@@ -12,23 +12,23 @@ import "std/str" { Str_builder }
 import "std/strnum"
 import "std/sys"
 
-const cache_env_name: U8[] = "KSPLC_CACHE_DIR" //< the variable that sets the cache folder
+const CACHE_ENV_NAME: U8[] = "KSPLC_CACHE_DIR" //< the variable that sets the cache folder
     //<
     //< It is also the fallback where neither HOME nor LOCALAPPDATA gives a folder.
 
-const ast_kind: U8[] = "ast" //< the kinds of cache, one subfolder each
+const AST_KIND: U8[] = "ast" //< the kinds of cache, one subfolder each
     //<
     //< The path is `<cache folder>/<kind>/…`.
     //< Caution: Add each new kind to clear_all too, or `ksplc clean` silently leaves it behind.
-const run_kind: U8[] = "run"
-const fmt_kind: U8[] = "fmt"
+const RUN_KIND: U8[] = "run"
+const FMT_KIND: U8[] = "fmt"
 
 fn exit_unlocated(tool: U8[]) //< it ends a command that finds no folder for its cache
     //<
     //< `tool` names the command in the message (`ksplc`, `ksplc run`).
     //< Caution: **Always name the fix** (the environment variable). In an environment with neither
     //< HOME nor LOCALAPPDATA it is the only way to set the folder.
-    io.err().s(tool).s(": cannot locate a cache directory. Set \{cache_env_name\} to choose one\n")
+    io.err().s(tool).s(": cannot locate a cache directory. Set \{CACHE_ENV_NAME\} to choose one\n")
     sys.exit(1)
 
 fn refused_root(root: U8[], arena: Arena$@): U8[] //<
@@ -44,12 +44,12 @@ fn refused_root(root: U8[], arena: Arena$@): U8[] //<
     case .foreign
         return arena.text()
             .s("the cache directory \{root\} belongs to another user. A file planted there would be \
-                built into your programs. Set \{cache_env_name\} to a directory of your own").take()
+                built into your programs. Set \{CACHE_ENV_NAME\} to a directory of your own").take()
     case .shared
         return arena.text()
             .s("the cache directory \{root\} can be written by its group or by everyone. A file \
                 planted there would be built into your programs. Run 'chmod go-w \{root\}', or set \
-                \{cache_env_name\} to a directory of your own").take()
+                \{CACHE_ENV_NAME\} to a directory of your own").take()
     default
         return ""
 
@@ -63,7 +63,7 @@ priv $root_warned: Bool = false //<
 fn append_cache_root(out: Str_builder$@): Bool //< it writes the cache folder into out
     //<
     //< True where a folder was found. It follows XDG's convention; Windows uses %LOCALAPPDATA%.
-    explicit: = sys.get_env(cache_env_name).unwrap_or("")
+    explicit: = sys.get_env(CACHE_ENV_NAME).unwrap_or("")
     if explicit.len > 0
         out.s(explicit)
         return true
@@ -95,14 +95,14 @@ fn append_self_identity(out: Str_builder$@): Bool //<
     out.s(self_path).c(0U8).s("\{info.size\}").c(0U8).s("\{info.mtime\}").c(0U8)
     return true
 
-const hash_hex_len: Sz = sha256.hex_len //< a sha256 as 64 hexadecimal characters
+const HASH_HEX_LEN: Sz = sha256.HEX_LEN //< a sha256 as 64 hexadecimal characters
     //<
     //< It is the cache's file name, and the key written inside it.
 
-typedef Hash_hex = U8[hash_hex_len]
+typedef Hash_hex = U8[HASH_HEX_LEN]
 
 fn hash_hex(data: U8[]): Hash_hex //< the digest as fixed-size text, without allocating
-    hex: U8[hash_hex_len] = ::{}
+    hex: U8[HASH_HEX_LEN] = ::{}
     sha256.write_hex(sha256.hash(data), U8$[]::hex)
     return hex
 
@@ -111,9 +111,9 @@ fn hash_hex(data: U8[]): Hash_hex //< the digest as fixed-size text, without all
 // identity). So **without cleaning, the cache grows by megabytes per build**. It is split into
 // folders with hexadecimal names. Old ones are removed only when a new one is created.
 // ==========================================
-priv const gen_name_len: Sz = 16
+priv const GEN_NAME_LEN: Sz = 16
 
-priv const max_generations: Sz = 8 //< how many generations are kept
+priv const MAX_GENERATIONS: Sz = 8 //< how many generations are kept
     //<
     //< Caution: **Do not make it too small.** The self-hosting check runs seed / stage1 / stage2
     //< and the LLVM backend's build: **different ksplcs in turn**. The maximum size is the count ×
@@ -173,7 +173,7 @@ priv fn remove_cache_dir(dir: U8[], arena: Arena$@) //< it removes one folder th
             return
     fs.remove_path(dir) catch {}
 
-priv const used_marker: U8[] = "used" //< the "last used" mark, holding that time in seconds
+priv const USED_MARKER: U8[] = "used" //< the "last used" mark, holding that time in seconds
     //<
     //< **The folder's own time is not enough.** A hit writes nothing, so the time stays old and
     //< **the most used slot would be the first removed**.
@@ -184,14 +184,14 @@ fn touch_dir(dir: U8[], arena: Arena$@) //< it marks dir as "used just now"
     //<
     //< Caution: **Call it every time**, or a slot removed mid-run makes that process fail for no
     //< visible reason.
-    path: = fs.join(dir, used_marker, arena)
+    path: = fs.join(dir, USED_MARKER, arena)
     io.write_file(path, arena.text().s("\{sys.wall_seconds()\}").take()) catch {}
 
 priv fn used_time(dir: U8[], dir_time: I64, arena: Arena$@): I64 //< the time dir was last used
     //<
     //< The time the mark holds; where it holds none (empty, or no mark), the newer of the mark
     //< file's own time and the folder's.
-    path: = fs.join(dir, used_marker, arena)
+    path: = fs.join(dir, USED_MARKER, arena)
     info: = fs.stat(path) catch
         return dir_time
     file_time: = info.mtime if info.mtime > dir_time else dir_time
@@ -266,14 +266,14 @@ fn append_generation_dir(kind: U8[], out: Str_builder$@, arena: Arena$@): Bool /
             io.err().s("ksplc: not using the cache: ").s(why).c('\n')
         return false
     base_dir: = fs.join(root.slice(), kind, arena)
-    dir: = fs.join(base_dir, (U8[]::hex).sub(0, gen_name_len), arena)
+    dir: = fs.join(base_dir, (U8[]::hex).sub(0, GEN_NAME_LEN), arena)
     is_new: = !fs.is_dir(dir)
     fs.mkdir_all(dir) catch
         return false
     // Nothing is spared: a generation removed mid-run only costs that run some misses, since every
     // write into it is a rename that can fail.
     if is_new
-        prune_dirs(base_dir, gen_name_len, max_generations, 0, dir, arena)
+        prune_dirs(base_dir, GEN_NAME_LEN, MAX_GENERATIONS, 0, dir, arena)
     out.s(dir)
     return true
 
@@ -287,7 +287,7 @@ fn clear_all(out: Str_builder$@, arena: Arena$@): Bool //<
     why: = refused_root(out.slice(), arena)
     if why.len > 0
         exit_refused("ksplc", why)
-    prune_dirs(fs.join(out.slice(), ast_kind, arena), gen_name_len, 0, 0, "", arena)
-    prune_dirs(fs.join(out.slice(), run_kind, arena), hash_hex_len, 0, 0, "", arena)
-    prune_dirs(fs.join(out.slice(), fmt_kind, arena), gen_name_len, 0, 0, "", arena)
+    prune_dirs(fs.join(out.slice(), AST_KIND, arena), GEN_NAME_LEN, 0, 0, "", arena)
+    prune_dirs(fs.join(out.slice(), RUN_KIND, arena), HASH_HEX_LEN, 0, 0, "", arena)
+    prune_dirs(fs.join(out.slice(), FMT_KIND, arena), GEN_NAME_LEN, 0, 0, "", arena)
     return true

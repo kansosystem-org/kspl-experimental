@@ -24,7 +24,7 @@ struct Sym_sample //<
     path: U8[] //< the path it should pick up; empty: it picks up nothing
     sym: U8[]
 
-const sym_samples: Sym_sample[_] = ::{
+const SYM_SAMPLES: Sym_sample[_] = ::{
     Sym_sample::{ .text = "assembled by `under_slot` in `ksplc/tools/run.kspl` today.",
         .path = "ksplc/tools/run.kspl", .sym = "under_slot" },
     Sym_sample::{ .text = "the `result_code` of `tests/support/harness.kspl` decides.",
@@ -63,7 +63,7 @@ struct Sym_word_sample //<
     text: U8[]
     want: U8[] //< the owner's word, then the member's, space-joined; empty: neither is taken
 
-const sym_word_samples: Sym_word_sample[_] = ::{
+const SYM_WORD_SAMPLES: Sym_word_sample[_] = ::{
     Sym_word_sample::{ .text = "under_slot", .want = "under_slot" },
     Sym_word_sample::{ .text = "Editor.clamp", .want = "Editor clamp" },
     Sym_word_sample::{ .text = "List<|T|>.push", .want = "List push" },
@@ -89,7 +89,7 @@ struct Sec_sample //<
     text: U8[]
     want: U8[] //< "path number", space-joined; empty: it picks up nothing
 
-const sec_samples: Sec_sample[_] = ::{
+const SEC_SAMPLES: Sec_sample[_] = ::{
     Sec_sample::{ .text = "the reason is in [`DESIGN-principles.md` §8.1.1](DESIGN-principles.md).",
         .want = "DESIGN-principles.md 8.1.1" },
     Sec_sample::{ .text =
@@ -131,7 +131,7 @@ const sec_samples: Sec_sample[_] = ::{
     // number.
     Sec_sample::{ .text = "the port is RP2040 in [`README.md`](README.md).", .want = "" },
     // A relative citation starting with `../`.
-    // Caution: **Include a form whose continuation is not in `sample_dirs`**, or a relative
+    // Caution: **Include a form whose continuation is not in `SAMPLE_DIRS`**, or a relative
     // citation into a package (`boards`, `port`) goes unread, **its number and name unchecked while
     // green**. **Choose a spelling that exists**
     Sec_sample::{ .text =
@@ -141,7 +141,7 @@ const sec_samples: Sec_sample[_] = ::{
     // with `#84-…` turns into "there is no chapter 84"**).
     Sec_sample::{ .text =
         "(\"8.4 The memory management model\" in \
-            [`SPEC-language.md`](SPEC-language.md#84-the-memory-management-model-defer--arc--arenas))",
+            [`SPEC-programming-language.md`](SPEC-programming-language.md#84-the-memory-management-model-defer--arc--arenas))",
         .want = "" },
     // After a `/`, this is not the start of a relative citation.
     // Caution: **Let it through and a test's URL (`/../ui/app.html`) is read as a path in this
@@ -160,16 +160,16 @@ struct Quote_sample //<
     text: U8[]
     want: U8[] //< "path name", space-joined; empty: it picks up nothing
 
-priv const sample_dirs: U8[][_] = ::{ "docs", "std" } //< the folder names the samples use
+priv const SAMPLE_DIRS: U8[][_] = ::{ "docs", "std" } //< the folder names the samples use
     //<
     //< Caution: **Do not copy the real list here.** The samples test how a citation's surroundings
     //< are read. A copy goes stale while green as the real list grows. `std` is for the
     //< extensionless sample (`std/lang`). **A path with an extension does not use the list**.
-priv const sample_bares: U8[][_] = ::{ "README.md", "DESIGN-principles.md", "DESIGN-repository.md",
-    "DESIGN-core.md", "DESIGN-system.md", "SPEC-language.md", "SPEC-local-server.md",
+priv const SAMPLE_BARES: U8[][_] = ::{ "README.md", "DESIGN-principles.md", "DESIGN-repository.md",
+    "DESIGN-core.md", "DESIGN-system.md", "SPEC-programming-language.md", "SPEC-local-server.md",
     "SPEC-tools.md" } //< the documents the samples name without a folder
 
-const quote_samples: Quote_sample[_] = ::{
+const QUOTE_SAMPLES: Quote_sample[_] = ::{
     // Caution: **Include a name cited against a source file.** Keyed on `.md` alone, a check cited
     // by its verdict line is **read by nobody**. It dangles silently after a rename.
     Quote_sample::{ .text =
@@ -202,7 +202,7 @@ const quote_samples: Quote_sample[_] = ::{
         .want = "DESIGN-principles.md One means to one purpose" },
     // A path in a source string: its closing `"` read as an opening makes the `, ` a name.
     Quote_sample::{ .text =
-        "priv const docs: U8[][2] = ::{ \"README.md\", \"DESIGN-principles.md\" };", .want = "" },
+        "priv const DOCS: U8[][2] = ::{ \"README.md\", \"DESIGN-principles.md\" };", .want = "" },
     // A quotation that merely comes before the path, with no joiner, is not a name.
     Quote_sample::{ .text =
         "the phrase \"a name\" and [`DESIGN-principles.md`](DESIGN-principles.md) both appear.",
@@ -279,7 +279,7 @@ struct Head_sample //<
     text: U8[]
     want: U8[] //< the paths picked up, space-joined; empty: it picks up nothing
 
-const head_samples: Head_sample[_] = ::{
+const HEAD_SAMPLES: Head_sample[_] = ::{
     Head_sample::{ .text = "the file `std/io.kspl` and the rest", .want = "std/io.kspl" },
     // A URL's word that ends in a folder's name (the GCC manual is under `onlinedocs/`).
     Head_sample::{ .text = "(https://gcc.gnu.org/onlinedocs/gcc/Debugging-Options.html)",
@@ -293,8 +293,8 @@ const head_samples: Head_sample[_] = ::{
 fn head_defects(arena: Arena$@): List<|U8[]|> //<
     //< Passes each sample to scan and checks the paths picked up
     $bad: = List<|U8[]|>.new(arena)
-    for s in head_samples
-        hits: = refs.find_src_paths(s.text, U8[][]::sample_dirs, arena)
+    for s in HEAD_SAMPLES
+        hits: = refs.find_src_paths(s.text, U8[][]::SAMPLE_DIRS, arena)
         got: = arena.text()
         for j in Range.asc(hits.len)
             got.s(" " if j > 0 else "").s(hits.get(j).text)
@@ -309,7 +309,7 @@ struct Quoted_head_sample //< one line for the check on double quotes inside a h
     text: U8[]
     hits: Bool //< whether it is a heading holding a double quote outside a code span
 
-const quoted_head_samples: Quoted_head_sample[_] = ::{
+const QUOTED_HEAD_SAMPLES: Quoted_head_sample[_] = ::{
     Quoted_head_sample::{ .text = "### 12.1 A retain goes in \"every copy\"", .hits = true },
     Quoted_head_sample::{ .text = "## Why the folders are split by \"what they know\"",
         .hits = true },
@@ -323,7 +323,7 @@ const quoted_head_samples: Quoted_head_sample[_] = ::{
 
 fn quoted_head_defects(arena: Arena$@): List<|U8[]|> //< the samples the heading check reads wrong
     $bad: = List<|U8[]|>.new(arena)
-    for s in quoted_head_samples
+    for s in QUOTED_HEAD_SAMPLES
         if scan.quotes_in_heading(s.text) != s.hits
             bad
                 .push(arena.text().s("'").s(s.text).s("' was judged wrong").take())
@@ -346,8 +346,8 @@ priv fn pairs_of(hits: List<|refs.Hit|>, arena: Arena$@): U8[] //<
 fn quote_defects(arena: Arena$@): List<|U8[]|> //<
     //< Passes each sample to cite and checks the "path and name" pairs picked up
     $bad: = List<|U8[]|>.new(arena)
-    for s in quote_samples
-        hits: = cite.find_doc_quotes(s.text, U8[][]::sample_dirs, U8[][]::sample_bares, arena)
+    for s in QUOTE_SAMPLES
+        hits: = cite.find_doc_quotes(s.text, U8[][]::SAMPLE_DIRS, U8[][]::SAMPLE_BARES, arena)
         note_mismatch(bad@, s.text, s.want, pairs_of(hits, arena), arena)
     return bad
 
@@ -361,7 +361,7 @@ struct Own_sample //<
     name: U8[]
     want: Bool
 
-const own_samples: Own_sample[_] = ::{
+const OWN_SAMPLES: Own_sample[_] = ::{
     Own_sample::{ .text = "# A title\n\n## Editing together\n", .name = "Editing together",
         .want = true },
     // A heading after its number, cited by the part before the subtitle.
@@ -393,7 +393,7 @@ const own_samples: Own_sample[_] = ::{
 fn own_defects(arena: Arena$@): List<|U8[]|> //<
     //< Passes each sample to scan and checks the verdict
     $bad: = List<|U8[]|>.new(arena)
-    for s in own_samples
+    for s in OWN_SAMPLES
         got: = scan.holds_name(s.text, s.name, arena)
         if got != s.want
             bad
@@ -404,16 +404,16 @@ fn own_defects(arena: Arena$@): List<|U8[]|> //<
 fn section_defects(arena: Arena$@): List<|U8[]|> //<
     //< Passes each sample to scan and checks the "path and number" pairs picked up
     $bad: = List<|U8[]|>.new(arena)
-    for s in sec_samples
-        hits: = cite.find_sections(s.text, U8[][]::sample_dirs, U8[][]::sample_bares, arena)
+    for s in SEC_SAMPLES
+        hits: = cite.find_sections(s.text, U8[][]::SAMPLE_DIRS, U8[][]::SAMPLE_BARES, arena)
         note_mismatch(bad@, s.text, s.want, pairs_of(hits, arena), arena)
     return bad
 
 fn symbol_defects(arena: Arena$@): List<|U8[]|> //<
     //< Passes each sample above to scan and checks the pairs picked up
     $bad: = List<|U8[]|>.new(arena)
-    for s in sym_samples
-        hits: = scan.find_symbol_refs(s.text, U8[][]::sample_dirs, arena)
+    for s in SYM_SAMPLES
+        hits: = scan.find_symbol_refs(s.text, U8[][]::SAMPLE_DIRS, arena)
         want: = s.path.len > 0
         if !want
             if hits.len != 0
@@ -438,7 +438,7 @@ fn symbol_defects(arena: Arena$@): List<|U8[]|> //<
 fn sym_word_defects(arena: Arena$@): List<|U8[]|> //<
     //< Passes the samples above to the two word readers and checks the words
     $bad: = List<|U8[]|>.new(arena)
-    for s in sym_word_samples
+    for s in SYM_WORD_SAMPLES
         got: = arena.text().s(scan.sym_base(s.text))
         member: = scan.sym_member(s.text)
         if member.len > 0
@@ -456,7 +456,7 @@ struct Kspage_link_sample //<
     text: U8[]
     want: U8[] //< `path#anchor`, space-joined; empty: it picks up nothing
 
-const kspage_link_samples: Kspage_link_sample[_] = ::{
+const KSPAGE_LINK_SAMPLES: Kspage_link_sample[_] = ::{
     Kspage_link_sample::{ .text = "\"href\": \"DESIGN-principles.md\"",
         .want = "DESIGN-principles.md" },
     // Where the spaces go is JSON's choice.
@@ -492,7 +492,7 @@ const kspage_link_samples: Kspage_link_sample[_] = ::{
 fn kspage_link_defects(arena: Arena$@): List<|U8[]|> //<
     //< Passes each sample above to scan and checks the links picked up
     $bad: = List<|U8[]|>.new(arena)
-    for s in kspage_link_samples
+    for s in KSPAGE_LINK_SAMPLES
         hits: = refs.find_kspage_links(s.text, arena)
         got: = arena.text()
         for j in Range.asc(hits.len)
@@ -513,7 +513,7 @@ struct Md_link_sample //<
     text: U8[]
     want: U8[] //< the targets picked up, space-joined; empty: it picks up nothing
 
-const md_link_samples: Md_link_sample[_] = ::{
+const MD_LINK_SAMPLES: Md_link_sample[_] = ::{
     Md_link_sample::{ .text = "[a](x.md)", .want = "x.md" },
     Md_link_sample::{ .text = "[`a`](x.md)", .want = "x.md" },
     // The notation written as code is not a link.
@@ -530,7 +530,7 @@ const md_link_samples: Md_link_sample[_] = ::{
 fn md_link_defects(arena: Arena$@): List<|U8[]|> //<
     //< Passes each sample above to the matcher and checks the targets picked up
     $bad: = List<|U8[]|>.new(arena)
-    for s in md_link_samples
+    for s in MD_LINK_SAMPLES
         got: = arena.text()
         $first: = true
         for h in refs.links_of("sample.md", s.text, arena)
@@ -548,7 +548,7 @@ struct Misnamed_link_sample //<
     text: U8[]
     want: U8[] //< the texts picked up, space-joined; empty: it picks up nothing
 
-const misnamed_link_samples: Misnamed_link_sample[_] = ::{
+const MISNAMED_LINK_SAMPLES: Misnamed_link_sample[_] = ::{
     Misnamed_link_sample::{ .text = "[`DESIGN-repository.md`](DESIGN-principles.md)",
         .want = "DESIGN-repository.md" },
     Misnamed_link_sample::{ .text = "[`std/docs/DESIGN-system.md`](std/docs/DESIGN-core.md#a)",
@@ -564,7 +564,7 @@ const misnamed_link_samples: Misnamed_link_sample[_] = ::{
 fn misnamed_link_defects(arena: Arena$@): List<|U8[]|> //<
     //< Passes each sample above to the matcher and checks the texts picked up
     $bad: = List<|U8[]|>.new(arena)
-    for s in misnamed_link_samples
+    for s in MISNAMED_LINK_SAMPLES
         got: = arena.text()
         $first: = true
         for h in refs.find_misnamed_links(s.text, arena)
@@ -591,7 +591,7 @@ struct Target_sample //<
     text: U8[]
     want: U8[]
 
-priv const target_samples: Target_sample[_] = ::{
+priv const TARGET_SAMPLES: Target_sample[_] = ::{
     // A bare name is next to the file that writes it.
     Target_sample::{ .here = "kspage/docs", .lead = "", .text = "DESIGN-principles.md",
         .want = "kspage/docs/DESIGN-principles.md" },
@@ -621,7 +621,7 @@ priv const target_samples: Target_sample[_] = ::{
 
 fn target_defects(arena: Arena$@): List<|U8[]|> //< the samples the resolving reads wrong
     $bad: = List<|U8[]|>.new(arena)
-    for s in target_samples
+    for s in TARGET_SAMPLES
         line: = arena.text().s(s.lead).s(s.text).take()
         hit: = refs.Hit::{ .at = s.lead.len, .end = line.len, .text = s.text, .extra = "" }
         got: = refs.hit_target(s.here, line, hit, arena)
@@ -632,13 +632,13 @@ fn target_defects(arena: Arena$@): List<|U8[]|> //< the samples the resolving re
     return bad
 
 fn target_sample_count(): Sz
-    return target_samples.len
+    return TARGET_SAMPLES.len
 
 // ==========================================
 // Where a workflow step's command runs from
 // ==========================================
 
-priv const step_workflow: U8[] =
+priv const STEP_WORKFLOW: U8[] =
     """jobs:
   one:
     steps:
@@ -662,14 +662,14 @@ priv const step_workflow: U8[] =
 """
 
 struct Step_sample //<
-    //< A word in `step_workflow`, and the folder the step holding it runs from (empty: none named)
+    //< A word in `STEP_WORKFLOW`, and the folder the step holding it runs from (empty: none named)
     //<
     //< Caution: **Include a step naming none, next to one that does.** A reader that carries a
     //< folder over to the steps after it passes every sample that names one.
     word: U8[]
     want: U8[]
 
-priv const step_samples: Step_sample[_] = ::{
+priv const STEP_SAMPLES: Step_sample[_] = ::{
     // Read on a line the item's key folds onto, climbing out of `run:`.
     Step_sample::{ .word = "alpha", .want = "ksplc" },
     Step_sample::{ .word = "beta", .want = "" },
@@ -685,9 +685,9 @@ priv const step_samples: Step_sample[_] = ::{
 
 fn step_defects(arena: Arena$@): List<|U8[]|> //< the samples whose step folder is read wrong
     $bad: = List<|U8[]|>.new(arena)
-    for s in step_samples
-        if at: = step_workflow.find_str(s.word)
-            got: = cite.step_dir(step_workflow, at, arena)
+    for s in STEP_SAMPLES
+        if at: = STEP_WORKFLOW.find_str(s.word)
+            got: = cite.step_dir(STEP_WORKFLOW, at, arena)
             if !got.equals(s.want)
                 bad
                     .push(arena.text().s("'").s(s.word).s("' should run from '").s(s.want)
@@ -698,4 +698,4 @@ fn step_defects(arena: Arena$@): List<|U8[]|> //< the samples whose step folder 
     return bad
 
 fn step_sample_count(): Sz
-    return step_samples.len
+    return STEP_SAMPLES.len

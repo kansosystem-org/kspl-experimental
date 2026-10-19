@@ -21,13 +21,13 @@ import "std/strfmt" as _strfmt
 import "std/verdict"
 import "tests/support/harness"
 
-priv const candidates: U8[][_] = ::{ "clang", "gcc", "cc" } //<
+priv const CANDIDATES: U8[][_] = ::{ "clang", "gcc", "cc" } //<
     //< The compilers the generated C is put through
     //<
     //< Caution: **Do not check with one alone.** Each warns about code the other is silent on
     //< (gcc: an arithmetic or comparison operand of a bit operation); one installed alone decides.
 
-priv const families: U8[][_] = ::{ "clang", "gcc" } //< the families both of which must be found
+priv const FAMILIES: U8[][_] = ::{ "clang", "gcc" } //< the families both of which must be found
 
 // **Do not leave `-Wextra` and `-O2` out.** Without them -Wsign-compare and
 // -Wstrict-aliasing (inactive without optimisation) are invisible, and both catch wrong answers.
@@ -35,7 +35,7 @@ priv const families: U8[][_] = ::{ "clang", "gcc" } //< the families both of whi
 // `-Wstrict-prototypes` is in neither: a `f()` declares no prototype, so a call goes unchecked.
 // `-pedantic` holds it to ISO C99, `-Woverlength-strings` aside ("The generated C is ISO C99, not
 // GNU C" in ksplc/docs/DESIGN-backends.md).
-priv const cflags: U8[][_] = ::{ "-std=c99", "-pedantic", "-Wall", "-Wextra",
+priv const CFLAGS: U8[][_] = ::{ "-std=c99", "-pedantic", "-Wall", "-Wextra",
     "-Wno-missing-field-initializers", "-Wno-overlength-strings", "-Wstrict-prototypes", "-O2",
     "-fsyntax-only" }
 
@@ -49,14 +49,14 @@ priv struct Target //< the inputs that produce the generated C
     ksplc_flags: U8[][]
     cc_flags: U8[][]
 
-priv const freestanding_ksplc: U8[][_] = ::{ "--freestanding" } //<
+priv const FREESTANDING_KSPLC: U8[][_] = ::{ "--freestanding" } //<
     //< The ksplc options for the freestanding target
     //<
     //< Caution: **Keep the list of options in a const.** A `U8[][]::{ ... }` built in a function
     //< and put in a struct points at the stack frame. That frame is gone after the return, with no
     //< diagnostic ("Which pointers into a frame are stopped from leaving it" in
-    //< `docs/DESIGN-language.md`). It breaks far away, as a garbled argv length.
-priv const freestanding_cc: U8[][_] = ::{ "-ffreestanding" }
+    //< `docs/DESIGN-programming-language.md`). It breaks far away, as a garbled argv length.
+priv const FREESTANDING_CC: U8[][_] = ::{ "-ffreestanding" }
 
 priv fn targets(arena: Arena$@): List<|Target|> //<
     //< The sources whose generated C is checked, each with its own flags
@@ -76,7 +76,7 @@ priv fn targets(arena: Arena$@): List<|Target|> //<
     out
         .push(Target::{ .slot = "freestanding",
         .src = "ksos/demo/cortex_m/cortex_m_ai_train_probe.kspl",
-        .ksplc_flags = U8[][]::freestanding_ksplc, .cc_flags = U8[][]::freestanding_cc })
+        .ksplc_flags = U8[][]::FREESTANDING_KSPLC, .cc_flags = U8[][]::FREESTANDING_CC })
     out
         .push(Target::{ .slot = "ksbind", .src = "ksbind/tests/main.kspl", .ksplc_flags = none,
         .cc_flags = none })
@@ -87,7 +87,7 @@ priv fn targets(arena: Arena$@): List<|Target|> //<
 
 priv struct Cc //< one usable C compiler
     name: U8[] //< what it is started by
-    family: U8[] //< one of `families`
+    family: U8[] //< one of `FAMILIES`
     id: U8[] //< its identity: target, version and family
 
 priv fn identify(name: U8[], arena: Arena$@): Cc? //< that compiler, where it starts
@@ -111,7 +111,7 @@ priv fn compilers(arena: Arena$@): List<|Cc|> //<
     //< twice only doubles the failing lines. Whether it starts is tested by starting it (PATH is
     //< not read).
     $found: = List<|Cc|>.new(arena)
-    for name in candidates
+    for name in CANDIDATES
         switch identify(name, arena)
         case .none
             continue
@@ -126,7 +126,7 @@ priv fn check_families(ccs: List<|Cc|>@, arena: Arena$@) //<
     //< Says which family no compiler found belongs to: a failure where both are required
     //<
     //< The `SKIP` reason is the one `tools/ci_gates.kspl` expects on a platform holding one alone.
-    for fam in families
+    for fam in FAMILIES
         if ccs.any(fn(c: Cc@; fam: U8[]): Bool {
             return c.family.equals(fam);
         })
@@ -198,7 +198,7 @@ fn main(): I32
             // No `-I` is needed: ksplc embeds the runtime headers that the generated C `#include`s.
             $argv: = List<|U8[]|>.new(arena)
             argv.push(cc.name)
-            for f in cflags
+            for f in CFLAGS
                 argv.push(f)
             for f in t.cc_flags
                 argv.push(f)

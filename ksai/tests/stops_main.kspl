@@ -15,7 +15,7 @@ priv struct Stop //< one stop's name, and the reason it must give for stopping
     name: U8[]
     says: U8[]
 
-priv const stops: Stop[_] = ::{
+priv const STOPS: Stop[_] = ::{
     Stop::{ .name = "tensor-null-arena", .says = "ksai: an explicit arena is required" },
     Stop::{ .name = "header-null-arena", .says = "ksai: an explicit arena is required" },
     Stop::{ .name = "adapters-null-arena", .says = "ksai: an explicit arena is required" },
@@ -31,7 +31,7 @@ priv const stops: Stop[_] = ::{
     Stop::{ .name = "grad-small-out", .says = "grad_matmul_input: out is not [m, k]" },
 }
 
-priv const past_the_stop: U8[] = "must not get here" //< what each program writes past its stop
+priv const PAST_THE_STOP: U8[] = "must not get here" //< what each program writes past its stop
 
 fn main(): I32
     verdict.begin("stops")
@@ -40,7 +40,7 @@ fn main(): I32
         return verdict.fatal("usage: ksplc run tests/stops_main.kspl <ksplc>")
     arena: = Arena.new(1024 * 1024)
     defer arena.free()
-    for s in stops
+    for s in STOPS
         r: =
             subproc.run_capture(U8[][]::{ args.get(1), "run", "tests/stops.kspl", s.name }, "",
             300000, 1 << 20, arena) catch
@@ -50,5 +50,5 @@ fn main(): I32
         stopped: = r.exit_code.is_some() && !r.exited_with(0)
         verdict.check(s.name,
             stopped && out.find_str(s.says).is_some() &&
-            out.find_str(past_the_stop).is_none(), out)
+            out.find_str(PAST_THE_STOP).is_none(), out)
     return verdict.finish()

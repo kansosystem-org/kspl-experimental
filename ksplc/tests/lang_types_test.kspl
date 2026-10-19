@@ -80,7 +80,7 @@ fn test_slice_descriptor_literals(arena: Arena$@)
     // --- `.` and `[]` through a pointer ---
     // `.` and `[]` dereference a pointer whatever the number of levels. `[]` does so only where the
     // target holds its own length ("Member access and indexing through a pointer" in
-    // docs/SPEC-language.md). A built-in member, a subscript and a method all follow it
+    // docs/SPEC-programming-language.md). A built-in member, a subscript and a method all follow it
     // (receiver_base_id in sema/type/env.kspl).
     pm: U8$[]@ = mut_view@
     pi: U8[]@ = imm_view@
@@ -188,6 +188,37 @@ fn test_const_alias_resolves_through()
     m: Meters = 41
     assert(meters_plus_one(m@) == 42, "a Meters@'s target can be handled as a number")
     verdict.pass("the alias resolution and the immutable qualifier's peeling work alternately.")
+
+priv struct Alias_box<|T|>
+    val: T
+
+priv typedef Named_box = Alias_box<|I32|>
+priv typedef Named_error = I32
+
+priv fn base_box_result(v: Alias_box<|I32|>): Alias_box<|I32|>!I32
+    return v
+
+priv fn named_box_result(v: Named_box): Named_box!Named_error
+    return base_box_result(v)!
+
+priv fn read_named_result(v: Named_box!Named_error): I32
+    box: = v catch
+        return -1
+    return box.val
+
+fn test_alias_as_generic_argument()
+    verdict.start("[Alias] aliases and their targets share generic instances...")
+    box: = Named_box::{ .val = 7 }
+    result: Named_box!Named_error = base_box_result(box)
+    assert(read_named_result(result) == 7, "a result annotation accepts the underlying type")
+    assert(read_named_result(base_box_result(box)) == 7, "a result argument accepts it too")
+    assert(read_named_result(named_box_result(box)) == 7, "the alias also works as a return type")
+    nested: Alias_box<|Named_box|> = ::{ .val = box }
+    base: Alias_box<|Alias_box<|I32|>|> = nested
+    assert(base.val.val == 7, "a nested generic accepts the alias as the same type argument")
+    boxes: = Named_box[]::{ box }
+    assert(boxes[0].val == 7, "a read-only slice keeps the qualifier around the resolved alias")
+    verdict.pass("aliases share result and nested-generic instances with their targets.")
 
 fn test_alias_element_acts_as_its_base() //<
     //< It checks an alias read out of an immutable slice acts as its base type
@@ -769,10 +800,10 @@ fn test_const_args_infer_from_array_lengths()
     assert(forwarded(s) == 612, "a generic passes its own const parameter's array on")
     verdict.pass("a const parameter takes the length of the array written where it stands.")
 
-priv struct Cbuf<|const n: Sz|> //< a generic with a value argument to read a `const` one off
-    data: U8[n]
+priv struct Cbuf<|const N: Sz|> //< a generic with a value argument to read a `const` one off
+    data: U8[N]
 
-priv struct Cflag<|const on: Bool|> //< the same, with a value that is no number
+priv struct Cflag<|const ON: Bool|> //< the same, with a value that is no number
     x: I32
 
 priv fn cbuf_cap<|const N: Sz|>(_b: Cbuf<|N|>@): Sz //< behind a pointer

@@ -1,7 +1,8 @@
 #!/usr/bin/env -S ksplc run
 //< It pins down at which boundary each of visibility's three levels closes
 //<
-//< The convention is "Visibility" in `docs/SPEC-language.md`; the properties pinned down are below.
+//< The convention is "Visibility" in `docs/SPEC-programming-language.md`; the properties pinned
+//< down are below.
 //< Caution: **Pair a case that fires with one that does not.** One kind alone notices neither too
 //< strict (closing at the folder) nor too loose (visible from anywhere).
 import "ksplc/tests/support/harness"
@@ -28,8 +29,8 @@ import "std/verdict"
 //   * a name another file declares, written without its alias, says which alias to write
 // ==========================================
 
-priv const lib_body: U8[] = //< two folders of different depth inside the package `alpha`
-    "const secret: I32 = 7\npub const open: I32 = 9\npriv const hidden: I32 = 5\n"
+priv const LIB_BODY: U8[] = //< two folders of different depth inside the package `alpha`
+    "const SECRET: I32 = 7\npub const OPEN: I32 = 9\npriv const HIDDEN: I32 = 5\n"
 
 priv struct Case //< one case
     //<
@@ -41,42 +42,42 @@ priv struct Case //< one case
     expect: U8[] //< empty means the check is "no error is reported"
     alone: Bool //< the expected error is the only one reported
 
-priv const same_gen: U8[] = //< a generic `same` declared `priv`, called inside its file only
+priv const SAME_GEN: U8[] = //< a generic `same` declared `priv`, called inside its file only
     "priv fn same<|T|>(a: T, b: T): Bool { return a == b; }\npub fn check(): Bool { return same(1, \
         1); }\n"
 
-priv const box_gen: U8[] = //< a generic type declared `priv`, used inside its file only
+priv const BOX_GEN: U8[] = //< a generic type declared `priv`, used inside its file only
     "priv struct Box<|T|> { v: T; }\npub fn mk(): I32 { b: Box<|I32|> = Box<|I32|>::{ .v = 1 }; \
         return b.v; }\n"
 
-priv const pub_lib: U8[] = //< a function, a generic type and a plain type, all `pub`
+priv const PUB_LIB: U8[] = //< a function, a generic type and a plain type, all `pub`
     "pub fn twice(x: I32): I32 { return x * 2; }\npub struct Box<|T|> { pub v: T; }\npub struct \
         Plain { pub v: I32; }\n"
 
-priv const cases: Case[] = Case[]::{
+priv const CASES: Case[] = Case[]::{
     Case::{ .name = "unspecified is visible from another folder inside the same package",
         .extra_rels = U8[][]::{ "alpha/mid.kspl" },
         .extra_bodies = U8[][]::{ "import \"alpha/deep/lib\" as lib\npub fn touch(): I32 { return \
-            lib.secret; }\n" }, .entry = "alpha/mid.kspl", .expect = "" },
+            lib.SECRET; }\n" }, .entry = "alpha/mid.kspl", .expect = "" },
     Case::{ .name = "unspecified is invisible across packages",
         .extra_rels = U8[][]::{ "beta/main.kspl" },
         .extra_bodies = U8[][]::{ "import \"alpha/deep/lib\" as lib\nfn main(): I32 { return \
-            lib.secret; }\n" }, .entry = "beta/main.kspl",
-        .expect = "cannot access symbol 'secret'" },
+            lib.SECRET; }\n" }, .entry = "beta/main.kspl",
+        .expect = "cannot access symbol 'SECRET'" },
     Case::{ .name = "pub is visible across packages too",
         .extra_rels = U8[][]::{ "beta/main.kspl" },
         .extra_bodies = U8[][]::{ "import \"alpha/deep/lib\" as lib\nfn main(): I32 { return \
-            lib.open; }\n" }, .entry = "beta/main.kspl", .expect = "" },
+            lib.OPEN; }\n" }, .entry = "beta/main.kspl", .expect = "" },
     Case::{ .name = "priv is invisible even from another file of the same package",
         .extra_rels = U8[][]::{ "alpha/mid.kspl" },
         .extra_bodies = U8[][]::{ "import \"alpha/deep/lib\" as lib\npub fn touch(): I32 { return \
-            lib.hidden; }\n" }, .entry = "alpha/mid.kspl",
-        .expect = "cannot access symbol 'hidden'" },
+            lib.HIDDEN; }\n" }, .entry = "alpha/mid.kspl",
+        .expect = "cannot access symbol 'HIDDEN'" },
     Case::{ .name = "a selective import of what its file cannot see is refused at the import",
         .extra_rels = U8[][]::{ "alpha/mid.kspl" },
-        .extra_bodies = U8[][]::{ "import \"alpha/deep/lib\" { hidden }\npub fn touch(): I32 { \
-            return hidden; }\n" }, .entry = "alpha/mid.kspl",
-        .expect = "cannot access symbol 'hidden'" },
+        .extra_bodies = U8[][]::{ "import \"alpha/deep/lib\" { HIDDEN }\npub fn touch(): I32 { \
+            return HIDDEN; }\n" }, .entry = "alpha/mid.kspl",
+        .expect = "cannot access symbol 'HIDDEN'" },
     Case::{ .name = "and of a type, whose uses ask nothing of their own",
         .extra_rels = U8[][]::{ "alpha/deep/shape.kspl", "alpha/mid.kspl" },
         .extra_bodies = U8[][]::{ "priv struct Cell { v: I32; }\n",
@@ -85,7 +86,7 @@ priv const cases: Case[] = Case[]::{
         .expect = "cannot access symbol 'Cell'" },
     Case::{ .name = "a priv generic's bare name does not answer for another file's own function",
         .extra_rels = U8[][]::{ "alpha/deep/gen.kspl", "alpha/mid.kspl" },
-        .extra_bodies = U8[][]::{ same_gen,
+        .extra_bodies = U8[][]::{ SAME_GEN,
         "import \"alpha/deep/gen\" as gen\nfn same(a: I32, b: I32): Bool { return a != b; }\npub fn \
             touch(): Bool { return gen.check() && same(1, 2); }\n" }, .entry = "alpha/mid.kspl",
         .expect = "" },
@@ -97,7 +98,7 @@ priv const cases: Case[] = Case[]::{
         .entry = "beta/main.kspl", .expect = "" },
     Case::{ .name = "a bare name only another file declares stays undefined",
         .extra_rels = U8[][]::{ "alpha/deep/gen.kspl", "alpha/mid.kspl" },
-        .extra_bodies = U8[][]::{ same_gen,
+        .extra_bodies = U8[][]::{ SAME_GEN,
         "import \"alpha/deep/gen\" as gen\npub fn touch(): Bool { return gen.check() && same(1, 2); \
             }\n" }, .entry = "alpha/mid.kspl", .expect = "undefined path or identifier 'same'" },
     Case::{ .name = "a selective import calls the generic it names, not another file's namesake",
@@ -113,13 +114,13 @@ priv const cases: Case[] = Case[]::{
         .entry = "beta/main.kspl", .expect = "" },
     Case::{ .name = "another file's priv generic type is undefined here, and nothing more",
         .extra_rels = U8[][]::{ "alpha/deep/box.kspl", "alpha/mid.kspl" },
-        .extra_bodies = U8[][]::{ box_gen,
+        .extra_bodies = U8[][]::{ BOX_GEN,
         "import \"alpha/deep/box\" as box\npub fn touch(): I32 { _b: = Box<|I32|>::{ .v = 2 }; \
             return box.mk(); }\n" }, .entry = "alpha/mid.kspl", .expect = "undefined type 'Box'",
         .alone = true },
     Case::{ .name = "and a field naming it says no more either",
         .extra_rels = U8[][]::{ "alpha/deep/box.kspl", "alpha/mid.kspl" },
-        .extra_bodies = U8[][]::{ box_gen,
+        .extra_bodies = U8[][]::{ BOX_GEN,
         "import \"alpha/deep/box\" as box\npub struct Wrap { pub b: Box<|I32|>; }\npub fn touch(): \
             I32 { return box.mk(); }\n" }, .entry = "alpha/mid.kspl",
         .expect = "undefined type 'Box'", .alone = true },
@@ -131,7 +132,7 @@ priv const cases: Case[] = Case[]::{
         .entry = "alpha/mid.kspl", .expect = "cannot access symbol 'Cell'", .alone = true },
     Case::{ .name = "and so is its priv generic type",
         .extra_rels = U8[][]::{ "alpha/deep/box.kspl", "alpha/mid.kspl" },
-        .extra_bodies = U8[][]::{ box_gen,
+        .extra_bodies = U8[][]::{ BOX_GEN,
         "import \"alpha/deep/box\" as box\npub fn touch(b: box.Box<|I32|>@): I32 { return box.mk(); \
             }\n" }, .entry = "alpha/mid.kspl", .expect = "cannot access symbol 'Box'",
         .alone = true },
@@ -148,7 +149,7 @@ priv const cases: Case[] = Case[]::{
     Case::{ .name =
         "a function written without the alias its file is imported under says what to write",
         .extra_rels = U8[][]::{ "alpha/deep/wide.kspl", "beta/main.kspl" },
-        .extra_bodies = U8[][]::{ pub_lib,
+        .extra_bodies = U8[][]::{ PUB_LIB,
         "import \"alpha/deep/wide\" as _p\nfn main(): I32 { return twice(1); }\n" },
         .entry = "beta/main.kspl",
         .expect =
@@ -156,7 +157,7 @@ priv const cases: Case[] = Case[]::{
             it as '_p'. Write '_p.twice'", .alone = true },
     Case::{ .name = "and so does a generic type, in the same words",
         .extra_rels = U8[][]::{ "alpha/deep/wide.kspl", "beta/main.kspl" },
-        .extra_bodies = U8[][]::{ pub_lib,
+        .extra_bodies = U8[][]::{ PUB_LIB,
         "import \"alpha/deep/wide\" as _p\nfn main(): I32 { b: Box<|I32|> = _p.Box<|I32|>::{ .v = 1 \
             }; return b.v; }\n" }, .entry = "beta/main.kspl",
         .expect =
@@ -164,7 +165,7 @@ priv const cases: Case[] = Case[]::{
             as '_p'. Write '_p.Box'" },
     Case::{ .name = "and a plain type",
         .extra_rels = U8[][]::{ "alpha/deep/wide.kspl", "beta/main.kspl" },
-        .extra_bodies = U8[][]::{ pub_lib,
+        .extra_bodies = U8[][]::{ PUB_LIB,
         "import \"alpha/deep/wide\" as _p\nfn main(): I32 { p: Plain = _p.Plain::{ .v = 1 }; return \
             p.v; }\n" }, .entry = "beta/main.kspl",
         .expect =
@@ -183,7 +184,7 @@ priv fn prepare(c: Case, index: Sz, arena: Arena$@): Job //<
     rels: = List<|U8[]|>.create(arena)
     bodies: = List<|U8[]|>.create(arena)
     rels.push("alpha/deep/lib.kspl")
-    bodies.push(lib_body)
+    bodies.push(LIB_BODY)
     for i in Range.asc(c.extra_rels.len)
         rels.push(c.extra_rels[i])
         bodies.push(c.extra_bodies[i])
@@ -194,15 +195,15 @@ fn main(): I32
     arena: = harness.begin(64 * 1024 * 1024)
     run_one_main(arena)
     io.out()
-        .s("# the boundary visibility closes at: \{cases.len\} (\{verdict.jobs()\} in parallel)\n")
+        .s("# the boundary visibility closes at: \{CASES.len\} (\{verdict.jobs()\} in parallel)\n")
 
     jobs: = List<|Job|>.create(arena)
-    for $i: = 0; i < cases.len; i += 1
-        jobs.push(prepare(cases[i], i, arena))
+    for $i: = 0; i < CASES.len; i += 1
+        jobs.push(prepare(CASES[i], i, arena))
     outs: = harness.run_all(jobs.slice(), "visibility")
 
-    for $i: = 0; i < cases.len; i += 1
-        c: = cases[i]
+    for $i: = 0; i < CASES.len; i += 1
+        c: = CASES[i]
         out: = outs.get(i).out
         if c.expect.len > 0
             verdict.check(c.name,
@@ -221,20 +222,20 @@ fn main(): I32
 // that merely imports a file holding no `main`.
 // ==========================================
 // The entry file, calling the imported `helper`.
-priv const entry_src: U8[] = """import "lib" { helper }
+priv const ENTRY_SRC: U8[] = """import "lib" { helper }
 fn main(): I32
   return helper()
 """
 
 // The imported file holds a `main`: rejected.
-priv const lib_with_main: U8[] = """fn main(): I32
+priv const LIB_WITH_MAIN: U8[] = """fn main(): I32
   return 2
 pub fn helper(): I32
   return 1
 """
 
 // The same without that `main`: passes.
-priv const lib_plain: U8[] = """pub fn helper(): I32
+priv const LIB_PLAIN: U8[] = """pub fn helper(): I32
   return 1
 """
 
@@ -245,7 +246,7 @@ priv fn check_main_case(slot: U8[], name: U8[], lib_src: U8[], expect: U8[][], d
         //< Caution: Make cwd the working directory. Resolving `import "lib"` starts from cwd.
     dir: = harness.sandbox(arena.text().s("onemain_\{slot\}").take())
     names: = U8[][]::{ "lib.kspl", "main.kspl" }
-    fs.write_tree(dir, names, U8[][]::{ lib_src, entry_src }, arena) catch
+    fs.write_tree(dir, names, U8[][]::{ lib_src, ENTRY_SRC }, arena) catch
         verdict.check(name, false, "cannot place the material")
         return
     $args: = List<|U8[]|>.new(arena)
@@ -259,9 +260,9 @@ priv fn run_one_main(arena: Arena$@) //< only one main per program
     io.out().s("# only one main per program: 2\n")
 
     // **A mark must appear at both positions**, or the reader cannot tell which to remove.
-    check_main_case("two", "an import target holding a main is refused", lib_with_main,
+    check_main_case("two", "an import target holding a main is refused", LIB_WITH_MAIN,
         U8[][]::{ "lib.kspl:1:1:", "main.kspl:2:1:", "defines main() 2 times" }, none, arena)
 
     // Against being too strict: importing a file holding no `main` is ordinary.
-    check_main_case("one", "an import target holding no main passes", lib_plain, none,
+    check_main_case("one", "an import target holding no main passes", LIB_PLAIN, none,
         U8[][]::{ "error:", "defines main()" }, arena)

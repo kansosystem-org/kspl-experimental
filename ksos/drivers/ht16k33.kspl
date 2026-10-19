@@ -14,17 +14,17 @@ import "ksos/drivers/mmio"
 import "ksos/drivers/rp2040/i2c"
 import "std/bytes"
 
-const default_addr: U32 = 0x70 //< the data sheet's default I2C address
+const DEFAULT_ADDR: U32 = 0x70 //< the data sheet's default I2C address
     //<
     //< The A0 to A2 solder jumpers move it within 0x70 to 0x77, and **the Freenove unit answers at
     //< 0x71**. Do not hard-code it; the caller scans with i2c.present() and uses the address found.
 
-const cmd_oscillator_on: U8 = 0x21
-const cmd_display_on: U8 = 0x81 // the display on, no blinking
-const cmd_brightness_base: U8 = 0xe0
+const CMD_OSCILLATOR_ON: U8 = 0x21
+const CMD_DISPLAY_ON: U8 = 0x81 // the display on, no blinking
+const CMD_BRIGHTNESS_BASE: U8 = 0xe0
 
-const max_brightness: U32 = 15
-const rows: Sz = 8
+const MAX_BRIGHTNESS: U32 = 15
+const ROWS: Sz = 8
 
 priv fn send1(addr: U32, b: U8): Void!mmio.Driver_error
     buf: U8[1] = ::{ b }
@@ -33,10 +33,10 @@ priv fn send1(addr: U32, b: U8): Void!mmio.Driver_error
 fn init(addr: U32, brightness: U32): Void!mmio.Driver_error //< wakes the oscillator and display
     //<
     //< Caution: **Send all three in this order.** Miss one and nothing lights.
-    send1(addr, cmd_oscillator_on)!
-    send1(addr, cmd_display_on)!
-    b: = max_brightness if brightness > max_brightness else brightness
-    send1(addr, cmd_brightness_base | U8::b)!
+    send1(addr, CMD_OSCILLATOR_ON)!
+    send1(addr, CMD_DISPLAY_ON)!
+    b: = MAX_BRIGHTNESS if brightness > MAX_BRIGHTNESS else brightness
+    send1(addr, CMD_BRIGHTNESS_BASE | U8::b)!
 
 fn draw(addr: U32, pattern: U16@): Void!mmio.Driver_error //< rewrites the whole display RAM
     //<
@@ -48,7 +48,7 @@ fn draw(addr: U32, pattern: U16@): Void!mmio.Driver_error //< rewrites the whole
     // that writes into it directly, with "a temporary's address cannot be taken". (The receiver is
     // `Self@`: the call does not change the descriptor, only the elements.)
     view: = U8$[]::buf
-    for i in Range.asc(rows)
+    for i in Range.asc(ROWS)
         // The HT16K33's display RAM is 2 bytes per row, little endian.
         view.put_u16_le(1 + i * 2, (pattern + i)$)
     i2c.write(addr, buf[0]@, 17)!

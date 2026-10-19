@@ -34,7 +34,7 @@ import "std/subproc"
 import "std/sys"
 import "std/verdict"
 
-priv const cache_env: U8[] = "KSPLC_CACHE_DIR" //<
+priv const CACHE_ENV: U8[] = "KSPLC_CACHE_DIR" //<
     //< The environment variable naming the disk cache's directory
     //<
     //< It is cache_env_name in `ksplc/base/cache.kspl`.
@@ -135,7 +135,7 @@ priv fn case_help_matches_behavior(arena: Arena$@) //<
     $pairs: Sz = 0
     for f in h.faces
         for fl in all
-            // Caution: Do not put `=x` on an option taking no value: argp rejects it before the
+            // Caution: Do not put `=x` on an option taking no value: argparse rejects it before the
             // per-subcommand check, and every pair passes as "rejected".
             arg: =
                 arena.text().s(fl).s("=x").take() if has(h.with_value@, fl) else fl
@@ -218,8 +218,8 @@ priv fn case_clean(arena: Arena$@)
         "usage: ksplc clean\n")
 
 // Names the cleaning takes as its own (64 hexadecimal digits, a `ksplc run` slot's).
-priv const planted_name: U8[] = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-priv const slot_name: U8[] = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+priv const PLANTED_NAME: U8[] = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+priv const SLOT_NAME: U8[] = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
 priv fn plant_link(at: U8[], target: U8[], arena: Arena$@): Bool //< false where none can be made
     //<
@@ -241,11 +241,11 @@ priv fn case_clean_keeps_link_targets(arena: Arena$@) //<
         verdict.check(name, false, "the victim's file cannot be written")
         return
     run: = fs.join(cache_root(arena), "run", arena)
-    slot: = fs.join(run, slot_name, arena)
+    slot: = fs.join(run, SLOT_NAME, arena)
     fs.mkdir_all(slot) catch
         verdict.check(name, false, "the slot cannot be made")
         return
-    if !plant_link(fs.join(run, planted_name, arena), victim, arena) ||
+    if !plant_link(fs.join(run, PLANTED_NAME, arena), victim, arena) ||
         !plant_link(fs.join(slot, "obj", arena), victim, arena)
         verdict.skip_check(name, "a link cannot be made with `ln -s` in this environment")
         return
@@ -288,7 +288,7 @@ priv fn case_cache_others_can_write(arena: Arena$@) //<
     io.write_file(src, "fn main(): I32\n  return 0\n") catch
         verdict.check(name_run, false, "the program cannot be written")
         return
-    sys.set_env(cache_env, shared) catch
+    sys.set_env(CACHE_ENV, shared) catch
         verdict.check(name_run, false, "the cache cannot be pointed at the folder")
         return
     ran: = harness.ksplc(U8[][]::{ "run", src })
@@ -299,11 +299,11 @@ priv fn case_cache_others_can_write(arena: Arena$@) //<
     handed: = hand_over(foreign)
     $theirs: = verdict.Run_out::{ .code = .some(0), .out = "" }
     if handed
-        sys.set_env(cache_env, foreign)
+        sys.set_env(CACHE_ENV, foreign)
             catch panic("the cache cannot be pointed at the other folder")
         theirs = harness.ksplc(U8[][]::{ "run", src })
     // Caution: **Point it back before checking**, or every case after this one runs refused.
-    sys.set_env(cache_env, cache_root(arena)) catch panic("the cache cannot be pointed back")
+    sys.set_env(CACHE_ENV, cache_root(arena)) catch panic("the cache cannot be pointed back")
     verdict.check(name_run,
         !ran.exited_with(0) && ran.out.find_str("chmod go-w").is_some(), ran.out)
     verdict.check(name_cc,
@@ -528,7 +528,7 @@ priv fn case_refusals()
         U8[][]::{ "--cflags=-O0", "a.kspl", "a.c" }, "build")
     ng_case("--pkg-src-dir does not take effect on info",
         U8[][]::{ "--pkg-src-dir=x", "info", "std-dir" }, "compile run build lint doc")
-    // argp rejects naming two subcommands.
+    // argparse rejects naming two subcommands.
     ng_case("two subcommands cannot be written", U8[][]::{ "fmt", "lint", "a.kspl" }, "")
     // An option given with nothing after its `=` is refused, never read as the default.
     ng_case("--surface-scope= is refused, not read as pub",
@@ -585,10 +585,10 @@ priv fn case_fmt_reads_back(arena: Arena$@) //< checks `fmt` writes no file that
     fs.mkdir_all(dir) catch {}
     path: = fs.join(dir, "h.kspl", arena)
     src: = arena.text().s("import \"std/io\"\n\n")
-        .s("priv const limit_with_a_rather_long_descriptive_name_for_the_probe: Sz = 3\n\n")
+        .s("priv const LIMIT_WITH_A_RATHER_LONG_DESCRIPTIVE_NAME_FOR_THE_PROBE: Sz = 3\n\n")
         .s("fn main(): I32\n    $t: Sz = 0\n")
         .s("    for $index_of_thing: Sz = 0; index_of_thing < ")
-        .s("limit_with_a_rather_long_descriptive_name_for_the_probe; index_of_thing += 1\n")
+        .s("LIMIT_WITH_A_RATHER_LONG_DESCRIPTIVE_NAME_FOR_THE_PROBE; index_of_thing += 1\n")
         .s("        t += 1\n    io.out().s(\"\\{t\\}\\n\")\n    return 0\n").take()
     io.write_file(path, src) catch
         verdict.check("fmt read-back: the sample can be written", false, path)
@@ -678,15 +678,15 @@ priv fn case_entry_spelling(arena: Arena$@)
         !bad.exited_with(0) &&
         bad.out.find_str(arena.text().s("\{want\}/src/hw.kspl").take()).is_some(), bad.out)
 
-priv fn json_lines(args: U8[][], arena: Arena$@): List<|json.Val|> //<
+priv fn json_lines(args: U8[][], arena: Arena$@): List<|json.Value|> //<
     //< Each line of what one run wrote to stderr, read as JSON (a line that is not is `null_val`)
     //<
     //< **Only standard error**: `harness.ksplc` joins the two streams, and json is promised on
     //< standard error alone.
     r: =
-        subproc.run_capture(harness.ksplc_argv(args), "", verdict.default_timeout_ms,
+        subproc.run_capture(harness.ksplc_argv(args), "", verdict.DEFAULT_TIMEOUT_MS,
         4 * 1024 * 1024, arena) catch panic("ksplc must start")
-    $rows: = List<|json.Val|>.new(arena)
+    $rows: = List<|json.Value|>.new(arena)
     for line in r.stderr_data.lines(arena)
         doc: = json.parse(line, arena) catch
             rows.push(.null_val)
@@ -694,14 +694,14 @@ priv fn json_lines(args: U8[][], arena: Arena$@): List<|json.Val|> //<
         rows.push(doc.val)
     return rows
 
-priv fn is_null(v: json.Val): Bool
+priv fn is_null(v: json.Value): Bool
     switch v
     case .null_val
         return true
     default
         return false
 
-priv fn closes(rows: List<|json.Val|>@, result: U8[], errors: I32, warnings: I32): Bool //<
+priv fn closes(rows: List<|json.Value|>@, result: U8[], errors: I32, warnings: I32): Bool //<
     //< Whether every line is an object, the last the closing one with this result and these counts
     if rows.len == 0
         return false
@@ -731,7 +731,7 @@ priv fn case_diagnostic_json(arena: Arena$@) //<
         verdict.check("json diagnostics: the sample can be written", false, warn)
         return
     errs: = json_lines(U8[][]::{ "--diagnostic-format=json", bad, out_c }, arena)
-    one: = errs.get(0) if errs.len == 2 else json.Val.null_val
+    one: = errs.get(0) if errs.len == 2 else json.Value.null_val
     verdict.check("json diagnostics: an error is one line of one object",
         errs.len == 2 &&
         one.get("severity").as_str().unwrap_or("").equals("error") &&
@@ -756,7 +756,7 @@ priv fn case_diagnostic_json(arena: Arena$@) //<
     verdict.check("json diagnostics: the text form names the same place and says the same",
         head.len > 12 && text.out.find_str(head).is_some(), text.out)
     warns: = json_lines(U8[][]::{ "lint", "--diagnostic-format=json", warn }, arena)
-    w: = warns.get(0) if warns.len == 2 else json.Val.null_val
+    w: = warns.get(0) if warns.len == 2 else json.Value.null_val
     verdict.check("json diagnostics: a code has a key of its own, out of the message",
         w.get("code").as_str().unwrap_or("").equals("W0207") &&
         !w.get("message").as_str().unwrap_or("").starts_with("["),
@@ -791,7 +791,7 @@ priv fn case_diagnostic_json(arena: Arena$@) //<
         verdict.check("json diagnostics: the sample can be written", false, broken)
         return
     syn: = json_lines(U8[][]::{ "--diagnostic-format=json", broken, out_c }, arena)
-    s0: = syn.get(0) if syn.len > 0 else json.Val.null_val
+    s0: = syn.get(0) if syn.len > 0 else json.Value.null_val
     verdict.check("json diagnostics: a syntax error has the kind `syntax` and no code",
         s0.get("kind").as_str().unwrap_or("").equals("syntax") && s0.find("code").is_some() &&
         is_null(s0.get("code")) && s0.get("line").as_int().unwrap_or(0I32) == 2I32,
@@ -812,7 +812,7 @@ fn main(): I32
     // Caution: **Point the cache at your own directory before starting.** `clean` really
     // erases: left on the shared cache it erases what suites running in parallel are building (a
     // `ksplc run` loses a file mid-build).
-    sys.set_env(cache_env, cache_root(arena)) catch
+    sys.set_env(CACHE_ENV, cache_root(arena)) catch
         return harness.fatal("the cache cannot be pointed at this suite's own directory")
     // Caution: **Clear the package directory setting.** The Makefile passes it on, and this suite's
     // missing import must be searched from the working directory, as when nothing is set.

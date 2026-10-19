@@ -13,7 +13,7 @@ import "std/strnum" // `to_i64` / `to_f64` / `parse_size`
 struct Config //< the formatting specification
     //<
     //< Caution: **Add a field's key and its reading in the same change** (the reason is at
-    //< `indent_width_key`). A trailing comma has no key: `check_line_wrap` follows the source.
+    //< `INDENT_WIDTH_KEY`). A trailing comma has no key: `check_line_wrap` follows the source.
     //< `append_key` walks the field table, so a new field joins the cache key by itself.
     indent_width: Sz
     column_limit: Sz //<
@@ -84,16 +84,16 @@ priv fn match_style_bool(style_str: U8[], i: Sz, key: U8[], now: Bool): Bool //<
     j: = match_style_key(style_str, i, key)
     return now if j == 0 else style_str.starts_with("true", j)
 
-priv const indent_width_key: U8[] = "IndentWidth" //<
+priv const INDENT_WIDTH_KEY: U8[] = "IndentWidth" //<
     //< `--style`'s keys, one per `Config` field, each written here alone
     //<
     //< Caution: **When adding one, add `Config`'s field, its reading and its place in
     //< `check_style_keys` in the same change.** Otherwise the key is accepted and does nothing
     //< (Principle 5). The keys follow the `--style` table in ksplc/docs/SPEC-tools.md (the check
     //< is tests/support/conventions_iface.kspl).
-priv const column_limit_key: U8[] = "ColumnLimit"
-priv const short_blocks_key: U8[] = "AllowShortBlocks"
-priv const short_functions_key: U8[] = "AllowShortFunctions"
+priv const COLUMN_LIMIT_KEY: U8[] = "ColumnLimit"
+priv const SHORT_BLOCKS_KEY: U8[] = "AllowShortBlocks"
+priv const SHORT_FUNCTIONS_KEY: U8[] = "AllowShortFunctions"
 
 priv fn check_style_keys(style_str: U8[], arena: Arena$@): U8[] //<
     //< It splits the specification at `,` and checks that each item's key is known
@@ -101,7 +101,7 @@ priv fn check_style_keys(style_str: U8[], arena: Arena$@): U8[] //<
     //< It returns "" where all are known.
     //< Caution: **An unknown key must not be silently ignored.** apply_style tries only known keys,
     //< so `IndentWith: 8` would match nothing and the defaults would come back as a success.
-    known: U8[][4] = ::{ indent_width_key, column_limit_key, short_blocks_key, short_functions_key }
+    known: U8[][4] = ::{ INDENT_WIDTH_KEY, COLUMN_LIMIT_KEY, SHORT_BLOCKS_KEY, SHORT_FUNCTIONS_KEY }
     for item in style_str.split(',', arena)
         key: = item.sub(0, item.find_char(':').unwrap_or(item.len)).trim_spaces()
         if key.len == 0
@@ -127,11 +127,11 @@ fn apply_style(style_str: U8[], config: Config$@, arena: Arena$@): U8[] //<
         return bad
     for i in Range.asc(style_str.len)
         config.indent_width =
-            match_style_size(style_str, i, indent_width_key, config.indent_width)
+            match_style_size(style_str, i, INDENT_WIDTH_KEY, config.indent_width)
         config.column_limit =
-            match_style_size(style_str, i, column_limit_key, config.column_limit)
+            match_style_size(style_str, i, COLUMN_LIMIT_KEY, config.column_limit)
         config.allow_short_blocks =
-            match_style_bool(style_str, i, short_blocks_key, config.allow_short_blocks)
+            match_style_bool(style_str, i, SHORT_BLOCKS_KEY, config.allow_short_blocks)
         config.allow_short_functions =
-            match_style_bool(style_str, i, short_functions_key, config.allow_short_functions)
+            match_style_bool(style_str, i, SHORT_FUNCTIONS_KEY, config.allow_short_functions)
     return ""

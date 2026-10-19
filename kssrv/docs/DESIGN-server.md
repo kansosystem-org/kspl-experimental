@@ -93,7 +93,7 @@ Caution: **Watch writable only while part-sent.** A socket whose send buffer is 
 
 ### The connection table is fixed-length; free slots are zero handles
 
-The table is one `Rc<|Conn|>[max_conns]` (`max_conns` in `kssrv/conn.kspl`), indexed by `reactor`'s token (the number it gives each socket). `Rc` is a reference-counted handle (ARC: the memory is freed when the last handle goes). A free slot is `Rc.empty()`, an ARC handle's zero value, told apart by `is_empty()`.
+The table is one `Rc<|Conn|>[max_conns]` (`MAX_CONNS` in `kssrv/conn.kspl`), indexed by `reactor`'s token (the number it gives each socket). `Rc` is a reference-counted handle (ARC: the memory is freed when the last handle goes). A free slot is `Rc.empty()`, an ARC handle's zero value, told apart by `is_empty()`.
 
 * **Why fixed-length**: concurrent connections need a cap anyway, or memory grows with the number of peers. A capped table need not grow, and going from token to slot is one subscript.
 * **Why `Rc`**: each occupied slot owns an allocated connection; an empty slot owns nothing. Read, build and send borrow from the slot, which only the outer loop drops, after the driver returns. So those phases carry no ownership transitions of their own.
@@ -122,7 +122,7 @@ Each time a socket is reported ready, kssrv does only a limited amount of work o
 | What is capped | By what |
 | :-- | :-- |
 | `read`'s repeats, and the requests handled in a row | `max_read_rounds` |
-| The bytes held part-read | `http.max_head_bytes` plus the body cap |
+| The bytes held part-read | `http.MAX_HEAD_BYTES` plus the body cap |
 
 (`conn_read` in `kssrv/main.kspl`.)
 
@@ -142,14 +142,14 @@ With no free slot, an accepted connection is closed without a response. Making i
 
 ### A connection that passes nothing for a while is dropped
 
-**A connection that has neither sent nor received a byte for `idle_conn_us` is closed** by `sweep_done` (`moved_us` in `kssrv/conn.kspl`). Without it, a client that connects and goes quiet holds its slot for good, and `max_conns` such clients shut everyone else out.
+**A connection that has neither sent nor received a byte for `idle_conn_us` is closed** by `sweep_done` (`moved_us` in `kssrv/conn.kspl`). Without it, a client that connects and goes quiet holds its slot for good, and `MAX_CONNS` such clients shut everyone else out.
 
 * **A page's hold is exempt** (`GET /api/here`, `holding`): it is quiet by design, and closing it would read as the page having gone.
 * **The clock restarts on every byte either way**, so a slow but moving transfer is not cut.
 
 ### A request has a deadline from its first byte
 
-**A request still arriving `request_time_us` after its first byte is closed** by `sweep_done` (`request_since_us` in `kssrv/conn.kspl`). **A request must arrive whole within that deadline.** The idle timer alone does not bound it, because it restarts on every byte. So a client that sends one byte every few seconds holds its slot for good. `max_conns` such clients shut everyone out (the attack called Slowloris).
+**A request still arriving `request_time_us` after its first byte is closed** by `sweep_done` (`request_since_us` in `kssrv/conn.kspl`). **A request must arrive whole within that deadline.** The idle timer alone does not bound it, because it restarts on every byte. So a client that sends one byte every few seconds holds its slot for good. `MAX_CONNS` such clients shut everyone out (the attack called Slowloris).
 
 * **One deadline for the head and body together.** The bodies taken are small (`max_request_body` facing outward), so a client that can send at all sends one well within it. A minimum rate would add a second figure to tune for no case kssrv meets.
 * **The clock starts at the request's first byte**, not at accept, so a keep-alive connection waiting between requests is the idle timer's to judge.
@@ -182,13 +182,13 @@ With no free slot, an accepted connection is closed without a response. Making i
 * Caution: **Do not watch it for readable.** `wait()` would return at once, over and over, burning the CPU. Once there is something to send, it is watched for writable.
 * **Put the decision to close in one place** (`sweep_done`). No notification will come, so nothing else decides it, and without it the slot stays filled.
 
-**Decide it by `read`'s answer, not by the event mark.** POSIX's `poll` shows a half-close only as `POLLIN`, while `WSAPoll` (Windows) raises `POLLHUP`. Folding `POLLHUP` into "it became unusable" would set off the chain above on Windows alone. `std/reactor` keeps the two marks apart (`err_or_closed`, `hangup`). kssrv reads even on `hangup` until `read` returns 0, so the environment need not be checked. `make test-conventions` checks that the marks agree on both platforms.
+**Decide it by `read`'s answer, not by the event mark.** POSIX's `poll` shows a half-close only as `POLLIN`, while `WSAPoll` (Windows) raises `POLLHUP`. Folding `POLLHUP` into "it became unusable" would set off the chain above on Windows alone. `std/reactor` keeps the two marks apart (`ERR_OR_CLOSED`, `HANGUP`). kssrv reads even on `HANGUP` until `read` returns 0, so the environment need not be checked. `make test-conventions` checks that the marks agree on both platforms.
 
 Note: The check is in `keepalive_cases` in `kssrv/tests/main.kspl` (it closes only the sending side after a request, and waits for the answer to come through).
 
 ### A connection reads what the peer sends after the answer
 
-**Before closing a connection after its last answer, kssrv closes its sending side. It then keeps reading and throwing away what the client still sends.** This goes on until the client closes or `linger_us` (5 seconds) passes (`lingering_since_us` in `kssrv/conn.kspl`, `conn_read` and `sweep_done` in `kssrv/main.kspl`). The same reader handles both phases with the same fairness cap and socket-error rules. Only a request read is buffered, and only a lingering EOF finishes the connection.
+**Before closing a connection after its last answer, kssrv closes its sending side. It then keeps reading and throwing away what the client still sends.** This goes on until the client closes or `LINGER_US` (5 seconds) passes (`lingering_since_us` in `kssrv/conn.kspl`, `conn_read` and `sweep_done` in `kssrv/main.kspl`). The same reader handles both phases with the same fairness cap and socket-error rules. Only a request read is buffered, and only a lingering EOF finishes the connection.
 
 **Closing the socket with the peer's bytes unread makes the OS answer with a reset** (a TCP RST, which aborts the connection). The usual case is a client still sending a body past the cap, refused with a 413 as soon as the head names its length. On Windows a reset throws away what the client has received and not yet read. So the client sees a broken connection in place of the 413. On Linux the 413 survives, so the loss shows on Windows alone. nginx and Apache read on after their last answer for the same reason.
 
@@ -254,7 +254,7 @@ Every log line goes through one buffered logger on the server's one thread. The 
 
 ### The log is flushed at fixed intervals, not per line
 
-`stdout` stays buffered and is flushed just before `wait()`, **once `flush_gap_us` has passed since the last flush** (`kssrv/main.kspl`).
+`stdout` stays buffered and is flushed just before `wait()`, **once `FLUSH_GAP_US` has passed since the last flush** (`kssrv/main.kspl`).
 
 * **Only the start-up lines are written at once**, before the loop, because whoever waits for the server watches for them (`kssrv/tests/start.kspl` for `kssrv: I: listening on`, `kspage/Makefile` for `kssrv: I: open `).
 * **An idle server still flushes a new line in the same round**, since an arriving connection makes `wait()` return at once.

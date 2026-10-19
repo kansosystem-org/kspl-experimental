@@ -11,7 +11,7 @@
 //   ed.clamp();
 //   page: = flow.layout(doc, sheet, src, width, arena);
 // ==========================================
-import "kspage/expr/addr" + { Addr, Reader, broken_ref }
+import "kspage/expr/addr" + { Addr, Reader, BROKEN_REF }
 import "kspage/expr/shown"
 import "kspage/expr/value" { Cell_error, Fold, Value, fn_kind, folded, number, rounded, take }
 import "kspage/model/day"
@@ -25,16 +25,16 @@ import "std/str" { Str_builder }
 import "std/strfmt" as _strfmt
 import "std/strnum"
 
-priv const unvisited: U8 = 0U8 //< a cycle is detected by whether a cell is being computed
-priv const working: U8 = 1U8
-priv const settled: U8 = 2U8
+priv const UNVISITED: U8 = 0U8 //< a cycle is detected by whether a cell is being computed
+priv const WORKING: U8 = 1U8
+priv const SETTLED: U8 = 2U8
 
-priv const max_nest: Sz = 64 //< how deep one formula may nest (parentheses, `-`, `if … else`)
+priv const MAX_NEST: Sz = 64 //< how deep one formula may nest (parentheses, `-`, `if … else`)
     //<
     //< As Excel's cap of 64. **Each level is a call.** Without a cap, a formula of a few kilobytes
     //< (`((((…1…))))`) runs the stack out, and on wasm it writes over the page's memory.
 
-priv const max_depth: Sz = 256 //< how deep one computation goes before a chain is set aside
+priv const MAX_DEPTH: Sz = 256 //< how deep one computation goes before a chain is set aside
     //<
     //< It counts the cells a chain passes through (`=A2`, `=A3`, …) and the nesting inside them.
     //< **A deeper chain is not refused**: its deepest cell is set aside and settled first, and then
@@ -76,8 +76,8 @@ priv struct Book //< the document's tables together
         //<
         //< **The screen lays it out as typed**, since the user cannot edit it without seeing the
         //< typed text. Its value is still computed and kept, for export and for the other cells.
-    depth: Sz //< how deep the computation under way is (`max_depth`)
-    // A chain went past `max_depth` at `deferred`: what was computed on the way is not kept, and
+    depth: Sz //< how deep the computation under way is (`MAX_DEPTH`)
+    // A chain went past `MAX_DEPTH` at `deferred`: what was computed on the way is not kept, and
     // `settle` computes `deferred` first.
     deferring: Bool
     deferred: Cell_at
@@ -113,7 +113,7 @@ priv fn new_grid(table: Block$@, book: Book$@): Grid$@
         .arena = arena,
     }
     for $i: Sz = 0; i < rows * cols; i += 1
-        g.state.push(unvisited)
+        g.state.push(UNVISITED)
         g.value.push(Cell_error.no_cell.failed())
         g.anchor.push(null)
     // **A cell's position counts merges** (`Block.tiles_of`). Counted separately, the address in a
@@ -146,11 +146,11 @@ priv struct P //< the state partway through reading a formula
     book: Book$@
     g: Grid$@ //<
         //< The table it is in; null for a formula in the body.
-    nest: Sz //< how deep this formula is nested where it is read now (`max_nest`)
+    nest: Sz //< how deep this formula is nested where it is read now (`MAX_NEST`)
 
 impl P
-    fn enter(p: Self$@): Bool //< goes one level deeper; false past `max_nest`
-        if p.nest >= max_nest
+    fn enter(p: Self$@): Bool //< goes one level deeper; false past `MAX_NEST`
+        if p.nest >= MAX_NEST
             return false
         p.nest += 1
         p.book.depth += 1
@@ -180,26 +180,26 @@ priv fn parse_number(p: P$@): Value //< reads a number
         return Cell_error.syntax.failed()
     return number(v)
 
-priv const met_round: Sz = 0 //<
+priv const MET_ROUND: Sz = 0 //<
     //< The methods that can follow a value
     //<
     //< **They cannot be used on a range** (only folding takes one: `fn_kind` in
     //< `expr/value.kspl`).
-priv const met_year: Sz = 1
-priv const met_month: Sz = 2
-priv const met_day: Sz = 3
+priv const MET_YEAR: Sz = 1
+priv const MET_MONTH: Sz = 2
+priv const MET_DAY: Sz = 3
 
 priv fn method_of(name: U8[]): Sz //< the names of the methods that can follow a value
     //<
     //< **An unknown name is rejected** (skipped over, a typo would pass silently).
     if name.equals("round")
-        return met_round
+        return MET_ROUND
     if name.equals("year")
-        return met_year
+        return MET_YEAR
     if name.equals("month")
-        return met_month
+        return MET_MONTH
     if name.equals("day")
-        return met_day
+        return MET_DAY
     return -1
 
 priv fn take_span(g: Grid$@, f: Fold$@, a: Addr, b: Addr) //< folds the cells from a to b
@@ -348,8 +348,8 @@ priv fn parse_broken(p: P$@): Value //< the mark of a removed position, `#REF!`
     //< **A broken reference's mark can be written inside a formula**, with its table's name or
     //< without. Deleting a row or column rewrites a removed position to it (closed up, it would
     //< silently point at the next cell).
-    if p.c.src.starts_with(broken_ref, p.c.pos)
-        p.c.pos += broken_ref.len
+    if p.c.src.starts_with(BROKEN_REF, p.c.pos)
+        p.c.pos += BROKEN_REF.len
         return Cell_error.no_cell.failed()
     return Cell_error.syntax.failed()
 
@@ -427,7 +427,7 @@ priv fn parse_method(p: P$@, v: Value): Value //< one method following a value
         return Cell_error.no_name.failed()
     if !eat(p, '(')
         return Cell_error.syntax.failed()
-    if kind == met_round
+    if kind == MET_ROUND
         places: = parse_pick(p)
         if !eat(p, ')')
             return Cell_error.syntax.failed()
@@ -442,9 +442,9 @@ priv fn parse_method(p: P$@, v: Value): Value //< one method following a value
     // too large to convert names no day.
     if days: = shown.whole_of(v.num)
         c: = day.civil_of(days)
-        if kind == met_year
+        if kind == MET_YEAR
             return number(F64::c.year)
-        if kind == met_month
+        if kind == MET_MONTH
             return number(F64::c.month)
         return number(F64::c.day)
     return Cell_error.not_number.failed()
@@ -497,17 +497,17 @@ priv fn parse_expr(p: P$@): Value
     return left
 
 // ---- Comparing ----
-priv const cmp_none: Sz = 0 //<
+priv const CMP_NONE: Sz = 0 //<
     //< The ways of comparing; this first one means no comparison follows
     //<
     //< **Only numbers can be compared** (a text cell gives "not a number").
     //< The result is 1 (true) or 0 (false). Multiply for "and"; add and test > 0 for "or".
-priv const cmp_eq: Sz = 1
-priv const cmp_ne: Sz = 2
-priv const cmp_lt: Sz = 3
-priv const cmp_le: Sz = 4
-priv const cmp_gt: Sz = 5
-priv const cmp_ge: Sz = 6
+priv const CMP_EQ: Sz = 1
+priv const CMP_NE: Sz = 2
+priv const CMP_LT: Sz = 3
+priv const CMP_LE: Sz = 4
+priv const CMP_GT: Sz = 5
+priv const CMP_GE: Sz = 6
 
 priv fn compare_op(p: P$@): Sz //< reads the comparison operator that comes next
     //<
@@ -517,28 +517,28 @@ priv fn compare_op(p: P$@): Sz //< reads the comparison operator that comes next
     next: = addr.at_next(p.c@)
     if c == '<' && next == '='
         p.c.pos += 2
-        return cmp_le
+        return CMP_LE
     if c == '<' && next == '>'
         p.c.pos += 2
-        return cmp_ne
+        return CMP_NE
     if c == '>' && next == '='
         p.c.pos += 2
-        return cmp_ge
+        return CMP_GE
     if c == '<' || c == '>' || c == '='
         p.c.pos += 1
-        return cmp_lt if c == '<' else (cmp_gt if c == '>' else cmp_eq)
-    return cmp_none
+        return CMP_LT if c == '<' else (CMP_GT if c == '>' else CMP_EQ)
+    return CMP_NONE
 
 priv fn compared(op: Sz, a: F64, b: F64): Bool
-    if op == cmp_eq
+    if op == CMP_EQ
         return a == b
-    if op == cmp_ne
+    if op == CMP_NE
         return a != b
-    if op == cmp_lt
+    if op == CMP_LT
         return a < b
-    if op == cmp_le
+    if op == CMP_LE
         return a <= b
-    if op == cmp_gt
+    if op == CMP_GT
         return a > b
     return a >= b
 
@@ -549,7 +549,7 @@ priv fn parse_compare(p: P$@): Value //<
     //< with the next operand, which is not what it looks like).
     left: = parse_expr(p)
     op: = compare_op(p)
-    if op == cmp_none
+    if op == CMP_NONE
         return left
     right: = parse_expr(p)
     if !left.ok
@@ -625,32 +625,32 @@ priv fn value_at(g: Grid$@, r: Sz, c: Sz): Value //< cell (r, c)'s value
         return Cell_error.no_cell.failed()
     i: = r * g.cols + c
     st: = g.state.get(i)
-    if st == settled
+    if st == SETTLED
         return g.value.get(i)
-    if st == working
+    if st == WORKING
         return Cell_error.circular.failed()
     book: = g.book
     // Caution: **Set the chain aside rather than go deeper**: each cell is several calls, and a
     // chain of thousands runs the stack out. What it stands for is not kept (`deferring`).
-    if book.depth >= max_depth
+    if book.depth >= MAX_DEPTH
         if !book.deferring
             book.deferring = true
             book.deferred = Cell_at::{ .g = g, .r = r, .c = c }
         return Cell_error.no_cell.failed()
-    g.state.set(i, working)
+    g.state.set(i, WORKING)
     book.depth += 1
     v: = compute(g, r, c)
     book.depth -= 1
     if book.deferring
-        g.state.set(i, unvisited)
+        g.state.set(i, UNVISITED)
         return v
     g.value.set(i, v)
-    g.state.set(i, settled)
+    g.state.set(i, SETTLED)
     return v
 
 priv fn settle(g: Grid$@, r: Sz, c: Sz): Value //< cell (r, c)'s value, however long its chain
     //<
-    //< A chain set aside (`max_depth`) has its deepest cell computed first, then is retried. **A
+    //< A chain set aside (`MAX_DEPTH`) has its deepest cell computed first, then is retried. **A
     //< cell set aside while it is already waiting depends on itself.** That is a cycle longer than
     //< one pass sees. It is marked as one, so the rest of it reads `#CYCLE!` as a short cycle does.
     book: = g.book
@@ -668,7 +668,7 @@ priv fn settle(g: Grid$@, r: Sz, c: Sz): Value //< cell (r, c)'s value, however 
         if waits(todo@, d)
             i: = d.r * d.g.cols + d.c
             d.g.value.set(i, Cell_error.circular.failed())
-            d.g.state.set(i, settled)
+            d.g.state.set(i, SETTLED)
             continue
         todo.push(d)
     book.deferring = false

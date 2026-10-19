@@ -46,12 +46,12 @@ $stack_car: U8[2560]
 // copy of the body (zero copy).
 $arena_buf: U8[24576]
 
-const record_marker: U8[] = "car1" //< the marker that identifies this writer
+const RECORD_MARKER: U8[] = "car1" //< the marker that identifies this writer
     //<
     //< Caution: **Give it a different name from the other firmwares.** They share the region, and
     //< with the same name each reads another's record as its own (a different marker erases it
     //< once).
-const sample_every: U32 = 50 //<
+const SAMPLE_EVERY: U32 = 50 //<
     //< How many rounds between saving one observation
     //<
     //< A round where the manoeuvre changed is always saved as well. **Not every round**: at 16
@@ -60,52 +60,52 @@ const sample_every: U32 = 50 //<
 // each save uses up room**; after a power cut it resumes from the last save.
 // Caution: **Do not make it shorter** — it cuts the room for the observations, and interrupts
 // stop while the write runs.
-const model_save_every: U32 = 600 // 60 seconds at a 100ms period
+const MODEL_SAVE_EVERY: U32 = 600 // 60 seconds at a 100ms period
 
 // --- the safety timeouts for stopping remotely / not running too long ---
-const ir_rearm_rounds: U32 = 8 //<
+const IR_REARM_ROUNDS: U32 = 8 //<
     //< How long a press must be held to re-arm the car [rounds]
     //<
     //< **These three are outside the policy**: like the battery and point-blank range, the car
     //< decides them alone, with no link.
     //< Caution: **Only a held press may re-arm it**; a brief press would set it off in the hand
     //< picking it up. A repeat comes about every 108ms, one per round (8 rounds ≈ 0.8s held).
-const ir_release_rounds: U32 = 3 //< how many rounds with no frame count as released
+const IR_RELEASE_ROUNDS: U32 = 3 //< how many rounds with no frame count as released
     //<
     //< Longer than the repeat interval (108ms), or a gap in a held press restarts the count.
 
-const ir_dump_rounds: U32 = 25 //< how long a press must be held to dump the record [rounds]
+const IR_DUMP_ROUNDS: U32 = 25 //< how long a press must be held to dump the record [rounds]
     //<
     //< **Make it longer than re-arming**, the everyday action (about three times). **Do not read it
     //< as seconds** — a round stretches by up to 70ms while it receives an IR frame.
-const ir_wipe_rounds: U32 = 60 //< how long a press must be held to erase the record [rounds]
+const IR_WIPE_ROUNDS: U32 = 60 //< how long a press must be held to erase the record [rounds]
     //<
     //< **Make it longer than dumping**, since erasing cannot be undone. **It is decided by the
     //< press's length at release**, so it cannot trigger dumping partway (`watch_remote`).
 // The limit on driving [rounds]; 0 is unlimited. **The only stop that works while nobody is
 // watching** (IR needs line of sight). A held press re-arms it.
-const max_driving_rounds: U32 = 600 // 60 seconds at a 100ms period
+const MAX_DRIVING_ROUNDS: U32 = 600 // 60 seconds at a 100ms period
 
-const console_timeout_ms: U32 = 8000 //< the limit on waiting for the console to become usable
+const CONSOLE_TIMEOUT_MS: U32 = 8000 //< the limit on waiting for the console to become usable
     //<
     //< Caution: **Wait before the very first line.** A `write` before USB is configured drops the
     //< line uncounted (not in `tx_dropped`). Keep it finite — with no USB it never gets configured.
 
-const loop_interval_ms: U32 = 100 //< the control period [ms]
+const LOOP_INTERVAL_MS: U32 = 100 //< the control period [ms]
     //<
     //< The ultrasonic measurement takes up to 36ms, so keep this well above that.
-const line_interval_ms: U32 = 10 //<
+const LINE_INTERVAL_MS: U32 = 10 //<
     //< The interval for reading only the line partway through a round and steering again [ms]
     //<
     //< **Two or more reads while turning across the line**, or the crossing goes unnoticed.
     //< **Make it divide loop_interval_ms** — otherwise the remainder goes unsteered. The net's step
     //< (`car_model.step`) must fit in it too.
-const emergency_mm: U32 = 100 //<
+const EMERGENCY_MM: U32 = 100 //<
     //< The distance at which it backs off, before the policy's decision [mm]
 
 // The prediction of the next round's three line bits (0 to 7), and whether that net is usable.
-// **`cmodel.no_prediction` means "no answer yet"** (0 is a prediction of all white).
-$last_pred: I32 = cmodel.no_prediction
+// **`cmodel.NO_PREDICTION` means "no answer yet"** (0 is a prediction of all white).
+$last_pred: I32 = cmodel.NO_PREDICTION
 $model_ready: Bool = false
 // The time one learning step took [us]. **Measure it apart from `us=`** (deciding alone), or
 // deciding looks slower. **The period adds up**: the work plus 100ms of pump.
@@ -174,9 +174,9 @@ priv fn apply(lon: I32, lat: I32, rot: I32, by: csample.Author) //<
     //< It records the capped value, the command actually sent, and its source together, so they
     //< never come from different rounds.
     d: = motor.divisor(lon, lat, rot)
-    last_lon = lon * motor.cap / d
-    last_lat = lat * motor.cap / d
-    last_rot = rot * motor.cap / d
+    last_lon = lon * motor.CAP / d
+    last_lat = lat * motor.CAP / d
+    last_rot = rot * motor.CAP / d
     last_by = by
     motor.drive(last_lon, last_lat, last_rot)
 
@@ -211,7 +211,7 @@ priv fn watch_battery(ln: con.Line$@): Bool //<
         halted = false
         // Caution: Reset the driving-time budget too, or it runs out of time again at once.
         driving_rounds = 0
-        con.say(ln, "[car]", battery.back_note)
+        con.say(ln, "[car]", battery.BACK_NOTE)
     default {}
     return may
 
@@ -243,7 +243,7 @@ priv fn watch_remote(ln: con.Line$@): Bool //<
             return false
         return false
     ir_quiet_rounds += 1
-    if ir_quiet_rounds != ir_release_rounds
+    if ir_quiet_rounds != IR_RELEASE_ROUNDS
         return !halted // neither released, nor the moment of release
     // --- the moment the button is released. Re-arming is decided here and only here ---
     //
@@ -258,13 +258,13 @@ priv fn watch_remote(ln: con.Line$@): Bool //<
         return false
     // **Check the longer press first**, or a long press would trigger re-arming. Dumping does not
     // lift the stop.
-    if held >= ir_wipe_rounds
+    if held >= IR_WIPE_ROUNDS
         wipe_requested = true
         return false
-    if held >= ir_dump_rounds
+    if held >= IR_DUMP_ROUNDS
         dump_requested = true
         return false
-    if held < ir_rearm_rounds
+    if held < IR_REARM_ROUNDS
         return false // a short press does not bring it back
     halted = false
     halt_needs_remote = false
@@ -280,7 +280,7 @@ priv fn watch_run_time(): Bool //<
     if halted
         return false
     driving_rounds += 1
-    if max_driving_rounds > 0 && driving_rounds >= max_driving_rounds
+    if MAX_DRIVING_ROUNDS > 0 && driving_rounds >= MAX_DRIVING_ROUNDS
         halt_remote(.time_limit)
         return false
     return true
@@ -292,7 +292,7 @@ priv fn pump_watch(ms: U32) //< waits while running USB, checking IR as well
     //< output is delayed.
     for $i: U32 = 0; i < ms; i += 1
         boot.pump(1)
-        f: = ir.try_receive(board.ir_receiver)
+        f: = ir.try_receive(board.IR_RECEIVER)
         if f.ok
             ir_frames += 1
             ir_seen_in_round = true
@@ -311,7 +311,7 @@ priv fn one_round(p: policy.Policy$@, arena: Arena$@) //< runs one round
 
     // Point-blank range is decided here, not by a learned function. **On the raw reading**: the
     // median notices an approach a round or two late, and a false alarm is on the safe side.
-    if raw > 0 && raw < emergency_mm
+    if raw > 0 && raw < EMERGENCY_MM
         last_dist = raw
         emergencies += 1
         apply(-45, 0, 0, .safety)
@@ -327,15 +327,15 @@ priv fn one_round(p: policy.Policy$@, arena: Arena$@) //< runs one round
 priv fn track_while_pumping(p: policy.Policy$@, arena: Arena$@, driving: Bool): Bool //<
     //< Spends one round's waiting time running USB and IR
     //<
-    //< **The ultrasonic is not read again** (too slow for `line_interval_ms`). **A round it may not
+    //< **The ultrasonic is not read again** (too slow for `LINE_INTERVAL_MS`). **A round it may not
     //< drive on is left alone**, or steering would overwrite the command that stopped it.
     mark: = arena.save()
     $steered: = false
     $waited: U32 = 0
-    for waited + line_interval_ms <= loop_interval_ms
-        pump_watch(line_interval_ms)
-        waited += line_interval_ms
-        if !driving || (last_dist > 0 && last_dist < emergency_mm)
+    for waited + LINE_INTERVAL_MS <= LOOP_INTERVAL_MS
+        pump_watch(LINE_INTERVAL_MS)
+        waited += LINE_INTERVAL_MS
+        if !driving || (last_dist > 0 && last_dist < EMERGENCY_MM)
             continue
         line: = track.read_bits()
         if line == last_line
@@ -353,8 +353,8 @@ priv fn track_while_pumping(p: policy.Policy$@, arena: Arena$@, driving: Bool): 
         if last_lon != prev_lon || last_lat != prev_lat || last_rot != prev_rot
             steered = true
     // Caution: Wait out the remainder too, or the period shrinks and the round limit comes early.
-    if waited < loop_interval_ms
-        pump_watch(loop_interval_ms - waited)
+    if waited < LOOP_INTERVAL_MS
+        pump_watch(LOOP_INTERVAL_MS - waited)
     return steered
 
 priv fn pct_field(ln: con.Line$@, label: U8[], permille: U32) //<
@@ -466,23 +466,23 @@ fn car_task(_arg: Void$@): Void
     // Caution: But limit the wait — on battery alone it never gets configured, and it would never
     // set off.
     $console_wait: U32 = 0
-    for !usb.is_configured() && console_wait < console_timeout_ms
+    for !usb.is_configured() && console_wait < CONSOLE_TIMEOUT_MS
         boot.pump(100)
         console_wait += 100
         // **Keep it lit through the wait** (seconds on battery).
         status.State.starting.show(false)
 
-    if !records.claim(record_marker)
+    if !records.claim(RECORD_MARKER)
         con.say(ln@, "[car]", "no on-board records (flash region unavailable)")
     else if records.wiped()
         con.say(ln@, "[car]", "records erased (first use, or another firmware was here)")
     else
-        csample.say_last(ln@, store.kind_sample)
+        csample.say_last(ln@, store.KIND_SAMPLE)
 
     if pilot_boot.connect(ln@)
         blob: = pilot_boot.fetch_policy(ln@, arena@)
         // Caution: Read it to the end before closing (the reason is at nc.drain_stream).
-        _rest: = nc.drain_stream(pilot_boot.fetch_idle_ms)
+        _rest: = nc.drain_stream(pilot_boot.FETCH_IDLE_MS)
         nc.close_conn()
         if blob.len > 0
             ready = take_policy(p@, blob, .bad_policy, arena@)
@@ -513,10 +513,10 @@ fn car_task(_arg: Void$@): Void
     // Caution: **Allocate it before the reset point (`work`)** — the weights live for the whole
     // run. It is not global: a global array's size takes only a number, which would drift from the
     // net.
-    model_buf: U8[cmodel.state_bytes] = ::{}
+    model_buf: U8[cmodel.STATE_BYTES] = ::{}
     mbuf: = U8$[]::model_buf
     if ready
-        model_ready = cmodel.init(U32::motor.cap, arena@)
+        model_ready = cmodel.init(U32::motor.CAP, arena@)
         if !model_ready
             con.say(ln@, "[car]", "forward model unavailable — running without it")
         else if store.load_model(mbuf)
@@ -553,10 +553,10 @@ fn car_task(_arg: Void$@): Void
         // **Dump outside the watch**; its seconds would drop the stop signal meanwhile.
         if dump_requested
             dump_requested = false
-            csample.dump(ln@, store.kind_sample)
+            csample.dump(ln@, store.KIND_SAMPLE)
         if wipe_requested
             wipe_requested = false
-            if store.wipe(record_marker, policy_bytes)
+            if store.wipe(RECORD_MARKER, policy_bytes)
                 con.say(ln@, "[car]", "records erased — the policy was written back")
             else
                 con.say(ln@, "[car]", "FAILED to erase the records")
@@ -575,14 +575,14 @@ fn car_task(_arg: Void$@): Void
                 last_pred = cmodel.step(last_line, last_lon, last_lat, last_rot, arena@)
                 last_learn_us = timer.elapsed_us(t0)
                 arena.restore(work)
-                if loops % model_save_every == 0
+                if loops % MODEL_SAVE_EVERY == 0
                     store.save_model(mbuf)
             // Caution: **Always save a round that changed**, or the change itself goes missing.
             changed: = last_lon != prev_lon || last_lat != prev_lat || last_rot != prev_rot
-            if changed || loops % sample_every == 0
+            if changed || loops % SAMPLE_EVERY == 0
                 // **Save it after the command is on the wheels** (interrupts stop during the
                 // write), with the decision's observation and command together.
-                csample.append(store.kind_sample,
+                csample.append(store.KIND_SAMPLE,
                     csample.Sample::{
                     .dist_mm = last_dist,
                     .bat_mv = battery.watch.last_mv,

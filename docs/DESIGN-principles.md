@@ -1,22 +1,22 @@
 # The principles behind Kanso's design
 
-**This document says why Kanso is built the way it is, across every part of it.** It holds the Development Principles that every change answers to. It says why each purpose has one notation, and how a model reads and writes Kanso. The reasons behind the language itself are in [`DESIGN-language.md`](DESIGN-language.md). How the repository, its documents, its packages and its gates are organized is in [`DESIGN-repository.md`](DESIGN-repository.md).
+**This document says why Kanso is built the way it is, across every part of it.** It holds the Development Principles that every change answers to. It says why each purpose has one notation, and how a model reads and writes Kanso. The reasons behind the language itself are in [`DESIGN-programming-language.md`](DESIGN-programming-language.md). How the repository, its documents, its packages and its gates are organized is in [`DESIGN-repository.md`](DESIGN-repository.md).
 
 What belongs to one folder, not to Kanso as a whole, stands in that folder. The compiler's internal design is [`ksplc/docs/DESIGN-compiler.md`](../ksplc/docs/DESIGN-compiler.md), and the standard library's is [`std/docs/DESIGN-core.md`](../std/docs/DESIGN-core.md).
 
 ## How to read this document
 
-Start with the eight Development Principles. Kanso's design documents apply them one subject at a time, one decision per section. This document holds the principles and why each purpose has one notation ("One notation per purpose"). It also says what the whole is for ("Models write it, and AI runs in it"). [`DESIGN-language.md`](DESIGN-language.md) decides what a program means and how it is written down. [`DESIGN-repository.md`](DESIGN-repository.md) decides how the documents, the packages and the build are arranged.
+Start with the eight Development Principles. Kanso's design documents apply them one subject at a time, one decision per section. This document holds the principles and why each purpose has one notation ("One notation per purpose"). It also says what the whole is for ("Models write it, and AI runs in it"). [`DESIGN-programming-language.md`](DESIGN-programming-language.md) decides what a program means and how it is written down. [`DESIGN-repository.md`](DESIGN-repository.md) decides how the documents, the packages and the build are arranged.
 
 * **Each section opens with the decision in plain words**, then gives the details, the reasons, and what the decision gives up. Reasons carry values.
 * **This document holds only KSPL's decisions and their grounds**, not a survey of how other languages handle the same problems.
 * **History is not written here** (Principle 7).
 * **The headings carry no numbers.** A section is cited by its heading's words. A number shifts whenever a section is inserted above it, and every citation of it goes stale at once.
-* **New to KSPL?** The two tables below give the notation and the words the chapters assume. The language itself is taught step by step in [`TOUR.md`](TOUR.md).
+* **New to KSPL?** The two tables below give the notation and the words the chapters assume. The language itself is taught step by step in [`TUTORIAL.md`](TUTORIAL.md).
 
 ### The notation the examples use
 
-KSPL reads like C written left to right. These are the forms the chapters use most; the full rules are in [`SPEC-language.md`](SPEC-language.md). The examples use the indentation notation (`.kspl`), where a block is its indented lines, as in Python (the chapter "The indentation notation (`.kspl`)" in [`DESIGN-notation.md`](DESIGN-notation.md)).
+KSPL reads like C written left to right. These are the forms the chapters use most; the full rules are in [`SPEC-programming-language.md`](SPEC-programming-language.md). The examples use the indentation notation (`.kspl`), where a block is its indented lines, as in Python (the chapter "The indentation notation (`.kspl`)" in [`DESIGN-notation.md`](DESIGN-notation.md)).
 
 | You see | It means | Nearest C |
 | :-- | :-- | :-- |
@@ -35,29 +35,7 @@ KSPL reads like C written left to right. These are the forms the chapters use mo
 
 ### Words used throughout
 
-These words recur in every chapter and in every package's documents. **This table is their one definition.** A package's own glossary holds only the words of that package, and points here for the rest. Compiler-internal words are in the compiler's glossary ([`ksplc/docs/DESIGN-compiler.md`, "The glossary"](../ksplc/docs/DESIGN-compiler.md#the-glossary)). A few words carry one fixed meaning in every document ("Terms of art" in [`SPEC-documents.md`](SPEC-documents.md)). Examples are *gate* (one check that CI runs), *reject* (the compiler refuses the program) and *canonical source* (the one place a fact lives).
-
-| Word | What it means here |
-| :-- | :-- |
-| **translation time** | When `ksplc` compiles the program, as opposed to run time. "Rejected at translation time" means a compile error |
-| **the generated C** | `ksplc` translates KSPL into C (or LLVM IR), and a C compiler (or LLVM) finishes the job |
-| **diagnostic**, `[W0109]` | A message from the compiler: an error, a warning, an information or a hint. Every one but an error carries a code, whose letter is its weight: `W` warning, `I` information, `H` hint. `ksplc explain W0109` prints what the code means |
-| **lint** | `ksplc lint`: the compiler's analysis alone. It prints every diagnostic, hints included, and builds nothing |
-| **desugar** | Rewrite a convenient notation into a plainer one: `a + b` becomes the call `a.add(b)` |
-| **generic**, **type argument**, **instantiate** | A generic is code with type parameters (`List<\|T\|>`); the concrete type put in for `T` is a *type argument*. Instantiating the generic makes one concrete copy per set of type arguments used (`List<\|I32\|>`), as C++ templates do. That copy is an *instantiation*, or *specialization*, and each one costs translation time |
-| **trait**, **conform** | A trait is a named set of methods, like a Java interface. `impl X: Trait` declares that `X` has them: `X` conforms to the trait |
-| **trait value**, **fat pointer**, **vtable**, **thunk** | A value whose type is a trait. It is a *fat pointer*: a pointer carried with a second word, here a pointer to the object plus a pointer to its vtable. The vtable is the table of that type's methods; each entry points at a *thunk*, a small adapter function that calls the type's own method |
-| **receiver** | The value a method is called on: `b` in `b.free()` |
-| **ARC** | Automatic reference counting. For a type that conforms to `Ref_counted`, each value counts the places holding it; the compiler inserts `retain` (count up) and `release` (count down, free at zero). The type `Arc` is another thing ("The names of the reference-counting types" in [`std/docs/DESIGN-core.md`](../std/docs/DESIGN-core.md#the-names-of-the-reference-counting-types)) |
-| **arena** | A block of memory that hands out pieces and gives all of them back at once, when the arena itself is freed. Nothing inside is freed one by one. `std/mem`'s `Arena` is one ("8.4 The memory management model" in [`SPEC-language.md`](SPEC-language.md#84-the-memory-management-model-defer--arc--arenas)) |
-| **FQN** | Fully qualified name: a name with its file's path in front (`std.Ref_counted`), unique in the program |
-| **FFI**, **ABI** | FFI is calling between KSPL and C. The ABI is the binary agreement such a call rests on: how a type is laid out, and how arguments are passed. Both of `ksplc`'s backends keep it identical, so C output and LLVM output can call each other |
-| **hosted**, **freestanding**, **bare metal** | *Hosted* code runs under an operating system and can call libc. *Freestanding* code (`--freestanding`) cannot; it is for *bare metal*, a chip with no operating system, such as a microcontroller |
-| **libc** | The C standard library (`printf`, `strtod`, `fopen` …). glibc is the usual one on Linux, and the CRT (UCRT) is Windows'. A freestanding build has none |
-| **the C runtime** | The C code in `ksplc/gen/runtime/` that every hosted program needs besides its own: files, threads, the clock, the checks. Its functions are named `kspl_*`, and they are the only place `std` touches an operating system's API directly |
-| **the seed**, **bootstrap** | The compiler is written in KSPL, so building it needs a compiler: the *bootstrap*. The *seed* (`ksplc/seed.c`) is the compiler, `std` included, frozen as C; any C compiler builds it into the first `ksplc`. A change the compiler needs at build time takes effect only once it reaches the seed |
-| **borrow checker** | Rust's compile-time proof that no reference outlives its data and that no two places change the same data at once. KSPL has none (the chapter "Ownership and lifetime" in [`DESIGN-language.md`](DESIGN-language.md)) |
-| **Principle N** | One of the eight [Development Principles](#development-principles). The table at their head states each in one line |
+Shared technical terms are defined in "Words used throughout" in [`SPEC-documents.md`](SPEC-documents.md). A reference to "Principle N" names one of the eight Development Principles below.
 
 ## Development Principles
 
@@ -65,14 +43,14 @@ Eight rules come first in every folder: in the language, the libraries, the tool
 
 | # | Principle | In plain words | For example | How it is checked |
 | :-- | :-- | :-- | :-- | :-- |
-| 1 | The Zen of Subtraction | Take a feature on only if its benefit outweighs all it costs, and remove one that stops paying its way | `Callable3` is not added. `std/seq` needs no more than two arguments, and "it would be handy" shows no price. See "Why capture is made explicit and escape is forbidden" in [`DESIGN-language.md`](DESIGN-language.md) | By review |
-| 2 | Warning Zero | The build prints no warning, from `ksplc` or from the C compiler | A C `char*` is received as `Void@`, since `U8@` makes the C compiler warn ("What cannot be written in C's types" in [`DESIGN-language.md`](DESIGN-language.md)) | `make lint`, which passes only at zero, and `make test-c-warnings` |
-| 3 | Keeping file size down and even | Keep files and functions short: split a file where its parts are read for different reasons, and merge a small file into its only user | A file holds at most 1000 lines, a function 300 | `make test-conventions` for a file, `make lint` (H0803) for a function |
-| 4 | Following DRY — one canonical source, copies tied together by a check | Keep each fact in one place. Where a copy must exist, a check compares it with the original | A runtime helper written in C and its LLVM counterpart are compared by `make test-conventions` ("What cannot be written in C's types" in [`DESIGN-language.md`](DESIGN-language.md)) | The check added with each copy, most of them in `make test-conventions` |
-| 5 | Do not leave anything "writable but ineffective" | Whatever the compiler or a tool accepts must have an effect; otherwise it is an error | `defer` has no capture list, since one would change nothing ("Why `defer` has no capture list" in [`DESIGN-language.md`](DESIGN-language.md)) | By review; each check's own samples show that the check can fire |
-| 6 | One means to one purpose | Offer one way to write each thing | No number casts to `Bool`, since `x != 0` already says it ("Why `Bool` keeps ordering and has no arithmetic" in [`DESIGN-language.md`](DESIGN-language.md)) | By review |
+| 1 | The Zen of Subtraction | Take a feature on only if its benefit outweighs all it costs, and remove one that stops paying its way | `Callable3` is not added. `std/seq` needs no more than two arguments, and "it would be handy" shows no price. See "Why capture is made explicit and escape is forbidden" in [`DESIGN-programming-language.md`](DESIGN-programming-language.md) | By review |
+| 2 | Warning Zero | The build prints no warning, from `ksplc` or from the C compiler | A C `char*` is received as `Void@`, since `U8@` makes the C compiler warn ("What cannot be written in C's types" in [`DESIGN-programming-language.md`](DESIGN-programming-language.md)) | `make lint`, which passes only at zero, and `make test-c-warnings` |
+| 3 | Keeping file size down and even | Keep files and functions short: split a file where its parts are read for different reasons, and merge a small file into its only user | Files and functions have size limits | `make test-conventions` for a file, `make lint` (H0803) for a function |
+| 4 | Following DRY — one canonical source, copies tied together by a check | Keep each fact in one place. Where a copy must exist, a check compares it with the original | A runtime helper written in C and its LLVM counterpart are compared by `make test-conventions` ("What cannot be written in C's types" in [`DESIGN-programming-language.md`](DESIGN-programming-language.md)) | The check added with each copy, most of them in `make test-conventions` |
+| 5 | Do not leave anything "writable but ineffective" | Whatever the compiler or a tool accepts must have an effect; otherwise it is an error | `defer` has no capture list, since one would change nothing ("Why `defer` has no capture list" in [`DESIGN-programming-language.md`](DESIGN-programming-language.md)) | By review; each check's own samples show that the check can fire |
+| 6 | One means to one purpose | Offer one way to write each thing | No number casts to `Bool`, since `x != 0` already says it ("Why `Bool` keeps ordering and has no arithmetic" in [`DESIGN-programming-language.md`](DESIGN-programming-language.md)) | By review |
 | 7 | Documents and comments state only "how it is now", in plain language | Write the present state and its reasons, never the history, in the short, plain sentences of [`SPEC-plain-language.md`](SPEC-plain-language.md) | This document says "X is", never "X used to be" | `make test-conventions` for a comment's length, a document sentence's length and phrases that tell a history; `tools/repo_stat.kspl` measures the share of comments; the rest by review |
-| 8 | A check that can only be half kept is not made a guarantee | If ordinary code can slip past a check, do not let the check pose as a guarantee | There is no thread-safety marker, since a global variable bypasses it ("Why data races are not prevented by the type system" in [`DESIGN-language.md`](DESIGN-language.md)) | By review |
+| 8 | A check that can only be half kept is not made a guarantee | If ordinary code can slip past a check, do not let the check pose as a guarantee | There is no thread-safety marker, since a global variable bypasses it ("Why data races are not prevented by the type system" in [`DESIGN-programming-language.md`](DESIGN-programming-language.md)) | By review |
 
 Each chapter below applies the principles to one subject, and [`ksplc/docs/DESIGN-compiler.md`](../ksplc/docs/DESIGN-compiler.md) applies them to the compiler's implementation.
 
@@ -93,7 +71,7 @@ Each chapter below applies the principles to one subject, and [`ksplc/docs/DESIG
 
 3. **Keeping file size down and even**
 
-   **A reader holds one file in mind at a time.** Mistakes hide in a file or a function too long to hold. A file too short to stand alone sends the reader to another file to understand it. The limits are 1000 lines per file, 300 lines per function and 8 levels of block nesting.
+   **A reader holds one file in mind at a time.** Mistakes hide in a file or a function too long to hold. A file too short to stand alone sends the reader to another file to understand it. The file, function and nesting limits are in "Principle 3 - what is counted, and how" in [`SPEC-gates.md`](SPEC-gates.md).
 
    * **Split where the parts are read for different reasons**, not at a line count. Cut by count, neither file can be read without the other. How to place the cut is "Choosing where to split a file" below.
    * **Plan the split before the limit is reached.** Split on the day the limit is hit, and the split lands inside an unrelated change. As a file nears the limit, write down where it will split ("Where a file's splitting plan is written" in [`SPEC-documents.md`](SPEC-documents.md)) before touching it again.
@@ -132,10 +110,10 @@ Each chapter below applies the principles to one subject, and [`ksplc/docs/DESIG
    * **Keep general writing rules independent of their field.** The plain-language specification separates its core and English rules from its software and Kanso chapters. This lets another field replace local terminology and conventions without copying project assumptions into its general rules. Kanso keeps its comment notation and checks in the project chapter.
    * **Write** the decided facts and their reasons, and what breaks if the thing is changed. Write the traps the next person is likely to hit ("A trap is written as why it is dangerous" in [`SPEC-documents.md`](SPEC-documents.md)). Write the contract seen from outside: what the arguments mean, lifetimes, the order of calls.
    * **Do not write how it came to be.** Leave out a work log, the investigation, rejected proposals and bugs already fixed. Leave out experience told in the past tense, dates, and which attempt this was.
-   * **An absence is a present fact.** Where leaving something out is the decision, write what is absent and why. Then the same proposal does not come back ("Markers not carried" in [`DESIGN-language.md`](DESIGN-language.md) and "Notations not carried" below). Never write when or by whom it was decided.
+   * **An absence is a present fact.** Where leaving something out is the decision, write what is absent and why. Then the same proposal does not come back ("Markers not carried" in [`DESIGN-programming-language.md`](DESIGN-programming-language.md) and "Notations not carried" below). Never write when or by whom it was decided.
    * **Do not write a figure that changes while nobody touches the repository**, such as a measured time. It is stale once written, and nobody can see that it is. Write the relation and the order of magnitude, and point at where the measurement and the way to retake it are.
-   * **Keep each comment short**: 6 lines at most, and 10 for a file's opening header. Every comment line up to the next line of code counts toward one comment, so a blank line does not start a new one. A section divider (a line opening with `---` or `===`) does, since it visibly starts a new subject. Longer background goes to a `DESIGN-<subject>.md`, under the same rules.
-   * **Keep comments to 30% of the source or less.** The share is measured over all the hand-written source (`cmt%` on the `total (hand-written)` line that [`tools/repo_stat.kspl`](../tools/repo_stat.kspl) prints). So a file with hard logic can run above it, and a plain one below. Room under the cap is no reason to write more: keep what the code cannot say, said once and briefly.
+   * **Keep each comment short.** "Comment notation and limits" in [`SPEC-plain-language.md`](SPEC-plain-language.md) sets the limits. Longer background belongs in a design document, where a reader seeks the reasons.
+   * **The comment-share limit applies to the repository, rather than each file.** A file with hard logic can need more explanation than a plain one. Room under the limit is no reason to write more: keep what the code cannot say, said once and briefly.
 
 8. **A check that can only be half kept is not made a guarantee**
 
@@ -143,7 +121,7 @@ Each chapter below applies the principles to one subject, and [`ksplc/docs/DESIG
 
    * **Before forbidding something, confirm that no ordinary way of writing slips past the check.** Where one does, the type system does not state the rule.
      * Failure (`T!E`), the absence of a value (`Option`) and being uninitialized cannot be slipped past, so the type system states them.
-     * Lifetime (who frees what, and when) and sharing (which threads can touch a value) can be, through raw pointers and top-level variables. So the type system leaves them out. See the chapters "Ownership and lifetime" and "Concurrency" in [`DESIGN-language.md`](DESIGN-language.md).
+     * Lifetime (who frees what, and when) and sharing (which threads can touch a value) can be, through raw pointers and top-level variables. So the type system leaves them out. See the chapters "Ownership and lifetime" and "Concurrency" in [`DESIGN-programming-language.md`](DESIGN-programming-language.md).
    * **What the type system does not state, the type's name does.** `Rc` (one thread), `Arc` (shareable), `Mutex<|T|>`, `Atomic_sz` and `Move_only` put the choice in front of whoever calls: misuse is made visible instead of stopped.
    * **A check that sees only some forms says so.** The convention checks read literal text and miss some forms, so their rules state that a form escaping the check is still a violation. Otherwise green is read as "the rule is kept".
 
@@ -160,7 +138,7 @@ Each chapter below applies the principles to one subject, and [`ksplc/docs/DESIG
 | The types the moved state holds | With the state | Left behind, they make the two files import each other. So `ksplc/sema/session/state.kspl` holds `Generic_arg`, `Alias_info` and `Import_symbol_info` beside the state structs |
 | What both parts read | The lower file, opened from `priv` | Moved up, it makes the lower file import the file that imports it |
 | A name only the moved part calls | The moved part, still `priv` | A name opened from `priv` is open to the whole package |
-| Some of an `impl`'s methods | A second `impl` of the same type, in the new file | An `impl` can add methods to a type declared in another file ("9.3 Adding a method to another file's type" in [`SPEC-language.md`](SPEC-language.md)), as `ksplc/base/ast_place.kspl` does for `Ast_node`. Callers import the new file, and `make lint` names a missing import |
+| Some of an `impl`'s methods | A second `impl` of the same type, in the new file | An `impl` can add methods to a type declared in another file ("9.3 Adding a method to another file's type" in [`SPEC-programming-language.md`](SPEC-programming-language.md)), as `ksplc/base/ast_place.kspl` does for `Ast_node`. Callers import the new file, and `make lint` names a missing import |
 
 **Three cases need care**:
 
@@ -220,7 +198,7 @@ Note: **A function doing a whole errand barely reduces the line count.** Take a 
 
 ### Notations not carried
 
-What KSPL leaves out, and what to write instead, is "Appendix A: Features not carried, and what to write instead" in [`SPEC-language.md`](SPEC-language.md). This section holds why, so that the same proposal does not come round again.
+What KSPL leaves out, and what to write instead, is "Appendix A: Features not carried, and what to write instead" in [`SPEC-programming-language.md`](SPEC-programming-language.md). This section holds why, so that the same proposal does not come round again.
 
 **The test is not whether a feature is sugar.** KSPL desugars plenty: `!`, `catch`'s expression form, the conditional value, string interpolation, operator overloading, closures. Each adds to what can be written while keeping one notation. What is turned away gives a second notation to something already writable, or adds implicit behavior.
 
@@ -237,13 +215,13 @@ What KSPL leaves out, and what to write instead, is "Appendix A: Features not ca
 | **`?` for a result** | `!` marks the place a function can stop and hand a failure back, and `?` marks absence ("Failure" below) |
 | **The abbreviated error type `T!`** | It would be a second spelling of one type |
 | **Another language's word for a loop or a branch** | One word for each job, spelled as C spells it. So a keyword takes no name a writer would use. See "The spelling of reserved words is taken from C" in [`DESIGN-notation.md`](DESIGN-notation.md) |
-| **`::` as a path separator** | A second mark would give a member two spellings. And `::` already has a job: `json::Val` would read like `Sz::n`. See "Why `::` stays the cast, and what it costs to parse" in [`DESIGN-language.md`](DESIGN-language.md) |
+| **`::` as a path separator** | A second mark would give a member two spellings. And `::` already has a job: `json::Value` would read like `Sz::n`. See "Why `::` stays the cast, and what it costs to parse" in [`DESIGN-programming-language.md`](DESIGN-programming-language.md) |
 | **Range syntax (`a..b`)** | A call already writes it, so an operator would be a second notation. `a..b` does not show whether its bound is exclusive; `Range.new`'s argument names do |
 | **`a[i..j]` for cutting out a slice** | It keeps the language small; a method already cuts any element type |
 | **Tuples** | Each returned value gets a name, so the contents can be read |
 | **A named local function** | Only a closure can be written inside a function body. Its environment rides on the caller's frame. So it cannot be named and reused from several functions |
-| **A closure that can be taken outside its function** | A closure keeps its captured values on the frame that built it. See "Why capture is made explicit and escape is forbidden" in [`DESIGN-language.md`](DESIGN-language.md). Where the values must leave, an ordinary struct makes their lifetime the writer's to decide |
-| **A trailing closure** | One call would have two spellings (`f(xs, g)` and `f(xs) g`). In the indentation notation, a closure after `if xs.any()` could not be told from the `if`'s body. See "Why a closure is not written after the call" in [`DESIGN-language.md`](DESIGN-language.md) |
+| **A closure that can be taken outside its function** | A closure keeps its captured values on the frame that built it. See "Why capture is made explicit and escape is forbidden" in [`DESIGN-programming-language.md`](DESIGN-programming-language.md). Where the values must leave, an ordinary struct makes their lifetime the writer's to decide |
+| **A trailing closure** | One call would have two spellings (`f(xs, g)` and `f(xs) g`). In the indentation notation, a closure after `if xs.any()` could not be told from the `if`'s body. See "Why a closure is not written after the call" in [`DESIGN-programming-language.md`](DESIGN-programming-language.md) |
 | **A static variable inside a function** | State persisting across calls lines up at the head of the file, where what touches it can be seen |
 | **A counterpart to `guard let` / `?.` / `??`** | It keeps the flow of control plain. `if name: = expression` is the one exception ("Unwrapping an `Option`" below) |
 | **A separate prefixed string form for formatting** | An ordinary string literal already formats in place, so it would be a second notation for one string |
@@ -252,18 +230,18 @@ What KSPL leaves out, and what to write instead, is "Appendix A: Features not ca
 | **Escapes outside the ten** | "Escapes are closed at ten" below |
 | **A built-in `Char` type, and a multi-byte character literal** | "There is no `Char` type" below |
 | **An octal literal, and a decimal integer that starts with `0`** | "A decimal integer does not start with 0" below |
-| **Link flags in the source** | A flag forces one machine's link line on every machine that builds it. It can also run code at build time. A library's name carries neither. See "The library an `extern` block needs is named on the block" in [`DESIGN-language.md`](DESIGN-language.md) |
+| **Link flags in the source** | A flag forces one machine's link line on every machine that builds it. It can also run code at build time. A library's name carries neither. See "The library an `extern` block needs is named on the block" in [`DESIGN-programming-language.md`](DESIGN-programming-language.md) |
 | **A postfix `if` / a conditional `break`** | The action before its condition runs against reading top to bottom (the condition, then the contents) |
 
 **Withdrawing a notation removes it from every place the source is read.** That is the grammar, and the compiler's own code that skips whitespace and comments. Removed from only one, a form the grammar refuses would pass silently through the other. Where the compiler reads comments apart from the grammar is "Every place a source enters reads it the same way" in [`../ksplc/docs/DESIGN-parse.md`](../ksplc/docs/DESIGN-parse.md).
 
 #### Escapes are closed at ten
 
-**Only ten escapes can follow a `\` in a literal; any other, such as C's `\b`, is an error, not a plain `b`** ("2.3.2 Escape sequences" in [`SPEC-language.md`](SPEC-language.md)). Reading an unknown one as "the character itself" would make `\b` and `b` two spellings of one byte, which Principle 6 (one means to one purpose) forbids. Worse, a `'\b'` copied from C (where it is the backspace, byte 8) would silently become `'b'`, which is what Principle 5 (nothing "writable but ineffective") forbids. The compiler holds the rejection in one place (`is_known_escape` in `ksplc/base/literal.kspl`), and `make test-negative` holds it.
+**Only ten escapes can follow a `\` in a literal; any other, such as C's `\b`, is an error, not a plain `b`** ("2.3.2 Escape sequences" in [`SPEC-programming-language.md`](SPEC-programming-language.md)). Reading an unknown one as "the character itself" would make `\b` and `b` two spellings of one byte, which Principle 6 (one means to one purpose) forbids. Worse, a `'\b'` copied from C (where it is the backspace, byte 8) would silently become `'b'`, which is what Principle 5 (nothing "writable but ineffective") forbids. The compiler holds the rejection in one place (`is_known_escape` in `ksplc/base/literal.kspl`), and `make test-negative` holds it.
 
 **`\{` and `\}` are among the ten because interpolation is written `\{` … `\}`.** *Interpolation* puts a value inside a string: `"n=\{n\}"`. So a bare `{` stands in the text as it is. There is no doubling (`{{`), which Python's f-strings and C# require. `'\{'` is the matching form in a character literal.
 
-**`\uXXXX` takes exactly four hex digits** ("2.3.3 Writing a code point with `\uXXXX`" in [`SPEC-language.md`](SPEC-language.md)). A *code point* is a character's number in Unicode. The table compares the shapes other languages use.
+**`\uXXXX` takes exactly four hex digits** ("2.3.3 Writing a code point with `\uXXXX`" in [`SPEC-programming-language.md`](SPEC-programming-language.md)). A *code point* is a character's number in Unicode. The table compares the shapes other languages use.
 
 | Shape | Where | What goes wrong | KSPL |
 | :-- | :-- | :-- | :-- |
@@ -280,7 +258,7 @@ What KSPL leaves out, and what to write instead, is "Appendix A: Features not ca
 
 **There is no `Char` type because it would carry exactly one job.** It would have `U8`'s representation and values, and differ only in printing as a character in interpolation (`\{x\}`). One byte has two readings, "as a number" and "as a character". The line between them belongs to how it is written, not to its type. Split by type, the line breaks easily: pass a `Char` once through a function that takes `U8`, and `A` prints as `65`. So the type would guarantee nothing. `\{b:c\}` puts the line where the value is printed, and says the same without a type (Principle 1, the Zen of Subtraction, and Principle 6). It adds one notation and removes one type, so it is not an addition.
 
-**Only `U8` carries `fmt_char`** (`std/strfmt.kspl`), for the same reason hex has its own `fmt_hex`. So `:c` on another type is refused (docs/SPEC-language.md §3.6.2). Do not let `c` take a width, zero padding or thousands separators. One character has nothing for them to apply to, so they would be written and do nothing (`char_alone` in `ksplc/parse/format_spec.kspl`).
+**Only `U8` carries `fmt_char`** (`std/strfmt.kspl`), for the same reason hex has its own `fmt_hex`. So `:c` on another type is refused (docs/SPEC-programming-language.md §3.6.2). Do not let `c` take a width, zero padding or thousands separators. One character has nothing for them to apply to, so they would be written and do nothing (`char_alone` in `ksplc/parse/format_spec.kspl`).
 
 **A character type can return, but not as eight bits.** It would be a text type that guarantees valid UTF-8, kept apart from `U8[]`, and it would give a code point (32 bits) per step when iterated. Its name is undecided, and `Char` is not the leading candidate. The word names five different things across languages and suggests one byte (Go uses `rune` rather than reuse it).
 
@@ -316,13 +294,13 @@ priv fn greet()
 | **It fills in a receiver nothing else fills in** | Everywhere else a leading `.` names an enum value (`.ok`). So a `defer .free()` moved to a line of its own would meet "cannot infer the enum type" |
 | **It is written nowhere else** | A `defer` of its own on the next line is what Go, Zig and C's draft `defer` write, and what a model writes unprompted. No form bound to a declaration fills a receiver into an arbitrary call |
 
-**The joined form would guarantee that nothing comes between an acquisition and its cleanup; that is the writer's to keep.** [W0109] asks about a way out of the block in between ("Why an early exit before a `defer` warns, and how narrowly" in [`DESIGN-language.md`](DESIGN-language.md)). Go and Zig carry the same exposure. The specification says to write the `defer` on the next line (8.4.1 in [`SPEC-language.md`](SPEC-language.md)).
+**The joined form would guarantee that nothing comes between an acquisition and its cleanup; that is the writer's to keep.** [W0109] asks about a way out of the block in between ("Why an early exit before a `defer` warns, and how narrowly" in [`DESIGN-programming-language.md`](DESIGN-programming-language.md)). Go and Zig carry the same exposure. The specification says to write the `defer` on the next line (8.4.1 in [`SPEC-programming-language.md`](SPEC-programming-language.md)).
 
 `defer` takes one statement, so the separate line costs only the name. If `defer` took only a block, the form would be `defer { buf.free(); }`, the one `;` the indentation notation would still show. **What holds it**: a `defer` behind a statement is refused with the line to write instead (`append_trailing_defer_hint` in [`../ksplc/parse/syntax_msg.kspl`](../ksplc/parse/syntax_msg.kspl)). A `defer .free()` standing alone is refused by name (`reject_receiverless_cleanup` in [`../ksplc/sema/body/stmt.kspl`](../ksplc/sema/body/stmt.kspl)). `make test-negative` holds both.
 
 #### A decimal integer does not start with 0
 
-**`0755` is a syntax error: a leading `0` on a decimal integer is not a decimal digit and not an octal mark.** Write `0x1ed` for a bit pattern, or `755` for the decimal number ("2.3 Literals" in [`SPEC-language.md`](SPEC-language.md)). Languages split on this spelling:
+**`0755` is a syntax error: a leading `0` on a decimal integer is not a decimal digit and not an octal mark.** Write `0x1ed` for a bit pattern, or `755` for the decimal number ("2.3 Literals" in [`SPEC-programming-language.md`](SPEC-programming-language.md)). Languages split on this spelling:
 
 | Reading of `0755` | Languages |
 | :-- | :-- |
@@ -347,32 +325,32 @@ Whichever reading KSPL took, a writer from the other half would get a different 
 
 #### Iteration
 
-**Every loop over a sequence is written `for x in xs`, the one way to write iteration.** The compiler expands it either by index or through `std/lang`'s `Iter<|T|>` (a trait with one method, `next`). The writer chooses neither; the type of `xs` decides (docs/SPEC-language.md, 7.2). The point is not to add notations, so no form drives an iterator by hand (`for it.has_next() { … }`). For the same reason `Iter` has only `next`. A separate "is there more" method would make it possible to call only one of the two.
+**Every loop over a sequence is written `for x in xs`, the one way to write iteration.** The compiler expands it either by index or through `std/lang`'s `Iter<|T|>` (a trait with one method, `next`). The writer chooses neither; the type of `xs` decides (docs/SPEC-programming-language.md, 7.2). The point is not to add notations, so no form drives an iterator by hand (`for it.has_next() { … }`). For the same reason `Iter` has only `next`. A separate "is there more" method would make it possible to call only one of the two.
 
-**`Iter` wins on a type that satisfies both** (the rule is docs/SPEC-language.md, 7.2). A type can be walked by index just by having the right shape, while `Iter` is declared on purpose. A structural match alone must not silently disable what was declared explicitly (Principle 5).
+**`Iter` wins on a type that satisfies both** (the rule is docs/SPEC-programming-language.md, 7.2). A type can be walked by index just by having the right shape, while `Iter` is declared on purpose. A structural match alone must not silently disable what was declared explicitly (Principle 5).
 
 **Which `std` APIs are eager and which lazy** is `std`'s own design. So are what each costs, and why a chain can be driven any number of times. See "Iteration has one notation" in [`../std/docs/DESIGN-core.md`](../std/docs/DESIGN-core.md). (*Eager* builds the whole result at once; *lazy* produces one element each time the loop asks.) Do not add terminals, the methods that consume a chain and return one value. Counting, folding and searching are all written with `for x in`, so each terminal added is a second way of doing the same thing.
 
-**Nothing is eager because closures cannot be held.** A struct holding a predicate (a function that answers yes or no) can be written. The closure's captured variables live in the caller's frame ("Why capture is made explicit and escape is forbidden" in [`DESIGN-language.md`](DESIGN-language.md)). The struct lives while the chain is built and consumed there. What cannot be written is a function that creates a closure and returns it ("Which pointers into a frame are stopped from leaving it" in [`DESIGN-language.md`](DESIGN-language.md)).
+**Nothing is eager because closures cannot be held.** A struct holding a predicate (a function that answers yes or no) can be written. The closure's captured variables live in the caller's frame ("Why capture is made explicit and escape is forbidden" in [`DESIGN-programming-language.md`](DESIGN-programming-language.md)). The struct lives while the chain is built and consumed there. What cannot be written is a function that creates a closure and returns it ("Which pointers into a frame are stopped from leaving it" in [`DESIGN-programming-language.md`](DESIGN-programming-language.md)).
 
 **The lazy chain rests on four properties of the language.** The first is the `Iter` above, which puts even a sequence with no `.len` onto `for x in`. The other three let the chain be written as method calls:
 
 * **A method can return its own type one level deeper** (`Seq<|S|>.where(): Seq<|Wh<|S|>|>`), and a level advances only as far as the user wrote.
-* **A method can introduce a new type argument** (`fn select<|U|>`), bound at the call site (["A type argument with nothing to bind to is rejected" in [`DESIGN-language.md`](DESIGN-language.md)](DESIGN-language.md#a-type-argument-with-nothing-to-bind-to-is-rejected)).
+* **A method can introduce a new type argument** (`fn select<|U|>`), bound at the call site (["A type argument with nothing to bind to is rejected" in [`DESIGN-programming-language.md`](DESIGN-programming-language.md)](DESIGN-programming-language.md#a-type-argument-with-nothing-to-bind-to-is-rejected)).
 * **A closure literal passed directly still fixes the type argument.** Its type is a synthesized environment (`_anon_env_N`) that declares no generics of its own. So the argument is taken from the instantiation of the `Callable1` it declares (`implemented_trait_instance` in `ksplc/sema/type/env.kspl`).
 
-**The stage types nest** (`Conv<|Keep<|List_seq<|T|>, T|>, T, U|>`), and every stage repeats `where` / `select` / `to_list`. So each new kind of stage multiplies the code in `std/seq`. Rust's `Iterator`, Java's `Stream` and Swift's `Sequence` remove this repetition with default method bodies. Which of the three a trait's default body could take in KSPL is std's own design. So is why each stays per stage. See ["Why the chain's stages cannot be folded"](../std/docs/DESIGN-core.md#why-the-chains-stages-cannot-be-folded) in [`../std/docs/DESIGN-core.md`](../std/docs/DESIGN-core.md).
+**The stage types nest** (`Conversion<|Keep<|List_seq<|T|>, T|>, T, U|>`), and every stage repeats `where` / `select` / `to_list`. So each new kind of stage multiplies the code in `std/seq`. Rust's `Iterator`, Java's `Stream` and Swift's `Sequence` remove this repetition with default method bodies. Which of the three a trait's default body could take in KSPL is std's own design. So is why each stays per stage. See ["Why the chain's stages cannot be folded"](../std/docs/DESIGN-core.md#why-the-chains-stages-cannot-be-folded) in [`../std/docs/DESIGN-core.md`](../std/docs/DESIGN-core.md).
 
 #### Failure
 
 **There is one way to convey failure, `T!E`** (a result that is either a `T` or an error `E`). `std/io.kspl` uses `!Io_error` and `std/fs.kspl` uses `!Fs_error`, with no `Option` or `Bool` mixed into the same file for failure. `exists` / `is_dir` stay `Bool`: they answer a question, and "does not exist" is a normal answer, not a failure.
 
-**A result is marked with `!`, in its type (`T!E`) and where its failure is passed on (`f()!`), and `?` marks nothing.** `!` reads as what it is: a place where the function can stop and hand a failure back. `?` means absence, as Swift, Kotlin and C# spell an optional value. See `T?` and "`T?` is sugar for `Option<|T|>`" in [`DESIGN-language.md`](DESIGN-language.md).
+**A result is marked with `!`, in its type (`T!E`) and where its failure is passed on (`f()!`), and `?` marks nothing.** `!` reads as what it is: a place where the function can stop and hand a failure back. `?` means absence, as Swift, Kotlin and C# spell an optional value. See `T?` and "`T?` is sugar for `Option<|T|>`" in [`DESIGN-programming-language.md`](DESIGN-programming-language.md).
 
 * **Two rules make it parse without ambiguity.** A postfix `!` is read only where no `=` follows it, so `a!=b` compares and `f()! == x` needs its space. A `!` at a line's end ends the statement. A `!` at a line's start continues the line before (a wrapped `T!E`). A statement never begins with a prefix `!`, whose value would be thrown away.
 * **What is given up**: a reader of Swift, Kotlin, C# or TypeScript reads `x!` as "assume it is present". That is a crash or an unchecked promise, where KSPL's `f()!` quietly passes a failure up. And Rust's `?`, which means exactly what KSPL's `!` does, is not shared.
 
-**A result is an ordinary value, so one mechanism serves it and the optional**: `T!E` is `std/lang`'s enum `Result<|T, E|>`, as `T?` is `Option<|T|>`. The rules are "8.3 Error handling" in [`SPEC-language.md`](SPEC-language.md). Why the result is a library type is "`T!E` is sugar for `Result<|T, E|>`" in [`DESIGN-language.md`](DESIGN-language.md). That section also says why a result nobody takes apart is a compile error.
+**A result is an ordinary value, so one mechanism serves it and the optional**: `T!E` is `std/lang`'s enum `Result<|T, E|>`, as `T?` is `Option<|T|>`. The rules are "8.3 Error handling" in [`SPEC-programming-language.md`](SPEC-programming-language.md). Why the result is a library type is "`T!E` is sugar for `Result<|T, E|>`" in [`DESIGN-programming-language.md`](DESIGN-programming-language.md). That section also says why a result nobody takes apart is a compile error.
 
 #### Unwrapping an `Option`
 
@@ -389,7 +367,7 @@ Whichever reading KSPL took, a writer from the other half would get a different 
 | | `#cfg(flag)` | `##error` / `##warning` |
 | :-- | :-- | :-- |
 | What it does | Drops a declaration | Emits a diagnostic |
-| What it takes | One flag name, with no comparison and no `&&` (docs/SPEC-language.md §10.1) | A foldable expression (`sizeof(Sz) == 8`): one the compiler can compute |
+| What it takes | One flag name, with no comparison and no `&&` (docs/SPEC-programming-language.md §10.1) | A foldable expression (`sizeof(Sz) == 8`): one the compiler can compute |
 | If the condition is misread | The declaration vanishes, with no message | A diagnostic appears |
 | When it runs | Before declarations are gathered (`ksplc/parse/normalize.kspl`), when no names or types are resolved yet | After types are attached (`ksplc/sema/body/infer.kspl`) |
 
@@ -402,7 +380,7 @@ Two grounds follow from the table.
 
 #### Things that look like duplication and are not
 
-**Some pairs look like two ways of doing one thing, but each covers cases the other cannot, so both stay.** `std/thread.kspl` and `std/reactor.kspl` can both "handle many connections", and which to use is in `std/docs/DESIGN-core.md`. The three indexing traits are each needed (docs/SPEC-language.md §6.1):
+**Some pairs look like two ways of doing one thing, but each covers cases the other cannot, so both stay.** `std/thread.kspl` and `std/reactor.kspl` can both "handle many connections", and which to use is in `std/docs/DESIGN-core.md`. The three indexing traits are each needed (docs/SPEC-programming-language.md §6.1):
 
 | Trait | The case only it serves | Example |
 | :-- | :-- | :-- |
@@ -423,7 +401,7 @@ Two grounds follow from the table.
 
 | Where it remains | Reason |
 | :-- | :-- |
-| `std/mem` and `std/libc` | Memory and C speak in raw pointers: an allocation that fails is a null, and so is C's "none". The rest of `std` returns `T?`, as any package does. A list that can be empty is a value with methods, not a pointer to its first node. Examples are `http.Headers`, `url.Query` and a JSON array's `json.Arr` |
+| `std/mem` and `std/libc` | Memory and C speak in raw pointers: an allocation that fails is a null, and so is C's "none". The rest of `std` returns `T?`, as any package does. A list that can be empty is a value with methods, not a pointer to its first node. Examples are `http.Headers`, `url.Query` and a JSON array's `json.Array` |
 | Functions carrying `#export` | The FFI boundary with C (where C code calls KSPL). `T?` is not ABI-compatible with C's null convention. That is, its memory layout differs from what C expects |
 | Tree walking in `ksplc/base` (`find_child` / `unwrap_top_level` / generating notation) | The same reason, suppressed with its grounds in the file-opening `##lint(H0701 = off)` |
 
@@ -431,7 +409,7 @@ Two grounds follow from the table.
 
 ### A default argument is allowed only for a foldable constant
 
-**The last parameters of a function can have a default, written `= literal` (such as `offset: Sz = 0`), and a caller can then leave them out** (docs/SPEC-language.md §8.1.1). The default is one literal value, and some parameters (an arena) must never have one. A *foldable constant* is a value the compiler knows without running anything.
+**The last parameters of a function can have a default, written `= literal` (such as `offset: Sz = 0`), and a caller can then leave them out** (docs/SPEC-programming-language.md §8.1.1). The default is one literal value, and some parameters (an arena) must never have one. A *foldable constant* is a value the compiler knows without running anything.
 
 There are two grounds for allowing it.
 
@@ -454,7 +432,7 @@ There are two grounds for allowing it.
 
 **`make test-conventions` holds it**: it refuses a parameter whose type names `Arena` and carries `=`. It reads the text, so a spelling it does not see (an arena behind a typedef) is still a violation.
 
-**Where a default cannot be placed**, and why, is the table in docs/SPEC-language.md §8.1.1. Each such place is rejected with a diagnostic (the cases `param_default_*` in `ksplc/tests/negative/fn.kspl`). A trait's declaration can carry one (the same section; `Index_place.at` in `std/lang` takes this form).
+**Where a default cannot be placed**, and why, is the table in docs/SPEC-programming-language.md §8.1.1. Each such place is rejected with a diagnostic (the cases `param_default_*` in `ksplc/tests/negative/fn.kspl`). A trait's declaration can carry one (the same section; `Index_place.at` in `std/lang` takes this form).
 
 **Where defaults stand is not listed here.** A default is part of its declaration's spelling. So each package's `SURFACE.txt` holds the published ones. `ksplc --emit-surface=<file> --surface-scope=all` writes every one a file reaches ("Writing out the published API" in [`../ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md)). What the second test turned away is recorded, so the same discussion is not had twice:
 
@@ -477,13 +455,13 @@ Each is a foldable constant, but the value left out is itself a judgment the cal
 | Naming: which names a file can see | Bringing a name in (`import`) | Hiding one (not writing `pub`) |
 | Linking: which symbols the compiled output shares with other code | Emitting a symbol (`#export`) | Using an outside one (`extern "C"`) |
 
-Two axes are not expressed with one pair of words; the list of axes is in [`SPEC-language.md`](SPEC-language.md), "9. Files and import".
+Two axes are not expressed with one pair of words; the list of axes is in [`SPEC-programming-language.md`](SPEC-programming-language.md), "9. Files and import".
 
 **The only languages that pair the words are C++20 (`export module` / `import`) and Java's `module-info` (`exports` / `requires`), and in each the pair reaches past naming.** Java makes visibility the product of two declarations. C++'s modules give up the premise that a translation unit (one source file and what it includes) is compiled independently.
 
-**The words do not change.** A keyword like Zig's `export fn` would make `#export` look as if it decided linkage too. Visibility decides that, and `#export` touches only the symbol's name. Nor is it renamed `#c_name`: on wasm32 the attribute also means "make it an export", so `c` would be a lie ([`SPEC-language.md`](SPEC-language.md), "11.3 Exposing a KSPL function to C (`#export`)").
+**The words do not change.** A keyword like Zig's `export fn` would make `#export` look as if it decided linkage too. Visibility decides that, and `#export` touches only the symbol's name. Nor is it renamed `#c_name`: on wasm32 the attribute also means "make it an export", so `c` would be a lie ([`SPEC-programming-language.md`](SPEC-programming-language.md), "11.3 Exposing a KSPL function to C (`#export`)").
 
-**A combination that becomes ineffective across the axes is rejected**; which ones are is "11.3 Exposing a KSPL function to C (`#export`)" in [`SPEC-language.md`](SPEC-language.md). On a method the cause is the name's uniqueness, not visibility. Symbols share one namespace across every link target. So only a name unique on its own can go out bare.
+**A combination that becomes ineffective across the axes is rejected**; which ones are is "11.3 Exposing a KSPL function to C (`#export`)" in [`SPEC-programming-language.md`](SPEC-programming-language.md). On a method the cause is the name's uniqueness, not visibility. Symbols share one namespace across every link target. So only a name unique on its own can go out bare.
 
 **This is a language rule, not a lint.** A lint runs only when someone runs it, and only over the files it is given. So the same notation in another file would be accepted. Like the other spellings that bring nothing about, it carries no diagnostic code ("1. Diagnostic codes, and the errors that have none" in [`../ksplc/docs/SPEC-diagnostics.md`](../ksplc/docs/SPEC-diagnostics.md)).
 
@@ -503,9 +481,9 @@ struct Point {
 }
 ```
 
-**Declarations lined up inside `{ … }`, a `struct`'s fields and an `enum`'s values alike, end with `;`, the last one too.** So a block has exactly one mark that says "end". The rule is "2.5 Blocks and statement ends" in [`SPEC-language.md`](SPEC-language.md).
+**Declarations lined up inside `{ … }`, a `struct`'s fields and an `enum`'s values alike, end with `;`, the last one too.** So a block has exactly one mark that says "end". The rule is "2.5 Blocks and statement ends" in [`SPEC-programming-language.md`](SPEC-programming-language.md).
 
-**`,` keeps its own job.** `;` ends a declaration, and `,` separates the items of a list within one notation. So the rule allowing a trailing `,` ("2.4 Trailing commas" in [`SPEC-language.md`](SPEC-language.md)) applies only to lists.
+**`,` keeps its own job.** `;` ends a declaration, and `,` separates the items of a list within one notation. So the rule allowing a trailing `,` ("2.4 Trailing commas" in [`SPEC-programming-language.md`](SPEC-programming-language.md)) applies only to lists.
 
 **The C family's shape is not taken.** There, `,` separates names inside an `enum` that is one whole declaration closed by `;`. KSPL's `enum` sits at the same level as `struct`, with no closing `;`, so that footing is absent. A list mark inside a block would make the mark that says "end" vary from block to block.
 

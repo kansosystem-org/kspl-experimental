@@ -88,7 +88,7 @@ priv fn sorted_order(keys: List<|Key|>$@, down: Bool, arena: Arena$@): List<|Sz|
         return key_order(keys.get(a$), keys.get(b$), down);
     }, arena)
 
-priv const values_cap: Sz = 1000 //< the most distinct values one column's list holds
+priv const VALUES_CAP: Sz = 1000 //< the most distinct values one column's list holds
     //<
     //< Values beyond it are reported, not silently dropped.
 
@@ -97,7 +97,7 @@ struct Column_values //< what one column shows, collected so a set of values can
     //< The values go into the list passed in. Empty cells are not among them — they are `blank`,
     //< which the picker shows as "(the blanks)".
     blank: Bool //< some cell under the heading shows nothing
-    cut: Bool //< there were more than `values_cap` distinct values, so the list is incomplete
+    cut: Bool //< there were more than `VALUES_CAP` distinct values, so the list is incomplete
 
 fn column_values(table: Block$@, column: Sz, arena: Arena$@, out: List<|U8[]|>$@): Column_values //<
     //< Collects the distinct texts one column shows, in the order that column sorts in
@@ -119,7 +119,7 @@ fn column_values(table: Block$@, column: Sz, arena: Arena$@, out: List<|U8[]|>$@
             continue
         if held(out, k.text)
             continue
-        if out.len >= values_cap
+        if out.len >= VALUES_CAP
             cut = true
             continue
         $at: Sz = out.len
@@ -155,7 +155,7 @@ enum Merge_end //< the result of merging the selected cells
     shut //< the document is open read-only
     alone //< only one cell is selected, so there is nothing to merge it with
     ragged //< an already merged cell extends outside the selection
-    too_wide //< the selection covers more rows or columns than one merge may (`limit.most_span`)
+    too_wide //< the selection covers more rows or columns than one merge may (`limit.MOST_SPAN`)
 
 enum Line_end //< the result of adding a row or a column
     //<
@@ -163,7 +163,7 @@ enum Line_end //< the result of adding a row or a column
     done
     outside //< the cursor is not inside a table cell
     shut //< the document is open read-only
-    too_wide //< the column would widen a merge past what one may cover (`limit.most_span`)
+    too_wide //< the column would widen a merge past what one may cover (`limit.MOST_SPAN`)
 
 priv fn same_order(order: List<|Sz|>$@): Bool //< whether a sort would leave the order unchanged
     //<
@@ -235,7 +235,7 @@ impl Editor
         //< Adds one row (or column) at the cell the cursor is in
         //<
         //< It is added after the cursor's row (or column). **A column landing on a merge widens it.
-        //< So one that would take it past `limit.most_span` is refused.** Saved, the file would not
+        //< So one that would take it past `limit.MOST_SPAN` is refused.** Saved, the file would not
         //< load, and adding a cell instead would change the table's shape.
         //< Caution: **Call it after layout** (the layout tells which cell the cursor is in).
         if r.shut()
@@ -259,9 +259,14 @@ impl Editor
         r.break_group()
         st: = r.step()
         made: = table.fresh_line(axis, r.arena)
+        // A new automatic column would have no room in a table whose set widths already fill
+        // the page. Copy the current column's setting; the existing widths stay as they are.
+        $size: F32? = .none
+        if axis == Axis.column && at > 0
+            size = table.size_of(axis, at - 1)
         // The spans are empty because the column is new, so a merged cell widens
         // (`Block.attach_line`).
-        edit.do_line(r, st, table, axis, at, true, made, List<|Sz|>.create(r.arena), .none)
+        edit.do_line(r, st, table, axis, at, true, made, List<|Sz|>.create(r.arena), size)
         edit.shift_formulas(r, st, table, axis, at, 1)
         r.break_group()
         return true

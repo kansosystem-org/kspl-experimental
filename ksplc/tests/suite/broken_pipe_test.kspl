@@ -26,7 +26,7 @@ import "std/verdict"
 // The probe that writes to an ended child: it must get an error back, not crash.
 // Caution: **Write after waiting for the child to end.** Written sooner, the write succeeds, and
 // the check goes green having checked nothing.
-priv const dead_child_src: U8[] =
+priv const DEAD_CHILD_SRC: U8[] =
     """import "std/io"
 import "std/str" { Str_builder }
 import "std/subproc"
@@ -70,7 +70,7 @@ fn main(): I32
 // ended part way**.
 // Caution: **Write more than the buffer.** An amount that fits is never flushed, so the probe
 // never gets the chance to notice the destination is gone.
-priv const loud_src: U8[] =
+priv const LOUD_SRC: U8[] =
     """import "std/io"
 import "std/sys"
 
@@ -86,7 +86,7 @@ fn main()
 """
 
 // The same probe writing one byte per call, the path a `.c()` takes.
-priv const loud_bytes_src: U8[] =
+priv const LOUD_BYTES_SRC: U8[] =
     """import "std/io"
 import "std/sys"
 
@@ -100,7 +100,7 @@ fn main()
 """
 
 // The probe printing the signals a started child ignores (Linux's `/proc/self/status`).
-priv const child_sig_src: U8[] =
+priv const CHILD_SIG_SRC: U8[] =
     """import "std/io"
 import "std/mem" { Arena }
 import "std/subproc"
@@ -115,7 +115,7 @@ fn main()
 
 """
 
-priv const sigpipe_bit: U8[] = "1000" //< the mark for ignoring SIGPIPE (number 13)
+priv const SIGPIPE_BIT: U8[] = "1000" //< the mark for ignoring SIGPIPE (number 13)
     //<
     //< `SigIgn` in `/proc/<pid>/status` is 64 hex digits.
 
@@ -140,7 +140,7 @@ priv fn build(name: U8[], src: U8[], work: U8[], arena: Arena$@): U8[] //< it bu
 
 priv fn check_dead_child(work: U8[], arena: Arena$@) //<
     //< Checks that writing to a peer that has ended does not crash
-    exe: = build("deadchild", dead_child_src, work, arena)
+    exe: = build("deadchild", DEAD_CHILD_SRC, work, arena)
     if exe.len == 0
         return
     r: = harness.run(U8[][]::{ exe })
@@ -178,7 +178,7 @@ priv fn check_head(name: U8[], src: U8[], how: U8[], work: U8[], arena: Arena$@)
 
 priv fn check_child_default(work: U8[], arena: Arena$@) //<
     //< Checks that a started child keeps SIGPIPE's default
-    exe: = build("childsig", child_sig_src, work, arena)
+    exe: = build("childsig", CHILD_SIG_SRC, work, arena)
     if exe.len == 0
         return
     r: = harness.run(U8[][]::{ exe })
@@ -189,7 +189,7 @@ priv fn check_child_default(work: U8[], arena: Arena$@) //<
         return
     // The bit for number 13 (0x1000) is not set in the lowest four digits.
     tail: = said.sub(said.len - 5, 4) if said.len >= 5 else said
-    verdict.check("a started child holds SIGPIPE's default", !tail.equals(sigpipe_bit),
+    verdict.check("a started child holds SIGPIPE's default", !tail.equals(SIGPIPE_BIT),
         arena.text().s("the child inherits the ignoring: \{said\}").take())
 
 fn main(): I32 //<
@@ -206,7 +206,7 @@ fn main(): I32 //<
         return harness.finish()
     work: = harness.sandbox("brokenpipe")
     check_dead_child(work, arena)
-    check_head("loud", loud_src, "(a string per call)", work, arena)
-    check_head("loud_bytes", loud_bytes_src, "(a byte per call)", work, arena)
+    check_head("loud", LOUD_SRC, "(a string per call)", work, arena)
+    check_head("loud_bytes", LOUD_BYTES_SRC, "(a byte per call)", work, arena)
     check_child_default(work, arena)
     return harness.finish()

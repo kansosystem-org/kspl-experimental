@@ -16,7 +16,7 @@
    ```
 
    The group must be one of `HELP_GROUPS` in `mk/help.mk`. A target missing from `.PHONY` or the help line fails `make test-recipe-bytes`. The closing `RESULT: ALL PASS` line is what the CI runner reads ("How a run is read" in [`SPEC-gates.md`](SPEC-gates.md)).
-2. **Add its row** to `gates` in `tools/ci_gates.kspl`. The row's place is its order in the run. Where it runs follows from two fields:
+2. **Add its row** to `GATES` in `tools/ci_gates.kspl`. The row's place is its order in the run. Where it runs follows from two fields:
 
    | `shard` | `macos` | Where it runs |
    | :-- | :-- | :-- |

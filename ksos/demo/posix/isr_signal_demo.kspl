@@ -13,7 +13,7 @@ import "std/libc"
 import "std/sys"
 import "std/verdict"
 
-const sigusr1: I32 = 10 // assumes Linux (30 on macOS/BSD; this demo only runs on a POSIX host)
+const SIGUSR1: I32 = 10 // assumes Linux (30 on macOS/BSD; this demo only runs on a POSIX host)
 
 $g_q: sync.Queue<|I32|>
 $g_qbuf: I32[4] // a small capacity, so the demo also shows drops on a full queue
@@ -37,7 +37,7 @@ fn on_ext_irq(_sig: I32): Void //< the mock ISR
     if !g_q.try_send(g_next_value)
         g_drop_count += 1
     g_next_value += 1
-    libc.signal(sigusr1, on_ext_irq)
+    libc.signal(SIGUSR1, on_ext_irq)
 
 fn driver(_arg: Void$@): Void //<
     //< Raise the "interrupt" 10 times in a row
@@ -45,7 +45,7 @@ fn driver(_arg: Void$@): Void //<
     //< There is no yield between them, so consumer cannot run in between. The first 4 fill the
     //< queue, and msgq_try_send drops the other 6 by returning false without blocking.
     for $i: I32 = 0; i < 10; i += 1
-        sys.raise_signal(sigusr1) // a real signal delivery, standing in for the interrupt
+        sys.raise_signal(SIGUSR1) // a real signal delivery, standing in for the interrupt
     io.out().s("[driver] raised 10 simulated interrupts\n")
 
 fn consumer(_arg: Void$@): Void
@@ -64,7 +64,7 @@ fn consumer(_arg: Void$@): Void
     // Cortex-M.
     before: = g_irq_count
     s: = task.irq_save()
-    sys.raise_signal(sigusr1)
+    sys.raise_signal(SIGUSR1)
     held: = g_irq_count == before
     task.irq_restore(s)
     verdict.check("isr: a signal raised inside a critical section waits for its end", held, "")
@@ -75,7 +75,7 @@ fn consumer(_arg: Void$@): Void
 
 fn main(): I32
     g_q.init(g_qbuf[0]@, 4)
-    libc.signal(sigusr1, on_ext_irq)
+    libc.signal(SIGUSR1, on_ext_irq)
     tcb_driver.create(U8$[]::stack_driver, driver, null, 1, "driver")
     tcb_consumer.create(U8$[]::stack_consumer, consumer, null, 1, "consumer")
     task.start_scheduler()

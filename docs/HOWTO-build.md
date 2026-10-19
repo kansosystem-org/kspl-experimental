@@ -193,15 +193,33 @@ pacman -S --needed \
   mingw-w64-ucrt-x86_64-arm-none-eabi-gcc
 ```
 
-**To assemble kspage for the browser (`make kspage-web` / `make test-kspage-wasm`)**, you also need the `-lld` and `-llvm` packages above: clang alone compiles to wasm32 and stops at the link.
+**To assemble kspage for the browser (`make kspage-web` / `make test-kspage-wasm`)**, install the LLVM tools and clang's wasm32 builtins:
 
-| The command needed | What it is for | Without it |
+```sh
+pacman -S --needed \
+  mingw-w64-ucrt-x86_64-llvm \
+  mingw-w64-ucrt-x86_64-lld \
+  mingw-w64-ucrt-x86_64-wasi-compiler-rt
+```
+
+**The `-wasi-compiler-rt` package supplies the arithmetic helpers that clang emits for wasm32.** The page remains freestanding and uses no WASI system calls. Keep clang and this package at matching versions with `pacman -Syu`.
+
+| The command or library needed | What it is for | Without it |
 |---|---|---|
 | `wasm-ld` | The wasm32 final link (`-lld`) | `wasm-ld: command not found` |
 | `llvm-nm` | Confirming the functions called from JS are all assembled (`-llvm`) | `llvm-nm: command not found` |
+| Clang's wasm32 builtins archive | Arithmetic helpers (`-wasi-compiler-rt`) | The build reports that wasm32 builtins are not installed |
 | `node` | Running the assembled wasm / checking the JS syntax (`make test-js-syntax`) | `node: command not found` |
 
-For `node`, the Windows build of Node.js on the PATH is quicker than an MSYS2 package. `make kspage-web` alone needs only `wasm-ld`.
+For `node`, the Windows build of Node.js on the PATH is quicker than an MSYS2 package. Node is needed for the tests.
+
+To locate the builtins archive, run:
+
+```sh
+clang --target=wasm32-wasi -rtlib=compiler-rt -print-libgcc-file-name
+```
+
+The reported file must exist. If it does not exist after installation, use `type -a clang` to check which compiler your PATH selects. Use the clang from `/ucrt64/bin` with these packages.
 
 `pacman -Ss <part of the name>` finds a package whose name has changed. To find the package that provides a command (`pacman -F`), **fetch the file database with `pacman -Fy` first**; otherwise you get only the warning `database file for '...' does not exist`.
 
@@ -221,5 +239,5 @@ The `Makefile` finds `ld.lld` / `llvm-objdump` / `llvm-objcopy` under the plain 
 | What you see | Why | The fix |
 | :-- | :-- | :-- |
 | **A link fails with `Permission denied`** | `make ci` rebuilds the same `.exe` many times in a short span. A program that watches new files can briefly lock one just written. A real-time scan such as Windows Defender's does it, and so does a sync agent such as OneDrive's | Re-running often fixes it. Where it recurs, exclude this repository's `out/` (or the whole repository) from the scan. Keep the repository outside a synced folder (for example `C:\dev\kspl`), as "[Building and testing](#building-and-testing)" says |
-| `make ci` ends `ALL GREEN`, yet its digest lists `SKIP` lines: `node`, Wine, the MinGW cross compiler, an ARM toolchain and others | Those gates need a tool the package list leaves out, or one that has no place on Windows (Wine runs Windows programs on Linux). `expected_skips` in `tools/ci_gates.kspl` names each such line for `win32`. A `SKIP` that it does not name fails its gate. So a green round has skipped only those | Nothing to fix. What each skip leaves unchecked is "Gates that pass silently where a tool is missing" in [`SPEC-gates.md`](SPEC-gates.md). "Install the packages" lists the tools for Kanso OS and kspage (`llvm`, `lld`, the ARM toolchain, `node`). Installing them turns their skips into real runs |
+| `make ci` ends `ALL GREEN`, yet its digest lists `SKIP` lines: `node`, Wine, the MinGW cross compiler, an ARM toolchain and others | Those gates need a tool the package list leaves out, or one that has no place on Windows (Wine runs Windows programs on Linux). `EXPECTED_SKIPS` in `tools/ci_gates.kspl` names each such line for `win32`. A `SKIP` that it does not name fails its gate. So a green round has skipped only those | Nothing to fix. What each skip leaves unchecked is "Gates that pass silently where a tool is missing" in [`SPEC-gates.md`](SPEC-gates.md). "Install the packages" lists the tools for Kanso OS and kspage (`llvm`, `lld`, the ARM toolchain, `node`). Installing them turns their skips into real runs |
 | Part of `std/tests/sys_test.kspl` skips itself | It needs POSIX paths such as `/bin/echo`, so it skips itself on native Windows (`sys.is_windows()`) | Nothing to fix. Subprocesses themselves (`run_capture`, through `CreateProcess`) work there, and the `windows-ucrt64` job in `.github/workflows/ci.yml` runs them on real hardware |

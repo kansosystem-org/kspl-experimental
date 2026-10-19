@@ -16,7 +16,7 @@ priv fn streams(r: subproc.Run_result@, arena: Arena$@): U8[] //< both streams, 
     return arena.text().s("stdout: ").s(r.stdout_data).s("\nstderr: ").s(r.stderr_data).take()
 
 priv fn capture(argv: U8[][], arena: Arena$@): subproc.Run_result //< one run, its streams apart
-    return subproc.run_capture(argv, "", verdict.default_timeout_ms, 4 * 1024 * 1024, arena) catch
+    return subproc.run_capture(argv, "", verdict.DEFAULT_TIMEOUT_MS, 4 * 1024 * 1024, arena) catch
         panic("ksplc must start")
 
 fn case_refusal_stream(arena: Arena$@) //<
@@ -39,7 +39,7 @@ fn case_refusal_stream(arena: Arena$@) //<
     case_fmt_stream(arena)
     case_status_stream(arena)
 
-priv const fmt_good: U8[] = "fn main(): I32\n    return 0\n" //< a file `fmt` leaves as it is
+priv const FMT_GOOD: U8[] = "fn main(): I32\n    return 0\n" //< a file `fmt` leaves as it is
 
 priv fn case_fmt_stream(arena: Arena$@) //<
     //< A failing `fmt` leaves only formatted text on standard output
@@ -49,7 +49,7 @@ priv fn case_fmt_stream(arena: Arena$@) //<
     dir: = harness.sandbox("cli_fmt_stream")
     good: = fs.join(dir, "good.kspl", arena)
     bad: = fs.join(dir, "bad.kspl", arena)
-    io.write_file(good, fmt_good) catch
+    io.write_file(good, FMT_GOOD) catch
         verdict.check("fmt's streams: the sample can be written", false, good)
         return
     io.write_file(bad, "fn main(): I32\n    return (\n") catch
@@ -57,7 +57,7 @@ priv fn case_fmt_stream(arena: Arena$@) //<
         return
     r: = capture(U8[][]::{ harness.ksplc_exe(), "fmt", good, bad }, arena)
     verdict.check("a failing fmt writes only the formatted text to standard output",
-        !r.exited_with(0) && r.stdout_data.equals(fmt_good) &&
+        !r.exited_with(0) && r.stdout_data.equals(FMT_GOOD) &&
         r.stderr_data.find_str("fmt/failed:").is_some(), streams(r@, arena))
 
 priv fn case_status_stream(arena: Arena$@) //<

@@ -12,16 +12,16 @@ import "std/verdict"
 import "tests/support/conventions_scan" as scan + { Sample }
 import "tests/support/harness"
 
-priv const web_js: U8[] = "kspage/port/web/*.js" //< the files checked
+priv const WEB_JS: U8[] = "kspage/port/web/*.js" //< the files checked
 
-priv const ks_home: U8[] = "kspage/port/web/kspage.js" //<
+priv const KS_HOME: U8[] = "kspage/port/web/kspage.js" //<
     //< Where the entry points passed around are built
     //<
     //< **Exactly these two.** `ks` is what the code that started the wasm passes to each part. `ui`
     //< is what the page's frame builds and mixes the parts into. **Many parts touch both**. **`kf`
     //< and `ks.api` are not checked.** `kf` sits between two files and writes in **both
     //< directions**, so it does not split into a provider and a reader.
-priv const ui_home: U8[] = "kspage/port/web/page.js"
+priv const UI_HOME: U8[] = "kspage/port/web/page.js"
 
 // ==========================================
 // The JS text with its strings and comments masked
@@ -119,7 +119,7 @@ priv fn reads_in_template(text: U8[], arena: Arena$@): Bool //<
             return true
     return false
 
-priv const template_samples: Sample[_] = ::{ Sample::{ .text =
+priv const TEMPLATE_SAMPLES: Sample[_] = ::{ Sample::{ .text =
     "say(`Replaced ${ui.count(n, \"place\")}`);", .hits = true },
     Sample::{ .text = "say(`${a ? { b: ui.count(1) }.b : \"}\"}`);", .hits = true },
     Sample::{ .text = "say(`ui.count is text here`);", .hits = false },
@@ -131,7 +131,7 @@ priv fn brace_hidden(text: U8[], arena: Arena$@): Bool //<
     //< Caution: **List samples on both sides** (otherwise masking too much or too little passes).
     return mask_js(text, arena).find_char('{').is_none()
 
-priv const mask_samples: Sample[_] = ::{ Sample::{ .text = "const a = \"{\";", .hits = true },
+priv const MASK_SAMPLES: Sample[_] = ::{ Sample::{ .text = "const a = \"{\";", .hits = true },
     Sample::{ .text = "// a { is masked", .hits = true },
     Sample::{ .text = "const a = '{';", .hits = true },
     Sample::{ .text = "const a = `${x}`;", .hits = true },
@@ -173,7 +173,7 @@ priv fn key_of(entry: U8[]): U8[] //<
 priv fn names_field(text: U8[], _arena: Arena$@): Bool
     return key_of(text).len > 0
 
-priv const field_samples: Sample[_] = ::{ Sample::{ .text = "hoverNow: hoverNow", .hits = true },
+priv const FIELD_SAMPLES: Sample[_] = ::{ Sample::{ .text = "hoverNow: hoverNow", .hits = true },
     Sample::{ .text = "  paint: () => run()", .hits = true },
     Sample::{ .text = "nameOf", .hits = true },
     Sample::{ .text = "reach(at, to) { open(at); }", .hits = true },
@@ -231,7 +231,7 @@ priv fn load_web(rels: List<|U8[]|>$@, srcs: List<|U8[]|>$@, arena: Arena$@) //<
     //< Builds the masked text once and passes it around
     //<
     //< Caution: **Do not rebuild it for each walk** (that masks every file again once per part).
-    for rel in harness.tracked_matching(U8[][]::{ web_js })
+    for rel in harness.tracked_matching(U8[][]::{ WEB_JS })
         rels.push(rel)
         srcs.push(mask_js(harness.read_under_root(rel), arena))
 
@@ -388,16 +388,16 @@ priv fn check_object(obj: U8[], home: U8[], parts: Bool, rels: List<|U8[]|>@,
 
 priv fn check_fires(arena: Arena$@)
     scan.check_samples("the place masking the strings and comments can fire",
-        Sample[]::mask_samples, "mask_samples", brace_hidden, arena)
+        Sample[]::MASK_SAMPLES, "mask_samples", brace_hidden, arena)
     scan.check_samples("the judgment that picks a field's name up can fire",
-        Sample[]::field_samples, "field_samples", names_field, arena)
+        Sample[]::FIELD_SAMPLES, "field_samples", names_field, arena)
     scan.check_samples("a field read inside a template's `${…}` is a read",
-        Sample[]::template_samples, "template_samples", reads_in_template, arena)
+        Sample[]::TEMPLATE_SAMPLES, "template_samples", reads_in_template, arena)
 
 fn run(arena: Arena$@)
     check_fires(arena)
     $rels: = List<|U8[]|>.new(arena)
     $srcs: = List<|U8[]|>.new(arena)
     load_web(rels@, srcs@, arena)
-    check_object("ks", ks_home, false, rels@, srcs@, arena)
-    check_object("ui", ui_home, true, rels@, srcs@, arena)
+    check_object("ks", KS_HOME, false, rels@, srcs@, arena)
+    check_object("ui", UI_HOME, true, rels@, srcs@, arena)

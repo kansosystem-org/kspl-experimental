@@ -17,13 +17,13 @@ import "ksos/drivers/ht16k33" as matrix
 import "ksos/drivers/mmio"
 import "ksos/drivers/rp2040/i2c"
 
-const frame_interval_ms: U32 = 500
-const frames_per_run: U32 = 8
+const FRAME_INTERVAL_MS: U32 = 500
+const FRAMES_PER_RUN: U32 = 8
 
-const scan_first: U32 = 0x08 //< the range scanned
+const SCAN_FIRST: U32 = 0x08 //< the range scanned
     //<
     //< 0x00 to 0x07 and 0x78 to 0x7f are reserved by the standard.
-const scan_last: U32 = 0x77
+const SCAN_LAST: U32 = 0x77
 
 priv $ready: Bool = false
 priv $target: U32 = 0
@@ -36,7 +36,7 @@ priv $phase: U32 = 0
 fn init(): Bool //< starts it
     //<
     //< Caution: Call it after `clocks.init()`. false means the I2C block did not start.
-    i2c.init(board.i2c_sda, board.i2c_scl) catch
+    i2c.init(board.I2C_SDA, board.I2C_SCL) catch
         return false
     ready = true
     return true
@@ -49,7 +49,7 @@ priv fn scan_bus(ln: con.Line$@): U32 //<
     $count: U32 = 0
     ln.reset()
     ln.str("[i2c] scan:")
-    for $a: U32 = scan_first; a <= scan_last; a += 1
+    for $a: U32 = SCAN_FIRST; a <= SCAN_LAST; a += 1
         if i2c.present(a)
             count += 1
             if found == 0
@@ -120,9 +120,9 @@ fn run(ln: con.Line$@)
     // Scan again each round. The swap happens while it runs, so remembering the first round's
     // result would keep writing to the old device after the swap.
     scan_found = scan_bus(ln)
-    attach(ln, scan_found if scan_found != 0 else matrix.default_addr)
+    attach(ln, scan_found if scan_found != 0 else matrix.DEFAULT_ADDR)
     // The picture **that keeps moving** is the sign of life.
-    for _i in Range.asc(Sz::frames_per_run)
+    for _i in Range.asc(Sz::FRAMES_PER_RUN)
         $frame: U16[8] = ::{}
         make_frame(frame[0]@, phase)
         matrix.draw(target, frame[0]@) catch e
@@ -147,4 +147,4 @@ fn run(ln: con.Line$@)
         append_i2c_reason(ln, last_error)
         _s: = ln.flush()
         phase += 1
-        boot.pump(frame_interval_ms)
+        boot.pump(FRAME_INTERVAL_MS)

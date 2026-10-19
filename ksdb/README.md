@@ -15,8 +15,8 @@ import "ksdb/log" as ksdblog
 import "ksdb/ram_store" as ram
 import "std/io"
 
-const kind_sample: U16 = 1
-const kind_policy: U16 = 2
+const KIND_SAMPLE: U16 = 1
+const KIND_POLICY: U16 = 2
 
 $buf: U8[8192]
 
@@ -24,7 +24,7 @@ fn main()
     store: = ram.make(U8$[]::buf, 4096) // a 4KB sector
     $lg: = ksdblog.Log.open(store) // scans the place and settles where it can append
 
-    lg.append(kind_sample, "dist=180 line=2") catch
+    lg.append(KIND_SAMPLE, "dist=180 line=2") catch
         return
 
     // Reading it back, oldest first.
@@ -40,7 +40,7 @@ fn main()
     // "The newest one" per kind. This is the shape for taking the policy handed down.
     // With not one record it throws `not_found`, which is not length 0.
     $policy: U8[2048] = ::{}
-    n: = lg.last(kind_policy, U8$[]::policy) catch
+    n: = lg.last(KIND_POLICY, U8$[]::policy) catch
         return
     io.out().s("the policy holds \{n\} bytes\n")
 ```

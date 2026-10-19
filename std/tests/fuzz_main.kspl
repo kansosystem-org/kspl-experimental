@@ -1,13 +1,13 @@
 //< Fuzzes std's readers with mutated input (`make test-fuzz`)
 //<
-//< **Each kind of bytes that comes into std from outside is scattered** (`kinds` below). The
+//< **Each kind of bytes that comes into std from outside is scattered** (`KINDS` below). The
 //< target program ([`read_prog.kspl`](read_prog.kspl)) goes as far as using what it read, and
 //< checks that it reads back what a writer wrote. **std's own writers produce the seeds**, so
 //< reader and writer are checked against each other before any round. The JSON files under the
 //< given folders (the repository's own, when it runs this) are seeds too.
 //< Usage: `ksplc run tests/fuzz_main.kspl <reader> <work folder> [seed folder ...]`, with
 //< `--trials`, `--seed` and `fuzz.declare_asan`'s two flags; the Makefile builds the reader.
-import "std/argp"
+import "std/argparse"
 import "std/base64"
 import "std/ds" { List }
 import "std/fuzz"
@@ -21,29 +21,29 @@ import "std/strfmt" as _strfmt
 import "std/url"
 import "std/verdict"
 
-priv const default_seed: I64 = 20260903
-priv const default_trials: I64 = 400 //< how many rounds CI scatters, some 40 a kind
+priv const DEFAULT_SEED: I64 = 20260903
+priv const DEFAULT_TRIALS: I64 = 400 //< how many rounds CI scatters, some 40 a kind
     //<
     //< **CI's depth**: the seed is fixed, so CI replays the same inputs and shows a regression.
     //< `make fuzz-long` runs deeper, with a fresh seed, to find what this seed never reaches.
 
-priv const reach_floor_div: Sz = 10 //<
+priv const REACH_FLOOR_DIV: Sz = 10 //<
     //< At least one round in this many must get deep into the reader
     //<
     //< It is the minimum share of mutated inputs that the reader reads rather than refuses.
     //< Caution: **Do not change it to tighten the check.** It is a lower bound for "is it working".
     //< The share that gets through means nothing by itself.
 
-priv const trial_timeout_ms: I32 = 10000 //<
+priv const TRIAL_TIMEOUT_MS: I32 = 10000 //<
     //< How long a round runs before it counts as never ending
     //<
     //< Shorter than for ksplc: a sane input is read in under a second.
 
-priv const max_seed_bytes: I64 = 64I64 * 1024I64 //< the size cap on a file used as a seed
+priv const MAX_SEED_BYTES: I64 = 64I64 * 1024I64 //< the size cap on a file used as a seed
     //<
     //< Caution: **Do not drop the small files.** A file of a few bytes can break a reader too.
 
-priv const kinds: fuzz.Input_kind[10] = ::{ //<
+priv const KINDS: fuzz.Input_kind[10] = ::{ //<
     //< The kinds of input that the fuzzer mutates and feeds to a reader, and their files' endings
     //<
     //< **This is the canonical source**: the reader's names ([`read_prog.kspl`](read_prog.kspl))
@@ -111,18 +111,18 @@ priv fn built_response(arena: Arena$@): U8[] //< the HTTP response that std's wr
         return ""
     return arena.dup_str(out.slice())
 
-priv const built_floats: F64[_] = ::{ -0.0, 5.0e-324, 2.2250738585072014e-308,
+priv const BUILT_FLOATS: F64[_] = ::{ -0.0, 5.0e-324, 2.2250738585072014e-308,
     1.7976931348623157e308, 1.0e21, 1.0e20, 1.0e-6, 1.0e-7, 0.1, -1.5e-7, 9007199254740993.0 } //<
         //< Decimals at the edges of the shortest form, which the writer's text must read back as
         //<
         //< The sign of zero, the smallest and largest F64, and both sides of each switch to the
         //< exponent form.
 
-priv fn built_numbers(arena: Arena$@): U8[] //< `built_floats`, and I64's ends, as std writes them
+priv fn built_numbers(arena: Arena$@): U8[] //< `BUILT_FLOATS`, and I64's ends, as std writes them
     $b: = Json_builder.new(arena)
     $arr: = b.arr().push(b.int_val(-9223372036854775807I64 - 1I64))
         .push(b.int_val(9223372036854775807I64))
-    for f in built_floats
+    for f in BUILT_FLOATS
         arr = arr.push(b.float_val(f))
     $out: = Str_builder.new()
     defer out.free()
@@ -147,7 +147,7 @@ priv fn head_at_limit(arena: Arena$@): U8[] //<
     //< the limit wherever a read ends.
     tail: U8[] = "\r\nContent-Length: 2\r\n\r\n"
     out: = arena.text().s("X: ")
-    for _i in Range.asc(jsonrpc.max_head_bytes - 3 - tail.len)
+    for _i in Range.asc(jsonrpc.MAX_HEAD_BYTES - 3 - tail.len)
         out.c('a')
     return out.s(tail).s("{}Content-Length: 2\r\n\r\n[]").take()
 
@@ -178,13 +178,13 @@ priv fn built_shape(arena: Arena$@): U8[] //<
 // add no path.
 // A regex seed has the form "the pattern before the 0 byte, the text to match after it". Why the
 // separator is not a newline is in `read_regex` in [`read_prog.kspl`](read_prog.kspl).
-priv const regex_samples: U8[][8] = ::{ "([a-z]+)-([0-9]+)\0foo-12 bar-345 baz",
+priv const REGEX_SAMPLES: U8[][8] = ::{ "([a-z]+)-([0-9]+)\0foo-12 bar-345 baz",
     "^(cat|dog)s?$\0dogs", "a.*?b|a.*b\0axxbxxb", "[^\\d\\s]+\\b\0words and 123 and abc",
     "(ab)+(cd)?\0ababcd", "\\((\\w+)\\)[*+?]\0(x)* (y)+",
     "(a|aa)+$\0aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!",
     "((a?){2,3}|b)*?c{1,2}\0aabba bc" }
 
-priv const request_samples: U8[][4] = ::{ "GET /a/b?x=1&y=%E3%81%82 HTTP/1.1\r\nHost: \
+priv const REQUEST_SAMPLES: U8[][4] = ::{ "GET /a/b?x=1&y=%E3%81%82 HTTP/1.1\r\nHost: \
     example.org\r\nAccept: */*\r\n\r\n",
     "POST /post HTTP/1.1\r\nHost: h\r\nContent-Length: 11\r\nContent-Type: text/plain\r\n\r\nhello \
         world", "PUT / HTTP/1.0\r\nX-A: 1\r\nX-A: 2\r\nx-a: 3\r\n\r\n",
@@ -193,13 +193,13 @@ priv const request_samples: U8[][4] = ::{ "GET /a/b?x=1&y=%E3%81%82 HTTP/1.1\r\n
 // Numbers in spellings std's writer does not write: integers past I64, which read as decimals, and
 // spellings longer than the shortest. Also exponents the writer turns into a fixed form that starts
 // with zeros (`0.0000300…`). Those must read back as the same F64.
-priv const number_sample: U8[] =
+priv const NUMBER_SAMPLE: U8[] =
     "[123456789012345678901234567890,-9223372036854775809,9007199254740993,1E+2,0.10000000000000000555,2.4703282292062328e-324,3.008264692815159e-5,1.555807952092567e-6,-6.388790567867736e-6]"
 
 // A JSON-RPC seed is a stream of frames. They hold a length named twice alike and then apart, and
 // a head with other fields and a body cut short. Others hold a length past the cap, a head naming
 // none, and a length of 0.
-priv const frame_samples: U8[][5] = ::{ "Content-Length: 2\r\nContent-Length: \
+priv const FRAME_SAMPLES: U8[][5] = ::{ "Content-Length: 2\r\nContent-Length: \
     2\r\n\r\n{}Content-Length: 2\r\ncontent-length: 4\r\n\r\n[]",
     "Content-Type: application/vscode-jsonrpc; charset=utf-8\r\ncontent-length: \
         7\r\n\r\n{\"a\":1}Content-Length: 9\r\n\r\n{\"b\"",
@@ -209,14 +209,14 @@ priv const frame_samples: U8[][5] = ::{ "Content-Length: 2\r\nContent-Length: \
 
 // A writer's seed is fields split at each 0 byte (`read_http_written` in
 // [`read_prog.kspl`](read_prog.kspl)): a status or a method and a target, header pairs, a body.
-priv const written_samples: U8[][5] = ::{ "POST\0/a?x=1\0Host\0example.org\0Content-Type\0text/plain\0hello",
+priv const WRITTEN_SAMPLES: U8[][5] = ::{ "POST\0/a?x=1\0Host\0example.org\0Content-Type\0text/plain\0hello",
     "GET\0/\0Host\0[::1]:8080\0Connection\0close\0Content-Length\00",
     "200\0Content-Type\0text/html; charset=utf-8\0X-Tab\0a\tb\0<p>hi</p>",
     "204\0Date\0Mon, 01 Jan 2001 00:00:00 GMT", "101\0Upgrade\0websocket\0Connection\0Upgrade" }
 
 // A command line's seed is its arguments split at each 0 byte (`read_argv` in
 // [`read_prog.kspl`](read_prog.kspl)).
-priv const argv_samples: U8[][5] = ::{ "--verbose\0--count=3\0--name=x\0a.txt\0b.txt",
+priv const ARGV_SAMPLES: U8[][5] = ::{ "--verbose\0--count=3\0--name=x\0a.txt\0b.txt",
     "fmt\0--define=a\0--define=\0--\0-x\0fmt", "run\0script.kspl\0--verbose\0--help\0--",
     "--version\0--dry-run\0--count=-9223372036854775808\0-",
     "--name=a=b\0--count=+5\0--name=\0--define=x" }
@@ -242,14 +242,14 @@ priv fn collect_samples(dirs: U8[][], arena: Arena$@): List<|fuzz.Sample|> //<
     push_sample(out@, "jsonrpc", "built frames", built_frames(arena), true)
     push_sample(out@, "json-struct", "built shape", built_shape(arena), true)
     push_sample(out@, "json", "built numbers", built_numbers(arena), true)
-    push_sample(out@, "json", "hand-written numbers", number_sample, false)
-    push_hand(out@, "jsonrpc", U8[][]::frame_samples, arena)
+    push_sample(out@, "json", "hand-written numbers", NUMBER_SAMPLE, false)
+    push_hand(out@, "jsonrpc", U8[][]::FRAME_SAMPLES, arena)
     push_sample(out@, "jsonrpc", "a head at its limit", head_at_limit(arena), false)
-    push_hand(out@, "http-write", U8[][]::written_samples, arena)
-    push_hand(out@, "argv", U8[][]::argv_samples, arena)
-    push_hand(out@, "regex", U8[][]::regex_samples, arena)
-    push_hand(out@, "http-req", U8[][]::request_samples, arena)
-    for f in fuzz.gather(dirs, U8[][]::{ ".json" }, max_seed_bytes, arena)
+    push_hand(out@, "http-write", U8[][]::WRITTEN_SAMPLES, arena)
+    push_hand(out@, "argv", U8[][]::ARGV_SAMPLES, arena)
+    push_hand(out@, "regex", U8[][]::REGEX_SAMPLES, arena)
+    push_hand(out@, "http-req", U8[][]::REQUEST_SAMPLES, arena)
+    for f in fuzz.gather(dirs, U8[][]::{ ".json" }, MAX_SEED_BYTES, arena)
         push_sample(out@, "json", f.name, f.data, false)
     return out
 
@@ -261,17 +261,17 @@ fn main(): I32
     verdict.begin("fuzz")
     arena: = Arena.new(512 * 1024 * 1024)
     defer arena.free()
-    $o: = fuzz.Opts::{ .trials = default_trials, .seed = default_seed }
+    $o: = fuzz.Options::{ .trials = DEFAULT_TRIALS, .seed = DEFAULT_SEED }
     $a: = fuzz.Sanitized::{ .asan = false, .required = false }
-    p: = argp.Parser.create("fuzz_main", "scatters broken input at std's readers", arena)
+    p: = argparse.Parser.create("fuzz_main", "scatters broken input at std's readers", arena)
     fuzz.declare_asan(p, a@)
     s: =
         fuzz.setup(p, o@, "ksplc run tests/fuzz_main.kspl", "<reader>", true, arena) catch why
         return verdict.fatal(why)
     fuzz.report_asan(a)
     c: = fuzz.Campaign::{ .subject = "std", .argv = U8[][]::{ s.exe }, .tell_kind = true,
-        .after = U8[][]::{}, .work = s.work, .kinds = fuzz.Input_kind[]::kinds, .in_turn = false,
-        .wait_ms = trial_timeout_ms, .reach_div = reach_floor_div,
+        .after = U8[][]::{}, .work = s.work, .kinds = fuzz.Input_kind[]::KINDS, .in_turn = false,
+        .wait_ms = TRIAL_TIMEOUT_MS, .reach_div = REACH_FLOOR_DIV,
         .again = fuzz.again_with_asan(a, s.again, arena) }
     $all: = collect_samples(s.dirs, arena)
     io.out().s("# assembling the seeds and reading them back (\{all.len\})\n")

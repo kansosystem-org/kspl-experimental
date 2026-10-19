@@ -13,7 +13,7 @@
 import "kssrv/api"
 import "kssrv/conn"
 import "kssrv/pilot"
-import "std/argp"
+import "std/argparse"
 import "std/chars" // single-character tests and slicing
 import "std/fs"
 import "std/http"
@@ -32,65 +32,65 @@ import "std/url"
 // The product's name, the logger's tag before the separator's `:`.
 // Caution: **Do not write it into a message as literal text.** Do not use
 // `sys.program_name()` in its place: that is the name the program was started as.
-priv const name: U8[] = "kssrv"
+priv const NAME: U8[] = "kssrv"
 
 // The one logger a run speaks through. **The level, the destination and the tag are set here**,
 // so no caller chooses any of them ("One buffered logger" in `kssrv/docs/DESIGN-server.md`).
 // Caution: **Do not hold it as a file-level variable.** It could only be a null pointer filled in
 // later: a server that is up but cannot always speak. `main` makes it once.
 priv fn log_new(): Log //< makes the run's logger: the standard output, down to information
-    return Log.new(io.out(), .information, name)
+    return Log.new(io.out(), .information, NAME)
 
-priv const listener_token: Sz = conn.max_conns //< the token given to the listening socket
+priv const LISTENER_TOKEN: Sz = conn.MAX_CONNS //< the token given to the listening socket
     //<
     //< It cannot collide with a slot number (0..max_conns-1).
 
-priv const max_request_body: Sz = 64 * 1024 //< the cap allowed on one request's body
+priv const MAX_REQUEST_BODY: Sz = 64 * 1024 //< the cap allowed on one request's body
     //<
     //< **Only local use accepts a large one**, for writing a document back. The outward-facing cap
     //< stays small because each connection holds its partial read.
-priv const max_local_body: Sz = 4 * 1024 * 1024
+priv const MAX_LOCAL_BODY: Sz = 4 * 1024 * 1024
 
 priv fn body_limit(ctx: conn.Ctx$@): Sz //< the body cap for this mode
-    return max_local_body if ctx.is_local() else max_request_body
+    return MAX_LOCAL_BODY if ctx.is_local() else MAX_REQUEST_BODY
 
-priv const io_chunk: Sz = 16 * 1024 //< how many bytes one read/write moves
+priv const IO_CHUNK: Sz = 16 * 1024 //< how many bytes one read/write moves
 
-priv const max_read_rounds: Sz = 8 //< the cap on repeats per notification
+priv const MAX_READ_ROUNDS: Sz = 8 //< the cap on repeats per notification
     //<
     //< It limits both repeated reads and how many requests are handled in a row.
 
-priv const linger_us: I64 = 5000000I64 //<
+priv const LINGER_US: I64 = 5000000I64 //<
     //< How long a connection whose last answer went out keeps reading what its peer still sends
     //<
     //< Long enough for a client to finish sending a body it started (nginx's `lingering_timeout` is
     //< the same 5 seconds). Short enough that a client that never stops cannot hold a slot.
 
-priv const idle_conn_us: I64 = 30000000I64 //<
+priv const IDLE_CONN_US: I64 = 30000000I64 //<
     //< How long a connection may pass no byte either way before it is dropped
     //<
     //< Without it a client that connects and goes quiet holds one of the `max_conns` slots for
     //< good, and that many such clients shut everyone out. A page's hold (`GET /api/here`) is quiet
     //< by design and is not dropped.
 
-priv const request_time_us: I64 = 30000000I64 //<
+priv const REQUEST_TIME_US: I64 = 30000000I64 //<
     //< How long one request may take to arrive whole, from its first byte to its last
     //<
     //< Caution: **The idle timer alone does not bound it.** It restarts on every byte. So a client
     //< sending one byte every few seconds holds its slot for good. `max_conns` such clients
-    //< shut everyone out (Slowloris). The bodies taken are small (`max_request_body`), so a client
+    //< shut everyone out (Slowloris). The bodies taken are small (`MAX_REQUEST_BODY`), so a client
     //< that can send at all sends one well within it.
 
-priv const poll_timeout_ms: I32 = 1000 //< `wait()`'s wait time
+priv const POLL_TIMEOUT_MS: I32 = 1000 //< `wait()`'s wait time
     //<
     //< It returns even with no connection, so a request to stop is noticed.
 
-priv const index_name: U8[] = "index.html" //<
+priv const INDEX_NAME: U8[] = "index.html" //<
     //< the file looked for when the root itself is requested
 
-priv const us_per_s: I64 = 1000000I64 //< what `--idle`'s seconds are measured against
+priv const US_PER_S: I64 = 1000000I64 //< what `--idle`'s seconds are measured against
 
-priv const flush_gap_us: I64 = 200000I64 //<
+priv const FLUSH_GAP_US: I64 = 200000I64 //<
     //< The interval (microseconds) at which the buffered log is flushed
     //<
     //< **It goes out at this interval rather than per line** (the reason is in the loop below).
@@ -137,7 +137,7 @@ priv enum Rel_path //< makes a relative path under the root from a percent-decod
     rejected
     hidden //< a name in it starts with a dot (`hides_name`), so it is answered as absent
 
-priv const well_known: U8[] = ".well-known" //< the one dot folder served (RFC 8615)
+priv const WELL_KNOWN: U8[] = ".well-known" //< the one dot folder served (RFC 8615)
     //<
     //< Certificate issuance (ACME) and other discovery read under it, so hiding it would break
     //< them.
@@ -152,7 +152,7 @@ priv fn hides_name(rel: U8[]): Bool //<
     for at < rel.len
         end: = at + rel.sub_from(at).find_char('/').unwrap_or(rel.len - at)
         name: = rel.sub(at, end - at)
-        if name.starts_with(".") && !name.equals(well_known)
+        if name.starts_with(".") && !name.equals(WELL_KNOWN)
             return true
         at = end + 1
     return false
@@ -165,13 +165,13 @@ priv fn asks_for_page(decoded: U8[]): Bool //<
     $rest: = decoded
     for rest.len > 0 && rest[0] == '/'
         rest = rest.sub_from(1)
-    return rest.len == 0 || rest.equals(index_name)
+    return rest.len == 0 || rest.equals(INDEX_NAME)
 
 priv fn path_to_rel(decoded: U8[], root: U8[], is_page: Bool, arena: Arena$@): Rel_path
     // **The page is the root's index file and nothing else** (`asks_for_page`). Otherwise a folder
     // standing at that name would have its own index served as the page, without the token.
     if is_page
-        return .ok(index_name) if api.rel_under(root, index_name).is_some() else .rejected
+        return .ok(INDEX_NAME) if api.rel_under(root, INDEX_NAME).is_some() else .rejected
     $t: U8[] = ""
     switch api.rel_under(root, decoded)
     case .some(r)
@@ -183,7 +183,7 @@ priv fn path_to_rel(decoded: U8[], root: U8[], is_page: Bool, arena: Arena$@): R
     // folder's own path. Yet the server refuses the index asked for by name.
     // The root itself is the page, so `t` is never empty here.
     if fs.is_dir(fs.join(root, t, arena))
-        served: = arena.text().s(t).c('/').s(index_name).take()
+        served: = arena.text().s(t).c('/').s(INDEX_NAME).take()
         switch api.rel_under(root, served)
         case .some(r)
             t = r
@@ -201,14 +201,14 @@ priv fn names_this_server(req: http.Request$@): Bool //<
     //< one.
     host: = req.headers.find("Host").unwrap_or("")
     name: = host.sub(0, host.find_char(':').unwrap_or(host.len))
-    return name.equals(local_host) || name.equals_ignore_case("localhost")
+    return name.equals(LOCAL_HOST) || name.equals_ignore_case("localhost")
 
 priv fn wants_close(req: http.Request$@): Bool //<
     //< Whether the connection closes after this answer (RFC 9112 §9.3)
     //<
     //< `close` among the `Connection` tokens closes it. Otherwise HTTP/1.1 stays open, and
     //< HTTP/1.0 only when it lists `keep-alive`. Caution: **Do not keep a 1.0 client open
-    //< unasked**: it reads the answer to the close, so it waits until `idle_conn_us` drops it.
+    //< unasked**: it reads the answer to the close, so it waits until `IDLE_CONN_US` drops it.
     $close: = false
     $keep: = false
     for h in req.headers.each()
@@ -243,7 +243,7 @@ priv fn queue_for_request(c: conn.Conn$@, req: http.Request$@, ctx: conn.Ctx$@) 
     keep_alive: = !wants_close(req)
     t: = conn.split_target(req.target)
     // **Under `/api/` every answer is JSON, a refusal's included**: an API client reads one form.
-    is_api: = t.path.starts_with(api.api_prefix)
+    is_api: = t.path.starts_with(api.API_PREFIX)
     // Caution: **For local use, answer only a request that names this server.** A web page whose
     // name is re-pointed at 127.0.0.1 (DNS rebinding) reaches the port as its own origin. Without
     // this, it would read every file the page can, the page itself included.
@@ -371,7 +371,7 @@ priv fn head_decided(c: conn.Conn$@): Bool //<
     //< time is searched once. `http.parse_request` refuses a bare LF or CR, so it decides
     //< too. Waited past, it would hold the client until its time is up rather than answer 400.
     s: = c.inbuf.slice()
-    if s.len > http.max_head_bytes
+    if s.len > http.MAX_HEAD_BYTES
         return true
     $i: = c.head_from
     for i < s.len
@@ -394,7 +394,7 @@ priv fn conn_send(c: conn.Conn$@): Bool //< sends as much of `outbuf` as can be 
         for c.sent < c.outbuf.len
             rest: = c.outbuf.slice().sub(c.sent, c.outbuf.len - c.sent)
             n: =
-                c.stream.write(rest.sub(0, io_chunk) if rest.len > io_chunk else rest) catch e
+                c.stream.write(rest.sub(0, IO_CHUNK) if rest.len > IO_CHUNK else rest) catch e
                 switch e
                 case .would_block
                     return true // wait for writable
@@ -414,7 +414,7 @@ priv fn conn_send(c: conn.Conn$@): Bool //< sends as much of `outbuf` as can be 
         // wait. **Stop with a chunk queued**: an empty `outbuf` is not watched for writable, so
         // the rest would never go.
         refills += 1
-        if refills >= max_read_rounds
+        if refills >= MAX_READ_ROUNDS
             return true
     if !c.close_after_send
         return true
@@ -433,8 +433,8 @@ priv fn refill_from_file(c: conn.Conn$@): Bool //< moves the file's next chunk i
     //< False means close: the read failed, or the file ended before the length the head named (it
     //< shrank since the stat). **The client then sees the connection close short**, which tells it
     //< the body is cut. Padding it out would hand over bytes that are not the file.
-    $chunk: U8[io_chunk] = ::{}
-    want: = c.file_left if c.file_left < io_chunk else io_chunk
+    $chunk: U8[IO_CHUNK] = ::{}
+    want: = c.file_left if c.file_left < IO_CHUNK else IO_CHUNK
     n: = c.file.read(U8$[]::{ .ptr = chunk[0]@, .len = want }) catch _e
         return false
     if n == 0
@@ -450,8 +450,8 @@ priv fn conn_read(c: conn.Conn$@, ctx: conn.Ctx$@): Bool //< reads from the sock
     //< False means close.
     //< Caution: **Cap the reads per notification**, or one client that keeps sending makes everyone
     //< else wait (the rest comes back as readable at the next `wait()`).
-    $chunk: U8[io_chunk] = ::{}
-    for _round in Range.asc(max_read_rounds)
+    $chunk: U8[IO_CHUNK] = ::{}
+    for _round in Range.asc(MAX_READ_ROUNDS)
         n: = c.stream.read(U8$[]::chunk) catch e
             switch e
             case .would_block
@@ -470,11 +470,11 @@ priv fn conn_read(c: conn.Conn$@, ctx: conn.Ctx$@): Bool //< reads from the sock
         c.inbuf.s(U8$[]::{ .ptr = chunk@, .len = n })
         c.moved_us = sys.mono_us()
         // **Without a cap, one client that never ends its request uses up the memory.**
-        if c.inbuf.len > http.max_head_bytes + body_limit(ctx)
+        if c.inbuf.len > http.MAX_HEAD_BYTES + body_limit(ctx)
             conn.queue_error(c, 431)
             c.inbuf.clear()
             return true
-        if n < io_chunk
+        if n < IO_CHUNK
             return true // everything there is has been read
     return true
 
@@ -490,7 +490,7 @@ priv fn conn_pump(c: conn.Conn$@, ctx: conn.Ctx$@, can_read: Bool): Bool //<
     if can_read && !c.peer_done && c.outbuf.len == 0 && !conn_read(c, ctx)
         return false
     // The requests per notification are capped too (the reason is at `conn_read`).
-    for _round in Range.asc(max_read_rounds)
+    for _round in Range.asc(MAX_READ_ROUNDS)
         conn_build(c, ctx)
         if c.outbuf.len == 0
             return true // nothing to build (the request has not arrived)
@@ -511,7 +511,7 @@ priv fn drive_backlog(t: conn.Conn_table$@, ctx: conn.Ctx$@): Bool //<
     //<
     //< True means one still has some, so the next `wait()` must not sleep.
     $left: = false
-    for i in Range.asc(conn.max_conns)
+    for i in Range.asc(conn.MAX_CONNS)
         if t.slots[i].is_empty() || !t.slots[i].get().backlog
             continue
         if !conn_pump(t.slots[i].get(), ctx, false)
@@ -534,18 +534,18 @@ priv fn say_refused(lg: Log$@, per_peer: Bool) //<
         if ln: = lg.at(.warning)
             if per_peer
                 ln
-                    .s("a peer holds \{conn.max_conns_per_peer\} connections already; more from it \
+                    .s("a peer holds \{conn.MAX_CONNS_PER_PEER\} connections already; more from it \
                         are refused until one closes")
             else
                 ln
-                    .s("every one of the \{conn.max_conns\} connection slots is taken; new \
+                    .s("every one of the \{conn.MAX_CONNS\} connection slots is taken; new \
                         connections are refused until one closes")
     conn.stats.connections_refused += 1I64
 
 priv fn accept_all(listener: net.Tcp_listener$@, t: conn.Conn_table$@, lg: Log$@, outward: Bool) //<
     //< Accepts every pending connection into a free slot, or refuses it
     //<
-    //< Facing outward, one address may hold at most `conn.max_conns_per_peer` of the slots.
+    //< Facing outward, one address may hold at most `conn.MAX_CONNS_PER_PEER` of the slots.
     for
         stream: = listener.accept() catch e
             switch e
@@ -558,12 +558,12 @@ priv fn accept_all(listener: net.Tcp_listener$@, t: conn.Conn_table$@, lg: Log$@
             lg.say(.error, "cannot set the accepted socket nonblocking")
             stream.free()
             continue
-        $host: U8[net.addr_text_max] = ::{}
+        $host: U8[net.ADDR_TEXT_MAX] = ::{}
         p: = stream.peer(U8$[]::host) catch net.Peer_addr::{ .host_len = 0, .port = 0 }
         peer: = U8[]::{ .ptr = host[0]@, .len = p.host_len }
         // Caution: **Count by address before taking a slot.** Otherwise one machine holding them
         // all shuts everyone else out, however short the time it can hold each.
-        if outward && conn.peer_count(t, peer) >= conn.max_conns_per_peer
+        if outward && conn.peer_count(t, peer) >= conn.MAX_CONNS_PER_PEER
             say_refused(lg, true)
             stream.free()
             continue
@@ -599,8 +599,8 @@ priv fn rebuild_interests(r: reactor.Reactor$@, listener: net.Tcp_listener$@,
         //< Caution: **Rebuild them from scratch.** Updated incrementally, a closed peer's
         //< registration stays and an interest is not switched back from partly sent to partly read.
     r.clear()
-    r.register(listener.raw_handle(), reactor.readable, listener_token)
-    for i in Range.asc(conn.max_conns)
+    r.register(listener.raw_handle(), reactor.READABLE, LISTENER_TOKEN)
+    for i in Range.asc(conn.MAX_CONNS)
         if t.slots[i].is_empty()
             continue
         c: = t.slots[i].get()
@@ -614,7 +614,7 @@ priv fn rebuild_interests(r: reactor.Reactor$@, listener: net.Tcp_listener$@,
             continue
         // **Watch for writable only while partly sent.** An empty send buffer is always writable,
         // so `wait()` would return at once and burn the CPU.
-        interest: = reactor.writable if c.outbuf.len > 0 else reactor.readable
+        interest: = reactor.WRITABLE if c.outbuf.len > 0 else reactor.READABLE
         r.register(c.stream.raw_handle(), interest, i)
 
 priv fn sweep_done(t: conn.Conn_table$@, ctx: conn.Ctx$@) //<
@@ -624,7 +624,7 @@ priv fn sweep_done(t: conn.Conn_table$@, ctx: conn.Ctx$@) //<
     //< answer. It lingered its full time (`linger_us`). Or it passed nothing for `idle_conn_us`.
     //< **This is needed because such a connection is not watched for reading** (the reason is at
     //< `rebuild_interests`).
-    for i in Range.asc(conn.max_conns)
+    for i in Range.asc(conn.MAX_CONNS)
         if t.slots[i].is_empty()
             continue
         c: = t.slots[i].get()
@@ -633,21 +633,21 @@ priv fn sweep_done(t: conn.Conn_table$@, ctx: conn.Ctx$@) //<
         // partway, which cannot be answered.
         // **A lingering connection is dropped once its time is up**, whatever its peer still sends.
         now: = sys.mono_us()
-        lingered: = c.lingering_since_us != 0I64 && now - c.lingering_since_us >= linger_us
+        lingered: = c.lingering_since_us != 0I64 && now - c.lingering_since_us >= LINGER_US
         idle: =
-            !c.holding && c.lingering_since_us == 0I64 && now - c.moved_us >= idle_conn_us
+            !c.holding && c.lingering_since_us == 0I64 && now - c.moved_us >= IDLE_CONN_US
         // A request still arriving, with nothing to answer yet, past its time.
         slow: =
             c.request_since_us != 0I64 && c.inbuf.len > 0 && c.outbuf.len == 0 && !c.backlog &&
-            c.lingering_since_us == 0I64 && now - c.request_since_us >= request_time_us
+            c.lingering_since_us == 0I64 && now - c.request_since_us >= REQUEST_TIME_US
         if idle
             if ln: = ctx.lg.at(.information)
-                ln.s("conn #\{c.serial\} passed nothing for \{idle_conn_us / us_per_s\} s; closed")
+                ln.s("conn #\{c.serial\} passed nothing for \{IDLE_CONN_US / US_PER_S\} s; closed")
         else if slow
             if ln: = ctx.lg.at(.information)
                 ln
                     .s("conn #\{c.serial\} did not send a whole request in \
-                        \{request_time_us / us_per_s\} s; closed")
+                        \{REQUEST_TIME_US / US_PER_S\} s; closed")
         else if !lingered && (!c.peer_done || c.outbuf.len > 0 || c.backlog)
             continue
         conn.table_drop(t, i, ctx.lg)
@@ -660,13 +660,13 @@ $asked_us: I64 = 0I64 //< when the last request arrived, on the monotonic clock
     //<
     //< Also set at start-up, so the wait for the first page is like any other.
 
-priv const any_host: U8[] = "0.0.0.0" //< the address listened on
+priv const ANY_HOST: U8[] = "0.0.0.0" //< the address listened on
     //<
     //< **Local use listens on the loopback only.** It is built so that it cannot be reached from
     //< outside ("Where it listens" in `docs/SPEC-local-server.md`).
-priv const local_host: U8[] = "127.0.0.1"
+priv const LOCAL_HOST: U8[] = "127.0.0.1"
 
-priv const token_bytes: Sz = 24 //< the token's byte count
+priv const TOKEN_BYTES: Sz = 24 //< the token's byte count
     //<
     //< Caution: **Make it long enough that brute force cannot find it**: it is what makes knowing
     //< the address alone not enough to make requests.
@@ -677,10 +677,10 @@ priv fn make_token(out: U8$[]): Bool //< makes one token and fills `out`
     //< Caution: **Do not take it as a parameter.** The command line is visible through `ps` to
     //< anyone on the same machine, so a token passed in has already leaked. **Use a
     //< cryptographically secure random source** (`std/rand` reads the OS's).
-    $raw: U8[token_bytes] = ::{}
+    $raw: U8[TOKEN_BYTES] = ::{}
     rand.fill(U8$[]::raw) catch _e
         return false
-    for i in Range.asc(token_bytes)
+    for i in Range.asc(TOKEN_BYTES)
         out[i * 2] = (raw[i] >> 4U8).to_hex_lower()
         out[i * 2 + 1] = (raw[i] & 0x0fU8).to_hex_lower()
     return true
@@ -695,7 +695,7 @@ fn main(): I32
     $idle_s: I64 = 0I64
     arg_arena: = Arena.new(4 * 1024)
     defer arg_arena.free()
-    cli: = argp.Parser
+    cli: = argparse.Parser
         .create("kssrv", "serves the files under <root>, and JSON under /api/", arg_arena)
     cli.positional("<port> <root>")
     cli.flag("--local", local@, "serve 127.0.0.1 only, make a token, open the file endpoints")
@@ -726,13 +726,13 @@ fn main(): I32
         return 1
 
     // **The token lives in main's memory**, not in an arena that is rewound per request.
-    $token_buf: U8[token_bytes*2] = ::{}
+    $token_buf: U8[TOKEN_BYTES*2] = ::{}
     $token: U8[] = ""
     if local
         if !make_token(U8$[]::token_buf)
             lg.say(.error, "cannot generate a token from the OS random source")
             return 1
-        token = U8[]::{ .ptr = token_buf@, .len = token_bytes * 2 }
+        token = U8[]::{ .ptr = token_buf@, .len = TOKEN_BYTES * 2 }
 
     port64: = port_text.to_i64() catch _e
         if ln: = lg.at(.error)
@@ -749,7 +749,7 @@ fn main(): I32
             ln.s("not a directory: \{root\}")
         return 1
 
-    host: = local_host if local else any_host
+    host: = LOCAL_HOST if local else ANY_HOST
     listener: = net.Tcp_listener.bind(host, port) catch e
         if ln: = lg.at(.error)
             ln.s("cannot listen on port \{port\}: \{e\}")
@@ -765,7 +765,7 @@ fn main(): I32
     // treats as owning nothing.
     $table: conn.Conn_table = ::{}
     defer
-        for i in Range.asc(conn.max_conns)
+        for i in Range.asc(conn.MAX_CONNS)
             conn.table_drop(table@, i, lg@)
 
     // Facing outward, the car's steering policy trains before accepting starts, **after the bind**,
@@ -806,7 +806,7 @@ fn main(): I32
     lg.done()
 
     // Caution: **Flush in this one place, not per line.** A flush blocks the accepting thread, and
-    // it **would happen twice per connection** (a line at accept and at close). `flush_gap_us` is
+    // it **would happen twice per connection** (a line at accept and at close). `FLUSH_GAP_US` is
     // checked **before entering the wait**, so when idle a line just written goes out in that pass.
     $flushed_us: = sys.mono_us()
     asked_us = flushed_us
@@ -814,7 +814,7 @@ fn main(): I32
         backlogged: = drive_backlog(table@, ctx@)
         rebuild_interests(r@, listener, table@)
         now_us: = sys.mono_us()
-        if now_us - flushed_us >= flush_gap_us
+        if now_us - flushed_us >= FLUSH_GAP_US
             lg.done()
             flushed_us = now_us
         // **Asked to stop, it stops once the answer has gone out** (`api.queue_api_stop`), whoever
@@ -823,11 +823,11 @@ fn main(): I32
             lg.say(.information, "asked to stop: stopping")
             return 0
         // **No holder means "nobody is using me".**
-        if idle_s > 0I64 && !conn.any_holding(table@) && now_us - asked_us >= idle_s * us_per_s
+        if idle_s > 0I64 && !conn.any_holding(table@) && now_us - asked_us >= idle_s * US_PER_S
             if ln: = lg.at(.information)
                 ln.s("no page has held it for \{idle_s\} seconds: stopping")
             return 0
-        $ready: = r.wait(0 if backlogged else poll_timeout_ms) catch e
+        $ready: = r.wait(0 if backlogged else POLL_TIMEOUT_MS) catch e
             if ln: = lg.at(.error)
                 ln.s("poll failed: \{e\}")
             continue
@@ -835,7 +835,7 @@ fn main(): I32
         // connection already gone still counts against its address and the table's cap.
         $accepting: = false
         for ev in ready
-            if ev.token == listener_token
+            if ev.token == LISTENER_TOKEN
                 accepting = true
                 continue
             if table.slots[ev.token].is_empty()
@@ -844,9 +844,9 @@ fn main(): I32
             // The latter is `read` returning 0, and dropping it loses an answer still to come (see
             // `conn_read`). Which flag it arrives under differs by environment, so `conn_read`
             // decides.
-            $keep: = (ev.revents & reactor.err_or_closed) == 0
+            $keep: = (ev.revents & reactor.ERR_OR_CLOSED) == 0
             if keep
-                woke: = ev.revents & (reactor.readable | reactor.hangup)
+                woke: = ev.revents & (reactor.READABLE | reactor.HANGUP)
                 keep = conn_pump(table.slots[ev.token].get(), ctx@, woke != 0)
             if !keep
                 conn.table_drop(table@, ev.token, lg@)

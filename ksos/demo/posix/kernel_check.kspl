@@ -39,18 +39,18 @@ $g_gone_progress: I32 = 0
 
 $g_mutex: sync.Mutex
 
-priv const max_tasks: Sz = 32 //<
+priv const MAX_TASKS: Sz = 32 //<
     //< How many slots the limit test fills: the kernel's task limit
     //<
-    //< It equals the kernel's `max_tasks`, which is priv, so the number is repeated here and
+    //< It equals the kernel's `MAX_TASKS`, which is priv, so the number is repeated here and
     //< checked against it. Only `delete` frees a slot; a task that returned from its entry and
     //< became done keeps its slot. Deleting `gone` in check 4 frees one, so the free room is 32 - 8
     //< + 1 (`lender` in check 7 and `sleeper` in check 8 take a slot and give it back).
-priv const fixed_tasks: Sz = 8 // coord + lo/mid/hi + first/second + hold + gone
-priv const freed_by_delete: Sz = 1 // gone
-priv const free_slots: Sz = max_tasks - fixed_tasks + freed_by_delete
-priv const filler_slots: Sz = free_slots + 1 // one extra, to see it refused
-priv const filler_stack: Sz = 32768
+priv const FIXED_TASKS: Sz = 8 // coord + lo/mid/hi + first/second + hold + gone
+priv const FREED_BY_DELETE: Sz = 1 // gone
+priv const FREE_SLOTS: Sz = MAX_TASKS - FIXED_TASKS + FREED_BY_DELETE
+priv const FILLER_SLOTS: Sz = FREE_SLOTS + 1 // one extra, to see it refused
+priv const FILLER_STACK: Sz = 32768
 
 $tcb_coord: Task
 $tcb_lo: Task
@@ -115,16 +115,16 @@ fn goner(_arg: Void$@): Void //< 4. The task deleted while it waits
 fn lender(_arg: Void$@): Void //< 7. It outranks coord, so it lends coord its priority, then waits
     g_mutex.lock()
     g_mutex.unlock()
-priv const lender_prio: I32 = 6 // above coord's 4
+priv const LENDER_PRIO: I32 = 6 // above coord's 4
 
-priv const sleep_ticks: U64 = 10 //< how long each of `sleeper`'s two delays asks for
+priv const SLEEP_TICKS: U64 = 10 //< how long each of `sleeper`'s two delays asks for
 $g_slept: U64[2] //< how long each delay really lasted
 $g_sleeps: Sz = 0 //< how many delays have returned
 
 fn sleeper(_arg: Void$@): Void //< 8. The task suspended while it sleeps, twice
     for i in Range.asc(2)
         from: = task.current_tick()
-        Task.delay(sleep_ticks)
+        Task.delay(SLEEP_TICKS)
         g_slept[i] = task.current_tick() - from
         g_sleeps += 1
 
@@ -200,8 +200,8 @@ fn coordinator(_arg: Void$@): Void
     verdict.start("[ksos] deleting a waiter returns what it lent")
     g_mutex.lock()
     // lender outranks coord, so it runs inside create, finds the mutex held, lends and waits.
-    tcb_lender.create(U8$[]::stack_lender, lender, null, lender_prio, "lender")
-    assert(tcb_coord.get_prio() == lender_prio, "kernel_check: the waiter did not lend its priority")
+    tcb_lender.create(U8$[]::stack_lender, lender, null, LENDER_PRIO, "lender")
+    assert(tcb_coord.get_prio() == LENDER_PRIO, "kernel_check: the waiter did not lend its priority")
     tcb_lender.delete()
     assert(tcb_coord.get_prio() == my_prio,
         "kernel_check: the holder kept the priority of a waiter that was deleted")
@@ -216,14 +216,14 @@ fn coordinator(_arg: Void$@): Void
     tcb_sleeper.suspend()
     Task.delay(1) // t+2
     tcb_sleeper.resume()
-    Task.delay(sleep_ticks - 1) // t+11: the first delay ended at t+10, the second runs to t+20
-    assert(g_sleeps == 1 && g_slept[0] == sleep_ticks,
+    Task.delay(SLEEP_TICKS - 1) // t+11: the first delay ended at t+10, the second runs to t+20
+    assert(g_sleeps == 1 && g_slept[0] == SLEEP_TICKS,
         "kernel_check: a delay suspended and resumed ended before its time")
     tcb_sleeper.suspend()
-    Task.delay(sleep_ticks + 5) // t+26: the second delay expired at t+20, while suspended
+    Task.delay(SLEEP_TICKS + 5) // t+26: the second delay expired at t+20, while suspended
     tcb_sleeper.resume()
     Task.delay(1)
-    assert(g_sleeps == 2 && g_slept[1] == sleep_ticks + 6, // from t+10 to the resume at t+26
+    assert(g_sleeps == 2 && g_slept[1] == SLEEP_TICKS + 6, // from t+10 to the resume at t+26
         "kernel_check: a delay that expired while suspended did not end at the resume")
     tcb_sleeper.delete()
     verdict
@@ -235,16 +235,16 @@ fn coordinator(_arg: Void$@): Void
     $made: Sz = 0
     $refused: Sz = 0
     fillers: = U8$[]::stack_filler
-    for i in Range.asc(filler_slots)
-        ok: = tcb_filler[i].create(fillers.sub_mut(i * filler_stack, filler_stack), filler_entry,
+    for i in Range.asc(FILLER_SLOTS)
+        ok: = tcb_filler[i].create(fillers.sub_mut(i * FILLER_STACK, FILLER_STACK), filler_entry,
             null, 1, "filler")
         if ok
             made += 1
         else
             refused += 1
-    assert(made == free_slots, "kernel_check: free slots are not (32 - 8 fixed + 1 freed by delete)")
+    assert(made == FREE_SLOTS, "kernel_check: free slots are not (32 - 8 fixed + 1 freed by delete)")
     assert(refused == 1, "kernel_check: create did not refuse the 33rd task")
-    assert(Task.count() == max_tasks, "kernel_check: the table holds more than max_tasks")
+    assert(Task.count() == MAX_TASKS, "kernel_check: the table holds more than max_tasks")
     verdict
         .pass("registering after the 32 seats are filled is turned away with false, and the table \
             grows no further (a seat that was deleted is reused).")

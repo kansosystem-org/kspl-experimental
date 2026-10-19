@@ -24,8 +24,8 @@ extern "C"
 
 // Caution: **Keep C's `long` as `Sz` going in and `I32` coming out** (the two `ctrl` functions and
 // `SSL_get_verify_result`). Written as `I64`, a result breaks on Windows ("What cannot be written
-// in C's types" in `../docs/DESIGN-language.md`). The `ctrl` functions stand for the macros
-// `SSL_CTX_set_min_proto_version` and `SSL_set_tlsext_host_name`.
+// in C's types" in `../docs/DESIGN-programming-language.md`). The `ctrl` functions stand for the
+// macros `SSL_CTX_set_min_proto_version` and `SSL_set_tlsext_host_name`.
 #link("ssl")
 #link("crypto")
 extern "C"
@@ -57,23 +57,23 @@ extern "C"
     fn SSL_shutdown(ssl: SSL$@): I32
 
 // The numbers behind the macros; each is the same in OpenSSL 1.1.0, 1.1.1 and 3.x.
-priv const ssl_verify_peer: I32 = 1 //< SSL_VERIFY_PEER
-priv const ssl_ctrl_set_min_proto_version: I32 = 123 //< SSL_CTRL_SET_MIN_PROTO_VERSION
-priv const tls1_2_version: Sz = 0x0303 //< TLS1_2_VERSION
-priv const ssl_ctrl_set_tlsext_hostname: I32 = 55 //< SSL_CTRL_SET_TLSEXT_HOSTNAME
-priv const tlsext_nametype_host_name: Sz = 0 //< TLSEXT_NAMETYPE_host_name
-priv const x509_v_ok: I32 = 0 //< X509_V_OK
-priv const ssl_error_want_read: I32 = 2 //< SSL_ERROR_WANT_READ: it waits for the peer's bytes
-priv const ssl_error_zero_return: I32 = 6 //< SSL_ERROR_ZERO_RETURN: the peer's close_notify came
+priv const SSL_VERIFY_PEER: I32 = 1 //< SSL_VERIFY_PEER
+priv const SSL_CTRL_SET_MIN_PROTO_VERSION: I32 = 123 //< SSL_CTRL_SET_MIN_PROTO_VERSION
+priv const TLS1_2_VERSION: Sz = 0x0303 //< TLS1_2_VERSION
+priv const SSL_CTRL_SET_TLSEXT_HOSTNAME: I32 = 55 //< SSL_CTRL_SET_TLSEXT_HOSTNAME
+priv const TLSEXT_NAMETYPE_HOST_NAME: Sz = 0 //< TLSEXT_NAMETYPE_host_name
+priv const X509_V_OK: I32 = 0 //< X509_V_OK
+priv const SSL_ERROR_WANT_READ: I32 = 2 //< SSL_ERROR_WANT_READ: it waits for the peer's bytes
+priv const SSL_ERROR_ZERO_RETURN: I32 = 6 //< SSL_ERROR_ZERO_RETURN: the peer's close_notify came
 
 // SSL_read takes the length as a C int, so a buf.len of 2^31 or more would become negative in the
 // cast. Partial I/O is already the contract (the caller loops), so clamping breaks nothing.
-priv const max_tls_io_len: Sz = 2147483647 // I32::MAX
+priv const MAX_TLS_IO_LEN: Sz = 2147483647 // I32::MAX
 
 priv fn clamp_tls_io_len(len: Sz): Sz
-    return len if len <= max_tls_io_len else max_tls_io_len
+    return len if len <= MAX_TLS_IO_LEN else MAX_TLS_IO_LEN
 
-priv const io_chunk: Sz = 16 * 1024 //< the most one move between the socket and OpenSSL carries
+priv const IO_CHUNK: Sz = 16 * 1024 //< the most one move between the socket and OpenSSL carries
     //<
     //< One TLS record's plaintext at most, so one `write` encrypts no more than it sends.
 
@@ -98,8 +98,8 @@ priv fn client_ctx(): SSL_CTX$@!Tls_error //<
     ctx: = SSL_CTX_new(TLS_client_method())
     if ctx == null
         throw .ctx_failed
-    SSL_CTX_set_verify(ctx, ssl_verify_peer, null)
-    if SSL_CTX_ctrl(ctx, ssl_ctrl_set_min_proto_version, tls1_2_version, null) != 1 ||
+    SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, null)
+    if SSL_CTX_ctrl(ctx, SSL_CTRL_SET_MIN_PROTO_VERSION, TLS1_2_VERSION, null) != 1 ||
         SSL_CTX_set_default_verify_paths(ctx) != 1
         SSL_CTX_free(ctx)
         throw .ctx_failed
@@ -131,7 +131,7 @@ priv fn client_ssl(ctx: SSL_CTX$@, host: U8[]): SSL$@!Tls_error //<
         SSL_free(ssl)
         throw .ctx_failed
     SSL_set_bio(ssl, rbio, wbio)
-    if SSL_ctrl(ssl, ssl_ctrl_set_tlsext_hostname, tlsext_nametype_host_name, Void$@::c_host) != 1
+    if SSL_ctrl(ssl, SSL_CTRL_SET_TLSEXT_HOSTNAME, TLSEXT_NAMETYPE_HOST_NAME, Void$@::c_host) != 1
         || SSL_set1_host(ssl, Void@::c_host) != 1
         SSL_free(ssl)
         throw .ctx_failed
@@ -140,9 +140,9 @@ priv fn client_ssl(ctx: SSL_CTX$@, host: U8[]): SSL$@!Tls_error //<
 priv fn send_queued(tcp: net.Tcp_stream$@, ssl: SSL$@): Bool //<
     //< Sends what OpenSSL has queued for the peer; false where the socket failed
     wbio: = SSL_get_wbio(ssl)
-    $chunk: U8[io_chunk] = ::{}
+    $chunk: U8[IO_CHUNK] = ::{}
     for BIO_ctrl_pending(wbio) > 0
-        n: = BIO_read(wbio, Void$@::chunk@, I32::io_chunk)
+        n: = BIO_read(wbio, Void$@::chunk@, I32::IO_CHUNK)
         if n <= 0
             return false
         tcp.write_all(U8[]::{ .ptr = chunk@, .len = n }) catch
@@ -151,7 +151,7 @@ priv fn send_queued(tcp: net.Tcp_stream$@, ssl: SSL$@): Bool //<
 
 priv fn take_more(tcp: net.Tcp_stream$@, ssl: SSL$@): Bool //<
     //< Hands OpenSSL what the peer sent next; false where the peer closed or the socket failed
-    $chunk: U8[io_chunk] = ::{}
+    $chunk: U8[IO_CHUNK] = ::{}
     n: = tcp.read(U8$[]::chunk) catch
         return false
     if n == 0
@@ -164,7 +164,7 @@ priv fn go_on(tcp: net.Tcp_stream$@, ssl: SSL$@, rc: I32): Bool //<
     //< It sends what the call queued (an alert included), and reads more where the call waits for
     //< the peer. Any other answer is an end: OpenSSL writes into memory, so it never waits to send.
     err: = SSL_get_error(ssl, rc)
-    return send_queued(tcp, ssl) && err == ssl_error_want_read && take_more(tcp, ssl)
+    return send_queued(tcp, ssl) && err == SSL_ERROR_WANT_READ && take_more(tcp, ssl)
 
 priv fn close_ssl(tcp: net.Tcp_stream$@, ssl: SSL$@) //<
     //< Shuts down (trying to send a close_notify) and frees the SSL
@@ -197,7 +197,7 @@ impl Tls_stream
         // **The verification's own answer decides the error.** With `SSL_VERIFY_PEER` a certificate
         // that does not verify stops the handshake. Only this tells it from a peer speaking no
         // TLS.
-        verified: = SSL_get_verify_result(ssl) == x509_v_ok
+        verified: = SSL_get_verify_result(ssl) == X509_V_OK
         if !shook || !verified
             close_ssl(tcp, ssl)
             SSL_CTX_free(ctx)
@@ -215,7 +215,7 @@ impl Tls_stream
         buf: U8[], //< the bytes to send
     ): Sz!Tls_error
         // Caution: **Call it again with the same bytes** while it does not finish, as OpenSSL asks.
-        want: = buf.len if buf.len <= io_chunk else io_chunk
+        want: = buf.len if buf.len <= IO_CHUNK else IO_CHUNK
         for
             ERR_clear_error()
             n: = SSL_write(r.ssl, Void@::buf.ptr, I32::want)
@@ -241,7 +241,7 @@ impl Tls_stream
             // Caution: **Only the peer's close_notify is an end.** A TCP connection dropped without
             // one ends `take_more` too; read as an end, whoever can drop it could cut a reply
             // short unnoticed.
-            if SSL_get_error(r.ssl, n) == ssl_error_zero_return
+            if SSL_get_error(r.ssl, n) == SSL_ERROR_ZERO_RETURN
                 return 0
             if !go_on(r.tcp, r.ssl, n)
                 throw .io_failed

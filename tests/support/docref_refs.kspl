@@ -158,7 +158,7 @@ fn find_doc_paths(text: U8[], dirs: U8[][], arena: Arena$@): List<|Hit|> //<
 // Caution: **List every extension in use.** A file whose extension is not here **does not look
 // like a path**, so **no** citation of it is checked for existence or symbol. **Longer ones come
 // first**: the cut stops at the first entry that fits.
-const src_path_ext: U8[][_] = ::{ "kspl", "ksplb", "py", "c", "h", "S", "mk", "kspeg", "js", "mjs",
+const SRC_PATH_EXT: U8[][_] = ::{ "kspl", "ksplb", "py", "c", "h", "S", "mk", "kspeg", "js", "mjs",
         "css", "html", "json", "yml", "cfg", "ld",
 }
 
@@ -167,7 +167,7 @@ fn find_src_paths(text: U8[], dirs: U8[][], arena: Arena$@): List<|Hit|>
     for d in dirs
         all.push(d)
     all.push("mk")
-    return find_paths(text, all.slice(), U8[][]::src_path_ext, true, U8[][]::{}, arena)
+    return find_paths(text, all.slice(), U8[][]::SRC_PATH_EXT, true, U8[][]::{}, arena)
 
 priv fn is_link_target(text: U8[], at: Sz): Bool //<
     //< whether the hit at `at` is a Markdown link's target
@@ -403,10 +403,10 @@ priv fn linked_target(here: U8[], text: U8[], linked: Bool, arena: Arena$@): U8[
 // Caution: **Do not drop one because it is not a document.** A name missing here leaves the file
 // **outside the scan**. Its namings stay silent about a deleted or moved target, while `make
 // test-docref` **stays green**. Check here when a new extension is added.
-const scanned_ext: U8[][_] = ::{ ".ksplb", ".kspl", ".c", ".h", ".py", ".S", ".mk", ".kspeg", ".md",
+const SCANNED_EXT: U8[][_] = ::{ ".ksplb", ".kspl", ".c", ".h", ".py", ".S", ".mk", ".kspeg", ".md",
     ".kspage", ".yml", ".cfg", ".js", ".mjs", ".css", ".html", "Makefile" }
 
-const read_as_data: U8[][_] = ::{ "ksplc/seed.c", "tests/support/docref_samples.kspl" } //<
+const READ_AS_DATA: U8[][_] = ::{ "ksplc/seed.c", "tests/support/docref_samples.kspl" } //<
     //< The files whose namings are data, not references
     //<
     //< The generated file first: references are checked in its canonical source. **The sample
@@ -414,10 +414,10 @@ const read_as_data: U8[][_] = ::{ "ksplc/seed.c", "tests/support/docref_samples.
     //< fire covers them.
 
 fn is_scanned(rel: U8[]): Bool //< whether a tracked file is read for its references
-    for s in read_as_data
+    for s in READ_AS_DATA
         if rel.equals(s)
             return false
-    for e in scanned_ext
+    for e in SCANNED_EXT
         if rel.ends_with(e)
             return true
     return false
@@ -454,7 +454,7 @@ fn find_misnamed_links(text: U8[], arena: Arena$@): List<|Hit|> //<
     return out
 
 priv fn names_a_file(name: U8[]): Bool //< whether a link's text ends in a file name read here
-    for e in scanned_ext
+    for e in SCANNED_EXT
         if name.ends_with(e)
             return true
     return false
@@ -465,7 +465,7 @@ priv fn last_step(path: U8[]): U8[] //< what follows the last `/`
         k -= 1
     return path.sub_from(k)
 
-const src_suffix: U8[][_] = ::{ ".kspl", ".ksplb" } //<
+const SRC_SUFFIX: U8[][_] = ::{ ".kspl", ".ksplb" } //<
     //< The extensions added to an import path
     //<
     //< A source's comes first, as the compiler adds it (`source_ext` in
@@ -509,10 +509,10 @@ fn src_place(p: Src_places@, k: Sz, arena: Arena$@): U8[] //<
     if last_segment_has_dot(p.raw)
         return ""
     j: = k - n
-    if j >= n * src_suffix.len
+    if j >= n * SRC_SUFFIX.len
         return ""
-    base: = p.bases.get(j / src_suffix.len)
-    return normalize(arena.text().s(base).s(src_suffix[j % src_suffix.len]).take(), arena)
+    base: = p.bases.get(j / SRC_SUFFIX.len)
+    return normalize(arena.text().s(base).s(SRC_SUFFIX[j % SRC_SUFFIX.len]).take(), arena)
 
 priv fn last_segment_has_dot(raw: U8[]): Bool //< whether the last step has an extension
     //<

@@ -20,18 +20,18 @@ import "ksos/demo/rp2040/common/records"
 import "ksos/drivers/rp2040/flash"
 import "std/bytes"
 
-const kind_boot: U16 = 1 //< the record kinds
+const KIND_BOOT: U16 = 1 //< the record kinds
     //<
     //< The caller defines their meaning (ksdb only matches them). 0 is the marker, so it is not
     //< used (`ksos/demo/rp2040/common/records`).
-const kind_span: U16 = 2
+const KIND_SPAN: U16 = 2
 
-const marker: U8[] = "ksdb1" //< the marker that identifies this writer
+const MARKER: U8[] = "ksdb1" //< the marker that identifies this writer
     //<
     //< Caution: **Give it a different name from the car's firmware.** They use the same region, so
     //< with the same name each reads the other's record as its own.
 
-const span_len: Sz = 300 //< a length that crosses a page (256B)
+const SPAN_LEN: Sz = 300 //< a length that crosses a page (256B)
     //<
     //< **Make it cross.** Without crossing, the path that programs it page by page is never
     //< exercised.
@@ -62,7 +62,7 @@ priv fn bump_boot_count(ln: con.Line$@, lg: ksdblog.Log$@): U32 //<
     //<
     //< It returns the new count (0 means it failed).
     prev: U8[4] = ::{}
-    n: = lg.last(kind_boot, U8$[]::prev) catch 0
+    n: = lg.last(KIND_BOOT, U8$[]::prev) catch 0
     $count: U32 = 0
     if n == 4
         count = (U8[]::prev).get_u32_le(0)
@@ -70,7 +70,7 @@ priv fn bump_boot_count(ln: con.Line$@, lg: ksdblog.Log$@): U32 //<
     next: U8[4] = ::{}
     nv: = U8$[]::next
     nv.put_u32_le(0, count)
-    lg.append(kind_boot, U8[]::next) catch
+    lg.append(KIND_BOOT, U8[]::next) catch
         say(ln, "FAIL append boot count (region full?)")
         return 0
     return count
@@ -78,18 +78,18 @@ priv fn bump_boot_count(ln: con.Line$@, lg: ksdblog.Log$@): U32 //<
 priv fn check_span(ln: con.Line$@, lg: ksdblog.Log$@): Bool //<
     //< Checks that a record crossing a page makes the round trip without a single byte garbled
     sv: = U8$[]::span_buf
-    for $i: Sz = 0; i < span_len; i += 1
+    for $i: Sz = 0; i < SPAN_LEN; i += 1
         sv[i] = span_byte(i)
-    lg.append(kind_span, U8[]::span_buf) catch
+    lg.append(KIND_SPAN, U8[]::span_buf) catch
         say(ln, "FAIL append span")
         return false
-    n: = lg.last(kind_span, U8$[]::read_buf) catch
+    n: = lg.last(KIND_SPAN, U8$[]::read_buf) catch
         say(ln, "FAIL read span")
         return false
-    if n != span_len
+    if n != SPAN_LEN
         say(ln, "FAIL span length")
         return false
-    for $i: Sz = 0; i < span_len; i += 1
+    for $i: Sz = 0; i < SPAN_LEN; i += 1
         if read_buf[i] != span_byte(i)
             ln.reset()
             ln.str("[ksdb] FAIL span byte at ")
@@ -111,7 +111,7 @@ priv fn report(ln: con.Line$@, lg: ksdblog.Log$@)
     ln.str(", used=")
     ln.u32(U32::lg.used())
     ln.str("/")
-    ln.u32(U32::flash.region_size)
+    ln.u32(U32::flash.REGION_SIZE)
     ln.str(")")
     _sent: = ln.flush()
     boot.pump(20)
@@ -121,7 +121,7 @@ priv fn open_once(ln: con.Line$@) //< writes on the first round only
     //< It scans the region on every open (it remembers no position, so even after a failed run it
     //< matches the device).
     say(ln, "claiming the flash region")
-    if !records.claim(marker)
+    if !records.claim(MARKER)
         say(ln, "FAIL cannot claim the flash region (boot ROM functions? erase?)")
         return
     if records.wiped()

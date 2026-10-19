@@ -1,6 +1,6 @@
 //< `ksplc`'s entry point: it reads the command line and starts the subcommand asked for
 //<
-//< **Each subcommand is a variant of `Mode`**, parsed by `std/argp` as a command, so a second
+//< **Each subcommand is a variant of `Mode`**, parsed by `std/argparse` as a command, so a second
 //< subcommand on one line is refused rather than one silently winning. The usage and the help text
 //< are `usage.kspl`'s. A run that ends with heap still in use reports the leak and fails.
 import "kspeg/engine" as kspeg
@@ -31,7 +31,7 @@ import "ksplc/tools/libs" as tools_libs
 import "ksplc/tools/run" as tools_run
 import "ksplc/tools/surface" as tools_surface
 import "ksplc/usage"
-import "std/argp"
+import "std/argparse"
 import "std/chars"
 import "std/ds" { List }
 import "std/io"
@@ -43,7 +43,7 @@ import "std/sys"
 
 embed "ksplc/kspl.kspeg" as kspl_grammar
 
-priv const max_split_units: Sz = 256 //< `--split=`'s upper bound
+priv const MAX_SPLIT_UNITS: Sz = 256 //< `--split=`'s upper bound
     //<
     //< Each translation unit reads the whole shared header again, so **a split far beyond the core
     //< count is slower**. The bound catches an accident (a mistyped order of magnitude).
@@ -100,8 +100,8 @@ priv struct Cli //< what the command line asked for, before it is checked
     eval_source: U8[]
     lint_specs: List<|U8[]|>$@
 
-priv fn declare_options(p: argp.Parser$@, o: Cli$@) //< it declares every subcommand and option
-    // A mode is a command rather than a flag, so that argp sees it set twice. As a flag,
+priv fn declare_options(p: argparse.Parser$@, o: Cli$@) //< it declares every subcommand and option
+    // A mode is a command rather than a flag, so that argparse sees it set twice. As a flag,
     // `ksplc fmt --lsp` would pass, and the later one would silently win.
     p.subcommand("fmt", "format the source")
     p.subcommand("lint", "do the static analysis alone")
@@ -156,11 +156,11 @@ priv fn declare_options(p: argp.Parser$@, o: Cli$@) //< it declares every subcom
             own runtime and std")
     p.flag("--in-place", o.fmt_in_place@, "write the formatting result back into the source")
 
-priv fn refuse_command_line(e: argp.Argp_error) //<
-    //< it reports a command line argp refused, and exits
+priv fn refuse_command_line(e: argparse.Argument_error) //<
+    //< it reports a command line argparse refused, and exits
     switch e
     case .help_requested
-        // On run, argp passes a `--help` after the script to the script, so this one is
+        // On run, argparse passes a `--help` after the script to the script, so this one is
         // ksplc's.
         usage.print_usage(io.out())
         sys.exit(0)
@@ -206,7 +206,7 @@ priv fn apply_options(o: Cli$@, mode_name: U8[]) //<
         check_machine(mode_name)
     if o.split_units.len > 0
         n: = o.split_units.to_i64() catch 0
-        if n < 1 || n > I64::max_split_units
+        if n < 1 || n > I64::MAX_SPLIT_UNITS
             usage.error_exit("--split: expected a number from 1 to 256\n")
         base_core.config.unit_count = Sz::n
     // Only the C backend can split. genllvm has no forward-declaration phase ("Genllvm (LLVM IR):
@@ -265,7 +265,7 @@ priv fn source_input(path: U8[]): U8[] //<
         usage.error_exit(said)
     return path
 
-priv fn read_mode(p: argp.Parser$@, mode_name: U8[], in_files: List<|U8[]|>$@, o: Cli$@): Mode //<
+priv fn read_mode(p: argparse.Parser$@, mode_name: U8[], in_files: List<|U8[]|>$@, o: Cli$@): Mode //<
     //< The mode the subcommand names, with its inputs checked
     if mode_name.equals("fmt")
         if in_files.len == 0
@@ -351,7 +351,7 @@ impl Mode
             .surface_scope = "", .style = "", .std_dir = "", .pkg_src_dir = "", .split_units = "",
             .diag_format = "", .cflags = "", .sanitize = "", .eval_source = "",
             .lint_specs = List<|U8[]|>.create(base_core.arena) }
-        p: = argp.Parser.create("ksplc", "", base_core.arena)
+        p: = argparse.Parser.create("ksplc", "", base_core.arena)
         // Kept so print_usage can build the usage list from the declarations.
         usage.cli = p
         declare_options(p, o@)
@@ -360,12 +360,13 @@ impl Mode
 
         in_files: = p.rest
         mode_name: = p.command.unwrap_or("compile")
-        // Caution: **A bare `-` is standard input only as the source of a compile or a run.** argp
-        // passes it on as "standard input"; anywhere else it is an accident of word splitting.
+        // Caution: **A bare `-` is standard input only as the source of a compile or a run.**
+        // argparse passes it on as "standard input"; anywhere else it is an accident of word
+        // splitting.
         for i in Range.asc(in_files.len)
             reads_stdin: =
                 i == 0 && (mode_name.equals("compile") || mode_name.equals("run"))
-            if in_files.get(i).equals(base_core.stdin_name) && !reads_stdin
+            if in_files.get(i).equals(base_core.STDIN_NAME) && !reads_stdin
                 io.err().s("Error: unknown option: -\n")
                 usage.usage_exit()
         // Caution: **Check it right after the subcommand is decided.** Placed after the options are
@@ -397,7 +398,7 @@ impl Mode
         case .explain(code)
             if !tools_explain.print_explanation(code, base_core.arena)
                 msg: = base_core.arena.text().s("ksplc explain: '\{code\}' has no section in ")
-                    .s(tools_explain.spec_name).s("\n").take()
+                    .s(tools_explain.SPEC_NAME).s("\n").take()
                 usage.error_exit(msg)
         case .doc(target)
             parser: = kspl_parser()!
@@ -502,7 +503,7 @@ priv fn refuse_with_library() //<
                 bare-metal runtime helpers, such as __aeabi_memcpy, by name from any object. These \
                 helpers cannot be private. A bare-metal image is built from source\n")
 
-priv const sanitizer_names: U8[][4] = ::{ "address", "thread", "memory", "undefined" } //<
+priv const SANITIZER_NAMES: U8[][4] = ::{ "address", "thread", "memory", "undefined" } //<
     //< The sanitizers `--sanitize=` takes, by the names the C compiler's `-fsanitize=` takes
     //<
     //< The first three are LLVM's function attributes too (`sanitize_<name>`). `undefined` is not:
@@ -533,11 +534,11 @@ priv fn check_sanitize(o: Cli$@, mode_name: U8[]) //<
                 -fsanitize=<names>. When compiling to LLVM, --sanitize marks the IR because it does \
                 not pass through a front end\n")
     for name in o.sanitize.split(',', base_core.arena)
-        if !name.is_one_of(U8[][]::sanitizer_names)
+        if !name.is_one_of(U8[][]::SANITIZER_NAMES)
             said: = base_core.arena.text().s("--sanitize: '").s(name)
                 .s("' is not a sanitizer ksplc knows:")
-            for i in Range.asc(sanitizer_names.len)
-                said.s(", " if i > 0 else " ").s(sanitizer_names[i])
+            for i in Range.asc(SANITIZER_NAMES.len)
+                said.s(", " if i > 0 else " ").s(SANITIZER_NAMES[i])
             usage.error_exit(said.c('\n').take())
         if name.equals("undefined") && base_core.is_llvm_target()
             usage
@@ -651,7 +652,7 @@ priv fn read_supplied(name: U8[]): U8[]? //<
     //<
     //< **It is mended here**, as the loader mends what it opens: a supplied source is not converted
     //< again (the caution in `load_and_parse_file`).
-    if !name.equals(base_core.stdin_name)
+    if !name.equals(base_core.STDIN_NAME)
         return .none
     raw: = io.read_stdin(base_core.arena) catch
         usage.error_exit("Error: the program could not be read from standard input\n")
@@ -856,7 +857,7 @@ priv fn apply_lint_setting(spec: U8[]) //< it applies one `--lint=CODE=level`
     case .none
         usage.error_exit("--lint: unknown level (expected 'off', 'on', or 'error')\n")
 
-const internal_trace_env_name: U8[] = "KSPLC_INTERNAL_TRACE" //<
+const INTERNAL_TRACE_ENV_NAME: U8[] = "KSPLC_INTERNAL_TRACE" //<
     //< The environment variable that decides whether ksplc prints its own `!` propagation trace
     //<
     //< `print_trace` (std/lang) prints the trace.
@@ -869,7 +870,7 @@ priv fn print_internal_trace() //<
     //< describes **ksplc's own control flow, not the user's program**. One missing semicolon would
     //< give 13 internal frames of 18, the parser engine's own among them. Principle 2 hides the raw
     //< C errors for the same reason.
-    if v: = sys.get_env(internal_trace_env_name)
+    if v: = sys.get_env(INTERNAL_TRACE_ENV_NAME)
         if v.len > 0
             print_trace()
 

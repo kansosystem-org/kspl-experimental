@@ -3,72 +3,73 @@
 //< `arena` holds the compilation's data, and `perm_arena` what must outlive a language-server
 //< request. `config` is what the command line asked for. `pools` turns node kinds, names and
 //< sources' logical names into numbers. **A name one layer writes and another matches stands here
-//< once** (`slice_fqn`, `option_fqn`, the format methods). So the two never spell it apart.
+//< once** (`SLICE_FQN`, `OPTION_FQN`, the format methods). So the two never spell it apart.
 import "std/chars" as std_chars
 import "std/ds" { List, Map }
 import "std/mem" + { Arena, alloc, dealloc }
 import "std/str" { Str_builder }
 import "std/sys"
 
-const max_ast_kinds: I32 = 512
+const MAX_AST_KINDS: I32 = 512
 
-const immut_mark: U8[] = " immut" //< the immutability marker of the type's internal representation
+const IMMUT_MARK: U8[] = " immut" //< the immutability marker of the type's internal representation
     //<
     //< In source, "unmarked is immutable" (the `$` goes only on a mutable level). The string keeps
     //< it apart from KSPL's `const` (a compile-time constant) and the C output's `const`.
 
-const slice_fqn: U8[] = "std.lang.Slice" //<
+const SLICE_FQN: U8[] = "std.lang.Slice" //<
     //< The FQN of the borrowed contiguous region (`Slice<|$T|>` in `std/lang`)
     //<
     //< A `T[]` is sugar for this (`../parse/desugar_slice.kspl`).
     //< Caution: **Keep the string in one place.** Sema's three layers (the type query, the
     //< instantiation, the cast check) and genc all match on this name.
 
-fn slice_ident(): U8[] //< the last word of `slice_fqn` (`Slice`)
+fn slice_ident(): U8[] //< the last word of `SLICE_FQN` (`Slice`)
     //<
     //< **This is the identifier put into the AST.**
     //< Caution: **Do not write the bare name directly.** That breaks "keep it in one place" above:
     //< after a rename, the desugaring would still insert the old name.
-    return slice_fqn.fqn_last()
+    return SLICE_FQN.fqn_last()
 
-const unknown_type_name: U8[] = "Unknown" //< the name of a type not yet known
+const UNKNOWN_TYPE_NAME: U8[] = "Unknown" //< the name of a type not yet known
     //<
     //< The parser writes it for an omitted type; Env registers it at `Builtin_type_id.unknown`.
 
-const option_fqn: U8[] = "std.lang.Option" //<
+const OPTION_FQN: U8[] = "std.lang.Option" //<
     //< The FQN of a value that can be absent (`T?`, the enum `Option` in `std/lang`)
     //<
     //< A `T?` is sugar for this (`../parse/desugar_slice.kspl`).
     //< Caution: **Match an Option by this and `instance_base`**, never by its mangled name's shape.
 
 fn option_ident(): U8[] //<
-    //< the last word of `option_fqn` (`Option`), the identifier put into the AST
-    return option_fqn.fqn_last()
+    //< the last word of `OPTION_FQN` (`Option`), the identifier put into the AST
+    return OPTION_FQN.fqn_last()
 
-const result_fqn: U8[] = "std.lang.Result" //<
+const RESULT_FQN: U8[] = "std.lang.Result" //<
     //< The FQN of a value or an error (`T!E`, the enum `Result` in `std/lang`)
     //<
     //< A `T!E` is sugar for this (`../parse/desugar_slice.kspl`).
     //< Caution: **Match a Result by this and `instance_base`**, never by its mangled name's shape.
 
 fn result_ident(): U8[] //<
-    //< the last word of `result_fqn` (`Result`), the identifier put into the AST
-    return result_fqn.fqn_last()
+    //< the last word of `RESULT_FQN` (`Result`), the identifier put into the AST
+    return RESULT_FQN.fqn_last()
 
-const fmt_method_char: U8[] = "fmt_char" //<
+const FMT_METHOD_CHAR: U8[] = "fmt_char" //<
     //< The method names that the format spec `\{value:SPEC\}` desugars to
     //<
     //< Caution: **Keep the strings in one place.** Two places match on the same name: the builder
     //< (`build_call` in `../parse/format_spec.kspl`), and the code that rewords "there is no such
     //< method" in terms of the format spec (`format_spec_item` in `../sema/body/dot.kspl`). If
     //< they drift, the user sees `fmt_prec`, a name they never wrote, for a `:.2`.
-const fmt_method_hex: U8[] = "fmt_hex"
-const fmt_method_prec: U8[] = "fmt_prec"
-const fmt_method_spec: U8[] = "fmt_spec"
-const fmt_method_file: U8[] = "std/strfmt" //<
+const FMT_METHOD_HEX: U8[] = "fmt_hex"
+const FMT_METHOD_PREC: U8[] = "fmt_prec"
+const FMT_METHOD_SPEC: U8[] = "fmt_spec"
+const FMT_METHOD_FILE: U8[] = "std/strfmt" //<
     //< The file that defines the four, which a file using a SPEC imports
     //<
-    //< The rule is "An extension method requires the import" in `../../docs/SPEC-language.md`.
+    //< The rule is "An extension method requires the import" in
+    //< `../../docs/SPEC-programming-language.md`.
 
 struct String_pool
     map: Map<|U8[], I32|>
@@ -219,12 +220,12 @@ typedef Progress_hook = fn() //<
     //< it stays null and a call does nothing.
 $progress_hook: Progress_hook = Progress_hook::null
 
-priv const progress_every_us: I64 = 1000000I64 //<
+priv const PROGRESS_EVERY_US: I64 = 1000000I64 //<
     //< The time between two reports [microseconds]
     //<
     //< Caution: **Do not throttle by "once every N calls".** One iteration's cost varies by orders
     //< of magnitude, so counting lets **only the slow loops exceed the window**. **Keep it well
-    //< under the supervisor's window** (`worker_timeout_ms` in `ksplc/lsp/server.kspl`).
+    //< under the supervisor's window** (`WORKER_TIMEOUT_MS` in `ksplc/lsp/server.kspl`).
 $progress_last_us: I64 = 0I64
 
 fn report_progress() //< it tells the caller "still working" during long work
@@ -236,7 +237,7 @@ fn report_progress() //< it tells the caller "still working" during long work
     now: = sys.mono_us()
     // **Where the clock is broken (`mono_us` always 0), report every time**; throttled, it would
     // exceed the window without reporting once.
-    if now != 0I64 && now - progress_last_us < progress_every_us
+    if now != 0I64 && now - progress_last_us < PROGRESS_EVERY_US
         return
     progress_last_us = now
     progress_hook()
@@ -258,7 +259,7 @@ fn is_llvm_target(): Bool //< whether the output goes to the LLVM IR backend
     default {}
     return false
 
-const defines_env_name: U8[] = "KSPLC_DEFINES" //<
+const DEFINES_ENV_NAME: U8[] = "KSPLC_DEFINES" //<
     //< The environment variable that carries the `#cfg()` flags the LSP sets for analysis
     //<
     //< It passes the same thing as `--define`.
@@ -272,7 +273,7 @@ fn append_defines_from_env() //<
     //< The separators are a comma and whitespace.
     //< Caution: **Allocate the copy from perm_arena.** A flag lives as long as the process; on the
     //< arena the LSP rewinds, the next request frees it.
-    raw: = sys.get_env(defines_env_name).unwrap_or("")
+    raw: = sys.get_env(DEFINES_ENV_NAME).unwrap_or("")
     $start: Sz = 0
     for i in Range.asc(raw.len + 1)
         is_sep: = i == raw.len || (raw.ptr + i)$ == ',' || (raw.ptr + i)$ == ' '
@@ -282,7 +283,7 @@ fn append_defines_from_env() //<
             config.defines.push(perm_arena.dup_str(raw.sub(start, i - start)))
         start = i + 1
 
-const source_ext: U8[] = ".kspl" //< the extension of a KSPL source file
+const SOURCE_EXT: U8[] = ".kspl" //< the extension of a KSPL source file
     //<
     //< **The string lives here and nowhere else.** Four things depend on it: the file an `import`
     //< opens (`append_file_path`), and the extension a name drops (`strip_kspl_ext`). The other two
@@ -290,7 +291,7 @@ const source_ext: U8[] = ".kspl" //< the extension of a KSPL source file
     //< source (`has_kspl_ext`). Decided apart, a diagnostic names a file that does not exist.
     //< Why one notation: "The indentation notation (`.kspl`)" in `../../docs/DESIGN-notation.md`.
 
-const stdin_name: U8[] = "-" //<
+const STDIN_NAME: U8[] = "-" //<
     //< the name of a program read from standard input, or given by `--eval=`
     //<
     //< **It has no file, so it is named as a command line names standard input.** It stands in
@@ -308,10 +309,10 @@ fn source_of(map: Map<|U8[], U8$[]|>$@, file: U8[]): U8$[] //<
         return got
     $named: = Str_builder.new()
     defer named.free()
-    named.s(file).s(source_ext)
+    named.s(file).s(SOURCE_EXT)
     return map.get(named.slice()).unwrap_or("")
 
-const file_uri_scheme: U8[] = "file://" //< the scheme an LSP document URI carries
+const FILE_URI_SCHEME: U8[] = "file://" //< the scheme an LSP document URI carries
     //<
     //< **Input and output share it**, so a document cannot come in under one spelling and go back
     //< out under another.
@@ -401,27 +402,27 @@ impl Str_builder
 // Compiler-Specific String Extensions
 // ==========================================
 impl U8[]
-    fn has_kspl_ext(r: U8[]): Bool //< whether it names a source file (`source_ext`)
-        return r.ends_with(source_ext)
+    fn has_kspl_ext(r: U8[]): Bool //< whether it names a source file (`SOURCE_EXT`)
+        return r.ends_with(SOURCE_EXT)
 
     fn with_source_ext(r: U8[]): U8[] //<
-        //< The name spelt as its file: `source_ext` added where the last part has no extension
+        //< The name spelt as its file: `SOURCE_EXT` added where the last part has no extension
         //<
         //< **A name with an extension is a file named as it is** (the grammar's `.kspeg`, a parser
         //< fixture), so nothing is added to it. Only a logical name (`std/io`) carries none. Nor is
-        //< anything added to `stdin_name`, which names no file.
-        if r.equals(stdin_name)
+        //< anything added to `STDIN_NAME`, which names no file.
+        if r.equals(STDIN_NAME)
             return r
         $at: = r.len
         for at > 0 && r[at - 1] != '/' && r[at - 1] != '\\'
             if r[at - 1] == '.'
                 return r
             at -= 1
-        return arena.text().s(r).s(source_ext).take() if r.len > 0 else r
+        return arena.text().s(r).s(SOURCE_EXT).take() if r.len > 0 else r
 
     fn strip_kspl_ext(r: U8[]): U8[] //<
-        //< It drops `source_ext`, which the output adds back, so a name round-trips
-        return r.strip_suffix(source_ext) if r.ends_with(source_ext) else r
+        //< It drops `SOURCE_EXT`, which the output adds back, so a name round-trips
+        return r.strip_suffix(SOURCE_EXT) if r.ends_with(SOURCE_EXT) else r
 
     fn fqn_head(r: U8[]): U8[] //< what comes before a dotted name's first dot, or all of it
         return r.sub(0, r.find_char('.').unwrap_or(r.len))
@@ -455,7 +456,7 @@ impl U8[]
 
     fn strip_file_uri(r: U8[]): U8[] //<
         //< A `file://` URI as a local path (the LSP's document URI; anything else unchanged)
-        return r.strip_prefix(file_uri_scheme)
+        return r.strip_prefix(FILE_URI_SCHEME)
 
     fn get_line_info(r: U8[], target_offset: Sz, starts: List<|Sz|>$@): Line_info //<
         //< char_idx: the UTF-16 code-unit offset given to the LSP (a surrogate pair's worth is +2)

@@ -46,9 +46,8 @@ function kspageProbeFresh(ks) {
     `a blank sheet holds a style table too (${styles.length})`);
 
   // **One empty paragraph must be there** (the cursor stands in it); typed by an `input` event.
-  ks.pressAt(8);
   typeIn("a");
-  check(app.text() === "a", `a blank sheet can be typed on as it is (${app.text()})`);
+  check(app.text() === "a", `a blank sheet accepts typing without a click (${app.text()})`);
 
   // **What was set aside comes back whole**, as a person brings it back ("Bring the draft back").
   document.getElementById("keep-take").click();
@@ -238,4 +237,65 @@ function kspageProbeOutside(ks) {
     box.dispatchEvent(new Event("change", { bubbles: true }));
     heldPics();
   }, 300);
+}
+
+// The generated document is opened through the same URL as a desktop double-click.
+function kspageProbeExample(ks) {
+  const { check } = ks;
+  const done = ks.hold();
+  (async () => {
+    const child = window.open(location.pathname + "?doc=sample.kspage", "kspage-example",
+      "width=640,height=900");
+    check(child !== null, "the sample window opens");
+    if (child === null) return;
+    try {
+      await new Promise((ready) => child.addEventListener("load", ready, { once: true }));
+      const app = await child.kspageReady;
+      const saved = JSON.parse(app.save());
+      const first = saved.blocks[0];
+      check(first.inlines[0].text === "Sample document", "the generated sample loads");
+      const style = saved.sheet.styles.find((s) => s.name === first.style);
+      check(style && !style.contents, "the sample title does not also gather contents");
+      check(app.surfaceCount() === 1, "the sample includes a slide");
+      check(app.text().includes("$760"), "the sample includes a calculated table");
+      const ime = child.document.activeElement;
+      ime.dispatchEvent(new child.InputEvent("input",
+        { data: "SAMPLE-INPUT", inputType: "insertText", bubbles: true }));
+      const count = (text) => text.split("SAMPLE-INPUT").length - 1;
+      check(count(app.save()) === 1, "sample typing is saved once without a click");
+      check(count(app.text()) === 1, "sample typing appears once in the document");
+      const canvas = child.document.getElementById("page");
+      const oldInk = canvas.style.getPropertyValue("--ink");
+      canvas.style.setProperty("--ink", "#ffffff");
+      app.find("Qty", false);
+      const cell = app.cellFrame();
+      check(cell !== null, "the sample table heading can be found");
+      if (cell !== null) {
+        const dpr = child.devicePixelRatio || 1;
+        const band = canvas.getContext("2d").getImageData(
+          Math.round((cell[0] + cell[2] - 15) * dpr),
+          Math.round((cell[1] + cell[3] / 2 - 1) * dpr),
+          Math.round(9 * dpr), Math.round(3 * dpr)).data;
+        let dark = 0;
+        for (let i = 0; i < band.length; i += 4) {
+          if (band[i] < 200 && band[i + 1] < 200 && band[i + 2] < 200) dark += 1;
+        }
+        check(dark > 0, "the filter arrow follows the heading's dark text on a dark screen");
+      }
+      canvas.style.setProperty("--ink", oldInk);
+      for (const menu of child.document.querySelectorAll("#bar > .menu")) {
+        menu.querySelector("summary").click();
+        await new Promise((ready) => child.requestAnimationFrame(ready));
+        const at = menu.querySelector(".items").getBoundingClientRect();
+        check(at.left >= 0 && at.right <= child.innerWidth,
+          menu.querySelector("summary").textContent + " stays inside the sample window");
+        menu.open = false;
+      }
+    } finally {
+      child.close();
+    }
+  })().then(done, (e) => {
+    check(false, "the sample opens and edits (" + String((e && e.stack) || e) + ")");
+    done();
+  });
 }

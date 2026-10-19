@@ -26,7 +26,9 @@
     const sideRoom = () => (side.hidden ? 0 : side.getBoundingClientRect().width);
     const fit = () => {
       if (app.showing() >= 0) { app.present(app.showing()); return; }
-      app.resize(document.body.clientWidth - 48 - sideRoom());
+      const width = document.body.clientWidth - 48 - sideRoom();
+      document.getElementById("stage").style.setProperty("--stage-width", `${width}px`);
+      app.resize(width);
     };
     // Where the slide list is shown. **Without it, the list does not appear.**
     app.slideStrip = document.getElementById("slides");
@@ -78,6 +80,16 @@
     // too, looked up on the spot (the ribbon is rebuilt). **Include `…`**: it sits in the ribbon's
     // row, so "the bar's menus" miss it.
     const menus = Array.from(document.querySelectorAll("#bar > .menu, #spill"));
+    const placeMenu = (menu) => {
+      const box = menu.querySelector(".items");
+      box.style.translate = "";
+      const at = box.getBoundingClientRect();
+      const shift = Math.max(24 - at.left, Math.min(0, innerWidth - 24 - at.right));
+      box.style.translate = `${shift}px 0`;
+    };
+    addEventListener("resize", () => {
+      for (const menu of menus) if (menu.open) placeMenu(menu);
+    });
     const shutTools = (except) => {
       for (const m of menus) {
         if (m !== except) m.open = false;
@@ -91,6 +103,7 @@
       }
     };
     for (const m of menus) {
+      m.addEventListener("toggle", () => { if (m.open) placeMenu(m); });
       // **Close the others before opening** (`toggle` fires later, with two open); keys too.
       m.querySelector("summary").addEventListener("click", () => {
         if (!m.open) shutTools(m);

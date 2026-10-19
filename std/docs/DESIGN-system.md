@@ -6,7 +6,7 @@
 
 ### An argument's destination is declared, and unknown ones are errors
 
-With `std/argp`, each option writes straight into a variable of yours. That variable's starting value is the default. An argument that starts with `-` and that nothing declared is an error; it is never skipped.
+With `std/argparse`, each option writes straight into a variable of yours. That variable's starting value is the default. An argument that starts with `-` and that nothing declared is an error; it is never skipped.
 
 Each declared item receives **a pointer to the caller's variable**, so the default value is that variable's initial value.
 
@@ -14,14 +14,14 @@ Each declared item receives **a pointer to the caller's variable**, so the defau
 $out: U8[] = "out/result.jsonl" // the default is the variable's initial value itself
 $vocab: I64 = 2000
 $verbose: = false
-p: = argp.Parser.create("build_corpus", "build a corpus", arena)
+p: = argparse.Parser.create("build_corpus", "build a corpus", arena)
 p.str_opt("--out", out@, "where to write")
 p.int_opt("--vocab", vocab@, "the target vocabulary size")
 p.flag("--verbose", verbose@, "show the progress")
 p.parse_or_exit(sys.args(), arena)
 ```
 
-The destination carries `$` because argp rewrites it. Without it, the diagnostic is `expected 'Bool$@', but got 'Bool@'`. The `$` also tells the reader that the variable changes later. **There is no lookup by name** (`get_str("--out")`). So the compiler catches a misspelt name or a mismatched type at compile time, not at run time.
+The destination carries `$` because argparse rewrites it. Without it, the diagnostic is `expected 'Bool$@', but got 'Bool@'`. The `$` also tells the reader that the variable changes later. **There is no lookup by name** (`get_str("--out")`). So the compiler catches a misspelt name or a mismatched type at compile time, not at run time.
 
 The table shows what the parser above does with a few command lines.
 
@@ -101,7 +101,7 @@ Some programs touch memory that they must not touch. Examples are a write throug
 | Anywhere else | `crash: invalid memory access (SIGSEGV at address 0x…)`, or `crash: bus error (SIGBUS …)` |
 
 * **The exit code stays the fault's own.** POSIX puts the signal back to its default and raises it again. So a parent reads 139, and a core dump is written where one is enabled. Windows ends with the exception's code, read as 139 ("A child's end is one code on every OS" below). A caller that checks the code sees no difference.
-* **The prefix is `crash: `, not `panic: `.** A panic is a stop that the program makes at a rule it checks, at a line it names. That rule is "Conditions that stop execution at run time" in [`../../docs/SPEC-language.md`](../../docs/SPEC-language.md). A crash is the OS's stop, and the fault names an address, not a line. One word per kind of stop keeps each one a single string to search for.
+* **The prefix is `crash: `, not `panic: `.** A panic is a stop that the program makes at a rule it checks, at a line it names. That rule is "Conditions that stop execution at run time" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md). A crash is the OS's stop, and the fault names an address, not a line. One word per kind of stop keeps each one a single string to search for.
 * **No trace is printed.** A walk of the stack inside a fault handler is safe only with an unwinder. The runtime does not carry one on every OS. And `print_trace`'s error trace is the route of the last `!` failure, which is unrelated to the fault. The line says what happened. A debugger on a build with `-g`, as `ksplc build` makes, says where.
 * **The handler calls only what is safe there** (write, signal, raise). The fault can strike inside the C library while it holds its locks. So the handler does not flush standard output, and a program whose last lines matter is line-buffered (the section above).
 * **A handler already in place is kept** (a sanitizer's, a host program's). A library takes none, since its host owns the signals.
@@ -154,7 +154,7 @@ Why a walk that walked nothing fails is at `check_list` in `std/verdict.kspl`. W
 | `http-res` | `http.parse_response` | A response that the writer takes (`format_response`) reads back as the status, headers and body it was given. It is written the same again |
 | `http-write` | `http.format_request` and `format_response`, given fields split at each 0 byte | What the writer takes reads back the same. That covers the method and target or the status, the headers in order with the writer's `Content-Length`, and the body |
 | `jsonrpc` | `jsonrpc.take_frame`, over a stream of frames | The frames before the first broken one are the same, however the bytes arrive. They can arrive at once, a byte at a time or seven at a time. Each body, framed again (`frame_into`), is taken back the same |
-| `argv` | `argp.Parser.parse_list`, with flags, values, a repeated item and positionals. It also has `--`, a command chosen by name and by flag, and one command taking an uninterpreted rest | What it read, written back as a command line, parses to the same values, items given, command and positionals |
+| `argv` | `argparse.Parser.parse_list`, with flags, values, a repeated item and positionals. It also has `--`, a command chosen by name and by flag, and one command taking an uninterpreted rest | What it read, written back as a command line, parses to the same values, items given, command and positionals |
 
 **Every seed is read once before any mutation** (`fuzz.check_seeds`). A seed that the program refuses is dropped, unless the program's own writer made it. A seed that stops the program fails. Dropped, it would hide a crash on a file that nobody mutated. **A broken round trip stops with `assert`.** So the driver counts it among the announced stops. And the input it keeps prints the broken property when it runs again. **Why under the fuzz, beside the unit tests**: a unit test checks the values that its writer thought of. Under the fuzz, the trip runs on every value that a mutation reaches. Examples are a header value that ends in a space, or a head one byte past its limit.
 
@@ -695,13 +695,13 @@ Each call of a recursive function takes some of the thread's *stack*. When the s
 
 **The walk's position is its frame's address, not a local's** (`kspl_stack_here` in [`../../ksplc/gen/runtime/core.c`](../../ksplc/gen/runtime/core.c)). The address sanitizer moves a local whose address is taken onto a stack of its own on the heap, to catch a use after return. Measured by a local, every walk built with the sanitizer would read as past its stack's end. It would then refuse input of any depth. A frame's address is on the thread's stack on every build. So a sanitized program refuses only what an unsanitized one does.
 
-**A walk that runs many times over mostly shallow input asks late** (`Stack_limit.later(margin)`, checked by the same `near()`). On Linux's main thread, the question costs a read of `/proc/self/maps`, far more than a shallow walk. So the walk asks only once it has gone a fixed amount of stack below where the limit was made (`unasked_room` in `std/stack_limit.kspl`). `std/json`'s parse and `std/regex`'s compile take that shape. **That amount is counted in bytes, not levels**, for the reason the count alone fails. The address sanitizer's frames are several times the plain ones. So a count of levels small enough for any stack on one build is not small enough on another. The bytes are few enough for any thread's stack to hold.
+**A walk that runs many times over mostly shallow input asks late** (`Stack_limit.later(margin)`, checked by the same `near()`). On Linux's main thread, the question costs a read of `/proc/self/maps`, far more than a shallow walk. So the walk asks only once it has gone a fixed amount of stack below where the limit was made (`UNASKED_ROOM` in `std/stack_limit.kspl`). `std/json`'s parse and `std/regex`'s compile take that shape. **That amount is counted in bytes, not levels**, for the reason the count alone fails. The address sanitizer's frames are several times the plain ones. So a count of levels small enough for any stack on one build is not small enough on another. The bytes are few enough for any thread's stack to hold.
 
 **A walk that reaches a limit refuses the whole input**, never one branch of it. A branch refused alone reads as that branch being absent. A parse would return a tree with a part missing, which is a wrong answer rather than a refusal. So `std/json`'s parse ends the whole document as `too_deep`, and `std/regex`'s compile ends the whole pattern.
 
 **Not taken: growing the stack** (rustc's `stacker`, Go's goroutines). It lifts the limit instead of reporting it. But it needs a way of switching stacks that the language lacks. And a debugger and a profiler lose the thread across the switch. Not taken either: a run of the walk on a thread whose stack size is chosen. The size must still be guessed from what a level costs, and that is the very number that moves.
 
-**The count stays too.** "Implementation limits" in [`../../docs/SPEC-language.md`](../../docs/SPEC-language.md) requires the guaranteed depth to be the same on every target. Only a count is the same everywhere. The stack is watched so that a refusal beyond the count's reach is a diagnostic rather than a crash. So a walk holds both, the count and the limit, and refuses at whichever comes first.
+**The count stays too.** "Implementation limits" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md) requires the guaranteed depth to be the same on every target. Only a count is the same everywhere. The stack is watched so that a refusal beyond the count's reach is a diagnostic rather than a crash. So a walk holds both, the count and the limit, and refuses at whichever comes first.
 
 ### Connecting by name tries the candidates overlapped
 
@@ -810,9 +810,9 @@ Caution: **Drop the broken header from the buffer then.** Kept, it makes every l
 
 ### JSON's numbers hold integers and decimals separately
 
-`json.Val` keeps integers and decimals apart, so a large integer is never rounded. The reader accepts strict JSON (RFC 8259) only.
+`json.Value` keeps integers and decimals apart, so a large integer is never rounded. The reader accepts strict JSON (RFC 8259) only.
 
-`json.Val` holds `int_val(I64)` and `float_val(F64)` as separate variants. All F64 would silently round an integer over 53 bits, such as an offset in a file in safetensors and the like. Integers only could not read ordinary JSON that holds a decimal. The text's shape tells them apart:
+`json.Value` holds `int_val(I64)` and `float_val(F64)` as separate variants. All F64 would silently round an integer over 53 bits, such as an offset in a file in safetensors and the like. Integers only could not read ordinary JSON that holds a decimal. The text's shape tells them apart:
 
 | The text | Read as |
 | :-- | :-- |
@@ -828,7 +828,7 @@ Caution: **Drop the broken header from the buffer then.** Kept, it makes every l
 
 The last is refused as `trailing_comma`. Reported as `invalid_string` at a key's position, it would not lead the writer to the trailing comma. Unlike the others, KSPL holds no option to loosen this. A loose reader lets the sender's broken output take hold unseen.
 
-**Two values are equal (`Val.equals`) when they hold the same JSON:**
+**Two values are equal (`Value.equals`) when they hold the same JSON:**
 
 * A number equals only one of its own kind.
 * A decimal equals only the same F64, bit for bit.
@@ -842,6 +842,6 @@ The kinds stay apart because the reader keeps `1` and `1.0` apart. The compariso
 
 **A read of a kind returns an option**: `as_str(): U8[]?`, `as_bool(): Bool?`, `as_int(): I32?`, `as_int64(): I64?`, `as_f64(): F64?`. A value of another kind, `null` and an absent member all give `.none`. `""`, `false` and 0 are values. A reader that takes a default writes it once, with the option's own `unwrap_or`. So the default sits in the reader's line, and there is one way to write it. There is no default parameter on each read.
 
-**A path reads an absent member as `null`.** `get(key)` and `get_at(index)` return a `Val`, which is `null_val` where there is none. So `msg.get("params").get("textDocument").get("uri").as_str()` stays one line. An option at each step would need a nested `if` per level, since KSPL has no `?.`. Nothing is lost, since the read at the end gives `.none` for a `null`. An absent member and a `null` one differ only for `find(key): Val?`. That is the one way to ask "is it there"; a `has_key` beside it would be a second. An array has no such pair. Its elements are counted (`arr_list`), and a position past the end reads as an absent member does.
+**A path reads an absent member as `null`.** `get(key)` and `get_at(index)` return a `Value`, which is `null_val` where there is none. So `msg.get("params").get("textDocument").get("uri").as_str()` stays one line. An option at each step would need a nested `if` per level, since KSPL has no `?.`. Nothing is lost, since the read at the end gives `.none` for a `null`. An absent member and a `null` one differ only for `find(key): Value?`. That is the one way to ask "is it there"; a `has_key` beside it would be a second. An array has no such pair. Its elements are counted (`arr_list`), and a position past the end reads as an absent member does.
 
-**An array's chain is hidden as an object's is.** `array_val` carries a `json.Arr` whose chain is private, read through `arr_list` and `get_at`. A payload that held the first node would hand every `switch` a pointer that is null for `[]`.
+**An array's chain is hidden as an object's is.** `array_val` carries a `json.Array` whose chain is private, read through `arr_list` and `get_at`. A payload that held the first node would hand every `switch` a pointer that is null for `[]`.

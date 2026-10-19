@@ -13,13 +13,13 @@
 
 **An unset field is not written.** A style's font fields can be unset, which means "inherited from the parent", so writing the default in would break the inheritance there. The reader leaves an absent field alone too. Only `Sheet.add` fills in defaults; with two places doing it, one could change alone.
 
-**A text of a different version is not read even in part.** A saved text opens with `{"kspage": N, "sheet": …`, where N is the number of its format version (`version` in [`share/store.kspl`](../share/store.kspl)). Writing back a document that kept only what could be read would lose the original.
+**A text of a different version is not read even in part.** A saved text opens with `{"kspage": N, "sheet": …`, where N is the number of its format version (`VERSION` in [`share/store.kspl`](../share/store.kspl)). Writing back a document that kept only what could be read would lose the original.
 
 ### Names the core looks up belong to the format version
 
 **The saved text holds a few names the core looks for by name.** They are these:
 
-* the header and footer marks `{page}` / `{pages}` (`page_mark` in [`lay/chrome.kspl`](../lay/chrome.kspl));
+* the header and footer marks `{page}` / `{pages}` (`PAGE_MARK` in [`lay/chrome.kspl`](../lay/chrome.kspl));
 * the header and footer styles (`header` / `footer` in [`model/doc.kspl`](../model/doc.kspl)).
 
 Caution: **Changing a name the core looks up raises the version in [`share/store.kspl`](../share/store.kspl).** Without the raise, an old file's mark is not read as a mark and is printed as written. One raise covers the whole vocabulary, not one per name.
@@ -248,7 +248,7 @@ The other products do the same: Word names its zip `.docx`, not `.zip`.
 
 **Do not pack the whole document onto one line.** Packed JSON reads back just as well, but then changing one word changes the whole document in a diff. git's diff and merge and `grep` can say nothing, and there is no way to compare what was written side by side.
 
-**It is written one value per line** ([`share/store.kspl`](../share/store.kspl)'s `spacing`). The reader skips whitespace, so a text saved earlier still reads if the indentation changes; packed text reads too.
+**It is written one value per line** ([`share/store.kspl`](../share/store.kspl)'s `SPACING`). The reader skips whitespace, so a text saved earlier still reads if the indentation changes; packed text reads too.
 
 **The other products differ here.** kspage saves text that it reads back, so packing is its own choice. A readable diff is worth more than what packing saves (some tens of KB).
 
@@ -868,7 +868,7 @@ Apple's and Microsoft's guidance both say "one level at most". **Two levels are 
 
 A submenu works inside a panel because the panel is a `details`. A bare submenu closes as the focus returns to the body, but a panel stays open, so the next field can be filled in.
 
-**The choices' list belongs to the JS that builds the submenu**; `page.html` holds only where it sits (`<div id="...">`). `menu_pairs` in `tests/support/conventions_bound.kspl` checks it against the core's list. The list lives in one form, so one reader is enough.
+**The choices' list belongs to the JS that builds the submenu**; `page.html` holds only where it sits (`<div id="...">`). `MENU_PAIRS` in `tests/support/conventions_bound.kspl` checks it against the core's list. The list lives in one form, so one reader is enough.
 
 **No bare text field on a menu's first level**; no other product has one. A group needing a field goes into a submenu or a panel, as "link", "footnote" and "comment" do. The one exception is "where it is saved and read from". It shows where saving writes. Folding it would break the rule that this can be read before the press ("The save destination is remembered" below). It is the one exception, so the flat rows do not keep growing.
 
@@ -1051,7 +1051,7 @@ What the panel lists is **the document's text** (headings, shapes' names), so th
 
 ### Whether the browser or the page holds the zoom
 
-**Kspage has no zoom of its own: the browser's zoom (Ctrl and + or −) is the one way to make the document bigger.** A desktop program holds a zoom of its own because no browser stands around it, and the OS's magnifier enlarges the whole screen. In a browser the zoom is already there, so a second one would be two means for one purpose (Principle 6). A page-side zoom does to the document exactly what the browser's does. Both divide the laid-out width and rewrap, with the canvas staying at the window's width. They differ only in whether the tools grow too.
+**Kspage has no zoom of its own: the browser's zoom (Ctrl and + or −) is the one way to make the document bigger.** A desktop program holds a zoom of its own because no browser stands around it, and the OS's magnifier enlarges the whole screen. In a browser the zoom is already there, so a second one would be two means for one purpose (Principle 6). A page-side zoom does to the document exactly what the browser's does. Both divide the laid-out width and rewrap, with the document's viewport staying at the window's width. They differ only in whether the tools grow too.
 
 **What is lost**: the browser's zoom enlarges the ribbon and the menus too, so "enlarge only the document" is impossible. On a narrow screen the groups that do not fit drop into `…` ("What is done with the tools that do not fit" above).
 

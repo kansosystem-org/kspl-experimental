@@ -13,7 +13,7 @@
 //   ./out/build_corpus.exe          build from the raw sources
 //   ./out/build_corpus.exe --fmt    normalize through ksplc fmt, then build
 // ==========================================
-import "std/argp"
+import "std/argparse"
 import "std/chars"
 import "std/ds" { List, Map }
 import "std/fs"
@@ -27,10 +27,10 @@ import "std/thread"
 import "tools/ai_assist/corpus_count" as count
 import "tools/ai_assist/ksplc_oracle" as oracle
 
-priv const val_every: Sz = 10 // one file in every ten goes to validation, deterministically
-priv const fmt_timeout_ms: I32 = 60000
-priv const output_cap: Sz = 4 * 1024 * 1024
-priv const num_fmt_workers: Sz = 8 //<
+priv const VAL_EVERY: Sz = 10 // one file in every ten goes to validation, deterministically
+priv const FMT_TIMEOUT_MS: I32 = 60000
+priv const OUTPUT_CAP: Sz = 4 * 1024 * 1024
+priv const NUM_FMT_WORKERS: Sz = 8 //<
     //< How many workers normalize() runs under --fmt, each starting a ksplc child per file
     //<
     //< The work is mostly waiting on I/O, so it need not match the CPU core count. A fixed value
@@ -74,8 +74,8 @@ priv fn normalize(rel_path: U8[], use_fmt: Bool, arena: Arena$@): U8$[]
     if !use_fmt
         return raw_copy
 
-    argv: = U8[][]::{ oracle.ksplc_path, "fmt", rel_path }
-    out: = subproc.run(argv, "", fmt_timeout_ms, output_cap, arena) catch ""
+    argv: = U8[][]::{ oracle.KSPLC_PATH, "fmt", rel_path }
+    out: = subproc.run(argv, "", FMT_TIMEOUT_MS, OUTPUT_CAP, arena) catch ""
     if out.len > 0
         return out
     io.err().s("  [warn] fmt failed on \{rel_path\}\n")
@@ -115,7 +115,7 @@ priv fn normalize_all(files: List<|U8[]|>$@, use_fmt: Bool, arena: Arena$@): Lis
             result.push(Rec::{ .path = rel, .code = code })
         return result
 
-    num_workers: = num_fmt_workers if n >= num_fmt_workers else n
+    num_workers: = NUM_FMT_WORKERS if n >= NUM_FMT_WORKERS else n
     results: = Rec$@::arena.alloc(n * sizeof(Rec))
 
     worker_arenas: = List<|Arena$@|>.create(arena)
@@ -188,18 +188,18 @@ fn main() //< collects the repository's sources into the train/val corpus
     arena: = Arena.new(512 * 1024 * 1024)
     defer arena.free()
     $use_fmt: = false
-    p: = argp.Parser
+    p: = argparse.Parser
         .create(sys.program_name(), "make a training corpus from the repository's sources", arena)
     p.flag("--fmt", use_fmt@, "normalize through ksplc fmt before building")
     p.parse_or_exit(sys.args(), arena)
-    if use_fmt && !fs.exists(oracle.ksplc_path)
+    if use_fmt && !fs.exists(oracle.KSPLC_PATH)
         io.err()
-            .s("[error] --fmt requires \{oracle.ksplc_path\} (check that make self-host has run)\n")
+            .s("[error] --fmt requires \{oracle.KSPLC_PATH\} (check that make self-host has run)\n")
         sys.exit(1)
 
     // Creating a folder that already exists fails harmlessly, so the error is ignored.
     fs.mkdir("tools/ai_assist") catch {}
-    fs.mkdir(oracle.corpus_dir) catch {}
+    fs.mkdir(oracle.CORPUS_DIR) catch {}
 
     files: = find_kspl_files(arena)
     normalized: = normalize_all(files, use_fmt, arena)
@@ -209,7 +209,7 @@ fn main() //< collects the repository's sources into the train/val corpus
     $dups: Sz = 0
     for rec in normalized
         digest: = sha256.hash(rec.code)
-        hex: U8[sha256.hex_len] = ::{}
+        hex: U8[sha256.HEX_LEN] = ::{}
         sha256.write_hex(digest, U8$[]::hex)
         hex_key: = U8$[]::hex
 
@@ -223,7 +223,7 @@ fn main() //< collects the repository's sources into the train/val corpus
     train: = List<|Rec|>.create(arena)
     val: = List<|Rec|>.create(arena)
     for i in Range.asc(records.len)
-        if i % val_every == val_every - 1
+        if i % VAL_EVERY == VAL_EVERY - 1
             val.push(records[i])
         else
             train.push(records[i])

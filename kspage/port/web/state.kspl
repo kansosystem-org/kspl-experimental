@@ -45,7 +45,7 @@ priv fn give_up(msg: U8$[]) //< the one place called when stopping
     //< `kspage_web_recover`.
     kspage_js_gave_up(msg.ptr, msg.len)
 
-const heap_bytes: Sz = 32 * 1024 * 1024 //<
+const HEAP_BYTES: Sz = 32 * 1024 * 1024 //<
     //< The size of the static buffer that stands in for the heap
     //<
     //< Wasm has neither libc nor malloc. Allocation uses a free list over a static buffer
@@ -53,7 +53,7 @@ const heap_bytes: Sz = 32 * 1024 * 1024 //<
     //< Caution: **Refuse once it is used up** (`doc_limit` below) — a failed allocation stops the
     //< whole wasm. Enlarging it alone does not fix that (the limit only moves further away).
 $heap: U8[32*1024*1024] = ::{}
-const room_per_byte: Sz = 20 //<
+const ROOM_PER_BYTE: Sz = 20 //<
     //< The heap bytes that one byte of document needs while it is edited
     //<
     //< The editing arena is never returned. It is zero-filled static memory, so enlarging it does
@@ -61,20 +61,20 @@ const room_per_byte: Sz = 20 //<
     //< Caution: **Leave room to spare** (once opened, it must still take typing). The three levels
     //< of refusal are in `../../docs/DESIGN-architecture.md`'s "Where memory runs short it refuses
     //< rather than crashing".
-const room_spare: Sz = 8 * 1024 * 1024
+const ROOM_SPARE: Sz = 8 * 1024 * 1024
 
-const room_per_flow: Sz = 512 //< the arena needed to lay out one block and write it back
+const ROOM_PER_FLOW: Sz = 512 //< the arena needed to lay out one block and write it back
     //<
     //< Caution: **Do not give a grid and a flow the same value.** A grid (a table) costs several
     //< times a flow, so one value either **cuts the cap for prose** or overruns the limit on a
     //< table. Err toward the value where the cost levels off (more columns cost little more).
-const room_per_grid: Sz = 2048
+const ROOM_PER_GRID: Sz = 2048
 
 fn doc_limit(): Sz //< the largest document, in bytes, that can be opened in this arena
     //<
     //< Caution: **It must be available before reading** — found short afterwards, the open document
     //< is lost. The cap follows the arena. **Passing this does not mean it fits** (`room_for`).
-    return (heap_bytes - room_spare) / room_per_byte
+    return (HEAP_BYTES - ROOM_SPARE) / ROOM_PER_BYTE
 
 priv fn blocks_in(b: Block$@): Sz //<
     //< Counts the blocks only (inside a grid, the whole grid counts as grid)
@@ -90,8 +90,8 @@ priv fn need_in(sh: Sheet$@, b: Block$@): Sz //<
     //< every row and cell).
     //< Caution: **Count the nesting and the page bands too** (each costs a layout).
     if sh.arrange_of(b.style).same_arrange(.grid)
-        return blocks_in(b) * room_per_grid
-    $n: Sz = room_per_flow
+        return blocks_in(b) * ROOM_PER_GRID
+    $n: Sz = ROOM_PER_FLOW
     for $i: Sz = 0; i < b.children.len; i += 1
         n += need_in(sh, b.children.get(i))
     return n
@@ -114,10 +114,10 @@ fn room_for(d: Doc$@, sh: Sheet$@, letting_go: Arena$@): Bool //<
     //< The refusal is a separate result from "cannot be read".
     //< Caution: **Ask after reading and before replacing** — found short after the replacement, the
     //< open document is lost. **Subtract what is freed**, or reloading a document of the same size
-    //< is refused. Leave room to spare (`room_spare`).
+    //< is refused. Leave room to spare (`ROOM_SPARE`).
     freed: = 0 if letting_go == null else letting_go.get_total_allocated()
     after: = mem.heap_used_bytes() - freed
-    return after + place_need(d, sh) + room_spare <= heap_bytes
+    return after + place_need(d, sh) + ROOM_SPARE <= HEAP_BYTES
 
 $doc_arena: Arena$@ = null
 $page_arena: Arena$@ = null
@@ -135,7 +135,7 @@ $sel: List<|Rect|>$@ = null
 // Where `kspage_js_vmetrics` writes. It is overwritten on every call (do not keep it).
 $vm: F32[3] = ::{}
 
-const nums_cap: Sz = 18 //< the buffer the numbers are passed through
+const NUMS_CAP: Sz = 18 //< the buffer the numbers are passed through
     //<
     //< Caution: **Do not size the buffer in JS.** Below `__heap_base` is C's stack, and a deep call
     //< silently overwrites the numbers. **Size it for the entry point that writes the most** (a
@@ -161,11 +161,11 @@ fn source(): Font_source //< the source of metrics, borrowed from the canvas
 fn ensure()
     if doc_arena != null
         return
-    mem.init_freestanding_heap(U8$[]::{ .ptr = heap@, .len = heap_bytes })
+    mem.init_freestanding_heap(U8$[]::{ .ptr = heap@, .len = HEAP_BYTES })
     // Caution: **It must be set up** (before or after the arena), or the page freezes when the
     // arena runs out (the header of `kspage_js_gave_up` above).
     panic_hook = give_up
-    fresh: = Arena.new(fresh_chunk)
+    fresh: = Arena.new(FRESH_CHUNK)
     made: = sample.build(fresh)
     show(fresh, made.doc, made.sheet)
 
@@ -203,7 +203,7 @@ fn blank() //< replaces the document shown now with a blank one, open for editin
     //< **It must be blank.** "New" uses it, so a sample here would put the sample's paragraphs in
     //< front of someone who started from a blank page.
     read_only = false
-    fresh: = Arena.new(fresh_chunk)
+    fresh: = Arena.new(FRESH_CHUNK)
     made: = sample.blank(fresh)
     adopt(fresh, made.doc, made.sheet)
 
@@ -213,14 +213,16 @@ fn new_edit() //< makes the editing state anew
     //< if the caller copied it on every remake, it would be lost on opening.
     ed = edit.new_editor(doc)
     ed.read_only = read_only
+    cursor_pending = true
 
 // Whether it is open read-only. It is not stored in the document (neither the saved text nor an
 // export) — stored, a copy would claim "read-only" while anyone can edit it.
 $read_only: Bool = false
 
 $ed: Editor$@ = null
+$cursor_pending: Bool = false //< the first screen layout must place the cursor
 
-const input_cap: Sz = 256 //< the buffer that JS writes typed text into
+const INPUT_CAP: Sz = 256 //< the buffer that JS writes typed text into
     //<
     //< An entry point refuses longer text; typed or composed text that long goes in through the
     //< loading arena, as a paste does (`keys.js`'s `type`).
@@ -246,7 +248,7 @@ $in_ptr: U8@ = null
 // ---- The shape values are passed in at the boundary ----
 // Two files of entry points share it, so it is here rather than copied.
 
-const fresh_chunk: Sz = 64 * 1024 //< the first chunk of an arena the web port starts afresh
+const FRESH_CHUNK: Sz = 64 * 1024 //< the first chunk of an arena the web port starts afresh
 
 fn rect_into(out: F32$@, r: Rect) //< a rectangle as four values: x, y, width, height
     out$ = r.x
@@ -285,12 +287,12 @@ fn color_into(out: F32$@, v: U32?) //<
 // passes by number. So moving one gets out of step with a window left open
 // ([`DESIGN-architecture.md`](../../docs/DESIGN-architecture.md)'s "The boundary between the core
 // and the browser").
-priv const shape_order: U8[] =
+priv const SHAPE_ORDER: U8[] =
     "box\tellipse\tfall_line\trise_line\tfall_arrow\trise_arrow\tfall_arrow_back\trise_arrow_back\tround_box\ttriangle\tdiamond"
-priv const dating_order: U8[] = "none\tplain\tlong"
-priv const collect_order: U8[] = "none\tcontents\tnotes\tbars\tlines"
-priv const sketch_order: U8[] = "whole\ttitled\thalved"
-priv const keep_order: U8[] = "is\tis_not\tholds\tabove\tbelow\tblank\tfilled" //<
+priv const DATING_ORDER: U8[] = "none\tplain\tlong"
+priv const COLLECT_ORDER: U8[] = "none\tcontents\tnotes\tbars\tlines"
+priv const SKETCH_ORDER: U8[] = "whole\ttitled\thalved"
+priv const KEEP_ORDER: U8[] = "is\tis_not\tholds\tabove\tbelow\tblank\tfilled" //<
     //< How a filter matches a cell (`Keep` in `../../model/filter.kspl`)
 
 priv fn no_of(order: U8[], name: U8[]): F32 //< the position within the list
@@ -320,28 +322,28 @@ priv fn name_of(order: U8[], n: I32): U8[] //< the name at that number
     return rest.sub(0, split_at_tab(rest))
 
 fn shape_no(s: style.Shape): F32
-    return no_of(shape_order, s.variant_name())
+    return no_of(SHAPE_ORDER, s.variant_name())
 
 fn shape_at(n: I32): style.Shape
-    return style.shape_from(name_of(shape_order, n))
+    return style.shape_from(name_of(SHAPE_ORDER, n))
 
 fn dating_no(d: day.Dating): F32
-    return no_of(dating_order, d.variant_name())
+    return no_of(DATING_ORDER, d.variant_name())
 
 fn dating_at(n: I32): day.Dating
-    return day.dating_from(name_of(dating_order, n))
+    return day.dating_from(name_of(DATING_ORDER, n))
 
 fn collect_no(c: Collect): F32
-    return no_of(collect_order, c.variant_name())
+    return no_of(COLLECT_ORDER, c.variant_name())
 
 fn collect_at(n: I32): Collect
-    return collect.collect_from(name_of(collect_order, n))
+    return collect.collect_from(name_of(COLLECT_ORDER, n))
 
 fn sketch_at(n: I32): insert.Sketch
-    return insert.sketch_from(name_of(sketch_order, n))
+    return insert.sketch_from(name_of(SKETCH_ORDER, n))
 
 fn keep_at(n: I32): filter.Keep
-    return filter.keep_from(name_of(keep_order, n))
+    return filter.keep_from(name_of(KEEP_ORDER, n))
 
 // ---- The functions that turn a list of names into numbers as they are ----
 fn align_no(a: style.Align): F32 //<
@@ -392,7 +394,7 @@ fn split_input(len: Sz): Split //< splits the typing arena's `len` bytes in two 
     //< Caution: **Call `ensure` first** (the arena exists after setup). **Without a tab it is
     //< "absent"**, and the caller does nothing — rewriting with empty text would treat a failed
     //< handover as "remove it". Length 0 is refused too.
-    if len <= 0 || len > input_cap
+    if len <= 0 || len > INPUT_CAP
         return no_split()
     both: = U8[]::{ .ptr = input@, .len = len }
     cut: = split_at_tab(both)
@@ -421,8 +423,8 @@ fn has_style(i: Sz): Bool //< whether style `i` exists
 fn has_box(i: Sz): Bool //< whether box `i` exists
     //<
     //< `page` is null until the first `kspage_web_layout`.
-    //< **`Sz` is signed** ("Primitive types" in `../../../docs/SPEC-language.md`). JS can pass -1,
-    //< so refuse negative values too.
+    //< **`Sz` is signed** ("Primitive types" in `../../../docs/SPEC-programming-language.md`). JS
+    //< can pass -1, so refuse negative values too.
     return page != null && i >= 0 && i < page.boxes.len
 
 fn has_selection(i: Sz): Bool //< whether selection rectangle `i` exists

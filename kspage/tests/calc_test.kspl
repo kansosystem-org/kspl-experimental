@@ -52,7 +52,7 @@ priv struct Case //< one table solved, and what one of its cells shows
     want: U8[] //< the text that cell shows once solved
     why: U8[] //< what the case is about, named where it fails
 
-priv const cases: Case[_] = ::{
+priv const CASES: Case[_] = ::{
     Case::{ .cells = "=1+2*3", .row = 0, .column = 0, .want = "7",
         .why = "the multiplication acts first" },
     Case::{ .cells = "=(1+2)*3", .row = 0, .column = 0, .want = "9",
@@ -255,7 +255,7 @@ fn test_each_formula_shows_what_it_should(arena: Arena$@) //<
     //< Each case's table, solved, shows its text in the cell named, or a mark saying how to fix it
     verdict.start("[kspage/calc] what each formula shows test...")
     $wrong: Sz = 0
-    for one in cases
+    for one in CASES
         d: = Doc.new(arena)
         t: = table_of(d, one.cells)
         calc.recalc(d, base.grid_sheet(arena))
@@ -266,7 +266,7 @@ fn test_each_formula_shows_what_it_should(arena: Arena$@) //<
             wrong += 1
     assert(wrong == 0, "every case shows what it should (the lines above name each that does not)")
     verdict
-        .pass(arena.text().s("all \{cases.len\} cases show what they should.").take())
+        .pass(arena.text().s("all \{CASES.len\} cases show what they should.").take())
 
 fn test_a_nested_table_calculates_on_its_own(arena: Arena$@)
     verdict.start("[kspage/calc] a table inside a cell being solved on its own test...")
@@ -548,8 +548,8 @@ fn test_a_comparison_reaches_another_table(arena: Arena$@) //<
         assert(cell_text(dst, 0, 1).equals("1"), "the comparison reads the other table's cell")
     verdict.pass("a comparison ends a name, as every other operator does.")
 
-priv const reached_names: U8[][_] = ::{ "Q1_sales", "売上", "Daylight", "A1", "if", "x.y" }
-priv const refused_names: U8[][_] = ::{ "Q1 sales", "my-table", "a<b", "2026", "#x", "Day", "Day2",
+priv const REACHED_NAMES: U8[][_] = ::{ "Q1_sales", "売上", "Daylight", "A1", "if", "x.y" }
+priv const REFUSED_NAMES: U8[][_] = ::{ "Q1 sales", "my-table", "a<b", "2026", "#x", "Day", "Day2",
     "x!y" }
 
 fn test_a_table_name_no_formula_reaches_is_refused(arena: Arena$@) //<
@@ -560,7 +560,7 @@ fn test_a_table_name_no_formula_reaches_is_refused(arena: Arena$@) //<
     //< so it is held to nothing.
     verdict.start("[kspage/calc] a table name a formula could not reach being refused test...")
     sheet: = base.grid_sheet(arena)
-    for name in reached_names
+    for name in REACHED_NAMES
         d: = Doc.new(arena)
         dst: =
             two_tables(d, name, arena.text().s("=").s(name).s("!B2+1").take())
@@ -572,7 +572,7 @@ fn test_a_table_name_no_formula_reaches_is_refused(arena: Arena$@) //<
         assert(ed.set_name(page, name), "a name a formula can reach is taken")
         calc.recalc(d, sheet)
         assert(cell_text(dst, 0, 0).equals("41"), "a formula reaches the table by it")
-    for name in refused_names
+    for name in REFUSED_NAMES
         d: = Doc.new(arena)
         dst: =
             two_tables(d, name, arena.text().s("=").s(name).s("!B2+1").take())
@@ -693,21 +693,21 @@ fn test_a_second_run_in_a_cell_is_prose(arena: Arena$@) //<
 // document run the stack out, and on wasm they write over the page's memory.
 // ==========================================
 
-priv const long_chain: Sz = 3000 //< rows in a running total, far past one pass's depth
+priv const LONG_CHAIN: Sz = 3000 //< rows in a running total, far past one pass's depth
 
 fn test_a_long_running_total_computes(arena: Arena$@) //<
     //< A chain of thousands of cells (`=A2+1`, `=A3+1`, …) computes, not refused
     verdict.start("[kspage/calc] a running total thousands of rows long test...")
     d: = Doc.new(arena)
     t: = d.add_block("table")
-    for i in Range.asc(long_chain - 1)
+    for i in Range.asc(LONG_CHAIN - 1)
         add_cell(add_row(t), arena.text().s("=A\{i + 2\}+1").take())
     add_cell(add_row(t), "1")
     calc.recalc(d, base.grid_sheet(arena))
-    want: = arena.text().s("\{long_chain\}").take()
+    want: = arena.text().s("\{LONG_CHAIN\}").take()
     assert(cell_text(t, 0, 0).equals(want), "the first row adds up the whole chain")
-    assert(cell_text(t, long_chain / 2, 0)
-        .equals(arena.text().s("\{long_chain - long_chain / 2\}").take()),
+    assert(cell_text(t, LONG_CHAIN / 2, 0)
+        .equals(arena.text().s("\{LONG_CHAIN - LONG_CHAIN / 2\}").take()),
         "a row partway holds its own sum")
     verdict.pass("a chain far deeper than one pass is settled from its end and comes out whole.")
 
@@ -716,13 +716,13 @@ fn test_a_long_cycle_is_reported(arena: Arena$@) //<
     verdict.start("[kspage/calc] a cycle longer than one pass coming out as a mark test...")
     d: = Doc.new(arena)
     t: = d.add_block("table")
-    for i in Range.asc(long_chain - 1)
+    for i in Range.asc(LONG_CHAIN - 1)
         add_cell(add_row(t), arena.text().s("=A\{i + 2\}").take())
     add_cell(add_row(t), "=A1")
     // If it set the chain aside for ever, the test itself would never end.
     calc.recalc(d, base.grid_sheet(arena))
     assert(cell_text(t, 0, 0).equals("#CYCLE!"), "the start of the cycle is a cycle")
-    assert(cell_text(t, long_chain - 1, 0).equals("#CYCLE!"), "so is its end")
+    assert(cell_text(t, LONG_CHAIN - 1, 0).equals("#CYCLE!"), "so is its end")
     verdict.pass("a cycle too long for one pass is found, not chased for ever.")
 
 priv fn nested(open: Sz, arena: Arena$@): U8[] //< `=` and `open` parentheses around a 1

@@ -30,13 +30,13 @@ fn write8(addr: U32, val: U8)
 // that does not answer cannot stall a driver forever. The limit leaves ample room for a wait that
 // working hardware clears in a few to a few tens of microseconds.
 // ==========================================
-const poll_timeout_iters: Sz = 1000000
+const POLL_TIMEOUT_ITERS: Sz = 1000000
 
 enum Driver_error //< why a driver's call did not take effect
     //<
     //< **One type for every driver**, so a board or a demo passes a driver's failure on with `!`.
     //< It names the kind once, where it decides what to do.
-    timed_out //< the hardware did not reach the state waited for within `poll_timeout_iters`
+    timed_out //< the hardware did not reach the state waited for within `POLL_TIMEOUT_ITERS`
     no_answer //< a device on a bus did not acknowledge (an I2C NACK)
     not_found //< what was looked up is absent (a ROM routine, a device)
     out_of_range //< an address or a length lies outside what the device holds or takes
@@ -50,5 +50,5 @@ fn wait(addr: U32, mask: U32, want_nonzero: Bool): Void!Driver_error //<
     $i: Sz = 0
     for ((read32(addr) & mask) != 0) != want_nonzero
         i += 1
-        if i >= poll_timeout_iters
+        if i >= POLL_TIMEOUT_ITERS
             throw .timed_out

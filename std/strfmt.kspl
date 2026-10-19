@@ -25,9 +25,9 @@ impl U8
 
 // ==========================================
 // The format wrappers for string interpolation. `\{expr\}` only expands to put(w, expr) ("The
-// expansion specification for string interpolation" in `../docs/SPEC-language.md`). So these thin
-// structs carry a width, a comma or a precision without any change to the grammar. They format
-// with write_int/write_float, on the stack.
+// expansion specification for string interpolation" in `../docs/SPEC-programming-language.md`). So
+// these thin structs carry a width, a comma or a precision without any change to the grammar. They
+// format with write_int/write_float, on the stack.
 // ==========================================
 pub struct Int_fmt //< a signed integer with its width, fill and comma setting
     priv val: I64
@@ -112,7 +112,7 @@ impl Float_fmt: Formattable //< so it can be used inside an interpolation
 // grouping; `fmt_prec` adds the digits after the decimal point; `fmt_hex` handles hex.
 // ==========================================
 
-priv const shortest_precision: I32 = -1 //<
+priv const SHORTEST_PRECISION: I32 = -1 //<
     //< The precision that sets no digit count: negative means the shortest round-trip form
 
 pub struct Char_fmt //< one byte written as a character rather than a number
@@ -215,44 +215,45 @@ impl Sz
 impl F32
     pub fn fmt_spec(r: Self, width: Sz, zero: Bool, comma: Bool): Float_fmt //<
         //< what a width, a zero pad or a comma in an interpolation desugars to
-        return float_fmt_spec(r, width, zero, comma, shortest_precision, true)
+        return float_fmt_spec(r, width, zero, comma, SHORTEST_PRECISION, true)
     pub fn fmt_prec(r: Self, width: Sz, zero: Bool, comma: Bool, precision: I32): Float_fmt //<
         //< what `.N` in an interpolation desugars to
         return float_fmt_spec(r, width, zero, comma, precision, true)
 impl F64
     pub fn fmt_spec(r: Self, width: Sz, zero: Bool, comma: Bool): Float_fmt //<
         //< what a width, a zero pad or a comma in an interpolation desugars to
-        return float_fmt_spec(r, width, zero, comma, shortest_precision, false)
+        return float_fmt_spec(r, width, zero, comma, SHORTEST_PRECISION, false)
     pub fn fmt_prec(r: Self, width: Sz, zero: Bool, comma: Bool, precision: I32): Float_fmt //<
         //< what `.N` in an interpolation desugars to
         return float_fmt_spec(r, width, zero, comma, precision, false)
 
-priv const max_pad_len: Sz = 1000000 //<
+priv const MAX_PAD_LEN: Sz = 1000000 //<
     //< The most padding write_digits() writes, whatever width it is given
     //<
     //< The width comes from the caller unchecked; the comment where write_digits uses it says why
     //< it is capped.
 
-pub const float_max_precision: Sz = 19 //< the most digits `.N` writes after the point.
+pub const FLOAT_MAX_PRECISION: Sz = 19 //< the most digits `.N` writes after the point.
     //<
     //< An F64 holds about 17 significant decimal digits, so later digits carry no information about
     //< the value, though they are still exact.
-priv const float_digits_cap: Sz = 340 //< the size of the buffer that holds the digits
+priv const FLOAT_DIGITS_CAP: Sz = 340 //< the size of the buffer that holds the digits
     //<
     //< The integer part is at most 309 digits (F64's maximum), the fractional part is at most the
     //< limit above, and a carry adds one digit.
-priv const shortest_exp_low: I32 = -6 //<
+priv const SHORTEST_EXP_LOW: I32 = -6 //<
     //< The magnitudes where the shortest form switches to exponent form
     //<
     //< Values below 10^-6 or at 10^21 and above are written `1.5e-7` / `1e+21`. **It is the same
     //< boundary as JSON (ECMAScript's Number::toString)**, so `\{x\}` and `std/json` print the
     //< same.
-priv const shortest_exp_high: I32 = 21
+priv const SHORTEST_EXP_HIGH: I32 = 21
 
 // The `fmt` of the primitive types.
 // **An integer always prints as a decimal number.** `U8` is an unsigned integer, not a
-// character ("Primitive types" in `../docs/SPEC-language.md`); to print it as a character, write
-// `\{b:c\}` (`fmt_char` above). If a plain `\{b\}` went to `w.c`, it would disagree with `\{b:3\}`.
+// character ("Primitive types" in `../docs/SPEC-programming-language.md`); to print it as a
+// character, write `\{b:c\}` (`fmt_char` above). If a plain `\{b\}` went to `w.c`, it would
+// disagree with `\{b:3\}`.
 
 impl I8: Formattable //< so it can be used inside an interpolation
     pub fn fmt(r: Self, w: Writer): Writer //< writes the value to w
@@ -291,10 +292,10 @@ impl Bool: Formattable //< so it can be used inside an interpolation
         return w.s("true" if r else "false")
 impl F32: Formattable //< so it can be used inside an interpolation
     pub fn fmt(r: Self, w: Writer): Writer //< writes the value to w
-        return write_float32(w, r, shortest_precision, 0, ' ', false)
+        return write_float32(w, r, SHORTEST_PRECISION, 0, ' ', false)
 impl F64: Formattable //< so it can be used inside an interpolation
     pub fn fmt(r: Self, w: Writer): Writer //< writes the value to w
-        return write_float(w, r, shortest_precision, 0, ' ', false)
+        return write_float(w, r, SHORTEST_PRECISION, 0, ' ', false)
 impl U8[]: Formattable //< so it can be used inside an interpolation
     pub fn fmt(r: U8[], w: Writer): Writer //< writes the value to w
         return w.s(r)
@@ -355,7 +356,7 @@ priv fn write_digits(w: Writer, digits: U8[], is_neg: Bool, width: Sz, fill: U8,
     // width comes straight from the caller (possibly from an application's format specifier),
     // unchecked. A huge width as the loop count would keep the CPU busy for a very long time (a
     // DoS). So it is capped at a limit that is large enough in practice.
-    room: Sz = max_pad_len if width > max_pad_len else width
+    room: Sz = MAX_PAD_LEN if width > MAX_PAD_LEN else width
     if fill == '0' && comma
         // The zeros are digits and are grouped too. So the digit count grows until the grouped
         // number fills the room: n digits take n + (n - 1) / 3 places. A separator never comes
@@ -444,7 +445,7 @@ priv fn next_digit(r: Bignat$@, s: Bignat@): U8 //<
 priv struct Float_digits //< a run of decimal digits
     //<
     //< value ~= 0.d1 d2 … dn x 10^k (d1 is the 10^(k-1) digit). The digits are stored as ASCII.
-    digits: U8[float_digits_cap]
+    digits: U8[FLOAT_DIGITS_CAP]
     n: Sz
     k: I32
 
@@ -611,14 +612,14 @@ priv fn write_shortest(w: Writer, d: Float_digits$@, is_neg: Bool, width: Sz, fi
     Writer //<
         //< Writes the shortest form
         //<
-        //< Exponent form past the bounds at `shortest_exp_low`; otherwise decimal, with a `.0` even
+        //< Exponent form past the bounds at `SHORTEST_EXP_LOW`; otherwise decimal, with a `.0` even
         //< on a whole number so it reads back as a floating-point number.
         //< Caution: **Align only the integer part, after subtracting the length of the rest.** The
         //< sign's position, the padding and the three-digit grouping are decided in one place,
         //< write_digits, and a copy would disagree with it.
     k: = d.k
     n: = d.n
-    if k > shortest_exp_high || k <= shortest_exp_low
+    if k > SHORTEST_EXP_HIGH || k <= SHORTEST_EXP_LOW
         e: = k - 1
         rest_len: Sz = (n if n > 1 else 0) + 2 + exponent_len(e)
         write_digits(w, U8[]::{ .ptr = d.digits@, .len = 1 }, is_neg,
@@ -685,7 +686,7 @@ priv fn write_decomposed(w: Writer, bf: Binary_float, is_zero: Bool, is_neg: Boo
         else
             shortest_digits(d@, bf)
         return write_shortest(w, d@, is_neg, width, fill, comma)
-    p: Sz = float_max_precision if precision > float_max_precision else precision
+    p: Sz = FLOAT_MAX_PRECISION if precision > FLOAT_MAX_PRECISION else precision
     if !is_zero
         fixed_digits(d@, bf, -I32::p)
     return write_fixed(w, d@, p, is_neg, width, fill, comma)
@@ -701,7 +702,7 @@ pub fn write_float( //< writes a floating-point number
     if write_float_special(w, v, width)
         return w
     bits: = bignat.f64_to_bits(v)
-    mag: = bits & ~bignat.f64_sign_bit
+    mag: = bits & ~bignat.F64_SIGN_BIT
     return write_decomposed(w, bignat.decompose_f64(mag), mag == 0U64, bits != mag, precision, width,
         fill, comma)
 

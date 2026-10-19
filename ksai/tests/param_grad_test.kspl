@@ -22,10 +22,10 @@ import "std/verdict"
 // uses would diverge, leaving **the path training actually uses untested**.
 // ==========================================
 
-priv const fd_eps: F64 = 1.0e-5 //< the finite difference's step
+priv const FD_EPS: F64 = 1.0e-5 //< the finite difference's step
     //<
     //< It is a central difference, so the truncation error scales as eps^2.
-priv const probe_lr: F64 = 1.0e-2 //< the SGD step used to recover the analytic gradient
+priv const PROBE_LR: F64 = 1.0e-2 //< the SGD step used to recover the analytic gradient
     //<
     //< **If it is too small, the difference is lost in rounding.**
 
@@ -46,7 +46,7 @@ priv fn grad_from_step(w: Tensor<|F64|>, before: Tensor<|F64|>, arena: Arena$@):
     //< a different point.
     g: = Tensor<|F64|>.new(w.shape, arena)
     for i in Range.asc(w.size)
-        (g.data + i)$ = ((before.data + i)$ - (w.data + i)$) / probe_lr
+        (g.data + i)$ = ((before.data + i)$ - (w.data + i)$) / PROBE_LR
         (w.data + i)$ = (before.data + i)$
     return g
 
@@ -55,12 +55,12 @@ priv fn max_gap(w: Tensor<|F64|>, g: Tensor<|F64|>, loss: Callable1<|Sz, F64|>):
     $worst: = 0.0
     for k in Range.asc(w.size)
         saved: = (w.data + k)$
-        (w.data + k)$ = saved + fd_eps
+        (w.data + k)$ = saved + FD_EPS
         l_plus: = loss.call(0)
-        (w.data + k)$ = saved - fd_eps
+        (w.data + k)$ = saved - FD_EPS
         l_minus: = loss.call(0)
         (w.data + k)$ = saved
-        d: = (l_plus - l_minus) / (2.0 * fd_eps) - (g.data + k)$
+        d: = (l_plus - l_minus) / (2.0 * FD_EPS) - (g.data + k)$
         ad: = -d if d < 0.0 else d
         if ad > worst
             worst = ad
@@ -116,7 +116,7 @@ fn test_linear_weight_grad()
     lp: = lin@
     $ps: Param[1] = ::{ snap("Linear: dW", lin.weights, work) }
     dy: = ones_like(lin.forward(x), work)
-    lin.backward(x, dy, probe_lr)
+    lin.backward(x, dy, PROBE_LR)
     recover(Param$[]::ps, work)
 
     check_all(Param[]::ps, 1.0e-6,
@@ -140,7 +140,7 @@ fn test_rmsnorm_weight_grad()
     rp: = rn@
     $ps: Param[1] = ::{ snap("RMSNorm: dW", rn.weight, work) }
     dy: = ones_like(rn.forward(x), work)
-    rn.backward(x, dy, probe_lr)
+    rn.backward(x, dy, PROBE_LR)
     recover(Param$[]::ps, work)
 
     check_all(Param[]::ps, 1.0e-6,
@@ -167,7 +167,7 @@ fn test_mlp_weight_grad()
     $ps: Param[2] = ::{ snap("MLP: fc1's dW", mlp.fc1.weights, work),
         snap("MLP: fc2's dW", mlp.fc2.weights, work) }
     dy: = ones_like(mlp.forward(x), work)
-    mlp.backward(x, dy, probe_lr)
+    mlp.backward(x, dy, PROBE_LR)
     recover(Param$[]::ps, work)
 
     check_all(Param[]::ps, 1.0e-6,
@@ -197,7 +197,7 @@ fn test_attention_weight_grad()
         snap("Attn: dWo", att.wo.weights, work) }
     $c: = att.train_forward(x)
     dout: = ones_like(c.out, work)
-    att.backward(c@, dout, probe_lr)
+    att.backward(c@, dout, PROBE_LR)
     recover(Param$[]::ps, work)
 
     check_all(Param[]::ps, 1.0e-5,
@@ -240,7 +240,7 @@ fn test_block_weight_grad()
 
     $c: = blk.train_forward(x)
     dout: = ones_like(c.out, work)
-    blk.backward(c@, dout, probe_lr)
+    blk.backward(c@, dout, PROBE_LR)
 
     recover(Param$[]::ps, work)
 
@@ -275,7 +275,7 @@ fn test_lora_weight_grad()
     op: = lo@
     $ps: Param[2] = ::{ snap("LoRA: dA", lo.a, work), snap("LoRA: dB", lo.b, work) }
     dy: = ones_like(lo.forward(x), work)
-    lo.backward(x, dy, probe_lr)
+    lo.backward(x, dy, PROBE_LR)
     recover(Param$[]::ps, work)
 
     check_all(Param[]::ps, 1.0e-6,
@@ -317,7 +317,7 @@ fn test_attention_lora_weight_grad()
         snap("Attn+LoRA: v_lora's dB", vl.b, work) }
     $c: = att.train_forward_lora(x, qp, vp)
     dout: = ones_like(c.out, work)
-    att.backward_lora(c@, dout, probe_lr, qp, vp)
+    att.backward_lora(c@, dout, PROBE_LR, qp, vp)
     // Caution: **Also check that the base stays frozen.** If it is not, the loss still goes down
     // but the training is no longer LoRA, and since the loss goes down, nobody notices.
     for i in Range.asc(att.wq.weights.size)
@@ -387,7 +387,7 @@ fn test_block_lora_weight_grad() //< LoRA over the whole block
 
     $c: = blk.train_forward_lora(x, qp, vp, f1p, f2p)
     dout: = ones_like(c.out, work)
-    blk.backward_lora(c@, dout, probe_lr, qp, vp, f1p, f2p)
+    blk.backward_lora(c@, dout, PROBE_LR, qp, vp, f1p, f2p)
     // Caution: **Also check that the base stays frozen** (the reason is on the attention side).
     for i in Range.asc(blk.ffn.fc1.weights.size)
         assert((blk.ffn.fc1.weights.data + i)$ == (fc1_before.data + i)$,

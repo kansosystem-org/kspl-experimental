@@ -167,7 +167,7 @@ To avoid comparing strings, the compiler *interns* them: each distinct string be
 
 ### A tree node's size is fixed by rule and guarded
 
-**The size in bytes of one tree node (`Ast_node`) and of its run of children (`std/ds`'s `List`) is a fixed number. A guard holds it to the byte: if someone makes a node bigger, the guard fails.** A self-host builds so many nodes that 8 bytes more or less per node changes the whole tree by tens of MB. `ksplc/pipeline.kspl` prints `AST Node bytes` and `AST Kids bytes` under `--stats`. `perf_guard` compares them with `want_node_bytes` / `want_kids_bytes` in `tests/tools/perf_guard.kspl`.
+**The size in bytes of one tree node (`Ast_node`) and of its run of children (`std/ds`'s `List`) is a fixed number. A guard holds it to the byte: if someone makes a node bigger, the guard fails.** A self-host builds so many nodes that 8 bytes more or less per node changes the whole tree by tens of MB. `ksplc/pipeline.kspl` prints `AST Node bytes` and `AST Kids bytes` under `--stats`. `perf_guard` compares them with `WANT_NODE_BYTES` / `WANT_KIDS_BYTES` in `tests/tools/perf_guard.kspl`.
 
 **A guard on the total cannot catch that growth.** `AST bytes` ("Arena's implementation: a linked list of chunks and bump allocation") is a ratio to a baseline. So one more pointer per node stays under the ceiling, while the cold usage (a run with no cache) grows measurably.
 
@@ -206,7 +206,7 @@ Each block is followed by a blank line. **`[AST Cache]` shows the disk cache's h
 | the two node sizes ("A tree node's size is fixed by rule and guarded") | fixed by rule |
 | (the compile time) | recorded beside them, decides nothing: it measures the machine and its load as much as the work |
 
-Caution: **Keep the characters of every line another program reads.** The guard finds its lines by the patterns at its head (`time_pattern` in `tests/tools/perf_guard.kspl` and the ones beside it). `stats_head` in `ksplc/tests/suite/ast_cache_test.kspl` finds `[AST Cache]`. A line spelt differently is not found.
+Caution: **Keep the characters of every line another program reads.** The guard finds its lines by the patterns at its head (`TIME_PATTERN` in `tests/tools/perf_guard.kspl` and the ones beside it). `STATS_HEAD` in `ksplc/tests/suite/ast_cache_test.kspl` finds `[AST Cache]`. A line spelt differently is not found.
 
 #### What each rule takes (`--stats`'s `[KSPEG Rule]`)
 
@@ -345,7 +345,7 @@ Making and discarding things uses the same few names everywhere. So a reader (an
 | **Global and file state** | `init()` | `fin()` | the global lifecycle, with no receiver |
 | **Raw memory (`std/mem` only)** | `alloc` | `dealloc` | tier C's byte allocation and freeing |
 
-**`free` and `dealloc` are the only names that carry an effect.** Sema's use-after-free and double-free tracking recognizes a freeing by these names alone ("Measuring what suppression costs" in [`DESIGN-diagnostics.md`](DESIGN-diagnostics.md)). The rule is "8.4 The memory management model: `defer` / ARC / arenas" in [`../../docs/SPEC-language.md`](../../docs/SPEC-language.md). Under any other name the check silently stops.
+**`free` and `dealloc` are the only names that carry an effect.** Sema's use-after-free and double-free tracking recognizes a freeing by these names alone ("Measuring what suppression costs" in [`DESIGN-diagnostics.md`](DESIGN-diagnostics.md)). The rule is "8.4 The memory management model: `defer` / ARC / arenas" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md). Under any other name the check silently stops.
 
 * **`Arena.create<|T|>` copies an existing value onto an arena** and returns a permanent `T@` (`base_core.arena.create(Foo::{...})`). It is a typed `alloc`, apart from `new`, which constructs. It lets an ad-hoc struct with no arena-taking `new` go on the arena too.
 * **One `init()` / `fin()` pair per layer**, in the layer's entry file, gathers its globals, and `main` calls only those pairs. `base_setup`'s covers the shared arena, the pools, the AST's shared state and the diagnostics; `parse_load`'s covers the Profiler and the kspeg arena. Do not init or fin a single global directly from `main`.
@@ -369,15 +369,15 @@ Every `import` in ksplc's own code names a full path, so a reader can see at a g
 
 ### A file using an extension method imports its defining file
 
-To call an extension method (a method added to a type from another file), a file must import the file where that method is written. The rule is in ["9. Files and import" in `../../docs/SPEC-language.md`](../../docs/SPEC-language.md#9-files-and-import), including that a built-in type counts as `std/lang`'s. This section holds only where it is enforced.
+To call an extension method (a method added to a type from another file), a file must import the file where that method is written. The rule is in ["9. Files and import" in `../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#9-files-and-import), including that a built-in type counts as `std/lang`'s. This section holds only where it is enforced.
 
 The compiler analyses every file in one space, so **without the import ledger the files' independence disappears**. It is enforced at the one point of method resolution, in `sema/body/dot.kspl`, which asks `is_file_imported` whether the file that wrote the name imports the method's file.
 
 Caution: **Ask the ledger (`sema/session/import_table.kspl`) and nothing else.** Asking instead whether the symbol resolves lets through a file that happens to be in the same compilation unit.
 
-**A built-in type's owner is `std/lang`** (`lang_file_path` in `sema/session/import_table.kspl`), used where no declaration names the receiver's type (`is_declared_type` in `sema/body/dot.kspl`). The method's file is then checked like any type's: the ledger is asked, and a hit marks the import used. Suppose the call were accepted because its file is somewhere in the program. Then whether it holds would depend on what the rest of the program imports. [I0401] would then call the import that makes it hold unused.
+**A built-in type's owner is `std/lang`** (`LANG_FILE_PATH` in `sema/session/import_table.kspl`), used where no declaration names the receiver's type (`is_declared_type` in `sema/body/dot.kspl`). The method's file is then checked like any type's: the ledger is asked, and a hit marks the import used. Suppose the call were accepted because its file is somewhere in the program. Then whether it holds would depend on what the rest of the program imports. [I0401] would then call the import that makes it hold unused.
 
-**A format spec's method is reported at the item written** (`reject_unimported_spec`), and its import is checked before the type is judged. A file that does not import `fmt_method_file` (`base/core.kspl`) has not necessarily loaded the methods, and every type would then seem to accept nothing.
+**A format spec's method is reported at the item written** (`reject_unimported_spec`), and its import is checked before the type is judged. A file that does not import `FMT_METHOD_FILE` (`base/core.kspl`) has not necessarily loaded the methods, and every type would then seem to accept nothing.
 
 **During a generic's instantiation the error is withheld, but the ledger is still asked.** [`DESIGN-diagnostics.md`](DESIGN-diagnostics.md) explains why, in "No diagnostic that depends on a generic's type argument".
 

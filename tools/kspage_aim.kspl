@@ -11,20 +11,12 @@ import "std/fs"
 import "std/mem" { Arena, dealloc }
 import "std/str" { Str_builder }
 import "std/strnum"
+import "std/sys"
 import "std/url" as url_text
 
-priv fn last_sep(path: U8[]): Sz? //< where the last separator stands, or none
-    //<
-    //< Caution: **Look at both separators** (Windows has `\`).
-    for i in Range.desc(path.len)
-        if path[i] == '/' || path[i] == '\\'
-            return .some(i)
-    return .none
-
 fn split_path(path: U8[]): U8[][2] //< a path split into its folder and its name
-    if at: = last_sep(path)
-        return U8[][2]::{ path.sub(0, at), path.sub_from(at + 1) }
-    return U8[][2]::{ ".", path }
+    dir: = sys.get_dir_name(path)
+    return U8[][2]::{ "." if dir.len == 0 else dir, sys.get_file_name(path) }
 
 fn trim_end_sep(dir: U8[]): U8[] //< a folder without the separators after its last name
     //<
@@ -32,8 +24,8 @@ fn trim_end_sep(dir: U8[]): U8[] //< a folder without the separators after its l
     //< matched on the string would start two servers for it, or find none to stop. A root (`/`,
     //< `C:\`) keeps its own.
     $at: = dir
-    for at.len > 1 && (at[at.len - 1] == '/' || at[at.len - 1] == '\\') &&
-        at[at.len - 2] != ':'
+    root: = sys.root_len(dir)
+    for at.len > root && sys.is_path_sep(at[at.len - 1])
         at = at.sub(0, at.len - 1)
     return at
 
@@ -41,9 +33,10 @@ fn parent_of(dir: U8[]): U8[] //< the folder one above
     //<
     //< With nothing further up it returns itself, so the caller stops (above `kspage` is `.`,
     //< above `.` is nothing).
-    if at: = last_sep(dir)
-        return dir.sub(0, at + 1) if at == 0 else dir.sub(0, at)
-    return "" if dir.equals(".") || dir.len == 0 else "."
+    if dir.len == 0 || dir.equals(".")
+        return ""
+    parent: = sys.get_dir_name(dir)
+    return "." if parent.len == 0 else parent
 
 fn doc_under(root: U8[], path: U8[]): U8[] //< the document's path relative to the served folder
     //<
@@ -124,10 +117,10 @@ fn url_for( //< the URL to open, with the document to open added
     text.s(tail)
     return text.slice()
 
-priv const page_prefix: U8[] = "kspage_open-" //< the start of a handed page's name
-priv const page_ext: U8[] = ".html" //< the end of a handed page's name
+priv const PAGE_PREFIX: U8[] = "kspage_open-" //< the start of a handed page's name
+priv const PAGE_EXT: U8[] = ".html" //< the end of a handed page's name
 
-const page_keep_s: I64 = 600 //< how long a handed page is kept [s]
+const PAGE_KEEP_S: I64 = 600 //< how long a handed page is kept [s]
     //<
     //< **Long enough for a cold browser to start and read it**; the next run removes it after that
     //< (`sweep_pages`).
@@ -170,7 +163,7 @@ fn write_page( //< writes the page for the URL, readable by its owner alone, and
 ): U8[]!fs.Fs_error
     $text: = Str_builder.new()
     defer text.free()
-    return fs.write_unique(dir, page_prefix, page_ext, page_text(open_url, text@), arena)
+    return fs.write_unique(dir, PAGE_PREFIX, PAGE_EXT, page_text(open_url, text@), arena)
 
 fn browser_argv( //< the command that starts the browser on a page
     //<
@@ -193,16 +186,16 @@ fn sweep_pages(dir: U8[], now: I64, arena: Arena$@) //< removes the pages handed
     //<
     //< **A page is needed only until the browser has read it**, and nothing tells when that was:
     //< the opener exits once the browser is started. So each run removes the pages older than
-    //< `page_keep_s`. Only names this file gives are touched.
+    //< `PAGE_KEEP_S`. Only names this file gives are touched.
     names: = fs.read_dir(dir, arena) catch
         return
     for name in names
-        if !name.starts_with(page_prefix) || !name.ends_with(page_ext)
+        if !name.starts_with(PAGE_PREFIX) || !name.ends_with(PAGE_EXT)
             continue
         path: = fs.join(dir, name, arena)
         info: = fs.stat(path) catch
             continue
-        if now - info.mtime > page_keep_s
+        if now - info.mtime > PAGE_KEEP_S
             fs.remove_path(path) catch {}
 
 fn write_owned(path: U8[], data: U8[]): Void!fs.Fs_error //<
@@ -213,7 +206,7 @@ fn write_owned(path: U8[], data: U8[]): Void!fs.Fs_error //<
     //< keeps the mode it had. A crash partway leaves a note no search can read.
     fs.replace_file(path, data, .owner_only)!
 
-priv const max_records: Sz = 8 //< the cap on the records listed in the note
+priv const MAX_RECORDS: Sz = 8 //< the cap on the records listed in the note
     //<
     //< Caution: **Do not let it grow without limit**: each run adds one, and every search would
     //< connect to all the dead servers.
@@ -242,7 +235,7 @@ fn state_text(url: U8[], root: U8[], had: U8[], text: Str_builder$@): U8[] //< t
     count: = state_count(had)
     $kept: Sz = 1
     for $i: Sz = 0; i < count; i += 1
-        if kept >= max_records
+        if kept >= MAX_RECORDS
             break
         one: = state_record(had, i)
         if one[1].equals(root)

@@ -24,7 +24,7 @@ import "ksplc/sema/type/query" as sema_type_query
 import "std/ds" { List, Map }
 import "std/str" + { Str_builder }
 
-priv const max_type_layout_depth: Sz = 1000 //<
+priv const MAX_TYPE_LAYOUT_DEPTH: Sz = 1000 //<
     //< calc_type_layout's safety limit, on the reasoning of max_nesting_depth in std/json.kspl
 
 priv struct Fields_walk //< `walk_fields`' answer
@@ -311,7 +311,7 @@ impl Sema_ctx
 
     // `offsetof(T, f)`'s answer. **Offsets come from this one place** (`walk_fields`); padding
     // counts ("Why a container's round trip is a table-returning
-    // trait" in docs/DESIGN-language.md).
+    // trait" in docs/DESIGN-programming-language.md).
     fn field_offset_of(r: Self$@, type_id: I32, field_name: U8[], err_node: base_ast.Ast_node$@):
         Sz!Sema_error
         r.ensure_type_registry(type_id, err_node)!
@@ -388,7 +388,7 @@ impl Sema_ctx
         //< The alignment a place's address is sure of, 0 where no `#packed` struct holds it
         //<
         //< A step through a pointer starts afresh: what it points at is laid out at its type's own.
-        if place == null || depth >= max_type_layout_depth
+        if place == null || depth >= MAX_TYPE_LAYOUT_DEPTH
             return 0
         if place.kind_id == .k_expr_primary
             return r.place_kept_align(place.get_primary_inner_expr(), depth + 1)
@@ -461,7 +461,7 @@ impl Sema_ctx
 
     priv fn c_can_measure(r: Self$@, type_id: I32, depth: Sz): Bool //<
         //< Whether the type is one the generated C names, so `sizeof` can be asked of it there
-        if depth >= max_type_layout_depth || sema_type_env.is_unknown(type_id) ||
+        if depth >= MAX_TYPE_LAYOUT_DEPTH || sema_type_env.is_unknown(type_id) ||
             sema_type_env.is_void(type_id)
             return false
         switch r.env.get_info(type_id)
@@ -543,7 +543,7 @@ impl Sema_ctx
             if seen_id == real_id
                 r.report_infinite_size(real_id)
                 return res
-        if resolving.len >= max_type_layout_depth
+        if resolving.len >= MAX_TYPE_LAYOUT_DEPTH
             // A too-deep **non-cycling** chain is rejected by the code that needed the size. From
             // the sweep, the later limits (max_arc_emit_depth in lower/arc.kspl) would never be
             // reached.

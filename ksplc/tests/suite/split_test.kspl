@@ -21,16 +21,16 @@ import "std/strfmt" as _strfmt
 import "std/sys"
 import "std/verdict"
 
-priv const fixture: U8[] = "tests/prog/split.kspl"
+priv const FIXTURE: U8[] = "tests/prog/split.kspl"
 
-priv const unit_counts: Sz[4] = ::{ 1, 2, 3, 16 } //< the number of splits
+priv const UNIT_COUNTS: Sz[4] = ::{ 1, 2, 3, 16 } //< the number of splits
     //<
     //< It lists 1 (do not split), about the core count, and a number larger than the file count.
     //< Caution: Include "larger than the file count". It makes empty units and puts **the caller
     //< and the callee in different units**. Without that, a symbol with too narrow a linkage
     //< passes.
 
-priv const runtime_marker: U8[] = "KSPL_LINK I64 kspl_mono_us(void)" //<
+priv const RUNTIME_MARKER: U8[] = "KSPL_LINK I64 kspl_mono_us(void)" //<
     //< The mark for the runtime's definition half (hosted.c)
     //<
     //< Caution: Count by the text of a definition that is not `static` and is only in hosted.c.
@@ -57,7 +57,7 @@ priv fn build_split(dir: U8[], n: Sz, arena: Arena$@): Built //<
     stem: = fs.join(dir, arena.text().s("u\{n\}").take(), arena)
     single: = arena.text().s("\{stem\}.c").take()
     r: = harness
-        .ksplc(U8[][]::{ arena.text().s("--split=\{n\}").take(), fixture, single })
+        .ksplc(U8[][]::{ arena.text().s("--split=\{n\}").take(), FIXTURE, single })
     if !r.exited_with(0)
         return Built::{ .ok = false,
             .out = arena.text().s("generation failed: \{r.out\}").take() }
@@ -84,7 +84,7 @@ priv fn build_split(dir: U8[], n: Sz, arena: Arena$@): Built //<
             return Built::{ .ok = false,
                 .out = arena.text().s("\{single\} must not be made when splitting").take() }
     exe: = arena.text().s("\{stem\}.exe").take()
-    b: = harness_build.build_exe(srcs.slice(), exe, U8[][]::harness_build.default_cflags)
+    b: = harness_build.build_exe(srcs.slice(), exe, U8[][]::harness_build.DEFAULT_CFLAGS)
     if !b.exited_with(0)
         return Built::{ .ok = false,
             .out = arena.text().s("the link failed: \{b.out\}").take() }
@@ -110,7 +110,7 @@ priv fn check_assignment_is_stable(dir: U8[], arena: Arena$@) //<
             return
         stem: = fs.join(sub_dir, "u", arena)
         r: = harness
-            .ksplc(U8[][]::{ "--split=3", fixture,
+            .ksplc(U8[][]::{ "--split=3", FIXTURE,
             arena.text().s("\{stem\}.c").take() })
         if !r.exited_with(0)
             verdict.check(name, false, r.out)
@@ -143,7 +143,7 @@ priv fn check_unit_shape(dir: U8[], arena: Arena$@) //<
             return
         if !text.starts_with(want_include)
             includes_ok = false
-        if has_definition(text, runtime_marker)
+        if has_definition(text, RUNTIME_MARKER)
             carriers += 1
     verdict.check("each unit takes in the shared header at its head", includes_ok, want_include)
     // The runtime's definition half (hosted.c) goes into only one unit; checked first, before it
@@ -155,20 +155,20 @@ priv fn check_unit_shape(dir: U8[], arena: Arena$@) //<
             "the header cannot be read")
         return
     verdict.check("the shared header does not hold the runtime's body",
-        !has_definition(hdr, runtime_marker), "")
+        !has_definition(hdr, RUNTIME_MARKER), "")
 
 fn main(): I32
     arena: = harness.begin(256 * 1024 * 1024)
     dir: = harness.sandbox("split")
     io.out().s("# --split\n")
     $outs: = List<|U8[]|>.new(arena)
-    for n in unit_counts
+    for n in UNIT_COUNTS
         b: = build_split(dir, n, arena)
         verdict.check(arena.text().s("it builds and runs at units=\{n\}").take(), b.ok, b.out)
         outs.push(b.out if b.ok else "")
     base: = outs.get(0)
-    for i in Range.asc(unit_counts.len)
-        n: = unit_counts[i]
+    for i in Range.asc(UNIT_COUNTS.len)
+        n: = UNIT_COUNTS[i]
         if n == 1
             continue
         got: = outs.get(i)
@@ -181,21 +181,21 @@ fn main(): I32
     // --- an invalid setting is not silently accepted ---
     for bad in U8[][]::{ "0", "-1", "abc", "" }
         r: = harness
-            .ksplc(U8[][]::{ arena.text().s("--split=\{bad\}").take(), fixture,
+            .ksplc(U8[][]::{ arena.text().s("--split=\{bad\}").take(), FIXTURE,
             fs.join(dir, "ubad.c", arena) })
         verdict.check(arena.text().s("--split=\{bad\} is refused").take(),
             !r.exited_with(0) && r.out.find_str("--split").is_some(), r.out)
     // The LLVM backend cannot split ("Genllvm (LLVM IR): why the structure differs, and
     // managing SSA" in `ksplc/docs/DESIGN-backends.md`), so it must not be accepted with no effect.
     llvm: = harness
-        .ksplc(U8[][]::{ "--to=llvm", "--split=2", fixture, fs.join(dir, "ullvm.ll", arena) })
+        .ksplc(U8[][]::{ "--to=llvm", "--split=2", FIXTURE, fs.join(dir, "ullvm.ll", arena) })
     verdict.check("using it together with --to=llvm is refused",
         !llvm.exited_with(0) && llvm.out.find_str("--split").is_some(), llvm.out)
     // A unit that cannot be written names its own file. The path lived in a builder freed before
     // the message was printed, so it read freed memory (another string's bytes).
     missing: = fs.join(fs.join(dir, "no_such_dir", arena), "prog.c", arena)
     header: = fs.join(fs.join(dir, "no_such_dir", arena), "prog.h", arena)
-    unwritable: = harness.ksplc(U8[][]::{ "--split=4", fixture, missing })
+    unwritable: = harness.ksplc(U8[][]::{ "--split=4", FIXTURE, missing })
     verdict.check("a unit that cannot be written is named in the error",
         !unwritable.exited_with(0) && unwritable.out.find_str(header).is_some(), unwritable.out)
     return harness.finish()

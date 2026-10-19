@@ -10,16 +10,16 @@ import "std/mem" { Arena }
 
 $storage: Sz[8192] = ::{}
 
-priv const drive_cap: U32 = 30 //< the scale for normalizing the manoeuvre
+priv const DRIVE_CAP: U32 = 30 //< the scale for normalizing the manoeuvre
     //<
     //< Caution: It must equal the cap applied to the wheels.
 
-priv const warmup_steps: U32 = 40 //< the number of learning steps
+priv const WARMUP_STEPS: U32 = 40 //< the number of learning steps
     //<
     //< **One round is one step**, minutes of the car's run. **Made shorter, it cannot beat "the
     //< same as the previous round".**
-priv const total_steps: U32 = 1500
-priv const probe_line: U32 = 6 //<
+priv const TOTAL_STEPS: U32 = 1500
+priv const PROBE_LINE: U32 = 6 //<
     //< The fixed question asked before saving and after loading (left and middle black)
 
 priv fn pos_of(line: U32): I32 //<
@@ -61,7 +61,7 @@ priv fn next_line(t: U32, line: U32, lon: I32, lat: I32, rot: I32): U32 //<
     //< reaches 0. **The bar is beating "the same as the previous round".** No forward, no change.
     if lon <= 0
         return line
-    span: = I32::drive_cap
+    span: = I32::DRIVE_CAP
     bend: = 1 if t % 16 < 10 else -1
     correction: = (rot + rot + lat) / span // a positive rot (clockwise) brings the line back left
     return enc_of(pos_of(line) + bend - correction)
@@ -73,13 +73,13 @@ priv fn probe_answer(dst: F32$[], arena: Arena$@) //< copies out the answer to t
     for _pass in Range.asc(2)
         model.forget()
         mark: = arena.save()
-        _p: = model.step(probe_line, I32::drive_cap, 0, 0, arena)
+        _p: = model.step(PROBE_LINE, I32::DRIVE_CAP, 0, 0, arena)
         arena.restore(mark)
-    for i in Range.asc(model.line_bits)
+    for i in Range.asc(model.LINE_BITS)
         dst[i] = model.raw_bit(i)
 
 priv fn same(a: F32[], b: F32[]): Bool //< whether the three raw values are equal, one by one
-    for i in Range.asc(model.line_bits)
+    for i in Range.asc(model.LINE_BITS)
         if a[i] != b[i]
             return false
     return true
@@ -92,7 +92,7 @@ priv fn pick(t: U32, line: U32, out_lat: I32$@, out_rot: I32$@): I32 //<
     //< forward**, or all it learns is "stopped, nothing changes".
     out_lat$ = 0
     out_rot$ = 0
-    cap: = I32::drive_cap
+    cap: = I32::DRIVE_CAP
     p: = pos_of(line)
     if p > 0
         out_rot$ = cap if t % 3 != 0 else cap / 2
@@ -108,20 +108,20 @@ fn ksos_main()
     panic_hook = con.on_panic
     $arena: = Arena.from_buffer(Void$@::storage@, sizeof(Sz) * 8192)
 
-    con.check("init", model.init(drive_cap, arena@))
+    con.check("init", model.init(DRIVE_CAP, arena@))
     // Caution: Reset to a point **after** the weights are allocated, or they vanish in round one.
     work: = arena.save()
 
     $line: U32 = 2
     $err_early: U32 = 0
-    $last_pred: I32 = model.no_prediction
-    for $t: U32 = 0; t < total_steps; t += 1
+    $last_pred: I32 = model.NO_PREDICTION
+    for $t: U32 = 0; t < TOTAL_STEPS; t += 1
         $lat: I32 = 0
         $rot: I32 = 0
         lon: = pick(t, line, lat@, rot@)
         last_pred = model.step(line, lon, lat, rot, arena@)
         arena.restore(work)
-        if t == warmup_steps
+        if t == WARMUP_STEPS
             err_early = model.err_permille()
         line = next_line(t, line, lon, lat, rot)
     err_late: = model.err_permille()
@@ -130,7 +130,7 @@ fn ksos_main()
     con.out().s("missed bits: \{err_early\} -> \{err_late\} per mille (no-change: \{base_late\})\n")
 
     // Every round counts a step (nothing here cancels one).
-    con.check("learned_every_round", model.steps_done() == total_steps - 1)
+    con.check("learned_every_round", model.steps_done() == TOTAL_STEPS - 1)
     // The main point: the missed bits shrank below "the same as the previous round".
     con.check("error_shrank", err_late < err_early && err_early > 0)
     con.check("beats_no_change", err_late < base_late)
@@ -146,11 +146,11 @@ fn ksos_main()
     arena.restore(smark)
     con.check("stopped_round_answers_the_previous_one", model.steps_done() == stop_steps + 1)
     // A stopped round returns no prediction.
-    con.check("stopped_round_has_no_prediction", stop_pred == model.no_prediction)
+    con.check("stopped_round_has_no_prediction", stop_pred == model.NO_PREDICTION)
     // **The round after a stopped one must not learn**: no question was asked to answer.
     after_stop: = model.steps_done()
     nmark: = arena.save()
-    _np: = model.step(line, I32::drive_cap, 0, 0, arena@)
+    _np: = model.step(line, I32::DRIVE_CAP, 0, 0, arena@)
     arena.restore(nmark)
     con.check("round_after_stop_is_not_learned", model.steps_done() == after_stop)
 
@@ -159,12 +159,12 @@ fn ksos_main()
     before_steps: = model.steps_done()
     model.forget()
     fmark: = arena.save()
-    _p: = model.step(line, I32::drive_cap, 0, 0, arena@)
+    _p: = model.step(line, I32::DRIVE_CAP, 0, 0, arena@)
     arena.restore(fmark)
     con.check("forget_skips_one", model.steps_done() == before_steps)
     // The cancellation lasts for one round only.
     fmark2: = arena.save()
-    _p2: = model.step(line, I32::drive_cap, 0, 0, arena@)
+    _p2: = model.step(line, I32::DRIVE_CAP, 0, 0, arena@)
     arena.restore(fmark2)
     con.check("forget_is_one_shot", model.steps_done() == before_steps + 1)
 
@@ -174,19 +174,19 @@ fn ksos_main()
     steps_before: = model.steps_done()
     err_before: = model.err_permille()
     base_before: = model.base_permille()
-    blob: U8[model.state_bytes] = ::{}
+    blob: U8[model.STATE_BYTES] = ::{}
     con.check("save", model.save(U8$[]::blob))
     before: F32[3] = ::{}
     drifted: F32[3] = ::{}
     after: F32[3] = ::{}
     probe_answer(F32$[]::before, arena@)
     // Caution: **Change the weights before loading**, or they match even if `load` did nothing.
-    $l2: U32 = probe_line
+    $l2: U32 = PROBE_LINE
     for $k: U32 = 0; k < 60; k += 1
         kmark: = arena.save()
-        _q: = model.step(l2, I32::drive_cap, 0, 0, arena@)
+        _q: = model.step(l2, I32::DRIVE_CAP, 0, 0, arena@)
         arena.restore(kmark)
-        l2 = next_line(k, l2, I32::drive_cap, 0, 0)
+        l2 = next_line(k, l2, I32::DRIVE_CAP, 0, 0)
     probe_answer(F32$[]::drifted, arena@)
     moved: = !same(F32[]::drifted, F32[]::before)
     con.check("weights_moved", moved && model.steps_done() > steps_before)
@@ -205,9 +205,9 @@ fn ksos_main()
     // Caution: Weights with a mismatched scale must be rejected; with the right shape, they would
     // go silently wrong.
     bl: = U8$[]::blob
-    bl[3] = U8::(drive_cap + 1)
+    bl[3] = U8::(DRIVE_CAP + 1)
     con.check("reject_other_cap", !model.load(U8[]::blob))
-    bl[3] = U8::drive_cap
+    bl[3] = U8::DRIVE_CAP
     bl.put_u16_le(0, 0xffffU16)
     con.check("reject_other_version", !model.load(U8[]::blob))
 

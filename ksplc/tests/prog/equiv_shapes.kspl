@@ -48,12 +48,12 @@ priv struct Ev_row
     priv k: U8
     priv e: Ev
 
-priv const g_evs: Ev[3] = ::{ .none, .one(200), .two(-7, 9) } //<
+priv const G_EVS: Ev[3] = ::{ .none, .one(200), .two(-7, 9) } //<
     //< A global holding tagged unions, which LLVM cannot fill through their named type
     //<
     //< Caution: **Keep variants of different sizes, an `I64` among them, and one inside a struct.**
     //< genllvm lays such a value out as packed bytes; one shape alone hides a misplaced payload.
-priv const g_ev_rows: Ev_row[2] = ::{::{ .k = 1, .e = .two(5, 6) },
+priv const G_EV_ROWS: Ev_row[2] = ::{::{ .k = 1, .e = .two(5, 6) },
     ::{ .e = .one(7), .k = 2 } }
 priv $g_ev_mut: Ev = .two(3, 4)
 
@@ -116,9 +116,9 @@ fn tagged_union_lines(b: Str_builder$@) //< tagged unions in array literals and 
         b.s("\{e.val()\},")
     for e in muts
         b.s("\{e.val()\},")
-    for e in g_evs
+    for e in G_EVS
         b.s("\{e.val()\},")
-    for row in g_ev_rows
+    for row in G_EV_ROWS
         b.s("\{row.k\}:\{row.e.val()\},")
     b.s("\{g_ev_mut.val()\}")
     g_ev_mut = .one(8)
@@ -137,7 +137,7 @@ fn tagged_union_lines(b: Str_builder$@) //< tagged unions in array literals and 
 
 fn eval_order_lines(b: Str_builder$@) //< the evaluation order, a line per group of shapes
     //<
-    //< The order is "Evaluation order" in docs/SPEC-language.md.
+    //< The order is "Evaluation order" in docs/SPEC-programming-language.md.
     // Caution: **Put an expression with a side effect on both sides of an assignment.** C does not
     // define the order of an assignment's left and right sides. Without them, a shape that gives
     // different answers under clang and gcc passes.
@@ -185,8 +185,8 @@ priv enum Narrow_tag: U8 //< a tagged union with a one-byte tag, which C held as
     two(b: U8, c: U8)
     wide(p: U8, al: Aligned16) //< a payload aligned past 8, behind a field of its own
 
-priv const g_aligned: Aligned_holder = ::{ .x = 1, .al = ::{ .a = 2 }, .y = 3 }
-priv const g_narrow: Narrow_tag[2] = ::{ .two(4, 5), .wide(6, ::{ .a = 7 }) }
+priv const G_ALIGNED: Aligned_holder = ::{ .x = 1, .al = ::{ .a = 2 }, .y = 3 }
+priv const G_NARROW: Narrow_tag[2] = ::{ .two(4, 5), .wide(6, ::{ .a = 7 }) }
 
 priv enum Layout_err: U8 //< a one-byte error, so a Result's `val` follows it closely
     bad
@@ -215,9 +215,9 @@ fn layout_lines(b: Str_builder$@) //<
     base: = Sz::h@
     b.s("aligned=\{Sz::h.al@ - base\}/\{Sz::h.y@ - base\}/\{Sz::h.rows@ - base\}/")
         .s("\{Sz::h.rows[1]@ - base\}/\{sizeof(Aligned_holder)\}/\{h.y\}/\{h.rows[1].a\}/")
-        .s("\{g_aligned.al.a\}\{g_aligned.y\}")
+        .s("\{G_ALIGNED.al.a\}\{G_ALIGNED.y\}")
     n: = Narrow_tag.wide(1, Aligned16::{ .a = 2 })
-    b.s(" narrow=\{sizeof(Narrow_tag)\}/\{n.sum()\}/\{g_narrow[0].sum()\}/\{g_narrow[1].sum()\}")
+    b.s(" narrow=\{sizeof(Narrow_tag)\}/\{n.sum()\}/\{G_NARROW[0].sum()\}/\{G_NARROW[1].sum()\}")
     // A Result holding an over-aligned value: LLVM put `val` right after the error, so the stride
     // and the value's alignment differed from C's. And one of bytes alone, whose size C gives as 3.
     rs: (Aligned16!Layout_err)[2] = ::{ aligned_ok(4), aligned_ok(5) }
@@ -291,21 +291,21 @@ priv enum Pick
     a
     b(x: I32)
 
-priv const g_four: I32 = 4
-priv const g_four_at: I32@ = g_four@
+priv const G_FOUR: I32 = 4
+priv const G_FOUR_AT: I32@ = G_FOUR@
 priv $g_var: I32 = 4
-priv const g_var_at: I32@ = g_var@
-priv const g_link1: Link = ::{ .v = 1, .next = null }
-priv const g_link2: Link = ::{ .v = 2, .next = g_link1@ }
-priv const g_pick_a: Pick = .a
-priv const g_pick_a2: Pick = g_pick_a //< a payload-less variant of a tagged union, by name
-priv const g_pick_b: Pick = .b(3)
-priv const g_picks: Pick[2] = ::{ g_pick_b, g_pick_a2 }
-priv const g_v_at: I32@ = g_link2.v@ //< a field's address
-priv const g_nums: I32[4] = ::{ 10, 20, 30, 40 }
-priv const g_num_at: I32@ = g_nums[2]@ //< an element's address
-priv const g_links: Link[2] = ::{::{ .v = 7, .next = null }, ::{ .v = 8, .next = g_link1@ } }
-priv const g_deep_at: I32@ = g_links[1].v@ //< a field of an element
+priv const G_VAR_AT: I32@ = g_var@
+priv const G_LINK1: Link = ::{ .v = 1, .next = null }
+priv const G_LINK2: Link = ::{ .v = 2, .next = G_LINK1@ }
+priv const G_PICK_A: Pick = .a
+priv const G_PICK_A2: Pick = G_PICK_A //< a payload-less variant of a tagged union, by name
+priv const G_PICK_B: Pick = .b(3)
+priv const G_PICKS: Pick[2] = ::{ G_PICK_B, G_PICK_A2 }
+priv const G_V_AT: I32@ = G_LINK2.v@ //< a field's address
+priv const G_NUMS: I32[4] = ::{ 10, 20, 30, 40 }
+priv const G_NUM_AT: I32@ = G_NUMS[2]@ //< an element's address
+priv const G_LINKS: Link[2] = ::{::{ .v = 7, .next = null }, ::{ .v = 8, .next = G_LINK1@ } }
+priv const G_DEEP_AT: I32@ = G_LINKS[1].v@ //< a field of an element
 
 impl Pick
     priv fn val(r: Self): I32
@@ -317,11 +317,11 @@ impl Pick
 
 fn global_ref_lines(b: Str_builder$@) //< globals that name other globals, one line
     g_var = 5
-    b.s("gref=\{g_four_at$\}/\{g_four_at == g_four@\}/\{g_var_at$\}/\{g_link2.next.v\}/")
-        .s("\{g_link2.next == g_link1@\}/\{g_pick_a2.val()\}/\{g_picks[0].val()\}/")
-        .s("\{g_picks[1].val()\}\n")
-    b.s("gpart=\{g_v_at$\}/\{g_v_at == g_link2.v@\}/\{g_num_at$\}/\{g_num_at == g_nums[2]@\}/")
-        .s("\{g_deep_at$\}/\{g_deep_at == g_links[1].v@\}\n")
+    b.s("gref=\{G_FOUR_AT$\}/\{G_FOUR_AT == G_FOUR@\}/\{G_VAR_AT$\}/\{G_LINK2.next.v\}/")
+        .s("\{G_LINK2.next == G_LINK1@\}/\{G_PICK_A2.val()\}/\{G_PICKS[0].val()\}/")
+        .s("\{G_PICKS[1].val()\}\n")
+    b.s("gpart=\{G_V_AT$\}/\{G_V_AT == G_LINK2.v@\}/\{G_NUM_AT$\}/\{G_NUM_AT == G_NUMS[2]@\}/")
+        .s("\{G_DEEP_AT$\}/\{G_DEEP_AT == G_LINKS[1].v@\}\n")
 
 // ==========================================
 // A local named as a global whose C name is written as it is (`#export`, an `extern` block's). C
@@ -353,7 +353,7 @@ priv $g_cast_src: F64[_] = ::{ 0.0, -0.0, -0.9, -1.0, 2.9, -2.9, 127.9, 128.0, -
         //< read at run time; the first is the zero the infinities and NaN are made from
 priv $g_cast_src32: F32[_] = ::{ F32::2147483520.0, F32::2147483648.0, F32::3.0e9, F32::-1.0e30,
     F32::16777217.0 }
-priv const g_cast_folded: I32 = I32::(1.5 * -3.0) //< folded by ksplc for both backends
+priv const G_CAST_FOLDED: I32 = I32::(1.5 * -3.0) //< folded by ksplc for both backends
 
 priv fn cast_row(b: Str_builder$@, v: F64)
     b.s("\{I8::v\},\{I16::v\},\{I32::v\},\{I64::v\},\{U8::v\},\{U16::v\},\{U32::v\},\{U64::v\},")
@@ -370,4 +370,4 @@ fn float_cast_lines(b: Str_builder$@) //< one line of every source value at ever
     for f in g_cast_src32
         b.s("\{I32::f\},\{U32::f\},\{I8::f\},\{U64::f\};")
     b.s("\{I32::2.9\},\{I32::-2.9\},\{U8::255.9\},\{I64::-9223372036854775808.0\},")
-        .s("\{U64::18446744073709549568.0\},\{I32::(F32::16777217.0)\},\{g_cast_folded\}\n")
+        .s("\{U64::18446744073709549568.0\},\{I32::(F32::16777217.0)\},\{G_CAST_FOLDED\}\n")

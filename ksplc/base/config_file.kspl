@@ -23,18 +23,18 @@ import "std/mem" { dealloc }
 import "std/str" { Str_builder }
 import "std/sys"
 
-const config_file_name: U8[] = "ksplc.cfg"
+const CONFIG_FILE_NAME: U8[] = "ksplc.cfg"
 
-priv const max_parent_walk: Sz = 64 //< the limit on how many folders the search walks up
+priv const MAX_PARENT_WALK: Sz = 64 //< the limit on how many folders the search walks up
     //<
     //< Enough for any repository, and it stops a `..` chain or a symbolic link loop.
 
 priv fn is_known_section(name: U8[]): Bool //< the known sections
     //<
     //< Add each new kind of setting here; nothing about the file is lint-specific.
-    return name.equals("lint") || name.equals(package_section)
+    return name.equals("lint") || name.equals(PACKAGE_SECTION)
 
-const package_section: U8[] = "package" //<
+const PACKAGE_SECTION: U8[] = "package" //<
     //< The section a package names itself in (`ksplc/base/package.kspl` reads it)
     //<
     //< **It marks the top of a package**: `package_top` below looks for it.
@@ -132,7 +132,7 @@ priv fn load_one(path: U8[], out: List<|Setting|>$@): Bool //<
             // **A `[package]` header is kept as a setting with an empty key.** It marks a
             // package's top. So one with no name is still seen and rejected
             // (`ksplc/base/package.kspl`).
-            if section.equals(package_section)
+            if section.equals(PACKAGE_SECTION)
                 out
                     .push(Setting::{ .section = section, .key = "", .value = "", .file = file_perm,
                     .line = line_no })
@@ -215,7 +215,7 @@ priv fn walk_up(dir: U8[], out: List<|U8[]|>$@) //< dir and each folder above it
     if !sys.is_absolute(start) && (start.equals("..") || start.starts_with("../"))
         start = base_locate.canonical_path(start)
     $cur: = start
-    for _steps in Range.asc(max_parent_walk)
+    for _steps in Range.asc(MAX_PARENT_WALK)
         out.push(cur)
         if cur.len == 0
             break
@@ -241,14 +241,14 @@ priv fn own_file(dir: U8[]): Cfg_file$@ //< dir's own `ksplc.cfg`, read once
 
 fn file_in(dir: U8[]): U8[] //< the path of the `ksplc.cfg` in dir (empty: the current folder)
     if dir.len == 0
-        return config_file_name
+        return CONFIG_FILE_NAME
     p: = base_core.perm_arena.text()
-    p.s(dir).c('/').s(config_file_name)
+    p.s(dir).c('/').s(CONFIG_FILE_NAME)
     return p.take()
 
 priv fn holds_package(settings: List<|Setting|>$@): Bool //< whether one file names a package
     for s in settings
-        if s.section.equals(package_section)
+        if s.section.equals(PACKAGE_SECTION)
             return true
     return false
 

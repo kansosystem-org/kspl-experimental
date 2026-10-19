@@ -8,19 +8,19 @@ import "ksos/net/mini_ipv4" as net
 import "std/bytes"
 import "std/chars"
 
-const mbedtls_err_ssl_want_read: I32 = -0x6900 //<
+const MBEDTLS_ERR_SSL_WANT_READ: I32 = -0x6900 //<
     //< The constant mbedtls_ssl_recv_t uses to say "there is no data to read right now"
     //<
     //< It is MBEDTLS_ERR_SSL_WANT_READ, from mbedtls/ssl.h; the caller reads again later. This file
     //< includes none of mbedTLS's headers.
 
-const mbedtls_err_net_conn_reset: I32 = -0x0050 //<
+const MBEDTLS_ERR_NET_CONN_RESET: I32 = -0x0050 //<
     //< What recv returns once the peer has reset the connection (RST)
     //<
     //< It is MBEDTLS_ERR_NET_CONN_RESET, from mbedtls/net_sockets.h. The peer's FIN reads as 0
     //< instead, the end of the stream in mbedtls_ssl_recv_t's contract.
 
-const max_frame_payload: Sz = 1400 //<
+const MAX_FRAME_PAYLOAD: Sz = 1400 //<
     //< The limit on a send payload that fits one Ethernet frame
     //<
     //< It is the MTU of 1500 minus the headers, with a margin.
@@ -73,10 +73,10 @@ fn make(link: netlink.Link, ends: net.Ends, our_seq: U32, peer_seq: U32): Tcp_co
 #export
 fn tcp_stream_send(ctx: Void$@, buf: U8@, len: Sz): I32
     conn: = Tcp_conn$@::ctx
-    n: Sz = len if len <= max_frame_payload else max_frame_payload
+    n: Sz = len if len <= MAX_FRAME_PAYLOAD else MAX_FRAME_PAYLOAD
     payload: = U8[]::{ .ptr = buf, .len = n }
     seg_len: = net.build_tcp_segment(U8$[]::conn.tx_scratch, conn.ends, conn.our_seq,
-        conn.peer_seq, net.tcp_flag_ack | net.tcp_flag_psh, payload)
+        conn.peer_seq, net.TCP_FLAG_ACK | net.TCP_FLAG_PSH, payload)
     // Caution: **If it could not send, do not advance our_seq.** Otherwise it claims bytes the peer
     // can never ACK. With no retransmit, the connection breaks silently. A build that returns 0 (it
     // does not fit the scratch buffer) is treated the same way.
@@ -90,7 +90,7 @@ priv fn send_ack(conn: Tcp_conn$@) //< tells the peer everything before peer_seq
     //< Without it the peer resends what it sent, and stops sending once its window is full. The
     //< outcome is not waited on: a lost ACK is sent again when the peer's resend arrives.
     seg_len: = net.build_tcp_segment(U8$[]::conn.tx_scratch, conn.ends, conn.our_seq,
-        conn.peer_seq, net.tcp_flag_ack, "")
+        conn.peer_seq, net.TCP_FLAG_ACK, "")
     if seg_len > 0
         _sent: = conn.link.send_frame(U8[]::conn.tx_scratch, seg_len)
 
@@ -130,32 +130,32 @@ fn tcp_stream_recv(ctx: Void$@, buf: U8$@, len: Sz): I32
     case .closed
         return 0
     case .reset
-        return mbedtls_err_net_conn_reset
+        return MBEDTLS_ERR_NET_CONN_RESET
     case .open {}
     case .fin_after_pending {} // unreachable: it turns closed as the held payload runs out
     if !conn.link.rx_available()
-        return mbedtls_err_ssl_want_read
+        return MBEDTLS_ERR_SSL_WANT_READ
     rx_len: = conn.link.recv_frame(U8$[]::conn.rx_scratch)
     seg: = net.parse_tcp_segment(U8[]::conn.rx_scratch, rx_len, conn.ends.dst_ip,
         conn.ends.dst_port, conn.ends.src_port)
     if !seg.ok
-        return mbedtls_err_ssl_want_read
-    fin: = (seg.flags & net.tcp_flag_fin) != 0
+        return MBEDTLS_ERR_SSL_WANT_READ
+    fin: = (seg.flags & net.TCP_FLAG_FIN) != 0
     if seg.seq != conn.peer_seq
         // A resend of what was taken (our ACK was lost), or a segment past one lost. The repeated
         // ACK tells the peer where the stream stands. A bare ACK gets no answer. Otherwise two ends
         // would ACK each other's ACKs for ever.
         if seg.payload_len > 0 || fin
             send_ack(conn)
-        return mbedtls_err_ssl_want_read
+        return MBEDTLS_ERR_SSL_WANT_READ
     // Caution: **Take RST only at the expected seq.** At any other a third party could guess one
     // into the window and cut the connection.
-    if (seg.flags & net.tcp_flag_rst) != 0
+    if (seg.flags & net.TCP_FLAG_RST) != 0
         conn.peer_state = .reset
-        return mbedtls_err_net_conn_reset
+        return MBEDTLS_ERR_NET_CONN_RESET
     if seg.payload_len == 0
         if !fin
-            return mbedtls_err_ssl_want_read // a bare ACK
+            return MBEDTLS_ERR_SSL_WANT_READ // a bare ACK
         conn.peer_seq += 1
         conn.peer_state = .closed
         send_ack(conn)

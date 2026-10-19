@@ -36,12 +36,12 @@ impl Shape
         case .line(len)
             return len
 
-priv const tag_five: I32 = 5
+priv const TAG_FIVE: I32 = 5
 
 priv enum Tagged //< tags written as any constant expression, folded by sema for both backends
     //<
     //< The values themselves are checked in ksplc/tests/enum_test.kspl.
-    by_name = tag_five
+    by_name = TAG_FIVE
     by_cast = I32::7
     by_char = 'A'
     by_size = sizeof(I64)
@@ -68,14 +68,14 @@ priv typedef Form2 = Form //< and through an alias of that alias
 priv typedef Opt_i32 = I32? //< a generic enum's instance, reached through an alias
 priv typedef Nums = List<|I32|> //< a generic struct's instance, `new` reached through an alias
 
-priv const g_text: U8[] = "ksplc.cfg" //< a global declaration's initialiser
+priv const G_TEXT: U8[] = "ksplc.cfg" //< a global declaration's initialiser
     //<
     //< Unlike C, the LLVM backend has to rebuild an initialiser as a static constant expression
     //< itself.
     //< Caution: Leave out a string, an array or a mutable global, and it becomes 0 / an empty
     //< slice. No warning comes (emit_llvm_const_init in ksplc/gen/llvm/decl.kspl).
-priv const g_num: I32 = 7
-priv const g_point: Point = Point::{ .x = 1, .y = 2 }
+priv const G_NUM: I32 = 7
+priv const G_POINT: Point = Point::{ .x = 1, .y = 2 }
 priv $g_mut_text: U8[] = "mutable"
 priv $g_mut_num: I32 = 42
 priv $g_mut_point: Point = Point::{ .y = 9, .x = 8 }
@@ -119,15 +119,15 @@ priv fn twice(a: I32): I32
 priv fn negate(a: I32): I32
     return -a
 
-priv const g_const_op: Unary_op = twice //< a function pointer placed in a global
+priv const G_CONST_OP: Unary_op = twice //< a function pointer placed in a global
     //<
     //< Each backend breaks at a different place, so both are tested. In C a `const` cannot go in
     //< front of the type name.
     //< Caution: **Test both the signature written directly and the one through an alias.** With an
     //< alias (`Unary_op`) the C type name is a typedef, so the `const` goes in front again. Choose
     //< the position by the resolved type ID, and the two disagree: the alias's `const` is lost.
-priv const g_const_op_direct: fn(a: I32): I32 = negate
-priv const g_chained_op: Unary_op3 = negate
+priv const G_CONST_OP_DIRECT: fn(a: I32): I32 = negate
+priv const G_CHAINED_OP: Unary_op3 = negate
 priv $g_mut_op: Unary_op = twice
 priv $g_null_op: Unary_op = Unary_op::null
 
@@ -248,7 +248,8 @@ priv fn tagged<|T, U|>(_h: Holder<|T|>@, k: Ranked, _tag: U): I32 //<
     //< A generic free function that has U written explicitly (the same shape as select in std/seq)
     //<
     //< It cannot be a method. A generic type's method can use only the type arguments its receiver
-    //< holds ("A type argument with nothing to bind to is rejected" in docs/DESIGN-language.md).
+    //< holds ("A type argument with nothing to bind to is rejected" in
+    //< docs/DESIGN-programming-language.md).
     return k.score() + I32::sizeof(U) + I32::sizeof(T) * 0
 
 impl<|T|> Holder<|T|>
@@ -270,52 +271,52 @@ impl<|T|> Holder<|T|>
 priv fn apply_c1_gen<|T|>(v: T, f: Callable1<|T, T|>): T
     return f.call(v)
 
-priv const reg_base: U32 = 0x40000000 //< the constant folding of a global initialiser
+priv const REG_BASE: U32 = 0x40000000 //< the constant folding of a global initialiser
     //<
     //< Caution: All three shapes "silently become a different value when not folded". They are a
     //< reference to another constant (the ABI path mangles the name), a value that does not fit an
     //< I32 (`1U32 << 31`), and a hex `F` (it looks like the type suffix). A register's definition
     //< has all three together.
-priv const reg_ctrl: U32 = reg_base + 0x0C
-priv const bit_top: U32 = 1U32 << 31
-priv const bit_mask: U32 = bit_top | 0xFF
-priv const bits_u32: U32 = 0b1010_1010U32 //<
+priv const REG_CTRL: U32 = REG_BASE + 0x0C
+priv const BIT_TOP: U32 = 1U32 << 31
+priv const BIT_MASK: U32 = BIT_TOP | 0xFF
+priv const BITS_U32: U32 = 0b1010_1010U32 //<
     //< A binary literal with a type suffix
     //<
     //< Caution: **Test the binary spelling too.** C99 has no `0b1010`, and writing it as is relies
     //< on a gcc/clang extension. Comparing values does not catch it, so equiv_test.kspl
     //< checks the text.
-priv const bits_u64: U64 = 0b1111000011110000U64
+priv const BITS_U64: U64 = 0b1111000011110000U64
 priv $g_hexlen: I32[0x1F] = ::{}
-priv const g_cast_back: I32 = U8::(0 - 1) //< a cast in a global, which LLVM folds itself
+priv const G_CAST_BACK: I32 = U8::(0 - 1) //< a cast in a global, which LLVM folds itself
     //<
     //< Caution: **Keep a constant naming another through a cast.** C inlines the folded value
     //< there, so a fold that drops the cast is wrong on both backends at once.
-priv const g_cast_u16: I32 = U16::70000
-priv const g_cast_sz: Sz = Sz::(0xFFFFFFFFFFFFFFFFU64 >> 1U64) //<
+priv const G_CAST_U16: I32 = U16::70000
+priv const G_CAST_SZ: Sz = Sz::(0xFFFFFFFFFFFFFFFFU64 >> 1U64) //<
     //< a cast to `Sz`, folded at its width
-priv const g_cast_ref: I32 = g_cast_back + 1
-priv const g_wide: Bool = true
-priv const g_picked: Sz = 64 if g_wide else 8 //< a conditional in a top-level constant
+priv const G_CAST_REF: I32 = G_CAST_BACK + 1
+priv const G_WIDE: Bool = true
+priv const G_PICKED: Sz = 64 if G_WIDE else 8 //< a conditional in a top-level constant
     //<
     //< Caution: **Use it as an array length too.** Lower hoists a conditional into a statement,
     //< which a top-level initializer has none of; C then names a temporary at file scope.
-priv const g_picked_buf: U8[g_picked] = ::{}
-priv const g_and: Bool = g_wide && !g_wide //< `&&` and `||` in top-level constants
+priv const G_PICKED_BUF: U8[G_PICKED] = ::{}
+priv const G_AND: Bool = G_WIDE && !G_WIDE //< `&&` and `||` in top-level constants
     //<
     //< Caution: **Keep a `!` over one, and one naming another constant.** Lower turns `&&` into a
     //< temporary and a branch inside a function, which a top-level initializer has none of.
-priv const g_not_and: Bool = !(g_wide && g_and)
-priv const g_or: Bool = g_and || !g_wide
-priv const g_div_neg: I32 = 7 / -1 //< a division and a remainder by `-1` in top-level constants
+priv const G_NOT_AND: Bool = !(G_WIDE && G_AND)
+priv const G_OR: Bool = G_AND || !G_WIDE
+priv const G_DIV_NEG: I32 = 7 / -1 //< a division and a remainder by `-1` in top-level constants
     //<
     //< Caution: **Keep the divisor `-1`.** Inside a function it goes to the run-time helper that
     //< defines a minimum divided by `-1`. At the top level it must fold, as a C file-scope
     //< initializer cannot call.
-priv const g_mod_neg: I32 = 9 % -1
-priv const g_div_chain: I32 = case_two * -1 / -1
-priv const case_one: I32 = 1
-priv const case_two: I32 = case_one + 1
+priv const G_MOD_NEG: I32 = 9 % -1
+priv const G_DIV_CHAIN: I32 = CASE_TWO * -1 / -1
+priv const CASE_ONE: I32 = 1
+priv const CASE_TWO: I32 = CASE_ONE + 1
 
 priv typedef Bare_fn = fn()
 
@@ -329,9 +330,9 @@ priv fn naked_ret() //< a `#naked` function: its assembly is its whole body and 
 
 priv fn case_named(n: I32): I32 //< case labels that name constants, which C cannot take as names
     switch n
-    case case_one
+    case CASE_ONE
         return 10
-    case case_two
+    case CASE_TWO
         return 20
     default
         return 0
@@ -446,14 +447,14 @@ impl Exit_probe
     priv fn runtime_exit(v: Self): Exit_probe
         return v
 
-priv const shift_mask: U32 = 6U32 //<
+priv const SHIFT_MASK: U32 = 6U32 //<
     //< Conversely, the constant for building an amount that can be folded at translation time
-priv const div_pick: I32 = 6
+priv const DIV_PICK: I32 = 6
 
 // Hiding a local is the shape shadow_lines tests, and the one [I0501] is for.
 ##lint(I0501 = off)
 
-priv const r: I32 = 100 //< a global named as a method's receiver usually is, read in a closure
+priv const R: I32 = 100 //< a global named as a method's receiver usually is, read in a closure
 
 priv fn shadow_param(n: I32): I32 //< a body's local hiding the parameter its initializer reads
     n: = n + 1
@@ -465,10 +466,11 @@ priv fn even_only(n: I32): I32!U8[]
     return n
 
 priv fn shadow_lines(b: Str_builder$@) //< a local hiding an outer one of its name
-    // **Its initializer reads the outer one** ("Scope and shadowing" in docs/SPEC-language.md).
-    // But C sees a declaration from its own declarator on. So the C gives the inner local a
-    // name of its own (hiding_local_name in base/c_name.kspl). Each shape declares one another
-    // way: a block, a labelled block, `if v: = v`, a `switch` arm, a `catch` and a parameter.
+    // **Its initializer reads the outer one** ("Scope and shadowing" in
+    // docs/SPEC-programming-language.md). But C sees a declaration from its own declarator on. So
+    // the C gives the inner local a name of its own (hiding_local_name in base/c_name.kspl). Each
+    // shape declares one another way: a block, a labelled block, `if v: = v`, a `switch` arm, a
+    // `catch` and a parameter.
     x: I32 = runtime_divisor(5)
     $sum: = 0
     if x > 0
@@ -495,16 +497,17 @@ priv fn shadow_lines(b: Str_builder$@) //< a local hiding an outer one of its na
         fallback I32::e.len
     b.s("shadow=\{sum\}/\{x\}/\{len\}/\{caught\}/\{e\}/\{shadow_param(runtime_divisor(4))\}")
     // A closure's receiver takes a made name, which no capture, parameter or global can meet.
-    // The closure's body reads the capture `r`, the parameter `r` and the global `r` in turn.
+    // The closure's body reads the capture `R`, the parameter `R` and the global `R` in turn.
     r: = runtime_divisor(40)
     b.s(" recv=\{apply_c1(2, fn(a: I32; r: I32): I32 { return a + r; })\}")
         .s("/\{apply_c1(r, fn(r: I32; ): I32 { return r * 2; })\}")
-        .s("/\{apply_c1(2, fn(a: I32; s: U8[]): I32 { return a + I32::s.len + r; })\}\n")
+        .s("/\{apply_c1(2, fn(a: I32; s: U8[]): I32 { return a + I32::s.len + R; })\}\n")
 
 priv fn ptr_lines(b: Str_builder$@, msg: U8[]) //< pointer arithmetic, counted in elements
     // Pointer arithmetic ("Pointer arithmetic and implicit dereferencing" in
-    // docs/SPEC-language.md). **It counts in elements.** An implementation that counts in bytes
-    // differs only for an element size other than 1, so it is checked on an array of `I32`.
+    // docs/SPEC-programming-language.md). **It counts in elements.** An implementation that counts
+    // in bytes differs only for an element size other than 1, so it is checked on an array of
+    // `I32`.
     // Caution: **Make the amount a run-time value.** Folded, the arithmetic itself vanishes.
     cells: I32[4] = ::{ 10, 20, 30, 40 }
     hop: = runtime_divisor(3)
@@ -530,9 +533,9 @@ priv fn ptr_lines(b: Str_builder$@, msg: U8[]) //< pointer arithmetic, counted i
         .s("/\{far_walk - wide_buf[0]@\}\n")
 
 priv fn global_cast_lines(b: Str_builder$@) //< the casts and choices folded in global constants
-    b.s("gcast=\{g_cast_back\}/\{g_cast_u16\}/\{g_cast_ref\}/\{g_picked\}/\{g_picked_buf.len\}")
-        .s(" gsz=\{g_cast_sz\}")
-    b.s(" glogic=\{g_and\}/\{g_not_and\}/\{g_or\} gdiv=\{g_div_neg\}/\{g_mod_neg\}/\{g_div_chain\}")
+    b.s("gcast=\{G_CAST_BACK\}/\{G_CAST_U16\}/\{G_CAST_REF\}/\{G_PICKED\}/\{G_PICKED_BUF.len\}")
+        .s(" gsz=\{G_CAST_SZ\}")
+    b.s(" glogic=\{G_AND\}/\{G_NOT_AND\}/\{G_OR\} gdiv=\{G_DIV_NEG\}/\{G_MOD_NEG\}/\{G_DIV_CHAIN\}")
     b.s("/\{case_named(runtime_divisor(1))\}\{case_named(runtime_divisor(2))\}")
 
 fn main(): Void!Exit_probe
@@ -601,7 +604,7 @@ raw-line-2""").s("<END>\n")
     for $i: = 0, $j: = 100; i < j; i += 1, j -= 10
         mv += i + j
     b.s("mvloop=\{mv\}\n")
-    b.s("gconst=").s(g_text).s("/\{g_num\}/(\{g_point.x\},\{g_point.y\})\n")
+    b.s("gconst=").s(G_TEXT).s("/\{G_NUM\}/(\{G_POINT.x\},\{G_POINT.y\})\n")
     b.s("gmut=").s(g_mut_text).s("/\{g_mut_num\}/(\{g_mut_point.x\},\{g_mut_point.y\})\n")
     b.s("garr=")
     for i in Range.asc(5)
@@ -610,8 +613,8 @@ raw-line-2""").s("<END>\n")
     for i in Range.asc(4)
         b.s("\{g_sparse[i]\}")
     b.s(" gzero=(\{g_zero.x\},\{g_zero.y\})\n")
-    b.s("gfold=\{I64::reg_ctrl\}/\{I64::bit_top\}/\{I64::bit_mask\}/\{I64::g_hexlen.len\}\n")
-    b.s("bits=\{I64::bits_u32\}/\{I64::bits_u64\}/\{I64::0b110U32\}\n")
+    b.s("gfold=\{I64::REG_CTRL\}/\{I64::BIT_TOP\}/\{I64::BIT_MASK\}/\{I64::g_hexlen.len\}\n")
+    b.s("bits=\{I64::BITS_U32\}/\{I64::BITS_U64\}/\{I64::0b110U32\}\n")
     slot: = Op_slot::{ .tag = 1, .op = twice }
     b.s("fnptr=\{I32::sizeof(Unary_op)\}/\{I32::sizeof(Op_slot)\}/\{slot.op(21)\}\n")
     // Anonymous functions: passed directly / nested / as a struct literal's field / a binding with
@@ -656,20 +659,20 @@ raw-line-2""").s("<END>\n")
         .s("closure=\{apply_c1(3, fn(x: I32; base: I32): I32 { return x + base; })\}/\{apply_c1(3, fn(x: I32; base: I32, step: I32): I32 { return x + base + step; })\}/\{apply_c2(3, 4, fn(x: I32, y: I32; step: I32): I32 { return (x + y) * step; })\}/\{apply_c1(1, late_cl)\}\n")
     b
         .s("anonfn=\{apply_op(20, fn(a: I32): I32 { return a + 1; })\}/\{apply_op(3, fn(a: I32): I32 { return apply_op(a, fn(c: I32): I32 { return c * 3; }) + 1; })\}/\{anon_slot.op(9)\}/\{anon_bound(7)\}\n")
-    const local_const_op: Unary_op = negate //< a global function pointer
+    const LOCAL_CONST_OP: Unary_op = negate //< a global function pointer
         //<
         //< The mutable one checks that storing a new value takes effect (it is not folded to the
         //< initial value). The local `const` tests both the alias and the direct spelling as well
         //< (the forward declaration and the definition share the decision).
-    const local_const_direct: fn(a: I32): I32 = twice
+    const LOCAL_CONST_DIRECT: fn(a: I32): I32 = twice
     g_mut_op = negate
     null_op: = g_null_op == null
     b
-        .s("gfnptr=\{g_const_op(6)\}/\{g_const_op_direct(6)\}/\{g_mut_op(6)\}/\{local_const_op(6)\}/\{local_const_direct(6)\}/\{null_op\}\n")
+        .s("gfnptr=\{G_CONST_OP(6)\}/\{G_CONST_OP_DIRECT(6)\}/\{g_mut_op(6)\}/\{LOCAL_CONST_OP(6)\}/\{LOCAL_CONST_DIRECT(6)\}/\{null_op\}\n")
     // A call across a chain of aliases, and the same stored in a struct's field.
     chained: Unary_op3 = twice
     chained_slot: = Op_slot::{ .tag = 3, .op = negate }
-    b.s("aliaschain=\{chained(5)\}/\{g_chained_op(5)\}/\{chained_slot.op(5)\}\n")
+    b.s("aliaschain=\{chained(5)\}/\{G_CHAINED_OP(5)\}/\{chained_slot.op(5)\}\n")
     // Unnamed function types wherever a type can stand. Examples: a list's element, a return, an
     // inferred local, a generic's field, a call of a call's result, a pointer to one, an array of
     // them. Each call reads its signature from the value's type.
@@ -720,7 +723,7 @@ raw-line-2""").s("<END>\n")
         .s("\{I32::Tagged.by_size\}/\{I32::Tagged.counted\}/\{U32::Wide_tag.top\}/\{U32::wide\}/")
         .s("\{I64::Long_tag.big\}/\{I64::Long_tag.after\}/\{sizeof(Byte_tags)\}\n")
     // A shift amount decided at run time ("Conditions that stop execution at run time" in
-    // docs/SPEC-language.md).
+    // docs/SPEC-programming-language.md).
     // Caution: **Go up to just below the width.** With the run-time check's boundary misplaced,
     // even a correct `1U32 << 31` is stopped. Also checked: a signed right shift is arithmetic, and
     // a compound assignment gives the same answer.
@@ -735,7 +738,7 @@ raw-line-2""").s("<END>\n")
     // turns `1U << m & 3` into `(1U << m) & 3`. The LLVM backend builds from the tree as it is, so
     // only this case shows the disagreement.
     b
-        .s("stshift=\{Sz::(1U32 << (shift_mask & 3U32))\}/\{Sz::(1U32 << (2U32 if shift_mask > 3U32 else 5U32))\}\n")
+        .s("stshift=\{Sz::(1U32 << (SHIFT_MASK & 3U32))\}/\{Sz::(1U32 << (2U32 if SHIFT_MASK > 3U32 else 5U32))\}\n")
     // A divisor decided at run time (the same run-time conditions).
     // Caution: **Test both unsigned and signed.** The C code does the check in ptrdiff_t. Not
     // converting back to the original type makes `U32 / ptrdiff_t` a signed 64-bit division. Then
@@ -747,13 +750,13 @@ raw-line-2""").s("<END>\n")
         .s("rtdiv=\{Sz::(4294967290U32 / U32::runtime_divisor(3))\}/\{I64::(-100 / runtime_divisor(3))\}/\{I64::(-100 % runtime_divisor(3))\}/\{I64::(100 / runtime_divisor(0 - 3))\}/\{I64::div_compound\}/\{Sz::((3000000000U32 / U32::runtime_divisor(1)) << 4U32)\}\n")
     // A divisor decided at translation time. It is combined with an operator of lower precedence
     // than the division (the same reason as for stshift).
-    b.s("stdiv=\{I64::(100 / (div_pick & 3))\}/\{I64::(100 / (3 if div_pick > 3 else 7))\}\n")
+    b.s("stdiv=\{I64::(100 / (DIV_PICK & 3))\}/\{I64::(100 / (3 if DIV_PICK > 3 else 7))\}\n")
     // An unsigned interpolation ("The expansion specification for string interpolation" in
-    // docs/SPEC-language.md).
+    // docs/SPEC-programming-language.md).
     // Caution: **Use a value with the top bit set.** With only small values, an implementation that
     // copies it into a signed type looks correct too.
     b.s("unsigned=\{4294967295U32\}/\{18446744073709551615U64\}/\{255U8\}\n")
-    // `U8`'s sign ("Primitive types" in docs/SPEC-language.md).
+    // `U8`'s sign ("Primitive types" in docs/SPEC-programming-language.md).
     // **Use a value greater than 127.** With only small values the answer does not change even
     // where C's `char` differs in sign per target.
     // **Include the spelling that prints it as a character (`:c`) as well.** It desugars to a
@@ -771,7 +774,7 @@ raw-line-2""").s("<END>\n")
     b.s("sizeof_sign=\{sz_signed\}/\{I64::(neg_sz - sizeof(I32))\}\n")
     ptr_lines(b@, msg)
     shadow_lines(b@)
-    // Floating-point conversion ("Primitive types" in docs/SPEC-language.md).
+    // Floating-point conversion ("Primitive types" in docs/SPEC-programming-language.md).
     // Caution: **Print with high precision.** At the default six digits single precision's rounding
     // is invisible, and an implementation that computes in double precision and converts back
     // agrees too.
@@ -806,7 +809,7 @@ raw-line-2""").s("<END>\n")
     single: F32 = runtime_f32(1.5)
     wp: Width_probe = ::{ .wide = narrow, .dbl = single }
     b.s("coerce=\{wp.wide\}/\{wp.dbl:.17\}/\{take_sz(narrow)\}/\{take_f64(single):.17\}\n")
-    // A struct's layout ("Structs (`struct`)" in docs/SPEC-language.md).
+    // A struct's layout ("Structs (`struct`)" in docs/SPEC-programming-language.md).
     // Caution: **Check both the size and the offsets.** With the size alone, even an implementation
     // that swapped the fields' order agrees.
     probe: Abi_probe = ::{}

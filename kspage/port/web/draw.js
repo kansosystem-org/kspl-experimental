@@ -111,12 +111,12 @@ function kspageDraw(ks) {
 
   // The shapes a band is drawn as. **A list of numbers, not the list offered to choose from** (that
   // is the menu's: `ribbon.js`'s `SHAPES`). **The list is the wasm's exactly**
-  // (`port/web/state.kspl`'s `shape_order`, separate from the enum's order in the source).
+  // (`port/web/state.kspl`'s `SHAPE_ORDER`, separate from the enum's order in the source).
   // **Do not move an existing entry** — a saved document is read by name, but this bridge passes by
   // number (`make test-conventions` checks that both sides match).
   const SHAPES = ["box", "ellipse", "fall_line", "rise_line", "fall_arrow", "rise_arrow",
     "fall_arrow_back", "rise_arrow_back", "round_box", "triangle", "diamond"];
-  // How a filter matches a cell (`keep_order` in `state.kspl`, `Keep` in `model/filter.kspl`).
+  // How a filter matches a cell (`KEEP_ORDER` in `state.kspl`, `Keep` in `model/filter.kspl`).
   // The same rule as the shapes: **do not move an existing entry.**
   const KEEPS = ["is", "is_not", "holds", "above", "below", "blank", "filled"];
   // The closed shapes (the inside is painted). **The rest are lines along the band's diagonal.**
@@ -514,17 +514,25 @@ function kspageDraw(ks) {
       return;
     }
     const height = Math.max(w.kspage_web_height(), 24);
+    // Set widths may take a table past the text column. Draw the whole laid-out region so it
+    // can be reached by scrolling; keep the layout width unchanged, or the prose would reflow.
+    let width = ks.width;
+    for (let i = 0; i < w.kspage_web_region_count(); i++) {
+      w.kspage_web_region(i, scratch);
+      const [x, _y, rw] = nums(3);
+      width = Math.max(width, x + rw);
+    }
 
     // **One document unit is one CSS pixel.** Another scale would need the click-mapping division
     // in four more places (`kspage/docs/DESIGN-application.md`'s "Whether the browser or the page holds the
     // zoom"). Only the pixel density is multiplied.
-    canvas.width = Math.ceil(ks.width * dpr);
+    canvas.width = Math.ceil(width * dpr);
     canvas.height = Math.ceil(height * dpr);
-    canvas.style.width = `${ks.width}px`;
+    canvas.style.width = `${width}px`;
     canvas.style.height = `${height}px`;
     // Resizing resets the 2D state, so the density is multiplied after it.
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, ks.width, height);
+    ctx.clearRect(0, 0, width, height);
     const ink = getComputedStyle(canvas).color;
     ctx.fillStyle = ink;
 
@@ -587,7 +595,7 @@ function kspageDraw(ks) {
     if (found !== 0) {
       moveCaret(cx, cy, ch);
       moveIme(cx, cy, ch);
-      followCaret(cy, ch);
+      followCaret(cx, cy, ch);
     } else {
       hideCaret();
     }
@@ -650,9 +658,10 @@ function kspageDraw(ks) {
   // Scrolls the cursor into the window.
   // Caution: **Scroll only when it goes outside** (every time, a window scrolled away to read would
   // jump back on every keystroke). **Scroll past the chrome pinned at the top**
-  // (`ks.api.headRoom`), or typing hides behind the tools. Only vertically (a column is the
-  // window's width). The direction of one arrow key, **kept in a table** (with four cases written
-  // out, one alone gets changed).
+  // (`ks.api.headRoom`), or typing hides behind the tools. A wide table scrolls within the stage
+  // so the tools and side panel stay in place.
+  // The direction of one arrow key, **kept in a table** (with four cases written out, one alone
+  // gets changed).
   const ARROW_STEPS = {
     ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1],
   };
@@ -683,7 +692,14 @@ function kspageDraw(ks) {
       window.scrollBy(0, -band.rh);
     }
   }
-  function followCaret(y, h) {
+  function followCaret(x, y, h) {
+    const stage = canvas.parentElement;
+    const left = stage.scrollLeft;
+    const margin = Math.min(caretMargin, stage.clientWidth / 4);
+    if (x < left + margin) stage.scrollLeft = Math.max(0, x - margin);
+    else if (x + 2 > left + stage.clientWidth - margin) {
+      stage.scrollLeft = x + 2 - stage.clientWidth + margin;
+    }
     const rect = canvas.getBoundingClientRect();
     let top = rect.top + y;
     const room = window.innerHeight;

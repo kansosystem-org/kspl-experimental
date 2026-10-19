@@ -23,29 +23,29 @@ import "std/str" { Str_builder }
 import "std/subproc"
 import "std/sys"
 
-priv const feed_idle_ms: I32 = 60000 //<
+priv const FEED_IDLE_MS: I32 = 60000 //<
     //< how long the child compile may go without reading the program
     //<
     //< It reads standard input to the end before anything else, so only a stalled child reaches it.
 
-priv const max_run_slots: Sz = 64 //< how many slots the cache keeps, besides those in use
+priv const MAX_RUN_SLOTS: Sz = 64 //< how many slots the cache keeps, besides those in use
     //<
     //< One slot is one script's executable, shared header and objects. **ksplc's own identity is in
     //< the key, so rebuilding ksplc creates every slot anew**; the sweep removes the old ones.
 
-priv const run_slot_spare_secs: I64 = 3600 //< a slot used within this many seconds is never swept
+priv const RUN_SLOT_SPARE_SECS: I64 = 3600 //< a slot used within this many seconds is never swept
     //<
     //< Caution: **Do not rely on the count alone.** One gate run creates more new slots than the
     //< cap while a single build is still writing its own. A count alone would remove that slot
     //< from under it (`failed to write file: …/prog.new.h`). The cache stays over the cap for that
     //< long.
 
-priv const run_cflags: U8[] = "-std=c99" //< the flags used to compile the generated C
+priv const RUN_CFLAGS: U8[] = "-std=c99" //< the flags used to compile the generated C
     //<
     //< For scripts, build speed comes first.
-priv const run_opt_flag: U8[] = "-O0"
+priv const RUN_OPT_FLAG: U8[] = "-O0"
 
-priv const run_section_flags: U8[][2] = ::{ "-ffunction-sections", "-fdata-sections" } //<
+priv const RUN_SECTION_FLAGS: U8[][2] = ::{ "-ffunction-sections", "-fdata-sections" } //<
     //< The compiler flags that let the link-time removal (append_dead_strip_flag) work
     //<
     //< Caution: **Always pass them together with the removal.** It drops whole sections, and
@@ -62,15 +62,15 @@ priv fn strips_unused_sections(): Bool //<
 
 priv fn append_section_flags(list: List<|U8[]|>$@) //< run_section_flags, where the removal works
     if strips_unused_sections()
-        for f in run_section_flags
+        for f in RUN_SECTION_FLAGS
             list.push(f)
 
 priv fn append_compile_flags(list: List<|U8[]|>$@) //< the flags every unit is compiled with
     //<
     //< Caution: **The cache keys read them from here as well** (append_flags_key). A flag given to
     //< the command alone would reuse objects compiled without it.
-    list.push(run_cflags)
-    list.push(run_opt_flag)
+    list.push(RUN_CFLAGS)
+    list.push(RUN_OPT_FLAG)
     append_section_flags(list)
 
 priv fn append_flags_key(h: Str_builder$@) //< the compile flags as the cache keys spell them
@@ -156,20 +156,20 @@ priv fn append_dead_strip_flag(list: List<|U8[]|>$@, arena: Arena$@) //<
     else
         list.push("-Wl,--gc-sections")
 
-priv const exe_stack_msvc: U8[] = "-Wl,/STACK:8388608" //<
+priv const EXE_STACK_MSVC: U8[] = "-Wl,/STACK:8388608" //<
     //< The stack size requested of the executable
     //<
     //< **The Windows linker's default reserves only 1MB**, so only there does a recursion die of
     //< real stack exhaustion before the depth limit ("Implementation limits" in
-    //< `docs/SPEC-language.md`). The Makefile's LDLIBS uses the same size.
-priv const exe_stack_gnu: U8[] = "-Wl,--stack,8388608"
+    //< `docs/SPEC-programming-language.md`). The Makefile's LDLIBS uses the same size.
+priv const EXE_STACK_GNU: U8[] = "-Wl,--stack,8388608"
 
 priv fn append_stack_flag(list: List<|U8[]|>$@, arena: Arena$@)
     k: = target_kind(arena)
     if k.msvc
-        list.push(exe_stack_msvc)
+        list.push(EXE_STACK_MSVC)
     else if k.windows
-        list.push(exe_stack_gnu)
+        list.push(EXE_STACK_GNU)
 
 fn append_exe_flags(list: List<|U8[]|>$@, arena: Arena$@) //<
     //< It appends to list the options passed when building an executable from the artifact
@@ -222,10 +222,10 @@ priv fn deps_are_fresh(deps_path: U8[], arena: Arena$@): Bool //<
     defer dealloc(Void$@::text.ptr)
     $seen: Sz = 0
     for line in text.lines(arena)
-        if line.len < base_cache.hash_hex_len + 2
+        if line.len < base_cache.HASH_HEX_LEN + 2
             return false
-        want: = line.sub(0, base_cache.hash_hex_len)
-        path: = line.sub_from(base_cache.hash_hex_len + 1)
+        want: = line.sub(0, base_cache.HASH_HEX_LEN)
+        path: = line.sub_from(base_cache.HASH_HEX_LEN + 1)
         if is_absent_mark(want)
             if fs.exists(path)
                 return false
@@ -249,7 +249,7 @@ fn write_deps_file(deps_path: U8[], loaded_files: List<|U8$[]|>$@) //<
     for import_path in loaded_files
         // **A program with no file has no line**: it has no digest to check, and its run's slot is
         // keyed by its text (`append_slot_key`).
-        if import_path.equals(base_core.stdin_name)
+        if import_path.equals(base_core.STDIN_NAME)
             continue
         // A name in `loaded_files` is a logical name, so each has one path
         // (`append_file_path` in `../base/locate.kspl`).
@@ -273,7 +273,7 @@ fn write_deps_file(deps_path: U8[], loaded_files: List<|U8$[]|>$@) //<
     // the one further up, so its appearance makes the result stale. Its line has dashes for a
     // digest.
     for cfg in base_config_file.files_missed()
-        for _i in Range.asc(base_cache.hash_hex_len)
+        for _i in Range.asc(base_cache.HASH_HEX_LEN)
             out.c('-')
         out.c(' ').s(cfg).c('\n')
     io.write_file(deps_path, out.slice()) catch {}
@@ -336,9 +336,9 @@ priv fn append_slot_key(script: U8[], given: U8[]?, out: Str_builder$@): Bool //
 // ==========================================
 priv fn pick_unit_count(): Sz
     n: = sys.cpu_count()
-    return max_run_units if n > max_run_units else n
+    return MAX_RUN_UNITS if n > MAX_RUN_UNITS else n
 
-priv const max_run_units: Sz = 16 //< the split count's upper bound
+priv const MAX_RUN_UNITS: Sz = 16 //< the split count's upper bound
     //<
     //< Splitting far past the core count is no faster (see above); this caps many-core machines.
 
@@ -353,7 +353,7 @@ priv fn has_obj(units: List<|Unit|>$@, obj: U8[]): Bool //<
     //< Caution: **Do not list the same object twice.** A small input split many ways gives units
     //< with the same (empty) contents. A name hashed from the contents makes them **one file**.
     //< Then `compile_units` would start several cc writing the same output. There are at most
-    //< `max_run_units`, so a linear search is enough.
+    //< `MAX_RUN_UNITS`, so a linear search is enough.
     for u in units
         if u.obj.equals(obj)
             return true
@@ -394,7 +394,7 @@ priv fn sweep_objects(obj_dir: U8[], units: List<|Unit|>$@, arena: Arena$@) //<
     names: = fs.read_dir(obj_dir, arena) catch
         return
     for name in names
-        if name.len != base_cache.hash_hex_len + 2 || !name.ends_with(".o")
+        if name.len != base_cache.HASH_HEX_LEN + 2 || !name.ends_with(".o")
             continue
         $keep: = false
         for u in units
@@ -495,9 +495,9 @@ priv fn exec_program(script: U8[], exe: U8[], script_args: List<|U8[]|>$@, arena
     $env_val: = Str_builder.new()
     defer env_val.free()
     env_val.s(exe).c('\n').s(script)
-    sys.set_env(sys.script_env_name, env_val.slice()) catch
+    sys.set_env(sys.SCRIPT_ENV_NAME, env_val.slice()) catch
         io.err()
-            .s("ksplc run: cannot set \{sys.script_env_name\}. script_path() will report none\n")
+            .s("ksplc run: cannot set \{sys.SCRIPT_ENV_NAME\}. script_path() will report none\n")
     $argv: = List<|U8[]|>.new(arena)
     argv.push(exe)
     for a in script_args
@@ -568,7 +568,7 @@ fn run_script(script: U8[], script_args: List<|U8[]|>$@) //<
     //<
     //< **This function does not return**: at the end it exits with the script's exit code. A script
     //< of `-` is read from standard input, and runs as `run_source` runs a text.
-    if script.equals(base_core.stdin_name)
+    if script.equals(base_core.STDIN_NAME)
         text: = io.read_stdin(base_core.arena) catch
             io.err().s("ksplc run: the program could not be read from standard input\n")
             sys.exit(1)
@@ -584,7 +584,7 @@ fn run_source(source: U8[], script_args: List<|U8[]|>$@) //<
     //<
     //< It is read as a file named `-` in the current folder. **This function does not return**, as
     //< `run_script` does not.
-    run_program(base_core.stdin_name, .some(source), script_args)
+    run_program(base_core.STDIN_NAME, .some(source), script_args)
 
 #noreturn
 priv fn run_program(script: U8[], given: U8[]?, script_args: List<|U8[]|>$@) //<
@@ -633,7 +633,7 @@ priv fn open_run_slot(script: U8[], given: U8[]?, arena: Arena$@): Run_slot //<
     refusal: = base_cache.refused_root(root.slice(), arena)
     if refusal.len > 0
         base_cache.exit_refused("ksplc run", refusal)
-    runs_dir: = fs.join(root.slice(), base_cache.run_kind, arena)
+    runs_dir: = fs.join(root.slice(), base_cache.RUN_KIND, arena)
     $slot_key: = Str_builder.new()
     defer slot_key.free()
     cacheable: = append_slot_key(script, given, slot_key@)
@@ -645,7 +645,7 @@ priv fn open_run_slot(script: U8[], given: U8[]?, arena: Arena$@): Run_slot //<
     // left no mark, the most-used slot would go first.
     base_cache.touch_dir(dir, arena)
     if is_new_slot
-        base_cache.prune_dirs(runs_dir, base_cache.hash_hex_len, max_run_slots, run_slot_spare_secs,
+        base_cache.prune_dirs(runs_dir, base_cache.HASH_HEX_LEN, MAX_RUN_SLOTS, RUN_SLOT_SPARE_SECS,
             dir, arena)
     deps: = fs.join(dir, "deps", arena)
     return Run_slot::{ .dir = dir, .cacheable = cacheable,
@@ -711,7 +711,7 @@ priv fn generate_c(slot: Run_slot@, script: U8[], given: U8[]?, arena: Arena$@):
     ksplc_argv.push(slot.new_c)
     $code: I32 = 0
     if text: = given
-        code = subproc.spawn_feed(ksplc_argv.slice(), "", text, feed_idle_ms) catch e
+        code = subproc.spawn_feed(ksplc_argv.slice(), "", text, FEED_IDLE_MS) catch e
             switch e
             case .spawn_failed
                 io.err().s("ksplc: failed to start ksplc\n")
@@ -807,7 +807,7 @@ priv fn build_and_link(slot: Run_slot@, units: List<|Unit|>$@, named_libs: List<
 // only clue.
 // ==========================================
 
-priv const build_opt_flags: U8[][2] = ::{ "-O2", "-g" } //<
+priv const BUILD_OPT_FLAGS: U8[][2] = ::{ "-O2", "-g" } //<
     //< The defaults, as a program ships: optimised, and `-g`, without which no crash is located
     //<
     //< `--cflags` goes after them, so its `-O0` wins (the C compiler takes the last).
@@ -850,8 +850,8 @@ fn build_program(input: U8[], output: U8[], cflags: U8[]) //<
     // can need `-lm`), as `ksplc run` links. GNU ld resolves from the left only.
     $cc: = List<|U8[]|>.new(arena)
     cc.push(cc_name())
-    cc.push(run_cflags)
-    for f in build_opt_flags
+    cc.push(RUN_CFLAGS)
+    for f in BUILD_OPT_FLAGS
         cc.push(f)
     // **`--sanitize` is the one way to ask**: `-fsanitize=` in `--cflags` is refused
     // (`check_sanitize` in `../main.kspl`).

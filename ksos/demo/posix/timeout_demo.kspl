@@ -47,9 +47,9 @@ $stack_holder: U8[65536]
 $stack_mid: U8[65536]
 $stack_setter: U8[65536]
 
-priv const holder_prio: I32 = 1
-priv const mid_prio: I32 = 2
-priv const coord_prio: I32 = 4
+priv const HOLDER_PRIO: I32 = 1
+priv const MID_PRIO: I32 = 2
+priv const COORD_PRIO: I32 = 4
 
 fn giver(_arg: Void$@): Void //< 2 and 8. Give 2 ticks after each token
     for _n in Range.asc(2)
@@ -130,16 +130,16 @@ fn coordinator(_arg: Void$@): Void
     Task.delay(1) // holder takes the mutex and sleeps
     g_start_mid.give()
     Task.delay(1) // mid starts waiting, and holder rises to 2
-    assert(tcb_holder.get_prio() == mid_prio, "timeout: the mid waiter did not lend its priority")
+    assert(tcb_holder.get_prio() == MID_PRIO, "timeout: the mid waiter did not lend its priority")
     before4: = task.current_tick()
     got4: = g_mutex.lock_for(3)
     assert(!got4, "timeout: lock_for took a mutex that is still held")
     assert(task.current_tick() == before4 + 3, "timeout: lock_for did not wait exactly 3 ticks")
-    assert(tcb_holder.get_prio() == mid_prio,
+    assert(tcb_holder.get_prio() == MID_PRIO,
         "timeout: lock_for giving up must leave the holder at the remaining waiter's priority")
     Task.delay(25) // holder unlocks, then mid takes the mutex and unlocks
     assert(g_mid_got, "timeout: the mid waiter never got the mutex")
-    assert(tcb_holder.get_prio() == holder_prio,
+    assert(tcb_holder.get_prio() == HOLDER_PRIO,
         "timeout: unlock did not restore the holder's priority")
     verdict
         .pass("only the lending of the side that gave up is returned, and the lending of the one \
@@ -202,11 +202,11 @@ fn main(): I32
     g_start_mid.init(0)
     g_ev.init()
     g_start_setter.init(0)
-    tcb_coord.create(U8$[]::stack_coord, coordinator, null, coord_prio, "coord")
+    tcb_coord.create(U8$[]::stack_coord, coordinator, null, COORD_PRIO, "coord")
     tcb_giver.create(U8$[]::stack_giver, giver, null, 1, "giver")
     tcb_sender.create(U8$[]::stack_sender, sender, null, 1, "sender")
-    tcb_holder.create(U8$[]::stack_holder, holder, null, holder_prio, "holder")
-    tcb_mid.create(U8$[]::stack_mid, mid_waiter, null, mid_prio, "mid")
+    tcb_holder.create(U8$[]::stack_holder, holder, null, HOLDER_PRIO, "holder")
+    tcb_mid.create(U8$[]::stack_mid, mid_waiter, null, MID_PRIO, "mid")
     tcb_setter.create(U8$[]::stack_setter, setter, null, 1, "setter")
     task.start_scheduler()
     return verdict.finish()

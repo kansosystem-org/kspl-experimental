@@ -5,7 +5,7 @@
 //< from is [`calc.kspl`](calc.kspl)'s concern. So the folding alone can be tested.
 //< **Turning the reason into text happens in this one place** (`error_text`), or the mark differs
 //< between the screen and the exported text.
-import "kspage/expr/addr" { broken_ref }
+import "kspage/expr/addr" { BROKEN_REF }
 import "kspage/expr/shown"
 import "std/str"
 
@@ -24,7 +24,7 @@ impl Cell_error
         case .syntax
             return "#SYNTAX!"
         case .no_cell
-            return broken_ref
+            return BROKEN_REF
         case .not_number
             return "#VALUE!"
         case .circular
@@ -58,24 +58,24 @@ fn rounded(v: F64, places: F64): Value //< the value rounded to places decimals
         return Cell_error.not_number.failed()
     return number(shown.round_to(v, Sz::I64::places))
 
-priv const fn_sum: Sz = 0 //<
+priv const FN_SUM: Sz = 0 //<
     //< The functions that fold a range
     //<
     //< **Only what the existing operations cannot express is added.** An average is
     //< `r.sum() / r.count()` and an absolute value is `-A1 if A1 < 0 else A1`, so neither exists.
-priv const fn_min: Sz = 1
-priv const fn_max: Sz = 2
-priv const fn_count: Sz = 3
+priv const FN_MIN: Sz = 1
+priv const FN_MAX: Sz = 2
+priv const FN_COUNT: Sz = 3
 
 fn fn_kind(name: U8[]): Sz
     if name.equals("sum")
-        return fn_sum
+        return FN_SUM
     if name.equals("min")
-        return fn_min
+        return FN_MIN
     if name.equals("max")
-        return fn_max
+        return FN_MAX
     if name.equals("count")
-        return fn_count
+        return FN_COUNT
     return -1
 
 struct Fold //< the state partway through folding, taking the arguments' values one at a time
@@ -97,13 +97,13 @@ fn take(f: Fold$@, v: Value) //< takes one value
         f.err = v.err
         return
     f.seen += 1
-    if f.kind == fn_count
+    if f.kind == FN_COUNT
         return
-    if f.kind == fn_sum
+    if f.kind == FN_SUM
         f.acc += v.num
         return
     first: = f.seen == 1
-    if first || (f.kind == fn_min && v.num < f.acc) || (f.kind == fn_max && v.num > f.acc)
+    if first || (f.kind == FN_MIN && v.num < f.acc) || (f.kind == FN_MAX && v.num > f.acc)
         f.acc = v.num
 
 fn folded(f: Fold$@): Value //< the value after folding
@@ -112,8 +112,8 @@ fn folded(f: Fold$@): Value //< the value after folding
     //< not exist.
     if f.broken
         return f.err.failed()
-    if f.kind == fn_count
+    if f.kind == FN_COUNT
         return number(F64::f.seen)
-    if f.kind == fn_sum
+    if f.kind == FN_SUM
         return number(f.acc)
     return Cell_error.not_number.failed() if f.seen <= 0 else number(f.acc)

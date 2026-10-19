@@ -17,7 +17,7 @@ import "ksai/optim" as ai_optim
 import "ksai/sampler" as ai_sampler
 import "ksai/tensor" { Tensor }
 import "ksai/tokenizer" as ai_tokenizer
-import "std/argp"
+import "std/argparse"
 import "std/chars"
 import "std/ds" { List }
 import "std/io"
@@ -35,16 +35,16 @@ priv struct Paths //< where the tokenizer is read from
     merges: U8[]
 
 // The shape. **`train` and `complete` build the same one**, so a weights file fits by construction.
-priv const dim: Sz = 128
-priv const hidden: Sz = 512
-priv const layers: Sz = 2
+priv const DIM: Sz = 128
+priv const HIDDEN: Sz = 512
+priv const LAYERS: Sz = 2
 // What the model sees of a hole: the prefix nearest it, the suffix's start and the middle's start.
-priv const prefix_tokens: Sz = 96
-priv const suffix_tokens: Sz = 48
-priv const middle_tokens: Sz = 32
-priv const context_bytes: Sz = 512 // how much text each side is encoded from, before the cut
-priv const fim_markers: Sz = 4 //< how many markers `Fim_ids` numbers after the tokenizer's words
-priv const max_seq: Sz = prefix_tokens + suffix_tokens + middle_tokens + fim_markers
+priv const PREFIX_TOKENS: Sz = 96
+priv const SUFFIX_TOKENS: Sz = 48
+priv const MIDDLE_TOKENS: Sz = 32
+priv const CONTEXT_BYTES: Sz = 512 // how much text each side is encoded from, before the cut
+priv const FIM_MARKERS: Sz = 4 //< how many markers `Fim_ids` numbers after the tokenizer's words
+priv const MAX_SEQ: Sz = PREFIX_TOKENS + SUFFIX_TOKENS + MIDDLE_TOKENS + FIM_MARKERS
 
 struct Fim_ids //< the four markers, numbered after the tokenizer's own words
     pre: I32
@@ -63,11 +63,11 @@ fn fim_prompt(pre: List<|I32|>$@, suf: List<|I32|>$@, ids: Fim_ids, arena: Arena
     //< hole matters most.
     $out: = List<|I32|>.new(arena)
     out.push(ids.pre)
-    from: = pre.len - prefix_tokens if pre.len > prefix_tokens else 0
+    from: = pre.len - PREFIX_TOKENS if pre.len > PREFIX_TOKENS else 0
     for $i: = from; i < pre.len; i += 1
         out.push(pre[i])
     out.push(ids.suf)
-    for $i: Sz = 0; i < suf.len && i < suffix_tokens; i += 1
+    for $i: Sz = 0; i < suf.len && i < SUFFIX_TOKENS; i += 1
         out.push(suf[i])
     out.push(ids.mid)
     return out
@@ -79,17 +79,17 @@ fn fim_sequence(pre: List<|I32|>$@, mid: List<|I32|>$@, suf: List<|I32|>$@, ids:
         //< Caution: **No `[EOT]` after a cut middle**, or the model learns to stop where it was
         //< cut.
     $out: = fim_prompt(pre, suf, ids, arena)
-    for $i: Sz = 0; i < mid.len && i < middle_tokens; i += 1
+    for $i: Sz = 0; i < mid.len && i < MIDDLE_TOKENS; i += 1
         out.push(mid[i])
-    if mid.len <= middle_tokens
+    if mid.len <= MIDDLE_TOKENS
         out.push(ids.eot)
     return out
 
 priv fn tail(text: U8[]): U8[] //< the prefix's end, where the hole begins
-    return text.sub_from(text.len - context_bytes) if text.len > context_bytes else text
+    return text.sub_from(text.len - CONTEXT_BYTES) if text.len > CONTEXT_BYTES else text
 
 priv fn head(text: U8[]): U8[] //< the suffix's start, where the hole ends
-    return text.sub(0, context_bytes) if text.len > context_bytes else text
+    return text.sub(0, CONTEXT_BYTES) if text.len > CONTEXT_BYTES else text
 
 priv fn base_vocab(at: Paths): Sz //< how many words the tokenizer has: its highest id, plus one
     //<
@@ -114,14 +114,14 @@ priv fn load_tokenizer(at: Paths, arena: Arena$@): ai_tokenizer.Tokenizer
         sys.exit(1)
     return tok
 
-priv fn read_jsonl(path: U8[], arena: Arena$@): List<|json.Val|> //< one JSON value per line
+priv fn read_jsonl(path: U8[], arena: Arena$@): List<|json.Value|> //< one JSON value per line
     //<
     //< A blank line is skipped; **a broken one stops the run**, naming it, so a bad file is not
     //< silently half-read.
     data: = io.read_file(path) catch
         io.err().s("[error] cannot read \{path\}\n")
         sys.exit(1)
-    $out: = List<|json.Val|>.new(arena)
+    $out: = List<|json.Value|>.new(arena)
     $n: Sz = 0
     for line in data.lines(arena)
         n += 1
@@ -134,7 +134,7 @@ priv fn read_jsonl(path: U8[], arena: Arena$@): List<|json.Val|> //< one JSON va
     return out
 
 priv fn new_model(vocab: Sz, arena: Arena$@): ai_model.Mini_llama<|F32|>
-    return ai_model.Mini_llama<|F32|>.new(vocab, dim, hidden, layers, max_seq, arena)
+    return ai_model.Mini_llama<|F32|>.new(vocab, DIM, HIDDEN, LAYERS, MAX_SEQ, arena)
 
 priv struct Encoded //< the corpus as token sequences, laid end to end
     tokens: List<|I32|>
@@ -200,11 +200,11 @@ priv fn train(corpus: U8[], at: Paths, plan: Schedule, u: ai_optim.Updater<|F32|
     if n == 0
         io.err().s("[error] the corpus holds no example\n")
         sys.exit(1)
-    io.out().s("examples=\{n\}  tokens=\{data.tokens.len\}  vocab=\{base + fim_markers\}\n")
+    io.out().s("examples=\{n\}  tokens=\{data.tokens.len\}  vocab=\{base + FIM_MARKERS\}\n")
     // **Printed once, before the first loss**: the number alone reads as a rate, which it is not.
     io.out().s("loss: nats per token on what it learns from, over the recent steps; lower is ")
         .s("better, 0 is every next token certain and right\n")
-    $model: = new_model(base + fim_markers, model_arena)
+    $model: = new_model(base + FIM_MARKERS, model_arena)
     $rng: = prng.Prng.new(seed)
     model.randomize(rng@)
     work: = Arena.new(64 * 1024 * 1024)
@@ -279,7 +279,7 @@ priv fn held_out_loss(corpus: U8[], at: Paths, weights: U8[], most: Sz) //<
     defer model_arena.free()
     base: = base_vocab(at)
     ids: = fim_ids(base)
-    $model: = new_model(base + fim_markers, model_arena)
+    $model: = new_model(base + FIM_MARKERS, model_arena)
     // **The weights point into the file read**, so it lives as long as the model does.
     st: = ai_file.load_safetensors(weights, model_arena) catch
         io.err().s("[error] cannot read \{weights\} (train writes it)\n")
@@ -335,7 +335,7 @@ priv fn candidates(model: ai_model.Mini_llama<|F32|>$@, tok: ai_tokenizer.Tokeni
         cfg: = ai_sampler.Sample_config.greedy() if s == 0 else drawn
         $mid: = List<|I32|>.new(work)
         $logits: = last
-        for $pos: = prompt.len; pos < prompt.len + middle_tokens; pos += 1
+        for $pos: = prompt.len; pos < prompt.len + MIDDLE_TOKENS; pos += 1
             pick: = ai_sampler.sample(logits, cfg, rng, work)
             // A marker other than a word ends it too: none of them is text.
             if pick >= ids.pre
@@ -355,7 +355,7 @@ priv fn complete(at: Paths, weights: U8[], in_path: U8[], out_path: U8[], sample
     base: = base_vocab(at)
     ids: = fim_ids(base)
     $tok: = load_tokenizer(at, model_arena)
-    $model: = new_model(base + fim_markers, model_arena)
+    $model: = new_model(base + FIM_MARKERS, model_arena)
     // **The weights point into the file read**, so it lives as long as the model does.
     st: = ai_file.load_safetensors(weights, model_arena) catch
         io.err().s("[error] cannot read \{weights\} (train writes it)\n")
@@ -401,7 +401,7 @@ fn main()
     $weights: U8[] = ""
     $in_path: U8[] = ""
     $out_path: U8[] = ""
-    p: = argp.Parser.create(sys.program_name(), "a small FIM coding model", arena)
+    p: = argparse.Parser.create(sys.program_name(), "a small FIM coding model", arena)
     p.subcommand("train", "fit a fresh model to a FIM corpus and write its weights")
     p.subcommand("complete", "answer a file of holes with candidates, one JSON object per line")
     p.subcommand("loss", "the mean loss over a corpus's first examples, the weights only read")

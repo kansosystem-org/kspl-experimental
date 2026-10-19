@@ -17,12 +17,12 @@ A diagnostic code's letter gives the weight ("5.2 The diagnostics' four weights"
 | a division or remainder by `0` | changes what runs |
 | a bit shift by the left side's type width or more, or by a negative amount | changes what runs |
 | an integer literal outside its range (`U8 = 300` and the like) | changes what runs |
-| a line in the indentation notation whose column matches no block | the reader and the compiler would disagree (the mechanism, and why any indent width works, is "The indentation notation (`.kspl`)" in [`../../docs/DESIGN-notation.md`](../../docs/DESIGN-notation.md)). `ksplc fmt` rebuilds the columns from the tree, so no formatted source meets it |
+| a line in the indentation notation whose column matches no block | the reader and the compiler would disagree. `ksplc fmt` rebuilds the columns from the tree, so no formatted source meets it |
 | an `#export` on a `priv` | written but does nothing: `priv` makes the generated C `static`, so the exported name still links to nothing outside (the attribute-combination check refuses it) |
 | a `;` at the end of a statement's line in the indentation notation | a second way of writing the line's end, which already ends the statement. `ksplc fmt` drops it |
 | a `;` right after the `}` of a block written on one line, where that block ends its statement (`if c { f() }; g()`) | a second way of writing that end, which the `}` already made. A block inside a value (`x: = f() catch { 0 }; g(x)`) ends no statement, and its `;` stays |
 
-The language rules are "2.3 Literals" and "6.8 Integer arithmetic: folding, overflow, division, shifts" in [`../../docs/SPEC-language.md`](../../docs/SPEC-language.md), and for `#export`, "11.3 Exposing a KSPL function to C (`#export`)" in the same document.
+The language rules are "2.3 Literals" and "6.8 Integer arithmetic: folding, overflow, division, shifts" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md), and for `#export`, "11.3 Exposing a KSPL function to C (`#export`)" in the same document.
 
 ## 2. The list of warnings (W)
 
@@ -64,7 +64,7 @@ A method frees its object, but the compiler cannot tell, so using the object aft
 * **Fix**: where it frees, name it `free` and add `impl X: Owned {}`. `Owned`'s `free` returns no failure, so move a clean-up whose result must be checked (a flush, say) into a separate method. An operation that does not free the receiver, or that takes an argument (`delete(key)`), is out of scope.
 
 ### [W0108] A bit operation's operand is compared without brackets
-The result of `&` / `|` / `^` is compared without brackets, as in `a & b == c`. KSPL binds all three more tightly than comparison, so it reads `(a & b) == c`. **C reads it the other way** (`a & (b == c)`), and neither the types nor a run-time check catch it. Where each operator stands is the table in "6.1 The operator list and precedence" in [`../../docs/SPEC-language.md`](../../docs/SPEC-language.md#61-the-operator-list-and-precedence).
+The result of `&` / `|` / `^` is compared without brackets, as in `a & b == c`. KSPL binds all three more tightly than comparison, so it reads `(a & b) == c`. **C reads it the other way** (`a & (b == c)`), and neither the types nor a run-time check catch it. Where each operator stands is the table in "6.1 The operator list and precedence" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#61-the-operator-list-and-precedence).
 * **Fix**: bracket the intended grouping (`(a & b) == c`). [H0301]'s "unneeded brackets" does not look at binary operations, so both can be followed.
 
 ### [W0109] An early exit before the `defer` that frees an `Owned` value
@@ -78,7 +78,7 @@ A value that must be freed can leave the function before its `defer` is reached,
 
 ### [W0201] Unreachable code
 Code that never runs, because it follows a `return`, a `throw`, a `for` that never ends (no condition, and no `break` leaves it) or the like. What follows a labelled `switch`, `if` or block that a `break` to its label leaves is reachable, whatever its branches end in.
-* **Fix**: delete it. A function returning a value needs no `return` after a `for` that never ends ("Loops" in [`../../docs/SPEC-language.md`](../../docs/SPEC-language.md#72-loops)).
+* **Fix**: delete it. A function returning a value needs no `return` after a `for` that never ends ("Loops" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#72-loops)).
 
 ### [W0202] An unused expression with no side effect
 An expression is evaluated, but its result is not stored. It holds no side effect (a function call, an assignment), so it does nothing. Examples are a plain `1 + 1;` and a bare variable reference.
@@ -107,16 +107,16 @@ A value is assigned to a variable and never read afterwards.
 * **Fix**: where it is deliberate, start the name with `_`.
 
 ### [W0209] A `//<` continuation that continues nothing
-A `//<` line meant to continue a description has nothing to continue, so its text is shown nowhere. A line holding only a `//<` and its text continues the `//<` above it, as part of that declaration's summary. A run must be contiguous: a blank line or a plain `//` comment ends it. Where the line above has no `//<` (one of those stands between, or nothing is above), there is no run to join. The text then reaches neither the editor's hover nor the record. The mark is written and the sentence is not read. That is the "writable, and with no effect" shape that is refused. The reason is "The documentation a declaration carries" in [`../../docs/DESIGN-notation.md`](../../docs/DESIGN-notation.md).
+A `//<` line meant to continue a description has nothing to continue, so its text is shown nowhere. A line holding only a `//<` and its text continues the `//<` above it, as part of that declaration's summary. A run must be contiguous: a blank line or a plain `//` comment ends it. Where the line above has no `//<` (one of those stands between, or nothing is above), there is no run to join. The text then reaches neither the editor's hover nor the record. The mark is written and the sentence is not read. That is the "writable, and with no effect" shape that is refused.
 * **Fix**: put the `//<` the run continues on the line above (behind the declaration or the member itself). Where the text is not that declaration's documentation, make it a plain `//` comment.
 
 ### [W0210] A `//<` anchor with nothing continuing it
-A `//<` behind a declaration can carry no text and leave the whole description to the `//<` lines below it. This is the anchor shape, in "The documentation a declaration carries" in [`../../docs/DESIGN-notation.md`](../../docs/DESIGN-notation.md). Where no such line follows, the run is empty and the entry is published with no description. It mirrors [W0209]: there the sentence has no mark, here the mark has no sentence.
+A `//<` behind a declaration can carry no text and leave the whole description to the `//<` lines below it. This is the anchor shape defined in [2.1 of `SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#21-comments). Where no such line follows, the run is empty and the entry is published with no description. It mirrors [W0209]: there the sentence has no mark, here the mark has no sentence.
 * **Fix**: write the description on `//<` lines under the mark, or behind the mark where it fits the line. Where there is really nothing to say, remove the `//<`.
 * **It is reached by deleting**: remove the continuations and the anchor is left with nothing under it.
 
 ### [W0211] A name a comment points at leads nowhere
-A comment names, in backticks, something the code does not hold, such as a method under its old name. A dotted name in backticks in a comment (`` `Map.entry_list` ``, `` `io.out()` ``) is read as the code beside the comment would read it. The head is resolved through the file's own declarations, its imports and the prelude, a parameter or local of the enclosing function first. Each later part is read as a member of the one before. Where the owner is found but lacks the member (a method renamed, a field moved, a function made a method), the pointer leads nowhere. A reader finds nothing, and a model believes the name exists ("A comment that points is checked as a document is" in [`../../docs/DESIGN-repository.md`](../../docs/DESIGN-repository.md)).
+A comment names, in backticks, something the code does not hold, such as a method under its old name. A dotted name in backticks in a comment (`` `Map.entry_list` ``, `` `io.out()` ``) is read as the code beside the comment would read it. The head is resolved through the file's own declarations, its imports and the prelude, a parameter or local of the enclosing function first. Each later part is read as a member of the one before. Where the owner is found but lacks the member (a method renamed, a field moved, a function made a method), the pointer leads nowhere. A reader finds nothing, and a model believes the name exists.
 * **Fix**: point at what exists.
   * Another file can add a method to the type while that file is not in the compilation. Tie such a method to its file (`` `List.order_by` in `std/seq` ``); the document check reads it instead (`make test-docref`).
   * Introduce a name another product owns as its own ("Python's `` `json.dumps` ``").
@@ -130,7 +130,7 @@ A comment names, in backticks, something the code does not hold, such as a metho
 * **The scope is the compilation's**: members are looked up across every file compiled together. So the lint gate, which compiles each entry point whole, sees what the editor's single document cannot.
 
 ### [W0212] A comment opening with `///` or `//!`, which is not read
-A documentation comment written in another language's style is ignored by KSPL. A line comment opening with `///` (before a declaration or a field, or behind code) is the documentation marker of Rust, Swift, C#, Zig and Doxygen. In every one of them it describes the thing *after* it. `//!` is Rust's and Zig's marker for the thing it stands *inside* (at a file's head, the file). KSPL's marker is `//<`, behind the thing it describes. So neither reaches the editor's hover or the reference pages. Meanwhile, whoever wrote it believes the description took effect ("The documentation a declaration carries" in [`../../docs/DESIGN-notation.md`](../../docs/DESIGN-notation.md)).
+A documentation comment written in another language's style is ignored by KSPL. A line comment opening with `///` (before a declaration or a field, or behind code) is the documentation marker of Rust, Swift, C#, Zig and Doxygen. In every one of them it describes the thing *after* it. `//!` is Rust's and Zig's marker for the thing it stands *inside* (at a file's head, the file). KSPL's marker is `//<`, behind the thing it describes. So neither reaches the editor's hover or the reference pages. Meanwhile, whoever wrote it believes the description took effect.
 * **Fix**: move the sentence behind the thing it describes, on that thing's own line, as `//<` (`fn add(a: I32, b: I32): I32 //< adds two numbers`). A longer description runs on below in `//<` lines one step in. A `//!` saying what a file is for becomes the `//<` run before the file's first line of code, above the imports. A remark for whoever edits the code, rather than a description for its callers, is a plain `//`.
 * **Not reported**:
   * four or more slashes (a banner, as in Rust);
@@ -138,17 +138,17 @@ A documentation comment written in another language's style is ignored by KSPL. 
   * a shebang. The analysis reads its `#!` rewritten to `//`, so followed by its path it would read `///`.
 
 ### [W0213] A long `//<` summary, or one opening with a label
-The summary is the first paragraph of a `//<` run: everything before the first `//<` carrying no text. It is what the editor's hover, the completion list and `ksplc doc` show, so it is **one line that says what the thing is**. A summary running over several lines crowds those places. One opening with `Caution:` or `Note:` tells the reader what to beware of before it says what the thing is ("The documentation a declaration carries" in [`../../docs/DESIGN-notation.md`](../../docs/DESIGN-notation.md)).
+The summary is the first paragraph of a `//<` run: everything before the first `//<` carrying no text. It is what the editor's hover, the completion list and `ksplc doc` show, so it is **one line that says what the thing is**. A summary running over several lines crowds those places. One opening with `Caution:` or `Note:` tells the reader what to beware of before it says what the thing is.
 * **Fix**: keep the first line and end the summary there with an empty `//<`. The rest runs on below it as the detail, which the six-line cap counts. Where the first line is a label, write a line above it saying what the thing is, then the empty `//<`.
 * **Not reported**: a run whose summary is one line, however long the detail below the parting mark.
 
 ### [W0501] Conformance to a look-alike of a known trait
 A type claims a trait that only looks like one the compiler treats specially, so the special treatment never happens. The `X` of `impl <type>: X` names a different declaration with the same name as a trait the compiler knows (`Ref_counted` / `Move_only` / `Owned`). The known traits are matched by FQN, the name with its full module path (`std.lang.Ref_counted` and so on). So conforming to the look-alike turns on none of ARC's `retain`/`release`, the move check or the free tracking. **Nothing else reports this for these three.**
-* **Fix**: to conform to the real trait, qualify it with `lang.`, as in `impl <type>: lang.Ref_counted` (the `std/lang` item in ["9. Files and import" in `../../docs/SPEC-language.md`](../../docs/SPEC-language.md#9-files-and-import)). Where the name serves an unrelated purpose, rename it, or silence this for that one file with `##lint(W0501 = off)`.
+* **Fix**: to conform to the real trait, qualify it with `lang.`, as in `impl <type>: lang.Ref_counted` (the `std/lang` item in ["9. Files and import" in `../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#9-files-and-import)). Where the name serves an unrelated purpose, rename it, or silence this for that one file with `##lint(W0501 = off)`.
 
 ### [W0502] A local or parameter hiding an imported module
-A local variable or parameter has the name an import line binds to a module (`import "std/io"` binds `io`, and `import "std/json" + { Val }` binds `json` beside `Val`). A module's members and a value's are both reached with `.`, so from the declaration to the end of its scope `io.out()` reads the local. It then fails as a missing member far from the cause. Where the local has a member of that name, it silently reads the wrong thing. The reason is "Why `::` stays the cast, and what it costs to parse" in [`../../docs/DESIGN-language.md`](../../docs/DESIGN-language.md). It is a warning, not an error, because shadowing stays legal ("4.5 Scope and shadowing" in [`../../docs/SPEC-language.md`](../../docs/SPEC-language.md)).
-* **Fix**: rename the local. The file can use the module only for names a selective import could bring (a type in signatures, `json.Val`). Then import those names instead (`import "std/json" { Val }`), so no module name is bound for a local to hide.
+A local variable or parameter has the name an import line binds to a module (`import "std/io"` binds `io`, and `import "std/json" + { Value }` binds `json` beside `Value`). A module's members and a value's are both reached with `.`, so from the declaration to the end of its scope `io.out()` reads the local. It then fails as a missing member far from the cause. Where the local has a member of that name, it silently reads the wrong thing. It is a warning, not an error, because shadowing stays legal ("4.5 Scope and shadowing" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md)).
+* **Fix**: rename the local. The file can use the module only for names a selective import could bring (a type in signatures, `json.Value`). Then import those names instead (`import "std/json" { Value }`), so no module name is bound for a local to hide.
 * **Not reported**:
   * a name no import line binds (a selective import without `+` binds only the names it lists);
   * the prelude's `lang`, which no line imports;
@@ -169,7 +169,7 @@ A `::` cast (KSPL's explicit type conversion) that the compiler would do anyway.
 * a lossless numeric widening (`I8` to `I32`);
 * a cast that only drops the write permission `$` (`U8$[]` to `U8[]`, `U8$@` to `U8@`).
 
-* **Fix**: drop the `::`; the conversion happens without it (the implicit casts in "6.4 Type conversion (`::`) and implicit casts" in [`../../docs/SPEC-language.md`](../../docs/SPEC-language.md)).
+* **Fix**: drop the `::`; the conversion happens without it (the implicit casts in "6.4 Type conversion (`::`) and implicit casts" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md)).
 * **The verdict is made against the expected type.** It is reported only where the surroundings fix the type (an argument, a return value, an annotated binding). It is not reported where the cast is what fixes the binding's type, as in `x: = U8[]::f();`.
 
 ### [I0302] A redundant boolean comparison
@@ -205,14 +205,14 @@ A branch that could return a boolean directly, as in `if cond { return true; } e
 * **Fix**: delete the `$` and let `.` dereference (`p.field`).
 
 ### [I0310] An import's `as` that changes no name
-The `as io` of `import "std/io" as io` adds nothing: the bare `import "std/io"` derives the same alias from the path's last part. The two are entirely synonymous: two ways to write one thing ("One notation per purpose" in [`../../docs/DESIGN-principles.md`](../../docs/DESIGN-principles.md)).
+The `as io` of `import "std/io" as io` adds nothing: the bare `import "std/io"` derives the same alias from the path's last part. The two are entirely synonymous: two ways to write one thing.
 * **Fix**: drop the `as`: `import "std/io"`. The `as` itself is kept for imports that change the name (`import "ksplc/base/ast" as base_ast`, or `import "std/strfmt" as _strfmt`, whose leading `_` lets it go unused). Confined to them, it leaves one spelling per import.
 
 ### [I0401] An unused import
-Something an `import` brought in is never used in that file. It comes in two shapes with one fix: a whole file's alias (`import "path" as name`) or one symbol of a selective import (`import "path" { A, B }`, the selective import of `docs/SPEC-language.md` §9).
+Something an `import` brought in is never used in that file. It comes in two shapes with one fix: a whole file's alias (`import "path" as name`) or one symbol of a selective import (`import "path" { A, B }`, the selective import of `docs/SPEC-programming-language.md` §9).
 * **The verdict covers that one file alone.** It rests only on whether the file writes the name, so a use inside a generic template never instantiated counts.
 * An alias counts only at the head of a qualified name (`io.out()`, `ds.List`), not as a field (`p.io`) or a function (`io()`) spelled the same.
-* An import an extension method's call needs ("An extension method requires the import" in [§9](../../docs/SPEC-language.md)) counts as used. This holds for a method on a built-in type too (`import "std/str"` for `s.equals(...)`) and for a format specifier (`import "std/strfmt"` for `\{n:x\}`).
+* An import an extension method's call needs ("An extension method requires the import" in [§9](../../docs/SPEC-programming-language.md)) counts as used. This holds for a method on a built-in type too (`import "std/str"` for `s.equals(...)`) and for a format specifier (`import "std/strfmt"` for `\{n:x\}`).
 * **Fix**: delete the import. Where loading it is deliberate, mark it ignored: a `_` on the alias, or a `_` leading the local name for a selective one (`{ A as _a }` and the like).
   * A file can be imported only so that its conformances hold (`import "std/strfmt" as _strfmt` for the `fmt` each type's `\{x\}` reaches). The importing file writes nothing that uses it: the call is made inside `put`'s instantiation, which asks for no import. Give it the `_`.
   * A name inside a declaration `#cfg` dropped is not counted, since that build lacks the declaration. For a symbol used in only one of the builds, put the same `#cfg` on the import, **on the line directly before it**. Written on the same line, it is moved to its own line by `ksplc fmt` anyway.
@@ -238,13 +238,14 @@ An identifier breaks KSPL's standard naming conventions.
 
   | The kind of name | The convention |
   | :-- | :-- |
-  | a type, a struct, an enum, a typedef | `Capital_snake_case` (snake case with a leading capital) |
-  | a variable, a constant, a function, a method, a field | `snake_case` (all lowercase; `UPPER_SNAKE_CASE` is allowed for a global constant and the like) |
+  | a type, a struct, an enum, a typedef | `Initial_upper_snake_case`: only the first letter is uppercase; all later letters are lowercase |
+  | an explicit constant (`const`) | `UPPER_SNAKE_CASE`: all letters are uppercase |
+  | an ordinary binding, a function, a method, a field, an enum variant | `snake_case`: all letters are lowercase |
 
 ### [I0601] An unnecessary mutability marker
 A variable or parameter declared with the mutability marker `$` is never reassigned within its scope (Rust's `unused_mut`). A declaration that cannot take a `$`, such as a for-in loop's variable (`for x in collection { ... }`), is out of scope.
 * **The criterion**: whether the value the name itself holds is rewritten (`is_reassigned` in `sema/flow/track.kspl`). A write that goes through a pointer or a slice to something else does not count.
-* **Why a write can need no `$` before the name**: KSPL has two places to write `$`, and they allow different things. I0601 asks only about the first. The full rule is "4.2 The two axes of mutability" in [`../../docs/SPEC-language.md`](../../docs/SPEC-language.md#42-the-two-axes-of-mutability).
+* **Why a write can need no `$` before the name**: KSPL has two places to write `$`, and they allow different things. I0601 asks only about the first. The full rule is "4.2 The two axes of mutability" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#42-the-two-axes-of-mutability).
 
   | Where the `$` stands | Example | What it allows |
   | :-- | :-- | :-- |
@@ -271,7 +272,7 @@ A variable or parameter declared with the mutability marker `$` is never reassig
 
 ### [I0602] Detecting a hand-made ownership struct
 Off by default ("5.3" in [`SPEC-tools.md`](SPEC-tools.md#53-enabling-disabling-or-promoting-a-diagnostic-to-an-error-lint----lint--ksplccfg)). Reported where a struct not conforming to `Ref_counted` holds a raw-pointer field and defines its own `free` method: hand-made ownership. Structs under `std/` are out of scope (ARC's own primitives, such as `Arena` and `List`, would make the advice circular).
-* **Fix**: following `Rc<|T|>` / `Arc<|T|>`, consider conforming it to `Ref_counted` so that reference counting manages its lifetime ("8.4 The memory management model: `defer` / ARC / arenas" in [`../../docs/SPEC-language.md`](../../docs/SPEC-language.md)).
+* **Fix**: following `Rc<|T|>` / `Arc<|T|>`, consider conforming it to `Ref_counted` so that reference counting manages its lifetime ("8.4 The memory management model: `defer` / ARC / arenas" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md)).
 
 ### [I0701] Error propagation using '!' is recommended
 A `catch` that only rethrows the caught error, as in `catch e { throw e; }`.
@@ -295,9 +296,9 @@ A type written where the line, or the place the value goes, already says it. It 
   * an enum variant (`k: Kind = Kind.small`);
   * a call made through the type (`xs: List<|I32|> = List<|I32|>.new(arena)`).
 
-  The annotation can also be `Bool` over `true` / `false`. Deleting it leaves the variable's type as it is. **Only a type the text shows is reported.** `count: Sz = items.len` is not reported: there the annotation is the one place a reader without hover sees the type. The reason is "A type is redundant only where it is written twice" in [`../../docs/DESIGN-language.md`](../../docs/DESIGN-language.md).
-* **An enum's type written at its variant where the place already gives it.** The places are the nine where the type name can be left out ("6.6.2 Where the type may be omitted" in [`../../docs/SPEC-language.md`](../../docs/SPEC-language.md)):
-  1. the right side of a declaration with a written type (`const usual: Kind = Kind.small`);
+  The annotation can also be `Bool` over `true` / `false`. Deleting it leaves the variable's type as it is. **Only a type the text shows is reported.** `count: Sz = items.len` is not reported: there the annotation is the one place a reader without hover sees the type.
+* **An enum's type written at its variant where the place already gives it.** The places are the nine where the type name can be left out ("6.6.2 Where the type may be omitted" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md)):
+  1. the right side of a declaration with a written type (`const USUAL: Kind = Kind.small`);
   2. the right side of `=` (`held = Option<|I32|>.some(3)`);
   3. a direct argument of a call (`kinds.push(Kind.small)`, a call through a function value's too);
   4. a variant's payload (`.some(Kind.small)`);
@@ -308,7 +309,7 @@ A type written where the line, or the place the value goes, already says it. It 
   9. the right side of `throw` (`throw Fault.lost`).
 
   In each, either side of an `if … else` standing there counts too (`return Option<|I32|>.some(n) if ok else Option<|I32|>.none`). The variant's type is the one the place expects: a `T!E` function's `T` for a `return`, its `E` for a `throw`. So `.small` finds the same variant and the program does not change.
-* **Fix**: delete the type the editor dims. That is the annotation (`p: = Point::{ … }`; a `const` loses its `:` with it, `const k = Kind.small`). Or it is the variant's type up to its `.` (`kinds.push(.small)`, `return .some(n)`, `throw .lost`, `catch .small`).
+* **Fix**: delete the type the editor dims. That is the annotation (`p: = Point::{ … }`; a `const` loses its `:` with it, `const K = Kind.small`). Or it is the variant's type up to its `.` (`kinds.push(.small)`, `return .some(n)`, `throw .lost`, `catch .small`).
 * **Not reported**:
   * an annotation doing work: a literal taking its type from it (`$i: Sz = 0`), a conversion it drives (`wide: I64 = small`), or a right side typed by it (`::{ … }`, `.small`);
   * another name for the type (`spot: Spot = Point::{ … }`, `Spot` a typedef);
@@ -353,7 +354,7 @@ A call is passed as an argument to another call, and the outer argument list wra
 * **Fix**: move the inner call into a named temporary and pass that (`lb: = base_core.arena.create(Lock_borrow::{ ... }); borrows.push(lb);`).
 
 ### [H0803] A function exceeds 300 lines
-A function or method is longer than the guide of 300 lines per function that Principle 3 lays down ("Development Principles" in [`../../docs/DESIGN-principles.md`](../../docs/DESIGN-principles.md)).
+A function or method exceeds 300 lines. The limit is defined in "Principle 3 - what is counted, and how" in [`../../docs/SPEC-gates.md`](../../docs/SPEC-gates.md).
 * **Fix**: split it into small helpers by task.
 
 ### [H0804] A direct wrap of a multi-line call
@@ -362,5 +363,5 @@ The subject of a `switch` or `if` directly wraps a call whose argument list span
 * It urges splitting for readability, not correctness, so it is a Hint, like H0802, which gives the same advice.
 
 ### [H0805] A function nests blocks past 8 levels
-A function's blocks nest deeper than the guide of 8 levels that Principle 3 lays down ("Development Principles" in [`../../docs/DESIGN-principles.md`](../../docs/DESIGN-principles.md)). The function body is level 0, so each `if`, `for`, `switch` case or bare block inside it opens one more. It is reported once per function, at the function, with the depth it reached.
+A function's blocks nest deeper than 8 levels. The limit is defined in "Principle 3 - what is counted, and how" in [`../../docs/SPEC-gates.md`](../../docs/SPEC-gates.md). The function body is level 0, so each `if`, `for`, `switch` case or bare block inside it opens one more. It is reported once per function, at the function, with the depth it reached.
 * **Fix**: move the innermost part into a helper, or reject first and leave ([H0801]) so the rest needs no `else`.

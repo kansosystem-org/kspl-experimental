@@ -4,7 +4,7 @@
 //< of them here. Where the summary says how to free the result, the test checks the heap after
 //< that free. The heap must come back to where it stood, so neither the result nor the work
 //< behind it is lost.
-import "std/argp"
+import "std/argparse"
 import "std/base64"
 import "std/ds" { List, Map }
 import "std/fs"
@@ -34,25 +34,25 @@ priv struct Null_probe //< a struct `into_struct` fills from JSON
     count: I64
 
 // The table is written out: a second file holding a table ksplc builds loses the first one's.
-priv const probe_fields: reflect.Field_info[2] = ::{::{ .name = "name",
+priv const PROBE_FIELDS: reflect.Field_info[2] = ::{::{ .name = "name",
     .offset = offsetof(Null_probe, name), .kind = .str_field },
     ::{ .name = "count", .offset = offsetof(Null_probe, count), .kind = .int_field,
     .extra = ::{ .width = sizeof(I64) } } }
 
 impl Null_probe: reflect.Reflectable
     fn fields(_r: Self): reflect.Field_info[]
-        return reflect.Field_info[]::probe_fields
+        return reflect.Field_info[]::PROBE_FIELDS
 
 priv struct Name_list //< a struct whose one field is a list of strings
     names: List<|U8[]|>
 
-priv const name_list_fields: reflect.Field_info[1] = ::{::{ .name = "names",
+priv const NAME_LIST_FIELDS: reflect.Field_info[1] = ::{::{ .name = "names",
     .offset = offsetof(Name_list, names), .kind = .list_field,
     .extra = ::{ .elem = .str_field, .elem_size = sizeof(U8[]) } } }
 
 impl Name_list: reflect.Reflectable
     fn fields(_r: Self): reflect.Field_info[]
-        return reflect.Field_info[]::name_list_fields
+        return reflect.Field_info[]::NAME_LIST_FIELDS
 
 priv fn freed(s: U8[]) //< gives back one block a null arena handed out
     dealloc(Void$@::s.ptr)
@@ -93,7 +93,7 @@ fn test_null_arena_text_and_bytes() //< the functions that return one block of t
     verdict.start("[std] null as the arena for one string or byte run test...")
     before: = mem.heap_used_bytes()
     $parts: = "a,b".split(',', null)
-    joined: = "-".join(parts, null)
+    joined: = "-".join(parts.slice(), null)
     assert(joined.equals("a-b"), "join on the heap")
     freed(joined)
     parts.free()
@@ -216,10 +216,10 @@ fn test_json_doc_val_switch() //<
             seen += 1 if s.equals("s") else 0
         case .array_val(a)
             seen += (1
-                if json.Val.array_val(a).get_at(0).as_int().unwrap_or(0) == 1 else 0)
+                if json.Value.array_val(a).get_at(0).as_int().unwrap_or(0) == 1 else 0)
         case .obj_val(o)
             seen += (1
-                if json.Val.obj_val(o).get("k").as_int().unwrap_or(0) == 2 else 0)
+                if json.Value.obj_val(o).get("k").as_int().unwrap_or(0) == 2 else 0)
         default {}
     assert(seen == 3, "each variant binds its one field")
     back_to(before, "each document frees at the end of its turn")
@@ -281,7 +281,7 @@ fn test_null_arena_messages() //< a query, headers, a message and a parser free 
     short_body: = "HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nab"
     _short: = http.parse_response(short_body, null) catch null
     back_to(before, "a message frees with free(), and a refused one leaves nothing")
-    p: = argp.Parser.create("probe", "a null arena", null)
+    p: = argparse.Parser.create("probe", "a null arena", null)
     p.positional("[anything]")
     $flag: = false
     p.flag("--on", flag@, "a flag")
@@ -294,7 +294,7 @@ fn test_null_arena_work_is_freed() //< a function frees the work it does not ret
     src: = "GET / HTTP/1.1\r\nHost: h\r\n\r\n"
     // A parse adds the test's own arguments to the parser. So the first parse comes before the
     // count, and the second adds no more than the room the first made.
-    p: = argp.Parser.create("probe", "a null arena", null)
+    p: = argparse.Parser.create("probe", "a null arena", null)
     defer p.free()
     p.positional("[anything]")
     p.parse_or_exit(sys.args(), null)
@@ -422,11 +422,11 @@ fn test_null_arena_fuzz() //< the fuzz driver's steps: a record frees with `free
     found.free()
     back_to(before, "findings free with free(), every finding noted in them included")
     none: = fuzz.findings_new(null)
-    fuzz.report_all(none, fuzz.Opts::{ .trials = 1I64, .seed = 1I64 },
+    fuzz.report_all(none, fuzz.Options::{ .trials = 1I64, .seed = 1I64 },
         "a driver given a null arena", 100, "again", null)
     none.free()
-    $o: = fuzz.Opts::{ .trials = 1I64, .seed = 1I64 }
-    p: = argp.Parser.create("probe", "a null arena", null)
+    $o: = fuzz.Options::{ .trials = 1I64, .seed = 1I64 }
+    p: = argparse.Parser.create("probe", "a null arena", null)
     $refused: = false
     _set: = fuzz.setup(p, o@, "probe", "<program>", false, null) catch why
         refused = true

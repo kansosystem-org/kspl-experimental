@@ -7,7 +7,7 @@
 //< covers **everything coarsely**, in steps of one chunk; the usage (the left of `AST Arena usage`)
 //< covers **only the AST, finely**, with no steps. The peak alone misses a 30% rise hidden under a
 //< step; the usage alone misses a regression outside the AST (a `List`, a `Map`).
-import "std/argp"
+import "std/argparse"
 import "std/chars"
 import "std/fs"
 import "std/io"
@@ -20,7 +20,7 @@ import "std/str" { Str_builder }
 import "std/strfmt"
 import "std/sys"
 
-priv const mem_threshold: F64 = 1.3 //< the multiple allowed for the peak
+priv const MEM_THRESHOLD: F64 = 1.3 //< the multiple allowed for the peak
     //<
     //< **It cannot be tighter than a step.** The AST's arena grows a chunk at a time (`Arena` in
     //< `std/mem.kspl`), so one step is a large fraction of the peak.
@@ -29,18 +29,18 @@ priv const mem_threshold: F64 = 1.3 //< the multiple allowed for the peak
     //< baseline to today's value**: the slack is lost, and the next run in which a chunk grows
     //< fails.
 
-priv const ast_threshold: F64 = 1.05 //< the multiple allowed for the usage
+priv const AST_THRESHOLD: F64 = 1.05 //< the multiple allowed for the usage
     //<
     //< Caution: **Do not give it the peak's value**: this count has no steps to absorb. Tighter
     //< than 5%, the baseline would need a new measurement at every intended feature addition.
 
-priv const time_pattern: U8[] = "Compile time\\s*:\\s*([\\d,]+) ms" //<
+priv const TIME_PATTERN: U8[] = "Compile time\\s*:\\s*([\\d,]+) ms" //<
     //< The patterns picked out of the log
     //<
     //< **The canonical source is the lines `ksplc/main.kspl` prints**; change them and change
     //< this. `[\d,]+` includes the grouping comma (`7,052`). `Compile time` is `N/A` on backends
     //< other than C and so is not picked up (`make perf-log` measures on C).
-priv const peak_pattern: U8[] = "System Peak Memory:\\s*([\\d,]+) bytes" //<
+priv const PEAK_PATTERN: U8[] = "System Peak Memory:\\s*([\\d,]+) bytes" //<
     //< The pattern for the peak memory
     //<
     //< **The build time is not used for the verdict**; only its ratio against the baseline is
@@ -49,7 +49,7 @@ priv const peak_pattern: U8[] = "System Peak Memory:\\s*([\\d,]+) bytes" //<
     //< memory stays the same. Time measures the machine and its load, not the work. A loose bound
     //< buries a real regression; a tight one fails on noise. `--stats` adds the per-stage
     //< breakdown. To investigate time, compare the minimum of several runs on a quiet machine.
-priv const ast_pattern: U8[] = "AST Arena usage\\s*:\\s*([\\d,]+) /" //<
+priv const AST_PATTERN: U8[] = "AST Arena usage\\s*:\\s*([\\d,]+) /" //<
     //< The memory the AST occupies
     //<
     //< Caution: **Capture the usage (the left), not the capacity (right of the `/`)**, which is the
@@ -57,7 +57,7 @@ priv const ast_pattern: U8[] = "AST Arena usage\\s*:\\s*([\\d,]+) /" //<
     //< RSS** (the peak is the most bytes `std/mem.kspl` held from malloc at once).
 // **Capture the distance to the next step and the step's size in one pattern**; either alone
 // cannot tell "where the peak goes if it takes the step".
-priv const headroom_pattern: U8[] =
+priv const HEADROOM_PATTERN: U8[] =
     "AST Arena headroom:\\s*([\\d,]+) bytes before next chunk \\(\\+([\\d,]+) bytes\\)"
 
 priv enum Guard_error //< the tool failed
@@ -87,15 +87,15 @@ priv struct Shapes //< the sizes of the types the tree is built from
     node: I64
     kids: I64
 
-priv const want_node_bytes: I64 = 64I64 //<
+priv const WANT_NODE_BYTES: I64 = 64I64 //<
     //< The fixed sizes of the tree's two types (64-bit: `Sz` and a pointer are 8 bytes)
     //<
     //< Caution: **When it fails, do not change these numbers first.** 8 bytes more each is tens of
-    //< MB over the tree, but `ast_threshold` absorbs it. **`AST bytes` passes while it gains
+    //< MB over the tree, but `AST_THRESHOLD` absorbs it. **`AST bytes` passes while it gains
     //< weight**.
-priv const want_kids_bytes: I64 = 32I64
-priv const node_pattern: U8[] = "AST Node bytes\\s*:\\s*([\\d,]+)"
-priv const kids_pattern: U8[] = "AST Kids bytes\\s*:\\s*([\\d,]+)"
+priv const WANT_KIDS_BYTES: I64 = 32I64
+priv const NODE_PATTERN: U8[] = "AST Node bytes\\s*:\\s*([\\d,]+)"
+priv const KIDS_PATTERN: U8[] = "AST Kids bytes\\s*:\\s*([\\d,]+)"
 
 priv struct Baseline //< holds cold and warm together
     //<
@@ -106,10 +106,10 @@ priv struct Baseline //< holds cold and warm together
 
 // The round trip with JSON. **A key is the field name itself**; ksplc builds the table and
 // `fields()` from the declarations, nesting included ("The compiler writes the table only" in
-// `../../docs/DESIGN-language.md`).
+// `../../docs/DESIGN-programming-language.md`).
 impl Baseline: reflect.Reflectable {}
 
-priv const value_ceiling: I64 = 1_000_000_000_000_000I64 //< the cap on a readable value
+priv const VALUE_CEILING: I64 = 1_000_000_000_000_000I64 //< the cap on a readable value
     //<
     //< It is a petabyte, or thirty thousand years in ms; no indicator reaches it.
     //< Caution: **Never let an overflow pass silently.** An overflowed I64 becomes "a small
@@ -124,7 +124,7 @@ priv fn digits_value(s: U8[]): I64 //< drops the grouping commas and returns an 
         if !s[i].is_digit()
             continue
         v = v * 10I64 + I64::(s[i] - '0')
-        if v > value_ceiling
+        if v > VALUE_CEILING
             return -1I64
     return v
 
@@ -158,15 +158,15 @@ priv fn parse_headroom(text: U8[], path: U8[], arena: Arena$@): Headroom!Guard_e
     //<
     //< Caution: **Take the value nearest the edge**; with several measurements, the far one reads
     //< as "there is still slack".
-    re: = regex.Regex.compile(headroom_pattern) catch
-        io.err().s("[perf_guard] the pattern cannot be read: ").s(headroom_pattern).s("\n")
+    re: = regex.Regex.compile(HEADROOM_PATTERN) catch
+        io.err().s("[perf_guard] the pattern cannot be read: ").s(HEADROOM_PATTERN).s("\n")
         throw .failed
     defer re.free()
     ms: = re.find_all(text, arena)
     if ms.len == 0
         io.err().s("[perf_guard] no arena headroom found in ").s(path).s("\n")
         throw .failed
-    $out: = Headroom::{ .free = value_ceiling, .step = 0I64 }
+    $out: = Headroom::{ .free = VALUE_CEILING, .step = 0I64 }
     for m in ms
         free_digits: = m.group(1, text).unwrap_or("")
         free: = digits_value(free_digits)
@@ -192,12 +192,12 @@ priv fn parse_log(path: U8[], arena: Arena$@): Reading!Guard_error //<
         throw .failed
     defer dealloc(Void$@::text.ptr)
     return Reading::{ .metrics = Metrics::{ .compile_ms =
-        max_capture(text, time_pattern, path, arena)!,
-        .peak_bytes = max_capture(text, peak_pattern, path, arena)!,
-        .ast_bytes = max_capture(text, ast_pattern, path, arena)! },
+        max_capture(text, TIME_PATTERN, path, arena)!,
+        .peak_bytes = max_capture(text, PEAK_PATTERN, path, arena)!,
+        .ast_bytes = max_capture(text, AST_PATTERN, path, arena)! },
         .head = parse_headroom(text, path, arena)!,
-        .shapes = Shapes::{ .node = max_capture(text, node_pattern, path, arena)!,
-        .kids = max_capture(text, kids_pattern, path, arena)! } }
+        .shapes = Shapes::{ .node = max_capture(text, NODE_PATTERN, path, arena)!,
+        .kids = max_capture(text, KIDS_PATTERN, path, arena)! } }
 
 priv fn baseline_path(arena: Arena$@): U8[] //< the baseline's path
     //<
@@ -281,11 +281,11 @@ priv fn report(kind: U8[], base: Metrics, cur: Reading, arena: Arena$@): Bool //
     ratio: = ratio_text(base.compile_ms, cur.metrics.compile_ms, arena)
     io.out().s("[perf_guard] ").s(kind).s(" compile time: \{cur.metrics.compile_ms:,\} (baseline ")
         .s("\{base.compile_ms:,\}, ").s(ratio).s(") -> NOT GATED\n")
-    limit: = I64::(F64::base.peak_bytes * mem_threshold)
+    limit: = I64::(F64::base.peak_bytes * MEM_THRESHOLD)
     peak_ok: = cur.metrics.peak_bytes <= limit
     io.out().s("[perf_guard] ").s(kind).s(" peak memory: \{cur.metrics.peak_bytes:,\} (baseline ")
         .s("\{base.peak_bytes:,\}, limit \{limit:,\}) -> ").s("PASS" if peak_ok else "FAIL").s("\n")
-    ast_limit: = I64::(F64::base.ast_bytes * ast_threshold)
+    ast_limit: = I64::(F64::base.ast_bytes * AST_THRESHOLD)
     ast_ok: = cur.metrics.ast_bytes <= ast_limit
     io.out().s("[perf_guard] ").s(kind).s(" AST bytes: \{cur.metrics.ast_bytes:,\} (baseline ")
         .s("\{base.ast_bytes:,\}, limit \{ast_limit:,\}) -> ").s("PASS" if ast_ok else "FAIL")
@@ -318,11 +318,11 @@ priv fn report_shapes(cold: Shapes, warm: Shapes): Bool //<
     //< **Compare the two logs with each other** — the same executable printed them, so a difference
     //< means an old log is being read.
     fresh: = cold.node == warm.node && cold.kids == warm.kids
-    node_ok: = fresh && cold.node == want_node_bytes
-    kids_ok: = fresh && cold.kids == want_kids_bytes
-    io.out().s("[perf_guard] Ast_node bytes: \{cold.node\} (want \{want_node_bytes\}) -> ")
+    node_ok: = fresh && cold.node == WANT_NODE_BYTES
+    kids_ok: = fresh && cold.kids == WANT_KIDS_BYTES
+    io.out().s("[perf_guard] Ast_node bytes: \{cold.node\} (want \{WANT_NODE_BYTES\}) -> ")
         .s("PASS" if node_ok else "FAIL").s("\n")
-    io.out().s("[perf_guard] child list bytes: \{cold.kids\} (want \{want_kids_bytes\}) -> ")
+    io.out().s("[perf_guard] child list bytes: \{cold.kids\} (want \{WANT_KIDS_BYTES\}) -> ")
         .s("PASS" if kids_ok else "FAIL").s("\n")
     if !fresh
         io.out().s("[perf_guard] the types' sizes differ between cold and warm: cold ")
@@ -345,7 +345,8 @@ fn main(): I32 //<
     $update: = false
     $cold_log: U8[] = ""
     $warm_log: U8[] = ""
-    p: = argp.Parser.create("perf_guard", "compare a build's cost against the baseline", arena)
+    p: = argparse.Parser
+        .create("perf_guard", "compare a build's cost against the baseline", arena)
     p.str_required("--cold", cold_log@, "the log of the build on an empty cache")
     p.str_required("--warm", warm_log@, "the log of the build on the same cache again")
     p.flag("--update", update@, "rewrite the baseline with these measurements")

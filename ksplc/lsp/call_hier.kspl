@@ -23,7 +23,7 @@ import "std/seq"
 import "std/str" { Str_builder }
 import "std/sys"
 
-priv const request_failed: I32 = -32803 //<
+priv const REQUEST_FAILED: I32 = -32803 //<
     //< The LSP's "the request was understood and could not be carried out" (3.17's RequestFailed)
     //<
     //< Not -32601: that says the method is unknown, and the editor stops offering it.
@@ -67,7 +67,7 @@ priv fn add_call_entry(idx: Fqn_lookup_idx$@, caller: Ast_node$@, callee: Ast_no
 
 priv fn build_call_hier_item(target: Ast_node$@, id_n: Ast_node$@, name: U8[], fqn_slice: U8[],
     src_res: U8[], starts: List<|Sz|>$@, is_ref_only: Bool, style: base_locate.Uri_style,
-    $b: Json_builder): json.Val
+    $b: Json_builder): json.Value
     t_off: = id_n.loc.offset if id_n != null else target.loc.offset
     t_len: = id_n.text.len if id_n != null else 1
     r_val: = b.range_in(src_res, t_off, t_len, starts)
@@ -87,12 +87,12 @@ priv fn build_call_hier_item(target: Ast_node$@, id_n: Ast_node$@, name: U8[], f
     if is_ref_only
         file_name.s(" (as fn pointer)")
 
-    return b.obj().set("name", b.str_val(name)).set("kind", b.int_val(lsp_msg.s_function))
+    return b.obj().set("name", b.str_val(name)).set("kind", b.int_val(lsp_msg.S_FUNCTION))
         .set("detail", b.str_val(file_name.slice())).set("uri", b.str_val(full_uri))
         .set("range", r_val).set("selectionRange", r_val).set("data", b.str_val(fqn_slice)).build()
 
 priv fn build_call_hier_json(c: Sema_ctx$@, idx: Fqn_lookup_idx$@, entry: Call_hier_entry$@,
-    is_incoming: Bool, style: base_locate.Uri_style, $b: Json_builder): json.Val
+    is_incoming: Bool, style: base_locate.Uri_style, $b: Json_builder): json.Value
     target: = entry.caller_def if is_incoming else entry.callee_def
 
     id_n: = target.find_child(.k_identifier)
@@ -219,7 +219,7 @@ priv fn build_callee_id_set(root: Ast_node$@): Map<|U8[], I32|>$@ //<
     return set
 
 priv fn collect_callee_ids(node: Ast_node$@, set: Map<|U8[], I32|>$@, depth: Sz)
-    if node == null || depth > lsp_position.max_walk_depth
+    if node == null || depth > lsp_position.MAX_WALK_DEPTH
         return
     info: = node.extract_call_target()
     if info.range_node != null
@@ -229,7 +229,7 @@ priv fn collect_callee_ids(node: Ast_node$@, set: Map<|U8[], I32|>$@, depth: Sz)
 
 priv fn mark_fn_ids(node: Ast_node$@, set: Map<|U8[], I32|>$@, depth: Sz) //<
     //< It registers the function identifiers inside a call's callee (`foo` / `usb.send_frame`)
-    if node == null || depth > lsp_position.max_walk_depth
+    if node == null || depth > lsp_position.MAX_WALK_DEPTH
         return
     if node.kind_id == .k_identifier && is_fn_or_impl_decl(node.def_node)
         $key: = Str_builder.new()
@@ -260,7 +260,7 @@ priv struct Call_search //< what both directions of a search carry down the tree
 
 priv fn find_incoming_calls(s: Call_search, node: Ast_node$@, target_fqn: U8[],
     caller_def: Ast_node$@, depth: Sz)
-    if node == null || depth > lsp_position.max_walk_depth
+    if node == null || depth > lsp_position.MAX_WALK_DEPTH
         return
 
     $current_caller: = caller_def
@@ -282,7 +282,7 @@ priv fn find_incoming_calls(s: Call_search, node: Ast_node$@, target_fqn: U8[],
 
 priv fn find_outgoing_calls(s: Call_search, node: Ast_node$@, depth: Sz) //<
     //< The calls and function-pointer uses under node, the caller's body
-    if node == null || depth > lsp_position.max_walk_depth
+    if node == null || depth > lsp_position.MAX_WALK_DEPTH
         return
 
     info: = node.extract_call_target()
@@ -301,7 +301,7 @@ priv fn find_def_by_fqn(node: Ast_node$@, idx: Fqn_lookup_idx$@, target_fqn: U8[
         //<
         //< Not Symbol_table.resolve(). That tries current_file (whichever was walked last) and then
         //< FQN keys. So a function in an unrelated file can fail to resolve.
-    if node == null || depth > lsp_position.max_walk_depth
+    if node == null || depth > lsp_position.MAX_WALK_DEPTH
         return .none
     if is_fn_or_impl_decl(node) && compute_def_fqn(idx, node).equals(target_fqn)
         return .some(node)
@@ -324,7 +324,8 @@ priv fn resolve_def_by_fqn(root: Ast_node$@, c: Sema_ctx$@, idx: Fqn_lookup_idx$
 // Interface APIs for Handlers
 // ==========================================
 
-fn prepare_call_hierarchy(state: Doc_state$@, params: json.Val, id_val: json.Val, arena: Arena$@)
+fn prepare_call_hierarchy(state: Doc_state$@, params: json.Value, id_val: json.Value,
+    arena: Arena$@)
     $b: = Json_builder.new(arena)
     path: = lsp_position.find_path_at_params(state, params)
     defer path.free()
@@ -366,7 +367,7 @@ priv fn call_order(a: Call_hier_entry$@, b: Call_hier_entry$@, is_incoming: Bool
 
 priv fn respond_with_call_hier_entries(calls_map: Map<|U8[], Call_hier_entry$@|>$@,
     sema: Sema_ctx$@, idx: Fqn_lookup_idx$@, is_incoming: Bool, style: base_locate.Uri_style,
-    $b: Json_builder, id_val: json.Val, arena: Arena$@)
+    $b: Json_builder, id_val: json.Value, arena: Arena$@)
     $arr: = b.arr()
     // **Only here is a list built** (sorting needs them all). Code that only iterates uses
     // `entries()` (the reason is at `entries` in `../../std/ds.kspl`).
@@ -385,7 +386,7 @@ priv fn respond_with_call_hier_entries(calls_map: Map<|U8[], Call_hier_entry$@|>
         arr = arr.push(res_obj)
     lsp_msg.send_response(id_val, arr.build(), arena)
 
-priv fn answered_no_workspace(ws_state: Doc_state$@, id_val: json.Val, arena: Arena$@): Bool //<
+priv fn answered_no_workspace(ws_state: Doc_state$@, id_val: json.Value, arena: Arena$@): Bool //<
     //< It answers an error where the workspace was not analysed far enough, and returns if it did
     //<
     //< **`build_workspace_state` hides the analysis's failure**, and `handle_calls` below reads
@@ -394,15 +395,15 @@ priv fn answered_no_workspace(ws_state: Doc_state$@, id_val: json.Val, arena: Ar
     //< on, and a wrong one costs more than hearing the question could not be answered.
     if ws_state != null && ws_state.sema != null && ws_state.root_file != null
         return false
-    lsp_msg.send_error_response(id_val, request_failed,
+    lsp_msg.send_error_response(id_val, REQUEST_FAILED,
         "the workspace could not be analysed, so the callers cannot be listed", arena)
     return true
 
-fn item_fqn(params: json.Val): U8[] //<
+fn item_fqn(params: json.Value): U8[] //<
     //< The FQN of the function a call hierarchy request asks about (the `data` prepare returned)
     return params.get("item").get("data").as_str().unwrap_or("")
 
-fn handle_calls(ws_state: Doc_state$@, params: json.Val, id_val: json.Val, is_incoming: Bool,
+fn handle_calls(ws_state: Doc_state$@, params: json.Value, id_val: json.Value, is_incoming: Bool,
     arena: Arena$@) //<
         //< It answers `callHierarchy/incomingCalls`, or `outgoingCalls` where not `is_incoming`
     if answered_no_workspace(ws_state, id_val, arena)

@@ -39,11 +39,11 @@ impl Task_state
             return "suspended"
         return "?" // unreachable (every variant is handled); written for the flow analysis
 
-priv const stack_guard_bytes: Sz = 16 //<
+priv const STACK_GUARD_BYTES: Sz = 16 //<
     //< The known bytes Task.create writes at the stack's lowest address (a canary)
     //<
     //< Every schedule() checks them; if they are damaged, it is an overflow and it panics at once.
-priv const stack_guard_byte: U8 = 0xa5
+priv const STACK_GUARD_BYTE: U8 = 0xa5
 
 struct Task
     priv ctx: Void$@ //< the context handle the port owns (opaque)
@@ -72,7 +72,7 @@ struct Task
     priv stack_guard: U8$@ //< its stack's lowest address (holding stack_guard_bytes of canary)
     priv cpu_ticks: U64 //< how many ticks found this task running (its CPU use)
 
-priv const max_tasks: Sz = 32
+priv const MAX_TASKS: Sz = 32
 
 priv $g_tasks: Task$@[32]
 priv $g_task_count: Sz = 0
@@ -115,8 +115,8 @@ priv fn find_task_slot(): Sz //<
         if !found && g_tasks[i] == null
             slot = i
             found = true
-    if !found && g_task_count >= max_tasks
-        return max_tasks
+    if !found && g_task_count >= MAX_TASKS
+        return MAX_TASKS
     return slot
 
 // When the task table or the port's contexts are full, it touches neither tcb nor the stack. It
@@ -127,14 +127,14 @@ impl Task
     fn create(r: Self$@, stack: U8$[], entry: Task_fn, arg: Void$@, prio: I32, name: U8[]): Bool
         // A stack too small to hold the canary is a configuration mistake. No run-time check can
         // catch it, so this check catches it here (like Queue.init's cap==0 check).
-        assert(stack.len > stack_guard_bytes,
+        assert(stack.len > STACK_GUARD_BYTES,
             "Task.create: the stack is too small for the overflow guard")
         // One critical section chooses and fills the slot. Otherwise a tick or another task between
         // the two would take the same slot, or schedule a task half written.
         s: = ksos_port_irq_save()
         defer ksos_port_irq_restore(s)
         slot: = find_task_slot()
-        if slot >= max_tasks
+        if slot >= MAX_TASKS
             return false
         ctx: = ksos_port_ctx_create(stack.ptr, stack.len)
         if ctx == null
@@ -156,8 +156,8 @@ impl Task
         r.name = name
         r.stack_guard = stack.ptr
         r.cpu_ticks = 0
-        for i in Range.asc(stack_guard_bytes)
-            stack[i] = stack_guard_byte
+        for i in Range.asc(STACK_GUARD_BYTES)
+            stack[i] = STACK_GUARD_BYTE
         g_tasks[slot] = r
         if slot == g_task_count
             g_task_count += 1
@@ -165,7 +165,7 @@ impl Task
         return true
 
 priv fn slot_of(t: Task$@): Sz //< t's index in g_tasks, or max_tasks if it is not there
-    $slot: Sz = max_tasks
+    $slot: Sz = MAX_TASKS
     for i in Range.asc(g_task_count)
         if g_tasks[i] == t
             slot = i
@@ -183,8 +183,8 @@ priv fn end_task(t: Task$@) //< [Call it inside a critical section] makes t done
 priv fn check_stack_guard(t: Task$@) //< checks that t's stack guard is still as written
     //<
     //< If it is damaged, that is an overflow and it panics at once.
-    for i in Range.asc(stack_guard_bytes)
-        if (t.stack_guard + i)$ != stack_guard_byte
+    for i in Range.asc(STACK_GUARD_BYTES)
+        if (t.stack_guard + i)$ != STACK_GUARD_BYTE
             panic("ksos: stack overflow detected")
 // The trampoline each port's initial context (from ksos_port_ctx_create) calls. It runs the
 // current task's entry, then marks it done and yields (this context is never picked again). The
@@ -332,7 +332,7 @@ impl Task
 fn current_tick(): U64
     return g_tick
 
-priv const last_tick: U64 = 0xFFFFFFFFFFFFFFFFU64
+priv const LAST_TICK: U64 = 0xFFFFFFFFFFFFFFFFU64
 
 fn deadline_after(ticks: U64): U64 //< the absolute tick ticks from now, for a delay or a timeout
     //<
@@ -340,7 +340,7 @@ fn deadline_after(ticks: U64): U64 //< the absolute tick ticks from now, for a d
     //< huge ticks to a deadline already passed, and the wait meant to be long ends at once.
     d: = g_tick + ticks
     if d < g_tick
-        return last_tick
+        return LAST_TICK
     return d
 
 fn deadline_passed(deadline: U64?): Bool //<
@@ -399,7 +399,7 @@ impl Task
         s: = ksos_port_irq_save()
         defer ksos_port_irq_restore(s)
         slot: = slot_of(r)
-        if slot >= max_tasks
+        if slot >= MAX_TASKS
             return // deleted already
         if r.state != .done
             end_task(r)

@@ -16,13 +16,12 @@ import "std/jsonrpc"
 import "std/mem" { Arena }
 import "std/str" // `find_str` and `equals`
 import "std/strfmt" as _strfmt
-import "std/sys"
 import "std/verdict"
 
 priv fn expect_symbols(c: jsonrpc_client.Client$@, uri: U8[], want: U8[], name: U8[],
     arena: Arena$@)
     got: = lsp_client.answer(c, "textDocument/documentSymbol", lsp_client.at_doc(uri, arena),
-        lsp_client.read_ms, arena)
+        lsp_client.READ_MS, arena)
     result: = got.get("result")
     symbols: = result.arr_list(arena)
     matches: =
@@ -43,13 +42,13 @@ fn run_empty(exe: U8[], arena: Arena$@) //< an empty buffer hides both previous 
         return
     defer c.free()
     _ready: =
-        c.request("initialize", lsp_client.empty_obj(arena), lsp_client.read_ms, arena) catch {}
+        c.request("initialize", lsp_client.empty_obj(arena), lsp_client.READ_MS, arena) catch {}
     for rel in U8[][]::{ "brace.kspl", "laid.kspl" }
         uri: = lsp_client.uri_of(dir, rel, arena)
         text: =
             ("fn first(): I32\n    return 1\n" if rel.ends_with(".kspl")
             else "fn first(): I32 { return 1; }\n")
-        c.notify("textDocument/didOpen", lsp_client.did_open(uri, text, arena), lsp_client.send_ms,
+        c.notify("textDocument/didOpen", lsp_client.did_open(uri, text, arena), lsp_client.SEND_MS,
             arena) catch {}
         expect_symbols(c@, uri, "first", "a nonempty buffer overrides its saved declarations", arena)
         for replacement in U8[][]::{ "", text, "" }
@@ -58,23 +57,23 @@ fn run_empty(exe: U8[], arena: Arena$@) //< an empty buffer hides both previous 
                 .set("textDocument", b.obj().set("uri", b.str_val(uri)).build())
                 .set("contentChanges",
                 b.arr().push(b.obj().set("text", b.str_val(replacement)).build()).build()).build()
-            c.notify("textDocument/didChange", params, lsp_client.send_ms, arena) catch {}
+            c.notify("textDocument/didChange", params, lsp_client.SEND_MS, arena) catch {}
             want: = "" if replacement.len == 0 else "first"
             expect_symbols(c@, uri, want,
                 "clearing and restoring a buffer replaces its declarations", arena)
         lsp_client.close(c@, uri, arena)
-        c.notify("textDocument/didOpen", lsp_client.did_open(uri, "", arena), lsp_client.send_ms,
+        c.notify("textDocument/didOpen", lsp_client.did_open(uri, "", arena), lsp_client.SEND_MS,
             arena) catch {}
         expect_symbols(c@, uri, "", "an empty reopened buffer hides its saved declarations", arena)
-        c.notify("$/ksplTestCrash", lsp_client.empty_obj(arena), lsp_client.send_ms, arena) catch {}
+        c.notify("$/ksplTestCrash", lsp_client.empty_obj(arena), lsp_client.SEND_MS, arena) catch {}
         expect_symbols(c@, uri, "", "an empty buffer stays empty after worker recovery", arena)
         use: = arena.text().s("import \"").s(rel).s("\" as blank\n")
             .s("fn ask(): I32 { return blank.saved(); }\n").take()
         use_uri: = lsp_client.uri_of(dir, "use.kspl", arena)
         c.notify("textDocument/didOpen", lsp_client.did_open(use_uri, use, arena),
-            lsp_client.send_ms, arena) catch {}
+            lsp_client.SEND_MS, arena) catch {}
         pos: = lsp_client.at_pos(use_uri, 1, col_in_line(use, "fn ask", "saved", arena), arena)
-        jump: = lsp_client.answer(c@, "textDocument/definition", pos, lsp_client.read_ms, arena)
+        jump: = lsp_client.answer(c@, "textDocument/definition", pos, lsp_client.READ_MS, arena)
         result: = lsp_client.dump(jump.get("result"), arena)
         verdict.check("an imported empty buffer hides its saved declarations",
             jump.get("id").as_int().unwrap_or(0) > 0 && is_missing(jump.get("error")) &&
@@ -91,7 +90,7 @@ fn run_empty(exe: U8[], arena: Arena$@) //< an empty buffer hides both previous 
 // `../../docs/DESIGN-tools.md`). So after a half-typed `pt.` the hover and the jump still answer.
 // ==========================================
 // The `q: = pt.` line is broken. Everything above and below it is valid.
-priv const broken_src: U8[] =
+priv const BROKEN_SRC: U8[] =
     """struct Point //< a place on the page
   x: I32
   y: I32
@@ -109,17 +108,17 @@ fn main(): I32
 
 """
 
-priv const broken_uri: U8[] = "file:///recover_probe.kspl"
+priv const BROKEN_URI: U8[] = "file:///recover_probe.kspl"
 
 priv fn check_answers_beside_the_break(c: jsonrpc_client.Client$@, arena: Arena$@)
-    c.notify("textDocument/didOpen", lsp_client.did_open(broken_uri, broken_src, arena),
-        lsp_client.send_ms, arena) catch {}
-    defer lsp_client.close(c, broken_uri, arena)
-    line: = decl_line(broken_src, "  n: = area(pt)", arena)
-    col: = col_in_line(broken_src, "  n: = area(pt)", "area", arena)
+    c.notify("textDocument/didOpen", lsp_client.did_open(BROKEN_URI, BROKEN_SRC, arena),
+        lsp_client.SEND_MS, arena) catch {}
+    defer lsp_client.close(c, BROKEN_URI, arena)
+    line: = decl_line(BROKEN_SRC, "  n: = area(pt)", arena)
+    col: = col_in_line(BROKEN_SRC, "  n: = area(pt)", "area", arena)
     got: =
-        c.request("textDocument/hover", lsp_client.at_pos(broken_uri, line, col, arena),
-        lsp_client.read_ms, arena) catch e
+        c.request("textDocument/hover", lsp_client.at_pos(BROKEN_URI, line, col, arena),
+        lsp_client.READ_MS, arena) catch e
         verdict.check("a hover beside a broken line still answers", false, end_text(e))
         return
     text: = lsp_client.hover_text(got.val)
@@ -130,13 +129,13 @@ priv fn check_answers_beside_the_break(c: jsonrpc_client.Client$@, arena: Arena$
     // Caution: **Test a jump too**: a hover needs only the node under the caret, the jump the tree
     // above it.
     def_got: =
-        c.request("textDocument/definition", lsp_client.at_pos(broken_uri, line, col, arena),
-        lsp_client.read_ms, arena) catch e
+        c.request("textDocument/definition", lsp_client.at_pos(BROKEN_URI, line, col, arena),
+        lsp_client.READ_MS, arena) catch e
         verdict.check("a jump beside a broken line still lands", false, end_text(e))
         return
     def_line: = def_got.val.get("result").get("range").get("start").get("line").as_int()
         .unwrap_or(-1)
-    want: = decl_line(broken_src, "fn area(p: Point): I32", arena)
+    want: = decl_line(BROKEN_SRC, "fn area(p: Point): I32", arena)
     landed: = arena.text().s("landed on line ").s("\{def_line\}").take()
     verdict.check("a jump beside a broken line still lands", def_line == want,
         lsp_client.why(c, landed, arena))
@@ -146,13 +145,13 @@ priv fn check_one_account_only(c: jsonrpc_client.Client$@, arena: Arena$@) //<
     //<
     //< **Only the parse reports it**. In a recovered tree the later stages find only the chain of
     //< unrelated errors one missing bracket sets off.
-    c.notify("textDocument/didOpen", lsp_client.did_open(broken_uri, broken_src, arena),
-        lsp_client.send_ms, arena) catch {}
-    defer lsp_client.close(c, broken_uri, arena)
+    c.notify("textDocument/didOpen", lsp_client.did_open(BROKEN_URI, BROKEN_SRC, arena),
+        lsp_client.SEND_MS, arena) catch {}
+    defer lsp_client.close(c, BROKEN_URI, arena)
     $count: Sz = 0
     $came: = false
     for _k in Range.asc(12)
-        msg: = c.read_msg(lsp_client.read_ms, arena) catch
+        msg: = c.read_msg(lsp_client.READ_MS, arena) catch
             break
         if !msg.val.get("method").as_str().unwrap_or("").equals("textDocument/publishDiagnostics")
             continue
@@ -168,7 +167,7 @@ priv fn check_one_account_only(c: jsonrpc_client.Client$@, arena: Arena$@) //<
 
 // A declaration whose block is never closed, **holding everything below it**. The file above must
 // still answer, and the parse must not run on to the end of the input.
-priv const unclosed_src: U8[] =
+priv const UNCLOSED_SRC: U8[] =
     """fn area(p: I32): I32 //< how much it covers
   return p * p
 
@@ -178,17 +177,17 @@ fn tail(): I32
 
 """
 
-priv const unclosed_uri: U8[] = "file:///unclosed_probe.kspl"
+priv const UNCLOSED_URI: U8[] = "file:///unclosed_probe.kspl"
 
 priv fn check_an_unclosed_block(c: jsonrpc_client.Client$@, arena: Arena$@)
-    c.notify("textDocument/didOpen", lsp_client.did_open(unclosed_uri, unclosed_src, arena),
-        lsp_client.send_ms, arena) catch {}
-    defer lsp_client.close(c, unclosed_uri, arena)
-    line: = decl_line(unclosed_src, "fn area(p: I32): I32", arena)
-    col: = col_in_line(unclosed_src, "fn area(p: I32): I32", "area", arena)
+    c.notify("textDocument/didOpen", lsp_client.did_open(UNCLOSED_URI, UNCLOSED_SRC, arena),
+        lsp_client.SEND_MS, arena) catch {}
+    defer lsp_client.close(c, UNCLOSED_URI, arena)
+    line: = decl_line(UNCLOSED_SRC, "fn area(p: I32): I32", arena)
+    col: = col_in_line(UNCLOSED_SRC, "fn area(p: I32): I32", "area", arena)
     got: =
-        c.request("textDocument/hover", lsp_client.at_pos(unclosed_uri, line, col, arena),
-        lsp_client.read_ms, arena) catch e
+        c.request("textDocument/hover", lsp_client.at_pos(UNCLOSED_URI, line, col, arena),
+        lsp_client.READ_MS, arena) catch e
         verdict.check("a block left unclosed does not take the file with it", false, end_text(e))
         return
     text: = lsp_client.hover_text(got.val)
@@ -205,30 +204,27 @@ fn run_recover(c: jsonrpc_client.Client$@, arena: Arena$@)
 // What the language server answers after its worker is remade, with many documents open. **Each
 // check starts a client of its own.** **The first answer after a recovery waits for its own
 // document's analysis** ("The language server runs as two processes: watcher and
-// analyser" in `../../docs/DESIGN-tools.md`). It is measured against analysing every open document
-// in the same run, so a slow machine moves both alike.
+// analyser" in `../../docs/DESIGN-tools.md`). The answer may wait for its own document and one
+// idle analysis. Message order tests that guarantee without depending on the machine's speed.
 // ==========================================
-priv const watchdog_ms: I64 = 10000 //<
-    //< The supervisor's hang timeout (`worker_timeout_ms` in `../../lsp/server.kspl`)
+priv const WATCHDOG_MS: I64 = 10000 //<
+    //< The supervisor's hang timeout (`WORKER_TIMEOUT_MS` in `../../lsp/server.kspl`)
     //<
     //< Written again here: importing the server would build the language server into this suite.
-priv const copies: Sz = 20 //< how many documents are open when the worker is remade
-priv const share_of_all: I64 = 2 //<
-    //< The recovery may take at most 1/`share_of_all` of analysing every open copy
+priv const COPIES: Sz = 20 //< how many documents are open when the worker is remade
+priv const BEFORE_ANSWER_MAX: Sz = 2 //<
+    //< The most documents whose diagnostics may precede the queued hover's answer
     //<
-    //< **What the check tells apart**: waiting for every open document costs about all of it.
-    //< Waiting for its own document (plus an idle-time analysis the request can find under way)
-    //< costs about 2/`copies` of it. Half sits far from both. So neither a loaded machine nor the
-    //< watchdog's own jitter moves a run across it. A multiple of one document's recovery
-    //< does.
-priv const copy_fns: Sz = 250 //<
+    //< Its own document, plus one idle analysis already under way. Restoring and analysing all
+    //< `COPIES` before answering fails regardless of process startup or pipe speed.
+priv const COPY_FNS: Sz = 250 //<
     //< How many functions each copy holds, so analysing one takes measurable work
     //<
     //< **Made here, not read from a file of the package.** The work stays the same whatever the
     //< package's files become. None is imported, so each analysis is the copy alone.
-priv const hover_decl: U8[] = "fn first(" //< the declaration the hover asks about
-priv const crash_hook: U8[] = "$/ksplTestCrash"
-priv const hang_hook: U8[] = "$/ksplTestHang"
+priv const HOVER_DECL: U8[] = "fn first(" //< the declaration the hover asks about
+priv const CRASH_HOOK: U8[] = "$/ksplTestCrash"
+priv const HANG_HOOK: U8[] = "$/ksplTestHang"
 
 priv fn copy_uri(k: Sz, arena: Arena$@): U8[] //< the `k`th copy's name
     return arena.text().s("file:///restart_copy_\{k\}.kspl").take()
@@ -236,14 +232,14 @@ priv fn copy_uri(k: Sz, arena: Arena$@): U8[] //< the `k`th copy's name
 priv fn copy_text(arena: Arena$@): U8[] //< the text every copy holds
     b: = arena.text()
     b.s("fn first(a: I32): I32 //< the function the hover asks about\n  return a\n\n")
-    for k in Range.asc(copy_fns)
+    for k in Range.asc(COPY_FNS)
         b.s("fn step_\{k\}(a: I32): I32\n  b: I32 = first(a) * 2\n  return b + \{k\}\n\n")
     return b.take()
 
-priv struct Recovery //< what one recovery took, from sending the hook on
-    ms: I64 //< until the hover answered; -1 where no answer came
+priv struct Recovery //< the response and diagnostics after one recovery
     answered: Bool //< whether the answer showed the declaration (not the null of a lost request)
     published: Sz //< how many of the open copies had their diagnostics published again
+    before_answer: Sz //< diagnostics before the hover answered; -1 where no answer came
 
 priv fn copy_of(uri: U8[], open: Sz, arena: Arena$@): I32 //< which open copy `uri` names; -1 none
     for k in Range.asc(open)
@@ -258,22 +254,23 @@ priv fn recover(c: jsonrpc_client.Client$@, hook: U8[], open: Sz, id: I32, text:
         //< It reads until the answer and every open copy's diagnostics have come.
         //< **Read the messages here, not through `request`**, which skips the diagnostics that
         //< come before its answer.
-    line: = decl_line(text, hover_decl, arena)
-    col: = col_in_line(text, hover_decl, "first", arena) + 1
+    line: = decl_line(text, HOVER_DECL, arena)
+    col: = col_in_line(text, HOVER_DECL, "first", arena) + 1
     pos: = lsp_client.at_pos(copy_uri(0, arena), line, col, arena)
-    $seen: Bool[copies] = ::{}
-    $out: = Recovery::{ .ms = -1, .answered = false, .published = 0 }
-    t0: = sys.mono_us()
-    c.notify(hook, lsp_client.empty_obj(arena), lsp_client.send_ms, arena) catch {}
-    c.send_raw(jsonrpc.encode("textDocument/hover", pos, id, arena), lsp_client.send_ms) catch {}
-    for out.ms < 0 || out.published < open
+    $seen: Bool[COPIES] = ::{}
+    $out: = Recovery::{ .answered = false, .published = 0, .before_answer = -1 }
+    // Queue both frames together, so the client cannot pause between the hook and the hover.
+    c.send_messages(U8[][]::{ jsonrpc.encode(hook, lsp_client.empty_obj(arena), -1, arena),
+        jsonrpc.encode("textDocument/hover", pos, id, arena) }, lsp_client.SEND_MS) catch
+        return out
+    for out.before_answer < 0 || out.published < open
         // The first answer after a hang comes once the watchdog has given up.
-        wait: = I32::(watchdog_ms + I64::lsp_client.read_ms)
+        wait: = I32::(WATCHDOG_MS + I64::lsp_client.READ_MS)
         msg: = c.read_msg(wait, arena) catch
             break
         if msg.val.get("id").as_int().unwrap_or(-1) == id
-            out.ms = (sys.mono_us() - t0) / 1000I64
             out.answered = lsp_client.hover_text(msg.val).find_str("first").is_some()
+            out.before_answer = out.published
             continue
         if !msg.val.get("method").as_str().unwrap_or("").equals("textDocument/publishDiagnostics")
             continue
@@ -290,11 +287,11 @@ priv fn open_copies(c: jsonrpc_client.Client$@, from: Sz, to: Sz, text: U8[], ar
     //< **Settle before the hook**: diagnostics still on the way would be counted as the recovery's.
     for k in Range.asc(to - from)
         c.notify("textDocument/didOpen",
-            lsp_client.did_open(copy_uri(from + k, arena), text, arena), lsp_client.send_ms, arena)
+            lsp_client.did_open(copy_uri(from + k, arena), text, arena), lsp_client.SEND_MS, arena)
             catch {}
     $left: = to - from
     for left > 0
-        msg: = c.read_msg(lsp_client.read_ms, arena) catch
+        msg: = c.read_msg(lsp_client.READ_MS, arena) catch
             return false
         if msg.val.get("method").as_str().unwrap_or("").equals("textDocument/publishDiagnostics")
             left -= 1
@@ -305,10 +302,10 @@ priv fn told(c: jsonrpc_client.Client$@, line: U8[], arena: Arena$@): Bool //<
     return arena.text().s(c.err_tail()).take().find_str(line).is_some()
 
 fn check_first_answer(exe: U8[], arena: Arena$@) //<
-    //< That a recovery with many documents open answers in about one document's analysis
+    //< That a queued request after recovery precedes unrelated documents' analyses
     //<
     //< After a crash and after a hang alike; every other document's diagnostics still come.
-    name: = "a recovery with many documents open answers in about one document's analysis"
+    name: = "a queued request after recovery precedes unrelated documents' analyses"
     text: = copy_text(arena)
     $c: =
         lsp_client.start(exe, U8[][]::{ .ptr = null, .len = 0 }, "", arena) catch
@@ -316,56 +313,48 @@ fn check_first_answer(exe: U8[], arena: Arena$@) //<
         return
     defer c.free()
     _init: =
-        c.request("initialize", lsp_client.empty_obj(arena), lsp_client.read_ms, arena) catch {}
-    if !verdict.check("the copy a recovery is measured on opens",
+        c.request("initialize", lsp_client.empty_obj(arena), lsp_client.READ_MS, arena) catch {}
+    if !verdict.check("the first recovery document opens",
         open_copies(c@, 0, 1, text, arena), lsp_client.why(c@, "", arena))
         return
 
-    // One document's recovery, reported beside the timing so a failure shows both scales.
-    got_one: = recover(c@, crash_hook, 1, 9000, text, arena)
+    got_one: = recover(c@, CRASH_HOOK, 1, 9000, text, arena)
     verdict.check("a hover answers after a crash with one document open", got_one.answered,
         lsp_client.why(c@, "", arena))
-    one: = got_one.ms
-
-    // The yardstick: analysing every other copy as it is opened (each waits for its diagnostics).
-    t_open: = sys.mono_us()
-    if !verdict.check("every copy opens", open_copies(c@, 1, copies, text, arena),
+    if !verdict.check("every copy opens", open_copies(c@, 1, COPIES, text, arena),
         lsp_client.why(c@, "", arena))
         return
-    all_ms: = (sys.mono_us() - t_open) / 1000I64
-    budget: = all_ms / share_of_all
-    for hook in U8[][]::{ crash_hook, hang_hook }
-        is_hang: = hook.equals(hang_hook)
-        got: = recover(c@, hook, copies, 9100 + I32::is_hang, text, arena)
-        allowed: = budget + (watchdog_ms if is_hang else 0I64)
+    for hook in U8[][]::{ CRASH_HOOK, HANG_HOOK }
+        is_hang: = hook.equals(HANG_HOOK)
+        got: = recover(c@, hook, COPIES, 9100 + I32::is_hang, text, arena)
         after: = "a hang" if is_hang else "a crash"
-        timing: = arena.text()
-            .s("\{got.ms\} ms with \{copies\} documents open; analysing them took \{all_ms\} ms and \
-                one document's recovery \{one\} ms, so the budget is \{allowed\} ms").take()
-        took: = lsp_client.why(c@, timing, arena)
+        order: = arena.text()
+            .s("\{got.before_answer\} of \{COPIES\} documents published before the hover; at most \
+                \{BEFORE_ANSWER_MAX\} allowed").take()
+        took: = lsp_client.why(c@, order, arena)
         verdict.check(arena.text().s("after ").s(after)
-            .s(", a hover answers in about one document's analysis, not one per open document")
-            .take(), got.answered && got.ms <= allowed, took)
+            .s(", a queued hover answers before unrelated documents are analysed").take(),
+            got.answered && got.before_answer <= BEFORE_ANSWER_MAX, took)
         verdict.check(arena.text().s("after ").s(after)
             .s(", every open document's diagnostics are published again").take(),
-            got.published == copies,
-            lsp_client.why(c@, arena.text().s("\{got.published\} of \{copies\}").take(), arena))
+            got.published == COPIES,
+            lsp_client.why(c@, arena.text().s("\{got.published\} of \{COPIES\}").take(), arena))
     verdict.check("the supervisor's log counts the documents it restores",
-        told(c@, arena.text().s("Open documents to restore: \{copies\}").take(), arena),
+        told(c@, arena.text().s("Open documents to restore: \{COPIES\}").take(), arena),
         lsp_client.why(c@, "", arena))
 
 // ==========================================
 // A document whose analysis crashes the worker is quarantined, and the others go on answering
 // ==========================================
 
-priv const kept_src: U8[] = "fn main(): I32\n  probe: I64 = 1\n  return 0\n\n"
-priv const kept_uris: U8[][_] = ::{ "file:///kept_a.kspl", "file:///kept_b.kspl" }
-priv const poison_uri: U8[] = "kspl-test-poison:///poison.kspl" //<
-    //< A name whose analysis crashes the worker (`test_poison_scheme` in `../../lsp/worker.kspl`)
+priv const KEPT_SRC: U8[] = "fn main(): I32\n  probe: I64 = 1\n  return 0\n\n"
+priv const KEPT_URIS: U8[][_] = ::{ "file:///kept_a.kspl", "file:///kept_b.kspl" }
+priv const POISON_URI: U8[] = "kspl-test-poison:///poison.kspl" //<
+    //< A name whose analysis crashes the worker (`TEST_POISON_SCHEME` in `../../lsp/worker.kspl`)
 
-priv fn probe_hover(c: jsonrpc_client.Client$@, uri: U8[], arena: Arena$@): json.Val
+priv fn probe_hover(c: jsonrpc_client.Client$@, uri: U8[], arena: Arena$@): json.Value
     got: = lsp_client.answer(c, "textDocument/hover", lsp_client.at_pos(uri, 1, 3, arena),
-        lsp_client.read_ms, arena)
+        lsp_client.READ_MS, arena)
     return got
 
 fn check_quarantine(exe: U8[], arena: Arena$@) //<
@@ -380,25 +369,25 @@ fn check_quarantine(exe: U8[], arena: Arena$@) //<
         return
     defer c.free()
     _init: =
-        c.request("initialize", lsp_client.empty_obj(arena), lsp_client.read_ms, arena) catch {}
-    for uri in kept_uris
-        c.notify("textDocument/didOpen", lsp_client.did_open(uri, kept_src, arena),
-            lsp_client.send_ms, arena) catch {}
-    c.notify("textDocument/didOpen", lsp_client.did_open(poison_uri, kept_src, arena),
-        lsp_client.send_ms, arena) catch {}
-    for uri in kept_uris
+        c.request("initialize", lsp_client.empty_obj(arena), lsp_client.READ_MS, arena) catch {}
+    for uri in KEPT_URIS
+        c.notify("textDocument/didOpen", lsp_client.did_open(uri, KEPT_SRC, arena),
+            lsp_client.SEND_MS, arena) catch {}
+    c.notify("textDocument/didOpen", lsp_client.did_open(POISON_URI, KEPT_SRC, arena),
+        lsp_client.SEND_MS, arena) catch {}
+    for uri in KEPT_URIS
         text: = lsp_client.hover_text(probe_hover(c@, uri, arena))
         verdict.check(arena.text().s("a document beside the quarantined one answers: ").s(uri)
             .take(), text.find_str("I64").is_some(),
             lsp_client.why(c@, arena.text().s("'").s(text).s("'").take(), arena))
-    poisoned: = probe_hover(c@, poison_uri, arena)
+    poisoned: = probe_hover(c@, POISON_URI, arena)
     verdict.check("the crashing document answers nothing, without bringing the worker down",
         lsp_client.hover_text(poisoned).len == 0 && c.alive(),
         lsp_client.dump(poisoned, arena))
     verdict.check(name,
-        told(c@, arena.text().s("quarantining '\{poison_uri\}'").take(), arena),
+        told(c@, arena.text().s("quarantining '\{POISON_URI\}'").take(), arena),
         lsp_client.why(c@, "", arena))
-    again: = lsp_client.hover_text(probe_hover(c@, kept_uris[0], arena))
+    again: = lsp_client.hover_text(probe_hover(c@, KEPT_URIS[0], arena))
     verdict.check("after the quarantine the worker goes on answering",
         again.find_str("I64").is_some(),
         lsp_client.why(c@, arena.text().s("'").s(again).s("'").take(), arena))
@@ -413,31 +402,31 @@ fn run_restart(exe: U8[], arena: Arena$@)
 // document by its path (`use/user`) disagrees with the pipeline's `mypkg/use/user`. The jump, the
 // rename and the hover find nothing. A logical-name answer points into a missing `mypkg/`.
 // ==========================================
-priv const heavy_ms: I32 = 60000 //< the first answer analyses the prelude's import tree too
+priv const HEAVY_MS: I32 = 60000 //< the first answer analyses the prelude's import tree too
 
-priv const own_top: U8[] = "alone" //< the folder the server is started in, and the package's top
-priv const own_rels: U8[][_] = ::{ "alone/ksplc.cfg", "alone/lib.kspl", "alone/use/user.kspl",
+priv const OWN_TOP: U8[] = "alone" //< the folder the server is started in, and the package's top
+priv const OWN_RELS: U8[][_] = ::{ "alone/ksplc.cfg", "alone/lib.kspl", "alone/use/user.kspl",
     "alone/gated.kspl" }
-priv const own_user: U8[] = "import \"mypkg/lib\"\n\npub fn use(): I32\n  return lib.hit()\n"
-priv const own_gated: U8[] = "#cfg(probe_flag)\npub fn gated(): I32\n  return 1\n" //<
+priv const OWN_USER: U8[] = "import \"mypkg/lib\"\n\npub fn use(): I32\n  return lib.hit()\n"
+priv const OWN_GATED: U8[] = "#cfg(probe_flag)\npub fn gated(): I32\n  return 1\n" //<
     //< A declaration an unset flag leaves out, which a hover explains with the reason
-priv const own_bodies: U8[][_] = ::{ "[package]\nname = mypkg\n", "pub fn hit(): I32\n  return 1\n",
-    own_user, own_gated }
-priv const own_call: U8[] = "  return lib.hit()"
+priv const OWN_BODIES: U8[][_] = ::{ "[package]\nname = mypkg\n", "pub fn hit(): I32\n  return 1\n",
+    OWN_USER, OWN_GATED }
+priv const OWN_CALL: U8[] = "  return lib.hit()"
 
 priv fn def_uri(c: jsonrpc_client.Client$@, uri: U8[], arena: Arena$@): U8[] //<
     //< Where `hit` is defined, asked from the user's document under that spelling
-    pos: = lsp_client.at_pos(uri, decl_line(own_user, own_call, arena),
-        col_in_line(own_user, own_call, "hit", arena) + 1, arena)
-    got: = lsp_client.answer(c, "textDocument/definition", pos, heavy_ms, arena)
+    pos: = lsp_client.at_pos(uri, decl_line(OWN_USER, OWN_CALL, arena),
+        col_in_line(OWN_USER, OWN_CALL, "hit", arena) + 1, arena)
+    got: = lsp_client.answer(c, "textDocument/definition", pos, HEAVY_MS, arena)
     return got.get("result").get("uri").as_str().unwrap_or("")
 
 priv fn marks_on(c: jsonrpc_client.Client$@, uri: U8[], arena: Arena$@): I32 //<
     //< How many diagnostics a `didOpen` of the user's document reports; -1 where none came
-    c.notify("textDocument/didOpen", lsp_client.did_open(uri, own_user, arena), lsp_client.send_ms,
+    c.notify("textDocument/didOpen", lsp_client.did_open(uri, OWN_USER, arena), lsp_client.SEND_MS,
         arena) catch {}
     for _k in Range.asc(12)
-        msg: = c.read_msg(lsp_client.read_ms, arena) catch
+        msg: = c.read_msg(lsp_client.READ_MS, arena) catch
             break
         if !msg.val.get("method").as_str().unwrap_or("").equals("textDocument/publishDiagnostics")
             continue
@@ -450,10 +439,10 @@ priv fn marks_on(c: jsonrpc_client.Client$@, uri: U8[], arena: Arena$@): I32 //<
 fn run_package(exe: U8[], arena: Arena$@)
     name: = "a package's own folder is worked on as the package"
     dir: = harness.sandbox("lsp_own")
-    fs.write_tree(dir, U8[][]::own_rels, U8[][]::own_bodies, arena) catch
+    fs.write_tree(dir, U8[][]::OWN_RELS, U8[][]::OWN_BODIES, arena) catch
         verdict.check(name, false, "it cannot be placed in the working directory")
         return
-    top: = arena.text().s(dir).c('/').s(own_top).take()
+    top: = arena.text().s(dir).c('/').s(OWN_TOP).take()
     $c: =
         lsp_client.start(exe, U8[][]::{ .ptr = null, .len = 0 }, top, arena) catch
         verdict.check(name, false, "the language server cannot be started")
@@ -461,7 +450,7 @@ fn run_package(exe: U8[], arena: Arena$@)
     defer c.free()
     $b: = Json_builder.new(arena)
     _ready: =
-        c.request("initialize", b.obj().build(), lsp_client.read_ms, arena) catch e
+        c.request("initialize", b.obj().build(), lsp_client.READ_MS, arena) catch e
         verdict.check(name, false, end_text(e))
         return
     // **Both spellings are tested** (the two a client names a document by, `lsp_client.kspl`).
@@ -475,8 +464,8 @@ fn run_package(exe: U8[], arena: Arena$@)
     verdict.check("asked by the file:// URI, the jump lands on the file in its folder",
         back.equals(want),
         lsp_client.why(c@, arena.text().s("'").s(back).s("'").take(), arena))
-    c.notify("textDocument/didOpen", lsp_client.did_open("use/user.kspl", own_user, arena),
-        lsp_client.send_ms, arena) catch {}
+    c.notify("textDocument/didOpen", lsp_client.did_open("use/user.kspl", OWN_USER, arena),
+        lsp_client.SEND_MS, arena) catch {}
     flat: = def_uri(c@, "use/user.kspl", arena)
     verdict.check("asked by the folder-relative name, it answers by that name",
         flat.equals("lib.kspl"),
@@ -487,7 +476,7 @@ fn run_package(exe: U8[], arena: Arena$@)
     params: = b.obj()
         .set("textDocument", b.obj().set("uri", b.str_val("lib.kspl")).build())
         .set("position", at_hit).set("newName", b.str_val("tap")).build()
-    renamed: = lsp_client.answer(c@, "textDocument/rename", params, heavy_ms, arena)
+    renamed: = lsp_client.answer(c@, "textDocument/rename", params, HEAVY_MS, arena)
     changes: = renamed.get("result").get("changes")
     verdict.check("a rename reaches the callers in its other folders",
         changes.find("lib.kspl").is_some() && changes.find("use/user.kspl").is_some(),
@@ -495,10 +484,10 @@ fn run_package(exe: U8[], arena: Arena$@)
     // **The range left out is recorded under the logical name**, which a copy's URI need not end
     // with.
     gated: = lsp_client.uri_of(top, "gated.kspl", arena)
-    c.notify("textDocument/didOpen", lsp_client.did_open(gated, own_gated, arena),
-        lsp_client.send_ms, arena) catch {}
+    c.notify("textDocument/didOpen", lsp_client.did_open(gated, OWN_GATED, arena),
+        lsp_client.SEND_MS, arena) catch {}
     why: = lsp_client.answer(c@, "textDocument/hover", lsp_client.at_pos(gated, 1, 8, arena),
-        lsp_client.read_ms, arena)
+        lsp_client.READ_MS, arena)
     said: = lsp_client.hover_text(why)
     verdict.check("what an unraised #cfg leaves out of it answers with the reason",
         said.find_str("not analyzed").is_some(),
@@ -510,7 +499,7 @@ fn run_package(exe: U8[], arena: Arena$@)
 // A template's `K` is bound to nothing, so the conformance table is empty. **It is a file of its
 // own for its subject**, "a diagnostic that appears only while editing".
 // ==========================================
-priv const bound_src: U8[] =
+priv const BOUND_SRC: U8[] =
     """pub trait Hashable<|Key|>
   fn hash(r: Self): U32
   fn equals(r: Self, other: Key): Bool
@@ -531,17 +520,17 @@ impl<|K: Hashable<|K|>|> Box<|K|>
 
 """
 
-priv const bound_uri: U8[] = "file:///bound_probe.kspl"
+priv const BOUND_URI: U8[] = "file:///bound_probe.kspl"
 
 fn check_template_bound(c: jsonrpc_client.Client$@, arena: Arena$@)
-    c.notify("textDocument/didOpen", lsp_client.did_open(bound_uri, bound_src, arena),
-        lsp_client.send_ms, arena) catch {}
-    defer lsp_client.close(c, bound_uri, arena)
+    c.notify("textDocument/didOpen", lsp_client.did_open(BOUND_URI, BOUND_SRC, arena),
+        lsp_client.SEND_MS, arena) catch {}
+    defer lsp_client.close(c, BOUND_URI, arena)
     $found: = false
     $count: Sz = 0
     $first: U8[] = ""
     for _k in Range.asc(8)
-        msg: = c.read_msg(lsp_client.read_ms, arena) catch
+        msg: = c.read_msg(lsp_client.READ_MS, arena) catch
             break
         if !msg.val.get("method").as_str().unwrap_or("").equals("textDocument/publishDiagnostics")
             continue

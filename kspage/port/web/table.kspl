@@ -9,7 +9,7 @@
 import "kspage/lay/ask"
 import "kspage/model/doc" { Axis, Block }
 import "kspage/model/filter" + { Filter }
-import "kspage/port/web/state" + { doc_arena, ed, ensure, in_ptr, input, input_cap, page, sheet }
+import "kspage/port/web/state" + { doc_arena, ed, ensure, in_ptr, input, INPUT_CAP, page, sheet }
 import "kspage/write/cells"
 import "kspage/write/csv"
 import "kspage/write/edit" as _edit
@@ -130,7 +130,7 @@ fn kspage_web_csv(): Sz
 #export
 fn kspage_web_insert_csv(text_len: Sz, name_len: Sz): I32
     ensure()
-    if page == null || in_ptr == null || text_len <= 0 || name_len <= 0 || name_len > input_cap
+    if page == null || in_ptr == null || text_len <= 0 || name_len <= 0 || name_len > INPUT_CAP
         return 0
     name: = U8[]::{ .ptr = input@, .len = name_len }
     src: = U8[]::{ .ptr = in_ptr, .len = text_len }
@@ -199,14 +199,14 @@ fn kspage_web_set_cell_size(axis: I32, v: F32): I32
 // ---- Filtering the rows ----
 
 // Filters the cursor's table to the rows whose cell in the cursor's column matches. The kind is
-// `kind`'s number in `keep_order` (`state.kspl`). The value is the `len` bytes written into
+// `kind`'s number in `KEEP_ORDER` (`state.kspl`). The value is the `len` bytes written into
 // `kspage_web_input_buffer()`. **It is a view** (`Over.filters`): nothing is saved, and a formula
 // counts every row. A condition already on that column is replaced. 1 if filtered, 0 with the
 // cursor outside a cell, -1 where a number is needed and the text is not one.
 #export
 fn kspage_web_filter(kind: I32, len: Sz): I32
     ensure()
-    if page == null || len < 0 || len > input_cap
+    if page == null || len < 0 || len > INPUT_CAP
         return 0
     spot: = ask.cell_of(page, ed.caret)
     if !spot.found
@@ -252,7 +252,7 @@ fn kspage_web_column_values(): Sz
         $at: Sz = 0
         for at < chosen.len
             rest: = chosen.sub_from(at)
-            stop: = at + rest.find_char(filter.value_sep).unwrap_or(rest.len)
+            stop: = at + rest.find_char(filter.VALUE_SEP).unwrap_or(rest.len)
             picked = picked.push(b.str_val(chosen.sub(at, stop - at)))
             at = stop + 1
         made = made.set("chosen", picked.build())
@@ -286,7 +286,7 @@ priv fn set_on(table: Block$@, column: Sz): U8[]? //<
 #export
 fn kspage_web_filter_values(len: Sz): I32
     ensure()
-    if page == null || len < 0 || len > input_cap
+    if page == null || len < 0 || len > INPUT_CAP
         return 0
     spot: = ask.cell_of(page, ed.caret)
     if !spot.found

@@ -84,13 +84,13 @@ fn kspage_web_load_buffer(len: Sz): U8@
     in_ptr = U8$@::in_arena.alloc(len)
     return in_ptr
 
-const too_big: I32 = -1 //<
+const TOO_BIG: I32 = -1 //<
     //< The result when it can be read but memory is too short to lay it out and write it back
     //<
     //< Caution: **Keep it separate from "cannot be read"** (the fixes are opposite), **as a value
     //< neither 0 nor 1**. Callers read "1 means read", so 0 would say "it is broken".
 
-const not_text: I32 = -2 //<
+const NOT_TEXT: I32 = -2 //<
     //< The result when a file opened as a text form is not text (it holds a NUL)
     //<
     //< Caution: **Keep it separate from both "too large" and "cannot be read".** An image or an
@@ -112,7 +112,7 @@ fn kspage_web_load(len: Sz): I32
         return 0
     // The arena is global (`state.load_arena`), so it can be freed when things stop partway. As a
     // local, unwinding would leave nothing pointing at it, and the arena would leak **forever**.
-    load_arena = Arena.new(state.fresh_chunk)
+    load_arena = Arena.new(state.FRESH_CHUNK)
     got: = store.load(U8[]::{ .ptr = in_ptr, .len = len }, load_arena) catch
         state.drop_load()
         return 0
@@ -121,7 +121,7 @@ fn kspage_web_load(len: Sz): I32
     // open document is lost with it**. So that refusal is a separate result from "cannot be read".
     if !state.room_for(got.doc, got.sheet, doc_arena)
         state.drop_load()
-        return too_big
+        return TOO_BIG
     state.adopt(load_arena, got.doc, got.sheet)
     return 1
 
@@ -132,13 +132,13 @@ fn kspage_web_load_manual(): I32
     // by the handover, which calls `kspage_web_load_buffer` first).
     ensure()
     // Global for the same reason as `kspage_web_load`'s: unwinding must leave it reachable.
-    load_arena = Arena.new(state.fresh_chunk)
+    load_arena = Arena.new(state.FRESH_CHUNK)
     got: = store.load(manual_text, load_arena) catch _e
         state.drop_load()
         return 0
     if !state.room_for(got.doc, got.sheet, doc_arena)
         state.drop_load()
-        return too_big
+        return TOO_BIG
     state.adopt(load_arena, got.doc, got.sheet)
     return 1
 
@@ -162,14 +162,14 @@ fn kspage_web_load_plain_text(len: Sz, spoken_len: Sz): I32
     spoken: = U8[]::{ .ptr = in_ptr, .len = spoken_len }
     src: = U8[]::{ .ptr = in_ptr + spoken_len, .len = len - spoken_len }
     if !text.texty(src)
-        return not_text
-    load_arena = Arena.new(state.fresh_chunk)
+        return NOT_TEXT
+    load_arena = Arena.new(state.FRESH_CHUNK)
     made: = text.sheet_for(sheet.root, load_arena.dup_str(spoken), load_arena)
     got: = text.read(src, made, load_arena)
     // One line is one block, so the gate matters most here ("Plain text holds one line per
     // block" in `../../docs/DESIGN-application.md`).
     if !state.room_for(got, made, doc_arena)
         state.drop_load()
-        return too_big
+        return TOO_BIG
     state.adopt(load_arena, got, made)
     return 1

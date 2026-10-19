@@ -19,15 +19,15 @@ import "std/mem" { Arena, dealloc }
 import "std/str" { Str_builder }
 import "std/sys"
 
-priv const magic: U8[] = "KSAST"
+priv const MAGIC: U8[] = "KSAST"
 
-priv const format_version: U32 = 4 //< the format's version
+priv const FORMAT_VERSION: U32 = 4 //< the format's version
     //<
     //< **Raise it whenever a node's fields, their order or the way the key is built change.**
     //< Otherwise a new reader reads an old file and silently breaks. Rebuilding ksplc changes every
     //< key anyway. This guards what would still be read (a file placed by hand, for example).
 
-priv const max_nodes: Sz = 8 * 1024 * 1024 //< the most nodes one entry can hold
+priv const MAX_NODES: Sz = 8 * 1024 * 1024 //< the most nodes one entry can hold
     //<
     //< It stops a broken file's `n_nodes` from asking for a huge allocation; no real entry nears
     //< it.
@@ -61,7 +61,7 @@ priv fn build_paths(logical_name: U8[], src: U8[], path: Str_builder$@, key: Str
     //< It returns false where the path cannot be determined (the cache is then not used).
     $material: = Str_builder.new()
     defer material.free()
-    material.s(magic).c(0U8).s("\{Sz::format_version\}").c(0U8)
+    material.s(MAGIC).c(0U8).s("\{Sz::FORMAT_VERSION\}").c(0U8)
     material.s(logical_name).c(0U8)
     // Caution: **Include the `--define` flags**: `#cfg()` drops declarations during normalization
     // (parse/normalize.should_drop_by_cfg), so one source gives a different AST per flag set.
@@ -75,7 +75,7 @@ priv fn build_paths(logical_name: U8[], src: U8[], path: Str_builder$@, key: Str
     digest: = base_cache.hash_hex(material.slice())
     key.s(U8[]::digest)
 
-    if !base_cache.append_generation_dir(base_cache.ast_kind, path, base_core.arena)
+    if !base_cache.append_generation_dir(base_cache.AST_KIND, path, base_core.arena)
         return false
     path.c('/').s(key.slice()).s(".ksast")
     return true
@@ -118,7 +118,7 @@ impl Str_table
         r.ids.set(s, id)
         return id
 
-priv const u32_max: I64 = 0xFFFFFFFF //< the largest U32
+priv const U32_MAX: I64 = 0xFFFFFFFF //< the largest U32
     //<
     //< Caution: Hold it as `I64`, not `Sz`: `Sz` is ptrdiff_t, at most 2^31-1 on a 32-bit target,
     //< so the value compared is widened to I64.
@@ -130,8 +130,8 @@ priv fn write_subtree(node: Ast_node$@, tbl: Str_table$@, body: Str_builder$@, c
     //< value that does not fit in U32 returns false, and the cache is not used.
     if node == null
         return false
-    if node.loc.offset < 0 || I64::node.loc.offset > u32_max ||
-        I64::node.children.len > u32_max
+    if node.loc.offset < 0 || I64::node.loc.offset > U32_MAX ||
+        I64::node.children.len > U32_MAX
         return false
     put_u32(body, U32::(I32::node.kind_id))
     put_u32(body, U32::node.ival)
@@ -184,8 +184,8 @@ fn store(logical_name: U8[], src: U8[], decls: List<|Ast_node$@|>$@) //<
 
     $out: = Str_builder.new()
     defer out.free()
-    out.s(magic)
-    put_u32(out@, format_version)
+    out.s(MAGIC)
+    put_u32(out@, FORMAT_VERSION)
     out.s(key.slice())
     put_u32(out@, U32::n_nodes)
     put_u32(out@, U32::decls.len)
@@ -300,8 +300,8 @@ fn load(logical_name: U8[], src: U8[], decls: List<|Ast_node$@|>$@): Bool //<
     $cur: = Cursor::{ .data = data, .pos = 0, .bad = false }
     // The key is checked inside the content too: with the name alone, another key's content saved
     // under this name would go unnoticed.
-    if !cur.bytes(magic.len).equals(magic) || cur.u32() != format_version ||
-        !cur.bytes(base_cache.hash_hex_len).equals(key.slice())
+    if !cur.bytes(MAGIC.len).equals(MAGIC) || cur.u32() != FORMAT_VERSION ||
+        !cur.bytes(base_cache.HASH_HEX_LEN).equals(key.slice())
         stats.misses += 1
         return false
     n_nodes: = Sz::cur.u32()
@@ -309,8 +309,8 @@ fn load(logical_name: U8[], src: U8[], decls: List<|Ast_node$@|>$@): Bool //<
     n_strs: = Sz::cur.u32()
     // A dropped range is not a node, so n_nodes does not bound their count; max_nodes does.
     n_regions: = Sz::cur.u32()
-    if cur.bad || n_nodes <= 0 || n_nodes > max_nodes || n_roots <= 0 || n_roots > n_nodes ||
-        n_strs > n_nodes || n_regions > max_nodes
+    if cur.bad || n_nodes <= 0 || n_nodes > MAX_NODES || n_roots <= 0 || n_roots > n_nodes ||
+        n_strs > n_nodes || n_regions > MAX_NODES
         stats.misses += 1
         return false
 

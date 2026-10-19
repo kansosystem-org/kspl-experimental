@@ -27,7 +27,7 @@ import "kspage/port/web/paper" as _paper
 import "kspage/port/web/state"
 // `out` is not imported by its own name — the entry points that write output take a parameter
 // named `out` (the buffer is written `state.out`).
-import "kspage/port/web/state" { doc, ed, ensure, in_ptr, input, input_cap, nums, nums_cap, page,
+import "kspage/port/web/state" { doc, ed, ensure, in_ptr, input, INPUT_CAP, nums, NUMS_CAP, page,
     page_arena, sel, sheet, source }
 import "kspage/port/web/table" as _table
 import "kspage/write/block"
@@ -84,10 +84,19 @@ priv fn lay_out(width: F32, cursor: Bool): Sz
             sheet.over.kept_row = held
     if page_arena != null
         page_arena.free()
-    page_arena = Arena.new(state.fresh_chunk)
+    page_arena = Arena.new(state.FRESH_CHUNK)
     // Pass the borrowing interface — otherwise a window shows only its target (the text is passed
     // in; the core does not open files).
     page = flow.layout(doc, sheet, source(), width, page_arena)
+    // Opening or creating a document places the cursor at its first editable box.
+    // Generated contents rows and shapes have no text in the document to edit.
+    if cursor && state.cursor_pending
+        state.cursor_pending = false
+        for $i: Sz = 0; i < page.boxes.len; i += 1
+            b: = page.boxes.get(i)
+            if b.inline != null && doc.owner_of(b.inline).found
+                ed.caret = caret.at(b.inline, b.offset)
+                break
     sel = List<|Rect|>.create(page_arena)
     // Caution: Mark it again at every layout — the boxes are remade, and the marks go with them.
     if cursor
@@ -176,7 +185,7 @@ fn kspage_web_nums(): F32$@
 // The number of values that fit in that buffer.
 #export
 fn kspage_web_nums_cap(): Sz
-    return nums_cap
+    return NUMS_CAP
 
 // Where typed text is written. JS writes here in UTF-8 and then calls `kspage_web_type`.
 #export
@@ -185,18 +194,18 @@ fn kspage_web_input_buffer(): U8@
 
 #export
 fn kspage_web_input_cap(): Sz
-    return input_cap
+    return INPUT_CAP
 
 priv fn drop_span(): Bool //< deletes the selection
     //<
     //< This is the only place that joins the spanned paragraphs into one. The core's `insert` and
     //< the like delete only the text, leaving an empty paragraph and its marker.
-    return page != null && ed.delete_span(page)
+    return page != null && ed.start_replacement(page)
 
 // Types the `len` bytes written in at the cursor.
 #export
 fn kspage_web_type(len: Sz)
-    if len <= 0 || len > input_cap
+    if len <= 0 || len > INPUT_CAP
         return
     drop_span()
     ed.insert(U8[]::{ .ptr = input@, .len = len })
@@ -206,6 +215,7 @@ fn kspage_web_type(len: Sz)
 #export
 fn kspage_web_backspace()
     if drop_span()
+        ed.break_group()
         return
     if page != null && ed.join_prev(page)
         return
@@ -278,7 +288,7 @@ fn kspage_web_move_row(up: I32): I32
 // Replaces the text being composed (not yet committed) with the `len` bytes written in.
 #export
 fn kspage_web_compose(len: Sz)
-    if len < 0 || len > input_cap
+    if len < 0 || len > INPUT_CAP
         return
     drop_span()
     ed.set_preedit(U8[]::{ .ptr = input@, .len = len })
@@ -379,7 +389,7 @@ fn kspage_web_typed(): Sz
 // (what shows is the computed result).
 #export
 fn kspage_web_set_typed(len: Sz)
-    if len < 0 || len > input_cap
+    if len < 0 || len > INPUT_CAP
         return
     ed.set_source(U8[]::{ .ptr = input@, .len = len })
 
@@ -411,7 +421,7 @@ fn kspage_web_paste(len: Sz): I32
 #export
 fn kspage_web_find(len: Sz, back: I32): I32
     ensure()
-    if len <= 0 || len > input_cap
+    if len <= 0 || len > INPUT_CAP
         return 0
     needle: = U8[]::{ .ptr = input@, .len = len }
     return 1 if ed.find_next(needle, back != 0) else 0
@@ -423,7 +433,7 @@ fn kspage_web_find(len: Sz, back: I32): I32
 #export
 fn kspage_web_count(len: Sz): Sz
     ensure()
-    if len <= 0 || len > input_cap
+    if len <= 0 || len > INPUT_CAP
         return 0
     needle: = U8[]::{ .ptr = input@, .len = len }
     return find.count_matches(ed.doc, needle)
@@ -465,7 +475,7 @@ fn kspage_web_drop_frame(): I32
 // too**, since the grid picker belongs to the page.
 #export
 fn kspage_web_insert_table(len: Sz, rows: Sz, cols: Sz): I32
-    if page == null || len <= 0 || len > input_cap
+    if page == null || len <= 0 || len > INPUT_CAP
         return 0
     name: = U8[]::{ .ptr = input@, .len = len }
     return 1 if ed.insert_table(page, sheet, name, rows, cols) else 0
@@ -476,7 +486,7 @@ fn kspage_web_insert_table(len: Sz, rows: Sz, cols: Sz): I32
 // one is not made. The template is not kept (the document holds the frames).
 #export
 fn kspage_web_insert_surface(len: Sz, plan: I32): I32
-    if page == null || len <= 0 || len > input_cap
+    if page == null || len <= 0 || len > INPUT_CAP
         return 0
     name: = U8[]::{ .ptr = input@, .len = len }
     // Return the reason as a number (the rule at `kspage_web_set_block_style` in `face.kspl`).
@@ -579,13 +589,13 @@ fn kspage_web_head_cell_count(i: Sz): Sz
         return 0
     return ask.head_cell_count(page, i)
 
-// Writes seven values into out for cell `c` of table `i`'s heading row. They are its rectangle
+// Writes nine values into out for cell `c` of table `i`'s heading row. They are its rectangle
 // (x / y / w / h), the column index with merges counted, whether that column is filtered, and
-// whether it was found. Seven 0s when absent. The filter arrow is drawn from this, so the page
-// knows nothing about the columns.
+// whether it was found, whether its text has a color, and that RGB color. Nine 0s when absent.
+// The filter arrow takes the text's resolved color, including inherited settings.
 #export
 fn kspage_web_head_cell(i: Sz, c: Sz, out: F32$@)
-    state.clear_out(out, 7)
+    state.clear_out(out, 9)
     if page == null
         return
     got: = ask.head_cell_at(page, i, c)
@@ -596,6 +606,13 @@ fn kspage_web_head_cell(i: Sz, c: Sz, out: F32$@)
     (out + 5)$ =
         1.0 if filter.column_narrowed(sheet.over.filters, got.table, got.column) else 0.0
     (out + 6)$ = 1.0
+    for $k: Sz = 0; k < page.boxes.len; k += 1
+        b: = page.boxes.get(k)
+        if b.inline != null && got.block.holds(b.inline)
+            if color: = b.ink.color
+                (out + 7)$ = 1.0
+                (out + 8)$ = F32::color
+            break
 
 // Writes three values into out for the heading cell over the cursor's column (the table's index,
 // the cell's index in that row, whether found). Three 0s when absent. **The cursor can be anywhere
@@ -676,7 +693,7 @@ fn kspage_web_aside(): Sz
 #export
 fn kspage_web_set_aside(len: Sz): I32
     ensure()
-    if page == null || len < 0 || len > input_cap
+    if page == null || len < 0 || len > INPUT_CAP
         return 0
     return 1 if ed.set_aside(page, U8[]::{ .ptr = input@, .len = len }) else 0
 

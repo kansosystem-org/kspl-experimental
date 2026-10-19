@@ -17,12 +17,12 @@ import "std/verdict"
 extern "C"
     fn clock(): I64 //< the process's CPU time, in CLOCKS_PER_SEC units (10^6 on POSIX)
 
-const sigusr1: I32 = 10 // assumes Linux (30 on macOS/BSD; this demo only runs on a POSIX host)
-const waiters: I32 = 3
-const raise_after_ms: I64 = 500 //< how long the child waits before raising the interrupt
+const SIGUSR1: I32 = 10 // assumes Linux (30 on macOS/BSD; this demo only runs on a POSIX host)
+const WAITERS: I32 = 3
+const RAISE_AFTER_MS: I64 = 500 //< how long the child waits before raising the interrupt
     //<
-    //< Keep `raise_after` below in step: the child's shell takes it in seconds.
-const raise_after: U8[] = "sleep 0.5; kill -USR1 $PPID"
+    //< Keep `RAISE_AFTER` below in step: the child's shell takes it in seconds.
+const RAISE_AFTER: U8[] = "sleep 0.5; kill -USR1 $PPID"
 
 $g_sem: sync.Sem
 $g_irqs: I32 = 0
@@ -43,12 +43,12 @@ fn on_irq(_sig: I32): Void //< the stand-in interrupt handler: one give per wait
     //< It does only what is async-signal-safe (gives and counters). It registers itself again, as
     //< glibc's signal() under -std=c99 resets the action after one delivery.
     g_irqs += 1
-    for i in Range.asc(waiters)
+    for i in Range.asc(WAITERS)
         if tcbs[i].get_state() == .blocked
             g_blocked_at_irq += 1
-    for _ in Range.asc(waiters)
+    for _ in Range.asc(WAITERS)
         g_sem.give()
-    libc.signal(sigusr1, on_irq)
+    libc.signal(SIGUSR1, on_irq)
 
 fn waiter(_arg: Void$@): Void
     g_sem.take()
@@ -56,7 +56,7 @@ fn waiter(_arg: Void$@): Void
         g_wall_waited = sys.mono_us() - g_wall_start
         g_cpu_used = clock() - g_cpu_start
     g_woken += 1
-    if g_woken == waiters && g_stop_at_end
+    if g_woken == WAITERS && g_stop_at_end
         task.stop_scheduler()
 
 fn round(title: U8[]) //< blocks three waiters, raises the interrupt from outside, and checks
@@ -64,30 +64,30 @@ fn round(title: U8[]) //< blocks three waiters, raises the interrupt from outsid
     g_irqs = 0
     g_blocked_at_irq = 0
     g_woken = 0
-    for i in Range.asc(waiters)
+    for i in Range.asc(WAITERS)
         stack: = U8$[]::{ .ptr = stacks[0]@ + i * 65536, .len = 65536 }
         tcbs[i].create(stack, waiter, null, I32::i + 1, "waiter")
     g_wall_start = sys.mono_us()
     g_cpu_start = clock()
-    $child: = subproc.spawn_async(U8[][]::{ "sh", "-c", raise_after }, "") catch
+    $child: = subproc.spawn_async(U8[][]::{ "sh", "-c", RAISE_AFTER }, "") catch
         panic("sleep: could not start the child that raises the interrupt")
     task.start_scheduler()
     _code: = child.wait()
     io.out().s("[sleep] waited \{g_wall_waited / 1000\} ms, CPU used \{g_cpu_used / 1000\} ms\n")
     assert(g_irqs == 1, "sleep: the interrupt did not arrive exactly once")
-    assert(g_blocked_at_irq == waiters, "sleep: the waiters were not all blocked at the interrupt")
-    assert(g_woken == waiters, "sleep: the scheduler returned before the interrupt woke its tasks")
-    assert(g_wall_waited >= raise_after_ms * 1000I64 * 4I64 / 5I64,
+    assert(g_blocked_at_irq == WAITERS, "sleep: the waiters were not all blocked at the interrupt")
+    assert(g_woken == WAITERS, "sleep: the scheduler returned before the interrupt woke its tasks")
+    assert(g_wall_waited >= RAISE_AFTER_MS * 1000I64 * 4I64 / 5I64,
         "sleep: the tasks woke before the interrupt could have come")
     // Spinning would use about as much CPU as the time waited; a sleep uses next to none.
     assert(g_cpu_used * 4I64 < g_wall_waited, "sleep: the CPU was kept busy while every task waited")
-    for i in Range.asc(waiters)
+    for i in Range.asc(WAITERS)
         tcbs[i].delete() // gives the slots and contexts back for the next round
     verdict.pass("it slept through the wait and woke the tasks on the interrupt.")
 
 fn main(): I32
     g_sem.init(0)
-    libc.signal(sigusr1, on_irq)
+    libc.signal(SIGUSR1, on_irq)
     round("[ksos] start_scheduler sleeps while every task waits on an interrupt")
     io.out().s("=== the idle task on ===\n")
     task.enable_idle_task(U8$[]::stack_idle, task.Idle_hook::null)

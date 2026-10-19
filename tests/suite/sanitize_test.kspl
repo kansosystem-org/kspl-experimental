@@ -25,23 +25,23 @@ import "tests/support/harness_sanitizer"
 // stops the program (`-fno-sanitize-recover`), so its exit code says so too. **`-O0`, as the build
 // is the cost**: ksplc's tests build in 3 s there and 12 s at `-O1`, and run in about a second
 // either way (measured). The sanitizers watch every access at `-O0`.
-priv const san_cflags: U8[][_] = ::{ "-O0", "-g", "-fno-omit-frame-pointer",
+priv const SAN_CFLAGS: U8[][_] = ::{ "-O0", "-g", "-fno-omit-frame-pointer",
     "-fsanitize=address,undefined", "-fno-sanitize-recover=all" }
 
 // **What ksplc marks in the IR `--to=llvm` writes** (`--sanitize=`), without which clang's
 // `-fsanitize=address` passes over it. Not `undefined`: its checks are clang's front end's, which
 // IR does not pass through, so through LLVM they watch the runtime's C alone.
-priv const san_marks: U8[] = "address"
+priv const SAN_MARKS: U8[] = "address"
 
 // **LeakSanitizer is asked for by name.** Where the platform has none (macOS), the runtime refuses
 // to start. So the probe says `SKIP` and no leak passes unseen.
-priv const asan_options: U8[] = "ASAN_OPTIONS=detect_leaks=1"
+priv const ASAN_OPTIONS: U8[] = "ASAN_OPTIONS=detect_leaks=1"
 
 // ==========================================
 // Reading a sanitizer's log
 // ==========================================
 
-priv const summary_head: U8[] = "SUMMARY: " //<
+priv const SUMMARY_HEAD: U8[] = "SUMMARY: " //<
     //< the line that closes one report, of either sanitizer
 
 priv fn opens_report(line: U8[]): Bool //< whether the line opens one report
@@ -55,7 +55,7 @@ priv fn reports_of(text: U8[], arena: Arena$@): List<|U8[]|> //<
     //< One line per report in a sanitizer's log: its summary, or its first line where none came
     //<
     //< **A report cut short still counts** (a process killed part way). **A pure function of one
-    //< text** (`report_samples`).
+    //< text** (`REPORT_SAMPLES`).
     $out: = List<|U8[]|>.new(arena)
     $open: U8[] = ""
     for line in text.lines(arena)
@@ -63,8 +63,8 @@ priv fn reports_of(text: U8[], arena: Arena$@): List<|U8[]|> //<
             if open.len > 0
                 out.push(open)
             open = line
-        else if open.len > 0 && line.starts_with(summary_head)
-            out.push(line.sub_from(summary_head.len))
+        else if open.len > 0 && line.starts_with(SUMMARY_HEAD)
+            out.push(line.sub_from(SUMMARY_HEAD.len))
             open = ""
     if open.len > 0
         out.push(open)
@@ -74,7 +74,7 @@ struct Sample
     text: U8[]
     reports: Sz
 
-priv const report_samples: Sample[_] = ::{
+priv const REPORT_SAMPLES: Sample[_] = ::{
     Sample::{ .text =
         "==1==ERROR: AddressSanitizer: heap-use-after-free on address 0x1\n    #0 0x1 in f \
             a.kspl:10:13\n\nSUMMARY: AddressSanitizer: heap-use-after-free a.kspl:10:13 in f\n",
@@ -97,10 +97,10 @@ priv const report_samples: Sample[_] = ::{
 
 priv fn check_reading_fires(arena: Arena$@)
     $bad: = List<|U8[]|>.new(arena)
-    for s in report_samples
+    for s in REPORT_SAMPLES
         if reports_of(s.text, arena).len != s.reports
             bad.push(arena.text().s("misread: ").s(s.text).take())
-    verdict.check_list("a sanitizer's log is read as one finding a report", report_samples.len,
+    verdict.check_list("a sanitizer's log is read as one finding a report", REPORT_SAMPLES.len,
         "samples", bad@, "the table is `report_samples`")
 
 priv fn reports_in(log_dir: U8[], arena: Arena$@): List<|U8[]|> //<
@@ -135,7 +135,7 @@ priv fn sanitized_argv(run: Sanitized, arena: Arena$@): U8[][] //<
     $out: = List<|U8[]|>.new(arena)
     out.push("env")
     out
-        .push(arena.text().s(asan_options).s(":log_path=")
+        .push(arena.text().s(ASAN_OPTIONS).s(":log_path=")
         .s(fs.join(run.log_dir, "asan", arena)).take())
     out
         .push(arena.text().s("UBSAN_OPTIONS=print_stacktrace=1:log_path=")
@@ -164,15 +164,15 @@ struct Planted //< a program with one fault written on purpose, and what the rep
     says: U8[] //< a piece of the report's summary that names the fault
     llvm: Bool //< also through the LLVM backend, where its sanitizer sees this fault
         //<
-        //< **The address and leak sanitizers' faults are seen there** (`san_marks`); the
+        //< **The address and leak sanitizers' faults are seen there** (`SAN_MARKS`); the
         //< undefined-behaviour ones are not, as their checks are clang's front end's.
-    unmarked: Bool //< also through LLVM without `san_marks`, where it must go unseen
+    unmarked: Bool //< also through LLVM without `SAN_MARKS`, where it must go unseen
         //<
         //< **This shows the marks are what watch the IR**: the fault is in KSPL code alone.
 
 // A second way to the memory, through a global. The compiler's own use-after-free check does not
 // follow it. Written through the local, the compiler refuses it.
-priv const use_after_free_source: U8[] =
+priv const USE_AFTER_FREE_SOURCE: U8[] =
     """
 import "std/mem"
 
@@ -188,7 +188,7 @@ fn main(): I32
 
 // **Many lost, not one.** The last pointer can linger in a register or on the stack. The leak
 // check finds it there and counts the memory as still held (measured at `-O0`).
-priv const leak_source: U8[] =
+priv const LEAK_SOURCE: U8[] =
     """
 import "std/mem"
 
@@ -202,7 +202,7 @@ fn main(): I32
 
 // **Through a raw address, which nothing but the sanitizer watches**: an index would be stopped by
 // KSPL's own bounds check first.
-priv const overflow_source: U8[] =
+priv const OVERFLOW_SOURCE: U8[] =
     """
 import "std/mem"
 
@@ -214,7 +214,7 @@ fn main(): I32
     return I32::r
 """
 
-priv const misaligned_source: U8[] =
+priv const MISALIGNED_SOURCE: U8[] =
     """
 import "std/mem"
 
@@ -227,14 +227,14 @@ fn main(): I32
     return r
 """
 
-priv const planted: Planted[_] = ::{
-    Planted::{ .what = "a use after free", .source = use_after_free_source,
+priv const PLANTED: Planted[_] = ::{
+    Planted::{ .what = "a use after free", .source = USE_AFTER_FREE_SOURCE,
         .says = "heap-use-after-free", .llvm = true, .unmarked = false },
-    Planted::{ .what = "a read past the end of the heap", .source = overflow_source,
+    Planted::{ .what = "a read past the end of the heap", .source = OVERFLOW_SOURCE,
         .says = "heap-buffer-overflow", .llvm = true, .unmarked = true },
-    Planted::{ .what = "a leak", .source = leak_source, .says = "leaked", .llvm = true,
+    Planted::{ .what = "a leak", .source = LEAK_SOURCE, .says = "leaked", .llvm = true,
         .unmarked = false },
-    Planted::{ .what = "a misaligned store", .source = misaligned_source,
+    Planted::{ .what = "a misaligned store", .source = MISALIGNED_SOURCE,
         .says = "undefined-behavior", .llvm = false, .unmarked = false },
 }
 
@@ -246,8 +246,8 @@ priv fn check_fires(work: U8[], arena: Arena$@) //<
     $runs: = List<|Sanitized|>.new(arena)
     $names: = List<|U8[]|>.new(arena)
     $wants: = List<|U8[]|>.new(arena)
-    for k in Range.asc(planted.len)
-        p: = planted[k]
+    for k in Range.asc(PLANTED.len)
+        p: = PLANTED[k]
         src: = fs.join(work, arena.text().s("planted\{k\}.kspl").take(), arena)
         io.write_file(src, p.source) catch
             verdict.check(p.what, false, "cannot write it")
@@ -264,7 +264,7 @@ priv fn check_fires(work: U8[], arena: Arena$@) //<
                 .s("" if bare else p.says).s("" if bare else "`").take()
             stem: = arena.text().s("planted\{k\}_\{way\}").take()
             b: = harness_sanitizer.build(work, src, fs.join(work, stem, arena),
-                U8[][]::san_cflags, llvm, "" if bare else san_marks, arena)
+                U8[][]::SAN_CFLAGS, llvm, "" if bare else SAN_MARKS, arena)
             if b.exe.len == 0
                 verdict.check(name, false, b.why)
                 continue
@@ -305,7 +305,7 @@ struct Pkg_tests //< a package's own tests, as its own `make test` runs them
 
 // **ksplc's and std's**: the language and the library every program holds. The other packages'
 // tests exercise what is built on these two.
-priv const pkg_tests: Pkg_tests[_] = ::{
+priv const PKG_TESTS: Pkg_tests[_] = ::{
     Pkg_tests::{ .pkg = "ksplc", .entry = "ksplc/tests/main.kspl", .takes_ksplc = false,
         .own_folder = false },
     Pkg_tests::{ .pkg = "std", .entry = "std/tests/main.kspl", .takes_ksplc = true,
@@ -315,7 +315,7 @@ priv const pkg_tests: Pkg_tests[_] = ::{
 priv fn sanitize_pkg_tests(work: U8[], arena: Arena$@) //<
     //< Each package's own tests (`make test` in its folder), built through each backend
     $runs: = List<|Sanitized|>.new(arena)
-    for t in pkg_tests
+    for t in PKG_TESTS
         dir: = fs.join(harness.root(), t.pkg, arena)
         entry: = fs.join(harness.root(), t.entry, arena)
         for llvm in Bool[]::{ false, true }
@@ -323,7 +323,7 @@ priv fn sanitize_pkg_tests(work: U8[], arena: Arena$@) //<
                 .s(", run with nothing the sanitizers report").take()
             stem: = arena.text().s(t.pkg).s("_llvm" if llvm else "_c").take()
             b: = harness_sanitizer.build(dir, entry, fs.join(work, stem, arena),
-                U8[][]::san_cflags, llvm, san_marks, arena)
+                U8[][]::SAN_CFLAGS, llvm, SAN_MARKS, arena)
             if b.exe.len == 0
                 verdict.check(name, false, b.why)
                 continue
@@ -357,7 +357,7 @@ fn main(): I32
     check_reading_fires(arena)
     work: = harness.sandbox("sanitize")
     said: = harness_sanitizer.runs_with(work, U8[][]::{ "-fsanitize=address,undefined" },
-        U8[][]::{ asan_options }, arena)
+        U8[][]::{ ASAN_OPTIONS }, arena)
     if said.len > 0
         lacks: = arena.text()
             .s("the C compiler cannot build with the address and undefined-behaviour sanitizers \

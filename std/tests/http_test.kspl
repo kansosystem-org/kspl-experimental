@@ -96,7 +96,7 @@ fn test_http_parse_buffered()
 
     req: =
         http.parse_request("POST /echo?x=1 HTTP/1.1\r\nHost: example.com\r\nContent-Length: \
-            5\r\n\r\nhello", http.default_max_body_bytes, arena)
+            5\r\n\r\nhello", http.DEFAULT_MAX_BODY_BYTES, arena)
         catch panic("parse_request should succeed for a well-formed request")
     assert(req.method.equals("POST"), "method must be parsed correctly")
     assert(req.target.equals("/echo?x=1"), "target must include the raw query string")
@@ -118,20 +118,20 @@ fn test_http_parse_buffered()
 
     $incomplete_ok: = true
     _r: =
-        http.parse_request("GET / HTTP/1.1\r\n", http.default_max_body_bytes, arena) catch
+        http.parse_request("GET / HTTP/1.1\r\n", http.DEFAULT_MAX_BODY_BYTES, arena) catch
         incomplete_ok = false
     assert(!incomplete_ok, "parse_request must reject a headerless-but-truncated message")
 
     // The body can be only partly in; sliced without a check, the view points outside the buffer.
     short_body: = "POST / HTTP/1.1\r\nHost: h\r\nContent-Length: 5\r\n\r\nhi"
-    assert(parse_error(short_body, http.default_max_body_bytes, arena).equals("incomplete"),
+    assert(parse_error(short_body, http.DEFAULT_MAX_BODY_BYTES, arena).equals("incomplete"),
         "parse_request must report incomplete while the body is still short")
 
     // **Both limits hold before the bytes arrive**: waiting for them is what a flood wants.
     assert(parse_error("POST / HTTP/1.1\r\nContent-Length: 5\r\n\r\nhi", 4, arena)
         .equals("body_too_large"), "a body over the limit is refused as soon as the head names it")
     long_head: = arena.text().s("GET / HTTP/1.1\r\nX: ")
-    for _k in Range.asc(http.max_head_bytes)
+    for _k in Range.asc(http.MAX_HEAD_BYTES)
         long_head.c('a')
     assert(parse_error(long_head.take(), 4, arena).equals("head_too_large"),
         "a head past the limit with no end yet is refused, not waited for")
@@ -140,12 +140,12 @@ fn test_http_parse_buffered()
 
     // consumed is "the number of bytes this message used", and what follows is the next message.
     two: = "GET /a HTTP/1.1\r\nHost: h\r\n\r\nGET /b HTTP/1.1\r\nHost: h\r\n\r\n"
-    first: = http.parse_request(two, http.default_max_body_bytes, arena)
+    first: = http.parse_request(two, http.DEFAULT_MAX_BODY_BYTES, arena)
         catch panic("the first of two pipelined requests must parse")
     assert(first.target.equals("/a"), "the first message must be the one parsed")
     assert(first.consumed == 28, "consumed must cover exactly the first message")
     second: =
-        http.parse_request(two.sub_from(first.consumed), http.default_max_body_bytes, arena)
+        http.parse_request(two.sub_from(first.consumed), http.DEFAULT_MAX_BODY_BYTES, arena)
         catch panic("the remainder after consumed must be the next request")
     assert(second.target.equals("/b"), "consumed must land on the start of the next message")
 
@@ -190,7 +190,7 @@ priv fn reject(label: U8$[], src: U8[])
     arena: = Arena.new(1024)
     defer arena.free()
     $accepted: = true
-    _r: = http.parse_request(src, http.default_max_body_bytes, arena) catch
+    _r: = http.parse_request(src, http.DEFAULT_MAX_BODY_BYTES, arena) catch
         accepted = false
     assert(!accepted, label)
 
@@ -274,16 +274,16 @@ fn test_http_reject_smuggling()
     for twice in U8[][]::{ "GET / HTTP/1.1\r\nHost: a\r\nHost: b\r\n\r\n",
         "GET / HTTP/1.1\r\nHost: a\r\nhost: a\r\n\r\n",
         "GET / HTTP/1.0\r\nHost: a\r\nHost: b\r\n\r\n" }
-        assert(parse_error(twice, http.default_max_body_bytes, arena_h).equals("invalid_host"),
+        assert(parse_error(twice, http.DEFAULT_MAX_BODY_BYTES, arena_h).equals("invalid_host"),
             "a request naming Host twice must be refused as invalid_host")
         $length_ok: = true
-        _n: = http.request_length(twice, http.default_max_body_bytes, arena_h) catch
+        _n: = http.request_length(twice, http.DEFAULT_MAX_BODY_BYTES, arena_h) catch
             length_ok = false
         assert(!length_ok, "request_length must refuse what parse_request refuses")
-    assert(parse_error("GET / HTTP/1.1\r\n\r\n", http.default_max_body_bytes, arena_h)
+    assert(parse_error("GET / HTTP/1.1\r\n\r\n", http.DEFAULT_MAX_BODY_BYTES, arena_h)
         .equals("invalid_host"), "an HTTP/1.1 request naming no Host must be refused")
     // Caution: **HTTP/1.0 can leave it out**, which a refusal of every missing Host would break.
-    assert(parse_error("GET / HTTP/1.0\r\n\r\n", http.default_max_body_bytes, arena_h)
+    assert(parse_error("GET / HTTP/1.0\r\n\r\n", http.DEFAULT_MAX_BODY_BYTES, arena_h)
         .equals("accepted"), "an HTTP/1.0 request naming no Host must be read")
 
     reject("an empty request must be rejected", "")
@@ -350,15 +350,15 @@ fn test_http_host_value()
     for good in U8[][]::{ "example.com", "example.com:8080", "127.0.0.1:80", "[::1]:8080",
         "[v1.fe]", "ex%41mple", "a-b_c.~!$&'()*+,;=", "host:", "" }
         req: = arena.text().s("GET / HTTP/1.1\r\nHost: ").s(good).s("\r\n\r\n").take()
-        assert(parse_error(req, http.default_max_body_bytes, arena).equals("accepted"),
+        assert(parse_error(req, http.DEFAULT_MAX_BODY_BYTES, arena).equals("accepted"),
             "a host, optionally with a port, must be read")
     for bad in U8[][]::{ "user@example.com", "example.com/x", "a b", "a\"b", "host:http",
         "host:65536", "host:1:2", "::1", "[::1", "[]", "[::1]x", "ex%4", "ex%zz" }
         req: = arena.text().s("GET / HTTP/1.0\r\nHost: ").s(bad).s("\r\n\r\n").take()
-        assert(parse_error(req, http.default_max_body_bytes, arena).equals("invalid_host"),
+        assert(parse_error(req, http.DEFAULT_MAX_BODY_BYTES, arena).equals("invalid_host"),
             "a Host value that is not a host and a port must be refused, on HTTP/1.0 too")
         $length_ok: = true
-        _n: = http.request_length(req, http.default_max_body_bytes, arena) catch
+        _n: = http.request_length(req, http.DEFAULT_MAX_BODY_BYTES, arena) catch
             length_ok = false
         assert(!length_ok, "request_length must refuse what parse_request refuses")
     // One answer to "HTTP/1.1 or later", which the Host rule and a connection's default share.
@@ -519,7 +519,7 @@ fn http_echo_server(listener: net.Tcp_listener$@): Void$@
         assert(n > 0, "the client must not close before its request is whole")
         got.s(U8[]::{ .ptr = chunk[0]@, .len = n })
         req =
-            http.parse_request(got.slice(), http.default_max_body_bytes, server_arena) catch e
+            http.parse_request(got.slice(), http.DEFAULT_MAX_BODY_BYTES, server_arena) catch e
             switch e
             case .incomplete {}
             default
@@ -592,7 +592,7 @@ fn test_http_socket_roundtrip()
     http.write_request(client, "POST", "/echo", req_headers, "ping")
         catch panic("client write_request should succeed")
     resp: =
-        http.read_response(client, null, http.default_max_body_bytes, 60000)
+        http.read_response(client, null, http.DEFAULT_MAX_BODY_BYTES, 60000)
         catch panic("client read_response should succeed")
     defer resp.free()
     resp_ok: =
@@ -617,7 +617,7 @@ fn test_http_socket_roundtrip()
 // still readable after a broken header.** A broken header that is not discarded fails forever.
 // ==========================================
 priv fn taken_or(acc: Str_builder$@, arena: Arena$@): U8[]
-    got: = jsonrpc.take_frame(acc, jsonrpc.max_body_bytes, arena) catch
+    got: = jsonrpc.take_frame(acc, jsonrpc.MAX_BODY_BYTES, arena) catch
         return "(broken)"
     switch got
     case .some(body)
@@ -693,13 +693,13 @@ fn test_jsonrpc_broken_frame()
     // A length above the cap is broken.
     $huge: = Str_builder.new()
     defer huge.free()
-    huge.s("Content-Length: \{jsonrpc.max_body_bytes + 1\}\r\n\r\n")
+    huge.s("Content-Length: \{jsonrpc.MAX_BODY_BYTES + 1\}\r\n\r\n")
     acc.s(huge.slice())
     assert(taken_or(acc@, arena).equals("(broken)"), "a length above the cap is broken")
 
     // **A head that never ends is broken too**, and dropped: kept, it grew for good.
     acc.len = 0
-    for _i in Range.asc(jsonrpc.max_head_bytes / 8 + 1)
+    for _i in Range.asc(jsonrpc.MAX_HEAD_BYTES / 8 + 1)
         acc.s("X: aaaa ")
     assert(taken_or(acc@, arena).equals("(broken)"), "a head past its cap without an end is broken")
     assert(acc.len == 0, "the head past its cap is dropped")
@@ -711,7 +711,7 @@ fn test_jsonrpc_broken_frame()
         tail: U8[] = "\r\nContent-Length: 2\r\n\r\n"
         acc.len = 0
         acc.s("X: ")
-        for _i in Range.asc(jsonrpc.max_head_bytes - 3 - tail.len + over)
+        for _i in Range.asc(jsonrpc.MAX_HEAD_BYTES - 3 - tail.len + over)
             acc.c('a')
         acc.s(tail).s("ok")
         assert(taken_or(acc@, arena).equals("ok" if over == 0 else "(broken)"),
@@ -755,7 +755,7 @@ fn test_jsonrpc_encode()
     $out: = Str_builder.new()
     defer out.free()
     jsonrpc.frame_into(out@, req)
-    body: = jsonrpc.take_frame(out@, jsonrpc.max_body_bytes, arena)
+    body: = jsonrpc.take_frame(out@, jsonrpc.MAX_BODY_BYTES, arena)
         catch panic("a freshly framed body must be takeable")
     switch body
     case .some(text)

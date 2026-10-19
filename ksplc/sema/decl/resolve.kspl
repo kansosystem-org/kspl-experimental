@@ -31,9 +31,9 @@ import "std/strnum" // `to_i64` / `to_f64` / `parse_size`
 // How the mutability mark on a type argument is accepted (the `$` of a `Slice<|$U8|>`). At a
 // position the declaration names (`struct Slice<|$T|>`), **an unmarked actual argument is wrapped
 // as immutable**. Immutable is the default, so the mutable side carries the mark. The reasoning is
-// "Why the mutability marker on a type argument is prefix" in `../../../docs/DESIGN-language.md`.
-// The type comparison decides the one level of weakening such a position allows
-// (generic_arg_weakens in `../type/query.kspl`), not this file.
+// "Why the mutability marker on a type argument is prefix" in
+// `../../../docs/DESIGN-programming-language.md`. The type comparison decides the one level of
+// weakening such a position allows (generic_arg_weakens in `../type/query.kspl`), not this file.
 // ==========================================
 fn arg_names_mut(arg: Ast_node$@): Bool //<
     //< Whether the actual argument holds the mutability mark (the `$` of a `Slice<|$U8|>`)
@@ -89,7 +89,7 @@ impl Sema_ctx
             return base_name
         // A built-in type and what derives from one are not qualified, or an `impl U8[]` method
         // lands on a fictional "std.io.U8[]".
-        if base_name.equals(base_core.unknown_type_name) || base_name.equals("Void") ||
+        if base_name.equals(base_core.UNKNOWN_TYPE_NAME) || base_name.equals("Void") ||
             base_name.ends_with("[]") || base_name.ends_with("@")
             return base_name
 
@@ -167,7 +167,7 @@ impl Sema_ctx
                     .take())
                 sym.type_id = 0
                 return 0
-        if r.resolving.aliases.len >= sema_type_query.max_alias_chain_depth
+        if r.resolving.aliases.len >= sema_type_query.MAX_ALIAS_CHAIN_DEPTH
             r.err(sym.node, too_deep(name))
             sym.type_id = 0
             return 0
@@ -188,7 +188,7 @@ impl Sema_ctx
         // nest.
         // **A chain whose far end was refused is that refusal's chain.** The forward walk above
         // reported it where it was cut, and a second error here would name the same chain.
-        if r.env.alias_chain_len(target_id) + 1 >= sema_type_query.max_alias_chain_depth
+        if r.env.alias_chain_len(target_id) + 1 >= sema_type_query.MAX_ALIAS_CHAIN_DEPTH
             if !sema_type_env.is_unknown(r.env.get_real_type(target_id))
                 r.err(sym.node, too_deep(name))
             sym.type_id = 0
@@ -568,7 +568,7 @@ priv fn refuse_computed_arg(c: Sema_ctx$@, arg: Ast_node$@) //<
     //< A type argument's value is written as it names its type, so arithmetic cannot stand there
     c.err(arg,
         "a value passed as a type argument must be a literal, a negated literal or the name of a \
-            const. Declare 'const n: I32 = ...'. Pass 'n' as the argument")
+            const. Declare 'const N: I32 = ...'. Pass 'N' as the argument")
 
 fn refuse_arg_kind(c: Sema_ctx$@, arg: Ast_node$@, generic: Ast_node$@, param: Ast_node$@,
     own: Ast_node$@) //<
@@ -601,7 +601,7 @@ fn refuse_arg_kind(c: Sema_ctx$@, arg: Ast_node$@, generic: Ast_node$@, param: A
     c.err(arg, c.scratch.slice())
 
 priv fn write_param_type(c: Sema_ctx$@, type_node: Ast_node$@) //<
-    //< `: T` of `const n: T`, if written
+    //< `: T` of `const N: T`, if written
     if type_node != null
         c.scratch.s(": \{type_node.text\}")
 
@@ -834,4 +834,4 @@ priv fn too_deep(name: U8[]): U8[] //<
     //< the refusal of an alias chain past the limit, naming its alias
     return base_core.arena.text()
         .s("typedef chain too deep. '\{name\}' is an alias of an alias more than \
-            \{sema_type_query.max_alias_chain_depth\} levels down").take()
+            \{sema_type_query.MAX_ALIAS_CHAIN_DEPTH\} levels down").take()

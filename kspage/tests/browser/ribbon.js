@@ -258,13 +258,14 @@ function kspageProbeRibbon(ks) {
 
   // The document's one unit is one CSS pixel. **This can be seen nowhere else.** Another ratio in
   // between wants the press-to-document division in four places (the zoom is the browser's). Only
-  // the pixel density is multiplied, so the CSS width is the width handed over.
+  // the pixel density is multiplied. A wide table or slide can extend the drawing surface.
   const zoomWide = Math.round(canvas.getBoundingClientRect().width);
   app.resize(600);
-  check(canvas.style.width === "600px",
-    "the width handed over becomes the CSS width as it stands ("
+  const extent = Math.max(600, ...app.regions().map((region) => region.x + region.w));
+  check(Math.abs(parseFloat(canvas.style.width) - extent) < 0.5,
+    "the drawing surface covers the layout without scaling ("
       + canvas.style.width + ")");
-  check(canvas.width === Math.ceil(600 * (window.devicePixelRatio || 1)),
+  check(canvas.width === Math.ceil(extent * (window.devicePixelRatio || 1)),
     "the pixel density alone is applied (" + canvas.width + ")");
   // **Do not lay a zoom tool down again** (two ratios would multiply together).
   check(document.getElementById("zoom") === null, "there is no zoom tool on the page's side");

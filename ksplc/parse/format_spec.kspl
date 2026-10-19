@@ -22,7 +22,7 @@ priv struct Format_spec_val //< the result of interpreting the SPEC
     chr: Bool //< `c` (print the byte as a character)
     consumed: Sz
 
-priv const max_format_spec_digits: I64 = 922337203685477579 //<
+priv const MAX_FORMAT_SPEC_DIGITS: I64 = 922337203685477579 //<
     //< The largest value the digit accumulation allows, checked before adding
     //<
     //< The check matches parse_number's in json.kspl, though a SPEC is too short to reach it.
@@ -35,7 +35,7 @@ priv fn parse_format_spec(spec: U8[]): Format_spec_val
         i = 1
     $width: I64 = 0
     for i < spec.len && (spec.ptr + i).is_digit()
-        if width > max_format_spec_digits
+        if width > MAX_FORMAT_SPEC_DIGITS
             break
         width = width * 10 + I64::((spec.ptr + i)$ - '0')
         i += 1
@@ -48,7 +48,7 @@ priv fn parse_format_spec(spec: U8[]): Format_spec_val
         i += 1
         precision = 0
         for i < spec.len && (spec.ptr + i).is_digit()
-            if precision > max_format_spec_digits
+            if precision > MAX_FORMAT_SPEC_DIGITS
                 break
             precision = precision * 10 + I64::((spec.ptr + i)$ - '0')
             i += 1
@@ -73,7 +73,7 @@ fn is_complete(spec_text: U8[], out_rest: U8[]$@): Bool //<
     //< Caution: **Do not silently drop unread text.** In a misordered `\{n:.2,05\}` only `.2` would
     //< take effect, and `,05` would vanish without a trace. That is the "written but does nothing"
     //< failure of an unknown attribute ("Compiler directives and attributes" in
-    //< docs/SPEC-language.md).
+    //< docs/SPEC-programming-language.md).
     fs: = parse_format_spec(spec_text)
     if fs.consumed >= spec_text.len
         return true
@@ -111,7 +111,7 @@ fn precision_written(spec_text: U8[]): Bool //<
     //<
     //< Caution: **Refuse it here, not by clamping**: `.25` printed 19 digits, its writer believing
     //< it took effect (Principle 5).
-    return parse_format_spec(spec_text).precision <= I32::strfmt.float_max_precision
+    return parse_format_spec(spec_text).precision <= I32::strfmt.FLOAT_MAX_PRECISION
 
 priv fn char_alone(fs: Format_spec_val, out_bad: U8[]$@): Bool //<
     //< Whether the `c` is written on its own
@@ -152,15 +152,15 @@ fn build_call(spec_text: U8[], loc: base_ast.Loc): Fmt_call //<
     //< be written but do nothing.
     fs: = parse_format_spec(spec_text)
     if fs.chr
-        return Fmt_call::{ .method = base_core.fmt_method_char,
+        return Fmt_call::{ .method = base_core.FMT_METHOD_CHAR,
             .args = Ast_node.build_args(loc) }
     if fs.hex
-        return Fmt_call::{ .method = base_core.fmt_method_hex,
+        return Fmt_call::{ .method = base_core.FMT_METHOD_HEX,
             .args = build_hex_args(fs, loc) }
     if fs.precision >= 0
-        return Fmt_call::{ .method = base_core.fmt_method_prec,
+        return Fmt_call::{ .method = base_core.FMT_METHOD_PREC,
             .args = build_prec_args(fs, loc) }
-    return Fmt_call::{ .method = base_core.fmt_method_spec, .args = build_spec_args(fs, loc) }
+    return Fmt_call::{ .method = base_core.FMT_METHOD_SPEC, .args = build_spec_args(fs, loc) }
 
 priv fn build_spec_args(fs: Format_spec_val, loc: base_ast.Loc): Ast_node$@ //<
     //< It builds `value.fmt_spec(width, zero, comma)`'s argument node (expr_args)

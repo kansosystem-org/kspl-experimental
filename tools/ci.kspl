@@ -14,7 +14,7 @@
 //         --cap=<seconds>
 //     ksplc run tools/ci.kspl summary [--jobs=<n>] [--title=<text>]
 // ==========================================
-import "std/argp"
+import "std/argparse"
 import "std/chars"
 import "std/fs"
 import "std/io"
@@ -24,7 +24,7 @@ import "std/subproc"
 import "std/sys"
 import "tools/ci_gates" + { Gate, Set }
 
-priv const verdict_line: U8[] = "RESULT: ALL PASS" //<
+priv const VERDICT_LINE: U8[] = "RESULT: ALL PASS" //<
     //< The line a gate with `Gate.verdict` must print ("How a run is read" in `docs/SPEC-gates.md`)
 
 fn main(): I32
@@ -36,7 +36,7 @@ fn main(): I32
     $platform: U8[] = ""
     $relaxed: U8[] = ""
     $cap: I64 = 0I64
-    p: = argp.Parser
+    p: = argparse.Parser
         .create(sys.program_name(), "run a set of CI gates, or print the summary", arena)
     p.positional("<set> | summary")
     p.str_opt("--make", make@, "the make to run each gate with (make passes its own)")
@@ -70,8 +70,8 @@ fn main(): I32
         io.err().s("ci: no row of `switch_skips` names the switch '\{odd\}'\n")
         return 2
     // **No default cap here**: `CI_GATE_CAP` in `mk/ci.mk` is its one place.
-    if cap < 1I64 || cap > cap_max_s
-        io.err().s("ci: a set needs --cap=<seconds>, from 1 to \{cap_max_s\}\n")
+    if cap < 1I64 || cap > CAP_MAX_S
+        io.err().s("ci: a set needs --cap=<seconds>, from 1 to \{CAP_MAX_S\}\n")
         return 2
     switch ci_gates.set_from(name, arena)
     case .some(s)
@@ -90,13 +90,13 @@ priv struct Round //< how this round runs each gate: the command line's settings
     relaxed: U8[] //< the switches turned off, space-separated (`--relaxed`)
     cap_s: I64 //< the seconds one gate may run before it is stopped (`--cap`)
 
-priv const cap_max_s: I64 = 2000000I64 //< the longest cap a child's limit in milliseconds holds
+priv const CAP_MAX_S: I64 = 2000000I64 //< the longest cap a child's limit in milliseconds holds
 
 priv fn run_set(name: U8[], s: Set, r: Round, arena: Arena$@): I32 //<
     //< Runs every gate of the set in the table's order; 0 when all passed
     //<
     //< **Every set refuses a gate no set runs**: it would go green everywhere, run nowhere.
-    fs.mkdir_all(ci_gates.log_dir) catch {}
+    fs.mkdir_all(ci_gates.LOG_DIR) catch {}
     if !ci_gates.reset_logs(arena)
         return 1
     // **What only Linux has its tools for runs on Linux alone**: elsewhere, open the repository in
@@ -115,7 +115,7 @@ priv fn run_set(name: U8[], s: Set, r: Round, arena: Arena$@): I32 //<
             io.err()
                 .s("ci: the shared sections need GNU make 4; install it with brew install make\n")
             return 1
-    for g in ci_gates.gates
+    for g in ci_gates.GATES
         if !run_anywhere(g)
             io.err().s("ci: no set runs the gate '\{g.log\}'\n")
             return 1
@@ -125,7 +125,7 @@ priv fn run_set(name: U8[], s: Set, r: Round, arena: Arena$@): I32 //<
             return 1
     $count: Sz = 0
     $fallen: Sz = 0
-    for g in ci_gates.gates
+    for g in ci_gates.GATES
         if !s.runs(g, r.platform)
             continue
         count += 1
@@ -149,7 +149,7 @@ priv fn run_set(name: U8[], s: Set, r: Round, arena: Arena$@): I32 //<
     return 0
 
 priv fn run_anywhere(g: Gate): Bool //< whether some set runs the gate
-    for s in ci_gates.set_order
+    for s in ci_gates.SET_ORDER
         if s.runs(g)
             return true
     return false
@@ -208,7 +208,7 @@ priv fn unexpected_skip(text: U8[], j: ci_gates.Judge@, arena: Arena$@): U8[]? /
 priv fn said_verdict(text: U8[], arena: Arena$@): Bool //<
     //< Whether the log holds the line a passing gate prints
     for line in text.lines(arena)
-        if line.starts_with(verdict_line)
+        if line.starts_with(VERDICT_LINE)
             return true
     return false
 

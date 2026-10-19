@@ -167,9 +167,9 @@ impl Sema_ctx
         //<
         //< It holds a **copy**, so its type is what the copy can write (details: copy_value_type in
         //< `sema/type/query.kspl`). A fixed-length array's elements follow the `$` before the name
-        //< ("The two axes of mutability" in docs/SPEC-language.md). A slice's or a pointer's
-        //< contents are **separate memory**, so the postfix level (`U8$[]` / `U8$@`) carries their
-        //< permission.
+        //< ("The two axes of mutability" in docs/SPEC-programming-language.md). A slice's or a
+        //< pointer's contents are **separate memory**, so the postfix level (`U8$[]` / `U8$@`)
+        //< carries their permission.
         if !is_mut
             return type_id
         return r.env.copy_value_type(type_id)
@@ -211,9 +211,9 @@ impl Sema_ctx
         //< Rejects an `Index_place` whose `at` returns **an unwritable place**
         //<
         //< **A container with immutable elements can implement only `Index_ref`** ("Indexing" in
-        //< `../../../docs/SPEC-language.md`). Where the immutability comes from a type argument
-        //< (`Slice<|T|>`) the declaration cannot show it, so each instance is checked. If not
-        //< rejected, the generated C only warns about the discarded const and **the write
+        //< `../../../docs/SPEC-programming-language.md`). Where the immutability comes from a type
+        //< argument (`Slice<|T|>`) the declaration cannot show it, so each instance is checked. If
+        //< not rejected, the generated C only warns about the discarded const and **the write
         //< succeeds** (Principle 2).
         if sym: = r.resolve_operator_method(target_id, "at")
             if sym.node == null
@@ -259,7 +259,7 @@ impl Sema_ctx
         //< True where that place cannot be written to
         //<
         //< 1. the path crosses a read-only pointer or cannot be followed (place_denies_write);
-        //< 2. the place's own type is immutable (a `const ro: U8[4]`'s `ro[0]` is `U8 immut`);
+        //< 2. the place's own type is immutable (a `const RO: U8[4]`'s `ro[0]` is `U8 immut`);
         //< 3. the root binding reached across no pointer or slice is immutable (`v: S`, `const`).
         //< Caution: **Use it where an address is taken implicitly too** (a `Self$@` receiver).
         //< Otherwise `cs.n = 9` is rejected while `cs.bump()` writes to ROM. Rule 3 is why a
@@ -284,8 +284,8 @@ impl Sema_ctx
         // Rule 3 does not apply where this level is a pointer or a slice. What is written is then
         // **the pointee or the element**, which the type decides. Applied, rule 3 would make
         // `buf.fill(0)` on a `buf: U8$[]` demand `$buf`, while `buf[0] = 0` would not ("The two
-        // axes of mutability" in docs/SPEC-language.md). `x@` **must not take** this shortcut (see
-        // root_binding_is_immutable).
+        // axes of mutability" in docs/SPEC-programming-language.md). `x@` **must not take** this
+        // shortcut (see root_binding_is_immutable).
         if r.env.is_pointer(node.type_id) || r.env.is_slice(node.type_id)
             return false
         return r.root_binding_is_immutable(node, false)
@@ -322,7 +322,7 @@ impl Sema_ctx
         if recv == null || r.env.is_pointer(recv.type_id)
             return false // a pointer was crossed
         if op.text.equals("[")
-            // A fixed-length array's elements are part of the value itself (a `const cs: H`'s
+            // A fixed-length array's elements are part of the value itself (a `const CS: H`'s
             // `cs.buf[0]` is in ROM), so it descends; a slice's elements are separate memory.
             if !r.env.is_array(r.env.get_real_type(recv.type_id))
                 return false
@@ -334,13 +334,13 @@ impl Sema_ctx
         //< A `const`'s value is immutable and at top level sits in `.rodata` (ROM), so a `$` on its
         //< elements can write nothing (Principle 5). If allowed, C fails to compile the generated
         //< code and LLVM fails at run time. It descends into neither **a struct's fields** nor a
-        //< pointer, whose target can be in RAM (`const p: I32$@ = ram@;` is legitimate).
+        //< pointer, whose target can be in RAM (`const P: I32$@ = ram@;` is legitimate).
         $seen: = List<|I32|>.new(null)
         defer seen.free()
         if !r.find_mut_in_const_storage(type_id, seen@)
             return
         // The `$` is always on a slice level: a fixed-length array cannot have one on its element
-        // ("The two axes of mutability" in docs/SPEC-language.md).
+        // ("The two axes of mutability" in docs/SPEC-programming-language.md).
         r.clear_scratch()
             .s("const '\{name\}' declares writable elements. A const is immutable and is placed in \
                 read-only memory. Remove the '$' from the slice stage (write 'T[]', not 'T$[]')")
@@ -357,7 +357,7 @@ impl Sema_ctx
                 return false
         seen.push(id)
         // Caution: **Recognize a slice by its spelling.** A `T$[]` is a `Slice<|$T|>` instance, so
-        // classifying by the constructor cannot tell it from a plain struct, and a `const sl:
+        // classifying by the constructor cannot tell it from a plain struct, and a `const SL:
         // U8$[]` would get through (is_slice_like in `../type/query.kspl`).
         slice_elem: = r.env.slice_struct_elem(id)
         if slice_elem != 0
@@ -465,8 +465,8 @@ impl Sema_ctx
         //< Whether the visibility level makes that declaration visible in the file being analysed
         //<
         //< **This is the one place that defines the three levels' meaning** (see "Structs
-        //< (`struct`)" in docs/SPEC-language.md). A stale copy would let an invisible name pass on
-        //< one path.
+        //< (`struct`)" in docs/SPEC-programming-language.md). A stale copy would let an invisible
+        //< name pass on one path.
         if vis == sema_type_scope.Visibility.file_private
             return false
         if vis == sema_type_scope.Visibility.internal
@@ -490,10 +490,10 @@ impl Sema_ctx
         //< Reports a selective import naming what its file cannot see (`import "p" { Hidden }`)
         //<
         //< **Selecting a name changes no visibility** ("Which names an import brings in" in
-        //< docs/SPEC-language.md), and the line that selects it is where that shows. Left to each
-        //< use, every road to a name had to ask again, and a type's, a constant's and a struct
-        //< literal's did not. A `priv` struct selected from another file was then used without a
-        //< word.
+        //< docs/SPEC-programming-language.md), and the line that selects it is where that shows.
+        //< Left to each use, every road to a name had to ask again, and a type's, a constant's and
+        //< a struct literal's did not. A `priv` struct selected from another file was then used
+        //< without a word.
         if r.suppress_errors
             return
         old_file: = r.file_name

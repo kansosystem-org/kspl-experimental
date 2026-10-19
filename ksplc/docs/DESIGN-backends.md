@@ -45,7 +45,7 @@ flowchart LR
 | Runtime | written into every `.c` | linked in from `ksplc emit-runtime` |
 | Debug information | `#line` before every statement | none |
 | `ksplc run`, `--split`, `--library`, `commit-seed` | yes | refused |
-| Machines | every row of `machines` in `base/target.kspl` | those with 8-byte pointers, by their `target triple`; refused otherwise |
+| Machines | every row of `MACHINES` in `base/target.kspl` | those with 8-byte pointers, by their `target triple`; refused otherwise |
 
 **genllvm lays out only 8-byte pointers and `Sz`** (a slice is `{ ptr, i64 }`, "The runtime memory layout and the ABI specification"). So `check_machine` in `main.kspl` refuses `--to=llvm` for a machine whose row has no LLVM triple. It does so before any IR is written. The IR names the row's `target triple` and no `target datalayout`. LLVM derives the layout from the triple. clang replaces a module's own layout with its target's without a word. So a copy would state what nothing reads.
 
@@ -63,11 +63,11 @@ The backends only translate; every decision has been made before them. They are 
 | what the generated `main` does around `kspl_main` | `gen/entry.kspl` | the startup calls and their order, how the return value becomes an exit code, and the words printed on failure |
 | reading the file an `embed` names | `gen/embed.kspl` | finding it the way an import is found, and refusing one that cannot be read |
 
-**A decision written twice drifts with no warning until someone runs the other backend.** A `main` written per backend can lack a call in one of them. Take the call that puts standard output into binary mode. Without it, a program built with `--to=llvm` writes `\r\n` on Windows where the C one writes `\n`. The reason is "Standard output carries the bytes a program writes" in [`../../docs/DESIGN-language.md`](../../docs/DESIGN-language.md). And a symbol that one backend owns, such as the runtime's version symbol, would make the other import it.
+**A decision written twice drifts with no warning until someone runs the other backend.** A `main` written per backend can lack a call in one of them. Take the call that puts standard output into binary mode. Without it, a program built with `--to=llvm` writes `\r\n` on Windows where the C one writes `\n`. The reason is "Standard output carries the bytes a program writes" in [`../../docs/DESIGN-programming-language.md`](../../docs/DESIGN-programming-language.md). And a symbol that one backend owns, such as the runtime's version symbol, would make the other import it.
 
 **An `embed` with no path in the tree stops with an ICE** (an internal compiler error, see [the glossary](DESIGN-compiler.md#the-glossary)). The parser always gives an `embed` its path as a string literal, so a missing one is a broken invariant. Returning silently would be the stopgap "Failing fast through an exception or an ICE" in [`DESIGN-compiler.md`](DESIGN-compiler.md) forbids.
 
-**Where the spelling differs, the table belongs to the backend.** The functions the LLVM preamble declares or defines itself form one table, `preamble_fns` in `gen/llvm/ctx.kspl`. It drives both the `declare`s and the skipping of `std`'s own declarations, so the two cannot disagree. `make test-conventions` holds its hand-defined entries against the `define`s in `gen/llvm/module.kspl`.
+**Where the spelling differs, the table belongs to the backend.** The functions the LLVM preamble declares or defines itself form one table, `PREAMBLE_FNS` in `gen/llvm/ctx.kspl`. It drives both the `declare`s and the skipping of `std`'s own declarations, so the two cannot disagree. `make test-conventions` holds its hand-defined entries against the `define`s in `gen/llvm/module.kspl`.
 
 **The emission itself is not shared**: the bodies of genc and genllvm overlap in only a few short windows, a small fraction of the whole.
 
@@ -104,7 +104,7 @@ The two longer rows:
 
 | Who | What it does with the answer |
 | :-- | :-- |
-| sema | Refuses whatever would take the address (`refuse_packed_address` / `refuse_packed_receiver`), and an ARC-managed field, whose helpers take it (`check_packed_managed_fields`); why is "Why a field `#packed` leaves under-aligned has no address" in [`../../docs/DESIGN-language.md`](../../docs/DESIGN-language.md) |
+| sema | Refuses whatever would take the address (`refuse_packed_address` / `refuse_packed_receiver`), and an ARC-managed field, whose helpers take it (`check_packed_managed_fields`); why is "Why a field `#packed` leaves under-aligned has no address" in [`../../docs/DESIGN-programming-language.md`](../../docs/DESIGN-programming-language.md) |
 | genc | Leaves the access to C, which knows the packing from the member path. Only the target an assignment fixes first (`_kspl_dst_N` in `emit_assign_stmt`, `gen/c/stmt.kspl`) is held through a pointer to a one-field packed struct, never a `T*` |
 | genllvm | Writes `, align N` on the load or store (`op_load_place` / `op_store_place` in `gen/llvm/types.kspl`), and on a struct literal's field store (`packed_field_align`) |
 | lower | Fixing an operand's address early (`hoist_address` in `lower/order.kspl`) fixes the struct holding the field instead (`hoist_packed_holder`) |
@@ -185,7 +185,7 @@ Caution: **Do not keep the list by hand**: which names collide changes with the 
 
 **A program's symbols take the linkage their visibility gives**: `priv` is `static` and the rest external, so `--split`'s units reach each other (`has_file_local_c_symbol` in `gen/c/decl.kspl`). The runtime's `kspl_*` are external, since one program holds one runtime.
 
-**A library's are all `static` but its `#export`s** (`--library`; what can be relied on is [`SPEC-tools.md` §2.10.1](SPEC-tools.md#2101-building-a-library---library)). [`../../docs/DESIGN-language.md`](../../docs/DESIGN-language.md) says why a library takes a private copy, and why `static` rather than a hidden visibility or an export list. The section is "A KSPL library crosses as C, holding its own runtime". This section holds how the generated C and the runtime make it so.
+**A library's are all `static` but its `#export`s** (`--library`; what can be relied on is [`SPEC-tools.md` §2.10.1](SPEC-tools.md#2101-building-a-library---library)). [`../../docs/DESIGN-programming-language.md`](../../docs/DESIGN-programming-language.md) says why a library takes a private copy, and why `static` rather than a hidden visibility or an export list. The section is "A KSPL library crosses as C, holding its own runtime". This section holds how the generated C and the runtime make it so.
 
 | What | How it becomes `static` |
 | :-- | :-- |
@@ -220,7 +220,7 @@ C needs a name declared before it is used. Genc therefore writes everything in a
 2. **Bodies in dependency order** (`collect_pending_nodes` → `resolve_pending_queues`). Struct, enum and trait bodies, and the compound-type structs (slice, array), pass through a dependency queue (`dep_queue`). They come out topologically sorted. A true cycle falls back to forced output.
    * **A function type's typedef goes on the same queue** (`emit_single_complex_type`). C cannot name a function-pointer type without one, and a generic's field, a return type or an inferred local writes the type by name. A typedef has no forward form, so whatever names one, even through a pointer, waits for it (`fn_typedef_named_by` in `ksplc/gen/c/root.kspl`). The typedef itself waits only for other function types, since a declarator can name an incomplete struct.
 3. **All function prototypes** (`emit_function_prototypes`), always before the variables and constants, so a generated vtable constant can name a thunk in its initializer.
-4. **Global variables and vtable constants** (`emit_top_level_vars`), also in dependency order, not source order. A C static initializer can only name what is defined above it. So `const m: Sz = n * 3;` with `n` declared later fails with "initializer element is not a compile-time constant". Step 2's work-list scheme emits a variable once its initializer names nothing unemitted, and emits a cycle as it stands (sema's `check_static_initializer` reports it). Type annotations are not examined: sema has folded array lengths to numbers.
+4. **Global variables and vtable constants** (`emit_top_level_vars`), also in dependency order, not source order. A C static initializer can only name what is defined above it. So `const M: Sz = n * 3;` with `n` declared later fails with "initializer element is not a compile-time constant". Step 2's work-list scheme emits a variable once its initializer names nothing unemitted, and emits a cycle as it stands (sema's `check_static_initializer` reports it). Type annotations are not examined: sema has folded array lengths to numbers.
 5. **Function and method bodies**, and the stmt_blocks (`emit_functions_and_impls`).
 6. **`main`** (`emit_main_function`).
 
@@ -265,7 +265,7 @@ Caution: **A `switch` built after Lower's walk binds its subject itself**, since
 
 #### How the generated code makes overflow wrap around
 
-In KSPL an integer that grows past its type's range wraps around (for `U8`, 255 + 1 is 0). C does not promise this, so the generated C computes in a type where it does. The specification defines overflow as `mod 2^N`, signed or unsigned ("6.8 Integer arithmetic: folding, overflow, division, shifts" in [`../../docs/SPEC-language.md`](../../docs/SPEC-language.md)). C gives neither directly, so **the generated code names the wrapping type explicitly**, for a different reason per signedness.
+In KSPL an integer that grows past its type's range wraps around (for `U8`, 255 + 1 is 0). C does not promise this, so the generated C computes in a type where it does. The specification defines overflow as `mod 2^N`, signed or unsigned ("6.8 Integer arithmetic: folding, overflow, division, shifts" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md)). C gives neither directly, so **the generated code names the wrapping type explicitly**, for a different reason per signedness.
 
 | KSPL type | What C does by itself | What the generated C does |
 | :-- | :-- | :-- |
@@ -294,7 +294,7 @@ The verdict is two functions in `gen/c/expr.kspl`, used by both `emit_binary_exp
 * **genllvm is right from the start**: `add i8` and `add i32` both wrap at their width. Left unfixed, genc would make the answer depend on the backend. The folding (`fit_result`) produces `mod 2^N` too.
 * Caution: **Self-hosting cannot notice it.** ksplc itself hardly ever reads after a wrap, and for the narrow unsigned types its output barely changes. On the signed side, the answer changes only at higher optimization.
 * Two regression assets cover it. `ksplc/tests/const_fold_width_test.kspl` checks fixed shapes: a global `const` through the folding, and a local through the generated code. `tests/suite/property_test.kspl` checks random expressions over the eight integer types. **Do not rely on the shape that only assigns back into the same width**: it passes even when the conversion back is forgotten.
-* **A check at `-O0` does not catch a signed wrap.** Plain C wraps too at `-O0`, so both value-checking assets pass. Property 3 in `tests/suite/property_test.kspl` checks that `-O0` and `-O2` give the same answer, because the failure is not a wrong value but a loop that never ends. `make test-equiv` also builds its program's C with C's signed-overflow trap (`trap_cflags` in `tests/suite/equiv_test.kspl`), which stops on an overflow the answer hides.
+* **A check at `-O0` does not catch a signed wrap.** Plain C wraps too at `-O0`, so both value-checking assets pass. Property 3 in `tests/suite/property_test.kspl` checks that `-O0` and `-O2` give the same answer, because the failure is not a wrong value but a loop that never ends. `make test-equiv` also builds its program's C with C's signed-overflow trap (`TRAP_CFLAGS` in `tests/suite/equiv_test.kspl`), which stops on an overflow the answer hides.
 
 #### In a top-level initializer, a constant becomes its value
 
@@ -396,7 +396,7 @@ So genllvm passes every aggregate as a bare `ptr`, as a return value and as an a
 * Every `ret` goes through `Genllvm_ctx.emit_ret_value`. A path that writes a `ret` directly mixes a value-returning `ret` into an sret function and breaks the IR.
 * `is_llvm_aggregate`'s branches must match the type-string output one to one. Kept as two tables, the ABI would drift silently ("the type is i64, yet it is treated as an aggregate").
 
-**It stops at the C boundary.** An internal ABI can be set alone only where both ends are one's own. With `#export` the C compiler at the other end classifies, and genllvm cannot match it. So the LLVM backend cannot pass a struct across the C boundary by value, not even a plain POD one. The reason is in docs/DESIGN-language.md, "The FFI boundary check looks inside the type". (POD, "plain old data", is a struct of plain fields only.)
+**It stops at the C boundary.** An internal ABI can be set alone only where both ends are one's own. With `#export` the C compiler at the other end classifies, and genllvm cannot match it. So the LLVM backend cannot pass a struct across the C boundary by value, not even a plain POD one. The reason is in docs/DESIGN-programming-language.md, "The FFI boundary check looks inside the type". (POD, "plain old data", is a struct of plain fields only.)
 
 **Do not give one option two meanings**: the thunks, vtable constants and ARC drop glue that `lower` synthesizes already carry their final names.
 
@@ -437,7 +437,7 @@ There are three requirements:
 * an `F32` rounded at each step;
 * a float cast to an integer, truncated toward zero.
 
-Without it, `const h: F64 = pi * 2.0` and `I32::2.9` built on C and were refused on LLVM.
+Without it, `const H: F64 = pi * 2.0` and `I32::2.9` built on C and were refused on LLVM.
 
 **A value holding a tagged union is written as packed bytes** (`emit_llvm_laid_const` in `gen/llvm/decl.kspl`). A tagged union's LLVM type is an `i32` tag and raw words ("The runtime memory layout and the ABI specification"). No constant can fill that field by field. Each variant needs bytes of its own, so an array of them cannot be an LLVM array either. Such a global gets a packed struct type of its own. Every piece sits at ksplc's layout offset (`field_offset_of`, `enum_payload_offset`, `payload_field_offset`), with `i8` padding between and the type's alignment on the global. The code reads it at the same offsets. It reads a field through a named type's GEP (LLVM's "address of a field" instruction). It reads a payload field by its byte offset (`payload_field_ptr` in `gen/llvm/types.kspl`).
 
@@ -468,7 +468,7 @@ The regression test is `tests/prog/equiv.kspl`. It stores a `const`, a mutable a
    * Do not map `#inline` to `alwaysinline`: that forces inlining even at `-O0`, so debugging behaves differently from genc's output even though the meaning is the same.
 2. **Declare it single-backend and make it a compile error**, only where there is no portable counterpart. `#interrupt` is a per-machine calling convention with no LLVM IR form. An `#align(N)` placed directly on a function or a variable reaches C as an expression genc copies. So no constant exists to pass to LLVM, which demands a number. On a struct, sema folds it into `Struct_def.align_attr`, and it works on both backends. `attr_rule` in `sema/decl/attrs.kspl` marks these two C-only, which makes them an error under `--to=llvm`.
 
-**"Silently ignored on LLVM" is not a choice**: every new attribute takes one of the two ways. `#cfg` and `#link` are read before either backend, so the backends cannot differ on them. Normalization drops the declaration, and the libraries a kept `extern` block names are written from the tree (`write_libs_file` in `tools/libs.kspl`). The canonical source for the decision is the "Backends supported" column of the attribute table in `docs/SPEC-language.md`. The regression tests are the cases `attr_interrupt_llvm_backend` and `attr_fn_align_llvm_backend` in `tests/negative/attr.kspl` (both with `// ARGS: --to=llvm`).
+**"Silently ignored on LLVM" is not a choice**: every new attribute takes one of the two ways. `#cfg` and `#link` are read before either backend, so the backends cannot differ on them. Normalization drops the declaration, and the libraries a kept `extern` block names are written from the tree (`write_libs_file` in `tools/libs.kspl`). The canonical source for the decision is the "Backends supported" column of the attribute table in `docs/SPEC-programming-language.md`. The regression tests are the cases `attr_interrupt_llvm_backend` and `attr_fn_align_llvm_backend` in `tests/negative/attr.kspl` (both with `// ARGS: --to=llvm`).
 
 **The LLVM backend's missing debug information ("Genllvm (LLVM IR): why the structure differs, and managing SSA") is a gap of the same kind.** It stays open because `-g` is a build flag, not an attribute: there is nothing to refuse.
 
@@ -488,7 +488,7 @@ The regression test is `tests/prog/equiv.kspl`. It stores a `const`, a mutable a
 
 **A compile with `--to=llvm` cannot check that the C compiler is told the same.** The link is the user's, as with `--machine`: the marks alone change nothing, and `-fsanitize=` alone watches only the runtime. The specification says to name both.
 
-**`undefined` is refused for IR.** The undefined-behaviour sanitizer has no mark: clang's front end writes each of its checks into the code, knowing C's types, which IR has lost. KSPL keeps its own checks, in both backends, for what it defines as a stop. Those are an index, a shift, a divisor and a cast to an enum. It defines integer overflow as wrapping, so there is no signed overflow to watch. What stays unwatched through LLVM is what `docs/SPEC-language.md` leaves undefined beyond those: a misaligned access through a pointer cast. A C build with `undefined` watches it. A floating-point value cast to an integer it does not fit is not among them: both backends saturate it. Writing such checks into the IR would be a second implementation of clang's, kept apart from it; it is not done.
+**`undefined` is refused for IR.** The undefined-behaviour sanitizer has no mark: clang's front end writes each of its checks into the code, knowing C's types, which IR has lost. KSPL keeps its own checks, in both backends, for what it defines as a stop. Those are an index, a shift, a divisor and a cast to an enum. It defines integer overflow as wrapping, so there is no signed overflow to watch. What stays unwatched through LLVM is what `docs/SPEC-programming-language.md` leaves undefined beyond those: a misaligned access through a pointer cast. A C build with `undefined` watches it. A floating-point value cast to an integer it does not fit is not among them: both backends saturate it. Writing such checks into the IR would be a second implementation of clang's, kept apart from it; it is not done.
 
 **Bare metal and other machines.** `--freestanding` is refused: a sanitizer's runtime maps its shadow memory and writes its reports through the OS. Which hosted machine has which sanitizer is not copied into ksplc. clang refuses `-fsanitize=thread` for Windows and `-fsanitize=memory` for macOS, naming the target. A copy would drift from the C compiler that decides.
 
@@ -522,7 +522,7 @@ flowchart TB
 
 **`priv` does not decide what becomes `static`.** A `priv` is not always referenced from its own file alone. ARC's `retain` / `release` are `priv fn`s in `std/refcount`, but Lower synthesizes their calls (`synth_arc_stmt` in `lower/arc.kspl`) in the user's file. Only a name unique within its own file can be made `static` (`Sema_symbol.has_program_unique_c_name` in `sema/type/scope.kspl`, `Ast_node.has_file_local_c_symbol` in `gen/c/decl.kspl`). A method (unique program-wide by its type's FQN) and a generic instance (unique by its type arguments) never are.
 
-Caution: **Keep this answer the same as whether the mangling adds a file prefix (`is_private_symbol` in `lower/abi.kspl`).** If one changes alone, a name without the prefix becomes `static`. The link then breaks only when the split count changes. The grounds are "Visibility and linkage are separate axes" in [`../../docs/DESIGN-language.md`](../../docs/DESIGN-language.md).
+Caution: **Keep this answer the same as whether the mangling adds a file prefix (`is_private_symbol` in `lower/abi.kspl`).** If one changes alone, a name without the prefix becomes `static`. The link then breaks only when the split count changes. The grounds are "Visibility and linkage are separate axes" in [`../../docs/DESIGN-programming-language.md`](../../docs/DESIGN-programming-language.md).
 
 **Emit the prototype and the body to the same unit** (`proto_belongs_here` in `gen/c/decl.kspl`). An impl's methods are placed by the impl's `loc`, not their own, and a mismatch leaves a unit holding a `static` declaration with no definition.
 

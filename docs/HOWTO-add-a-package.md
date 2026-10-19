@@ -19,7 +19,7 @@
 ## The checks that must learn the name
 
 4. **The static analysis**: add `ksfoo/tests/main.kspl` to `LINT_TARGETS` in `mk/lint.mk`, beside the other packages' entries. Left out, `make test-conventions` fails with "no entry point of the static analysis has leaked out".
-5. **The reference directions** are in `tests/suite/docref_test.kspl`. Add `ksfoo` to `layer_from`. Add a `layer_to` row that starts `"ksfoo docs std root"` and names each package it imports. Add `ksfoo` to the rows of `docs`, `root`, `tests` and `tools`, which can point at every package. Left out of `layer_from`, `make test-docref` fails with "every package folder has a row in the reference directions".
+5. **The reference directions** are in `tests/suite/docref_test.kspl`. Add `ksfoo` to `LAYER_FROM`. Add a `LAYER_TO` row that starts `"ksfoo docs std root"` and names each package it imports. Add `ksfoo` to the rows of `docs`, `root`, `tests` and `tools`, which can point at every package. Left out of `LAYER_FROM`, `make test-docref` fails with "every package folder has a row in the reference directions".
 6. **The table those directions come from** is in "The layers" in [`SPEC-documents.md`](SPEC-documents.md). Add `` `ksfoo/` `` to its implementation row. Add an arrow (`ksfoo→std`) for each direction that the `layer_to` row holds. An arrow and a row that disagree fail `make test-conventions` with "the reference-direction table and the check line up".
 7. **The published API, if it has one**: add `ksfoo` to `SURFACE_PKGS` in `mk/test.mk`, then write the record:
 
@@ -28,7 +28,7 @@
    ```
 
    Listed without the file, `make test-surface` fails with "there is no ksfoo/SURFACE.txt".
-8. **The SKIP lines its tests print**: `make test-extract-rest` relays them, and each needs an `Expected_skip` row in `tools/ci_gates.kspl`, or the gate fails with "a SKIP no row of `expected_skips` holds" ([`HOWTO-add-a-gate.md`](HOWTO-add-a-gate.md)).
+8. **The SKIP lines its tests print**: `make test-extract-rest` relays them, and each needs an `Expected_skip` row in `tools/ci_gates.kspl`, or the gate fails with "a SKIP no row of `EXPECTED_SKIPS` holds" ([`HOWTO-add-a-gate.md`](HOWTO-add-a-gate.md)).
 
 ## Optional, and checked by nothing
 

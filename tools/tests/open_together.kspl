@@ -18,10 +18,10 @@ import "std/sys"
 import "std/verdict"
 import "tools/kspage_aim" as aim
 
-priv const shared_port: U8[] = "18640" //< the port both opens name, so they compete for it
-priv const url_wait_steps: Sz = 300 //< how many times, 100ms apart, the opens' output is read
-priv const answer_wait_ms: I32 = 10000 //< how long a server may take to answer one request
-priv const tool_wait_ms: I32 = 60000 //< how long `--list` and `--stop-all` may take
+priv const SHARED_PORT: U8[] = "18640" //< the port both opens name, so they compete for it
+priv const URL_WAIT_STEPS: Sz = 300 //< how many times, 100ms apart, the opens' output is read
+priv const ANSWER_WAIT_MS: I32 = 10000 //< how long a server may take to answer one request
+priv const TOOL_WAIT_MS: I32 = 60000 //< how long `--list` and `--stop-all` may take
 
 priv fn url_of(out_path: U8[]): U8[] //< the URL an opener put out, "" until a whole line of it
     body: = io.read_file(out_path) catch
@@ -45,7 +45,7 @@ priv fn status_of(url: U8[], target: U8[], arena: Arena$@): I32 //<
     http.write_request(stream, "GET", target, head, "") catch
         return 0
     answer: =
-        http.read_response(stream, arena, http.default_max_body_bytes, answer_wait_ms) catch
+        http.read_response(stream, arena, http.DEFAULT_MAX_BODY_BYTES, ANSWER_WAIT_MS) catch
         return 0
     return answer.status
 
@@ -74,12 +74,12 @@ priv fn open_argv(opener: U8[], doc: U8[], arena: Arena$@): U8[][5] //<
     //< the opener would serve the repository's root for both.
     return U8[][5]::{ opener, doc,
         arena.text().s("--root=").s(aim.parent_of(doc)).take(),
-        arena.text().s("--port=").s(shared_port).take(), "--show" }
+        arena.text().s("--port=").s(SHARED_PORT).take(), "--show" }
 
 priv fn reap(kid: subproc.Child$@) //< waits for an open to end, and kills one that does not
     //<
     //< **A `--show` open ends once its server has**; one still running would hold the gate open.
-    for _step in Range.asc(url_wait_steps)
+    for _step in Range.asc(URL_WAIT_STEPS)
         if !kid.alive()
             _code: = kid.wait()
             return
@@ -116,7 +116,7 @@ fn main(): I32 //< the exit code is the checks' verdict (`verdict.finish`)
         return verdict.fatal("the second open cannot be started")
     $url_a: U8[] = ""
     $url_b: U8[] = ""
-    for _step in Range.asc(url_wait_steps)
+    for _step in Range.asc(URL_WAIT_STEPS)
         url_a = url_of(out_a)
         url_b = url_of(out_b)
         if url_a.len > 0 && url_b.len > 0 || !first.alive() && !second.alive()
@@ -138,7 +138,7 @@ fn main(): I32 //< the exit code is the checks' verdict (`verdict.finish`)
         verdict.check("the second server serves the second folder",
             status_of(url_b, "/api/stat?path=b.kspage", arena) == 200, url_b)
         listed: =
-            subproc.run_capture(U8[][]::{ opener, "--list" }, "", tool_wait_ms, 64 * 1024, arena)
+            subproc.run_capture(U8[][]::{ opener, "--list" }, "", TOOL_WAIT_MS, 64 * 1024, arena)
             catch panic("the opener must start")
         lines: = listed.stdout_data
         for one in U8[][]::{ port_a, port_b }
@@ -152,7 +152,7 @@ fn main(): I32 //< the exit code is the checks' verdict (`verdict.finish`)
             verdict.check(arena.text().s("the note records the server on ").s(one)
                 .s(" for its folder").take(), found, lines)
     stopped: =
-        subproc.run_capture(U8[][]::{ opener, "--stop-all" }, "", tool_wait_ms, 64 * 1024, arena)
+        subproc.run_capture(U8[][]::{ opener, "--stop-all" }, "", TOOL_WAIT_MS, 64 * 1024, arena)
         catch panic("the opener must start")
     verdict.check("--stop-all stops what was started", stopped.exited_with(0),
         stopped.text(arena))

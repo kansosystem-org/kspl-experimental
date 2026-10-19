@@ -1,5 +1,5 @@
 #!/usr/bin/env -S ksplc run
-//< Compiles the code `docs/SPEC-language.md` calls "refused" and "allowed", and compares results
+//< Compiles the code `docs/SPEC-programming-language.md` calls "refused" and "allowed", and compares results
 //<
 //< Nobody runs the specification's prose.
 //< Caution: **List refusals and allowances in pairs.** Refusals alone let an implementation that
@@ -26,7 +26,7 @@ priv struct Case //< one claim
 
 // The table of the specification's claims.
 // Caution: **List refusals and allowances in pairs** (the reason is in the file header).
-priv const cases: Case[_] = ::{
+priv const CASES: Case[_] = ::{
     Case::{ .sec = "2.2", .claim = "a KSPL reserved word cannot be used as an identifier",
         .reject = true, .src = "fn main(): I32 { struct: I32 = 1; return struct; }\n" },
     Case::{ .sec = "2.2", .claim = "a C reserved word can be used as an identifier",
@@ -128,10 +128,10 @@ priv const cases: Case[_] = ::{
         .reject = true,
         .src = "priv fn f(): I32 { return 1; }\npriv g: I32 = f()\nfn main(): I32 { return 0; }\n" },
     Case::{ .sec = "4.2", .claim = "consts referring to each other are refused", .reject = true,
-        .src = "const a: I32 = b\nconst b: I32 = a\nfn main(): I32 { return 0; }\n" },
+        .src = "const A: I32 = B\nconst B: I32 = A\nfn main(): I32 { return 0; }\n" },
     Case::{ .sec = "4.2", .claim = "a const declared later can be referred to from earlier",
         .reject = false,
-        .src = "const a: I32 = b + 1\nconst b: I32 = 2\nfn main(): I32 { return a - 3; }\n" },
+        .src = "const A: I32 = B + 1\nconst B: I32 = 2\nfn main(): I32 { return A - 3; }\n" },
     Case::{ .sec = "4.3", .claim = "redeclaring in the same scope is refused", .reject = true,
         .src = "fn main(): I32 { x: I32 = 1; x: I32 = 2; return x; }\n" },
     // **The inner scope carries a label** (a block with no heading is writable in neither
@@ -391,11 +391,11 @@ priv const cases: Case[_] = ::{
     Case::{ .sec = "8.4.2", .claim = "Ref_counted demands retain/release", .reject = true,
         .src = "priv struct S { n: I32; }\nimpl S: Ref_counted {}\nfn main(): I32 { return 0; }\n" },
     Case::{ .sec = "9", .claim = "priv is invisible from another file", .reject = true,
-        .src = "import \"std/strnum\"\nfn main(): I32 { return I32::strnum.max_pad_len; }\n" },
+        .src = "import \"std/strnum\"\nfn main(): I32 { return I32::strnum.MAX_PAD_LEN; }\n" },
     Case::{ .sec = "9", .claim = "pub is visible", .reject = false,
-        .src = "import \"std/math\" { pi }\nfn main(): I32 { return 0 if pi > 3.0 else 1; }\n" },
+        .src = "import \"std/math\" { PI }\nfn main(): I32 { return 0 if PI > 3.0 else 1; }\n" },
     Case::{ .sec = "9", .claim = "a name not imported cannot be used", .reject = true,
-        .src = "fn main(): I32 { return I32::math.pi; }\n" },
+        .src = "fn main(): I32 { return I32::math.PI; }\n" },
     Case::{ .sec = "10", .claim = "an unknown attribute is refused", .reject = true,
         .src = "#nosuchattr\npriv fn f(): I32 { return 1; }\nfn main(): I32 { return 0; }\n" },
     Case::{ .sec = "10", .claim = "a function dropped by #cfg cannot be called", .reject = true,
@@ -449,18 +449,18 @@ fn main(): I32
     // Caution: **Write each case's input to its own file**, or children running side by side read
     // each other's.
     $jobs: = List<|subproc.Job|>.new(arena)
-    for i in Range.asc(cases.len)
+    for i in Range.asc(CASES.len)
         src: = fs.join(work, arena.text().s("c\{i\}.kspl").take(), arena)
         gen: = fs.join(work, arena.text().s("c\{i\}.c").take(), arena)
-        io.write_file(src, cases[i].src) catch
+        io.write_file(src, CASES[i].src) catch
             return ksplc_harness.fatal("cannot place the material")
         jobs
             .push(subproc.Job::{ .argv = ksplc_harness.ksplc_argv(U8[][]::{ src, gen }),
             .cwd = harness.root() })
-    io.out().s("# the specification's claims: \{cases.len\} (parallelism \{verdict.jobs()\})\n")
+    io.out().s("# the specification's claims: \{CASES.len\} (parallelism \{verdict.jobs()\})\n")
     outs: = ksplc_harness.run_all(jobs.slice(), "spec_claims")
-    for i in Range.asc(cases.len)
-        c: = cases[i]@
+    for i in Range.asc(CASES.len)
+        c: = CASES[i]@
         r: = outs.get(i)
         got_reject: = !r.exited_with(0)
         name: = arena.text().s("[").s(c.sec).s("] ").s(c.claim).take()

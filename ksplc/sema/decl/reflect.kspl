@@ -22,23 +22,23 @@ import "std/chars"
 import "std/ds" { List, Map }
 import "std/str" { Str_builder }
 
-priv const trait_fqn: U8[] = "std.reflect.Reflectable" //<
+priv const TRAIT_FQN: U8[] = "std.reflect.Reflectable" //<
     //< The `std/reflect` names the compiler refers to
     //<
     //< **If they are renamed there, change these too** (the top of `../../../std/reflect.kspl`;
     //< `make test-conventions` checks them).
-priv const info_name: U8[] = "Field_info"
-priv const method_name: U8[] = "fields"
+priv const INFO_NAME: U8[] = "Field_info"
+priv const METHOD_NAME: U8[] = "fields"
 
-priv const table_prefix: U8[] = "_reflect_fields_" //< the prefix of a synthesized table's name
+priv const TABLE_PREFIX: U8[] = "_reflect_fields_" //< the prefix of a synthesized table's name
     //<
     //< The leading `_` keeps it apart from user names.
 
-priv const list_fqn: U8[] = "std.ds.List" //< the container's name
+priv const LIST_FQN: U8[] = "std.ds.List" //< the container's name
     //<
     //< **If `std/ds`'s `List` is renamed, change this too** (`make test-conventions` checks it).
 
-priv const max_nest_depth: Sz = 32 //< the maximum nesting depth walked
+priv const MAX_NEST_DEPTH: Sz = 32 //< the maximum nesting depth walked
     //<
     //< Value nesting is finite (`sema/decl/layout.kspl` rejects an infinite size); this keeps a
     //< deep chain from overflowing the native stack.
@@ -84,7 +84,7 @@ impl Sema_ctx
         target: = impl_node.find_child(.k_type_expr)
         if target == null
             return .none
-        if depth > max_nest_depth
+        if depth > MAX_NEST_DEPTH
             r.err(impl_node,
                 "'Reflectable' nesting exceeds the limit. This struct embeds other structs too \
                     deeply. Write the 'fields()' body by hand for the inner types")
@@ -133,8 +133,8 @@ impl Sema_ctx
             // Caution: **Check for the container first.** As a plain struct, `List<|T|>` is walked
             // into `ptr` / `len` / `cap` / `arena` and rejected under a name the user did not
             // write.
-            is_list: = r.clause_names(f_type, list_fqn)
-            if is_list || r.clause_names(f_type, base_core.option_fqn)
+            is_list: = r.clause_names(f_type, LIST_FQN)
+            if is_list || r.clause_names(f_type, base_core.OPTION_FQN)
                 if !r.push_wrapper_row(rows, f, f_type, is_list, site, impl_node, emitted, extra,
                     depth)
                     ok = false
@@ -180,8 +180,8 @@ impl Sema_ctx
         inner_kind: = r.field_kind_name(inner_id)
         // **Decide it first:** `clause_names` writes to scratch.
         nested: =
-            r.clause_names(inner_node, list_fqn) ||
-            (!is_list && r.clause_names(inner_node, base_core.option_fqn))
+            r.clause_names(inner_node, LIST_FQN) ||
+            (!is_list && r.clause_names(inner_node, base_core.OPTION_FQN))
         $spec: = Row_spec::{ .field = f.name, .kind = "list_field" if is_list else "opt_field" }
         if inner_kind.len == 0 || nested
             // **Show the type as a diagnostic shows it** (`List<|I64|>`, `I64?`), not an instance's
@@ -316,8 +316,9 @@ impl Sema_ctx
         //< Caution: **Keep them one-to-one with `std/reflect`'s `Field_kind`**, or a kind can be
         //< written but not synthesized, or synthesized but not walked (Principle 5).
         real_id: = r.env.get_clean_real_type(type_id)
-        // `Sz` is signed ("3.1 Primitive types" in `../../../docs/SPEC-language.md`): as unsigned,
-        // a negative length would be read without its sign and refused as out of range.
+        // `Sz` is signed ("3.1 Primitive types" in `../../../docs/SPEC-programming-language.md`):
+        // as unsigned, a negative length would be read without its sign and refused as out of
+        // range.
         switch real_id
         case I32::sema_type_env.Builtin_type_id.i8_type,
             I32::sema_type_env.Builtin_type_id.i16_type,
@@ -365,22 +366,22 @@ impl Sema_ctx
         //<
         //< Caution: **Match by FQN.** By the last segment alone, a file's own `trait Reflectable`
         //< gets the synthesis and a baffling diagnostic ("Why compiler-known traits are confined to
-        //< `std/lang`" in `../../../docs/DESIGN-language.md`).
+        //< `std/lang`" in `../../../docs/DESIGN-programming-language.md`).
         path: = impl_node.find_child(.k_expr_path)
         if path == null || path.children.len == 0
             return false
         if impl_node.find_child(.k_decl_fn) != null
             return false
-        return r.read_written_type(path).fqn.equals(trait_fqn)
+        return r.read_written_type(path).fqn.equals(TRAIT_FQN)
 
 priv fn make_table_decl(impl_node: Ast_node$@, target: Ast_node$@, rows_in: List<|Row_spec|>$@,
     prefix: U8[]): Ast_node$@ //<
         //< Builds the const declaration of `_reflect_fields_X`, one row per field
     loc: = impl_node.loc
-    info_spelling: = qualified(prefix, info_name)
+    info_spelling: = qualified(prefix, INFO_NAME)
     $name: = Str_builder.new()
     defer name.free()
-    name.s(table_prefix).s(flatten_name(target.text))
+    name.s(TABLE_PREFIX).s(flatten_name(target.text))
     $sized: = Str_builder.new()
     defer sized.free()
     sized.s(info_spelling).s("[\{rows_in.len\}]")
@@ -529,7 +530,7 @@ priv fn make_field_init(key: U8[], value: Ast_node$@, loc: Loc): Ast_node$@ //< 
 priv fn make_fields_method(impl_node: Ast_node$@, table_name: U8[], prefix: U8[]): Ast_node$@ //<
     //< `fn fields(_r: Self): <prefix>Field_info[] { return <prefix>Field_info[]::<table>; }`
     loc: = impl_node.loc
-    info_spelling: = qualified(prefix, info_name)
+    info_spelling: = qualified(prefix, INFO_NAME)
     slice_spelling: = base_core.arena.dup_str(join3(info_spelling, "[]", ""))
     param: = Ast_node.new(.k_fn_param, "fn_param", loc)
     param.add_child(Ast_node.new(.k_identifier, "_r", loc))
@@ -551,7 +552,7 @@ priv fn make_fields_method(impl_node: Ast_node$@, table_name: U8[], prefix: U8[]
     block.add_child(ret)
     method: = Ast_node.new(.k_decl_fn, "fn", loc)
     method.add_child(Ast_node.new(.k_keyword, "fn", loc))
-    method.add_child(Ast_node.new(.k_identifier, method_name, loc))
+    method.add_child(Ast_node.new(.k_identifier, METHOD_NAME, loc))
     method.add_child(sig)
     method.add_child(block)
     return method

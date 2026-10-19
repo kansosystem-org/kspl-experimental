@@ -56,13 +56,13 @@ The second leaves a call that compiles everywhere and does nothing until a build
 
 **The numbers are part of OpenSSL's ABI** (the binary interface: the numbers and layouts a compiled program relies on). They are the same in 1.1.0, 1.1.1 and 3.x, as are `SSL_VERIFY_PEER` (1) and `X509_V_OK` (0). Each stands once, as a named constant beside the declarations. SQLite's `SQLITE_TRANSIENT`, a function pointer with every bit set, is passed as the pointer-width integer `-1` (the reason is beside the constant in `ksbind/db.kspl`).
 
-**C's `long` crosses without C as well.** The two `ctrl` functions take a `long` and return one, and so does `SSL_get_verify_result`, each value fitting in 32 bits. A `long` parameter is declared `Sz` (KSPL's pointer-sized unsigned integer) and a `long` result `I32`. This is right on every target KSPL builds for. The rule and its reason are "What cannot be written in C's types" in [`../../docs/DESIGN-language.md`](../../docs/DESIGN-language.md).
+**C's `long` crosses without C as well.** The two `ctrl` functions take a `long` and return one, and so does `SSL_get_verify_result`, each value fitting in 32 bits. A `long` parameter is declared `Sz` (KSPL's pointer-sized unsigned integer) and a `long` result `I32`. This is right on every target KSPL builds for. The rule and its reason are "What cannot be written in C's types" in [`../../docs/DESIGN-programming-language.md`](../../docs/DESIGN-programming-language.md).
 
 **What it gives up**:
 
 * **OpenSSL before 1.1.0 is not bound**: `TLS_client_method` and `SSL_set1_host` begin there.
 * **A future OpenSSL renumbering a command would go unnoticed until a run.** The tests drive both `ctrl` calls on every connection, and a refused one fails the connection as `ctx_failed`, so a run notices; the compile does not.
-* **The MSVC toolchain does not link `ksbind/tls`**: it names OpenSSL's libraries `libssl` and `libcrypto`. No `#cfg` names the toolchain ("The library an `extern` block needs is named on the block" in [`../../docs/DESIGN-language.md`](../../docs/DESIGN-language.md)).
+* **The MSVC toolchain does not link `ksbind/tls`**: it names OpenSSL's libraries `libssl` and `libcrypto`. No `#cfg` names the toolchain ("The library an `extern` block needs is named on the block" in [`../../docs/DESIGN-programming-language.md`](../../docs/DESIGN-programming-language.md)).
 
 ### What each binding guards against
 

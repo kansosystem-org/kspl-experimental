@@ -13,11 +13,11 @@ import "ksdb/log" as ksdblog
 import "ksdb/store" { Store }
 import "ksos/drivers/rp2040/flash"
 
-const kind_marker: U16 = 0 //< the marker record's kind
+const KIND_MARKER: U16 = 0 //< the marker record's kind
     //<
     //< Caution: **Give each writer's kinds numbers of 1 or more** (0 is the marker).
 
-const marker_max: Sz = 8 //< the maximum marker length
+const MARKER_MAX: Sz = 8 //< the maximum marker length
     //<
     //< Keep it short (it only claims the region and carries no meaning).
 
@@ -32,7 +32,7 @@ fn claim(marker: U8[]): Bool //< opens the record
     //< previous record is gone).
     ready = false
     erased_on_open = false
-    if marker.len == 0 || marker.len > marker_max
+    if marker.len == 0 || marker.len > MARKER_MAX
         return false
     flash.init() catch
         return false
@@ -40,17 +40,17 @@ fn claim(marker: U8[]): Bool //< opens the record
         .read_at = flash.read_at,
         .program_at = flash.program_at,
         .erase_sector = flash.erase_sector,
-        .capacity = flash.region_size,
-        .sector_size = flash.sector_size,
+        .capacity = flash.REGION_SIZE,
+        .sector_size = flash.SECTOR_SIZE,
     }
     lg = ksdblog.Log.open(store)
     ready = true
-    if lg.last_equals(kind_marker, marker)
+    if lg.last_equals(KIND_MARKER, marker)
         return true
     lg.reset() catch
         ready = false
         return false
-    lg.append(kind_marker, marker) catch
+    lg.append(KIND_MARKER, marker) catch
         ready = false
         return false
     erased_on_open = true

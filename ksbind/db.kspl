@@ -45,31 +45,31 @@ extern "C"
     fn sqlite3_errmsg(db: sqlite3$@): Void@
     fn sqlite3_errstr(rc: I32): Void@
 
-priv const sqlite_transient: Sz = -1 //<
+priv const SQLITE_TRANSIENT: Sz = -1 //<
     //< SQLITE_TRANSIENT, "copy the bytes now": the macro `((void(*)(void*))-1)`, a function pointer
     //<
     //< Received as `Sz`, which is pointer-width on every target, it arrives as that pointer. Every
     //< C ABI KSPL builds for passes an integer and a pointer of one width in the same register or
     //< slot.
-priv const max_c_int: Sz = 2147483647 //<
+priv const MAX_C_INT: Sz = 2147483647 //<
     //< The longest SQL or text SQLite's `int` length takes
     //<
     //< Caution: **Refuse a longer one, never cast it.** Cast, it can turn negative, which SQLite
     //< reads as "NUL-terminated" and searches past the caller's range.
-priv const sqlite_ok: I32 = 0 //< what every call returns on success
-priv const sqlite_error: I32 = 1 //<
+priv const SQLITE_OK: I32 = 0 //< what every call returns on success
+priv const SQLITE_ERROR: I32 = 1 //<
     //< SQLITE_ERROR, the generic code: here, SQL holding no statement or holding a NUL
-priv const sqlite_nomem: I32 = 7 //< SQLITE_NOMEM: an allocation inside SQLite failed
-priv const sqlite_cantopen: I32 = 14 //< SQLITE_CANTOPEN, for a path refused before SQLite sees it
-priv const sqlite_toobig: I32 = 18 //< SQLITE_TOOBIG, for a length refused before SQLite sees it
-priv const sqlite_row: I32 = 100 //<
+priv const SQLITE_NOMEM: I32 = 7 //< SQLITE_NOMEM: an allocation inside SQLite failed
+priv const SQLITE_CANTOPEN: I32 = 14 //< SQLITE_CANTOPEN, for a path refused before SQLite sees it
+priv const SQLITE_TOOBIG: I32 = 18 //< SQLITE_TOOBIG, for a length refused before SQLite sees it
+priv const SQLITE_ROW: I32 = 100 //<
     //< sqlite3_step()'s SQLITE_ROW and SQLITE_DONE
-priv const sqlite_done: I32 = 101
-priv const sqlite_integer: I32 = 1 //<
+priv const SQLITE_DONE: I32 = 101
+priv const SQLITE_INTEGER: I32 = 1 //<
     //< sqlite3_column_type()'s constants; any other value is NULL (5)
-priv const sqlite_float: I32 = 2
-priv const sqlite_text: I32 = 3
-priv const sqlite_blob: I32 = 4
+priv const SQLITE_FLOAT: I32 = 2
+priv const SQLITE_TEXT: I32 = 3
+priv const SQLITE_BLOB: I32 = 4
 
 pub enum Db_error //< why a database operation failed
     //<
@@ -96,7 +96,7 @@ pub enum Db_error //< why a database operation failed
         //<
         //< Only `bind_row` / `read_row` return this and the next error.
         //< Caution: **These two errors keep a default from being filled in silently** (the reason
-        //< is in "a table-returning trait" in `../docs/DESIGN-language.md`).
+        //< is in "a table-returning trait" in `../docs/DESIGN-programming-language.md`).
     column_type(mismatched: U8[]) //< the column's kind or value does not fit the field.
         //<
         //< A value fits when the field's width and sign hold it unchanged: 300 does not fit a `U8`.
@@ -123,7 +123,7 @@ priv fn holds_no_statement(db: sqlite3$@, sql: U8@, len: Sz): Bool //<
     rc: = sqlite3_prepare_v2(db, Void@::sql, I32::len, handle@, null)
     if handle != null
         sqlite3_finalize(handle)
-    return rc == sqlite_ok && handle == null
+    return rc == SQLITE_OK && handle == null
 
 priv fn fixed_said(rc: I32): U8[] //<
     //< SQLite's own text for a code (`sqlite3_errstr`), which lives as long as the process
@@ -136,7 +136,7 @@ priv fn copy_said(said: Str_builder$@, db: sqlite3$@, rc: I32): U8[] //<
     //<
     //< Caution: **Copy it at once**: SQLite's text lasts only until the connection's next call.
     //< **An allocation that failed takes the fixed text**, since copying would allocate again.
-    if rc == sqlite_nomem
+    if rc == SQLITE_NOMEM
         return fixed_said(rc)
     said.clear().s(str.from_cstr(U8$@::sqlite3_errmsg(db)))
     return said.slice()
@@ -162,16 +162,16 @@ impl Db
         case .some(p)
             c_path = p
         case .none
-            throw .open_failed(sqlite_cantopen, fixed_said(sqlite_cantopen))
+            throw .open_failed(SQLITE_CANTOPEN, fixed_said(SQLITE_CANTOPEN))
         defer dealloc(Void$@::c_path)
         $handle: sqlite3$@ = null
         rc: = sqlite3_open(Void@::c_path, handle@)
         // SQLite hands back a connection even when opening fails, to carry the message. **No `Db`
         // is made to hold it**, so `open_failed` says SQLite's fixed text for the code instead.
-        if rc != sqlite_ok || handle == null
+        if rc != SQLITE_OK || handle == null
             if handle != null
                 sqlite3_close_v2(handle)
-            code: = rc if rc != sqlite_ok else sqlite_nomem
+            code: = rc if rc != SQLITE_OK else SQLITE_NOMEM
             throw .open_failed(code, fixed_said(code))
         d: = mem.alloc_as<|Db|>()
         d.handle = handle
@@ -184,22 +184,22 @@ impl Db
         r: Self$@,
         sql: U8[], //< the SQL, with parameters written as `:name` or `?`
     ): Statement$@!Db_error
-        if sql.len > max_c_int
-            throw .prepare_failed(sqlite_toobig, fixed_said(sqlite_toobig))
+        if sql.len > MAX_C_INT
+            throw .prepare_failed(SQLITE_TOOBIG, fixed_said(SQLITE_TOOBIG))
         // Caution: **SQL holding a NUL is refused, not cut at it.** SQLite stops reading there, and
         // the statement after it would be dropped without a word. SQLITE_ERROR is what SQLite
         // gives any byte its grammar does not take.
         if sql.contains_nul()
-            throw .prepare_failed(sqlite_error, fixed_said(sqlite_error))
+            throw .prepare_failed(SQLITE_ERROR, fixed_said(SQLITE_ERROR))
         $handle: sqlite3_stmt$@ = null
         $rest: U8@ = null
         rc: =
             sqlite3_prepare_v2(r.handle, Void@::sql.ptr, I32::sql.len, handle@, rest@)
-        if rc != sqlite_ok
+        if rc != SQLITE_OK
             throw .prepare_failed(rc, copy_said(r.said@, r.handle, rc))
         // SQL holding no statement (blank, or a comment alone) succeeds with no statement.
         if handle == null
-            throw .prepare_failed(sqlite_error, fixed_said(sqlite_error))
+            throw .prepare_failed(SQLITE_ERROR, fixed_said(SQLITE_ERROR))
         // Caution: **Refuse what follows the first statement, never drop it**: dropped, `exec` of
         // two `CREATE TABLE`s would succeed with the second table never made.
         if !holds_no_statement(r.handle, rest, sql.len - (rest - sql.ptr))
@@ -225,7 +225,7 @@ impl Db
             throw .returns_rows
         // **The text goes to this `Db`**: the statement and its own text are freed on return.
         rc: = sqlite3_step(stmt.handle)
-        if rc != sqlite_done
+        if rc != SQLITE_DONE
             throw .step_failed(rc, copy_said(r.said@, r.handle, rc))
 
     pub fn last_insert_rowid(r: Self$@): I64 //< the row id the last `INSERT` created
@@ -262,10 +262,10 @@ impl Statement
         idx: I32, //< which parameter, counting from 1
         val: U8[], //< the text to bind, which sqlite copies
     ): Void!Db_error
-        if val.len > max_c_int
-            throw .bind_failed(sqlite_toobig, fixed_said(sqlite_toobig))
+        if val.len > MAX_C_INT
+            throw .bind_failed(SQLITE_TOOBIG, fixed_said(SQLITE_TOOBIG))
         r
-            .bound(sqlite3_bind_text(r.handle, idx, Void@::val.ptr, I32::val.len, sqlite_transient))!
+            .bound(sqlite3_bind_text(r.handle, idx, Void@::val.ptr, I32::val.len, SQLITE_TRANSIENT))!
 
     pub fn bind_null( //< binds SQL's NULL to a parameter
         r: Self$@,
@@ -275,9 +275,9 @@ impl Statement
 
     pub fn step(r: Self$@): Step_result!Db_error //< runs to the next row, or to the end
         rc: = sqlite3_step(r.handle)
-        if rc == sqlite_row
+        if rc == SQLITE_ROW
             return .row
-        if rc == sqlite_done
+        if rc == SQLITE_DONE
             return .done
         throw .step_failed(rc, r.said_now(rc))
 
@@ -285,11 +285,11 @@ impl Statement
         //<
         //< It fails as `step_failed` with the code of the last step, if that step failed.
         rc: = sqlite3_reset(r.handle)
-        if rc != sqlite_ok
+        if rc != SQLITE_OK
             throw .step_failed(rc, r.said_now(rc))
 
     priv fn bound(r: Self$@, rc: I32): Void!Db_error //< the check every bind_* makes on the answer
-        if rc != sqlite_ok
+        if rc != SQLITE_OK
             throw .bind_failed(rc, r.said_now(rc))
 
     priv fn said_now(r: Self$@, rc: I32): U8[] //< what the connection says of `rc`, kept in `said`
@@ -303,13 +303,13 @@ impl Statement
         col: I32, //< which column, counting from 0
     ): Column_kind
         t: = sqlite3_column_type(r.handle, col)
-        if t == sqlite_integer
+        if t == SQLITE_INTEGER
             return .integer
-        if t == sqlite_float
+        if t == SQLITE_FLOAT
             return .float
-        if t == sqlite_text
+        if t == SQLITE_TEXT
             return .text
-        if t == sqlite_blob
+        if t == SQLITE_BLOB
             return .blob
         return .null_value
 
@@ -343,8 +343,8 @@ impl Statement
         // Caution: **A null pointer is SQL's NULL or an allocation that failed**, and only the
         // connection's code tells which (SQLite's documentation of sqlite3_column_text). Taken
         // as NULL, a lost value would read as empty text.
-        if text == null && sqlite3_errcode(sqlite3_db_handle(r.handle)) == sqlite_nomem
-            throw .column_failed(sqlite_nomem, fixed_said(sqlite_nomem))
+        if text == null && sqlite3_errcode(sqlite3_db_handle(r.handle)) == SQLITE_NOMEM
+            throw .column_failed(SQLITE_NOMEM, fixed_said(SQLITE_NOMEM))
         if text == null || n <= 0
             return 0
         if n > buf.len

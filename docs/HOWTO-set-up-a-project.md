@@ -52,7 +52,7 @@ The second line checks the result: it prints the `std/` folder `ksplc` uses.
 ./hello
 ```
 
-`build` writes the C, then has `clang` (or the compiler `CC` names) compile and link it. It links the libraries this platform needs and those the program names (`#link("openblas")`, "11.5 Naming the library an `extern` block needs" in the [KSPL language specification](SPEC-language.md)).
+`build` writes the C, then has `clang` (or the compiler `CC` names) compile and link it. It links the libraries this platform needs and those the program names (`#link("openblas")`, "11.5 Naming the library an `extern` block needs" in the [KSPL language specification](SPEC-programming-language.md)).
 
 | You want | Do this |
 | :-- | :-- |
@@ -66,7 +66,7 @@ The steps it takes, and how to take them apart (to ship objects without the sour
 
 ## Splitting a program into files
 
-**Where an `import` searches from depends on how it is written.** Above all, it depends on whether it contains `/` ("The three strict rules of path resolution" in the [KSPL language specification](SPEC-language.md)). The table shows what to write for the usual cases.
+**Where an `import` searches from depends on how it is written.** Above all, it depends on whether it contains `/` ("The three strict rules of path resolution" in the [KSPL language specification](SPEC-programming-language.md)). The table shows what to write for the usual cases.
 
 | Where the file is | Write |
 | :-- | :-- |
@@ -146,7 +146,7 @@ A `.kspage` file double-clicked in a file manager opens in a browser through `ou
   xdg-mime default kspage.desktop application/x-kspage
   ```
 
-3. **Double-click `out/sample.kspage`**, the one way to confirm the association works. It holds [`tools/kspage_doc.kspl`](../tools/kspage_doc.kspl)'s content, **not the document shown at start-up**.
+3. **Double-click `out/sample.kspage`**, the one way to confirm the association works. It holds [`kspage/content/example.kspl`](../kspage/content/example.kspl)'s content. Its title is "Sample document".
 
 **Do not skip the first of the four lines.** Linux ties an application to a MIME type (a name for a kind of file), not to an extension. Undeclared, `.kspage` reads as `application/octet-stream`, which the last line cannot tie.
 

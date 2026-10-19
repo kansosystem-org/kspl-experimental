@@ -10,7 +10,7 @@ import "ksplc/base/core" as base_core
 import "std/chars" // `is_upper`
 import "std/str" { Str_builder }
 
-const made_name_mark: U8[] = "_%" //<
+const MADE_NAME_MARK: U8[] = "_%" //<
     //< How a local the compiler makes opens its name (`made_name`)
     //<
     //< **No identifier can hold `%`.** So a name in the source never equals a made one, whatever
@@ -18,21 +18,21 @@ const made_name_mark: U8[] = "_%" //<
     //< keeps it among the names that nobody needs to read. Every unused-name check leaves those
     //< alone.
 
-const made_name_c_prefix: U8[] = "__kspl_" //<
-    //< What stands for `made_name_mark` in the generated C
+const MADE_NAME_C_PREFIX: U8[] = "__kspl_" //<
+    //< What stands for `MADE_NAME_MARK` in the generated C
     //<
-    //< **A source's name reaches `__` only with `c_name_suffix` after it**
+    //< **A source's name reaches `__` only with `C_NAME_SUFFIX` after it**
     //< (`is_reserved_for_compiler`). A made name's stem never ends in that suffix. So a made name
     //< meets no name of the source in C either.
 
-const made_temp_stem: U8[] = "tmp_" //<
+const MADE_TEMP_STEM: U8[] = "tmp_" //<
     //< How Lower's temporaries open their stem: each is unique, so the LLVM backend adds no serial
 
 fn made_name(stem: U8[]): U8[] //< a name for a local the compiler makes, copied into the arena
     //<
     //< Caution: **Make every such name here.** One spelled in the identifiers' own space shares the
     //< source's names: the source's `_e` read the error a `catch` declares.
-    return base_core.arena.text().s(made_name_mark).s(stem).take()
+    return base_core.arena.text().s(MADE_NAME_MARK).s(stem).take()
 
 fn hiding_local_name(name: U8[], hidden_count: I32): U8[] //<
     //< The name of a local that hides hidden_count outer locals of its name (`shadow1_x`)
@@ -45,7 +45,7 @@ fn hiding_local_name(name: U8[], hidden_count: I32): U8[] //<
     stem: = name.made_stem() if name.is_made_name() else name
     return made_name(base_core.arena.text().s("shadow\{hidden_count\}_").s(stem).take())
 
-const c_name_suffix: U8[] = "_kw" //<
+const C_NAME_SUFFIX: U8[] = "_kw" //<
     //< The suffix added in the generated C to a name that equals a C reserved word
     //<
     //< Caution: **Keep the rule as "just add it".** If it searched for a free name instead, every
@@ -54,13 +54,13 @@ const c_name_suffix: U8[] = "_kw" //<
 
 impl U8[]
     fn is_made_name(r: U8[]): Bool //< whether the compiler made it (`made_name`)
-        return r.starts_with(made_name_mark)
+        return r.starts_with(MADE_NAME_MARK)
 
     fn made_stem(r: U8[]): U8[] //< a made name without its mark, which each backend spells
-        return r.sub_from(made_name_mark.len)
+        return r.sub_from(MADE_NAME_MARK.len)
 
     fn is_made_temp(r: U8[]): Bool //< whether it names one of Lower's temporaries
-        return r.is_made_name() && r.made_stem().starts_with(made_temp_stem)
+        return r.is_made_name() && r.made_stem().starts_with(MADE_TEMP_STEM)
 
     fn is_c_keyword(r: U8[]): Bool //< whether it is a C99 reserved word
         //<
@@ -141,8 +141,8 @@ impl U8[]
 
     fn c_safe_name_to(r: U8[], out: Str_builder$@) //< writes the name as emitted into C
         if r.is_made_name()
-            out.s(made_name_c_prefix).s(r.made_stem())
+            out.s(MADE_NAME_C_PREFIX).s(r.made_stem())
             return
         out.s(r)
         if r.needs_c_escape()
-            out.s(c_name_suffix)
+            out.s(C_NAME_SUFFIX)

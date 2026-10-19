@@ -16,30 +16,30 @@ import "std/str" { Str_builder }
 import "std/subproc"
 import "std/sys"
 
-priv const chunk: Sz = 64 * 1024 //< the most bytes taken in one read
-priv const work_chunk: Sz = 64 * 1024 //< the chunk of the arena a call's own work goes into
-priv const max_drain: Sz = 8 //< the most chunks of standard error drained at a time
-priv const read_slice_ms: I32 = 50 //< the slice of the timeout given to one read
+priv const CHUNK: Sz = 64 * 1024 //< the most bytes taken in one read
+priv const WORK_CHUNK: Sz = 64 * 1024 //< the chunk of the arena a call's own work goes into
+priv const MAX_DRAIN: Sz = 8 //< the most chunks of standard error drained at a time
+priv const READ_SLICE_MS: I32 = 50 //< the slice of the timeout given to one read
     //<
     //< Caution: **Do not give the whole timeout to one read.** A server that writes a lot to
     //< standard error stalls on its full pipe **while** this client waits on standard output.
     //< Then neither moves until the timeout. A slice that runs out is not a failure.
 
-priv const again_step: I32 = -1 //< the result of one step
+priv const AGAIN_STEP: I32 = -1 //< the result of one step
     //<
     //< A success is positive, so 0 and negative values serve as marks.
-priv const closed_step: I32 = 0
-priv const fail_step: I32 = -2
-priv const err_tail_bytes: Sz = 400 //<
+priv const CLOSED_STEP: I32 = 0
+priv const FAIL_STEP: I32 = -2
+priv const ERR_TAIL_BYTES: Sz = 400 //<
     //< How much of the end of standard error is attached to a failure's description
 
 fn id_after(id: I32): I32 //< the id the request after `id` takes
     //<
     //< Caution: **Go back to 1 past I32's top.** Wrapped to a negative, the id would make `encode`
     //< send the request as a notification, and its answer would never come.
-    return 1 if id >= i32_top else id + 1
+    return 1 if id >= I32_TOP else id + 1
 
-priv const i32_top: I32 = 2147483647 //< the largest I32
+priv const I32_TOP: I32 = 2147483647 //< the largest I32
 
 impl Client: Owned {} //< it owns its memory and releases it with `free()`
 
@@ -62,8 +62,8 @@ pub fn spawn( //< starts a child and attaches to its pipes
     child: = subproc.spawn_piped(argv, cwd)!
     return Client::{ .child = child, .next_id = 1, .acc = Str_builder.new(),
         .err = Str_builder.new(),
-        .out_buf = U8$[]::{ .ptr = U8$@::alloc(chunk), .len = chunk },
-        .err_buf = U8$[]::{ .ptr = U8$@::alloc(chunk), .len = chunk } }
+        .out_buf = U8$[]::{ .ptr = U8$@::alloc(CHUNK), .len = CHUNK },
+        .err_buf = U8$[]::{ .ptr = U8$@::alloc(CHUNK), .len = CHUNK } }
 
 impl Client
     pub fn free(r: Self$@) //< kills the child and frees every buffer
@@ -78,9 +78,14 @@ impl Client
         body: U8[], //< the body, without its header
         timeout_ms: I32, //< how long the server may go without reading any of it
     ): Void!jsonrpc.Rpc_end //< fails as `timed_out` or `closed`
+        r.send_messages(U8[][]::{ body }, timeout_ms)!
+
+    fn send_messages(r: Self$@, bodies: U8[][], timeout_ms: I32): Void!jsonrpc.Rpc_end //<
+        //< Frames separate messages and sends them in one write, in their given order
         $out: = Str_builder.new()
         defer out.free()
-        jsonrpc.frame_into(out@, body)
+        for body in bodies
+            jsonrpc.frame_into(out@, body)
         r.child.write(out.slice(), timeout_ms) catch e
             switch e
             case .timed_out
@@ -91,11 +96,11 @@ impl Client
     pub fn notify( //< sends a notification, which expects no response
         r: Self$@,
         method: U8[], //< the name of the method to call
-        params: json.Val, //< the parameters sent with it
+        params: json.Value, //< the parameters sent with it
         timeout_ms: I32, //< how long the server may go without reading it
         arena: Arena$@, //< where the text is built while sending; null builds it on the heap
     ): Void!jsonrpc.Rpc_end //< fails as `send_raw` does
-        work: = Arena.new(work_chunk)
+        work: = Arena.new(WORK_CHUNK)
         defer work.free()
         r.send_raw(jsonrpc.encode(method, params, -1, arena if arena != null else work), timeout_ms)!
 
@@ -107,7 +112,7 @@ impl Client
         //< deadline.
         r: Self$@,
         method: U8[], //< the name of the method to call
-        params: json.Val, //< the parameters sent with it
+        params: json.Value, //< the parameters sent with it
         timeout_ms: I32, //< how long the whole round trip may take
         arena: Arena$@, //< where the reply goes; null means the reply's own arena and a `free()`
     ): json.Doc!jsonrpc.Rpc_end //< the reply, freed as `json.parse`'s document is
@@ -115,7 +120,7 @@ impl Client
         r.next_id = id_after(id)
         // The write spends the same budget: the round trip's timeout bounds both halves.
         deadline: = sys.deadline_after_ms(timeout_ms)
-        work: = Arena.new(work_chunk)
+        work: = Arena.new(WORK_CHUNK)
         defer work.free()
         r.send_raw(jsonrpc.encode(method, params, id, work), timeout_ms)!
         for sys.mono_us() <= deadline
@@ -129,26 +134,26 @@ impl Client
     pub fn read_msg( //< reads one frame and returns it as a JSON document
         //<
         //< Caution: **Keep draining standard error while waiting too** (the reason is at
-        //< `read_slice_ms`). The timeout bounds **this one call**, even when data trickles in.
+        //< `READ_SLICE_MS`). The timeout bounds **this one call**, even when data trickles in.
         r: Self$@,
         timeout_ms: I32, //< how long this one call may take
         arena: Arena$@, //< where the reply goes; null means the reply's own arena and a `free()`
     ): json.Doc!jsonrpc.Rpc_end //< the message, freed as `json.parse`'s document is
         deadline: = sys.deadline_after_ms(timeout_ms)
         // The frame's text is work: only the value parsed from it is the caller's.
-        work: = Arena.new(work_chunk)
+        work: = Arena.new(WORK_CHUNK)
         defer work.free()
         for sys.mono_us() <= deadline
             r.drain_err()
-            taken: = jsonrpc.take_frame(r.acc@, jsonrpc.max_body_bytes, work)!
+            taken: = jsonrpc.take_frame(r.acc@, jsonrpc.MAX_BODY_BYTES, work)!
             if body: = taken
                 return json.parse(body, arena) catch
                     throw .broken
-            got: = r.read_step(read_slice_ms)
-            if got == closed_step
+            got: = r.read_step(READ_SLICE_MS)
+            if got == CLOSED_STEP
                 r.drain_err()
                 throw .closed
-            if got == fail_step
+            if got == FAIL_STEP
                 r.drain_err()
                 throw .broken
             if got > 0
@@ -162,11 +167,11 @@ impl Client
         n: = r.child.read(r.out_buf, ms) catch e
             switch e
             case .timed_out
-                return again_step
+                return AGAIN_STEP
             case .closed
-                return closed_step
+                return CLOSED_STEP
             case .failed
-                return fail_step
+                return FAIL_STEP
         return I32::n
 
     pub fn err_tail(r: Self$@): U8[] //< the end of what the server wrote to standard error
@@ -182,10 +187,10 @@ impl Client
 
     priv fn drain_err(r: Self$@) //<
         //< Drains standard error, returning at once if nothing is waiting
-        for _k in Range.asc(max_drain)
+        for _k in Range.asc(MAX_DRAIN)
             got: = r.child.read_err(r.err_buf, 0) catch
                 return
             r.err.s(U8$[]::{ .ptr = r.err_buf.ptr, .len = got })
             // Caution: **Keep only the tail after each read.** A server that writes for as long as
             // it runs would otherwise grow this buffer without end, for bytes nobody reads.
-            r.err.drop_prefix(r.err.len - err_tail_bytes)
+            r.err.drop_prefix(r.err.len - ERR_TAIL_BYTES)

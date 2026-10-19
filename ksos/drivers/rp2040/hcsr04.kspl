@@ -7,18 +7,18 @@
 import "ksos/drivers/rp2040/gpio"
 import "ksos/drivers/rp2040/timer"
 
-const max_distance_mm: U32 = 3000 //< the largest distance that can be measured
+const MAX_DISTANCE_MM: U32 = 3000 //< the largest distance that can be measured
     //<
     //< Beyond it, or with no reflection, the result is "too far", not "an error".
 
-const echo_timeout_us: U32 = 18000 //< the limit on waiting for ECHO
+const ECHO_TIMEOUT_US: U32 = 18000 //< the limit on waiting for ECHO
     //<
     //< The same value as Freenove's sample (300cm × 60).
 
-const settle_us: U32 = 36000 //<
+const SETTLE_US: U32 = 36000 //<
     //< Left between measurements, so the next one does not pick up the previous reflection
 
-const trigger_pulse_us: U32 = 10 //< the pulse width sent on TRIG
+const TRIGGER_PULSE_US: U32 = 10 //< the pulse width sent on TRIG
     //<
     //< The data sheet requires at least 10µs.
 
@@ -51,29 +51,29 @@ fn measure(trig: U32, echo: U32): Distance //< measures once
     gpio.clear(trig)
     timer.delay_us(2)
     gpio.set(trig)
-    timer.delay_us(trigger_pulse_us)
+    timer.delay_us(TRIGGER_PULSE_US)
     gpio.clear(trig)
 
     // --- wait for ECHO to go High ---
     // A limit here too: with no sensor connected it never goes High.
     wait_start: = timer.now_us()
     for !gpio.read(echo)
-        if timer.elapsed_us(wait_start) > echo_timeout_us
+        if timer.elapsed_us(wait_start) > ECHO_TIMEOUT_US
             // No response at all: suspect the wiring, not "too far".
             return Distance::{ .ok = false, .mm = 0, .echo_us = 0, .timed_out = false }
 
     // --- measure the High width ---
     high_start: = timer.now_us()
     for gpio.read(echo)
-        if timer.elapsed_us(high_start) > echo_timeout_us
+        if timer.elapsed_us(high_start) > ECHO_TIMEOUT_US
             return Distance::{
                 .ok = true,
-                .mm = max_distance_mm,
-                .echo_us = echo_timeout_us,
+                .mm = MAX_DISTANCE_MM,
+                .echo_us = ECHO_TIMEOUT_US,
                 .timed_out = true,
             }
     width: = timer.elapsed_us(high_start)
     $mm: U32 = echo_us_to_mm(width)
-    if mm > max_distance_mm
-        mm = max_distance_mm
+    if mm > MAX_DISTANCE_MM
+        mm = MAX_DISTANCE_MM
     return Distance::{ .ok = true, .mm = mm, .echo_us = width, .timed_out = false }

@@ -64,6 +64,12 @@ Caution: **Call both after layout**, which decides which cell the cursor is in.
 
 A column is "the cell with the same number in every row", so deleting one removes a cell from every row.
 
+**An inserted column takes the current column's width setting.** If that column has no setting,
+the new one is automatic too. The other widths stay as they are, so a table can grow beyond the
+text column. Leaving the new width unset in a table that already fills the page would give it
+no space and make insertion appear to do nothing. The editing screen draws the whole table and
+scrolls it horizontally; the tools stay in place, and following the cursor brings it into view.
+
 ### Fitting measures a column, and unsets a row's height
 
 **A double-click on a cell's seam fits it to its content**, the gesture every spreadsheet uses. A row is fitted by removing its set height; a column by measuring its content.
@@ -199,6 +205,8 @@ Caution: **Show the count while a condition is on.** A table with rows missing a
 
 Every heading cell carries a small arrow. Pressing it opens a panel under that column. The panel holds sorting, the column's values each with a tick box, a box to search them, the conditions, and the way back. Tick three names and press once, and the table shows those three.
 
+The arrow uses the heading's text color. Thus a light heading stays readable when the screen's surrounding tools are dark.
+
 | The rule | Why |
 | :-- | :-- |
 | **The arrow is on every heading row, with nothing to switch on first** | Excel shows its arrows only after AutoFilter is switched on. Here the heading is the first row whatever anyone presses ("Tables" above), so a switch would decide nothing |
@@ -211,7 +219,7 @@ Every heading cell carries a small arrow. Pressing it opens a panel under that c
 | **With nothing ticked, no rows show** | That is what unticking everything asks for. The way back is the panel's own "Show every row", which removes this column's narrowing and leaves the other columns'. An empty set meaning "all" could not be told from one whose values have all been typed away |
 | **A narrowed column keeps a line under its arrow** | Excel's funnel says some column is narrowed, never which |
 
-Note: Blank cells are one value in the list, worded and placed last. An empty value carries them. How a set is spelled is `value_sep` in [`model/filter.kspl`](../model/filter.kspl).
+Note: Blank cells are one value in the list, worded and placed last. An empty value carries them. How a set is spelled is `VALUE_SEP` in [`model/filter.kspl`](../model/filter.kspl).
 
 ## Formulas in tables
 
@@ -259,7 +267,7 @@ Caution: **Do not move the origin**: every day in every saved document would shi
 
 **A text is read and shown as a day only where its style says so** (`Number_spec.dated`; no type is guessed, "What it does not hold" in [`DESIGN-architecture.md`](DESIGN-architecture.md)). On a day the number format does not apply (neither grouping nor per cent is read). With one text formatted two ways, the screen cannot show which acted. A day cannot be written literally inside a formula (`2026-08-18` is a subtraction): write `Day.of(year, month, day)`, and take it apart with `.year()` / `.month()` / `.day()`.
 
-**The calendar reaches 10^13 years either way** ([`model/day.kspl`](../model/day.kspl)'s `year_reach`). Its count of days is a whole number an F64 holds exactly. So the day a formula names is the day it reads back. `Day.of` past it is `#VALUE!`; reckoned anyway, the count would be rounded to another day, and far enough out it would overflow an I64.
+**The calendar reaches 10^13 years either way** ([`model/day.kspl`](../model/day.kspl)'s `YEAR_REACH`). Its count of days is a whole number an F64 holds exactly. So the day a formula names is the day it reads back. `Day.of` past it is `#VALUE!`; reckoned anyway, the count would be rounded to another day, and far enough out it would overflow an I64.
 
 **Nothing returns "today".** The same document would give a different answer each day. Layout would then stop being a pure function, which the tests stand on.
 
@@ -318,7 +326,7 @@ stateDiagram-v2
 
 * **A solved cell is remembered**, or it would be solved again at every branch that refers to it.
 * **Reaching a cell that is being solved is a cycle** (`#CYCLE!`); without this the descent would never come back.
-* **A chain is solved in passes, not in one descent** (`settle` in [`expr/calc.kspl`](../expr/calc.kspl)). Each cell a chain passes through is several calls. So a running total of thousands of rows (`=A2+1`, `=A3+1`, …) ran the stack out, and on wasm wrote over the page's memory. Past `max_depth` (256 levels, cells and nesting counted together) the cell reached is set aside. What was computed on the way is dropped, that cell is solved first, and the chain is retried. A cell set aside while it is already waiting depends on itself, so a cycle longer than one pass still reads `#CYCLE!`.
+* **A chain is solved in passes, not in one descent** (`settle` in [`expr/calc.kspl`](../expr/calc.kspl)). Each cell a chain passes through is several calls. So a running total of thousands of rows (`=A2+1`, `=A3+1`, …) ran the stack out, and on wasm wrote over the page's memory. Past `MAX_DEPTH` (256 levels, cells and nesting counted together) the cell reached is set aside. What was computed on the way is dropped, that cell is solved first, and the chain is retried. A cell set aside while it is already waiting depends on itself, so a cycle longer than one pass still reads `#CYCLE!`.
 * **One formula nests at most 64 deep** (parentheses, `-`, `if … else`; Excel's cap). Deeper, it reads `#SYNTAX!` rather than recursing once per level.
 
 So cells are solved **in dependency order, not in the order written**, and an earlier row can refer to a later one.

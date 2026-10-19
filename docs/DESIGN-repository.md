@@ -28,12 +28,14 @@ The six kinds, what each holds, and how a document is named are "Document naming
 
 **The kind carries the reader, so no second axis is added.** Inside a package the folder is the subject, so the kind answers who reads. A `SPEC-` is for whoever relies on the subject from outside. A `DESIGN-<subject>.md` is for whoever changes it. The documents that belong to no package share no subject. So their entry point's table names the reader ("A column, not a folder, says who reads a document" below).
 
+**A specification's reader needs a complete agreement without reading maintainer explanations.** A reference to design reasons interrupts that task and can hide a missing rule. So references between these kinds go from design to specification. The rule is "What a SPEC can point at" in [`SPEC-documents.md`](SPEC-documents.md). The README connects the two reading paths for whoever wants the reasons. What this gives up is a direct link from each rule to its rationale.
+
 * **The reader is not marked per file.** A document honestly serving two readers would need one label, and the argument moves to which one. That is the standing complaint against documentation cut by persona (an imagined type of reader).
 * **The kind makes one misplacement visible**: facts about something outside Kanso in a document for whoever changes Kanso. A board's pin table belongs in [`../ksos/docs/SPEC-board.md`](../ksos/docs/SPEC-board.md), not in ksos's rationale.
 
 **What the reader must already have is said where the kind cannot say it.** It is said in a `HOWTO-`'s first sentence. It is said in a column of a README's table only where the documents differ ("Document naming" in [`SPEC-documents.md`](SPEC-documents.md)). The reader needs a checklist (a terminal, a toolchain, a car on the desk), not a persona. A column answering the same all the way down is noise the reader learns to skip. The check reaches the name, not the row: which documents earn a row is the "one file, one kind" judgment.
 
-**A document gets no line cap.** A specification is as long as its subject, and is looked up rather than read through. The two kinds read through are bounded by what they are: a `README.md` routes and explains nothing, and a `TOUR.md` is one program. A cap would be a number with no grounds behind it and no gate under it (Principle 8).
+**A document gets no line cap.** A specification is as long as its subject, and is looked up rather than read through. The two kinds read through are bounded by what they are: a `README.md` routes and explains nothing, and a `TUTORIAL.md` is one program. A cap would be a number with no grounds behind it and no gate under it (Principle 8).
 
 ### A column, not a folder, says who reads a document
 
@@ -48,7 +50,7 @@ A folder picks one reader and says no more. Folders cut by reader beside the col
 
 **The column names the reader, not the subject.** A subject splits again once one document covers two, and then nothing decides where it belongs; a reader does not split. Other products put the reader in a title or a hostname, and both must be learnt.
 
-**No folder needs an exception.** GitHub finds `CONTRIBUTING.md` and `SECURITY.md` in `docs/` ("Documents whose name is fixed from outside" in [`SPEC-documents.md`](SPEC-documents.md)). So they stand where every other document does, and the language specification and this document cite each other by bare name.
+**No folder needs an exception.** GitHub finds `CONTRIBUTING.md` and `SECURITY.md` in `docs/` ("Documents whose name is fixed from outside" in [`SPEC-documents.md`](SPEC-documents.md)). So they stand where every other document does. The index directs readers to specifications and design documents by their task.
 
 **What it gives up is the reader's name in the path.** A link to `docs/DESIGN-principles.md` says what the document is, not whom it is for, and a reader who does not know the kinds finds that in `docs/README.md`. The products praised for keeping readers apart pay with two places to keep in step. Where both share one folder, a common complaint is documents with no status and a catch-all group. Here every name carries its kind from a closed set, and every document says only how things stand now. So the two are told apart before either is opened, and nothing is left over.
 
@@ -150,8 +152,8 @@ KSPL has no mark to tell a pointer from a plain name in backquotes (above), so t
 
 **No file for models is kept** (`llms.txt`, `llms-full.txt`: a convention for one file a model reads first). What one would hold already has a canonical source a model can read:
 
-* what KSPL leaves out (Appendix A of [`SPEC-language.md`](SPEC-language.md));
-* the tour ([`TOUR.md`](TOUR.md));
+* what KSPL leaves out (Appendix A of [`SPEC-programming-language.md`](SPEC-programming-language.md));
+* the tour ([`TUTORIAL.md`](TUTORIAL.md));
 * the grammar, the API pages, and each diagnostic's section (`ksplc explain <code>`).
 
 So the file would only repeat them, in two files if both the convention and GitHub's rendering are to find it. An agent working on this repository reads those sources whole.
@@ -160,7 +162,7 @@ So the file would only repeat them, in two files if both the convention and GitH
 
 ### The tour is a program, one declaration per step
 
-**The tour is one program, and each step is one of its declarations with its `//<` comment, in an order chosen for teaching.** How the page is written and checked is the head of [`TOUR.md`](TOUR.md); this section holds why.
+**The tour is one program, and each step is one of its declarations with its `//<` comment, in an order chosen for teaching.** How the page is written and checked is the head of [`TUTORIAL.md`](TUTORIAL.md); this section holds why.
 
 **The motive is a tour that cannot drift.** A tour is the one document a newcomer reads before they can tell that it is wrong. A tour kept by hand drifts as far as its team is small. Checking only the code examples leaves the prose between them to go stale. Generated from a program the gates compile and run, the code and the words that explain it sit in one file and are checked together.
 
@@ -265,7 +267,7 @@ Kanso holds no hidden work at build time, any more than at run time.
 
 ### A package names itself, and names what it uses
 
-**A package states its own name, and the packages it imports, in its `ksplc.cfg` file. Its place is the environment's, so it builds from any folder, under any folder name.** It names itself in its top folder's `ksplc.cfg` (`[package]`, `name = ksdb`). It lists under `uses` what it imports besides itself and `std`. Its files and its `embed`s (files baked into the program) are read from that folder, wherever it stands and whatever it is called. A used package's place is told as any place is ("Outside parts are not fetched; only their location is stated" above). The rule is "9.1 import syntax and path resolution" in [`SPEC-language.md`](SPEC-language.md).
+**A package states its own name, and the packages it imports, in its `ksplc.cfg` file. Its place is the environment's, so it builds from any folder, under any folder name.** It names itself in its top folder's `ksplc.cfg` (`[package]`, `name = ksdb`). It lists under `uses` what it imports besides itself and `std`. Its files and its `embed`s (files baked into the program) are read from that folder, wherever it stands and whatever it is called. A used package's place is told as any place is ("Outside parts are not fetched; only their location is stated" above). The rule is "9.1 import syntax and path resolution" in [`SPEC-programming-language.md`](SPEC-programming-language.md).
 
 **The motive**: a package found as a folder of its name, under the folder the compiler runs in, compiles only from the repository's root. From its own folder, its import of itself is looked for one level too deep, and a copy under another name cannot build. So whether a package can be lifted out is answered only by trying. Common complaints are about cases where the place decides. Examples are imports that resolve by how the program was started, a fixed workspace folder, and module paths that name a location. A name with no place in it causes none of them: nothing in `ksdb/log` says where ksdb stands.
 
@@ -278,7 +280,7 @@ Kanso holds no hidden work at build time, any more than at run time.
 
 ### The standard library reaches only itself
 
-**A file in `std/` can import only other `std/` files, and never with a `..` path.** Either reach out of it is refused at the line that writes it ("9.1 import syntax and path resolution" in [`SPEC-language.md`](SPEC-language.md)).
+**A file in `std/` can import only other `std/` files, and never with a `..` path.** Either reach out of it is refused at the line that writes it ("9.1 import syntax and path resolution" in [`SPEC-programming-language.md`](SPEC-programming-language.md)).
 
 **The motive**: `std` is found by its place, not by a name. So no `uses` list holds it ("A package names itself, and names what it uses" above). Without the rule, a `std` file importing another package would compile clean. It would show up only as a "not found" pointing at `std`, from inside another package's copy. `std/../x` would let a file from outside be read as `std`'s, into its unit of visibility and its linkage.
 
@@ -310,7 +312,7 @@ Kanso holds no hidden work at build time, any more than at run time.
 
 ### A path's `..` is resolved by its spelling
 
-**`a/../b` always means `b`.** A path's `..` is folded by its spelling, not by asking the filesystem. That holds in the walk up to the folder a file stands in, and in the file's name alike ("9.1 import syntax and path resolution" in [`SPEC-language.md`](SPEC-language.md)).
+**`a/../b` always means `b`.** A path's `..` is folded by its spelling, not by asking the filesystem. That holds in the walk up to the folder a file stands in, and in the file's name alike ("9.1 import syntax and path resolution" in [`SPEC-programming-language.md`](SPEC-programming-language.md)).
 
 | Path as written | The file stands in | Its name |
 | :-- | :-- | :-- |
@@ -523,7 +525,7 @@ CI's machines effectively have one core, so the only way to make the gates faste
 
 **Do not merge fine-grained suites "because there are many of them".** Merging runs not one byte less, so the wall clock does not shrink (the total fixes it). And a fine-grained name points straight at the cause when it fails. Only the same property inspected in two places can be merged.
 
-**When reducing the total, look at the heavy individuals, not the count.** The time is skewed per suite and per case. `ksplc/tests/negative/` is mostly a handful of cases that poke the depth safety valve. Their input must exceed the 1000 levels that the compiler's walks over a type allow (`max_type_unwrap_depth` in `ksplc/sema/type/query.kspl` and its kind). It costs quadratically in the level count. So a large count does not mean a large amount of time.
+**When reducing the total, look at the heavy individuals, not the count.** The time is skewed per suite and per case. `ksplc/tests/negative/` is mostly a handful of cases that poke the depth safety valve. Their input must exceed the 1000 levels that the compiler's walks over a type allow (`MAX_TYPE_UNWRAP_DEPTH` in `ksplc/sema/type/query.kspl` and its kind). It costs quadratically in the level count. So a large count does not mean a large amount of time.
 
 ### A failed round says why in its last lines
 
@@ -538,7 +540,7 @@ CI's machines effectively have one core, so the only way to make the gates faste
 
 * **A reason built at run time must carry, in one literal, the piece a row names.** An interpolation can put anything in, so a row matched across one proves nothing. A constant of the same file is read as its text. A reason bound to a name in the same function, or returned by a function of the file, is read where it is written.
 * **A call written inside a string is not read.** It is a program a test runs as its child and reads itself, and no round prints its lines.
-* **A reason that no platform must let through stays out of every row.** The check lists it with its reason (`held_by_none` in `tests/support/conventions_skip.kspl`). An example is a module that only the Linux image is promised to hold.
+* **A reason that no platform must let through stays out of every row.** The check lists it with its reason (`HELD_BY_NONE` in `tests/support/conventions_skip.kspl`). An example is a module that only the Linux image is promised to hold.
 
 ### 'Supported' means someone uses it
 

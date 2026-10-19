@@ -45,13 +45,30 @@ export function run(ks) {
   check(textOf(0) === "", `that box is empty (${textOf(0)})`);
   const blankStyles = w.kspage_web_style_count();
   check(blankStyles > 0, `a blank carries a table of styles too (${blankStyles})`);
-  w.kspage_web_click(1, 4, 0);
   type("a");
   // **Place afresh after typing** (a box is the result of placing).
   w.kspage_web_layout(300);
-  check(textOf(0) === "a", `a blank can be typed on as it stands (${textOf(0)})`);
+  check(textOf(0) === "a", `a blank accepts typing without a click (${textOf(0)})`);
   // Caution: **Put it back where it was** (leaving the document the sections after this look at).
   check(load(wasDoc) === 1, "the document from before the blank reads back over it");
+
+  // Replacing text across paragraphs is one undo step, including the deleted paragraphs.
+  const replacement = material({ blocks: [para("body", "First"), para("body", "Second")] });
+  check(load(replacement) === 1, "the replacement fixture loads");
+  w.kspage_web_layout(300);
+  w.kspage_web_select_all();
+  type("X");
+  type("Y");
+  w.kspage_web_layout(300);
+  check(textOf(0) === "XY", "typing replaces the selected paragraphs");
+  w.kspage_web_undo();
+  w.kspage_web_layout(300);
+  check(textOf(0) === "First" && textOf(1) === "Second",
+    "one undo restores the selected text and both paragraphs");
+  w.kspage_web_redo();
+  w.kspage_web_layout(300);
+  check(textOf(0) === "XY", "redo replaces the paragraphs again");
+  check(load(wasDoc) === 1, "the document is restored after the replacement check");
 
   // Empty text is one editable line, with or without an extension declaring its language.
   for (const spoken of ["", "txt"]) {
@@ -175,7 +192,7 @@ export function run(ks) {
     "refused as unplaceable, the document now is still there");
   check(w.kspage_web_layout(300) > 0, "it can be placed afresh after being refused too");
   // Caution: **Do not refuse too much** — ordinary documents must pass. **Do not look at a grid
-  // and a flow by the same value** (`port/web/state.kspl`'s `room_per_flow` / `room_per_grid`),
+  // and a flow by the same value** (`port/web/state.kspl`'s `ROOM_PER_FLOW` / `ROOM_PER_GRID`),
   // or **ordinary prose gets a fraction of its ceiling**. So prose of about the table's bytes
   // has to pass.
   const plainOf = (n) => '{"kspage":6,"sheet":{"styles":[{"name":"body"}]},"blocks":['

@@ -193,7 +193,7 @@ Caution: **Lift the wheels off before writing it.** Put the body on a box so tha
    2. **Two** beeps, then forward, back, sideways both ways, diagonally, turning both ways.
    3. **Two** beeps, and the wheels stay stopped.
 
-**The first part is the real check.** A wrong order means `motor_pin_a/b` disagrees with the wiring ("The right side reverses pin names and forward/back" in [`SPEC-board.md`](SPEC-board.md)). A wheel turning backward means `board.wheel_polarity` does not fit this unit ("The direction of rotation differs from unit to unit" in [`SPEC-board.md`](SPEC-board.md)).
+**The first part is the real check.** A wrong order means `motor_pin_a/b` disagrees with the wiring ("The right side reverses pin names and forward/back" in [`SPEC-board.md`](SPEC-board.md)). A wheel turning backward means `board.WHEEL_POLARITY` does not fit this unit ("The direction of rotation differs from unit to unit" in [`SPEC-board.md`](SPEC-board.md)).
 
 In the second part, moving sideways turns the front left and rear right one way, and the other pair the other way. Moving diagonally turns only one diagonal pair. The body must move right for positive `lateral` and clockwise for positive `rotation` in `drive()`.
 
@@ -224,7 +224,7 @@ In the second part, moving sideways turns the front left and rear right one way,
 
 Caution: **Confirm that each value moves.** A fixed value looks the same as a pin with nothing connected.
 
-Caution: **Cover the leftmost line sensor and check that the left character changes.** Some units have the outer sensors mounted swapped; if the right one changes, flip `board.line_sensor_swapped` ("Line tracking" in [`SPEC-board.md`](SPEC-board.md)). All three characters stuck the same usually means the sensor board's sensitivity trimmer (a small adjustable resistor) needs turning.
+Caution: **Cover the leftmost line sensor and check that the left character changes.** Some units have the outer sensors mounted swapped; if the right one changes, flip `board.LINE_SENSOR_SWAPPED` ("Line tracking" in [`SPEC-board.md`](SPEC-board.md)). All three characters stuck the same usually means the sensor board's sensitivity trimmer (a small adjustable resistor) needs turning.
 
 **No lines and N beeps at the head of each lap** means USB did not enumerate: back to stage 2b. **`bat=` at about a quarter of the real voltage** means the 12-bit resolution was mixed up with Arduino's 10 ("The ADC" in [`DESIGN-rtos.md`](DESIGN-rtos.md)).
 
@@ -587,7 +587,7 @@ The only path to the wheels (`apply`) is `one_round` inside `if ready && !halted
 
 | The car sees | It | `car-loop` (6e) | `car-pilot` (7, 9) | `car-ir` (12) | How it comes back |
 | :-- | :-- | :--: | :--: | :--: | :-- |
-| The battery under `battery_low_mv` on `low_rounds` **consecutive** laps (`ksos/demo/rp2040/common/battery.kspl`) (a motor's inrush dips it for an instant) | Stops; `car-loop` also sends no more requests | ✅ | ✅ | — | Switch the battery off and on ("Bringing it back when the battery stopped it" above) |
+| The battery under `BATTERY_LOW_MV` on `LOW_ROUNDS` **consecutive** laps (`ksos/demo/rp2040/common/battery.kspl`) (a motor's inrush dips it for an instant) | Stops; `car-loop` also sends no more requests | ✅ | ✅ | — | Switch the battery off and on ("Bringing it back when the battery stopped it" above) |
 | The distance under `emergency_mm` (100mm) | Backs off | ✅ | ✅ | — | By itself, once the distance grows |
 | No valid reply within `reply_deadline_ms` (300ms) | Stops | ✅ | — | — | By itself, at the next valid reply |
 | No policy received, and none in the record | Never moves | — | ✅ | — | Receive one from kssrv (stage 9) |
@@ -737,7 +737,7 @@ car t=700 ... n=599 ... run=1 rec=95
 car t=710 ... n=609 ... run=11 rec=95        <- n is growing
 ```
 
-**The speed cap rewrites the policy's output**, so the report line and the record show the instruction really sent. It is set in one place, `cap` in `ksos/boards/freenove_4wd_pico/motor.kspl`, and applies to the close-range reverse too.
+**The speed cap rewrites the policy's output**, so the report line and the record show the instruction really sent. It is set in one place, `CAP` in `ksos/boards/freenove_4wd_pico/motor.kspl`, and applies to the close-range reverse too.
 
 ### Seeing the state as light while it drives itself
 
@@ -861,7 +861,7 @@ Note: Only `ksos/demo/rp2040/common/sample.kspl` knows the columns' order, and t
 | Colours shifted per element | The 24-bit boundaries do not line up | Check that each element gets exactly 24 bits |
 | Flicker, or wrong colours at times | The window for the write is missed (interrupts not stopped, or the loop not in RAM) | Check both |
 
-Caution: **Do not raise the brightness** (one place: `board.ws2812_level`). Eight elements at full white use about 0.5A, and the low-voltage watch (`battery_low_mv`) fires on their own light. To save more, light fewer elements (what a dark one still uses is under "The WS2812 LEDs" in [`SPEC-board.md`](SPEC-board.md)).
+Caution: **Do not raise the brightness** (one place: `board.WS2812_LEVEL`). Eight elements at full white use about 0.5A, and the low-voltage watch (`battery_low_mv`) fires on their own light. To save more, light fewer elements (what a dark one still uses is under "The WS2812 LEDs" in [`SPEC-board.md`](SPEC-board.md)).
 
 If the colours do start going wrong, doubling `bit_counts` doubles the window for the write. Whether WS2812 accepts the longer Low must be confirmed on the real board.
 
@@ -895,8 +895,8 @@ car t=300 dist= 612mm line=3 bat=7.980V drive=(20,7,12) n=300 us=9210 emerg=0 dr
 | `pred=` | The predicted next-lap bits (0 to 7), to compare with the next line's `line=`. `-` is no prediction (stopped, or not one step learned) |
 | `perr=` | A moving average of the share of bits predicted wrong, in % (not the loss). `--` is not one step learned |
 | `base=` | The share wrong for "the same as the previous tick", in %. **`perr=` below it is the only evidence of learning** (both over the same steps and window, so `[dump]` need not be recounted). A draw is not a win: it means only "no change" was learned |
-| `v` | The weights' layout version (`state_version` in `demo/common/car_model.kspl`). If it differs from the local source, the other numbers still look plausible: check it first when the counting changes |
-| `lus=` | One learning step's time in µs, apart from `us=` (the policy alone). A lap that sent a stop skips the forward pass (the net's calculation from input to output) and reads small: read it where `drive=` is non-zero. Do not rely on the absolute value; to shorten it, shrink `hidden` in `demo/common/car_model.kspl` |
+| `v` | The weights' layout version (`STATE_VERSION` in `demo/common/car_model.kspl`). If it differs from the local source, the other numbers still look plausible: check it first when the counting changes |
+| `lus=` | One learning step's time in µs, apart from `us=` (the policy alone). A lap that sent a stop skips the forward pass (the net's calculation from input to output) and reads small: read it where `drive=` is non-zero. Do not rely on the absolute value; to shorten it, shrink `HIDDEN` in `demo/common/car_model.kspl` |
 | `st,` | Steps learned. **It accumulates across power cycles** (read back from the record), so a run's steps are the difference. One per lap (fewer than `n=` when steering was redone mid-lap), only on laps the wheels moved |
 | `sv` | Saves of the weights to the record. If it stays 0, the next start-up does not resume from here |
 | `resumed the forward model — N steps learned, missed E per mille of bits vs B for no-change` | The previous weights were read. Whether E is below B says whether it was learning last time (E alone says nothing) |
@@ -945,7 +945,7 @@ On the floor, read these three **from the top** (a lower one means something onl
 
 ### Tell the version written by `v`, not by `st,`
 
-**`st,` accumulates across power cycles** and restarts from 0 when `load` refuses another version's weights, so one value can mean "resumed" or "restarted". Read `v` first: if it differs from `state_version` in the local `demo/common/car_model.kspl`, the version written is old. Then one run's steps are the difference in `st,` from the start-up `resumed ...` line.
+**`st,` accumulates across power cycles** and restarts from 0 when `load` refuses another version's weights, so one value can mean "resumed" or "restarted". Read `v` first: if it differs from `STATE_VERSION` in the local `demo/common/car_model.kspl`, the version written is old. Then one run's steps are the difference in `st,` from the start-up `resumed ...` line.
 
 ## Stage 12 — driving it from the IR remote alone
 
@@ -1035,7 +1035,7 @@ Stage 7's firmware (`rp2040_car_pilot_probe`) **stops on any button** because it
 
 ### The speed is slower than the tutorial's
 
-The tutorial drives at 50 to 80%. `motor.cap` is the only cap, held to **a speed one can catch on foot**. To raise it, change that one place in `motor.kspl`.
+The tutorial drives at 50 to 80%. `motor.CAP` is the only cap, held to **a speed one can catch on foot**. To raise it, change that one place in `motor.kspl`.
 
 ## Tuning line following
 
@@ -1049,7 +1049,7 @@ Which manoeuvre each line reading gives is in the server's own documents; this h
 
 | Check | If it fails |
 |---|---|
-| On `ksos-rp2040-board`'s sensor line, cover only the physically leftmost sensor: the left character of `line=B.W.B` must change | `board.line_sensor_swapped` does not match the unit |
+| On `ksos-rp2040-board`'s sensor line, cover only the physically leftmost sensor: the left character of `line=B.W.B` must change | `board.LINE_SENSOR_SWAPPED` does not match the unit |
 | That holds, yet it turns the wrong way | `motor.drive`'s turning term: with only `rot` positive, the left two wheels must go forward and the right two back (clockwise from above) |
 
 **The distance is read every control lap (`loop_interval_ms` = 100ms), and the line every `line_interval_ms` (10ms).** Why is in "What the self-driving probe does, and where its judgement lives" in [`DESIGN-rtos.md`](DESIGN-rtos.md). When the line moves mid-lap, only the steering is redone, counted in the report line's `trk=` apart from `n=`. If `trk=` does not grow, the line is not moving or the sensors are not answering.

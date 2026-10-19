@@ -182,9 +182,9 @@ Caution: **Do not add a path that bypasses it.** Such a path returns a size of 0
 * **A cycle's report is held and emitted once, at the end of `collect.run`** (`Resolving_state.registry_cycle_at` → `report_registry_cycle`). An array length is evaluated under `eval_constexpr_quiet`, which discards diagnostics and restores the count, so an `err` where the cycle is found would vanish.
 * **It does not walk past a pointer or a slice.** The pointee does not affect the pointer's size, and walking it would never stop on a self-referring type (a linked list).
 
-**A machine's widths come from one table**: `machines` in `base/target.kspl`, one row per machine ksplc knows. A row holds a pointer's width, a function pointer's and `Sz`'s. It also holds the alignment of `I64` / `U64` / `F64` in a struct, and the LLVM triple. `calc_type_layout` in `sema/decl/layout.kspl` and `Sz`'s width (`get_primitive_bit_size` in `sema/type/query.kspl`) read the row `current` resolves: `--machine`'s, else the one ksplc runs on, which `kspl_host_machine` in `gen/runtime/hosted.c` names from the C compiler's own macros. Everything else is laid out from those widths, so a slice is a pointer and an `Sz`, a trait value two pointers.
+**A machine's widths come from one table**: `MACHINES` in `base/target.kspl`, one row per machine ksplc knows. A row holds a pointer's width, a function pointer's and `Sz`'s. It also holds the alignment of `I64` / `U64` / `F64` in a struct, and the LLVM triple. `calc_type_layout` in `sema/decl/layout.kspl` and `Sz`'s width (`get_primitive_bit_size` in `sema/type/query.kspl`) read the row `current` resolves: `--machine`'s, else the one ksplc runs on, which `kspl_host_machine` in `gen/runtime/hosted.c` names from the C compiler's own macros. Everything else is laid out from those widths, so a slice is a pointer and an `Sz`, a trait value two pointers.
 
-* **Every subcommand that lays values out asks for the machine before it starts** (`machine_refusal_to` in `usage.kspl`, the subcommands in `machine_faces`). On a host the table lacks, each says so, naming the triple `kspl_host_machine` built, rather than reaching `current` and stopping with an internal error. **The language server refuses too, on standard error, rather than take a machine from a setting.** The reasons:
+* **Every subcommand that lays values out asks for the machine before it starts** (`machine_refusal_to` in `usage.kspl`, the subcommands in `MACHINE_FACES`). On a host the table lacks, each says so, naming the triple `kspl_host_machine` built, rather than reaching `current` and stopping with an internal error. **The language server refuses too, on standard error, rather than take a machine from a setting.** The reasons:
   * Every machine the tree is built on has a row.
   * A guessed machine would show a static `if` that the compile then decides otherwise.
   * A machine named in `ksplc.cfg` beside `--machine` would be a second way to name it (Principle 6).
@@ -232,7 +232,7 @@ The record holds the type, what was measured, the number and the node that asked
 
 Inside Sema, "this cannot be written" is a wrapper around a type, placed at exactly the level it applies to. Several functions ask about it, and each looks at a different depth, so picking the wrong one gives a wrong answer without any error.
 
-In KSPL, a `$` written in a type makes that level writable, and a level without `$` is read-only (the language specification, `docs/SPEC-language.md` §3.2). **A type is interned as a canonical string** (`sema/type/env.kspl`): one fixed spelling per type, stored once and compared by number. An immutability mark is a structural node, `Info.const_of(base_id)`, written as `base_core.immut_mark()` (`" immut"`) right after what it marks.
+In KSPL, a `$` written in a type makes that level writable, and a level without `$` is read-only (the language specification, `docs/SPEC-programming-language.md` §3.2). **A type is interned as a canonical string** (`sema/type/env.kspl`): one fixed spelling per type, stored once and compared by number. An immutability mark is a structural node, `Info.const_of(base_id)`, written as `base_core.immut_mark()` (`" immut"`) right after what it marks.
 
 | type | canonical string | `Info` |
 | :-- | :-- | :-- |
@@ -281,7 +281,7 @@ The regression is in `ksplc/tests/lang_types_test.kspl`.
 
 #### Where immutability's two axes are enforced
 
-**KSPL asks two separate questions about a write. Can this name get a new value? Can the thing it points at be changed?** One function, `enforce_mutability` in `sema/body/write_perm.kspl`, answers both, and picks the question by whether the write goes through a pointer. The language specification (`docs/SPEC-language.md` §4.2) keeps the two axes orthogonal (independent of each other):
+**KSPL asks two separate questions about a write. Can this name get a new value? Can the thing it points at be changed?** One function, `enforce_mutability` in `sema/body/write_perm.kspl`, answers both, and picks the question by whether the write goes through a pointer. The language specification (`docs/SPEC-programming-language.md` §4.2) keeps the two axes orthogonal (independent of each other):
 
 | axis | written as | the question | checked on |
 | :-- | :-- | :-- | :-- |
@@ -502,7 +502,7 @@ Caution: **Register it at Pass 2a** (`impl_needs_early_collect`). At 2b, resolvi
 
 **A generic's impl covering a slice type (`T[]`) is accepted.** Desugaring turns `impl<|T|> T$[] { ... }` into `impl<|T|> Slice<|$T|>`, which is handled as a generic's impl for `List<|T|>` is (the regression test: `ksplc/tests/slice_test.kspl`).
 
-Caution: **Do not add a test rejecting it.** Monomorphization has one starting point, `instantiate_struct`, so there is nothing to reject. The reason is "A slice is a std struct, under generics' rules" in [`../../docs/DESIGN-language.md`](../../docs/DESIGN-language.md).
+Caution: **Do not add a test rejecting it.** Monomorphization has one starting point, `instantiate_struct`, so there is nothing to reject. The reason is "A slice is a std struct, under generics' rules" in [`../../docs/DESIGN-programming-language.md`](../../docs/DESIGN-programming-language.md).
 
 #### Instantiation's two axes, and which of them to change
 

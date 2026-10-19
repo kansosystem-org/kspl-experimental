@@ -371,7 +371,7 @@ fn test_child_holds_no_socket(ksplc: U8[]) //<
     client.set_nonblocking() catch panic("set_nonblocking should succeed on a connected socket")
     $r: = reactor.Reactor.new()
     defer r.free()
-    r.register(client.raw_handle(), reactor.readable, 0)
+    r.register(client.raw_handle(), reactor.READABLE, 0)
     $ready: = r.wait(5000) catch panic("wait should succeed")
     seen: = ready.len == 1
     ready.free()
@@ -433,7 +433,7 @@ fn test_tcp_read_for() //<
     listener.free()
     verdict.pass("read_for ends at its timeout on a quiet peer, and reads what the peer sends.")
 
-priv const four_gib: I64 = 1I64 << 32 //< a length whose low 32 bits are all 0
+priv const FOUR_GIB: I64 = 1I64 << 32 //< a length whose low 32 bits are all 0
 
 fn test_tcp_past_int() //<
     //< A read and a write handed more than an `int` holds each move a piece and say how much
@@ -443,7 +443,7 @@ fn test_tcp_past_int() //<
     //< touched here.** The read fills five bytes of it. The write runs non-blocking, so it
     //< moves only what the socket takes at once. Only a 64-bit `Sz` holds a length past an `int`.
     verdict.start("[Net] a read and a write handed more than an int holds move a piece test...")
-    len: = Sz::four_gib
+    len: = Sz::FOUR_GIB
     listener: = net.Tcp_listener.bind("127.0.0.1", 0)
         catch panic("bind should succeed on a free port")
     port: = listener.port() catch panic("a bound socket knows its port")
@@ -505,9 +505,9 @@ fn test_reactor_multi_connection()
     c0.set_nonblocking() catch panic("set_nonblocking should succeed on a connected socket")
     c1.set_nonblocking() catch panic("set_nonblocking should succeed on a connected socket")
     c2.set_nonblocking() catch panic("set_nonblocking should succeed on a connected socket")
-    r.register(c0.raw_handle(), reactor.readable, 0)
-    r.register(c1.raw_handle(), reactor.readable, 1)
-    r.register(c2.raw_handle(), reactor.readable, 2)
+    r.register(c0.raw_handle(), reactor.READABLE, 0)
+    r.register(c1.raw_handle(), reactor.READABLE, 1)
+    r.register(c2.raw_handle(), reactor.READABLE, 2)
 
     // Nothing has been sent yet, so no connection should be readable.
     $empty_ready: = r.wait(200) catch panic("wait should succeed even with nothing ready")
@@ -539,11 +539,11 @@ fn test_reactor_multi_connection()
         for i in Range.asc(3)
             if handled[i] == 0
                 stream: = c0 if i == 0 else c1 if i == 1 else c2
-                r.register(stream.raw_handle(), reactor.readable, i)
+                r.register(stream.raw_handle(), reactor.READABLE, i)
         $ready: = r.wait(5000)
             catch panic("wait should succeed while connections are still pending")
         for item in ready
-            assert((item.revents & reactor.readable) != 0, "ready item must report readable")
+            assert((item.revents & reactor.READABLE) != 0, "ready item must report readable")
             stream: = c0 if item.token == 0 else c1 if item.token == 1 else c2
             buf: U8[64] = ::{}
             n: = stream.read(U8$[]::buf)
@@ -556,7 +556,7 @@ fn test_reactor_multi_connection()
         "all three connections must have been handled exactly once")
 
     // After a clear nothing is watched, so wait returns empty when it times out.
-    r.register(c0.raw_handle(), reactor.readable, 0)
+    r.register(c0.raw_handle(), reactor.READABLE, 0)
     r.clear()
     $after_clear: = r.wait(0) catch panic("wait should succeed with an empty registration set")
     assert(after_clear.len == 0, "clear must leave nothing registered")
@@ -594,7 +594,7 @@ fn test_reactor_writable()
 
     $r: = reactor.Reactor.new()
     defer r.free()
-    r.register(client.raw_handle(), reactor.writable, 7)
+    r.register(client.raw_handle(), reactor.WRITABLE, 7)
     $ready: = r.wait(5000) catch panic("wait should succeed on a connected stream")
     ready_token: = ready.get(0).token
     assert(ready.len == 1 && ready_token == 7, "a connected stream is reported writable")
@@ -626,7 +626,7 @@ fn test_accept_returns_blocking()
         catch panic("connect should succeed once the listener is bound")
     $r: = reactor.Reactor.new()
     defer r.free()
-    r.register(listener.raw_handle(), reactor.readable, 0)
+    r.register(listener.raw_handle(), reactor.READABLE, 0)
     $ready: = r.wait(5000) catch panic("wait should succeed")
     ready.free()
     conn: = listener.accept() catch panic("accept should succeed once the listener is readable")

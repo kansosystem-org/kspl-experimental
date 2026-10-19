@@ -6,32 +6,32 @@
 import "ksai/tensor" { Tensor }
 import "std/mem" { Arena }
 
-pub const format_version: U8[] = "2" //< the version written in the policy, and the one read
+pub const FORMAT_VERSION: U8[] = "2" //< the version written in the policy, and the one read
     //<
     //< Caution: **Raise it when the features' order, the activation (SiLU) or the manoeuvre
     //< table's meaning changes.** The shapes still fit, so an old reader silently uses new weights
     //< with the old meaning.
 
-pub const feature_count: Sz = 5 //< [measured or not, the normalized distance, left, middle, right]
-pub const drive_fields: Sz = 3 //< how many values one manoeuvre holds (lon, lat, rot)
+pub const FEATURE_COUNT: Sz = 5 //< [measured or not, the normalized distance, left, middle, right]
+pub const DRIVE_FIELDS: Sz = 3 //< how many values one manoeuvre holds (lon, lat, rot)
 
-pub const line_left: I64 = 4 //< the left line sensor's bit in an observation's `line`
-pub const line_middle: I64 = 2 //< the middle sensor's bit
-pub const line_right: I64 = 1 //< the right sensor's bit
+pub const LINE_LEFT: I64 = 4 //< the left line sensor's bit in an observation's `line`
+pub const LINE_MIDDLE: I64 = 2 //< the middle sensor's bit
+pub const LINE_RIGHT: I64 = 1 //< the right sensor's bit
 
 pub fn features( //< an observation as the feature vector the policy takes
     dist_mm: I64, //< the distance ahead; **0 means "could not be measured"**, not "close"
-    line: I64, //< the line sensors, as `line_left` / `line_middle` / `line_right` bits
+    line: I64, //< the line sensors, as `LINE_LEFT` / `LINE_MIDDLE` / `LINE_RIGHT` bits
     far_mm: I64, //< the distance the normalized one reaches 1 at; farther counts as far
     arena: Arena$@, //< where the tensor goes
 ): Tensor<|F32|>
-    shape: Sz[2] = ::{ 1, feature_count }
+    shape: Sz[2] = ::{ 1, FEATURE_COUNT }
     x: = Tensor<|F32|>.new(Sz[]::shape, arena)
     valid: = dist_mm > 0I64
     clamped: = dist_mm if dist_mm < far_mm else far_mm
     x[0] = 1.0 if valid else 0.0
     x[1] = F32::(F64::clamped / F64::far_mm) if valid else 0.0
-    x[2] = 1.0 if (line & line_left) != 0I64 else 0.0
-    x[3] = 1.0 if (line & line_middle) != 0I64 else 0.0
-    x[4] = 1.0 if (line & line_right) != 0I64 else 0.0
+    x[2] = 1.0 if (line & LINE_LEFT) != 0I64 else 0.0
+    x[3] = 1.0 if (line & LINE_MIDDLE) != 0I64 else 0.0
+    x[4] = 1.0 if (line & LINE_RIGHT) != 0I64 else 0.0
     return x

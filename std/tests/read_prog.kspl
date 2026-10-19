@@ -7,7 +7,7 @@
 //< breaks stops with `assert`**, counted as an announced stop. What a writer here wrote, or what
 //< the reader read, must read back the same.
 //< Usage: `read_prog <kind> <file>` (the kinds are the names that `read_one` below lists).
-import "std/argp"
+import "std/argparse"
 import "std/base64"
 import "std/chars"
 import "std/ds" { List }
@@ -27,18 +27,18 @@ import "std/url"
 // Caution: **Do not just count the bytes**, or a mix-up in the characters does not show.
 priv $used: U64 = 0
 
-priv const mix: U64 = 0x100000001B3U64 //< the multiplier
+priv const MIX: U64 = 0x100000001B3U64 //< the multiplier
     //<
     //< **It can wrap on overflow**; it is used only for mixing.
 
 priv fn use_bytes(s: U8[])
     for b in s
-        used = (used ^ U64::b) * mix
+        used = (used ^ U64::b) * MIX
 
 priv fn use_len(n: Sz)
-    used = (used ^ U64::n) * mix
+    used = (used ^ U64::n) * MIX
 
-priv const split_at: U8 = 0U8 //<
+priv const SPLIT_AT: U8 = 0U8 //<
     //< The byte that separates the regular expression's pattern from the text it is matched against
 
 // ---------------------------------------------------------
@@ -60,7 +60,7 @@ priv fn read_json(src: U8[], arena: Arena$@): I32 //<
     json_round_trip(doc.val, 2, arena)
     return 0
 
-priv fn json_round_trip(v: json.Val, indent: Sz, arena: Arena$@) //<
+priv fn json_round_trip(v: json.Value, indent: Sz, arena: Arena$@) //<
     //< Checks that the value, written out and read back, is equal, and is then written the same
     //<
     //< `equals` holds a decimal to the same F64, bit for bit: the writer's shortest form must read
@@ -76,7 +76,7 @@ priv fn json_round_trip(v: json.Val, indent: Sz, arena: Arena$@) //<
     back.val.dump(twice@, indent)
     assert(twice.slice().equals(once.slice()), "json: the value read back is written otherwise")
 
-priv fn walk_json(v: json.Val, arena: Arena$@) //< it walks the elements of the arrays
+priv fn walk_json(v: json.Value, arena: Arena$@) //< it walks the elements of the arrays
     //<
     //< `dump` already walks inside objects, so only the array path is taken here.
     $items: = v.arr_list(arena)
@@ -158,7 +158,7 @@ priv fn read_regex(src: U8[], arena: Arena$@): I32 //<
     //< which leaves an invisible `\r` at the end of the first part.
     $pattern: = src
     $text: U8[] = ""
-    if at: = src.find_char(split_at)
+    if at: = src.find_char(SPLIT_AT)
         pattern = src.sub(0, at)
         text = src.sub_from(at + 1)
     rx: = Regex.compile(pattern) catch
@@ -202,7 +202,7 @@ priv fn use_groups(one: Match, rx: Regex$@, text: U8[], arena: Arena$@) //<
 // HTTP
 // ---------------------------------------------------------
 priv fn read_http_request(src: U8[], arena: Arena$@): I32
-    req: = http.parse_request(src, http.default_max_body_bytes, arena) catch
+    req: = http.parse_request(src, http.DEFAULT_MAX_BODY_BYTES, arena) catch
         return 1
     use_bytes(req.method)
     use_bytes(req.target)
@@ -356,7 +356,7 @@ priv fn read_rpc(src: U8[], arena: Arena$@): I32 //<
         $again: = Str_builder.new()
         defer again.free()
         jsonrpc.frame_into(again@, body)
-        back: = jsonrpc.take_frame(again@, jsonrpc.max_body_bytes, arena) catch
+        back: = jsonrpc.take_frame(again@, jsonrpc.MAX_BODY_BYTES, arena) catch
             panic("jsonrpc: a body framed again is broken")
         assert(back.unwrap_or("").equals(body) && again.len == 0,
             "jsonrpc: a body framed again is taken back as another")
@@ -372,7 +372,7 @@ priv fn frames_of(src: U8[], run: Sz, arena: Arena$@): Frames //<
     $got: = Frames::{ .bodies = List<|U8[]|>.new(arena), .clean = 0, .broken = false }
     $at: Sz = 0
     for
-        taken: = jsonrpc.take_frame(acc@, jsonrpc.max_body_bytes, arena) catch
+        taken: = jsonrpc.take_frame(acc@, jsonrpc.MAX_BODY_BYTES, arena) catch
             got.broken = true
             continue
         if body: = taken
@@ -438,7 +438,7 @@ priv fn read_struct(src: U8[], arena: Arena$@): I32 //<
     return 0
 
 // ---------------------------------------------------------
-// A command line (`argp`)
+// A command line (`argparse`)
 // ---------------------------------------------------------
 
 priv struct Cli //< where the parser under test stores what it read
@@ -453,9 +453,9 @@ priv fn cli_new(arena: Arena$@): Cli
     return Cli::{ .verbose = false, .dry = false, .count = 0, .name = "",
         .defines = List<|U8[]|>.create(arena), .trailing = List<|U8[]|>.create(arena) }
 
-priv fn cli_parser(c: Cli$@, arena: Arena$@): argp.Parser$@ //<
+priv fn cli_parser(c: Cli$@, arena: Arena$@): argparse.Parser$@ //<
     //< A parser with each kind of item: flags, values, a repeated one, commands and positionals
-    p: = argp.Parser.create("prog", "a parser under test", arena)
+    p: = argparse.Parser.create("prog", "a parser under test", arena)
     p.positional("[file ...]")
     p.flag("--verbose", c.verbose@, "say more")
     p.flag("--dry-run", c.dry@, "change nothing")
@@ -467,7 +467,7 @@ priv fn cli_parser(c: Cli$@, arena: Arena$@): argp.Parser$@ //<
     p.subcommand_trailing("run", "run a script with its own arguments", c.trailing)
     return p
 
-priv const cli_names: U8[][5] = ::{ "--verbose", "--dry-run", "--count", "--name", "--define" }
+priv const CLI_NAMES: U8[][5] = ::{ "--verbose", "--dry-run", "--count", "--name", "--define" }
 
 priv fn read_argv(src: U8[], arena: Arena$@): I32 //<
     //< Parses the fields as a command line, then writes what it read back as one and parses that
@@ -487,20 +487,21 @@ priv fn read_argv(src: U8[], arena: Arena$@): I32 //<
     $second: = cli_new(arena)
     q: = cli_parser(second@, arena)
     q.parse_list(argv_again(p, first@, arena)) catch e
-        panic(U8$[]::arena.text().s("argp: what it read, written back, is refused: \{e\}").take())
+        panic(U8$[]::arena.text().s("argparse: what it read, written back, is refused: \{e\}")
+            .take())
     $same: =
         first.verbose == second.verbose && first.dry == second.dry &&
         first.count == second.count && first.name.equals(second.name) &&
         p.command.unwrap_or("").equals(q.command.unwrap_or("")) && same_list(p.rest, q.rest) &&
         same_list(first.defines, second.defines) &&
         same_list(first.trailing, second.trailing)
-    for n in cli_names
+    for n in CLI_NAMES
         same = same && p.saw(n) == q.saw(n)
     same = same && p.saw_empty("--define") == q.saw_empty("--define")
-    assert(same, "argp: what it read, written back, reads as another")
+    assert(same, "argparse: what it read, written back, reads as another")
     return 0
 
-priv fn argv_again(p: argp.Parser$@, c: Cli$@, arena: Arena$@): List<|U8[]|>$@ //<
+priv fn argv_again(p: argparse.Parser$@, c: Cli$@, arena: Arena$@): List<|U8[]|>$@ //<
     //< What the parser read, written as a command line: the items, the command, `--`, the rest
     out: = List<|U8[]|>.create(arena)
     if p.saw("--verbose")

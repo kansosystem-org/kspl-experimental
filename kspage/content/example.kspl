@@ -1,0 +1,38 @@
+#!/usr/bin/env -S ksplc run
+//< Writes a sample document for opening in the browser
+//<
+//< The sample uses the demo's styles and content. Its title identifies a successful load.
+import "kspage/content/sample"
+import "kspage/model/doc" as _doc
+import "kspage/share/store"
+import "std/argparse"
+import "std/ds" as _ds
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/sys"
+
+fn main(): I32 //< writes the one sample document
+    arena: = Arena.new(1024 * 1024)
+    defer arena.free()
+    // Caution: **Do not parse the arguments by hand.** `std/argparse` refuses an unknown `--name`
+    // (by hand, `--foo` would become the output path) and builds the usage text.
+    p: = argparse.Parser.create(sys.program_name(), "write one sample .kspage out", arena)
+    p.positional("<the destination (.kspage)>")
+    p.parse_or_exit(sys.args(), arena)
+    if p.rest.len != 1
+        p.print_usage(io.err())
+        return 1
+    out_path: = p.rest.get(0)
+    made: = sample.build(arena)
+    title: = made.doc.blocks.get(0)
+    title.inlines.len = 0
+    title.add_text("Sample document")
+    $text: = Str_builder.new()
+    defer text.free()
+    store.save(made.doc, made.sheet, text@)
+    io.write_file(out_path, text.slice()) catch e
+        io.err().s("\{sys.program_name()\}: cannot write: \{out_path\} (\{e\})\n")
+        return 1
+    io.out().s("# built -> \{out_path\} (\{text.len\} bytes)\n")
+    return 0

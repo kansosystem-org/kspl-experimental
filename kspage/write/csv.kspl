@@ -20,16 +20,16 @@ import "std/ds" { List }
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
 
-priv const quote: U8 = '"'
+priv const QUOTE: U8 = '"'
 
 priv fn tricky(text: U8[]): Bool //< whether the text has to be quoted
     for $i: Sz = 0; i < text.len; i += 1
         c: = text[i]
-        if c == ',' || c == quote || c == '\n' || c == '\r'
+        if c == ',' || c == QUOTE || c == '\n' || c == '\r'
             return true
     return false
 
-priv const guard: U8 = '\'' //< the mark that keeps a spreadsheet from reading a text as a formula
+priv const GUARD: U8 = '\'' //< the mark that keeps a spreadsheet from reading a text as a formula
 
 priv fn formula_like(text: U8[]): Bool //<
     //< Whether a spreadsheet opening the CSV would run the text, guarded or not
@@ -37,7 +37,7 @@ priv fn formula_like(text: U8[]): Bool //<
     //< **A run of `'` is looked through**, so the guard reads back (`unguarded`) whatever the text:
     //< `'=x` is written `''=x`. The characters are the ones OWASP's CSV-injection guidance names.
     $i: Sz = 0
-    for i < text.len && text[i] == guard
+    for i < text.len && text[i] == GUARD
         i += 1
     if i >= text.len
         return false
@@ -52,23 +52,23 @@ priv fn field_into(out: Str_builder$@, text: U8[], number: Bool) //< writes one 
     $sb: = Str_builder.new()
     defer sb.free()
     if !number && formula_like(text)
-        sb.c(guard)
+        sb.c(GUARD)
     sb.s(text)
     got: = sb.slice()
     if !tricky(got)
         out.s(got)
         return
-    out.c(quote)
+    out.c(QUOTE)
     for $i: Sz = 0; i < got.len; i += 1
-        if got[i] == quote
-            out.c(quote)
+        if got[i] == QUOTE
+            out.c(QUOTE)
         out.c(got[i])
-    out.c(quote)
+    out.c(QUOTE)
 
 priv fn unguarded(text: U8[]): U8[] //< a field read with the writer's `'` taken back off
     //<
     //< The counterpart of `field_into`: the `'` comes off exactly where the writer puts one on.
-    if text.len > 0 && text[0] == guard && formula_like(text)
+    if text.len > 0 && text[0] == GUARD && formula_like(text)
         return text.sub(1, text.len - 1)
     return text
 
@@ -132,12 +132,12 @@ priv fn quoted_field(c: Reader$@, out: Str_builder$@) //<
             crlf: = ch == '\r' && c.pos + 1 < c.src.len && c.src[c.pos + 1] == '\n'
             c.pos += 2 if crlf else 1
             continue
-        if ch != quote
+        if ch != QUOTE
             out.c(ch)
             c.pos += 1
             continue
-        if c.pos + 1 < c.src.len && c.src[c.pos + 1] == quote
-            out.c(quote)
+        if c.pos + 1 < c.src.len && c.src[c.pos + 1] == QUOTE
+            out.c(QUOTE)
             c.pos += 2
             continue
         c.pos += 1
@@ -156,7 +156,7 @@ priv fn read_row(c: Reader$@, out: List<|U8[]|>$@, arena: Arena$@): Bool //<
         defer sb.free()
         // Caution: **Read on to the separator after a closing quote** (`"q"junk` is `qjunk`).
         // Stopped there, the rest would start a row of its own.
-        if c.pos < c.src.len && c.src[c.pos] == quote
+        if c.pos < c.src.len && c.src[c.pos] == QUOTE
             quoted_field(c, sb@)
         plain_field(c, sb@)
         out.push(arena.dup_str(sb.slice()))

@@ -75,13 +75,13 @@ priv fn check_shebang_modes(arena: Arena$@) //< checks Git's index, including on
     verdict.check_list("every tracked shebang file has Git's executable bit", seen, "files", bad@,
         "run git update-index --chmod=+x -- <path>; also chmod +x <path> on Unix")
 
-priv const ci_yml: U8[] = ".github/workflows/ci.yml"
-priv const jobs_head: U8[] = "jobs:"
-priv const inputs_head: U8[] = "    inputs:"
-priv const cron_head: U8[] = "- cron: \""
-priv const job_pad: U8[] = "  "
-priv const input_pad: U8[] = "      "
-priv const guard_head: U8[] = "    if:"
+priv const CI_YML: U8[] = ".github/workflows/ci.yml"
+priv const JOBS_HEAD: U8[] = "jobs:"
+priv const INPUTS_HEAD: U8[] = "    inputs:"
+priv const CRON_HEAD: U8[] = "- cron: \""
+priv const JOB_PAD: U8[] = "  "
+priv const INPUT_PAD: U8[] = "      "
+priv const GUARD_HEAD: U8[] = "    if:"
 
 priv fn key_at(line: U8[], pad: U8[]): U8[] //< takes the name out of a `<indent><name>:` line
     //<
@@ -109,9 +109,9 @@ priv fn job_blocks(yml: U8[], names: List<|U8[]|>$@, bodies: List<|U8[]|>$@, are
         if off + line.len < yml.len && (yml.ptr + off + line.len)$ == '\r'
             step += 1
         if !seen
-            seen = line.equals(jobs_head)
+            seen = line.equals(JOBS_HEAD)
         else
-            name: = key_at(line, job_pad)
+            name: = key_at(line, JOB_PAD)
             if name.len > 0
                 if names.len > 0
                     bodies.push(yml.sub(head, off - head))
@@ -127,12 +127,12 @@ priv fn dispatch_inputs_of(yml: U8[], arena: Arena$@): List<|U8[]|> //<
     $inside: = false
     for line in yml.lines(arena)
         if !inside
-            inside = line.equals(inputs_head)
+            inside = line.equals(INPUTS_HEAD)
             continue
         // Once outside `workflow_dispatch:` it is over (a comment may stand inside).
         if line.trim_spaces().len > 0 && !line.starts_with("    ")
             break
-        name: = key_at(line, input_pad)
+        name: = key_at(line, INPUT_PAD)
         if name.len > 0
             out.push(name)
     return out
@@ -142,9 +142,9 @@ priv fn crons_of(yml: U8[], arena: Arena$@): List<|U8[]|> //<
     $out: = List<|U8[]|>.new(arena)
     for line in yml.lines(arena)
         t: = line.trim_spaces()
-        if !t.starts_with(cron_head)
+        if !t.starts_with(CRON_HEAD)
             continue
-        rest: = t.sub_from(cron_head.len)
+        rest: = t.sub_from(CRON_HEAD.len)
         if end: = rest.find_char('"')
             out.push(rest.sub(0, end))
     return out
@@ -172,20 +172,20 @@ priv fn quoted_crons(guard: U8[], arena: Arena$@): List<|U8[]|> //<
 priv fn guard_of(body: U8[], arena: Arena$@): U8[] //<
     //< The `if:` line of a job's body (empty where there is none)
     for line in body.lines(arena)
-        if line.starts_with(guard_head)
+        if line.starts_with(GUARD_HEAD)
             return line
     return ""
 
-priv const gates_src: U8[] = "tools/ci_gates.kspl" //<
+priv const GATES_SRC: U8[] = "tools/ci_gates.kspl" //<
     //< The CI's sets and the targets the workflow's matrices run agree
     //<
     //< Caution: **A set missing from the `.yml` silently stops running.** The runner refuses a set
     //< holding no gate but cannot see the CI's matrix; this is the second link.
-priv const set_head: U8[] = "enum Set "
-priv const set_order_head: U8[] = "const set_order:"
-priv const shard_prefix: U8[] = "ci_shard_" //< the sets one job of `ci` runs
-priv const matrix_head: U8[] = "target: ["
-priv const linux_only: U8[] = "ci-shard-linux" //<
+priv const SET_HEAD: U8[] = "enum Set "
+priv const SET_ORDER_HEAD: U8[] = "const SET_ORDER:"
+priv const SHARD_PREFIX: U8[] = "ci_shard_" //< the sets one job of `ci` runs
+priv const MATRIX_HEAD: U8[] = "target: ["
+priv const LINUX_ONLY: U8[] = "ci-shard-linux" //<
     //< What only the Linux runner runs (qemu, wasm, the browser, BLAS)
 
 fn set_variants(src: U8[], arena: Arena$@): List<|U8[]|> //<
@@ -194,7 +194,7 @@ fn set_variants(src: U8[], arena: Arena$@): List<|U8[]|> //<
     $inside: = false
     for line in src.lines(arena)
         if !inside
-            inside = line.starts_with(set_head)
+            inside = line.starts_with(SET_HEAD)
             continue
         if !line.starts_with("  ")
             break
@@ -217,8 +217,8 @@ priv fn matrix_of(body: U8[], arena: Arena$@): List<|U8[]|> //<
     //< Caution: **Search only within the body** (what `job_blocks` cut). Searching the whole file,
     //< it reads another job's matrix as its own.
     $out: = List<|U8[]|>.new(arena)
-    if head: = body.find_str(matrix_head)
-        rest: = body.sub_from(head + matrix_head.len)
+    if head: = body.find_str(MATRIX_HEAD)
+        rest: = body.sub_from(head + MATRIX_HEAD.len)
         if end: = rest.find_char(']')
             for w in rest.sub(0, end).split(',', arena)
                 t: = w.trim_spaces()
@@ -229,20 +229,20 @@ priv fn matrix_of(body: U8[], arena: Arena$@): List<|U8[]|> //<
 priv fn check_job(body: U8[], job: U8[], want: List<|U8[]|>@, bad: List<|U8[]|>$@, arena: Arena$@) //<
     //< Compares the targets a job should run with the ones its matrix lists
     $got: = matrix_of(body, arena)
-    where: = arena.text().s(job).s(" in ").s(ci_yml).take()
+    where: = arena.text().s(job).s(" in ").s(CI_YML).take()
     if got.len == 0
         bad.push(arena.text().s("there is no matrix in ").s(where).take())
         return
-    scan.diff_into(want, got@, gates_src, where, bad, arena)
-    scan.diff_into(got@, want, where, gates_src, bad, arena)
+    scan.diff_into(want, got@, GATES_SRC, where, bad, arena)
+    scan.diff_into(got@, want, where, GATES_SRC, bad, arena)
 
 priv fn check_ci_shards(arena: Arena$@)
     $bad: = List<|U8[]|>.new(arena)
-    src: = harness.read_under_root(gates_src)
+    src: = harness.read_under_root(GATES_SRC)
     sets: = set_variants(src, arena)
     // **`set_order` is how a name is read back**, so a set missing there cannot be run.
     $order: U8[] = ""
-    if head: = src.find_str(set_order_head)
+    if head: = src.find_str(SET_ORDER_HEAD)
         tail: = src.sub_from(head)
         order = tail.sub(0, tail.find_char('}').unwrap_or(tail.len))
     $want: = List<|U8[]|>.new(arena)
@@ -251,22 +251,22 @@ priv fn check_ci_shards(arena: Arena$@)
         if order.find_str(arena.text().s("Set.").s(v).s(",").take()).is_none() &&
             order.find_str(arena.text().s("Set.").s(v).s(" ").take()).is_none()
             bad
-                .push(arena.text().s("Set.").s(v).s(" is not in set_order in ").s(gates_src).take())
+                .push(arena.text().s("Set.").s(v).s(" is not in set_order in ").s(GATES_SRC).take())
         name: = v.replace("_", "-", arena)
-        if v.starts_with(shard_prefix) && !name.equals(linux_only)
+        if v.starts_with(SHARD_PREFIX) && !name.equals(LINUX_ONLY)
             want.push(name)
     if want.len == 0
         verdict.check("the CI's shards agree with the workflow's matrix", false,
-            arena.text().s("could not read the ci_shard_ sets out of ").s(gates_src).take())
+            arena.text().s("could not read the ci_shard_ sets out of ").s(GATES_SRC).take())
         return
     $names: = List<|U8[]|>.new(arena)
     $bodies: = List<|U8[]|>.new(arena)
-    job_blocks(harness.read_under_root(ci_yml), names@, bodies@, arena)
+    job_blocks(harness.read_under_root(CI_YML), names@, bodies@, arena)
     // **Linux has one more**: what runs only there is a shard of its own (`ci-shard-linux`).
     $with_linux: = List<|U8[]|>.new(arena)
     for i in Range.asc(want.len)
         with_linux.push(want.get(i))
-    with_linux.push(linux_only)
+    with_linux.push(LINUX_ONLY)
     check_job(body_of(names@, bodies@, "linux"), "linux", with_linux@, bad@, arena)
     check_job(body_of(names@, bodies@, "windows-ucrt64"), "windows-ucrt64", want@, bad@, arena)
     verdict.check_list("the CI's shards agree with the workflow's matrix", want.len, "shards", bad@,
@@ -279,14 +279,14 @@ priv fn check_dispatch_switches(arena: Arena$@) //<
     //< Caution: **Add only one side and either direction breaks silently**: an input alone "can be
     //< pressed and does nothing" (Principle 5); a job alone runs whatever is chosen. The names
     //< match so nobody has to remember the pairing; a cron that is not declared matches no run.
-    yml: = harness.read_under_root(ci_yml)
+    yml: = harness.read_under_root(CI_YML)
     $names: = List<|U8[]|>.new(arena)
     $bodies: = List<|U8[]|>.new(arena)
     job_blocks(yml, names@, bodies@, arena)
     got: = dispatch_inputs_of(yml, arena)
     if names.len == 0 || got.len == 0
         verdict.check("a job's if: matches the input and cron declarations", false,
-            arena.text().s("could not read the jobs or the inputs out of ").s(ci_yml).take())
+            arena.text().s("could not read the jobs or the inputs out of ").s(CI_YML).take())
         return
     $bad: = List<|U8[]|>.new(arena)
     scan.diff_into(names@, got@, "the jobs", "workflow_dispatch's inputs", bad@, arena)
@@ -309,13 +309,13 @@ priv fn check_dispatch_switches(arena: Arena$@) //<
         bad@,
         "add a job and add an input of the same name and an if: too (.github/workflows/ci.yml)")
 
-priv const lint_mk: U8[] = "mk/lint.mk" //<
+priv const LINT_MK: U8[] = "mk/lint.mk" //<
     //< The static analysis' list of entry points agrees with the tree
     //<
     //< Caution: **A source holding `fn main` that is missing from the list is never linted.** The
     //< analysis walks imports, so **an entry point nobody imports is not covered**.
 
-priv const lint_sources: U8[][_] = ::{ "*.kspl", ":!ksplc/tests/negative/*",
+priv const LINT_SOURCES: U8[][_] = ::{ "*.kspl", ":!ksplc/tests/negative/*",
     ":!ksplc/tests/parse/*", ":!ksplc/tests/lint/*", ":!ksplc/tests/runtime/*",
     ":!ksplc/tests/ship/*" } //<
         //< Sources searched for an entry point, and the fixtures left out, each linted by its suite
@@ -336,10 +336,10 @@ priv fn is_entry(src: U8[], arena: Arena$@): Bool //<
     return false
 
 // Caution: **Keep a `main` inside a string on the miss side**: it is what a plain search hits.
-priv const entry_samples: Sample[_] = ::{
+priv const ENTRY_SAMPLES: Sample[_] = ::{
     Sample::{ .text = "fn main(): I32\n  return 0\n", .hits = true },
     Sample::{ .text = "import \"std/io\"\n\nfn main() {\n}\n", .hits = true },
-    Sample::{ .text = "priv const s: U8[] =\n  \"\"\"x\nfn main()\n\"\"\"\n", .hits = false },
+    Sample::{ .text = "priv const S: U8[] =\n  \"\"\"x\nfn main()\n\"\"\"\n", .hits = false },
     Sample::{ .text = "pub fn main(): I32\n  return 0\n", .hits = true },
     Sample::{ .text = "fn mainly(): I32\n", .hits = false },
     Sample::{ .text = "  // fn main(): I32\n", .hits = false },
@@ -360,13 +360,13 @@ priv fn lint_targets(arena: Arena$@): List<|U8[]|> //<
     return out
 
 priv fn check_lint_entries(arena: Arena$@)
-    $bad: = scan.misjudged(Sample[]::entry_samples, is_entry, arena)
+    $bad: = scan.misjudged(Sample[]::ENTRY_SAMPLES, is_entry, arena)
     listed: = lint_targets(arena)
     if listed.len == 0
         bad
-            .push(arena.text().s("make could not print the lint lists of ").s(lint_mk).take())
+            .push(arena.text().s("make could not print the lint lists of ").s(LINT_MK).take())
     $seen: Sz = 0
-    for rel in harness.tracked_matching(U8[][]::lint_sources)
+    for rel in harness.tracked_matching(U8[][]::LINT_SOURCES)
         if !is_entry(harness.read_under_root(rel), arena)
             continue
         seen += 1
@@ -374,7 +374,7 @@ priv fn check_lint_entries(arena: Arena$@)
             bad.push(rel)
     verdict.check_list("no entry point of the static analysis has leaked out", seen, "entry points",
         bad@,
-        arena.text().s("line it up in LINT_TARGETS in ").s(lint_mk)
+        arena.text().s("line it up in LINT_TARGETS in ").s(LINT_MK)
         .s(", or leave its folder out in `lint_sources` with why").take())
 
 // ==========================================
@@ -382,19 +382,19 @@ priv fn check_lint_entries(arena: Arena$@)
 // **It is written by hand, for people.** So a check added to the gates or to a suite list, but not
 // to the table, stays out of sight on every platform at once.
 // ==========================================
-priv const gates_doc: U8[] = "docs/SPEC-gates.md"
-priv const table_head: U8[] = "| Check | Linux"
-priv const args_mark: U8[] = ".args = \""
-priv const suite_lists: U8[][_] = ::{ "mk/test.mk", "ksplc/Makefile" } //<
+priv const GATES_DOC: U8[] = "docs/SPEC-gates.md"
+priv const TABLE_HEAD: U8[] = "| Check | Linux"
+priv const ARGS_MARK: U8[] = ".args = \""
+priv const SUITE_LISTS: U8[][_] = ::{ "mk/test.mk", "ksplc/Makefile" } //<
     //< The files whose `SUITES` (and `LINUX_SUITES`) list the suites CI runs
-priv const list_heads: U8[][_] = ::{ "SUITES := ", "LINUX_SUITES := " }
+priv const LIST_HEADS: U8[][_] = ::{ "SUITES := ", "LINUX_SUITES := " }
 
 priv fn first_cells(doc: U8[], arena: Arena$@): List<|U8[]|> //< the table's first column, by row
     $out: = List<|U8[]|>.new(arena)
     $inside: = false
     for line in doc.lines(arena)
         if !inside
-            inside = line.starts_with(table_head)
+            inside = line.starts_with(TABLE_HEAD)
             continue
         if !line.starts_with("|")
             break
@@ -433,7 +433,7 @@ priv fn cell_names(text: U8[], arena: Arena$@): Bool //<
 
 // Caution: **Keep a prefix, a longer name and a word of prose on the miss side.** A search for
 // the name anywhere in the cell hits all three.
-priv const cell_samples: Sample[_] = ::{
+priv const CELL_SAMPLES: Sample[_] = ::{
     Sample::{ .text = "test-lsp (the language server)\tlsp", .hits = true },
     Sample::{ .text = "debug tests\tdebug", .hits = true },
     Sample::{ .text = "The other suites (cli / config)\tconfig", .hits = true },
@@ -450,24 +450,24 @@ priv fn ci_checks(arena: Arena$@): List<|U8[]|> //<
     //< A half of the suites (`test-suites-a`) stands for what its list holds, and `NAME=1` is a
     //< setting, not a target.
     $out: = List<|U8[]|>.new(arena)
-    for args in scan.find_all(harness.read_under_root(gates_src), args_mark, "\"", arena)
+    for args in scan.find_all(harness.read_under_root(GATES_SRC), ARGS_MARK, "\"", arena)
         for w in args.split(' ', arena)
             if w.len > 0 && w.find_char('=').is_none() && !w.starts_with("test-suites")
                 scan.push_unique(out@, w)
-    for rel in suite_lists
+    for rel in SUITE_LISTS
         text: = harness.read_under_root(rel)
-        for head in list_heads
+        for head in LIST_HEADS
             for w in htext.make_list(text, head, arena)
                 scan.push_unique(out@, w)
     return out
 
 priv fn check_platform_table(arena: Arena$@)
-    $bad: = scan.misjudged(Sample[]::cell_samples, cell_names, arena)
-    cells: = first_cells(harness.read_under_root(gates_doc), arena)
+    $bad: = scan.misjudged(Sample[]::CELL_SAMPLES, cell_names, arena)
+    cells: = first_cells(harness.read_under_root(GATES_DOC), arena)
     checks: = ci_checks(arena)
     if cells.len == 0 || checks.len == 0
         bad
-            .push(arena.text().s("could not read the table out of ").s(gates_doc)
+            .push(arena.text().s("could not read the table out of ").s(GATES_DOC)
             .s(" or the gates and suites").take())
     for name in checks
         $named: = false
@@ -480,7 +480,7 @@ priv fn check_platform_table(arena: Arena$@)
     verdict.check_list("the platform table names every gate and suite CI runs", checks.len, "checks",
         bad@,
         arena.text().s("give it a row, or a place in a row's list, in \"What each ")
-        .s("platform runs\" in ").s(gates_doc).take())
+        .s("platform runs\" in ").s(GATES_DOC).take())
 
 priv fn check_linux_suites_gated(arena: Arena$@) //<
     //< Each suite out of `test-suites` (`LINUX_SUITES`) has a gate of its own
@@ -488,18 +488,18 @@ priv fn check_linux_suites_gated(arena: Arena$@) //<
     //< **No half of the suites runs it.** So a name added to the list, but not to the gates' table,
     //< runs on no platform, and every round stays green.
     $gated: = List<|U8[]|>.new(arena)
-    for args in scan.find_all(harness.read_under_root(gates_src), args_mark, "\"", arena)
+    for args in scan.find_all(harness.read_under_root(GATES_SRC), ARGS_MARK, "\"", arena)
         for w in args.split(' ', arena)
             scan.push_unique(gated@, w)
     $bad: = List<|U8[]|>.new(arena)
-    names: = htext.make_list(harness.read_under_root(suite_lists[0]), list_heads[1], arena)
+    names: = htext.make_list(harness.read_under_root(SUITE_LISTS[0]), LIST_HEADS[1], arena)
     for name in names
         if !htext.has(gated@, arena.text().s("test-").s(name).take())
             bad.push(name)
     verdict.check_list("each suite out of `test-suites` has a gate of its own", names.len, "suites",
-        bad@, arena.text().s("give it a `Gate` in ").s(gates_src).take())
+        bad@, arena.text().s("give it a `Gate` in ").s(GATES_SRC).take())
 
-priv const blas_home: U8[] = "ksai/" //<
+priv const BLAS_HOME: U8[] = "ksai/" //<
     //< The one package `make test-blas` builds with `BLAS=1`
     //<
     //< **A `#cfg(blas)` elsewhere is never built**: `lint-cfg` analyses it, but no gate links or
@@ -519,19 +519,19 @@ priv fn holds_blas(src: U8[], arena: Arena$@): Bool //<
 
 // Caution: **Keep one inside a string and one in a comment on the miss side**: a plain search hits
 // both.
-priv const blas_samples: Sample[_] = ::{
+priv const BLAS_SAMPLES: Sample[_] = ::{
     Sample::{ .text = "#cfg(blas)\nfn f()\n", .hits = true },
     Sample::{ .text = "    #cfg(!blas)\n    x = 1\n", .hits = true },
-    Sample::{ .text = "priv const s: U8[] =\n  \"\"\"x\n#cfg(blas)\n\"\"\"\n", .hits = false },
+    Sample::{ .text = "priv const S: U8[] =\n  \"\"\"x\n#cfg(blas)\n\"\"\"\n", .hits = false },
     Sample::{ .text = "// #cfg(blas) is read by lint-cfg\n", .hits = false },
     Sample::{ .text = "#cfg(llvm)\nfn f()\n", .hits = false },
 }
 
 priv fn check_blas_home(arena: Arena$@)
-    $bad: = scan.misjudged(Sample[]::blas_samples, holds_blas, arena)
-    $files: = harness.tracked_matching(U8[][]::scan.kspl_specs)
+    $bad: = scan.misjudged(Sample[]::BLAS_SAMPLES, holds_blas, arena)
+    $files: = harness.tracked_matching(U8[][]::scan.KSPL_SPECS)
     for rel in files.slice()
-        if !rel.starts_with(blas_home) && holds_blas(harness.read_under_root(rel), arena)
+        if !rel.starts_with(BLAS_HOME) && holds_blas(harness.read_under_root(rel), arena)
             bad.push(rel)
     verdict.check_list("`#cfg(blas)` stands only in ksai, the one package `make test-blas` builds",
         files.len, "files", bad@,
@@ -543,10 +543,10 @@ priv fn check_blas_home(arena: Arena$@)
 // of `.devcontainer/Dockerfile`. A workflow that sets MSYS2 up by itself installs a list of its
 // own, and a person following `docs/HOWTO-build.md` meets a missing command CI never saw.
 // ==========================================
-priv const msys2_list: U8[] = "tools/msys2-packages.txt"
-priv const msys2_action: U8[] = ".github/actions/msys2-ucrt64/action.yml"
-priv const msys2_doc: U8[] = "docs/HOWTO-build.md"
-priv const msys2_reader: U8[] = "sed 's/#.*//' tools/msys2-packages.txt" //<
+priv const MSYS2_LIST: U8[] = "tools/msys2-packages.txt"
+priv const MSYS2_ACTION: U8[] = ".github/actions/msys2-ucrt64/action.yml"
+priv const MSYS2_DOC: U8[] = "docs/HOWTO-build.md"
+priv const MSYS2_READER: U8[] = "sed 's/#.*//' tools/msys2-packages.txt" //<
     //< How the action and the document read the list, so the two read the same names
 
 priv fn sets_up_msys2(text: U8[], arena: Arena$@): Bool //<
@@ -559,7 +559,7 @@ priv fn sets_up_msys2(text: U8[], arena: Arena$@): Bool //<
     return false
 
 // Caution: **Keep a comment and the local action on the miss side**: a plain search hits both.
-priv const msys2_samples: Sample[_] = ::{
+priv const MSYS2_SAMPLES: Sample[_] = ::{
     Sample::{ .text = "      - uses: msys2/setup-msys2@ec48f7c5 # v2\n", .hits = true },
     Sample::{ .text = "      - name: MSYS2\n        uses: msys2/setup-msys2@v2\n", .hits = true },
     Sample::{ .text = "      # msys2/setup-msys2@v2 sits behind the action\n", .hits = false },
@@ -576,27 +576,27 @@ priv fn packages_in(list: U8[], arena: Arena$@): Sz //< how many packages the li
     return n
 
 priv fn check_msys2_list(arena: Arena$@)
-    $bad: = scan.misjudged(Sample[]::msys2_samples, sets_up_msys2, arena)
-    if packages_in(harness.read_under_root(msys2_list), arena) == 0
-        bad.push(arena.text().s(msys2_list).s(" names no package").take())
-    action: = harness.read_under_root(msys2_action)
+    $bad: = scan.misjudged(Sample[]::MSYS2_SAMPLES, sets_up_msys2, arena)
+    if packages_in(harness.read_under_root(MSYS2_LIST), arena) == 0
+        bad.push(arena.text().s(MSYS2_LIST).s(" names no package").take())
+    action: = harness.read_under_root(MSYS2_ACTION)
     if !sets_up_msys2(action, arena)
-        bad.push(arena.text().s(msys2_action).s(" does not set MSYS2 up").take())
-    for rel in U8[][]::{ msys2_action, msys2_doc }
-        if harness.read_under_root(rel).find_str(msys2_reader).is_none()
+        bad.push(arena.text().s(MSYS2_ACTION).s(" does not set MSYS2 up").take())
+    for rel in U8[][]::{ MSYS2_ACTION, MSYS2_DOC }
+        if harness.read_under_root(rel).find_str(MSYS2_READER).is_none()
             bad
-                .push(arena.text().s(rel).s(" does not read the list as `").s(msys2_reader).s("`")
+                .push(arena.text().s(rel).s(" does not read the list as `").s(MSYS2_READER).s("`")
                 .take())
     $seen: Sz = 0
     for rel in harness.tracked_matching(U8[][]::{ "*.yml", "*.yaml" })
-        if !rel.starts_with(".github/") || rel.equals(msys2_action)
+        if !rel.starts_with(".github/") || rel.equals(MSYS2_ACTION)
             continue
         seen += 1
         if sets_up_msys2(harness.read_under_root(rel), arena)
             bad.push(arena.text().s(rel).s(" sets MSYS2 up by itself").take())
     verdict.check_list("Windows's packages come from one list", seen, "workflow files", bad@,
-        arena.text().s("set MSYS2 up through ").s(msys2_action).s(", and add a package to ")
-        .s(msys2_list).take())
+        arena.text().s("set MSYS2 up through ").s(MSYS2_ACTION).s(", and add a package to ")
+        .s(MSYS2_LIST).take())
 
 priv fn check_job_timeouts(arena: Arena$@) //< every workflow job states its own time limit
     //<
@@ -604,7 +604,7 @@ priv fn check_job_timeouts(arena: Arena$@) //< every workflow job states its own
     //< then bills six hours, ten times over on macOS ("How CI runs" in `docs/SPEC-gates.md`).
     $bad: = List<|U8[]|>.new(arena)
     $seen: Sz = 0
-    for path in U8[][]::{ ci_yml, ".github/workflows/release.yml" }
+    for path in U8[][]::{ CI_YML, ".github/workflows/release.yml" }
         yml: = harness.read_under_root(path)
         $names: = List<|U8[]|>.new(arena)
         $bodies: = List<|U8[]|>.new(arena)
@@ -641,7 +641,7 @@ priv fn names_latest(text: U8[], arena: Arena$@): Bool //<
 
 // Caution: **Keep a comment, a trailing comment and a matrix variable on the miss side.** A plain
 // search hits the first two. A check that reads only `runs-on:` misses a matrix's `os:`.
-priv const latest_samples: Sample[_] = ::{
+priv const LATEST_SAMPLES: Sample[_] = ::{
     Sample::{ .text = "    runs-on: ubuntu-latest\n", .hits = true },
     Sample::{ .text = "          - { os: macos-latest, slug: macos-arm64 }\n", .hits = true },
     Sample::{ .text = "    runs-on: macos-latest-large\n", .hits = true },
@@ -652,7 +652,7 @@ priv const latest_samples: Sample[_] = ::{
 }
 
 priv fn check_runner_pins(arena: Arena$@)
-    $bad: = scan.misjudged(Sample[]::latest_samples, names_latest, arena)
+    $bad: = scan.misjudged(Sample[]::LATEST_SAMPLES, names_latest, arena)
     $seen: Sz = 0
     for rel in harness.tracked_matching(U8[][]::{ "*.yml", "*.yaml" })
         if !rel.starts_with(".github/")

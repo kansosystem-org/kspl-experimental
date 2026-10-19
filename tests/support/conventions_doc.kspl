@@ -19,11 +19,11 @@ import "tests/support/harness_text"
 // Note: The convention itself is "Document naming" in `docs/SPEC-documents.md`. This file **only
 // turns it into a check**.
 // ==========================================
-priv const kind_names: U8[][_] = ::{ "README.md", "TOUR.md", "PLAN.md" } //<
+priv const KIND_NAMES: U8[][_] = ::{ "README.md", "TUTORIAL.md", "PLAN.md" } //<
     //< the kinds a folder holds at most one of
-priv const kind_heads: U8[][_] = ::{ "SPEC-", "HOWTO-", "DESIGN-" } //<
+priv const KIND_HEADS: U8[][_] = ::{ "SPEC-", "HOWTO-", "DESIGN-" } //<
     //< the kinds that carry a subject
-priv const outside_names: U8[][_] = ::{ "CONTRIBUTING.md", "LICENSE.md", "THIRD-PARTY-NOTICES.md",
+priv const OUTSIDE_NAMES: U8[][_] = ::{ "CONTRIBUTING.md", "LICENSE.md", "THIRD-PARTY-NOTICES.md",
     "SECURITY.md" } //<
         //< The document names fixed from outside
         //<
@@ -32,20 +32,22 @@ priv const outside_names: U8[][_] = ::{ "CONTRIBUTING.md", "LICENSE.md", "THIRD-
         //< tool looks for takes one of the six kinds' names.
 
 fn is_kind_name(name: U8[], _arena: Arena$@): Bool //< whether one file name is a kind's, or fixed
-    for k in kind_names
+    for k in KIND_NAMES
         if name.equals(k)
             return true
-    for h in kind_heads
+    for h in KIND_HEADS
         if name.starts_with(h) && name.ends_with(".md") && name.len > h.len + 3
             return true
-    for o in outside_names
+    for o in OUTSIDE_NAMES
         if name.equals(o)
             return true
     return false
 
-priv const name_samples: Sample[_] = ::{
+priv const NAME_SAMPLES: Sample[_] = ::{
     Sample::{ .text = "README.md", .hits = true },
-    Sample::{ .text = "SPEC-language.md", .hits = true },
+    Sample::{ .text = "TUTORIAL.md", .hits = true },
+    Sample::{ .text = "TOUR.md", .hits = false },
+    Sample::{ .text = "SPEC-programming-language.md", .hits = true },
     Sample::{ .text = "HOWTO-bring-up.md", .hits = true },
     Sample::{ .text = "DESIGN-tools.md", .hits = true },
     Sample::{ .text = "CONTRIBUTING.md", .hits = true },
@@ -75,10 +77,10 @@ priv fn check_names(arena: Arena$@)
                 .push(arena.text().s(rel).s(": `").s(name).s("` is none of the six kinds").take())
     verdict.check_list("every document carries one of the six kinds' names (docs/SPEC-documents.md)",
         seen, "files", bad@,
-        "README / TOUR / HOWTO-<task> / SPEC-<subject> / DESIGN-<subject> / PLAN")
+        "README / TUTORIAL / HOWTO-<task> / SPEC-<subject> / DESIGN-<subject> / PLAN")
 
 priv fn check_kind_fires(arena: Arena$@)
-    scan.check_samples("the judgment of a kind's name can fire", Sample[]::name_samples,
+    scan.check_samples("the judgment of a kind's name can fire", Sample[]::NAME_SAMPLES,
         "name_samples", is_kind_name, arena)
 
 fn run_kind(arena: Arena$@) //< this section's entry point
@@ -94,15 +96,15 @@ fn run_kind(arena: Arena$@) //< this section's entry point
 // Caution: **Do not copy the list of numbers into here.** Its canonical source is the list under
 // "Development Principles" in `docs/DESIGN-principles.md`, read and compared with the uses.
 // ==========================================
-priv const rule_doc: U8[] = "docs/DESIGN-principles.md" //< where the numbers come from
-priv const rule_head: U8[] = "## Development Principles" //<
+priv const RULE_DOC: U8[] = "docs/DESIGN-principles.md" //< where the numbers come from
+priv const RULE_HEAD: U8[] = "## Development Principles" //<
     //< The heading where the Development Principles' list begins
     //<
     //< Caution: **Do not mix it with another numbered list**: `docs/DESIGN-principles.md` uses `1.
     //< **…**` in its chapters too, so only the text under this heading is read.
-priv const rule_mark: U8[] = ". **"
+priv const RULE_MARK: U8[] = ". **"
 
-priv const cite_word: U8[] = "Principle " //< the form of a citation
+priv const CITE_WORD: U8[] = "Principle " //< the form of a citation
     //<
     //< Caution: **Do not drop the trailing space**: `take_numbers` reads the number right after
     //< this text, and would not reach `Principle 5`'s `5`.
@@ -111,11 +113,11 @@ priv fn numbers_in_doc(arena: Arena$@): List<|U8[]|> //<
     //< Picks the principles' numbers out of `docs/DESIGN-principles.md`
     $out: = List<|U8[]|>.new(arena)
     $inside: = false
-    for line in harness.read_under_root(rule_doc).lines(arena)
+    for line in harness.read_under_root(RULE_DOC).lines(arena)
         if line.starts_with("## ")
-            inside = line.trim_end().equals(rule_head)
+            inside = line.trim_end().equals(RULE_HEAD)
             continue
-        dot: = line.find_str(rule_mark).unwrap_or(0)
+        dot: = line.find_str(RULE_MARK).unwrap_or(0)
         if !inside || dot == 0
             continue
         $all: = true
@@ -134,8 +136,8 @@ priv fn cited(line: U8[], arena: Arena$@): List<|U8[]|> //<
     $out: = List<|U8[]|>.new(arena)
     $at: Sz = 0
     for at < line.len
-        if hit: = line.sub_from(at).find_str(cite_word)
-            at = at + hit + cite_word.len
+        if hit: = line.sub_from(at).find_str(CITE_WORD)
+            at = at + hit + CITE_WORD.len
             take_numbers(line, at, out@)
         else
             break
@@ -165,13 +167,13 @@ priv fn check_cites(arena: Arena$@)
                 seen += 1
                 if !harness_text.has(numbers@, n)
                     bad
-                        .push(arena.text().s(rel).s(":\{i\}: there is no ").s(cite_word).s(n).take())
+                        .push(arena.text().s(rel).s(":\{i\}: there is no ").s(CITE_WORD).s(n).take())
     verdict.check_list("a Principle's number named really exists", seen, "namings", bad@,
         "the numbers' origin is the run of \"Development Principles\" in \
             `docs/DESIGN-principles.md`")
 
 // The samples for the judgment ("a check shows it can fire" in `conventions_scan.kspl`).
-priv const cite_samples: Sample[_] = ::{
+priv const CITE_SAMPLES: Sample[_] = ::{
     Sample::{ .text = "// nothing that does not act (Principle 5).", .hits = true },
     Sample::{ .text = "// taking away, and one means (Principle 1 and Principle 6).",
         .hits = true },
@@ -183,7 +185,7 @@ priv fn cites(line: U8[], arena: Arena$@): Bool
     return cited(line, arena).len > 0
 
 priv fn check_rule_fires(arena: Arena$@)
-    scan.check_samples("the judgment that picks a number up can fire", Sample[]::cite_samples,
+    scan.check_samples("the judgment that picks a number up can fire", Sample[]::CITE_SAMPLES,
         "cite_samples", cites, arena)
 
 fn run_rule(arena: Arena$@)
@@ -269,20 +271,20 @@ priv fn check_md_tables(arena: Arena$@)
         "a `|` inside a cell becomes `\\|` (the columns that grew are thrown away)")
 
 // The count of a table's cells. **`\|` is not counted** (it is masked before counting).
-priv const cell_samples: U8[][_] = ::{ "| a | b |", "| a \\| b |", "> | a | b | c |", "a | b",
+priv const CELL_SAMPLES: U8[][_] = ::{ "| a | b |", "| a \\| b |", "> | a | b | c |", "a | b",
     "|---|---|" }
-priv const cell_want: Sz[_] = ::{ 2, 1, 3, 2, 2 }
+priv const CELL_WANT: Sz[_] = ::{ 2, 1, 3, 2, 2 }
 
 priv fn check_cell_fires(arena: Arena$@)
     $c: = List<|U8[]|>.new(arena)
-    for i in Range.asc(cell_samples.len)
-        got: = cell_count(cell_samples[i], arena)
-        if got != cell_want[i]
+    for i in Range.asc(CELL_SAMPLES.len)
+        got: = cell_count(CELL_SAMPLES[i], arena)
+        if got != CELL_WANT[i]
             c
-                .push(arena.text().s("\"").s(cell_samples[i]).s("\" was counted as \{got\} columns")
-                .s(" (\{cell_want[i]\} was wanted)").take())
+                .push(arena.text().s("\"").s(CELL_SAMPLES[i]).s("\" was counted as \{got\} columns")
+                .s(" (\{CELL_WANT[i]\} was wanted)").take())
     verdict.check_list("the place that counts a table's cells tells an escaped bar apart",
-        cell_samples.len, "samples", c@,
+        CELL_SAMPLES.len, "samples", c@,
         "the judgment misreads its own samples: mend the judgment, not the table")
 
 fn run_prose(arena: Arena$@)
@@ -376,42 +378,42 @@ priv fn check_manual_tabs(arena: Arena$@) //<
 // Caution: **Keep it at 3 labels** (the list of names and the count both appear in one form).
 // **Mix in one label with no `tally`**: a reader that ignores the mark would list buttons that are
 // not labels (the real screen has a `push` set).
-priv const tab_sample: U8[][] = U8[][]::{ "<div id=\"side-tabs\">",
+priv const TAB_SAMPLE: U8[][] = U8[][]::{ "<div id=\"side-tabs\">",
     "<button>Alpha<span class=\"tally\">2</span></button>",
     "<button>Beta<span class=\"tally\">0</span></button>",
     "<button>Elsewhere<span class=\"push\">Ctrl+B</span></button>",
     "<button>Gamma<span class=\"tally\">7</span></button></div>" }
-priv const tab_told: U8[] = "the 3 tabs Alpha, Beta and Gamma"
+priv const TAB_TOLD: U8[] = "the 3 tabs Alpha, Beta and Gamma"
 
-priv const count_text: U8[] = "the 2 tabs and 13 tabs , not the tabs; x1111" //<
+priv const COUNT_TEXT: U8[] = "the 2 tabs and 13 tabs , not the tabs; x1111" //<
     //< the sample for counting with a digit in front
     //<
     //< Caution: **Include an overlapping case** — get the advance wrong and `11` counts as 2.
-priv const count_needle: U8[][_] = ::{ " tabs ", "11", "absent" }
-priv const count_want: Sz[_] = ::{ 2, 1, 0 }
+priv const COUNT_NEEDLE: U8[][_] = ::{ " tabs ", "11", "absent" }
+priv const COUNT_WANT: Sz[_] = ::{ 2, 1, 0 }
 
 priv fn check_manual_fires(arena: Arena$@)
     $a: = List<|U8[]|>.new(arena)
     page: = arena.text()
-    for part in tab_sample
+    for part in TAB_SAMPLE
         page.s(part)
     names: = tab_names(page.take(), arena)
     got: = joined(names@, arena)
-    if !got.equals(tab_told)
+    if !got.equals(TAB_TOLD)
         a
             .push(arena.text().s("read \"").s(got).s("\" from the sample screen (should be \"")
-            .s(tab_told).s("\")").take())
-    verdict.check_list("the reading of the labels' names can fire", tab_sample.len, "lines", a@,
+            .s(TAB_TOLD).s("\")").take())
+    verdict.check_list("the reading of the labels' names can fire", TAB_SAMPLE.len, "lines", a@,
         "the judgment misreads its own samples: mend the judgment, not the table")
 
     $b: = List<|U8[]|>.new(arena)
-    for i in Range.asc(count_want.len)
-        n: = count_after_digit(count_text, count_needle[i])
-        if n != count_want[i]
+    for i in Range.asc(COUNT_WANT.len)
+        n: = count_after_digit(COUNT_TEXT, COUNT_NEEDLE[i])
+        if n != COUNT_WANT[i]
             b
-                .push(arena.text().s("counted \"").s(count_needle[i]).s("\" as \{n\}")
-                .s(" (should be \{count_want[i]\})").take())
-    verdict.check_list("the counting verdict can fire", count_want.len, "samples", b@,
+                .push(arena.text().s("counted \"").s(COUNT_NEEDLE[i]).s("\" as \{n\}")
+                .s(" (should be \{COUNT_WANT[i]\})").take())
+    verdict.check_list("the counting verdict can fire", COUNT_WANT.len, "samples", b@,
         "the judgment misreads its own samples: mend the judgment, not the table")
 
 fn run_manual(arena: Arena$@)

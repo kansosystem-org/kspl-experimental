@@ -14,18 +14,18 @@ import "std/buf" { Buf_writer }
 import "std/str" as _str
 import "std/strfmt" as _strfmt // `\{}` on a number, and its `:02x` / `:03`
 
-const line_max: Sz = 200 //<
+const LINE_MAX: Sz = 200 //<
     //< The limit on one line (the character count, not counting the CR LF at the end)
     //<
     //< Beyond it the line is truncated, which is more useful in a log than failing.
 
-const line_bytes_max: Sz = line_max + 2 //< the largest byte count passed to the send queue
+const LINE_BYTES_MAX: Sz = LINE_MAX + 2 //< the largest byte count passed to the send queue
     //<
     //< Caution: **Count the CR LF**, or a full line loses two bytes.
 
 struct Line
-    // Room for the CR LF (see flush) beyond `line_max`.
-    priv buf: U8[line_bytes_max]
+    // Room for the CR LF (see flush) beyond `LINE_MAX`.
+    priv buf: U8[LINE_BYTES_MAX]
     priv len: Sz
     // Whether bytes were dropped beyond the limit (shown as a `~` at the end).
     priv truncated: Bool
@@ -41,7 +41,7 @@ impl Line
         r.truncated = false
 
     fn byte(r: Self$@, b: U8)
-        if r.len >= line_max
+        if r.len >= LINE_MAX
             r.truncated = true
             return
         r.buf[r.len] = b
@@ -94,10 +94,10 @@ impl Line
         //< `usb.tx_dropped()`**.
         if r.truncated
             // Mark the truncation in the line, or the reader cannot notice it.
-            r.len = line_max - 1
+            r.len = LINE_MAX - 1
             r.buf[r.len] = '~'
             r.len += 1
-        // Caution: **Write the CR LF without `byte`**, which stops at `line_max`: a full line would
+        // Caution: **Write the CR LF without `byte`**, which stops at `LINE_MAX`: a full line would
         // lose its end and run into the next.
         r.buf[r.len] = '\r'
         r.buf[r.len + 1] = '\n'
@@ -119,4 +119,4 @@ fn can_flush(): Bool //< whether one line fits in the send queue
     //< Caution: **Ask before `flush`**, which discards a line that does not fit. A waiter calls
     //< `usb.poll_once()` until this is true; put a limit on the wait, since with no reader the
     //< queue never empties.
-    return usb.has_room(line_bytes_max)
+    return usb.has_room(LINE_BYTES_MAX)

@@ -14,7 +14,7 @@ import "std/verdict"
 fn test_sha256()
     verdict.start("[Sha256] SHA-256 test (agreement with known test vectors)...")
 
-    hex: U8[sha256.hex_len] = ::{}
+    hex: U8[sha256.HEX_LEN] = ::{}
 
     d1: = sha256.hash("abc")
     sha256.write_hex(d1, U8$[]::hex)
@@ -114,11 +114,11 @@ fn test_base64_codec()
         return
     panic("base64.decode should throw Base64_error.invalid_length for a non-multiple-of-4 input")
 // ==========================================
-// std/json: how the way a number is written maps to Val's variants.
+// std/json: how the way a number is written maps to Value's variants.
 // Caution: **Keep an integer and a fraction in separate variants.** F64 alone silently rounds an
 // integer beyond 53 bits (an offset in a safetensors file); integers alone cannot hold a fraction.
 // ==========================================
-priv fn dumped(v: json.Val, out: Str_builder$@): U8[]
+priv fn dumped(v: json.Value, out: Str_builder$@): U8[]
     out.clear()
     v.dump(out)
     return out.slice()
@@ -141,7 +141,7 @@ priv struct Loose_case //< a string whose power of 10 goes beyond ±22, and its 
     text: U8[]
     want: F64
 
-priv const loose_cases: Loose_case[_] = ::{
+priv const LOOSE_CASES: Loose_case[_] = ::{
     ::{ .text = "1e23", .want = 1.0e23 },
     ::{ .text = "1e50", .want = 1.0e50 },
     ::{ .text = "1e100", .want = 1.0e100 },
@@ -153,8 +153,8 @@ priv const loose_cases: Loose_case[_] = ::{
 
 fn test_to_f64() //< the conversion from a string to F64
     //<
-    //< **The same implementation runs in a freestanding build too**, so `std/json` and `std/argp`
-    //< return the same value on a microcontroller.
+    //< **The same implementation runs in a freestanding build too**, so `std/json` and
+    //< `std/argparse` return the same value on a microcontroller.
     verdict.start("[Str] the conversion from a string to F64 test...")
 
     // Within 19 digits and 10^±22 it agrees with the literal **bit for bit**.
@@ -176,7 +176,7 @@ fn test_to_f64() //< the conversion from a string to F64
     // Beyond 10^±22 the answer is still the correctly rounded value.
     // Caution: **Compare for exact equality.** The expected value is a literal the C compiler
     // rounds.
-    for c in loose_cases
+    for c in LOOSE_CASES
         assert(parsed(c.text) == c.want,
             "to_f64: an exponent past the exact table must round correctly")
     assert(parsed("1.7976931348623157e308") == 1.7976931348623157e308,
@@ -474,9 +474,9 @@ fn test_json_nesting_to_the_count(arena: Arena$@) //<
     //< **On every build, a sanitized one too**: the stack check beside the count must not refuse
     //< what the main thread's stack holds.
     verdict.start("[Json] nesting up to the count parses, one level more is too deep...")
-    assert(nested_outcome(json.max_nesting_depth, arena).equals("parses"),
+    assert(nested_outcome(json.MAX_NESTING_DEPTH, arena).equals("parses"),
         "json: nesting to max_nesting_depth parses")
-    assert(nested_outcome(json.max_nesting_depth + 1, arena).equals("too_deep"),
+    assert(nested_outcome(json.MAX_NESTING_DEPTH + 1, arena).equals("too_deep"),
         "json: one level past max_nesting_depth is refused as too_deep")
     verdict.pass("Nesting to the count parses, and one level more is refused as too_deep.")
 

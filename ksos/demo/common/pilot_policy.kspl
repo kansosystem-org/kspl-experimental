@@ -6,7 +6,7 @@
 // Caution: **Check the version before reading.** The shapes do not show the features' order, the
 // activation or the manoeuvre table's meaning, and another version goes silently wrong.
 // ==========================================
-// What is in the one file (format version `encoding.format_version`):
+// What is in the one file (format version `encoding.FORMAT_VERSION`):
 //   fc1.weight [5, hidden] / fc1.bias [hidden]        … the input layer. The activation is SiLU
 //   fc2.weight [hidden, actions] / fc2.bias [actions] … the output layer (the logits)
 //   maneuvers  [actions, 3]                           … the manoeuvre's number -> lon, lat, rot
@@ -62,7 +62,7 @@ fn load(blob: U8[], arena: Arena$@): Policy!Pilot_error //<
     $sf: = st.Safetensors.load_from_bytes(blob, arena) catch
         throw .bad_blob
     meta: = sf.metadata().get("__metadata__")
-    if !meta.get("kspl_pilot").as_str().unwrap_or("").equals(encoding.format_version)
+    if !meta.get("kspl_pilot").as_str().unwrap_or("").equals(encoding.FORMAT_VERSION)
         throw .bad_version
     far_mm: = meta.get("far_mm").as_str().unwrap_or("").to_i64() catch
         throw .bad_meta
@@ -84,15 +84,15 @@ fn load(blob: U8[], arena: Arena$@): Policy!Pilot_error //<
     actions: = dim(w2, 1)
     // Caution: Check every shape before building. Miss even one and a later matmul reads outside
     // blob.
-    if dim(w1, 0) != encoding.feature_count || hidden == 0 || actions == 0
+    if dim(w1, 0) != encoding.FEATURE_COUNT || hidden == 0 || actions == 0
         throw .bad_shape
     if dim(b1, 0) != hidden || dim(w2, 0) != hidden || dim(b2, 0) != actions
         throw .bad_shape
-    if dim(man, 0) != actions || dim(man, 1) != encoding.drive_fields
+    if dim(man, 0) != actions || dim(man, 1) != encoding.DRIVE_FIELDS
         throw .bad_shape
 
     // The same nn.Mlp as the producer: one forward pass, not a copy of the formula.
-    $mlp: = nn.Mlp<|F32|>.new(encoding.feature_count, hidden, actions, arena)
+    $mlp: = nn.Mlp<|F32|>.new(encoding.FEATURE_COUNT, hidden, actions, arena)
     mlp.fc1.weights = w1
     mlp.fc1.bias = b1
     mlp.fc2.weights = w2
@@ -109,6 +109,6 @@ fn decide(p: Policy$@, dist_mm: I64, line: I64, compute: Arena$@): Drive //<
     x: = encoding.features(dist_mm, line, p.far_mm, compute)
     best: = Sz::sampler.argmax(p.mlp.forward(x))
     // The manoeuvre table holds small integers as F32, so truncation recovers them exactly.
-    row: = best * encoding.drive_fields
+    row: = best * encoding.DRIVE_FIELDS
     return Drive::{ .lon = I32::p.maneuvers[row], .lat = I32::p.maneuvers[row + 1],
         .rot = I32::p.maneuvers[row + 2] }

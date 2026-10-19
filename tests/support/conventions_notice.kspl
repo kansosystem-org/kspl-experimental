@@ -11,16 +11,16 @@ import "std/verdict"
 import "tests/support/conventions_scan" as scan + { Sample }
 import "tests/support/harness"
 
-priv const notices: U8[] = "THIRD-PARTY-NOTICES.md"
+priv const NOTICES: U8[] = "THIRD-PARTY-NOTICES.md"
 
-priv const no_notice_heads: U8[][_] = ::{ "## Public-domain origins", "## Binary files" } //<
+priv const NO_NOTICE_HEADS: U8[][_] = ::{ "## Public-domain origins", "## Binary files" } //<
     //< The sections whose files owe no notice: a public-domain origin, and a binary's origin
     //<
     //< A borrowed binary also states its origin under its license's own section.
 
-priv const binary_head: U8[] = "## Binary files" //< the section every binary file is listed in
+priv const BINARY_HEAD: U8[] = "## Binary files" //< the section every binary file is listed in
 
-priv const license_words: U8[][_] = ::{ "spdx-license-identifier:", "copyright (c)", "copyright ©",
+priv const LICENSE_WORDS: U8[][_] = ::{ "spdx-license-identifier:", "copyright (c)", "copyright ©",
     "licensed under", "all rights reserved", "permission is hereby granted",
     "redistribution and use" } //<
         //< A license's own words, folded to lower case: what code copied with its header carries
@@ -28,10 +28,10 @@ priv const license_words: U8[][_] = ::{ "spdx-license-identifier:", "copyright (
         //< Caution: **List only words a license itself uses**, not ones a sentence about licenses
         //< uses ("the licence travels with the files"), or every document about licenses fires.
 
-priv const own_words: U8[][_] = ::{ "LICENSE.md", "THIRD-PARTY-NOTICES.md",
+priv const OWN_WORDS: U8[][_] = ::{ "LICENSE.md", "THIRD-PARTY-NOTICES.md",
     "tests/support/conventions_notice.kspl" } //< the files whose license words are their own
 
-priv const released: U8[][_] = ::{ "ksplc/", "std/", "tools/release-assets/", "tools/kspl_lldb.py",
+priv const RELEASED: U8[][_] = ::{ "ksplc/", "std/", "tools/release-assets/", "tools/kspl_lldb.py",
     ".vscode/" } //<
         //< What the release carries
         //<
@@ -43,7 +43,7 @@ priv const released: U8[][_] = ::{ "ksplc/", "std/", "tools/release-assets/", "t
 priv struct Listed //< one file `THIRD-PARTY-NOTICES.md` names in a table's first column
     path: U8[]
     owes: Bool //< whether its section owes a notice
-    binary: Bool //< whether it is listed under `binary_head`
+    binary: Bool //< whether it is listed under `BINARY_HEAD`
 
 priv fn listed_in(text: U8[], arena: Arena$@): List<|Listed|>$@ //<
     //< The files a notices text names, each with its section's status
@@ -61,11 +61,11 @@ priv fn listed_in(text: U8[], arena: Arena$@): List<|Listed|>$@ //<
         if close == 0
             continue
         $owes: = true
-        for h in no_notice_heads
+        for h in NO_NOTICE_HEADS
             owes = owes && !head.equals(h)
         out
             .push(Listed::{ .path = line.sub(3, close), .owes = owes,
-            .binary = head.equals(binary_head) })
+            .binary = head.equals(BINARY_HEAD) })
     return out
 
 fn carries_license_words(text: U8[], arena: Arena$@): Bool //< whether it holds a license's words
@@ -73,7 +73,7 @@ fn carries_license_words(text: U8[], arena: Arena$@): Bool //< whether it holds 
     for c in text
         b.c(c.to_lower())
     low: = b.take()
-    for w in license_words
+    for w in LICENSE_WORDS
         if low.find_str(w).is_some()
             return true
     return false
@@ -87,7 +87,7 @@ fn is_binary(body: U8[], _arena: Arena$@): Bool //< whether it holds a NUL in it
     return false
 
 fn is_released(path: U8[], _arena: Arena$@): Bool //< whether the release carries it
-    for r in released
+    for r in RELEASED
         if path.equals(r) || r.ends_with("/") && path.starts_with(r)
             return true
     return false
@@ -98,7 +98,7 @@ priv fn is_listed(path: U8[], listed: List<|Listed|>$@, binary_only: Bool): Bool
             return true
     return false
 
-priv const word_samples: Sample[_] = ::{
+priv const WORD_SAMPLES: Sample[_] = ::{
     Sample::{ .text = "// SPDX-License-Identifier: BSD-3-Clause", .hits = true },
     Sample::{ .text = "/* Copyright (c) 2020 Someone Else */", .hits = true },
     Sample::{ .text = "Licensed under the Apache License, Version 2.0", .hits = true },
@@ -111,13 +111,13 @@ priv const word_samples: Sample[_] = ::{
         .hits = false },
 }
 
-priv const binary_samples: Sample[_] = ::{
+priv const BINARY_SAMPLES: Sample[_] = ::{
     Sample::{ .text = "weights\0\0\0", .hits = true },
     Sample::{ .text = "plain text, no NUL", .hits = false },
     Sample::{ .text = "", .hits = false },
 }
 
-priv const released_samples: Sample[_] = ::{
+priv const RELEASED_SAMPLES: Sample[_] = ::{
     Sample::{ .text = "std/ds.kspl", .hits = true },
     Sample::{ .text = "ksplc/seed.c", .hits = true },
     Sample::{ .text = "tools/kspl_lldb.py", .hits = true },
@@ -126,7 +126,7 @@ priv const released_samples: Sample[_] = ::{
     Sample::{ .text = "tools/surface.kspl", .hits = false },
 }
 
-priv const sample_notices: U8[] =
+priv const SAMPLE_NOTICES: U8[] =
     """
 ## Someone's kit (BSD-3-Clause)
 
@@ -154,13 +154,13 @@ priv const sample_notices: U8[] =
 """ //< a notices text holding one row of each kind
 
 priv fn check_notice_fires(arena: Arena$@)
-    scan.check_samples("the judgment of a license's words can fire", Sample[]::word_samples,
+    scan.check_samples("the judgment of a license's words can fire", Sample[]::WORD_SAMPLES,
         "word_samples", carries_license_words, arena)
-    scan.check_samples("the judgment of a binary file can fire", Sample[]::binary_samples,
+    scan.check_samples("the judgment of a binary file can fire", Sample[]::BINARY_SAMPLES,
         "binary_samples", is_binary, arena)
     scan.check_samples("the judgment of what the release carries can fire",
-        Sample[]::released_samples, "released_samples", is_released, arena)
-    rows: = listed_in(sample_notices, arena)
+        Sample[]::RELEASED_SAMPLES, "released_samples", is_released, arena)
+    rows: = listed_in(SAMPLE_NOTICES, arena)
     got: = rows.slice()
     verdict.check("the notices' rows are read with their section's standing",
         got.len == 3 && got[0].path.equals("ksos/drivers/rp2040/adc.kspl") && got[0].owes &&
@@ -168,7 +168,7 @@ priv fn check_notice_fires(arena: Arena$@)
         got[2].binary && !got[2].owes, arena.text().s("\{got.len\} rows").take())
 
 priv fn check_notices(arena: Arena$@)
-    listed: = listed_in(harness.read_under_root(notices), arena)
+    listed: = listed_in(harness.read_under_root(NOTICES), arena)
     $tracked: = harness.tracked()
     $gone: = List<|U8[]|>.new(arena)
     $unlisted: = List<|U8[]|>.new(arena)
@@ -185,7 +185,7 @@ priv fn check_notices(arena: Arena$@)
             shipped.push(l.path)
     for rel in tracked.slice()
         $own: = false
-        for o in own_words
+        for o in OWN_WORDS
             own = own || rel.equals(o)
         if own
             continue
@@ -220,15 +220,15 @@ fn run_notices(arena: Arena$@) //< this section's entry point
 // unchanged, in one of the documents it copies. Then a command changed there cannot go stale in
 // the zip. The verdict is held to the samples below (Principle 5).
 // ==========================================
-priv const copy_rel: U8[] = "tools/release-assets/README.md" //< the README the release zip carries
+priv const COPY_REL: U8[] = "tools/release-assets/README.md" //< the README the release zip carries
 
-priv const source_rels: U8[][_] = ::{ "docs/HOWTO-set-up-a-project.md", "README.md" } //<
+priv const SOURCE_RELS: U8[][_] = ::{ "docs/HOWTO-set-up-a-project.md", "README.md" } //<
     //< The documents it copies: the set-up how-to first, then the root README's quick start
     //<
     //< The program `hello.kspl` stands only in the root README, so the how-to alone cannot hold
     //< it.
 
-priv const fence: U8[] = "```" //< what opens and closes a fenced block
+priv const FENCE: U8[] = "```" //< what opens and closes a fenced block
 
 priv fn fenced_blocks(text: U8[], arena: Arena$@): List<|U8[]|> //<
     //< Every fenced block of a Markdown text: its opening line's language, a newline, and its body
@@ -244,13 +244,13 @@ priv fn fenced_blocks(text: U8[], arena: Arena$@): List<|U8[]|> //<
     for raw in text.lines(arena)
         t: = raw.trim_spaces()
         if !inside
-            if t.starts_with(fence)
+            if t.starts_with(FENCE)
                 inside = true
                 col = raw.len - raw.trim_start().len
                 body.clear()
-                body.s(t.sub_from(fence.len)).c('\n')
+                body.s(t.sub_from(FENCE.len)).c('\n')
             continue
-        if t.equals(fence)
+        if t.equals(FENCE)
             inside = false
             out.push(arena.dup_str(body.slice()))
             continue
@@ -276,7 +276,7 @@ priv struct Copy_sample //< a copy, a source, and whether every block of the cop
     source: U8[]
     hits: Bool
 
-priv const samples: Copy_sample[_] = ::{
+priv const SAMPLES: Copy_sample[_] = ::{
     Copy_sample::{ .copy = "Run it:\n\n```sh\n./ksplc run a.kspl\n```\n",
         .source = "Text.\n\n```sh\n./ksplc run a.kspl\n```\n", .hits = true },
     // **A block inside a list item** carries the item's indentation in the source.
@@ -299,11 +299,11 @@ priv const samples: Copy_sample[_] = ::{
 priv fn check_fires(arena: Arena$@)
     $bad: = List<|U8[]|>.new(arena)
     $i: Sz = 0
-    for s in samples
+    for s in SAMPLES
         if held(s.copy, s.source, arena) != s.hits
             bad.push(arena.text().s("sample \{i\} came out the other way").take())
         i += 1
-    verdict.check_list("the verdict on a copied block can fire", samples.len, "samples", bad@,
+    verdict.check_list("the verdict on a copied block can fire", SAMPLES.len, "samples", bad@,
         "the table is `samples`")
 
 priv fn first_line(block: U8[], arena: Arena$@): U8[] //< the block's first body line, to name it
@@ -312,9 +312,9 @@ priv fn first_line(block: U8[], arena: Arena$@): U8[] //< the block's first body
 
 priv fn check_copy(arena: Arena$@)
     // A copy with no block fails too: `check_list` refuses a walk that looked at nothing.
-    blocks: = fenced_blocks(harness.read_under_root(copy_rel), arena)
+    blocks: = fenced_blocks(harness.read_under_root(COPY_REL), arena)
     $sources: = List<|U8[]|>.new(arena)
-    for rel in source_rels
+    for rel in SOURCE_RELS
         sources.push(harness.read_under_root(rel))
     $bad: = List<|U8[]|>.new(arena)
     for b in blocks

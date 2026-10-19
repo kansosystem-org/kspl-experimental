@@ -167,25 +167,27 @@ Do not claim an action succeeded unless the program has established that result.
 
 These rules apply to every Kanso document, source comment, diagnostic message and report to a person. Repository text is written in English. The core, English and software chapters all apply.
 
-Principle 7 in [`DESIGN-principles.md`](DESIGN-principles.md) states why Kanso uses these rules. [`SPEC-documents.md`](SPEC-documents.md) sets document names, headings, markers and links.
+[`SPEC-documents.md`](SPEC-documents.md) sets document names, headings, markers and links.
 
 ### Terminology sources
 
 Kanso's canonical terminology sources are:
 
 * "Terms of art" in [`SPEC-documents.md`](SPEC-documents.md).
-* "Words used throughout" in [`DESIGN-principles.md`](DESIGN-principles.md).
+* "Words used throughout" in [`SPEC-documents.md`](SPEC-documents.md).
 * Each package's glossary for its own terms.
 
 Use "fire" for a check and "raise" for an interrupt. Keep another product's vocabulary in that product's terms. The rule is "Another language's vocabulary stays in that language's words" in [`SPEC-documents.md`](SPEC-documents.md).
 
 ### Comment notation and limits
 
-The first line of a `//<` comment is its one-line summary ([W0213]). Write a short sentence or phrase without a final full stop. Principle 7 in [`DESIGN-principles.md`](DESIGN-principles.md) sets the limits on comment length and the share of source occupied by comments.
+The first line of a `//<` comment is its one-line summary ([W0213]). Write a short sentence or phrase without a final full stop. **Keep each comment to at most six lines, or ten lines for a file's opening header.** Every comment line before the next code line counts. A blank line does not start a new comment. A section divider opening with `---` or `===` starts a new subject and a new comment.
+
+**Comments occupy at most 30% of the hand-written source.** This is the repository-wide share, shown as `cmt%` on `tools/repo_stat.kspl`'s `total (hand-written)` line. Individual files may exceed it.
 
 ### Document tense and reports
 
-Documents state the present behavior and its reasons, as Principle 7 requires. Use the past in reports of completed work and the future in plans. A work report states the result, supporting checks and anything not checked.
+Documents state the present behavior and its reasons. Use the past in reports of completed work and the future in plans. A work report states the result, supporting checks and anything not checked.
 
 ### Checking the rules
 

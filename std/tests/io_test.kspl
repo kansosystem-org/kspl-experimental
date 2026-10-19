@@ -43,7 +43,7 @@ fn test_io_read_edges() //< a directory is refused; a file under-reporting its s
         dealloc(Void$@::text.ptr)
     verdict.pass("a directory is refused on both entry points, and a size is only a first guess.")
 
-priv const big_size: U8[] = "3221225472" //< 3 GiB: past what a 32-bit `long` can hold as a size
+priv const BIG_SIZE: U8[] = "3221225472" //< 3 GiB: past what a 32-bit `long` can hold as a size
 
 priv fn ran_to_zero(argv: U8[][], arena: Arena$@): Bool //<
     //< whether the tool started and ended with 0
@@ -67,10 +67,10 @@ fn test_io_read_past_2gib(arena: Arena$@) //<
     grow: =
         (U8[][]::{ "powershell", "-NoProfile", "-Command",
         arena.text()
-        .s("$f = [IO.File]::OpenWrite('\{path\}'); $f.SetLength(\{big_size\}); $f.Close()").take() }
+        .s("$f = [IO.File]::OpenWrite('\{path\}'); $f.SetLength(\{BIG_SIZE\}); $f.Close()").take() }
         if sys.is_windows()
         else U8[][]::{ "/bin/sh", "-c",
-        arena.text().s("dd if=/dev/null of='\{path\}' bs=1 seek=\{big_size\} 2>/dev/null").take() })
+        arena.text().s("dd if=/dev/null of='\{path\}' bs=1 seek=\{BIG_SIZE\} 2>/dev/null").take() })
     // A tool that answers 0 without growing it would let the read below pass on a 4-byte file.
     grown: = ran_to_zero(grow, arena)
     info: = fs.stat(path) catch
@@ -154,7 +154,7 @@ fn test_io_stream_errors() //< an open stream's read and write failures are repo
     assert(refused, "sync must report a write the stream refused before it")
     verdict.pass("a refused read fails, and a write refused before sync is reported by it.")
 
-priv const write_after_free_src: U8[] = //< a child that writes to a file stream it has freed
+priv const WRITE_AFTER_FREE_SRC: U8[] = //< a child that writes to a file stream it has freed
     """import "std/io"
 
 $kept: io.File_stream = io.File_stream::{ .stream = null }
@@ -169,7 +169,7 @@ fn test_io_write_after_free(ksplc: U8[], arena: Arena$@) //< ksplc runs the chil
     verdict.start("[Io] a write to a file stream after free()...")
     // Unchecked, the freed stream's null reads as standard output, and the write lands there. The
     // stream is a global, which the compile-time check on a local's free does not follow.
-    named: = sys_test.child_stops_with(ksplc, "write_after_free", write_after_free_src,
+    named: = sys_test.child_stops_with(ksplc, "write_after_free", WRITE_AFTER_FREE_SRC,
         "io: a File_stream was written after free()", arena)
     assert(named, "a write after free() must stop the program with the reason")
     verdict.pass("a write to a freed file stream stops the program instead of going elsewhere.")

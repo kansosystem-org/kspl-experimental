@@ -19,18 +19,18 @@ import "tests/support/conventions_scan" as scan
 import "tests/support/docsnippet_shape" as shape
 import "tests/support/harness"
 
-priv const entry_head: U8[] = "* [`" //< how `ksplc doc` opens one entry of its contents
-priv const entry_tail: U8[] = "`](" //< and closes the entry's name
+priv const ENTRY_HEAD: U8[] = "* [`" //< how `ksplc doc` opens one entry of its contents
+priv const ENTRY_TAIL: U8[] = "`](" //< and closes the entry's name
 
 // The words that open a declaration of a type or of what a type gains, after `pub` / `priv`.
-priv const decl_words: U8[][_] = ::{ "struct ", "enum ", "trait ", "typedef ", "impl" }
+priv const DECL_WORDS: U8[][_] = ::{ "struct ", "enum ", "trait ", "typedef ", "impl" }
 
 // What ties a name to its file (`name` in `file`), as "Linking documents to source" in
 // `docs/SPEC-documents.md` spells it.
-priv const file_words: U8[][_] = ::{ "in `", "of `", "inside `" }
+priv const FILE_WORDS: U8[][_] = ::{ "in `", "of `", "inside `" }
 
 // The endings that make a name a file's name (`edit.kspl`, `ci.yml`).
-priv const file_exts: U8[][_] = ::{ "kspl", "ksplb", "md", "c", "h", "txt", "cfg", "json", "html",
+priv const FILE_EXTS: U8[][_] = ::{ "kspl", "ksplb", "md", "c", "h", "txt", "cfg", "json", "html",
     "js", "css", "mk", "py", "ll", "sh", "exe", "yml", "ld", "kspeg", "toml", "kspage", "uf2", "elf",
     "o", "a", "so", "dll", "wasm", "svg" }
 
@@ -125,14 +125,14 @@ fn is_tied(after: U8[]): Bool //< whether the text after a span ties it to its f
             return false
     if t.starts_with("(`")
         return true
-    for w in file_words
+    for w in FILE_WORDS
         if t.trim_start().starts_with(w)
             return true
     return false
 
 fn names_a_file(parts: List<|U8[]|>@): Bool //< whether its last part is a file's ending
     last: = parts.get(parts.len - 1)
-    for e in file_exts
+    for e in FILE_EXTS
         if last.equals(e)
             return true
     return false
@@ -203,10 +203,10 @@ priv fn bare_key(key: U8[], arena: Arena$@): U8[] //<
 priv fn add_entries(alias: U8[], std: Bool, said: U8[], ix: Index@, arena: Arena$@) //<
     //< Files one file's listing: a member under its type, every name under a std file's alias
     for ln in said.lines(arena)
-        if !ln.starts_with(entry_head)
+        if !ln.starts_with(ENTRY_HEAD)
             continue
-        if shut: = ln.find_str(entry_tail)
-            key: = bare_key(ln.sub(entry_head.len, shut - entry_head.len), arena)
+        if shut: = ln.find_str(ENTRY_TAIL)
+            key: = bare_key(ln.sub(ENTRY_HEAD.len, shut - ENTRY_HEAD.len), arena)
             // A conformance (`List<|T|>:Owned`) adds no name.
             if key.len == 0 || key.find_char(':').is_some()
                 continue
@@ -241,7 +241,7 @@ priv fn declares_one(src: U8[], heads: Map<|U8[], Bool|>$@, arena: Arena$@): Boo
     for ln in src.lines(arena)
         t: = ln.trim_spaces().strip_prefix("pub ").strip_prefix("priv ")
         $opens: = false
-        for w in decl_words
+        for w in DECL_WORDS
             opens = opens || t.starts_with(w)
         if !opens
             continue
@@ -340,7 +340,7 @@ priv fn wrong_name(ix: Index@, u: Use@, own: Map<|U8[], Bool|>$@): Bool //<
             !own.get(member).unwrap_or(false)
     return knows(ix.modules, head) && !holds(ix.modules, head, member)
 
-priv const span_samples: scan.Sample[_] = ::{
+priv const SPAN_SAMPLES: scan.Sample[_] = ::{
     scan.Sample::{ .text = "Map.items", .hits = true },
     scan.Sample::{ .text = "io.out()", .hits = true },
     scan.Sample::{ .text = "mem.dealloc(text.ptr)", .hits = true },
@@ -353,7 +353,7 @@ priv const span_samples: scan.Sample[_] = ::{
         //< What reads as a pointer and what does not, in a span's text
 }
 
-priv const left_samples: scan.Sample[_] = ::{ scan.Sample::{ .text = "Python's |`json.dumps`|",
+priv const LEFT_SAMPLES: scan.Sample[_] = ::{ scan.Sample::{ .text = "Python's |`json.dumps`|",
     .hits = true }, scan.Sample::{ .text = "C++'s |`std.move`|", .hits = true },
     scan.Sample::{ .text = "|`List.order_by`| in `std/seq`", .hits = true },
     scan.Sample::{ .text = "|`List.where`| / `List.select` in `std/seq`", .hits = true },
@@ -392,6 +392,6 @@ fn check(arena: Arena$@) //< this check's entry point, called from `suite/docref
     verdict.check_list("a dotted name a document writes names a declaration", uses.len, "names",
         bad@, "point at what exists, or tie the name to its file (`name` in `file`)")
     scan.check_samples("the reading of a span as a dotted name can fire",
-        scan.Sample[]::span_samples, "span_samples", reads_a_name, arena)
+        scan.Sample[]::SPAN_SAMPLES, "span_samples", reads_a_name, arena)
     scan.check_samples("the wordings that leave a name alone can fire",
-        scan.Sample[]::left_samples, "left_samples", left_alone, arena)
+        scan.Sample[]::LEFT_SAMPLES, "left_samples", left_alone, arena)

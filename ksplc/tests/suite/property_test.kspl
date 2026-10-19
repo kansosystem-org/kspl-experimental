@@ -15,9 +15,9 @@
 // ==========================================
 import "ksplc/tests/support/harness"
 import "ksplc/tests/support/harness_build"
-import "ksplc/tests/support/property_float" { paren, wrapped, Fexpr, Float_kind, float_kinds, flit,
+import "ksplc/tests/support/property_float" { paren, wrapped, Fexpr, Float_kind, FLOAT_KINDS, flit,
     gen_float, pow2_chain, round_to, float_bytes }
-import "std/argp"
+import "std/argparse"
 import "std/ds" { List }
 import "std/fs"
 import "std/io"
@@ -26,10 +26,10 @@ import "std/prng" { Prng }
 import "std/str" { Str_builder }
 import "std/verdict"
 
-priv const default_seed: U64 = 20260720U64
-priv const default_n: Sz = 200
+priv const DEFAULT_SEED: U64 = 20260720U64
+priv const DEFAULT_N: Sz = 200
 
-priv const wrap_timeout_ms: I32 = 30000 //< the timeout for the cases that check it does not hang
+priv const WRAP_TIMEOUT_MS: I32 = 30000 //< the timeout for the cases that check it does not hang
     //<
     //< Under the default 10 minutes a failure looks like a hang of unknown cause.
 
@@ -48,7 +48,7 @@ priv struct Int_kind //<
     bits: Sz
     signed: Bool
 
-priv const int_kinds: Int_kind[8] = ::{ Int_kind::{ .name = "I8", .bits = 8, .signed = true },
+priv const INT_KINDS: Int_kind[8] = ::{ Int_kind::{ .name = "I8", .bits = 8, .signed = true },
     Int_kind::{ .name = "I16", .bits = 16, .signed = true },
     Int_kind::{ .name = "I32", .bits = 32, .signed = true },
     Int_kind::{ .name = "I64", .bits = 64, .signed = true },
@@ -197,10 +197,10 @@ priv struct Item //< the items printed
     text: U8[]
     want: U8[]
 
-priv const cmp_ops: U8[][6] = ::{ "<", "<=", ">", ">=", "==", "!=" }
+priv const CMP_OPS: U8[][6] = ::{ "<", "<=", ">", ">=", "==", "!=" }
 
 priv fn gen_cmp(r: Prng$@, k: Int_kind@, arena: Arena$@): Item
-    op: = cmp_ops[r.below(6)]
+    op: = CMP_OPS[r.below(6)]
     a: = gen_int(r, 3, k, arena)
     b: = gen_int(r, 3, k, arena)
     lt: = less(a.v, b.v, k)
@@ -235,13 +235,13 @@ priv fn src_values(r: Prng$@, k: Int_kind@, out: List<|I64|>$@) //<
     out.push(norm(-1I64 if k.signed else 1I64, k))
     out.push(norm(r.between(lo, hi), k))
 
-priv const f32_edges: I64[3] = ::{ 127, -126, -149 } //<
+priv const F32_EDGES: I64[3] = ::{ 127, -126, -149 } //<
     //< The exponent's ends per type
     //<
     //< In order: a power above this is inf, the smallest normal, the smallest subnormal.
     //< Caution: **Write them as powers of 2.** A decimal literal (`5e-324`) tests the
     //< decimal-to-binary conversion instead.
-priv const f64_edges: I64[3] = ::{ 1023, -1022, -1074 }
+priv const F64_EDGES: I64[3] = ::{ 1023, -1022, -1074 }
 
 priv fn float_edge_items(out: List<|Item|>$@, arena: Arena$@) //<
     //< It adds the exponent-end shapes as a fixed choice
@@ -250,8 +250,8 @@ priv fn float_edge_items(out: List<|Item|>$@, arena: Arena$@) //<
     //< green untested. Always include gradual underflow (`the smallest normal - the smallest
     //< subnormal`): a target that flushes it to 0 passes unnoticed.
     for ki in Range.asc(2)
-        k: = float_kinds[ki]@
-        edges: = f32_edges if k.bytes == 4 else f64_edges
+        k: = FLOAT_KINDS[ki]@
+        edges: = F32_EDGES if k.bytes == 4 else F64_EDGES
         big: = pow2_chain(edges[0], k, arena)
         tiny: = pow2_chain(edges[1], k, arena)
         sub: = pow2_chain(edges[2], k, arena)
@@ -288,24 +288,24 @@ priv fn float_edge_items(out: List<|Item|>$@, arena: Arena$@) //<
                 .push(Item::{ .ty = k.name, .text = f.text,
                 .want = float_bytes(f.v, k, arena) })
 
-priv const fixed_mantissas: I64[6] = ::{ 0, 0, 1, -1, 1, -4095 } //< only fixed shapes
+priv const FIXED_MANTISSAS: I64[6] = ::{ 0, 0, 1, -1, 1, -4095 } //< only fixed shapes
     //<
     //< It pins down the casts between `F32` and `F64`, the signed zeros, and the exponent's ends.
-priv const fixed_shifts: Sz[6] = ::{ 0, 0, 0, 0, 1, 4 }
-priv const fixed_negate_zero: Bool[6] = ::{ false, true, false, false, false, false }
+priv const FIXED_SHIFTS: Sz[6] = ::{ 0, 0, 0, 0, 1, 4 }
+priv const FIXED_NEGATE_ZERO: Bool[6] = ::{ false, true, false, false, false, false }
 
 priv fn float_items(out: List<|Item|>$@, arena: Arena$@)
     for ki in Range.asc(2)
-        k: = float_kinds[ki]@
-        other: = float_kinds[1 - ki]@
+        k: = FLOAT_KINDS[ki]@
+        other: = FLOAT_KINDS[1 - ki]@
         for i in Range.asc(6)
-            d: = 1I64 << I64::fixed_shifts[i]
-            $text: = flit(fixed_mantissas[i], k, arena)
-            $v: = round_to(F64::fixed_mantissas[i], k)
-            if fixed_shifts[i] > 0
+            d: = 1I64 << I64::FIXED_SHIFTS[i]
+            $text: = flit(FIXED_MANTISSAS[i], k, arena)
+            $v: = round_to(F64::FIXED_MANTISSAS[i], k)
+            if FIXED_SHIFTS[i] > 0
                 text = arena.text().s("(\{text\} / \{flit(d, k, arena)\})").take()
                 v = round_to(v / F64::d, k)
-            if fixed_negate_zero[i]
+            if FIXED_NEGATE_ZERO[i]
                 text = arena.text().s("(-(\{text\}))").take()
                 v = -v
             out
@@ -317,17 +317,17 @@ priv fn float_items(out: List<|Item|>$@, arena: Arena$@)
             out.push(Item::{ .ty = other.name, .text = cast_text, .want = cast_want })
     float_edge_items(out, arena)
 
-priv const f2i_mantissas: I64[4] = ::{ 0, -1, 201, -128 } //<
+priv const F2I_MANTISSAS: I64[4] = ::{ 0, -1, 201, -128 } //<
     //< The integers converted to floating point, and the floating point converted to integers
     //<
     //< **From integer to floating point, rounding happens** (`U64`'s maximum rounds up to 2^64); a
     //< sign mix-up (`sitofp` / `uitofp`) makes `I64`'s minimum huge. **The reverse direction uses
     //< only values whose truncation fits**: the rest, and NaN, are undefined.
-priv const f2i_shifts: Sz[4] = ::{ 0, 1, 1, 0 }
+priv const F2I_SHIFTS: Sz[4] = ::{ 0, 1, 1, 0 }
 
 priv fn cast_items(r: Prng$@, decls: List<|U8[]|>$@, out: List<|Item|>$@, arena: Arena$@)
     for si in Range.asc(8)
-        k: = int_kinds[si]@
+        k: = INT_KINDS[si]@
         $vals: = List<|I64|>.new(arena)
         src_values(r, k, vals@)
         for j in Range.asc(vals.len)
@@ -337,12 +337,12 @@ priv fn cast_items(r: Prng$@, decls: List<|U8[]|>$@, out: List<|Item|>$@, arena:
             decl: = arena.text().s("  ").s(src).s(": ").s(k.name).s(" = ").s(vt).take()
             decls.push(decl)
             for di in Range.asc(8)
-                d: = int_kinds[di]@
+                d: = INT_KINDS[di]@
                 cast: = wrapped(d.name, "::", src, arena)
                 want: = num_text(norm(v, d), d, arena)
                 out.push(Item::{ .ty = d.name, .text = cast, .want = want })
             for fi in Range.asc(2)
-                f: = float_kinds[fi]@
+                f: = FLOAT_KINDS[fi]@
                 // An unsigned maximum looks negative in I64, so reread it with its own sign.
                 $as_f: = F64::v
                 if !k.signed
@@ -351,19 +351,19 @@ priv fn cast_items(r: Prng$@, decls: List<|U8[]|>$@, out: List<|Item|>$@, arena:
                 cast: = wrapped(f.name, "::", src, arena)
                 out.push(Item::{ .ty = f.name, .text = cast, .want = f_want })
     for fi in Range.asc(2)
-        f: = float_kinds[fi]@
+        f: = FLOAT_KINDS[fi]@
         for j in Range.asc(4)
-            d: = 1I64 << I64::f2i_shifts[j]
-            v: = round_to(F64::f2i_mantissas[j] / F64::d, f)
+            d: = 1I64 << I64::F2I_SHIFTS[j]
+            v: = round_to(F64::F2I_MANTISSAS[j] / F64::d, f)
             src: = arena.text().s("s_").s(f.name).s("_\{j\}").take()
-            $text: = flit(f2i_mantissas[j], f, arena)
-            if f2i_shifts[j] > 0
+            $text: = flit(F2I_MANTISSAS[j], f, arena)
+            if F2I_SHIFTS[j] > 0
                 text = arena.text().s("(\{text\} / \{flit(d, f, arena)\})").take()
             decl: = arena.text().s("  ").s(src).s(": ").s(f.name).s(" = ").s(text).take()
             decls.push(decl)
             trunc: = I64::v
             for di in Range.asc(8)
-                dk: = int_kinds[di]@
+                dk: = INT_KINDS[di]@
                 if trunc >= lo_of(dk) &&
                     (dk.signed && trunc <= hi_of(dk) || !dk.signed && trunc >= 0I64)
                     cast: = wrapped(dk.name, "::", src, arena)
@@ -372,12 +372,12 @@ priv fn cast_items(r: Prng$@, decls: List<|U8[]|>$@, out: List<|Item|>$@, arena:
 
 priv fn gen_item(r: Prng$@, arena: Arena$@): Item
     if r.chance(25)
-        k: = float_kinds[r.below(2)]@
+        k: = FLOAT_KINDS[r.below(2)]@
         if r.chance(75)
             e: = gen_float(r, 3, k, arena)
             return Item::{ .ty = k.name, .text = e.text,
                 .want = float_bytes(e.v, k, arena) }
-        op: = cmp_ops[r.below(6)]
+        op: = CMP_OPS[r.below(6)]
         a: = gen_float(r, 2, k, arena)
         b: = gen_float(r, 2, k, arena)
         $yes: = false
@@ -395,7 +395,7 @@ priv fn gen_item(r: Prng$@, arena: Arena$@): Item
             yes = a.v != b.v
         return Item::{ .ty = "Bool", .text = paren(a.text, op, b.text, arena),
             .want = "true" if yes else "false" }
-    k: = int_kinds[r.below(8)]@
+    k: = INT_KINDS[r.below(8)]@
     if r.chance(75)
         e: = gen_int(r, 4, k, arena)
         return Item::{ .ty = k.name, .text = e.text, .want = num_text(e.v, k, arena) }
@@ -423,7 +423,7 @@ priv fn build_arith_program(decls: List<|U8[]|>@, items: List<|Item|>@, arena: A
     defer b.free()
     b.s("import \"std/io\" as io\n\n")
     for ki in Range.asc(2)
-        append_show(b@, float_kinds[ki]@)
+        append_show(b@, FLOAT_KINDS[ki]@)
     b.s("fn main()\n")
     for d in decls
         b.s(d).s("\n")
@@ -463,7 +463,7 @@ priv fn build_side(src: U8[], llvm: Bool, work: U8[], tag: U8[], opt: U8[], aren
             .why = arena.text().s("\{label\} failed at generation\n\{g.out\}").take(), .out = "",
             .code = .none }
     cflags: =
-        U8[][]::harness_build.llvm_cflags if llvm else U8[][]::{ "-std=c99", opt }
+        U8[][]::harness_build.LLVM_CFLAGS if llvm else U8[][]::{ "-std=c99", opt }
     b: =
         (harness_build.build_llvm_exe(U8[][]::{ gen }, exe, cflags) if llvm
         else harness_build.build_exe(U8[][]::{ gen }, exe, cflags))
@@ -471,7 +471,7 @@ priv fn build_side(src: U8[], llvm: Bool, work: U8[], tag: U8[], opt: U8[], aren
         return Side::{ .ok = false,
             .why = arena.text().s("\{label\}'s artefact does not pass the C compiler\n\{b.out\}")
             .take(), .out = "", .code = .none }
-    r: = harness.run_capped(U8[][]::{ exe }, harness.tmp_dir(), wrap_timeout_ms)
+    r: = harness.run_capped(U8[][]::{ exe }, harness.tmp_dir(), WRAP_TIMEOUT_MS)
     if r.code.is_none()
         return Side::{ .ok = false,
             .why = arena.text().s("\{label\} does not end\n\{r.out\}").take(), .out = "",
@@ -481,7 +481,7 @@ priv fn build_side(src: U8[], llvm: Bool, work: U8[], tag: U8[], opt: U8[], aren
 priv fn line_at(lines: List<|U8[]|>@, i: Sz): U8[] //< line n (empty if there is none)
     return "" if i >= lines.len else lines.get(i)
 
-priv const max_shown: Sz = 10 //<
+priv const MAX_SHOWN: Sz = 10 //<
     //< It checks that the three agree and lists only the first disagreements
 
 priv fn compare(items: List<|Item|>@, c: U8[], l: U8[], arena: Arena$@): U8[]
@@ -496,7 +496,7 @@ priv fn compare(items: List<|Item|>@, c: U8[], l: U8[], arena: Arena$@): U8[]
         if cv.equals(it.want) && lv.equals(it.want)
             continue
         bad += 1
-        if bad <= max_shown
+        if bad <= MAX_SHOWN
             detail.s("\n    ").s(it.ty).s(" = ").s(it.text).s("\n      expected ").s(it.want)
                 .s(" / genc ").s(cv).s(" / genllvm ").s(lv)
     if bad == 0
@@ -504,18 +504,18 @@ priv fn compare(items: List<|Item|>@, c: U8[], l: U8[], arena: Arena$@): U8[]
     return arena.text().s("\{bad\} disagree").s(detail.take()).take()
 
 // ==========================================
-priv const escape_bytes: U8[6] = ::{ 10U8, 13U8, 9U8, 0U8, 92U8, 34U8 } //<
+priv const ESCAPE_BYTES: U8[6] = ::{ 10U8, 13U8, 9U8, 0U8, 92U8, 34U8 } //<
     //< The escaped bytes the strings use, all from the canonical escape set
     //<
     //< The set is the one `eval_char` (`ksplc/sema/decl/eval.kspl`) defines. Besides these, only
     //< bare printable ASCII is used (not the backslash or the double quote).
     //< Other escapes are checked elsewhere, against the specification.
-priv const escape_texts: U8[][6] = ::{ "\\n", "\\r", "\\t", "\\0", "\\\\", "\\\"" }
+priv const ESCAPE_TEXTS: U8[][6] = ::{ "\\n", "\\r", "\\t", "\\0", "\\\\", "\\\"" }
 
 priv fn escape_of(b: U8): U8[]
     for i in Range.asc(6)
-        if escape_bytes[i] == b
-            return escape_texts[i]
+        if ESCAPE_BYTES[i] == b
+            return ESCAPE_TEXTS[i]
     return ""
 
 priv fn gen_bytes(r: Prng$@, n: Sz, arena: Arena$@): U8[] //< one random byte sequence
@@ -524,7 +524,7 @@ priv fn gen_bytes(r: Prng$@, n: Sz, arena: Arena$@): U8[] //< one random byte se
     b: = arena.text()
     for _i in Range.asc(n)
         if r.chance(30)
-            b.c(escape_bytes[r.below(6)])
+            b.c(ESCAPE_BYTES[r.below(6)])
             continue
         $c: = U8::r.between(32I64, 126I64)
         for c == 92U8 || c == 34U8
@@ -565,7 +565,7 @@ priv fn bytes_want(s: U8[], arena: Arena$@): U8[] //<
 // Doubling `1` 31 times reaches the sign bit, and from `2147483640` to the maximum is 7 steps.
 // **Each is written twice, once with `*=` `+=`**: a compound assignment is emitted on its own path.
 // **The answer is returned as the exit code**: `std/io` would enlarge the C and slow `-O2`.
-priv const wrap_probe: U8[] =
+priv const WRAP_PROBE: U8[] =
     """priv fn doubling(start: I32): I32
   $n: I32 = 0
   $i: I32 = start
@@ -622,15 +622,15 @@ fn main(): I32
 
 """
 
-priv const wrap_names: U8[][4] = ::{ "doubling", "adding", "`*=` doubling", "`+=` adding" } //<
+priv const WRAP_NAMES: U8[][4] = ::{ "doubling", "adding", "`*=` doubling", "`+=` adding" } //<
     //< What each bit of the probe's exit code names, from the lowest
 
 fn main(): I32
     arena: = harness.begin(512 * 1024 * 1024)
     // The arguments after the two paths every suite is given.
-    $n_arg: = I64::default_n
-    $seed_arg: = I64::default_seed
-    p: = argp.Parser.create("property_test", "expressions agree across the backends", arena)
+    $n_arg: = I64::DEFAULT_N
+    $seed_arg: = I64::DEFAULT_SEED
+    p: = argparse.Parser.create("property_test", "expressions agree across the backends", arena)
     p.int_opt("--n", n_arg@, "how many expressions to draw")
     p.int_opt("--seed", seed_arg@, "where the generator starts; the same seed gives the same draw")
     $more: = List<|U8[]|>.new(arena)
@@ -692,7 +692,7 @@ fn main(): I32
     // Caution: Include `-O0` too, as the baseline: a failure then points at the optimisation alone.
     // `-O3` is not needed; transformations that assume no overflow start at `-O2`.
     wrap_src: = fs.join(work, "wrap.kspl", arena)
-    io.write_file(wrap_src, wrap_probe) catch
+    io.write_file(wrap_src, WRAP_PROBE) catch
         return harness.fatal("cannot write the material")
     for opt in U8[][]::{ "-O0", "-O2" }
         tag: = arena.text().s("wrap\{opt\}").take()
@@ -704,9 +704,9 @@ fn main(): I32
         // A non-zero exit code points at the functions that disagreed, one bit each.
         code: = w.code.unwrap_or(-1)
         why: = arena.text().s("what disagreed:")
-        for bit in Range.asc(wrap_names.len)
+        for bit in Range.asc(WRAP_NAMES.len)
             if ((code >> I32::bit) & 1) != 0
-                why.s(" ").s(wrap_names[bit])
+                why.s(" ").s(WRAP_NAMES[bit])
         why.s(" (code=\{code\})")
         verdict.check(name, code == 0, why.take())
     return harness.finish()

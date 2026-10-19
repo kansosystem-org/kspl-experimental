@@ -31,13 +31,13 @@ import "std/strnum"
 import "std/sys"
 import "std/verdict"
 
-priv const fixture: U8[] = "tests/prog/debug_line.kspl"
+priv const FIXTURE: U8[] = "tests/prog/debug_line.kspl"
 
-priv const imported: U8[] = "std/io.kspl" //< the file the fixture imports
+priv const IMPORTED: U8[] = "std/io.kspl" //< the file the fixture imports
     //<
     //< The imported file's lines need a mapping too (under split compilation it breaks first).
 
-priv const mark_tag: U8[] = "// MARK:"
+priv const MARK_TAG: U8[] = "// MARK:"
 
 priv struct Directive //< one `#line` line of the generated C
     line: Sz
@@ -60,8 +60,8 @@ priv fn mark_lines(body: U8[], arena: Arena$@): List<|Sz|> //<
     $n: Sz = 0
     for raw in body.lines(arena)
         n += 1
-        if at: = raw.find_str(mark_tag)
-            if is_ident(raw.sub_from(at + mark_tag.len).trim_end())
+        if at: = raw.find_str(MARK_TAG)
+            if is_ident(raw.sub_from(at + MARK_TAG.len).trim_end())
                 out.push(n)
     return out
 
@@ -91,14 +91,14 @@ priv fn directives(text: U8[], arena: Arena$@): List<|Directive|> //<
 // **The folder's name differs from the package's** (`alone/` holding `mypkg`). A `#line` naming
 // `mypkg/lib.kspl`, relative to the folder the C compiler ran in, sends a debugger nowhere.
 // ==========================================
-priv const own_rels: U8[][3] = ::{ "alone/ksplc.cfg", "alone/lib.kspl", "alone/probe/main.kspl" }
-priv const own_bodies: U8[][3] = ::{ "[package]\nname = mypkg\n", "pub fn hit(): I32\n  return 7\n",
+priv const OWN_RELS: U8[][3] = ::{ "alone/ksplc.cfg", "alone/lib.kspl", "alone/probe/main.kspl" }
+priv const OWN_BODIES: U8[][3] = ::{ "[package]\nname = mypkg\n", "pub fn hit(): I32\n  return 7\n",
     "import \"mypkg/lib\"\n\nfn main(): I32\n  return lib.hit() - 7\n" }
 
 priv fn case_own_folder(dir: U8[], arena: Arena$@) //<
     //< Every `#line` of the package's own files opens from the folder the C was generated in
     name: = "a declared package's #line opens from its own folder"
-    fs.write_tree(dir, U8[][]::own_rels, U8[][]::own_bodies, arena) catch
+    fs.write_tree(dir, U8[][]::OWN_RELS, U8[][]::OWN_BODIES, arena) catch
         verdict.check(name, false, "the package cannot be placed")
         return
     top: = fs.join(dir, "alone", arena)
@@ -135,7 +135,7 @@ priv fn check_for_has_its_own_line(text: U8[], arena: Arena$@) //<
     $drifted: = ""
     for raw in text.lines(arena)
         if raw.starts_with("#line ")
-            in_fixture = raw.find_str(fixture).is_some()
+            in_fixture = raw.find_str(FIXTURE).is_some()
         else if in_fixture && raw.trim_start().starts_with("for (")
             seen += 1
             if !prev.starts_with("#line ") && drifted.len == 0
@@ -155,14 +155,14 @@ fn main(): I32
     arena: = harness.begin(256 * 1024 * 1024)
     dir: = harness.sandbox("debug_line")
     io.out().s("# debug position information\n")
-    body: = io.read_file(fixture) catch
+    body: = io.read_file(FIXTURE) catch
         return harness.fatal("the fixture cannot be read")
     marks: = mark_lines(body, arena)
     verdict.check("the fixture has MARKs", marks.len >= 4,
         arena.text().s("\{marks.len\} MARKs were found").take())
 
     gen: = fs.join(dir, "gen.c", arena)
-    r: = harness.ksplc(U8[][]::{ fixture, gen })
+    r: = harness.ksplc(U8[][]::{ FIXTURE, gen })
     if !r.exited_with(0)
         verdict.check("the fixture's C generation", false, r.out)
         return harness.finish()
@@ -179,9 +179,9 @@ fn main(): I32
     for d in dirs
         if !d.path.ends_with(".kspl") && !d.path.ends_with(".kspl") && non_kspl.len == 0
             non_kspl = d.path
-        if d.path.equals(fixture)
+        if d.path.equals(FIXTURE)
             fixture_lines.push(d.line)
-        if d.path.equals(imported)
+        if d.path.equals(IMPORTED)
             saw_imported = true
     verdict.check("#line points at nothing but a KSPL source", non_kspl.len == 0, non_kspl)
 
@@ -196,7 +196,7 @@ fn main(): I32
     verdict.check("each MARK's line appears in a #line", missing == 0,
         arena.text().s("\{missing\} lines did not appear").take())
     // The imported file must get a mapping too.
-    verdict.check("the imported source appears in a #line too", saw_imported, imported)
+    verdict.check("the imported source appears in a #line too", saw_imported, IMPORTED)
     check_for_has_its_own_line(text, arena)
     case_own_folder(dir, arena)
 
@@ -207,8 +207,8 @@ fn main(): I32
         verdict.skip_check("the executable-side check",
             "it is Linux only (the reason is the caution at the top of the source)")
         return harness.finish()
-    fixture_name: = sys.get_file_name(fixture)
-    imported_name: = sys.get_file_name(imported)
+    fixture_name: = sys.get_file_name(FIXTURE)
+    imported_name: = sys.get_file_name(IMPORTED)
     exe_g: = fs.join(dir, "with_g.exe", arena)
     with_g: = harness_build.build_exe(U8[][]::{ gen }, exe_g,
         U8[][]::{ "-std=c99", "-g", "-O0", "-w" })

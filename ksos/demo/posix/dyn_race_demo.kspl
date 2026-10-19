@@ -10,9 +10,9 @@ import "ksos/kernel/task" + { Task }
 import "std/mem"
 import "std/verdict"
 
-const churners: I32 = 3
-const rounds: I32 = 2000
-const dyn_stack: Sz = 16384
+const CHURNERS: I32 = 3
+const ROUNDS: I32 = 2000
+const DYN_STACK: Sz = 16384
 
 $tcb_1: Task
 $tcb_2: Task
@@ -29,7 +29,7 @@ fn waits_forever(_arg: Void$@): Void //< a task its creator deletes
     for
         Task.yield()
 
-const full_yields: I32 = 1000 // the yields a full table may take to empty before it counts as a leak
+const FULL_YIELDS: I32 = 1000 // the yields a full table may take to empty before it counts as a leak
 
 fn create_or_wait(entry: task.Task_fn, name: U8[]): Task$@ //< creates a task once a slot is free
     //<
@@ -38,17 +38,17 @@ fn create_or_wait(entry: task.Task_fn, name: U8[]): Task$@ //< creates a task on
     //< faster the machine, the more). A slot lost for good still fails: the yields run out.
     $yields: I32 = 0
     for
-        switch Task.create_dyn(entry, null, 1, name, dyn_stack)
+        switch Task.create_dyn(entry, null, 1, name, DYN_STACK)
         case .some(t)
             return t
         case .none
             yields += 1
-            assert(yields < full_yields,
+            assert(yields < FULL_YIELDS,
                 "dyn_race: a slot never came back, so a deleted task was not freed")
             Task.yield()
 
 fn churn(_arg: Void$@): Void //< creates tasks and sees each one end, both ways, many times over
-    for _i in Range.asc(rounds)
+    for _i in Range.asc(ROUNDS)
         create_or_wait(ends_itself, "self")
         create_or_wait(waits_forever, "other").delete_dyn()
     g_done += 1
@@ -63,7 +63,7 @@ fn main(): I32
     task.start_scheduler() // returns once every task is done
     task.enable_preemption(1000000000) // no tick past this point
     dyn.reap_pending()
-    assert(g_done == churners, "dyn_race: a churning task did not finish")
+    assert(g_done == CHURNERS, "dyn_race: a churning task did not finish")
     assert(mem.heap_used_bytes() == before,
         "dyn_race: every Task and stack from create_dyn goes back to the heap")
     verdict.pass("each Task and stack went back to the heap once, with no slot taken twice.")

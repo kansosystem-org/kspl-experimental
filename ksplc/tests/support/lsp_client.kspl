@@ -16,14 +16,14 @@ import "std/mem" { Arena }
 import "std/str" + { Str_builder }
 import "std/subproc"
 
-pub const read_ms: I32 = 15000 //< how long the answer to a request that walks no files may take
+pub const READ_MS: I32 = 15000 //< how long the answer to a request that walks no files may take
 
-pub const walk_ms: I32 = 120000 //< how long a request that walks the workspace may take
+pub const WALK_MS: I32 = 120000 //< how long a request that walks the workspace may take
     //<
     //< References and a rename read every file of the workspace, so a loaded machine (a Windows
-    //< `make ci` at `-j12`) takes many times `read_ms` over them.
+    //< `make ci` at `-j12`) takes many times `READ_MS` over them.
 
-pub const send_ms: I32 = 15000 //< how long the server may go without reading what is sent to it
+pub const SEND_MS: I32 = 15000 //< how long the server may go without reading what is sent to it
     //<
     //< A send that fails is not checked where it is made: the request after it then fails, and its
     //< check names the server's standard error.
@@ -64,7 +64,7 @@ pub fn rel_of(top: U8[], uri: U8[], arena: Arena$@): U8[] //<
 priv fn slashed(path: U8[], arena: Arena$@): U8[] //< `path` with each `\` spelt `/`
     return path.replace("\\", "/", arena)
 
-pub fn did_open(uri: U8[], text: U8[], arena: Arena$@): json.Val //<
+pub fn did_open(uri: U8[], text: U8[], arena: Arena$@): json.Value //<
     //< The params of `textDocument/didOpen`
     //<
     //< The `languageId` is the one an editor sends for a `.kspl` (`kspl`, the extension's
@@ -82,9 +82,9 @@ pub fn close(c: jsonrpc_client.Client$@, uri: U8[], arena: Arena$@) //<
     //< suite's crash and hang hooks), by `defer` right after its didOpen. The worker the
     //< supervisor remakes analyses every open document again while the editor is idle. So a
     //< document left behind is work the recovery's request can find under way.
-    c.notify("textDocument/didClose", at_doc(uri, arena), send_ms, arena) catch {}
+    c.notify("textDocument/didClose", at_doc(uri, arena), SEND_MS, arena) catch {}
 
-fn at_doc(uri: U8[], arena: Arena$@): json.Val //<
+fn at_doc(uri: U8[], arena: Arena$@): json.Value //<
     //< The params pointing at only the document (`textDocument`)
     //<
     //< For a query that needs no position (`semanticTokens/full` and the like).
@@ -92,29 +92,29 @@ fn at_doc(uri: U8[], arena: Arena$@): json.Val //<
     return b.obj()
         .set("textDocument", b.obj().set("uri", b.str_val(uri)).build()).build()
 
-pub fn at_pos(uri: U8[], line: Sz, character: Sz, arena: Arena$@): json.Val //<
+pub fn at_pos(uri: U8[], line: Sz, character: Sz, arena: Arena$@): json.Value //<
     //< The params pointing at a position (`textDocument` + `position`)
     $b: = Json_builder.new(arena)
     doc: = b.obj().set("uri", b.str_val(uri)).build()
     pos: = b.obj().set("line", b.int_val(line)).set("character", b.int_val(character)).build()
     return b.obj().set("textDocument", doc).set("position", pos).build()
 
-pub fn empty_obj(arena: Arena$@): json.Val //< `{}`, the params of a request that takes none
+pub fn empty_obj(arena: Arena$@): json.Value //< `{}`, the params of a request that takes none
     $b: = Json_builder.new(arena)
     return b.obj().build()
 
 pub fn answer( //< the reply to a request; `null` when none comes, so the check reading it fails
     c: jsonrpc_client.Client$@,
     method: U8[], //< the LSP method asked
-    params: json.Val, //< what it is asked with
+    params: json.Value, //< what it is asked with
     timeout_ms: I32, //< how long the round trip may take
     arena: Arena$@, //< where the reply goes
-): json.Val
+): json.Value
     got: = c.request(method, params, timeout_ms, arena) catch
         return .null_val
     return got.val
 
-pub fn hover_text(msg: json.Val): U8[] //< `result.contents.value` (the hover's body)
+pub fn hover_text(msg: json.Value): U8[] //< `result.contents.value` (the hover's body)
     //<
     //< Empty where there is none.
     return msg.get("result").get("contents").get("value").as_str().unwrap_or("")
@@ -128,7 +128,7 @@ pub fn why(c: jsonrpc_client.Client$@, msg: U8[], arena: Arena$@): U8[] //<
     //< `msg` with the supervisor's log
     return arena.text().s(msg).s(" | supervisor: ").s(c.err_tail()).take()
 
-pub fn dump(v: json.Val, arena: Arena$@): U8[] //< `v` as JSON text, cut to 300 bytes
+pub fn dump(v: json.Value, arena: Arena$@): U8[] //< `v` as JSON text, cut to 300 bytes
     $b: = Str_builder.new()
     defer b.free()
     v.dump(b@)

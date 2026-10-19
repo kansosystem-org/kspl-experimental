@@ -12,8 +12,8 @@
 #cfg(!freestanding)
 import "std/libc"
 
-pub const pi: F64 = 3.141592653589793 //< the ratio of a circle's circumference to its diameter
-pub const e: F64 = 2.718281828459045 //< the base of the natural logarithm
+pub const PI: F64 = 3.141592653589793 //< the ratio of a circle's circumference to its diameter
+pub const E: F64 = 2.718281828459045 //< the base of the natural logarithm
 
 #cfg(!freestanding)
 pub fn sqrt(x: F64): F64 //< the non-negative square root
@@ -43,13 +43,13 @@ pub fn cos(x: F64): F64 //< the cosine of an angle in radians
 pub fn tan(x: F64): F64 //< the tangent of an angle in radians
     return libc.tan(x)
 
-priv const ln2: F64 = 0.6931471805599453 //< the natural logarithm of 2
-priv const two_pow_52: F64 = 4503599627370496.0 //< from here up every F64 is a whole number
-priv const two_pow_53: F64 = 9007199254740992.0 //< from here up every F64 is even
+priv const LN2: F64 = 0.6931471805599453 //< the natural logarithm of 2
+priv const TWO_POW_52: F64 = 4503599627370496.0 //< from here up every F64 is a whole number
+priv const TWO_POW_53: F64 = 9007199254740992.0 //< from here up every F64 is even
 
 priv fn is_already_integral_or_non_finite(x: F64): Bool //<
     //< Whether x is a NaN or +/-Infinity, or so large (2^52 or more) that it is already an integer
-    return !(x - x == 0.0) || x >= two_pow_52 || x <= -two_pow_52
+    return !(x - x == 0.0) || x >= TWO_POW_52 || x <= -TWO_POW_52
 
 // It needs only the integer cast, so hosted and freestanding builds share it.
 pub fn round(x: F64): F64 //< rounds to the nearest whole number, halves away from 0
@@ -215,9 +215,9 @@ pub fn exp(x: F64): F64 //< e raised to the power of `x`
         return infinity()
     if x < -745.1332191019412
         return 0.0
-    scaled: = ((x / ln2) + 0.5) if x >= 0.0 else ((x / ln2) - 0.5)
+    scaled: = ((x / LN2) + 0.5) if x >= 0.0 else ((x / LN2) - 0.5)
     rounded: = I64::scaled
-    r: = x - (F64::rounded) * ln2
+    r: = x - (F64::rounded) * LN2
     // **2^k in two halves**: k runs from -1075 to 1024, where 2^k alone is 0 or infinity although
     // the product lands in range.
     half: = rounded / 2I64
@@ -252,19 +252,19 @@ pub fn log(x: F64): F64 //< the natural logarithm, base e
     for m < 1.0
         m *= 2.0
         e_exp -= 1.0
-    return e_exp * ln2 + log_atanh_small(m)
+    return e_exp * LN2 + log_atanh_small(m)
 
 // Whether a finite x is a whole number; from 2^52 up every F64 is one, and the cast is only below.
 #cfg(freestanding)
 priv fn is_integral(x: F64): Bool
-    if x >= two_pow_52 || x <= -two_pow_52
+    if x >= TWO_POW_52 || x <= -TWO_POW_52
         return true
     return F64::(I64::x) == x
 
 // Whether x is an odd whole number; from 2^53 up every F64 is even.
 #cfg(freestanding)
 priv fn is_odd_integral(x: F64): Bool
-    if !is_finite(x) || x >= two_pow_53 || x <= -two_pow_53 || !is_integral(x)
+    if !is_finite(x) || x >= TWO_POW_53 || x <= -TWO_POW_53 || !is_integral(x)
         return false
     return I64::x % 2I64 != 0I64
 
@@ -305,7 +305,7 @@ priv fn cos_taylor_small(r: F64): F64
 // sin/cos by quadrant: x = k*(pi/2) + r with r in [-pi/4,pi/4]; the quadrant is k mod 4.
 #cfg(freestanding)
 priv fn sincos_reduce(x: F64, sin_out: F64$@, cos_out: F64$@)
-    half_pi: = pi / 2.0
+    half_pi: = PI / 2.0
     scaled: = (x / half_pi + 0.5) if x >= 0.0 else (x / half_pi - 0.5)
     // A NaN or an infinity has no angle: NaN, as libm answers. Caution: **Cut before the cast
     // below.** The cast is undefined behaviour in C for a non-finite or huge x. A huge finite one

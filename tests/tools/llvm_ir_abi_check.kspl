@@ -16,7 +16,7 @@ import "std/str"
 import "std/strfmt" as _strfmt
 import "std/sys"
 
-priv const max_reported: Sz = 40 //< the cap on the disagreements reported
+priv const MAX_REPORTED: Sz = 40 //< the cap on the disagreements reported
     //<
     //< Caution: Always print the remaining count when cut short (cut silently, a fix that seems to
     //< work may be "merely not displayed").
@@ -24,20 +24,20 @@ priv const max_reported: Sz = 40 //< the cap on the disagreements reported
 // The argument attributes that do not affect the type (before or after the type's text).
 // **Only this list holds them.** A forgotten one is matched as part of the type, so attributes
 // that differ between definition and call report a false disagreement.
-priv const type_attrs: U8[][_] = ::{ "noalias", "nocapture", "nonnull", "readonly", "readnone",
+priv const TYPE_ATTRS: U8[][_] = ::{ "noalias", "nocapture", "nonnull", "readonly", "readnone",
         "writeonly", "signext", "zeroext", "inreg", "returned", "immarg", "noundef", "nofree",
         "dead_on_unwind",
 }
 
 // The start of a value's text. Reaching it ends the type.
-priv const value_heads: U8[][_] = ::{ "zeroinitializer", "null", "true", "false", "undef", "poison",
+priv const VALUE_HEADS: U8[][_] = ::{ "zeroinitializer", "null", "true", "false", "undef", "poison",
 }
 
 // A block's terminator (no instruction can follow until the next label). LLVM reads one placed
 // after it as an unnamed block that uses up an implicit number. So every later `%N` disagrees, and
 // "the number is too small" is reported far from the cause. Caught in the text, the causing line
 // is named.
-priv const terminators: U8[][_] = ::{ "ret", "br", "switch", "unreachable", "resume", "indirectbr",
+priv const TERMINATORS: U8[][_] = ::{ "ret", "br", "switch", "unreachable", "resume", "indirectbr",
 }
 
 priv struct Call //< one direct call
@@ -88,7 +88,7 @@ priv fn starts_word(s: U8[], w: U8[]): Bool //<
     return s.starts_with(w) && s.len > w.len && s[w.len].is_space()
 
 priv fn starts_value(t: U8[]): Bool
-    for h in value_heads
+    for h in VALUE_HEADS
         if t.starts_with(h)
             return true
     if t.starts_with("c\"")
@@ -99,7 +99,7 @@ priv fn starts_value(t: U8[]): Bool
     return i < t.len && (t[i].is_digit() || t[i] == '.')
 
 priv fn is_type_attr(t: U8[]): Bool
-    for a in type_attrs
+    for a in TYPE_ATTRS
         if t.equals(a)
             return true
     return t.starts_with("align") || t.starts_with("dereferenceable")
@@ -283,7 +283,7 @@ priv fn is_terminator(ln: U8[]): Bool //< whether it is a block terminator instr
     if ln.len == 0 || !ln[0].is_space()
         return false
     s: = ln.trim_start()
-    for t in terminators
+    for t in TERMINATORS
         if s.starts_with(t) && (s.len == t.len || !is_word_char(s[t.len]))
             return true
     return false
@@ -460,13 +460,13 @@ priv fn report(path: U8[], stats: File_stats, bad: List<|Bad|>$@)
     io.out().s(path).s(": ")
     io.out()
         .s("\{stats.defines\} defines, \{stats.calls\} direct calls, \{stats.rets\} rets checked\n")
-    shown: = max_reported if bad.len > max_reported else bad.len
+    shown: = MAX_REPORTED if bad.len > MAX_REPORTED else bad.len
     for k in Range.asc(shown)
         b: = bad.get(k)
         io.out().s("  ").s(path).s(":\{b.lineno\}: @\{b.name\}: \{b.why\}\n")
         io.out().s("      ").s(b.raw).s("\n")
-    if bad.len > max_reported
-        io.out().s("  ... and \{bad.len - max_reported\} more\n")
+    if bad.len > MAX_REPORTED
+        io.out().s("  ... and \{bad.len - MAX_REPORTED\} more\n")
 
 fn main(): I32
     args: = sys.args()

@@ -23,9 +23,9 @@ $stack_light: U8[65536]
 $stack_idle: U8[65536]
 
 $g_refresh_count: I32 = 0
-const max_refresh: I32 = 4
-const refresh_period: U64 = 300 // ticks (about 300ms with enable_preemption's 1ms period)
-const churner_stack: Sz = 65536
+const MAX_REFRESH: I32 = 4
+const REFRESH_PERIOD: U64 = 300 // ticks (about 300ms with enable_preemption's 1ms period)
+const CHURNER_STACK: Sz = 65536
 fn heavy_task(_arg: Void$@): Void //<
     //< A task that nearly hogs the CPU but is briefly not ready at a fixed interval
     //<
@@ -81,16 +81,16 @@ fn monitor_task(_arg: Void$@): Void //<
     // Taken before any churner exists. Only light's 256-byte block comes and goes beside it, so a
     // churner reaped leaves the heap well within half a churner's stack of this.
     base: = mem.heap_used_bytes()
-    for g_refresh_count < max_refresh
-        switch Task.create_dyn(churner_task, null, 1, "churner", churner_stack)
+    for g_refresh_count < MAX_REFRESH
+        switch Task.create_dyn(churner_task, null, 1, "churner", CHURNER_STACK)
         case .some {}
         case .none
             panic("task-manager: could not create churner (heap or task slots exhausted)")
-        Task.delay(refresh_period)
+        Task.delay(REFRESH_PERIOD)
         print_table()
         // The churner deleted itself long ago; only the idle task frees it before the next
         // create_dyn (which would reap it too).
-        assert(mem.heap_used_bytes() < base + churner_stack / 2,
+        assert(mem.heap_used_bytes() < base + CHURNER_STACK / 2,
             "task-manager: the idle task did not give a deleted churner's stack back to the heap")
         g_refresh_count += 1
     verdict.pass("by every refresh, the churner that deleted itself is back on the heap.")

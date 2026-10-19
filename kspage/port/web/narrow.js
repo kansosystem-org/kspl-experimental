@@ -55,13 +55,18 @@ function kspagePin(ks) {
       return;
     }
     pinned = band;
+    const stage = canvas.parentElement;
+    const view = stage.getBoundingClientRect();
+    const left = Math.max(band.left + band.rx, view.left);
+    const right = Math.min(band.left + band.rx + band.rw, view.left + stage.clientWidth);
+    const width = Math.max(right - left, 0);
     const dpr = window.devicePixelRatio || 1;
     pin.style.display = "block";
-    pin.style.left = `${band.left + band.rx}px`;
+    pin.style.left = `${left}px`;
     pin.style.top = `${band.top + band.y}px`;
-    pin.style.width = `${band.rw}px`;
+    pin.style.width = `${width}px`;
     pin.style.height = `${band.rh}px`;
-    pin.width = Math.ceil(band.rw * dpr);
+    pin.width = Math.ceil(width * dpr);
     pin.height = Math.ceil(band.rh * dpr);
     const g = pin.getContext("2d");
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -69,9 +74,9 @@ function kspagePin(ks) {
     // (`readTheme`'s rule in `draw.js`). Where it is transparent, the role's own color is used.
     const ground = getComputedStyle(canvas).backgroundColor;
     g.fillStyle = ground && ground !== "rgba(0, 0, 0, 0)" ? ground : ks.paperInkOf();
-    g.fillRect(0, 0, band.rw, band.rh);
+    g.fillRect(0, 0, width, band.rh);
     // Now in document coordinates, cropped to the row (copied, not laid out again).
-    g.translate(-band.rx, -band.ry);
+    g.translate(band.left - left, -band.ry);
     const crop = [band.rx, band.ry, band.rw, band.rh];
     g.fillStyle = getComputedStyle(canvas).color;
     paintPanels(g, ks.plain, crop);
@@ -85,12 +90,13 @@ function kspagePin(ks) {
     e.preventDefault();
     const at = pin.getBoundingClientRect();
     w.kspage_web_compose_commit();
-    w.kspage_web_click(e.clientX - at.left + pinned.rx, e.clientY - at.top + pinned.ry, 0);
+    w.kspage_web_click(e.clientX - pinned.left, e.clientY - at.top + pinned.ry, 0);
     ks.draw();
     ks.ime.focus();
   });
   // Scrolling repaints it (the window's position decides the band); **so does layout** (`draw.js`).
   window.addEventListener("scroll", paintPinned, { passive: true });
+  canvas.parentElement.addEventListener("scroll", paintPinned, { passive: true });
 
   ks.pinnedBand = pinnedBand;
   ks.paintPinned = paintPinned;
@@ -140,10 +146,11 @@ function kspageNarrow(ks) {
       const cells = w.kspage_web_head_cell_count(i);
       for (let c = 0; c < cells; c += 1) {
         w.kspage_web_head_cell(i, c, scratch);
-        const [x, y, cw, chh, column, on, found] = nums(7);
+        const [x, y, cw, chh, column, on, found, hasColor, color] = nums(9);
         if (found === 0 || cw < LEAST) continue;
         out.push({
           table: i, cell: c, column: column, on: on !== 0,
+          ink: hasColor !== 0 && !ks.plain ? ks.colorText(color) : null,
           x: x + cw - SIDE - PAD, y: y + (chh - SIDE) / 2, w: SIDE, h: SIDE,
           cellX: x, cellY: y, cellW: cw, cellH: chh,
         });
@@ -175,7 +182,7 @@ function kspageNarrow(ks) {
     for (let i = 0; i < row.length; i += 1) {
       const a = row[i];
       g.globalAlpha = a.on ? 0.95 : 0.4;
-      g.fillStyle = ink;
+      g.fillStyle = a.ink || ink;
       g.beginPath();
       // A downward triangle, the shape the field agrees on for "there is a list here".
       g.moveTo(a.x + 2, a.y + a.h * 0.36);

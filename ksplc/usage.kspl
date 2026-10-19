@@ -7,7 +7,7 @@
 // ==========================================
 import "ksplc/base/core" as base_core
 import "ksplc/base/target" as base_target
-import "std/argp"
+import "std/argparse"
 import "std/chars"
 import "std/ds" { List }
 import "std/io"
@@ -52,7 +52,7 @@ impl Info_topic
     fn info_topic_name(t: Self): U8[] //< a subject as the command line writes it
         return t.variant_name().replace("_", "-", base_core.arena)
 
-const info_topic_order: Info_topic[7] = ::{ Info_topic.std_dir, Info_topic.link_libs,
+const INFO_TOPIC_ORDER: Info_topic[7] = ::{ Info_topic.std_dir, Info_topic.link_libs,
     Info_topic.exe_flags, Info_topic.cache_dir, Info_topic.keywords, Info_topic.machine,
     Info_topic.package } //<
         //< The subjects in the order the usage lists them
@@ -63,7 +63,7 @@ const info_topic_order: Info_topic[7] = ::{ Info_topic.std_dir, Info_topic.link_
 fn info_topics(): U8[] //< every subject, separated by spaces, in the usage's order
     $b: = Str_builder.new()
     defer b.free()
-    for t in info_topic_order
+    for t in INFO_TOPIC_ORDER
         if b.len > 0
             b.c(' ')
         b.s(t.info_topic_name())
@@ -72,7 +72,7 @@ fn info_topics(): U8[] //< every subject, separated by spaces, in the usage's or
 fn parse_info_topic(name: U8[]): Info_topic //< it reads the subject's name
     //<
     //< Where the name is unknown, it exits with the list appended to the message.
-    for t in info_topic_order
+    for t in INFO_TOPIC_ORDER
         if t.info_topic_name().equals(name)
             return t
     error_exit(base_core.arena.text()
@@ -80,7 +80,7 @@ fn parse_info_topic(name: U8[]): Info_topic //< it reads the subject's name
         .take())
     return .std_dir
 
-fn refuse_unread_std_dir(p: argp.Parser$@, topic: Info_topic) //<
+fn refuse_unread_std_dir(p: argparse.Parser$@, topic: Info_topic) //<
     //< It rejects `--std-dir=` on a subject whose answer does not read it
     //<
     //< `info` takes the option for `std-dir` alone; `flag_faces` sees only the subcommand, so taken
@@ -145,7 +145,7 @@ fn flag_faces(flag: U8[]): U8[] //< the subcommands an option applies to
         return "compile"
     return ""
 
-const machine_faces: U8[] = "compile lint lsp lsp-worker run build info" //<
+const MACHINE_FACES: U8[] = "compile lint lsp lsp-worker run build info" //<
     //< The subcommands that lay values out, and so need a machine ksplc has widths for
     //<
     //< `info` asks for it only on its `machine` subject. **The rest read no type** (`fmt` and
@@ -157,7 +157,7 @@ fn machine_refusal_to(face: U8[], named: U8[], host: U8[], m: Str_builder$@) //<
     //< `named` is `--machine`'s (empty where none is given), `host` the machine ksplc runs on.
     //< **Every subcommand in `machine_faces` asks this before it starts**: a machine left unasked
     //< reaches the layout and stops ksplc with an internal error, naming no fix.
-    if !faces_include(machine_faces, face)
+    if !faces_include(MACHINE_FACES, face)
         return
     name: = named if named.len > 0 else host
     if _known: = base_target.find(name)
@@ -194,7 +194,7 @@ fn faces_include(faces: U8[], face: U8[]): Bool //<
         i += 1
     return false
 
-fn check_flag_faces(p: argp.Parser$@, face: U8[]) //<
+fn check_flag_faces(p: argparse.Parser$@, face: U8[]) //<
     //< It rejects an option that does not apply to this subcommand
     //<
     //< The error names the subcommands the option applies to.
@@ -216,20 +216,20 @@ fn check_flag_faces(p: argp.Parser$@, face: U8[]) //<
                 on: \{faces\}\n")
         error_exit(m.slice())
 
-priv fn option_names(p: argp.Parser$@): List<|U8[]|> //< every option the parser declares
+priv fn option_names(p: argparse.Parser$@): List<|U8[]|> //< every option the parser declares
     $names: = List<|U8[]|>.new(base_core.arena)
     p.append_names(names@)
     return names
 
-fn refuse_empty_values(p: argp.Parser$@) //<
+fn refuse_empty_values(p: argparse.Parser$@) //<
     //< It rejects an option given with nothing after its `=` (`--emit-deps=`)
     //<
     //< **No option of ksplc means anything by an empty value.** Taken, it would read as the default
     //< or be ignored, and the writer would believe it took effect.
     for name in option_names(p)
         if p.saw_empty(name)
-            error_exit(base_core.arena.text().s("Error: \{argp.Argp_error.missing_value(name)\}\n")
-                .take())
+            error_exit(base_core.arena.text()
+                .s("Error: \{argparse.Argument_error.missing_value(name)\}\n").take())
 
 fn help_with_topics(head: U8[], topics: U8[]): U8[] //<
     //< It appends the list of subjects to a subcommand's description
@@ -246,7 +246,7 @@ fn usage_for_topics(face: U8[], topics: U8[]): U8[] //<
 
 // The argument Parser, for the usage list.
 // Caution: Set it right after Mode.new builds it; if left null, no option is listed.
-$cli: argp.Parser$@ = null
+$cli: argparse.Parser$@ = null
 
 fn print_words(words: List<|U8[]|>@) //< the usage's description
     //<
@@ -261,7 +261,7 @@ priv struct Face //< a subcommand and the command line it takes
     name: U8[] //< the name `flag_faces` uses; `compile` is the default, typed with no name
     form: U8[] //< its command line, as its usage line writes it
 
-priv const faces: Face[11] = ::{ Face::{ .name = "compile",
+priv const FACES: Face[11] = ::{ Face::{ .name = "compile",
     .form = "ksplc [options...] <input.kspl> <output.c>" },
     Face::{ .name = "run",
     .form = "ksplc run [options...] <script.kspl> | - | --eval=<source> [args...]" },
@@ -280,15 +280,15 @@ priv const faces: Face[11] = ::{ Face::{ .name = "compile",
         //< list, a reader cannot tell which applies where without trying.
 
 fn usage_of(face: U8[]): U8[] //< the one usage line of a subcommand, for refusing its arguments
-    for f in faces
+    for f in FACES
         if f.name.equals(face)
             return base_core.arena.text().s("usage: ").s(f.form).c('\n').take()
     return base_core.arena.text().s("usage: ksplc ").s(face).c('\n').take()
 
 fn print_usage(out: Writer) //<
     //< the whole usage: `io.out()` for `--help`, `io.err()` after a refusal
-    for i in Range.asc(faces.len)
-        out.s("usage: " if i == 0 else "       ").s(faces[i].form)
+    for i in Range.asc(FACES.len)
+        out.s("usage: " if i == 0 else "       ").s(FACES[i].form)
         if i == 0
             out.s("          compile (the default subcommand)")
         out.c('\n')
@@ -320,7 +320,7 @@ fn print_usage(out: Writer) //<
         out.c('\n')
         cli.print_options(out)
 
-fn print_faces_and_flags(out: Writer, p: argp.Parser$@) //<
+fn print_faces_and_flags(out: Writer, p: argparse.Parser$@) //<
     //< It lists the options that apply, per subcommand
     //<
     //< Caution: **Build the list from `flag_faces`**; a list written by hand drifts silently.
@@ -328,7 +328,7 @@ fn print_faces_and_flags(out: Writer, p: argp.Parser$@) //<
     out
         .s("\nThe options that take effect per subcommand (an option not here is an error on that \
             subcommand):\n")
-    for face in faces
+    for face in FACES
         $line: = Str_builder.new()
         defer line.free()
         line.s("  ").s(face.name).c(':')

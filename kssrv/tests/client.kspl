@@ -16,19 +16,19 @@ import "std/strnum"
 import "std/sys"
 import "std/verdict"
 
-const host: U8[] = "127.0.0.1" //< the address to connect to
+const HOST: U8[] = "127.0.0.1" //< the address to connect to
     //<
     //< The loopback skips the firewall check, so Windows does not ask for permission.
 
-priv const chunk: Sz = 64 * 1024 //< the most one read takes
+priv const CHUNK: Sz = 64 * 1024 //< the most one read takes
     //<
     //< It reads again when that is not enough.
 
-priv const send_timeout_ms: I32 = 30000 //< the cap on waiting to finish sending (milliseconds)
+priv const SEND_TIMEOUT_MS: I32 = 30000 //< the cap on waiting to finish sending (milliseconds)
     //<
     //< Separate from the receive timeout: a stalled send means the server is not reading.
 
-priv const spin_reads: Sz = 512 //< how many times to spin on a re-read before sleeping
+priv const SPIN_READS: Sz = 512 //< how many times to spin on a re-read before sleeping
     //<
     //< One read is about a microsecond, so this waits one millisecond's worth without sleeping.
     //< Caution: **Do not remove it** (the reason is inside `next`).
@@ -75,13 +75,13 @@ struct Conn //< one connection
 
 impl Conn
     fn open(port: I32): Conn!Http_end
-        sock: = net.Tcp_stream.connect(host, port) catch
+        sock: = net.Tcp_stream.connect(HOST, port) catch
             throw .connect_failed
         sock.set_nonblocking() catch
             sock.free()
             throw .connect_failed
         return Conn::{ .sock = sock, .acc = Str_builder.new(),
-            .buf = U8$[]::{ .ptr = U8$@::alloc(chunk), .len = chunk } }
+            .buf = U8$[]::{ .ptr = U8$@::alloc(CHUNK), .len = CHUNK } }
 
     fn open_in(port: I32, arena: Arena$@): Conn$@!Http_end //<
         //< Returns a connection allocated in the arena
@@ -101,11 +101,11 @@ impl Conn
         dealloc(Void$@::r.buf.ptr)
 
     fn send(r: Self$@, raw: U8[]): Void!Http_end //< sends raw bytes completely
-        deadline: = sys.mono_us() + I64::send_timeout_ms * 1000I64
+        deadline: = sys.mono_us() + I64::SEND_TIMEOUT_MS * 1000I64
         $sent: Sz = 0
         for sent < raw.len
             n: = write_step(r.sock, raw.sub_from(sent))
-            if n == fail_step
+            if n == FAIL_STEP
                 throw .io_failed
             if n <= 0
                 if sys.mono_us() > deadline
@@ -127,14 +127,14 @@ impl Conn
             if v: = got
                 return v
             n: = recv_step(r.sock, r.buf)
-            if n == fail_step
+            if n == FAIL_STEP
                 throw .io_failed
             if n == 0
                 throw .closed
             if n < 0
                 // Caution: **Do not sleep on the first empty read**, or every response gets a
                 // minimum of the time slept.
-                if spins < spin_reads
+                if spins < SPIN_READS
                     spins += 1
                     continue
                 sys.sleep_ms(1)
@@ -143,27 +143,27 @@ impl Conn
             r.acc.s(U8$[]::{ .ptr = r.buf.ptr, .len = n })
         throw .timed_out
 
-priv const fail_step: I32 = -2 //< a result of one transport step
+priv const FAIL_STEP: I32 = -2 //< a result of one transport step
     //<
     //< Caution: **Keep "not yet possible" apart from "it failed"**, or a routine would_block fails.
-priv const again_step: I32 = -1
+priv const AGAIN_STEP: I32 = -1
 
 priv fn write_step(sock: net.Tcp_stream$@, buf: U8[]): I32
     n: = sock.write(buf) catch e
         switch e
         case .would_block
-            return again_step
+            return AGAIN_STEP
         default
-            return fail_step
+            return FAIL_STEP
     return I32::n
 
 priv fn recv_step(sock: net.Tcp_stream$@, buf: U8$[]): I32
     n: = sock.read(buf) catch e
         switch e
         case .would_block
-            return again_step
+            return AGAIN_STEP
         default
-            return fail_step
+            return FAIL_STEP
     return I32::n
 
 priv fn take_resp(r: Conn$@, no_body: Bool, arena: Arena$@): Resp? //<
@@ -227,7 +227,7 @@ fn header(head: U8[], name: U8[]): U8[] //<
 priv fn header_int(head: U8[], name: U8[]): Sz
     return digits_of(header(head, name))
 
-const default_timeout_ms: I32 = 10000 //< the default receiving timeout (milliseconds)
+const DEFAULT_TIMEOUT_MS: I32 = 10000 //< the default receiving timeout (milliseconds)
 
 fn request(port: I32, raw: U8[], expect: Sz, timeout_ms: I32, no_body: Bool, arena: Arena$@):
     List<|Resp|>!Http_end //<
@@ -297,7 +297,7 @@ impl Stream
         deadline: = sys.mono_us() + I64::timeout_ms * 1000I64
         for sys.mono_us() <= deadline
             n: = recv_step(r.conn.sock, r.conn.buf)
-            if n == 0 || n == fail_step
+            if n == 0 || n == FAIL_STEP
                 break
             if n < 0
                 sys.sleep_ms(1)
@@ -317,7 +317,7 @@ impl Stream
         for sys.mono_us() <= deadline &&
             r.conn.acc.slice().find_str("\r\n\r\n").is_none()
             n: = recv_step(r.conn.sock, r.conn.buf)
-            if n == 0 || n == fail_step
+            if n == 0 || n == FAIL_STEP
                 break
             if n < 0
                 sys.sleep_ms(1)
@@ -346,14 +346,14 @@ fn get(port: I32, target: U8[], extra: U8[], arena: Arena$@): Resp!Http_end //<
     //<
     //< `extra` holds extra header lines (`"Connection: close\r\n"` and the like).
     got: =
-        request(port, raw("GET", target, extra, "", arena), 1, default_timeout_ms, false, arena)!
+        request(port, raw("GET", target, extra, "", arena), 1, DEFAULT_TIMEOUT_MS, false, arena)!
     return got.get(0)
 
-priv const json_type: U8[] = "Content-Type: application/json\r\n" //< a JSON body's header line
+priv const JSON_TYPE: U8[] = "Content-Type: application/json\r\n" //< a JSON body's header line
 
 fn post_bytes(target: U8[], body: U8[], arena: Arena$@): U8[] //<
     //< Builds the request bytes for POSTing one JSON body
-    return raw("POST", target, json_type, body, arena)
+    return raw("POST", target, JSON_TYPE, body, arena)
 
 fn post_json(port: I32, target: U8[], extra: U8[], body: U8[], timeout_ms: I32, arena: Arena$@):
     Resp!Http_end //<
@@ -362,24 +362,24 @@ fn post_json(port: I32, target: U8[], extra: U8[], body: U8[], timeout_ms: I32, 
         //< `extra` may be empty (to test having no token). **The local endpoints need a token**
         //< (`bearer_head`).
     bytes: =
-        raw("POST", target, arena.text().s(extra).s(json_type).take(), body, arena)
+        raw("POST", target, arena.text().s(extra).s(JSON_TYPE).take(), body, arena)
     got: = request(port, bytes, 1, timeout_ms, false, arena)!
     return got.get(0)
 
 fn post_empty(port: I32, target: U8[], arena: Arena$@): Resp!Http_end //<
     //< POSTs with no body and returns the response
     got: =
-        request(port, raw("POST", target, "", "", arena), 1, default_timeout_ms, false, arena)!
+        request(port, raw("POST", target, "", "", arena), 1, DEFAULT_TIMEOUT_MS, false, arena)!
     return got.get(0)
 
-fn dump_of(v: json.Val, arena: Arena$@): U8[] //<
+fn dump_of(v: json.Value, arena: Arena$@): U8[] //<
     //< Turns a JSON value into a string (for display in checks)
     $out: = Str_builder.new()
     defer out.free()
     v.dump(out@)
     return arena.dup_str(out.slice())
 
-fn doc_of(r: Resp, arena: Arena$@): json.Val //< reads the body as JSON (null if it cannot)
+fn doc_of(r: Resp, arena: Arena$@): json.Value //< reads the body as JSON (null if it cannot)
     doc: = json.parse(r.body, arena) catch
         return .null_val
     return doc.val
@@ -390,12 +390,12 @@ fn doc_of(r: Resp, arena: Arena$@): json.Val //< reads the body as JSON (null if
 // not enough to fix it.
 // ==========================================
 
-const name_body_max: Sz = 36 //< the most characters of the request put into the name
-const shown_body_max: Sz = 200 //< the most body bytes put into the message
+const NAME_BODY_MAX: Sz = 36 //< the most characters of the request put into the name
+const SHOWN_BODY_MAX: Sz = 200 //< the most body bytes put into the message
 
 fn shown(r: Resp, arena: Arena$@): U8[] //<
     //< A summary of one response (for a check's message)
-    body: = r.body if r.body.len <= shown_body_max else r.body.sub(0, shown_body_max)
+    body: = r.body if r.body.len <= SHOWN_BODY_MAX else r.body.sub(0, SHOWN_BODY_MAX)
     return arena.text().s("\{r.status\} ").s(body).take()
 
 fn is_json(r: Resp): Bool //< whether the answer says its body is JSON, a body sent or not
@@ -408,7 +408,7 @@ fn check_405(name: U8[], r: Resp, allow: U8[], arena: Arena$@) //<
         arena.text().s("\{r.status\} Allow: ").s(said).take())
 
 fn short(text: U8[]): U8[]
-    return text if text.len <= name_body_max else text.sub(0, name_body_max)
+    return text if text.len <= NAME_BODY_MAX else text.sub(0, NAME_BODY_MAX)
 
 fn filler(n: Sz, arena: Arena$@): U8[] //<
     //< Makes a body of one repeated character (for testing a cap)
@@ -419,7 +419,7 @@ fn filler(n: Sz, arena: Arena$@): U8[] //<
 
 fn put_file(port: I32, target: U8[], auth: U8[], body: U8[], arena: Arena$@): Resp!Http_end
     got: =
-        request(port, raw("PUT", target, auth, body, arena), 1, default_timeout_ms, false, arena)!
+        request(port, raw("PUT", target, auth, body, arena), 1, DEFAULT_TIMEOUT_MS, false, arena)!
     return got.get(0)
 
 fn bearer_head(token: U8[], arena: Arena$@): U8[] //<

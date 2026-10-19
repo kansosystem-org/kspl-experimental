@@ -46,7 +46,7 @@ struct Target //< what a position names: the definition, and the name written th
     stands_for: Ast_node$@ //<
         //< where `def` is an `as` name, the declaration it stands for; else null
 
-fn target_at(state: Doc_state$@, params: json.Val): Target? //<
+fn target_at(state: Doc_state$@, params: json.Value): Target? //<
     //< The definition the name at the request's position stands for; none off a name
     path: = lsp_position.find_path_at_params(state, params)
     defer path.free()
@@ -100,11 +100,12 @@ priv fn name_node(at: Ast_node$@): Ast_node$@? //< the identifier a picked node 
         return .some(last)
     return .none
 
-fn handle_references(ws_state: Doc_state$@, params: json.Val, id_val: json.Val, arena: Arena$@) //<
-    //< `textDocument/references`: it returns the uses as a list of `Location`
-    //<
-    //< **Count the declaration only as asked** (`context.includeDeclaration`), or "only the uses"
-    //< cannot be had (a common complaint).
+fn handle_references(ws_state: Doc_state$@, params: json.Value, id_val: json.Value,
+    arena: Arena$@) //<
+        //< `textDocument/references`: it returns the uses as a list of `Location`
+        //<
+        //< **Count the declaration only as asked** (`context.includeDeclaration`), or "only the
+        //< uses" cannot be had (a common complaint).
     switch target_at(ws_state, params)
     case .some(t)
         // Every place is returned in this request's URI style (`Uri_style` in
@@ -125,7 +126,7 @@ fn handle_references(ws_state: Doc_state$@, params: json.Val, id_val: json.Val, 
     default
         lsp_msg.send_null_response(id_val, arena)
 
-priv fn wants_decl(params: json.Val): Bool //< whether the references count the declaration itself
+priv fn wants_decl(params: json.Value): Bool //< whether the references count the declaration itself
     //<
     //< Caution: **Where the option is absent, count it**, or a client that sends none loses the
     //< definition from the list. False only when exclusion is asked for.
@@ -221,7 +222,7 @@ impl Walk
         target_def: = w.target_def
         // **Nodes the compiler generated are not uses** (`made_by_compiler` in
         // `../base/ast_ext.kspl`).
-        if node == null || target_def == null || depth > lsp_position.max_walk_depth ||
+        if node == null || target_def == null || depth > lsp_position.MAX_WALK_DEPTH ||
             node.made_by_compiler()
             return
         // An import's or embed's name belongs to its file alone; unrelated imports elsewhere stay

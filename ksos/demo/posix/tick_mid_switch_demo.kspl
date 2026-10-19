@@ -19,11 +19,11 @@ import "ksos/kernel/task" + { Task }
 import "std/sys"
 import "std/verdict"
 
-const sigalrm: I32 = 14 // assumes Linux, as the POSIX port does
+const SIGALRM: I32 = 14 // assumes Linux, as the POSIX port does
 
 // The starts the third case makes. A start_scheduler that lets a tick into its gap breaks within
 // the first thousand or so; a passing run takes about a second.
-const restarts: I32 = 20000
+const RESTARTS: I32 = 20000
 
 $g_ran: I32[3]
 $g_restart_ran: I32[2]
@@ -40,7 +40,7 @@ fn first(_arg: Void$@): Void //< the task main's start_scheduler switches into w
 
 fn second(_arg: Void$@): Void //< switches into third, which has never run, with a tick held
     s: = task.irq_save()
-    sys.raise_signal(sigalrm)
+    sys.raise_signal(SIGALRM)
     Task.yield()
     task.irq_restore(s)
     g_ran[1] = 1
@@ -61,7 +61,7 @@ fn held_ticks() //< the start and the yield, each with a tick held over its swit
     // It installs the tick's handler; at 1000 s the timer never fires during the run.
     task.enable_preemption(1000000000)
     s: = task.irq_save()
-    sys.raise_signal(sigalrm)
+    sys.raise_signal(SIGALRM)
     task.start_scheduler() // returns once every task is done
     task.irq_restore(s)
     assert(g_ran[0] == 1, "tick_mid_switch: the task started with a tick held never ran its code")
@@ -75,7 +75,7 @@ fn held_ticks() //< the start and the yield, each with a tick held over its swit
 fn live_tick_restarts() //< start_scheduler called many times over under a tick every 30 us
     task.enable_preemption(30)
     $n: I32 = 0
-    for n < restarts
+    for n < RESTARTS
         tcb_1.create(U8$[]::stack_1, restart_a, null, 1, "restart a")
         tcb_2.create(U8$[]::stack_2, restart_b, null, 1, "restart b")
         task.start_scheduler()

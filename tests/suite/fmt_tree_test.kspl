@@ -53,7 +53,7 @@ priv struct Parting //< a pair showing that the verdict on where two texts diffe
 // Caution: **List pairs that differ beside the pair that does not**, or a verdict answering "the
 // same" to everything passes (Principle 5 in `../../docs/DESIGN-principles.md`). The third differs
 // only in its last line end.
-priv const partings: Parting[_] = ::{
+priv const PARTINGS: Parting[_] = ::{
     Parting::{ .a = "x: = 1\n", .b = "x: = 1\n", .line = 0 },
     Parting::{ .a = "a\n} // c\n", .b = "a // c\n}\n", .line = 1 },
     Parting::{ .a = "a\nb\n", .b = "a\nb", .line = 2 },
@@ -62,18 +62,18 @@ priv const partings: Parting[_] = ::{
 
 priv fn check_parting(arena: Arena$@)
     $bad: = List<|U8[]|>.new(arena)
-    for p in partings
+    for p in PARTINGS
         got: = first_difference(p.a, p.b)
         if got != p.line
             bad.push(arena.text().s("line \{got\} where \{p.line\} was wanted").take())
-    verdict.check_list("the verdict on where two texts part can fire", partings.len, "pairs", bad@,
+    verdict.check_list("the verdict on where two texts part can fire", PARTINGS.len, "pairs", bad@,
         "the judgment misreads its own samples: mend the judgment, not the table")
 
 // ==========================================
 // Every tracked source is a fixed point of the formatter
 // ==========================================
 
-priv const fmt_specs: U8[][_] = ::{ "*.kspl", ":!ksplc/tests/negative/", ":!ksplc/tests/lint/" } //<
+priv const FMT_SPECS: U8[][_] = ::{ "*.kspl", ":!ksplc/tests/negative/", ":!ksplc/tests/lint/" } //<
     //< The sources formatted
     //<
     //< Caution: **Leave out the deliberately broken files** (`ksplc/tests/negative/` unreadable,
@@ -109,7 +109,7 @@ priv fn check_formatted(rels: List<|U8[]|>@, arena: Arena$@)
 // At a narrow width every source still reads, and one formatting is final
 // ==========================================
 
-priv const narrow_limits: Sz[_] = ::{ 40, 50, 60 } //<
+priv const NARROW_LIMITS: Sz[_] = ::{ 40, 50, 60 } //<
     //< The column limits the tree is also formatted at
     //<
     //< **A narrow width breaks lines where the default never does**: a declaration's head, an
@@ -117,7 +117,7 @@ priv const narrow_limits: Sz[_] = ::{ 40, 50, 60 } //<
     //< `k % 3`th), so the tree is formatted narrow once, not three times.
 
 priv fn narrow_style(k: Sz, arena: Arena$@): U8[] //< the `--style` the `k`th source is formatted at
-    return arena.text().s("ColumnLimit: \{narrow_limits[k % narrow_limits.len]\}").take()
+    return arena.text().s("ColumnLimit: \{NARROW_LIMITS[k % NARROW_LIMITS.len]\}").take()
 
 priv fn narrow_name(rels: List<|U8[]|>@, k: Sz, arena: Arena$@): U8[] //<
     //< How a finding names the `k`th source: its path and the style it was formatted at
@@ -173,7 +173,7 @@ priv fn check_narrow(rels: List<|U8[]|>@, arena: Arena$@)
 fn main(): I32
     arena: = harness.begin(64 * 1024 * 1024)
     check_parting(arena)
-    rels: = harness.tracked_matching(U8[][]::fmt_specs)
+    rels: = harness.tracked_matching(U8[][]::FMT_SPECS)
     check_formatted(rels@, arena)
     check_narrow(rels@, arena)
     return ksplc_harness.finish()

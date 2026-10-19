@@ -44,18 +44,18 @@ $req_buf: U8[512] // where the request (the header plus the body) is built
 $arena_buf: U8[2048] // used by json.parse
 $resp_buf: U8[1024] // one response
 
-const our_port: U16 = 54323
-const peer_port: U16 = 8080 // kssrv
-const our_isn: U32 = 13000 // a fixed value (a demo; real use randomizes it)
-const stage_report_interval_ms: U32 = 3000
+const OUR_PORT: U16 = 54323
+const PEER_PORT: U16 = 8080 // kssrv
+const OUR_ISN: U32 = 13000 // a fixed value (a demo; real use randomizes it)
+const STAGE_REPORT_INTERVAL_MS: U32 = 3000
 
-const loop_interval_ms: U32 = 100 //< the control period [ms]
+const LOOP_INTERVAL_MS: U32 = 100 //< the control period [ms]
     //<
     //< Caution: Keep it well above the ultrasonic's 36ms worst case.
-const reply_deadline_ms: U32 = 300 //< the limit on waiting for a valid answer [ms]
+const REPLY_DEADLINE_MS: U32 = 300 //< the limit on waiting for a valid answer [ms]
     //<
     //< Past this it stops.
-const emergency_mm: U32 = 100 //<
+const EMERGENCY_MM: U32 = 100 //<
     //< The distance at which it backs off, before the server's decision [mm]
 
 // Set once anything has failed; it stays stopped from then on.
@@ -121,7 +121,7 @@ priv fn exchange(dist_mm: U32, line: U32, seq: U32): Sz //<
         return 0
     if !nc.send_all(head.slice().ptr, head.len)
         return 0
-    got: = nc.read_stream(U8$[]::resp_buf, reply_deadline_ms)
+    got: = nc.read_stream(U8$[]::resp_buf, REPLY_DEADLINE_MS)
     return got
 
 priv fn body_offset(resp: U8[]): Sz //< finds where the body starts in the response
@@ -163,7 +163,7 @@ priv fn watch_battery(ln: con.Line$@): Bool //<
         halt_battery()
     case .back
         halted = false
-        con.say(ln, "[car]", battery.back_note)
+        con.say(ln, "[car]", battery.BACK_NOTE)
     default {}
     return may
 
@@ -177,7 +177,7 @@ priv fn one_round(seq: U32) //< runs one round
     last_line = line
 
     // Point-blank range is decided here, without waiting for the server.
-    if dist > 0 && dist < emergency_mm
+    if dist > 0 && dist < EMERGENCY_MM
         apply("emergency_back", -45, 0, 0)
         _sent: = exchange(dist, line, seq) // still sent, to keep the server's counts moving
         return
@@ -238,7 +238,7 @@ fn car_task(_arg: Void$@): Void
         return // silent; see `boot.clocks_and_gpio`
     track.init()
     range.init()
-    gpio.init_analog(board.battery_pin)
+    gpio.init_analog(board.BATTERY_PIN)
     adc.init() catch
         boot.beep(4)
         return
@@ -254,7 +254,7 @@ fn car_task(_arg: Void$@): Void
     for !usb.ncm_is_up()
         boot.pump(200)
         waited += 200
-        if waited >= stage_report_interval_ms
+        if waited >= STAGE_REPORT_INTERVAL_MS
             waited = 0
             boot.beep(usb.current_stage())
 
@@ -266,7 +266,7 @@ fn car_task(_arg: Void$@): Void
     con.say(ln@, "[car]", "link up, resolving peer")
     if !nc.resolve_peer(ln@)
         halt("no arp reply")
-    else if !nc.open(ln@, our_port, peer_port, our_isn)
+    else if !nc.open(ln@, OUR_PORT, PEER_PORT, OUR_ISN)
         halt("no tcp handshake")
     else
         con.say(ln@, "[car]", "connected to kssrv, entering the control loop")
@@ -283,7 +283,7 @@ fn car_task(_arg: Void$@): Void
         // moments.
         if loops % 10 == 0
             report(ln@)
-        boot.pump(loop_interval_ms)
+        boot.pump(LOOP_INTERVAL_MS)
 
 // The on_idle for `task.run_single_task`: semihosting's exit is not available, so it does nothing.
 priv fn park() {}

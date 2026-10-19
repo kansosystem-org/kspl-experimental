@@ -14,9 +14,9 @@ import "ksos/kernel/sync"
 import "ksos/kernel/task" + { Task }
 import "std/verdict"
 
-priv const low_prio: I32 = 1
-priv const mid_prio: I32 = 3
-priv const high_prio: I32 = 5
+priv const LOW_PRIO: I32 = 1
+priv const MID_PRIO: I32 = 3
+priv const HIGH_PRIO: I32 = 5
 
 $g_m1: sync.Mutex
 $g_m2: sync.Mutex
@@ -50,12 +50,12 @@ fn low(_arg: Void$@): Void
     g_m1.lock()
     g_m2.lock()
     Task.delay_until(2) // high and mid start waiting at tick 1
-    assert(tcb_low.get_prio() == high_prio, "mutex_nested: high's wait did not lend its priority")
+    assert(tcb_low.get_prio() == HIGH_PRIO, "mutex_nested: high's wait did not lend its priority")
     g_m2.unlock()
-    assert(tcb_low.get_prio() == high_prio,
+    assert(tcb_low.get_prio() == HIGH_PRIO,
         "mutex_nested: releasing m2 dropped the priority high lends through m1")
     g_m1.unlock()
-    assert(tcb_low.get_prio() == low_prio, "mutex_nested: the last release kept a lent priority")
+    assert(tcb_low.get_prio() == LOW_PRIO, "mutex_nested: the last release kept a lent priority")
     verdict.pass("releasing m2 keeps 5 while high waits on m1; releasing m1 returns 1.")
 
     // --- Round 2 ---
@@ -63,12 +63,12 @@ fn low(_arg: Void$@): Void
     g_m1.lock()
     g_m2.lock()
     Task.delay_until(4) // high2 and mid2 start waiting at tick 3
-    assert(tcb_low.get_prio() == high_prio, "mutex_nested: high2's wait did not lend its priority")
+    assert(tcb_low.get_prio() == HIGH_PRIO, "mutex_nested: high2's wait did not lend its priority")
     g_m1.unlock()
-    assert(tcb_low.get_prio() == mid_prio,
+    assert(tcb_low.get_prio() == MID_PRIO,
         "mutex_nested: releasing m1 did not fall to the priority mid lends through m2")
     g_m2.unlock()
-    assert(tcb_low.get_prio() == low_prio, "mutex_nested: the last release kept a lent priority")
+    assert(tcb_low.get_prio() == LOW_PRIO, "mutex_nested: the last release kept a lent priority")
     verdict
         .pass("releasing m1 first falls to 3 while mid waits on m2, not to 1; releasing m2 returns \
             1.")
@@ -76,10 +76,10 @@ fn low(_arg: Void$@): Void
 fn main(): I32
     g_m1.init()
     g_m2.init()
-    tcb_low.create(U8$[]::stack_low, low, null, low_prio, "low")
-    tcb_high.create(U8$[]::stack_high, wait_m1, Void$@::g_round1@, high_prio, "high")
-    tcb_mid.create(U8$[]::stack_mid, wait_m2, Void$@::g_round1@, mid_prio, "mid")
-    tcb_high2.create(U8$[]::stack_high2, wait_m1, Void$@::g_round2@, high_prio, "high2")
-    tcb_mid2.create(U8$[]::stack_mid2, wait_m2, Void$@::g_round2@, mid_prio, "mid2")
+    tcb_low.create(U8$[]::stack_low, low, null, LOW_PRIO, "low")
+    tcb_high.create(U8$[]::stack_high, wait_m1, Void$@::g_round1@, HIGH_PRIO, "high")
+    tcb_mid.create(U8$[]::stack_mid, wait_m2, Void$@::g_round1@, MID_PRIO, "mid")
+    tcb_high2.create(U8$[]::stack_high2, wait_m1, Void$@::g_round2@, HIGH_PRIO, "high2")
+    tcb_mid2.create(U8$[]::stack_mid2, wait_m2, Void$@::g_round2@, MID_PRIO, "mid2")
     task.start_scheduler()
     return verdict.finish()

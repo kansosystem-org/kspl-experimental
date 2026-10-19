@@ -11,7 +11,7 @@ import "kspage/model/doc" { Rect }
 import "kspage/model/paint"
 import "kspage/model/run"
 import "kspage/model/style"
-import "kspage/port/web/state" + { ed, ensure, in_ptr, input, input_cap, page, sheet }
+import "kspage/port/web/state" + { ed, ensure, in_ptr, input, INPUT_CAP, page, sheet }
 import "kspage/write/block"
 import "kspage/write/insert"
 import "kspage/write/shape"
@@ -29,7 +29,7 @@ fn kspage_web_style(): Sz
 // empty name reverts to the parent's; **with nothing selected it applies to the whole inline.**
 #export
 fn kspage_web_set_style(len: Sz): I32
-    if len < 0 || len > input_cap
+    if len < 0 || len > INPUT_CAP
         return 0
     return 1 if ed.set_style(U8[]::{ .ptr = input@, .len = len }) else 0
 
@@ -97,7 +97,7 @@ fn kspage_web_span_ink(out: F32$@)
         switch s.font.weight
         case .some(v)
             (out + 8)$ = 1.0
-            (out + 9)$ = 1.0 if v >= paint.bold_weight else 0.0
+            (out + 9)$ = 1.0 if v >= paint.BOLD_WEIGHT else 0.0
         case .none {}
         switch s.font.italic
         case .some(v)
@@ -114,7 +114,7 @@ fn kspage_web_span_ink(out: F32$@)
 #export
 fn kspage_web_insert_shape(len: Sz, kind: I32): I32
     ensure()
-    if len <= 0 || len > input_cap
+    if len <= 0 || len > INPUT_CAP
         return 0
     // Caution: **Take the name from the typing arena** (the loading arena is for an image's
     // source).
@@ -128,7 +128,7 @@ fn kspage_web_insert_shape(len: Sz, kind: I32): I32
 #export
 fn kspage_web_draw_shape(len: Sz, kind: I32, x: F32, y: F32, w: F32, h: F32): I32
     ensure()
-    if len <= 0 || len > input_cap
+    if len <= 0 || len > INPUT_CAP
         return 0
     name: = U8[]::{ .ptr = input@, .len = len }
     return 1 if ed.draw_shape(page, sheet, name, state.shape_at(kind), x, y, w, h) else 0
@@ -157,7 +157,7 @@ fn kspage_web_block_style(): Sz
 #export
 fn kspage_web_set_block_style(len: Sz): I32
     ensure()
-    if page == null || len < 0 || len > input_cap
+    if page == null || len < 0 || len > INPUT_CAP
         return 0
     name: = U8[]::{ .ptr = input@, .len = len }
     // Caution: **Return the reason as a number** — a single false leaves the page no fitting
@@ -199,7 +199,7 @@ fn kspage_web_name(): Sz
 #export
 fn kspage_web_set_name(len: Sz): I32
     ensure()
-    if page == null || len < 0 || len > input_cap
+    if page == null || len < 0 || len > INPUT_CAP
         return 0
     name: = U8[]::{ .ptr = input@, .len = len }
     switch ed.name_fault_at(page, name)
@@ -218,7 +218,7 @@ fn kspage_web_set_name(len: Sz): I32
 #export
 fn kspage_web_insert_refer(len: Sz): I32
     ensure()
-    if page == null || len < 0 || len > input_cap
+    if page == null || len < 0 || len > INPUT_CAP
         return 0
     name: = U8[]::{ .ptr = input@, .len = len }
     return 1 if ed.insert_refer(page, sheet, name) else 0
@@ -236,7 +236,7 @@ fn kspage_web_href(): Sz
 #export
 fn kspage_web_set_href(len: Sz): I32
     ensure()
-    if len < 0 || len > input_cap
+    if len < 0 || len > INPUT_CAP
         return 0
     // Caution: **Do not accept a scheme that cannot be opened** (`safe_href` in `model/run.kspl`)
     // — accepted but never opened, it is a field that does nothing (Principle 5). Empty means
@@ -301,7 +301,7 @@ fn kspage_web_insert_image(len: Sz, w: F32, h: F32): I32
 #export
 fn kspage_web_insert_gathered(len: Sz, kind: I32): I32
     ensure()
-    if page == null || len <= 0 || len > input_cap
+    if page == null || len <= 0 || len > INPUT_CAP
         return 0
     what: = Collect.notes if kind == 2 else Collect.contents
     name: = U8[]::{ .ptr = input@, .len = len }
@@ -335,7 +335,7 @@ fn kspage_web_note(): Sz
 #export
 fn kspage_web_set_note(len: Sz): I32
     ensure()
-    if len < 0 || len > input_cap
+    if len < 0 || len > INPUT_CAP
         return 0
     return 1 if ed.set_note(U8[]::{ .ptr = input@, .len = len }) else 0
 

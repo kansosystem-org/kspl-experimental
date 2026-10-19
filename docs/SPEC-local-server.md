@@ -2,7 +2,7 @@
 
 **This document sets the protocol for a page in a browser and a small program on the same machine, the *local server*.** The page asks the program to read and write files for it. The document also sets what that program must refuse. By design, a browser lets a page open a file only through a window a person chooses. A page cannot walk folders or reach a file by its path. So one local program answers these requests. The same program serves the page, so the same-origin rule does not block them. (That rule lets a page freely call only the server the page came from.) **It starts no program.** Take a server that starts programs on a page's request. Every guard of it must hold, for what a page can ask for there is running code.
 
-**It describes no single implementation**: the server is meant to be replaceable, so only the rules live here. Why the protocol has its own document, and why each rule was chosen, is "A page asks the local machine through one protocol" in [`DESIGN-repository.md`](DESIGN-repository.md).
+**It describes no single implementation**: the server is meant to be replaceable, so only the rules live here.
 
 ## Who asks whom
 
@@ -165,7 +165,5 @@ A client that requires file access stops startup and tells the user to open the 
 ## Further reading
 
 * [`README.md`](README.md) — which reader each document here is for.
-* [`DESIGN-principles.md`](DESIGN-principles.md) — the Development Principles, which many rules here follow from.
-* [`DESIGN-repository.md`](DESIGN-repository.md) — the grounds for this protocol.
 * [kssrv](../kssrv/README.md) — the server that answers.
 * [kspage](../kspage/README.md) — the editing system that is the client.

@@ -16,16 +16,16 @@ import "std/str"
 import "std/sys"
 import "std/verdict"
 
-priv const stats_head: U8[] = "[Fmt Cache] "
+priv const STATS_HEAD: U8[] = "[Fmt Cache] "
 
-priv const formatted: U8[] = "fn main(): I32\n    return 0\n" //< a text formatting leaves alone
-priv const unformatted: U8[] = "fn main(): I32\n  return 0\n" //< one it changes
+priv const FORMATTED: U8[] = "fn main(): I32\n    return 0\n" //< a text formatting leaves alone
+priv const UNFORMATTED: U8[] = "fn main(): I32\n  return 0\n" //< one it changes
 
 priv fn counts(out: U8[], arena: Arena$@): U8[] //< `--stats`'s `[Fmt Cache]` line, past its head
     for one in out.lines(arena)
         shown: = one.trim_start()
-        if shown.starts_with(stats_head)
-            return shown.sub_from(stats_head.len)
+        if shown.starts_with(STATS_HEAD)
+            return shown.sub_from(STATS_HEAD.len)
     return ""
 
 priv fn fmt_counts(path: U8[], extra: U8[][], arena: Arena$@): U8[] //<
@@ -64,8 +64,8 @@ fn run(arena: Arena$@) //< every case, in a cache folder made fresh for them
     sys.set_env("KSPLC_CACHE_DIR", fs.join(dir, "cache", arena))
         catch panic("KSPLC_CACHE_DIR could not be set")
     defer put_back("KSPLC_CACHE_DIR", was)
-    a: = place(dir, "a.kspl", formatted, arena)
-    b: = place(dir, "b.kspl", unformatted, arena)
+    a: = place(dir, "a.kspl", FORMATTED, arena)
+    b: = place(dir, "b.kspl", UNFORMATTED, arena)
     if a.len == 0 || b.len == 0
         verdict.check("the formatter's cache has its material", false, dir)
         return
@@ -77,7 +77,7 @@ fn run(arena: Arena$@) //< every case, in a cache folder made fresh for them
     expect("a text formatting changes is not recorded", fmt_counts(b, in_place, arena),
         "0 hit / 1 miss / 0 stored", arena)
     got: = io.read_file(b) catch ""
-    verdict.check("a text the cache has no record of is formatted", got.equals(formatted), got)
+    verdict.check("a text the cache has no record of is formatted", got.equals(FORMATTED), got)
     // Each field of the style is part of the key: a record made under one style tells nothing
     // about another. **Not in place**, so `a` stays as it was for the next style.
     for style in U8[][]::{ "IndentWidth: 8", "ColumnLimit: 120", "AllowShortBlocks: true",

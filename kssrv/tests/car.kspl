@@ -15,7 +15,7 @@ import "std/verdict"
 // ==========================================
 // --- Downloading the policy ---
 
-priv const bad_car: U8[][5] = ::{ "{\"line\":2}", "{\"dist_mm\":100}",
+priv const BAD_CAR: U8[][5] = ::{ "{\"line\":2}", "{\"dist_mm\":100}",
     "{\"dist_mm\":-1,\"line\":2}", "{\"dist_mm\":100,\"line\":8}", "{\"dist_mm\":100,\"line\":-1}" }
 
 fn pilot_cases(port: I32, arena: Arena$@): pilot.Blob?!client.Http_end
@@ -65,21 +65,21 @@ impl Car_link
         body: = arena.text().s("{\"dist_mm\":\{dist_mm\},\"line\":\{line\},\"seq\":\{r.seq\}}")
             .take()
         r.conn.send(client.post_bytes("/api/car", body, arena))!
-        return r.conn.next(false, client.default_timeout_ms, arena)
+        return r.conn.next(false, client.DEFAULT_TIMEOUT_MS, arena)
 
-const dist_steps: Sz = 121 //< how many distance steps
+const DIST_STEPS: Sz = 121 //< how many distance steps
     //<
     //< From 0mm to 3000mm in 25mm steps.
-const dist_step_mm: I64 = 25I64
-const line_count: Sz = 8
-priv const near_mm: I64 = 150I64 //< the point-blank distance (mm)
+const DIST_STEP_MM: I64 = 25I64
+const LINE_COUNT: Sz = 8
+priv const NEAR_MM: I64 = 150I64 //< the point-blank distance (mm)
     //<
     //< Nearer than this it must not move forward.
-const tight_margin: F64 = 0.0001 //< the logit gap counted as a close call
-priv const max_tight: Sz = 5 //< how many points may be dropped from the verdict as a close call
+const TIGHT_MARGIN: F64 = 0.0001 //< the logit gap counted as a close call
+priv const MAX_TIGHT: Sz = 5 //< how many points may be dropped from the verdict as a close call
     //<
     //< More than this is itself a fault.
-priv const min_agree_pct: Sz = 95 //< the share of manoeuvres that should match the rule (per cent)
+priv const MIN_AGREE_PCT: Sz = 95 //< the share of manoeuvres that should match the rule (per cent)
 
 priv struct Sweep //< what the sweep collected
     seen: Sz
@@ -114,10 +114,10 @@ fn car_cases(port: I32, blob: pilot.Blob?, arena: Arena$@): Void!client.Http_end
         "the advance must be zero where the distance cannot be measured or the obstacle touches")
     d49: = arena.text().s("\{sw.agree\}/\{sw.seen\}").take()
     verdict.check("the manoeuvre matches the rule 95% of the time or better",
-        sw.agree * 100 >= sw.seen * min_agree_pct, d49)
+        sw.agree * 100 >= sw.seen * MIN_AGREE_PCT, d49)
     if blob.is_none()
         sw.diff.push("could not read the policy handed out")
-    if sw.tight > max_tight
+    if sw.tight > MAX_TIGHT
         many: = arena.text().s("too many points dropped as a close call: \{sw.tight\}/\{sw.seen\}")
             .take()
         sw.diff.push(many)
@@ -127,10 +127,10 @@ fn car_cases(port: I32, blob: pilot.Blob?, arena: Arena$@): Void!client.Http_end
             read")
     d51: = arena.text().s("\{link.seq\}").take()
     verdict.check("it keeps handling observations on one connection",
-        link.seq == 1 + dist_steps * line_count, d51)
+        link.seq == 1 + DIST_STEPS * LINE_COUNT, d51)
 
-    for bad in bad_car
-        r: = client.post_json(port, "/api/car", "", bad, client.default_timeout_ms, arena)!
+    for bad in BAD_CAR
+        r: = client.post_json(port, "/api/car", "", bad, client.DEFAULT_TIMEOUT_MS, arena)!
         nm52: = arena.text().s("a broken observation is 400: ").s(client.short(bad)).take()
         d53: = arena.text().s("\{r.status\}").take()
         verdict.check(nm52, r.status == 400, d53)
@@ -173,9 +173,9 @@ priv fn sweep(link: Car_link$@, blob: pilot.Blob?, arena: Arena$@): Sweep!client
     defer scratch.free()
     $sw: = Sweep::{ .seen = 0, .agree = 0, .bad = List<|U8[]|>.create(arena),
         .diff = List<|U8[]|>.create(arena), .tight = 0 }
-    for k in Range.asc(dist_steps)
-        dist: = I64::k * dist_step_mm
-        for line in Range.asc(line_count)
+    for k in Range.asc(DIST_STEPS)
+        dist: = I64::k * DIST_STEP_MM
+        for line in Range.asc(LINE_COUNT)
             r: = link.observe(dist, line, arena)!
             doc: = client.doc_of(r, arena)
             cmd: = doc.get("cmd").as_str().unwrap_or("")
@@ -188,7 +188,7 @@ priv fn sweep(link: Car_link$@, blob: pilot.Blob?, arena: Arena$@): Sweep!client
                 sw.agree += 1
             if dist == 0I64 && !cmd.equals("stop")
                 sw.bad.push(at_point(dist, line, cmd, arena))
-            if dist > 0I64 && dist < near_mm &&
+            if dist > 0I64 && dist < NEAR_MM &&
                 doc.get("lon").as_int().unwrap_or(0) > 0
                 sw.bad.push(at_point(dist, line, cmd, arena))
             at: = at_point(dist, line, cmd, arena)
@@ -202,18 +202,18 @@ priv struct Point //< one point of the sweep
 priv fn at_point(dist: I64, line: Sz, note: U8[], arena: Arena$@): U8[]
     return arena.text().s("dist=\{dist\} line=\{line\}: ").s(note).take()
 
-priv fn match_blob(sw: Sweep$@, blob: pilot.Blob?, doc: json.Val, where_at: U8[], p: Point,
+priv fn match_blob(sw: Sweep$@, blob: pilot.Blob?, doc: json.Value, where_at: U8[], p: Point,
     scratch: Arena$@, arena: Arena$@)
     if b: = blob
         d: = pilot.drive(b, p.dist, p.line, scratch)
-        if d.margin < tight_margin
+        if d.margin < TIGHT_MARGIN
             sw.tight += 1
             return
         if !same_drive(d, doc)
             sw.diff
                 .push(arena.text().s(where_at).s(" -> \{d.lon\},\{d.lat\},\{d.rot\}").take())
 
-priv fn same_drive(d: pilot.Drive, doc: json.Val): Bool
+priv fn same_drive(d: pilot.Drive, doc: json.Value): Bool
     return d.lon == doc.get("lon").as_int().unwrap_or(-1000) &&
         d.lat == doc.get("lat").as_int().unwrap_or(-1000) &&
         d.rot == doc.get("rot").as_int().unwrap_or(-1000)

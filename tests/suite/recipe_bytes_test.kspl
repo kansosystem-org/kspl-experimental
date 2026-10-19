@@ -33,14 +33,14 @@ priv struct Hit //< one finding on a recipe line
     text: U8[]
 
 // The tools that swallow the earlier stage's failure when they are a pipe's later stage.
-priv const filters: U8[][_] = ::{ "tee", "head", "tail", "grep", "sort", "wc", "xargs", "awk",
+priv const FILTERS: U8[][_] = ::{ "tee", "head", "tail", "grep", "sort", "wc", "xargs", "awk",
     "sed", "cut", "python3" }
 
-priv const safe_producers: U8[][_] = ::{ "echo", "printf" } //< commands that do not fail
+priv const SAFE_PRODUCERS: U8[][_] = ::{ "echo", "printf" } //< commands that do not fail
     //<
     //< Adding pipefail where only these are the earlier stage changes nothing.
 
-priv const shell_words: U8[][_] = ::{ "if", "while", "until", "elif", "then", "else" } //<
+priv const SHELL_WORDS: U8[][_] = ::{ "if", "while", "until", "elif", "then", "else" } //<
     //< The shell's syntax words (at the start of an earlier stage, not a command)
 
 priv fn make_files(arena: Arena$@): List<|U8[]|> //<
@@ -148,13 +148,13 @@ priv fn producer_can_fail(prod: U8[]): Bool //<
         for t.len > 0 && (t[0] == '@' || t[0] == '(' || t[0] == '!' || t[0] == ' ')
             t = t.sub_from(1)
             skipped = true
-        for w in shell_words
+        for w in SHELL_WORDS
             if starts_word(t, w)
                 t = t.sub_from(w.len)
                 skipped = true
         if !skipped
             break
-    for safe in safe_producers
+    for safe in SAFE_PRODUCERS
         if starts_word(t, safe)
             return false
     return true
@@ -173,7 +173,7 @@ priv fn has_failing_pipe(chunk: U8[]): Bool //<
         prod_start = i + 1
         after: = chunk.sub_from(i + 1).trim_start()
         $is_filter: = false
-        for f in filters
+        for f in FILTERS
             if starts_word(after, f)
                 is_filter = true
         if is_filter && producer_can_fail(prod)
@@ -475,19 +475,19 @@ priv fn help_groups(arena: Arena$@): List<|U8[]|> //< the groups `mk/help.mk` li
     //< **The canonical source is that one line** (no copy is kept). Unreadable, it returns empty
     //< and the caller fails with "not one could be read".
     $out: = List<|U8[]|>.new(arena)
-    text: = harness.read_under_root(help_file)
+    text: = harness.read_under_root(HELP_FILE)
     if text.len == 0
         return out
     for line in text.lines(arena)
-        if !line.starts_with(groups_head)
+        if !line.starts_with(GROUPS_HEAD)
             continue
-        for w in harness_text.words(line.sub_from(groups_head.len), arena)
+        for w in harness_text.words(line.sub_from(GROUPS_HEAD.len), arena)
             out.push(w)
         break
     return out
 
-priv const help_file: U8[] = "mk/help.mk"
-priv const groups_head: U8[] = "export HELP_GROUPS := "
+priv const HELP_FILE: U8[] = "mk/help.mk"
+priv const GROUPS_HEAD: U8[] = "export HELP_GROUPS := "
 
 priv fn check_help_groups(names: Names@, arena: Arena$@) //<
     //< The groups agree with `mk/help.mk`'s row
@@ -497,7 +497,7 @@ priv fn check_help_groups(names: Names@, arena: Arena$@) //<
     //< `include` lines are walked, so the answer does not change with the environment.
     known: = help_groups(arena)
     if !verdict.check("the row of groups can be read from `mk/help.mk`", known.len > 0,
-        arena.text().s(help_file).s("'s `").s(groups_head).s("...` line cannot be read").take())
+        arena.text().s(HELP_FILE).s("'s `").s(GROUPS_HEAD).s("...` line cannot be read").take())
         return
     $unknown: = List<|U8[]|>.new(arena)
     for d in names.docs
@@ -506,7 +506,7 @@ priv fn check_help_groups(names: Names@, arena: Arena$@) //<
                 .push(arena.text().s(d.where).s(": ").s(d.group).take())
     verdict.check_list("`make help`'s groups are in `mk/help.mk`'s row", names.docs.len, "lines",
         unknown@,
-        arena.text().s("mend the writing, or add the group to ").s(help_file).take())
+        arena.text().s("mend the writing, or add the group to ").s(HELP_FILE).take())
 
     $empty: = List<|U8[]|>.new(arena)
     for g in known
@@ -518,7 +518,7 @@ priv fn check_help_groups(names: Names@, arena: Arena$@) //<
         if !seen
             empty.push(g)
     verdict.check_list("`mk/help.mk`'s groups hold one thing or more", known.len, "groups", empty@,
-        arena.text().s("add that group's `## ` line, or drop the group from ").s(help_file).take())
+        arena.text().s("add that group's `## ` line, or drop the group from ").s(HELP_FILE).take())
 
 // ==========================================
 // 6. That a `$(call)` asks for nothing that vanishes **make warns about neither.** An argument
@@ -721,35 +721,35 @@ priv fn check_calls(arena: Arena$@) //<
 
 // What `args_passed` and `highest_read` must answer. **A nested comma and an escaped `$` are the
 // cases that pass unseen**, so both sides of each are included.
-priv const call_samples: U8[][_] = ::{ "$(call f)", "$(call f,a,b)", "$(call f,$(subst a,b,c),d)",
+priv const CALL_SAMPLES: U8[][_] = ::{ "$(call f)", "$(call f,a,b)", "$(call f,$(subst a,b,c),d)",
     "$(call f,,x)", "$(call f,a" }
-priv const call_want: I64[_] = ::{ 0, 2, 2, 2, -1 }
-priv const read_samples: U8[][_] = ::{ "echo $(1) $(3)", "echo $$(1)", "$$$(2)",
+priv const CALL_WANT: I64[_] = ::{ 0, 2, 2, 2, -1 }
+priv const READ_SAMPLES: U8[][_] = ::{ "echo $(1) $(3)", "echo $$(1)", "$$$(2)",
     "awk '{print $$1}'", "$1 and ${2}", "$(12x) $(x)" }
-priv const read_want: Sz[_] = ::{ 3, 0, 2, 0, 2, 0 }
+priv const READ_WANT: Sz[_] = ::{ 3, 0, 2, 0, 2, 0 }
 
 priv fn check_call_fires(arena: Arena$@)
     $bad: = List<|U8[]|>.new(arena)
-    for i in Range.asc(call_samples.len)
-        got: = args_passed(call_samples[i])
-        if got != call_want[i]
+    for i in Range.asc(CALL_SAMPLES.len)
+        got: = args_passed(CALL_SAMPLES[i])
+        if got != CALL_WANT[i]
             bad
-                .push(arena.text().s("\"").s(call_samples[i])
+                .push(arena.text().s("\"").s(CALL_SAMPLES[i])
                 .s("\" was counted as \{got\} arguments").take())
-    for i in Range.asc(read_samples.len)
-        got: = highest_read(read_samples[i])
-        if got != read_want[i]
+    for i in Range.asc(READ_SAMPLES.len)
+        got: = highest_read(READ_SAMPLES[i])
+        if got != READ_WANT[i]
             bad
-                .push(arena.text().s("\"").s(read_samples[i]).s("\" was read as up to \{got\}")
+                .push(arena.text().s("\"").s(READ_SAMPLES[i]).s("\" was read as up to \{got\}")
                 .take())
     verdict.check_list("the reading of a `$(call)` and of what a function reads can fire",
-        call_samples.len + read_samples.len, "samples", bad@,
+        CALL_SAMPLES.len + READ_SAMPLES.len, "samples", bad@,
         "the tables are `call_samples` and `read_samples`")
 
 // The self-host compare's material: the same C but for one space inside a string literal, which
 // a compare ignoring whitespace (`diff -w`) calls equal.
-priv const stage_text: U8[] = "const char *s = \"a b\";\n"
-priv const stage_spaced: U8[] = "const char *s = \"a  b\";\n"
+priv const STAGE_TEXT: U8[] = "const char *s = \"a b\";\n"
+priv const STAGE_SPACED: U8[] = "const char *s = \"a  b\";\n"
 
 priv fn stages_agree(one: U8[], other: U8[], dir: U8[], arena: Arena$@): Bool //<
     //< Whether `ksplc/Makefile`'s compare and verdict, the self-host check's steps, pass the two
@@ -768,8 +768,8 @@ priv fn check_stage_compare(arena: Arena$@) //<
     dir: = harness.sandbox("recipe_bytes")
     plain: = fs.join(dir, "plain.c", arena)
     spaced: = fs.join(dir, "spaced.c", arena)
-    io.write_file(plain, stage_text) catch {}
-    io.write_file(spaced, stage_spaced) catch {}
+    io.write_file(plain, STAGE_TEXT) catch {}
+    io.write_file(spaced, STAGE_SPACED) catch {}
     verdict.check("the self-host compare passes a file against itself",
         stages_agree(plain, plain, dir, arena), "")
     verdict.check("the self-host compare fails on one space added inside a string literal",

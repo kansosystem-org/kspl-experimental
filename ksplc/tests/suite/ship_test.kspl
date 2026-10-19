@@ -18,16 +18,16 @@ import "std/subproc"
 import "std/sys"
 import "std/verdict"
 
-priv const fixture_dir: U8[] = "tests/ship" //< the vendors' and the customers' sources
+priv const FIXTURE_DIR: U8[] = "tests/ship" //< the vendors' and the customers' sources
 
-priv const output_cap: Sz = 64 * 1024 //< how much of each of a customer's outputs is kept
+priv const OUTPUT_CAP: Sz = 64 * 1024 //< how much of each of a customer's outputs is kept
 
-priv const libs: U8[][2] = ::{ "greet", "count" } //< the two vendors' libraries
+priv const LIBS: U8[][2] = ::{ "greet", "count" } //< the two vendors' libraries
 
-priv const exports: U8[][6] = ::{ "count_parse", "count_words", "greet_gone_peer", "greet_hello",
+priv const EXPORTS: U8[][6] = ::{ "count_parse", "count_words", "greet_gone_peer", "greet_hello",
     "greet_norm", "greet_stop" } //< every `#export` of the two, which alone may stay visible outside them
 
-priv const c_expected: U8[] =
+priv const C_EXPECTED: U8[] =
     """host starts
 hello 0
 hello 1
@@ -38,7 +38,7 @@ host: a write to a gone peer failed
 host ends
 """ //< what the C customer prints, its library calls between its own lines
 
-priv const app_expected: U8[] =
+priv const APP_EXPECTED: U8[] =
     """app starts
 hello 0
 hello 1
@@ -47,21 +47,21 @@ norm of (6, 8) is 10.0
 app: 24 bytes, norm 10
 """ //< what the KSPL customer prints
 
-priv const header_flags: U8[][6] = ::{ "-std=c99", "-Wall", "-Wextra", "-Werror",
+priv const HEADER_FLAGS: U8[][6] = ::{ "-std=c99", "-Wall", "-Wextra", "-Werror",
     "-Wstrict-prototypes", "-fsyntax-only" } //< the strictest C99 a customer may build with
 
-priv const cross_cc: U8[] = "x86_64-w64-mingw32-gcc" //< the cross compiler for Windows
-priv const cross_ar: U8[] = "x86_64-w64-mingw32-ar"
+priv const CROSS_CC: U8[] = "x86_64-w64-mingw32-gcc" //< the cross compiler for Windows
+priv const CROSS_AR: U8[] = "x86_64-w64-mingw32-ar"
 
 priv struct Toolchain //< one C toolchain, as the steps below spell a library with it
     cc: U8[]
     ar: U8[]
     windows: Bool //< a `.dll` with its import library, not a `.so`
     macho: Bool //< a `.dylib` found through `@rpath`
-    link_libs: U8[][] //< `ksplc info link-libs`'s answer for this toolchain's target
+    link_libs: U8[][] //< `ksplc info link-LIBS`'s answer for this toolchain's target
 
 priv fn link_libs_for(cc: U8[], arena: Arena$@): U8[][] //<
-    //< `ksplc info link-libs` asked for the target `cc` builds for
+    //< `ksplc info link-LIBS` asked for the target `cc` builds for
     //<
     //< ksplc reads the target from `CC`, so it is set for the one question and then put back.
     before: = arena.dup_str(sys.get_env("CC").unwrap_or(""))
@@ -92,7 +92,7 @@ priv fn argv_of(head: U8[][], tail: U8[][], arena: Arena$@): U8[][] //< two runs
 
 priv fn copy_in(names: U8[][], to: U8[], arena: Arena$@): Bool //< copies fixtures into a place
     for n in names
-        body: = io.read_file(fs.join(fixture_dir, n, arena)) catch
+        body: = io.read_file(fs.join(FIXTURE_DIR, n, arena)) catch
             return false
         defer dealloc(Void$@::body.ptr)
         io.write_file(fs.join(to, n, arena), body) catch
@@ -102,7 +102,7 @@ priv fn copy_in(names: U8[][], to: U8[], arena: Arena$@): Bool //< copies fixtur
 priv fn vendor_builds(vendor: U8[], arena: Arena$@): Bool //<
     //< Each vendor's C and interfaces, as the vendor makes them: one compile writes them all
     $all: = true
-    for lib in libs
+    for lib in LIBS
         $argv: = List<|U8[]|>.new(arena)
         argv.push(arena.text().s("--library=\{lib\}.h").take())
         // **greet ships both forms from the one compile**; count ships its C header alone.
@@ -127,7 +127,7 @@ priv fn check_private(vendor: U8[], obj_dir: U8[], arena: Arena$@) //<
         verdict.skip_check(name, "nm is not installed")
         return
     $bad: = List<|U8[]|>.new(arena)
-    for lib in libs
+    for lib in LIBS
         r: = harness.run_in(U8[][]::{ nm, "--defined-only", "--extern-only",
             fs.join(obj_dir, arena.text().s("\{lib\}.o").take(), arena) }, vendor)
         if !r.exited_with(0)
@@ -138,7 +138,7 @@ priv fn check_private(vendor: U8[], obj_dir: U8[], arena: Arena$@) //<
             if sym.len > 0 && line.find_char(':').is_none() && !is_export(sym)
                 bad
                     .push(arena.text().s("\{lib\}.o: ").s(line.trim_spaces()).take())
-    verdict.check(name, bad.len == 0, "\n".join(bad, arena))
+    verdict.check(name, bad.len == 0, "\n".join(bad.slice(), arena))
 
 priv fn last_word(line: U8[], arena: Arena$@): U8[] //< a line's last word (nm's symbol name)
     $last: = ""
@@ -148,7 +148,7 @@ priv fn last_word(line: U8[], arena: Arena$@): U8[] //< a line's last word (nm's
     return last
 
 priv fn is_export(sym: U8[]): Bool //< whether it is one of the `#export` names
-    for e in exports
+    for e in EXPORTS
         if sym.equals(e)
             return true
     return false
@@ -156,7 +156,7 @@ priv fn is_export(sym: U8[]): Bool //< whether it is one of the `#export` names
 priv fn build_static(tc: Toolchain, vendor: U8[], dir: U8[], arena: Arena$@): Bool //<
     //< Each library as an archive in `dir`: an object, then `ar`
     $all: = true
-    for lib in libs
+    for lib in LIBS
         obj: = fs.join(dir, arena.text().s("\{lib\}.o").take(), arena)
         all =
             all &&
@@ -173,7 +173,7 @@ priv fn build_static(tc: Toolchain, vendor: U8[], dir: U8[], arena: Arena$@): Bo
 priv fn build_shared(tc: Toolchain, vendor: U8[], dir: U8[], arena: Arena$@): Bool //<
     //< Each library as a shared one in `dir`, with its link libraries named
     $all: = true
-    for lib in libs
+    for lib in LIBS
         $argv: = List<|U8[]|>.new(arena)
         argv.push(tc.cc)
         argv.push("-std=c99")
@@ -240,7 +240,7 @@ priv fn check_runs(name: U8[], argv: U8[][], expected: U8[], dir: U8[], arena: A
     //< goes through (Wine) writes its own notices to standard error. Stderr is still shown on a
     //< failure.
     r: =
-        subproc.run_capture(argv, dir, verdict.default_timeout_ms, output_cap, arena) catch
+        subproc.run_capture(argv, dir, verdict.DEFAULT_TIMEOUT_MS, OUTPUT_CAP, arena) catch
         verdict.check(name, false, "it could not be started")
         return
     got: = r.stdout_data.replace("\r\n", "\n", arena)
@@ -254,7 +254,7 @@ priv fn check_collision(tc: Toolchain, vendor: U8[], dir: U8[], arena: Arena$@) 
     //<
     //< **This is the failure `--library` removes**; were it to link, the check above that the
     //< libraries link together would show nothing.
-    for lib in libs
+    for lib in LIBS
         c_file: = arena.text().s("plain_\{lib\}.c").take()
         obj: = fs.join(dir, arena.text().s("\{lib\}.o").take(), arena)
         if !ok_step(arena.text().s("\{lib\} builds without --library").take(),
@@ -325,7 +325,7 @@ priv fn kspl_customer(tc: Toolchain, vendor: U8[], root: U8[], arena: Arena$@) /
         argv_of(U8[][]::{ tc.cc, "-std=c99", "app.c", "-L.", "-lgreet", "@app.libs" },
         argv_of(tc.link_libs, U8[][]::{ "-o", exe }, arena), arena), customer)
         return
-    check_runs("the KSPL customer runs with greet's library", U8[][]::{ exe }, app_expected,
+    check_runs("the KSPL customer runs with greet's library", U8[][]::{ exe }, APP_EXPECTED,
         customer, arena)
 
 priv fn cross_windows(root: U8[], arena: Arena$@) //<
@@ -336,10 +336,10 @@ priv fn cross_windows(root: U8[], arena: Arena$@) //<
     //< it). Wine is not in the image, so the run under it stays a SKIP there.
     names: = U8[][]::{ "the libraries cross-compile and link for Windows (static and DLL)",
         "the Windows programs run under Wine" }
-    if !harness.has_tool(cross_cc) || !harness.has_tool(cross_ar)
+    if !harness.has_tool(CROSS_CC) || !harness.has_tool(CROSS_AR)
         for n in names
             harness.require_or_skip(n, "KANSO_REQUIRE_MINGW",
-                arena.text().s("\{cross_cc\} is not installed").take())
+                arena.text().s("\{CROSS_CC\} is not installed").take())
         return
     vendor: = fs.join(root, "win", arena)
     fs.mkdir_all(vendor) catch
@@ -353,8 +353,8 @@ priv fn cross_windows(root: U8[], arena: Arena$@) //<
             return
         defer dealloc(Void$@::body.ptr)
         io.write_file(fs.join(vendor, name, arena), body) catch {}
-    tc: = Toolchain::{ .cc = cross_cc, .ar = cross_ar, .windows = true, .macho = false,
-        .link_libs = link_libs_for(cross_cc, arena) }
+    tc: = Toolchain::{ .cc = CROSS_CC, .ar = CROSS_AR, .windows = true, .macho = false,
+        .link_libs = link_libs_for(CROSS_CC, arena) }
     static_dir: = fs.join(vendor, "static", arena)
     shared_dir: = fs.join(vendor, "shared", arena)
     fs.mkdir_all(static_dir) catch {}
@@ -373,8 +373,8 @@ priv fn cross_windows(root: U8[], arena: Arena$@) //<
         verdict.check(names[1], false, "nothing was built to run")
         return
     check_runs("the static Windows program runs under Wine", U8[][]::{ wine, static_exe },
-        c_expected, static_dir, arena)
-    check_runs("the DLL Windows program runs under Wine", U8[][]::{ wine, shared_exe }, c_expected,
+        C_EXPECTED, static_dir, arena)
+    check_runs("the DLL Windows program runs under Wine", U8[][]::{ wine, shared_exe }, C_EXPECTED,
         shared_dir, arena)
 
 priv fn host_toolchain(arena: Arena$@): Toolchain //<
@@ -401,25 +401,25 @@ fn main(): I32
             return harness.fatal("cannot make a working directory")
     if !copy_in(U8[][]::{ "greet.kspl", "count.kspl", "main.c" }, vendor, arena)
         return harness
-            .fatal(arena.text().s("the fixtures in \{fixture_dir\} cannot be copied").take())
+            .fatal(arena.text().s("the fixtures in \{FIXTURE_DIR\} cannot be copied").take())
     tc: = host_toolchain(arena)
     if !vendor_builds(vendor, arena)
         return harness.finish()
-    strict: = argv_of(U8[][]::header_flags, U8[][]::{ "main.c" }, arena)
+    strict: = argv_of(U8[][]::HEADER_FLAGS, U8[][]::{ "main.c" }, arena)
     ok_step("the generated headers compile under -std=c99 -Wall -Wextra -Werror -Wstrict-prototypes",
         argv_of(U8[][]::{ tc.cc }, strict, arena), vendor)
     if build_static(tc, vendor, static_dir, arena)
         check_private(vendor, static_dir, arena)
         exe: = link_main(tc, vendor, static_dir, false, arena)
         if exe.len > 0
-            check_runs("the C customer runs with both static libraries", U8[][]::{ exe }, c_expected,
+            check_runs("the C customer runs with both static libraries", U8[][]::{ exe }, C_EXPECTED,
                 static_dir, arena)
             check_stop(exe, static_dir, arena)
         kspl_customer(tc, vendor, root, arena)
     if build_shared(tc, vendor, shared_dir, arena)
         exe: = link_main(tc, vendor, shared_dir, true, arena)
         if exe.len > 0
-            check_runs("the C customer runs with both shared libraries", U8[][]::{ exe }, c_expected,
+            check_runs("the C customer runs with both shared libraries", U8[][]::{ exe }, C_EXPECTED,
                 shared_dir, arena)
     check_collision(tc, vendor, plain_dir, arena)
     if !tc.windows

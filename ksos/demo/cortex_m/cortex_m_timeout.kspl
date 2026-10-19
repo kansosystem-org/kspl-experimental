@@ -18,15 +18,15 @@ $stack_co: U8[1024]
 $stack_spin: U8[1024]
 $stack_giver: U8[1024]
 
-priv const give_after: U64 = 3
-priv const long_deadline: U64 = 100
+priv const GIVE_AFTER: U64 = 3
+priv const LONG_DEADLINE: U64 = 100
 
 fn spinner(_arg: Void$@): Void //< Never lets go of the CPU (SysTick does the switching)
     for {}
 
 fn giver(_arg: Void$@): Void //<
     //< Runs at the spinner's priority, waits for SysTick to switch to it, then gives
-    Task.delay(give_after)
+    Task.delay(GIVE_AFTER)
     g_sem.give()
 
 fn coordinator(_arg: Void$@): Void //< High-priority waiter with a timeout; checks both results
@@ -39,10 +39,10 @@ fn coordinator(_arg: Void$@): Void //< High-priority waiter with a timeout; chec
 
     tcb_giver.create(U8$[]::stack_giver, giver, null, 1, "giver")
     before2: = task.current_tick()
-    got2: = g_sem.take_for(long_deadline)
+    got2: = g_sem.take_for(LONG_DEADLINE)
     waited2: = task.current_tick() - before2
     con.check("take_for(100) returns true once the giver gives", got2)
-    con.check("it returned before the deadline", waited2 < long_deadline)
+    con.check("it returned before the deadline", waited2 < LONG_DEADLINE)
 
     con.print_summary("Cortex-M timeout")
     con.exit()

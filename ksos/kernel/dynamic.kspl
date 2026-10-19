@@ -16,9 +16,9 @@ priv struct Dyn_entry
     tcb: Task$@ //< null = a free slot
     stack: U8$@
     pending_reap: Bool //< true: waiting to be freed after the current task deleted itself
-priv const max_dyn: Sz = 32 // as task.kspl's max_tasks: at most this many dynamic tasks at once
+priv const MAX_DYN: Sz = 32 // as task.kspl's max_tasks: at most this many dynamic tasks at once
 
-priv const max_queue_bytes: Sz = 16777216 //< the limit [bytes] on a queue's element buffer
+priv const MAX_QUEUE_BYTES: Sz = 16777216 //< the limit [bytes] on a queue's element buffer
     //<
     //< **It keeps `cap * sizeof(T)` from overflowing `Sz`** (signed, so an overflow is undefined
     //< and cannot be tested for afterwards).
@@ -30,7 +30,7 @@ priv $g_dyn_count: Sz = 0
 priv fn find_dyn_by_tcb(t: Task$@): Sz //< returns t's index in g_dyn
     //<
     //< If there is none it returns max_dyn.
-    $idx: Sz = max_dyn
+    $idx: Sz = MAX_DYN
     $found: = false
     for i in Range.asc(g_dyn_count)
         if !found && g_dyn[i].tcb == t
@@ -48,8 +48,8 @@ priv fn find_dyn_slot(): Sz //<
         if !found && g_dyn[i].tcb == null
             slot = i
             found = true
-    if !found && g_dyn_count >= max_dyn
-        return max_dyn
+    if !found && g_dyn_count >= MAX_DYN
+        return MAX_DYN
     return slot
 
 priv fn release_dyn(idx: Sz): Dyn_entry //< [Call it inside a critical section] frees the entry
@@ -75,7 +75,7 @@ priv fn find_reapable(): Sz //< [Call it inside a critical section] an entry rea
     for i in Range.asc(g_dyn_count)
         if g_dyn[i].pending_reap && g_dyn[i].tcb.get_state() == .done
             return i
-    return max_dyn
+    return MAX_DYN
 
 fn reap_pending(): Sz //<
     //< Frees every entry whose task deleted itself and has since switched away
@@ -86,10 +86,10 @@ fn reap_pending(): Sz //<
         s: = task.irq_save()
         idx: = find_reapable()
         $e: Dyn_entry = ::{}
-        if idx < max_dyn
+        if idx < MAX_DYN
             e = release_dyn(idx)
         task.irq_restore(s)
-        if idx >= max_dyn
+        if idx >= MAX_DYN
             return reaped
         free_dyn(e)
         reaped += 1
@@ -122,12 +122,12 @@ impl Task
         // create, and a delete_dyn it calls there must find its entry.
         s: = task.irq_save()
         slot: = find_dyn_slot()
-        if slot < max_dyn
+        if slot < MAX_DYN
             g_dyn[slot] = Dyn_entry::{ .tcb = tcb, .stack = stack, .pending_reap = false }
             if slot == g_dyn_count
                 g_dyn_count += 1
         task.irq_restore(s)
-        if slot >= max_dyn
+        if slot >= MAX_DYN
             free_dyn(Dyn_entry::{ .tcb = tcb, .stack = stack, .pending_reap = false })
             return .none
         if !tcb.create(U8$[]::{ .ptr = stack, .len = stack_size }, entry, arg, prio, name)
@@ -148,7 +148,7 @@ impl Task
         reap_pending()
         s: = task.irq_save()
         idx: = find_dyn_by_tcb(r)
-        if idx >= max_dyn
+        if idx >= MAX_DYN
             task.irq_restore(s)
             return // it did not come from create_dyn (a static task, for example): do nothing
         if r == Task.current()
@@ -203,7 +203,7 @@ impl<|T|> sync.Queue<|T|>
         // Caution: **Check before multiplying.** An overflowed `cap * sizeof(T)` is small, so the
         // allocation succeeds while `init` writes `cap` elements past the buffer. Division cannot
         // overflow, so test with it.
-        assert(sizeof(T) > 0 && cap <= max_queue_bytes / sizeof(T),
+        assert(sizeof(T) > 0 && cap <= MAX_QUEUE_BYTES / sizeof(T),
             "Queue.init_dyn: needs sizeof(T) > 0 and cap * sizeof(T) within Sz")
         q: = heap.heap_alloc_as<|sync.Queue<|T|>|>()
         buf: = T$@::heap.heap_alloc(cap * sizeof(T))

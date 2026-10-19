@@ -60,7 +60,7 @@ pub enum Fs_error //< why a filesystem operation failed
     not_found //< the named path does not exist, or could not be opened
     invalid_path //< a path the OS cannot take, such as one containing a NUL
     operation_failed //< the OS refused; it cannot tell whether it exists, permission, or no parent
-    too_deep //< a walk reached the depth limit (see `max_walk_depth`)
+    too_deep //< a walk reached the depth limit (see `MAX_WALK_DEPTH`)
     held_elsewhere //< another holder has the lock (only `File_lock.try_take`, which does not wait)
     io(err: io.Io_error) //< reading or writing a file's contents failed; it names the file
     mkdir_failed(at: U8[]) //< the segment that could not be created, as a view into the path.
@@ -81,7 +81,7 @@ pub struct File_info //< what the OS reports about one path
     pub kind: File_kind //< a regular file, a directory or anything else
     pub mtime: I64 //< the last modification time, in Unix epoch seconds, UTC
 
-pub const max_path_len: Sz = 4095 //< the longest path passed to the OS; a longer one fails
+pub const MAX_PATH_LEN: Sz = 4095 //< the longest path passed to the OS; a longer one fails
     //<
     //< The runtime copies a path into a fixed-length buffer.
     //< Caution: **Never truncate a longer path and pass it on.** The caller would get **the result
@@ -91,7 +91,7 @@ priv fn check_path(path: U8[]): Void!Fs_error //< refuses what the OS cannot tak
     //<
     //< It checks only the length and an inner NUL, which C reads as the end (each operation checks
     //< whether the path exists). The runtime refuses both as well; this names the cause.
-    if path.len > max_path_len || path.contains_nul()
+    if path.len > MAX_PATH_LEN || path.contains_nul()
         throw .invalid_path
 
 pub fn stat(path: U8[]): File_info!Fs_error //< what the OS reports about a path, following links
@@ -120,7 +120,7 @@ pub fn is_executable(path: U8[]): Bool //< whether the owner's execute bit is se
     //< Caution: **Do not use this to decide "can it be started"**: `can_run` below answers that.
     return kspl_is_exec(path.ptr, path.len)
 
-priv const run_exts: U8[][4] = ::{ ".exe", ".com", ".bat", ".cmd" } //<
+priv const RUN_EXTS: U8[][4] = ::{ ".exe", ".com", ".bat", ".cmd" } //<
     //< The extensions that can be started on Windows
     //<
     //< Caution: **Do not read `PATHEXT`**: whoever can change it can get something else started
@@ -137,7 +137,7 @@ pub fn can_run(path: U8[]): Bool //< whether it can actually be started on this 
     if !sys.is_windows()
         return is_executable(path)
     ext: = sys.last_ext(path)
-    for e in run_exts
+    for e in RUN_EXTS
         if ext.equals_ignore_case(e)
             return true
     return false
@@ -217,7 +217,7 @@ pub fn rename_path( //< renames or moves a file or a directory
     if kspl_rename_cstr(old_buf, new_buf) != 0
         throw .operation_failed
 
-priv const max_entry_name_len: Sz = 1024
+priv const MAX_ENTRY_NAME_LEN: Sz = 1024
 
 pub fn read_dir( //< one directory's entries, without descending
     //<
@@ -234,8 +234,8 @@ pub fn read_dir( //< one directory's entries, without descending
     defer kspl_dir_close(h)
     $out: = List<|U8[]|>.new(arena)
     for
-        $name_buf: U8[max_entry_name_len] = ::{}
-        n: = kspl_dir_read(h, name_buf@, max_entry_name_len)
+        $name_buf: U8[MAX_ENTRY_NAME_LEN] = ::{}
+        n: = kspl_dir_read(h, name_buf@, MAX_ENTRY_NAME_LEN)
         if n == 0
             break
         // Caution: **-1 is not the end.** A name can be too long for the buffer, or Windows cannot
@@ -346,7 +346,7 @@ pub fn absolute( //< the full path from the root: a relative path joined to the 
 ): U8[]!Fs_error //< the absolute path; fails if the working directory cannot be read
     if path.len > 0 && sys.is_absolute(path)
         return arena.dup_str(path)
-    $buf: U8[max_path_len + 1] = ::{}
+    $buf: U8[MAX_PATH_LEN + 1] = ::{}
     here: = sys.cwd(U8$[]::buf) catch
         throw .operation_failed
     if path.len == 0 || path.equals(".")
@@ -476,7 +476,7 @@ pub fn skip_build_output(name: U8[]): Bool //< a `skip_dir` that leaves out `out
     //< A repository's build output and git's own folder: neither holds a file anyone wrote there.
     return name.equals("out") || name.equals(".git")
 
-priv const max_walk_depth: Sz = 512 //< the maximum number of levels a walk descends
+priv const MAX_WALK_DEPTH: Sz = 512 //< the maximum number of levels a walk descends
     //<
     //< Each level is one native stack frame, so a deep tree (or a link cycle) would exhaust the
     //< stack; `too_deep` lets the caller report the cause.
@@ -484,7 +484,7 @@ priv const max_walk_depth: Sz = 512 //< the maximum number of levels a walk desc
 priv fn walk_into(dir: U8[], skip_dir: fn(name: U8[]): Bool, arena: Arena$@,
     out: List<|U8[]|>$@, depth: Sz): Void!Fs_error //<
         //< Collects the files below dir into out
-    if depth >= max_walk_depth
+    if depth >= MAX_WALK_DEPTH
         throw .too_deep
     entries: = read_dir(dir, arena)!
     for name in entries // read_dir leaves out `.` and `..`
@@ -493,7 +493,7 @@ priv fn walk_into(dir: U8[], skip_dir: fn(name: U8[]): Bool, arena: Arena$@,
             out.push(full)
             continue
         // Caution: **Do not enter a link to a directory** (Python's `os.walk` default). Followed,
-        // two links to `.` make a walk visit 2^depth directories before `max_walk_depth` stops it.
+        // two links to `.` make a walk visit 2^depth directories before `MAX_WALK_DEPTH` stops it.
         // A link out of the tree hands `copy_tree` files from elsewhere (a link to `~/.ssh`).
         if skip_dir(name) || is_link(full)
             continue
@@ -506,7 +506,7 @@ priv fn walk_into(dir: U8[], skip_dir: fn(name: U8[]): Bool, arena: Arena$@,
 // is a race. To close it, removal must be relative to a directory kept open. See "Creating refuses
 // a taken name, and trees are not removed" in `std/docs/DESIGN-system.md`.
 
-priv const max_unique_tries: Sz = 16 //< how many names `mkdir_unique` tries before giving up
+priv const MAX_UNIQUE_TRIES: Sz = 16 //< how many names `mkdir_unique` tries before giving up
 
 pub fn mkdir_unique( //< creates a directory with a name nobody has used, and returns its path
     //<
@@ -521,7 +521,7 @@ pub fn mkdir_unique( //< creates a directory with a name nobody has used, and re
     // Apart from `arena`, which takes the path while the work stands (`mem.scratch`).
     $work: = mem.scratch(null)
     defer work.free()
-    for _try in Range.asc(max_unique_tries)
+    for _try in Range.asc(MAX_UNIQUE_TRIES)
         tail: = rand.u64() catch
             throw .operation_failed
         path: =
@@ -551,7 +551,7 @@ pub fn write_unique( //< writes a new file under a name nobody has used, readabl
     // Apart from `arena`, which takes the path while the work stands (`mem.scratch`).
     $work: = mem.scratch(null)
     defer work.free()
-    for _try in Range.asc(max_unique_tries)
+    for _try in Range.asc(MAX_UNIQUE_TRIES)
         tail: = rand.u64() catch
             throw .operation_failed
         path: =
@@ -590,7 +590,7 @@ pub fn replace_file( //< replaces a file's whole content, so that a power cut ca
     name: = sys.get_file_name(path)
     $work: = mem.scratch(null)
     defer work.free()
-    for _try in Range.asc(max_unique_tries)
+    for _try in Range.asc(MAX_UNIQUE_TRIES)
         tail: = rand.u64() catch
             throw .operation_failed
         part: = work.arena.text().s(name).s(".\{tail:016x\}.part").take()

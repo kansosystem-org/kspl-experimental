@@ -41,15 +41,15 @@ $stack_car: U8[2560]
 $policy_buf: U8[4096]
 $arena_buf: U8[24576]
 
-const record_marker: U8[] = "car1" //< the marker that identifies this writer
+const RECORD_MARKER: U8[] = "car1" //< the marker that identifies this writer
     //<
     //< Caution: **It must be the same name as `rp2040_car_pilot_probe`'s**, which saved the policy;
     //< a different one erases the region.
 
-const loop_interval_ms: U32 = 100 //< the control period [ms]
+const LOOP_INTERVAL_MS: U32 = 100 //< the control period [ms]
     //<
     //< **Keep it within the face's frame interval**, or the fastest blink (100ms) lags.
-const ir_poll_us: U32 = 1000 //< the interval for checking IR [us]
+const IR_POLL_US: U32 = 1000 //< the interval for checking IR [us]
     //<
     //< **Keep it under 1.5ms**, not merely under a frame. The driver needs 7500us of the 9000us
     //< leader mark. So **a late check cuts the leader short, and the driver rejects the frame**.
@@ -58,23 +58,23 @@ const ir_poll_us: U32 = 1000 //< the interval for checking IR [us]
 // **In the table's 32-bit value, cmd is the third byte, not the leftmost** (NEC sends the low bit
 // first; the leftmost is `cmd ^ 0xFF`). **This remote's address is 0x00**. Details: stage 12 in
 // ksos/docs/HOWTO-bring-up.md.
-const key_forward: U32 = 0x40 // ✚     (table BF40FF00)
-const key_back: U32 = 0x19 // ➖     (table E619FF00)
-const key_left: U32 = 0x07 // ⏪     (table F807FF00)
-const key_right: U32 = 0x09 // ⏩     (table F609FF00)
-const key_stop: U32 = 0x15 // ▶      (table EA15FF00)
-const key_servo_left: U32 = 0x16 // 0      (table E916FF00)
-const key_servo_right: U32 = 0x0C // 1      (table F30CFF00)
-const key_servo_center: U32 = 0x08 // 4      (table F708FF00)
-const key_buzzer: U32 = 0x44 // TEST   (table BB44FF00)
-const key_face_next: U32 = 0x18 // 2      (table E718FF00)
-const key_face_off: U32 = 0x1C // 5      (table E31CFF00)
-const key_ws2812_next: U32 = 0x42 // 7      (table BD42FF00)
-const key_ws2812_off: U32 = 0x52 // 8      (table AD52FF00)
-const key_mode_light: U32 = 0x0D // C      (table F20DFF00)
-const key_mode_line: U32 = 0x5E // 3      (table A15EFF00)
-const key_mode_sonar: U32 = 0x5A // 6      (table A55AFF00)
-const key_mode_manual: U32 = 0x4A // 9      (table B54AFF00)
+const KEY_FORWARD: U32 = 0x40 // ✚     (table BF40FF00)
+const KEY_BACK: U32 = 0x19 // ➖     (table E619FF00)
+const KEY_LEFT: U32 = 0x07 // ⏪     (table F807FF00)
+const KEY_RIGHT: U32 = 0x09 // ⏩     (table F609FF00)
+const KEY_STOP: U32 = 0x15 // ▶      (table EA15FF00)
+const KEY_SERVO_LEFT: U32 = 0x16 // 0      (table E916FF00)
+const KEY_SERVO_RIGHT: U32 = 0x0C // 1      (table F30CFF00)
+const KEY_SERVO_CENTER: U32 = 0x08 // 4      (table F708FF00)
+const KEY_BUZZER: U32 = 0x44 // TEST   (table BB44FF00)
+const KEY_FACE_NEXT: U32 = 0x18 // 2      (table E718FF00)
+const KEY_FACE_OFF: U32 = 0x1C // 5      (table E31CFF00)
+const KEY_WS2812_NEXT: U32 = 0x42 // 7      (table BD42FF00)
+const KEY_WS2812_OFF: U32 = 0x52 // 8      (table AD52FF00)
+const KEY_MODE_LIGHT: U32 = 0x0D // C      (table F20DFF00)
+const KEY_MODE_LINE: U32 = 0x5E // 3      (table A15EFF00)
+const KEY_MODE_SONAR: U32 = 0x5A // 6      (table A55AFF00)
+const KEY_MODE_MANUAL: U32 = 0x4A // 9      (table B54AFF00)
 
 enum Mode //< the car's driving mode
     //<
@@ -92,7 +92,7 @@ impl Mode
         last_lon = 0
         last_lat = 0
         last_rot = 0
-        look_at(I32::board.servo_angle_center)
+        look_at(I32::board.SERVO_ANGLE_CENTER)
         mode = m
 
     priv fn mode_text(m: Self): U8[]
@@ -105,25 +105,25 @@ impl Mode
             return "line"
         return "?"
 
-const hold_timeout_us: U32 = 250000 //< how long until a held press counts as released [us]
+const HOLD_TIMEOUT_US: U32 = 250000 //< how long until a held press counts as released [us]
     //<
     //< **About twice the repeat interval (108ms)**: shorter judders between repeats, longer keeps
     //< running after the finger comes off.
 
-const line_interval_us: U32 = 10000 //< the interval for reading the line again [us]
+const LINE_INTERVAL_US: U32 = 10000 //< the interval for reading the line again [us]
     //<
     //< **Read on this interval, not on the period (100ms)**, which steers only after the line has
     //< crossed the sensor and loses it on a bend.
 
-const servo_step_deg: I32 = 10 //< one step of the head's swing [degrees]
+const SERVO_STEP_DEG: I32 = 10 //< one step of the head's swing [degrees]
 
-const light_min: U32 = 50 //< the minimum for light chasing [the raw ADC value]
+const LIGHT_MIN: U32 = 50 //< the minimum for light chasing [the raw ADC value]
     //<
     //< **Below this it does not drive**: in the dark, noise alone would steer the difference.
-const light_diff_div: I32 = 8 //<
+const LIGHT_DIFF_DIV: I32 = 8 //<
     //< Light chasing's cruising speed, and the divisor for the left-right difference
 
-const ws2812_modes: U32 = 6 //< how many WS2812 display modes there are (0 = off)
+const WS2812_MODES: U32 = 6 //< how many WS2812 display modes there are (0 = off)
 
 $mode: Mode = .manual
 $servo_angle: I32 = 90
@@ -161,9 +161,9 @@ priv fn apply(lon: I32, lat: I32, rot: I32) //<
     //<
     //< Caution: **Do not clamp each component separately** (the reason is at `cap`).
     d: = motor.divisor(lon, lat, rot)
-    last_lon = lon * motor.cap / d
-    last_lat = lat * motor.cap / d
-    last_rot = rot * motor.cap / d
+    last_lon = lon * motor.CAP / d
+    last_lat = lat * motor.CAP / d
+    last_rot = rot * motor.CAP / d
     motor.drive(last_lon, last_lat, last_rot)
 
 priv fn drive_lr(left: I32, right: I32) //<
@@ -182,8 +182,8 @@ priv fn refuse() //< the signal for rejecting something
 
 priv fn rgb(r: Bool, g: Bool, b: Bool): U32 //< one WS2812 LED's colour
     //<
-    //< **Only `board.ws2812_level` sets the brightness** (the reason is there).
-    lv: = board.ws2812_level
+    //< **Only `board.WS2812_LEVEL` sets the brightness** (the reason is there).
+    lv: = board.WS2812_LEVEL
     return ((lv if g else 0U32) << 16U32) | ((lv if r else 0U32) << 8U32) | (lv if b else 0U32)
 
 priv fn ws2812_show() //< lights the eight LEDs in the current display mode
@@ -191,7 +191,7 @@ priv fn ws2812_show() //< lights the eight LEDs in the current display mode
     //< **It may be called every round** (the phase advances in here).
     $px: U32[8] = ::{}
     ws2812_phase += 1
-    for i in Range.asc(board.ws2812_count)
+    for i in Range.asc(board.WS2812_COUNT)
         n: = U32::i
         px[i] = 0
         switch mode_of_ws2812()
@@ -267,15 +267,15 @@ priv fn run_line(arena: Arena$@) //< line tracking
 priv fn run_light() //< light chasing
     //<
     //< It turns on the difference in brightness between left and right. **In the dark it does not
-    //< drive** (the reason is at `light_min`).
-    left: = adc.read_pin(board.light_sensor_left)
-    right: = adc.read_pin(board.light_sensor_right)
-    if left.value < light_min || right.value < light_min
+    //< drive** (the reason is at `LIGHT_MIN`).
+    left: = adc.read_pin(board.LIGHT_SENSOR_LEFT)
+    right: = adc.read_pin(board.LIGHT_SENSOR_RIGHT)
+    if left.value < LIGHT_MIN || right.value < LIGHT_MIN
         apply(0, 0, 0)
         return
-    diff: = (I32::right.value - I32::left.value) / light_diff_div
+    diff: = (I32::right.value - I32::left.value) / LIGHT_DIFF_DIV
     // **Steer towards the brighter side** (a brighter right slows the right wheels).
-    drive_lr(motor.cap + diff, motor.cap - diff)
+    drive_lr(motor.CAP + diff, motor.CAP - diff)
 
 // ---------------------------------------------------------
 // The remote
@@ -295,7 +295,7 @@ priv fn manual_hold(lon: I32, rot: I32) //< drives by hand for one press
 priv fn hold_expire() //< stops once the held press has ended
     //<
     //< **It may be called every tick.**
-    if !holding || timer.elapsed_us(hold_seen_us) < hold_timeout_us
+    if !holding || timer.elapsed_us(hold_seen_us) < HOLD_TIMEOUT_US
         return
     holding = false
     apply(0, 0, 0)
@@ -303,33 +303,33 @@ priv fn hold_expire() //< stops once the held press has ended
 priv fn handle_key(ln: con.Line$@, cmd: U32)
     keys += 1
     switch cmd
-    case key_forward
-        manual_hold(motor.cap, 0)
-    case key_back
-        manual_hold(0 - motor.cap, 0)
-    case key_left
-        manual_hold(0, 0 - motor.cap)
-    case key_right
-        manual_hold(0, motor.cap)
-    case key_stop
+    case KEY_FORWARD
+        manual_hold(motor.CAP, 0)
+    case KEY_BACK
+        manual_hold(0 - motor.CAP, 0)
+    case KEY_LEFT
+        manual_hold(0, 0 - motor.CAP)
+    case KEY_RIGHT
+        manual_hold(0, motor.CAP)
+    case KEY_STOP
         // **Acting the same as `9` (to manual) is on purpose**: two keys to reach for, one path
         // (`set_mode`).
         Mode.manual.set_mode()
-    case key_servo_left
-        look_at(servo_angle + servo_step_deg)
-    case key_servo_right
-        look_at(servo_angle - servo_step_deg)
-    case key_servo_center
-        look_at(I32::board.servo_angle_center)
-    case key_buzzer
+    case KEY_SERVO_LEFT
+        look_at(servo_angle + SERVO_STEP_DEG)
+    case KEY_SERVO_RIGHT
+        look_at(servo_angle - SERVO_STEP_DEG)
+    case KEY_SERVO_CENTER
+        look_at(I32::board.SERVO_ANGLE_CENTER)
+    case KEY_BUZZER
         buzzer.tone(2000, 100)
-    case key_ws2812_next
-        ws2812_mode = (ws2812_mode + 1) % ws2812_modes
-    case key_ws2812_off
+    case KEY_WS2812_NEXT
+        ws2812_mode = (ws2812_mode + 1) % WS2812_MODES
+    case KEY_WS2812_OFF
         ws2812_mode = 0
-    case key_mode_light
+    case KEY_MODE_LIGHT
         Mode.light.set_mode()
-    case key_mode_line
+    case KEY_MODE_LINE
         if have_policy
             Mode.line.set_mode()
         else
@@ -338,16 +338,16 @@ priv fn handle_key(ln: con.Line$@, cmd: U32)
             ln.reset()
             ln.str("[car] no stored policy - run ksos-rp2040-car-pilot with kssrv first")
             _sent: = ln.flush()
-    case key_mode_sonar
+    case KEY_MODE_SONAR
         // **The ultrasonic is not plugged in** (it shares the matrix's pins): rejected, with the
         // reason.
         refuse()
         ln.reset()
         ln.str("[car] no ultrasonic - it shares GPIO 4/5 with the LED matrix")
         _sent: = ln.flush()
-    case key_mode_manual
+    case KEY_MODE_MANUAL
         Mode.manual.set_mode()
-    case key_face_next
+    case KEY_FACE_NEXT
         if face.available()
             face.next()
         else
@@ -355,7 +355,7 @@ priv fn handle_key(ln: con.Line$@, cmd: U32)
             ln.reset()
             ln.str("[car] LED matrix did not answer - check that it is plugged in")
             _sent: = ln.flush()
-    case key_face_off
+    case KEY_FACE_OFF
         face.Look.off.set()
     default
         // An unknown key is silently ignored, **with no rejection signal**: another remote or light
@@ -386,8 +386,8 @@ priv fn pump(ln: con.Line$@, arena: Arena$@, ms: U32)
         usb.poll_once()
         // Caution: **Check whether it is idle first**; `try_receive` returns silently when idle,
         // and "nothing came" would look like "unreadable".
-        busy: = !ir.is_idle(board.ir_receiver)
-        f: = ir.try_receive(board.ir_receiver)
+        busy: = !ir.is_idle(board.IR_RECEIVER)
+        f: = ir.try_receive(board.IR_RECEIVER)
         if f.ok
             if f.repeat
                 ir_repeat += 1
@@ -401,14 +401,14 @@ priv fn pump(ln: con.Line$@, arena: Arena$@, ms: U32)
         else if busy
             ir_bad += 1
         hold_expire()
-        // **Read the line on this tick** (the reason is at `line_interval_us`).
-        since_line += ir_poll_us
-        if since_line >= line_interval_us
+        // **Read the line on this tick** (the reason is at `LINE_INTERVAL_US`).
+        since_line += IR_POLL_US
+        if since_line >= LINE_INTERVAL_US
             since_line = 0
             if mode == Mode.line
                 track_step(arena)
-        timer.delay_us(ir_poll_us)
-        waited += ir_poll_us
+        timer.delay_us(IR_POLL_US)
+        waited += IR_POLL_US
 
 priv fn report(ln: con.Line$@)
     ln.reset()
@@ -457,18 +457,18 @@ priv fn bring_up(): Void!mmio.Driver_error //< starts the peripherals
     //< there is no running context.
     clocks.init()!
     gpio.init()!
-    gpio.init_out(board.buzzer_pin)
-    gpio.clear(board.buzzer_pin)
-    gpio.init_analog(board.light_sensor_left)
-    gpio.init_analog(board.light_sensor_right)
+    gpio.init_out(board.BUZZER_PIN)
+    gpio.clear(board.BUZZER_PIN)
+    gpio.init_analog(board.LIGHT_SENSOR_LEFT)
+    gpio.init_analog(board.LIGHT_SENSOR_RIGHT)
     // The rest are parts the car runs without. A failure leaves that part out. The report line
     // shows which (a still face, no LEDs, no console).
     adc.init() catch {}
     motor.init() catch {}
     head.init()
     track.init()
-    ir.init(board.ir_receiver)
-    ws2812.init(board.ws2812_pin) catch {}
+    ir.init(board.IR_RECEIVER)
+    ws2812.init(board.WS2812_PIN) catch {}
     face.init() catch {}
     usb.init() catch {}
 
@@ -490,7 +490,7 @@ fn car_task(_arg: Void$@): Void
     ln.str("[car] IR remote car - see ksos/docs/HOWTO-bring-up.md")
     _sent: = ln.flush()
 
-    if !records.claim(record_marker)
+    if !records.claim(RECORD_MARKER)
         ln.reset()
         ln.str("[car] records unavailable - line mode will refuse")
         _sent: = ln.flush()
@@ -535,7 +535,7 @@ fn car_task(_arg: Void$@): Void
         face.show()
         if loops % 10 == 0
             report(ln@)
-        pump(ln@, arena@, loop_interval_ms)
+        pump(ln@, arena@, LOOP_INTERVAL_MS)
 
 // The on_idle for `task.run_single_task`: semihosting's exit is not available, so it does nothing.
 priv fn park() {}

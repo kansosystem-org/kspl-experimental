@@ -12,22 +12,22 @@ import "std/verdict"
 // of that. So this test reproduces the regression on a host: a fake ksos/net/link.Link returns
 // one prepared frame instead of hardware.
 // ==========================================
-const peer_ip: U32 = 0x0A000001 // 10.0.0.1
-const our_ip: U32 = 0x0A000005 // 10.0.0.5
-const our_port: U16 = 40000
-const peer_port: U16 = 80
-const peer_isn: U32 = 5000
-const our_isn: U32 = 1000
+const PEER_IP: U32 = 0x0A000001 // 10.0.0.1
+const OUR_IP: U32 = 0x0A000005 // 10.0.0.5
+const OUR_PORT: U16 = 40000
+const PEER_PORT: U16 = 80
+const PEER_ISN: U32 = 5000
+const OUR_ISN: U32 = 1000
 
 priv fn to_peer(): net.Ends //< a frame's ends from us to the peer
-    return net.Ends::{ .src_mac = our_mac(), .dst_mac = peer_mac(), .src_ip = our_ip,
-        .dst_ip = peer_ip, .src_port = our_port, .dst_port = peer_port }
+    return net.Ends::{ .src_mac = our_mac(), .dst_mac = peer_mac(), .src_ip = OUR_IP,
+        .dst_ip = PEER_IP, .src_port = OUR_PORT, .dst_port = PEER_PORT }
 
 priv fn from_peer(): net.Ends //< a frame's ends from the peer to us
     //<
     //< The MACs stay as in to_peer: nothing here reads them back.
-    return net.Ends::{ .src_mac = our_mac(), .dst_mac = peer_mac(), .src_ip = peer_ip,
-        .dst_ip = our_ip, .src_port = peer_port, .dst_port = our_port }
+    return net.Ends::{ .src_mac = our_mac(), .dst_mac = peer_mac(), .src_ip = PEER_IP,
+        .dst_ip = OUR_IP, .src_port = PEER_PORT, .dst_port = OUR_PORT }
 
 priv fn our_mac(): net.Mac
     return net.Mac::{ .hi = 0x0000, .lo = 0x00000001 }
@@ -74,18 +74,18 @@ priv fn fake_link(): netlink.Link
 
 priv fn stage_segment(payload: U8$[], seq: U32) //<
     //< Puts a data segment of payload.len bytes on the fake link
-    stage_flagged(payload, seq, net.tcp_flag_ack | net.tcp_flag_psh)
+    stage_flagged(payload, seq, net.TCP_FLAG_ACK | net.TCP_FLAG_PSH)
 
 priv fn stage_flagged(payload: U8$[], seq: U32, flags: U8) //< stage_segment with the flags named
     for i in Range.asc(payload.len)
         payload[i] = U8::(i % 251) // a prime, so the period does not line up with the buffer
-    fake_len = net.build_tcp_segment(U8$[]::fake_frame, from_peer(), seq, our_isn + 1, flags,
+    fake_len = net.build_tcp_segment(U8$[]::fake_frame, from_peer(), seq, OUR_ISN + 1, flags,
         payload)
     fake_ready = true
 
 priv fn last_sent(): net.Tcp_segment //<
     //< the last frame sent, read as a segment from us to the peer
-    return net.parse_tcp_segment(U8[]::sent_frame, sent_len, our_ip, our_port, peer_port)
+    return net.parse_tcp_segment(U8[]::sent_frame, sent_len, OUR_IP, OUR_PORT, PEER_PORT)
 
 $conn: tcpc.Tcp_conn
 $payload_buf: U8[1200] = ::{}
@@ -100,9 +100,9 @@ fn test_tcp_conn_segment_larger_than_buffer() //<
         .start("[ksos/net] splitting a segment larger than the buffer and handing it over (not \
             truncating) test...")
 
-    stage_segment(U8$[]::payload_buf, peer_isn + 1)
+    stage_segment(U8$[]::payload_buf, PEER_ISN + 1)
     link: = fake_link()
-    conn = tcpc.make(link, to_peer(), our_isn + 1, peer_isn + 1)
+    conn = tcpc.make(link, to_peer(), OUR_ISN + 1, PEER_ISN + 1)
 
     // The buffer is 500 bytes. A 1200-byte segment should come out as 500 + 500 + 200.
     $total: Sz = 0
@@ -124,7 +124,7 @@ fn test_tcp_conn_segment_larger_than_buffer() //<
             mismatch += 1
     assert(mismatch == 0, "the reassembled bytes must match the segment payload exactly")
     // Once everything is returned, it must equal the peer's next seq.
-    assert(conn.peer_seq == peer_isn + 1 + 1200,
+    assert(conn.peer_seq == PEER_ISN + 1 + 1200,
         "peer_seq must advance by the whole payload once it has all been handed over")
 
     verdict
@@ -141,15 +141,15 @@ fn test_tcp_conn_rejects_wrong_seq() //<
             state) test...")
 
     link: = fake_link()
-    conn = tcpc.make(link, to_peer(), our_isn + 1, peer_isn + 1)
+    conn = tcpc.make(link, to_peer(), OUR_ISN + 1, PEER_ISN + 1)
 
-    stage_segment(U8$[]::payload_buf, peer_isn + 999) // a seq that differs from the expected one
+    stage_segment(U8$[]::payload_buf, PEER_ISN + 999) // a seq that differs from the expected one
     n_bad: = tcpc.tcp_stream_recv(Void$@::conn@, got[0]@, 500)
     assert(n_bad < 0, "a segment with an unexpected seq must be reported as want-read")
-    assert(conn.peer_seq == peer_isn + 1, "a rejected segment must not advance peer_seq")
+    assert(conn.peer_seq == PEER_ISN + 1, "a rejected segment must not advance peer_seq")
 
     // Next, one with the right seq must be readable.
-    stage_segment(U8$[]::payload_buf, peer_isn + 1)
+    stage_segment(U8$[]::payload_buf, PEER_ISN + 1)
     n_ok: = tcpc.tcp_stream_recv(Void$@::conn@, got[0]@, 500)
     assert(n_ok == 500, "the next in-order segment must still be readable")
 
@@ -162,25 +162,25 @@ fn test_tcp_conn_acks_received_data() //< received data is ACKed, and a resend A
     verdict.start("[ksos/net] ACKing what was handed over, and a resend again, test...")
 
     link: = fake_link()
-    conn = tcpc.make(link, to_peer(), our_isn + 1, peer_isn + 1)
+    conn = tcpc.make(link, to_peer(), OUR_ISN + 1, PEER_ISN + 1)
     sent_count = 0
-    stage_segment(U8$[]::payload_buf, peer_isn + 1)
+    stage_segment(U8$[]::payload_buf, PEER_ISN + 1)
     _first: = tcpc.tcp_stream_recv(Void$@::conn@, got[0]@, 500)
     assert(sent_count == 0, "no ACK may go while part of the segment is still held")
     _second: = tcpc.tcp_stream_recv(Void$@::conn@, got[0]@, 500)
     _third: = tcpc.tcp_stream_recv(Void$@::conn@, got[0]@, 500)
     assert(sent_count == 1, "one ACK must go once the whole segment has been handed over")
     ack: = last_sent()
-    assert(ack.ok && ack.flags == net.tcp_flag_ack && ack.payload_len == 0,
+    assert(ack.ok && ack.flags == net.TCP_FLAG_ACK && ack.payload_len == 0,
         "the ACK must be a bare ACK from us to the peer")
-    assert(ack.ack == peer_isn + 1 + 1200 && ack.seq == our_isn + 1,
+    assert(ack.ack == PEER_ISN + 1 + 1200 && ack.seq == OUR_ISN + 1,
         "the ACK must name the byte after the segment, from our current seq")
 
     // The peer resends the segment (as if our ACK were lost): it is dropped and ACKed again.
-    stage_segment(U8$[]::payload_buf, peer_isn + 1)
+    stage_segment(U8$[]::payload_buf, PEER_ISN + 1)
     n_dup: = tcpc.tcp_stream_recv(Void$@::conn@, got[0]@, 500)
-    assert(n_dup == tcpc.mbedtls_err_ssl_want_read, "a resent segment must not be read twice")
-    assert(sent_count == 2 && last_sent().ack == peer_isn + 1 + 1200,
+    assert(n_dup == tcpc.MBEDTLS_ERR_SSL_WANT_READ, "a resent segment must not be read twice")
+    assert(sent_count == 2 && last_sent().ack == PEER_ISN + 1 + 1200,
         "a resent segment must be answered with the same ACK")
 
     verdict.pass("the whole segment is ACKed once it is handed over, and a resend is ACKed again.")
@@ -191,13 +191,13 @@ fn test_tcp_conn_reads_fin_as_end_of_stream() //<
 
     // A FIN on a data segment: the data first, then 0 on every call.
     link: = fake_link()
-    conn = tcpc.make(link, to_peer(), our_isn + 1, peer_isn + 1)
+    conn = tcpc.make(link, to_peer(), OUR_ISN + 1, PEER_ISN + 1)
     sent_count = 0
     data: = (U8$[]::payload_buf).sub_mut(0, 100)
-    stage_flagged(data, peer_isn + 1, net.tcp_flag_ack | net.tcp_flag_psh | net.tcp_flag_fin)
+    stage_flagged(data, PEER_ISN + 1, net.TCP_FLAG_ACK | net.TCP_FLAG_PSH | net.TCP_FLAG_FIN)
     n_data: = tcpc.tcp_stream_recv(Void$@::conn@, got[0]@, 500)
     assert(n_data == 100, "the data before the FIN must be handed over first")
-    assert(sent_count == 1 && last_sent().ack == peer_isn + 1 + 100 + 1,
+    assert(sent_count == 1 && last_sent().ack == PEER_ISN + 1 + 100 + 1,
         "the ACK must cover the data and the FIN's own sequence number")
     assert(tcpc.tcp_stream_recv(Void$@::conn@, got[0]@, 500) == 0,
         "after the FIN, recv must read the end of the stream")
@@ -205,12 +205,12 @@ fn test_tcp_conn_reads_fin_as_end_of_stream() //<
         "the end of the stream must stay, not turn back into want-read")
 
     // A bare FIN.
-    conn = tcpc.make(link, to_peer(), our_isn + 1, peer_isn + 1)
+    conn = tcpc.make(link, to_peer(), OUR_ISN + 1, PEER_ISN + 1)
     empty: = (U8$[]::payload_buf).sub_mut(0, 0)
-    stage_flagged(empty, peer_isn + 1, net.tcp_flag_ack | net.tcp_flag_fin)
+    stage_flagged(empty, PEER_ISN + 1, net.TCP_FLAG_ACK | net.TCP_FLAG_FIN)
     assert(tcpc.tcp_stream_recv(Void$@::conn@, got[0]@, 500) == 0,
         "a bare FIN must read as the end of the stream")
-    assert(last_sent().ack == peer_isn + 2, "a bare FIN must be ACKed")
+    assert(last_sent().ack == PEER_ISN + 2, "a bare FIN must be ACKed")
 
     verdict.pass("data before a FIN arrives, the FIN is ACKed, and then the stream reads 0.")
 
@@ -221,15 +221,15 @@ fn test_tcp_conn_reports_reset() //< the peer's RST at the expected seq reads as
     verdict.start("[ksos/net] reporting the peer's RST, and ignoring one at the wrong seq, test...")
 
     link: = fake_link()
-    conn = tcpc.make(link, to_peer(), our_isn + 1, peer_isn + 1)
+    conn = tcpc.make(link, to_peer(), OUR_ISN + 1, PEER_ISN + 1)
     empty: = (U8$[]::payload_buf).sub_mut(0, 0)
-    stage_flagged(empty, peer_isn + 77, net.tcp_flag_rst)
-    assert(tcpc.tcp_stream_recv(Void$@::conn@, got[0]@, 500) == tcpc.mbedtls_err_ssl_want_read,
+    stage_flagged(empty, PEER_ISN + 77, net.TCP_FLAG_RST)
+    assert(tcpc.tcp_stream_recv(Void$@::conn@, got[0]@, 500) == tcpc.MBEDTLS_ERR_SSL_WANT_READ,
         "an RST at an unexpected seq must be ignored")
-    stage_flagged(empty, peer_isn + 1, net.tcp_flag_rst)
-    assert(tcpc.tcp_stream_recv(Void$@::conn@, got[0]@, 500) == tcpc.mbedtls_err_net_conn_reset,
+    stage_flagged(empty, PEER_ISN + 1, net.TCP_FLAG_RST)
+    assert(tcpc.tcp_stream_recv(Void$@::conn@, got[0]@, 500) == tcpc.MBEDTLS_ERR_NET_CONN_RESET,
         "an RST at the expected seq must read as a reset")
-    assert(tcpc.tcp_stream_recv(Void$@::conn@, got[0]@, 500) == tcpc.mbedtls_err_net_conn_reset,
+    assert(tcpc.tcp_stream_recv(Void$@::conn@, got[0]@, 500) == tcpc.MBEDTLS_ERR_NET_CONN_RESET,
         "the reset must stay on later calls")
 
     verdict.pass("an RST at the expected seq reads as a reset from then on; one elsewhere is not.")
@@ -240,12 +240,12 @@ fn test_tcp_conn_send_is_partial() //< sending is one frame per call
     verdict.start("[ksos/net] a send request over the ceiling becoming a partial send test...")
 
     link: = fake_link()
-    conn = tcpc.make(link, to_peer(), our_isn + 1, peer_isn + 1)
+    conn = tcpc.make(link, to_peer(), OUR_ISN + 1, PEER_ISN + 1)
     sent_count = 0
     n: = tcpc.tcp_stream_send(Void$@::conn@, payload_buf[0]@, 1200)
     assert(n == 1200, "1200 bytes fit under the 1400-byte per-frame limit")
     assert(sent_count == 1, "one call must put exactly one frame on the link")
-    assert(conn.our_seq == our_isn + 1 + 1200, "our_seq must advance by what was sent")
+    assert(conn.our_seq == OUR_ISN + 1 + 1200, "our_seq must advance by what was sent")
 
     verdict.pass("one frame per call, and seq advances by exactly that much.")
 fn test_tcp_conn_send_failure_does_not_advance_seq() //<
@@ -256,19 +256,19 @@ fn test_tcp_conn_send_failure_does_not_advance_seq() //<
     verdict.start("[ksos/net] not advancing seq where it could not send test...")
 
     link: = fake_link()
-    conn = tcpc.make(link, to_peer(), our_isn + 1, peer_isn + 1)
+    conn = tcpc.make(link, to_peer(), OUR_ISN + 1, PEER_ISN + 1)
     sent_count = 0
     fake_send_ok = false
     n_fail: = tcpc.tcp_stream_send(Void$@::conn@, payload_buf[0]@, 100)
     assert(n_fail == 0, "a link that cannot send right now must be reported as 0 bytes sent")
-    assert(conn.our_seq == our_isn + 1, "a failed send must not advance our_seq")
+    assert(conn.our_seq == OUR_ISN + 1, "a failed send must not advance our_seq")
     assert(sent_count == 0, "nothing must have been counted as sent")
 
     // Called again with the same data, it sends and seq advances.
     fake_send_ok = true
     n_ok: = tcpc.tcp_stream_send(Void$@::conn@, payload_buf[0]@, 100)
     assert(n_ok == 100, "retrying the same bytes must succeed once the link is free")
-    assert(conn.our_seq == our_isn + 1 + 100, "our_seq must advance only for what was sent")
+    assert(conn.our_seq == OUR_ISN + 1 + 100, "our_seq must advance only for what was sent")
 
     verdict.pass("a round that could not send returns 0 and does not advance seq.")
 
@@ -288,7 +288,7 @@ fn test_frame_builders_pad_to_min() //<
 
     // Refill with non-zero before each call, or a 0 left by the previous call hides a missed fill.
     b.fill(0xEE)
-    arp_len: = net.build_arp_request(b, our_mac(), our_ip, peer_ip)
+    arp_len: = net.build_arp_request(b, our_mac(), OUR_IP, PEER_IP)
     assert(arp_len == 60, "a 42-byte ARP request must be padded out to the 60-byte minimum")
     check_zero_tail(view, 42, arp_len,
         "ARP request: the padding up to the minimum frame must be zero")
@@ -300,7 +300,7 @@ fn test_frame_builders_pad_to_min() //<
         "UDP packet: the padding up to the minimum frame must be zero")
 
     b.fill(0xEE)
-    tcp_len: = net.build_tcp_segment(b, to_peer(), our_isn, peer_isn, net.tcp_flag_ack, empty)
+    tcp_len: = net.build_tcp_segment(b, to_peer(), OUR_ISN, PEER_ISN, net.TCP_FLAG_ACK, empty)
     assert(tcp_len == 60, "an empty TCP segment (54 bytes) must be padded out to 60")
     check_zero_tail(view, 54, tcp_len,
         "TCP segment: the padding up to the minimum frame must be zero")
@@ -322,19 +322,19 @@ fn test_frame_builders_refuse_a_small_buffer() //<
     tiny: U8[40] = ::{} // not even enough for the smallest frame (60)
     t: = U8$[]::tiny
     empty: = U8[]::{ .ptr = null, .len = 0 }
-    arp_len: = net.build_arp_request(t, our_mac(), our_ip, peer_ip)
+    arp_len: = net.build_arp_request(t, our_mac(), OUR_IP, PEER_IP)
     assert(arp_len == 0,
         "an ARP request must not be built into a buffer smaller than the minimum frame")
     udp_len: = net.build_udp_packet(t, to_peer(), empty)
     assert(udp_len == 0, "a UDP packet must not be built into a too-small buffer")
-    tcp_len: = net.build_tcp_segment(t, to_peer(), our_isn, peer_isn, net.tcp_flag_ack, empty)
+    tcp_len: = net.build_tcp_segment(t, to_peer(), OUR_ISN, PEER_ISN, net.TCP_FLAG_ACK, empty)
     assert(tcp_len == 0, "a TCP segment must not be built into a too-small buffer")
 
     // A buffer big enough for the minimum frame but too small for the payload is the same.
     small: U8[64] = ::{}
     s: = U8$[]::small
     body: U8[32] = ::{}
-    big_len: = net.build_tcp_segment(s, to_peer(), our_isn, peer_isn, net.tcp_flag_ack,
+    big_len: = net.build_tcp_segment(s, to_peer(), OUR_ISN, PEER_ISN, net.TCP_FLAG_ACK,
         U8[]::body)
     assert(big_len == 0, "a 54+32-byte segment must not be built into a 64-byte buffer")
 
@@ -349,24 +349,24 @@ fn test_tcp_parse_ignores_ethernet_padding() //<
 
     buf: U8[128] = ::{}
     empty: = U8[]::{ .ptr = null, .len = 0 }
-    n: = net.build_tcp_segment(U8$[]::buf, from_peer(), peer_isn + 1, our_isn + 1,
-        net.tcp_flag_ack, empty)
+    n: = net.build_tcp_segment(U8$[]::buf, from_peer(), PEER_ISN + 1, OUR_ISN + 1,
+        net.TCP_FLAG_ACK, empty)
     assert(n == 60, "an empty segment is padded out to the 60-byte minimum")
 
-    seg: = net.parse_tcp_segment(U8[]::buf, n, peer_ip, peer_port, our_port)
+    seg: = net.parse_tcp_segment(U8[]::buf, n, PEER_IP, PEER_PORT, OUR_PORT)
     assert(seg.ok, "a padded pure ACK is still a valid segment")
     assert(seg.payload_len == 0, "the padding must not be counted as payload")
 
     // The layer above too: peer_seq must not move when there is no readable data.
     link: = fake_link()
-    conn = tcpc.make(link, to_peer(), our_isn + 1, peer_isn + 1)
+    conn = tcpc.make(link, to_peer(), OUR_ISN + 1, PEER_ISN + 1)
     fake_len = n
     for i in Range.asc(n)
         fake_frame[i] = buf[i]
     fake_ready = true
     got_n: = tcpc.tcp_stream_recv(Void$@::conn@, got[0]@, 500)
     assert(got_n < 0, "a pure ACK carries no data, so the stream must report want-read")
-    assert(conn.peer_seq == peer_isn + 1, "a pure ACK must not advance peer_seq")
+    assert(conn.peer_seq == PEER_ISN + 1, "a pure ACK must not advance peer_seq")
 
     verdict
         .pass("it does not mistake the 0 filling for payload, and does not move peer_seq either.")
@@ -374,7 +374,7 @@ priv fn parses(buf: U8[], len: Sz): Bool //<
     //< Whether it parses as a segment addressed to this connection
     //<
     //< The expected value is not an argument, so each caller's line says what it expects.
-    return net.parse_tcp_segment(buf, len, peer_ip, peer_port, our_port).ok
+    return net.parse_tcp_segment(buf, len, PEER_IP, PEER_PORT, OUR_PORT).ok
 fn test_tcp_parse_rejects_malformed_headers() //< the lengths the peer declares are not trusted
     //<
     //< **Drop a segment whose declared lengths are too short, or whose data has not arrived.**
@@ -383,9 +383,9 @@ fn test_tcp_parse_rejects_malformed_headers() //< the lengths the peer declares 
     $buf: U8[128] = ::{}
     body: U8[20] = ::{}
     b: = U8$[]::buf
-    base: = net.build_tcp_segment(b, from_peer(), peer_isn + 1, our_isn + 1,
-        net.tcp_flag_ack | net.tcp_flag_psh, U8[]::body)
-    intact: = net.parse_tcp_segment(U8[]::buf, base, peer_ip, peer_port, our_port)
+    base: = net.build_tcp_segment(b, from_peer(), PEER_ISN + 1, OUR_ISN + 1,
+        net.TCP_FLAG_ACK | net.TCP_FLAG_PSH, U8[]::body)
+    intact: = net.parse_tcp_segment(U8[]::buf, base, PEER_IP, PEER_PORT, OUR_PORT)
     assert(intact.payload_len == 20,
         "the unmodified segment must parse with its real payload length")
 
@@ -425,8 +425,8 @@ fn test_tcp_parse_follows_ip_options() //<
     $buf: U8[128] = ::{}
     body: U8[20] = ::{}
     b: = U8$[]::buf
-    base: = net.build_tcp_segment(b, from_peer(), peer_isn + 1, our_isn + 1,
-        net.tcp_flag_ack | net.tcp_flag_psh, U8[]::body)
+    base: = net.build_tcp_segment(b, from_peer(), PEER_ISN + 1, OUR_ISN + 1,
+        net.TCP_FLAG_ACK | net.TCP_FLAG_PSH, U8[]::body)
     assert(base == 74, "14 + 20 + 20 + 20 = 74 bytes, above the padding threshold")
 
     // A 4-byte option (three NOPs plus the terminator) is inserted right after the IP header.
@@ -440,7 +440,7 @@ fn test_tcp_parse_follows_ip_options() //<
     buf[14] = 0x46 // version 4, IHL = 6 words (24 bytes)
     b.put_u16_be(16, 64) // Total Length = 24 + 20 + 20
 
-    seg: = net.parse_tcp_segment(U8[]::buf, base + 4, peer_ip, peer_port, our_port)
+    seg: = net.parse_tcp_segment(U8[]::buf, base + 4, PEER_IP, PEER_PORT, OUR_PORT)
     assert(seg.ok, "a segment with IP options is still a valid segment")
     assert(seg.payload_off == 58, "the payload starts after the options and the TCP header")
     assert(seg.payload_len == 20, "the payload length must not change because of the options")

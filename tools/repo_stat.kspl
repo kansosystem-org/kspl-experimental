@@ -10,7 +10,7 @@
 //     ./out/ksplc_stage1.exe run tools/repo_stat.kspl [output folder]   # default out
 //   <out>/repo_stat.txt  the line count and comment rate per file, and the total per extension
 // ==========================================
-import "std/argp"
+import "std/argparse"
 import "std/chars"
 import "std/ds" { List }
 import "std/fs"
@@ -23,7 +23,7 @@ import "std/subproc"
 import "std/sys"
 import "tools/repo_stat_path" as path_kind + { Block_marks }
 
-priv const default_out: U8[] = "out"
+priv const DEFAULT_OUT: U8[] = "out"
 
 priv struct Stat //< one file's breakdown
     //<
@@ -94,7 +94,7 @@ priv fn bump_ext(rows: List<|Ext_row|>$@, ext: U8[], st: Stat)
             return
     rows.push(Ext_row::{ .ext = ext, .st = st })
 
-priv const header: U8[] = "   lines    body comment   blank    cmt%   trail  "
+priv const HEADER: U8[] = "   lines    body comment   blank    cmt%   trail  "
 
 priv fn write_pct(b: Str_builder$@, st: Stat) //< the comment rate [%] to one decimal place
     //<
@@ -114,8 +114,8 @@ priv fn write_cols(b: Str_builder$@, st: Stat) //< writes only the number column
     write_pct(b, st)
     b.s("  ")
 
-priv const git_timeout_ms: I32 = 60000 //< how long one `git ls-files` may run
-priv const git_list_cap: Sz = 1 << 24 //< the most of a list kept; the repository's is far under it
+priv const GIT_TIMEOUT_MS: I32 = 60000 //< how long one `git ls-files` may run
+priv const GIT_LIST_CAP: Sz = 1 << 24 //< the most of a list kept; the repository's is far under it
 
 priv fn git_list(args: U8[][], arena: Arena$@): U8[]!fs.Fs_error //< what `git <args>` prints
     //<
@@ -125,7 +125,7 @@ priv fn git_list(args: U8[][], arena: Arena$@): U8[]!fs.Fs_error //< what `git <
     for a in args
         argv.push(a)
     listed: =
-        subproc.run(argv.slice(), "", git_timeout_ms, git_list_cap, arena) catch e
+        subproc.run(argv.slice(), "", GIT_TIMEOUT_MS, GIT_LIST_CAP, arena) catch e
         e.describe("listing the files here", "git")
         throw .operation_failed
     return listed
@@ -145,7 +145,7 @@ priv fn write_files(b: Str_builder$@, exts: List<|Ext_row|>$@, arena: Arena$@): 
     $total: = Stat::{}
     $gen: = Stat::{}
     $top: U8[] = ""
-    b.s("== 1. per file ==\n\n\{header\}path\n")
+    b.s("== 1. per file ==\n\n\{HEADER\}path\n")
     for path in files
         marker: = path_kind.comment_marker(path)
         st: = stat_file(path, marker, path_kind.block_marks(path))
@@ -193,7 +193,7 @@ priv fn write_exts(b: Str_builder$@, exts: List<|Ext_row|>$@, arena: Arena$@) //
     //<
     //< **The rate is shown only for extensions that have a comment mark** (`.md`'s 0% would be
     //< misread as "no comments").
-    b.s("== 2. per extension ==\n\n   files\{header\}ext\n")
+    b.s("== 2. per extension ==\n\n   files\{HEADER\}ext\n")
     sorted: = exts.order_by(fn(x: Ext_row@, y: Ext_row@; ): I32 {
         return I32::(y.st.lines - x.st.lines);
     }, arena)
@@ -220,20 +220,20 @@ priv fn save(out_dir: U8[], name: U8[], data: U8[], arena: Arena$@): Void!fs.Fs_
 fn main(): I32 //< writes the repository's size on one page of text
     arena: = Arena.new(64 * 1024 * 1024)
     defer arena.free()
-    // Caution: **Do not parse the arguments by hand.** `std/argp` refuses an unknown `--name` and
-    // an undeclared positional (by hand, `repo_stat --bogus` makes a folder `--bogus/`).
-    p: = argp.Parser
+    // Caution: **Do not parse the arguments by hand.** `std/argparse` refuses an unknown `--name`
+    // and an undeclared positional (by hand, `repo_stat --bogus` makes a folder `--bogus/`).
+    p: = argparse.Parser
         .create(sys.program_name(), "put the repository's size into one sheet of text", arena)
     p.positional("[output folder] the default is out/")
     p.parse_or_exit(sys.args(), arena)
-    // Caution: **Do not silently drop an extra positional argument**; argp does not count them, so
-    // the maximum is checked here.
+    // Caution: **Do not silently drop an extra positional argument**; argparse does not count them,
+    // so the maximum is checked here.
     if p.rest.len > 1
         io.err()
             .s("\{sys.program_name()\}: there is only one output folder (\{p.rest.len\} were \
                 passed)\n")
         return 1
-    out_dir: = p.rest.get(0) if p.rest.len > 0 else default_out
+    out_dir: = p.rest.get(0) if p.rest.len > 0 else DEFAULT_OUT
 
     fs.mkdir_all(out_dir) catch e
         io.err().s("\{sys.program_name()\}: cannot create \{out_dir\}: \{e\}\n")

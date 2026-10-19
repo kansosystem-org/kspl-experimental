@@ -4,7 +4,7 @@
 //< They share this body rather than one file taking flags.
 //<
 //< **A package's suites run apart**, side by side, each a run of its own under the usual time limit
-//< (`verdict.default_timeout_ms`). One limit over the whole `make test` grows too short as the
+//< (`verdict.DEFAULT_TIMEOUT_MS`). One limit over the whole `make test` grows too short as the
 //< package grows. A package names them as `ksplc/Makefile` does: `SUITES` lists them, `make
 //< test-<name>` runs one, and `make test SUITES=` runs the rest of `make test`.
 import "ksplc/tests/support/harness" as ksplc_harness
@@ -19,7 +19,7 @@ import "std/sys"
 import "std/verdict"
 import "tests/support/harness"
 
-priv const alone_dir: U8[] = "alone" //<
+priv const ALONE_DIR: U8[] = "alone" //<
     //< The folder name of the copy
     //<
     //< Caution: **Never the package's own name**, or a package found by its folder passes too and
@@ -101,7 +101,7 @@ priv fn make_args(copy: U8[], deps: U8[], target: U8[], more: U8[][], arena: Are
         args.push(a)
     return args.slice()
 
-priv const suites_mk: U8[] = "kanso-extract-suites: ; @echo $(SUITES)\n" //<
+priv const SUITES_MK: U8[] = "kanso-extract-suites: ; @echo $(SUITES)\n" //<
     //< The makefile read after the copy's own, to ask it for its `SUITES`
 
 priv fn suites_of(copy: U8[], arena: Arena$@): List<|U8[]|> //<
@@ -111,7 +111,7 @@ priv fn suites_of(copy: U8[], arena: Arena$@): List<|U8[]|> //<
     //< belong to the package).
     $out: = List<|U8[]|>.new(arena)
     mk: = fs.join(sys.get_dir_name(copy), "suites.mk", arena)
-    io.write_file(mk, suites_mk) catch
+    io.write_file(mk, SUITES_MK) catch
         return out
     r: = harness
         .make(U8[][]::{ "-C", copy, "--no-print-directory", "-s", "-f", "Makefile", "-f", mk,
@@ -128,8 +128,8 @@ priv fn offers(copy: U8[], target: U8[]): Bool //< whether the copy's `Makefile`
     //< **make answers, with a dry run** ("No rule to make target" where it is absent).
     return harness.make(U8[][]::{ "-C", copy, "-n", target }).exited_with(0)
 
-priv const tail_lines: Sz = 30 //< how much of a failed run's end is shown after its own FAIL lines
-priv const log_dir: U8[] = "out/log/extract" //< where a failed run's whole output is kept
+priv const TAIL_LINES: Sz = 30 //< how much of a failed run's end is shown after its own FAIL lines
+priv const LOG_DIR: U8[] = "out/log/extract" //< where a failed run's whole output is kept
 
 priv fn digest(what: U8[], out: U8[], arena: Arena$@): U8[] //<
     //< A failed run's output cut to what explains it: its own `FAIL` lines, then its last lines
@@ -141,11 +141,11 @@ priv fn digest(what: U8[], out: U8[], arena: Arena$@): U8[] //<
     for line in lines
         if line.starts_with("FAIL ") || line.starts_with("RESULT:")
             b.s(line).c('\n')
-    from: = lines.len - tail_lines if lines.len > tail_lines else 0
+    from: = lines.len - TAIL_LINES if lines.len > TAIL_LINES else 0
     b.s("--- its last \{lines.len - from\} lines ---\n")
     for i in Range.new(from, lines.len, 1)
         b.s(lines.get(i)).c('\n')
-    dir: = fs.join(harness.root(), log_dir, arena)
+    dir: = fs.join(harness.root(), LOG_DIR, arena)
     path: = fs.join(dir, arena.text().s(what).s(".log").take(), arena)
     fs.mkdir_all(dir) catch {}
     io.write_file(path, out) catch
@@ -182,7 +182,7 @@ priv fn case_alone(dir: U8[], part: Part, arena: Arena$@) //<
         return
     label: = arena.text().s("\{dir\}_\{part.variant_name()\}").take()
     work: = harness.sandbox(arena.text().s("extract_\{label\}").take())
-    copy: = fs.join(work, alone_dir, arena)
+    copy: = fs.join(work, ALONE_DIR, arena)
     deps: = fs.join(work, "deps", arena)
     $placed: = copy_package(dir, copy)
     for i in Range.asc(decl.len)

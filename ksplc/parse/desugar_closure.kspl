@@ -9,7 +9,7 @@ import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/c_name" as base_c_name
 import "ksplc/base/core" as base_core
 import "ksplc/base/diag" as base_diag
-import "ksplc/parse/desugar" { Desugar_ctx, closure_empty_field, next_anon_serial, build_temp_name,
+import "ksplc/parse/desugar" { Desugar_ctx, CLOSURE_EMPTY_FIELD, next_anon_serial, build_temp_name,
     serial_str, build_path_ref }
 import "ksplc/parse/desugar_slice" { spell_as_written }
 import "ksplc/parse/load" as parse_load
@@ -196,7 +196,7 @@ impl Ast_node
         // warns `excess elements in struct initializer` for `struct X { };` with `= {0}`
         // (Principle 2: not one warning from the generated C either).
         if captures == null
-            src.s("  priv \{closure_empty_field\}: U8;\n")
+            src.s("  priv \{CLOSURE_EMPTY_FIELD\}: U8;\n")
         for cap in base_ast_ext.Param_cursor.new(captures, false)
             if !r.append_capture_field(ctx, cap, src)
                 return false
@@ -216,7 +216,7 @@ impl Ast_node
         src.s("): \{env_name\}\{gen_args\} {\n  return \{env_name\}\{gen_args\}::{")
         first = true
         if captures == null
-            src.s(" .\{closure_empty_field\} = 0")
+            src.s(" .\{CLOSURE_EMPTY_FIELD\} = 0")
             first = false
         for cap in base_ast_ext.Param_cursor.new(captures, false)
             c_name: = cap.find_text(.k_identifier)
@@ -231,13 +231,13 @@ impl Ast_node
         src.s("impl\{gen_args\} \{env_name\}\{gen_args\}: Callable\{arity\}<|")
         for p in base_ast_ext.Param_cursor.new(params, false)
             p_ty: = written_type_text(p.get_decl_type_node())
-            if p_ty.equals(base_core.unknown_type_name)
+            if p_ty.equals(base_core.UNKNOWN_TYPE_NAME)
                 r.desugar_err(ctx, "a closure parameter must have a type annotation")
                 return false
             src.s("\{p_ty\}, ")
         // **No `pub`.** On a `priv` struct's method it widens nothing (the visibility-width check;
         // sema/decl/access.kspl). The call goes through the `Callable` vtable's slot either
-        // way ("Traits (`trait`)" in docs/SPEC-language.md).
+        // way ("Traits (`trait`)" in docs/SPEC-programming-language.md).
         // The receiver is spelled `r` only until name_closure_receiver renames it.
         src.s("\{ret_ty\}|> {\n  fn call(r: Self@")
         for p in base_ast_ext.Param_cursor.new(params, false)
@@ -268,7 +268,7 @@ impl Ast_node
             r.desugar_err(ctx, "a capture must be a name with a type ('n: I32')")
             return false
         c_ty: = written_type_text(cap.get_decl_type_node())
-        if c_ty.len == 0 || c_ty.equals(base_core.unknown_type_name)
+        if c_ty.len == 0 || c_ty.equals(base_core.UNKNOWN_TYPE_NAME)
             $m: = Str_builder.new()
             defer m.free()
             m

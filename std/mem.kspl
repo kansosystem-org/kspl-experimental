@@ -40,8 +40,8 @@ extern "C"
 priv $heap_current: Sz = 0
 priv $heap_peak: Sz = 0
 priv $heap_total: Sz = 0
-priv const alloc_header_size: Sz = 16 //< the header size, which keeps C's 16-byte alignment
-priv const max_align: Sz = 8 //< the alignment of every address returned
+priv const ALLOC_HEADER_SIZE: Sz = 16 //< the header size, which keeps C's 16-byte alignment
+priv const MAX_ALIGN: Sz = 8 //< the alignment of every address returned
     //<
     //< 8 meets the requirements of `Sz`, a pointer and F64 on both 32-bit and 64-bit.
 
@@ -50,9 +50,9 @@ priv fn align_pad(ptr: U8$@): Sz //<
     //<
     //< **The start of a passed-in buffer need not be aligned** (`std/docs/DESIGN-core.md`'s "The
     //< receiver aligns the start of a given buffer").
-    rem: = (Sz::ptr) % max_align
-    return 0 if rem == 0 else max_align - rem
-priv const alloc_owner_offset: Sz = sizeof(Sz) //<
+    rem: = (Sz::ptr) % MAX_ALIGN
+    return 0 if rem == 0 else MAX_ALIGN - rem
+priv const ALLOC_OWNER_OFFSET: Sz = sizeof(Sz) //<
     //< The offset in the header where the block records its own address
     //<
     //< **`dealloc` accepts only the exact pointer `alloc` returned.** The address sits in the
@@ -65,7 +65,7 @@ pub fn alloc( //< allocates raw bytes from the global heap
 ): Void$@ //< the bytes, freed with `dealloc`; running out of memory stops the program
     if size < 0
         panic("alloc size must be non-negative")
-    alloc_size: = size + alloc_header_size
+    alloc_size: = size + ALLOC_HEADER_SIZE
     // Caution: **Refuse a size the header wrapped** (as `Arena.alloc` does): malloc would hand out
     // a few bytes, and the caller would write `size` of them.
     if alloc_size < size
@@ -75,12 +75,12 @@ pub fn alloc( //< allocates raw bytes from the global heap
         panic("Out of memory")
     size_ptr: = Sz$@::ptr
     size_ptr$ = size
-    owner_ptr: = (U8$@$@)::((ptr) + alloc_owner_offset)
+    owner_ptr: = (U8$@$@)::((ptr) + ALLOC_OWNER_OFFSET)
     owner_ptr$ = ptr
 
     raise_peak(kspl_atomic_add(heap_current@, size) + size)
     kspl_atomic_add(heap_total@, size)
-    data_ptr: = ptr + alloc_header_size
+    data_ptr: = ptr + ALLOC_HEADER_SIZE
     return Void$@::data_ptr
 // A compare-and-swap loop, so a thread holding a lower value can never write it over a higher one.
 // Cost: one atomic read while the peak stays above, as it does once a program warms up.
@@ -109,9 +109,9 @@ pub fn dealloc( //< returns bytes to the global heap
     ptr: Void$@, //< what `alloc` returned; null does nothing
 )
     if ptr != null
-        real_ptr: = (U8$@::ptr) - alloc_header_size
+        real_ptr: = (U8$@::ptr) - ALLOC_HEADER_SIZE
         // **Check where it came from before passing it to `libc.free`.**
-        owner_ptr: = (U8$@$@)::(real_ptr + alloc_owner_offset)
+        owner_ptr: = (U8$@$@)::(real_ptr + ALLOC_OWNER_OFFSET)
         if owner_ptr$ != real_ptr
             panic("mem.dealloc: this pointer did not come from mem.alloc, or was already freed. \
                 Arena memory is released by Arena.free(), and a pointer into the middle of an \
@@ -156,7 +156,7 @@ priv struct Fh_block //<
 // A remainder smaller than one header plus this is not split off, so tiny free blocks do not
 // fragment the heap.
 #cfg(freestanding)
-priv const fh_min_useful_bytes: Sz = 16
+priv const FH_MIN_USEFUL_BYTES: Sz = 16
 
 priv struct _Fh_state
     free_list: Fh_block$@
@@ -235,7 +235,7 @@ priv fn freestanding_heap_alloc(size: Sz): Void$@
         return null // unreachable
 
     leftover: = cur.size - need
-    if leftover >= sizeof(Fh_block) + fh_min_useful_bytes
+    if leftover >= sizeof(Fh_block) + FH_MIN_USEFUL_BYTES
         // The first need bytes of cur are allocated; the rest takes cur's place in the free list.
         new_hdr: = Fh_block$@::((U8$@::fh_data_ptr(cur)) + need)
         new_hdr.size = leftover - sizeof(Fh_block)
@@ -432,8 +432,8 @@ priv struct Arena_chunk
 // Caution: **Always use this for the distance, and do not write `sizeof(Arena_chunk)` directly.**
 // On a 32-bit target the header is 12 bytes, so every allocation after it is 4 bytes off an
 // 8-byte boundary. F64 / I64 / U64 there are undefined behavior (AAPCS).
-priv const arena_chunk_header_size: Sz =
-    ((sizeof(Arena_chunk) + max_align - 1) / max_align) * max_align
+priv const ARENA_CHUNK_HEADER_SIZE: Sz =
+    ((sizeof(Arena_chunk) + MAX_ALIGN - 1) / MAX_ALIGN) * MAX_ALIGN
 pub struct Arena //< a bump allocator: everything it allocated is freed at once
     priv head: Arena_chunk$@
     pub default_chunk_size: Sz //< the largest size a chunk grows to; 0 marks a fixed buffer.
@@ -441,7 +441,7 @@ pub struct Arena //< a bump allocator: everything it allocated is freed at once
         //< from_buffer() sets 0: running out panics without calling malloc, and free() does nothing
         //< (the chunk and the Arena are the caller's memory).
     priv resets: Sz //< how many times reset() has run, so restore() can refuse a mark from before
-priv const arena_initial_chunk: Sz = 256 * 1024 //<
+priv const ARENA_INITIAL_CHUNK: Sz = 256 * 1024 //<
     //< the first chunk's capacity; later ones grow from it
     //<
     //< A smaller default_chunk_size takes precedence.
@@ -493,10 +493,10 @@ impl Arena
         size: Sz, //< its size in bytes
     ): Arena
         pad: = align_pad(U8$@::buf)
-        assert(size > pad + arena_chunk_header_size,
+        assert(size > pad + ARENA_CHUNK_HEADER_SIZE,
             "Arena.from_buffer: buffer too small for a chunk header")
         chunk: = Arena_chunk$@::((U8$@::buf) + pad)
-        chunk.cap = size - pad - arena_chunk_header_size
+        chunk.cap = size - pad - ARENA_CHUNK_HEADER_SIZE
         chunk.used = 0
         chunk.next = null
         return Arena::{ .head = chunk, .default_chunk_size = 0, .resets = 0 }
@@ -505,7 +505,7 @@ impl Arena
         //< It doubles from a small first chunk up to default_chunk_size. So a small workload does
         //< not over-allocate, and a large one reaches big chunks quickly. An allocation above the
         //< limit gets a chunk of its own size.
-        $step: = arena_initial_chunk if r.head == null else r.head.cap * 2
+        $step: = ARENA_INITIAL_CHUNK if r.head == null else r.head.cap * 2
         if step > r.default_chunk_size
             step = r.default_chunk_size
         return alloc_size if alloc_size > step else step
@@ -522,7 +522,7 @@ impl Arena
             return alloc(size)
         if size < 0
             panic("Arena alloc size must be non-negative")
-        alloc_size: = ((size + max_align - 1) / max_align) * max_align
+        alloc_size: = ((size + MAX_ALIGN - 1) / MAX_ALIGN) * MAX_ALIGN
         // Caution: **Refuse a size the rounding wrapped.** Negative, it passes the room check below
         // and moves `used` backwards. Then the block handed out overlaps live ones. `Sz` is 32 bits
         // on some targets, where a size computed from input reaches it.
@@ -533,7 +533,7 @@ impl Arena
             head_chunk: = r.head
             remaining: = head_chunk.cap - head_chunk.used
             if remaining >= alloc_size
-                ptr: = (U8$@::head_chunk) + arena_chunk_header_size + head_chunk.used
+                ptr: = (U8$@::head_chunk) + ARENA_CHUNK_HEADER_SIZE + head_chunk.used
                 head_chunk.used += alloc_size
                 return Void$@::ptr
 
@@ -542,7 +542,7 @@ impl Arena
             panic("Arena.from_buffer: static buffer exhausted (no growth allowed)")
 
         new_cap: = r.next_chunk_cap(alloc_size)
-        total_size: = arena_chunk_header_size + new_cap
+        total_size: = ARENA_CHUNK_HEADER_SIZE + new_cap
         new_chunk: = Arena_chunk$@::alloc(total_size)
 
         new_chunk.cap = new_cap
@@ -550,7 +550,7 @@ impl Arena
         new_chunk.next = r.head
 
         r.head = new_chunk
-        data_start: = (U8$@::new_chunk) + arena_chunk_header_size
+        data_start: = (U8$@::new_chunk) + ARENA_CHUNK_HEADER_SIZE
         return Void$@::data_start
 
     pub fn save(r: Self$@): Arena_state //< a mark to rewind to later
@@ -584,7 +584,7 @@ impl Arena
                 r.head.used = 0 // a fixed buffer stops here; its one chunk belongs to the caller
             return
         need: = free_chunks(r.head, null)
-        one: = Arena_chunk$@::alloc(arena_chunk_header_size + need)
+        one: = Arena_chunk$@::alloc(ARENA_CHUNK_HEADER_SIZE + need)
         one.cap = need
         one.used = 0
         one.next = null
@@ -619,7 +619,7 @@ impl Arena
         $total: Sz = 0
         $curr: = r.head
         for curr != null
-            total += curr.cap + arena_chunk_header_size
+            total += curr.cap + ARENA_CHUNK_HEADER_SIZE
             curr = curr.next
         return total
 
@@ -627,7 +627,7 @@ impl Arena
         $total: Sz = 0
         $curr: = r.head
         for curr != null
-            total += curr.used + arena_chunk_header_size
+            total += curr.used + ARENA_CHUNK_HEADER_SIZE
             curr = curr.next
         return total
 
@@ -684,7 +684,7 @@ struct Scratch //< the arena a function works in: the caller's, or one of its ow
     own: Own_arena //< the arena made for a caller who passed null, or empty; `free` frees it
     priv lent_at: Arena_state //< where the caller's arena stood when it was lent; `free` rewinds
 
-priv const scratch_chunk: Sz = 64 * 1024 //< the largest chunk a scratch arena of its own takes
+priv const SCRATCH_CHUNK: Sz = 64 * 1024 //< the largest chunk a scratch arena of its own takes
 
 fn scratch( //< the arena to work in: the caller's from its current mark, or one made here
     //<
@@ -694,7 +694,7 @@ fn scratch( //< the arena to work in: the caller's from its current mark, or one
 ): Scratch
     if lent != null
         return Scratch::{ .arena = lent, .own = ::{}, .lent_at = lent.save() }
-    own: = Arena.new(scratch_chunk)
+    own: = Arena.new(SCRATCH_CHUNK)
     return Scratch::{ .arena = own, .own = ::{ .arena = own }, .lent_at = ::{} }
 
 impl Scratch

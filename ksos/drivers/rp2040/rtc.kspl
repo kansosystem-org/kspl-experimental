@@ -12,19 +12,19 @@
 
 import "ksos/drivers/mmio"
 import "ksos/drivers/rp2040/resets"
-const rtc_base: U32 = 0x4005c000
-const rtc_clkdiv_m1: U32 = rtc_base + 0x00
-const rtc_setup_0: U32 = rtc_base + 0x04
-const rtc_setup_1: U32 = rtc_base + 0x08
-const rtc_ctrl: U32 = rtc_base + 0x0C
-const rtc_rtc_1: U32 = rtc_base + 0x18
-const rtc_rtc_0: U32 = rtc_base + 0x1C
+const RTC_BASE: U32 = 0x4005c000
+const RTC_CLKDIV_M1: U32 = RTC_BASE + 0x00
+const RTC_SETUP_0: U32 = RTC_BASE + 0x04
+const RTC_SETUP_1: U32 = RTC_BASE + 0x08
+const RTC_CTRL: U32 = RTC_BASE + 0x0C
+const RTC_RTC_1: U32 = RTC_BASE + 0x18
+const RTC_RTC_0: U32 = RTC_BASE + 0x1C
 
-const reset_rtc: U32 = 1U32 << 15 //< RESETS's RTC is bit15 (pico-sdk's RESETS_RESET_RTC_BITS)
+const RESET_RTC: U32 = 1U32 << 15 //< RESETS's RTC is bit15 (pico-sdk's RESETS_RESET_RTC_BITS)
 
-const ctrl_enable: U32 = 1U32 << 0
-const ctrl_active: U32 = 1U32 << 1
-const ctrl_load: U32 = 1U32 << 4
+const CTRL_ENABLE: U32 = 1U32 << 0
+const CTRL_ACTIVE: U32 = 1U32 << 1
+const CTRL_LOAD: U32 = 1U32 << 4
 
 struct Date_time
     year: U32 //< 0-4095
@@ -58,18 +58,18 @@ fn init(dt: Date_time, clkdiv_m1: U32): Void!mmio.Driver_error //< starts the RT
     //< clkdiv_m1 is clk_rtc's frequency in Hz, minus 1.
     //< Caution: **Take it out of reset first.** A write to a register still in reset is silently
     //< discarded (and reads back as 0).
-    resets.reset_then_unreset(reset_rtc)!
-    mmio.write32(rtc_ctrl, 0U32) // stop it first, then configure it
-    mmio.write32(rtc_clkdiv_m1, clkdiv_m1)
-    mmio.write32(rtc_setup_0, pack_setup_0(dt))
-    mmio.write32(rtc_setup_1, pack_setup_1(dt))
-    mmio.write32(rtc_ctrl, ctrl_load) // load SETUP_0/1 into the counters
-    mmio.write32(rtc_ctrl, ctrl_enable) // start it running
+    resets.reset_then_unreset(RESET_RTC)!
+    mmio.write32(RTC_CTRL, 0U32) // stop it first, then configure it
+    mmio.write32(RTC_CLKDIV_M1, clkdiv_m1)
+    mmio.write32(RTC_SETUP_0, pack_setup_0(dt))
+    mmio.write32(RTC_SETUP_1, pack_setup_1(dt))
+    mmio.write32(RTC_CTRL, CTRL_LOAD) // load SETUP_0/1 into the counters
+    mmio.write32(RTC_CTRL, CTRL_ENABLE) // start it running
 
 fn is_active(): Bool //< returns the RTC_ACTIVE bit (the status bit saying it is running)
-    return (mmio.read32(rtc_ctrl) & ctrl_active) != 0
+    return (mmio.read32(RTC_CTRL) & CTRL_ACTIVE) != 0
 
 fn read(): Date_time //< reads the current date and time
-    date_bits: = mmio.read32(rtc_rtc_1)
-    time_bits: = mmio.read32(rtc_rtc_0)
+    date_bits: = mmio.read32(RTC_RTC_1)
+    time_bits: = mmio.read32(RTC_RTC_0)
     return unpack(date_bits, time_bits)

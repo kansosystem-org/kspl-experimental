@@ -18,20 +18,20 @@ import "std/seq"
 import "std/strfmt"
 import "std/sys"
 
-priv const magic_start0: U32 = 0x0a324655
-priv const magic_start1: U32 = 0x9e5d5157
-priv const magic_end: U32 = 0x0ab16f30
-priv const flag_family_id_present: U32 = 0x00002000
-priv const rp2040_family_id: U32 = 0xe48bff56
-priv const payload_size: Sz = 256
-priv const block_size: Sz = 512
-priv const data_area: Sz = 476
-priv const pt_load: U32 = 1
-priv const phentsize32: Sz = 32 //< the size of one ELF32 program header
+priv const MAGIC_START0: U32 = 0x0a324655
+priv const MAGIC_START1: U32 = 0x9e5d5157
+priv const MAGIC_END: U32 = 0x0ab16f30
+priv const FLAG_FAMILY_ID_PRESENT: U32 = 0x00002000
+priv const RP2040_FAMILY_ID: U32 = 0xe48bff56
+priv const PAYLOAD_SIZE: Sz = 256
+priv const BLOCK_SIZE: Sz = 512
+priv const DATA_AREA: Sz = 476
+priv const PT_LOAD: U32 = 1
+priv const PHENTSIZE32: Sz = 32 //< the size of one ELF32 program header
     //<
     //< Nothing else is handled: the reads below **use fixed offsets** (p_offset=+4 / p_paddr=+12),
     //< so a different entry size would read a different field.
-priv const max_load_addr: U32 = 0xffffffff //< the largest load address
+priv const MAX_LOAD_ADDR: U32 = 0xffffffff //< the largest load address
     //<
     //< UF2's targetAddr is 32-bit, so the limit has that type.
 
@@ -76,7 +76,7 @@ priv fn load_pages(data: U8[], arena: Arena$@): List<|Page|>!Uf2_error //<
     e_phoff: = Sz::data.get_u32_le(0x1c)
     e_phentsize: = Sz::data.get_u16_le(0x2a)
     e_phnum: = Sz::data.get_u16_le(0x2c)
-    if e_phentsize != phentsize32
+    if e_phentsize != PHENTSIZE32
         throw .bad_program_header_size
 
     $pages: = List<|Page|>.new(arena)
@@ -90,7 +90,7 @@ priv fn load_pages(data: U8[], arena: Arena$@): List<|Page|>!Uf2_error //<
         base: = e_phoff + i * e_phentsize
         if base + 20 > data.len
             throw .truncated_program_header
-        if data.get_u32_le(base) != pt_load || data.get_u32_le(base + 16) == 0
+        if data.get_u32_le(base) != PT_LOAD || data.get_u32_le(base + 16) == 0
             continue
         p_offset: = Sz::data.get_u32_le(base + 4)
         p_paddr: = Sz::data.get_u32_le(base + 12)
@@ -100,15 +100,15 @@ priv fn load_pages(data: U8[], arena: Arena$@): List<|Page|>!Uf2_error //<
         // Caution: **Reject a load address that does not fit in 32 bits.** `U32::` silently
         // truncates it (0xffffff00 + 0x200 becomes address 0, and passes verify too), and
         // overwriting boot2 at 0 stops the chip from booting.
-        if p_paddr > Sz::max_load_addr - p_filesz
+        if p_paddr > Sz::MAX_LOAD_ADDR - p_filesz
             throw .load_address_out_of_range
         // A page at a time; a gap within a page stays 0.
         $off: Sz = 0
         for off < p_filesz
             a: = p_paddr + off
-            page_base: = a - a % payload_size
+            page_base: = a - a % PAYLOAD_SIZE
             start: = a - page_base
-            room: = payload_size - start
+            room: = PAYLOAD_SIZE - start
             n: = room if room < p_filesz - off else p_filesz - off
             $slot: Sz = 0
             if known: = slot_of.get(page_base)
@@ -133,28 +133,28 @@ priv fn verify(path: U8[], blocks: Sz): Void!Uf2_error //<
     //< this reads it back, and it fails here rather than on the device.
     data: = io.read_file(path) catch
         throw .read_back_failed
-    if data.len != blocks * block_size
+    if data.len != blocks * BLOCK_SIZE
         throw .inconsistent_block_numbering
     $prev_end: U32 = 0
     for i in Range.asc(blocks)
-        b: = data.sub(i * block_size, block_size)
-        if b.get_u32_le(0) != magic_start0 || b.get_u32_le(4) != magic_start1 ||
-            b.get_u32_le(block_size - 4) != magic_end
+        b: = data.sub(i * BLOCK_SIZE, BLOCK_SIZE)
+        if b.get_u32_le(0) != MAGIC_START0 || b.get_u32_le(4) != MAGIC_START1 ||
+            b.get_u32_le(BLOCK_SIZE - 4) != MAGIC_END
             throw .bad_magic
-        if b.get_u32_le(8) != flag_family_id_present || b.get_u32_le(0x1c) != rp2040_family_id
+        if b.get_u32_le(8) != FLAG_FAMILY_ID_PRESENT || b.get_u32_le(0x1c) != RP2040_FAMILY_ID
             throw .wrong_family_id
         if Sz::b.get_u32_le(0x14) != i || Sz::b.get_u32_le(0x18) != blocks
             throw .inconsistent_block_numbering
         // The check that matters: a block without both payloadSize=256 and a 256-byte-aligned
         // address is silently ignored.
-        if Sz::b.get_u32_le(0x10) != payload_size
+        if Sz::b.get_u32_le(0x10) != PAYLOAD_SIZE
             throw .payload_not_256
         addr: = b.get_u32_le(0x0c)
-        if addr % U32::payload_size != 0
+        if addr % U32::PAYLOAD_SIZE != 0
             throw .target_addr_not_aligned
-        if i > 0 && addr <= prev_end - U32::payload_size
+        if i > 0 && addr <= prev_end - U32::PAYLOAD_SIZE
             throw .blocks_not_ascending
-        prev_end = addr + U32::payload_size
+        prev_end = addr + U32::PAYLOAD_SIZE
 
 priv fn convert(in_path: U8[], out_path: U8[], arena: Arena$@): Void!Uf2_error
     elf: = io.read_file(in_path) catch
@@ -169,16 +169,16 @@ priv fn convert(in_path: U8[], out_path: U8[], arena: Arena$@): Void!Uf2_error
         throw .read_back_failed
     for i in Range.asc(pages.len)
         blk_out.fill(0)
-        blk_out.put_u32_le(0, magic_start0)
-        blk_out.put_u32_le(4, magic_start1)
-        blk_out.put_u32_le(8, flag_family_id_present)
+        blk_out.put_u32_le(0, MAGIC_START0)
+        blk_out.put_u32_le(4, MAGIC_START1)
+        blk_out.put_u32_le(8, FLAG_FAMILY_ID_PRESENT)
         blk_out.put_u32_le(0x0c, pages[i].addr)
-        blk_out.put_u32_le(0x10, U32::payload_size)
+        blk_out.put_u32_le(0x10, U32::PAYLOAD_SIZE)
         blk_out.put_u32_le(0x14, U32::i)
         blk_out.put_u32_le(0x18, U32::pages.len)
-        blk_out.put_u32_le(0x1c, rp2040_family_id)
+        blk_out.put_u32_le(0x1c, RP2040_FAMILY_ID)
         _n: = blk_out.copy_from(32, U8[]::pages[i].data)
-        blk_out.put_u32_le(32 + data_area, magic_end)
+        blk_out.put_u32_le(32 + DATA_AREA, MAGIC_END)
         out.s(blk_view)
     out.sync() catch
         throw .read_back_failed
@@ -186,9 +186,9 @@ priv fn convert(in_path: U8[], out_path: U8[], arena: Arena$@): Void!Uf2_error
 
     verify(out_path, pages.len)!
     low: = pages[0].addr
-    high: = pages[pages.len - 1].addr + U32::payload_size
+    high: = pages[pages.len - 1].addr + U32::PAYLOAD_SIZE
     io.out()
-        .s("# UF2: \{pages.len\} blocks, \{pages.len * block_size\} bytes, load \
+        .s("# UF2: \{pages.len\} blocks, \{pages.len * BLOCK_SIZE\} bytes, load \
             \{strfmt.hex(low, 8)\}-\{strfmt.hex(high, 8)\} -> \{out_path\} (format verified)\n")
 
 fn main(): I32

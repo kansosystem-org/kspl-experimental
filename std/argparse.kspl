@@ -17,7 +17,7 @@ import "std/str"
 import "std/strnum" // `to_i64`
 import "std/sys"
 
-pub enum Argp_error //< why the arguments could not be read as declared
+pub enum Argument_error //< why the arguments could not be read as declared
     help_requested //< `--help` was given; not a failure, but parsing does not continue either
     unknown_option(name: U8[]) //< a `--name` no declaration knows
     missing_value(name: U8[]) //< an item that takes a value has no `=value` attached
@@ -65,7 +65,7 @@ priv struct Cmd //< a command selected by a positional argument's name (`fmt` / 
         //< script).
     hidden: Bool //< left out of the usage: a command another program calls, never a person
 
-priv fn store_value(o: Opt$@, val: U8[], again: Bool): Void!Argp_error //<
+priv fn store_value(o: Opt$@, val: U8[], again: Bool): Void!Argument_error //<
     //< Interprets the value by o's kind and stores it in the destination
     //<
     //< Caution: **Refuse an item of one value given `again`.** Kept, the later value silently wins,
@@ -87,13 +87,13 @@ priv fn store_value(o: Opt$@, val: U8[], again: Bool): Void!Argp_error //<
         // ignored.
         throw .unexpected_value(o.name)
 
-priv const help_column: Sz = 26 //< the column where the description starts
+priv const HELP_COLUMN: Sz = 26 //< the column where the description starts
     //<
     //< Each byte counts as one display column (ASCII).
 
 priv fn help_name(out: Writer, name: U8[], suffix: U8[])
     out.s("  ").s(name).s(suffix)
-    for $i: Sz = 2 + name.len + suffix.len; i < help_column; i += 1
+    for $i: Sz = 2 + name.len + suffix.len; i < HELP_COLUMN; i += 1
         out.c(' ')
     out.c(' ') // a name past the column still gets one space
 
@@ -111,7 +111,7 @@ pub struct Parser //< the declarations, and where the parsed values go
     priv takes_positional: Bool
     pub command: U8[]? //< the chosen command, or none; the caller decides the default.
         //<
-        //< A default kept in argp would drift from the declaration.
+        //< A default kept in argparse would drift from the declaration.
     priv own: Own_arena //< the arena it lives in, when `create` was given null
 
 impl Parser
@@ -298,7 +298,7 @@ impl Parser
                 return .some(c)
         return .none
 
-    priv fn option_named(r: Self$@, arg: U8[]): Opt_hit!Argp_error //<
+    priv fn option_named(r: Self$@, arg: U8[]): Opt_hit!Argument_error //<
         //< The option an argument names, matched in two steps
         //<
         //< 1. the whole argument (`--in-place`); 2. split at the first `=` (`--lint=CODE=level`).
@@ -311,7 +311,7 @@ impl Parser
         // Reports **the argument as given**, so the user finds what they typed.
         throw .unknown_option(arg)
 
-    priv fn set_command(r: Self$@, name: U8[]): Void!Argp_error //< selects a command
+    priv fn set_command(r: Self$@, name: U8[]): Void!Argument_error //< selects a command
         //<
         //< A second one throws multiple_commands.
         if r.command.is_some()
@@ -322,7 +322,7 @@ impl Parser
         r: Self$@,
         a: sys.Args, //< what `sys.args()` returned
         arena: Arena$@, //< where the arguments are listed while parsing (null: the heap)
-    ): Void!Argp_error
+    ): Void!Argument_error
         $argv: = List<|U8[]|>.new(arena)
         defer argv.free() // the values are views into `a`, so the list is only work
         for $i: Sz = 1; i < a.len; i += 1
@@ -334,7 +334,7 @@ impl Parser
         //< Also for arguments from elsewhere, such as a configuration file or a test.
         r: Self$@,
         argv: List<|U8[]|>$@, //< the arguments, **without** the program's own name
-    ): Void!Argp_error
+    ): Void!Argument_error
         // subcommand_trailing's rest, pushed once its target has arrived.
         $trail: List<|U8[]|>$@ = null
         $operands_only: = false // after `--`
@@ -430,7 +430,7 @@ impl Parser
         for i in Range.asc(r.opts.len)
             o: = r.opts.at(i)
             $suffix: U8[] = ""
-            // Only ASCII before the column (see `help_column`).
+            // Only ASCII before the column (see `HELP_COLUMN`).
             switch o.kind
             case .int_val(_o)
                 suffix = "=<int>"
@@ -468,12 +468,12 @@ impl Parser
 
 impl Parser: Owned {} //< `free()` lets go the arena a parser made with null lives in
 
-impl Argp_error: Formattable //< so a failure can be written straight into a message
+impl Argument_error: Formattable //< so a failure can be written straight into a message
     pub fn fmt(r: Self, w: Writer): Writer //< writes the reason for a person to read
         //<
         //< Interpolation expands into a chain of calls on a Writer ("The expansion specification
-        //< for string interpolation" in docs/SPEC-language.md). Returning a `U8[]` would leave the
-        //< caller managing a temporary buffer's lifetime.
+        //< for string interpolation" in docs/SPEC-programming-language.md). Returning a `U8[]`
+        //< would leave the caller managing a temporary buffer's lifetime.
         switch r
         case .help_requested
             return w.s("help requested")

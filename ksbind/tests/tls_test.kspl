@@ -56,14 +56,14 @@ extern "C"
     fn PEM_write_bio_X509(bp: tls.BIO$@, x: X509$@): I32
     fn SSL_set_fd(ssl: tls.SSL$@, fd: I32): I32
 
-priv const evp_pkey_ed25519: I32 = 1087 //< EVP_PKEY_ED25519 (NID_ED25519)
-priv const mbstring_asc: I32 = 0x1001 //< MBSTRING_ASC
+priv const EVP_PKEY_ED25519: I32 = 1087 //< EVP_PKEY_ED25519 (NID_ED25519)
+priv const MBSTRING_ASC: I32 = 0x1001 //< MBSTRING_ASC
 
 priv enum Peer_act //< what the peer does once a client connects
     no_tls //< reads the ClientHello and closes, speaking no TLS
     refused //< offers its certificate, which the client refuses
-    echo_then_close //< answers `ping` with `pong`, then closes with a close_notify
-    echo_then_cut //< answers `ping` with `pong`, then drops the connection with no close_notify
+    echo_then_close //< answers `PING` with `PONG`, then closes with a close_notify
+    echo_then_cut //< answers `PING` with `PONG`, then drops the connection with no close_notify
     gone //< completes the handshake, then drops the connection without reading a byte
 
 priv struct Tls_peer //<
@@ -72,8 +72,8 @@ priv struct Tls_peer //<
     ctx: tls.SSL_CTX$@ //< null for `.no_tls`
     act: Peer_act
 
-priv const ping: U8[] = "ping" //< what the client sends
-priv const pong: U8[] = "pong" //< what the peer answers
+priv const PING: U8[] = "ping" //< what the client sends
+priv const PONG: U8[] = "pong" //< what the peer answers
 
 #export
 fn tls_test_peer(peer: Tls_peer$@): Void$@
@@ -96,15 +96,15 @@ fn tls_test_peer(peer: Tls_peer$@): Void$@
             assert(SSL_accept(ssl) == 1, "the peer's handshake should succeed")
         default
             assert(SSL_accept(ssl) == 1, "the peer's handshake should succeed")
-            // Reads the whole `ping` first: a byte left unread would turn the close into a reset.
+            // Reads the whole `PING` first: a byte left unread would turn the close into a reset.
             $got: U8[4] = ::{}
             $have: I32 = 0
             for have < 4
                 n: = tls.SSL_read(ssl, Void$@::(got@ + have), 4 - have)
                 assert(n > 0, "the peer should read the client's ping")
                 have += n
-            assert((U8$[]::got).equals(ping), "the peer should read ping")
-            assert(tls.SSL_write(ssl, Void@::pong.ptr, 4) == 4, "the peer should answer pong")
+            assert((U8$[]::got).equals(PING), "the peer should read ping")
+            assert(tls.SSL_write(ssl, Void@::PONG.ptr, 4) == 4, "the peer should answer pong")
             switch peer.act
             case .echo_then_close
                 tls.SSL_shutdown(ssl)
@@ -114,7 +114,7 @@ fn tls_test_peer(peer: Tls_peer$@): Void$@
     return null
 
 priv fn new_key(): EVP_PKEY$@ //< a fresh Ed25519 key, which the caller frees
-    kctx: = EVP_PKEY_CTX_new_id(evp_pkey_ed25519, null)
+    kctx: = EVP_PKEY_CTX_new_id(EVP_PKEY_ED25519, null)
     assert(kctx != null && EVP_PKEY_keygen_init(kctx) == 1, "an Ed25519 key generator should start")
     $pkey: EVP_PKEY$@ = null
     assert(EVP_PKEY_keygen(kctx, pkey@) == 1, "an Ed25519 key should be made")
@@ -136,7 +136,7 @@ priv fn new_cert( //< a certificate for `key`, valid for an hour, which the call
         ASN1_INTEGER_set(X509_get_serialNumber(x), serial) == 1 &&
         X509_gmtime_adj(X509_getm_notBefore(x), 0) != null &&
         X509_gmtime_adj(X509_getm_notAfter(x), 3600) != null && X509_set_pubkey(x, key) == 1 &&
-        X509_NAME_add_entry_by_txt(name, "CN", mbstring_asc, Void@::cn.ptr, I32::cn.len, -1, 0) == 1
+        X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC, Void@::cn.ptr, I32::cn.len, -1, 0) == 1
         && X509_set_issuer_name(x, issuer_name) == 1 && X509_sign(x, signer, null) > 0
     assert(ok, "the certificate should be filled in and signed")
     return x
@@ -160,7 +160,7 @@ priv fn self_signed_ctx(): tls.SSL_CTX$@ //<
     EVP_PKEY_free(key)
     return ctx
 
-priv const ca_base: U8[] = "out/tmp/ksbind_tls" //< where a test CA's certificate is written
+priv const CA_BASE: U8[] = "out/tmp/ksbind_tls" //< where a test CA's certificate is written
 
 priv struct Test_ca //< a CA made for one test, which the client trusts while it stands
     key: EVP_PKEY$@
@@ -176,7 +176,7 @@ impl Test_ca
         //< variable. So the test runs the code a program runs.
         key: = new_key()
         cert: = new_cert(key, "Kanso test CA", 1, null, key)
-        dir: = fs.mkdir_unique(ca_base, "ca_", arena)
+        dir: = fs.mkdir_unique(CA_BASE, "ca_", arena)
             catch panic("the scratch folder should be made")
         file: = fs.join(dir, "ca.pem", arena)
         $c_file: U8$@ = null
@@ -246,7 +246,7 @@ priv enum After_pong //< what a read after the peer's last byte gives
 
 impl Peer_act
     fn round_trip_then(r: Self, arena: Arena$@): After_pong //<
-        //< Connects to a peer a test CA vouches for, trades `ping` for `pong`, and reads once more
+        //< Connects to a peer a test CA vouches for, trades `PING` for `PONG`, and reads once more
         ca: = Test_ca.trusted(arena)
         defer ca.free()
         ctx: = ca.issue_ctx("localhost")
@@ -259,7 +259,7 @@ impl Peer_act
             catch panic("thread spawn failed")
         s: = tls.Tls_stream.connect("localhost", port)
             catch panic("a certificate the trusted CA issued for this host should connect")
-        sent: = s.write(ping) catch panic("the client's write should succeed")
+        sent: = s.write(PING) catch panic("the client's write should succeed")
         assert(sent == 4, "the client's ping should go out whole")
         $got: U8[4] = ::{}
         $have: Sz = 0
@@ -268,7 +268,7 @@ impl Peer_act
                 catch panic("the client should read the pong")
             assert(n > 0, "the pong should arrive before the end")
             have += n
-        assert((U8$[]::got).equals(pong), "the client should read pong")
+        assert((U8$[]::got).equals(PONG), "the client should read pong")
         $after: = After_pong.end
         $rest: U8[8] = ::{}
         n: = s.read(U8$[]::rest) catch
@@ -330,16 +330,16 @@ fn test_tls_cut_connection_is_an_error()
     assert(after == After_pong.error, "a read after a cut with no close_notify must fail")
     verdict.pass("A connection cut without a close_notify fails, rather than reading as an end.")
 
-priv const sigpipe: I32 = 13 //< SIGPIPE's number on Linux and macOS
-priv const write_tries: Sz = 50 //< the cap on writes to a peer that is gone before one fails
-priv const write_gap_ms: I32 = 20 //< the wait between them, for the peer's reset to arrive
+priv const SIGPIPE: I32 = 13 //< SIGPIPE's number on Linux and macOS
+priv const WRITE_TRIES: Sz = 50 //< the cap on writes to a peer that is gone before one fails
+priv const WRITE_GAP_MS: I32 = 20 //< the wait between them, for the peer's reset to arrive
 
 priv $sigpipes_seen: I32 = 0 //< how many SIGPIPEs reached `count_sigpipe`
 
 priv fn count_sigpipe(_sig: I32): Void //< a SIGPIPE handler that only counts
     sigpipes_seen += 1
     // Registered again: under SysV semantics one delivery puts the default back.
-    libc.signal(sigpipe, count_sigpipe)
+    libc.signal(SIGPIPE, count_sigpipe)
 
 fn test_tls_write_to_a_gone_peer_raises_no_sigpipe()
     verdict.start("[Tls] writing to a peer that is gone failing with no SIGPIPE test...")
@@ -364,18 +364,18 @@ fn test_tls_write_to_a_gone_peer_raises_no_sigpipe()
     // linked into can differ.** A handler stands in for that program. It counts what the default
     // would have killed it with.
     sigpipes_seen = 0
-    before: = libc.signal(sigpipe, count_sigpipe)
+    before: = libc.signal(SIGPIPE, count_sigpipe)
     $failed: Sz = 0
-    for _try in Range.asc(write_tries)
-        s.write(ping) catch
+    for _try in Range.asc(WRITE_TRIES)
+        s.write(PING) catch
             failed += 1
         if failed >= 2
             break
-        sys.sleep_ms(write_gap_ms)
+        sys.sleep_ms(WRITE_GAP_MS)
     // `free` sends a close_notify, one more write to the peer that is gone.
     s.free()
     seen: = sigpipes_seen
-    libc.signal(sigpipe, before)
+    libc.signal(SIGPIPE, before)
     assert(failed >= 2, "a write to a peer that is gone should fail")
     assert(seen == 0, "a write to a peer that is gone should fail as a value, raising no SIGPIPE")
     verdict.pass("A write to a peer that is gone fails as a value, and raises no SIGPIPE.")

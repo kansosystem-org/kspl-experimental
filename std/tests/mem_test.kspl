@@ -15,23 +15,23 @@ import "std/verdict"
 // ==========================================
 // std/mem: what an arena keeps when it is reset for another round.
 // ==========================================
-priv const kib: Sz = 1024
+priv const KIB: Sz = 1024
 
 priv fn one_round(a: Arena$@) //< three allocations, each bigger than the chunk before could hold
-    a.alloc(100 * kib)
-    a.alloc(300 * kib)
-    a.alloc(700 * kib)
+    a.alloc(100 * KIB)
+    a.alloc(300 * KIB)
+    a.alloc(700 * KIB)
 
 fn test_arena_reset_keeps_one_chunk()
     verdict.start("[Arena] reset keeps what a round used as one chunk, and the next round fits...")
-    a: = Arena.new(1024 * kib)
+    a: = Arena.new(1024 * KIB)
     defer a.free()
     one_round(a)
     grown: = a.get_total_allocated()
     a.reset()
     kept: = a.get_total_allocated()
     assert(kept < grown, "Arena: what the chunks held unused is let go")
-    assert(a.headroom().free == 1100 * kib,
+    assert(a.headroom().free == 1100 * KIB,
         "Arena: one chunk holds what the round used, past the ceiling")
     one_round(a)
     assert(a.get_total_allocated() == kept, "Arena: the same round again takes no new chunk")
@@ -53,12 +53,12 @@ fn test_arena_reset_fixed_buffer()
 // ==========================================
 fn test_arena_restore()
     verdict.start("[Arena] restore rewinds to a mark, across a chunk and more than once...")
-    a: = Arena.new(4 * kib)
+    a: = Arena.new(4 * KIB)
     defer a.free()
     a.alloc(100)
     mark: = a.save()
     first: = a.alloc(16)
-    a.alloc(5 * kib) // past the chunk, so it takes one of its own
+    a.alloc(5 * KIB) // past the chunk, so it takes one of its own
     grown: = a.get_total_allocated()
     a.restore(mark)
     assert(a.get_total_allocated() < grown, "Arena: the chunk taken after the mark is freed")
@@ -79,7 +79,7 @@ priv fn json_refused(src: U8[], a: Arena$@): Bool //< whether `json.parse` refus
 
 fn test_lent_arena_keeps_the_result_alone()
     verdict.start("[Arena] a lent arena keeps a function's result alone...")
-    a: = Arena.new(64 * kib)
+    a: = Arena.new(64 * KIB)
     defer a.free()
     whole: = "GET / HTTP/1.1\r\nHost: h\r\nX-A: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\n\r\n"
     part: = "GET / HTTP/1.1\r\nHost: h\r\nX-A: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\n"
@@ -101,7 +101,7 @@ fn test_lent_arena_keeps_the_result_alone()
         "Arena: an encoded body survives the work behind it")
     verdict.pass("A lent arena is rewound past a function's work, and keeps what it returns")
 
-priv const restore_foreign_src: U8[] = //< a child that rewinds one arena to another's mark
+priv const RESTORE_FOREIGN_SRC: U8[] = //< a child that rewinds one arena to another's mark
     """import "std/mem" { Arena }
 
 fn main()
@@ -113,7 +113,7 @@ fn main()
   b.restore(mark)
 """
 
-priv const restore_before_reset_src: U8[] = //< a child that rewinds to a mark from before reset
+priv const RESTORE_BEFORE_RESET_SRC: U8[] = //< a child that rewinds to a mark from before reset
     //<
     //< After the reset the one chunk is kept and holds more than the mark did. So only the count
     //< of resets tells the mark is stale.
@@ -128,7 +128,7 @@ fn main()
   a.restore(mark)
 """
 
-priv const restore_rewound_past_src: U8[] = //< a child that rewinds to a mark it rewound past
+priv const RESTORE_REWOUND_PAST_SRC: U8[] = //< a child that rewinds to a mark it rewound past
     """import "std/mem" { Arena }
 
 fn main()
@@ -146,11 +146,11 @@ fn test_arena_restore_refuses_stale_marks(ksplc: U8[], arena: Arena$@) //< ksplc
     // Without the refusal the foreign mark frees every chunk and becomes the head. The next
     // allocations then overlap the other arena's data, and only a double free at the end shows it.
     why: = "Arena.restore: the mark is not this arena's"
-    assert(sys_test.child_stops_with(ksplc, "restore_foreign", restore_foreign_src, why, arena),
+    assert(sys_test.child_stops_with(ksplc, "restore_foreign", RESTORE_FOREIGN_SRC, why, arena),
         "a mark from another arena must stop the program at restore, naming it")
-    assert(sys_test.child_stops_with(ksplc, "restore_reset", restore_before_reset_src, why, arena),
+    assert(sys_test.child_stops_with(ksplc, "restore_reset", RESTORE_BEFORE_RESET_SRC, why, arena),
         "a mark from before reset() must stop the program at restore")
-    assert(sys_test.child_stops_with(ksplc, "restore_past", restore_rewound_past_src, why, arena),
+    assert(sys_test.child_stops_with(ksplc, "restore_past", RESTORE_REWOUND_PAST_SRC, why, arena),
         "a mark an earlier restore rewound past must stop the program at restore")
     verdict.pass("Arena.restore stops on a mark from another arena, before reset, or rewound past")
 
@@ -165,7 +165,7 @@ fn test_move_overlap()
     mem.move(Void$@::p, Void$@::p, 0)
     verdict.pass("mem.move copies overlapping ranges in both directions, and 0 bytes does nothing")
 
-priv const arena_zero_src: U8[] = //< a child that asks for an arena whose chunks hold nothing
+priv const ARENA_ZERO_SRC: U8[] = //< a child that asks for an arena whose chunks hold nothing
     """import "std/mem" { Arena }
 
 fn main()
@@ -177,7 +177,7 @@ fn main()
 fn test_arena_new_refuses_zero(ksplc: U8[], arena: Arena$@) //< ksplc runs the child
     verdict.start("[Arena] Arena.new with a chunk size of 0...")
     // Without the refusal it is taken for a fixed buffer: the first alloc blames `from_buffer`.
-    named: = sys_test.child_stops_with(ksplc, "arena_zero", arena_zero_src,
+    named: = sys_test.child_stops_with(ksplc, "arena_zero", ARENA_ZERO_SRC,
         "Arena.new: chunk_size must be above 0", arena)
     assert(named, "Arena.new(0) must stop the program, naming itself and the size")
     verdict.pass("Arena.new refuses a chunk size of 0 where it is called.")
@@ -185,32 +185,32 @@ fn test_arena_new_refuses_zero(ksplc: U8[], arena: Arena$@) //< ksplc runs the c
 // ==========================================
 // std/mem: the heap's counters, when several threads allocate and free at once.
 // ==========================================
-priv const churn_threads: Sz = 4
-priv const churn_rounds: I32 = 50000
-priv const churn_bytes: Sz = 24
+priv const CHURN_THREADS: Sz = 4
+priv const CHURN_ROUNDS: I32 = 50000
+priv const CHURN_BYTES: Sz = 24
 
 #export
 fn heap_churn(rounds: I32$@): Void$@ //< allocates and frees one block, rounds times over
     for _i in Range.asc(rounds$)
-        dealloc(alloc(churn_bytes))
+        dealloc(alloc(CHURN_BYTES))
     return null
 
 fn test_heap_counters_across_threads()
     verdict.start("[Mem] the heap's counters lose no update when threads allocate at once...")
     used0: = mem.heap_used_bytes()
     total0: = mem.heap_requested_total_bytes()
-    $rounds: = churn_rounds
-    $ts: thread.Thread$@[churn_threads] = ::{}
-    for i in Range.asc(churn_threads)
+    $rounds: = CHURN_ROUNDS
+    $ts: thread.Thread$@[CHURN_THREADS] = ::{}
+    for i in Range.asc(CHURN_THREADS)
         ts[i] = thread.Thread.spawn<|I32|>(heap_churn, rounds@) catch panic("thread spawn failed")
-    for i in Range.asc(churn_threads)
+    for i in Range.asc(CHURN_THREADS)
         ts[i].join_and_free()
     // Each thread's handle is on the heap too, freed by its join.
-    want: = churn_threads * (Sz::churn_rounds * churn_bytes + sizeof(thread.Thread))
+    want: = CHURN_THREADS * (Sz::CHURN_ROUNDS * CHURN_BYTES + sizeof(thread.Thread))
     assert(mem.heap_used_bytes() == used0, "Mem: the bytes in use return to where they started")
     assert(mem.heap_requested_total_bytes() - total0 == want,
         "Mem: the running total counts every byte each thread asked for")
-    assert(mem.heap_peak_used_bytes() >= used0 + churn_bytes,
+    assert(mem.heap_peak_used_bytes() >= used0 + CHURN_BYTES,
         "Mem: the peak holds at least one block live at once")
     verdict
         .pass("four threads allocating at once leave the in-use count, the total and the peak right")

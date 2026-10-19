@@ -20,8 +20,8 @@ import "ksos/drivers/rp2040/ir_nec" as ir
 import "ksos/drivers/rp2040/timer"
 import "ksos/drivers/rp2040/usb_cdc" as usb
 
-const line_interval_ms: U32 = 500
-const lines_per_run: U32 = 8
+const LINE_INTERVAL_MS: U32 = 500
+const LINES_PER_RUN: U32 = 8
 
 priv $ready: Bool = false
 
@@ -39,12 +39,12 @@ fn init(): Bool //< starts it
     // Line tracking is a plain digital input. The sensor board drives it, so no pull is set.
     track.init()
     // The ultrasonic uses only two GPIOs (TRIG out / ECHO in). No dedicated block is needed.
-    sonar.init(board.ultrasonic_trig, board.ultrasonic_echo)
-    ir.init(board.ir_receiver)
+    sonar.init(board.ULTRASONIC_TRIG, board.ULTRASONIC_ECHO)
+    ir.init(board.IR_RECEIVER)
     // The ADC needs both "switch the pin to analog" and "start the ADC itself".
-    gpio.init_analog(board.battery_pin)
-    gpio.init_analog(board.light_sensor_left)
-    gpio.init_analog(board.light_sensor_right)
+    gpio.init_analog(board.BATTERY_PIN)
+    gpio.init_analog(board.LIGHT_SENSOR_LEFT)
+    gpio.init_analog(board.LIGHT_SENSOR_RIGHT)
     adc.init() catch
         return false
     ready = true
@@ -57,8 +57,8 @@ priv fn pump(ms: U32) //< waits ms milliseconds, running USB and watching for th
     //< idle is_idle returns at once, so even a call every millisecond costs almost nothing.
     for $i: U32 = 0; i < ms; i += 1
         usb.poll_once()
-        if !ir.is_idle(board.ir_receiver)
-            f: = ir.try_receive(board.ir_receiver)
+        if !ir.is_idle(board.IR_RECEIVER)
+            f: = ir.try_receive(board.IR_RECEIVER)
             if f.ok
                 ir_count += 1
                 if !f.repeat
@@ -78,9 +78,9 @@ priv fn append_line_sensors(ln: con.Line$@, bits: U32)
     ln.byte(')')
 
 priv fn append_reading(ln: con.Line$@)
-    bat: = adc.read_pin_avg(board.battery_pin, board.battery_samples)
-    left: = adc.read_pin(board.light_sensor_left)
-    right: = adc.read_pin(board.light_sensor_right)
+    bat: = adc.read_pin_avg(board.BATTERY_PIN, board.BATTERY_SAMPLES)
+    left: = adc.read_pin(board.LIGHT_SENSOR_LEFT)
+    right: = adc.read_pin(board.LIGHT_SENSOR_RIGHT)
 
     ln.str("bat=")
     if bat.ok
@@ -88,7 +88,7 @@ priv fn append_reading(ln: con.Line$@)
         ln.str("V(")
         ln.u32_pad(bat.value, 4)
         ln.byte(')')
-        if board.battery_mv(bat.value) < board.battery_low_mv
+        if board.battery_mv(bat.value) < board.BATTERY_LOW_MV
             ln.str(" LOW")
     else
         ln.str("----")
@@ -103,7 +103,7 @@ priv fn append_reading(ln: con.Line$@)
 
     // The ultrasonic blocks for up to 36ms. At a 0.5-second period the gap (settle_us) is enough
     // too.
-    d: = sonar.measure(board.ultrasonic_trig, board.ultrasonic_echo)
+    d: = sonar.measure(board.ULTRASONIC_TRIG, board.ULTRASONIC_ECHO)
     ln.str("  dist=")
     if !d.ok
         ln.str("----") // ECHO did not rise: probably not connected
@@ -129,8 +129,8 @@ fn run(ln: con.Line$@)
         con.say(ln, "[sensor]", "ADC did not start (clk_adc?)")
         return
     con.say(ln, "[sensor]", "ADC 12bit (0-4095); press a remote button while these lines run")
-    for _i in Range.asc(Sz::lines_per_run)
+    for _i in Range.asc(Sz::LINES_PER_RUN)
         ln.reset()
         append_reading(ln)
         _sent: = ln.flush()
-        pump(line_interval_ms)
+        pump(LINE_INTERVAL_MS)

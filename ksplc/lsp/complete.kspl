@@ -25,7 +25,7 @@ import "std/mem" { Arena }
 import "std/seq"
 import "std/str" { Str_builder }
 
-const pick_mark: U8[] = "Ksplc_pick_here" //< the synthesized name replacing the half-typed word
+const PICK_MARK: U8[] = "Ksplc_pick_here" //< the synthesized name replacing the half-typed word
     //<
     //< Caution: **Make it a name a person would not write**, or a real name is mistaken for it.
 
@@ -34,17 +34,17 @@ struct Swapped //< the text after the replacement, and the half-typed word
     prefix: U8[]
     offset: Sz
 
-const kind_field: I32 = 5 //< the LSP's kind (`CompletionItemKind`)
+const KIND_FIELD: I32 = 5 //< the LSP's kind (`CompletionItemKind`)
     //<
     //< **The numbers are the LSP's**, so they are written as numbers.
-const kind_function: I32 = 3
-const kind_method: I32 = 2
-const kind_struct: I32 = 22
-const kind_enum: I32 = 13
-const kind_interface: I32 = 8
-const kind_constant: I32 = 21
-const kind_variable: I32 = 6
-const kind_module: I32 = 9
+const KIND_FUNCTION: I32 = 3
+const KIND_METHOD: I32 = 2
+const KIND_STRUCT: I32 = 22
+const KIND_ENUM: I32 = 13
+const KIND_INTERFACE: I32 = 8
+const KIND_CONSTANT: I32 = 21
+const KIND_VARIABLE: I32 = 6
+const KIND_MODULE: I32 = 9
 
 struct Pick
     name: U8[]
@@ -74,14 +74,14 @@ fn swap_in_mark(src: U8[], at: Sz, arena: Arena$@): Swapped //<
     $stop: = at
     for stop < src.len && src[stop].is_alnum()
         stop += 1
-    b: = arena.text().s(src.sub(0, start)).s(pick_mark).s(src.sub_from(stop))
+    b: = arena.text().s(src.sub(0, start)).s(PICK_MARK).s(src.sub_from(stop))
     return Swapped::{ .text = b.take(), .prefix = src.sub(start, at - start), .offset = start }
 
 priv fn find_mark(node: Ast_node$@): Ast_node$@? //<
     //< It looks for the synthesized name's node in the analysed tree
     if node == null
         return .none
-    if node.kind_id == .k_identifier && node.text.equals(pick_mark)
+    if node.kind_id == .k_identifier && node.text.equals(PICK_MARK)
         return .some(node)
     for child in node.children
         if got: = find_mark(child)
@@ -98,23 +98,23 @@ priv fn named_by(node: Ast_node$@): Pick //< the name and kind of that declarati
     $own_type: I32 = 0
     switch node.kind_id
     case .k_decl_fn
-        kind = kind_function
+        kind = KIND_FUNCTION
     case .k_decl_struct
-        kind = kind_struct
+        kind = KIND_STRUCT
     case .k_decl_enum
-        kind = kind_enum
+        kind = KIND_ENUM
     case .k_decl_trait
-        kind = kind_interface
+        kind = KIND_INTERFACE
     case .k_decl_typedef
-        kind = kind_struct
+        kind = KIND_STRUCT
     case .k_decl_const
-        kind = kind_constant
+        kind = KIND_CONSTANT
         own_type = node.type_id
     case .k_decl_var, .k_decl_var_item, .k_fn_param
-        kind = kind_variable
+        kind = KIND_VARIABLE
         own_type = node.type_id
     case .k_decl_import
-        kind = kind_module
+        kind = KIND_MODULE
     default
         return Pick::{ .name = "", .kind = 0, .node = null, .type_id = 0 }
     return Pick::{ .name = id_node.text, .kind = kind, .node = node, .type_id = own_type }
@@ -125,7 +125,7 @@ priv fn add_pick(out: List<|Pick|>$@, name: U8[], kind: I32, prefix: U8[], node:
         //<
         //< Caution: **Do not add the same name twice** (the enclosing scope and the file may both
         //< hold it).
-    if name.len == 0 || name.equals(pick_mark) || !name.starts_with(prefix)
+    if name.len == 0 || name.equals(PICK_MARK) || !name.starts_with(prefix)
         return
     for p in out
         if p.name.equals(name)
@@ -170,7 +170,7 @@ priv fn detail_of(c: Sema_ctx$@, p: Pick, out: Str_builder$@) //<
         t: = c.env.display(p.type_id)
         out.s(t)
 
-priv fn send_picks(state: Doc_state$@, out: List<|Pick|>$@, id_val: json.Val, arena: Arena$@) //<
+priv fn send_picks(state: Doc_state$@, out: List<|Pick|>$@, id_val: json.Value, arena: Arena$@) //<
     //< It sends the candidates as the answer, **an empty array where there is none** (not `null`)
     //<
     //< **Each carries its declaration's description** (`documentation`), read as the hover reads
@@ -206,7 +206,7 @@ priv fn qualifier_of(path: List<|Ast_node$@|>$@, mark: Ast_node$@): U8[] //<
     if path.len < 2
         return ""
     parent: = path.get(path.len - 2)
-    if parent == mark || !parent.text.ends_with(pick_mark)
+    if parent == mark || !parent.text.ends_with(PICK_MARK)
         return ""
     if cut: = parent.text.rfind_char('.')
         if cut > 0
@@ -245,7 +245,7 @@ priv fn alias_module_of(state: Doc_state$@, head: U8[], arena: Arena$@): U8[] //
         return b.take()
     return ""
 
-fn send_none(id_val: json.Val, arena: Arena$@) //< it answers that there is no candidate
+fn send_none(id_val: json.Value, arena: Arena$@) //< it answers that there is no candidate
     //<
     //< Caution: **Return an empty array rather than `null`.** `null` means "no answer" and an empty
     //< array means "it looked and found none". **Whether to show it is the client's decision.**
@@ -253,7 +253,7 @@ fn send_none(id_val: json.Val, arena: Arena$@) //< it answers that there is no c
     arr: = b.arr()
     lsp_msg.send_response(id_val, arr.build(), arena)
 
-fn handle_completion(state: Doc_state$@, swapped: Swapped, id_val: json.Val, arena: Arena$@) //<
+fn handle_completion(state: Doc_state$@, swapped: Swapped, id_val: json.Value, arena: Arena$@) //<
     //< It answers a completion request
     //<
     //< Caution: **Where the synthesized name is not in the tree, return nothing.** The syntax
@@ -330,11 +330,11 @@ priv fn picks_of_type(c: Sema_ctx$@, raw: U8[], prefix: U8[], out: List<|Pick|>$
     if !base_only.equals(raw)
         add_methods(c, base_only, prefix, out)
     // A method with its own type arguments is not in the table; it is found by the template's name.
-    add_by_dot_prefix(c.generics.templates, base_only, prefix, out, kind_method)
+    add_by_dot_prefix(c.generics.templates, base_only, prefix, out, KIND_METHOD)
 
 priv fn add_fields(sd: sema_type_def.Struct_def$@, prefix: U8[], out: List<|Pick|>$@)
     for f in sd.fields_list
-        add_pick(out, f.name, kind_field, prefix, f.node, f.type_id)
+        add_pick(out, f.name, KIND_FIELD, prefix, f.node, f.type_id)
 
 priv fn add_declared_fields(c: Sema_ctx$@, raw: U8[], prefix: U8[], out: List<|Pick|>$@) //<
     //< The fields declared by a generic nothing instantiated, which has no struct entry to list
@@ -350,7 +350,7 @@ priv fn add_declared_fields(c: Sema_ctx$@, raw: U8[], prefix: U8[], out: List<|P
                 id_n: = f.find_child(.k_identifier)
                 t_node: = f.get_decl_type_node()
                 if id_n != null
-                    add_pick(out, id_n.text, kind_field, prefix, f,
+                    add_pick(out, id_n.text, KIND_FIELD, prefix, f,
                         t_node.type_id if t_node != null else 0)
     case .none {}
 
@@ -364,7 +364,7 @@ priv fn add_methods(c: Sema_ctx$@, type_name: U8[], prefix: U8[], out: List<|Pic
     switch c.env.methods_of(type_name)
     case .some(m)
         for e in m.items()
-            add_pick(out, e.key, kind_method, prefix, e.value.node, 0)
+            add_pick(out, e.key, KIND_METHOD, prefix, e.value.node, 0)
     default {}
 
 priv fn add_by_dot_prefix(map: Map<|U8[], Ast_node$@|>$@, head: U8[], prefix: U8[],
@@ -402,18 +402,18 @@ priv fn add_by_dot_prefix_syms(map: Map<|U8[], sema_type_scope.Sema_symbol$@|>$@
 priv fn kind_of_sym(sym: sema_type_scope.Sema_symbol$@): I32
     switch sym.kind
     case .function(_v)
-        return kind_function
+        return KIND_FUNCTION
     case .struct_def, .generic_struct
-        return kind_struct
+        return KIND_STRUCT
     case .enum_def, .generic_enum
-        return kind_enum
+        return KIND_ENUM
     case .enum_variant(_t)
-        return kind_enum
+        return KIND_ENUM
     case .trait_def, .generic_trait
-        return kind_interface
+        return KIND_INTERFACE
     case .constant
-        return kind_constant
+        return KIND_CONSTANT
     case .alias_def
-        return kind_struct
+        return KIND_STRUCT
     default
-        return kind_variable
+        return KIND_VARIABLE

@@ -10,7 +10,7 @@
 //     ksplc run tools/surface.kspl check <package>   # checks the record against the sources
 //     ksplc run tools/surface.kspl pages <package>   # writes the reference under out/docs/
 // ==========================================
-import "std/argp"
+import "std/argparse"
 import "std/chars"
 import "std/ds" { List }
 import "std/fs"
@@ -21,22 +21,22 @@ import "std/subproc"
 import "std/sys"
 import "tools/surface_rows" as rows
 
-priv const record_name: U8[] = "SURFACE.txt"
-priv const default_ksplc: U8[] = "out/ksplc_stage1.exe"
-priv const work_dir: U8[] = "out/surface"
-priv const emit_timeout_ms: I32 = 300000
-priv const capture_cap: Sz = 1 << 16
+priv const RECORD_NAME: U8[] = "SURFACE.txt"
+priv const DEFAULT_KSPLC: U8[] = "out/ksplc_stage1.exe"
+priv const WORK_DIR: U8[] = "out/surface"
+priv const EMIT_TIMEOUT_MS: I32 = 300000
+priv const CAPTURE_CAP: Sz = 1 << 16
 
 // **A subfolder is API too** (a `pub` anywhere inside can be imported).
 
-priv const test_dir: U8[] = "tests" //<
+priv const TEST_DIR: U8[] = "tests" //<
     //< **`tests/` is skipped**: otherwise the API changes with every test added
 
 priv fn skip_dir(name: U8[]): Bool //< `tests/`, build output, and git's own folder
     //<
     //< Caution: **Skip `out/` too.** A package's own tests write programs there. One read as a
     //< source adds an entry, or a "could not be read" line, that the package never wrote.
-    return name.equals(test_dir) || fs.skip_build_output(name)
+    return name.equals(TEST_DIR) || fs.skip_build_output(name)
 
 priv fn sources(pkg: U8[], arena: Arena$@): List<|U8[]|>!fs.Fs_error //<
     //< The sources inside the package, by ascending path
@@ -69,18 +69,18 @@ priv fn built(pkg: U8[], ksplc: U8[], arena: Arena$@): U8[]!fs.Fs_error //<
     //< **It stops at the first file that cannot be read**: a partial record would shrink silently,
     //< its entries shown as removed. **It runs once per file**: no entry point imports every file,
     //< so each file is one in turn.
-    fs.mkdir_all(work_dir)!
+    fs.mkdir_all(WORK_DIR)!
     files: = sources(pkg, arena)!
     $out: = Str_builder.new()
     for src in files
         stem: = stem_of(src, arena)
-        tsv: = fs.join(work_dir, arena.text().s(stem).s(".tsv").take(), arena)
-        obj: = fs.join(work_dir, arena.text().s(stem).s(".c").take(), arena)
+        tsv: = fs.join(WORK_DIR, arena.text().s(stem).s(".tsv").take(), arena)
+        obj: = fs.join(WORK_DIR, arena.text().s(stem).s(".c").take(), arena)
         fs.remove_path(tsv) catch {}
         argv: = U8[][]::{ ksplc, "--std-dir=std",
             arena.text().s("--emit-surface=").s(tsv).take(),
-            arena.text().s("--surface-scope=").s(scope_pub).take(), src, obj }
-        _printed: = subproc.run(argv, "", emit_timeout_ms, capture_cap, arena) catch e
+            arena.text().s("--surface-scope=").s(SCOPE_PUB).take(), src, obj }
+        _printed: = subproc.run(argv, "", EMIT_TIMEOUT_MS, CAPTURE_CAP, arena) catch e
             e.describe(arena.text().s("writing out ").s(src).s("'s API").take(), ksplc)
             throw .operation_failed
         part: = io.read_file(tsv) catch
@@ -88,7 +88,7 @@ priv fn built(pkg: U8[], ksplc: U8[], arena: Arena$@): U8[]!fs.Fs_error //<
         out.s(part)
     return arena.dup_str(out.slice())
 
-priv const scope_pub: U8[] = "pub" //< the record's scope: only what is published is recorded
+priv const SCOPE_PUB: U8[] = "pub" //< the record's scope: only what is published is recorded
     //<
     //< Nobody may rely on a `priv`, so changing one breaks nothing.
 
@@ -111,13 +111,13 @@ priv fn declarations_only(body: U8[], arena: Arena$@): U8[] //<
     return out.take()
 
 priv fn record_path(pkg: U8[], arena: Arena$@): U8[]
-    return fs.join(pkg, record_name, arena)
+    return fs.join(pkg, RECORD_NAME, arena)
 
-priv const pages_dir: U8[] = "out/docs" //< where `pages` writes the reference to browse
+priv const PAGES_DIR: U8[] = "out/docs" //< where `pages` writes the reference to browse
     //<
     //< **It is build output, never committed**: the description in the source is the one copy, and
     //< `ksplc doc` renders it whenever asked (7.5 in `ksplc/docs/SPEC-tools.md`).
-priv const page_cap: Sz = 1 << 24 //< the most of one rendering kept; std's largest is far below
+priv const PAGE_CAP: Sz = 1 << 24 //< the most of one rendering kept; std's largest is far below
 
 priv fn publishing(body: U8[], arena: Arena$@): List<|U8[]|>$@ //<
     //< The files the record's declarations come from, each once and in order
@@ -133,7 +133,7 @@ priv fn publishing(body: U8[], arena: Arena$@): List<|U8[]|>$@ //<
 priv fn render_to(ksplc: U8[], target: U8[], path: U8[], arena: Arena$@): Void!fs.Fs_error //<
     //< Writes what `ksplc doc <target>` prints to `path`
     argv: = U8[][]::{ ksplc, "--std-dir=std", "doc", target }
-    printed: = subproc.run(argv, "", emit_timeout_ms, page_cap, arena) catch e
+    printed: = subproc.run(argv, "", EMIT_TIMEOUT_MS, PAGE_CAP, arena) catch e
         e.describe(arena.text().s("`ksplc doc ").s(target).s("`").take(), ksplc)
         throw .operation_failed
     fs.mkdir_all(sys.get_dir_name(path))!
@@ -141,22 +141,22 @@ priv fn render_to(ksplc: U8[], target: U8[], path: U8[], arena: Arena$@): Void!f
         throw .operation_failed
 
 priv fn do_pages(pkg: U8[], ksplc: U8[], arena: Arena$@): Void!fs.Fs_error //<
-    //< Writes the package's listing and one page per publishing file under `pages_dir`
+    //< Writes the package's listing and one page per publishing file under `PAGES_DIR`
     //<
     //< **Each page is `ksplc doc`'s answer as it stands.** So a page here cannot say anything the
     //< command would not. The pages are kept only to be browsed.
     files: = publishing(declarations_only(built(pkg, ksplc, arena)!, arena), arena)
-    render_to(ksplc, pkg, fs.join(fs.join(pages_dir, pkg, arena), "index.md", arena), arena)!
+    render_to(ksplc, pkg, fs.join(fs.join(PAGES_DIR, pkg, arena), "index.md", arena), arena)!
     for one in files
         render_to(ksplc, one,
-            arena.text().s(pages_dir).c('/').s(one).s(".md").take(), arena)!
-    io.out().s("wrote \{pages_dir\}/\{pkg\}/ (\{files.len\} pages and index.md)\n")
+            arena.text().s(PAGES_DIR).c('/').s(one).s(".md").take(), arena)!
+    io.out().s("wrote \{PAGES_DIR\}/\{pkg\}/ (\{files.len\} pages and index.md)\n")
 
 priv fn do_write(pkg: U8[], ksplc: U8[], arena: Arena$@): Void!fs.Fs_error
     whole: = built(pkg, ksplc, arena)!
     body: = declarations_only(whole, arena)
     path: = record_path(pkg, arena)
-    io.write_file(path, arena.text().s(rows.record_head).s(body).take()) catch
+    io.write_file(path, arena.text().s(rows.RECORD_HEAD).s(body).take()) catch
         throw .operation_failed
     io.out().s("wrote \{path\}\n")
 
@@ -198,7 +198,7 @@ fn main(): I32 //< writes or checks the record of a package's published API
     arena: = Arena.new(64 * 1024 * 1024)
     defer arena.free()
     $ksplc: U8[] = ""
-    p: = argp.Parser
+    p: = argparse.Parser
         .create(sys.program_name(), "make / match the record of the API a package publishes", arena)
     p.subcommand("write", "remake <package>/SURFACE.txt")
     p.subcommand("check", "match the record against the shape today (exit 1 if they differ)")
@@ -213,7 +213,7 @@ fn main(): I32 //< writes or checks the record of a package's published API
     if !fs.is_dir(pkg)
         io.err().s("\{sys.program_name()\}: there is no folder called \{pkg\}\n")
         return 1
-    exe: = ksplc if ksplc.len > 0 else default_ksplc
+    exe: = ksplc if ksplc.len > 0 else DEFAULT_KSPLC
     if p.command.unwrap_or("").equals("pages")
         do_pages(pkg, exe, arena) catch e
             io.err().s("\{sys.program_name()\}: failed: \{e\}\n")

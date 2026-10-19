@@ -16,7 +16,7 @@ import "ksos/drivers/mmio"
 import "ksos/drivers/rp2040/i2c"
 import "ksos/drivers/rp2040/timer"
 
-priv const brightness: U32 = 4 //< the brightness, 0 to 15.
+priv const BRIGHTNESS: U32 = 4 //< the brightness, 0 to 15.
     //<
     //< Caution: **Do not raise it too far.** There are 128 LEDs, so it drains the battery by itself
     //< (and the driving decision watches the battery).
@@ -42,13 +42,13 @@ impl Look
     priv fn frames_of(l: Self): Sz //< the frame count per expression
         switch l
         case .rotate
-            return rotate_frames
+            return ROTATE_FRAMES
         case .blink
-            return blink_frames
+            return BLINK_FRAMES
         case .smile
-            return smile_frames
+            return SMILE_FRAMES
         case .cry
-            return cry_frames
+            return CRY_FRAMES
         default {}
         return 0
 
@@ -71,30 +71,30 @@ impl Look
         //< **The left eye is the low byte and the right the high byte.**
         switch l
         case .rotate
-            return turned_row(rotate_l[f], y) | (turned_row(rotate_r[f], y) << 8U16)
+            return turned_row(ROTATE_L[f], y) | (turned_row(ROTATE_R[f], y) << 8U16)
         case .blink
-            return turned_row(blink_lr[f], y) | (turned_row(blink_lr[f], y) << 8U16)
+            return turned_row(BLINK_LR[f], y) | (turned_row(BLINK_LR[f], y) << 8U16)
         case .smile
-            return turned_row(smile_lr[f], y) | (turned_row(smile_lr[f], y) << 8U16)
+            return turned_row(SMILE_LR[f], y) | (turned_row(SMILE_LR[f], y) << 8U16)
         case .cry
-            return turned_row(cry_lr[f], y) | (turned_row(cry_lr[f], y) << 8U16)
+            return turned_row(CRY_LR[f], y) | (turned_row(CRY_LR[f], y) << 8U16)
         default {}
         return 0U16
 
-priv const rotate_frames: Sz = 8 //< the number of frames, and one frame's length in ms
+priv const ROTATE_FRAMES: Sz = 8 //< the number of frames, and one frame's length in ms
     //<
     //< **They differ per expression.** Make them all the same and the blink is too fast, or the
     //< eyes' rotation looks stopped.
-priv const blink_frames: Sz = 5
-priv const smile_frames: Sz = 2
-priv const cry_frames: Sz = 5
+priv const BLINK_FRAMES: Sz = 5
+priv const SMILE_FRAMES: Sz = 2
+priv const CRY_FRAMES: Sz = 5
 
 // A picture is **one frame = one U64**.
 // **Do not make it a byte array.** The formatter puts one element per line, and the eight-row
 // shape of the picture becomes unreadable. The top byte is row 0 (the topmost).
 //
 // The eyes roll clockwise (the left eye). 1 is lit, and bit0 is column 0.
-priv const rotate_l: U64[8] = ::{
+priv const ROTATE_L: U64[8] = ::{
     0x1824727242422418U64,
     0x183C5A4242422418U64,
     0x18244E4E42422418U64,
@@ -107,7 +107,7 @@ priv const rotate_l: U64[8] = ::{
 // The right eye of the same rotation.
 // Caution: **Do not use the same frames as the left.** The start is shifted; with identical frames
 // both eyes roll while staring the same way.
-priv const rotate_r: U64[8] = ::{
+priv const ROTATE_R: U64[8] = ::{
     0x18244E4E42422418U64,
     0x183C5A4242422418U64,
     0x1824727242422418U64,
@@ -118,18 +118,18 @@ priv const rotate_r: U64[8] = ::{
     0x1824424E4E422418U64,
 }
 // The blink. The same frames serve both left and right.
-priv const blink_lr: U64[5] = ::{
+priv const BLINK_LR: U64[5] = ::{
     0x1824425A5A422418U64,
     0x0000007E5A422418U64,
     0x00000000007E2418U64,
     0x0000007E5A422418U64,
     0x00000000007E2418U64,
 }
-priv const smile_lr: U64[2] = ::{ //< a smile (narrowed eyes swaying up and down)
+priv const SMILE_LR: U64[2] = ::{ //< a smile (narrowed eyes swaying up and down)
     0x0000003C42420000U64,
     0x00003C4242000000U64,
 }
-priv const cry_lr: U64[5] = ::{ //< a cry (a tear falling from downcast eyes)
+priv const CRY_LR: U64[5] = ::{ //< a cry (a tear falling from downcast eyes)
     0x7E423C0000000000U64,
     0x7E423C1818000000U64,
     0x7E423C0018180000U64,
@@ -137,12 +137,12 @@ priv const cry_lr: U64[5] = ::{ //< a cry (a tear falling from downcast eyes)
     0x7E423C0000001818U64,
 }
 
-priv const addr_first: U32 = 0x70 //<
+priv const ADDR_FIRST: U32 = 0x70 //<
     //< the HT16K33's address is one of 0x70 to 0x77, set by strapping
     //<
-    //< **Do not hard-code the default** (see `matrix.default_addr`). The scan is only eight writes,
+    //< **Do not hard-code the default** (see `matrix.DEFAULT_ADDR`). The scan is only eight writes,
     //< so once at start-up is enough.
-priv const addr_last: U32 = 0x77
+priv const ADDR_LAST: U32 = 0x77
 
 priv $addr: U32 = 0
 priv $ready: Bool = false
@@ -154,14 +154,14 @@ fn init(): Void!mmio.Driver_error //< starts I2C and the matrix
     //<
     //< `not_found` where no matrix answers on the bus.
     //< Caution: **The caller must keep working on a failure too** (only the face is missing).
-    i2c.init(board.i2c_sda, board.i2c_scl)!
+    i2c.init(board.I2C_SDA, board.I2C_SCL)!
     addr = 0
-    for $a: U32 = addr_first; a <= addr_last; a += 1
+    for $a: U32 = ADDR_FIRST; a <= ADDR_LAST; a += 1
         if addr == 0 && i2c.present(a)
             addr = a
     if addr == 0
         throw .not_found
-    matrix.init(addr, brightness)!
+    matrix.init(addr, BRIGHTNESS)!
     matrix.clear(addr)!
     ready = true
 
@@ -225,7 +225,7 @@ fn show() //< keeps the face updated
         matrix.clear(addr) catch {}
         return
     $rows: U16[8] = ::{}
-    for y in Range.asc(matrix.rows)
+    for y in Range.asc(matrix.ROWS)
         rows[y] = look.row_of(frame, y)
     matrix.draw(addr, rows[0]@) catch {}
     frame += 1

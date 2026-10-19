@@ -224,7 +224,7 @@ So the run holds the target, and the look is applied as a direct-formatting styl
 
 **Decide the text colour together with the fill.** The fill (`Style.fill` / `Ink.background`) is a fixed number, but unset text takes the screen's default colour. So deciding only one allows bright text on a bright fill on some screens.
 
-Note: The rule colour has the same problem, and its default black is a dark screen's background. So a line meant to show what was added gets a colour readable on either screen (`write/insert.kspl`'s `drawn_color`).
+Note: The rule colour has the same problem, and its default black is a dark screen's background. So a line meant to show what was added gets a colour readable on either screen (`write/insert.kspl`'s `DRAWN_COLOR`).
 
 ### Underline and strikethrough sit with the colour
 
@@ -641,13 +641,15 @@ Caution: **Do not add a drawing primitive.** A bar is a painted band (`Panel`), 
 
 **Where the style sets no colour, a default colour is drawn** (`lay/chart.kspl`'s `drawn`). Transparent in a style with neither rule nor fill, a resolved range would show nothing. Whoever inserted it could only conclude the range was wrong (Principle 5). A shape differs: a frame with neither rule nor fill is useful as a shape that holds children, while a graph holds none.
 
-Note: The default colour is the one insertion uses (`model/style.kspl`'s `drawn_color`). Kept apart, an inserted graph and a graph read from a file would differ in colour (Principle 4).
+Note: The default colour is the one insertion uses (`model/style.kspl`'s `DRAWN_COLOR`). Kept apart, an inserted graph and a graph read from a file would differ in colour (Principle 4).
 
 A bar starts from 0, and the axis is drawn at 0; showing only the differences would make a short bar look long.
 
 ## How the cursor is held
 
 The cursor is a place in the document ("this run, this byte"), not a point on the screen. So it stays put when the window is resized and the text moves.
+
+Opening a document places the cursor at the first editable text. A new blank document accepts typing immediately.
 
 The cursor is held as "which `Inline`, and which byte in it" ([`lay/caret.kspl`](../lay/caret.kspl)), **not in screen coordinates**. When the width changes the boxes move, but the position in the document does not, so the cursor survives relayout. (The `Inline` it points at lives in an arena relayout does not throw away.)
 

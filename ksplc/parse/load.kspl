@@ -128,7 +128,7 @@ impl Profiler
 
     fn init(r: Self$@)
         r.kspeg_map.free()
-        r.kspeg_list.len = 0
+        r.kspeg_list.clear()
         r$ = Profiler::{ .kspeg_map = Map<|U8[], Kspeg_prof_entry$@|>.new(base_core.arena),
             .kspeg_list = r.kspeg_list }
 
@@ -185,7 +185,7 @@ fn fin()
         kspeg_arena.free()
         kspeg_arena = null
 
-priv const layout_roles: U8[][3] = ::{ "Block_open", "Block_close", "Stmt_end" } //<
+priv const LAYOUT_ROLES: U8[][3] = ::{ "Block_open", "Block_close", "Stmt_end" } //<
     //< The three roles that become levels and newlines in the indentation notation (`.kspl`)
     //<
     //< They must match the grammar's rule names (the heading of [`../kspl.kspeg`](../kspl.kspeg)).
@@ -194,7 +194,7 @@ priv fn rule_kind(rule: U8[]): base_ast_kinds.Ast_kind //< it looks up the kind 
     //<
     //< **The roles' names stay out of the tree**: the grammar names the three above to show where
     //< the notation changes, and the tree keeps them `Literal`.
-    for one in layout_roles
+    for one in LAYOUT_ROLES
         if rule.equals(one)
             return .k_literal
     return Ast_node.peek_kind_id(rule)
@@ -202,7 +202,7 @@ priv fn rule_kind(rule: U8[]): base_ast_kinds.Ast_kind //< it looks up the kind 
 fn to_ast_node(knode: kspeg.Node$@, file_name: U8[], depth: Sz): Ast_node$@?
     if knode == null
         return .none
-    if depth >= parse_normalize.max_parse_tree_depth
+    if depth >= parse_normalize.MAX_PARSE_TREE_DEPTH
         io.err()
             .s("\nfatal: source nesting too deep to convert to AST. A recursive construct may be \
                 unbounded.\n")
@@ -454,7 +454,7 @@ fn load_and_parse_file(import_path: U8[], loaded_files: List<|U8$[]|>$@, root_fi
     // silence makes the LSP's supervisor kill the worker.
     base_core.report_progress()
     import_stack.push(perm_path)
-    defer import_stack.len -= 1
+    defer import_stack.pop()
 
     path_key: = perm_path // the same content as import_path, so the copy is shared
     // Already in source_map means the caller supplied it (the LSP's editor buffer, or a test), and

@@ -134,9 +134,9 @@ fn infer_namespace_access(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@,
                     return cid
                 case .none {}
 
-    // An alias names the enum itself ("A typedef is only another name" in docs/SPEC-language.md),
-    // so `Tone.dark` is the enum's variant. It is typed by the name as written, as `Pt::{…}` is, so
-    // a diagnostic spells it as the source does.
+    // An alias names the enum itself ("A typedef is only another name" in
+    // docs/SPEC-programming-language.md), so `Tone.dark` is the enum's variant. It is typed by the
+    // name as written, as `Pt::{…}` is, so a diagnostic spells it as the source does.
     if is_enum || (sym_ptr != null && sym_ptr.kind.is_alias())
         enum_name: = c.env.get_str(c.env.get_real_type(sym_ptr.type_id))
         $variant_def: sema_type_def.Enum_variant$@ = null
@@ -277,13 +277,13 @@ fn format_spec_item(method_name: U8[]): U8[] //<
     //<
     //< Caution: **Do not hard-code the method names.** Their canonical source is `fmt_method_*` in
     //< `ksplc/base/core.kspl`, which `ksplc/parse/format_spec.kspl` uses too.
-    if method_name.equals(base_core.fmt_method_prec)
+    if method_name.equals(base_core.FMT_METHOD_PREC)
         return "'.N'"
-    if method_name.equals(base_core.fmt_method_hex)
+    if method_name.equals(base_core.FMT_METHOD_HEX)
         return "'x' / 'X'"
-    if method_name.equals(base_core.fmt_method_char)
+    if method_name.equals(base_core.FMT_METHOD_CHAR)
         return "'c'"
-    if method_name.equals(base_core.fmt_method_spec)
+    if method_name.equals(base_core.FMT_METHOD_SPEC)
         return "the width / '0' / ',' items"
     return ""
 
@@ -482,11 +482,11 @@ priv fn check_method_import(c: Sema_ctx$@, member_node: Ast_node$@, found_sym: S
     // **A type that no declaration names counts as `std/lang`'s** (a scalar, a slice, an array, a
     // `Result`), which every file imports. A method another file adds to it needs that file
     // imported, as for any type. See "An extension method requires the import" in
-    // `../../../docs/SPEC-language.md`.
+    // `../../../docs/SPEC-programming-language.md`.
     // Caution: **Do not accept it because "some file loaded it".** The call would rest on what else
     // the program imports, and [I0401] would call the import unused.
     if c.env.is_slice(recv_id) || (struct_file.len == 0 && !is_declared_type(c, recv_id))
-        struct_file = base_locate.lang_file_path
+        struct_file = base_locate.LANG_FILE_PATH
     // **Not inside an instantiation**: the receiver's type can come from the type argument. A
     // generic cannot import every file serving its bound. See "No diagnostic that depends on a
     // generic's type argument" in `ksplc/docs/DESIGN-diagnostics.md`.
@@ -528,7 +528,7 @@ priv fn report_missing_member(c: Sema_ctx$@, member_node: Ast_node$@, recv_id: I
     if spec_item.len > 0
         // Caution: **Check the import before checking the type.** A file that does not import the
         // methods may not have loaded them at all, and then no type seems to accept anything.
-        spec_file: = base_core.fmt_method_file
+        spec_file: = base_core.FMT_METHOD_FILE
         if !c.is_file_imported(spec_file)
             reject_unimported_spec(c, member_node, spec_item, member_name_raw, spec_file)
             return
@@ -581,7 +581,7 @@ priv fn report_missing_member(c: Sema_ctx$@, member_node: Ast_node$@, recv_id: I
                 import is not cyclic.")
     c.err(member_node, c.scratch.slice())
 
-priv const max_near_name: Sz = 64 //< the longest name nearest_field compares, in bytes
+priv const MAX_NEAR_NAME: Sz = 64 //< the longest name nearest_field compares, in bytes
 
 priv fn nearest_field(c: Sema_ctx$@, recv_id: I32, name: U8[]): U8[] //<
     //< The receiver's field whose name is nearest to `name`, or empty where none is near enough
@@ -609,11 +609,11 @@ priv fn edit_distance(a: U8[], b: U8[]): Sz //<
     //<
     //< An edit is an insertion, a deletion, a substitution or a swap of two neighbours (`totla`
     //< for `total` is one). A name longer than max_near_name counts as far from everything.
-    if a.len > max_near_name || b.len > max_near_name
-        return max_near_name
-    $before: Sz[max_near_name + 1] = ::{} // the row for a's byte before the last
-    $last: Sz[max_near_name + 1] = ::{}
-    $row: Sz[max_near_name + 1] = ::{}
+    if a.len > MAX_NEAR_NAME || b.len > MAX_NEAR_NAME
+        return MAX_NEAR_NAME
+    $before: Sz[MAX_NEAR_NAME + 1] = ::{} // the row for a's byte before the last
+    $last: Sz[MAX_NEAR_NAME + 1] = ::{}
+    $row: Sz[MAX_NEAR_NAME + 1] = ::{}
     for j in Range.asc(b.len + 1)
         row[j] = j
     for i in Range.asc(a.len)
@@ -636,7 +636,7 @@ priv fn refuse_method_value_on_value(c: Sema_ctx$@, member_node: Ast_node$@, rec
     //<
     //< A function value is an address alone, with no room for the receiver, so `p.m` has nothing to
     //< stand for. Named through its type, the method is a function taking the receiver first. See
-    //< "A method as a value is named through its type" in docs/DESIGN-language.md.
+    //< "A method as a value is named through its type" in docs/DESIGN-programming-language.md.
     owner: = c.env.display(recv_id)
     m: = member_node.text
     // The hint names the type as a file inside its package writes it: no package path before it.

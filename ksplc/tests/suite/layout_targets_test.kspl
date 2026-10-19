@@ -19,21 +19,21 @@ import "std/strfmt" as _strfmt
 import "std/subproc"
 import "std/verdict"
 
-priv const probe: U8[] = "tests/prog/layout_probe.kspl"
-priv const probe_rt: U8[] = "tests/prog/layout_probe_rt.c"
-priv const probe_wide: U8[] = "tests/prog/layout_probe_wide.c" //<
+priv const PROBE: U8[] = "tests/prog/layout_probe.kspl"
+priv const PROBE_RT: U8[] = "tests/prog/layout_probe_rt.c"
+priv const PROBE_WIDE: U8[] = "tests/prog/layout_probe_wide.c" //<
     //< a product only clang's builtins hold
-priv const clang: U8[] = "clang" //< the C compiler: `--target` names any machine to it alone
-priv const check_name: U8[] = "kspl_folded_for_" //<
+priv const CLANG: U8[] = "clang" //< the C compiler: `--target` names any machine to it alone
+priv const CHECK_NAME: U8[] = "kspl_folded_for_" //<
     //< how a check's name begins, the machine after it
-priv const min_checks: Sz = 20 //< the probe folds at least this many numbers on every machine
-priv const wasm_machine: U8[] = "wasm32-unknown-unknown"
+priv const MIN_CHECKS: Sz = 20 //< the probe folds at least this many numbers on every machine
+priv const WASM_MACHINE: U8[] = "wasm32-unknown-unknown"
 
 priv struct Answer //< one entry point of the probe and what it returns on wasm32
     name: U8[]
     want: U8[]
 
-priv const wasm_answers: Answer[11] = ::{
+priv const WASM_ANSWERS: Answer[11] = ::{
     Answer::{ .name = "two_ptrs", .want = "8" },
     Answer::{ .name = "word_bits_if", .want = "32" },
     Answer::{ .name = "word_bits_const", .want = "32" },
@@ -55,29 +55,29 @@ priv fn generate(dir: U8[], machine: U8[], arena: Arena$@): U8[] //<
     //< The probe's C for the machine, or empty where ksplc refuses it (the check is reported)
     out: = fs.join(dir, arena.text().s(machine).s(".c").take(), arena)
     r: = harness
-        .ksplc(U8[][]::{ arena.text().s("--machine=").s(machine).take(), "--freestanding", probe,
+        .ksplc(U8[][]::{ arena.text().s("--machine=").s(machine).take(), "--freestanding", PROBE,
         out })
     if !verdict.check(arena.text().s("\{machine\}: ksplc compiles the probe").take(),
         r.exited_with(0), r.out)
         return ""
-    mark: = arena.text().s("typedef char ").s(check_name).take()
+    mark: = arena.text().s("typedef char ").s(CHECK_NAME).take()
     count: = harness.read_generated(out).count_str(mark)
     verdict.check(arena.text().s("\{machine\}: the C checks every folded number").take(),
-        count >= min_checks,
-        arena.text().s("\{count\} checks, fewer than \{min_checks\}").take())
+        count >= MIN_CHECKS,
+        arena.text().s("\{count\} checks, fewer than \{MIN_CHECKS\}").take())
     return out
 
 priv fn compile_for(c_file: U8[], machine: U8[], obj: U8[]): verdict.Run_out //<
     //< clang compiling the C for the machine, warnings refused (Principle 2)
     return harness
-        .run(U8[][]::{ clang,
+        .run(U8[][]::{ CLANG,
         harness.arena().text().s("--target=\{machine\}").take(), "-ffreestanding", "-std=c99", "-O2",
         "-Wall", "-Werror", "-c", c_file, "-o", obj })
 
 priv fn check_machines(dir: U8[], arena: Arena$@): U8[] //<
     //< Every machine's C compiles for that machine; returns wasm32's C for the run that follows
     $wasm_c: U8[] = ""
-    for m in base_target.machines
+    for m in base_target.MACHINES
         name: = m.name
         c_file: = generate(dir, name, arena)
         if c_file.len == 0
@@ -85,21 +85,21 @@ priv fn check_machines(dir: U8[], arena: Arena$@): U8[] //<
         r: = compile_for(c_file, name, arena.text().s(c_file).s(".o").take())
         verdict.check(arena.text().s("\{name\}: clang agrees with every folded number").take(),
             r.exited_with(0), r.out)
-        if name.equals(wasm_machine)
+        if name.equals(WASM_MACHINE)
             wasm_c = c_file
     return wasm_c
 
-priv const mismatched: U8[][2] = ::{ "thumbv7m-none-eabi", "x86_64-linux-gnu" } //<
+priv const MISMATCHED: U8[][2] = ::{ "thumbv7m-none-eabi", "x86_64-linux-gnu" } //<
     //< A 32-bit and a 64-bit machine, each one's C compiled for the other
 
 priv fn check_fires(dir: U8[], arena: Arena$@) //<
     //< A C folded for one machine and compiled for another fails at a check naming the first
     for i in Range.asc(2)
-        folded: = mismatched[i]
-        other: = mismatched[1 - i]
+        folded: = MISMATCHED[i]
+        other: = MISMATCHED[1 - i]
         c_file: = fs.join(dir, arena.text().s(folded).s(".c").take(), arena)
         r: = compile_for(c_file, other, fs.join(dir, "mismatch.o", arena))
-        named: = arena.text().s(check_name).s(folded.replace("-", "_", arena)).take()
+        named: = arena.text().s(CHECK_NAME).s(folded.replace("-", "_", arena)).take()
         verdict.check(arena.text().s("\{folded\}'s C compiled for \{other\} fails at a check")
             .take(), !r.exited_with(0) && r.out.find_str(named).is_some(), r.out)
 
@@ -112,13 +112,13 @@ priv fn wasm_builtins(arena: Arena$@): U8[] //<
     //< Caution: **Read its standard output alone.** clang 22 warns on standard error that the
     //< `wasi` name is old, and the path read with that warning names no file.
     r: =
-        subproc.run_capture(U8[][]::{ clang, "--target=wasm32-wasi", "-rtlib=compiler-rt",
+        subproc.run_capture(U8[][]::{ CLANG, "--target=wasm32-wasi", "-rtlib=compiler-rt",
         "-print-libgcc-file-name" }, "", 30000, 4096, arena) catch
         return ""
     path: = r.stdout_data.trim_spaces()
     return path if r.exited_with(0) && fs.exists(path) else ""
 
-priv const node_script: U8[] =
+priv const NODE_SCRIPT: U8[] =
     "const m = await WebAssembly.instantiate(require('fs').readFileSync(process.argv[1]));for \
         (const n of process.argv.slice(2)) console.log(n + '=' + m.instance.exports[n]());" //<
             //< Calls each named entry point of the module and prints `name=value`, one a line
@@ -147,8 +147,8 @@ priv fn check_wasm_run(dir: U8[], wasm_c: U8[], arena: Arena$@) //<
     wide_o: = fs.join(dir, "wide.o", arena)
     probe_o: = arena.text().s(wasm_c).s(".o").take()
     if !verdict.check("the wasm32 helpers compile",
-        compile_for(probe_rt, wasm_machine, rt_o).exited_with(0) &&
-        compile_for(probe_wide, wasm_machine, wide_o).exited_with(0), "")
+        compile_for(PROBE_RT, WASM_MACHINE, rt_o).exited_with(0) &&
+        compile_for(PROBE_WIDE, WASM_MACHINE, wide_o).exited_with(0), "")
         return
     module: = fs.join(dir, "probe.wasm", arena)
     link: = harness
@@ -158,24 +158,24 @@ priv fn check_wasm_run(dir: U8[], wasm_c: U8[], arena: Arena$@) //<
         return
     $argv: = List<|U8[]|>.new(arena)
     for word in U8[][]::{ "node", "-e",
-        arena.text().s("(async () => { ").s(node_script).s(" })()").take(), module }
+        arena.text().s("(async () => { ").s(NODE_SCRIPT).s(" })()").take(), module }
         argv.push(word)
-    for a in wasm_answers
+    for a in WASM_ANSWERS
         argv.push(a.name)
     ran: = harness.run(argv.slice())
     if !verdict.check("the wasm32 module runs under node", ran.exited_with(0), ran.out)
         return
-    for a in wasm_answers
+    for a in WASM_ANSWERS
         line: = arena.text().s(a.name).c('=').s(a.want).c('\n').take()
         verdict.check(arena.text().s("wasm32: \{a.name\} returns \{a.want\}").take(),
             ran.out.find_str(line).is_some(), ran.out)
 
-priv const unlisted_host: U8[] = "riscv64-linux-gnu" //< a host machine the table has no row for
+priv const UNLISTED_HOST: U8[] = "riscv64-linux-gnu" //< a host machine the table has no row for
 
-priv const analysing: U8[][7] = ::{ "compile", "lint", "lsp", "lsp-worker", "run", "build", "info" } //<
+priv const ANALYSING: U8[][7] = ::{ "compile", "lint", "lsp", "lsp-worker", "run", "build", "info" } //<
     //< The subcommands that lay values out, each of which must refuse a machine it has no row for
 
-priv const parsing_only: U8[][5] = ::{ "fmt", "doc", "explain", "emit-runtime", "clean" } //<
+priv const PARSING_ONLY: U8[][5] = ::{ "fmt", "doc", "explain", "emit-runtime", "clean" } //<
     //< The subcommands that read no type, which run on a machine the table lacks
 
 priv fn refusal(face: U8[], named: U8[], host: U8[], arena: Arena$@): U8[] //<
@@ -191,13 +191,13 @@ priv fn check_unlisted_host(arena: Arena$@) //<
     //< The host is handed in as the table lookup reads it, as `kspl_host_machine` would answer on
     //< such a machine. **Each refusal names the host, `--machine=` and the known machines**; left
     //< unasked, the layout reaches an unknown machine and ksplc stops with an internal error.
-    for face in analysing
-        said: = refusal(face, "", unlisted_host, arena)
+    for face in ANALYSING
+        said: = refusal(face, "", UNLISTED_HOST, arena)
         verdict.check(arena.text().s("an unlisted host: \{face\} refuses, naming the fix").take(),
-            said.find_str(unlisted_host).is_some() && said.find_str("--machine=").is_some() &&
+            said.find_str(UNLISTED_HOST).is_some() && said.find_str("--machine=").is_some() &&
             said.find_str("thumbv7m-none-eabi").is_some(), said)
-    for face in parsing_only
-        said: = refusal(face, "", unlisted_host, arena)
+    for face in PARSING_ONLY
+        said: = refusal(face, "", UNLISTED_HOST, arena)
         verdict.check(arena.text().s("an unlisted host: \{face\} runs, reading no type").take(),
             said.len == 0, said)
     said: = refusal("compile", "pdp11-unknown", "x86_64-linux-gnu", arena)
@@ -210,7 +210,7 @@ fn main(): I32
     arena: = harness.begin(64 * 1024 * 1024)
     dir: = harness.sandbox("layout_targets")
     io.out().s("# the sizes ksplc folds, for each machine it knows\n")
-    if !harness.has_tool(clang)
+    if !harness.has_tool(CLANG)
         return harness.fatal("clang is not installed: it alone builds for every machine")
     wasm_c: = check_machines(dir, arena)
     check_fires(dir, arena)

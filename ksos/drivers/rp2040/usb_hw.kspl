@@ -9,65 +9,65 @@ import "ksos/drivers/mmio"
 // rewrites `stage_*` and `ncm_alt`).
 // The bytes it uses to describe itself are in `usb_desc.kspl`.
 // ==========================================
-const reset_usbctrl: U32 = 1U32 << 24
+const RESET_USBCTRL: U32 = 1U32 << 24
 
-const dpram: U32 = 0x50100000
-const dpram_setup: U32 = 0x50100000
-const dpram_ep_ctrl: U32 = 0x50100008 // starts at EP1 IN. EPn dir's control = +8*(n-1)+4*dir
-const dpram_buf_ctrl: U32 = 0x50100080 // starts at EP0 IN. EPn dir's buffer control = +8*n+4*dir
-const dpram_ep0_buf: U32 = 0x50100100
+const DPRAM: U32 = 0x50100000
+const DPRAM_SETUP: U32 = 0x50100000
+const DPRAM_EP_CTRL: U32 = 0x50100008 // starts at EP1 IN. EPn dir's control = +8*(n-1)+4*dir
+const DPRAM_BUF_CTRL: U32 = 0x50100080 // starts at EP0 IN. EPn dir's buffer control = +8*n+4*dir
+const DPRAM_EP0_BUF: U32 = 0x50100100
 
-const regs_addr_endp: U32 = 0x50110000
-const regs_main_ctrl: U32 = 0x50110040
-const regs_sie_ctrl: U32 = 0x5011004c
-const regs_sie_status: U32 = 0x50110050
-const regs_buff_status: U32 = 0x50110058
-const regs_ep_stall_arm: U32 = 0x50110068
-const regs_muxing: U32 = 0x50110074
-const regs_pwr: U32 = 0x50110078
+const REGS_ADDR_ENDP: U32 = 0x50110000
+const REGS_MAIN_CTRL: U32 = 0x50110040
+const REGS_SIE_CTRL: U32 = 0x5011004c
+const REGS_SIE_STATUS: U32 = 0x50110050
+const REGS_BUFF_STATUS: U32 = 0x50110058
+const REGS_EP_STALL_ARM: U32 = 0x50110068
+const REGS_MUXING: U32 = 0x50110074
+const REGS_PWR: U32 = 0x50110078
 
-const main_ctrl_controller_en: U32 = 1U32 << 0
-const sie_ctrl_ep0_int_1buf: U32 = 1U32 << 29
-const sie_ctrl_pullup_en: U32 = 1U32 << 16
-const sie_status_setup_rec: U32 = 1U32 << 17
-const sie_status_bus_reset: U32 = 1U32 << 19
-const muxing_to_phy: U32 = 1U32 << 0
-const muxing_softcon: U32 = 1U32 << 3
-const pwr_vbus_detect: U32 = 1U32 << 2
-const pwr_vbus_detect_override_en: U32 = 1U32 << 3
+const MAIN_CTRL_CONTROLLER_EN: U32 = 1U32 << 0
+const SIE_CTRL_EP0_INT_1BUF: U32 = 1U32 << 29
+const SIE_CTRL_PULLUP_EN: U32 = 1U32 << 16
+const SIE_STATUS_SETUP_REC: U32 = 1U32 << 17
+const SIE_STATUS_BUS_RESET: U32 = 1U32 << 19
+const MUXING_TO_PHY: U32 = 1U32 << 0
+const MUXING_SOFTCON: U32 = 1U32 << 3
+const PWR_VBUS_DETECT: U32 = 1U32 << 2
+const PWR_VBUS_DETECT_OVERRIDE_EN: U32 = 1U32 << 3
 
-const buf_ctrl_full: U32 = 1U32 << 15
-const buf_ctrl_last: U32 = 1U32 << 14
-const buf_ctrl_data1_pid: U32 = 1U32 << 13
-const buf_ctrl_stall: U32 = 1U32 << 11
-const buf_ctrl_avail: U32 = 1U32 << 10
+const BUF_CTRL_FULL: U32 = 1U32 << 15
+const BUF_CTRL_LAST: U32 = 1U32 << 14
+const BUF_CTRL_DATA1_PID: U32 = 1U32 << 13
+const BUF_CTRL_STALL: U32 = 1U32 << 11
+const BUF_CTRL_AVAIL: U32 = 1U32 << 10
 
-const stall_arm_ep0_in: U32 = 1U32 << 0
-const stall_arm_ep0_out: U32 = 1U32 << 1
+const STALL_ARM_EP0_IN: U32 = 1U32 << 0
+const STALL_ARM_EP0_OUT: U32 = 1U32 << 1
 
-const ep_ctrl_enable: U32 = 1U32 << 31
-const ep_ctrl_int_per_buf: U32 = 1U32 << 29
-const ep_type_control: U32 = 0
-const ep_type_bulk: U32 = 2
-const ep_type_interrupt: U32 = 3
+const EP_CTRL_ENABLE: U32 = 1U32 << 31
+const EP_CTRL_INT_PER_BUF: U32 = 1U32 << 29
+const EP_TYPE_CONTROL: U32 = 0
+const EP_TYPE_BULK: U32 = 2
+const EP_TYPE_INTERRUPT: U32 = 3
 
 // The endpoints this driver uses, and where their buffers are in DPRAM.
 // EP0 uses 0x100. The other buffers start at 0x180, in steps of 64 bytes.
-const ep1_in_buf: U32 = 0x50100180 // ACM's notification (unused, but the standard requires it)
-const ep2_out_buf: U32 = 0x501001c0 // the console: host to device
-const ep2_in_buf: U32 = 0x50100200 // the console: device to host
-const ep3_in_buf: U32 = 0x50100240 // NCM's notification (without it the link does not come up)
-const ep4_out_buf: U32 = 0x50100280 // NCM: host to device (an NTB)
-const ep4_in_buf: U32 = 0x501002c0 // NCM: device to host (an NTB)
-const max_packet: U32 = 64
+const EP1_IN_BUF: U32 = 0x50100180 // ACM's notification (unused, but the standard requires it)
+const EP2_OUT_BUF: U32 = 0x501001c0 // the console: host to device
+const EP2_IN_BUF: U32 = 0x50100200 // the console: device to host
+const EP3_IN_BUF: U32 = 0x50100240 // NCM's notification (without it the link does not come up)
+const EP4_OUT_BUF: U32 = 0x50100280 // NCM: host to device (an NTB)
+const EP4_IN_BUF: U32 = 0x501002c0 // NCM: device to host (an NTB)
+const MAX_PACKET: U32 = 64
 // ==========================================
 // The low-level parts
 // ==========================================
 fn buf_ctrl_addr(ep: U32, is_in: Bool): U32
-    return dpram_buf_ctrl + 8 * ep + (0U32 if is_in else 4U32)
+    return DPRAM_BUF_CTRL + 8 * ep + (0U32 if is_in else 4U32)
 
 fn ep_ctrl_addr(ep: U32, is_in: Bool): U32
-    return dpram_ep_ctrl + 8 * (ep - 1) + (0U32 if is_in else 4U32)
+    return DPRAM_EP_CTRL + 8 * (ep - 1) + (0U32 if is_in else 4U32)
 
 fn copy_to_dpram(dst: U32, src: U8@, len: U32) //<
     //< Copies len bytes from src into DPRAM at dst
@@ -93,16 +93,16 @@ fn enable_ep(ep: U32, is_in: Bool, ep_type: U32, buf: U32) //< enables an endpoi
     //<
     //< buf is an absolute DPRAM address; the register takes its offset.
     addr: = ep_ctrl_addr(ep, is_in)
-    mmio.write32(addr, ep_ctrl_enable | ep_ctrl_int_per_buf | (ep_type << 26) | (buf - dpram))
+    mmio.write32(addr, EP_CTRL_ENABLE | EP_CTRL_INT_PER_BUF | (ep_type << 26) | (buf - DPRAM))
 
 fn send(ep: U32, buf: U32, data: U8@, len: U32, pid: U32) //<
     //< Arms one packet to send (device to host)
     //<
     //< len must be 64 or less.
     copy_to_dpram(buf, data, len)
-    $v: U32 = len | buf_ctrl_avail | buf_ctrl_full | buf_ctrl_last
+    $v: U32 = len | BUF_CTRL_AVAIL | BUF_CTRL_FULL | BUF_CTRL_LAST
     if pid != 0
-        v = v | buf_ctrl_data1_pid
+        v = v | BUF_CTRL_DATA1_PID
     addr: = buf_ctrl_addr(ep, true)
     mmio.write32(addr, v)
 
@@ -110,8 +110,8 @@ fn arm_recv(ep: U32, pid: U32, len: U32) //< arms one packet to receive (host to
     //<
     //< len is the most that can be received. To wait for the status stage (a zero-length OUT),
     //< pass len = 0.
-    $v: U32 = len | buf_ctrl_avail
+    $v: U32 = len | BUF_CTRL_AVAIL
     if pid != 0
-        v = v | buf_ctrl_data1_pid
+        v = v | BUF_CTRL_DATA1_PID
     addr: = buf_ctrl_addr(ep, false)
     mmio.write32(addr, v)

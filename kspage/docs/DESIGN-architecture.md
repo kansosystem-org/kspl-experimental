@@ -83,7 +83,7 @@ A compiler can be cut by the order of processing: read, check, then generate. **
 
 None imports anything above it.
 
-**The folders make the levels a constraint, not just names.** Two files in different folders that import each other are a compile error ([`docs/SPEC-language.md`](../../docs/SPEC-language.md)'s "9.4 Circular imports and visibility"). One flat folder would not give that. The compiler does not catch every upward import, though: one that closes no cycle (`expr` -> `share`) builds with zero diagnostics. So `make test-conventions` checks the order.
+**The folders make the levels a constraint, not just names.** Two files in different folders that import each other are a compile error ([`docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md)'s "9.4 Circular imports and visibility"). One flat folder would not give that. The compiler does not catch every upward import, though: one that closes no cycle (`expr` -> `share`) builds with zero diagnostics. So `make test-conventions` checks the order.
 
 **Do not split a cycle inside one level.** In `lay/`, `flow` calls the three arrangements and the line building, and each of them calls back into `flow` (layout always enters through flow). Moved into another folder, that cycle would cross folders and would not build. So a cycle decides where a folder's boundary goes.
 
@@ -290,7 +290,7 @@ Numbers pass through one arena the wasm hands out, and text passes as a place an
 
 Caution: **Do not hold the width on the JS side.** With a view made in each place, the day the arena is narrowed a view silently reads its neighbour. With one reader, checking that the numbers fit is one place too.
 
-**No slice crosses the boundary** ("11.1 Types that cannot cross the C boundary" in [`docs/SPEC-language.md`](../../docs/SPEC-language.md)): the pointer and the length are passed separately. Nor can a struct be returned, so several values are returned through a place passed in for them.
+**No slice crosses the boundary** ("11.1 Types that cannot cross the C boundary" in [`docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md)): the pointer and the length are passed separately. Nor can a struct be returned, so several values are returned through a place passed in for them.
 
 **The wasm's memory becomes a different `ArrayBuffer` when it grows** (an `ArrayBuffer` is JS's handle on a block of raw bytes). Do not keep a `Uint8Array` (a byte view of that block) on the JS side; make one at each read.
 
@@ -408,6 +408,8 @@ Caution: **A check on the page must not count on the document shown at startup.*
 **The browser checks begin only once the page itself says its start-up is done.** It says so through one promise, `window.kspageReady` ([`port/web/page.js`](../port/web/page.js)), however long that takes. It resolves once the core runs, the local server has been asked and the document the page comes up on is in. It rejects with the reason where the start failed. The page then shows that reason in the status bar, so a person is not left before a blank page. Every waiter takes this promise, and none looks for `window.kspage` on a timer.
 
 **Asynchronous work is awaited directly.** Wasm compilation and IndexedDB run outside the page's thread; a fixed delay cannot prove either has completed. The runner caps real elapsed time outside the browser.
+
+**The reload check waits for the tab's path to be stored before navigating.** Showing the document does not mean that its IndexedDB write has finished. Reloading earlier can cancel that write and leave no path to reopen.
 
 **Every round starts late on purpose** (`kspage/tests/browser/late.js`). Before the page's start goes on, the wasm is compiled again off the page's thread a number of times. A wait counted on the clock then fails every round, not only on a busy machine.
 

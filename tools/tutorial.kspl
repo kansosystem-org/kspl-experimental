@@ -1,55 +1,57 @@
 #!/usr/bin/env -S ksplc run
-//< Writes and checks the language tour (`docs/TOUR.md`)
+//< Writes and checks the language tutorial (`docs/TUTORIAL.md`)
 //<
-//< It is built from `ksplc/tests/notation/tour.kspl` and a run.
+//< It is built from `ksplc/tests/notation/tutorial.kspl` and a run.
 //< **The page is committed.** So a change to the program, or to what the compiler makes of it,
-//< shows as a diff. `make tour` rewrites it, and `make test-docs` fails when it is out of date.
+//< shows as a diff. `make tutorial` rewrites it, and `make test-docs` fails when it is out of date.
 //< **The page's code blocks, joined in order, must run and print what the program prints.** So
 //< the page shows the whole program. Both subcommands refuse a page that does not.
 
 // ==========================================
-//     ksplc run tools/tour.kspl write   # rewrites docs/TOUR.md
-//     ksplc run tools/tour.kspl check   # checks the page against the program's current output
+//     ksplc run tools/tutorial.kspl write   # rewrites docs/TUTORIAL.md
+//     ksplc run tools/tutorial.kspl check   # checks the page against the program's current output
 // ==========================================
-import "std/argp"
+import "std/argparse"
 import "std/io"
 import "std/mem" { Arena }
 import "std/str" // `equals`
 import "std/subproc"
 import "std/sys"
-import "tools/tour_page" as page
+import "tools/tutorial_page" as page
 
-priv const laid_src: U8[] = "ksplc/tests/notation/tour.kspl"
-priv const page_path: U8[] = "docs/TOUR.md"
-priv const joined_path: U8[] = "out/tour_joined.kspl" //< the page's code blocks, joined to be run
-priv const default_ksplc: U8[] = "out/ksplc_stage1.exe"
-priv const run_timeout_ms: I32 = 300000
-priv const capture_cap: Sz = 1 << 16
+priv const LAID_SRC: U8[] = "ksplc/tests/notation/tutorial.kspl"
+priv const PAGE_PATH: U8[] = "docs/TUTORIAL.md"
+priv const JOINED_PATH: U8[] = "out/tutorial_joined.kspl" //<
+    //< the page's code blocks, joined to be run
+priv const DEFAULT_KSPLC: U8[] = "out/ksplc_stage1.exe"
+priv const RUN_TIMEOUT_MS: I32 = 300000
+priv const CAPTURE_CAP: Sz = 1 << 16
 
-priv enum Tour_error
+priv enum Tutorial_error
     unreadable //< the source or the page could not be read
     did_not_run //< the program did not compile or did not exit cleanly
     not_written //< the page could not be written
     not_laid_out //< the program has a declaration the page could not place
 
-priv fn program_output(ksplc: U8[], arena: Arena$@): U8[]!Tour_error //< what the program prints
+priv fn program_output(ksplc: U8[], arena: Arena$@): U8[]!Tutorial_error //< what the program prints
     printed: =
-        subproc.run(U8[][]::{ ksplc, "run", laid_src }, "", run_timeout_ms, capture_cap, arena)
+        subproc.run(U8[][]::{ ksplc, "run", LAID_SRC }, "", RUN_TIMEOUT_MS, CAPTURE_CAP, arena)
         catch e
-        e.describe(arena.text().s("running ").s(laid_src).take(), ksplc)
+        e.describe(arena.text().s("running ").s(LAID_SRC).take(), ksplc)
         throw .did_not_run
     return arena.dup_str(printed)
 
-priv fn built(printed: U8[], arena: Arena$@): U8[]!Tour_error //< the page the program gives today
-    laid: = io.read_file(laid_src) catch
+priv fn built(printed: U8[], arena: Arena$@): U8[]!Tutorial_error //<
+    //< the page the program gives today
+    laid: = io.read_file(LAID_SRC) catch
         throw .unreadable
     return page.render(laid, printed, arena) catch e
         switch e
         case .untitled
-            io.err().s("\{laid_src\}: a declaration with no `//<` title comes before every titled ")
+            io.err().s("\{LAID_SRC\}: a declaration with no `//<` title comes before every titled ")
                 .s("one, so no step can show it\n")
         case .title_missing
-            io.err().s("\{laid_src\}: a declaration's `//<` has no title after it\n")
+            io.err().s("\{LAID_SRC\}: a declaration's `//<` has no title after it\n")
         throw .not_laid_out
 
 priv fn joined_code(text: U8[], arena: Arena$@): U8[] //< every ```` ```kspl ```` block, in order
@@ -70,63 +72,64 @@ priv fn stands_alone( //< whether the page's code blocks, joined, are the progra
     printed: U8[], //< what the program prints
     ksplc: U8[],
     arena: Arena$@,
-): Bool!Tour_error
-    io.write_file(joined_path, joined_code(text, arena)) catch
+): Bool!Tutorial_error
+    io.write_file(JOINED_PATH, joined_code(text, arena)) catch
         throw .not_written
     got: =
-        subproc.run(U8[][]::{ ksplc, "run", joined_path }, "", run_timeout_ms, capture_cap, arena)
+        subproc.run(U8[][]::{ ksplc, "run", JOINED_PATH }, "", RUN_TIMEOUT_MS, CAPTURE_CAP, arena)
         catch e
-        e.describe(arena.text().s("running the page's code blocks, joined in ").s(joined_path)
+        e.describe(arena.text().s("running the page's code blocks, joined in ").s(JOINED_PATH)
             .take(), ksplc)
         return false
     if got.equals(printed)
         return true
-    io.err().s("\{page_path\}: its code blocks, joined in \{joined_path\}, print something ")
-        .s("other than \{laid_src\}\n")
+    io.err().s("\{PAGE_PATH\}: its code blocks, joined in \{JOINED_PATH\}, print something ")
+        .s("other than \{LAID_SRC\}\n")
     return false
 
-priv fn do_write(ksplc: U8[], arena: Arena$@): Bool!Tour_error //< whether the page was written
+priv fn do_write(ksplc: U8[], arena: Arena$@): Bool!Tutorial_error //< whether the page was written
     printed: = program_output(ksplc, arena)!
     text: = built(printed, arena)!
     if !stands_alone(text, printed, ksplc, arena)!
-        io.err().s("\{page_path\} is left as it was\n")
+        io.err().s("\{PAGE_PATH\} is left as it was\n")
         return false
-    io.write_file(page_path, text) catch
+    io.write_file(PAGE_PATH, text) catch
         throw .not_written
-    io.out().s("wrote \{page_path\}\n")
+    io.out().s("wrote \{PAGE_PATH\}\n")
     return true
 
-priv fn do_check(ksplc: U8[], arena: Arena$@): Bool!Tour_error //< whether the page is current
-    had: = io.read_file(page_path) catch
-        io.err().s("\{sys.program_name()\}: there is no \{page_path\}. Make it with `make tour`\n")
+priv fn do_check(ksplc: U8[], arena: Arena$@): Bool!Tutorial_error //< whether the page is current
+    had: = io.read_file(PAGE_PATH) catch
+        io.err()
+            .s("\{sys.program_name()\}: there is no \{PAGE_PATH\}. Make it with `make tutorial`\n")
         throw .unreadable
     printed: = program_output(ksplc, arena)!
     whole: = stands_alone(had, printed, ksplc, arena)!
     now: = built(printed, arena)!
     if !had.equals(now)
-        io.err().s("\{page_path\}: the tour differs from what its program gives today.\n")
-            .s("Run `make tour` and commit the diff.\n")
+        io.err().s("\{PAGE_PATH\}: the tutorial differs from what its program gives today.\n")
+            .s("Run `make tutorial` and commit the diff.\n")
         return false
     if !whole
         return false
     io.out()
-        .s("\{page_path\}: the tour is what its program gives today, and its blocks run as it\n")
+        .s("\{PAGE_PATH\}: the tutorial is what its program gives today, and its blocks run as it\n")
     return true
 
-fn main(): I32 //< writes or checks the language tour
+fn main(): I32 //< writes or checks the language tutorial
     arena: = Arena.new(16 * 1024 * 1024)
     defer arena.free()
     $ksplc: U8[] = ""
-    p: = argp.Parser
-        .create(sys.program_name(), "make / match the tour of the language", arena)
-    p.subcommand("write", "remake docs/TOUR.md")
+    p: = argparse.Parser
+        .create(sys.program_name(), "make / match the tutorial of the language", arena)
+    p.subcommand("write", "remake docs/TUTORIAL.md")
     p.subcommand("check", "match the page against what the program gives today (exit 1 on a drift)")
     p.str_opt("--ksplc", ksplc@, "the compiler to use (default out/ksplc_stage1.exe)")
     p.parse_or_exit(sys.args(), arena)
     if p.command.is_none()
         io.err().s("\{sys.program_name()\}: pass write or check\n")
         return 1
-    exe: = ksplc if ksplc.len > 0 else default_ksplc
+    exe: = ksplc if ksplc.len > 0 else DEFAULT_KSPLC
     ok: =
         (do_write(exe, arena) if p.command.unwrap_or("").equals("write")
         else do_check(exe, arena)) catch e

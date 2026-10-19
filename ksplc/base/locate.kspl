@@ -13,16 +13,16 @@ import "std/fs"
 import "std/str" { Str_builder }
 import "std/sys"
 
-const std_dir_env_name: U8[] = "KSPLC_STD_DIR"
-priv const default_std_dir: U8[] = "std"
+const STD_DIR_ENV_NAME: U8[] = "KSPLC_STD_DIR"
+priv const DEFAULT_STD_DIR: U8[] = "std"
 
-const pkg_src_dir_env_name: U8[] = "KSPLC_PKG_SRC_DIR" //<
+const PKG_SRC_DIR_ENV_NAME: U8[] = "KSPLC_PKG_SRC_DIR" //<
     //< Where a package other than `std` (of the shape `ksdb/…`) is looked for
     //<
     //< Caution: **Do not merge it with `std`'s.** The standard library ships with the compiler, so
     //< it can live apart from the other packages (`/usr/local/lib/kspl/std` versus the repository).
 
-priv const std_prefix: U8[] = "std/" //< the logical prefix `import "std/..."` reserves
+priv const STD_PREFIX: U8[] = "std/" //< the logical prefix `import "std/..."` reserves
     //<
     //< Only this prefix is resolved by std_dir() instead of a search order. In a search order, the
     //< project's `std/` folder would silently hide the real standard library (or the reverse).
@@ -31,11 +31,11 @@ priv const std_prefix: U8[] = "std/" //< the logical prefix `import "std/..."` r
 fn is_std_file(file_path: U8[]): Bool //< whether that definition comes from std
     //<
     //< It reads the import's string (`std/mem.kspl`), not where `--std-dir` points.
-    return file_path.starts_with(std_prefix)
+    return file_path.starts_with(STD_PREFIX)
 
 fn std_name(rest: U8[]): U8[] //< the logical name of the file at `rest` under std's folder
     out: = base_core.arena.text()
-    out.s(std_prefix).s(rest)
+    out.s(STD_PREFIX).s(rest)
     return out.take()
 
 fn package_of(file_path: U8[]): U8[] //< the name of the package that file belongs to
@@ -56,7 +56,7 @@ fn package_of(file_path: U8[]): U8[] //< the name of the package that file belon
 fn std_dir(): U8[] //< the standard library's folder, resolved once (`SPEC-tools.md` §2.9.1)
     if base_core.config.std_dir.len > 0
         return base_core.config.std_dir
-    if v: = sys.get_env(std_dir_env_name)
+    if v: = sys.get_env(STD_DIR_ENV_NAME)
         if v.len > 0
             base_core.config.std_dir_origin = "the environment variable KSPLC_STD_DIR"
             // get_env returns a view into libc's static buffer, so it is copied (see
@@ -69,11 +69,11 @@ fn std_dir(): U8[] //< the standard library's folder, resolved once (`SPEC-tools
     beside: = std_beside_exe()
     base_core.config.std_dir_origin =
         "the default, std in the current folder" if beside.len == 0 else "beside ksplc"
-    base_core.config.std_dir = default_std_dir if beside.len == 0 else beside
+    base_core.config.std_dir = DEFAULT_STD_DIR if beside.len == 0 else beside
     return base_core.config.std_dir
 
 fn std_found(): Bool //< whether the standard library's folder taken holds `lang.kspl`
-    return fs.exists(fs.join(std_dir(), std_landmark, base_core.arena))
+    return fs.exists(fs.join(std_dir(), STD_LANDMARK, base_core.arena))
 
 fn std_missing_note(): U8[] //< where std was looked for and which folder was taken
     //<
@@ -85,14 +85,14 @@ fn std_missing_note(): U8[] //< where std was looked for and which folder was ta
     exe_dir: = exe_folder()
     out: = base_core.arena.text()
     out.s("ksplc: the standard library is not found: \{to_absolute(std_dir())\} holds no ")
-        .s(std_landmark).s(" (it was taken from ").s(origin).s(").\n")
+        .s(STD_LANDMARK).s(" (it was taken from ").s(origin).s(").\n")
         .s("  ksplc takes the first of these:\n    --std-dir=DIR\n")
         .s("    the environment variable KSPLC_STD_DIR\n")
-    for rel in std_beside
+    for rel in STD_BESIDE
         where: =
             (fold_dots(fs.join(exe_dir, rel, base_core.arena)) if exe_dir.len > 0 else rel)
-        out.s("    ").s(where).s(", where it holds ").s(std_landmark).c('\n')
-    out.s("    std in the current folder: ").s(to_absolute(default_std_dir))
+        out.s("    ").s(where).s(", where it holds ").s(STD_LANDMARK).c('\n')
+    out.s("    std in the current folder: ").s(to_absolute(DEFAULT_STD_DIR))
         .s("\n  Name the folder with --std-dir= or KSPLC_STD_DIR; `ksplc info std-dir` names the \
             one taken.\n")
     return out.take()
@@ -100,13 +100,13 @@ fn std_missing_note(): U8[] //< where std was looked for and which folder was ta
 extern "C"
     fn kspl_exe_path(buf: U8$@, cap: Sz): Sz //< this executable's path, links resolved; else 0
 
-priv const std_beside: U8[][2] = ::{ "std", "../lib/kspl/std" } //<
+priv const STD_BESIDE: U8[][2] = ::{ "std", "../lib/kspl/std" } //<
     //< Where std is looked for from the executable's folder, in order
     //<
     //< An unpacked release zip holds it beside the executable; `make install` puts it under the
     //< prefix (`<prefix>/bin/ksplc`, `<prefix>/lib/kspl/std`).
 
-priv const std_landmark: U8[] = "lang.kspl" //< the file that says a folder holds std
+priv const STD_LANDMARK: U8[] = "lang.kspl" //< the file that says a folder holds std
     //<
     //< Every program reads `std/lang` (`lang_file_path`), so every std holds it.
     //< Caution: **Do not take a folder named `std` for one**: a project's own `std/` beside a
@@ -116,10 +116,10 @@ priv fn std_beside_exe(): U8[] //< the std standing beside this executable; empt
     dir: = exe_folder()
     if dir.len == 0
         return ""
-    for rel in std_beside
+    for rel in STD_BESIDE
         // The links are resolved, so folding `bin/..` by spelling names the folder it reaches.
         at: = fold_dots(fs.join(dir, rel, base_core.arena))
-        if fs.exists(fs.join(at, std_landmark, base_core.arena))
+        if fs.exists(fs.join(at, STD_LANDMARK, base_core.arena))
             // Caution: **Keep it on perm_arena**, as the variable's copy above.
             return base_core.perm_arena.dup_str(at)
     return ""
@@ -128,8 +128,8 @@ priv fn exe_folder(): U8[] //< this executable's folder, links resolved; empty w
     //<
     //< Caution: **Do not take the executable from argv[0]** (the reason is at `kspl_exe_path` in
     //< `gen/runtime/hosted_spawn.c`).
-    $buf: U8[os_path_bytes] = ::{}
-    n: = kspl_exe_path(buf[0]@, os_path_bytes)
+    $buf: U8[OS_PATH_BYTES] = ::{}
+    n: = kspl_exe_path(buf[0]@, OS_PATH_BYTES)
     if n == 0
         return ""
     // `/` throughout, as cwd() below does, so `info std-dir` names it in one spelling.
@@ -148,7 +148,7 @@ fn pkg_src_dir(): U8[] //< the folder where a package other than `std` is looked
     base_core.config.pkg_src_dir_known = true
     if base_core.config.pkg_src_dir.len > 0
         return base_core.config.pkg_src_dir
-    if v: = sys.get_env(pkg_src_dir_env_name)
+    if v: = sys.get_env(PKG_SRC_DIR_ENV_NAME)
         if v.len > 0
             // A copy of get_env's view, as in std_dir().
             // Caution: **Allocate it from perm_arena**; on the arena the LSP rewinds, it dangles on
@@ -247,7 +247,7 @@ fn package_dir(unit: U8[]): U8[] //<
     out.s(root).c('/').s(unit)
     return out.take()
 
-priv const os_path_bytes: Sz = 4096 //<
+priv const OS_PATH_BYTES: Sz = 4096 //<
     //< The size of the temporary buffer a path the OS reports is copied into
     //<
     //< That is the working directory and the executable. **Where it does not fit, the path is not
@@ -289,7 +289,7 @@ fn fold_dots(path: U8[], keep_first: Bool = false): U8[] //<
             continue
         folds: = parts.len > 0 && !parts.get(parts.len - 1).equals("..")
         if part.equals("..") && folds && !(keep_first && parts.len == 1)
-            parts.len -= 1
+            parts.pop()
             continue
         if part.equals("..") && head > 0
             continue
@@ -327,7 +327,7 @@ priv fn placed_elsewhere(unit: U8[]): Bool //<
     //< file. Under `std/` it is rejected where it is imported (`refused_use` in `package.kspl`).
     if unit.len == 0 || unit.equals("..")
         return false
-    return unit.equals(std_prefix.sub(0, std_prefix.len - 1)) ||
+    return unit.equals(STD_PREFIX.sub(0, STD_PREFIX.len - 1)) ||
         !package_dir(unit).equals(unit)
 
 fn cwd(): U8[] //< the working directory with `/` separators; empty where it cannot be read
@@ -335,8 +335,8 @@ fn cwd(): U8[] //< the working directory with `/` separators; empty where it can
     //< Caution: **Do not mix the separators.** The OS spells it with its own, so a plain join gives
     //< `C:\a\b/c/d.kspl`; every one becomes `/`. **Do not use `one_name`**: dropping the `.`
     //< levels also drops a rooted path's leading empty level, which makes it relative.
-    $buf: U8[os_path_bytes] = ::{}
-    root: = sys.cwd(U8$[]::{ .ptr = buf[0]@, .len = os_path_bytes }) catch
+    $buf: U8[OS_PATH_BYTES] = ::{}
+    root: = sys.cwd(U8$[]::{ .ptr = buf[0]@, .len = OS_PATH_BYTES }) catch
         return ""
     out: = base_core.arena.text()
     for c in root
@@ -370,8 +370,8 @@ fn to_project_relative(path: U8[]): U8[] //<
     //< `main.kspl` are one file, so the logical name must be one too (`one_name` above).
     if !sys.is_absolute(path)
         return one_name(path)
-    $buf: U8[os_path_bytes] = ::{}
-    root: = sys.cwd(U8$[]::{ .ptr = buf[0]@, .len = os_path_bytes }) catch
+    $buf: U8[OS_PATH_BYTES] = ::{}
+    root: = sys.cwd(U8$[]::{ .ptr = buf[0]@, .len = OS_PATH_BYTES }) catch
         return path
     rest: = rest_under(path, root)
     // A logical name is written `/`-separated.
@@ -422,7 +422,7 @@ struct Uri_style //< how one client writes a document URI, read from one it sent
 
 fn uri_style_of(uri: U8[]): Uri_style //<
     //< It keeps the client's form instead of choosing one, as clangd's `URIForFile` does
-    return Uri_style::{ .has_scheme = uri.starts_with(base_core.file_uri_scheme),
+    return Uri_style::{ .has_scheme = uri.starts_with(base_core.FILE_URI_SCHEME),
         .is_absolute = sys.is_absolute(uri.strip_file_uri()) }
 
 impl Uri_style
@@ -436,7 +436,7 @@ impl Uri_style
         append_file_path(name, named@)
         out: = base_core.arena.text()
         if r.has_scheme
-            out.s(base_core.file_uri_scheme)
+            out.s(base_core.FILE_URI_SCHEME)
         out.s(to_absolute(named.slice()) if r.is_absolute else named.slice())
         return out.take()
 
@@ -448,7 +448,7 @@ fn append_file_path(import_path: U8[], out: Str_builder$@) //<
     //< match ("The bootstrap, and keeping the seed in step" in ksplc/docs/DESIGN-compiler.md).
     append_disk_path(import_path, out)
     if !out.slice().has_kspl_ext()
-        out.s(base_core.source_ext)
+        out.s(base_core.SOURCE_EXT)
 
 fn embed_disk_path(logical: U8[]): U8[] //< the path an embedded file is read from
     //<
@@ -479,8 +479,8 @@ fn embedded_read(): List<|U8[]|>$@ //< the embedded files this compilation read
 
 priv fn append_disk_path(import_path: U8[], out: Str_builder$@) //<
     //< Where a logical name's file is: under std's folder, in a package's own folder, or locally
-    if import_path.starts_with(std_prefix)
-        out.s(std_dir()).c('/').s(import_path.sub_from(std_prefix.len))
+    if import_path.starts_with(STD_PREFIX)
+        out.s(std_dir()).c('/').s(import_path.sub_from(STD_PREFIX.len))
     else if recorded_root(declared_roots, package_of(import_path)).is_some()
         // **A package that named itself is read from its own folder** (`disk_name` above).
         out.s(disk_name(import_path))
@@ -493,4 +493,4 @@ priv fn append_disk_path(import_path: U8[], out: Str_builder$@) //<
             out.s(root).c('/')
         out.s(import_path)
 
-const lang_file_path: U8[] = "std/lang" //< the file every file imports without an import line
+const LANG_FILE_PATH: U8[] = "std/lang" //< the file every file imports without an import line

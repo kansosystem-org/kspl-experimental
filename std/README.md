@@ -1,6 +1,6 @@
 # std
 
-**The KSPL standard library**: lists and maps, strings, files, the network, threads and more, for anyone writing KSPL. The compiler itself depends on it too. Apart from `std/lang`, each file is imported as `import "std/xxx"` and reached through its alias, the short name before the dot (`io.out()` after `import "std/io"`; ["9. Files and import" in `docs/SPEC-language.md`](../docs/SPEC-language.md#9-files-and-import)).
+**The KSPL standard library**: lists and maps, strings, files, the network, threads and more, for anyone writing KSPL. The compiler itself depends on it too. Apart from `std/lang`, each file is imported as `import "std/xxx"` and reached through its alias, the short name before the dot (`io.out()` after `import "std/io"`; ["9. Files and import" in `docs/SPEC-programming-language.md`](../docs/SPEC-programming-language.md#9-files-and-import)).
 
 ## Run it
 
@@ -33,7 +33,7 @@ fn main()
 
 Importing one file of `std` also compiles the files it imports, and this section says how many that is.
 
-**`std/lang` and `std/libc` go into every program.** `std/lang` goes in as "9.2 Which names an import brings in" in [`../docs/SPEC-language.md`](../docs/SPEC-language.md#92-which-names-an-import-brings-in) says. `libc` goes in because `panic` writes its message and stops the program through it. `std/lang`'s names can be written bare in every file (`Option`, `Owned`). **`lang.` is needed only where the file declares or imports a name of its own that hides one of them.** In a file declaring its own `Owned`, the bare `Owned` is that file's, and `lang.Owned` is `std/lang`'s. The compiler gives some of `std/lang`'s traits special treatment, and only under their `std/lang` names. So a missing `lang.` there loses that treatment. Two checks catch it. For `Ref_counted` / `Move_only` / `Owned`, the linter's [W0501] warns that the type conforms to a look-alike. An operator such as `+` or `==` becomes a call to an operator trait (`Add`, `Eq` and the like). For such a trait, desugaring reports an error where the operator is used. Desugaring is the compiler's step that rewrites shorthand into plain calls.
+**`std/lang` and `std/libc` go into every program.** `std/lang` goes in as "9.2 Which names an import brings in" in [`../docs/SPEC-programming-language.md`](../docs/SPEC-programming-language.md#92-which-names-an-import-brings-in) says. `libc` goes in because `panic` writes its message and stops the program through it. `std/lang`'s names can be written bare in every file (`Option`, `Owned`). **`lang.` is needed only where the file declares or imports a name of its own that hides one of them.** In a file declaring its own `Owned`, the bare `Owned` is that file's, and `lang.Owned` is `std/lang`'s. The compiler gives some of `std/lang`'s traits special treatment, and only under their `std/lang` names. So a missing `lang.` there loses that treatment. Two checks catch it. For `Ref_counted` / `Move_only` / `Owned`, the linter's [W0501] warns that the type conforms to a look-alike. An operator such as `+` or `==` becomes a call to an operator trait (`Add`, `Eq` and the like). For such a trait, desugaring reports an error where the operator is used. Desugaring is the compiler's step that rewrites shorthand into plain calls.
 
 Above those two, the files form tiers by how many files one import compiles.
 

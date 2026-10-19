@@ -128,7 +128,7 @@ fn test_fs_wide_path() //<
         .pass("even in a place holding a space and non-ASCII, creating, writing, measuring, \
             renaming, enumerating, reading and deleting all went through.")
 
-priv const level_filler: U8[] = "abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmn" //<
+priv const LEVEL_FILLER: U8[] = "abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmn" //<
     //< Fifty characters that make each level of the long tree below long
 
 fn test_fs_past_max_path() //<
@@ -147,7 +147,7 @@ fn test_fs_past_max_path() //<
     $levels: = List<|U8[]|>.new(arena)
     $at: = root
     for i in Range.asc(5)
-        at = fs.join(at, arena.text().s("level_\{i\}_").s(level_filler).take(), arena)
+        at = fs.join(at, arena.text().s("level_\{i\}_").s(LEVEL_FILLER).take(), arena)
         levels.push(at)
     deep: = levels.get(levels.len - 1)
     one: = fs.join(deep, "leaf.txt", arena)
@@ -196,7 +196,7 @@ fn test_fs_past_max_path() //<
 fn skip_skipme(name: U8[]): Bool //< a `skip_dir` that leaves out the folders named `skipme`
     return name.equals("skipme")
 
-priv const walk_root: U8[] = "out/tmp/kspl_test_debug_walk"
+priv const WALK_ROOT: U8[] = "out/tmp/kspl_test_debug_walk"
 
 // ==========================================
 // std/fs: walk_files returns a tree flat and in lexicographic order, and skip_dir drops a whole
@@ -222,7 +222,7 @@ fn test_fs_walk()
     write_probe_file("out/tmp/kspl_test_debug_walk/z/deep/d.txt")
     write_probe_file("out/tmp/kspl_test_debug_walk/skipme/x.txt")
 
-    $files: = fs.walk_files(walk_root, skip_skipme, arena)
+    $files: = fs.walk_files(WALK_ROOT, skip_skipme, arena)
         catch panic("walk_files should succeed for an existing directory")
     assert(files.len == 3, "walk_files should return 3 files with skipme pruned")
     assert(entry_is(files@, 0, "out/tmp/kspl_test_debug_walk/a/a2.txt"), "walk_files[0] mismatch")
@@ -248,12 +248,12 @@ fn test_fs_walk()
     assert(part_ok, "mkdir_failed should name the level that could not be created")
 
     remove_walk_tree()
-    assert(!fs.exists(walk_root), "the probe tree should be gone after cleanup")
+    assert(!fs.exists(WALK_ROOT), "the probe tree should be gone after cleanup")
     verdict
         .pass("mkdir_all created every level, walk_files returned in lexicographic order, and \
             skip_dir dropped a whole branch.")
 
-priv const race_dirs: Sz = 16 //< how many threads create the same tree at once
+priv const RACE_DIRS: Sz = 16 //< how many threads create the same tree at once
     //<
     //< Caution: **Make it actually hit the check-then-act race.** Called twice in sequence,
     //< `is_dir` short-circuits, so the test passes even without the handling. Suites run by
@@ -268,10 +268,10 @@ priv struct Race_ctx
         //< Caution: **Without it there is no race**: a late starter would find the tree already
         //< made.
 
-priv const race_spin: Sz = 100000000
+priv const RACE_SPIN: Sz = 100000000
 
 priv fn race_entry(c: Race_ctx$@): Void$@
-    for _k in Range.asc(race_spin)
+    for _k in Range.asc(RACE_SPIN)
         if c.go.load() != 0
             break
     fs.mkdir_all(c.path) catch
@@ -288,7 +288,7 @@ fn test_fs_mkdir_all_race()
     $fails: = thread.Atomic_sz.new(0)
     $go: = thread.Atomic_sz.new(0)
     $ctxs: = List<|Race_ctx$@|>.new(arena)
-    for _k in Range.asc(race_dirs)
+    for _k in Range.asc(RACE_DIRS)
         c: = Race_ctx$@::arena.alloc(sizeof(Race_ctx))
         c$ = Race_ctx::{ .path = deep, .fails = fails@, .go = go@ }
         ctxs.push(c)
@@ -300,7 +300,7 @@ fn test_fs_mkdir_all_race()
     go.store(1)
     for t in threads.slice()
         t.join_and_free()
-    assert(threads.len == race_dirs, "all racers must start")
+    assert(threads.len == RACE_DIRS, "all racers must start")
     assert(fs.is_dir(deep), "the tree must exist after the race")
     assert(fails.load() == 0, "losing the race must not be reported as a failure")
     clear_tree_best_effort(root, arena)
@@ -396,7 +396,7 @@ fn test_fs_path_guard()
             .pass("the text decisions match the boundaries (the depth limit was blocked by the OS's \
                 path-length limit and is unverified).")
         return
-    fs.walk_files(deep_root, fs.skip_none, arena) catch e
+    fs.walk_files(DEEP_ROOT, fs.skip_none, arena) catch e
         switch e
         case .too_deep
             remove_deep_tree(520)
@@ -419,10 +419,10 @@ fn test_fs_long_path()
     // would not tell the caller the length was the cause.
     $b: = Str_builder.new()
     defer b.free()
-    for $i: Sz = 0; i <= fs.max_path_len; i += 1
+    for $i: Sz = 0; i <= fs.MAX_PATH_LEN; i += 1
         b.c('x')
     long_path: = b.slice()
-    assert(long_path.len == fs.max_path_len + 1,
+    assert(long_path.len == fs.MAX_PATH_LEN + 1,
         "builds a path exceeding the bound by exactly one byte")
 
     $saw_invalid: = false
@@ -443,7 +443,7 @@ fn test_fs_long_path()
     // path).
     assert(!fs.exists(long_path), "an over-long path is not found by exists either")
     // A path exactly at the bound is accepted (the two sides together pin an off-by-one).
-    at_limit: = long_path.sub(0, fs.max_path_len)
+    at_limit: = long_path.sub(0, fs.MAX_PATH_LEN)
     $at_limit_invalid: = false
     fs.mkdir(at_limit) catch e
         switch e
@@ -480,11 +480,11 @@ fn test_fs_inner_nul()
     assert(!fs.is_executable(sh.slice()), "the runtime refuses a path holding a NUL")
     verdict.pass("a path holding a NUL is refused, both by std/fs and by the runtime.")
 
-priv const deep_root: U8[] = "out/tmp/kspl_test_debug_deep"
+priv const DEEP_ROOT: U8[] = "out/tmp/kspl_test_debug_deep"
 
 priv fn build_deep_tree(levels: Sz): Str_builder
     $b: = Str_builder.new()
-    b.s(deep_root)
+    b.s(DEEP_ROOT)
     for _i in Range.asc(levels)
         b.s("/d")
     return b
@@ -494,7 +494,7 @@ priv fn remove_deep_tree(levels: Sz) //< deletes from the leaves in order
         $b: = build_deep_tree(n)
         defer b.free()
         fs.remove_path(b.slice()) catch {}
-    fs.remove_path(deep_root) catch {}
+    fs.remove_path(DEEP_ROOT) catch {}
 
 priv fn entry_is(list: List<|U8[]|>$@, at: Sz, want: U8[]): Bool
     got: U8[] = list.get(at)
@@ -513,4 +513,4 @@ priv fn remove_walk_tree() //< deletes the tree from the leaves in order
     fs.remove_path("out/tmp/kspl_test_debug_walk/z/deep") catch {}
     fs.remove_path("out/tmp/kspl_test_debug_walk/z") catch {}
     fs.remove_path("out/tmp/kspl_test_debug_walk/a") catch {}
-    fs.remove_path(walk_root) catch {}
+    fs.remove_path(WALK_ROOT) catch {}

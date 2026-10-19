@@ -349,16 +349,16 @@ test-surface: $(STAGE1_EXE)
 
 .PHONY: surface test-surface
 
-# --- The tour of the language ---
-## Measure-and-inspect|tour|Rewrite the tour of the language (`docs/TOUR.md`) from its program
-tour: $(STAGE1_EXE)
-	@echo "# WRITING THE TOUR OF THE LANGUAGE"
-	./$(STAGE1_EXE) run tools/tour.kspl write --ksplc=$(STAGE1_EXE)
+# --- The language tutorial ---
+## Measure-and-inspect|tutorial|Rewrite the language tutorial (`docs/TUTORIAL.md`) from its program
+tutorial: $(STAGE1_EXE)
+	@echo "# WRITING THE TUTORIAL OF THE LANGUAGE"
+	./$(STAGE1_EXE) run tools/tutorial.kspl write --ksplc=$(STAGE1_EXE)
 
-## Gates|test-docs|Whether the tour of the language matches its program, and its code blocks run as it
+## Gates|test-docs|Whether the language tutorial matches its program, and its code blocks run as it
 test-docs: $(STAGE1_EXE)
-	@echo "# CHECKING THE TOUR OF THE LANGUAGE (run 'make tour' to update)"
-	./$(STAGE1_EXE) run tools/tour.kspl check --ksplc=$(STAGE1_EXE)
-	@echo "RESULT: ALL PASS (the tour matches its program)"
+	@echo "# CHECKING THE TUTORIAL OF THE LANGUAGE (run 'make tutorial' to update)"
+	./$(STAGE1_EXE) run tools/tutorial.kspl check --ksplc=$(STAGE1_EXE)
+	@echo "RESULT: ALL PASS (the tutorial matches its program)"
 
-.PHONY: tour test-docs
+.PHONY: tutorial test-docs

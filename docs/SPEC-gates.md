@@ -1,6 +1,6 @@
 # The specification for the gates
 
-This file says what CI runs, what every gate promises, and what the checks count. CI (continuous integration) is the automatic build-and-test run on GitHub's machines. A gate is one check that CI runs and that can fail the build ("Terms of art" in [`SPEC-documents.md`](SPEC-documents.md)). How to run the gates yourself is in [`HOWTO-build.md`](HOWTO-build.md). Why a gate has its shape is in [`DESIGN-repository.md`](DESIGN-repository.md) and in the design document of the package it inspects.
+This file says what CI runs, what every gate promises, and what the checks count. CI (continuous integration) is the automatic build-and-test run on GitHub's machines. A gate is one check that CI runs and that can fail the build ("Terms of art" in [`SPEC-documents.md`](SPEC-documents.md)). How to run the gates yourself is in [`HOWTO-build.md`](HOWTO-build.md).
 
 ## How CI runs
 
@@ -59,11 +59,11 @@ Caution: **When adding a gate, make it print one line in this notation.** A nota
 
 **One gate's full log is in the run's Artifacts** (the files a run keeps for download). The log on screen merges a whole job into one stream, and a reader that gets only the tail (GitHub's API) cannot see its middle. `tools/ci.kspl` writes each gate's log to `out/log/ci/<name>.log`, and the workflow uploads it as `log-<job>-<section>`. It uploads on a failing run too (`if:always()`), which is the run you need it for.
 
-**The log's tail lists what actually ran, then why each fallen gate fell.** `make ci` / `ci-macos` end by listing the gates they ran and the seconds each took (`gate seconds:` is the total). The list is read from `out/log/ci/` itself, not written by hand. Where the time goes, and what shrinks it, is "Where CI's time goes" in [`DESIGN-repository.md`](DESIGN-repository.md).
+**The log's tail lists what actually ran, then why each fallen gate fell.** `make ci` / `ci-macos` end by listing the gates they ran and the seconds each took (`gate seconds:` is the total). The list is read from `out/log/ci/` itself, not written by hand.
 
 **A gate that passed silently on an expected SKIP stays in the list as `PASS`.** The count of its `SKIP` lines stands beside it (`test-ksos-link` off Linux, `test-kspage-served` with no browser). The lines themselves are in the gate's log, and the count line says how many gates carry one.
 
-**A round with a fallen gate ends with `# why it failed:`.** Then comes one line per cause, each opening with the gate's name, then the path of that gate's whole log. A green round prints no such block. The causes are read from the gate's log (`causes` in `tools/ci_gates.kspl`), in this order, each line once. Past `causes_shown` lines, a gate says how many more its log holds:
+**A round with a fallen gate ends with `# why it failed:`.** Then comes one line per cause, each opening with the gate's name, then the path of that gate's whole log. A green round prints no such block. The causes are read from the gate's log (`causes` in `tools/ci_gates.kspl`), in this order, each line once. Past `CAUSES_SHOWN` lines, a gate says how many more its log holds:
 
 | A line of the log that | Is shown |
 | :-- | :-- |
@@ -78,7 +78,7 @@ Caution: **When adding a gate, make it print one line in this notation.** A nota
 
 ## How the gates are arranged
 
-**Which gates run, and in which job, is one table: `gates` in `tools/ci_gates.kspl`.** Each row is a gate, what `make` is asked for, and which job runs it. Each make target below only names its set, and the seed runs the table. (The seed is the compiler's frozen copy in C, `ksplc/seed.c`, which every build starts from.) So a compiler that the round is still checking never decides what is checked.
+**Which gates run, and in which job, is one table: `GATES` in `tools/ci_gates.kspl`.** Each row is a gate, what `make` is asked for, and which job runs it. Each make target below only names its set, and the seed runs the table. (The seed is the compiler's frozen copy in C, `ksplc/seed.c`, which every build starts from.) So a compiler that the round is still checking never decides what is checked.
 
 | Target | What it runs |
 | :-- | :-- |
@@ -107,7 +107,7 @@ flowchart TD
     G --> O["each gate's log, out/log/ci/name.log,<br/>uploaded to the run's Artifacts"]
 ```
 
-**The common gates run as two sections, in parallel, as separate jobs.** `ci-shard-core` runs C self-hosting, lint and one share of the regression suites. `ci-shard-rest` runs LLVM self-hosting, LLVM tests and the other share. `SUITES_B` in `mk/test.mk` assigns the root suites. The compiler extraction checks deal out its suite list, longest first, between the jobs. They deal successive pairs in opposite directions, and use separate copies and scratch directories. `make test-extract-ksplc` runs both shares. The other packages' copies are cut in two the same way. std's copy (`extract-std`) runs in the rest job. Every other package's copy (`extract-rest`) runs in the core job. Linux runs three jobs: these two and `ci-shard-linux`. How many job start-ups can be paid for sets the number of sections, not what divides evenly. The grounds are "Where CI's time goes" in [`DESIGN-repository.md`](DESIGN-repository.md).
+**The common gates run as two sections, in parallel, as separate jobs.** `ci-shard-core` runs C self-hosting, lint and one share of the regression suites. `ci-shard-rest` runs LLVM self-hosting, LLVM tests and the other share. `SUITES_B` in `mk/test.mk` assigns the root suites. The compiler extraction checks deal out its suite list, longest first, between the jobs. They deal successive pairs in opposite directions, and use separate copies and scratch directories. `make test-extract-ksplc` runs both shares. The other packages' copies are cut in two the same way. std's copy (`extract-std`) runs in the rest job. Every other package's copy (`extract-rest`) runs in the core job. Linux runs three jobs: these two and `ci-shard-linux`. How many job start-ups can be paid for sets the number of sections, not what divides evenly.
 
 **Always measure the usage time before adding a section.** The cheapest way to shrink the wait is not splitting but choosing which jobs run ("How CI runs" above).
 
@@ -197,7 +197,7 @@ The last catches a demo whose checks were never reached. A kernel bug that leave
 
 ### Gates that pass silently where a tool is missing
 
-**Some gates need a tool or a library that not every machine has. Without it, the gate says `SKIP` and passes silently.** **A SKIP that its platform does not expect fails its gate.** `expected_skips` in `tools/ci_gates.kspl` holds, per platform, the reasons a round can skip for (the rows below). So a runner that loses a tool fails rather than going green. **`make test-conventions` holds every reason the tree can print against those rows** (`tests/support/conventions_skip.kspl`). So a reason that one platform alone prints gets its row before that platform's round meets it. On Linux a switch marks most of these tools as required. A missing tool then fails the gate there instead ("The switches that require a tool" below). The devcontainer holds every one of them unless the row says otherwise. Elsewhere a green run has not checked what the gate checks. The note on each row says what the gate itself does.
+**Some gates need a tool or a library that not every machine has. Without it, the gate says `SKIP` and passes silently.** **A SKIP that its platform does not expect fails its gate.** `EXPECTED_SKIPS` in `tools/ci_gates.kspl` holds, per platform, the reasons a round can skip for (the rows below). So a runner that loses a tool fails rather than going green. **`make test-conventions` holds every reason the tree can print against those rows** (`tests/support/conventions_skip.kspl`). So a reason that one platform alone prints gets its row before that platform's round meets it. On Linux a switch marks most of these tools as required. A missing tool then fails the gate there instead ("The switches that require a tool" below). The devcontainer holds every one of them unless the row says otherwise. Elsewhere a green run has not checked what the gate checks. The note on each row says what the gate itself does.
 
 | Gate | What it needs | On Linux CI | Elsewhere, without it |
 | :-- | :-- | :-- | :-- |
@@ -219,7 +219,7 @@ The last catches a demo whose checks were never reached. A kernel bug that leave
 
 **On Linux each switch below is 1, so a gate whose tool is missing fails rather than skips.** CI's Linux job runs in the image that `.devcontainer/Dockerfile` builds, which holds every one of these tools. So a skip there could only mean that the image lost one. On macOS and Windows each is 0, and the gate says `SKIP`. They are set in one place, `REQUIRE_SWITCHES` in `mk/test.mk`, and each reads `0` or `1` alone. Any other value stops `make`. A value read as "not 1" would turn the requirement off with nothing said.
 
-**On a Linux machine of your own that lacks a tool, set its switch to 0** (`make ci KANSO_REQUIRE_CHOWN=0`, or in the environment). The gate then skips, and `make ci` lets that skip through instead of failing on it (`switch_skips` in `tools/ci_gates.kspl`). **Such a round is not CI's verdict**: it has not checked what the switch's gates check. So the round ends by naming each switch turned off, and CI's Linux job never turns one off. Every failure a switch causes names the switch and the `=0` that turns it off.
+**On a Linux machine of your own that lacks a tool, set its switch to 0** (`make ci KANSO_REQUIRE_CHOWN=0`, or in the environment). The gate then skips, and `make ci` lets that skip through instead of failing on it (`SWITCH_SKIPS` in `tools/ci_gates.kspl`). **Such a round is not CI's verdict**: it has not checked what the switch's gates check. So the round ends by naming each switch turned off, and CI's Linux job never turns one off. Every failure a switch causes names the switch and the `=0` that turns it off.
 
 | Switch | What it requires | The gates it affects | Turned off, the round has not checked |
 | :-- | :-- | :-- | :-- |
@@ -273,8 +273,8 @@ Some tools have no switch, and no Linux row of `expected_skips` holds their skip
   * ksbind's tests, where OpenSSL and SQLite link (required on Linux, as in note 18).
   * ksplc itself as the language server, played an editor's session. Its supervisor reads the editor on a thread of its own while it restarts a crashed worker. It must end at `exit` with its input still open.
 
-   It fails on any report from any process, the runtime's and libc's included. **It finds the races the tests reach, not the ones they miss.** Why it stands in place of a type-system check is "Why data races are not prevented by the type system" in [`DESIGN-language.md`](DESIGN-language.md).
-  * **It shows that it can fire**: a program racing on purpose, built and run the same way, must be reported first. **And that it still covers what starts threads.** Every tracked source that starts a thread is compiled into a program that it runs. Or the source is named with the reason in `left_out` in `tests/suite/race_test.kspl`.
+   It fails on any report from any process, the runtime's and libc's included. **It finds the races the tests reach, not the ones they miss.**
+  * **It shows that it can fire**: a program racing on purpose, built and run the same way, must be reported first. **And that it still covers what starts threads.** Every tracked source that starts a thread is compiled into a program that it runs. Or the source is named with the reason in `LEFT_OUT` in `tests/suite/race_test.kspl`.
   * **No report is suppressed.** std, the runtime and the program are compiled from source into one unit. So nothing that the sanitizer watches is uninstrumented, and a report is a finding to fix.
   * **Only the C backend is built.** Through the LLVM backend, clang's `-fsanitize=thread` watches only the functions `--sanitize=thread` marks in the IR, as note 29's build marks them for the address sanitizer.
 * **note 18**: ksbind's own `make test` links OpenSSL and SQLite, which the devcontainer holds and the windows-ucrt64 runner does not. `test-extract` runs it wherever it runs. `make lint` and `test-c-warnings` still read the bindings where they do not link.
@@ -283,7 +283,7 @@ Some tools have no switch, and no Linux row of `expected_skips` holds their skip
 * **note 21**: std's, kspage's and ksai's `test-fuzz` build the program they fuzz with the address sanitizer, where the C compiler holds its runtime. The sanitizer stops a program at its first out-of-range memory access. The driver prints a line saying which build it made. ksplc's fuzz runs the compiler the suites inspect, which no sanitizer builds.
 * **note 22**: two of `cli`'s cases check that ksplc refuses a cache folder that others could plant entries in. One folder everyone can write; another user owns the other. Handing a folder to another user takes root, or `sudo` without a password. Windows's permissions are an ACL, which ksplc does not read, so neither case runs there.
 * **note 23**: `test-kspage-desktop` writes the entry alone, building nothing, and checks it with `desktop-file-validate`, which the Linux image holds. A `.desktop` entry is what Linux desktops read; macOS and Windows associate a file with a program another way.
-* **note 24**: `ksplc/tests/suite/layout_targets_test.kspl` compiles `ksplc/tests/prog/layout_probe.kspl` with `--machine` for each machine ksplc knows (`machines` in `ksplc/base/target.kspl`), and has clang compile the C for the same machine with warnings refused. The C checks every number ksplc folded, so a size laid out wrongly fails there. **Each check is shown to fire.** A 32-bit machine's C compiled for a 64-bit one must fail at a check naming the machine. So must the other way round. It needs only clang, which builds for every machine. Where `wasm-ld`, `node` and clang's wasm32 builtins are found, the wasm32 build also runs. It holds a 128-bit product that links only with those builtins. A folded size can decide the program in several ways: a static `if`, a constant chain, a `case` label, reflection. Each way must answer as wasm32 lays values out.
+* **note 24**: `ksplc/tests/suite/layout_targets_test.kspl` compiles `ksplc/tests/prog/layout_probe.kspl` with `--machine` for each machine ksplc knows (`MACHINES` in `ksplc/base/target.kspl`), and has clang compile the C for the same machine with warnings refused. The C checks every number ksplc folded, so a size laid out wrongly fails there. **Each check is shown to fire.** A 32-bit machine's C compiled for a 64-bit one must fail at a check naming the machine. So must the other way round. It needs only clang, which builds for every machine. Where `wasm-ld`, `node` and clang's wasm32 builtins are found, the wasm32 build also runs. It holds a 128-bit product that links only with those builtins. A folded size can decide the program in several ways: a static `if`, a constant chain, a `case` label, reflection. Each way must answer as wasm32 lays values out.
 * **note 25**: Linux and Windows run the same check through `test-extract`: ksai's own `make test`, run on its copy, trains `llama_engine` and requires the loss to fall (`ksai/tests/examples_main.kspl`). macOS runs no `test-extract`, so it runs `make run` instead.
 * **note 26**: what these read is the tree's text, or the text the compiler translates it to, so the answer cannot differ by platform. Run on Windows as well, they would pay a second time for the answer Linux already gave, and a Windows minute is billed double. So they run in `ci-shard-linux` (`Shard.linux` in `tools/ci_gates.kspl`). The suites among them are `SUITES_TEXT` in `mk/test.mk`. What the platform decides stays on Windows: building, linking and running, the language server over the tree (`lsp-tree`), and the C compiler's warnings (`c-warnings`).
 * **note 27**: `make debug` runs the tests of every package but kssrv and ksbind in one program. kssrv's tests start the server as a child, and ksbind's link OpenSSL and SQLite. So each runs only as its package's own `make test`. Linux and Windows run the same tests already, one package at a time. Each package's own `make test` runs from a copy of its folder (`test-extract`, across the suite shares). That also proves the package stands alone. A failed check fails that run, since each package's tests end with the checks' own verdict. So there they run only what no copy holds: `tools/`, which has no `Makefile` (`make debug-tools`). macOS runs no copy, so it runs `make debug`, which holds `tools/` too; kssrv's and ksbind's tests go unrun there.
@@ -307,7 +307,7 @@ SKIP kssrv: a link inside the root cannot get outside: a link cannot be made wit
 
 | Part | What it is |
 | :-- | :-- |
-| **The marker** | Four characters: `pass` / `FAIL` / `SKIP`, never the pair `OK` / `NG` (why, and why only the passing one is lower case, is at `mark_ok` in `tests/support/conventions_line.kspl`) |
+| **The marker** | Four characters: `pass` / `FAIL` / `SKIP`, never the pair `OK` / `NG` (why, and why only the passing one is lower case, is at `MARK_OK` in `tests/support/conventions_line.kspl`) |
 | **The label** | For a suite, its name in the table in `mk/test.mk`; for a kspage probe, the section's name. Do not have the suite write its own label: the table is the one source |
 | **The content** | What was confirmed |
 
@@ -338,13 +338,13 @@ SKIP Net: connecting over the IPv6 loopback and peer() test: this machine has no
 
 Caution: **Do not edit a record by hand.** The next `make surface` overwrites the edit, and until then the gate compares the tree against something nobody generated.
 
-**The reference to read is rendered from the same walk when asked**, not committed. `ksplc doc <file>` prints what a file publishes, entry by entry, so it cannot disagree with the record. `make surface` also writes it under `out/docs/` for browsing, and no gate looks at that copy. Why the record is kept at all is "The published API is recorded in the repository" in [`DESIGN-repository.md`](DESIGN-repository.md). Why the reference is not committed is "The reference is rendered when asked, not committed" there.
+**The reference to read is rendered from the same walk when asked**, not committed. `ksplc doc <file>` prints what a file publishes, entry by entry, so it cannot disagree with the record. `make surface` also writes it under `out/docs/` for browsing, and no gate looks at that copy.
 
 **Adding, changing or removing a `pub` shows in the record's diff.** A declaration split by `#cfg` appears for both branches, since the record reads the raw syntax tree, not the branch one build enables.
 
 ## What the convention checks count
 
-This section says only what `make test-conventions` counts, and where. The principles themselves are "Development Principles" in [`DESIGN-principles.md`](DESIGN-principles.md). **Do not copy the rules here.**
+This section defines the size limits and what `make test-conventions` counts. Review checks the requirements that the gate cannot measure.
 
 ### Executable scripts
 
@@ -352,9 +352,9 @@ This section says only what `make test-conventions` counts, and where. The princ
 
 ### Principle 3 - what is counted, and how
 
-**Every file written by hand is measured for size** (`.kspl`, `.c` / `.h`, and the page's `.html` / `.css` / `.js`). Only the generated `ksplc/seed.c` is left out: the split applies to the code that generates it.
+**Every file written by hand has at most 1000 lines and is measured for size** (`.kspl`, `.c` / `.h`, and the page's `.html` / `.css` / `.js`). Only the generated `ksplc/seed.c` is left out: the split applies to the code that generates it.
 
-**A function's length is lint's to measure** ([H0803], 300 lines), in KSPL source alone; C relies on the C compiler's warnings and on review instead.
+**A function's length is lint's to measure** ([H0803], 300 lines), in KSPL source alone; C relies on the C compiler's warnings and on review instead. **Block nesting is limited to 8 levels**, with the function body at level 0 ([H0805]).
 
 **A file over 900 lines fails `make test-conventions` unless "Files near the limit and how they split" in the `README.md` of the top-level folder it sits in names it.** What that section holds is "Where a file's splitting plan is written" in [`SPEC-documents.md`](SPEC-documents.md). A warning on screen alone would let the README's "no file exceeds it" go stale without anyone seeing it (Principle 7).
 
@@ -367,4 +367,4 @@ This section says only what `make test-conventions` counts, and where. The princ
 * **The count sees the length alone.** It cannot tell an instruction from a description, so it holds both to 25. Review holds an instruction to 20.
 * **Code and link targets count no words.** A code block, a span in backquotes and a link's target are left out. A link counts as its text.
 * **A unit is a heading, a table cell, a list item or a paragraph.** A unit splits into sentences after a `.`, `!` or `?` and a space.
-* **A document not yet in plain language is listed, and skipped whole** (`not_converted` in [`../tests/support/conventions_plain.kspl`](../tests/support/conventions_plain.kspl)). A listed document that passes fails the check, so the list only shrinks.
+* **A document not yet in plain language is listed, and skipped whole** (`NOT_CONVERTED` in [`../tests/support/conventions_plain.kspl`](../tests/support/conventions_plain.kspl)). A listed document that passes fails the check, so the list only shrinks.

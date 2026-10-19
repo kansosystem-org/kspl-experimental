@@ -11,26 +11,26 @@ import "ksplc/sema/type/query" as sema_type_query
 import "std/ds" { List }
 import "std/str" { Str_builder }
 
-const startup_calls: U8[][3] = ::{ //<
+const STARTUP_CALLS: U8[][3] = ::{ //<
     //< The runtime calls made after `argc` / `argv` are stored and before `kspl_main`, in order
     //<
     //< Each is `void (void)` and does nothing outside Windows (`runtime/hosted.c`). The console
     //< ones set the code page; without it, `--help` and the first diagnostics come out
     //< unreadable. The binary one stops the C runtime from silently turning a `\n` written to
     //< standard output into `\r\n` ("Standard output carries the bytes a program writes" in
-    //< `../../docs/DESIGN-language.md`).
+    //< `../../docs/DESIGN-programming-language.md`).
     "kspl_io_attach_console", "kspl_io_init_console", "kspl_io_set_stdio_binary",
 }
 
-const failed_with_code: U8[] = "[Kanso] Error: main() failed with code %lld" //<
+const FAILED_WITH_CODE: U8[] = "[Kanso] Error: main() failed with code %lld" //<
     //< The failure line where `main`'s error is a signed integer, printed with that number
-const failed_with_unsigned_code: U8[] = "[Kanso] Error: main() failed with code %llu" //<
+const FAILED_WITH_UNSIGNED_CODE: U8[] = "[Kanso] Error: main() failed with code %llu" //<
     //< The failure line where `main`'s error is an unsigned integer, printed with that number
-const failed_with_variant: U8[] = "[Kanso] Error: main() failed with %s" //<
+const FAILED_WITH_VARIANT: U8[] = "[Kanso] Error: main() failed with %s" //<
     //< The failure line where `main`'s error is an enum, printed with the variant's declared name
-const failed: U8[] = "[Kanso] Error: main() failed." //< the failure line for any other error
+const FAILED: U8[] = "[Kanso] Error: main() failed." //< the failure line for any other error
 
-const exit_code_max: I64 = 255 //<
+const EXIT_CODE_MAX: I64 = 255 //<
     //< The largest number a failure's exit status passes on as it is; any other gives 1
     //<
     //< A POSIX shell sees only the low 8 bits, so 256 would read as 0, success. **A failure always
@@ -38,14 +38,14 @@ const exit_code_max: I64 = 255 //<
 
 enum Main_err //< what `main`'s error is, which fixes the failure line and the exit status
     none //< `main` returns no Result
-    number //< an integer: `failed_with_code`; the status is the number where it is 1..255
-    variant //< an enum: `failed_with_variant`, naming the variant; the status is 1
-    other //< anything else (a struct, a float): `failed`; the status is 1
+    number //< an integer: `FAILED_WITH_CODE`; the status is the number where it is 1..255
+    variant //< an enum: `FAILED_WITH_VARIANT`, naming the variant; the status is 1
+    other //< anything else (a struct, a float): `FAILED`; the status is 1
 
 struct Main_plan //< how the entry point turns what `kspl_main` returns into an exit code
     exit_is_value: Bool //< an integer (a Result's success value) is the exit code; otherwise 0
     err: Main_err //< what a failure is (`none` where `main` returns no Result)
-    err_is_unsigned: Bool //< a `number` error is unsigned (`failed_with_unsigned_code`)
+    err_is_unsigned: Bool //< a `number` error is unsigned (`FAILED_WITH_UNSIGNED_CODE`)
     err_variants: List<|Enum_variant$@|>$@ //< a `variant` error's variants; null otherwise
     err_has_payload: Bool //< a `variant` error is a tagged union, whose tag is its first field
     trace_fn: U8[] //<
@@ -64,11 +64,11 @@ impl Main_plan
     fn failure_line(r: Self@): U8[] //< the format of the line a failure prints, without its `\n`
         switch r.err
         case .number
-            return failed_with_unsigned_code if r.err_is_unsigned else failed_with_code
+            return FAILED_WITH_UNSIGNED_CODE if r.err_is_unsigned else FAILED_WITH_CODE
         case .variant
-            return failed_with_variant
+            return FAILED_WITH_VARIANT
         default
-            return failed
+            return FAILED
 
 fn plan_of(env: sema_type_env.Env$@, main_type_id: I32): Main_plan //<
     //< The plan for a `main` of this type

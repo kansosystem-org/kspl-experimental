@@ -41,7 +41,7 @@ struct Mono_state_backup //<
     file_name: U8[]
     current_impl: U8[]
 
-const max_mono_depth: Sz = 128 //< the limit on instantiate_struct's recursive call depth
+const MAX_MONO_DEPTH: Sz = 128 //< the limit on instantiate_struct's recursive call depth
     //<
     //< A cycle hits instantiated_nodes' cache (register_inst_node); a non-cycling chain (A<|T|>
     //< embedding B<|T|>, B embedding C, ...) does not.
@@ -141,7 +141,7 @@ impl Sema_ctx
         //< Caution: **Code that synthesizes a slice type must go through here** (a string literal's
         //< type, the reflection table). **Return unknown if the instantiation fails** (it is
         //< reported).
-        $inst: = r.instantiate_struct(base_core.slice_fqn, I32[]::{ elem_id }) catch
+        $inst: = r.instantiate_struct(base_core.SLICE_FQN, I32[]::{ elem_id }) catch
             return I32::sema_type_env.Builtin_type_id.unknown
         defer inst.free()
         return r.env.get_or_add(base_core.arena.dup_str(inst.slice()))
@@ -154,16 +154,32 @@ impl Sema_ctx
         if sema_type_env.is_unknown(ok_id) || sema_type_env.is_unknown(err_id)
             return I32::sema_type_env.Builtin_type_id.unknown
         $inst: =
-            r.instantiate_struct(base_core.result_fqn, I32[]::{ ok_id, err_id }) catch
+            r.instantiate_struct(base_core.RESULT_FQN, I32[]::{ ok_id, err_id }) catch
             return I32::sema_type_env.Builtin_type_id.unknown
         defer inst.free()
         return r.env.get_or_add(base_core.arena.dup_str(inst.slice()))
 
-    fn instantiate_struct(r: Self$@, base_name: U8[], args: I32[]): Str_builder!Sema_error //<
+    priv fn instance_arg_id(r: Self$@, id: I32): I32 //<
+        //< an argument's aliases resolved, keeping its qualifier
+        real: = r.env.get_real_type(id)
+        if r.env.is_const(real)
+            return r.env.make_const(r.instance_arg_id(r.env.strip_const(real)))
+        return real
+
+    fn instantiate_struct(r: Self$@, base_name: U8[], $args: I32[]): Str_builder!Sema_error //<
         //< Makes the instance of the generic type base_name (an FQN) binding args, once
         //<
         //< It returns the instance's mangled name, derived from its record (`Instance` in
         //< `../type/env.kspl`), as is its registration key.
+        // An alias and its target must share the instance, including inside `T!E`. Copy only
+        // where an alias occurs: callers can keep the argument array for another instantiation.
+        for id in args
+            if r.instance_arg_id(id) != id
+                $canonical: = List<|I32|>.new(base_core.arena)
+                for arg in args
+                    canonical.push(r.instance_arg_id(arg))
+                args = canonical.slice()
+                break
         inst_rec: = sema_type_env.Instance::{ .template = base_name, .args = args }
         $args_text: = Str_builder.new()
         defer args_text.free()
@@ -198,7 +214,7 @@ impl Sema_ctx
 
         r.mono.mono_depth += 1
         defer r.mono.mono_depth -= 1
-        if r.mono.mono_depth > max_mono_depth
+        if r.mono.mono_depth > MAX_MONO_DEPTH
             r.err(inst_node,
                 "generic type instantiation chain too deep (possible unbounded recursive generic \
                     type)")
@@ -325,7 +341,7 @@ impl Sema_ctx
         //<
         //< Caution: **Check it here, at the instantiation's first binding.** Inside the instance, a
         //< diagnostic hanging on a type argument is not emitted. So `Ring<|3000000000|>` for
-        //< `const n: I32` was truncated in silence, and `Ring<|true|>` was reported inside the
+        //< `const N: I32` was truncated in silence, and `Ring<|true|>` was reported inside the
         //< body.
         type_node: = param.find_child(.k_type_expr)
         if type_node == null
@@ -445,7 +461,7 @@ impl Sema_ctx
                     continue
                 // Caution: **Do not add a method with its own type parameters to the table.** Only
                 // the call site decides `U` (instantiate_fn below, and "A type argument with
-                // nothing to bind to is rejected" in docs/DESIGN-language.md).
+                // nothing to bind to is rejected" in docs/DESIGN-programming-language.md).
                 if sema_decl_mono_name.introduces_own_generic_param(m_node, impl_gen_params)
                     continue
                 // skip_infer=true: the loop below queues the bodies on pending.
@@ -595,7 +611,7 @@ impl Sema_ctx
         // The depth of the instantiation chain. The call depth (mono_depth) cannot catch this (the
         // reason is at inst_chain_depth in sema/session/state.kspl).
         chain_depth: = r.generics.inst_chain_depth + 1
-        if chain_depth > max_mono_depth
+        if chain_depth > MAX_MONO_DEPTH
             if !r.mono.chain_cut
                 r.err(inst_node,
                     "generic function instantiation chain too deep (possible unbounded recursive \

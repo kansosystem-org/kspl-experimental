@@ -418,7 +418,7 @@
       ["find", kspageProbeFind], ["paint", kspageProbePaint],
       ["paper", kspageProbePaper], ["link", kspageProbeLink], ["note", kspageProbeNote],
       ["keys", kspageProbeKeys], ["ribbon", kspageProbeRibbon],
-      ["fresh", kspageProbeFresh], ["drag", kspageProbeDrag],
+      ["fresh", kspageProbeFresh], ["example", kspageProbeExample], ["drag", kspageProbeDrag],
       ["local", kspageProbeLocal],
       ["outside", kspageProbeOutside], ["outline", kspageProbeOutline]];
     for (const [name, run] of parts) {

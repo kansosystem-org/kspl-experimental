@@ -1,7 +1,7 @@
 //< Saves a document and its styles, and loads them back
 //<
 //< Caution: **Do not write it all on one line**, or changing one word makes the whole document
-//< show up as changed. With `spacing` below, each value gets a line of its own.
+//< show up as changed. With `SPACING` below, each value gets a line of its own.
 
 // ==========================================
 // Usage:
@@ -20,11 +20,11 @@ import "kspage/model/run" { Inline }
 import "kspage/model/style" + { Number_spec, Sheet, Style }
 import "kspage/model/style_when" + { When }
 import "std/ds" { List }
-import "std/json" + { Val, Json_builder, Obj_builder }
+import "std/json" + { Value, Json_builder, Object_builder }
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
 
-priv const version: I64 = 6 //< the version of the saved format
+priv const VERSION: I64 = 6 //< the version of the saved format
     //<
     //< Caution: **Raise it when the format changes.** Changed without raising it, an old text is
     //< silently read as meaning something else. A name the core looks up counts as part of the
@@ -49,13 +49,13 @@ struct Loaded //< the document and the styles read back
 
 // ---- writing out ----
 
-priv fn font_val(b: Json_builder$@, f: Font): Val //< writes one fully set font as text
+priv fn font_val(b: Json_builder$@, f: Font): Value //< writes one fully set font as text
     //<
     //< Every field is written (a `Font` has no "not set").
     return b.obj().set("family", b.str_val(f.family)).set("size_px", b.float_val(f.size_px))
         .set("weight", b.int_val(f.weight)).set("italic", b.bool_val(f.italic)).build()
 
-fn spec_into($ob: Obj_builder, b: Json_builder$@, spec: Font_spec): Obj_builder //<
+fn spec_into($ob: Object_builder, b: Json_builder$@, spec: Font_spec): Object_builder //<
     //< Writes the font settings, only the fields that are set
     //<
     //< An unset field is not written (filling in a default would cut the inheritance).
@@ -69,7 +69,7 @@ fn spec_into($ob: Obj_builder, b: Json_builder$@, spec: Font_spec): Obj_builder 
         ob = ob.set("italic", b.bool_val(v))
     return ob
 
-priv fn color_val(b: Json_builder$@, v: U32): Val //< writes one color as `#rrggbb`
+priv fn color_val(b: Json_builder$@, v: U32): Value //< writes one color as `#rrggbb`
     //<
     //< `str_val` makes the copy (the arena here is freed on return).
     $sb: = Str_builder.new()
@@ -77,7 +77,7 @@ priv fn color_val(b: Json_builder$@, v: U32): Val //< writes one color as `#rrgg
     paint.color_into(v, sb@)
     return b.str_val(sb.slice())
 
-fn ink_into($ob: Obj_builder, b: Json_builder$@, ink: Ink): Obj_builder //<
+fn ink_into($ob: Object_builder, b: Json_builder$@, ink: Ink): Object_builder //<
     //< Writes a color's settings into the text
     //<
     //< An unset field is not written (as for `Font_spec`).
@@ -93,7 +93,7 @@ fn ink_into($ob: Obj_builder, b: Json_builder$@, ink: Ink): Obj_builder //<
         ob = ob.set("strike", b.bool_val(v))
     return ob
 
-priv fn number_into($ob: Obj_builder, b: Json_builder$@, spec: Number_spec): Obj_builder //<
+priv fn number_into($ob: Object_builder, b: Json_builder$@, spec: Number_spec): Object_builder //<
     //< Writes how a number is shown into the text
     //<
     //< For plain numbers nothing is written.
@@ -113,7 +113,7 @@ priv fn number_into($ob: Obj_builder, b: Json_builder$@, spec: Number_spec): Obj
         ob = ob.set("dated", b.str_val(dated))
     return ob
 
-priv fn checked(v: Val, dflt: I64, fits: fn(got: I64): Bool): Sz!Store_error //<
+priv fn checked(v: Value, dflt: I64, fits: fn(got: I64): Bool): Sz!Store_error //<
     //< Reads a number only if it is inside the allowed range
     //<
     //< Caution: **Do not decide the range here** (`kspage/model/limit` holds it; `fits` checks it).
@@ -124,7 +124,7 @@ priv fn checked(v: Val, dflt: I64, fits: fn(got: I64): Bool): Sz!Store_error //<
         throw .out_of_range
     return Sz::got
 
-priv fn read_number(v: Val): Number_spec!Store_error //<
+priv fn read_number(v: Value): Number_spec!Store_error //<
     //< Builds how a number is shown from the text
     $spec: Number_spec = style.plain_number()
     places: = v.get("places")
@@ -140,7 +140,7 @@ priv fn read_number(v: Val): Number_spec!Store_error //<
         spec.dated = day.dating_from(v.get("dated").as_str().unwrap_or(""))
     return spec
 
-priv fn when_into(b: Json_builder$@, ob: Obj_builder, how: U8[], w: When): Obj_builder //<
+priv fn when_into(b: Json_builder$@, ob: Object_builder, how: U8[], w: When): Object_builder //<
     //< Writes the rule that changes the look by the value as text
     //<
     //< The field's name says how it compares (`when_above` and the like).
@@ -148,18 +148,18 @@ priv fn when_into(b: Json_builder$@, ob: Obj_builder, how: U8[], w: When): Obj_b
     defer sb.free()
     sb.s("when_")
     sb.s(how)
-    out: Obj_builder = ob.set(sb.slice(), b.float_val(w.than))
+    out: Object_builder = ob.set(sb.slice(), b.float_val(w.than))
     return out.set("when_then", b.str_val(w.then))
 
-priv fn read_when(v: Val): When //<
+priv fn read_when(v: Value): When //<
     //< Builds the rule that changes the look by the value from the text
     //<
-    //< There is only one way of comparing, read in a fixed order (`style_when.comparisons`). So a
+    //< There is only one way of comparing, read in a fixed order (`style_when.COMPARISONS`). So a
     //< text holding two does not give an answer that depends on the writer's order.
     $out: When = style_when.no_when()
     $sb: = Str_builder.new()
     defer sb.free()
-    for how in style_when.comparisons
+    for how in style_when.COMPARISONS
         sb.clear()
         sb.s("when_").s(how.variant_name())
         than: = v.get(sb.slice())
@@ -170,8 +170,8 @@ priv fn read_when(v: Val): When //<
             return out
     return out
 
-fn style_val(b: Json_builder$@, s: Style$@): Val //< writes one style as text
-    $ob: Obj_builder = b.obj().set("name", b.str_val(s.name))
+fn style_val(b: Json_builder$@, s: Style$@): Value //< writes one style as text
+    $ob: Object_builder = b.obj().set("name", b.str_val(s.name))
     ob = spec_into(ob, b, s.font)
     ob = ink_into(ob, b, s.ink)
     ob = number_into(ob, b, s.number)
@@ -252,20 +252,20 @@ fn style_val(b: Json_builder$@, s: Style$@): Val //< writes one style as text
         ob = ob.set("arrange", b.str_val(arrange))
     return ob.build()
 
-fn paper_val(b: Json_builder$@, p: Paper): Val //< writes the paper settings as text
+fn paper_val(b: Json_builder$@, p: Paper): Value //< writes the paper settings as text
     //<
     //< The field names are the ones in `paper_into` below, so the saved text and the text sent
     //< elsewhere stay in step.
     return paper_into(b.obj(), b, p).build()
 
-priv const same_room: Sz = 16 * 1024 //< the scratch arena `same_style` and `same_paper` write in
+priv const SAME_ROOM: Sz = 16 * 1024 //< the scratch arena `same_style` and `same_paper` write in
 
 fn same_style(a: Style$@, b: Style$@): Bool //< whether two styles save as the same text
     //<
     //< Caution: **Do not compare field by field** — a field added to `Style` and forgotten there
     //< makes a change to it alone "the same". **The work is freed before returning** (written into
     //< the document's arena, every comparison would grow it).
-    work: = Arena.new(same_room)
+    work: = Arena.new(SAME_ROOM)
     defer work.free()
     $jb: = Json_builder.new(work)
     return dump_equal(style_val(jb@, a), style_val(jb@, b))
@@ -273,12 +273,12 @@ fn same_style(a: Style$@, b: Style$@): Bool //< whether two styles save as the s
 fn same_paper(a: Paper, b: Paper): Bool //< whether two paper settings save as the same text
     //<
     //< The same reasons as `same_style`.
-    work: = Arena.new(same_room)
+    work: = Arena.new(SAME_ROOM)
     defer work.free()
     $jb: = Json_builder.new(work)
     return dump_equal(paper_val(jb@, a), paper_val(jb@, b))
 
-priv fn dump_equal(a: json.Val, b: json.Val): Bool //< whether two values dump as the same text
+priv fn dump_equal(a: json.Value, b: json.Value): Bool //< whether two values dump as the same text
     $one: = Str_builder.new()
     defer one.free()
     $other: = Str_builder.new()
@@ -287,7 +287,7 @@ priv fn dump_equal(a: json.Val, b: json.Val): Bool //< whether two values dump a
     b.dump(other@)
     return one.slice().equals(other.slice())
 
-priv fn paper_into($ob: Obj_builder, b: Json_builder$@, p: Paper): Obj_builder //<
+priv fn paper_into($ob: Object_builder, b: Json_builder$@, p: Paper): Object_builder //<
     //< Writes one page's settings into the text
     //<
     //< A field that is 0 is not written.
@@ -309,7 +309,7 @@ priv fn paper_into($ob: Obj_builder, b: Json_builder$@, p: Paper): Obj_builder /
         ob = ob.set("reading_width", b.float_val(p.reading))
     return ob
 
-fn read_paper(v: Val): Paper!Store_error //< builds the paper settings from the text
+fn read_paper(v: Value): Paper!Store_error //< builds the paper settings from the text
     $p: Paper = paper.no_paper()
     p.height = checked_f32(v.get("page_height"), p.height, limit.page_fits)!
     p.width = checked_f32(v.get("page_width"), p.width, limit.page_fits)!
@@ -320,7 +320,7 @@ fn read_paper(v: Val): Paper!Store_error //< builds the paper settings from the 
     p.reading = checked_f32(v.get("reading_width"), p.reading, limit.length_fits)!
     return p
 
-fn sheet_val(b: Json_builder$@, sheet: Sheet$@): Val //< writes the style table as text
+fn sheet_val(b: Json_builder$@, sheet: Sheet$@): Value //< writes the style table as text
     $list: = b.arr()
     for $i: Sz = 0; i < sheet.styles.len; i += 1
         list = list.push(style_val(b, sheet.styles.get(i)))
@@ -329,12 +329,12 @@ fn sheet_val(b: Json_builder$@, sheet: Sheet$@): Val //< writes the style table 
     ob = paper_into(ob, b, sheet.paper)
     return ob.build()
 
-priv fn rect_val(b: Json_builder$@, r: Rect): Val
+priv fn rect_val(b: Json_builder$@, r: Rect): Value
     return b.obj().set("x", b.float_val(r.x)).set("y", b.float_val(r.y))
         .set("w", b.float_val(r.w)).set("h", b.float_val(r.h)).build()
 
-priv fn inline_val(b: Json_builder$@, n: Inline$@): Val
-    $ob: Obj_builder = b.obj().set("text", b.str_val(n.text()))
+priv fn inline_val(b: Json_builder$@, n: Inline$@): Value
+    $ob: Object_builder = b.obj().set("text", b.str_val(n.text()))
     if n.style.len > 0
         ob = ob.set("style", b.str_val(n.style))
     if n.href.len > 0
@@ -349,7 +349,7 @@ priv fn inline_val(b: Json_builder$@, n: Inline$@): Val
         ob = ob.set("refers", b.str_val(n.refers))
     return ob.build()
 
-priv fn sizes_val(b: Json_builder$@, specs: List<|F32?|>$@): Val //<
+priv fn sizes_val(b: Json_builder$@, specs: List<|F32?|>$@): Value //<
     //< Writes the list of column widths and row heights
     //<
     //< An unset entry is null (packed together, the entries would shift).
@@ -362,10 +362,10 @@ priv fn sizes_val(b: Json_builder$@, specs: List<|F32?|>$@): Val //<
             out = out.push(b.null_val())
     return out.build()
 
-fn block_val(b: Json_builder$@, blk: Block$@): Val //< writes one block and its tree as text
+fn block_val(b: Json_builder$@, blk: Block$@): Value //< writes one block and its tree as text
     //<
     //< An empty field is not added.
-    $ob: Obj_builder = b.obj().set("style", b.str_val(blk.style))
+    $ob: Object_builder = b.obj().set("style", b.str_val(blk.style))
     if blk.name.len > 0
         ob = ob.set("name", b.str_val(blk.name))
     if f: = blk.frame
@@ -406,7 +406,7 @@ fn block_val(b: Json_builder$@, blk: Block$@): Val //< writes one block and its 
         ob = ob.set("children", cs.build())
     return ob.build()
 
-priv fn chrome_into(ob: Obj_builder, b: Json_builder$@, key: U8[], band: Block$@): Obj_builder //<
+priv fn chrome_into(ob: Object_builder, b: Json_builder$@, key: U8[], band: Block$@): Object_builder //<
     //< Writes one band into the text
     //<
     //< A band with no text is not written (an empty band matches the default).
@@ -414,7 +414,7 @@ priv fn chrome_into(ob: Obj_builder, b: Json_builder$@, key: U8[], band: Block$@
         return ob
     return ob.set(key, block_val(b, band))
 
-priv const spacing: Sz = 1 //< the width of one indent step
+priv const SPACING: Sz = 1 //< the width of one indent step
     //<
     //< Caution: **Do not make it 0** — 0 means "all on one line" (see the header). The reader skips
     //< whitespace, so changing it leaves old texts readable.
@@ -430,16 +430,16 @@ fn save(d: Doc$@, sheet: Sheet$@, out: Str_builder$@) //<
     $blocks: = b.arr()
     for $i: Sz = 0; i < d.blocks.len; i += 1
         blocks = blocks.push(block_val(b@, d.blocks.get(i)))
-    $ob: Obj_builder = b.obj().set("kspage", b.int_val(version))
+    $ob: Object_builder = b.obj().set("kspage", b.int_val(VERSION))
         .set("sheet", sheet_val(b@, sheet)).set("blocks", blocks.build())
     // The page's header and footer. With empty text they are not written.
     ob = chrome_into(ob, b@, "header", d.header)
     ob = chrome_into(ob, b@, "footer", d.footer)
-    ob.build().dump(out, spacing)
+    ob.build().dump(out, SPACING)
 
 // ---- reading back ----
 
-priv fn present(v: Val): Bool //< whether a field is present
+priv fn present(v: Value): Bool //< whether a field is present
     //<
     //< `null` counts as "not present".
     switch v
@@ -448,10 +448,10 @@ priv fn present(v: Val): Bool //< whether a field is present
     default {}
     return true
 
-priv fn as_f32(v: Val, dflt: F32): F32
+priv fn as_f32(v: Value, dflt: F32): F32
     return F32::v.as_f64().unwrap_or(dflt)
 
-priv fn checked_f32(v: Val, dflt: F32, fits: fn(got: F64): Bool): F32!Store_error //<
+priv fn checked_f32(v: Value, dflt: F32, fits: fn(got: F64): Bool): F32!Store_error //<
     //< Reads a length or a size only if it is inside the allowed range
     //<
     //< As `checked` for an integer: **the range is `kspage/model/limit`'s**, and one outside it
@@ -461,7 +461,7 @@ priv fn checked_f32(v: Val, dflt: F32, fits: fn(got: F64): Bool): F32!Store_erro
         throw .out_of_range
     return F32::got
 
-priv fn read_font(v: Val, dflt: Font): Font!Store_error
+priv fn read_font(v: Value, dflt: Font): Font!Store_error
     $out: Font = dflt
     if present(v.get("family"))
         out.family = v.get("family").as_str().unwrap_or("")
@@ -470,7 +470,7 @@ priv fn read_font(v: Val, dflt: Font): Font!Store_error
     out.italic = v.get("italic").as_bool().unwrap_or(dflt.italic)
     return out
 
-fn read_spec(v: Val): Font_spec!Store_error //< builds the font settings from the text
+fn read_spec(v: Value): Font_spec!Store_error //< builds the font settings from the text
     //<
     //< A field that is absent, or of another kind, stays "not set", as in `read_ink`.
     $spec: Font_spec = paint.inherit_all()
@@ -483,7 +483,7 @@ fn read_spec(v: Val): Font_spec!Store_error //< builds the font settings from th
     spec.italic = v.get("italic").as_bool()
     return spec
 
-fn read_ink(v: Val): Ink //< builds a color's settings from the text
+fn read_ink(v: Value): Ink //< builds a color's settings from the text
     //<
     //< A text that does not read means "not set" (not a half-built black).
     $ink: Ink = paint.inherit_ink()
@@ -497,7 +497,7 @@ fn read_ink(v: Val): Ink //< builds a color's settings from the text
     ink.strike = v.get("strike").as_bool()
     return ink
 
-fn read_style(sheet: Sheet$@, v: Val): Style$@!Store_error //<
+fn read_style(sheet: Sheet$@, v: Value): Style$@!Store_error //<
     //< Builds one style from the text, adds it to the end of the table and returns it
     //<
     //< `Sheet.add` sets the defaults (setting them here too would put the default in two places).
@@ -561,7 +561,7 @@ fn read_style(sheet: Sheet$@, v: Val): Style$@!Store_error //<
         s.arrange = style.arrange_from(v.get("arrange").as_str().unwrap_or(""))
     return s
 
-priv fn read_sheet(v: Val, arena: Arena$@): Sheet$@!Store_error
+priv fn read_sheet(v: Value, arena: Arena$@): Sheet$@!Store_error
     sheet: = Sheet.new(read_font(v.get("root"), font.default_root())!, arena)
     sheet.paper = read_paper(v)!
     styles: = v.get("styles").arr_list(arena)
@@ -569,7 +569,7 @@ priv fn read_sheet(v: Val, arena: Arena$@): Sheet$@!Store_error
         read_style(sheet, styles.get(i))!
     return sheet
 
-priv fn read_rect(v: Val): Rect!Store_error
+priv fn read_rect(v: Value): Rect!Store_error
     return Rect::{
         .x = checked_f32(v.get("x"), 0.0, limit.length_fits)!,
         .y = checked_f32(v.get("y"), 0.0, limit.length_fits)!,
@@ -577,7 +577,7 @@ priv fn read_rect(v: Val): Rect!Store_error
         .h = checked_f32(v.get("h"), 0.0, limit.length_fits)!,
     }
 
-priv fn read_sizes(v: Val, into: List<|F32?|>$@, arena: Arena$@): Void!Store_error //<
+priv fn read_sizes(v: Value, into: List<|F32?|>$@, arena: Arena$@): Void!Store_error //<
     //< Reads the list and appends it to `into`
     //<
     //< null means "not set".
@@ -589,18 +589,18 @@ priv fn read_sizes(v: Val, into: List<|F32?|>$@, arena: Arena$@): Void!Store_err
             spec = .some(checked_f32(got, 0.0, limit.length_fits)!)
         into.push(spec)
 
-priv fn span_of(v: Val): Sz!Store_error //< reads the size of a merge
+priv fn span_of(v: Value): Sz!Store_error //< reads the size of a merge
     //<
     //< Absent, it is 1 (not merged).
     return checked(v, 1I64, limit.span_fits)
 
-fn read_block(v: Val, arena: Arena$@): Block$@!Store_error //<
+fn read_block(v: Value, arena: Arena$@): Block$@!Store_error //<
     //< Builds one block, with its whole tree, from the text
     //<
     //< It is the counterpart of `block_val`.
     return read_block_at(v, arena, 1)
 
-priv fn read_block_at(v: Val, arena: Arena$@, depth: Sz): Block$@!Store_error //<
+priv fn read_block_at(v: Value, arena: Arena$@, depth: Sz): Block$@!Store_error //<
     //< `read_block` for a block `depth` levels down (`limit.nesting_fits`)
     if !limit.nesting_fits(depth)
         throw .out_of_range
@@ -651,7 +651,7 @@ fn load(src: U8[], arena: Arena$@): Loaded!Store_error //<
     // the product stops every saved document from opening ("An earlier name is not read" in
     // `../docs/DESIGN-application.md`).
     said: = root.val.get("kspage").as_int64().unwrap_or(0)
-    if said != version
+    if said != VERSION
         throw .unknown_version
     d: = Doc.new(arena)
     blocks: = root.val.get("blocks").arr_list(arena)

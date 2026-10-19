@@ -33,7 +33,7 @@ $tcb: Task
 $stack: U8[4096]
 $ln: con.Line
 
-const console_timeout_ms: U32 = 8000 //<
+const CONSOLE_TIMEOUT_MS: U32 = 8000 //<
     //< The limit on waiting for the console to become usable [ms]
     //<
     //< Caution: **Keep it finite.** A start-up with no USB attached never gets configured. So
@@ -67,7 +67,7 @@ fn probe_task(_arg: Void$@): Void
     // It carries on even if USB does not start (it beeps nine times). The LEDs and the matrix can
     // still be seen then.
     _usb: = boot.usb_up()
-    _console: = boot.wait_configured(console_timeout_ms)
+    _console: = boot.wait_configured(CONSOLE_TIMEOUT_MS)
 
     // It does not return.
     $round: U32 = 0
@@ -96,14 +96,14 @@ fn ksos_main()
 //   [2]    … a line over 64 bytes, sent split; reaching the `<END` at its end shows that the split
 //            and the PID alternation are right. Lines 2 and 3 are queued while line 1 is sent.
 // ==========================================
-const line_interval_ms: U32 = 500 //<
+const LINE_INTERVAL_MS: U32 = 500 //<
     //< The interval between lines, and how many times they are sent
     //<
     //< Any faster and the Serial Monitor cannot be read.
-const repeats: U32 = 4
+const REPEATS: U32 = 4
 
 fn console_stage()
-    for _i in Range.asc(Sz::repeats)
+    for _i in Range.asc(Sz::REPEATS)
         // write only queues; poll_once inside pump does the actual sending, one packet at a time.
         // It returns false when the queue is full. But a dropped line is simply written again next
         // round. So nothing is resent here (not flooding the queue comes first).
@@ -112,7 +112,7 @@ fn console_stage()
             .write("ksos: [2] \
                 START>0123456789012345678901234567890123456789012345678901234567890123456789<END\r\n")
         _c: = usb.write("ksos: [3] hello from RP2040 over USB CDC\r\n")
-        boot.pump(line_interval_ms)
+        boot.pump(LINE_INTERVAL_MS)
 
 // ==========================================
 // Checks whether the calendar RTC (ksos/drivers/rp2040/rtc) keeps ticking, from 2026-07-24
@@ -130,7 +130,7 @@ fn rtc_stage_init(): Bool //< starts it
     //< Caution: Call it after `clocks.init()` (clk_rtc is supplied there).
     initial: = rtc.Date_time::{ .year = 2026, .month = 7, .day = 24, .dotw = 5, .hour = 12,
         .minute = 0, .second = 0 }
-    rtc.init(initial, clocks.rtc_hz - 1) catch
+    rtc.init(initial, clocks.RTC_HZ - 1) catch
         return false
     rtc_ready = true
     return true
@@ -188,17 +188,17 @@ fn rtc_stage(ln: con.Line$@)
 //   3. all off … whether it returns to Low (the latch)
 // ==========================================
 
-const step_ms: U32 = 1000 //< how long one step is shown [ms]
+const STEP_MS: U32 = 1000 //< how long one step is shown [ms]
     //<
     //< Make it long enough for the eye to follow (too fast and it ends at "I think it lit").
 
 priv $leds_ready: Bool = false
-$px: U32[board.ws2812_count] = ::{}
+$px: U32[board.WS2812_COUNT] = ::{}
 
 fn leds_stage_init(): Bool //< starts it
     //<
     //< false means the data line's PWM could not be set up.
-    ws2812.init(board.ws2812_pin) catch
+    ws2812.init(board.WS2812_PIN) catch
         return false
     leds_ready = true
     return true
@@ -206,7 +206,7 @@ fn leds_stage_init(): Bool //< starts it
 priv fn leds_dim(r: Bool, g: Bool, b: Bool): U32 //< the colour to send
     //<
     //< **The brightness comes from the limit in board** (do not write 0xff here).
-    lv: = board.ws2812_level
+    lv: = board.WS2812_LEVEL
     $c: U32 = 0
     if r
         c |= lv << 16
@@ -231,11 +231,11 @@ fn leds_stage(ln: con.Line$@)
         con.say(ln, "[led]", "FAILED to set up pwm for the data line")
         return
     leds_fill(leds_dim(true, false, false))
-    leds_show(ln, "all red", step_ms)
+    leds_show(ln, "all red", STEP_MS)
     leds_fill(leds_dim(false, true, false))
-    leds_show(ln, "all green", step_ms)
+    leds_show(ln, "all green", STEP_MS)
     leds_fill(leds_dim(false, false, true))
-    leds_show(ln, "all blue", step_ms)
+    leds_show(ln, "all blue", STEP_MS)
 
     con.say(ln, "[led]", "one white, walking")
     for $i: Sz = 0; i < px.len; i += 1
@@ -245,4 +245,4 @@ fn leds_stage(ln: con.Line$@)
         boot.pump(200)
 
     leds_fill(0)
-    leds_show(ln, "all off", step_ms)
+    leds_show(ln, "all off", STEP_MS)

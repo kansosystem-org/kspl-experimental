@@ -1,7 +1,7 @@
 //< The tree a regular-expression pattern compiles into, and the program written from the tree
 //<
-//< **It is not meant for direct use**, apart from the limits `max_groups`, `max_repeat_count`
-//< and `max_program_size`; compiling and matching are in `std/regex`.
+//< **It is not meant for direct use**, apart from the limits `MAX_GROUPS`, `MAX_REPEAT_COUNT`
+//< and `MAX_PROGRAM_SIZE`; compiling and matching are in `std/regex`.
 
 // ==========================================
 // **Both** compiling and matching (`regex.kspl`) build on this, so the tree lives below both:
@@ -10,18 +10,18 @@
 import "std/ds" { List }
 import "std/mem" + { dealloc }
 
-pub const max_groups: Sz = 9 //< how many capturing groups a pattern can have.
+pub const MAX_GROUPS: Sz = 9 //< how many capturing groups a pattern can have.
     //<
     //< Caution: **Refuse a pattern that exceeds it** (`too_many_groups`); otherwise the tenth group
     //< onward silently comes back empty. 9 matches `\1`…`\9` and sets the size a Match holds.
 
-pub const max_program_size: Sz = 20000 //< the most states a compiled pattern can hold
+pub const MAX_PROGRAM_SIZE: Sz = 20000 //< the most states a compiled pattern can hold
     //<
     //< A search's memory and its time per byte grow with them, so a pattern past it is refused
     //< (`too_large`). A counted repetition is written out round by round, so `(a{1000}){1000}`
     //< would hold a million.
 
-pub const max_repeat_count: Sz = 1000 //< the largest `{m,n}` count accepted, as in RE2 and Go.
+pub const MAX_REPEAT_COUNT: Sz = 1000 //< the largest `{m,n}` count accepted, as in RE2 and Go.
     //<
     //< Caution: **Refuse a count that exceeds it** (`invalid_repeat`), as a count no engine
     //< accepts would make a pattern that works here alone.
@@ -30,15 +30,15 @@ struct Slots //< what each capturing group caught; `-1` means it did not take pa
     //<
     //< **`-1` is not 0**: an empty match has `start == end`.
     count: Sz
-    start: Sz[max_groups]
-    end: Sz[max_groups]
+    start: Sz[MAX_GROUPS]
+    end: Sz[MAX_GROUPS]
 
 fn reset_slots( //< marks every group as not having taken part
     c: Slots$@, //< the slots to clear
     count: Sz, //< how many groups the pattern has
 )
     c.count = count
-    for i in Range.asc(max_groups)
+    for i in Range.asc(MAX_GROUPS)
         c.start[i] = -1
         c.end[i] = -1
 
@@ -60,7 +60,7 @@ struct Rx_node //< one node of a compiled pattern; `kind` decides which fields m
     lazy: Bool //<
         //< For .repeat/.group_repeat: the shortest match (`*?` `+?` `??` `{m,n}?`)
     neg: Bool //< for .class: `[^...]`
-    set: Bool[byte_count] //< for .class: the membership table
+    set: Bool[BYTE_COUNT] //< for .class: the membership table
     sub: Rx_node$@ //< for .repeat: the quantified atom; for .group_repeat: the repeated group
     alts: List<|List<|Rx_node$@|>|> //< for .group: one atom list per alternative
     gidx: I32 //<
@@ -98,11 +98,11 @@ fn new_group_node( //< one new group node, with its alternatives
     n.gidx = gidx
     return n
 
-const byte_count: Sz = 256 //< how many values one byte takes: a class's table has a slot each
+const BYTE_COUNT: Sz = 256 //< how many values one byte takes: a class's table has a slot each
 
 fn new_class_node(): Rx_node$@ //< one new `[...]` node with an empty membership table
     n: = new_node(.class)
-    for i in Range.asc(byte_count)
+    for i in Range.asc(BYTE_COUNT)
         n.set[i] = false
     return n
 
@@ -200,7 +200,7 @@ impl Emitter
         //<
         //< Caution: **Stop writing the copies of a repetition once it is full.** `(a{1000}){1000}`
         //< would otherwise write a million steps before compile() refuses them.
-        return r.states > max_program_size
+        return r.states > MAX_PROGRAM_SIZE
 
     // The emitter walks the group nesting as the parse did, so it goes no deeper than
     // `max_nesting_depth`, which compile() already held against the stack.

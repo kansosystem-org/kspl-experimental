@@ -23,7 +23,7 @@ struct Line //< one record line
     text: U8[]
     doc: U8[]
 
-priv const col: U8 = '\t' //< the field separator
+priv const COL: U8 = '\t' //< the field separator
     //<
     //< Not whitespace, which appears inside the text.
 
@@ -168,7 +168,7 @@ priv struct Held //< the marks carried across a body's members
     attrs: U8[]
     vis: U8[]
 
-priv const part_mark: U8 = '~' //<
+priv const PART_MARK: U8 = '~' //<
     //< What separates a declaration's key from the part of it a row describes
     //<
     //< **It appears in no name**, so a key holding one is a part. A parameter is
@@ -177,7 +177,7 @@ priv const part_mark: U8 = '~' //<
     //< **A part does not sort right after its own declaration**: `~` sorts after the letters, so
     //< `sub`'s parts land after `sub_from`. **The reader finds the owner from the key.**
 
-priv const file_key: U8[] = "~" //<
+priv const FILE_KEY: U8[] = "~" //<
     //< The key for the file's own description
     //<
     //< **The mark alone is no declaration's key**, so the row cannot be mistaken for one. It is not
@@ -188,7 +188,7 @@ priv fn param_key(key: U8[], at: Sz, name: U8[]): U8[] //< the key of one parame
         return ""
     $s: = Str_builder.new()
     defer s.free()
-    s.s(key).c(part_mark).s("\{at:02\}").c('.').s(name)
+    s.s(key).c(PART_MARK).s("\{at:02\}").c('.').s(name)
     return base_core.arena.dup_str(s.slice())
 
 priv fn return_key(key: U8[]): U8[] //< the key of a declaration's return value
@@ -197,7 +197,7 @@ priv fn return_key(key: U8[]): U8[] //< the key of a declaration's return value
     if key.len == 0
         return ""
     s: = base_core.arena.text()
-    s.s(key).c(part_mark).c(part_mark)
+    s.s(key).c(PART_MARK).c(PART_MARK)
     return s.take()
 
 priv fn add_parts(lines: List<|Line|>$@, key: U8[], n: Ast_node$@, src: U8[]) //<
@@ -367,11 +367,11 @@ priv fn collect_item(item: Ast_node$@, src: U8[], lines: List<|Line|>$@) //<
     default {}
 
 fn is_file_row(key: U8[]): Bool //< whether the line is the file's own description
-    return key.equals(file_key)
+    return key.equals(FILE_KEY)
 
 fn owner_of(key: U8[]): U8[] //<
     //< The key of the declaration a part's line describes; empty where the line is no part
-    if mark: = key.find_char(part_mark)
+    if mark: = key.find_char(PART_MARK)
         if mark > 0
             return key.sub(0, mark)
     return ""
@@ -381,7 +381,7 @@ fn part_name_of(key: U8[]): U8[] //<
     //<
     //< **A parameter has its position in front of its name** (`param_key`), so the name starts
     //< after the `.`. The return value has the mark a second time and no name.
-    if mark: = key.find_char(part_mark)
+    if mark: = key.find_char(PART_MARK)
         if mark > 0
             rest: = key.sub_from(mark + 1)
             if dot: = rest.find_char('.')
@@ -391,13 +391,13 @@ fn part_name_of(key: U8[]): U8[] //<
 fn surface_lines(raw_root: Ast_node$@, src: U8[]): List<|Line|> //<
     //< One file's lines, in ascending key order
     //<
-    //< **The file's own description goes under the bare mark** (see `file_key`); the reader decides
+    //< **The file's own description goes under the bare mark** (see `FILE_KEY`); the reader decides
     //< what to do with it. A file with no description gets no line.
     $lines: = List<|Line|>.new(base_core.arena)
     if raw_root != null && src.len > 0
         said: = file_doc(src)
         if said.len > 0
-            add(lines@, file_key, "file", said)
+            add(lines@, FILE_KEY, "file", said)
         for item in raw_root.children
             collect_item(item, src, lines@)
     return lines.order_by(fn(a: Line@, b: Line@; ): I32 {
@@ -412,10 +412,10 @@ fn render_surface(raw_root: Ast_node$@, src: U8[], file: U8[]): U8[] //<
     lines: = surface_lines(raw_root, src)
     out: = base_core.arena.text()
     for l in lines
-        out.s(file).c(col).s(l.key).c(col).s(l.text)
+        out.s(file).c(COL).s(l.key).c(COL).s(l.text)
         // **The column is left off where there is no documentation**, or every such entry carries a
         // trailing separator.
         if l.doc.len > 0
-            out.c(col).s(l.doc)
+            out.c(COL).s(l.doc)
         out.c('\n')
     return out.take()

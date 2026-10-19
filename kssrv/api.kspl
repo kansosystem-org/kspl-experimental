@@ -1,6 +1,6 @@
 //< The endpoints under `/api/`
 //<
-//< To add an endpoint, add one row to `routes` and one case to `Api.queue`. How a response is
+//< To add an endpoint, add one row to `ROUTES` and one case to `Api.queue`. How a response is
 //< queued (`conn.queue_response`) lives in `kssrv/conn.kspl`.
 //< **Do not mix the local-use endpoints (`--local`) with the outward-facing ones.** The file
 //< endpoints read and write under the root, so facing outward they **do not exist**. The car's
@@ -17,13 +17,13 @@ import "std/str" { Str_builder }
 import "std/sys"
 import "std/url"
 
-const api_prefix: U8[] = "/api/" //< the JSON API's prefix
+const API_PREFIX: U8[] = "/api/" //< the JSON API's prefix
     //<
     //< Below it a routing table answers, not static serving.
 
-const bearer: U8[] = "Bearer " //< the prefix before the token in the `Authorization` header
+const BEARER: U8[] = "Bearer " //< the prefix before the token in the `Authorization` header
 
-fn queue_json(c: conn.Conn$@, status: I32, val: json.Val, keep: Bool, allow: U8[] = "") //<
+fn queue_json(c: conn.Conn$@, status: I32, val: json.Value, keep: Bool, allow: U8[] = "") //<
     //< Builds one JSON value and queues it as the response; `allow` is a 405's `Allow`
     $body: = Str_builder.new()
     defer body.free()
@@ -50,7 +50,7 @@ fn queue_api_status(c: conn.Conn$@, ctx: conn.Ctx$@, keep: Bool) //<
             .set("train_cpu_ms", b.int_val(ctx.p.train_ms))
             .set("agreement", b.float_val(ctx.p.agreement))
             .set("agreement_checked", b.int_val(ctx.p.checked))
-            .set("command_valid_ms", b.int_val(pilot.command_valid_ms)).build()
+            .set("command_valid_ms", b.int_val(pilot.COMMAND_VALID_MS)).build()
     // Caution: **Say whether it is for local use.** Otherwise the page shows the local tools even
     // where there are no file endpoints: buttons that do nothing. Without the token this is a 401,
     // so nothing leaks.
@@ -64,7 +64,7 @@ fn queue_api_status(c: conn.Conn$@, ctx: conn.Ctx$@, keep: Bool) //<
         .set("connections_total", b.int_val(conn.stats.connections_total))
         .set("connections_open", b.int_val(conn.stats.connections_open))
         .set("connections_refused", b.int_val(conn.stats.connections_refused))
-        .set("max_connections", b.int_val(conn.max_conns))
+        .set("max_connections", b.int_val(conn.MAX_CONNS))
         .set("heap_bytes", b.int_val(heap_used_bytes())).set("pilot", pilot_val).build()
     queue_json(c, 200, val, keep)
 
@@ -119,7 +119,7 @@ fn queue_api_file(c: conn.Conn$@, t: conn.Target, req: http.Request$@, root: U8[
         queue_json_error(c, 400)
         return
     path: = fs.join(root, rel, c.arena)
-    // Only GET and PUT come here (`routes`).
+    // Only GET and PUT come here (`ROUTES`).
     if req.method.equals("GET")
         queue_get_file(c, path, keep)
         return
@@ -195,9 +195,9 @@ fn token_matches(given: U8[], want: U8[]): Bool //<
 fn authorized(req: http.Request$@, token: U8[]): Bool
     if v: = req.headers.find("Authorization")
         given: = v
-        if !given.starts_with(bearer)
+        if !given.starts_with(BEARER)
             return false
-        return token_matches(given.sub_from(bearer.len), token)
+        return token_matches(given.sub_from(BEARER.len), token)
     return false
 
 fn queue_api_car(c: conn.Conn$@, req: http.Request$@, p: pilot.Pilot$@, keep: Bool) //<
@@ -215,19 +215,19 @@ fn queue_api_car(c: conn.Conn$@, req: http.Request$@, p: pilot.Pilot$@, keep: Bo
     // As a default, it would turn a broken request into a valid observation.
     dist: = doc.val.get("dist_mm").as_int64().unwrap_or(-1I64)
     line: = doc.val.get("line").as_int64().unwrap_or(-1I64)
-    if dist < 0I64 || line < 0I64 || line >= I64::pilot.line_patterns
+    if dist < 0I64 || line < 0I64 || line >= I64::pilot.LINE_PATTERNS
         queue_json_error(c, 400)
         return
     seq: = doc.val.get("seq").as_int64().unwrap_or(0I64)
     obs: = pilot.Obs::{ .dist_mm = dist, .line = line }
     // The work uses the connection's arena, which `conn_build` rewinds per request.
     act: = pilot.decide(p, obs, c.arena)
-    m: = pilot.maneuvers[act]
+    m: = pilot.MANEUVERS[act]
     conn.stats.commands += 1I64
     $b: = Json_builder.new(c.arena)
     val: = b.obj().set("seq", b.int_val(seq)).set("cmd", b.str_val(m.name))
         .set("lon", b.int_val(m.lon)).set("lat", b.int_val(m.lat))
-        .set("rot", b.int_val(m.rot)).set("valid_ms", b.int_val(pilot.command_valid_ms)).build()
+        .set("rot", b.int_val(m.rot)).set("valid_ms", b.int_val(pilot.COMMAND_VALID_MS)).build()
     queue_json(c, 200, val, keep)
 
 fn queue_api_pilot(c: conn.Conn$@, p: pilot.Pilot$@, keep: Bool) //<
@@ -311,7 +311,7 @@ priv struct Route //< one entry point under `/api/`
     methods: U8[] //< the methods it takes, as a 405's `Allow` names them; another one is a 405
     api: Api //< the endpoint it reaches
 
-priv const routes: Route[7] = ::{ //<
+priv const ROUTES: Route[7] = ::{ //<
     //< Every entry point, with who may reach it and by which methods
     //<
     //< **The guards run once, here, for every row**: decided per endpoint, a new one forgets one.
@@ -340,7 +340,7 @@ fn queue_api(c: conn.Conn$@, t: conn.Target, req: http.Request$@, ctx: conn.Ctx$
     if ctx.is_local() && !authorized(req, ctx.token)
         queue_json_error(c, 401)
         return
-    for r in routes
+    for r in ROUTES
         if !t.path.equals(r.path)
             continue
         if !reaches(c, ctx, r.reach)

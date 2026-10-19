@@ -29,14 +29,14 @@ struct Position
 // Utility methods
 // ==========================================
 impl Json_builder
-    fn position(r: Self$@, line: Sz, col: Sz): json.Val
+    fn position(r: Self$@, line: Sz, col: Sz): json.Value
         return r.obj().set("line", r.int_val(I32::line))
             .set("character", r.int_val(I32::col)).build()
 
-    fn range(r: Self$@, sl: Sz, sc: Sz, el: Sz, ec: Sz): json.Val
+    fn range(r: Self$@, sl: Sz, sc: Sz, el: Sz, ec: Sz): json.Value
         return r.obj().set("start", r.position(sl, sc)).set("end", r.position(el, ec)).build()
 
-    fn range_in(r: Self$@, src: U8[], off: Sz, len: Sz, starts: List<|Sz|>$@): json.Val //<
+    fn range_in(r: Self$@, src: U8[], off: Sz, len: Sz, starts: List<|Sz|>$@): json.Value //<
         //< The LSP range of `len` bytes at `off` in `src`, cut short at its end
         at: = off if off <= src.len else src.len
         end: = at + len if at + len <= src.len else src.len
@@ -44,7 +44,7 @@ impl Json_builder
         e: = src.get_line_char(end, starts)
         return r.range(s.line, s.character, e.line, e.character)
 
-    fn location(r: Self$@, uri: U8[], sl: Sz, sc: Sz, el: Sz, ec: Sz): json.Val
+    fn location(r: Self$@, uri: U8[], sl: Sz, sc: Sz, el: Sz, ec: Sz): json.Value
         $safe_uri: = uri.with_forward_slashes()
         defer safe_uri.free()
 
@@ -110,46 +110,46 @@ impl Str_builder
     fn ensure_kspl_ext(r: Self$@) //<
         //< It adds the default extension to a URI or path string lacking one (shared by the LSP)
         //<
-        //< `source_ext` in `base/core.kspl` is the one.
+        //< `SOURCE_EXT` in `base/core.kspl` is the one.
         if !r.slice().has_kspl_ext()
-            r.s(base_core.source_ext)
+            r.s(base_core.SOURCE_EXT)
 // ==========================================
 // Reading a message, and writing one
 // ==========================================
 
 // The LSP's symbol kinds that are sent. The numbers are the protocol's (`SymbolKind`).
-const s_namespace: I32 = 3I32
-const s_method: I32 = 6I32
-const s_field: I32 = 8I32
-const s_enum: I32 = 10I32
-const s_interface: I32 = 11I32
-const s_function: I32 = 12I32
-const s_variable: I32 = 13I32
-const s_constant: I32 = 14I32
-const s_member: I32 = 22I32
-const s_struct: I32 = 23I32
-const s_type: I32 = 26I32
+const S_NAMESPACE: I32 = 3I32
+const S_METHOD: I32 = 6I32
+const S_FIELD: I32 = 8I32
+const S_ENUM: I32 = 10I32
+const S_INTERFACE: I32 = 11I32
+const S_FUNCTION: I32 = 12I32
+const S_VARIABLE: I32 = 13I32
+const S_CONSTANT: I32 = 14I32
+const S_MEMBER: I32 = 22I32
+const S_STRUCT: I32 = 23I32
+const S_TYPE: I32 = 26I32
 
 // The LSP's diagnostic tags (`DiagnosticTag`), and the document sync it asks for (`Full`).
-const tag_unnecessary: I32 = 1I32
-const tag_deprecated: I32 = 2I32
-const sync_full: I32 = 1I32
+const TAG_UNNECESSARY: I32 = 1I32
+const TAG_DEPRECATED: I32 = 2I32
+const SYNC_FULL: I32 = 1I32
 
 // The error codes a refusal is answered with. `InvalidParams`: a parameter is missing or of the
 // wrong kind. `RequestFailed`: well formed, refused for a reason the message gives the person.
-const invalid_params: I32 = -32602I32
-const request_failed: I32 = -32803I32
+const INVALID_PARAMS: I32 = -32602I32
+const REQUEST_FAILED: I32 = -32803I32
 
-const max_content_length: I32 = 128 * 1024 * 1024 //<
+const MAX_CONTENT_LENGTH: I32 = 128 * 1024 * 1024 //<
     //< The limit on a Content-Length, which prevents memory exhaustion and digit overflow
     //<
     //< It leaves ample room for an ordinary LSP message.
-priv const max_header_line_len: Sz = 8192 //< the limit on one header line
+priv const MAX_HEADER_LINE_LEN: Sz = 8192 //< the limit on one header line
     //<
     //< A real header fits in a few dozen bytes; this stops line_buf growing without limit when a
     //< peer never sends a newline.
 
-fn offset_at(src: U8[], params: json.Val): Sz //<
+fn offset_at(src: U8[], params: json.Value): Sz //<
     //< The offset in `src` of the position a request names (`params.position`)
     pos: = params.get("position")
     return src.get_offset_from_pos(pos.get("line").as_int().unwrap_or(0),
@@ -195,7 +195,7 @@ fn read_content_length(): I32!Lsp_error
                 throw .format_error
             prev_was_nl = true
             declared: =
-                jsonrpc.content_length(line_buf.slice(), max_content_length) catch
+                jsonrpc.content_length(line_buf.slice(), MAX_CONTENT_LENGTH) catch
                 throw .format_error
             if n: = declared
                 len = I32::n
@@ -203,12 +203,12 @@ fn read_content_length(): I32!Lsp_error
             continue
 
         prev_was_nl = false
-        if line_buf.len >= max_header_line_len
+        if line_buf.len >= MAX_HEADER_LINE_LEN
             throw .format_error
         line_buf.c(ch)
 
-priv fn build_jsonrpc_envelope($b: Json_builder, id_val: json.Val): json.Obj_builder
-    $obj: = b.obj().set("jsonrpc", b.str_val(jsonrpc.version))
+priv fn build_jsonrpc_envelope($b: Json_builder, id_val: json.Value): json.Object_builder
+    $obj: = b.obj().set("jsonrpc", b.str_val(jsonrpc.VERSION))
     switch id_val
     case .null_val
         obj = obj.set("id", b.null_val())
@@ -216,24 +216,24 @@ priv fn build_jsonrpc_envelope($b: Json_builder, id_val: json.Val): json.Obj_bui
         obj = obj.set("id", id_val)
     return obj
 
-priv fn dump_and_send_val(val: json.Val)
+priv fn dump_and_send_val(val: json.Value)
     $body: = Str_builder.new()
     defer body.free()
     val.dump(body@)
     send_rpc_message(body.slice())
 
-priv fn dump_and_send(obj: json.Obj_builder)
+priv fn dump_and_send(obj: json.Object_builder)
     dump_and_send_val(obj.build())
 
-fn send_response(id_val: json.Val, result: json.Val, arena: Arena$@)
+fn send_response(id_val: json.Value, result: json.Value, arena: Arena$@)
     b: = Json_builder.new(arena)
     obj: = build_jsonrpc_envelope(b, id_val).set("result", result)
     dump_and_send(obj)
 
-fn send_null_response(id_val: json.Val, arena: Arena$@)
+fn send_null_response(id_val: json.Value, arena: Arena$@)
     send_response(id_val, .null_val, arena)
 
-fn send_error_response(id_val: json.Val, code: I32, msg: U8[], arena: Arena$@)
+fn send_error_response(id_val: json.Value, code: I32, msg: U8[], arena: Arena$@)
     $b: = Json_builder.new(arena)
 
     err_obj: = b.obj().set("code", b.int_val(code)).set("message", b.str_val(msg)).build()
@@ -248,7 +248,7 @@ fn send_diagnostics_list(uri: U8[], diags: List<|base_diag.Lsp_diagnostic|>$@)
     $final_uri: = Str_builder.new()
     defer final_uri.free()
     if !uri.has_kspl_ext()
-        final_uri.s(uri).s(base_core.source_ext)
+        final_uri.s(uri).s(base_core.SOURCE_EXT)
     else
         final_uri.s(uri)
 
@@ -277,10 +277,10 @@ fn send_diagnostics_list(uri: U8[], diags: List<|base_diag.Lsp_diagnostic|>$@)
 
             if is_unnecessary
                 d_obj = d_obj.set("tags",
-                    b.arr().push(b.int_val(tag_unnecessary)).build())
+                    b.arr().push(b.int_val(TAG_UNNECESSARY)).build())
             else if is_deprecated
                 d_obj = d_obj.set("tags",
-                    b.arr().push(b.int_val(tag_deprecated)).build())
+                    b.arr().push(b.int_val(TAG_DEPRECATED)).build())
 
             arr = arr.push(d_obj.build())
 
@@ -293,8 +293,8 @@ fn send_diagnostics_list(uri: U8[], diags: List<|base_diag.Lsp_diagnostic|>$@)
 // ==========================================
 // Private API
 // ==========================================
-priv fn send_publish_diagnostics($b: Json_builder, params: json.Val)
-    msg_obj: = b.obj().set("jsonrpc", b.str_val(jsonrpc.version))
+priv fn send_publish_diagnostics($b: Json_builder, params: json.Value)
+    msg_obj: = b.obj().set("jsonrpc", b.str_val(jsonrpc.VERSION))
         .set("method", b.str_val("textDocument/publishDiagnostics")).set("params", params).build()
     dump_and_send_val(msg_obj)
 
@@ -304,9 +304,9 @@ priv fn send_rpc_message(json_body: U8$[])
     jsonrpc.frame_into(frame@, json_body)
     io.out().s(frame.slice())
     io.out().flush()
-const worker_alive_tag: U8[] = "__KSPL_WORKER_ALIVE__" //< the tag of the liveness marker
-const worker_done_tag: U8[] = "__KSPL_WORKER_DONE__" //< the tag of the completion marker
-const restore_method: U8[] = "$/ksplRestore" //<
+const WORKER_ALIVE_TAG: U8[] = "__KSPL_WORKER_ALIVE__" //< the tag of the liveness marker
+const WORKER_DONE_TAG: U8[] = "__KSPL_WORKER_DONE__" //< the tag of the completion marker
+const RESTORE_METHOD: U8[] = "$/ksplRestore" //<
     //< The notification a restarted worker gets each open document's text by, to hold unanalysed
     //<
     //< It passes between the supervisor and the worker only; no editor sends it. **Named here
@@ -318,11 +318,11 @@ fn send_worker_alive() //<
     //< The supervisor's timeout is **per read** (worker_timeout_ms in server.kspl). Silent past
     //< it, even a live worker is killed, and the client gets a null. A real hang stops this output
     //< too.
-    send_marker(worker_alive_tag)
+    send_marker(WORKER_ALIVE_TAG)
 
 fn send_worker_done() //<
     //< The marker an LSP worker sends to tell the supervisor it finished handling one message
-    send_marker(worker_done_tag)
+    send_marker(WORKER_DONE_TAG)
 
 fn marker_len(tag: U8[]): Sz //< how many bytes the marker for `tag` takes, its NULs included
     return tag.len + 2

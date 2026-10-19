@@ -14,7 +14,7 @@ import "std/tests/fs_test"
 import "std/thread"
 import "std/verdict"
 
-priv const base: U8[] = "out/tmp/kspl_test_tree"
+priv const BASE: U8[] = "out/tmp/kspl_test_tree"
 
 priv fn holds(path: U8[], want: U8[]): Bool //< whether the file at path contains exactly want
     got: = io.read_file(path) catch
@@ -26,11 +26,11 @@ fn test_fs_mkdir_unique()
     verdict.start("[Fs] making a directory nobody took test...")
     arena: = Arena.new(64 * 1024)
     defer arena.free()
-    a: = fs.mkdir_unique(base, "box_", arena) catch panic("mkdir_unique should make a directory")
-    b: = fs.mkdir_unique(base, "box_", arena) catch panic("mkdir_unique should make a second one")
+    a: = fs.mkdir_unique(BASE, "box_", arena) catch panic("mkdir_unique should make a directory")
+    b: = fs.mkdir_unique(BASE, "box_", arena) catch panic("mkdir_unique should make a second one")
     assert(!a.equals(b), "two calls must not return the same directory")
     assert(fs.is_dir(a) && fs.is_dir(b), "both places must stand as directories")
-    leaf: = a.sub_from(base.len + 1)
+    leaf: = a.sub_from(BASE.len + 1)
     assert(leaf.starts_with("box_") && leaf.len == 4 + 16,
         "the name is the prefix and 16 hex digits")
     // A base that cannot contain a directory is refused at once, without trying name after name.
@@ -63,7 +63,7 @@ fn test_fs_write_unique()
     verdict.start("[Fs] writing a file nobody took, for its owner alone test...")
     arena: = Arena.new(64 * 1024)
     defer arena.free()
-    dir: = fs.mkdir_unique(base, "owned_", arena)
+    dir: = fs.mkdir_unique(BASE, "owned_", arena)
         catch panic("mkdir_unique should make a directory")
     a: = fs.write_unique(dir, "page_", ".html", "one", arena) catch
         panic("write_unique should write a file")
@@ -100,7 +100,7 @@ fn test_fs_replace_file()
     verdict.start("[Fs] replacing a file whole, with its mode kept or narrowed test...")
     arena: = Arena.new(64 * 1024)
     defer arena.free()
-    dir: = fs.mkdir_unique(base, "replace_", arena)
+    dir: = fs.mkdir_unique(BASE, "replace_", arena)
         catch panic("mkdir_unique should make a directory")
     doc: = fs.join(dir, "doc.txt", arena)
     fs.replace_file(doc, "one", .kept) catch panic("a new file should be written")
@@ -151,7 +151,7 @@ fn test_fs_write_tree()
     verdict.start("[Fs] writing a tree of files test...")
     arena: = Arena.new(64 * 1024)
     defer arena.free()
-    dir: = fs.mkdir_unique(base, "write_", arena)
+    dir: = fs.mkdir_unique(BASE, "write_", arena)
         catch panic("mkdir_unique should make a directory")
     rels: = U8[][]::{ "top.txt", "a/b/deep.txt" }
     fs.write_tree(dir, rels, U8[][]::{ "top", "deep" }, arena)
@@ -183,7 +183,7 @@ fn test_fs_copy_tree()
     verdict.start("[Fs] copying a tree to a place where nothing stands test...")
     arena: = Arena.new(64 * 1024)
     defer arena.free()
-    dir: = fs.mkdir_unique(base, "copy_", arena) catch panic("mkdir_unique should make a directory")
+    dir: = fs.mkdir_unique(BASE, "copy_", arena) catch panic("mkdir_unique should make a directory")
     from: = fs.join(dir, "from", arena)
     fs.write_tree(from, U8[][]::{ "a.txt", "sub/b.txt", "skipme/c.txt" },
         U8[][]::{ "a", "b", "c" }, arena) catch panic("the tree to copy must be writable")
@@ -274,7 +274,7 @@ fn test_fs_dir_trust() //< dir_trust tells a folder others can write from one th
     verdict.start("[Fs] dir_trust: a folder's owner alone, everyone, and nothing there test...")
     arena: = Arena.new(64 * 1024)
     defer arena.free()
-    dir: = fs.mkdir_unique(base, "trust_", arena)
+    dir: = fs.mkdir_unique(BASE, "trust_", arena)
         catch panic("mkdir_unique should make a directory")
     assert(fs.dir_trust(fs.join(dir, "absent", arena)) == fs.Dir_trust.missing,
         "a folder that is not there is missing")
@@ -347,7 +347,7 @@ fn test_fs_copy_file()
     verdict.start("[Fs] copying one file to a name where nothing stands test...")
     arena: = Arena.new(64 * 1024)
     defer arena.free()
-    dir: = fs.mkdir_unique(base, "copy1_", arena)
+    dir: = fs.mkdir_unique(BASE, "copy1_", arena)
         catch panic("mkdir_unique should make a directory")
     from: = fs.join(dir, "from.txt", arena)
     io.write_file(from, "contents") catch panic("the file to copy must be writable")

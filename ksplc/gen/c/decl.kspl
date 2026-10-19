@@ -26,7 +26,7 @@ import "std/mem" { dealloc }
 import "std/str" { Str_builder }
 import "std/strfmt"
 
-priv const max_alias_dep_depth: Sz = 64 //<
+priv const MAX_ALIAS_DEP_DEPTH: Sz = 64 //<
     //< The depth limit for walking an alias's dependencies
     //<
     //< The same idea as max_type_layout_depth in sema/decl/layout.kspl.
@@ -37,7 +37,7 @@ priv fn write_c_fn_name($w: Writer, fn_name: U8[], s_impl: U8[], verbatim_name: 
     //< The name is kspl_<Impl>_<fn_name>, without doubling the prefix on an fn_name that already
     //< starts with <Impl>_.
     if s_impl.len > 0
-        w = w.s(base_mangle.kspl_prefix)
+        w = w.s(base_mangle.KSPL_PREFIX)
         skip_prefix: =
             fn_name.len > s_impl.len && (fn_name.ptr + s_impl.len)$ == '_' &&
             fn_name.starts_with(s_impl)
@@ -163,7 +163,7 @@ impl Ast_node
                         cg.s("KSPL_UNUSED ")
 
                     if t_node != null && t_node.kind_id != .k_empty &&
-                        !t_node.text.equals(base_core.unknown_type_name)
+                        !t_node.text.equals(base_core.UNKNOWN_TYPE_NAME)
                         t_node.emit_c_decl(cg, p_name, false)
                     else if !sema_type_env.is_unknown(item.type_id) &&
                         !sema_type_env.is_void(item.type_id)
@@ -293,7 +293,7 @@ impl Ast_node
             verbatim_name = sym.uses_verbatim_c_name()
 
         if is_priv_fn
-            cg.s(gen_c_ctx.file_local_word)
+            cg.s(gen_c_ctx.FILE_LOCAL_WORD)
         if is_inline
             cg.s("inline ")
 
@@ -674,7 +674,7 @@ priv fn type_mentions_waiting(cg: Genc_ctx$@, type_id: I32, waiting: Map<|I32, B
         //< It strips pointers, slices, arrays, immutability qualifiers and aliases (the
         //< `B` of `typedef A = B@;` counts).
 
-    if type_id == 0 || depth > max_alias_dep_depth
+    if type_id == 0 || depth > MAX_ALIAS_DEP_DEPTH
         return false
     if waiting.get(type_id).unwrap_or(false)
         return true

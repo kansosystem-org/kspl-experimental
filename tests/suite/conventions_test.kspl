@@ -31,9 +31,9 @@ import "tests/support/conventions_win" as cwin
 import "tests/support/harness"
 import "tests/support/harness_text" as htext
 
-priv const max_comment_lines: Sz = 6
+priv const MAX_COMMENT_LINES: Sz = 6
 
-priv const max_header_lines: Sz = 10 //<
+priv const MAX_HEADER_LINES: Sz = 10 //<
     //< The cap on a file's opening header, wider than a body comment's
     //<
     //< It is still a cap, not a header of any length (Principle 7 in docs/DESIGN-principles.md).
@@ -61,11 +61,11 @@ impl Comment_run
 priv fn check_comments(arena: Arena$@)
     $bad: = List<|U8[]|>.new(arena)
     $seen: Sz = 0
-    for rel in harness.tracked_matching(U8[][]::scan.kspl_specs)
+    for rel in harness.tracked_matching(U8[][]::scan.KSPL_SPECS)
         seen += 1
         check_comment_runs(rel, harness.read_under_root(rel).lines(arena), bad@, arena)
-    n: = arena.text().s("a comment is within \{max_comment_lines\} lines to the next code line, a ")
-        .s("file's header within \{max_header_lines\} (Principle 7 in docs/DESIGN-principles.md)")
+    n: = arena.text().s("a comment is within \{MAX_COMMENT_LINES\} lines to the next code line, a ")
+        .s("file's header within \{MAX_HEADER_LINES\} (Principle 7 in docs/DESIGN-principles.md)")
         .take()
     verdict.check_list(n, seen, "files", bad@,
         "long background belongs on the DESIGN-<subject>.md side")
@@ -115,10 +115,10 @@ priv fn check_comment_runs(rel: U8[], lines: List<|U8[]|>, bad: List<|U8[]|>$@, 
             closed = true
         if !closed && i < lines.len && text.len == 0 && run.len > 0
             continue
-        if run.len > max_comment_lines
+        if run.len > MAX_COMMENT_LINES
             // The first run over the body cap before any declaration is the header (the wider
             // cap).
-            cap: = max_comment_lines if seen_decl else max_header_lines
+            cap: = MAX_COMMENT_LINES if seen_decl else MAX_HEADER_LINES
             if run.len > cap
                 bad
                     .push(arena.text().s(rel).s(":\{run.start\}: \{run.len\} lines ")
@@ -138,7 +138,7 @@ priv fn check_summary_inside(arena: Arena$@) //<
     //< decides that form (`ksplc/docs/SPEC-tools.md`).
     $bad: = List<|U8[]|>.new(arena)
     $seen: Sz = 0
-    for rel in harness.tracked_matching(U8[][]::scan.kspl_specs)
+    for rel in harness.tracked_matching(U8[][]::scan.KSPL_SPECS)
         seen += 1
         lines: = harness.read_under_root(rel).lines(arena)
         $in_raw: = false
@@ -166,13 +166,13 @@ priv fn check_summary_inside(arena: Arena$@) //<
 // does not declare the same name, `Option` gets two spellings (Principle 6). The only file that
 // needs the qualification is one whose own declaration has taken the unqualified name.
 // ==========================================
-priv const decl_heads: U8[][_] = ::{ "struct ", "enum ", "trait ", "typedef ", "fn ", "const " }
+priv const DECL_HEADS: U8[][_] = ::{ "struct ", "enum ", "trait ", "typedef ", "fn ", "const " }
 
 priv fn declares(src: U8[], name: U8[], arena: Arena$@): Bool //<
     //< whether that file declares `name`
     for line in src.lines(arena)
         t: = line.trim_start().strip_prefix("pub ").strip_prefix("priv ")
-        for h in decl_heads
+        for h in DECL_HEADS
             if !t.starts_with(h)
                 continue
             rest: = t.sub_from(h.len)
@@ -222,10 +222,10 @@ priv fn check_lang_prefix(arena: Arena$@)
 
 // ==========================================
 // The language has `T[]::arr` ("Type conversion (`::`) and implicit casts" in
-// `docs/SPEC-language.md`).
+// `docs/SPEC-programming-language.md`).
 // Only a hand-built descriptor over a whole array at its declared length is reported (the form
 // stays for reinterpreting bytes).
-priv const descriptor_exempt: U8[][_] = ::{ "ksplc/tests/negative/deep_const_weakening.kspl",
+priv const DESCRIPTOR_EXEMPT: U8[][_] = ::{ "ksplc/tests/negative/deep_const_weakening.kspl",
     "ksplc/tests/negative/pointer.kspl", "ksplc/tests/win64_arg_abi_test.kspl",
     "ksplc/tests/prog/equiv.kspl" }
 
@@ -317,7 +317,7 @@ priv fn hand_descriptor(raw: U8[], names: List<|U8[]|>@, sizes: List<|Sz|>@, are
 
 // Caution: **Declare the same name twice at different sizes** (`mixed`). Nothing else exercises
 // the branch that leaves such a name unjudged.
-priv const descriptor_src: U8[] =
+priv const DESCRIPTOR_SRC: U8[] =
     """fn probe()
   four: I32[4] = ::{ 0, 0, 0, 0 }
   two: I32[2] = ::{ 0, 0 }
@@ -331,13 +331,13 @@ fn again()
 
 // **Report only the declared length** (a shorter view is correct, and has no fix).
 // `.len = 40` catches a read stopping at one digit.
-priv const descriptor_samples: U8[][_] = ::{ "  s: = I32[]::{ .ptr = four@, .len = 4 };",
+priv const DESCRIPTOR_SAMPLES: U8[][_] = ::{ "  s: = I32[]::{ .ptr = four@, .len = 4 };",
     "  s: = I32[]::{ .ptr = four@, .len = 2 };", "  s: = I32[]::{ .ptr = four[0]@, .len = 4 };",
     "  s: = I32[]::{ .ptr = other@, .len = 4 };", "  s: = I32[]::{ .ptr = mixed@, .len = 4 };",
     "  s: = I32[]::{ .ptr = four@, .len = 40 };",
     "  a: = I32[]::{ .ptr = two@, .len = 1 }; b: = I32[]::{ .ptr = four@, .len = 4 };",
     "  a: = I32[]::{ 1, 2 }; b: = I32[]::{ .ptr = four@, .len = 4 };" }
-priv const descriptor_want: Bool[_] = ::{ true, false, true, false, false, false, true, true } //<
+priv const DESCRIPTOR_WANT: Bool[_] = ::{ true, false, true, false, false, false, true, true } //<
     //< The expected answer for each line of the descriptor samples
     //<
     //< In order: it hits / a shorter view / a form with a `[0]` in between / a name with no
@@ -348,25 +348,25 @@ priv const descriptor_want: Bool[_] = ::{ true, false, true, false, false, false
 priv fn check_descriptor_fires(arena: Arena$@)
     $names: = List<|U8[]|>.new(arena)
     $sizes: = List<|Sz|>.new(arena)
-    array_sizes(descriptor_src, names@, sizes@, arena)
+    array_sizes(DESCRIPTOR_SRC, names@, sizes@, arena)
     $bad: = List<|U8[]|>.new(arena)
-    for i in Range.asc(descriptor_samples.len)
-        got: = hand_descriptor(descriptor_samples[i], names@, sizes@, arena)
-        if got != descriptor_want[i]
+    for i in Range.asc(DESCRIPTOR_SAMPLES.len)
+        got: = hand_descriptor(DESCRIPTOR_SAMPLES[i], names@, sizes@, arena)
+        if got != DESCRIPTOR_WANT[i]
             bad
-                .push(arena.text().s("\"").s(descriptor_samples[i].trim_spaces())
+                .push(arena.text().s("\"").s(DESCRIPTOR_SAMPLES[i].trim_spaces())
                 .s("\" was read as \{got\}").take())
     verdict.check_list("the verdict on a hand-assembled descriptor can fire",
-        descriptor_samples.len, "samples", bad@,
+        DESCRIPTOR_SAMPLES.len, "samples", bad@,
         "the judgment misreads its own samples: mend the judgment, not the table")
 
 priv fn check_descriptors(arena: Arena$@)
     $seen: Sz = 0
     $bad: = List<|U8[]|>.new(arena)
-    for rel in harness.tracked_matching(U8[][]::scan.kspl_specs)
+    for rel in harness.tracked_matching(U8[][]::scan.KSPL_SPECS)
         seen += 1
         $skip: = false
-        for e in descriptor_exempt
+        for e in DESCRIPTOR_EXEMPT
             if rel.equals(e)
                 skip = true
         if skip
@@ -390,14 +390,14 @@ priv fn check_descriptors(arena: Arena$@)
 // Note: If it fails, do not stop using `Map` — design the seed in the form
 // `std/docs/DESIGN-core.md` decides.
 // ==========================================
-priv const untrusted_key_dirs: U8[][_] = ::{ "kssrv/", "ksdb/", "kspage/" }
+priv const UNTRUSTED_KEY_DIRS: U8[][_] = ::{ "kssrv/", "ksdb/", "kspage/" }
 
 priv fn check_map_at_boundary(arena: Arena$@)
     $seen: Sz = 0
     $bad: = List<|U8[]|>.new(arena)
-    for rel in harness.tracked_matching(U8[][]::scan.kspl_specs)
+    for rel in harness.tracked_matching(U8[][]::scan.KSPL_SPECS)
         $inside: = false
-        for d in untrusted_key_dirs
+        for d in UNTRUSTED_KEY_DIRS
             if rel.starts_with(d)
                 inside = true
         if !inside
@@ -419,7 +419,7 @@ priv fn check_map_at_boundary(arena: Arena$@)
 // 10. The strings by which the compiler names std really exist ksplc finds std's declarations by
 // **a fully-qualified-name string** such as `"std.lang.Move_only"`. Only "is that name in that
 // file" is checked. What each is used for is in "Why compiler-known traits are confined to
-// `std/lang`" in `docs/DESIGN-language.md` (a copy would drift).
+// `std/lang`" in `docs/DESIGN-programming-language.md` (a copy would drift).
 // ==========================================
 priv fn check_compiler_named_std(arena: Arena$@)
     $seen: Sz = 0
@@ -440,7 +440,7 @@ priv fn check_compiler_named_std(arena: Arena$@)
                 case .none
                     continue
                 case .some(cut)
-                    // A source's extension (`source_ext` in `../../ksplc/base/core.kspl`).
+                    // A source's extension (`SOURCE_EXT` in `../../ksplc/base/core.kspl`).
                     file: = arena.text().s("std/").s(rest.sub(0, cut)).s(".kspl").take()
                     name: = rest.sub_from(cut + 1)
                     if !declares_name(harness.read_under_root(file), name, arena)
@@ -534,9 +534,10 @@ priv fn check_panic_spelling(arena: Arena$@) //<
     //< Keeps the run-time stop message to one form
     //<
     //< The prefix is `panic: ` and what follows starts lower case (see
-    //< "Every stop has one notation" in `../../docs/SPEC-language.md`). **Split between the code
-    //< generator and std, one event gets two strings to grep for.** `ksplc/tests/runtime/`'s EXPECT
-    //< sees only checks that have a test, so a new check is caught here.
+    //< "Every stop has one notation" in `../../docs/SPEC-programming-language.md`). **Split between
+    //< the code generator and std, one event gets two strings to grep for.**
+    //< `ksplc/tests/runtime/`'s EXPECT sees only checks that have a test, so a new check is caught
+    //< here.
     $seen: Sz = 0
     $bad: = List<|U8[]|>.new(arena)
     for rel in harness
@@ -550,25 +551,44 @@ priv fn check_panic_spelling(arena: Arena$@) //<
                 bad
                     .push(arena.text().s(rel).s(":\{i\}: ").s(line.trim_spaces()).take())
     verdict.check_list("the letter when it stops at run time is one", seen, "lines", bad@,
-        "the prefix is 'panic: ' and what follows is lower case (§13 of docs/SPEC-language.md)")
+        "the prefix is 'panic: ' and what follows is lower case (§13 of \
+            docs/SPEC-programming-language.md)")
 
-priv const result_forms: U8[][] = U8[][]::{ "ALL PASS", "SOME FAILED", "SKIPPED" } //<
+priv const RESULT_FORMS: U8[][] = U8[][]::{ "ALL PASS", "SOME FAILED", "SKIPPED" } //<
     //< The wordings a gate's closing verdict line may take
     //<
     //< **A wording per gate makes CI grep for each**, and a wrong one drifts silently: **it passes
     //< green even when a gate fails** (Principle 5). The source is `finish` in `std/verdict.kspl`.
 
 priv fn result_form_ok(rest: U8[], _arena: Arena$@): Bool
-    for i in Range.asc(result_forms.len)
-        if rest.starts_with(result_forms[i])
+    for i in Range.asc(RESULT_FORMS.len)
+        if rest.starts_with(RESULT_FORMS[i])
             return true
     return false
+
+priv fn result_line_off(line: U8[], arena: Arena$@): Bool //< a verdict marker with an unknown form
+    if at: = line.find_str("RESULT: ")
+        if at > 0 &&
+            (line[at - 1].is_alnum() || line[at - 1] == '_' || (at >= 8 && line[at - 1] == '-'))
+            return false
+        prefix: = line.sub(0, at).trim_spaces()
+        if prefix.equals("const") || prefix.ends_with(" const")
+            return false
+        return !result_form_ok(line.sub_from(at + 8), arena)
+    return false
+
+priv const RESULT_LINE_SAMPLES: Sample[_] = ::{ Sample::{ .text = "const ADC_RESULT: U32 = 0",
+    .hits = false }, Sample::{ .text = "priv const RESULT: U32 = 0", .hits = false },
+    Sample::{ .text = "io.out().s(\"RESULT: ALL PASS\\n\")", .hits = false },
+    Sample::{ .text = "io.out().s(\"RESULT: success\\n\")", .hits = true },
+    Sample::{ .text = "RESULT: bad", .hits = true },
+    Sample::{ .text = "BROWSER-RESULT: 0 failures", .hits = false } }
 
 // The samples showing that the verdict can fire (the pattern is "A check shows it can fire" in
 // `../support/conventions_scan.kspl`).
 // Caution: **Include all three forms, and the parenthesised one too.** Drop one and that form
 // failing as "an unknown string" goes unnoticed.
-priv const result_samples: Sample[_] = ::{
+priv const RESULT_SAMPLES: Sample[_] = ::{
     Sample::{ .text = "ALL PASS", .hits = true },
     Sample::{ .text = "ALL PASS (12 files already formatted)", .hits = true },
     Sample::{ .text = "SOME FAILED (3)", .hits = true },
@@ -581,7 +601,7 @@ priv const result_samples: Sample[_] = ::{
 
 // **Both ways of breaking it are sampled** (the prefix's capital and the next word's); one alone
 // lets the other pass. A miscounted `at + 7` hits `panic: ok`.
-priv const panic_samples: Sample[_] = ::{
+priv const PANIC_SAMPLES: Sample[_] = ::{
     Sample::{ .text = "io.err().s(\"Panic: out of memory\\n\");", .hits = true },
     Sample::{ .text = "io.err().s(\"panic: Out of memory\\n\");", .hits = true },
     Sample::{ .text = "io.err().s(\"panic: out of memory\\n\");", .hits = false },
@@ -593,10 +613,10 @@ priv const panic_samples: Sample[_] = ::{
 }
 
 // **Pick up only an FQN inside a string**: after a double quote, two or more steps, no final dot.
-priv const fqn_samples: U8[][_] = ::{ "want: = \"std.lang.Add\";", "want: = \"std.lang.\";",
+priv const FQN_SAMPLES: U8[][_] = ::{ "want: = \"std.lang.Add\";", "want: = \"std.lang.\";",
     "want: = \"std.lang\";", "out: = std.io.out();",
     "two: = \"std.ds.List\" ; \"std.str.Str_builder\";", "// about std.lang.Add" }
-priv const fqn_want: Sz[_] = ::{ 1, 0, 0, 0, 2, 0 } //<
+priv const FQN_WANT: Sz[_] = ::{ 1, 0, 0, 0, 2, 0 } //<
     //< How many FQNs each of the samples holds
     //<
     //< In order: 1 / 0 (ends in a dot) / 0 (too few steps) / 0 (outside a string) / 2 / 0 (outside
@@ -604,7 +624,7 @@ priv const fqn_want: Sz[_] = ::{ 1, 0, 0, 0, 2, 0 } //<
 
 // **The name must match exactly** (by prefix `Add` hits `Adder`, and a rename slips past). **A
 // `priv` does not hit**: ksplc names only what is public, so a hidden one would mask a lost `pub`.
-priv const declares_src: U8[] =
+priv const DECLARES_SRC: U8[] =
     """pub struct Adder
 
 
@@ -619,34 +639,34 @@ priv fn hidden(): I32
 pub trait Add
 
 """
-priv const declares_names: U8[][_] = ::{ "Add", "Adder", "take", "hidden", "Missing", "Adde" } //<
+priv const DECLARES_NAMES: U8[][_] = ::{ "Add", "Adder", "take", "hidden", "Missing", "Adde" } //<
     //< The names looked up in `declares_src`
     //<
     //< **`Adde` does not hit**; without checking the name's end it hits the start of `Adder`, and
     //< **a name removed by a rename is answered as "there"**. `Adder` and `Add` check both hit.
-priv const declares_want: Bool[_] = ::{ true, true, true, false, false, false }
+priv const DECLARES_WANT: Bool[_] = ::{ true, true, true, false, false, false }
 
 priv fn check_named_std_fires(arena: Arena$@)
     scan.check_samples("the verdict on the letter when it stops can fire",
-        Sample[]::panic_samples, "panic_samples", panic_off, arena)
+        Sample[]::PANIC_SAMPLES, "panic_samples", panic_off, arena)
 
     $b: = List<|U8[]|>.new(arena)
-    for i in Range.asc(fqn_samples.len)
-        got: = std_fqns_in(fqn_samples[i], arena).len
-        if got != fqn_want[i]
+    for i in Range.asc(FQN_SAMPLES.len)
+        got: = std_fqns_in(FQN_SAMPLES[i], arena).len
+        if got != FQN_WANT[i]
             b
-                .push(arena.text().s("\"").s(fqn_samples[i])
-                .s("\" gave \{got\} (should be \{fqn_want[i]\})").take())
-    verdict.check_list("the place picking a std FQN out of a letter can fire", fqn_samples.len,
+                .push(arena.text().s("\"").s(FQN_SAMPLES[i])
+                .s("\" gave \{got\} (should be \{FQN_WANT[i]\})").take())
+    verdict.check_list("the place picking a std FQN out of a letter can fire", FQN_SAMPLES.len,
         "samples", b@, "the judgment misreads its own samples: mend the judgment, not the table")
 
     $c: = List<|U8[]|>.new(arena)
-    for i in Range.asc(declares_names.len)
-        got: = declares_name(declares_src, declares_names[i], arena)
-        if got != declares_want[i]
+    for i in Range.asc(DECLARES_NAMES.len)
+        got: = declares_name(DECLARES_SRC, DECLARES_NAMES[i], arena)
+        if got != DECLARES_WANT[i]
             c
-                .push(arena.text().s("\"").s(declares_names[i]).s("\" was read as \{got\}").take())
-    verdict.check_list("the place hunting a declaration's name can fire", declares_names.len,
+                .push(arena.text().s("\"").s(DECLARES_NAMES[i]).s("\" was read as \{got\}").take())
+    verdict.check_list("the place hunting a declaration's name can fire", DECLARES_NAMES.len,
         "samples", c@, "the judgment misreads its own samples: mend the judgment, not the table")
 
 // Whether the line opens a `"""` string, read from outside one (the comment cap relies on it).
@@ -655,8 +675,8 @@ priv fn opens_raw(text: U8[], arena: Arena$@): Bool
     return scan.flip_raw(text, false)
 
 // Caution: **Keep both sides in**, or a judgment answering always true (or always false) passes.
-priv const raw_samples: Sample[_] = ::{ Sample::{ .text = "  w = w.s(\"\"\"", .hits = true },
-    Sample::{ .text = "priv const q: U8[] = \"\"\"", .hits = true },
+priv const RAW_SAMPLES: Sample[_] = ::{ Sample::{ .text = "  w = w.s(\"\"\"", .hits = true },
+    Sample::{ .text = "priv const Q: U8[] = \"\"\"", .hits = true },
     Sample::{ .text = "// a raw string is fenced by `\"\"\"`", .hits = false },
     Sample::{ .text = "  // Note: the `\"\"\"` fence closes it", .hits = false },
     Sample::{ .text = "  let x = 1;", .hits = false },
@@ -664,33 +684,29 @@ priv const raw_samples: Sample[_] = ::{ Sample::{ .text = "  w = w.s(\"\"\"", .h
 
 priv fn check_raw_fires(arena: Arena$@)
     scan.check_samples("the reading of where a `\"\"\"` text opens can fire",
-        Sample[]::raw_samples, "raw_samples", opens_raw, arena)
+        Sample[]::RAW_SAMPLES, "raw_samples", opens_raw, arena)
 
 priv fn check_result_fires(arena: Arena$@)
     scan.check_samples("the verdict on the verdict line's letter can fire",
-        Sample[]::result_samples, "result_samples", result_form_ok, arena)
+        Sample[]::RESULT_SAMPLES, "result_samples", result_form_ok, arena)
+    scan.check_samples("a result marker is distinguished from a constant's name",
+        Sample[]::RESULT_LINE_SAMPLES, "result_line_samples", result_line_off, arena)
 
 priv fn check_result_line(arena: Arena$@)
     $seen: Sz = 0
     $bad: = List<|U8[]|>.new(arena)
-    for rel in harness.tracked_matching(U8[][]::scan.build_ext)
+    for rel in harness.tracked_matching(U8[][]::scan.BUILD_EXT)
         $i: Sz = 0
         for line in harness.read_under_root(rel).lines(arena)
             seen += 1
             i += 1
-            switch line.find_str("RESULT: ")
-            case .none
+            // The files defining the forms and their examples carry incomplete markers.
+            if rel.equals("tests/suite/conventions_test.kspl") ||
+                rel.equals("std/verdict.kspl") || rel.equals("docs/SPEC-gates.md")
                 continue
-            case .some(at)
-                // **This file (it lists the forms) and the browser's `BROWSER-RESULT:` are left
-                // out.**
-                if rel.equals("tests/suite/conventions_test.kspl") ||
-                    rel.equals("std/verdict.kspl") || rel.equals("docs/SPEC-gates.md") ||
-                    (at >= 8 && line[at - 1] == '-')
-                    continue
-                if !result_form_ok(line.sub_from(at + 8), arena)
-                    bad
-                        .push(arena.text().s(rel).s(":\{i\}: \{line.trim_spaces()\}").take())
+            if result_line_off(line, arena)
+                bad
+                    .push(arena.text().s(rel).s(":\{i\}: \{line.trim_spaces()\}").take())
     hint: = arena.text().s("after 'RESULT: ' comes ALL PASS / SOME FAILED / SKIPPED ")
         .s("(\"How a run is read\" in docs/SPEC-gates.md)").take()
     verdict.check_list("the letter of a gate's verdict line is one", seen, "lines", bad@, hint)
@@ -698,7 +714,7 @@ priv fn check_result_line(arena: Arena$@)
 // That a single test's line is not written by hand (hand-written lines always diverge): none of
 // `-> Passed!`, `-> Skipped` or the three-line `"\n[..."` comes back.
 // Caution: **Having added a package, add it here too.**
-priv const case_line_globs: U8[][_] = ::{ "ksai/tests/*.kspl", "ksbind/tests/*.kspl",
+priv const CASE_LINE_GLOBS: U8[][_] = ::{ "ksai/tests/*.kspl", "ksbind/tests/*.kspl",
     "ksdb/tests/*.kspl", "kspage/tests/*.kspl", "kspeg/tests/*.kspl", "ksos/tests/*.kspl",
     "ksplc/tests/*.kspl", "kssrv/tests/*.kspl", "std/tests/*.kspl", "tools/ai_assist/tests/*.kspl",
     "tools/tests/*.kspl" }
@@ -706,7 +722,7 @@ priv const case_line_globs: U8[][_] = ::{ "ksai/tests/*.kspl", "ksbind/tests/*.k
 priv fn check_case_line(arena: Arena$@)
     $seen: Sz = 0
     $bad: = List<|U8[]|>.new(arena)
-    for rel in harness.tracked_matching(U8[][]::case_line_globs)
+    for rel in harness.tracked_matching(U8[][]::CASE_LINE_GLOBS)
         $i: Sz = 0
         for line in harness.read_under_root(rel).lines(arena)
             seen += 1
@@ -748,7 +764,7 @@ priv fn check_file_summary_first(arena: Arena$@) //<
     //< green having found none (`file_doc_at` in `../../ksplc/base/ast_doc.kspl`, likewise).
     $seen: Sz = 0
     $bad: = List<|U8[]|>.new(arena)
-    for rel in harness.tracked_matching(U8[][]::scan.kspl_specs)
+    for rel in harness.tracked_matching(U8[][]::scan.KSPL_SPECS)
         seen += 1
         $over: Sz = 0
         $i: Sz = 0
@@ -770,7 +786,7 @@ priv fn check_file_summary_first(arena: Arena$@) //<
     verdict.check_list("a file that describes itself opens with that description", seen, "files",
         bad@, "move the //< run to the head, and leave the banner for whoever edits it below")
 
-priv const plural_names: U8[][_] = ::{ "test", "tool", "doc", "app", "board", "driver" } //<
+priv const PLURAL_NAMES: U8[][_] = ::{ "test", "tool", "doc", "app", "board", "driver" } //<
     //< The singular names a folder holding many of a kind must not take
     //<
     //< ("A folder's name is plural where it names its contents" in `docs/SPEC-documents.md`.) A
@@ -778,7 +794,7 @@ priv const plural_names: U8[][_] = ::{ "test", "tool", "doc", "app", "board", "d
     //< stays.
 
 priv fn names_a_kind(part: U8[]): Bool //< whether a folder's name is one of plural_names
-    for one in U8[][]::plural_names
+    for one in U8[][]::PLURAL_NAMES
         if part.equals(one)
             return true
     return false
@@ -835,7 +851,7 @@ priv fn check_tests_registered(arena: Arena$@)
     $called: = Str_builder.new() // every `.test_…` name, each between spaces
     defer called.free()
     called.c(' ')
-    for rel in harness.tracked_matching(U8[][]::scan.kspl_specs)
+    for rel in harness.tracked_matching(U8[][]::scan.KSPL_SPECS)
         src: = harness.read_under_root(rel)
         $i: Sz = 0
         for i + 6 < src.len

@@ -20,25 +20,25 @@ import "std/chars" // classifying and extracting one character
 //   lg.append(kind_sample, "…") catch { … };
 //   $it: = lg.iter(); for it.next() { … }        // oldest first
 //   n: = lg.last(kind_policy, U8$[]::dst)?;     // the newest one of that kind
-pub const header_size: Sz = 8 //< the size of a record's header, in bytes.
+pub const HEADER_SIZE: Sz = 8 //< the size of a record's header, in bytes.
 // Where each field sits in a record's header (the layout is in ksdb/docs/DESIGN-storage.md).
-priv const len_at: Sz = 0 //< the content's length (U16)
-priv const kind_at: Sz = 2 //< the record's kind (U16)
-priv const crc_at: Sz = 4 //< the CRC (U32) of the header before it and of the content
-priv const crc_seed: U32 = 0xffffffff //< CRC-32 starts from this and is finished by xoring it
+priv const LEN_AT: Sz = 0 //< the content's length (U16)
+priv const KIND_AT: Sz = 2 //< the record's kind (U16)
+priv const CRC_AT: Sz = 4 //< the CRC (U32) of the header before it and of the content
+priv const CRC_SEED: U32 = 0xffffffff //< CRC-32 starts from this and is finished by xoring it
 
-pub const max_payload: Sz = 0xfffe //< the largest content one record can hold.
+pub const MAX_PAYLOAD: Sz = 0xfffe //< the largest content one record can hold.
     //<
     //< `0xFFFF` marks an empty slot, so it cannot be a content length.
-priv const empty_len: U16 = 0xffff //< the `len` an erased slot reads as (nothing is written yet)
-priv const chunk_size: Sz = 64 //< how many bytes are read at a time
+priv const EMPTY_LEN: U16 = 0xffff //< the `len` an erased slot reads as (nothing is written yet)
+priv const CHUNK_SIZE: Sz = 64 //< how many bytes are read at a time
     //<
     //< Caution: The buffer lives on the stack, so keep it small: a microcontroller's task stack is
     //< only a few kilobytes.
 
 pub enum Ksdb_error //< why an append or a read failed
     full //< the medium has no room left; the log only appends, so this lasts until a `reset`.
-    too_large //< the content is longer than `max_payload`, or does not fit in one sector.
+    too_large //< the content is longer than `MAX_PAYLOAD`, or does not fit in one sector.
     write_failed //< the medium refused a write or an erase.
     too_small //< the `dst` passed to `last` or `Cursor.read` is shorter than the content.
     not_found //< no record of that kind exists.
@@ -60,11 +60,11 @@ priv fn align4(n: Sz): Sz //< rounds up to a multiple of 4
 
 priv fn record_span(payload_len: Sz): Sz //<
     //< One record's length: the header, the content and the padding
-    return align4(header_size + payload_len)
+    return align4(HEADER_SIZE + payload_len)
 
 priv struct Chunks //< a read of `left` bytes from `at`, one chunk at a time
     //<
-    //< Caution: **It holds no buffer**; the caller passes one `chunk_size` array to every `next`,
+    //< Caution: **It holds no buffer**; the caller passes one `CHUNK_SIZE` array to every `next`,
     //< so a walk costs one chunk of stack however long the range.
     priv store: Store
     priv at: Sz
@@ -84,7 +84,7 @@ priv fn crc_range(store: Store, at: Sz, len: Sz, seed: U32): U32 //<
     //<
     //< `crc32` can be continued, so reading in chunks gives the same value as reading all at once.
     $c: U32 = seed
-    $chunk: U8[chunk_size] = ::{}
+    $chunk: U8[CHUNK_SIZE] = ::{}
     $rd: = Chunks::{ .store = store, .at = at, .left = len }
     for rd.left > 0
         c = rd.next(U8$[]::chunk).crc32(c)
@@ -92,18 +92,18 @@ priv fn crc_range(store: Store, at: Sz, len: Sz, seed: U32): U32 //<
 
 priv fn head_crc(header: U8[]): U32 //<
     //< the CRC over the header's fields before its own, unfinished
-    return header.sub(0, crc_at).crc32(crc_seed)
+    return header.sub(0, CRC_AT).crc32(CRC_SEED)
 
 priv fn record_is_valid(store: Store, at: Sz, header: U8[]): Bool //<
     //< Whether the CRC of the record at `at`, whose header has been read into `header`, matches
     //<
     //< The CRC covers the header except its own crc field.
     c: =
-        crc_range(store, at + header_size, header.get_u16_le(len_at), head_crc(header))
-    return (c ^ crc_seed) == header.get_u32_le(crc_at)
+        crc_range(store, at + HEADER_SIZE, header.get_u16_le(LEN_AT), head_crc(header))
+    return (c ^ CRC_SEED) == header.get_u32_le(CRC_AT)
 
 priv fn is_erased(store: Store, at: Sz, len: Sz): Bool //< whether len bytes from at are erased
-    $chunk: U8[chunk_size] = ::{}
+    $chunk: U8[CHUNK_SIZE] = ::{}
     $rd: = Chunks::{ .store = store, .at = at, .left = len }
     for rd.left > 0
         for b in rd.next(U8$[]::chunk)
@@ -151,7 +151,7 @@ impl Log
         kind: U16, //< the caller's own tag; `iter` returns it and `last` matches on it
         payload: U8[],
     ): Void!Ksdb_error
-        if payload.len > max_payload
+        if payload.len > MAX_PAYLOAD
             throw .too_large
         span: = record_span(payload.len)
         if span > r.store.sector_size
@@ -170,17 +170,17 @@ impl Log
                 found = true
             else
                 r.tail = r.store.next_sector(r.tail)
-        $head: U8[header_size] = ::{}
+        $head: U8[HEADER_SIZE] = ::{}
         hv: = U8$[]::head
-        hv.put_u16_le(len_at, U16::payload.len)
-        hv.put_u16_le(kind_at, kind)
-        hv.put_u32_le(crc_at, payload.crc32(head_crc(U8[]::head)) ^ crc_seed)
+        hv.put_u16_le(LEN_AT, U16::payload.len)
+        hv.put_u16_le(KIND_AT, kind)
+        hv.put_u32_le(CRC_AT, payload.crc32(head_crc(U8[]::head)) ^ CRC_SEED)
         // Caution: **Write the content first and the header last.** The other way round, a power
         // cut after the header leaves a record with a correct length but no content. Content first,
         // the header stays erased, so the scan sees an empty slot and the partial write never
         // counts.
         if payload.len > 0
-            if !r.store.program_at(r.tail + header_size, payload)
+            if !r.store.program_at(r.tail + HEADER_SIZE, payload)
                 throw .write_failed
         if !r.store.program_at(r.tail, U8[]::head)
             throw .write_failed
@@ -246,7 +246,7 @@ impl Log
             return false
         if Sz::it.len != data.len
             return false
-        $chunk: U8[chunk_size] = ::{}
+        $chunk: U8[CHUNK_SIZE] = ::{}
         $rd: = Chunks::{ .store = r.store, .at = it.payload_at(), .left = it.len }
         $done: Sz = 0
         for rd.left > 0
@@ -284,18 +284,18 @@ impl Cursor
         if r.started
             r.at += record_span(r.len)
         r.started = true
-        $h: U8[header_size] = ::{}
+        $h: U8[HEADER_SIZE] = ::{}
         header: = U8[]::h
-        for r.at + header_size <= r.end
+        for r.at + HEADER_SIZE <= r.end
             r.store.read_at(r.at, U8$[]::h)
-            len: = header.get_u16_le(len_at)
+            len: = header.get_u16_le(LEN_AT)
             span: = record_span(len)
             valid: =
-                len != empty_len && r.at + span <= r.end &&
+                len != EMPTY_LEN && r.at + span <= r.end &&
                 record_is_valid(r.store, r.at, header)
             if valid
                 r.len = len
-                r.kind = header.get_u16_le(kind_at)
+                r.kind = header.get_u16_le(KIND_AT)
                 return true
             // **It must always advance**; with a sector size of 0 the scan would never end.
             // `Log.open` rejects that size up front, so no check is needed here (Principle 5: a
@@ -304,7 +304,7 @@ impl Cursor
         return false
 
     pub fn payload_at(r: Self$@): Sz //< where the current record's content begins
-        return r.at + header_size
+        return r.at + HEADER_SIZE
 
     pub fn read( //< copies the current record's content out and returns its length
         //<

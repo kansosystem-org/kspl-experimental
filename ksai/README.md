@@ -80,7 +80,7 @@ Start with `matmul`, `add_bias`, `softmax`, and `silu`. Then read `+`, `-`, `*`,
 - `Tensor<|T|>` holds `data`, `shape` (the size of each dimension), and `size` (the total element count).
 - `softmax` converts scores to probabilities. `silu` is an activation function.
 - `x[i]` provides an element's location through `Index_place`. You can read, assign, compound-assign (`x[i] += v`), or take its address (`x[i]@`) without copying it.
-- The receiver needs no `$`, KSPL's marker for a writable receiver. Thus, `out[i] = v` works on a tensor passed by value, such as `matmul_into`'s `out`. See the receiver selection rules in [`docs/SPEC-language.md`](../docs/SPEC-language.md).
+- The receiver needs no `$`, KSPL's marker for a writable receiver. Thus, `out[i] = v` works on a tensor passed by value, such as `matmul_into`'s `out`. See the receiver selection rules in [`docs/SPEC-programming-language.md`](../docs/SPEC-programming-language.md).
 - An arena (`Arena`) supplies memory for multiple values and releases it together. Intermediate tensors share an arena for fast, deterministic release.
 
 By default, `matmul` uses only KSPL for portability and has no library dependencies. The optional BLAS backend uses OpenBLAS's general matrix product, gemm, for server throughput. BLAS means Basic Linear Algebra Subprograms. `make BLAS=1` requires `libopenblas-dev` and calls OpenBLAS through the foreign function interface (FFI).

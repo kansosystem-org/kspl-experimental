@@ -21,7 +21,7 @@ struct Machine //< one machine, with the widths its C compiler lays a value out 
         //< genllvm's IR is written for 8-byte pointers and `Sz` (`{ ptr, i64 }` slices), so a
         //< machine without a triple is refused `--to=llvm` rather than given wrong offsets.
 
-const machines: Machine[8] = ::{
+const MACHINES: Machine[8] = ::{
     Machine::{ .name = "x86_64-linux-gnu", .pointer_bytes = 8, .fn_pointer_bytes = 8, .sz_bytes = 8,
         .wide_align = 8, .llvm_triple = "x86_64-unknown-linux-gnu" },
     Machine::{ .name = "aarch64-linux-gnu", .pointer_bytes = 8, .fn_pointer_bytes = 8,
@@ -45,14 +45,14 @@ const machines: Machine[8] = ::{
     //< it**: on a machine whose name is missing here, ksplc refuses to compile without `--machine`.
 
 fn find(name: U8[]): Machine? //< the machine of that name, or none where none is known
-    for m in machines
+    for m in MACHINES
         if m.name.equals(name)
             return .some(m)
     return .none
 
 fn known_names_to(out: Str_builder$@) //< every machine's name, separated by `, `, onto out
-    for i in Range.asc(machines.len)
-        out.s(", " if i > 0 else "").s(machines[i].name)
+    for i in Range.asc(MACHINES.len)
+        out.s(", " if i > 0 else "").s(MACHINES[i].name)
 
 extern "C"
     fn kspl_host_machine(buf: U8$@, cap: Sz): Sz //< the machine ksplc was compiled for; else 0
@@ -83,4 +83,4 @@ fn current(): Machine //< the machine this compile lays values out for
         return m
     case .none {}
     base_diag.ice_assert(false, "base_target.current: the machine was not checked before use")
-    return machines[0]
+    return MACHINES[0]

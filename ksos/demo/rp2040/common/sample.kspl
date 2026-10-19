@@ -6,7 +6,7 @@
 //< written and the value read silently drift apart.
 
 // ==========================================
-// The layout, `sample_bytes` bytes: 0..2 the distance [mm], 2..4 the battery [mV], 4 the line (the
+// The layout, `SAMPLE_BYTES` bytes: 0..2 the distance [mm], 2..4 the battery [mV], 4 the line (the
 // low three bits) plus the source (the top bit, set for a safety timeout), 5 lon, 6 lat and 7 rot,
 // each plus the offset.
 // ==========================================
@@ -19,17 +19,17 @@ import "ksos/demo/rp2040/common/console" as con
 import "ksos/demo/rp2040/common/records"
 import "std/bytes"
 
-const sample_bytes: Sz = 8 //< the size of one observation
+const SAMPLE_BYTES: Sz = 8 //< the size of one observation
     //<
     //< Caution: **Do not exceed 8 bytes**, or a record grows from 16 to 20 bytes (the header plus
     //< content rounded to four). The source is kept in the line byte's spare bits.
-priv const line_bits_mask: U8 = 0x07
-priv const by_safety_bit: U8 = 0x80
-priv const drive_bias: I32 = 128 //< the offset for storing lon/lat/rot in one byte each
+priv const LINE_BITS_MASK: U8 = 0x07
+priv const BY_SAFETY_BIT: U8 = 0x80
+priv const DRIVE_BIAS: I32 = 128 //< the offset for storing lon/lat/rot in one byte each
     //<
     //< Caution: **Do not store them signed** (-45 as 0xd3 reads back as 211).
 
-priv const dump_wait_ms: U32 = 50 //< the limit on waiting for one line to be queued [ms]
+priv const DUMP_WAIT_MS: U32 = 50 //< the limit on waiting for one line to be queued [ms]
     //<
     //< **Keep it finite**: with the Serial Monitor closed the queue never empties.
 
@@ -77,23 +77,23 @@ priv fn encode(v: U8$[], s: Sample) //< lays one out
     v.put_u16_le(0, U16::d)
     v.put_u16_le(2, U16::mv)
     bits: = U8::s.line
-    flag: U8 = by_safety_bit if s.by == Author.safety else 0
+    flag: U8 = BY_SAFETY_BIT if s.by == Author.safety else 0
     v[4] = bits | flag
-    v[5] = U8::(s.lon + drive_bias)
-    v[6] = U8::(s.lat + drive_bias)
-    v[7] = U8::(s.rot + drive_bias)
+    v[5] = U8::(s.lon + DRIVE_BIAS)
+    v[6] = U8::(s.lat + DRIVE_BIAS)
+    v[7] = U8::(s.rot + DRIVE_BIAS)
 
 priv fn decode(b: U8[]): Sample //< reads one back
     return Sample::{
         .dist_mm = b.get_u16_le(0),
         .bat_mv = b.get_u16_le(2),
         // Caution: Always mask the line; the source is in the byte's top bit.
-        .line = b[4] & line_bits_mask,
+        .line = b[4] & LINE_BITS_MASK,
         // **Subtract at I32 width** (Sample's field); in U8, `83 - 128` wraps to 211.
-        .lon = b[5] - drive_bias,
-        .lat = b[6] - drive_bias,
-        .rot = b[7] - drive_bias,
-        .by = .safety if (b[4] & by_safety_bit) != 0 else .policy,
+        .lon = b[5] - DRIVE_BIAS,
+        .lat = b[6] - DRIVE_BIAS,
+        .rot = b[7] - DRIVE_BIAS,
+        .by = .safety if (b[4] & BY_SAFETY_BIT) != 0 else .policy,
     }
 
 fn append(kind: U16, s: Sample) //< appends one
@@ -103,7 +103,7 @@ fn append(kind: U16, s: Sample) //< appends one
     //< failed write): it returns silently, and driving is unaffected.
     if !records.ok() || stop_reason.len > 0
         return
-    buf: U8[sample_bytes] = ::{}
+    buf: U8[SAMPLE_BYTES] = ::{}
     encode(U8$[]::buf, s)
     records.handle().append(kind, U8[]::buf) catch e
         // Caution: Do not discard the reason; full is expected, a failed write is not.
@@ -114,9 +114,9 @@ fn append(kind: U16, s: Sample) //< appends one
 fn say_last(ln: con.Line$@, kind: U16) //< prints the newest one as one line
     //<
     //< **This is the evidence that "the time series survived a power cut".**
-    buf: U8[sample_bytes] = ::{}
+    buf: U8[SAMPLE_BYTES] = ::{}
     n: = records.read_last(kind, U8$[]::buf)
-    if n != sample_bytes
+    if n != SAMPLE_BYTES
         return
     v: = decode(U8[]::buf)
     ln.reset()
@@ -143,7 +143,7 @@ priv fn emit_line(ln: con.Line$@): Bool //< prints one line
     //<
     //< Caution: **Wait for room before printing**; a line that does not fit is discarded (flush in
     //< ksos/demo/rp2040/common/console.kspl). true if it was printed.
-    for $waited: U32 = 0; !con.can_flush() && waited < dump_wait_ms; waited += 1
+    for $waited: U32 = 0; !con.can_flush() && waited < DUMP_WAIT_MS; waited += 1
         boot.pump(1)
     return ln.flush()
 
@@ -191,11 +191,11 @@ fn dump(ln: con.Line$@, kind: U16) //< prints the whole record to the console
         ok = emit_line(ln)
     $n: U32 = 0
     $other: U32 = 0
-    buf: U8[sample_bytes] = ::{}
+    buf: U8[SAMPLE_BYTES] = ::{}
     $it: = lg.iter()
     for ok && it.next()
         // Caution: Check both the kind and the length; the marker and the policy share the record.
-        if it.kind != kind || Sz::it.len != sample_bytes
+        if it.kind != kind || Sz::it.len != SAMPLE_BYTES
             other += 1
             ln.reset()
             ln.str("[dump] skip kind=")

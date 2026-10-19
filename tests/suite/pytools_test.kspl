@@ -5,7 +5,7 @@
 //< converters reading Hugging Face weights) each hold a self-test.
 //< Caution: **Holding one does not make it work.** Called by nobody, it is a button that does
 //< nothing when pressed. It stays green while the tool rots: the demangler in
-//< `tools/kspl_lldb.py` can go on looking for a name the compiler no longer emits.
+//< `TOOLS/kspl_lldb.py` can go on looking for a name the compiler no longer emits.
 //< **There is one way to start it**: every tool self-tests when run with no argument. Keep it the
 //< same as tools are added, or this file comes to hold a branch per tool.
 //< Caution: **Print a `SKIP` line when a module a tool needs is absent.** Skipped with no line, it
@@ -18,26 +18,26 @@ import "std/strfmt" as _strfmt
 import "std/verdict"
 import "tests/support/harness"
 
-priv const python: U8[] = "python3" //< the interpreter the tools run under, found on `PATH`
+priv const PYTHON: U8[] = "python3" //< the interpreter the tools run under, found on `PATH`
 
-priv const mark_ok: U8[] = "pass" //< the pass mark, read as a line's first word
+priv const MARK_OK: U8[] = "pass" //< the pass mark, read as a line's first word
     //<
     //< Its canonical source is the table in `tests/support/conventions_line.kspl`. Only the reader
     //< is here, so the day the mark changes, a stale copy fails with the false reason "not one
     //< ran".
 
-priv const selftest_timeout_ms: I32 = 300000 //< how long one tool's self-test may run
+priv const SELFTEST_TIMEOUT_MS: I32 = 300000 //< how long one tool's self-test may run
 
 priv struct Tool //< one Python tool, and how it is started
     path: U8[] //< the file, from the repository's root
     module: U8[] //< the name to run with `python3 -m`; empty runs the file itself
         //<
         //< Caution: **Give a module name to a tool that imports across folders**
-        //< (`from tools.ai_assist...`). Run as a file, it fails with `No module named 'tools'`,
+        //< (`from TOOLS.ai_assist...`). Run as a file, it fails with `No module named 'tools'`,
         //< because only the file's own folder enters `sys.path`.
     needs: U8[] //< a module whose absence makes the check a `SKIP`; empty if none
 
-priv const tools: Tool[_] = ::{ Tool::{ .path = "tools/kspl_lldb.py", .module = "", .needs = "" },
+priv const TOOLS: Tool[_] = ::{ Tool::{ .path = "tools/kspl_lldb.py", .module = "", .needs = "" },
     Tool::{ .path = "tools/ai_assist/export_qwen_tokenizer.py", .module = "", .needs = "" },
     Tool::{ .path = "tools/ai_assist/lora_finetune_external.py",
     .module = "tools.ai_assist.lora_finetune_external", .needs = "" },
@@ -45,17 +45,17 @@ priv const tools: Tool[_] = ::{ Tool::{ .path = "tools/kspl_lldb.py", .module = 
     .module = "tools.ai_assist.export_qwen_to_kspl", .needs = "numpy" },
     Tool::{ .path = "tools/ai_assist/qwen_logit_parity.py", .module = "", .needs = "" } }
 
-priv const libraries: U8[][_] = ::{ "tools/ai_assist/safetensors_io.py" } //<
-    //< The Python files under `tools/` that are no tool: modules the tools import, run by none
+priv const LIBRARIES: U8[][_] = ::{ "tools/ai_assist/safetensors_io.py" } //<
+    //< The Python files under `TOOLS/` that are no tool: modules the tools import, run by none
     //<
     //< Each is exercised through the tools that import it.
 
 priv fn importable(name: U8[]): Bool //< whether `python3` can import the module `name`
     arena: = ksplc_harness.arena()
     return ksplc_harness
-        .run(U8[][]::{ python, "-c", arena.text().s("import ").s(name).take() }).exited_with(0)
+        .run(U8[][]::{ PYTHON, "-c", arena.text().s("import ").s(name).take() }).exited_with(0)
 
-priv const mark_selftest: U8[] = "[self-test]" //< the other opening a self-test's line may have
+priv const MARK_SELFTEST: U8[] = "[self-test]" //< the other opening a self-test's line may have
 
 priv fn ran_one(out: U8[]): Bool //< whether a line of the output opens with a self-test's mark
     //<
@@ -66,11 +66,11 @@ priv fn ran_one(out: U8[]): Bool //< whether a line of the output opens with a s
     arena: = ksplc_harness.arena()
     for line in out.lines(arena)
         first: = line.sub(0, line.find_char(' ').unwrap_or(line.len))
-        if first.equals(mark_ok) || first.equals(mark_selftest)
+        if first.equals(MARK_OK) || first.equals(MARK_SELFTEST)
             return true
     return false
 
-priv fn check_listed() //< that every Python file under `tools/` is a tool here or a library
+priv fn check_listed() //< that every Python file under `TOOLS/` is a tool here or a library
     //<
     //< **A tool left off the list is never run**, and goes on passing while it rots.
     arena: = ksplc_harness.arena()
@@ -78,10 +78,10 @@ priv fn check_listed() //< that every Python file under `tools/` is a tool here 
     found: = harness.tracked_matching(U8[][]::{ "tools/*.py" })
     for f in found
         $listed: = false
-        for lib in libraries
+        for lib in LIBRARIES
             listed = listed || lib.equals(f)
-        for i in Range.asc(tools.len)
-            listed = listed || tools[i].path.equals(f)
+        for i in Range.asc(TOOLS.len)
+            listed = listed || TOOLS[i].path.equals(f)
         if !listed
             missing.push(f)
     verdict.check_list("every Python file under tools/ is a tool run here or a library", found.len,
@@ -95,9 +95,9 @@ priv fn check_tool(t: Tool@) //< runs one tool's self-test and reports it
             arena.text().s(t.needs).s(" is absent (put it in this environment and it runs)").take())
         return
     argv: =
-        (U8[][]::{ python, t.path } if t.module.len == 0
-        else U8[][]::{ python, "-m", t.module })
-    r: = ksplc_harness.run_capped(argv, harness.root(), selftest_timeout_ms)
+        (U8[][]::{ PYTHON, t.path } if t.module.len == 0
+        else U8[][]::{ PYTHON, "-m", t.module })
+    r: = ksplc_harness.run_capped(argv, harness.root(), SELFTEST_TIMEOUT_MS)
     if !r.exited_with(0)
         verdict.check(name, false,
             arena.text().s("the self-test failed (exit code \{r.code.unwrap_or(-1)\})\n").s(r.out)
@@ -111,6 +111,6 @@ priv fn check_tool(t: Tool@) //< runs one tool's self-test and reports it
 fn main(): I32
     harness.begin(1 << 20)
     check_listed()
-    for i in Range.asc(tools.len)
-        check_tool(tools[i]@)
+    for i in Range.asc(TOOLS.len)
+        check_tool(TOOLS[i]@)
     return ksplc_harness.finish()

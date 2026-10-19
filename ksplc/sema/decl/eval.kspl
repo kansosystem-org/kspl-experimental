@@ -104,11 +104,11 @@ impl Sema_ctx
             return .none
         return .some(v)
 
-priv const i64_max_val: I64 = 9223372036854775807I64 //< i64's boundaries
+priv const I64_MAX_VAL: I64 = 9223372036854775807I64 //< i64's boundaries
     //<
     //< The lower one is built as `-(2^63 - 1) - 1`: the literal 2^63 does not fit in I64. The `I64`
     //< suffix keeps it clear of the rule for a `-`'s left-hand literal in sema/body/binary.kspl.
-priv const i64_min_val: I64 = -9223372036854775807I64 - 1
+priv const I64_MIN_VAL: I64 = -9223372036854775807I64 - 1
 
 // Fits the folded result of an arithmetic operator or a left shift into the operands' width.
 // **A signed result that does not fit is an error** (`I32`'s `2147483647 + 1` fits i64; in C it
@@ -170,14 +170,14 @@ fn wrap_to(v: I64, bits: I32, is_uns: Bool): I64 //< the value a cast to the wid
         return I64::low
     return I64::low - (1I64 << I64::bits)
 
-priv const guaranteed_const_chain: I32 = 256 //<
+priv const GUARANTEED_CONST_CHAIN: I32 = 256 //<
     //< The constant-reference chain length the specification promises, named by the diagnostic
     //<
-    //< The promise is in "Implementation limits" in docs/SPEC-language.md.
+    //< The promise is in "Implementation limits" in docs/SPEC-programming-language.md.
     //< Caution: **Do not show max_constexpr_depth below**: it counts nodes, a larger number than
     //< the chain that can be written.
 
-priv const max_constexpr_depth: I32 = guaranteed_const_chain * 4 //< the fold's recursion limit
+priv const MAX_CONSTEXPR_DEPTH: I32 = GUARANTEED_CONST_CHAIN * 4 //< the fold's recursion limit
     //<
     //< **The higher it is, the more a pathological input costs.** max_parse_tree_depth in
     //< ksplc/parse/normalize.kspl stops one expression's nesting. Only a chain across declarations
@@ -235,7 +235,7 @@ impl Ast_node
         c.clear_scratch()
             .s("constant expression nesting too deep. Folding follows more constants defined by \
                 other constants than the compiler supports. The language guarantees \
-                \{guaranteed_const_chain\} levels of references between constants. Folding uses one \
+                \{GUARANTEED_CONST_CHAIN\} levels of references between constants. Folding uses one \
                 native stack frame per level. Deeper input would exhaust the stack")
         c.err(r, c.scratch.slice())
 
@@ -243,7 +243,7 @@ impl Ast_node
         //< Folds one node `depth` levels below the fold's head
         if r == null
             throw .not_constant
-        if depth > max_constexpr_depth
+        if depth > MAX_CONSTEXPR_DEPTH
             // Caution: **Do not return with `not_constant`.** Under suppression the report is
             // dropped, and report_init_overflow re-folds only what did not return `not_constant`,
             // so the depth error would appear nowhere. **A quiet fold leaves no cut to report**;
@@ -361,7 +361,7 @@ impl Ast_node
             if op.equals("-")
                 // Caution: Negating the minimum silently wraps to itself (as in checked_neg in
                 // std/checked_int.kspl).
-                if val == i64_min_val
+                if val == I64_MIN_VAL
                     if !c.suppress_errors
                         c.err(r,
                             "integer overflow (negation of the minimum value) in compile-time \
@@ -406,25 +406,25 @@ impl Ast_node
             // would reject a constant that works at run time.
             if op.equals("+")
                 if !is_uns &&
-                    ((right > 0 && left > i64_max_val - right) ||
-                    (right < 0 && left < i64_min_val - right))
+                    ((right > 0 && left > I64_MAX_VAL - right) ||
+                    (right < 0 && left < I64_MIN_VAL - right))
                     return r.report_overflow(c)!
                 return fit_or_report(r, c, left + right, bits, is_uns)!
             if op.equals("-")
                 if !is_uns &&
-                    ((right < 0 && left > i64_max_val + right) ||
-                    (right > 0 && left < i64_min_val + right))
+                    ((right < 0 && left > I64_MAX_VAL + right) ||
+                    (right > 0 && left < I64_MIN_VAL + right))
                     return r.report_overflow(c)!
                 return fit_or_report(r, c, left - right, bits, is_uns)!
             if op.equals("*")
                 if !is_uns && left != 0 && right != 0
                     // Checked by absolute value; I64's minimum has none, so it is rejected
                     // outright.
-                    if left == i64_min_val || right == i64_min_val
+                    if left == I64_MIN_VAL || right == I64_MIN_VAL
                         return r.report_overflow(c)!
                     la: = -left if left < 0 else left
                     ra: = -right if right < 0 else right
-                    if la > i64_max_val / ra
+                    if la > I64_MAX_VAL / ra
                         return r.report_overflow(c)!
                 return fit_or_report(r, c, left * right, bits, is_uns)!
             // Signed `/` and `%` follow kspl_sdiv / kspl_smod (ksplc/gen/runtime/core.h): the
@@ -432,7 +432,7 @@ impl Ast_node
             if op.equals("/")
                 if is_uns
                     return I64::(ul / ur)
-                if right == -1 && left == i64_min_val
+                if right == -1 && left == I64_MIN_VAL
                     return r.report_overflow(c)!
                 return fit_or_report(r, c, left / right, bits, is_uns)!
             if op.equals("%")
@@ -445,7 +445,7 @@ impl Ast_node
                 if right < 0 || right >= I64::bits
                     return r.report_bad_shift(c)!
                 if !is_uns && left != 0 &&
-                    (left > (i64_max_val >> right) || left < (i64_min_val >> right))
+                    (left > (I64_MAX_VAL >> right) || left < (I64_MIN_VAL >> right))
                     return r.report_overflow(c)!
                 return fit_or_report(r, c, I64::(ul << ur) if is_uns else left << right, bits,
                     is_uns)!
@@ -653,7 +653,7 @@ impl Ast_node
         //< spelling: a literal's suffix, a cast's target, a constant's declared type, a variant's
         //< base type.
         unknown: = I32::sema_type_env.Builtin_type_id.unknown
-        if r == null || depth > max_constexpr_depth
+        if r == null || depth > MAX_CONSTEXPR_DEPTH
             return unknown
         if r.type_id != 0 && !sema_type_env.is_unknown(r.type_id)
             return r.type_id

@@ -4,7 +4,7 @@
 //<
 //< **Each of these builds either way** (a payload nobody uses, clauses that could be folded
 //< together), so the check reads the text (Principle 5 turned round). The canonical source is
-//< `../../docs/SPEC-language.md`.
+//< `../../docs/SPEC-programming-language.md`.
 //< `tests/suite/conventions_test.kspl` checks how a document is written, and
 //< `tests/support/conventions_match.kspl` checks where "two things written separately drift
 //< silently".
@@ -46,13 +46,14 @@ priv fn empty_case_payloads(line: U8[], arena: Arena$@): List<|U8[]|>$@ //<
 priv fn check_empty_case_payload(arena: Arena$@) //<
     //< A payload's brackets are not written on an empty `case`
     //<
-    //< The rule is "Write the payload only when it is needed" in `../../docs/SPEC-language.md`.
+    //< The rule is "Write the payload only when it is needed" in
+    //< `../../docs/SPEC-programming-language.md`.
     //<
     //< **List discarded names and the reader sees only "something is extracted".** When nothing is
     //< used inside, `.variant` is enough, and the exhaustiveness check still works.
     $seen: Sz = 0
     $bad: = List<|U8[]|>.new(arena)
-    for rel in harness.tracked_matching(U8[][]::scan.kspl_specs)
+    for rel in harness.tracked_matching(U8[][]::scan.KSPL_SPECS)
         $i: Sz = 0
         for line in harness.read_under_root(rel).lines(arena)
             i += 1
@@ -68,10 +69,10 @@ priv fn check_empty_case_payload(arena: Arena$@) //<
 // Caution: **Check the count picked up**: a yes or no cannot notice one of two clauses missed.
 // **Include a clause with a body, and cases in a comment and a string** (the side that must not
 // hit).
-priv const payload_samples: U8[][_] = ::{ "    case .add(a, b) {}", "    case .add {}",
+priv const PAYLOAD_SAMPLES: U8[][_] = ::{ "    case .add(a, b) {}", "    case .add {}",
     "    case .add(a) { work(); }", "    case .add(a) {} case .sub(b) {}",
     "    // do not write case .add(a) {}", "    s: = \"case .add(a) {}\";", "    default {}" }
-priv const payload_want: Sz[_] = ::{ 1, 0, 0, 2, 0, 0, 0 } //<
+priv const PAYLOAD_WANT: Sz[_] = ::{ 1, 0, 0, 2, 0, 0, 0 } //<
     //< The expected count for each sample
     //<
     //< In order: 1 / 0 (no payload) / 0 (it has a body) / 2 / 0 (a comment) / 0 (a string) / 0
@@ -79,13 +80,13 @@ priv const payload_want: Sz[_] = ::{ 1, 0, 0, 2, 0, 0, 0 } //<
 
 priv fn check_payload_fires(arena: Arena$@)
     $bad: = List<|U8[]|>.new(arena)
-    for i in Range.asc(payload_samples.len)
-        got: = empty_case_payloads(payload_samples[i], arena).len
-        if got != payload_want[i]
+    for i in Range.asc(PAYLOAD_SAMPLES.len)
+        got: = empty_case_payloads(PAYLOAD_SAMPLES[i], arena).len
+        if got != PAYLOAD_WANT[i]
             bad
-                .push(arena.text().s("took \{got\} out of \"").s(payload_samples[i])
-                .s("\" (it should be \{payload_want[i]\})").take())
-    verdict.check_list("the judgment of an empty case can fire", payload_samples.len, "samples",
+                .push(arena.text().s("took \{got\} out of \"").s(PAYLOAD_SAMPLES[i])
+                .s("\" (it should be \{PAYLOAD_WANT[i]\})").take())
+    verdict.check_list("the judgment of an empty case can fire", PAYLOAD_SAMPLES.len, "samples",
         bad@, "the judgment misreads its own samples: mend the judgment, not the table")
 
 // ==========================================
@@ -155,7 +156,7 @@ priv fn check_enum_functions(arena: Arena$@) //<
     //< rule (Principle 8 in `../../docs/DESIGN-principles.md`).
     $seen: Sz = 0
     $bad: = List<|U8[]|>.new(arena)
-    for rel in harness.tracked_matching(U8[][]::scan.kspl_specs)
+    for rel in harness.tracked_matching(U8[][]::scan.KSPL_SPECS)
         if fixture_text(rel)
             continue
         lines: = harness.read_under_root(rel).lines(arena)
@@ -188,24 +189,24 @@ priv fn check_enum_functions(arena: Arena$@) //<
 // The samples for `enum_taken_first`, with `State` as the file's one enum.
 // Caution: **Include the side that must not hit**: a method, a pointer, a qualified name, an
 // enum taken second, a comment.
-priv const enum_samples: U8[][_] = ::{ "fn text(s: State): U8[]", "pub fn show(s: State, on: Bool)",
+priv const ENUM_SAMPLES: U8[][_] = ::{ "fn text(s: State): U8[]", "pub fn show(s: State, on: Bool)",
     "priv fn color(s: State): U32", "fn text(s: State): U8[] {", "  fn text(s: Self): U8[]",
     "fn at(s: State@): U8[]", "fn from(s: other.State)", "fn pair(n: I32, s: State)",
     "fn other(s: Mode)", "// fn text(s: State)" }
-priv const enum_want: Bool[_] = ::{ true, true, true, true, false, false, false, false, false,
+priv const ENUM_WANT: Bool[_] = ::{ true, true, true, true, false, false, false, false, false,
     false }
 
 priv fn check_enum_functions_fire(arena: Arena$@)
     $enums: = List<|U8[]|>.new(arena)
     enums.push("State")
     $bad: = List<|U8[]|>.new(arena)
-    for i in Range.asc(enum_samples.len)
-        got: = enum_taken_first(enum_samples[i], enums@).len > 0
-        if got != enum_want[i]
+    for i in Range.asc(ENUM_SAMPLES.len)
+        got: = enum_taken_first(ENUM_SAMPLES[i], enums@).len > 0
+        if got != ENUM_WANT[i]
             bad
-                .push(arena.text().s("\"").s(enum_samples[i]).s("\" was read as ")
+                .push(arena.text().s("\"").s(ENUM_SAMPLES[i]).s("\" was read as ")
                 .s("a function of the enum" if got else "fine").take())
-    verdict.check_list("the judgment of a function of one enum can fire", enum_samples.len,
+    verdict.check_list("the judgment of a function of one enum can fire", ENUM_SAMPLES.len,
         "samples", bad@, "the judgment misreads its own samples: mend the judgment, not the table")
 
 // ==========================================
@@ -274,7 +275,7 @@ priv fn check_arena_default(arena: Arena$@) //<
     //< at the call.
     $seen: Sz = 0
     $bad: = List<|U8[]|>.new(arena)
-    for rel in harness.tracked_matching(U8[][]::scan.kspl_specs)
+    for rel in harness.tracked_matching(U8[][]::scan.KSPL_SPECS)
         $i: Sz = 0
         for line in harness.read_under_root(rel).lines(arena)
             i += 1
@@ -289,7 +290,7 @@ priv fn check_arena_default(arena: Arena$@) //<
 // Caution: **Include the side that must not hit.** These are a variable's initializer (top-level,
 // local, mutable), a comparison, a default on another type, a function type taking an arena, a
 // string.
-priv const arena_default_samples: Sample[_] = ::{
+priv const ARENA_DEFAULT_SAMPLES: Sample[_] = ::{
     Sample::{ .text = "    arena: Arena$@ = null, //< where the elements go", .hits = true },
     Sample::{ .text = "fn new(loc: Loc, arena: Arena$@ = null): Node$@", .hits = true },
     Sample::{ .text = "fn grow(n: Sz, a: mem.Arena$@ = null) {", .hits = true },
@@ -307,9 +308,9 @@ priv const arena_default_samples: Sample[_] = ::{
 
 priv fn check_arena_default_fires(arena: Arena$@)
     scan.check_samples("the judgment of an arena's default can fire",
-        Sample[]::arena_default_samples, "arena_default_samples", defaults_an_arena, arena)
+        Sample[]::ARENA_DEFAULT_SAMPLES, "arena_default_samples", defaults_an_arena, arena)
 
-priv const list_call: U8[] = "verdict.check_list(" //< the call whose last argument is the fix
+priv const LIST_CALL: U8[] = "verdict.check_list(" //< the call whose last argument is the fix
 
 priv fn has_hintless_list(src: U8[], arena: Arena$@): Bool //<
     //< Whether a source calls `verdict.check_list` with an empty fix, outside a `\"\"\"` string
@@ -327,8 +328,8 @@ priv fn has_hintless_list(src: U8[], arena: Arena$@): Bool //<
     text: = code.slice()
     $rest: U8[] = text
     for rest.len > 0
-        if at: = rest.find_str(list_call)
-            $i: = at + list_call.len
+        if at: = rest.find_str(LIST_CALL)
+            $i: = at + LIST_CALL.len
             $depth: Sz = 1
             for i < rest.len && depth > 0
                 if rest[i] == '('
@@ -351,7 +352,7 @@ priv fn has_hintless_list(src: U8[], arena: Arena$@): Bool //<
 // The samples for `has_hintless_list`.
 // Caution: **Keep a call spread over lines and one inside a `\"\"\"` string.** The first is the
 // usual shape. The second is a test's material, not a call.
-priv const hintless_samples: Sample[_] = ::{
+priv const HINTLESS_SAMPLES: Sample[_] = ::{
     Sample::{ .text = "    verdict.check_list(\"x\", n, \"files\", bad@, \"\")\n", .hits = true },
     Sample::{ .text = "    verdict.check_list(\"x (y)\", n, \"files\",\n        bad@, \"\")\n",
         .hits = true },
@@ -360,17 +361,17 @@ priv const hintless_samples: Sample[_] = ::{
     Sample::{ .text = "    verdict.check_list(\"x\", n, \"f\", bad@, \"say \\\"so\\\"\")\n",
         .hits = false },
     Sample::{ .text =
-        "priv const s: U8[] =\n    \"\"\"\n  verdict.check_list(\"x\", 1, \"f\", b@, \
+        "priv const S: U8[] =\n    \"\"\"\n  verdict.check_list(\"x\", 1, \"f\", b@, \
             \"\")\n\"\"\"\n", .hits = false },
 }
 
 priv fn check_hintless_lists(arena: Arena$@) //<
     //< Every walk's verdict says how to fix what it finds
-    $bad: = scan.misjudged(Sample[]::hintless_samples, has_hintless_list, arena)
+    $bad: = scan.misjudged(Sample[]::HINTLESS_SAMPLES, has_hintless_list, arena)
     $seen: Sz = 0
-    for rel in harness.tracked_matching(U8[][]::scan.kspl_specs)
+    for rel in harness.tracked_matching(U8[][]::scan.KSPL_SPECS)
         src: = harness.read_under_root(rel)
-        if src.find_str(list_call).is_none()
+        if src.find_str(LIST_CALL).is_none()
             continue
         seen += 1
         if has_hintless_list(src, arena)
@@ -382,7 +383,7 @@ priv fn check_hintless_lists(arena: Arena$@) //<
 // A diagnostic names a type by its display text, never its internal name
 // ==========================================
 
-priv const internal_name_call: U8[] = "get_str(" //< the call that gives a type's internal name
+priv const INTERNAL_NAME_CALL: U8[] = "get_str(" //< the call that gives a type's internal name
 
 priv fn interpolates_internal_name(line: U8[], _arena: Arena$@): Bool //<
     //< Whether a line puts a type's internal name into an interpolation (`\{…get_str(…)…\}`)
@@ -398,7 +399,7 @@ priv fn interpolates_internal_name(line: U8[], _arena: Arena$@): Bool //<
         if at: = rest.find_str("\\{")
             after: = rest.sub_from(at + 2)
             end: = after.find_str("\\}").unwrap_or(after.len)
-            if after.sub(0, end).find_str(internal_name_call).is_some()
+            if after.sub(0, end).find_str(INTERNAL_NAME_CALL).is_some()
                 return true
             rest = after.sub_from(end)
         else
@@ -407,7 +408,7 @@ priv fn interpolates_internal_name(line: U8[], _arena: Arena$@): Bool //<
 // The samples for `interpolates_internal_name`.
 // Caution: **Include the side that must not hit**: a key built with `.s()`, `display` in the
 // interpolation, a comment, and `get_str` after the interpolation closes.
-priv const internal_name_samples: Sample[_] = ::{
+priv const INTERNAL_NAME_SAMPLES: Sample[_] = ::{
     Sample::{ .text = "    .s(\"between '\\{c.env.get_str(t)\\}' and\")", .hits = true },
     Sample::{ .text = "  c.err(n, \"x \\{a\\} and \\{r.env.get_str(b)\\}\")", .hits = true },
     Sample::{ .text = "    .s(\"between '\\{c.env.display(t)\\}' and\")", .hits = false },
@@ -418,9 +419,9 @@ priv const internal_name_samples: Sample[_] = ::{
 
 priv fn check_internal_names(arena: Arena$@) //<
     //< No message in the compiler interpolates a type's internal name
-    $bad: = scan.misjudged(Sample[]::internal_name_samples, interpolates_internal_name, arena)
+    $bad: = scan.misjudged(Sample[]::INTERNAL_NAME_SAMPLES, interpolates_internal_name, arena)
     $seen: Sz = 0
-    for rel in harness.tracked_matching(U8[][]::scan.kspl_specs)
+    for rel in harness.tracked_matching(U8[][]::scan.KSPL_SPECS)
         if !rel.starts_with("ksplc/") || rel.starts_with("ksplc/tests/")
             continue
         $i: Sz = 0

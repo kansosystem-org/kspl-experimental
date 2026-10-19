@@ -21,7 +21,7 @@ import "std/verdict"
 
 // The child that writes to both streams and ends.
 // Caution: **Fix the order it writes them in** (the check is that both remain).
-priv const child_src: U8[] =
+priv const CHILD_SRC: U8[] =
     """import "std/io"
 
 fn main()
@@ -30,12 +30,12 @@ fn main()
 
 """
 
-priv const kana_count: Sz = 2800 //< the long argument's length in `か`, one UTF-16 unit each
-priv const long_value_len: Sz = 5000 //< the long environment value's length, past 4096 units
+priv const KANA_COUNT: Sz = 2800 //< the long argument's length in `か`, one UTF-16 unit each
+priv const LONG_VALUE_LEN: Sz = 5000 //< the long environment value's length, past 4096 units
 
 // The child that says whether its argument and an environment value arrived whole: 2800 `か` are
 // 8400 bytes, which a cut or a code page's `!` would change.
-priv const long_child_src: U8[] =
+priv const LONG_CHILD_SRC: U8[] =
     """import "std/io"
 import "std/sys"
 
@@ -64,7 +64,7 @@ priv fn build_child(work: U8[], name: U8[], source: U8[], arena: Arena$@): U8[] 
     if !c.exited_with(0)
         verdict.check("the child translates to C", false, c.out)
         return ""
-    b: = harness_build.build_exe(U8[][]::{ gen }, exe, U8[][]::harness_build.default_cflags)
+    b: = harness_build.build_exe(U8[][]::{ gen }, exe, U8[][]::harness_build.DEFAULT_CFLAGS)
     if !b.exited_with(0)
         verdict.check("the child builds", false, b.out)
         return ""
@@ -88,7 +88,7 @@ fn main(): I32
     fs.mkdir_all(work) catch
         verdict.check("the place can be made", false, work)
         return harness.finish()
-    exe: = build_child(work, "twostreams", child_src, arena)
+    exe: = build_child(work, "twostreams", CHILD_SRC, arena)
     if exe.len == 0
         return harness.finish()
 
@@ -123,16 +123,16 @@ priv fn check_long(work: U8[], arena: Arena$@) //<
     //<
     //< Windows counts both in UTF-16 units: a command line to 32767, a value past 4096. Counted in
     //< UTF-8 bytes, the kana (three bytes a unit) would be refused at a third of the limit.
-    exe: = build_child(work, "longargs", long_child_src, arena)
+    exe: = build_child(work, "longargs", LONG_CHILD_SRC, arena)
     if exe.len == 0
         return
     $kana: = Str_builder.new()
     defer kana.free()
-    for _i in Range.asc(kana_count)
+    for _i in Range.asc(KANA_COUNT)
         kana.s("か")
     $value: = Str_builder.new()
     defer value.free()
-    for _i in Range.asc(long_value_len)
+    for _i in Range.asc(LONG_VALUE_LEN)
         value.c('a')
     $long_set: = true
     sys.set_env("KSPL_SPAWN_LONG", value.slice()) catch
@@ -157,37 +157,37 @@ priv fn check_long(work: U8[], arena: Arena$@) //<
 //   * a prompt written to a terminal shows before the program waits to read
 // ==========================================
 
-priv const lines: Sz = 300 //< the number of lines printed
+priv const LINES: Sz = 300 //< the number of lines printed
     //<
     //< Caution: **Make it more than one full buffer**, or a loss cannot be told from everything
     //< happening to stay in the buffer.
 
 // A SIGSEGV from a null dereference. A signal does not flush stdio, so without line buffering the
 // output is all lost (as with macOS's abort()).
-priv const crash: U8[] = """    p: I32$@ = null
+priv const CRASH: U8[] = """    p: I32$@ = null
     p$ = 1
 """
 
-priv const panic_call: U8[] = """    panic("boom")
+priv const PANIC_CALL: U8[] = """    panic("boom")
 """
 
-priv const prog_head: U8[] = """import "std/io"
+priv const PROG_HEAD: U8[] = """import "std/io"
 
 fn main(): I32
 """
 
 // Caution: Keep it a raw string, so the interpolation's characters reach the program as typed.
-priv const prog_print: U8[] = """        io.out().s("line \{i\}").c('\n')
+priv const PROG_PRINT: U8[] = """        io.out().s("line \{i\}").c('\n')
 """
 
-priv const prog_tail: U8[] = """    return 0
+priv const PROG_TAIL: U8[] = """    return 0
 
 """
 
 priv fn program(prologue: U8[], death: U8[], arena: Arena$@): U8[] //<
     //< The program that prints lines and then ends abnormally with the code in death
-    return arena.text().s(prog_head).s(prologue).s("    for $i: = 0; i < \{lines\}; i += 1\n")
-        .s(prog_print).s(death).s(prog_tail).take()
+    return arena.text().s(PROG_HEAD).s(prologue).s("    for $i: = 0; i < \{LINES\}; i += 1\n")
+        .s(PROG_PRINT).s(death).s(PROG_TAIL).take()
 
 priv fn check_flush_case(slot: U8[], name: U8[], prologue: U8[], death: U8[], want_all: Bool,
     want_text: U8[], arena: Arena$@) //<
@@ -205,11 +205,11 @@ priv fn check_flush_case(slot: U8[], name: U8[], prologue: U8[], death: U8[], wa
         verdict.check(name, false, b.out)
         return
     seen: = b.out.count_str("line ")
-    if want_all && seen != lines
+    if want_all && seen != LINES
         verdict.check(name, false,
             arena.text().s("the count of lines seen is short\n\{b.out\}").take())
         return
-    if !want_all && seen >= lines
+    if !want_all && seen >= LINES
         verdict.check(name, false, "all of it is visible (under full buffering it should be lost)")
         return
     if want_text.len > 0 && b.out.find_str(want_text).is_none()
@@ -219,7 +219,7 @@ priv fn check_flush_case(slot: U8[], name: U8[], prologue: U8[], death: U8[], wa
     verdict.check(name, true, "")
 
 // Both streams end their line with "\r\n" written by hand.
-priv const prog_crlf: U8[] =
+priv const PROG_CRLF: U8[] =
     """import "std/io"
 
 fn main(): I32
@@ -236,7 +236,7 @@ priv fn check_bytes(arena: Arena$@) //<
     name: = "standard output and standard error carry the bytes written"
     work: = harness.sandbox("flush_crlf")
     src: = fs.join(work, "p.kspl", arena)
-    io.write_file(src, prog_crlf) catch
+    io.write_file(src, PROG_CRLF) catch
         verdict.check(name, false, "cannot write the material")
         return
     b: = harness_build.build_and_run(src, work, "p", U8[][]::{})
@@ -246,7 +246,7 @@ priv fn check_bytes(arena: Arena$@) //<
 
 // A prompt, a read, then a death by signal. Only what was written before the death remains. So a
 // prompt in the output went out before the program waited to read.
-priv const prompt_src: U8[] =
+priv const PROMPT_SRC: U8[] =
     """import "std/io"
 
 fn main(): I32
@@ -283,7 +283,7 @@ priv fn check_prompt(arena: Arena$@) //<
     if !probe.exited_with(0)
         verdict.skip_check(name, "no util-linux `script` to give the program a terminal")
         return
-    exe: = build_child(harness.sandbox("flush_prompt"), "prompt", prompt_src, arena)
+    exe: = build_child(harness.sandbox("flush_prompt"), "prompt", PROMPT_SRC, arena)
     if exe.len == 0
         return
     // The premise: into a pipe the prompt waits in the buffer, and the death loses it. Unless it
@@ -298,14 +298,14 @@ priv fn check_prompt(arena: Arena$@) //<
 
 priv fn run_output_flush(arena: Arena$@) //< the output kept on an abnormal exit
     io.out().s("# keeping the output on an abnormal exit: 6\n")
-    check_flush_case("panic", "panic: the output before the panic remains", "", panic_call, true,
+    check_flush_case("panic", "panic: the output before the panic remains", "", PANIC_CALL, true,
         "panic: boom", arena)
     // The premise: unless the output is lost with no line buffer, the next case passing proves
     // nothing about set_line_buffered.
     check_flush_case("nobuf",
         "no line buffer: the output is lost on a death by signal (confirming the premise)", "",
-        crash, false, "", arena)
+        CRASH, false, "", arena)
     check_flush_case("linebuf", "set_line_buffered: the output remains even on a death by signal",
-        "    io.set_line_buffered()\n", crash, true, "", arena)
+        "    io.set_line_buffered()\n", CRASH, true, "", arena)
     check_bytes(arena)
     check_prompt(arena)

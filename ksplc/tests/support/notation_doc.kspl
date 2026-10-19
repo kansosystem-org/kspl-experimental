@@ -12,14 +12,14 @@ import "std/mem" { Arena }
 import "std/str"
 import "std/verdict"
 
-priv const probe_uri: U8[] = "file:///doc_probe.kspl"
-priv const wait_ms: I32 = 15000
+priv const PROBE_URI: U8[] = "file:///doc_probe.kspl"
+priv const WAIT_MS: I32 = 15000
 
 // One declaration carrying every mark: its summary, one on a parameter's line, that parameter's
 // continuation, and the detail after the parting. **The head wraps, so its run starts on the line
 // where the head ends** ("The documentation a declaration carries" in
 // `../../../docs/DESIGN-notation.md`).
-priv const probe_src: U8[] =
+priv const PROBE_SRC: U8[] =
     """priv fn twice(
   n: I32, //< the number doubled
   //< A negative is doubled just the same, and nothing is clamped.
@@ -33,10 +33,10 @@ fn main(): I32
   return twice(21)
 """
 
-priv const call_line: Sz = 10 //< the line and column of `twice`'s call (0-based)
+priv const CALL_LINE: Sz = 10 //< the line and column of `twice`'s call (0-based)
     //<
-    //< It is the `return twice(21)` line of `probe_src`.
-priv const call_col: Sz = 9
+    //< It is the `return twice(21)` line of `PROBE_SRC`.
+priv const CALL_COL: Sz = 9
 
 fn run(c: jsonrpc_client.Client$@, arena: Arena$@) //<
     //< It checks a hover on the call of twice carries every part of its documentation
@@ -44,10 +44,10 @@ fn run(c: jsonrpc_client.Client$@, arena: Arena$@) //<
     //< Caution: **Check all four.** Separate steps read them (`decl_summary`, `param_docs`,
     //< `summary_run` and `run_at` in `../../base/ast_doc.kspl`), and one going silent shows
     //< nowhere else.
-    c.notify("textDocument/didOpen", lsp_client.did_open(probe_uri, probe_src, arena),
-        lsp_client.send_ms, arena) catch {}
+    c.notify("textDocument/didOpen", lsp_client.did_open(PROBE_URI, PROBE_SRC, arena),
+        lsp_client.SEND_MS, arena) catch {}
     got: = lsp_client.answer(c, "textDocument/hover",
-        lsp_client.at_pos(probe_uri, call_line, call_col, arena), wait_ms, arena)
+        lsp_client.at_pos(PROBE_URI, CALL_LINE, CALL_COL, arena), WAIT_MS, arena)
     t: = got.get("result").get("contents").get("value").as_str().unwrap_or("")
     verdict.check("a hover carries the doc comment written in the indentation notation",
         t.find_str("twice what it is given").is_some() &&

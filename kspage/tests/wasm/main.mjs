@@ -38,7 +38,7 @@ check(entryPoints > 100, `there are ${entryPoints} entry points to call from JS 
 // How it refuses when asked about outside the range.
 // Caution: **Refuse without falling.** The screen's side sends a number past the placed count, or
 // -1, and **on wasm, falling on a run-time check is an infinite loop** ("Conditions that stop
-// execution at run time" in `../../../docs/SPEC-language.md`): the screen freezes and the draft is
+// execution at run time" in `../../../docs/SPEC-programming-language.md`): the screen freezes and the draft is
 // lost. **The subscript's type is signed**, so refuse the negative side too. **Before placing is
 // the same** (there is no page until the first `kspage_web_layout`).
 inPart("edge");

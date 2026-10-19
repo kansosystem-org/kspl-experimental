@@ -60,7 +60,7 @@ $lsp_diags: Lsp_diag_manager = ::{}
 
 impl Lsp_diag_manager
     fn clear(r: Self$@)
-        r.list.len = 0
+        r.list.clear()
         // A Map cannot be emptied, so it is created again; its keys live as long as list.
         r.seen.free()
         r.seen = Map<|U8[], Bool|>.new(null)
@@ -129,7 +129,7 @@ priv fn print_json(file: U8[], line: Sz, column: Sz, end_column: Sz, msg: U8[],
         json_written.hints += 1
     print_json_row(row)
 
-priv fn print_json_row(row: json.Val) //< one object as one line of stderr
+priv fn print_json_row(row: json.Value) //< one object as one line of stderr
     $out: = Str_builder.new()
     defer out.free()
     row.dump(out@)
@@ -158,7 +158,7 @@ fn print_json_closing(succeeded: Bool) //<
         .set("hints", b.int_val(json_written.hints)).build()
     print_json_row(row)
 
-priv fn json_num(b: Json_builder$@, v: Sz): json.Val //< a position, or `null` where it is 0
+priv fn json_num(b: Json_builder$@, v: Sz): json.Value //< a position, or `null` where it is 0
     return b.null_val() if v == 0 else b.int_val(v)
 
 fn print_unplaced(file: U8[], line: Sz, msg: U8[]) //<
@@ -275,12 +275,12 @@ priv fn print_placed(file_name: U8[], source: U8[], offset: Sz, length: Sz, msg:
     // lands far below the text it marks. The position in the head stays the line's own.
     $first: Sz = 1
     $last: Sz = line_chars
-    if line_chars > shown_line_chars
-        first = column - shown_line_lead if column > shown_line_lead else 1
-        last = first + shown_line_chars - 1
+    if line_chars > SHOWN_LINE_CHARS
+        first = column - SHOWN_LINE_LEAD if column > SHOWN_LINE_LEAD else 1
+        last = first + SHOWN_LINE_CHARS - 1
         if last > line_chars
             last = line_chars
-            first = last - shown_line_chars + 1
+            first = last - SHOWN_LINE_CHARS + 1
     cut_head: = first > 1
     cut_tail: = last < line_chars
     shown: = line_text.sub(byte_at_char(line_text, first - 1),
@@ -297,8 +297,8 @@ priv fn print_placed(file_name: U8[], source: U8[], offset: Sz, length: Sz, msg:
     repeat_char(log_w, "^", span_len)
     log_w.s("\n")
 
-priv const shown_line_chars: Sz = 120 //< the most characters of a source line a diagnostic shows
-priv const shown_line_lead: Sz = 40 //< how many characters before the column a cut line keeps
+priv const SHOWN_LINE_CHARS: Sz = 120 //< the most characters of a source line a diagnostic shows
+priv const SHOWN_LINE_LEAD: Sz = 40 //< how many characters before the column a cut line keeps
 
 priv fn byte_at_char(text: U8[], n: Sz): Sz //<
     //< The byte offset where the `n`th character (from 0) starts, or the length past the last

@@ -31,7 +31,7 @@ priv struct Op_traits //< the method and trait an operator calls on a user type
     method_name: U8[]
     trait_name: U8[]
 
-priv const op_traits: Op_traits[10] = ::{ Op_traits::{ .op = "+", .method_name = "add",
+priv const OP_TRAITS: Op_traits[10] = ::{ Op_traits::{ .op = "+", .method_name = "add",
     .trait_name = "Add" }, Op_traits::{ .op = "-", .method_name = "sub", .trait_name = "Sub" },
     Op_traits::{ .op = "*", .method_name = "mul", .trait_name = "Mul" },
     Op_traits::{ .op = "/", .method_name = "div", .trait_name = "Div" },
@@ -50,8 +50,8 @@ priv struct Operands //< a binary expression's two sides, once both their types 
     right: Ast_node$@
     right_id: I32
 
-priv fn get_op_traits(op: U8[]): Op_traits //< op's row in `op_traits`; empty names for none
-    for row in op_traits
+priv fn get_op_traits(op: U8[]): Op_traits //< op's row in `OP_TRAITS`; empty names for none
+    for row in OP_TRAITS
         if row.op.equals(op)
             return row
     return Op_traits::{ .op = op, .method_name = "", .trait_name = "" }
@@ -217,8 +217,9 @@ fn infer_binary_expr(node: Ast_node$@, ctx: Sema_ctx$@, expected_id: I32): I32!S
     if is_cmp || is_logical || is_strict_bitwise || ctx.env.is_pointer(expected_id)
         pass_left_id = I32::sema_type_env.Builtin_type_id.unknown
     // **The outer expected type does not reach a numeric operation's operands** ("Integer
-    // arithmetic" in docs/SPEC-language.md). They compute at their own width, and infer_expr's last
-    // step widens the result. Passed down, `c: I32 = a + b` over two U8 gave 256, not 0.
+    // arithmetic" in docs/SPEC-programming-language.md). They compute at their own width, and
+    // infer_expr's last step widens the result. Passed down, `c: I32 = a + b` over two U8 gave 256,
+    // not 0.
     $right_first_id: = I32::sema_type_env.Builtin_type_id.unknown
     $right_done: = false
     // Caution: **Literals alone have no width, so they take it**: on both sides (`x: I64 =
@@ -350,9 +351,9 @@ priv fn lint_operand_pair(ctx: Sema_ctx$@, node: Ast_node$@, left_node: Ast_node
         ctx.warn(node, ctx.scratch.slice())
 
     // [W0108] KSPL ranks `&` `|` `^` with `*` ("The operator list and precedence" in
-    // docs/SPEC-language.md), C below comparison, so the same text parses differently. **Neither
-    // types nor the run time catch it**: only the answer changes (`6 & 4 == 4` is true in KSPL
-    // only).
+    // docs/SPEC-programming-language.md), C below comparison, so the same text parses differently.
+    // **Neither types nor the run time catch it**: only the answer changes (`6 & 4 == 4` is true in
+    // KSPL only).
     if is_bare_bitwise(left_node) || is_bare_bitwise(right_node)
         ctx.clear_scratch()
             .s("[W0108] '&', '|' and '^' bind tighter than comparison in KSPL (they sit with '*'), \
@@ -388,7 +389,7 @@ priv fn right_expected_id(ctx: Sema_ctx$@, right_node: Ast_node$@, left_type_id:
     // where the outer expected type equals it. The assignment above promotes other operands to the
     // wider side, but a literal has no type of its own to promote.
     // Caution: **Do not include a shift.** The amount's type is independent of the left-hand side's
-    // ("Shifts are outside the exception" in docs/SPEC-language.md).
+    // ("Shifts are outside the exception" in docs/SPEC-programming-language.md).
     if ctx.env.is_integer(left_type_id) && !is_logical && !is_shift &&
         ctx.env.get_real_type(expected_id) == ctx.env.get_real_type(left_type_id) &&
         sema_body_literal.is_untyped_int_literal(right_node)
@@ -442,9 +443,9 @@ fn compound_right_expected(ctx: Sema_ctx$@, right_node: Ast_node$@, left_type_id
         //<
         //< One written in literals alone has no width of its own and takes the place's, as an
         //< initializer does. See `f += 1.0` on an `F32`, and "6.5 Assignment and compound
-        //< assignment" in docs/SPEC-language.md. Caution: **Not a shift amount**, which keeps its
-        //< own type, nor any other value. So `y <<= x` (`y: U8`, `x: I32`) passes, as `y = y << x`
-        //< does.
+        //< assignment" in docs/SPEC-programming-language.md. Caution: **Not a shift amount**, which
+        //< keeps its own type, nor any other value. So `y <<= x` (`y: U8`, `x: I32`) passes, as `y
+        //< = y << x` does.
     bin_op: = op_text.sub(0, op_text.len - 1)
     if !bin_op.is_shift_op() && ctx.env.is_numeric(left_type_id) &&
         sema_body_literal.is_untyped_numeric_expr(right_node)

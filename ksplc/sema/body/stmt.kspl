@@ -33,15 +33,15 @@ import "ksplc/sema/type/scope" as sema_type_scope + { Sema_symbol }
 import "std/chars"
 import "std/str"
 
-priv const max_block_nesting: Sz = 128 //< the limit on a block's nesting
+priv const MAX_BLOCK_NESTING: Sz = 128 //< the limit on a block's nesting
     //<
     //< **It exists for the C backend, not ksplc.** Each KSPL block becomes one brace level in C,
     //< and C's depth counts expression parentheses too, so it stays below 256.
 
-priv const guaranteed_block_nesting: Sz = 64 //<
+priv const GUARANTEED_BLOCK_NESTING: Sz = 64 //<
     //< The number of levels the specification promises to accept, which the diagnostic states
     //<
-    //< The promise is in the implementation limits of docs/SPEC-language.md.
+    //< The promise is in the implementation limits of docs/SPEC-programming-language.md.
     //< Caution: **Do not show max_block_nesting above in a diagnostic.** It counts scope levels,
     //< including the function's and the file's, so it promises more than is actually accepted.
 
@@ -65,7 +65,7 @@ priv fn report_bad_ptr_step(c: Sema_ctx$@, node: Ast_node$@, type_id: I32, right
         .s("be an integer (it counts elements), but got '\{r_shown\}'")
     c.err(node, c.scratch.slice())
 
-priv const no_name_label: U8[] = "_" //< the label for a level with no name
+priv const NO_NAME_LABEL: U8[] = "_" //< the label for a level with no name
     //<
     //< **The name is defined only here** (`infer_stmt_break_continue` uses it).
 
@@ -273,7 +273,7 @@ impl Ast_node
             sema_type_scope.Sym_kind.constant if is_const else sema_type_scope.Sym_kind.variable
 
         // The immutability of a fixed-length array's elements is set by the `$` before the name
-        // ("The two axes of mutability" in docs/SPEC-language.md).
+        // ("The two axes of mutability" in docs/SPEC-programming-language.md).
         // Caution: Write it back to the type node too. genc emits the type name from here
         // (emit_var_decl in gen/c/stmt.kspl), so fixing only the symbol emits `const U8 data[N]`
         // and C fails. The desugaring splits a multi-name declaration (`$a: T[N], b: T[N]`) into
@@ -571,9 +571,9 @@ impl Ast_node
         defer c.symtab.exit_scope()
         // The scope levels count the depth (one per block).
         // Caution: Stop once reported, or one cause is reported once per nesting level.
-        if c.symtab.scope_stack.len > max_block_nesting
+        if c.symtab.scope_stack.len > MAX_BLOCK_NESTING
             c.clear_scratch()
-                .s("block nesting too deep. The language guarantees \{guaranteed_block_nesting\} \
+                .s("block nesting too deep. The language guarantees \{GUARANTEED_BLOCK_NESTING\} \
                     levels of block nesting. The C backend emits one brace level per block. C \
                     compilers reject deeper nesting")
             c.err(r, c.scratch.slice())
@@ -609,7 +609,7 @@ impl Ast_node
         // target is not determined.
         // Caution: **Do not silently choose the innermost**: the writer may have meant another
         // level (Principle 5 of docs/DESIGN-principles.md).
-        if target_label.equals(no_name_label)
+        if target_label.equals(NO_NAME_LABEL)
             c.clear_scratch()
                 .s("cannot '\{r.text\}' to the label '_'. '_' means the block has no name and can \
                     be ")

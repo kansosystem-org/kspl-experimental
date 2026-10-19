@@ -22,7 +22,7 @@ import "tests/support/harness"
 // in `std/str`). Both drop a `\r` at a line's end.
 // ==========================================
 
-priv const hand_cut: U8[] = "find_char('\\n')"
+priv const HAND_CUT: U8[] = "find_char('\\n')"
 
 priv fn cuts_by_hand(line: U8[], arena: Arena$@): Bool //< whether it cuts into lines by hand
     //<
@@ -31,7 +31,7 @@ priv fn cuts_by_hand(line: U8[], arena: Arena$@): Bool //< whether it cuts into 
     //< Caution: **Keep the judging in this one place.** The check and its samples both call it. So
     //< the samples show the very judgment the check runs ("a check shows it can fire" in
     //< `conventions_scan.kspl`).
-    return scan.strip_code(line, arena).find_str(hand_cut).is_some()
+    return scan.strip_code(line, arena).find_str(HAND_CUT).is_some()
 
 priv fn check_line_cut(arena: Arena$@)
     $bad: = List<|U8[]|>.new(arena)
@@ -52,7 +52,7 @@ priv fn check_line_cut(arena: Arena$@)
 // `fs.is_executable` is not used for the check before starting **`is_executable` is always false on
 // Windows** (no execute bit there); `fs.can_run` answers that.
 // ==========================================
-priv const spawn_calls: U8[][_] = ::{ "spawn_piped", "spawn_redirect", "spawn_wait", "spawn_async",
+priv const SPAWN_CALLS: U8[][_] = ::{ "spawn_piped", "spawn_redirect", "spawn_wait", "spawn_async",
     "run_capture" }
 
 priv fn gates_on_exec(body: U8[], _arena: Arena$@): Bool //<
@@ -61,7 +61,7 @@ priv fn gates_on_exec(body: U8[], _arena: Arena$@): Bool //<
     //< Caution: **Keep the judging in this one place** (the reason is at `cuts_by_hand`).
     if body.find_str("is_executable").is_none()
         return false
-    for call in spawn_calls
+    for call in SPAWN_CALLS
         if body.find_str(call).is_some()
             return true
     return false
@@ -69,7 +69,7 @@ priv fn gates_on_exec(body: U8[], _arena: Arena$@): Bool //<
 priv fn check_exec_gate(arena: Arena$@)
     $bad: = List<|U8[]|>.new(arena)
     $seen: Sz = 0
-    for rel in harness.tracked_matching(U8[][]::scan.kspl_specs)
+    for rel in harness.tracked_matching(U8[][]::scan.KSPL_SPECS)
         body: = harness.read_under_root(rel)
         seen += 1
         // **There are exactly three exemptions**: the predicate's definition, the test pinning it
@@ -88,7 +88,7 @@ priv fn check_exec_gate(arena: Arena$@)
 // Opening it gives a `FileNotFoundError`, which shows up first there or in the Windows job.
 // ==========================================
 
-priv const tmp_literals: U8[][_] = ::{ "\"/tmp/", "'/tmp/" } //<
+priv const TMP_LITERALS: U8[][_] = ::{ "\"/tmp/", "'/tmp/" } //<
     //< The forms of a string that starts with a `/tmp/` path
     //<
     //< **Only `"/tmp/` inside a string is checked**; a comment explaining `/tmp` is not hit.
@@ -96,14 +96,14 @@ priv const tmp_literals: U8[][_] = ::{ "\"/tmp/", "'/tmp/" } //<
 priv fn opens_tmp(line: U8[], _arena: Arena$@): Bool //< whether a string starts with `/tmp/`
     //<
     //< Caution: **Keep the judging in this one place** (the reason is at `cuts_by_hand`).
-    for lit in tmp_literals
+    for lit in TMP_LITERALS
         if line.find_str(lit).is_some()
             return true
     return false
 
 // Caution: **Include the explaining sentences.** A comment explaining `/tmp` must not hit, so
 // without them a broken quote-mark test goes unnoticed.
-priv const tmp_samples: Sample[_] = ::{
+priv const TMP_SAMPLES: Sample[_] = ::{
     Sample::{ .text = "path = \"/tmp/x.safetensors\"", .hits = true },
     Sample::{ .text = "open('/tmp/out', 'wb')", .hits = true },
     Sample::{ .text = "SOCK := \"/tmp/uart.sock\"", .hits = true },
@@ -114,14 +114,14 @@ priv const tmp_samples: Sample[_] = ::{
 }
 
 priv fn check_tmp_fires(arena: Arena$@)
-    scan.check_samples("the judgment of `/tmp` can fire", Sample[]::tmp_samples, "tmp_samples",
+    scan.check_samples("the judgment of `/tmp` can fire", Sample[]::TMP_SAMPLES, "tmp_samples",
         opens_tmp, arena)
 
 priv fn check_tmp_literal(arena: Arena$@)
     $bad: = List<|U8[]|>.new(arena)
     $seen: Sz = 0
-    for rel in harness.tracked_matching(U8[][]::scan.build_ext)
-        // **This file is excluded because it holds its own samples** (`tmp_samples` above).
+    for rel in harness.tracked_matching(U8[][]::scan.BUILD_EXT)
+        // **This file is excluded because it holds its own samples** (`TMP_SAMPLES` above).
         if rel.equals("tests/support/conventions_win.kspl")
             continue
         $i: Sz = 0
@@ -142,8 +142,8 @@ priv fn check_tmp_literal(arena: Arena$@)
 // typo (a `>` or `|` that lost its quoting becomes the name). So the check reads **the paths**, not
 // any text, untracked files included (`harness.tracked` picks up `--others`).
 
-priv const win_bad_chars: U8[] = "<>:\"|?*"
-priv const win_devices: U8[][_] = ::{ "con", "prn", "aux", "nul" }
+priv const WIN_BAD_CHARS: U8[] = "<>:\"|?*"
+priv const WIN_DEVICES: U8[][_] = ::{ "con", "prn", "aux", "nul" }
 
 priv fn win_device(part: U8[]): Bool //<
     //< Whether it is a device's name
@@ -154,7 +154,7 @@ priv fn win_device(part: U8[]): Bool //<
     //< (names there are case-insensitive).
     dot: = part.find_char('.').unwrap_or(0)
     stem: = part.sub(0, dot) if dot > 0 else part
-    for d in win_devices
+    for d in WIN_DEVICES
         if stem.equals_ignore_case(d)
             return true
     if stem.len != 4
@@ -172,7 +172,7 @@ priv fn win_hostile(path: U8[], arena: Arena$@): Bool //<
         if part.len == 0
             continue
         for $i: Sz = 0; i < part.len; i += 1
-            if part[i] < ' ' || win_bad_chars.find_char(part[i]).is_some()
+            if part[i] < ' ' || WIN_BAD_CHARS.find_char(part[i]).is_some()
                 return true
         last: = part[part.len - 1]
         if last == '.' || last == ' ' || win_device(part)
@@ -195,13 +195,13 @@ priv fn check_win_paths(arena: Arena$@)
 // ==========================================
 
 // The misses rely on `cuts_by_hand` dropping string literals and line comments.
-priv const line_cut_samples: Sample[_] = ::{ Sample::{ .text = "  at: = out.find_char('\\n');",
+priv const LINE_CUT_SAMPLES: Sample[_] = ::{ Sample::{ .text = "  at: = out.find_char('\\n');",
     .hits = true }, Sample::{ .text = "  // do not cut with find_char('\\n')", .hits = false },
     Sample::{ .text = "  want: = \"find_char('\\n')\";", .hits = false },
     Sample::{ .text = "  for line in out.lines(arena) {", .hits = false } }
 
 // **The only test is whether both appear in the same file.** One alone is not a hit.
-priv const exec_gate_samples: Sample[_] = ::{ Sample::{ .text =
+priv const EXEC_GATE_SAMPLES: Sample[_] = ::{ Sample::{ .text =
     "if fs.is_executable(p) { subproc.spawn_piped(argv, \"\"); }", .hits = true },
     Sample::{ .text = "if fs.is_executable(p) { subproc.run_capture(argv); }", .hits = true },
     Sample::{ .text = "if fs.is_executable(p) { return true; }", .hits = false },
@@ -209,7 +209,7 @@ priv const exec_gate_samples: Sample[_] = ::{ Sample::{ .text =
 
 // **It checks each element**, so the separating `/` alone is not hit. The first row is text that
 // lost its quoting and became a file name.
-priv const win_path_samples: Sample[_] = ::{ Sample::{ .text =
+priv const WIN_PATH_SAMPLES: Sample[_] = ::{ Sample::{ .text =
     "indow.app;|const app = window.kspage;|", .hits = true },
     Sample::{ .text = "out/tmp/a>b.txt", .hits = true },
     Sample::{ .text = "out/tmp/x:1.txt", .hits = true },
@@ -223,11 +223,11 @@ priv const win_path_samples: Sample[_] = ::{ Sample::{ .text =
 
 priv fn check_win_fires(arena: Arena$@)
     scan.check_samples("the judgment of a path Windows cannot make can fire",
-        Sample[]::win_path_samples, "win_path_samples", win_hostile, arena)
+        Sample[]::WIN_PATH_SAMPLES, "win_path_samples", win_hostile, arena)
     scan.check_samples("the judgment of cutting into lines by hand can fire",
-        Sample[]::line_cut_samples, "line_cut_samples", cuts_by_hand, arena)
+        Sample[]::LINE_CUT_SAMPLES, "line_cut_samples", cuts_by_hand, arena)
     scan.check_samples("the judgment of the check before starting can fire",
-        Sample[]::exec_gate_samples, "exec_gate_samples", gates_on_exec, arena)
+        Sample[]::EXEC_GATE_SAMPLES, "exec_gate_samples", gates_on_exec, arena)
 
 fn run(arena: Arena$@)
     check_win_fires(arena)

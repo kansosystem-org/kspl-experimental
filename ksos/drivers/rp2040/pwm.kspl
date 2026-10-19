@@ -19,13 +19,13 @@ import "ksos/drivers/mmio"
 import "ksos/drivers/rp2040/gpio"
 import "ksos/drivers/rp2040/resets"
 
-const reset_pwm: U32 = 1U32 << 14
+const RESET_PWM: U32 = 1U32 << 14
 
-const pwm_base: U32 = 0x40050000
-const slice_stride: U32 = 0x14
-const csr_en: U32 = 1U32 << 0
+const PWM_BASE: U32 = 0x40050000
+const SLICE_STRIDE: U32 = 0x14
+const CSR_EN: U32 = 1U32 << 0
 
-const funcsel_pwm: U32 = 4 //< the GPIO FUNCSEL value that selects PWM (F4)
+const FUNCSEL_PWM: U32 = 4 //< the GPIO FUNCSEL value that selects PWM (F4)
 
 fn slice_of(pin: U32): U32 //< the PWM slice number pin is connected to
     //<
@@ -39,14 +39,14 @@ fn is_channel_b(pin: U32): Bool //<
 fn init(): Void!mmio.Driver_error //< takes the PWM block out of reset
     //<
     //< Call it once before any other PWM operation (again is safe). The wait has a timeout.
-    resets.unreset(reset_pwm)!
+    resets.unreset(RESET_PWM)!
 
 fn config_slice(slice: U32, div_int: U32, div_frac: U32, top: U32) //<
     //< Sets the slice's period and starts it running
     //<
     //< div_int/div_frac is the divisor in 8.4 fixed point, and top the wrap value (period = TOP+1).
     //< CC keeps its previous value, so the output is undefined until set_percent writes one.
-    base: = pwm_base + slice_stride * slice
+    base: = PWM_BASE + SLICE_STRIDE * slice
     mmio.write32(base, 0U32) // stop it first, then configure it
     div_addr: = base + 0x04
     mmio.write32(div_addr, ((div_int & 0xFF) << 4) | (div_frac & 0xF))
@@ -54,24 +54,24 @@ fn config_slice(slice: U32, div_int: U32, div_frac: U32, top: U32) //<
     mmio.write32(top_addr, top)
     ctr_addr: = base + 0x08
     mmio.write32(ctr_addr, 0U32)
-    mmio.write32(base, csr_en)
+    mmio.write32(base, CSR_EN)
 
 fn init_pin(pin: U32) //<
     //< makes pin usable as a PWM output (switches the pin's function to PWM)
     //<
     //< config_slice sets the slice's period separately.
-    gpio.select_function(pin, funcsel_pwm)
+    gpio.select_function(pin, FUNCSEL_PWM)
 
 fn cc_addr_of(pin: U32): U32 //< the address of pin's duty register (CC)
     //<
     //< **It exists for a path with a tight deadline** (WS2812 rewrites the duty every period); the
-    //< caller gets the address here rather than copying `pwm_base`.
-    return pwm_base + slice_stride * slice_of(pin) + 0x0C
+    //< caller gets the address here rather than copying `PWM_BASE`.
+    return PWM_BASE + SLICE_STRIDE * slice_of(pin) + 0x0C
 
 fn ctr_addr_of(pin: U32): U32 //< the address of the counter (CTR) of the slice pin belongs to
     //<
     //< Used like cc_addr_of; both channels of a slice give the same address.
-    return pwm_base + slice_stride * slice_of(pin) + 0x08
+    return PWM_BASE + SLICE_STRIDE * slice_of(pin) + 0x08
 
 fn set_level(pin: U32, level: U32) //< sets pin's duty as a count
     //<

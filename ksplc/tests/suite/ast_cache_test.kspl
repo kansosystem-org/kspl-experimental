@@ -21,10 +21,10 @@ import "std/strnum"
 import "std/sys"
 import "std/verdict"
 
-priv const fixture: U8[] = "tests/prog/ast_cache.kspl"
-priv const stats_head: U8[] = "[AST Cache] "
+priv const FIXTURE: U8[] = "tests/prog/ast_cache.kspl"
+priv const STATS_HEAD: U8[] = "[AST Cache] "
 
-priv const lsp_ms: I32 = 60000 //<
+priv const LSP_MS: I32 = 60000 //<
     //< The wide wait: with nothing cached the language server reads the whole of std
 
 priv struct Counts //< `--stats`'s hits and misses
@@ -47,8 +47,8 @@ priv fn parse_counts(out: U8[], arena: Arena$@): Counts //<
     $line: U8[] = ""
     for one in out.lines(arena)
         shown: = one.trim_start() // `--stats` indents its lines
-        if shown.starts_with(stats_head)
-            line = shown.sub_from(stats_head.len)
+        if shown.starts_with(STATS_HEAD)
+            line = shown.sub_from(STATS_HEAD.len)
             break
     $nums: = List<|I64|>.new(arena)
     for word in line.split(' ', arena)
@@ -78,10 +78,10 @@ priv fn build(dir: U8[], cache: U8[], stem: U8[], src: U8[], extra: U8[][], aren
     text: = io.read_file(gen) catch ""
     return Built::{ .ok = true, .gen = text, .counts = parse_counts(r.out, arena), .out = r.out }
 
-priv const key_at: Sz = 9 //<
+priv const KEY_AT: Sz = 9 //<
     //< Where the key's hexadecimal starts in an entry, behind the magic and the format's version
     //<
-    //< Those two are `magic` and `format_version` in `../../parse/ast_cache.kspl`.
+    //< Those two are `MAGIC` and `FORMAT_VERSION` in `../../parse/ast_cache.kspl`.
     //< **Written here so the second half fails the key check**, not both the version check.
 
 priv fn break_entries(cache: U8[], arena: Arena$@): Sz //<
@@ -106,11 +106,11 @@ priv fn break_entries(cache: U8[], arena: Arena$@): Sz //<
         else
             // It fails the key check.
             b: = arena.text()
-            b.s(text.sub(0, key_at if text.len > key_at else text.len))
+            b.s(text.sub(0, KEY_AT if text.len > KEY_AT else text.len))
             for _i in Range.asc(16)
                 b.c('0')
-            if text.len > key_at + 16
-                b.s(text.sub_from(key_at + 16))
+            if text.len > KEY_AT + 16
+                b.s(text.sub_from(KEY_AT + 16))
             io.write_file(path, b.take()) catch
                 continue
         broken += 1
@@ -135,7 +135,7 @@ priv fn cfg_reason(cache: U8[], arena: Arena$@): U8[] //<
     //< (`send_cfg_inactive_hover` in `../../lsp/hover.kspl`). **A hit that returns only the
     //< declarations is exactly the lie this file rejects.**
     sys.set_env("KSPLC_CACHE_DIR", cache) catch panic("KSPLC_CACHE_DIR could not be set")
-    src: = io.read_file(fixture) catch
+    src: = io.read_file(FIXTURE) catch
         return ""
     // The workspace is the package's top, where the suite runs (an empty path inherits it).
     $c: =
@@ -143,13 +143,13 @@ priv fn cfg_reason(cache: U8[], arena: Arena$@): U8[] //<
         return ""
     defer c.free()
     $b: = Json_builder.new(arena)
-    _init: = c.request("initialize", b.obj().build(), lsp_ms, arena) catch {}
+    _init: = c.request("initialize", b.obj().build(), LSP_MS, arena) catch {}
     // **The buffer is the file's own bytes.** The key covers the source's whole content, so one
     // byte off makes it a miss and the check tests the parse twice.
-    c.notify("textDocument/didOpen", lsp_client.did_open(fixture, src, arena), lsp_client.send_ms,
+    c.notify("textDocument/didOpen", lsp_client.did_open(FIXTURE, src, arena), lsp_client.SEND_MS,
         arena) catch {}
     got: = lsp_client.answer(c@, "textDocument/hover",
-        lsp_client.at_pos(fixture, cfg_probe_line(src), 9, arena), lsp_ms, arena)
+        lsp_client.at_pos(FIXTURE, cfg_probe_line(src), 9, arena), LSP_MS, arena)
     return lsp_client.hover_text(got)
 
 priv fn other_spelling(exe: U8[]): U8[] //< it points at the same executable by a different path
@@ -167,7 +167,7 @@ fn main(): I32
     cache: = fs.join(work, "cache", arena)
     io.out().s("# the AST cache\n")
 
-    cold: = build(work, cache, "ac_cold", fixture, U8[][]::{}, arena)
+    cold: = build(work, cache, "ac_cold", FIXTURE, U8[][]::{}, arena)
     verdict.check("it builds cold (with no cache)", cold.ok, cold.out)
     if !cold.ok
         return harness.finish()
@@ -179,7 +179,7 @@ fn main(): I32
         arena.text().s("hit=\{cold.counts.hits\} miss=\{cold.counts.misses\} ")
         .s("stored=\{cold.counts.stores\}").take())
 
-    warm: = build(work, cache, "ac_warm", fixture, U8[][]::{}, arena)
+    warm: = build(work, cache, "ac_warm", FIXTURE, U8[][]::{}, arena)
     verdict.check("it builds warm (with a cache)", warm.ok, warm.out)
     if !warm.ok
         return harness.finish()
@@ -206,7 +206,7 @@ fn main(): I32
     // Caution: **Rewrite the file at the same path.** A copy under another name changes the file
     // name in the key instead, so it passes even with the key blind to the content.
     marker: = "io.out().s(\"ac="
-    src: = io.read_file(fixture) catch
+    src: = io.read_file(FIXTURE) catch
         return harness.fatal("the fixture cannot be read")
     verdict.check("the fixture has exactly one mark to rewrite", src.count_str(marker) == 1,
         arena.text().s("\{src.count_str(marker)\} places").take())
@@ -229,9 +229,9 @@ fn main(): I32
     // `#cfg()` works inside normalisation, so **the same source gives a different AST per flag
     // set**. Without the flags in the key, a freestanding build picks up the hosted entry and fails
     // to link.
-    plain: = build(work, cache, "ac_nodef", fixture, U8[][]::{}, arena)
+    plain: = build(work, cache, "ac_nodef", FIXTURE, U8[][]::{}, arena)
     with_def: =
-        build(work, cache, "ac_withdef", fixture, U8[][]::{ "--define=ac_cache_probe" }, arena)
+        build(work, cache, "ac_withdef", FIXTURE, U8[][]::{ "--define=ac_cache_probe" }, arena)
     verdict.check("it builds with --define too", with_def.ok, with_def.out)
     if plain.ok && with_def.ok
         verdict.check("with and without --define the generated C changes (the flags are in the key)",
@@ -243,7 +243,7 @@ fn main(): I32
     verdict.check("the entries are placed as .ksast", broken_count > 0,
         arena.text().s("\{broken_count\}").take())
     if broken_count > 0
-        broken: = build(work, cache, "ac_broken", fixture, U8[][]::{}, arena)
+        broken: = build(work, cache, "ac_broken", FIXTURE, U8[][]::{}, arena)
         verdict.check("it builds even with a broken entry", broken.ok, broken.out)
         verdict.check("the generated C does not change even when broken",
             broken.gen.equals(cold.gen),
@@ -275,7 +275,7 @@ fn main(): I32
     sys.set_env("KSPLC_CACHE_DIR", cache) catch panic("KSPLC_CACHE_DIR could not be set")
     other: = harness
         .run(U8[][]::{ other_spelling(harness.ksplc_exe()),
-        arena.text().s("--std-dir=\{harness.std_dir()\}").take(), fixture,
+        arena.text().s("--std-dir=\{harness.std_dir()\}").take(), FIXTURE,
         fs.join(work, "ac_other.c", arena) })
     gens_after: = fs.read_dir(ast_dir, arena) catch
         return harness.fatal("the generations' place cannot be read")

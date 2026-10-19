@@ -12,8 +12,8 @@ import "ksos/drivers/nrf51/timer"
 import "ksos/kernel/sync"
 import "ksos/kernel/task" + { Task }
 
-priv const rounds: Sz = 3
-priv const wait_us: U32 = 1000
+priv const ROUNDS: Sz = 3
+priv const WAIT_US: U32 = 1000
 
 $g_sem: sync.Sem
 $g_gives: Sz = 0
@@ -34,15 +34,15 @@ fn timer0_irq8_handler()
 
 fn waiter(_arg: Void$@): Void
     con.puts("=== Kanso OS (nRF51 / Cortex-M0) the scheduler sleeps on WFI ===\n")
-    scs.enable_irq(timer.irq)
-    for _ in Range.asc(rounds)
-        timer.start_once(wait_us)
+    scs.enable_irq(timer.IRQ)
+    for _ in Range.asc(ROUNDS)
+        timer.start_once(WAIT_US)
         g_sem.take() // no deadline: only the interrupt can end it
         g_woken += 1
-    con.check("each of the timer's interrupts ran its handler, which gave", g_gives == rounds)
+    con.check("each of the timer's interrupts ran its handler, which gave", g_gives == ROUNDS)
     con.check("each came while no task ran: the scheduler slept between tasks",
-        g_gives_idle == rounds)
-    con.check("each give woke the waiter", g_woken == rounds)
+        g_gives_idle == ROUNDS)
+    con.check("each give woke the waiter", g_woken == ROUNDS)
     con.print_summary("nRF51 WFI sleep")
     con.exit()
 

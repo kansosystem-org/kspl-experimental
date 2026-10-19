@@ -20,18 +20,18 @@ import "std/verdict"
 import "tests/support/harness"
 import "tests/support/harness_text"
 
-priv const triple_var: U8[] = "KANSO_STAND_IN_TRIPLE" //< what the stand-in answers `-dumpmachine`
+priv const TRIPLE_VAR: U8[] = "KANSO_STAND_IN_TRIPLE" //< what the stand-in answers `-dumpmachine`
 
 // The Windows target, as UCRT64's clang names it (the Makefile refuses any other). The host is
 // asked besides, with its own compiler.
-priv const windows_triple: U8[] = "x86_64-w64-windows-gnu"
+priv const WINDOWS_TRIPLE: U8[] = "x86_64-w64-windows-gnu"
 
 // What Windows and MSYS2's UCRT64 shell set, which the Makefile reads to take its Windows branch.
-priv const windows_env: U8[][_] = ::{ "OS=Windows_NT", "MSYSTEM=UCRT64" }
+priv const WINDOWS_ENV: U8[][_] = ::{ "OS=Windows_NT", "MSYSTEM=UCRT64" }
 
-priv const ldlibs_head: U8[] = "LDLIBS := " //< `LDLIBS`'s line in make's `-p`, its value expanded
+priv const LDLIBS_HEAD: U8[] = "LDLIBS := " //< `LDLIBS`'s line in make's `-p`, its value expanded
 
-priv const fix_hint: U8[] =
+priv const FIX_HINT: U8[] =
     "fix the Makefile's LDLIBS or `append_link_libs` / `append_stack_flag` in ksplc/tools/run.kspl, \
         whichever is wrong"
 
@@ -85,7 +85,7 @@ struct Answers //< one sample: `LDLIBS`, ksplc's two answers, and whether they d
 
 // The first two are today's answers on Linux and UCRT64. (On Linux, ksplc's section options are not
 // in LDLIBS.) The third is UCRT64's out of order.
-priv const samples: Answers[_] = ::{ Answers::{ .ldlibs = "-lm -lpthread", .libs = "-lm -lpthread",
+priv const SAMPLES: Answers[_] = ::{ Answers::{ .ldlibs = "-lm -lpthread", .libs = "-lm -lpthread",
     .flags = "-ffunction-sections -fdata-sections -Wl,--gc-sections", .fires = false },
     Answers::{ .ldlibs = "-lm -lws2_32 -lshell32 -Wl,--stack,8388608",
     .libs = "-lm -lws2_32 -lshell32", .flags = "-Wl,--stack,8388608", .fires = false },
@@ -104,13 +104,13 @@ priv const samples: Answers[_] = ::{ Answers::{ .ldlibs = "-lm -lpthread", .libs
 
 priv fn check_fires(arena: Arena$@)
     $bad: = List<|U8[]|>.new(arena)
-    for s in samples
+    for s in SAMPLES
         if (disagreements(s.ldlibs, s.libs, s.flags, arena).len > 0) != s.fires
             bad
                 .push(arena.text()
                 .s("LDLIBS \"\{s.ldlibs\}\" against \"\{s.libs\}\" / \"\{s.flags\}\"")
                 .s(" should " if s.fires else " should not ").s("disagree").take())
-    verdict.check_list("the comparison of the link rules can fire", samples.len, "samples", bad@,
+    verdict.check_list("the comparison of the link rules can fire", SAMPLES.len, "samples", bad@,
         "the table is `samples`")
 
 // ==========================================
@@ -119,7 +119,7 @@ priv fn check_fires(arena: Arena$@)
 
 priv fn stand_in_src(arena: Arena$@): U8[] //< a C compiler that only names a target
     return arena.text().s("import \"std/io\"\nimport \"std/sys\"\n\nfn main(): I32\n")
-        .s("  io.out().s(sys.get_env(\"\{triple_var\}\").unwrap_or(\"\")).c('\\n')\n  return 0\n")
+        .s("  io.out().s(sys.get_env(\"\{TRIPLE_VAR\}\").unwrap_or(\"\")).c('\\n')\n  return 0\n")
         .take()
 
 priv fn info(topic: U8[]): verdict.Run_out //< what `ksplc info <topic>` answers
@@ -154,8 +154,8 @@ priv fn build_stand_in(work: U8[], arena: Arena$@): U8[] //<
 
 priv fn ldlibs_of(out: U8[], arena: Arena$@): U8[]? //< `LDLIBS`'s value in make's `-p`
     for line in out.lines(arena)
-        if line.starts_with(ldlibs_head)
-            return .some(line.sub_from(ldlibs_head.len))
+        if line.starts_with(LDLIBS_HEAD)
+            return .some(line.sub_from(LDLIBS_HEAD.len))
     return .none
 
 priv fn compare(name: U8[], cc: U8[], triple: U8[], make_vars: U8[][], arena: Arena$@) //<
@@ -164,7 +164,7 @@ priv fn compare(name: U8[], cc: U8[], triple: U8[], make_vars: U8[][], arena: Ar
     //< Caution: **Pass `CC` to make on its command line**: the Makefile assigns it, which an
     //< environment variable does not override.
     if triple.len > 0
-        sys.set_env(triple_var, triple) catch
+        sys.set_env(TRIPLE_VAR, triple) catch
             verdict.check(arena.text().s("\{name\}: the stand-in can be told the target").take(),
                 false, "")
             return
@@ -188,7 +188,7 @@ priv fn compare(name: U8[], cc: U8[], triple: U8[], make_vars: U8[][], arena: Ar
         sys.unset_env("CC") catch panic("CC could not be unset")
     else
         sys.set_env("CC", saved) catch panic("CC could not be put back")
-    sys.unset_env(triple_var) catch panic("the target variable could not be unset")
+    sys.unset_env(TRIPLE_VAR) catch panic("the target variable could not be unset")
     $ldlibs: U8[] = ""
     switch ldlibs_of(made.out, arena)
     case .some(v)
@@ -204,9 +204,9 @@ priv fn compare(name: U8[], cc: U8[], triple: U8[], make_vars: U8[][], arena: Ar
     seen: =
         harness_text.words(ldlibs, arena).len + harness_text.words(libs.out, arena).len
     verdict.check_list(arena.text().s("\{name\}: the Makefile's LDLIBS agrees with ksplc").take(),
-        seen, "words", bad@, fix_hint)
+        seen, "words", bad@, FIX_HINT)
 
-priv const blas_entry: U8[] = "ksai/tests/main.kspl" //< the one package with a BLAS build
+priv const BLAS_ENTRY: U8[] = "ksai/tests/main.kspl" //< the one package with a BLAS build
 
 priv fn check_blas_off(work: U8[], arena: Arena$@) //<
     //< A build without BLAS asks the link for no OpenBLAS
@@ -217,7 +217,7 @@ priv fn check_blas_off(work: U8[], arena: Arena$@) //<
     libs: = fs.join(work, "blas_off.libs", arena)
     r: = ksplc_harness.run_in(U8[][]::{ ksplc_harness.ksplc_exe(),
         arena.text().s("--std-dir=").s(ksplc_harness.std_dir()).take(),
-        arena.text().s("--emit-libs=").s(libs).take(), blas_entry,
+        arena.text().s("--emit-libs=").s(libs).take(), BLAS_ENTRY,
         fs.join(work, "blas_off.c", arena) }, harness.root())
     if !r.exited_with(0)
         verdict.check("a build without BLAS asks the link for no OpenBLAS", false, r.out)
@@ -225,7 +225,7 @@ priv fn check_blas_off(work: U8[], arena: Arena$@) //<
     got: = io.read_file(libs) catch ""
     verdict.check("a build without BLAS asks the link for no OpenBLAS",
         got.find_str("openblas").is_none(),
-        arena.text().s(blas_entry).s(" asks for: ").s(got.trim_spaces())
+        arena.text().s(BLAS_ENTRY).s(" asks for: ").s(got.trim_spaces())
         .s(" (give each BLAS-only declaration its own #cfg(blas))").take())
 
 fn main(): I32
@@ -238,5 +238,5 @@ fn main(): I32
     stand_in: = build_stand_in(work, arena)
     if stand_in.len == 0
         return ksplc_harness.finish()
-    compare(windows_triple, stand_in, windows_triple, U8[][]::windows_env, arena)
+    compare(WINDOWS_TRIPLE, stand_in, WINDOWS_TRIPLE, U8[][]::WINDOWS_ENV, arena)
     return ksplc_harness.finish()

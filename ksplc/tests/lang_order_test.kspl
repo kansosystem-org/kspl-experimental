@@ -65,33 +65,33 @@ fn test_sizeof_does_not_depend_on_declaration_order()
 // Caution: **Test a chain too.** With one step alone, merely swapping the output order once
 // passes.
 // ==========================================
-priv $ord_buf: U8[ord_len] = ::{}
-priv const ord_len: Sz = ord_base * 2
-priv const ord_base: Sz = 3
+priv $ord_buf: U8[ORD_LEN] = ::{}
+priv const ORD_LEN: Sz = ORD_BASE * 2
+priv const ORD_BASE: Sz = 3
 
 priv struct Ord_pair
     x: I32
     y: I32
 
-priv const ord_pair: Ord_pair = Ord_pair::{ .x = ord_x, .y = 2 }
-priv const ord_x: I32 = 9
-priv const ord_arr: I32[3] = ::{ ord_x, ord_x + 1, ord_x + 2 }
-priv $ord_mut: Sz = ord_base * 10
+priv const ORD_PAIR: Ord_pair = Ord_pair::{ .x = ORD_X, .y = 2 }
+priv const ORD_X: I32 = 9
+priv const ORD_ARR: I32[3] = ::{ ORD_X, ORD_X + 1, ORD_X + 2 }
+priv $ord_mut: Sz = ORD_BASE * 10
 
-priv fn ord_in_return_type(): U8[ord_len]
+priv fn ord_in_return_type(): U8[ORD_LEN]
     return ::{}
 
 fn test_declarations_may_reference_later_constants()
     verdict.start("[order] a constant declared behind can be referred to test...")
 
-    assert(ord_len == 6 && ord_base == 3, "a chain of constants solves backwards")
+    assert(ORD_LEN == 6 && ORD_BASE == 3, "a chain of constants solves backwards")
     assert(ord_buf.len == 6, "an array length is computed from a constant declared later")
     $rb: = ord_in_return_type()
     rb[5] = 1
     assert(rb.len == 6 && rb[5] == 1, "the same for a function return type's array length")
-    assert(ord_pair.x == 9 && ord_pair.y == 2,
+    assert(ORD_PAIR.x == 9 && ORD_PAIR.y == 2,
         "a struct's initializer can refer to a constant behind")
-    assert(ord_arr[0] == 9 && ord_arr[2] == 11, "the same for an array's initializer")
+    assert(ORD_ARR[0] == 9 && ORD_ARR[2] == 11, "the same for an array's initializer")
     assert(ord_mut == 30, "the same for a mutable global")
 
     verdict.pass("neither sema's fold nor genc's output order is bound to the declarations' order.")
@@ -101,7 +101,7 @@ fn test_declarations_may_reference_later_constants()
 // Caution: **Test the trait conformance too.** Even with the methods in place, an upcast does not
 // pass unless `impl<|T|> C<|T|>: Trait` attaches.
 // ==========================================
-priv const slot_size: Sz = sizeof(Slot<|I32|>)
+priv const SLOT_SIZE: Sz = sizeof(Slot<|I32|>)
 
 impl<|T|> Slot<|T|>
     fn get(r: Self@): T
@@ -125,7 +125,7 @@ priv fn slot_tag_of(t: Slot_tag): I32
 fn test_generic_impl_may_precede_its_type()
     verdict.start("[generic] a generic impl may come before its type test...")
 
-    assert(slot_size == sizeof(I32), "the size of a type declared after the impl resolves")
+    assert(SLOT_SIZE == sizeof(I32), "the size of a type declared after the impl resolves")
     $c: Slot<|I32|> = ::{ .v = 1 }
     c.put(9)
     assert(c.get() == 9, "a method of an impl written before the declaration has grown")

@@ -97,6 +97,53 @@ function kspageProbeInsert(ks) {
   // row and Shift+Enter up — one rule: a move past the table's end grows a row.
   const key = (k, shift) => ime.dispatchEvent(new KeyboardEvent("keydown",
     { key: k, shiftKey: !!shift, bubbles: true, cancelable: true }));
+  // A fresh table already fills the text width. Both insertion controls must add a visible
+  // column without shrinking the old ones, including after the last column at the page edge.
+  const firstCell = app.cellFrame();
+  openMenu("add-col");
+  document.getElementById("add-col").click();
+  check(cellsIn() === wasCells + 15, "the menu adds a column to every row of a fresh table");
+  check(Math.abs(app.cellFrame()[2] - firstCell[2]) < 0.5, "the current column keeps its width");
+  key("Tab");
+  check(Math.abs(app.cellFrame()[2] - firstCell[2]) < 0.5,
+    "the inserted column has the same visible width");
+  undoKey();
+  check(cellsIn() === wasCells + 12, "one undo removes the new column");
+  press(firstCell[0] + 8, firstCell[1] + 8);
+  for (let i = 0; i < 3; i += 1) key("Tab");
+  const chromeLeft = document.getElementById("chrome").getBoundingClientRect().left;
+  let addColumn = document.getElementById("tool-col");
+  if (addColumn.getBoundingClientRect().width === 0) {
+    document.getElementById("spill").open = true;
+    addColumn = Array.from(document.querySelectorAll("#spill .items button"))
+      .find((button) => button.textContent === "Table: Insert a column");
+  }
+  check(addColumn !== undefined, "the ribbon offers Insert a column, directly or in its overflow");
+  const buttonRect = addColumn.getBoundingClientRect();
+  const hit = document.elementFromPoint(buttonRect.left + buttonRect.width / 2,
+    buttonRect.top + buttonRect.height / 2);
+  check(hit !== null && (hit === addColumn || addColumn.contains(hit)),
+    "the ribbon's insertion button can be pointed at");
+  addColumn.click();
+  check(cellsIn() === wasCells + 15, "the ribbon adds a column after the last one");
+  key("Tab");
+  const endCell = app.cellFrame();
+  check(Math.abs(endCell[2] - firstCell[2]) < 0.5, "the new last column has a visible width too");
+  check(canvas.clientWidth >= endCell[0] + endCell[2] - 1, "the canvas draws the whole last column");
+  const viewport = canvas.parentElement;
+  const view = viewport.getBoundingClientRect();
+  const cursor = app.caretElement.getBoundingClientRect();
+  check(viewport.scrollLeft > 0 && cursor.left >= view.left &&
+    cursor.right <= view.left + viewport.clientWidth,
+    "Tab scrolls horizontally to keep the new column's cursor in view");
+  check(window.scrollX === 0 && document.getElementById("chrome").getBoundingClientRect().left === chromeLeft,
+    "the document scrolls without moving the tools");
+  ks.typeIn("new-column-text");
+  check(app.save().includes("new-column-text"), "the new column accepts typing");
+  undoKey();
+  undoKey();
+  check(cellsIn() === wasCells + 12, "undo takes the text and column back separately");
+  press(firstCell[0] + 8, firstCell[1] + 8);
   for (let i = 0; i < 11; i += 1) key("Tab");
   check(rowsIn() === wasRows + 3, "eleven Tabs walk the twelve cells without growing a row");
   key("Tab");
@@ -256,6 +303,7 @@ function kspageProbePin(ks) {
   const wasY = window.scrollY;
   pressAt(8);
   check(app.insertTable("table", 40, 2), "a table of forty rows goes in after the paragraph");
+  check(app.addLine("column") === "", "the tall table can grow past the page's width");
   const frame = app.cellFrame();
   check(frame !== null, "the cursor stands in the fresh table's first cell");
   // The canvas's place in the document (the window scrolls the document, not the canvas).
@@ -272,15 +320,25 @@ function kspageProbePin(ks) {
   const room = app.headRoom();
   check(Math.abs(pin.getBoundingClientRect().top - room) < 1.5, "it stands just under the tools");
   check(pin.width > 0 && pin.height > 0, "and holds a painting");
+  const viewport = canvas.parentElement;
+  viewport.scrollLeft = viewport.scrollWidth - viewport.clientWidth;
+  viewport.dispatchEvent(new Event("scroll"));
+  const view = viewport.getBoundingClientRect();
+  const clipped = pin.getBoundingClientRect();
+  check(clipped.left >= view.left - 1 && clipped.right <= view.left + viewport.clientWidth + 1,
+    "a wide heading scrolls with the table and stays clear of the side panel");
 
   // **A press on the band is a press on the heading.** The cursor goes into that cell, and the
   // window follows it up, so the real heading shows and nothing is kept.
   const at = pin.getBoundingClientRect();
+  const docX = at.left + 4 - canvas.getBoundingClientRect().left;
   pin.dispatchEvent(new PointerEvent("pointerdown", { clientX: at.left + 4, clientY: at.top + 4,
     button: 0, bubbles: true, cancelable: true }));
   const back = app.cellFrame();
   check(back !== null && Math.abs(back[1] - frame[1]) < 0.5,
     "a press on the band stands the cursor in the heading row");
+  check(back !== null && docX >= back[0] && docX < back[0] + back[2],
+    "after horizontal scrolling the press reaches the correct heading cell");
   check(app.pinnedHead() === null, "and the window follows up to the real heading");
 
   // Send the whole table past the top: nothing is kept (the band leaves with the last row).
@@ -291,6 +349,8 @@ function kspageProbePin(ks) {
     "at the head of the document the sheet is hidden");
 
   undoKey();
-  check(app.cellFrame() === null, "one undo takes the table back");
+  check(app.cellFrame() !== null, "one undo removes the extra column and keeps the table");
+  undoKey();
+  check(app.cellFrame() === null, "the next undo takes the table back");
   window.scrollTo(0, wasY);
 }

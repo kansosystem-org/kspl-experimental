@@ -13,21 +13,21 @@ import "ksplc/sema/type/def" { Fn_sig, Trait_def }
 import "ksplc/sema/type/env" as sema_type_env
 import "std/str"
 
-priv const max_const_add_depth: I32 = 1 //<
+priv const MAX_CONST_ADD_DEPTH: I32 = 1 //<
     //< The deepest level at which an implicit conversion may add a `const` (is_const_compatible)
     //<
     //< 1 = the outermost level of the pointee or element: `U8$[]` → `U8[]` is allowed, `U8$[]$[]`
     //< → `U8[]$[]` is not.
-priv const unlimited_const_add_depth: I32 = 1000 //<
+priv const UNLIMITED_CONST_ADD_DEPTH: I32 = 1000 //<
     //< The bound for when needs_deep_const_add asks "would it be allowed if the depth were ignored"
 
-priv const max_type_unwrap_depth: Sz = 1000 //<
+priv const MAX_TYPE_UNWRAP_DEPTH: Sz = 1000 //<
     //< The bound on how often get_clean_real_type strips an alias and an immutability qualifier
     //<
     //< It strips them alternately.
     //< A safety limit against a broken type table whose shape loops back to itself.
 
-const max_alias_chain_depth: Sz = 1000 //<
+const MAX_ALIAS_CHAIN_DEPTH: Sz = 1000 //<
     //< The bound on how many levels of a type-alias chain (`typedef A = B; ...`) are followed
     //<
     //< Both the stripping code (get_real_type) and the resolver (sema/decl/resolve.kspl) use it.
@@ -105,14 +105,14 @@ impl sema_type_env.Env
         //<
         //< It walks the structure: has_const_deep and is_const cannot tell `U8[]` from "the
         //< descriptor immutable too", a safe downgrade.
-        return r.is_const_compatible_at(act, exp, 0, max_const_add_depth)
+        return r.is_const_compatible_at(act, exp, 0, MAX_CONST_ADD_DEPTH)
 
     fn needs_deep_const_add(r: Self$@, act: I32, exp: I32): Bool //<
         //< Whether it was rejected for the sole reason that the level is too deep
         //<
         //< For the diagnostic's hint: the shape agrees, so "the type differs" alone says nothing.
-        return !r.is_const_compatible_at(act, exp, 0, max_const_add_depth) &&
-            r.is_const_compatible_at(act, exp, 0, unlimited_const_add_depth)
+        return !r.is_const_compatible_at(act, exp, 0, MAX_CONST_ADD_DEPTH) &&
+            r.is_const_compatible_at(act, exp, 0, UNLIMITED_CONST_ADD_DEPTH)
 
     priv fn is_const_compatible_at(r: Self$@, act: I32, exp: I32, depth: I32, limit: I32): Bool //<
         //< depth is the level counted from the outermost
@@ -144,7 +144,7 @@ impl sema_type_env.Env
             case .array(b2, s2)
                 // A fixed-length array's **elements**' immutability is not matched. An array is
                 // always copied, so the copy's binding decides it ("The two axes of mutability" in
-                // docs/SPEC-language.md).
+                // docs/SPEC-programming-language.md).
                 // Caution: The elements' **inside** (the T@ of `array(T@,N)`) is not stripped.
                 // Relaxing there would let a read-only pointer be moved into an array of mutable
                 // pointers.
@@ -178,7 +178,7 @@ impl sema_type_env.Env
         //< way.
         //< An alias reaches here inside a parameter (`fn(r: Ints@)` beside `fn(r: Box<|I64|>@)`),
         //< which the two types' ids keep apart. See "A typedef is only another name" in
-        //< docs/SPEC-language.md.
+        //< docs/SPEC-programming-language.md.
         if a.params.len != b.params.len
             return false
         for i in Range.asc(a.params.len)
@@ -241,7 +241,7 @@ impl sema_type_env.Env
         //< The numeric-kind checks (is_float / is_unsigned / get_primitive_bit_size ...) need it;
         //< one pass of each does not suffice.
         $cur: = r.get_real_type(id)
-        for _d in Range.asc(max_type_unwrap_depth)
+        for _d in Range.asc(MAX_TYPE_UNWRAP_DEPTH)
             stripped: = r.strip_const(cur)
             if stripped == cur
                 return cur
@@ -302,10 +302,10 @@ impl sema_type_env.Env
         //< They are stripped alternately until none is left.
         //< It is **the one and only implementation point** of the convention that `.`/`[]`
         //< dereference a pointer automatically. See "Member access and indexing through a pointer"
-        //< in docs/SPEC-language.md. It is also the type a table, a vtable or a definition is
-        //< looked up by.
+        //< in docs/SPEC-programming-language.md. It is also the type a table, a vtable or a
+        //< definition is looked up by.
         $cur: = r.get_real_type(id)
-        for _d in Range.asc(max_type_unwrap_depth)
+        for _d in Range.asc(MAX_TYPE_UNWRAP_DEPTH)
             switch r.get_info(cur)
             case .pointer(b), .const_of(b)
                 cur = r.get_real_type(b)
@@ -426,7 +426,7 @@ impl sema_type_env.Env
     fn is_array(r: Self$@, id: I32): Bool
         return r.get_info(r.get_clean_real_type(id)).is_array()
     fn is_result(r: Self$@, id: I32): Bool //< whether it is an instance of `std/lang`'s `Result`
-        return r.instance_base(r.get_clean_real_type(id)).equals(base_core.result_fqn)
+        return r.instance_base(r.get_clean_real_type(id)).equals(base_core.RESULT_FQN)
     fn array_len(r: Self$@, id: I32): I32 //< a fixed-length array's element count (else 0)
         switch r.get_info(r.get_clean_real_type(id))
         case .array(_b, size)
@@ -595,7 +595,7 @@ impl sema_type_env.Env
         //< It is always one of the two: the one the other widens into without loss
         //< (is_lossless_numeric). So `U8 + I16` is `I16`, while `I32 + U32`, `I8 + U8`, `Sz + U32`
         //< and any integer with a float have none ("Type conversion (`::`) and implicit casts" in
-        //< docs/SPEC-language.md).
+        //< docs/SPEC-programming-language.md).
         if type1 == type2
             return type1
         t1: = r.scalar_base(r.strip_const(r.get_real_type(type1)))
@@ -666,7 +666,7 @@ impl sema_type_env.Env
         //< It stops at the bound (so even on a cycle), and returning the bound means "at or above".
         $current: = id
         $n: Sz = 0
-        for n < max_alias_chain_depth
+        for n < MAX_ALIAS_CHAIN_DEPTH
             next: = r.strip_alias(current)
             if next == current
                 break
@@ -680,7 +680,7 @@ impl sema_type_env.Env
         //< sema/decl/resolve.kspl.** Cutting off a chain the resolver accepted returns a
         //< half-stripped type, and the user sees "a type mismatch" with no word of the depth.
         $current: = id
-        $max_depth: = max_alias_chain_depth
+        $max_depth: = MAX_ALIAS_CHAIN_DEPTH
         for max_depth > 0
             max_depth -= 1
             next: = r.strip_alias(current)

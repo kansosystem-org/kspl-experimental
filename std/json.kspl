@@ -1,6 +1,6 @@
 //< Parsing, building and writing out JSON values
 //<
-//< The arena-backed `Json_builder` / `Array_builder` / `Obj_builder` build a head-and-tail chain
+//< The arena-backed `Json_builder` / `Array_builder` / `Object_builder` build a head-and-tail chain
 //< by value, so nothing is copied twice. Parsing limits the nesting depth. An integer stays an
 //< integer, so one wider than 53 bits does not round on the way through.
 import "std/bignat" // `f64_to_bits`
@@ -12,36 +12,36 @@ import "std/str" { Str_builder }
 import "std/strfmt"
 import "std/strnum" // `to_f64`
 
-pub enum Val //< one JSON value, of any of the seven kinds
+pub enum Value //< one JSON value, of any of the seven kinds
     null_val //< JSON's `null`
     bool_val(b: Bool) //< `true` or `false`
     int_val(i: I64) //< a number written without a point or an exponent
     float_val(f: F64) //< a number with a point or an exponent, kept separate so nothing rounds
     str_val(s: U8[]) //< a string, already unescaped
-    array_val(a: Arr) //< an array; read its elements through `arr_list` and `get_at`
-    obj_val(o: Obj) //< an object; read its members through `get` and `find`
+    array_val(a: Array) //< an array; read its elements through `arr_list` and `get_at`
+    obj_val(o: Object) //< an object; read its members through `get` and `find`
 
 priv struct Node
-    val: Val
+    val: Value
     next: Node$@
 
-pub struct Arr //< an array's elements, reachable only through `arr_list` and `get_at`
+pub struct Array //< an array's elements, reachable only through `arr_list` and `get_at`
     //<
-    //< `Val.array_val`'s payload. It hides the chain as `Obj` hides its members: a payload
+    //< `Value.array_val`'s payload. It hides the chain as `Object` hides its members: a payload
     //< holding a `Node$@` would hand every `switch` a pointer that is null for `[]`.
     priv head: Node$@
 
 priv struct Member
     key: U8[]
-    val: Val
+    val: Value
     next: Member$@
 
-pub struct Obj //< an object's members, reachable only through `get` and `find`
+pub struct Object //< an object's members, reachable only through `get` and `find`
     //<
-    //< `Val.obj_val`'s payload.
+    //< `Value.obj_val`'s payload.
     //< Caution: The payload must not hold a `Member$@` directly. Code outside can bind a `pub
     //< enum`'s payload (`switch v case .obj_val(head)`). The priv list would then leak out ("Why a
-    //< narrow type cannot stand where visibility is wide" in docs/DESIGN-language.md).
+    //< narrow type cannot stand where visibility is wide" in docs/DESIGN-programming-language.md).
     //< Reading an object goes through `get(key)` and `find(key)`.
     priv head: Member$@
 
@@ -71,7 +71,7 @@ pub struct Array_builder //< builds an array in the order elements are pushed
     priv head: Node$@ //< the first element pushed; null for none yet
     priv tail: Node$@ //< the last element pushed, so the next one is appended without a walk
 
-pub struct Obj_builder //< builds an object; setting a key again replaces it
+pub struct Object_builder //< builds an object; setting a key again replaces it
     pub builder: Json_builder //< the builder that allocates the members
     priv head: Member$@
     priv tail: Member$@
@@ -88,39 +88,39 @@ impl Json_builder
         //<
         //< Given an arena, it frees nothing: that arena does. A second `free()` frees nothing.
         r.own.free()
-    pub fn null_val(_r: Self$@): Val //< JSON's `null`
+    pub fn null_val(_r: Self$@): Value //< JSON's `null`
         return .null_val
-    pub fn bool_val(_r: Self$@, b: Bool): Val //< `true` or `false`
+    pub fn bool_val(_r: Self$@, b: Bool): Value //< `true` or `false`
         return .bool_val(b)
-    pub fn int_val(_r: Self$@, i: I64): Val //< a number with no point; wide enough for an offset
+    pub fn int_val(_r: Self$@, i: I64): Value //< a number with no point; wide enough for an offset
         //<
-        //< Caution: Take an I64, like Val.int_val and as_int64; with an I32 here, values could be
+        //< Caution: Take an I64, like Value.int_val and as_int64; with an I32 here, values could be
         //< read but not written.
         return .int_val(i)
-    pub fn float_val(_r: Self$@, f: F64): Val //< a number with a point
+    pub fn float_val(_r: Self$@, f: F64): Value //< a number with a point
         return .float_val(f)
-    pub fn str_val(r: Self$@, s: U8[]): Val //< a string, copied into the arena
+    pub fn str_val(r: Self$@, s: U8[]): Value //< a string, copied into the arena
         return .str_val(r.arena.dup_str(s) if s.len > 0 else "")
     pub fn arr(r: Self$@): Array_builder //< an empty array builder
         return Array_builder::{ .builder = r$, .head = null, .tail = null }
-    pub fn obj(r: Self$@): Obj_builder //< an empty object builder
-        return Obj_builder::{ .builder = r$, .head = null, .tail = null }
+    pub fn obj(r: Self$@): Object_builder //< an empty object builder
+        return Object_builder::{ .builder = r$, .head = null, .tail = null }
 
 impl Json_builder: Owned {} //< `free()` lets go the arena it made for itself
 
 impl Array_builder
     pub fn push( //< adds one element at the end
         $r: Self,
-        val: Val, //< the element to add
+        val: Value, //< the element to add
     ): Array_builder
         n: = r.builder.arena.create(Node::{ .val = val })
         append_node(r.head@, r.tail@, n)
         return r
 
-    pub fn build(r: Self): Val //< the array built so far
-        return .array_val(Arr::{ .head = r.head })
+    pub fn build(r: Self): Value //< the array built so far
+        return .array_val(Array::{ .head = r.head })
 
-impl Obj_builder
+impl Object_builder
     pub fn set( //< adds a member; an existing key is replaced, not added again
         //<
         //< Caution: **Replace an existing key.** If appended, `{"a":1,"a":2}` makes `get` return
@@ -128,8 +128,8 @@ impl Obj_builder
         //< costs the same as `get`.
         $r: Self,
         key: U8[], //< the member's name, copied into the arena
-        val: Val, //< the value stored under it
-    ): Obj_builder
+        val: Value, //< the value stored under it
+    ): Object_builder
         $m: = r.head
         for m != null
             if m.key.equals(key)
@@ -141,8 +141,8 @@ impl Obj_builder
         append_member(r.head@, r.tail@, fresh)
         return r
 
-    pub fn build(r: Self): Val //< the object built so far
-        return .obj_val(Obj::{ .head = r.head })
+    pub fn build(r: Self): Value //< the object built so far
+        return .obj_val(Object::{ .head = r.head })
 // ---------------------------------------------------------
 // Parsing & Dumping
 // ---------------------------------------------------------
@@ -154,7 +154,7 @@ pub enum Json_error //< why a document could not be read, or cannot be trusted
     expected_colon //< a member's name was not followed by `:`
     expected_comma_or_bracket //< an element was not followed by `,` or the closing mark
     trailing_comma //< `[1,]` or `{"a":1,}`; JSON requires an element after a comma
-    too_deep //< deeper than `max_nesting_depth`, or than the stack left can hold
+    too_deep //< deeper than `MAX_NESTING_DEPTH`, or than the stack left can hold
     too_large //< an array's elements need more bytes than this target's `Sz` can count
     trailing_input //< something other than whitespace follows the value
     duplicate_key(at: Sz) //<
@@ -181,12 +181,12 @@ priv struct Parse_ctx
     depth: Sz
     stack: Stack_limit //< where the parse stops short of the stack's end, beside `depth`'s count
 
-pub const max_nesting_depth: Sz = 500 //< the deepest nesting read; deeper fails with `too_deep`
+pub const MAX_NESTING_DEPTH: Sz = 500 //< the deepest nesting read; deeper fails with `too_deep`
     //<
     //< It guards against stack exhaustion, and is deep enough for ordinary JSON. `std/json_struct`
     //< holds a round trip to it too, so a document that parses does not stop part way.
 
-priv const stack_margin: Sz = 64 * 1024 //<
+priv const STACK_MARGIN: Sz = 64 * 1024 //<
     //< The stack kept free below where a parse stops
     //<
     //< **The count alone is sized for the main thread.** A thread's stack can be far smaller (512KB
@@ -196,7 +196,7 @@ priv const stack_margin: Sz = 64 * 1024 //<
 
 priv fn enter_nesting(ctx: Parse_ctx$@): Void!Json_error
     ctx.depth += 1
-    if ctx.depth > max_nesting_depth || ctx.stack.near()
+    if ctx.depth > MAX_NESTING_DEPTH || ctx.stack.near()
         throw .too_deep
 
 priv fn skip_ws(ctx: Parse_ctx$@)
@@ -252,7 +252,7 @@ priv fn parse_string(ctx: Parse_ctx$@): U8[]!Json_error
             throw .invalid_string
     throw .unexpected_eof
 
-priv fn parse_number(ctx: Parse_ctx$@): Val!Json_error //< reads one number
+priv fn parse_number(ctx: Parse_ctx$@): Value!Json_error //< reads one number
     //<
     //< int_val for integer notation; float_val with a point or an exponent.
     //< Caution: **Do not store an integer as an F64.** An integer over 53 bits (safetensors'
@@ -328,7 +328,7 @@ priv fn check_comma_or_end(ctx: Parse_ctx$@, end_char: U8): Bool!Json_error
         return false
     throw .expected_comma_or_bracket
 
-priv fn parse_value(ctx: Parse_ctx$@): Val!Json_error
+priv fn parse_value(ctx: Parse_ctx$@): Value!Json_error
     skip_ws(ctx)
     if ctx.pos >= ctx.src.len
         throw .unexpected_eof
@@ -357,16 +357,16 @@ priv fn parse_value(ctx: Parse_ctx$@): Val!Json_error
             return parse_number(ctx)!
     throw .invalid_character(c)
 
-priv const key_scan_max: Sz = 16 //< how many keys an object compares one by one before using a set
+priv const KEY_SCAN_MAX: Sz = 16 //< how many keys an object compares one by one before using a set
 
-priv fn parse_object(ctx: Parse_ctx$@): Val!Json_error
+priv fn parse_object(ctx: Parse_ctx$@): Value!Json_error
     enter_nesting(ctx)!
     defer ctx.depth -= 1
     ctx.pos += 1
     skip_ws(ctx)
     if ctx.pos < ctx.src.len && (ctx.src.ptr + ctx.pos)$ == '}'
         ctx.pos += 1
-        return .obj_val(Obj::{ .head = null })
+        return .obj_val(Object::{ .head = null })
     $head: Member$@ = null
     $tail: Member$@ = null
     // **A few keys are compared one by one; past that, a set of them.** One by one alone, an
@@ -380,13 +380,13 @@ priv fn parse_object(ctx: Parse_ctx$@): Val!Json_error
             throw .trailing_comma
         key_at: = ctx.pos
         key: = parse_string(ctx)!
-        if count < key_scan_max
+        if count < KEY_SCAN_MAX
             $m: = head
             for m != null
                 if m.key.equals(key)
                     throw .duplicate_key(key_at)
                 m = m.next
-            if count + 1 == key_scan_max
+            if count + 1 == KEY_SCAN_MAX
                 $f: = head
                 for f != null
                     seen.set(f.key, true)
@@ -410,16 +410,16 @@ priv fn parse_object(ctx: Parse_ctx$@): Val!Json_error
 
         if check_comma_or_end(ctx, '}')!
             break
-    return .obj_val(Obj::{ .head = head })
+    return .obj_val(Object::{ .head = head })
 
-priv fn parse_array(ctx: Parse_ctx$@): Val!Json_error
+priv fn parse_array(ctx: Parse_ctx$@): Value!Json_error
     enter_nesting(ctx)!
     defer ctx.depth -= 1
     ctx.pos += 1
     skip_ws(ctx)
     if ctx.pos < ctx.src.len && (ctx.src.ptr + ctx.pos)$ == ']'
         ctx.pos += 1
-        return .array_val(Arr::{ .head = null })
+        return .array_val(Array::{ .head = null })
     $head: Node$@ = null
     $tail: Node$@ = null
     for
@@ -433,14 +433,14 @@ priv fn parse_array(ctx: Parse_ctx$@): Val!Json_error
 
         if check_comma_or_end(ctx, ']')!
             break
-    return .array_val(Arr::{ .head = head })
+    return .array_val(Array::{ .head = head })
 
 pub struct Doc //< a parsed document: its value, and the arena `parse` built it in given null
     //<
     //< **Only the document frees anything.** Its `val`, and every part read out of that (`get`,
-    //< `get_at`, `arr_list`), is a `Val`, which has no `free`: freeing a part cannot tear the
+    //< `get_at`, `arr_list`), is a `Value`, which has no `free`: freeing a part cannot tear the
     //< whole.
-    pub val: Val //< the document's value
+    pub val: Value //< the document's value
     priv own: Own_arena //< the arena `parse` made for it given null, or empty; `free` lets it go
 
 impl Doc
@@ -462,7 +462,7 @@ pub fn parse( //< the whole document; anything left over is refused
     //< the document; fails on bad syntax or on text after it, leaving nothing behind
     $work: = mem.scratch(arena)
     $ctx: = Parse_ctx::{ .src = src, .pos = 0, .arena = work.arena, .depth = 0,
-        .stack = Stack_limit.later(stack_margin) }
+        .stack = Stack_limit.later(STACK_MARGIN) }
     v: = parse_value(ctx@) catch e
         work.free()
         throw e
@@ -479,16 +479,16 @@ priv fn write_break(out: Str_builder$@, indent: Sz, depth: Sz) //< a newline wit
     for _i in Range.asc(indent * depth)
         out.c(' ')
 
-impl Val
+impl Value
     pub fn arr_list( //< an array's elements as a list; the one way to walk an array
         //<
-        //< A `Val` cannot be the subject of `for in` (a chain has no `.len`), so walk this list.
+        //< A `Value` cannot be the subject of `for in` (a chain has no `.len`), so walk this list.
         //< Caution: When arena is null it allocates on the global heap, so the caller frees it with
         //< a `defer` (the same convention as `List.new`).
         r: Self,
         arena: Arena$@, //< the arena for the list; null means the global heap, freed by the caller
-    ): List<|Val|>
-        $out: = List<|Val|>.new(arena)
+    ): List<|Value|>
+        $out: = List<|Value|>.new(arena)
         switch r
         case .array_val(a)
             $curr: = a.head
@@ -564,7 +564,7 @@ impl Val
         //< O(members x names).
         r: Self,
         key: U8[], //< the member's name
-    ): Val
+    ): Value
         return r.find(key).unwrap_or(.null_val)
 
     pub fn find( //< an object's member, or nothing where the object has none
@@ -573,7 +573,7 @@ impl Val
         //< from a `null` one. On a value that is not an object, nothing.
         r: Self,
         key: U8[], //< the member's name
-    ): Val?
+    ): Value?
         switch r
         case .obj_val(o)
             $m: = o.head
@@ -590,7 +590,7 @@ impl Val
         //< count.
         r: Self,
         index: Sz, //< which element, counting from 0
-    ): Val
+    ): Value
         switch r
         case .array_val(a)
             $curr: = a.head
@@ -659,7 +659,7 @@ impl Val
         //< time.
         //< Caution: **It is quadratic in an object's members**, as `get` called for each key is.
         r: Self,
-        o: Val, //< the value to compare with
+        o: Value, //< the value to compare with
     ): Bool
         if r.kind_rank() != o.kind_rank()
             return false

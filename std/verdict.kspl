@@ -25,12 +25,12 @@ import "std/strnum" // `to_i64`
 import "std/subproc"
 import "std/sys"
 
-priv const mark_pass: U8[] = "pass" //< the marks at the start of a line
+priv const MARK_PASS: U8[] = "pass" //< the marks at the start of a line
     //<
     //< A single test fails with `std/lang`'s panic; a run of checks prints `FAIL`, which a gate's
     //< summary picks up.
-priv const mark_fail: U8[] = "FAIL"
-priv const mark_skip: U8[] = "SKIP"
+priv const MARK_FAIL: U8[] = "FAIL"
+priv const MARK_SKIP: U8[] = "SKIP"
 
 // The current test's label, and the text of its heading.
 // Caution: **Keep the heading alive until `pass` is called.** These hold a view into the string
@@ -91,7 +91,7 @@ pub fn pass( //< reports that the test passed
     desc: U8[], //< what was confirmed; if empty, the heading's text is used
 )
     text: = desc.trim_end()
-    line(mark_pass, text if text.len > 0 else cur_body, "")
+    line(MARK_PASS, text if text.len > 0 else cur_body, "")
 
 pub fn skip( //< reports that the test does not apply on this target, and why
     //<
@@ -101,9 +101,9 @@ pub fn skip( //< reports that the test does not apply on this target, and why
 )
     text: = why.trim_end()
     if cur_body.len == 0
-        line(mark_skip, text, "")
+        line(MARK_SKIP, text, "")
         return
-    line(mark_skip, cur_body, text)
+    line(MARK_SKIP, cur_body, text)
     skipped.add(cur_body)
 
 // ==========================================
@@ -157,7 +157,7 @@ priv $run_tag: Tag = ::{ .buf = ::{}, .len = 0 }
 priv $failed: Names = ::{ .buf = ::{}, .len = 0, .count = 0, .kept = 0 }
 priv $skipped: Names = ::{ .buf = ::{}, .len = 0, .count = 0, .kept = 0 }
 
-pub const max_findings_shown: Sz = 20 //< how many of a walk's findings one check lists
+pub const MAX_FINDINGS_SHOWN: Sz = 20 //< how many of a walk's findings one check lists
     //<
     //< Beyond this many, a longer list tells the reader nothing more.
 
@@ -184,9 +184,9 @@ pub fn check( //< one check: prints a `pass` line if it holds, a `FAIL` line if 
 ): Bool //< `ok` itself, so the call can be used as a condition
     cur_tag = ""
     if ok
-        line(mark_pass, name, "")
+        line(MARK_PASS, name, "")
         return true
-    line(mark_fail, name, detail)
+    line(MARK_FAIL, name, detail)
     failed.add(name)
     return false
 
@@ -217,8 +217,8 @@ pub fn check_list( //< reports a walk's findings as one check, with how many thi
     $why: = Str_builder.new()
     defer why.free()
     for i in Range.asc(bad.len)
-        if i >= max_findings_shown
-            why.s("\n    (and \{bad.len - max_findings_shown\} more)")
+        if i >= MAX_FINDINGS_SHOWN
+            why.s("\n    (and \{bad.len - MAX_FINDINGS_SHOWN\} more)")
             break
         why.s("\n    ").s(bad.get(i))
     if tail.len > 0 && bad.len > 0
@@ -227,9 +227,9 @@ pub fn check_list( //< reports a walk's findings as one check, with how many thi
         why.s("\n    it walked no \{unit\} at all, so it held nothing up against anything — the ")
             .s("reading broke, or what it reads has moved")
     if ok
-        line(mark_pass, shown.slice(), "")
+        line(MARK_PASS, shown.slice(), "")
         return true
-    line(mark_fail, shown.slice(), why.slice().trim_start())
+    line(MARK_FAIL, shown.slice(), why.slice().trim_start())
     failed.add(shown.slice())
     return false
 
@@ -241,7 +241,7 @@ pub fn skip_check( //< reports a check this environment cannot run, with the rea
     why: U8[], //< what this environment lacks
 )
     cur_tag = ""
-    line(mark_skip, name, why.trim_end())
+    line(MARK_SKIP, name, why.trim_end())
     skipped.add(name)
 
 pub fn finish(): I32 //<
@@ -252,8 +252,8 @@ pub fn finish(): I32 //<
     //< none, and `ALL PASS` would say that something held.
     if reported == 0
         cur_tag = ""
-        line(mark_fail, nothing_ran, "")
-        failed.add(nothing_ran)
+        line(MARK_FAIL, NOTHING_RAN, "")
+        failed.add(NOTHING_RAN)
     if failed.count > 0
         io.out().s("RESULT: SOME FAILED (\{failed.count\}) -> ")
         failed.put()
@@ -267,13 +267,13 @@ pub fn finish(): I32 //<
     io.out().s("RESULT: ALL PASS\n")
     return 0
 
-priv const nothing_ran: U8[] = "no check ran" //< what `finish` names for a run that reported none
+priv const NOTHING_RAN: U8[] = "no check ran" //< what `finish` names for a run that reported none
 
 pub fn fatal( //< ends a run that cannot continue (for example, its input files are missing)
     msg: U8[], //< why it cannot continue
 ): I32 //< always 1, the exit code to return from main
     cur_tag = ""
-    line(mark_fail, msg, "")
+    line(MARK_FAIL, msg, "")
     io.out().s("RESULT: SOME FAILED (1)\n")
     return 1
 
@@ -281,12 +281,12 @@ pub fn fatal( //< ends a run that cannot continue (for example, its input files 
 // A child's run, as a check reads it
 // ==========================================
 
-pub const default_timeout_ms: I32 = 600000 //< the usual limit on waiting for a child (`run_child`)
+pub const DEFAULT_TIMEOUT_MS: I32 = 600000 //< the usual limit on waiting for a child (`run_child`)
     //<
     //< Long, as insurance against a run that hangs. **Only a check whose failure is not stopping
     //< passes a shorter one.**
 
-priv const run_output_cap: Sz = 4 * 1024 * 1024 //< how much of each of a child's outputs is kept
+priv const RUN_OUTPUT_CAP: Sz = 4 * 1024 * 1024 //< how much of each of a child's outputs is kept
     //<
     //< Caution: What is beyond it is cut without a word: enough for matching diagnostics, not for
     //< receiving an artifact itself.
@@ -331,7 +331,7 @@ pub fn run_child( //< runs one child to its end, and returns how it ended and wh
     $work: = mem.scratch(null)
     defer work.free()
     t0: = sys.mono_us()
-    r: = subproc.run_capture(argv, cwd, timeout_ms, run_output_cap, work.arena)
+    r: = subproc.run_capture(argv, cwd, timeout_ms, RUN_OUTPUT_CAP, work.arena)
     o: = folded(r, work.arena)
     note_near_cap(argv, (sys.mono_us() - t0) / 1000I64, timeout_ms, o.code.is_none())
     return Run_out::{ .code = o.code, .out = arena.dup_str(o.out) }
@@ -364,7 +364,7 @@ pub fn jobs(): Sz //< how many children `run_children` runs side by side
 pub fn run_children( //< runs children side by side (`jobs`), and returns their runs in order
     //<
     //< **The results come in the input's order**, so the code that judges has one form, sequential
-    //< or parallel. **Each waits at most `default_timeout_ms`**, as `run_child` does unless told
+    //< or parallel. **Each waits at most `DEFAULT_TIMEOUT_MS`**, as `run_child` does unless told
     //< otherwise.
     //< Caution: **Give each run a `work_dir` of its own.** The outputs are collected there in files
     //< of fixed names (`j<number>.out`), so two runs sharing one at once read each other's.
@@ -385,7 +385,7 @@ pub fn run_children( //< runs children side by side (`jobs`), and returns their 
     // The outputs and the folding are work, as in `run_child`.
     $work: = mem.scratch(null)
     defer work.free()
-    rs: = subproc.run_many(items, jobs(), default_timeout_ms, run_output_cap, work_dir, work.arena)
+    rs: = subproc.run_many(items, jobs(), DEFAULT_TIMEOUT_MS, RUN_OUTPUT_CAP, work_dir, work.arena)
     for i in Range.asc(rs.len)
         o: = folded(rs.get(i), work.arena)
         outs.push(Run_out::{ .code = o.code, .out = arena.dup_str(o.out) })

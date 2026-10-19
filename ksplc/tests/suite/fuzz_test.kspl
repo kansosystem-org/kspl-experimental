@@ -8,7 +8,7 @@
 //< timeout uses real time, so a slow compilation on a busy machine can look endless. A failing
 //< case is rerun alone.
 import "ksplc/tests/support/harness"
-import "std/argp"
+import "std/argparse"
 import "std/chars"
 import "std/ds" { List }
 import "std/fs"
@@ -17,24 +17,24 @@ import "std/mem" { Arena }
 import "std/str" // `arena.text()`
 import "std/strfmt" as _strfmt
 
-priv const default_seed: I64 = 20260719
-priv const default_trials: I64 = 20 //< how many rounds CI scatters
+priv const DEFAULT_SEED: I64 = 20260719
+priv const DEFAULT_TRIALS: I64 = 20 //< how many rounds CI scatters
     //<
     //< **CI's depth**: the seed is fixed, so CI replays the same inputs and shows a regression.
     //< `make fuzz-long` runs deeper, with a fresh seed, to find what this seed never reaches.
 
-priv const trial_timeout_ms: I32 = 15000 //< a round's first timeout
+priv const TRIAL_TIMEOUT_MS: I32 = 15000 //< a round's first timeout
 
-priv const max_seed_bytes: I64 = 64I64 * 1024I64 //<
+priv const MAX_SEED_BYTES: I64 = 64I64 * 1024I64 //<
     //< The cap that keeps a round short
     //<
     //< Caution: **Do not drop the small side.** A file of a few bytes has its ways of breaking too.
 
-priv const notations: fuzz.Input_kind[1] = ::{ //< the one notation a source is written in
+priv const NOTATIONS: fuzz.Input_kind[1] = ::{ //< the one notation a source is written in
     fuzz.Input_kind::{ .name = ".kspl", .ext = ".kspl" },
 }
 
-priv const reach_floor_div: Sz = 20 //<
+priv const REACH_FLOOR_DIV: Sz = 20 //<
     //< At least one round in this many must compile, not be refused
     //<
     //< Caution: **Do not raise it to tighten the check**: it only shows that fuzzing works.
@@ -79,14 +79,14 @@ priv fn imports_std_alone(src: U8[]): Bool //<
         at = end + 1
     return true
 
-priv const usage: U8[] = "[seed folder ...]"
+priv const USAGE: U8[] = "[seed folder ...]"
 
 fn main(): I32
     arena: = harness.begin(512 * 1024 * 1024)
-    $o: = fuzz.Opts::{ .trials = default_trials, .seed = default_seed }
-    p: = argp.Parser
+    $o: = fuzz.Options::{ .trials = DEFAULT_TRIALS, .seed = DEFAULT_SEED }
+    p: = argparse.Parser
         .create("fuzz_test", "scatters broken source at the compiler's front end", arena)
-    p.positional(usage)
+    p.positional(USAGE)
     fuzz.declare(p, o@)
     $more: = List<|U8[]|>.new(arena)
     for a in harness.more_args()
@@ -107,12 +107,12 @@ fn main(): I32
     // **The broken source is named in its seed's notation**: the name decides how it is read.
     c: = fuzz.Campaign::{ .subject = "ksplc", .argv = harness.ksplc_argv(U8[][]::{}),
         .tell_kind = false, .after = U8[][]::{ fs.join(work, "out.c", arena) }, .work = work,
-        .kinds = fuzz.Input_kind[]::notations, .in_turn = true, .wait_ms = trial_timeout_ms,
-        .reach_div = reach_floor_div, .again = again.take() }
+        .kinds = fuzz.Input_kind[]::NOTATIONS, .in_turn = true, .wait_ms = TRIAL_TIMEOUT_MS,
+        .reach_div = REACH_FLOOR_DIV, .again = again.take() }
     $endings: = List<|U8[]|>.new(arena)
-    for n in notations
+    for n in NOTATIONS
         endings.push(n.ext)
-    found: = fuzz.gather(dirs.slice(), endings.slice(), max_seed_bytes, arena)
+    found: = fuzz.gather(dirs.slice(), endings.slice(), MAX_SEED_BYTES, arena)
     $seeds: = List<|fuzz.Sample|>.new(arena)
     for one in found
         if imports_std_alone(one.data)

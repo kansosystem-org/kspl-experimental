@@ -19,10 +19,10 @@ import "std/strfmt" as _strfmt
 import "std/sys"
 import "std/verdict"
 
-priv const usage: U8[] = "usage: ksplc run tests/copy.kspl <kssrv> <copy> <work_dir>" //<
+priv const USAGE: U8[] = "usage: ksplc run tests/copy.kspl <kssrv> <copy> <work_dir>" //<
     //< the arguments, in order (`make check-pilot-copy` in `kssrv/Makefile` passes them)
 
-priv const copy_port: I32 = 18398 //< the port the server listens on for this check
+priv const COPY_PORT: I32 = 18398 //< the port the server listens on for this check
     //<
     //< Caution: **Keep it different from the ports in `kssrv/tests/main.kspl`**: that suite may be
     //< running at the same time.
@@ -33,7 +33,7 @@ fn main(): I32
     defer arena.free()
     argv: = sys.args()
     if argv.len != 4
-        panic(arena.dup_str(usage))
+        panic(arena.dup_str(USAGE))
     exe: = arena.dup_str(argv.get(1))
     copy_path: = arena.dup_str(argv.get(2))
     work: = arena.dup_str(argv.get(3))
@@ -47,11 +47,11 @@ fn main(): I32
 priv fn fetch(exe: U8[], root: U8[], work: U8[], arena: Arena$@): pilot.Blob? //<
     //< The policy the server serves; the server is stopped before this returns
     started: =
-        bring_up(exe, root, work, "kssrv", copy_port, U8[][]::{},
+        bring_up(exe, root, work, "kssrv", COPY_PORT, U8[][]::{},
         "kssrv comes into a state where it can answer", arena)
     if got: = started
         $srv: = got
-        r: = client.get(copy_port, "/api/pilot", "", arena) catch e
+        r: = client.get(COPY_PORT, "/api/pilot", "", arena) catch e
             srv.failed("GET /api/pilot is answered", e.reason(), arena)
             srv.stop()
             return .none
@@ -81,7 +81,7 @@ priv fn compare(served: pilot.Blob, copy_path: U8[], arena: Arena$@) //<
         sweep(served, c, found@, arena)
     else
         found.push(arena.text().s("could not read \{copy_path\}").take())
-    verdict.check_list("the copy has not gone stale", car.dist_steps * car.line_count, "points",
+    verdict.check_list("the copy has not gone stale", car.DIST_STEPS * car.LINE_COUNT, "points",
         found@, fresh)
 
 priv fn read_blob(path: U8[], arena: Arena$@): pilot.Blob? //< the copy, read as a policy
@@ -95,16 +95,16 @@ priv fn sweep(served: pilot.Blob, copy: pilot.Blob, found: List<|U8[]|>$@, arena
     //< Every point where the copy's manoeuvre differs from the served one
     //<
     //< **A close call is left out of the verdict.** Where the served policy barely prefers one
-    //< manoeuvre, the two computations can disagree for that reason alone (`car.tight_margin`).
+    //< manoeuvre, the two computations can disagree for that reason alone (`car.TIGHT_MARGIN`).
     scratch: = Arena.new(1024 * 1024)
     defer scratch.free()
-    for k in Range.asc(car.dist_steps)
-        dist: = I64::k * car.dist_step_mm
-        for line in Range.asc(car.line_count)
+    for k in Range.asc(car.DIST_STEPS)
+        dist: = I64::k * car.DIST_STEP_MM
+        for line in Range.asc(car.LINE_COUNT)
             mark: = scratch.save()
             want: = pilot.drive(served, dist, line, scratch)
             got: = pilot.drive(copy, dist, line, scratch)
-            if want.margin >= car.tight_margin &&
+            if want.margin >= car.TIGHT_MARGIN &&
                 (want.lon != got.lon || want.lat != got.lat || want.rot != got.rot)
                 at: = arena.text()
                     .s("dist=\{dist\} line=\{line\}: \{got.lon\},\{got.lat\},\{got.rot\}")

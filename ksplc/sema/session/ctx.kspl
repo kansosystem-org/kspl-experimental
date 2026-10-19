@@ -23,8 +23,8 @@ import "std/chars"
 import "std/ds" { List, Map }
 import "std/str" { Str_builder }
 
-priv const max_errors: I32 = 50 //< the errors a run reports, the cap's own line counted
-priv const max_instance_notes: Sz = 8 //< the instantiations an error in a generic's body names
+priv const MAX_ERRORS: I32 = 50 //< the errors a run reports, the cap's own line counted
+priv const MAX_INSTANCE_NOTES: Sz = 8 //< the instantiations an error in a generic's body names
     //<
     //< "Compilation stops at 50 errors" in ksplc/docs/SPEC-tools.md fixes it; change both together.
 
@@ -92,7 +92,7 @@ enum Sema_error
         //< The limit is max_constexpr_depth in sema/decl/eval.kspl.
         //< Caution: **Keep it apart from not_constant**, a normal result in a speculative fold.
         //< Merged into it, the cutoff reaches the user as an unrelated diagnostic, such as a wrong
-        //< array size ("Implementation limits" in docs/SPEC-language.md).
+        //< array size ("Implementation limits" in docs/SPEC-programming-language.md).
 
 enum Bodies //< which function bodies an analysis checks
     //<
@@ -339,7 +339,7 @@ impl Sema_ctx
         //< The built-in `Unknown` / `Void` are not qualified. It lives here, not in `resolve`.
         //< There, ctx would have to import resolve and be pulled into the declarations' mutual
         //< recursion. That is a large tangle, since many files use ctx.
-        if r.file_name.len > 0 && !name.equals(base_core.unknown_type_name) &&
+        if r.file_name.len > 0 && !name.equals(base_core.UNKNOWN_TYPE_NAME) &&
             !name.equals("Void")
             return r.build_mod_fqn(r.file_name, name)
         return base_core.pools.name_text(name)
@@ -471,12 +471,12 @@ impl Sema_ctx
         // The cap's own line is the 50th error ("Compilation stops at 50 errors" in
         // ksplc/docs/SPEC-tools.md). It is printed in place of the error that would have been it.
         if eff_sev == base_diag.Diagnostic_severity.error &&
-            r.diags.counts.errors >= max_errors - 1
-            if r.diags.counts.errors == max_errors - 1
+            r.diags.counts.errors >= MAX_ERRORS - 1
+            if r.diags.counts.errors == MAX_ERRORS - 1
                 starts: = r.line_starts_for(file, src)
                 $cap: = Str_builder.new()
                 defer cap.free()
-                cap.s("Too many errors (>= \{max_errors\}). Further errors are suppressed.")
+                cap.s("Too many errors (>= \{MAX_ERRORS\}). Further errors are suppressed.")
                 base_diag.print_diagnostic(file, src, offset, span, cap.slice(), eff_sev, starts)
                 r.diags.counts.errors += 1
             return
@@ -526,7 +526,7 @@ impl Sema_ctx
             if text.equals(prev)
                 more = true
                 continue
-            if n == max_instance_notes
+            if n == MAX_INSTANCE_NOTES
                 more = true
                 break
             out.s("\n  Note: ").s(text).s(".")
@@ -669,9 +669,9 @@ impl Sema_ctx
     fn append_closure_note(r: Self$@) //< writes to scratch that adding `;` makes it a closure
         //<
         //< Even with zero captures, a `;` makes it a `Callable` ("Why capture is made explicit and
-        //< escape is forbidden" in docs/DESIGN-language.md). That **the presence of `;` decides the
-        //< type** is not visible in the text. Unexplained, the user sees only "the types do not
-        //< match, though I just passed a function".
+        //< escape is forbidden" in docs/DESIGN-programming-language.md). That **the presence of `;`
+        //< decides the type** is not visible in the text. Unexplained, the user sees only "the
+        //< types do not match, though I just passed a function".
         //< Caution: Keep the wording in this one place. Two situations need it: a function pointer
         //< passed to a `Callable`'s position, and a function value bound with no type annotation.
         r.scratch
@@ -773,7 +773,8 @@ impl Sema_ctx
         // **A local with an imported module's name hides the module**, and KSPL reaches both with
         // `.`. An `io.out()` below it reads the local and fails as a missing member, far from the
         // cause. A warning, not an error: shadowing stays legal ("Scope and shadowing" in
-        // docs/SPEC-language.md). The prelude's `lang`, an import nobody wrote, is excluded.
+        // docs/SPEC-programming-language.md). The prelude's `lang`, an import nobody wrote, is
+        // excluded.
         named: = r.peek_file_alias(r.file_name, name)
         if named != null && named.decl_node != null
             r.clear_scratch()
@@ -784,22 +785,29 @@ impl Sema_ctx
     priv fn lint_declared_name(r: Self$@, name: U8[], sym: Sema_symbol$@, target_node: Ast_node$@) //<
         //< [I0502] Reports a name off its kind's convention
         //<
-        //< A type is in Capital_snake_case (or a single capital, `T`), a value in snake_case; a
-        //< global constant may be upper case.
+        //< A type uses Initial_upper_snake_case, an explicit constant UPPER_SNAKE_CASE, and an
+        //< ordinary value snake_case.
         if sym.kind.is_type()
-            if !(name.len == 1 && (name.ptr + 0).is_upper()) && !is_capital_snake(name)
+            if !is_initial_upper_snake(name)
                 r.clear_scratch()
-                    .s("[I0502] Type name '\{name\}' does not use Capital_snake_case. Rename it \
-                        using Capital_snake_case.")
+                    .s("[I0502] Type name '\{name\}' does not use Initial_upper_snake_case. \
+                        Uppercase only the first letter; lowercase all later letters.")
                 r.information(target_node, r.scratch.slice())
             return
         if !sym.kind.is_value()
             return
-        if sym.flags.is_global
-            switch sym.kind
-            case .constant
+        switch sym.kind
+        case .constant
+            if sym.node == null || sym.node.kind_id != .k_decl_const
+                r.check_snake_case(name, target_node, "Identifier")
                 return
-            default {}
+            if !is_upper_snake(name)
+                r.clear_scratch()
+                    .s("[I0502] Constant '\{name\}' does not use UPPER_SNAKE_CASE. Uppercase all \
+                        letters and separate words with underscores.")
+                r.information(target_node, r.scratch.slice())
+            return
+        default {}
         r.check_snake_case(name, target_node, "Identifier")
 
 // It releases what it owns with `free()`; see `Owned` in std/lang.kspl for why it conforms.
@@ -861,11 +869,17 @@ impl Ast_node
                     .s("unknown lint level '\{level_node.text\}' (expected 'off', 'on', or 'error')")
                 c.err(level_node, c.scratch.slice())
 
-priv fn is_capital_snake(name: U8[]): Bool //<
-    //< whether name is `Capital_snake_case`: one capital, first
+priv fn is_initial_upper_snake(name: U8[]): Bool //<
+    //< whether only the first letter of name is uppercase
     if name.len == 0 || !(name.ptr + 0).is_upper()
         return false
     for $i: Sz = 1; i < name.len; i += 1
         if (name.ptr + i).is_upper()
+            return false
+    return true
+
+priv fn is_upper_snake(name: U8[]): Bool //< whether name has no lowercase letters
+    for ch in name
+        if ch.is_lower()
             return false
     return true

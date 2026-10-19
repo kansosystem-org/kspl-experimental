@@ -15,9 +15,9 @@ import "std/sys"
 import "std/tests/sys_test"
 import "std/verdict"
 
-priv const work_dir: U8[] = "out/tmp/kspl_test_verdict"
+priv const WORK_DIR: U8[] = "out/tmp/kspl_test_verdict"
 
-priv const child_head: U8[] =
+priv const CHILD_HEAD: U8[] =
     """
 import "std/ds" { List }
 import "std/mem" { Arena }
@@ -27,7 +27,7 @@ fn main(): I32
 """
 
 // A failed check and a skipped check both let the run continue; only the failure is named.
-priv const falls_main: U8[] =
+priv const FALLS_MAIN: U8[] =
     """
   verdict.begin("probe")
   verdict.check("one holds", true, "")
@@ -36,7 +36,7 @@ priv const falls_main: U8[] =
   verdict.check("four still runs", true, "")
   return verdict.finish()
 """
-priv const falls_out: U8[] =
+priv const FALLS_OUT: U8[] =
     """
 pass probe: one holds
 FAIL probe: two fails: what was found
@@ -46,27 +46,27 @@ RESULT: SOME FAILED (1) -> two fails
 """
 
 // Nothing failed, so it passes and names what it skipped; an empty label prints no separator.
-priv const passes_main: U8[] =
+priv const PASSES_MAIN: U8[] =
     """
   verdict.begin("")
   verdict.check("one holds", true, "")
   verdict.skip_check("two is passed over", "why")
   return verdict.finish()
 """
-priv const passes_out: U8[] =
+priv const PASSES_OUT: U8[] =
     """
 pass one holds
 SKIP two is passed over: why
 RESULT: ALL PASS (1 skipped) -> two is passed over
 """
 
-priv const stops_main: U8[] =
+priv const STOPS_MAIN: U8[] =
     """
   verdict.begin("probe")
   verdict.check("one holds", true, "")
   return verdict.fatal("its material is not there")
 """
-priv const stops_out: U8[] =
+priv const STOPS_OUT: U8[] =
     """
 pass probe: one holds
 FAIL probe: its material is not there
@@ -74,18 +74,18 @@ RESULT: SOME FAILED (1)
 """
 
 // A run that reported no check fails: nothing it held up says that anything passed.
-priv const empty_main: U8[] = """
+priv const EMPTY_MAIN: U8[] = """
   verdict.begin("probe")
   return verdict.finish()
 """
-priv const empty_out: U8[] =
+priv const EMPTY_OUT: U8[] =
     """
 FAIL probe: no check ran
 RESULT: SOME FAILED (1) -> no check ran
 """
 
 // A walk of no files fails, just as one that finds something does; the findings are indented below.
-priv const walks_main: U8[] =
+priv const WALKS_MAIN: U8[] =
     """
   verdict.begin("")
   arena: = Arena.new(4096)
@@ -97,7 +97,7 @@ priv const walks_main: U8[] =
   verdict.check_list("a walk finding one", 2, "files", found@, "mend it so")
   return verdict.finish()
 """
-priv const walks_out: U8[] =
+priv const WALKS_OUT: U8[] =
     """
 pass a walk of one (1 files)
 FAIL a walk of none (0 files): it walked no files at all, so it held nothing up against anything — the reading broke, or what it reads has moved
@@ -107,7 +107,7 @@ RESULT: SOME FAILED (2) -> a walk of none (0 files), a walk finding one (2 files
 """
 
 // More failures than the `RESULT:` line has room to name.
-priv const overflows_main: U8[] =
+priv const OVERFLOWS_MAIN: U8[] =
     """
   for _i in Range.asc(300)
     verdict.check("a check whose name is long enough to fill the room", false, "")
@@ -120,9 +120,9 @@ priv fn run_child( //< writes one child's program and runs it to the end
     body: U8[], //< the child's `main`, indented
     arena: Arena$@,
 ): subproc.Run_result
-    fs.mkdir_all(work_dir) catch panic("the work directory must be creatable")
-    src: = arena.text().s(work_dir).c('/').s(name).s(".kspl").take()
-    io.write_file(src, arena.text().s(child_head).s(body).take()) catch
+    fs.mkdir_all(WORK_DIR) catch panic("the work directory must be creatable")
+    src: = arena.text().s(WORK_DIR).c('/').s(name).s(".kspl").take()
+    io.write_file(src, arena.text().s(CHILD_HEAD).s(body).take()) catch
         panic("the child's program must be writable")
     r: =
         subproc.run_capture(U8[][]::{ ksplc, "run", src }, "", 300000, 1 << 20, arena)
@@ -149,22 +149,22 @@ priv fn holds_to( //< runs one child and stops if its output or exit code is not
 
 fn test_verdict_goes_on_past_a_failure(ksplc: U8[], arena: Arena$@)
     verdict.start("[Verdict] a run of checks going on past a failure test...")
-    holds_to(ksplc, "falls", falls_main, falls_out, 1, arena)
-    holds_to(ksplc, "passes", passes_main, passes_out, 0, arena)
-    holds_to(ksplc, "stops", stops_main, stops_out, 1, arena)
-    holds_to(ksplc, "empty", empty_main, empty_out, 1, arena)
+    holds_to(ksplc, "falls", FALLS_MAIN, FALLS_OUT, 1, arena)
+    holds_to(ksplc, "passes", PASSES_MAIN, PASSES_OUT, 0, arena)
+    holds_to(ksplc, "stops", STOPS_MAIN, STOPS_OUT, 1, arena)
+    holds_to(ksplc, "empty", EMPTY_MAIN, EMPTY_OUT, 1, arena)
     verdict
         .pass("A failed check does not stop the run, and a run with no check fails; the `RESULT:` \
             line and the exit code say it.")
 
 fn test_verdict_walk_of_nothing_fails(ksplc: U8[], arena: Arena$@)
     verdict.start("[Verdict] a walk that walked nothing failing test...")
-    holds_to(ksplc, "walks", walks_main, walks_out, 1, arena)
+    holds_to(ksplc, "walks", WALKS_MAIN, WALKS_OUT, 1, arena)
     verdict.pass("A walk that walked nothing fails, as one that found something does.")
 
 fn test_verdict_names_what_fits(ksplc: U8[], arena: Arena$@)
     verdict.start("[Verdict] a `RESULT:` line naming more than its room holds test...")
-    r: = run_child(ksplc, "overflows", overflows_main, arena)
+    r: = run_child(ksplc, "overflows", OVERFLOWS_MAIN, arena)
     lines: = r.stdout_data.lines(arena)
     assert(r.exited_with(1) && lines.len == 301,
         "each failure puts its line out, and the run ends on 1")
@@ -396,7 +396,7 @@ fn test_log_pushes_a_heavy_line_out_at_once()
 
     verdict.pass("an error and a warning are handed over as they close, and a lighter line piles.")
 
-priv const killed_src: U8[] = //< a child killed outright right after a warning written through `at`
+priv const KILLED_SRC: U8[] = //< a child killed outright right after a warning written through `at`
     """import "std/io"
 import "std/log" { Log }
 import "std/subproc"
@@ -421,7 +421,7 @@ fn test_log_keeps_a_heavy_line_through_a_kill(ksplc: U8[], arena: Arena$@) //< k
         verdict.skip("it hands over shell command lines")
         return
     r: =
-        subproc.run_capture(sys_test.child_argv(ksplc, "log_killed", killed_src, arena), "", 300000,
+        subproc.run_capture(sys_test.child_argv(ksplc, "log_killed", KILLED_SRC, arena), "", 300000,
         4096, arena) catch panic("the child must start")
     assert(r.exit_code.is_some(), "the child must start and come to an end")
     assert(r.exited_with(137), "the child must end by SIGKILL, before any exit path")

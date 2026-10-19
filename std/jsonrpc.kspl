@@ -16,14 +16,14 @@ import "std/str" { Str_builder }
 import "std/strfmt" as _strfmt
 import "std/strnum" as _strnum // `to_count`
 
-pub const version: U8[] = "2.0" //< the protocol version written in every body
+pub const VERSION: U8[] = "2.0" //< the protocol version written in every body
 
-priv const frame_sep: U8[] = "\r\n\r\n" //< the separator between the header and the body
-pub const length_tag: U8[] = "Content-Length:" //< the header that gives the body's length.
+priv const FRAME_SEP: U8[] = "\r\n\r\n" //< the separator between the header and the body
+pub const LENGTH_TAG: U8[] = "Content-Length:" //< the header that gives the body's length.
     //<
     //< **Do not copy the name** (the reason is at `frame_into`).
 
-pub const max_body_bytes: Sz = 16 * 1024 * 1024 //< the largest body to wait for, so a lie ends.
+pub const MAX_BODY_BYTES: Sz = 16 * 1024 * 1024 //< the largest body to wait for, so a lie ends.
     //<
     //< Caution: **Keep a bound**, or a server that declares 4GB puts this client into a wait that
     //< never completes (as with `std/http`'s body bound).
@@ -49,11 +49,11 @@ pub fn content_length( //< the length the header declares, or none if it declare
             end += 1
         line: = head.sub(at, end - at)
         at = end + 1
-        if !line.sub(0, length_tag.len).equals_ignore_case(length_tag)
+        if !line.sub(0, LENGTH_TAG.len).equals_ignore_case(LENGTH_TAG)
             continue
         // Caution: **Do not let the first line decide**: a peer taking the last one cuts the frame
         // elsewhere, and every frame after it is misread.
-        n: = line.sub_from(length_tag.len).trim_spaces().to_count(limit) catch
+        n: = line.sub_from(LENGTH_TAG.len).trim_spaces().to_count(limit) catch
             throw .broken
         if seen: = found
             if seen != n
@@ -68,11 +68,11 @@ pub fn frame_into( //< writes the header and then the body to the destination
     out: Str_builder$@, //< where the framed message is written
     body: U8[], //< the JSON text to send
 )
-    out.s(length_tag).c(' ').s("\{body.len\}").s(frame_sep).s(body)
+    out.s(LENGTH_TAG).c(' ').s("\{body.len\}").s(FRAME_SEP).s(body)
 
 pub fn encode( //< assembles one JSON-RPC body
     method: U8[], //< the name of the method to call
-    params: json.Val, //< the parameters sent with it
+    params: json.Value, //< the parameters sent with it
     id: I32, //< the request's id; a negative value makes a notification with no id
     arena: Arena$@, //< where the text goes; null means the heap, freed with `dealloc`
 ): U8[] //< the body text, without the frame header
@@ -81,7 +81,7 @@ pub fn encode( //< assembles one JSON-RPC body
     $work: = mem.scratch(null)
     defer work.free()
     $b: = Json_builder.new(work.arena)
-    $obj: = b.obj().set("jsonrpc", b.str_val(version))
+    $obj: = b.obj().set("jsonrpc", b.str_val(VERSION))
     if id >= 0
         obj = obj.set("id", b.int_val(id))
     obj = obj.set("method", b.str_val(method)).set("params", params)
@@ -90,7 +90,7 @@ pub fn encode( //< assembles one JSON-RPC body
     obj.build().dump(out@)
     return arena.dup_str(out.slice())
 
-pub const max_head_bytes: Sz = 8192 //<
+pub const MAX_HEAD_BYTES: Sz = 8192 //<
     //< the longest head taken, its blank line counted, so a lie ends
     //<
     //< A real header is a few dozen bytes. Without it, a peer that never ends one grows the buffer
@@ -102,22 +102,22 @@ pub fn take_frame( //< cuts out one whole frame, or nothing if none is complete 
     //< failure forever. **Take the reader's own limit.** A reader that lets a larger body in than
     //< this one waits for loses the frame boundary. Every frame after it is then misread.
     acc: Str_builder$@, //< what has arrived so far; the frame cut out is removed from it
-    max_body: Sz, //< the largest body waited for (`max_body_bytes` unless the reader takes more)
+    max_body: Sz, //< the largest body waited for (`MAX_BODY_BYTES` unless the reader takes more)
     arena: Arena$@, //< where the body is copied to; null means the heap, freed with `dealloc`
 ): U8[]?!Rpc_end //< the body, or none for now; a bad length header fails with broken
     text: = U8[]::acc.slice()
     $sep: Sz = 0
     // Caution: **Look for the head's end only within the limit.** Looked for further, a long head
     // arriving in one read is taken, and the same head arriving a byte at a time is broken.
-    switch text.sub(0, max_head_bytes).find_str(frame_sep)
+    switch text.sub(0, MAX_HEAD_BYTES).find_str(FRAME_SEP)
     case .some(i)
         sep = i
     case .none
-        if text.len >= max_head_bytes
+        if text.len >= MAX_HEAD_BYTES
             acc.len = 0
             throw .broken
         return .none
-    body_at: = sep + frame_sep.len
+    body_at: = sep + FRAME_SEP.len
     // Caution: **Drop the head before failing**, or every later read fails on the same one. A
     // body is never empty, so a head declaring no length is as broken as one declaring 0.
     declared: = content_length(text.sub(0, sep), max_body) catch

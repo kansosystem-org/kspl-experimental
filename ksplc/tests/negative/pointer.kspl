@@ -5,13 +5,13 @@
 //< `@` on a read-only element must not pass it where a mutable pointer is expected
 //<
 //< **The notation is right and only the permission drops.** Handed straight to a `U8$@`, the
-//< expected type descends into `ro[0]`. The `const_of(U8)` -> `U8` conversion fits a copy. It
+//< expected type descends into `RO[0]`. The `const_of(U8)` -> `U8` conversion fits a copy. It
 //< must not retype the place. `x` alone settles the type of `x@`, or a ROM write is lost.
 // EXPECT: expected 'U8$@', but got 'U8@'
 // EXPECT: expected 'U8$[]', but got 'U8[]'
 
-const ro: U8[4] = ::{ 1, 2, 3, 4 }
-const lit: U8[] = "abc"
+const RO: U8[4] = ::{ 1, 2, 3, 4 }
+const LIT: U8[] = "abc"
 
 priv fn writes_through(p: U8$@)
   p$ = 9
@@ -20,8 +20,8 @@ priv fn writes_elem(s: U8$[])
   s[0] = 9
 
 fn main(): I32
-  writes_through(ro[0]@)
-  writes_elem(lit)
+  writes_through(RO[0]@)
+  writes_elem(LIT)
   return 0
 // ==== case addr_of_immutable_binding
 //< Taking an immutable binding's address must not let an out parameter rewrite it
@@ -365,12 +365,12 @@ fn main(): I32
 // EXPECT-NOT: cannot cast a 'const' declaration to the mutable slice type 'U8[]'
 import "std/io"
 
-const ro: U8[4] = ::{ 1U8, 2U8, 3U8, 4U8 }
+const RO: U8[4] = ::{ 1U8, 2U8, 3U8, 4U8 }
 
 pub fn main(): I32
-  bad_const: = U8$[]::ro // this one stops
+  bad_const: = U8$[]::RO // this one stops
   bad_literal: = U8$[]::"abc" // this one stops too
-  ok_immutable: = U8[]::ro // an immutable slice passes
+  ok_immutable: = U8[]::RO // an immutable slice passes
   $buf: U8[4] = ::{}
   ok_owned: = U8$[]::buf // memory one holds oneself passes
   io.out().s("\{bad_const.len\}\{bad_literal.len\}\{ok_immutable.len\}\{ok_owned.len\}\n")
@@ -394,7 +394,7 @@ pub fn main(): I32
 
 // The shapes it does not hold, among the arithmetic taking a pointer as an operand.
 // The three shapes that can be written are in "6.2 Pointer arithmetic and implicit
-// dereferencing" in `../../../docs/SPEC-language.md`.
+// dereferencing" in `../../../docs/SPEC-programming-language.md`.
 priv fn op(n: Sz): Sz
   return n
 
@@ -413,7 +413,7 @@ fn case_ptr_arith_bad_forms(): I32
 // A subtraction between pointers whose target types differ.
 // **The answer being "how many elements", it cannot subtract unless the element size is settled
 // to one** ("6.2 Pointer arithmetic and implicit dereferencing" in
-// `../../../docs/SPEC-language.md`). Let it through without refusing and KSPL's diagnostics are
+// `../../../docs/SPEC-programming-language.md`). Let it through without refusing and KSPL's diagnostics are
 // zero, with only the C compiler's `invalid operands to binary expression` coming out.
 fn case_ptr_diff_mismatched(): I32
   a: I32 = 1
@@ -515,7 +515,7 @@ fn main()
 // ==== case write_elem_through_const_ptr
 //< Elements must not be rewritable through a pointer to a read-only slice
 //<
-//< `p[0] = v` on a `p: U8[]@` auto-dereferences (`docs/SPEC-language.md` §6.2.1), so the elements'
+//< `p[0] = v` on a `p: U8[]@` auto-dereferences (`docs/SPEC-programming-language.md` §6.2.1), so the elements'
 //< check must peel the pointer step off. A `U8$[]@` (an immutable pointer to a **mutable** slice)
 //< has writable elements: the descriptor's (ptr+len) mutability is a different step.
 //< The slice is named, not the pointer: `$[]` goes on the slice's step.
@@ -555,14 +555,14 @@ fn main(): I32
 // EXPECT: cannot write through a read-only pointer
 // EXPECT: cannot write through a read-only pointer
 
-const ro: U8[4] = ::{ 1, 2, 3, 4 }
+const RO: U8[4] = ::{ 1, 2, 3, 4 }
 
 // p: U8@ is the promise "I do not write to the target".
 priv fn breaks_promise(p: U8@)
   (p + 1)$ = 9
 
 fn main(): I32
-  q: = ro@ // U8@
+  q: = RO@ // U8@
   (q + 1)$ = 9
-  breaks_promise(ro@)
-  return I32::ro[1]
+  breaks_promise(RO@)
+  return I32::RO[1]

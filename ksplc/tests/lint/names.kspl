@@ -5,7 +5,7 @@
 //< A typedef and its type, or two typedefs of one type, mix without a warning
 //<
 //< A typedef is only another name for its type ("3.5 Typedefs (`typedef`)" in
-//< `docs/SPEC-language.md`), as in C, Rust and Swift. A type the compiler keeps apart from another
+//< `docs/SPEC-programming-language.md`), as in C, Rust and Swift. A type the compiler keeps apart from another
 //< is a struct with one field.
 // EXPECT-NOT: warning:
 pub typedef Meters = I32
@@ -115,7 +115,7 @@ priv fn shown(json: I32): I32 //< a parameter named as a module
 pub fn main(): I32
   arena: = Arena.new(1024)
   defer arena.free()
-  io.out().s(json.Val.null_val.as_str().unwrap_or(""))
+  io.out().s(json.Value.null_val.as_str().unwrap_or(""))
   mem: = 3
   lang: = 4
   _io: = 5
@@ -237,14 +237,14 @@ pub fn value_method(): I32
 //< It is off by default, so it is enabled with ARGS. `main` and names opening with `_` are out of
 //< scope, so that they stay quiet is looked at too.
 // ARGS: --lint=I0402=on
-// EXPECT: [I0402] Public symbol 'inner_only'
+// EXPECT: [I0402] Public symbol 'INNER_ONLY'
 // EXPECT-NOT: [I0402] Public symbol 'main'
 import "std/io"
 
-pub const inner_only: I64 = 3
+pub const INNER_ONLY: I64 = 3
 
 fn main(): I32
-  io.out().s("\{inner_only\}\n")
+  io.out().s("\{INNER_ONLY\}\n")
   return 0
 // ==== case unused_import_alias
 //< Whether an import alias is unused is decided within **that one file**
@@ -310,3 +310,42 @@ impl<|T|> Box<|T|>
 
 fn main(): I32
   return 0
+// ==== case explicit_constant_names
+//< Lowercase explicit constants are reported at file and local scope
+// EXPECT: [I0502] Constant 'file_limit' does not use UPPER_SNAKE_CASE
+// EXPECT: [I0502] Constant 'local_limit' does not use UPPER_SNAKE_CASE
+const file_limit: I32 = 4
+
+pub fn probe(): I32
+  const local_limit: I32 = 2
+  return file_limit + local_limit
+// ==== case accepted_value_and_type_names
+//< Constants, ordinary immutable bindings, enum variants and embedded values keep distinct styles
+// EXPECT-NOT: [I0502]
+embed "ksplc/kspl.kspeg" as grammar
+
+const BUFFER_SIZE: Sz = 4
+
+pub enum Transfer_state
+  ready
+
+pub fn probe(): Sz
+  const LOCAL_LIMIT: Sz = 2
+  read_only: Sz = BUFFER_SIZE + LOCAL_LIMIT
+  state: Transfer_state = .ready
+  return read_only + grammar.len + Sz::state
+// ==== case uppercase_is_reserved_for_constant_names
+//< Uppercase ordinary bindings and enum variants still break their naming conventions
+// EXPECT: [I0502] Identifier 'READ_ONLY' does not use snake_case
+// EXPECT: [I0502] Enum variant 'READY' does not use snake_case
+// EXPECT: [I0502] Type name 'Bad_Type' does not use Initial_upper_snake_case
+pub struct Bad_Type
+  pub value: I32
+
+pub enum Bad_state
+  READY
+
+pub fn probe(): I32
+  READ_ONLY: I32 = 4
+  item: Bad_Type = ::{ .value = READ_ONLY }
+  return item.value + I32::Bad_state.READY

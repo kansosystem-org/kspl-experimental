@@ -5,11 +5,12 @@ import "std/fs"
 import "std/io"
 import "std/mem" { Arena, dealloc }
 import "std/str" + { Str_builder }
+import "std/sys"
 import "std/tests/tree_test"
 import "std/verdict"
 import "tools/kspage_aim" as aim
 import "tools/surface_rows" as surface
-import "tools/tour_page" as tour
+import "tools/tutorial_page" as tutorial
 
 // ==========================================
 // Tests the URL that opens kspage, the page that hands it to a browser, and the paths in the note
@@ -21,9 +22,9 @@ import "tools/tour_page" as tour
 // the Makefile.
 // ==========================================
 
-priv const scratch: U8[] = "out/tmp/kspl_test_aim" //< where the checks that write files work
+priv const SCRATCH: U8[] = "out/tmp/kspl_test_aim" //< where the checks that write files work
 
-priv const secret_url: U8[] = "http://127.0.0.1:8080/?doc=a.kspage#t=secret0123" //<
+priv const SECRET_URL: U8[] = "http://127.0.0.1:8080/?doc=a.kspage#t=secret0123" //<
     //< a URL whose token a check looks for
 
 priv fn holding(path: U8[], want: U8[]): Bool //< whether the file at path holds want
@@ -155,7 +156,7 @@ fn test_a_note_that_was_cut_short() //< a note cut off partway is read as far as
     assert(aim.state_count("http://h:1/#t=k\n.\n") == 1, "two lines together make one record")
     assert(aim.state_record("http://h:1/#t=k\n", 0)[1].len == 0, "a line that is not there is empty")
     assert(aim.state_record("http://h:1/#t=k\n.\n", 9)[0].len == 0, "a record not there is empty")
-    // **Do not let it grow without limit**: past the cap, the oldest records go first.
+    // **Do not let it grow without LIMIT**: past the cap, the oldest records go first.
     arena: = Arena.new(64 * 1024)
     defer arena.free()
     $body: = Str_builder.new()
@@ -206,7 +207,9 @@ fn test_a_folder_named_with_a_separator_at_its_end() //< `devel/` is the same fo
     // Caution: **A root keeps its separator**, or `/` becomes empty and `C:\` a drive's current
     // folder.
     assert(aim.trim_end_sep("/").equals("/"), "the root keeps its `/`")
-    assert(aim.trim_end_sep("C:\\").equals("C:\\"), "a drive's root keeps its `\\`")
+    if sys.is_windows()
+        for root in U8[][]::{ "C:\\", "\\\\srv\\share\\", "\\\\?\\C:\\" }
+            assert(aim.trim_end_sep(root).equals(root), "a Windows root keeps its separator")
     verdict.pass("the separators after a folder's name drop, and a root keeps its own.")
 
 fn test_climbing_up_from_a_file() //< a path goes up one folder, absolute or not
@@ -219,6 +222,10 @@ fn test_climbing_up_from_a_file() //< a path goes up one folder, absolute or not
     // **The parent of the root is the root** (the caller stops on it).
     assert(aim.parent_of("/").equals("/"), "above the root is the root")
     assert(aim.parent_of("C:\\work\\a").equals("C:\\work"), "it goes up with `\\` too")
+    assert(aim.parent_of("").len == 0, "an empty path has no parent")
+    if sys.is_windows()
+        for root in U8[][]::{ "C:\\", "\\\\srv\\share\\", "\\\\?\\C:\\" }
+            assert(aim.parent_of(root).equals(root), "a Windows root is its own parent")
     verdict.pass("it climbs a tier at a time, and stops at the root.")
 
 fn test_the_path_the_server_will_see() //< the path the server sees for a document
@@ -247,6 +254,16 @@ fn test_where_the_file_lives() //< a path splits into its folder and its name
     d: = aim.split_path("C:\\work/a.kspl")
     assert(d[0].equals("C:\\work") && d[1].equals("a.kspl"),
         "mixed in, it splits at the separator further back")
+    e: = aim.split_path("/sample.kspage")
+    assert(e[0].equals("/") && e[1].equals("sample.kspage"),
+        "a file directly under the root stays in the root")
+    if sys.is_windows()
+        for path in U8[][]::{ "C:\\sample.kspage", "\\\\srv\\share\\sample.kspage",
+            "\\\\?\\C:\\sample.kspage" }
+            split: = aim.split_path(path)
+            root: = path.sub(0, path.len - "sample.kspage".len)
+            assert(split[0].equals(root) && split[1].equals("sample.kspage"),
+                "a file under a Windows root stays in that root")
     verdict.pass("a path splits at both separators, and with no container it becomes where we are.")
 
 fn test_the_browser_is_handed_a_page_not_the_url() //< the token stays off the command line
@@ -256,9 +273,9 @@ fn test_the_browser_is_handed_a_page_not_the_url() //< the token stays off the c
     verdict.start("[tools/kspage_aim] handing the browser a page, not the URL test...")
     arena: = Arena.new(64 * 1024)
     defer arena.free()
-    dir: = fs.mkdir_unique(scratch, "page_", arena)
+    dir: = fs.mkdir_unique(SCRATCH, "page_", arena)
         catch panic("cannot create the working directory")
-    page: = aim.write_page(secret_url, dir, arena) catch panic("the page should be written")
+    page: = aim.write_page(SECRET_URL, dir, arena) catch panic("the page should be written")
     for win in Bool[2]::{ false, true }
         way: = aim.browser_argv("xdg-open", page, win, arena)
         for one in way
@@ -266,9 +283,9 @@ fn test_the_browser_is_handed_a_page_not_the_url() //< the token stays off the c
                 "no argument handed to the browser's starter holds the token")
         assert(!win || way[1].find_char('/').is_none(),
             "on Windows the page's path is written with `\\`")
-    moving: = arena.text().s("content=\"0;url=").s(secret_url).c('"').take()
+    moving: = arena.text().s("content=\"0;url=").s(SECRET_URL).c('"').take()
     assert(holding(page, moving), "the page moves on to the URL")
-    linked: = arena.text().s("href=\"").s(secret_url).c('"').take()
+    linked: = arena.text().s("href=\"").s(SECRET_URL).c('"').take()
     assert(holding(page, linked), "and offers it as a link too")
     assert(owner_only(page, arena), "only its owner may read the page")
     // **The URL is written as an attribute's value**, so a `"` cannot end it.
@@ -286,15 +303,15 @@ fn test_a_page_handed_long_ago_is_removed() //< a page goes once a browser has h
     verdict.start("[tools/kspage_aim] removing the pages handed long ago test...")
     arena: = Arena.new(64 * 1024)
     defer arena.free()
-    dir: = fs.mkdir_unique(scratch, "sweep_", arena)
+    dir: = fs.mkdir_unique(SCRATCH, "sweep_", arena)
         catch panic("cannot create the working directory")
-    page: = aim.write_page(secret_url, dir, arena) catch panic("the page should be written")
+    page: = aim.write_page(SECRET_URL, dir, arena) catch panic("the page should be written")
     other: = fs.join(dir, "other.html", arena)
     io.write_file(other, "x") catch panic("the probe file must be writable")
     at: = (fs.stat(page) catch panic("the page should stand")).mtime
-    aim.sweep_pages(dir, at + aim.page_keep_s, arena)
+    aim.sweep_pages(dir, at + aim.PAGE_KEEP_S, arena)
     assert(fs.exists(page), "a page within its time is kept")
-    aim.sweep_pages(dir, at + aim.page_keep_s + 1, arena)
+    aim.sweep_pages(dir, at + aim.PAGE_KEEP_S + 1, arena)
     assert(!fs.exists(page), "a page past its time is removed")
     assert(fs.exists(other), "a file whose name the opener does not give is left alone")
     fs.remove_path(other) catch {}
@@ -305,7 +322,7 @@ fn test_the_note_is_written_for_its_owner() //< the note and the log hold the to
     verdict.start("[tools/kspage_aim] writing the note for its owner alone test...")
     arena: = Arena.new(64 * 1024)
     defer arena.free()
-    dir: = fs.mkdir_unique(scratch, "note_", arena)
+    dir: = fs.mkdir_unique(SCRATCH, "note_", arena)
         catch panic("cannot create the working directory")
     note: = fs.join(dir, "kspage_open.state", arena)
     // **A note written before stands with the mode it was made with**, which must not carry over.
@@ -421,12 +438,12 @@ fn test_taking_a_row_apart(arena: Arena$@) //< a row becomes its four fields
     //< run on.
     verdict.start("[tools/surface] taking a row apart into its fields test...")
     data: =
-        "std/argp\tParser.flag\tpub fn flag(r: Self$@)\ta switch taking no \
-            value\nstd/argp\tCmd.name\tname: U8[]\n"
+        "std/argparse\tParser.flag\tpub fn flag(r: Self$@)\ta switch taking no \
+            value\nstd/argparse\tCmd.name\tname: U8[]\n"
     rows: = surface.rows_of(data, arena)
     assert(rows.len == 2, "both rows are read")
     a: = surface.parts_of(rows.get(0))
-    assert(a.file.equals("std/argp"), "the file's logical name comes out")
+    assert(a.file.equals("std/argparse"), "the file's logical name comes out")
     assert(a.key.equals("Parser.flag"), "and the key within it")
     assert(a.text.equals("pub fn flag(r: Self$@)"), "and the spelling")
     assert(a.doc.equals("a switch taking no value"), "and what it says of itself")
@@ -502,29 +519,29 @@ fn test_what_a_file_says_of_itself(arena: Arena$@) //<
     verdict.pass("a file's own row is told from a declaration's, and counts as no declaration.")
 
 // ==========================================
-// Tests the tool that writes the language tour (`tools/tour_page.kspl`)
+// Tests the tool that writes the language tour (`tools/tutorial_page.kspl`)
 // **A mistake here gives a page that says less than the program does** (a step dropped, a block
 // cut short). `make test-docs` stays green, since the page matches the same broken writer.
 // ==========================================
-priv const laid_sample: U8[] =
-    "import \"std/io\"\n\npriv const limit: Sz = 4 //< a name for a value\n  //<\n  //< it cannot \
+priv const LAID_SAMPLE: U8[] =
+    "import \"std/io\"\n\npriv const LIMIT: Sz = 4 //< a name for a value\n  //<\n  //< it cannot \
         be assigned to.\n\npriv fn twice_of<|T|>(v: T): T //< generics\n  //<\n  //< a type the \
         caller picks.\n  return v\n\npriv fn helper(): I32\n  return 0\n\npriv $seen: Sz = 0 //< a \
         global\n\nfn main(): I32\n  return 0\n"
 
 fn test_a_step_per_described_declaration(arena: Arena$@) //<
     //< The imports, then one step per top-level `//<`, with its name, its prose and its code
-    verdict.start("[tools/tour] the walk's steps test...")
-    steps: = tour.walk_steps(laid_sample, arena) catch e
+    verdict.start("[tools/tutorial] the walk's steps test...")
+    steps: = tutorial.walk_steps(LAID_SAMPLE, arena) catch e
         verdict.check("the sample walks", false, arena.text().s("\{e\}").take())
         return
     assert(steps.len == 4, "the imports, then the three that carry a description")
     assert(steps.get(0).code.equals("import \"std/io\""), "the first step is every import")
-    assert(steps.get(1).name.equals("limit"), "a `const` names the word after the keyword")
+    assert(steps.get(1).name.equals("LIMIT"), "a `const` names the word after the keyword")
     assert(steps.get(1).title.equals("a name for a value"), "the title is the words after the mark")
     assert(steps.get(1).prose.equals("it cannot be assigned to."),
         "the prose is the run below the parting, joined into one paragraph")
-    assert(steps.get(1).code.equals("priv const limit: Sz = 4"), "the code carries no `//<`")
+    assert(steps.get(1).code.equals("priv const LIMIT: Sz = 4"), "the code carries no `//<`")
     // **A declaration with no `//<` joins the step before it**: dropped, the joined blocks would
     // not compile.
     assert(steps.get(2).code
@@ -536,34 +553,34 @@ fn test_a_step_per_described_declaration(arena: Arena$@) //<
 
 fn test_a_walk_refuses_code_it_cannot_place(arena: Arena$@) //<
     //< Code with no step to join, and a `//<` with no title, stop the walk instead of vanishing
-    verdict.start("[tools/tour] the walk's refusals test...")
+    verdict.start("[tools/tutorial] the walk's refusals test...")
     $untitled: = false
     _a: =
-        tour.walk_steps("priv fn helper(): I32\n  return 0\n\nfn main(): I32 //< m\n  return 0\n",
-        arena) catch e
+        tutorial.walk_steps("priv fn helper(): I32\n  return 0\n\nfn main(): I32 //< m\n  return \
+            0\n", arena) catch e
         untitled = e == .untitled
-        fallback List<|tour.Step|>.new(arena)
+        fallback List<|tutorial.Step|>.new(arena)
     assert(untitled, "an undescribed declaration before every step is refused")
     $no_title: = false
-    _b: = tour.walk_steps("fn main(): I32 //<\n  return 0\n", arena) catch e
+    _b: = tutorial.walk_steps("fn main(): I32 //<\n  return 0\n", arena) catch e
         no_title = e == .title_missing
-        fallback List<|tour.Step|>.new(arena)
+        fallback List<|tutorial.Step|>.new(arena)
     assert(no_title, "a `//<` with nothing after it is refused")
     verdict.pass("a walk refuses code it cannot place on the page.")
 
 fn test_the_page_holds_the_steps(arena: Arena$@) //<
     //< The page carries a section per step and the printout
-    verdict.start("[tools/tour] the page's shape test...")
-    text: = tour.render(laid_sample, "hello", arena) catch e
+    verdict.start("[tools/tutorial] the page's shape test...")
+    text: = tutorial.render(LAID_SAMPLE, "hello", arena) catch e
         verdict.check("the sample renders", false, arena.text().s("\{e\}").take())
         return
     // **The link that climbs out of docs/ is checked by its shape, not written out whole.**
     // (`make test-docref` would resolve it from this file, not from the page.)
     assert(text.find_str("[`../README").is_some(), "a link climbs out of docs/ first")
-    assert(text.find_str("](SPEC-language.md)").is_some(),
+    assert(text.find_str("](SPEC-programming-language.md)").is_some(),
         "a link inside docs/ keeps its bare name")
     assert(text.find_str("\n## a name for a value\n").is_some(), "a heading per step")
-    assert(text.find_str("```kspl\npriv const limit: Sz = 4\n```").is_some(),
+    assert(text.find_str("```kspl\npriv const LIMIT: Sz = 4\n```").is_some(),
         "the step's own code in its fence")
     assert(text.find_str("```\nhello\n```").is_some(),
         "the printout in a plain fence, closed on its own line")

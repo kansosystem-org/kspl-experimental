@@ -27,21 +27,21 @@ priv fn prepare_in_tree(c: jsonrpc_client.Client$@, rel: U8[], decl: U8[], arena
     //< prepareCallHierarchy at `decl`'s name in the repository's file `rel`, opened as on disk
     return prepare_fn(c, rel, harness.read_under_root(rel), decl, arena)
 
-priv const broken_ws_file: U8[] = "std/log.kspl" //<
+priv const BROKEN_WS_FILE: U8[] = "std/log.kspl" //<
     //< The starting point of a workspace walk that **reaches the files built not to compile**
     //<
     //< The common last segment `at` pulls in nearly all of `ksplc/tests/negative`, including the
     //< one nested too deep to check.
     //< Caution: **Do not swap in a rarer name** (`init` below reaches few); this check would go
     //< green after walking straight past what it exists to test.
-priv const broken_ws_decl: U8[] = "    pub fn at"
+priv const BROKEN_WS_DECL: U8[] = "    pub fn at"
 
 priv fn check_workspace_survives_unbuildable(c: jsonrpc_client.Client$@, arena: Arena$@) //<
     //< A workspace query over a tree that holds files built not to compile
     //<
     //< Caution: **The point is that it answers at all.** A worker killed by a too-deep tree answers
     //< "no callers", which reads exactly like a true empty answer.
-    prep: = prepare_in_tree(c, broken_ws_file, broken_ws_decl, arena)
+    prep: = prepare_in_tree(c, BROKEN_WS_FILE, BROKEN_WS_DECL, arena)
     verdict.check("prepareCallHierarchy lands on the name the unbuildable files also carry",
         prep.found, lsp_client.why(c, prep.raw, arena))
     if !prep.found
@@ -61,7 +61,7 @@ priv fn check_workspace_survives_unbuildable(c: jsonrpc_client.Client$@, arena: 
     verdict.check("and the callers named are the real ones", has_name(names@, "table_drop"),
         lsp_client.why(c, how, arena))
 
-priv fn check_ht16k33_callers(c: jsonrpc_client.Client$@, item: json.Val, arena: Arena$@) //<
+priv fn check_ht16k33_callers(c: jsonrpc_client.Client$@, item: json.Value, arena: Arena$@) //<
     //< A caller is always inside a file that refers to ht16k33.
     got: = incoming(c, item, arena)
     calls: = got.calls
@@ -90,7 +90,7 @@ priv fn check_ht16k33_callers(c: jsonrpc_client.Client$@, item: json.Val, arena:
     verdict.check("a caller that really calls carries no fn pointer mark", marked.len == 0, d7)
     check_caller_order(calls@, arena)
 
-priv fn check_caller_order(calls: List<|json.Val|>@, arena: Arena$@) //<
+priv fn check_caller_order(calls: List<|json.Value|>@, arena: Arena$@) //<
     //< The callers are sorted by file and position
     //<
     //< Caution: **Do not return them in `Map`'s order.** Otherwise **the same question is answered
@@ -132,7 +132,7 @@ priv fn check_fn_pointer(c: jsonrpc_client.Client$@, arena: Arena$@) //<
     verdict.check("ksos_main comes out among probe_task's callers", ok9, d9)
     // **`fromRanges` is on the call item** (not inside `from`); one level deeper it is always 0,
     // and "it does not double-count" is always green.
-    $call: = json.Val.null_val
+    $call: = json.Value.null_val
     $found: = false
     for i in Range.asc(calls.len)
         from: = calls.get(i).get("from")
@@ -162,7 +162,7 @@ priv fn check_fn_pointer(c: jsonrpc_client.Client$@, arena: Arena$@) //<
 // (`build_workspace_state` in `ksplc/lsp/worker.kspl`).
 // ==========================================
 
-priv const worst_gap_max_ms: Sz = 5000 //<
+priv const WORST_GAP_MAX_MS: Sz = 5000 //<
     //< The longest a workspace query may leave the worker silent
     //<
     //< Caution: **Do not make the supervisor's window (`worker_timeout_ms` in
@@ -170,7 +170,7 @@ priv const worst_gap_max_ms: Sz = 5000 //<
     //< is reached, so that would call "just before failing" green; half leaves room. **Do not raise
     //< it to get back to green**; make the query lighter.
 
-priv const query_id: I32 = 2 //< the id the workspace query is sent with
+priv const QUERY_ID: I32 = 2 //< the id the workspace query is sent with
 
 priv fn answers(out: U8[], id: I32, arena: Arena$@): Bool //<
     //< Whether the worker's output holds the response to request `id`, its markers taken out
@@ -185,7 +185,7 @@ priv fn answers(out: U8[], id: I32, arena: Arena$@): Bool //<
         else if !inside
             acc.c(c)
     for
-        got: = jsonrpc.take_frame(acc@, jsonrpc.max_body_bytes, arena) catch
+        got: = jsonrpc.take_frame(acc@, jsonrpc.MAX_BODY_BYTES, arena) catch
             return false
         body: = got.unwrap_or("")
         if body.len == 0
@@ -216,7 +216,7 @@ priv fn check_worker_alive_workspace(exe: U8[], root: U8[], arena: Arena$@)
     defer frames.free()
     jsonrpc.frame_into(frames@, jsonrpc.encode("initialize", init, 1, arena))
     jsonrpc.frame_into(frames@,
-        jsonrpc.encode("callHierarchy/incomingCalls", params, query_id, arena))
+        jsonrpc.encode("callHierarchy/incomingCalls", params, QUERY_ID, arena))
     w.write(frames.slice(), 300000) catch
         verdict.check(name, false, "the worker took no request")
         w.kill()
@@ -241,18 +241,18 @@ priv fn check_worker_alive_workspace(exe: U8[], root: U8[], arena: Arena$@)
     w.kill()
     // **A worker that dies at once is never silent for long.** So the measure counts only beside
     // the marks it sent while working and the answer it ended with.
-    answered: = answers(out.slice(), query_id, arena)
+    answered: = answers(out.slice(), QUERY_ID, arena)
     verdict.check("the workspace query is worked on and answered", seen > 0 && answered,
         arena.text().s("\{seen\} marks, ").s("an answer" if answered else "no answer")
-        .s(" to id \{query_id\}").take())
+        .s(" to id \{QUERY_ID\}").take())
     worst_ms: = Sz::(worst_us / 1000I64)
     // **Print the measured value on a passing run too**, or nobody knows the margin on each machine
     // (as `ksplc/tests/suite/thin_use_test.kspl` does beside each bound).
     // Caution: **Do not copy the number into the check's name**; the canonical source is this line.
     shown: = arena.text().s(name)
-        .s(" (worst silence \{worst_ms\} ms / cap \{worst_gap_max_ms\} ms)").take()
+        .s(" (worst silence \{worst_ms\} ms / cap \{WORST_GAP_MAX_MS\} ms)").take()
     d: = arena.text().s("\{seen\} marks").take()
-    verdict.check(shown, worst_ms < worst_gap_max_ms, d)
+    verdict.check(shown, worst_ms < WORST_GAP_MAX_MS, d)
 
 fn main(): I32
     arena: = harness.begin(512 * 1024 * 1024)
@@ -269,7 +269,7 @@ fn main(): I32
         return ksplc_harness.fatal("the language server cannot be started")
     defer c.free()
     init: =
-        c.request("initialize", lsp_client.empty_obj(arena), lsp_client.read_ms, arena) catch e
+        c.request("initialize", lsp_client.empty_obj(arena), lsp_client.READ_MS, arena) catch e
         return ksplc_harness
             .fatal(arena.text().s("initialize does not return \{end_text(e)\}").take())
     if !verdict.check("the language server comes up over the whole tree",

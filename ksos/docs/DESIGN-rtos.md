@@ -264,7 +264,7 @@ Note: **No external SWD probe is needed.** The buzzer (sounding the stage as a n
 
 It runs the kernel core in Linux user space, so the scheduler and the synchronizing primitives are checked with no microcontroller. `ksos_port_posix.c` does a real context switch with `ucontext` (`makecontext`/`swapcontext`, the POSIX calls that save one stack and registers and resume another).
 
-**It stays in C.** `makecontext` is variadic (it takes any number of arguments), and how it passes control to the function given is hidden behind the header's macros. KSPL's `extern "C"` crosses only scalars and raw pointers, so it cannot declare that function (the types it cannot cross are listed in [`../../docs/SPEC-language.md`](../../docs/SPEC-language.md)).
+**It stays in C.** `makecontext` is variadic (it takes any number of arguments), and how it passes control to the function given is hidden behind the header's macros. KSPL's `extern "C"` crosses only scalars and raw pointers, so it cannot declare that function (the types it cannot cross are listed in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md)).
 
 #### Preemption
 
@@ -497,7 +497,7 @@ Caution: **Do not repeat the folder's name in a file name** (`rp2040/gpio.kspl`,
 
 The port layer (`port/`) is something else: the boot and the C/asm glue (startup, the linker script, the context switch), not KSPL's MMIO drivers.
 
-**`wait` in `ksos/drivers/mmio.kspl` is the one home of the busy wait every driver shares** (`mmio.wait(addr, mask, want_nonzero)!`). A *busy wait* reads a register over and over until a bit changes. It gives up with `timed_out` after `poll_timeout_iters` iterations, so hardware that does not answer cannot stall a driver forever. Do not copy the loop or the constant into a driver.
+**`wait` in `ksos/drivers/mmio.kspl` is the one home of the busy wait every driver shares** (`mmio.wait(addr, mask, want_nonzero)!`). A *busy wait* reads a register over and over until a bit changes. It gives up with `timed_out` after `POLL_TIMEOUT_ITERS` iterations, so hardware that does not answer cannot stall a driver forever. Do not copy the loop or the constant into a driver.
 
 **A driver's call that can fail returns `Void!Driver_error`** (`Driver_error` in the same file), not a `Bool`. A `Bool` said only "it did not work", and a caller could drop it unseen. A result must be passed on with `!` or handled with `catch`. Its kind (`timed_out`, `no_answer`, `not_found`, `out_of_range`, `full`) says why. A board passes a driver's failure on; a demo decides there what to leave out and how to say so. Two kinds stay `Bool`: a question (`i2c.present`, `usb_cdc.is_configured`), and a try that is answered at once (`usb_cdc.write`, `flash.program_at`, which implements ksdb's `Store`).
 
@@ -692,7 +692,7 @@ There are 24 bits per element, in G→R→B order.
 
 **PIO is not used.** PIO is the RP2040's small programmable I/O engine. It would remove the grace period, but it adds a block only the RP2040/RP2350 has. Two means would also serve one purpose, sending bits out of one pin at an exact interval (Principle 6). This judgement holds as long as the grace period is kept.
 
-Caution: **Mind the current.** One element uses close to 60mA at most, so eight all white is 0.5A, and the low-voltage watch fires on its own light. The caller keeps the brightness down (`ws2812_level` in `ksos/boards/freenove_4wd_pico/board.kspl`).
+Caution: **Mind the current.** One element uses close to 60mA at most, so eight all white is 0.5A, and the low-voltage watch fires on its own light. The caller keeps the brightness down (`WS2812_LEVEL` in `ksos/boards/freenove_4wd_pico/board.kspl`).
 
 **Only one line can be driven** (the driver holds the address and the run being assembled). Once a second is needed, move that state into a struct.
 

@@ -15,36 +15,36 @@ import "ksos/kernel/task"
 import "std/bytes"
 import "std/chars" // tests on one character, and slicing
 
-priv const xip_base: U32 = 0x10000000 //< the start address where the flash is visible under XIP
+priv const XIP_BASE: U32 = 0x10000000 //< the start address where the flash is visible under XIP
     //<
     //< A read is a plain read from here.
 
-const page_size: Sz = 256 //< the unit of writing
+const PAGE_SIZE: Sz = 256 //< the unit of writing
     //<
     //< The boot ROM's program accepts only a multiple of this.
-const sector_size: Sz = 4096 //< the unit of erasing
+const SECTOR_SIZE: Sz = 4096 //< the unit of erasing
     //<
     //< The boot ROM's erase accepts only a multiple of this.
 
-priv const block_size: U32 = 65536 //< the "larger erase" size passed to the boot ROM's erase
+priv const BLOCK_SIZE: U32 = 65536 //< the "larger erase" size passed to the boot ROM's erase
     //<
     //< The ROM uses 0xd8 (a 64KB block erase) where the range is aligned, else the 4KB sector
     //< erase.
-priv const block_erase_cmd: U8 = 0xd8
+priv const BLOCK_ERASE_CMD: U8 = 0xd8
 
-const region_base: Sz = 0x1f0000 //< the region reserved for the record
+const REGION_BASE: Sz = 0x1f0000 //< the region reserved for the record
     //<
     //< Caution: **It must equal the ASSERT in `ksos/port/rp2040/link.ld`** (which checks at link
     //< time that the firmware image does not reach here). **It is at the end, so the record
     //< survives rewriting the firmware**; a full erase (picotool erase) removes it.
-const region_size: Sz = 0x10000
+const REGION_SIZE: Sz = 0x10000
 
 // --- the boot ROM's functions (the function table in the RP2040 data sheet's "Bootrom") ---
-priv const rom_func_table_at: U32 = 0x14 //<
+priv const ROM_FUNC_TABLE_AT: U32 = 0x14 //<
     //< The table addresses are stored at the start of the ROM as fixed 2-byte values
     //<
     //< The ROM never changes, so they are not read volatile.
-priv const rom_lookup_at: U32 = 0x18
+priv const ROM_LOOKUP_AT: U32 = 0x18
 
 priv typedef Rom_lookup = fn(table: U32, code: U32): U32
 priv typedef Rom_void = fn(): Void
@@ -75,8 +75,8 @@ priv fn rom_hword(at: U32): U32
 priv fn rom_func(c1: U8, c2: U8): U32 //< looks up a function in the ROM's function table
     //<
     //< 0 if it is not found.
-    lookup_at: = rom_hword(rom_lookup_at)
-    table: = rom_hword(rom_func_table_at)
+    lookup_at: = rom_hword(ROM_LOOKUP_AT)
+    table: = rom_hword(ROM_FUNC_TABLE_AT)
     if lookup_at == 0 || table == 0
         return 0
     lookup: = Rom_lookup::lookup_at
@@ -113,10 +113,10 @@ priv fn in_window(do_erase: Bool, at: U32, data: U8@)
     exit_xip()
     if do_erase
         erase: = Rom_erase::at_erase
-        erase(at, sector_size, block_size, block_erase_cmd)
+        erase(at, SECTOR_SIZE, BLOCK_SIZE, BLOCK_ERASE_CMD)
     else
         program: = Rom_program::at_program
-        program(at, data, page_size)
+        program(at, data, PAGE_SIZE)
     flush()
     enter_xip()
 
@@ -138,9 +138,9 @@ fn read_at(at: Sz, dst: U8$[]) //< reads dst.len bytes from at
     //<
     //< at is the offset from the start of the region.
     //< A plain XIP read; the ROM's flush after a write drops the cache, so nothing is stale.
-    if at < 0 || dst.len < 0 || at + dst.len > region_size
+    if at < 0 || dst.len < 0 || at + dst.len > REGION_SIZE
         panic("rp2040/flash: read outside the region")
-    src: = U8[]::{ .ptr = U8@::(xip_base + U32::(region_base + at)), .len = dst.len }
+    src: = U8[]::{ .ptr = U8@::(XIP_BASE + U32::(REGION_BASE + at)), .len = dst.len }
     d: = dst
     _n: = d.copy_from(0, src)
 
@@ -152,14 +152,14 @@ fn program_at(at: Sz, src: U8[]): Bool //< writes src to at
     //< page (the append that writes the header last relies on this).
     if !ready
         return false
-    if at < 0 || src.len < 0 || at + src.len > region_size
+    if at < 0 || src.len < 0 || at + src.len > REGION_SIZE
         return false
     $done: Sz = 0
     for done < src.len
-        abs: = region_base + at + done
-        page_at: = abs - (abs % page_size)
+        abs: = REGION_BASE + at + done
+        page_at: = abs - (abs % PAGE_SIZE)
         in_page: = abs - page_at
-        $n: Sz = page_size - in_page
+        $n: Sz = PAGE_SIZE - in_page
         if n > src.len - done
             n = src.len - done
         run_in_window(false, U32::page_at, in_page, src.sub(done, n))
@@ -171,8 +171,8 @@ fn erase_sector(at: Sz): Bool //< erases the sector that contains at
     //< **true once it is erased.**
     if !ready
         return false
-    if at < 0 || at >= region_size
+    if at < 0 || at >= REGION_SIZE
         return false
-    base: = region_base + at - ((region_base + at) % sector_size)
+    base: = REGION_BASE + at - ((REGION_BASE + at) % SECTOR_SIZE)
     run_in_window(true, U32::base, 0, "")
     return true

@@ -3,7 +3,7 @@
 //< The fixtures in [`../negative`](../negative) and [`../lint`](../lint) are one mechanism: a
 //< source whose opening comment holds `// EXPECT:` / `// EXPECT-NOT:` / `// ARGS:`, compiled once
 //< and its output matched. A file may hold several such sources, each opened by a line
-//< `// ==== case <name>` (`case_head`).
+//< `// ==== case <name>` (`CASE_HEAD`).
 //< Caution: **Do not use one entry point split by argument.** Only the input and ksplc decide
 //< `ksplc run`'s directory, so the same script run **at the same time** with other arguments
 //< contends for it (as `make -j test-suites` does).
@@ -22,12 +22,12 @@ import "std/subproc"
 import "std/sys"
 import "std/verdict"
 
-priv const fixture_exts: U8[][_] = ::{ ".kspl", ".ksplb" } //< the fixtures' extensions
+priv const FIXTURE_EXTS: U8[][_] = ::{ ".kspl", ".ksplb" } //< the fixtures' extensions
     //<
     //< `.ksplb` is the parser's input in braces (`tests/parse/`), handed to the parser alone.
 
 priv fn fixture_ext(name: U8[]): U8[] //< a fixture's extension, empty for any other name
-    for ext in fixture_exts
+    for ext in FIXTURE_EXTS
         if name.ends_with(ext)
             return ext
     return ""
@@ -35,7 +35,7 @@ priv fn fixture_ext(name: U8[]): U8[] //< a fixture's extension, empty for any o
 priv fn strip_fixture_ext(name: U8[]): U8[] //< drops a fixture's extension from a name
     return name.strip_suffix(fixture_ext(name))
 
-priv const case_head: U8[] = "// ==== case " //< opens one case, at the start of its line
+priv const CASE_HEAD: U8[] = "// ==== case " //< opens one case, at the start of its line
     //<
     //< **A case is the text from the line after its head to the next head.** So it reads as the
     //< file it would be alone: a line number in a mark counts from its head. Its name names the
@@ -51,7 +51,7 @@ priv fn case_starts(body: U8[], arena: Arena$@): List<|Sz|> //< where each case'
     $at: = List<|Sz|>.new(arena)
     $p: Sz = 0
     for p < body.len
-        if body.sub_from(p).starts_with(case_head)
+        if body.sub_from(p).starts_with(CASE_HEAD)
             at.push(p)
         switch body.sub_from(p).find_char('\n')
         case .some(nl)
@@ -100,7 +100,7 @@ priv fn gather(name: U8[], path: U8[], body: U8[], work: U8[], into: List<|Fixtu
     for i in Range.asc(starts.len)
         head: = body.sub_from(starts.get(i))
         nl: = head.find_char('\n').unwrap_or(head.len)
-        stem: = head.sub(case_head.len, nl - case_head.len).trim_spaces()
+        stem: = head.sub(CASE_HEAD.len, nl - CASE_HEAD.len).trim_spaces()
         if !is_case_name(stem)
             return arena.text()
                 .s("the case head '\{head.sub(0, nl)\}' names no case (lower case letters, digits \

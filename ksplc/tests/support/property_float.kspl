@@ -30,7 +30,7 @@ struct Float_kind
     name: U8[]
     bytes: Sz
 
-const float_kinds: Float_kind[_] = ::{ Float_kind::{ .name = "F32", .bytes = 4 },
+const FLOAT_KINDS: Float_kind[_] = ::{ Float_kind::{ .name = "F32", .bytes = 4 },
     Float_kind::{ .name = "F64", .bytes = 8 } }
 
 fn round_to(v: F64, k: Float_kind@): F64 //< it rounds to that type's width
@@ -77,11 +77,11 @@ struct Fexpr
     text: U8[]
     v: F64
 
-priv const pow2_30: I64 = 1073741824 //< the factors for reaching an exponent
+priv const POW2_30: I64 = 1073741824 //< the factors for reaching an exponent
     //<
     //< **Only powers of two**: short integers, exact in binary, so no rounding happens.
 
-priv const scale_steps: Sz = 40 //<
+priv const SCALE_STEPS: Sz = 40 //<
     //< The cap on how many times 2^30 is multiplied (divided) when reaching a random exponent
     //<
     //< Caution: **Size it for the widest type**: `F64` runs from 2^-1074 to 2^1024.
@@ -105,16 +105,16 @@ fn node_scale(r: Prng$@, depth: Sz, k: Float_kind@, arena: Arena$@): Fexpr //<
     //< Caution: Do not skimp on the steps, or it stops short of the exponent's end.
     $e: = gen_float(r, depth - 1, k, arena)
     up: = r.chance(50)
-    factor: = flit(pow2_30, k, arena)
-    steps: = 1 + r.below(scale_steps)
+    factor: = flit(POW2_30, k, arena)
+    steps: = 1 + r.below(SCALE_STEPS)
     for _i in Range.asc(steps)
-        nxt: = round_to(e.v * F64::pow2_30 if up else e.v / F64::pow2_30, k)
+        nxt: = round_to(e.v * F64::POW2_30 if up else e.v / F64::POW2_30, k)
         if !finite(nxt)
             break
         e = Fexpr::{ .text = paren(e.text, "*" if up else "/", factor, arena), .v = nxt }
     return e
 
-priv const float_ops: U8[][_] = ::{ "+", "-", "*", "/" }
+priv const FLOAT_OPS: U8[][_] = ::{ "+", "-", "*", "/" }
 
 fn gen_float(r: Prng$@, depth: Sz, k: Float_kind@, arena: Arena$@): Fexpr
     if depth == 0 || r.chance(35)
@@ -124,7 +124,7 @@ fn gen_float(r: Prng$@, depth: Sz, k: Float_kind@, arena: Arena$@): Fexpr
         return Fexpr::{ .text = wrapped("(-(", e.text, "))", arena), .v = -e.v }
     if r.chance(20)
         return node_scale(r, depth, k, arena)
-    $op: = float_ops[r.below(4)]
+    $op: = FLOAT_OPS[r.below(4)]
     a: = gen_float(r, depth - 1, k, arena)
     b: = gen_float(r, depth - 1, k, arena)
     if op.equals("/") && b.v == 0.0

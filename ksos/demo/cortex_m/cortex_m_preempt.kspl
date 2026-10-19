@@ -10,10 +10,10 @@
 import "ksos/demo/common/semihost_console" as con
 import "ksos/kernel/task" + { Task }
 
-priv const monitor_wait: U64 = 20
-priv const check_rounds: U32 = 2000 //< one call of hold_callee_saved: well under a tick of work
-priv const seed_a: U32 = 0x1000 //< A's r4-r11 hold seed_a+4 .. seed_a+11
-priv const seed_b: U32 = 0x2000 //< and B's seed_b+4 .. seed_b+11
+priv const MONITOR_WAIT: U64 = 20
+priv const CHECK_ROUNDS: U32 = 2000 //< one call of hold_callee_saved: well under a tick of work
+priv const SEED_A: U32 = 0x1000 //< A's r4-r11 hold seed_a+4 .. seed_a+11
+priv const SEED_B: U32 = 0x2000 //< and B's seed_b+4 .. seed_b+11
 
 $g_ran_a: I32 = 0
 $g_ran_b: I32 = 0
@@ -106,7 +106,7 @@ fn task_a(_arg: Void$@): Void //< a computing task that never yields
         g_ran_a = 1
         other: = g_calls_b
         $bad: U32 = 0
-        hold_callee_saved(seed_a, check_rounds, bad@)
+        hold_callee_saved(SEED_A, CHECK_ROUNDS, bad@)
         g_bad_a += bad
         g_calls_a += 1
         if g_calls_b != other
@@ -117,7 +117,7 @@ fn task_b(_arg: Void$@): Void
         g_ran_b = 1
         other: = g_calls_a
         $bad: U32 = 0
-        hold_callee_saved(seed_b, check_rounds, bad@)
+        hold_callee_saved(SEED_B, CHECK_ROUNDS, bad@)
         g_bad_b += bad
         g_calls_b += 1
         if g_calls_a != other
@@ -129,10 +129,10 @@ fn monitor(_arg: Void$@): Void //< the monitoring task
     //< tick works. It then checks that A and B both had the CPU and kept their registers. Then it
     //< ends QEMU.
     from: = task.current_tick()
-    Task.delay(monitor_wait)
+    Task.delay(MONITOR_WAIT)
     con.puts("=== Kanso OS (Cortex-M) preemptive scheduling ===\n")
     con.check("monitor woke from its delay while A and B never yield",
-        task.current_tick() - from >= monitor_wait)
+        task.current_tick() - from >= MONITOR_WAIT)
     // Caution: **Check that both A and B ran too.** Waking alone does not show one task hogging
     // the CPU while only the clock advances (a gap in the round robin).
     con.check("task A got the CPU", g_ran_a == 1)

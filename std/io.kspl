@@ -170,7 +170,7 @@ pub fn read_file(path: U8[]): U8[]!Io_error //<
     //< The whole file, on the heap; the caller frees it with `mem.dealloc(text.ptr)`
     //<
     //< A `/proc` file that reports 0 bytes, and a pipe, are still read to the end.
-    return read_upto(path, no_cap, null)
+    return read_upto(path, NO_CAP, null)
 
 pub fn read_file_capped( //< the file's first `cap` bytes, or the whole file if it is shorter
     //<
@@ -182,7 +182,7 @@ pub fn read_file_capped( //< the file's first `cap` bytes, or the whole file if 
 ): U8[]!Io_error //< the bytes; fails if the file cannot be opened or read
     return read_upto(path, cap if cap > 0 else 0, arena)
 
-priv const no_cap: Sz = -1 //< `read_upto`'s cap for the whole file, however long
+priv const NO_CAP: Sz = -1 //< `read_upto`'s cap for the whole file, however long
 
 priv fn read_upto(path: U8[], cap: Sz, arena: Arena$@): U8[]!Io_error
     file: = fopen_checked(path, "rb")!
@@ -191,8 +191,8 @@ priv fn read_upto(path: U8[], cap: Sz, arena: Arena$@): U8[]!Io_error
     // Caution: **Leave the size to kspl_file_size.** C's fseek / ftell use `long`, whose width
     // differs by target (hosted.c). **The size is only a first guess**: a full read keeps reading.
     size_i64: = kspl_file_size(file)
-    $room: Sz = Sz::size_i64 + 1 if size_i64 > 0I64 else read_step
-    if cap != no_cap && room > cap
+    $room: Sz = Sz::size_i64 + 1 if size_i64 > 0I64 else READ_STEP
+    if cap != NO_CAP && room > cap
         room = cap
     if room == 0
         return U8[]::{ .ptr = null, .len = 0 }
@@ -202,7 +202,7 @@ priv fn read_upto(path: U8[], cap: Sz, arena: Arena$@): U8[]!Io_error
         len += libc.fread(buffer + len, 1, room - len, file)
         if len < room || room == cap
             break
-        wider: = room * 2 if cap == no_cap || room < cap / 2 else cap
+        wider: = room * 2 if cap == NO_CAP || room < cap / 2 else cap
         grown: = U8$@::arena.alloc(wider)
         mem.copy(grown, buffer, len)
         if arena == null
@@ -216,7 +216,7 @@ priv fn read_upto(path: U8[], cap: Sz, arena: Arena$@): U8[]!Io_error
         throw .read_failed(path)
     return U8[]::{ .ptr = buffer, .len = len }
 
-priv const read_step: Sz = 64 * 1024 //< the first buffer size for a file of unknown size
+priv const READ_STEP: Sz = 64 * 1024 //< the first buffer size for a file of unknown size
 
 pub fn write_file( //< writes the whole file, creating or replacing it
     path: U8[], //< the file to write

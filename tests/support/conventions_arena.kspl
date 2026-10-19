@@ -13,9 +13,9 @@ import "std/verdict"
 import "tests/support/conventions_scan" as scan + { Sample }
 import "tests/support/harness"
 
-priv const std_record: U8[] = "std/SURFACE.txt" //< where std's functions and their signatures are
+priv const STD_RECORD: U8[] = "std/SURFACE.txt" //< where std's functions and their signatures are
 
-priv const arena_type: U8[] = "Arena$@" //< the type of a parameter that takes an arena
+priv const ARENA_TYPE: U8[] = "Arena$@" //< the type of a parameter that takes an arena
 
 priv struct Arena_call //< how one function taking an arena is written at a call
     label: U8[] //< its file and key, as the record names it (`std/fs join`)
@@ -124,7 +124,7 @@ priv fn arena_call_of(file: U8[], key: U8[], sig: U8[], arena: Arena$@): Arena_c
             p.sub(0, colon).strip_prefix("$").strip_prefix("_").equals("r")
             has_self = true
             continue
-        if ty.equals(arena_type)
+        if ty.equals(ARENA_TYPE)
             bare: = key.sub(0, key.find_str(" #cfg").unwrap_or(key.len))
             dot: = bare.rfind_char('.')
             name: = bare.sub_from(dot.unwrap_or(0) + 1) if dot.is_some() else bare
@@ -140,7 +140,7 @@ priv fn arena_call_of(file: U8[], key: U8[], sig: U8[], arena: Arena$@): Arena_c
 priv fn check_null_arena_calls(arena: Arena$@)
     $calls: = List<|Arena_call|>.new(arena)
     $modules: = List<|U8[]|>.new(arena)
-    for line in harness.read_under_root(std_record).lines(arena)
+    for line in harness.read_under_root(STD_RECORD).lines(arena)
         cols: = line.split('\t', arena)
         if cols.len < 3 || !cols.get(0).starts_with("std/") ||
             !cols.get(2).starts_with("pub fn ")
@@ -162,44 +162,44 @@ priv fn check_null_arena_calls(arena: Arena$@)
             result as its summary says")
 
 // Caution: **Keep both sides in each table**, or a judgment answering always true passes.
-priv const fs_join: Arena_call = ::{ .label = "std/fs join", .name = "join", .before = "fs",
+priv const FS_JOIN: Arena_call = ::{ .label = "std/fs join", .name = "join", .before = "fs",
     .at = 2 }
-priv const text_join: Arena_call = ::{ .label = "std/str U8[].join", .name = "join", .before = "",
+priv const TEXT_JOIN: Arena_call = ::{ .label = "std/str U8[].join", .name = "join", .before = "",
     .at = 1 }
-priv const list_new: Arena_call = ::{ .label = "std/ds List<|T|>.new", .name = "new",
+priv const LIST_NEW: Arena_call = ::{ .label = "std/ds List<|T|>.new", .name = "new",
     .before = "List", .at = 0 }
-priv const sample_modules: U8[][_] = ::{ "fs", "json" }
+priv const SAMPLE_MODULES: U8[][_] = ::{ "fs", "json" }
 
 priv fn calls_fs_join(text: U8[], arena: Arena$@): Bool
-    return has_null_call(text, fs_join, U8[][]::sample_modules, arena)
+    return has_null_call(text, FS_JOIN, U8[][]::SAMPLE_MODULES, arena)
 
 priv fn calls_text_join(text: U8[], arena: Arena$@): Bool
-    return has_null_call(text, text_join, U8[][]::sample_modules, arena)
+    return has_null_call(text, TEXT_JOIN, U8[][]::SAMPLE_MODULES, arena)
 
 priv fn calls_list_new(text: U8[], arena: Arena$@): Bool
-    return has_null_call(text, list_new, U8[][]::sample_modules, arena)
+    return has_null_call(text, LIST_NEW, U8[][]::SAMPLE_MODULES, arena)
 
-priv const fs_join_samples: Sample[_] = ::{ Sample::{ .text = "fs.join(\"a\", \"b\", null)",
+priv const FS_JOIN_SAMPLES: Sample[_] = ::{ Sample::{ .text = "fs.join(\"a\", \"b\", null)",
     .hits = true }, Sample::{ .text = "fs.join(f(a, b), \"c\", null)", .hits = true },
     Sample::{ .text = "fs.join(\"a,)\", ',', null)", .hits = true },
     Sample::{ .text = "fs.join(\"a\", \"b\", arena)", .hits = false },
     Sample::{ .text = "fs.join(\"a\", null, arena)", .hits = false },
     Sample::{ .text = "dfs.join(\"a\", \"b\", null)", .hits = false } }
-priv const text_join_samples: Sample[_] = ::{ Sample::{ .text = "\"-\".join(parts, null)",
+priv const TEXT_JOIN_SAMPLES: Sample[_] = ::{ Sample::{ .text = "\"-\".join(parts, null)",
     .hits = true }, Sample::{ .text = "fs.join(parts, null)", .hits = false },
     Sample::{ .text = "s.join(parts, arena)", .hits = false } }
-priv const list_new_samples: Sample[_] = ::{ Sample::{ .text = "List<|I32|>.new(null)",
+priv const LIST_NEW_SAMPLES: Sample[_] = ::{ Sample::{ .text = "List<|I32|>.new(null)",
     .hits = true }, Sample::{ .text = "List<|Map<|I32, I32|>|>.new(null)", .hits = true },
     Sample::{ .text = "Map<|I32, I32|>.new(null)", .hits = false },
     Sample::{ .text = "List<|I32|>.new(arena)", .hits = false } }
 
 priv fn check_null_arena_fires(arena: Arena$@)
     scan.check_samples("the reading of a module function's null arena can fire",
-        Sample[]::fs_join_samples, "fs_join_samples", calls_fs_join, arena)
+        Sample[]::FS_JOIN_SAMPLES, "fs_join_samples", calls_fs_join, arena)
     scan.check_samples("the reading of a method's null arena can fire",
-        Sample[]::text_join_samples, "text_join_samples", calls_text_join, arena)
+        Sample[]::TEXT_JOIN_SAMPLES, "text_join_samples", calls_text_join, arena)
     scan.check_samples("the reading of a constructor's null arena can fire",
-        Sample[]::list_new_samples, "list_new_samples", calls_list_new, arena)
+        Sample[]::LIST_NEW_SAMPLES, "list_new_samples", calls_list_new, arena)
 
 fn run(arena: Arena$@) //< runs the check, after showing it can fire
     check_null_arena_fires(arena)

@@ -39,15 +39,15 @@ pub enum Http_error //< why a message could not be read, or cannot be trusted
     invalid_line_break //< a bare CR or LF was in the headers; only CRLF ends a line
     unsupported_version //< the version is not `HTTP/` plus one digit, a dot and one digit
     incomplete //< the header or body has not all arrived yet
-    head_too_large //< the first line and the headers went over `max_head_bytes` (HTTP's 431)
+    head_too_large //< the first line and the headers went over `MAX_HEAD_BYTES` (HTTP's 431)
     body_too_large //< `Content-Length` names more than the caller's body limit (HTTP's 413)
     connection_closed //< the peer closed before the header or body was fully read
     io(err: net.Net_error) //< the socket itself failed
 
-pub const max_head_bytes: Sz = 64 * 1024 //< the most a message's head can take, against DoS
+pub const MAX_HEAD_BYTES: Sz = 64 * 1024 //< the most a message's head can take, against DoS
     //<
     //< The head is the first line and the headers; every reader here refuses a longer one.
-pub const default_max_body_bytes: Sz = 16 * 1024 * 1024 //< the body limit if the caller sets none
+pub const DEFAULT_MAX_BODY_BYTES: Sz = 16 * 1024 * 1024 //< the body limit if the caller sets none
 
 // ---------------------------------------------------------
 // Checking the character sets (the parser and the builder use the same ones)
@@ -144,13 +144,13 @@ priv fn is_host_value(v: U8[]): Bool //<
         return false
     return port.len <= 5
 
-priv const sz_max: Sz = Sz::((~0U64) >> U64::(65 - sizeof(Sz) * 8)) //< the largest `Sz`
+priv const SZ_MAX: Sz = Sz::((~0U64) >> U64::(65 - sizeof(Sz) * 8)) //< the largest `Sz`
 
 priv fn parse_digits(s: U8[]): Sz!Http_error //< it accepts only `1*DIGIT`, up to what `Sz` holds
     //<
     //< Caution: **Do not use parse_size**, which reads `5abc` as 5 and accepts `+5`; accepting what
     //< the proxy in front refuses makes the body boundaries disagree.
-    return s.to_count(sz_max) catch
+    return s.to_count(SZ_MAX) catch
         throw .invalid_header
 
 // ---------------------------------------------------------
@@ -252,7 +252,7 @@ priv fn may_carry_body(status: I32): Bool //< whether a response with this statu
 pub struct Header_builder //< builds a header list, keeping the order the headers were added in
     //<
     //< The same "list builder that tracks head/tail by value" pattern as json.kspl's
-    //< Obj_builder/Array_builder.
+    //< Object_builder/Array_builder.
     priv arena: Arena$@ //< where the headers go; null until `add` makes an arena of the list's own
     priv own: Own_arena //< that arena of its own, which the built list keeps
     priv head: Header$@ //< the first header added; null for none yet
@@ -481,7 +481,7 @@ priv fn scan_head(src: U8[], max_body: Sz, arena: Arena$@): Head_parts!Http_erro
         throw e.past_head_limit(src)
     head: = parse_headers(ctx@, arena) catch e
         throw e.past_head_limit(src)
-    if ctx.pos > max_head_bytes
+    if ctx.pos > MAX_HEAD_BYTES
         throw .head_too_large
     length: = get_content_length(head)!
     if n: = length
@@ -495,7 +495,7 @@ impl Http_error
         //< The error to throw for a head still arriving: `head_too_large` once src passes the limit
         switch r
         case .incomplete
-            if src.len > max_head_bytes
+            if src.len > MAX_HEAD_BYTES
                 return .head_too_large
         default {}
         return r
@@ -512,9 +512,9 @@ priv fn body_in(src: U8[], h: Head_parts, body_len: Sz): U8[]!Http_error //<
 pub fn parse_request( //< the one request at the start of the buffer; fails if it is incomplete
     //<
     //< **A body over `max_body` fails as soon as the head says so**, before it arrives. A head
-    //< over `max_head_bytes` fails as soon as that much has arrived without its end.
+    //< over `MAX_HEAD_BYTES` fails as soon as that much has arrived without its end.
     src: U8[], //< what has arrived so far
-    max_body: Sz, //< the largest body accepted (`default_max_body_bytes` when the caller has none)
+    max_body: Sz, //< the largest body accepted (`DEFAULT_MAX_BODY_BYTES` when the caller has none)
     arena: Arena$@, //< where the parts go; null means an arena of the request's own and a `free()`
 ): Request$@!Http_error //< the request; fails with incomplete while more bytes are due
     $work: = mem.scratch(arena)
@@ -552,7 +552,7 @@ pub fn request_length( //< how many bytes the request at the start of the buffer
 
 pub fn parse_response( //< the one response at the start of the buffer; fails if it is incomplete
     //<
-    //< The body limit is `default_max_body_bytes`; the head's is `max_head_bytes`.
+    //< The body limit is `DEFAULT_MAX_BODY_BYTES`; the head's is `MAX_HEAD_BYTES`.
     src: U8[], //< what has arrived so far
     arena: Arena$@, //< where the parts go; null means an arena of the response's own and a `free()`
 ): Response$@!Http_error //< the response; fails with incomplete while more bytes are due
@@ -563,7 +563,7 @@ pub fn parse_response( //< the one response at the start of the buffer; fails if
     return got
 
 priv fn response_in(src: U8[], work: mem.Scratch): Response$@!Http_error //< parse_response's work
-    h: = scan_head(src, default_max_body_bytes, work.arena)!
+    h: = scan_head(src, DEFAULT_MAX_BODY_BYTES, work.arena)!
     status_line: = parse_status_line(h.first_line, work.arena)!
     body_len: = response_body_len(h, status_line.status)!
     body: = body_in(src, h, body_len)!
@@ -588,18 +588,18 @@ priv fn read_chunk_into(stream: net.Tcp_stream$@, b: Str_builder$@, chunk: U8$[]
         throw .connection_closed
     b.s(U8$[]::{ .ptr = chunk.ptr, .len = n })
 
-priv const read_chunk: Sz = 4096 //< how much one read from a connection takes
+priv const READ_CHUNK: Sz = 4096 //< how much one read from a connection takes
 
 priv fn read_head(stream: net.Tcp_stream$@, b: Str_builder$@, arena: Arena$@, max_body: Sz,
     deadline_us: I64, chunk: U8$[]): Head_parts!Http_error //<
-        //< Reads from stream to the head's empty line (or past `max_head_bytes`); reads the head
+        //< Reads from stream to the head's empty line (or past `MAX_HEAD_BYTES`); reads the head
         //<
         //< Caution: **Copy the first line's fields before reading the body.** They view b, which a
         //< further read can move. **Look for the empty line only where it can newly be**, from
         //< three bytes before what the last read added. Searched from the start each time, a head
         //< that arrives a byte at a time costs its length squared.
     $from: Sz = 0
-    for b.slice().sub_from(from).find_str("\r\n\r\n").is_none() && b.len <= max_head_bytes
+    for b.slice().sub_from(from).find_str("\r\n\r\n").is_none() && b.len <= MAX_HEAD_BYTES
         from = b.len - 3 if b.len > 3 else 0
         read_chunk_into(stream, b, chunk, deadline_us)!
     return scan_head(b.slice(), max_body, arena)
@@ -622,7 +622,7 @@ priv fn response_from(stream: net.Tcp_stream$@, work: mem.Scratch, max_body: Sz,
     deadline: = sys.deadline_after_ms(timeout_ms)
     $b: = Str_builder.new()
     defer b.free()
-    chunk: U8[read_chunk] = ::{}
+    chunk: U8[READ_CHUNK] = ::{}
     h: = read_head(stream, b@, work.arena, max_body, deadline, U8$[]::chunk)!
     status_line: = parse_status_line(h.first_line, work.arena)!
     body_len: = response_body_len(h, status_line.status)!
@@ -674,7 +674,7 @@ priv fn write_framed_head(b: Str_builder$@, head: Headers, length: Sz, names_len
         b.s("Content-Length: \{length\}\r\n")
     b.s("\r\n")
 
-priv const written_version: U8[] = "HTTP/1.1" //< the version every request written here names
+priv const WRITTEN_VERSION: U8[] = "HTTP/1.1" //< the version every request written here names
 
 pub fn format_request( //< builds one whole request as bytes: the first line, the headers, the body
     //<
@@ -690,9 +690,9 @@ pub fn format_request( //< builds one whole request as bytes: the first line, th
     if !is_token(method) || !is_request_target(target)
         throw .invalid_request_line
     check_framing(head, body.len, true)!
-    check_host(head, written_version)!
+    check_host(head, WRITTEN_VERSION)!
     start: = b.len
-    b.s(method).s(" ").s(target).c(' ').s(written_version).s("\r\n")
+    b.s(method).s(" ").s(target).c(' ').s(WRITTEN_VERSION).s("\r\n")
     write_framed_head(b, head, body.len, true) catch e
         b.len = start // as in `write_response_head`
         throw e

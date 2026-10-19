@@ -43,7 +43,7 @@ function kspageCommand(ui) {
     ["fall_arrow_back", "Arrow, down-right reversed"],
     ["rise_arrow_back", "Arrow, up-right reversed"]];
   const CHART_PICKS = [["bars", "Bar chart"], ["lines", "Line chart"]];
-  // How a filter matches a cell (`keep_order` in `state.kspl`).
+  // How a filter matches a cell (`KEEP_ORDER` in `state.kspl`).
   const KEEP_PICKS = [["is", "is"], ["is_not", "is not"], ["holds", "contains"],
     ["above", "is above"], ["below", "is below"], ["blank", "is empty"], ["filled", "is not empty"]];
   // Builds an item that holds one setting (`fly.js` holds the value).

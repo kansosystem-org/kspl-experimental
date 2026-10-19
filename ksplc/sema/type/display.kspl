@@ -11,12 +11,12 @@ import "ksplc/sema/type/query" as sema_type_query
 import "std/chars"
 import "std/str" { Str_builder }
 
-priv const max_generic_key_depth: Sz = 8 //< the type-argument nesting written out in full
+priv const MAX_GENERIC_KEY_DEPTH: Sz = 8 //< the type-argument nesting written out in full
     //<
     //< A deeper argument is written `…`: a polymorphic recursion's instance nests far deeper, and
     //< its internal name would show past the limit. It also stops a key that reads back as
     //< containing itself.
-priv const elided_arg: U8[] = "…" //< a type argument past max_generic_key_depth
+priv const ELIDED_ARG: U8[] = "…" //< a type argument past max_generic_key_depth
 
 impl sema_type_env.Env
     fn original_generic_name(r: Self$@, type_str: U8[]): U8[] //<
@@ -84,10 +84,10 @@ impl sema_type_env.Env
         id: = r.type_to_id.get(a).unwrap_or(0)
         $res: = w
         if names_mut_pos &&
-            !(r.is_const(id) if id != 0 else a.ends_with(base_core.immut_mark))
+            !(r.is_const(id) if id != 0 else a.ends_with(base_core.IMMUT_MARK))
             res = res.c('$')
-        if depth >= max_generic_key_depth
-            return res.s(elided_arg)
+        if depth >= MAX_GENERIC_KEY_DEPTH
+            return res.s(ELIDED_ARG)
         if id != 0
             return r.display_type_to(id, depth + 1, res)
         return r.expand_generic_key_to(a, depth + 1, res)
@@ -108,7 +108,7 @@ impl sema_type_env.Env
         //< Unmarked is immutable, a `$` before the sigil mutable (`U8[]` / `U8$[]` / `U8$@`). depth
         //< counts round trips through a generic key, not structural recursion.
         if id < 0 || id >= r.id_to_type.len
-            return w.s(base_core.unknown_type_name)
+            return w.s(base_core.UNKNOWN_TYPE_NAME)
         $res: = w
         switch r.get_info(id)
         case .pointer(b)
@@ -143,7 +143,7 @@ impl sema_type_env.Env
             // An instance of `Option<|T|>` was written `T?`; a result inside it is bracketed,
             // since `T!E?` reads as `T!(E?)`.
             real_id: = r.get_clean_real_type(id)
-            if r.instance_base(real_id).equals(base_core.option_fqn)
+            if r.instance_base(real_id).equals(base_core.OPTION_FQN)
                 inner: = r.instance_arg(real_id, 0)
                 if r.is_result(inner)
                     return r.display_type_to(inner, depth, res.c('(')).s(")?")
@@ -180,10 +180,10 @@ impl sema_type_env.Env
             id: = inst.args[pos]
             if base_ast.variance_names_mut(mask, pos) && !r.is_const(id)
                 res = res.c('$')
-            if depth < max_generic_key_depth
+            if depth < MAX_GENERIC_KEY_DEPTH
                 res = r.display_type_to(id, depth + 1, res)
             else
-                res = res.s(elided_arg)
+                res = res.s(ELIDED_ARG)
         return res.s("|>")
 
     fn display_str(r: Self$@, id: I32): Str_builder

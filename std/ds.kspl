@@ -12,7 +12,7 @@ priv fn grow_cap(cap: Sz, initial: Sz): Sz //<
     //< Caution: **Do not use `io`.** That makes the cycle `ds → io → str → ds`, and code that only
     //< uses `List` / `Map` pays for the whole string and IO library. Build a message with a number
     //< with `Panic_msg` (std/lang), which allocates nothing and works on freestanding.
-    return initial if cap == 0 else cap * 2
+    return initial if cap == 0 else checked_cap_bytes(cap, 2)
 
 priv fn checked_cap_bytes(cap: Sz, elem_size: Sz): Sz
     if cap < 0
@@ -154,6 +154,16 @@ impl<|T|> List<|T|>
         (r.ptr + r.len)$ = item
         r.len += 1
 
+    pub fn pop(r: Self$@): T? //< removes and returns the last element, or none if empty
+        if r.len == 0
+            return .none
+        last: = r.len - 1
+        item: = (r.ptr + last)$
+        $empty: T[1] = ::{}
+        (r.ptr + last)$ = empty[0]
+        r.len = last
+        return .some(item)
+
     pub fn insert( //< inserts one element, shifting the following elements along
         r: Self$@,
         index: Sz, //< where it goes; an index out of range stops the program
@@ -187,19 +197,22 @@ impl<|T|> List<|T|>
         (r.ptr + r.len - 1)$ = empty[0]
         r.len -= 1
 
+    pub fn clear(r: Self$@) //< releases every element, keeping the capacity for reuse; O(n)
+        //<
+        //< Caution: **Use assignment, not `mem.zero` or a length reset.** Assignment releases ARC
+        //< values. A raw pointer or a manually owned resource still needs its own cleanup.
+        $empty: T[1] = ::{}
+        for i in Range.asc(r.len)
+            (r.ptr + i)$ = empty[0]
+        r.len = 0
+
     pub fn free(r: Self$@) //< frees the elements and the memory
         //<
         //< **The list itself stays**: a second `free()` frees nothing, and the block `create(null)`
         //< put it in is the caller's to give back with `mem.dealloc`.
-        //< Caution: **Release the elements' ownership before freeing the memory.** For ARC content,
-        //< assigning the zero value releases the old value; without it the contents leak on every
-        //< discard, where the caller cannot reach them.
-        $empty: T[1] = ::{}
-        for i in Range.asc(r.len)
-            (r.ptr + i)$ = empty[0]
+        r.clear()
         if r.cap > 0 && r.arena == null
             dealloc(Void$@::r.ptr)
-        r.len = 0
         r.cap = 0
 
     pub fn slice(r: Self$@): T$[] //< a view of every element, for a function that takes a slice

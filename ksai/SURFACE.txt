@@ -40,13 +40,13 @@ ksai/block_train	nn.Transformer_block<|T|>.backward_grads	pub fn backward_grads(
 ksai/block_train	nn.Transformer_block<|T|>.backward_lora	pub fn backward_lora(r: Self$@, c: Block_train<|T|>$@, dout: Tensor<|T|>, lr: F64, q_lora: lora.Lora<|T|>$@, v_lora: lora.Lora<|T|>$@, fc1_lora: lora.Lora<|T|>$@, fc2_lora: lora.Lora<|T|>$@): Tensor<|T|>	one step on the adapters only; every base weight stays frozen. The base is frozen (a backward with lr=0 returns only the gradient). The returned gradient sums every path.
 ksai/block_train	nn.Transformer_block<|T|>.train_forward	pub fn train_forward(r: Self$@, x: Tensor<|T|>): Block_train<|T|>	runs the whole sequence at once, keeping what the backward pass needs
 ksai/block_train	nn.Transformer_block<|T|>.train_forward_lora	pub fn train_forward_lora(r: Self$@, x: Tensor<|T|>, q_lora: lora.Lora<|T|>$@, v_lora: lora.Lora<|T|>$@, fc1_lora: lora.Lora<|T|>$@, fc2_lora: lora.Lora<|T|>$@): Block_train<|T|>	the same as `train_forward`, with the adapters' delta added. It does not update the base (attention_norm, wq/wk/wv/wo, ffn_norm, fc1/fc2) at all. It folds only the adapters' deltas into the block's forward pass.
-ksai/examples/car_pilot/encoding	drive_fields	pub const drive_fields: Sz = 3	how many values one manoeuvre holds (lon, lat, rot)
-ksai/examples/car_pilot/encoding	feature_count	pub const feature_count: Sz = 5	[measured or not, the normalized distance, left, middle, right]
+ksai/examples/car_pilot/encoding	DRIVE_FIELDS	pub const DRIVE_FIELDS: Sz = 3	how many values one manoeuvre holds (lon, lat, rot)
+ksai/examples/car_pilot/encoding	FEATURE_COUNT	pub const FEATURE_COUNT: Sz = 5	[measured or not, the normalized distance, left, middle, right]
+ksai/examples/car_pilot/encoding	FORMAT_VERSION	pub const FORMAT_VERSION: U8[] = "2"	the version written in the policy, and the one read. Caution: **Raise it when the features' order, the activation (SiLU) or the manoeuvre table's meaning changes.** The shapes still fit, so an old reader silently uses new weights with the old meaning.
+ksai/examples/car_pilot/encoding	LINE_LEFT	pub const LINE_LEFT: I64 = 4	the left line sensor's bit in an observation's `line`
+ksai/examples/car_pilot/encoding	LINE_MIDDLE	pub const LINE_MIDDLE: I64 = 2	the middle sensor's bit
+ksai/examples/car_pilot/encoding	LINE_RIGHT	pub const LINE_RIGHT: I64 = 1	the right sensor's bit
 ksai/examples/car_pilot/encoding	features	pub fn features(dist_mm: I64, line: I64, far_mm: I64, arena: Arena$@): Tensor<|F32|>	an observation as the feature vector the policy takes
-ksai/examples/car_pilot/encoding	format_version	pub const format_version: U8[] = "2"	the version written in the policy, and the one read. Caution: **Raise it when the features' order, the activation (SiLU) or the manoeuvre table's meaning changes.** The shapes still fit, so an old reader silently uses new weights with the old meaning.
-ksai/examples/car_pilot/encoding	line_left	pub const line_left: I64 = 4	the left line sensor's bit in an observation's `line`
-ksai/examples/car_pilot/encoding	line_middle	pub const line_middle: I64 = 2	the middle sensor's bit
-ksai/examples/car_pilot/encoding	line_right	pub const line_right: I64 = 1	the right sensor's bit
 ksai/grad	Tensor<|T|>.accumulate	pub fn accumulate(r: Self$@, grad: Tensor<|T|>)	adds another gradient into this one, in place. self += grad. **The caller decides the order of the additions.** Floating-point addition is not associative. So a sum that must match on every run has to be taken in one fixed order.
 ksai/grad	Tensor<|T|>.cross_entropy_loss	pub fn cross_entropy_loss(r: Self$@, target: I32): F64	how wrong the last position's prediction was, in nats. Self's final dimension is the vocabulary; L = logsumexp(logits) - logits[target]. Of several rows it takes only the last (one step of teacher forcing); for every row, use `cross_entropy_loss_seq`.
 ksai/grad	Tensor<|T|>.cross_entropy_loss_seq	pub fn cross_entropy_loss_seq(r: Self$@, targets: I32$[]): F64	how wrong every position's prediction was, averaged, in nats. Every row's loss: next-token prediction, what a language model is trained on.
@@ -201,7 +201,7 @@ ksai/safetensors	Safetensors	pub struct Safetensors	a parsed header and weights,
 ksai/safetensors	Safetensors.get_tensor	pub fn get_tensor<|T|>(r: Self$@, name: U8[], arena: Arena$@): Tensor<|T|>!Safetensors_error	one tensor, borrowing aligned elements or copying misaligned ones. Caution: **An aligned result borrows from the file.** Its elements are not copied, so the backing bytes must stay alive while the tensor is used. A misaligned result uses an aligned copy in the supplied arena instead.
 ksai/safetensors	Safetensors.load_from_bytes	pub fn load_from_bytes(file_data: U8[], arena: Arena$@): Safetensors!Safetensors_error	reads the header of a file the caller already holds in memory. **The function that opens a file lives elsewhere** (`ksai/model_file`): here it would need `std/io`, and code that only uses tensors would pay for file I/O. The bytes belong to the caller (typically `embed "model.safetensors" as model_bytes;`) and must outlive every tensor borrowing them.
 ksai/safetensors	Safetensors.map_into	pub fn map_into<|T|>(r: Self$@, name: U8[], dst: Tensor<|T|>$@, arena: Arena$@): Void!Safetensors_error	maps one tensor from the file into `dst`, rejecting a different shape. Caution: **Check the shape before swapping the weights in.** The model is built with its own dimensions. Weights that do not fit fail later in some matmul, with no hint of which tensor differs. Typically, a different checkpoint was passed.
-ksai/safetensors	Safetensors.metadata	pub fn metadata(r: Self@): json.Val	the header; its values live in the parsing arena
+ksai/safetensors	Safetensors.metadata	pub fn metadata(r: Self@): json.Value	the header; its values live in the parsing arena
 ksai/safetensors	Safetensors_error	pub enum Safetensors_error	why a weights file could not be read or written. I/O, a broken header and a missing tensor are recoverable run-time conditions. So they propagate as an error union (?E) for the caller to handle.
 ksai/safetensors	Safetensors_error.dtype_mismatch	dtype_mismatch(name: U8[])	the file's element width is not the one being read, naming it
 ksai/safetensors	Safetensors_error.invalid_header	invalid_header	the JSON header could not be parsed
@@ -226,6 +226,7 @@ ksai/sampler	Sample_config.top_k	pub top_k: Sz	at most this many top-scoring can
 ksai/sampler	Sample_config.top_p	pub top_p: F64	only candidates within this cumulative probability; 1.0 means no limit
 ksai/sampler	argmax	pub fn argmax<|T|>(logits: Tensor<|T|>): I32	the highest-scoring token, the same one every time. Caution: **Also reject a shape whose last dimension is 0.** A size of 0 is legitimate for an empty tensor (`Tensor.new` in `ksai/tensor.kspl`), and checking only the number of dimensions lets `(logits.data + offset)$` read a region with no elements. No range check catches a raw dereference, and it does not crash: it returns **a plausible token ID**, 0.
 ksai/sampler	sample	pub fn sample<|T|>(logits: Tensor<|T|>, cfg: Sample_config, rng: prng.Prng$@, arena: Arena$@): I32	one token chosen at random, weighted by the model's scores
+ksai/tensor	MAX_TENSOR_ELEMS	pub const MAX_TENSOR_ELEMS: Sz = 100000000	the most elements one tensor can hold. The cap `new` enforces, which fits cfg(freestanding)'s 32-bit Sz (800MB even at F64). It is pub so safetensors.get_tensor, which bypasses `new`, applies the same cap.
 ksai/tensor	Tensor	pub struct Tensor<|T|>	a multi-dimensional array: the elements and their shape
 ksai/tensor	Tensor.data	pub data: T$@	the elements, laid out with the last dimension varying fastest
 ksai/tensor	Tensor.shape	pub shape: Sz$[]	each dimension's size; how many there are is `shape.len`
@@ -256,7 +257,6 @@ ksai/tensor	Tensor_error	pub enum Tensor_error	why an operation could not run on
 ksai/tensor	Tensor_error.out_of_bounds	out_of_bounds	a row number outside the tensor; a bad element index stops the program
 ksai/tensor	Tensor_error.rank_mismatch	rank_mismatch	the number of dimensions is not what the operation expects
 ksai/tensor	Tensor_error.shape_mismatch	shape_mismatch	a dimension's size does not match, such as the inner-product dimension
-ksai/tensor	max_tensor_elems	pub const max_tensor_elems: Sz = 100000000	the most elements one tensor can hold. The cap `new` enforces, which fits cfg(freestanding)'s 32-bit Sz (800MB even at F64). It is pub so safetensors.get_tensor, which bypasses `new`, applies the same cap.
 ksai/tokenizer	Bpe_key:ds.Hashable<|Bpe_key|>	impl Bpe_key: ds.Hashable<|Bpe_key|>	so a pair of token IDs can stand as a map's key. The two hashes below skip `ds.fmix32`. Token IDs are consecutive numbers whose low bits are already spread. So mixing would only add an operation to each BPE merge lookup.
 ksai/tokenizer	Load_error	pub enum Load_error	why `Tokenizer.load` refused a vocabulary or its merges
 ksai/tokenizer	Load_error.broken	broken(path: U8[], line: Sz)	a line is not one `train_bpe.kspl` writes; the file and the. line's number from 1 (`load_text` names `vocabulary` or `merges` for the file). **Refused, not skipped**: a word or a rule dropped in silence makes every text it touches encode to other IDs, which nothing downstream can notice.
@@ -265,7 +265,7 @@ ksai/tokenizer	Token_key:ds.Hashable<|Token_key|>	impl Token_key: ds.Hashable<|T
 ksai/tokenizer	Tokenizer	pub struct Tokenizer	the vocabulary and merge rules that turn text into token IDs
 ksai/tokenizer	Tokenizer.add_merge	pub fn add_merge(r: Self$@, id1: I32, id2: I32, merged_id: I32)	adds one merge rule: this pair, when adjacent, becomes that one word. Caution: **The call order is the rank**, so the rules must arrive in priority order (`load()` and `train_bpe.kspl`'s merges.txt already do).
 ksai/tokenizer	Tokenizer.add_token	pub fn add_token(r: Self$@, token: U8[], id: I32)	adds one word to the vocabulary, looked up in both directions from then on
-ksai/tokenizer	Tokenizer.arena	pub arena: Arena$@	the arena for every word, every rule and every cached chunk. **Nothing a call returns is put here** (`encode` and `decode` take the caller's arena), so a tokenizer kept for a server's lifetime grows only up to `chunk_cache_cap`.
+ksai/tokenizer	Tokenizer.arena	pub arena: Arena$@	the arena for every word, every rule and every cached chunk. **Nothing a call returns is put here** (`encode` and `decode` take the caller's arena), so a tokenizer kept for a server's lifetime grows only up to `CHUNK_CACHE_CAP`.
 ksai/tokenizer	Tokenizer.decode	pub fn decode(r: Self$@, tokens: List<|I32|>$@, arena: Arena$@): U8[]	the text for the IDs
 ksai/tokenizer	Tokenizer.decode_one	pub fn decode_one(r: Self$@, id: I32): U8[]	the text for one ID, for printing each generated token as it comes. **It allocates nothing**: the result is the vocabulary's own bytes, which stay valid while the tokenizer's arena does. An ID not in the vocabulary gives an empty text.
 ksai/tokenizer	Tokenizer.encode	pub fn encode(r: Self$@, text: U8[], arena: Arena$@): List<|I32|>$@	the token IDs for a text. Splits into chunks (`chunk_end`) and within each chunk merges the pair of the smallest rank every time; no merge crosses a chunk, as during training.
@@ -274,5 +274,5 @@ ksai/tokenizer	Tokenizer.load_text	pub fn load_text(r: Self$@, vocab: U8[], merg
 ksai/tokenizer	Tokenizer.new	pub fn new(arena: Arena$@): Tokenizer	an empty tokenizer, to be filled by `load` or by `add_token` / `add_merge`
 ksai/tokenizer	Tokenizer.next_rank	pub next_rank: I32	the rank the next `add_merge` gets; the call order is the rank
 ksai/tokenizer	Tokenizer.vocab	pub vocab: Map<|U8[], I32|>$@	each word's byte sequence, mapped to its ID
+ksai/tokenizer	UNK_ID	pub const UNK_ID: I32 = 0	`<unk>`, the ID a byte the vocabulary lacks is encoded as
 ksai/tokenizer	parse_token_id	pub fn parse_token_id(text: U8[]): I32?	a decimal ID that fits an `I32`, or none
-ksai/tokenizer	unk_id	pub const unk_id: I32 = 0	`<unk>`, the ID a byte the vocabulary lacks is encoded as

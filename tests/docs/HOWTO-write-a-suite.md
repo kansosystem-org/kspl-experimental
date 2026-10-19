@@ -14,7 +14,7 @@ You need a built tree and enough KSPL to read a short program.
   | `out/ksplc_stage1.exe` | *Stage1*: the compiler built from the current source, with your edit in it | What the suite checks |
 
   Why two compilers take part is "The seed runs the suites" in [`tests/docs/DESIGN-suites.md`](DESIGN-suites.md).
-* **Some KSPL.** [`docs/TOUR.md`](../../docs/TOUR.md) walks through the language in one program.
+* **Some KSPL.** [`docs/TUTORIAL.md`](../../docs/TUTORIAL.md) walks through the language in one program.
 
 ## Where a new test goes
 
@@ -55,7 +55,7 @@ These steps add a suite of the repository, under `tests/suite/`, or one of the c
 6. **Run it**: `make test-<name>`, then `make test-conventions`. The run prints one line per check and a closing verdict, as in two of `make test-docref`'s lines and its last:
 
    ```
-   pass docref: SPEC-*.md cites no PLAN.md
+   pass docref: SPEC files cite no DESIGN or PLAN and no specification below or beside them
    pass docref: numbered headings are unique and consecutive per document
    RESULT: ALL PASS
    ```
@@ -115,7 +115,7 @@ Caution: **Do not free it with a `defer`.** `finish` / `fatal` free it, so a `de
 
 A convention check must prove that it can catch a violation. The convention checks (`make test-conventions`) are **green when the repository is clean, and so green even when a check is broken**. A check *fires* when it catches a violation; one that cannot fire guards nothing.
 
-So a rule's decision is factored out into a function that takes one string. Beside it, **in the same file as the rule**, sits a table of sample strings: some that match, and some that do not. `tmp_samples` and `check_tmp_fires` in `tests/support/conventions_win.kspl` are the shape: the table, then `scan.misjudged` putting each sample to the decision (`opens_tmp`), and `verdict.check_list` reporting the ones it misjudged.
+So a rule's decision is factored out into a function that takes one string. Beside it, **in the same file as the rule**, sits a table of sample strings: some that match, and some that do not. `TMP_SAMPLES` and `check_tmp_fires` in `tests/support/conventions_win.kspl` are the shape: the table, then `scan.misjudged` putting each sample to the decision (`opens_tmp`), and `verdict.check_list` reporting the ones it misjudged.
 
 The flow below shows the two halves: the samples test the decision, and the real check uses the same decision on the tree.
 

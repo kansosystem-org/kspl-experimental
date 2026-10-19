@@ -2,7 +2,7 @@
 //< The rules for places, and for whether they may be touched, run as programs
 //<
 //< The rules are "Places, and the rules for when they may be written" in
-//< `docs/SPEC-language.md`.
+//< `docs/SPEC-programming-language.md`.
 //< Caution: **Test the shapes that should pass together with them**, or rejecting everything goes
 //< green too. `tests/negative/` holds one case per syntax (`.f` / `[i]` / `$` / a capture /
 //< defer) for the paths; here are the rules themselves.
@@ -21,7 +21,7 @@ import "std/verdict"
 // function taking a mutable pointer.
 // Caution: **Do not drop the level that holds a struct as an element.** With only plain elements
 // (`I32[]`), no path reaching **a field inside** an element (`b.si[0].n`) is taken.
-priv const head: U8[] =
+priv const HEAD: U8[] =
     "priv struct Cell { n: I32; }
 impl Cell
   fn bumpc(r: Self$@)
@@ -60,7 +60,7 @@ impl I32$[]
 
 "
 
-priv const tail: U8[] = "
+priv const TAIL: U8[] = "
 fn main(): I32
   return 0
 
@@ -71,7 +71,7 @@ priv struct Case
     op: U8[] //< the operation's name
     body: U8[]
 
-priv const deny: Case[] = Case[]::{ //< every one is a shape that **should be rejected**
+priv const DENY: Case[] = Case[]::{ //< every one is a shape that **should be rejected**
     // route: it reaches through the read-only pointer Box@.
     Case::{ .rule = "route", .op = "write", .body = "priv fn t(b: Box@) { b.n = 1; }" },
     Case::{ .rule = "route", .op = "address", .body = "priv fn t(b: Box@) { takes_mut(b.n@); }" },
@@ -104,7 +104,7 @@ priv const deny: Case[] = Case[]::{ //< every one is a shape that **should be re
 }
 
 // Shapes that break none of the rules, so rejecting everything is not green.
-priv const allow: Case[] = Case[]::{
+priv const ALLOW: Case[] = Case[]::{
     Case::{ .rule = "", .op = "write", .body = "priv fn t() { $b: Box = ::{}; b.n = 1; }" },
     Case::{ .rule = "", .op = "address",
         .body = "priv fn t() { $b: Box = ::{}; takes_mut(b.n@); }" },
@@ -152,7 +152,7 @@ priv fn compile_only(dir: U8[], index: Sz, body: U8[], arena: Arena$@): Verdict
     gen: = fs.join(dir, arena.text().s("\{stem\}.c").take(), arena)
     $sb: = Str_builder.new()
     defer sb.free()
-    sb.s(head).s(body).s(tail)
+    sb.s(HEAD).s(body).s(TAIL)
     io.write_file(src, sb.slice()) catch
         return Verdict::{ .compiled = false, .first_error = "cannot write the material" }
     r: = harness.ksplc(U8[][]::{ src, gen })
@@ -168,14 +168,14 @@ fn main(): I32
     run_write_perm(arena)
     dir: = harness.sandbox("place")
 
-    for i in Range.asc(deny.len)
-        c: = deny[i]
+    for i in Range.asc(DENY.len)
+        c: = DENY[i]
         v: = compile_only(dir, i, c.body, arena)
         name: = arena.text().s("[\{c.rule\}] \{c.op\} is refused").take()
         verdict.check(name, !v.compiled, "it passes")
-    for i in Range.asc(allow.len)
-        c: = allow[i]
-        v: = compile_only(dir, deny.len + i, c.body, arena)
+    for i in Range.asc(ALLOW.len)
+        c: = ALLOW[i]
+        v: = compile_only(dir, DENY.len + i, c.body, arena)
         name: = arena.text().s("[control] \{c.op\}").take()
         why: = arena.text().s("refused: \{v.first_error\}").take()
         verdict.check(name, v.compiled, why)
@@ -210,34 +210,34 @@ priv struct Write //< the write's path
     slot: U8[]
     body: U8[]
 
-priv const holder_decl: U8[] =
+priv const HOLDER_DECL: U8[] =
     """struct Holder { buf: U8[4]; n: I32; }
 impl Holder { fn bump_holder(r: Self$@) { r.n = 7; } }
 """
 
-priv const holder2_decl: U8[] =
+priv const HOLDER2_DECL: U8[] =
     """struct Holder2 { buf: U8[4]; n: I32; }
 impl Holder2 { fn bump_holder(r: Self$@) { r.n = 7; } }
-const ro_st: Holder2 = ::{ .buf = ::{ 1, 2, 3, 4 }, .n = 0 }
+const RO_ST: Holder2 = ::{ .buf = ::{ 1, 2, 3, 4 }, .n = 0 }
 """
 
-priv const nested_mut_locals: U8[] =
+priv const NESTED_MUT_LOCALS: U8[] =
     """$in_a: U8[4] = ::{ 1, 2, 3, 4 };
   $sl_a: U8$[][1] = ::{ U8$[]::in_a };
   nested: U8$[]$[] = U8$[]$[]::sl_a;"""
 
-priv const nested_ro_locals: U8[] =
+priv const NESTED_RO_LOCALS: U8[] =
     """$sl_b: U8[][1] = ::{ "abcd" };
   nested_ro: U8[]$[] = U8[]$[]::sl_b;"""
 
 priv fn roots(arena: Arena$@): List<|Root|>
     $out: = List<|Root|>.new(arena)
     out
-        .push(Root::{ .slot = "const_array", .globals = "const ro_arr: U8[4] = ::{ 1, 2, 3, 4 };",
-        .locals = "", .expr = "ro_arr" })
+        .push(Root::{ .slot = "const_array", .globals = "const RO_ARR: U8[4] = ::{ 1, 2, 3, 4 };",
+        .locals = "", .expr = "RO_ARR" })
     out
-        .push(Root::{ .slot = "const_slice", .globals = "const ro_sl: U8[] = \"abcd\";",
-        .locals = "", .expr = "ro_sl" })
+        .push(Root::{ .slot = "const_slice", .globals = "const RO_SL: U8[] = \"abcd\";",
+        .locals = "", .expr = "RO_SL" })
     out
         .push(Root::{ .slot = "global_immut_array", .globals = "gl_arr: U8[4] = ::{ 1, 2, 3, 4 };",
         .locals = "", .expr = "gl_arr" })
@@ -248,16 +248,16 @@ priv fn roots(arena: Arena$@): List<|Root|>
         .push(Root::{ .slot = "local_immut_slice", .globals = "",
         .locals = "loc_sl: U8[] = \"abcd\";", .expr = "loc_sl" })
     out
-        .push(Root::{ .slot = "ro_ptr", .globals = "const ro_arr: U8[4] = ::{ 1, 2, 3, 4 };",
-        .locals = "rp: U8@ = ro_arr[0]@;", .expr = "rp" })
+        .push(Root::{ .slot = "ro_ptr", .globals = "const RO_ARR: U8[4] = ::{ 1, 2, 3, 4 };",
+        .locals = "rp: U8@ = RO_ARR[0]@;", .expr = "rp" })
     out
-        .push(Root::{ .slot = "ro_ptr_to_ptr", .globals = "const ro_arr: U8[4] = ::{ 1, 2, 3, 4 };",
-        .locals = "rp: U8@ = ro_arr[0]@;\n  rpp: U8@@ = rp@;", .expr = "rpp" })
+        .push(Root::{ .slot = "ro_ptr_to_ptr", .globals = "const RO_ARR: U8[4] = ::{ 1, 2, 3, 4 };",
+        .locals = "rp: U8@ = RO_ARR[0]@;\n  rpp: U8@@ = rp@;", .expr = "rpp" })
     out
         .push(Root::{ .slot = "ptr_to_ro_slice", .globals = "",
         .locals = "loc_sl: U8[] = \"abcd\";\n  psl: U8[]@ = loc_sl@;", .expr = "psl" })
     out
-        .push(Root::{ .slot = "ro_ptr_to_struct", .globals = holder_decl,
+        .push(Root::{ .slot = "ro_ptr_to_struct", .globals = HOLDER_DECL,
         .locals = "$hv: Holder = ::{ .buf = ::{ 1, 2, 3, 4 }, .n = 0 };\n  hp: Holder@ = hv@;",
         .expr = "hp" })
     // A mutable binding too: even a valid write whose generated C fails (an assignment to a C
@@ -266,16 +266,16 @@ priv fn roots(arena: Arena$@): List<|Root|>
         .push(Root::{ .slot = "mut_binding_array", .globals = "",
         .locals = "$mut_arr: U8[4] = ::{ 1, 2, 3, 4 };", .expr = "mut_arr" })
     out
-        .push(Root::{ .slot = "const_struct", .globals = holder2_decl, .locals = "",
-        .expr = "ro_st" })
+        .push(Root::{ .slot = "const_struct", .globals = HOLDER2_DECL, .locals = "",
+        .expr = "RO_ST" })
     // **Nested view types are among the sources too.** Otherwise the implicit conversion of "a
     // slice of mutable slices" to "a slice of immutable slices" is never tested. That conversion
     // lets the callee write a read-only value into a mutable frame.
     out
-        .push(Root::{ .slot = "nested_mut_slices", .globals = "", .locals = nested_mut_locals,
+        .push(Root::{ .slot = "nested_mut_slices", .globals = "", .locals = NESTED_MUT_LOCALS,
         .expr = "nested" })
     out
-        .push(Root::{ .slot = "nested_ro_slices", .globals = "", .locals = nested_ro_locals,
+        .push(Root::{ .slot = "nested_ro_slices", .globals = "", .locals = NESTED_RO_LOCALS,
         .expr = "nested_ro" })
     return out
 
@@ -313,7 +313,7 @@ priv fn writes(arena: Arena$@): List<|Write|>
     out.push(Write::{ .slot = "write_nested_elem", .body = "<e>[0][0] = 9;" })
     return out
 
-priv const prog_middle: U8[] =
+priv const PROG_MIDDLE: U8[] =
     """
 impl U8
   fn bump(r: Self$@)
@@ -337,7 +337,7 @@ fn main(): I32
 """
 
 priv fn build_case(r: Root, w: Write, arena: Arena$@): U8[]
-    return arena.text().s(r.globals).s("\n").s(prog_middle).s("  ").s(r.locals).s("\n  ")
+    return arena.text().s(r.globals).s("\n").s(PROG_MIDDLE).s("  ").s(r.locals).s("\n  ")
         .s(w.body.replace("<e>", r.expr, arena)).s("\n  return 0\n\n").take()
 
 priv fn c_complains(out: U8[]): Bool //< the C compiler's finding
@@ -369,7 +369,7 @@ priv fn must_accept(slot: U8[], src: U8[], dir: U8[], arena: Arena$@) //<
     verdict.check(name, cc.exited_with(0) && !c_complains(cc.out),
         arena.text().s("C refused it\n\{src\}--- C's finding ---\n\{cc.out\}").take())
 
-priv const ok_mut_local_array: U8[] =
+priv const OK_MUT_LOCAL_ARRAY: U8[] =
     """fn main(): I32
   $arr: U8[4] = ::{ 1, 2, 3, 4 }
   arr[0] = 9
@@ -377,7 +377,7 @@ priv const ok_mut_local_array: U8[] =
 
 """
 
-priv const ok_mut_ptr_arith: U8[] =
+priv const OK_MUT_PTR_ARITH: U8[] =
     """fn main(): I32
   $arr: U8[4] = ::{ 1, 2, 3, 4 }
   p: = arr[0]@
@@ -386,7 +386,7 @@ priv const ok_mut_ptr_arith: U8[] =
 
 """
 
-priv const ok_mut_slice_through_const_descriptor_ptr: U8[] =
+priv const OK_MUT_SLICE_THROUGH_CONST_DESCRIPTOR_PTR: U8[] =
     """fn main(): I32
   $arr: U8[4] = ::{ 1, 2, 3, 4 }
   sl: U8$[] = U8$[]::arr
@@ -396,7 +396,7 @@ priv const ok_mut_slice_through_const_descriptor_ptr: U8[] =
 
 """
 
-priv const ok_mut_receiver_field_and_elem: U8[] =
+priv const OK_MUT_RECEIVER_FIELD_AND_ELEM: U8[] =
     """struct Holder { buf: U8[4]; n: I32; }
 
 impl Holder
@@ -413,7 +413,7 @@ fn main(): I32
 
 """
 
-priv const ok_whole_array_assign: U8[] =
+priv const OK_WHOLE_ARRAY_ASSIGN: U8[] =
     """fn main(): I32
   $a: U8[18] = ::{ 1 }
   $b: U8[18] = ::{ 2 }
@@ -422,26 +422,26 @@ priv const ok_whole_array_assign: U8[] =
 
 """
 
-priv const ok_explicit_cast_escape_hatch: U8[] =
-    """const ro: U8[4] = ::{ 1, 2, 3, 4 }
+priv const OK_EXPLICIT_CAST_ESCAPE_HATCH: U8[] =
+    """const RO: U8[4] = ::{ 1, 2, 3, 4 }
 
 fn main(): I32
-  p: U8$@ = U8$@::(ro@)
+  p: U8$@ = U8$@::(RO@)
   p$ = 9
-  return I32::ro[0]
+  return I32::RO[0]
 
 """
 
 priv fn run_write_perm(arena: Arena$@) //< what passes ksplc passes C without a warning
     dir: = harness.sandbox("write_perm")
     work: = dir
-    must_accept("mut_local_array", ok_mut_local_array, work, arena)
-    must_accept("mut_ptr_arith", ok_mut_ptr_arith, work, arena)
-    must_accept("mut_slice_through_const_descriptor_ptr", ok_mut_slice_through_const_descriptor_ptr,
+    must_accept("mut_local_array", OK_MUT_LOCAL_ARRAY, work, arena)
+    must_accept("mut_ptr_arith", OK_MUT_PTR_ARITH, work, arena)
+    must_accept("mut_slice_through_const_descriptor_ptr", OK_MUT_SLICE_THROUGH_CONST_DESCRIPTOR_PTR,
         work, arena)
-    must_accept("mut_receiver_field_and_elem", ok_mut_receiver_field_and_elem, work, arena)
-    must_accept("whole_array_assign", ok_whole_array_assign, work, arena)
-    must_accept("explicit_cast_escape_hatch", ok_explicit_cast_escape_hatch, work, arena)
+    must_accept("mut_receiver_field_and_elem", OK_MUT_RECEIVER_FIELD_AND_ELEM, work, arena)
+    must_accept("whole_array_assign", OK_WHOLE_ARRAY_ASSIGN, work, arena)
+    must_accept("explicit_cast_escape_hatch", OK_EXPLICIT_CAST_ESCAPE_HATCH, work, arena)
 
     // --- the combinations ---
     rs: = roots(arena)

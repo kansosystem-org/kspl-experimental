@@ -38,18 +38,18 @@ extern "C"
     fn kspl_proc_alive(handle: I64): Bool
     fn kspl_proc_ended(handle: I64, code: I32$@): Bool //< whether it ended; the code into `code`
 
-priv const stdio_in: I32 = 1 //< `kspl_proc_start`'s `stdio`
+priv const STDIO_IN: I32 = 1 //< `kspl_proc_start`'s `stdio`
     //<
     //< Caution: The values must match the C code (hosted_spawn.c).
-priv const stdio_out: I32 = 2
-priv const stdio_err: I32 = 4
-priv const stdio_no_window: I32 = 8 //< no console window is shown for the child
+priv const STDIO_OUT: I32 = 2
+priv const STDIO_ERR: I32 = 4
+priv const STDIO_NO_WINDOW: I32 = 8 //< no console window is shown for the child
     //<
     //< **Windows only.** A console program started by a program with no console gets a new console
     //< window, an unwanted black window beside the user's own. POSIX ignores the bit.
     //< Caution: **Only when both streams go to files.** With it, the child is not attached to the
     //< parent's console, so anything it writes to the console is lost.
-priv const stdio_group: I32 = 16 //< the child leads a process group of its own (a job on Windows)
+priv const STDIO_GROUP: I32 = 16 //< the child leads a process group of its own (a job on Windows)
     //<
     //< **Only for a child stopped at a time limit.** The kill then stops what it started too.
     //< See "A time limit stops the child and all it started" in
@@ -136,7 +136,7 @@ pub fn run_capture( //< runs one child to the end and collects both its outputs
     //< wait (`kspl_proc_poll`). **Append only what was read**: the cap is a promise ("beyond this
     //< it is cut"), not the size to allocate.
     //< **Past the time limit, the child and all it started are killed.** Once the child itself
-    //< has ended, what it started can hold the outputs open. They are read for `pipe_grace_ms`
+    //< has ended, what it started can hold the outputs open. They are read for `PIPE_GRACE_MS`
     //< more, and what comes after is not kept.
     argv: U8[][], //< the executable and its arguments
     cwd: U8[], //< the working directory; empty inherits the caller's
@@ -144,7 +144,7 @@ pub fn run_capture( //< runs one child to the end and collects both its outputs
     output_cap: Sz, //< how many bytes of each output are kept; the rest is cut
     arena: Arena$@, //< where the outputs go; null means the heap, each freed with `dealloc`
 ): Run_result!Spawn_error //< both outputs and how it ended; fails only if it cannot start
-    h: = start(argv, cwd, stdio_out | stdio_err | stdio_group, "", "")
+    h: = start(argv, cwd, STDIO_OUT | STDIO_ERR | STDIO_GROUP, "", "")
     if h == 0
         throw .spawn_failed
     $out: = Str_builder.new()
@@ -164,7 +164,7 @@ pub fn run_capture( //< runs one child to the end and collects both its outputs
         now: = sys.mono_us()
         if !ended && kspl_proc_ended(h, code@)
             ended = true
-            grace_end: = now + I64::pipe_grace_ms * 1000I64
+            grace_end: = now + I64::PIPE_GRACE_MS * 1000I64
             until = grace_end if grace_end < deadline else deadline
         if now >= until
             timed_out = !ended
@@ -178,10 +178,10 @@ pub fn run_capture( //< runs one child to the end and collects both its outputs
         mask: = kspl_proc_poll(h, wait_ms)
         if mask < 0
             break // nothing left to watch (both streams were read to the end)
-        if out_open && (mask & stdio_out) != 0
+        if out_open && (mask & STDIO_OUT) != 0
             out_open =
                 take_into(out@, U8[]::chunk, kspl_proc_read(h, chunk[0]@, chunk.len, 0), output_cap)
-        if err_open && (mask & stdio_err) != 0
+        if err_open && (mask & STDIO_ERR) != 0
             err_open =
                 take_into(err@, U8[]::chunk,
                 kspl_proc_read_err(h, chunk[0]@, chunk.len, 0), output_cap)
@@ -201,7 +201,7 @@ pub fn run_capture( //< runs one child to the end and collects both its outputs
         .output_lost = false,
     }
 
-priv const pipe_grace_ms: I32 = 100 //< how long outputs are read once the child itself has ended
+priv const PIPE_GRACE_MS: I32 = 100 //< how long outputs are read once the child itself has ended
     //<
     //< **Everything the child wrote is in the pipes when it ends.** So this waits only for what
     //< it started and left holding them. See "A child's outputs are read briefly past its end" in
@@ -229,16 +229,16 @@ priv fn read_capped(path: U8[], cap: Sz, arena: Arena$@): U8$[]? //<
 // Starts one job; returns 0 on failure (the caller turns that into `Spawn_error.spawn_failed`).
 #cfg(!freestanding)
 priv fn start_job(job: Job, index: Sz, work_dir: U8[], arena: Arena$@): I64
-    return start(job.argv, job.cwd, stdio_group, job_path(work_dir, index, "out", arena),
+    return start(job.argv, job.cwd, STDIO_GROUP, job_path(work_dir, index, "out", arena),
         job_path(work_dir, index, "err", arena))
 
-priv const reap_pause_max_ms: I32 = 10 //< the longest pause between two looks at a running job
+priv const REAP_PAUSE_MAX_MS: I32 = 10 //< the longest pause between two looks at a running job
     //<
     //< **Short beside a job's own run**, so a slot stands idle at most this long after its job
     //< ends. The pauses start at 1 ms and double up to it, so a long job costs a look every 10 ms.
 
 priv fn next_pause(pause: I32): I32 //< the pause doubled, up to reap_pause_max_ms
-    return pause * 2 if pause * 2 < reap_pause_max_ms else reap_pause_max_ms
+    return pause * 2 if pause * 2 < REAP_PAUSE_MAX_MS else REAP_PAUSE_MAX_MS
 
 // Waits for a started child until its deadline: its exit code, or none once the deadline passed,
 // the child then killed.
@@ -457,7 +457,7 @@ pub fn spawn_feed( //< runs one child with the given bytes on its standard input
     input: U8[], //< what the child reads on its standard input
     idle_ms: I32, //< how long the child can go without taking any of it
 ): I32!Feed_error //< the exit code, as `Run_result.exit_code`'s, once it has taken all of `input`
-    handle: = start(argv, cwd, stdio_in, "", "")
+    handle: = start(argv, cwd, STDIO_IN, "", "")
     if handle == 0
         throw .spawn_failed
     // Caution: **Stop a child that did not take it all, rather than wait for it.** One that stopped
@@ -513,7 +513,7 @@ pub fn spawn_redirect( //< starts a child without waiting, with its outputs goin
     out_path: U8[], //< the file standard output is written to
     err_path: U8[], //< the file standard error is written to
 ): Child!Spawn_error //< the running child, to wait on; fails if it cannot start
-    handle: = start(argv, cwd, stdio_no_window, out_path, err_path)
+    handle: = start(argv, cwd, STDIO_NO_WINDOW, out_path, err_path)
     if handle == 0
         throw .spawn_failed
     return Child::{ .handle = handle }
@@ -574,7 +574,7 @@ pub fn spawn_limited( //< starts a child that writes where the caller does, with
     cwd: U8[], //< the working directory; empty inherits the caller's
     timeout_ms: I32, //< how long it can run, from now, before it is stopped with all it started
 ): Limited_child!Spawn_error //< the running child, to wait on; fails if it cannot start
-    handle: = start(argv, cwd, stdio_in | stdio_group, "", "")
+    handle: = start(argv, cwd, STDIO_IN | STDIO_GROUP, "", "")
     if handle == 0
         throw .spawn_failed
     kspl_proc_close_stdin(handle)
@@ -618,7 +618,7 @@ pub fn spawn_piped( //< starts a child for two-way communication over pipes
     argv: U8[][], //< the executable and its arguments
     cwd: U8[], //< the working directory; empty inherits the caller's
 ): Piped_child!Spawn_error //< the running child and its three pipes; fails if it cannot start
-    handle: = start(argv, cwd, stdio_in | stdio_out | stdio_err, "", "")
+    handle: = start(argv, cwd, STDIO_IN | STDIO_OUT | STDIO_ERR, "", "")
     if handle == 0
         throw .spawn_failed
     return Piped_child::{ .handle = handle }

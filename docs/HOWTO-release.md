@@ -21,7 +21,7 @@ Caution: **Pushing the tag starts the workflow.** The workflow builds on three p
 
 3. **Run CI on that commit, with every job ticked.** From the Actions tab, open CI, press "Run workflow" on `main` while its head is the commit you will tag, and leave all three jobs ticked. The release refuses a commit that no `ci.yml` run passed on with every job (step 7), and CI's weekly round has not always run on it. The run spends the account's minutes, macOS's most ("How CI runs" in [`SPEC-gates.md`](SPEC-gates.md)).
 4. **Pick the version.** The tag's name (`v0.1.5` and so on) is the only version: it goes into the files' names, and nothing in the source holds it. The extensions' own `package.json` keep `"version": "0.1.0"` whatever the tag; nothing checks it.
-5. **What the zip carries is listed in two places that change together**: the packing steps of `release.yml` and `released` in `tests/support/conventions_notice.kspl`. The zip's `README.md` is `tools/release-assets/README.md`, and each of its code blocks must stand whole in [`HOWTO-set-up-a-project.md`](HOWTO-set-up-a-project.md) or the root [`README.md`](../README.md); `make test-conventions` checks both.
+5. **What the zip carries is listed in two places that change together**: the packing steps of `release.yml` and `RELEASED` in `tests/support/conventions_notice.kspl`. The zip's `README.md` is `tools/release-assets/README.md`, and each of its code blocks must stand whole in [`HOWTO-set-up-a-project.md`](HOWTO-set-up-a-project.md) or the root [`README.md`](../README.md); `make test-conventions` checks both.
 
 ## The tag
 

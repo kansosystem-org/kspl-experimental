@@ -13,17 +13,17 @@ import "ksos/boards/freenove_4wd_pico/board"
 import "ksos/demo/rp2040/common/console" as con
 import "ksos/drivers/rp2040/adc"
 
-const low_rounds: U32 = 5 //< the battery's minimum must be seen **several rounds in a row**
+const LOW_ROUNDS: U32 = 5 //< the battery's minimum must be seen **several rounds in a row**
     //<
     //< Not one reading: the motors' inrush dips the voltage for an instant on every start.
 
-const absent_mv: U32 = 3000 //< the voltage below which the battery counts as "off" [mV]
+const ABSENT_MV: U32 = 3000 //< the voltage below which the battery counts as "off" [mV]
     //<
     //< **It tells "a person switched it off" from "it dipped under load".** Switched off, the
     //< divider floats to **around 0.07V**. Two lithium cells stay in the 5V range even when
     //< drained.
 
-const back_note: U8[] = "battery back — re-armed, deciding again" //<
+const BACK_NOTE: U8[] = "battery back — re-armed, deciding again" //<
     //< The one line printed when it comes back
     //<
     //< Caution: **Do not copy the string into the caller**, where it would go stale.
@@ -52,7 +52,7 @@ struct Watch //< the watch's state
 priv fn read_mv(): U32 //< the battery's voltage [mV]
     //<
     //< 0 if it cannot be measured.
-    bat: = adc.read_pin_avg(board.battery_pin, board.battery_samples)
+    bat: = adc.read_pin_avg(board.BATTERY_PIN, board.BATTERY_SAMPLES)
     return board.battery_mv(bat.value) if bat.ok else 0
 
 // One per machine, like the battery. **Do not create one in the caller**; only here does the
@@ -71,9 +71,9 @@ impl Watch
             if !r.on_battery
                 return .hold // stops for reasons other than the battery do not recover here
             r.now_mv = mv
-            if mv > 0 && mv < absent_mv
+            if mv > 0 && mv < ABSENT_MV
                 r.saw_absent = true
-            if !r.saw_absent || mv < board.battery_low_mv
+            if !r.saw_absent || mv < board.BATTERY_LOW_MV
                 return .hold
             r.on_battery = false
             r.saw_absent = false
@@ -82,9 +82,9 @@ impl Watch
             r.now_mv = 0
             return .back
         r.last_mv = mv
-        if mv > 0 && mv < board.battery_low_mv
+        if mv > 0 && mv < board.BATTERY_LOW_MV
             r.low_seen += 1
-            if r.low_seen >= low_rounds
+            if r.low_seen >= LOW_ROUNDS
                 r.on_battery = true
                 r.halt_mv = mv
                 return .low

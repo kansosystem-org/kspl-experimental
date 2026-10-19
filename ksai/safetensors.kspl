@@ -46,7 +46,7 @@ priv fn dtype_bytes(name: U8[]): Sz //<
 
 pub struct Safetensors //< a parsed header and weights, borrowed for their arenas' lifetimes
     priv raw_data: U8[]
-    priv header: json.Val
+    priv header: json.Value
     priv data_offset: Sz
 
 impl Safetensors
@@ -77,7 +77,7 @@ impl Safetensors
 
         return Safetensors::{ .raw_data = file_data, .header = metadata.val,
             .data_offset = 8 + header_len }
-    pub fn metadata(r: Self@): json.Val //< the header; its values live in the parsing arena
+    pub fn metadata(r: Self@): json.Value //< the header; its values live in the parsing arena
         return r.header
 
     pub fn get_tensor<|T|>( //< one tensor, borrowing aligned elements or copying misaligned ones
@@ -122,7 +122,7 @@ impl Safetensors
             // Read as I32, `4294967297` became 1, and the file was taken for a shape another reader
             // refuses.
             dim: = shape.get(i).as_int64().unwrap_or(-1)
-            if dim < 0 || U64::dim > U64::tensor.max_tensor_elems
+            if dim < 0 || U64::dim > U64::tensor.MAX_TENSOR_ELEMS
                 throw .invalid_header
             s: = Sz::dim
             if s > 0 && size > avail / s
@@ -132,7 +132,7 @@ impl Safetensors
         // I32's range. It is truncated where it reaches a BLAS FFI as an I32 (see tensor.kspl).
         // So `new`'s cap, tensor.max_tensor_elems, applies here too, and this path cannot bypass
         // it.
-        if size > tensor.max_tensor_elems
+        if size > tensor.MAX_TENSOR_ELEMS
             throw .invalid_header
         // Caution: **Check `data_offsets`' end too.** A size from `shape` alone can read past the
         // declared range while staying inside the file. Then it passes the bounds check and returns

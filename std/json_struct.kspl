@@ -1,25 +1,27 @@
 //< Round-trips a whole struct to and from JSON by walking `std/reflect`'s field table
 //<
 //< **The key names are written nowhere**: a key is the field's own name (the grounds are in
-//< "a table-returning trait" in `../docs/DESIGN-language.md`).
+//< "a table-returning trait" in `../docs/DESIGN-programming-language.md`).
 
 // ==========================================
 // **Kept apart from `std/json`**, which is JSON itself, so a client that never round-trips does
 // not import `std/reflect`.
 // ==========================================
+import "std/checked_int"
 import "std/ds" { List }
-import "std/json" { Json_builder, Val, Obj_builder, Array_builder, Json_error, max_nesting_depth }
+import "std/json" { Json_builder, Value, Object_builder, Array_builder, Json_error,
+    MAX_NESTING_DEPTH }
 import "std/mem" + { Arena }
 import "std/reflect"
 
-priv const list_ptr_off: Sz = offsetof(List<|U8|>, ptr) //< the positions inside a `List<|T|>`
+priv const LIST_PTR_OFF: Sz = offsetof(List<|U8|>, ptr) //< the positions inside a `List<|T|>`
     //<
     //< **They do not depend on T**, so the ones for `U8` serve for all. The check is
     //< `tests/reflect_test.kspl`'s "reflect: a container's ptr position does not depend on the
     //< element's type", and the same for `len` (`make debug`).
-priv const list_len_off: Sz = offsetof(List<|U8|>, len)
-priv const list_cap_off: Sz = offsetof(List<|U8|>, cap)
-priv const list_arena_off: Sz = offsetof(List<|U8|>, arena)
+priv const LIST_LEN_OFF: Sz = offsetof(List<|U8|>, len)
+priv const LIST_CAP_OFF: Sz = offsetof(List<|U8|>, cap)
+priv const LIST_ARENA_OFF: Sz = offsetof(List<|U8|>, arena)
 
 priv fn element_field($f: reflect.Field_info): reflect.Field_info //<
     //< a container's value descriptor
@@ -31,20 +33,21 @@ pub fn from_struct<|T: reflect.Reflectable|>( //< copies a reflectable value int
     //<
     //< `v` is a `T@`: passed by value, the field offsets would point into a temporary.
     //< **A `U64` past the largest `I64` is refused** (`field_type`), not written as a negative
-    //< number: `I64` is the widest integer a `Val` holds.
+    //< number: `I64` is the widest integer a `Value` holds.
     v: T@, //< the value to read; pointed at, not copied
     b: Json_builder$@, //< holds the object being built
-): Val!Json_error //< the object
+): Value!Json_error //< the object
     return obj_of(U8@::v, v.fields(), b, 0)!
 
-priv fn obj_of(base: U8@, tbl: reflect.Field_info[], b: Json_builder$@, depth: Sz): Val!Json_error //<
-    //< Walks one table and builds one object
-    //<
-    //< **Nesting is handled by calling itself**; a nested struct arrives as bytes and a table, not
-    //< as a type.
-    if depth > max_nesting_depth
+priv fn obj_of(base: U8@, tbl: reflect.Field_info[], b: Json_builder$@, depth: Sz):
+    Value!Json_error //<
+        //< Walks one table and builds one object
+        //<
+        //< **Nesting is handled by calling itself**; a nested struct arrives as bytes and a table,
+        //< not as a type.
+    if depth > MAX_NESTING_DEPTH
         throw .too_deep
-    $ob: Obj_builder = b.obj()
+    $ob: Object_builder = b.obj()
     for f in tbl
         $at: = base + f.offset
         $field: = f
@@ -60,7 +63,7 @@ priv fn obj_of(base: U8@, tbl: reflect.Field_info[], b: Json_builder$@, depth: S
         ob = ob.set(f.name, value_of(at, field, b, depth + 1)!)
     return ob.build()
 
-priv fn value_of(at: U8@, f: reflect.Field_info, b: Json_builder$@, depth: Sz): Val!Json_error //<
+priv fn value_of(at: U8@, f: reflect.Field_info, b: Json_builder$@, depth: Sz): Value!Json_error //<
     //< Reads a field or container value through the same descriptor
     switch f.kind
     case .int_field
@@ -84,10 +87,10 @@ priv fn value_of(at: U8@, f: reflect.Field_info, b: Json_builder$@, depth: Sz): 
     case .struct_field
         return obj_of(at, f.nested, b, depth)!
     case .list_field
-        if depth > max_nesting_depth
+        if depth > MAX_NESTING_DEPTH
             throw .too_deep
-        ptr_slot: Void@@ = (Void@@)::(at + list_ptr_off)
-        len_slot: = Sz@::(at + list_len_off)
+        ptr_slot: Void@@ = (Void@@)::(at + LIST_PTR_OFF)
+        len_slot: = Sz@::(at + LIST_LEN_OFF)
         elems: = U8@::ptr_slot$
         $ar: Array_builder = b.arr()
         elem: = element_field(f)
@@ -106,16 +109,16 @@ pub fn into_struct<|T: reflect.Reflectable|>( //< copies a JSON object into a re
     //< A list it stopped in holds the elements up to the refused one, zero where unwritten.
     //< Caution: **Copy the names into `arena`.** The names inside `v` point into the parse's arena.
     //< Freeing that first leaves the written value pointing at freed memory.
-    v: Val, //< the object to read from
+    v: Value, //< the object to read from
     out: T$@, //< the value to write into, field by field
     arena: Arena$@, //< where strings and lists go; null means the heap, freed as above
 ): Void!Json_error
     fill_from(U8$@::out, out.fields(), v, arena, 0)!
 
-priv fn fill_from(base: U8$@, tbl: reflect.Field_info[], v: Val, arena: Arena$@, depth: Sz):
+priv fn fill_from(base: U8$@, tbl: reflect.Field_info[], v: Value, arena: Arena$@, depth: Sz):
     Void!Json_error //<
         //< Walks one table and writes from one object; it calls itself for nesting.
-    if depth > max_nesting_depth
+    if depth > MAX_NESTING_DEPTH
         throw .too_deep
     switch v
     case .obj_val {}
@@ -126,7 +129,7 @@ priv fn fill_from(base: U8$@, tbl: reflect.Field_info[], v: Val, arena: Arena$@,
         $field: = f
         // Only an absent optional becomes `.none`; an explicit null is refused, leaving the tag
         // untouched.
-        $got: = Val.null_val
+        $got: = Value.null_val
         switch v.find(f.name)
         case .some(member)
             got = member
@@ -151,7 +154,7 @@ priv fn fill_from(base: U8$@, tbl: reflect.Field_info[], v: Val, arena: Arena$@,
         default {}
         fill_value(at, field, got, arena, depth + 1)!
 
-priv fn fill_value(at: U8$@, f: reflect.Field_info, got: Val, arena: Arena$@, depth: Sz):
+priv fn fill_value(at: U8$@, f: reflect.Field_info, got: Value, arena: Arena$@, depth: Sz):
     Void!Json_error
     // **Signed and unsigned share one path** (`../std/reflect.kspl`'s `store_int`).
     switch f.kind
@@ -194,26 +197,23 @@ priv fn fill_value(at: U8$@, f: reflect.Field_info, got: Val, arena: Arena$@, de
         case .array_val {}
         default
             throw .field_type(f.name)
-        if depth > max_nesting_depth
+        if depth > MAX_NESTING_DEPTH
             throw .too_deep
         $items: = got.arr_list(arena)
         defer items.free() // only work: the elements are copied into `room`
         count: = items.len
-        // Caution: **Check the product before allocating.** Where `Sz` is 32 bits, a long array of
-        // large elements wraps to a small size, and the writes below run past it with the input's
-        // data.
-        bytes: = I64::count * I64::f.extra.elem_size
-        if I64::(Sz::bytes) != bytes
+        // Check before allocating: a wrapped size would leave less room than the writes need.
+        bytes: = count.checked_mul(f.extra.elem_size) catch
             throw .too_large
-        room: = arena.alloc(Sz::bytes) if count > 0 else null
+        room: = arena.alloc(bytes) if count > 0 else null
         // Caution: **Zero the room, and count an element only once its filling starts.** A refusal
         // leaves the list to the caller's cleanup, which frees each counted element. Counted
         // garbage is freed as a pointer, and an element left out leaks what it had written.
-        mem.zero(room, Sz::bytes)
-        ptr_slot: Void$@$@ = (Void$@$@)::(at + list_ptr_off)
-        len_slot: = Sz$@::(at + list_len_off)
-        cap_slot: = Sz$@::(at + list_cap_off)
-        arena_slot: Arena$@$@ = (Arena$@$@)::(at + list_arena_off)
+        mem.zero(room, bytes)
+        ptr_slot: Void$@$@ = (Void$@$@)::(at + LIST_PTR_OFF)
+        len_slot: = Sz$@::(at + LIST_LEN_OFF)
+        cap_slot: = Sz$@::(at + LIST_CAP_OFF)
+        arena_slot: Arena$@$@ = (Arena$@$@)::(at + LIST_ARENA_OFF)
         ptr_slot$ = room
         len_slot$ = 0
         cap_slot$ = count

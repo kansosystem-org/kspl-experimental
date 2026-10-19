@@ -5,13 +5,13 @@
 import "std/bytes"
 import "std/chars" // `sub` and hex digits
 
-priv const block_size: Sz = 64 // 512bit
-pub const digest_size: Sz = 32 //< the digest is always this many bytes (256 bits)
-priv const length_at: Sz = block_size - 8 // the last block's tail holds the message's bit length
+priv const BLOCK_SIZE: Sz = 64 // 512bit
+pub const DIGEST_SIZE: Sz = 32 //< the digest is always this many bytes (256 bits)
+priv const LENGTH_AT: Sz = BLOCK_SIZE - 8 // the last block's tail holds the message's bit length
 
 pub struct Sha256 //< a running SHA-256, fed in pieces and closed at the end
     priv h: U32[8]
-    priv buf: U8[block_size] //< holds the trailing bytes that do not yet fill a block
+    priv buf: U8[BLOCK_SIZE] //< holds the trailing bytes that do not yet fill a block
     priv buf_len: Sz //< how many bytes in buf are valid (0..63)
     priv total_len: U64 //< every byte update() has taken so far (for the padding's length field)
 
@@ -37,7 +37,7 @@ priv fn small_sigma1(x: U32): U32
 // table for every 64-byte block**.
 // **Do not put a constant table inside a function elsewhere either.** This code runs very often
 // (ksplc keys its AST cache with it).
-priv const round_k: U32[64] = ::{ 0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b,
+priv const ROUND_K: U32[64] = ::{ 0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b,
     0x59f111f1, 0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74,
     0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
     0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3,
@@ -68,7 +68,7 @@ impl Sha256
 
         for i in Range.asc(64)
             ch: = (e & f) ^ (~e & g)
-            temp1: = hh + big_sigma1(e) + ch + round_k[i] + w[i]
+            temp1: = hh + big_sigma1(e) + ch + ROUND_K[i] + w[i]
             maj: = (a & b) ^ (a & c) ^ (b & c)
             temp2: = big_sigma0(a) + maj
             hh = g
@@ -103,22 +103,22 @@ impl Sha256
 
         // 1. If bytes are left in the buffer from the last call, fill it first
         if r.buf_len > 0
-            need: = block_size - r.buf_len
+            need: = BLOCK_SIZE - r.buf_len
             take: = data.len if data.len < need else need
             for i in Range.asc(take)
                 r.buf[r.buf_len + i] = data[i]
             r.buf_len += take
             pos += take
-            if r.buf_len == block_size
+            if r.buf_len == BLOCK_SIZE
                 r.compress(U8$[]::r.buf)
                 r.buf_len = 0
             else
                 return // there is not yet a whole block
 
         // 2. Compress whole 64-byte blocks directly, without copying them into the buffer
-        for pos + block_size <= data.len
-            r.compress(data.sub(pos, block_size))
-            pos += block_size
+        for pos + BLOCK_SIZE <= data.len
+            r.compress(data.sub(pos, BLOCK_SIZE))
+            pos += BLOCK_SIZE
 
         // 3. Copy the rest into the buffer (the next update() or finalize() handles it)
         for pos < data.len
@@ -126,40 +126,40 @@ impl Sha256
             r.buf_len += 1
             pos += 1
 
-    pub fn finalize(r: Self$@): U8[digest_size] //< closes the hash and returns the digest
+    pub fn finalize(r: Self$@): U8[DIGEST_SIZE] //< closes the hash and returns the digest
         bit_len: = r.total_len * 8U64
 
         r.buf[r.buf_len] = 0x80U8
         r.buf_len += 1
 
         // If no room is left for the 8-byte length field, zero-fill and compress this block first
-        if r.buf_len > length_at
-            for r.buf_len < block_size
+        if r.buf_len > LENGTH_AT
+            for r.buf_len < BLOCK_SIZE
                 r.buf[r.buf_len] = 0U8
                 r.buf_len += 1
             r.compress(U8$[]::r.buf)
             r.buf_len = 0
-        for r.buf_len < length_at
+        for r.buf_len < LENGTH_AT
             r.buf[r.buf_len] = 0U8
             r.buf_len += 1
 
         // Write the whole input's length in bits into the last 8 bytes, big endian
         buf_slice: = U8$[]::r.buf
-        buf_slice.put_u64_be(length_at, bit_len)
+        buf_slice.put_u64_be(LENGTH_AT, bit_len)
         r.compress(U8$[]::r.buf)
 
-        out: U8[digest_size] = ::{}
+        out: U8[DIGEST_SIZE] = ::{}
         out_slice: = U8$[]::out
         for i in Range.asc(8)
             out_slice.put_u32_be(i * 4, r.h[i])
         return out
 
-pub fn hash(data: U8[]): U8[digest_size] //< the digest of all of `data`, in one call
+pub fn hash(data: U8[]): U8[DIGEST_SIZE] //< the digest of all of `data`, in one call
     $hasher: = Sha256.new()
     hasher.update(data)
     return hasher.finalize()
 
-pub const hex_len: Sz = 64 //< the hex text is always this many characters.
+pub const HEX_LEN: Sz = 64 //< the hex text is always this many characters.
     //<
     //< The caller provides an array of this size.
 
@@ -168,11 +168,11 @@ pub fn write_hex( //< writes the digest as lowercase hex, without allocating
     //< Use it for log output and for comparisons in a test.
     //< Caution: **Do not take a `Writer`.** Importing `io` would make one digest pay for the whole
     //< string and IO library, many times the size of this file.
-    digest: U8[digest_size], //< what `finalize` or `hash` returned
-    out: U8$[], //< the destination, whose leading `hex_len` bytes are written
+    digest: U8[DIGEST_SIZE], //< what `finalize` or `hash` returned
+    out: U8$[], //< the destination, whose leading `HEX_LEN` bytes are written
 )
-    assert(out.len >= hex_len, "sha256.write_hex: out is shorter than hex_len")
-    for i in Range.asc(digest_size)
+    assert(out.len >= HEX_LEN, "sha256.write_hex: out is shorter than hex_len")
+    for i in Range.asc(DIGEST_SIZE)
         byte: = digest[i]
         out[i * 2] = chars.hex_digit(byte >> 4U8, 'a')
         out[i * 2 + 1] = chars.hex_digit(byte & 0x0fU8, 'a')

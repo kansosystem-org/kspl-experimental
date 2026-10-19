@@ -15,22 +15,22 @@ import "std/str"
 import "std/sys"
 
 // A walk's memo holds, per type, one of these; a type it holds nothing for is not decided yet.
-priv const memo_no: I32 = 1 //< decided: it does not
-priv const memo_yes: I32 = 2 //< decided: it does
+priv const MEMO_NO: I32 = 1 //< decided: it does not
+priv const MEMO_YES: I32 = 2 //< decided: it does
 
-priv const max_move_only_depth: Sz = 1000 //<
+priv const MAX_MOVE_ONLY_DEPTH: Sz = 1000 //<
     //< The safety limit on the recursion depth of is_move_only's structural derivation
     //<
     //< Memoization collapses repeat visits, so the depth is the chain of *distinct* embedded types
     //< (struct S1{f:S2}, struct S2{f:S3}, ...). No node is available for a diagnostic, so, like
     //< max_mangle_depth, it stops with io.err() + sys.exit(1).
 
-priv const arc_trait_fqn: U8[] = "std.lang.Ref_counted" //<
+priv const ARC_TRAIT_FQN: U8[] = "std.lang.Ref_counted" //<
     //< The FQNs of the traits the compiler knows
     //<
     //< Each means this declaration alone, not a same-named other (see is_arc_type).
-priv const move_only_trait_fqn: U8[] = "std.lang.Move_only"
-priv const owned_trait_fqn: U8[] = "std.lang.Owned"
+priv const MOVE_ONLY_TRAIT_FQN: U8[] = "std.lang.Move_only"
+priv const OWNED_TRAIT_FQN: U8[] = "std.lang.Owned"
 
 fn shadowed_known_trait(trait_fqn: U8[]): U8[] //<
     //< The known trait (listed above) that trait_fqn only shares a name with, or empty
@@ -38,7 +38,7 @@ fn shadowed_known_trait(trait_fqn: U8[]): U8[] //<
     //< Such a trait is a different declaration with the same name.
     //< Returns empty if there are none. **Only these three are looked at**: a same-named operator
     //< trait errors on its own, but these three, matched by FQN, would silently stop working.
-    known: U8[][3] = ::{ arc_trait_fqn, move_only_trait_fqn, owned_trait_fqn }
+    known: U8[][3] = ::{ ARC_TRAIT_FQN, MOVE_ONLY_TRAIT_FQN, OWNED_TRAIT_FQN }
     own_simple: = trait_fqn.fqn_last()
     for k in known
         if trait_fqn.equals(k)
@@ -67,7 +67,7 @@ impl sema_type_env.Env
         default {}
         if !is_struct
             return false
-        return r.has_implemented_trait_fqn(bare, arc_trait_fqn)
+        return r.has_implemented_trait_fqn(bare, ARC_TRAIT_FQN)
 
     priv fn owned_parts(r: Self$@, real_id: I32, out: List<|I32|>$@) //<
         //< The types of the positions a value of real_id owns, one level down
@@ -122,9 +122,9 @@ impl sema_type_env.Env
         // The immutable qualifier is stripped for the same reason as in is_arc_type.
         real_id: = r.get_clean_real_type(type_id)
         cached: = memo.get(real_id).unwrap_or(0)
-        if cached == memo_no
+        if cached == MEMO_NO
             return false
-        if cached == memo_yes
+        if cached == MEMO_YES
             return true
         for seen_id in resolving
             if seen_id == real_id
@@ -139,7 +139,7 @@ impl sema_type_env.Env
                 found = true
                 break
         resolving.len -= 1
-        memo.set(real_id, memo_yes if found else memo_no)
+        memo.set(real_id, MEMO_YES if found else MEMO_NO)
         return found
 
     priv fn owns_arc_content_impl(r: Self$@, type_id: I32, memo: Map<|I32, I32|>$@,
@@ -160,7 +160,7 @@ impl sema_type_env.Env
         //< True if there is an explicit impl for `std.lang.Owned`. It is **not derived
         //< structurally**, as Move_only is: an owned part brings no duty to free it (`Sema_ctx`
         //< holds a `Str_builder`).
-        return r.has_implemented_trait_fqn(r.strip_ptr_full(target_id), owned_trait_fqn)
+        return r.has_implemented_trait_fqn(r.strip_ptr_full(target_id), OWNED_TRAIT_FQN)
 
     fn is_move_only(r: Self$@, target_id: I32): Bool //<
         //< Whether target_id is Move_only (implicit copying forbidden)
@@ -178,24 +178,24 @@ impl sema_type_env.Env
             //< Whether target_id is Move_only by what it owns, where it declares no impl
             //<
             //< The positions walked are `owned_parts`' ("Worked example: forbidding copies with
-            //< `Move_only`" in docs/SPEC-language.md). **Keep the memo and break cycles with
-            //< resolving**, as type_has_arc_content_impl does.
+            //< `Move_only`" in docs/SPEC-programming-language.md). **Keep the memo and break cycles
+            //< with resolving**, as type_has_arc_content_impl does.
         cached: = memo.get(target_id).unwrap_or(0)
-        if cached == memo_no
+        if cached == MEMO_NO
             return false
-        if cached == memo_yes
+        if cached == MEMO_YES
             return true
         // A pointer or a slice is a borrowed view; copying it adds no release duty.
         if r.is_pointer(target_id) || r.is_slice(target_id)
-            memo.set(target_id, memo_no)
+            memo.set(target_id, MEMO_NO)
             return false
-        if r.has_implemented_trait_fqn(target_id, move_only_trait_fqn)
-            memo.set(target_id, memo_yes)
+        if r.has_implemented_trait_fqn(target_id, MOVE_ONLY_TRAIT_FQN)
+            memo.set(target_id, MEMO_YES)
             return true
         for seen_id in resolving
             if seen_id == target_id
                 return false
-        if depth >= max_move_only_depth
+        if depth >= MAX_MOVE_ONLY_DEPTH
             io.err()
                 .s("\nfatal: value nesting too deep while deriving a structural marker. A recursive \
                     chain of embedded values may be unbounded.\n")
@@ -211,5 +211,5 @@ impl sema_type_env.Env
                 derived = true
                 break
         resolving.len -= 1
-        memo.set(target_id, memo_yes if derived else memo_no)
+        memo.set(target_id, MEMO_YES if derived else MEMO_NO)
         return derived

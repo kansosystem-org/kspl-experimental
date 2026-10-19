@@ -13,18 +13,18 @@ import "std/subproc"
 import "std/sys"
 import "std/verdict"
 
-priv const usage: U8[] =
+priv const USAGE: U8[] =
     "usage: ksplc run tests/examples_main.kspl <llama_engine> <qwen_infer> <fim_coder> <work_dir>" //<
         //< the arguments, in that order (`make test` in `ksai/Makefile` passes them)
 
-priv const llama_verdict: U8[] = "RESULT: ALL PASS" //< what llama_engine says when training works
+priv const LLAMA_VERDICT: U8[] = "RESULT: ALL PASS" //< what llama_engine says when training works
     //<
     //< Caution: **Keep it in step with `ksai/examples/llama_engine/main.kspl`**, whose line
     //< `make run`'s gate reads too.
 
-priv const llama_wait_ms: I32 = 600000 //< the cap on one run of llama_engine (it trains)
+priv const LLAMA_WAIT_MS: I32 = 600000 //< the cap on one run of llama_engine (it trains)
 
-priv const llama_said_cap: Sz = 1024 * 1024 //< how much of what it says is kept
+priv const LLAMA_SAID_CAP: Sz = 1024 * 1024 //< how much of what it says is kept
 
 fn main(): I32
     io.set_line_buffered()
@@ -32,7 +32,7 @@ fn main(): I32
     defer arena.free()
     argv: = sys.args()
     if argv.len != 5
-        panic(arena.dup_str(usage))
+        panic(arena.dup_str(USAGE))
     // The children start in `work`, so the programs' paths are made absolute first.
     llama: = fs.absolute(argv.get(1), arena) catch panic("cannot read the working directory")
     qwen_exe: = arena.dup_str(argv.get(2))
@@ -53,12 +53,12 @@ priv fn test_llama_trains(exe: U8[], work: U8[], arena: Arena$@) //<
     fs.mkdir_all(work) catch
         panic(U8$[]::arena.text().s("cannot create the working directory: \{work\}").take())
     r: =
-        subproc.run_capture(U8[][]::{ exe }, work, llama_wait_ms, llama_said_cap, arena)
+        subproc.run_capture(U8[][]::{ exe }, work, LLAMA_WAIT_MS, LLAMA_SAID_CAP, arena)
         catch panic("llama_engine must start")
     said: = arena.text().s(r.stdout_data).s(r.stderr_data).take()
     $held: = false
     for line in said.lines(arena)
-        if line.starts_with(llama_verdict)
+        if line.starts_with(LLAMA_VERDICT)
             held = true
     assert(r.exited_with(0) && held,
         U8$[]::arena.text()
@@ -72,8 +72,8 @@ priv fn test_llama_trains(exe: U8[], work: U8[], arena: Arena$@) //<
 // (train, write, read, complete, one answer line per hole) and that threads change only the time.
 // Answer quality is not tested here; the compiler's evaluation outside this package measures it.
 // ==========================================
-priv const fim_wait_ms: I32 = 600000 //< the cap on one run of fim_coder
-priv const said_cap: Sz = 1024 * 1024 //< how much of what it says is kept
+priv const FIM_WAIT_MS: I32 = 600000 //< the cap on one run of fim_coder
+priv const SAID_CAP: Sz = 1024 * 1024 //< how much of what it says is kept
 
 priv fn byte_vocab(arena: Arena$@): U8[] //< a vocabulary of the 256 bytes alone
     //<
@@ -87,7 +87,7 @@ priv fn byte_vocab(arena: Arena$@): U8[] //< a vocabulary of the 256 bytes alone
 
 priv fn fim_run(argv: U8[][], work: U8[], arena: Arena$@): U8[] //<
     //< one run; its output if it failed
-    r: = subproc.run_capture(argv, work, fim_wait_ms, said_cap, arena) catch
+    r: = subproc.run_capture(argv, work, FIM_WAIT_MS, SAID_CAP, arena) catch
         return "fim_coder could not be started"
     if !r.exited_with(0)
         return arena.text().s("exit \{r.exit_code.unwrap_or(-1)\}:\n").s(r.stdout_data)

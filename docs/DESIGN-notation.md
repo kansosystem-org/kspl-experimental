@@ -1,6 +1,6 @@
 # The rationale behind KSPL's notation
 
-**This document says why KSPL source is written the way it is.** It says why blocks are written by indentation in `.kspl` files. It says how names, keywords, line ends, long strings and documentation comments are written. The rest of the language's rationale is in [`DESIGN-language.md`](DESIGN-language.md): its symbols, types, traits, function values, ownership, concurrency, visibility and the boundary with C. What the language *is* belongs to the specification, [`SPEC-language.md`](SPEC-language.md).
+**This document says why KSPL source is written the way it is.** It says why blocks are written by indentation in `.kspl` files. It says how names, keywords, line ends, long strings and documentation comments are written. The rest of the language's rationale is in [`DESIGN-programming-language.md`](DESIGN-programming-language.md): its symbols, types, traits, function values, ownership, concurrency, visibility and the boundary with C. What the language *is* belongs to the specification, [`SPEC-programming-language.md`](SPEC-programming-language.md).
 
 ## The indentation notation (`.kspl`)
 
@@ -13,7 +13,7 @@ priv fn sign(n: I32): I32
     return 1
 ```
 
-The rules are "2.5 Blocks and statement ends" in [`SPEC-language.md`](SPEC-language.md). This chapter holds why there is one notation and why its rules are what they are. A reader in the compiler ([`../ksplc/parse/layout.kspl`](../ksplc/parse/layout.kspl)) rewrites indentation into braces before parsing ("Only one stage rewrites, and only before the parser"). **The braces are the parser's representation, not a second way to write.** No command takes a `.ksplb` file. (That name is kept for brace text, which only the parser's own tests write.) The formatter writes only `.kspl`, and an `import` names only `.kspl`. The grammar holds, in the names of its rules, which symbols that reader replaces ("What disappears, and what does not").
+The rules are "2.5 Blocks and statement ends" in [`SPEC-programming-language.md`](SPEC-programming-language.md). This chapter holds why there is one notation and why its rules are what they are. A reader in the compiler ([`../ksplc/parse/layout.kspl`](../ksplc/parse/layout.kspl)) rewrites indentation into braces before parsing ("Only one stage rewrites, and only before the parser"). **The braces are the parser's representation, not a second way to write.** No command takes a `.ksplb` file. (That name is kept for brace text, which only the parser's own tests write.) The formatter writes only `.kspl`, and an `import` names only `.kspl`. The grammar holds, in the names of its rules, which symbols that reader replaces ("What disappears, and what does not").
 
 **One notation, through the decision order of the chapter "One notation per purpose" in [`DESIGN-principles.md`](DESIGN-principles.md):**
 
@@ -33,13 +33,13 @@ The rules are "2.5 Blocks and statement ends" in [`SPEC-language.md`](SPEC-langu
 
 ### What disappears, and what does not
 
-**Only the braces around a block and the `;` that ends a statement (blocks and terminators) disappear.** Every other brace or `;` (in a struct literal, for example) stays as it is written. The table of which is which is in "2.5 Blocks and statement ends" of [`SPEC-language.md`](SPEC-language.md).
+**Only the braces around a block and the `;` that ends a statement (blocks and terminators) disappear.** Every other brace or `;` (in a struct literal, for example) stays as it is written. The table of which is which is in "2.5 Blocks and statement ends" of [`SPEC-programming-language.md`](SPEC-programming-language.md).
 
 Note: **The grammar names them too.** A block's opening and closing braces and the terminating `;` are the rules `Block_open` / `Block_close` / `Stmt_end`, listed in the header of [`../ksplc/kspl.kspeg`](../ksplc/kspl.kspeg). How that list is kept in step with the tree is "Keeping the grammar and the AST node kinds in step" in [`../ksplc/docs/DESIGN-compiler.md`](../ksplc/docs/DESIGN-compiler.md).
 
 **No mark (`:`) is placed on a block's heading.** Python opens a block with `:`. KSPL's `:` already serves type annotations and labels, and this would be a third meaning. Instead, a wrapped line and a block are told apart by how they are written. The three cases in which a line continues are in the specification's section above. Python's rule "a line wraps only inside brackets" is not enough, because the formatter also wraps outside brackets (it starts the line after `b.s(…)` with `.s(…)`).
 
-**`catch` is the one word that both continues a line and opens a block. It is the one form the symbols alone do not decide: the column decides.** So a line is never broken after `catch`. A break there would put the two readings at the same column. The handler would be read as the block's first statement, and the value it stood for would be lost. `ksplc fmt` refuses that break and runs past the width instead ("The formatting settings (`--style`)" in [`../ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md)). `ksplc/tests/notation/tour.kspl` carries the shape, so the refusal cannot be dropped unnoticed.
+**`catch` is the one word that both continues a line and opens a block. It is the one form the symbols alone do not decide: the column decides.** So a line is never broken after `catch`. A break there would put the two readings at the same column. The handler would be read as the block's first statement, and the value it stood for would be lost. `ksplc fmt` refuses that break and runs past the width instead ("The formatting settings (`--style`)" in [`../ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md)). `ksplc/tests/notation/tutorial.kspl` carries the shape, so the refusal cannot be dropped unnoticed.
 
 ### How a column is read
 
@@ -61,7 +61,7 @@ By the heading's column alone, the line at 4 would join the block. A person sees
 * `ksplc fmt` rebuilds the columns, so no formatted source meets it.
 * The reader returns what it finds as a value. The compiler prints it once, with every other diagnostic. How is "Every place a source enters reads it the same way" in [`../ksplc/docs/DESIGN-parse.md`](../ksplc/docs/DESIGN-parse.md).
 
-**Only a space counts as a column** (the rule is "2.5 Blocks and statement ends" in [`SPEC-language.md`](SPEC-language.md)). Do not make a tab count. Its width is an editor setting, so counting it would allow a line that lines up on screen while the columns differ. The tab gets no diagnostic code: a line pushed out to column 0 gets a syntax error first, so a code would never fire. The rewriting stage does find it, and `ksplc/tests/layout_test.kspl` pins that.
+**Only a space counts as a column** (the rule is "2.5 Blocks and statement ends" in [`SPEC-programming-language.md`](SPEC-programming-language.md)). Do not make a tab count. Its width is an editor setting, so counting it would allow a line that lines up on screen while the columns differ. The tab gets no diagnostic code: a line pushed out to column 0 gets a syntax error first, so a code would never fire. The rewriting stage does find it, and `ksplc/tests/layout_test.kspl` pins that.
 
 Note: **Japanese input most easily slips in the ideographic space** (U+3000, a full-width space). The syntax error it causes says nothing about the cause, since on screen the line looks correctly indented. So `odd_indent_name` in `ksplc/parse/syntax_msg.kspl` adds a Note naming the character, as Python names it in `invalid non-printable character U+00A0`. It is a Note rather than a lint because the syntax error comes first, and the program never reaches sema.
 
@@ -83,7 +83,7 @@ A newline inside brackets never starts a level, so parentheses carry either valu
 
 ### The forms whose notation is fixed
 
-The rules for these shapes are "2.5 Blocks and statement ends" in [`SPEC-language.md`](SPEC-language.md); this section holds why.
+The rules for these shapes are "2.5 Blocks and statement ends" in [`SPEC-programming-language.md`](SPEC-programming-language.md); this section holds why.
 
 **Naming a bare block is better than `_` where it can be named** (below). The refusal of a `break` to `_` is pinned by the case `break_to_no_name_label` in `ksplc/tests/negative/control.kspl`.
 
@@ -156,7 +156,7 @@ flowchart LR
 
 **The rewriting runs exactly once at each place a source enters**: from the disk and from the editor. The compiler holds that ("Every place a source enters reads it the same way" in [`../ksplc/docs/DESIGN-parse.md`](../ksplc/docs/DESIGN-parse.md)).
 
-**An import names a `.kspl` file, and a logical name drops that extension** (the rule is "9.1 import syntax and path resolution" in [`SPEC-language.md`](SPEC-language.md)). Wherever a logical name is written out again (a diagnostic, a `#line`, the language server's document URI), `.kspl` is added back. Dropping and adding back read one constant, `source_ext` in [`../ksplc/base/core.kspl`](../ksplc/base/core.kspl), so no name is written out that points at a missing file.
+**An import names a `.kspl` file, and a logical name drops that extension** (the rule is "9.1 import syntax and path resolution" in [`SPEC-programming-language.md`](SPEC-programming-language.md)). Wherever a logical name is written out again (a diagnostic, a `#line`, the language server's document URI), `.kspl` is added back. Dropping and adding back read one constant, `SOURCE_EXT` in [`../ksplc/base/core.kspl`](../ksplc/base/core.kspl), so no name is written out that points at a missing file.
 
 Note: `make test-notation` watches that a file saved with CRLF is the same program as with LF. It also watches that squiggles, hovers and jump-to-definition point at the lines as written.
 
@@ -178,11 +178,11 @@ Write `io.out()` when `out` alone would be unclear, and plain `Arena` when the n
 
 A prefix (the `io.` of `io.out()`) is **part of the name, showing at the use site**. Where the name alone says what the thing is, the prefix says it twice. Where it does not, fix the name, not the prefix.
 
-**A name can enter the unprefixed space (selective import, `import "…" { Name }`; docs/SPEC-language.md §9) only if all three hold:**
+**A name can enter the unprefixed space (selective import, `import "…" { Name }`; docs/SPEC-programming-language.md §9) only if all three hold:**
 
 | # | Condition | Passes | Fails |
 | :-- | :-- | :-- | :-- |
-| 1 | **Its spelling says what the thing is** | `Arena`, `Tensor`, `Option`, `Str_builder` | `Node`, `Val`, `Entry`, `Config`, `run`, `init`, `out` |
+| 1 | **Its spelling says what the thing is** | `Arena`, `Tensor`, `Option`, `Str_builder` | `Node`, `Value`, `Entry`, `Config`, `run`, `init`, `out` |
 | 2 | **Its spelling is unique across the program** | — | A colliding name cannot enter, since a collision is always a compile error |
 | 3 | **Its origin carries no design information** | A name from `ksplc/base/` or `std/`: where it comes from tells the reader nothing | A reference crossing layers (`ksplc/`'s `parse` / `sema` / `lower` / `gen`). Such a name enters with the layer in the name (`Sema_ctx`, `Genc_ctx`) |
 
@@ -198,19 +198,19 @@ A prefix (the `io.` of `io.out()`) is **part of the name, showing at the use sit
 
 ### The spelling of reserved words is taken from C
 
-**Where a keyword does C's job, it uses C's word (`switch`, `for`, `typedef`), even when it behaves a little differently**: it takes C's spelling, not C's behavior. `switch` does not fall through (run on into the next case), and `for` covers C's `for` / `while` / `do-while` and sequence iteration in one word (`docs/SPEC-language.md`, 7.1 and 7.2). There are two reasons.
+**Where a keyword does C's job, it uses C's word (`switch`, `for`, `typedef`), even when it behaves a little differently**: it takes C's spelling, not C's behavior. `switch` does not fall through (run on into the next case), and `for` covers C's `for` / `while` / `do-while` and sequence iteration in one word (`docs/SPEC-programming-language.md`, 7.1 and 7.2). There are two reasons.
 
-1. **The names left to a writer do not shrink.** In KSPL, C's reserved words (`int`, `goto` and so on) are usable as identifiers (`docs/SPEC-language.md`, 2.2). A keyword of KSPL's own would take one more word out of the names a writer can use. Taking C's spelling takes only words that are already reserved in C. `match` and `loop` are common nouns, needed exactly where one names a match's result, or a loop.
+1. **The names left to a writer do not shrink.** In KSPL, C's reserved words (`int`, `goto` and so on) are usable as identifiers (`docs/SPEC-programming-language.md`, 2.2). A keyword of KSPL's own would take one more word out of the names a writer can use. Taking C's spelling takes only words that are already reserved in C. `match` and `loop` are common nouns, needed exactly where one names a match's result, or a loop.
 2. **The reader does not look it up again.** A reader of C reads `switch` and `for` on sight; a new spelling for the same meaning must be looked up once.
 
-**Being one word and being spelled `for` are separate decisions.** The first follows from "every repetition serves the same purpose" (`docs/SPEC-language.md`, 7.2), with Go's single `for` as the precedent. The second is this section's rule.
+**Being one word and being spelled `for` are separate decisions.** The first follows from "every repetition serves the same purpose" (`docs/SPEC-programming-language.md`, 7.2), with Go's single `for` as the precedent. The second is this section's rule.
 
-**One word costs the checks nothing.** Whether a loop ever ends is read from its shape, not from a keyword: a `for` with no condition that no `break` leaves never ends. So a function can end on it, and what follows it is unreachable (`docs/SPEC-language.md`, 7.2). A separate word for the endless loop would give the checks nothing the shape does not. But the writer would have one more word to choose between. Where each `break` goes is settled once, when the compiler resolves the `break`. The missing-return check and the unreachable-code warning read that one judgement (`is_endless_loop` in `ksplc/base/ast_ext.kspl`), so they cannot disagree (Principle 6).
+**One word costs the checks nothing.** Whether a loop ever ends is read from its shape, not from a keyword: a `for` with no condition that no `break` leaves never ends. So a function can end on it, and what follows it is unreachable (`docs/SPEC-programming-language.md`, 7.2). A separate word for the endless loop would give the checks nothing the shape does not. But the writer would have one more word to choose between. Where each `break` goes is settled once, when the compiler resolves the `break`. The missing-return check and the unreachable-code warning read that one judgement (`is_endless_loop` in `ksplc/base/ast_ext.kspl`), so they cannot disagree (Principle 6).
 
 * **A constant `true` is a condition.** Reading `for true` as endless would make the check fold constants, and give one meaning two spellings. `for true` gets a warning instead, whose fix is the bare `for`.
 * **The shape spares the writer a dead `return`.** If the loop were read as one that can end, a `return` that never runs would be demanded after it. Nothing would warn that it never runs, and loops would be bent into a flag and a `break` to avoid it.
 
-**Another name for a type is `typedef`, name first** (`typedef Id = I32`; `docs/SPEC-language.md`, 3.5). The job is exactly C's: a KSPL typedef is only another name (["A typedef is only another name"](DESIGN-language.md#a-typedef-is-only-another-name)). C's `typedef` likewise "does not introduce a new type, only a synonym" (C11, 6.7.8). The C backend writes one for each. The order is not C's:
+**Another name for a type is `typedef`, name first** (`typedef Id = I32`; `docs/SPEC-programming-language.md`, 3.5). The job is exactly C's: a KSPL typedef is only another name (["A typedef is only another name"](DESIGN-programming-language.md#a-typedef-is-only-another-name)). C's `typedef` likewise "does not introduce a new type, only a synonym" (C11, 6.7.8). The C backend writes one for each. The order is not C's:
 
 | | Where the new name stands | Example |
 | :-- | :-- | :-- |
@@ -219,9 +219,33 @@ A prefix (the `io.` of `io.out()`) is **part of the name, showing at the use sit
 
 KSPL writes a type whole (`fn(x: I32): I32`), so C's order would only put the name behind it. Reason 1 holds as well: `alias` and `type` stay free for a writer, where Rust's `type` keyword costs every field called `type`.
 
-**What is given up**: `typedef` reads as "define a type" and defines none, which C's standard itself must say. A reader from C takes it as meant. One who expects a new type finds the one-field struct in Appendix A of `docs/SPEC-language.md`. A C writer's `typedef I32 Id;`, and the other languages' spellings of an alias, fail with a note writing the line in KSPL's order (`append_typedef_spelling_hint` in `ksplc/parse/syntax_msg.kspl`).
+**What is given up**: `typedef` reads as "define a type" and defines none, which C's standard itself must say. A reader from C takes it as meant. One who expects a new type finds the one-field struct in Appendix A of `docs/SPEC-programming-language.md`. A C writer's `typedef I32 Id;`, and the other languages' spellings of an alias, fail with a note writing the line in KSPL's order (`append_typedef_spelling_hint` in `ksplc/parse/syntax_msg.kspl`).
 
-Caution: **Where the spelling is the same but the behavior differs, the specification must say so by name.** The same spelling invites the reading "presumably the same", and silence lets that misreading through (`docs/SPEC-language.md`, 7.1 names that `switch` does not fall through).
+Caution: **Where the spelling is the same but the behavior differs, the specification must say so by name.** The same spelling invites the reading "presumably the same", and silence lets that misreading through (`docs/SPEC-programming-language.md`, 7.1 names that `switch` does not fall through).
+
+### When an abbreviation is useful
+
+**An abbreviation earns its place through frequent use or an established meaning.** `len`, `str`, `buf` and `fmt` are familiar in programming. `Rc` and `Arc` name established ownership patterns. The shorter spelling saves space without making each reader invent an expansion.
+
+Less familiar public names use full words: `Conversion`, `Options`, and JSON's `Value`, `Array`, `Object` and `Object_builder`. A reader can understand these names without learning another vocabulary. The argument parser's module is `std/argparse`; its name joins the familiar words for its task.
+
+### Why the size type is named `Sz`
+
+**`Sz` keeps common type annotations short and text searches distinct.** Lengths and indices occur often, so `count: Sz` stays compact beside types such as `I32` and `U64`.
+
+`Size` is an ordinary domain name: a program can use it for dimensions or size categories. Keeping that name available also makes a search for `Sz` less likely to find unrelated identifiers.
+
+**What is given up**: a new reader must learn the abbreviation. Its meaning and width are defined in "3.1 Primitive types" in [`SPEC-programming-language.md`](SPEC-programming-language.md#31-primitive-types). Why it is signed is explained in "Why the size and index type `Sz` is signed" in [`DESIGN-programming-language.md`](DESIGN-programming-language.md#why-the-size-and-index-type-sz-is-signed).
+
+### Why constants are uppercase and enum variants lowercase
+
+**An uppercase constant name states its role where it is used.** A reader of `MAX_BUFFER_SIZE` can recognize a named constant without finding its declaration.
+
+Ordinary immutable bindings keep lowercase names. Immutability is the default, so using uppercase for it would make most local names uppercase too.
+
+An enum variant's context already identifies its role. Lowercase keeps `.not_found` and constructors such as `.some(value)` readable without adding a second visual mark.
+
+**What is given up**: changing a value between a constant and an ordinary binding also changes its name. The naming rules and the exact meaning of each case style are in "2.2 Identifiers and naming rules" in [`SPEC-programming-language.md`](SPEC-programming-language.md#22-identifiers-and-naming-rules).
 
 ### The line terminator is the file's spelling, not the program's
 
@@ -240,7 +264,7 @@ flowchart LR
 
 **Every place a source enters takes this step**: the disk, the formatter and the language server. A place that skips it answers about a different program from the one a compile sees. They share one step, `settle` in [`../ksplc/parse/source_fix.kspl`](../ksplc/parse/source_fix.kspl), so none can be skipped. The places are listed in "Every place a source enters reads it the same way" in [`../ksplc/docs/DESIGN-parse.md`](../ksplc/docs/DESIGN-parse.md).
 
-**What a program writes is the output half of the same question.** On Windows it is decided for every program at its entry point ("Standard output carries the bytes a program writes" in [`DESIGN-language.md`](DESIGN-language.md)).
+**What a program writes is the output half of the same question.** On Windows it is decided for every program at its entry point ("Standard output carries the bytes a program writes" in [`DESIGN-programming-language.md`](DESIGN-programming-language.md)).
 
 ### Carrying a long string literal across lines
 
@@ -248,10 +272,10 @@ End a line inside a string with `\` to continue the string on the next line. The
 
 **A string literal is the one thing on a line a formatter cannot narrow by itself**, because its bytes are the program. Without a way to carry a string on, a formatter breaks everything else on the line and stops at the literal. Narrowing it then means splitting the call by hand into several `.s(…)`, changing code to fix layout. The width check misses it too, since it reads only lines that *begin* with `//`.
 
-**A `\` at a line's end carries the text on, stands for no byte, and takes the next line's indent with it** ("Escape sequences" in [`SPEC-language.md`](SPEC-language.md)). So indenting the block moves no byte, and `ksplc fmt` can lay a literal out like anything else. What is carried on stands one step in from its opening line, as a `//<` run does. At the opener's column it would look like a line beginning something of its own.
+**A `\` at a line's end carries the text on, stands for no byte, and takes the next line's indent with it** ("Escape sequences" in [`SPEC-programming-language.md`](SPEC-programming-language.md)). So indenting the block moves no byte, and `ksplc fmt` can lay a literal out like anything else. What is carried on stands one step in from its opening line, as a `//<` run does. At the opener's column it would look like a line beginning something of its own.
 
 ```kspl
-priv const help: U8[] = "usage: tool [options] <file>, \
+priv const HELP: U8[] = "usage: tool [options] <file>, \
     where options come before the file"
 ```
 
@@ -282,7 +306,7 @@ priv struct Window //< a rectangle on the screen
     height: I32 //< how tall it is
 ```
 
-**One marker, `//<`, describes the thing on its own line, and a `//<` with no text separates the summary from the detail.** One marker spares the writer a question that does not matter to a reader: whether a sentence is about the line or about its contents. Where each kind of declaration takes it is "2.1 Comments" in [`SPEC-language.md`](SPEC-language.md). `Rule_prof` in `kspeg/engine.kspl` shows a summary with its detail below, and `Mode` in `ksplc/main.kspl` the anchor shape (an empty `//<` on the declaration's line, with the description below).
+**One marker, `//<`, describes the thing on its own line, and a `//<` with no text separates the summary from the detail.** One marker spares the writer a question that does not matter to a reader: whether a sentence is about the line or about its contents. Where each kind of declaration takes it is "2.1 Comments" in [`SPEC-programming-language.md`](SPEC-programming-language.md). `Rule_prof` in `kspeg/engine.kspl` shows a summary with its detail below, and `Mode` in `ksplc/main.kspl` the anchor shape (an empty `//<` on the declaration's line, with the description below).
 
 **The description sits behind the thing it describes.** So no name is written twice, and no pair gets out of step: a renamed parameter takes its description along. Javadoc and Doxygen restate the name in a `@param x`. Behind rather than in front, because prose in front pushes the signature down, and the reader meets the description before the shape. That is why Python puts its docstring after the `def` line.
 
@@ -348,6 +372,6 @@ The run does not restate the file's name. `ksplc doc` titles the file's referenc
 
 **Take a function whose first parameter is an enum declared in the same file. It is written as that enum's method, in its `impl` and taking `Self`.** So you call `state.text()` or `a.same_role(b)`, not `state_text(state)`. What an enum does is found where the enum is. The name need not repeat the type (as 11.1 asks of any name). And the call reads in the order the value flows.
 
-**An enum of another file or package is left out.** Its `impl` would hold another package's reading of it, against the reference direction. (kspage's readers of std's `json.Val` stay in kspage.) The direction is the chapter "What crosses a package boundary" in [`DESIGN-repository.md`](DESIGN-repository.md).
+**An enum of another file or package is left out.** Its `impl` would hold another package's reading of it, against the reference direction. (kspage's readers of std's `json.Value` stay in kspage.) The direction is the chapter "What crosses a package boundary" in [`DESIGN-repository.md`](DESIGN-repository.md).
 
 **The language allows both shapes; this is the repository's rule for its own sources.** `make test-conventions` checks it (`check_enum_functions` in [`../tests/support/conventions_spell.kspl`](../tests/support/conventions_spell.kspl)), leaving out fixtures whose text a test compiles. It reads one line at a time, so a signature it does not recognize still breaks the rule (Principle 8).

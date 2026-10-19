@@ -27,13 +27,13 @@ import "std/subproc"
 import "std/sys"
 import "std/thread"
 
-priv const worker_timeout_ms: I32 = 10000 // the hang-detection timeout (a first analysis is slow)
+priv const WORKER_TIMEOUT_MS: I32 = 10000 // the hang-detection timeout (a first analysis is slow)
 
 priv fn relay_stripping_alive(src: U8[], out: Str_builder$@) //<
     //< It copies into out while removing the liveness markers
     //<
     //< Without this the markers reach the editor unchanged and break the LSP's framing.
-    tag: = lsp_msg.worker_alive_tag
+    tag: = lsp_msg.WORKER_ALIVE_TAG
     $i: Sz = 0
     for i < src.len
         at: = lsp_msg.marker_at(src, i, tag)
@@ -92,12 +92,12 @@ priv fn pump_worker_output(worker: subproc.Piped_child@, arena: Arena$@): Worker
     // Each search resumes marker-length-1 before where the last found none. So a marker crossing a
     // chunk boundary is still found. Re-walking the whole buffer per chunk is quadratic in an
     // output that can reach tens of MB.
-    tag: = lsp_msg.worker_done_tag
+    tag: = lsp_msg.WORKER_DONE_TAG
     overlap: = lsp_msg.marker_len(tag) - 1
     $scanned: Sz = 0
     for
         got: =
-            worker.read(U8$[]::{ .ptr = rbuf, .len = cap }, worker_timeout_ms) catch e
+            worker.read(U8$[]::{ .ptr = rbuf, .len = cap }, WORKER_TIMEOUT_MS) catch e
             switch e
             case .timed_out
                 ok = .hang
@@ -139,7 +139,7 @@ priv fn exchange(w: subproc.Piped_child?@, frame: U8[], arena: Arena$@): Worker_
     // Caution: **Bound the write by the watchdog too.** A worker stuck in an analysis reads
     // nothing, and once the pipe is full an unbounded write would hang the editor's server with it.
     if c: = w$
-        c.write(frame, worker_timeout_ms) catch
+        c.write(frame, WORKER_TIMEOUT_MS) catch
             return .write_failed
         return pump_worker_output(c@, arena)
     return .write_failed
@@ -171,7 +171,7 @@ impl Lsp_docs
     priv fn free(r: Self$@)
         r.store.free()
 
-    priv fn observe(r: Self$@, method: U8[], params: json.Val) //<
+    priv fn observe(r: Self$@, method: U8[], params: json.Value) //<
         //< It records the text on didOpen / didChange and discards it on didClose
         //<
         //< **Each of the three settles the document's analysis**: the worker analyses the new text
@@ -285,7 +285,7 @@ priv fn hand_over(docs: Lsp_docs$@, w: subproc.Piped_child?@, lost_uri: U8[], ar
             continue
         mark: = arena.save()
         $frame: =
-            build_doc_frame(lsp_msg.restore_method, e.key, e.value.text.slice(), arena)
+            build_doc_frame(lsp_msg.RESTORE_METHOD, e.key, e.value.text.slice(), arena)
         handed: = exchange(w, frame.slice(), arena)
         frame.free()
         arena.restore(mark)
@@ -324,13 +324,13 @@ priv fn check_doc(docs: Lsp_docs$@, worker: subproc.Piped_child?, uri: U8[], are
         c.kill()
     return restart_worker(docs, "", arena)
 
-priv fn message_of(body: U8[], arena: Arena$@): json.Val //<
+priv fn message_of(body: U8[], arena: Arena$@): json.Value //<
     //< the message; null if it does not parse
     doc: = json.parse(body, arena) catch
         return .null_val
     return doc.val
 
-priv fn named_uri(params: json.Val): U8[] //< the document a message names; empty for none
+priv fn named_uri(params: json.Value): U8[] //< the document a message names; empty for none
     //<
     //< A call hierarchy's second step names it in `item`, every other request in `textDocument`.
     td_uri: = params.get("textDocument").get("uri").as_str().unwrap_or("")
@@ -418,7 +418,7 @@ impl Editor_reader
         for
             // **The limit the reader took the frame under** (`read_message`), or a body between
             // the two limits leaves the frames after it misread.
-            got: = jsonrpc.take_frame(taken, lsp_msg.max_content_length, arena) catch
+            got: = jsonrpc.take_frame(taken, lsp_msg.MAX_CONTENT_LENGTH, arena) catch
                 continue // the frame was dropped with its header; the next one follows
             if body: = got
                 return .message(body)

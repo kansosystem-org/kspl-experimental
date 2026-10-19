@@ -43,12 +43,12 @@ fn edge_origin(page: Page$@, edge: Edge): F32? //<
                 return .some(cell.rect.y)
     return .none
 
-priv const edge_reach: F32 = 4.0 //< the distance within which a border is grabbed
+priv const EDGE_REACH: F32 = 4.0 //< the distance within which a border is grabbed
     //<
     //< **Too thin and it cannot be grabbed; too thick and a narrow cell cannot be.**
 
 priv fn within(v: F32, edge_at: F32): Bool
-    return v >= edge_at - edge_reach && v <= edge_at + edge_reach
+    return v >= edge_at - EDGE_REACH && v <= edge_at + EDGE_REACH
 
 fn edge_at(page: Page$@, x: F32, y: F32): Edge //<
     //< The right or bottom border of the cell at (x, y)
@@ -232,12 +232,13 @@ struct Head_cell //< one cell of a top-level table's heading row
     //<
     //< `column` counts merges (a tile's column), the index that a filter on that column uses.
     table: Block$@
+    block: Block$@
     rect: Rect
     column: Sz
     found: Bool
 
 fn no_head_cell(): Head_cell //< the answer where there is no such cell
-    return Head_cell::{ .table = null,
+    return Head_cell::{ .table = null, .block = null,
         .rect = Rect::{ .x = 0.0, .y = 0.0, .w = 0.0, .h = 0.0 }, .column = 0, .found = false }
 
 fn head_cell_count(page: Page$@, i: Sz): Sz //< how many cells the i-th table's heading row shows
@@ -261,8 +262,8 @@ fn head_cell_at(page: Page$@, i: Sz, c: Sz): Head_cell //< the c-th cell of that
             if cell.table != table || cell.row != 0
                 continue
             if n == c
-                return Head_cell::{ .table = table, .rect = cell.rect, .column = cell.column,
-                    .found = true }
+                return Head_cell::{ .table = table, .block = cell.block, .rect = cell.rect,
+                    .column = cell.column, .found = true }
             n += 1
     return no_head_cell()
 
@@ -449,10 +450,10 @@ struct Fit //< what a column or row would be if fitted to its contents
 fn no_fit(): Fit
     return Fit::{ .size = .none, .found = false }
 
-priv const fit_pad: F32 = 12.0 //< the space left beside the widest text
+priv const FIT_PAD: F32 = 12.0 //< the space left beside the widest text
     //<
     //< **Without it the text touches the rule** (the cell's own padding is inside the width).
-priv const fit_least: F32 = 24.0 //< the narrowest column a fitting makes
+priv const FIT_LEAST: F32 = 24.0 //< the narrowest column a fitting makes
     //<
     //< **An empty column must still be grabbable** (so its border can be found and dragged back).
 
@@ -499,5 +500,5 @@ fn fit_at(page: Page$@, edge: Edge): Fit //< that border's column or row fitted 
         got: = block_width(page, cell.block)
         if got > wide
             wide = got
-    size: = wide + fit_pad
-    return Fit::{ .size = .some(size if size > fit_least else fit_least), .found = true }
+    size: = wide + FIT_PAD
+    return Fit::{ .size = .some(size if size > FIT_LEAST else FIT_LEAST), .found = true }

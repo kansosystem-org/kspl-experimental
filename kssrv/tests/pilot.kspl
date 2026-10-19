@@ -54,14 +54,14 @@ struct Drive //< the answer to one observation
     // file in double precision, so that difference alone can swap first and second.
     margin: F64
 
-priv const feature_count: Sz = 5 //< the count of features (valid, distance, left, centre, right)
+priv const FEATURE_COUNT: Sz = 5 //< the count of features (valid, distance, left, centre, right)
 
-priv const silu_floor: F64 = -60.0 //< the input below which SiLU is taken as 0
+priv const SILU_FLOOR: F64 = -60.0 //< the input below which SiLU is taken as 0
     //<
     //< For large negative z, exp(-z) overflows, so the result is set to 0 there.
 
 priv fn silu(z: F64): F64
-    if z < silu_floor
+    if z < SILU_FLOOR
         return 0.0
     return z / (1.0 + math.exp(-z))
 
@@ -135,7 +135,7 @@ priv fn top_margin(logits: List<|F64|>@, best: Sz): F64 //< the gap between firs
 
 // The manoeuvre for each of the 8 line patterns. The index is left<<2 | centre<<1 | right, and 1
 // is black. Only an edge black is a large drift; an edge and the centre black is a small one.
-priv const rule_by_line: U8[][8] = ::{ "creep", // 000 nothing: the line's position is unknown
+priv const RULE_BY_LINE: U8[][8] = ::{ "creep", // 000 nothing: the line's position is unknown
     "track_right_hard", // 001 only right = the line is far right
     "forward", // 010 only centre = on the line
     "track_right", // 011 centre and right = the line is slightly right
@@ -145,15 +145,15 @@ priv const rule_by_line: U8[][8] = ::{ "creep", // 000 nothing: the line's posit
     "stop", // 111 all three black = a crossing or the end
 }
 
-priv const back_mm: I64 = 150I64 //< the distance below which it backs off (mm)
-priv const strafe_mm: I64 = 400I64 //< the distance below which it dodges sideways (mm)
+priv const BACK_MM: I64 = 150I64 //< the distance below which it backs off (mm)
+priv const STRAFE_MM: I64 = 400I64 //< the distance below which it dodges sideways (mm)
 
 fn car_rule(dist_mm: I64, line: I64): U8[] //<
     //< kssrv/pilot.kspl's rule, written again from the specification to check the answers
     if dist_mm <= 0I64
         return "stop"
-    if dist_mm < back_mm
+    if dist_mm < BACK_MM
         return "back"
-    if dist_mm < strafe_mm
+    if dist_mm < STRAFE_MM
         return "strafe_left" if (line & 1I64) != 0I64 else "strafe_right"
-    return rule_by_line[Sz::line]
+    return RULE_BY_LINE[Sz::line]

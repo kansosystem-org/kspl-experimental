@@ -15,13 +15,13 @@ import "tests/support/docref_refs" { Hit, find_paths }
 import "tests/support/harness_text" as htext
 
 // A reference carrying a section number: `<doc>… §12` and `<doc>… chapter 8`, with up to
-// `section_window` characters between.
+// `SECTION_WINDOW` characters between.
 // Caution: **Do not keep the list of folders here.** The caller passes it from `doc_dirs`. **Do not
 // keep the names of documents written without a folder** (`bares`) either. The caller builds them
 // from the tracked documents. A copied list misses a document added later, and its citations go
 // unread.
 
-priv const section_window: Sz = 40 //<
+priv const SECTION_WINDOW: Sz = 40 //<
     //< How far after the citation the number may be, in **characters**
     //<
     //< Not bytes: a character outside ASCII takes several, shrinking a byte window. **The ASCII `.`
@@ -62,7 +62,7 @@ fn read_section_number(text: U8[], i: Sz, arena: Arena$@): U8[] //<
         return ""
     return arena.dup_str(text.sub(start, j - start))
 
-priv const sec_joiners: U8[][_] = ::{ " in ", " of " } //<
+priv const SEC_JOINERS: U8[][_] = ::{ " in ", " of " } //<
     //< The joiners that tie a section number before a path
     //<
     //< English often reverses the order: the number first, the path after (`3.2.5 in
@@ -70,7 +70,7 @@ priv const sec_joiners: U8[][_] = ::{ " in ", " of " } //<
     //< green on a smaller count** (as with symbols; the caution on `sym_joiners` in
     //< `docref_scan.kspl`).
 
-priv const sec_not_prefix: U8[][_] = ::{ "Principle", "stage", "Stage" } //<
+priv const SEC_NOT_PREFIX: U8[][_] = ::{ "Principle", "stage", "Stage" } //<
     //< The words that mark a number before a joiner as not a section number
     //<
     //< **`Principle N` is not a section number**: another check watches it, and picked here
@@ -87,7 +87,7 @@ priv fn read_section_before(text: U8[], at: Sz, arena: Arena$@): U8[] //<
     $k: = at
     for k > 0 && (text[k - 1] == '`' || text[k - 1] == '[')
         k -= 1
-    for j in sec_joiners
+    for j in SEC_JOINERS
         if k < j.len || !text.sub(k - j.len, j.len).equals(j)
             continue
         end: = k - j.len
@@ -107,7 +107,7 @@ priv fn read_section_before(text: U8[], at: Sz, arena: Arena$@): U8[] //<
         for w > 0 && text[w - 1] == ' '
             w -= 1
         $cited: = false
-        for pre in sec_not_prefix
+        for pre in SEC_NOT_PREFIX
             if w >= pre.len && text.sub(w - pre.len, pre.len).equals(pre)
                 cited = true
         if !cited
@@ -159,7 +159,7 @@ fn find_sections(text: U8[], dirs: U8[][], bares: U8[][], arena: Arena$@): List<
             continue
         $j: = p.end
         $chars: Sz = 0
-        for chars <= section_window && j <= text.len
+        for chars <= SECTION_WINDOW && j <= text.len
             num: = read_section_number(text, j, arena)
             if num.len > 0
                 out
@@ -179,8 +179,8 @@ fn find_sections(text: U8[], dirs: U8[][], bares: U8[][], arena: Arena$@): List<
                 break
             // The window stops at a newline (only the space right before the number can be crossed)
             // and at `](`. Beyond it is the link's target. Its **anchor digits would read as a
-            // section number** (`](SPEC-language.md#84-…)` becoming "there is no §84"). The ASCII
-            // `.` is not a stop (the caution on `section_window`).
+            // section number** (`](SPEC-programming-language.md#84-…)` becoming "there is no §84").
+            // The ASCII `.` is not a stop (the caution on `SECTION_WINDOW`).
             if j >= text.len || text[j] == '\n' ||
                 (j + 2 <= text.len && text.sub(j, 2).equals("]("))
                 break
@@ -356,11 +356,11 @@ priv fn read_quoted_before(text: U8[], at: Sz, arena: Arena$@): U8[] //<
     //<
     //< The name read (empty where there is none).
     //< Caution: **Do not read only after the citation**: this order is common, and a smaller count
-    //< cannot be told from green (the caution on `sec_joiners` above).
+    //< cannot be told from green (the caution on `SEC_JOINERS` above).
     $k: = at
     for k > 0 && (text[k - 1] == '`' || text[k - 1] == '[')
         k -= 1
-    for j in sec_joiners
+    for j in SEC_JOINERS
         end: = joiner_before(text, k, j)
         if end < 0
             continue
@@ -380,7 +380,7 @@ priv fn read_quoted_before(text: U8[], at: Sz, arena: Arena$@): U8[] //<
 // path.
 // Caution: **Do not use a wide window.** A quotation mark that merely comes near the citation (a
 // shell's `"$PWD"`, an emphasis) is read as a name; only the joining characters are crossed.
-priv const quote_joiners: U8[][_] = ::{ " ", "`", "'", "s", ",", ")", "]" }
+priv const QUOTE_JOINERS: U8[][_] = ::{ " ", "`", "'", "s", ",", ")", "]" }
 
 priv fn skip_quote_joiners(text: U8[], at: Sz): Sz //<
     //< Whether the name is reached from `at` crossing only joining characters
@@ -402,7 +402,7 @@ priv fn skip_quote_joiners(text: U8[], at: Sz): Sz //<
             continue
         w: = htext.cp_len(text[j])
         $ok: = false
-        for t in quote_joiners
+        for t in QUOTE_JOINERS
             if w == t.len && text.sub(j, w).equals(t)
                 ok = true
         if !ok
@@ -450,11 +450,11 @@ fn step_dir(text: U8[], at: Sz, arena: Arena$@): U8[] //<
         if n > Sz::head && t.len > 0 && !t.starts_with("#") && indent_of(l) <= top
             break
         key: = t.strip_prefix("- ").trim_spaces() if n == Sz::head else t
-        if key.starts_with(step_dir_key)
-            return unquoted(key.sub_from(step_dir_key.len).trim_spaces())
+        if key.starts_with(STEP_DIR_KEY)
+            return unquoted(key.sub_from(STEP_DIR_KEY.len).trim_spaces())
     return ""
 
-priv const step_dir_key: U8[] = "working-directory:"
+priv const STEP_DIR_KEY: U8[] = "working-directory:"
 
 priv fn line_of(text: U8[], starts: List<|Sz|>@, j: Sz): U8[] //< line j, its `\r` dropped
     end: = text.len if j + 1 >= starts.len else starts.get(j + 1) - 1
@@ -492,7 +492,7 @@ fn find_doc_quotes(text: U8[], dirs: U8[][], bares: U8[][], arena: Arena$@): Lis
     // **The section-number side's two workarounds are not needed here.** The read after a path
     // stops at `(`. On the target side no joiner comes before. So **only one of the two ever
     // reaches a name**. For a link with an anchor, the read before still finds the document.
-    // Caution: **Add `(` to `quote_joiners` and the workaround is needed here again** (one
+    // Caution: **Add `(` to `QUOTE_JOINERS` and the workaround is needed here again** (one
     // reference looks like two).
     for p in paths
         before: = read_quoted_before(text, p.at, arena)

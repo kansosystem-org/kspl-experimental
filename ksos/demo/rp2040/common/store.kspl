@@ -12,11 +12,11 @@ import "ksos/demo/common/car_model" as cmodel
 import "ksos/demo/rp2040/common/console" as con
 import "ksos/demo/rp2040/common/records"
 
-const kind_policy: U16 = 1 //< the record kinds
+const KIND_POLICY: U16 = 1 //< the record kinds
     //<
-    //< 0 is the marker, so it is not used (`records.kind_marker`).
-const kind_sample: U16 = 2
-const kind_model: U16 = 3
+    //< 0 is the marker, so it is not used (`records.KIND_MARKER`).
+const KIND_SAMPLE: U16 = 2
+const KIND_MODEL: U16 = 3
 
 $saves: U32 = 0
 
@@ -37,12 +37,12 @@ fn wipe(marker: U8[], blob: U8[]): Bool //<
     lg: = records.handle()
     lg.reset() catch
         return false
-    lg.append(records.kind_marker, marker) catch
+    lg.append(records.KIND_MARKER, marker) catch
         return false
     saves = 0
     if blob.len == 0
         return true
-    lg.append(kind_policy, blob) catch
+    lg.append(KIND_POLICY, blob) catch
         return false
     return true
 
@@ -54,10 +54,10 @@ fn save_policy(ln: con.Line$@, blob: U8[]) //< saves the downloaded policy
     if !records.ok()
         return
     lg: = records.handle()
-    if lg.last_equals(kind_policy, blob)
+    if lg.last_equals(KIND_POLICY, blob)
         con.say(ln, "[car]", "policy unchanged — kept the stored one")
         return
-    lg.append(kind_policy, blob) catch e
+    lg.append(KIND_POLICY, blob) catch e
         // Print the reason too. Full (expected) and a failed write (something wrong with the
         // region) are different things.
         ln.reset()
@@ -76,7 +76,7 @@ fn stored_policy(buf: U8$[]): U8[]!ksdblog.Ksdb_error //<
     //< (see load in ksos/demo/common/pilot_policy.kspl), so leave `buf` alone while it runs.
     if !records.ok()
         throw .not_found
-    n: = records.handle().last(kind_policy, buf)!
+    n: = records.handle().last(KIND_POLICY, buf)!
     return U8[]::{ .ptr = buf.ptr, .len = n }
 
 fn save_model(buf: U8$[]) //< saves the learned weights in the record
@@ -85,7 +85,7 @@ fn save_model(buf: U8$[]) //< saves the learned weights in the record
     //< loop, so messages here would flood the lines while it runs.
     if !records.ok() || !cmodel.save(buf)
         return
-    records.handle().append(kind_model, U8[]::{ .ptr = buf.ptr, .len = buf.len }) catch
+    records.handle().append(KIND_MODEL, U8[]::{ .ptr = buf.ptr, .len = buf.len }) catch
         return
     saves += 1
 
@@ -94,7 +94,7 @@ fn load_model(buf: U8$[]): Bool //< reads the weights the previous start-up save
     //< **true if they were read.**
     //< **They can be rejected** (after the scale or the net's shape changes). Then it runs with the
     //< initial values and learns again.
-    n: = records.read_last(kind_model, buf)
+    n: = records.read_last(KIND_MODEL, buf)
     if n != buf.len
         return false
     return cmodel.load(U8[]::{ .ptr = buf.ptr, .len = n })

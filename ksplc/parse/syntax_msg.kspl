@@ -306,7 +306,7 @@ priv fn append_trailing_defer_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool
         msg.s("Put it on the next line. Name what it cleans up ('defer x.free()').")
     return true
 
-priv const other_typedef_words: U8[][4] = ::{ "alias", "type", "typealias", "using" } //<
+priv const OTHER_TYPEDEF_WORDS: U8[][4] = ::{ "alias", "type", "typealias", "using" } //<
     //< The words other languages use to give a type another name, where KSPL writes `typedef`
     //<
     //< They are D's; Rust's, Go's and Python's; Swift's and Kotlin's; C++'s.
@@ -343,7 +343,7 @@ priv fn append_typedef_spelling_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bo
     rest: = after.sub_from(word_end(after, 0)).trim_spaces()
     if word_end(after, 0) == 0 || !rest.starts_with("=") || rest.starts_with("==")
         return false
-    for w in other_typedef_words
+    for w in OTHER_TYPEDEF_WORDS
         if word.equals(w)
             msg.s("\n  Note: use 'typedef' to declare another name for a type: '")
                 .s(code.sub(0, s)).s("typedef ").s(after).s("'.")
@@ -435,7 +435,7 @@ priv fn statement_has_if_without_else(src: U8[], pos: Sz): Bool //<
     span: = src.sub(start + 1, pos - start - 1)
     return span.find_str(" if").is_some() && span.find_str(" else").is_none()
 
-priv const max_open: Sz = 64 //< how many brackets can be open before the count below gives up
+priv const MAX_OPEN: Sz = 64 //< how many brackets can be open before the count below gives up
 
 priv fn append_unclosed_bracket_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool //<
     //< It writes the sentence naming where an unclosed `(` or `[` around the failure opened
@@ -478,7 +478,7 @@ priv fn innermost_open(src: U8[], pos: Sz): Sz //<
     //< Where the innermost bracket still open at `pos` opened, or -1 where none is
     //<
     //< It is also -1 where they nest deeper than `max_open`.
-    $open: Sz[max_open] = ::{}
+    $open: Sz[MAX_OPEN] = ::{}
     $n: Sz = 0
     $i: Sz = 0
     for i < pos && i < src.len
@@ -493,7 +493,7 @@ priv fn innermost_open(src: U8[], pos: Sz): Sz //<
             i = inner + 2
             continue
         if c == '(' || c == '[' || c == '{'
-            if n == max_open
+            if n == MAX_OPEN
                 return -1
             open[n] = i
             n += 1
@@ -523,7 +523,8 @@ priv fn append_non_ascii_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool //<
     //<
     //< Python, Rust, Swift, Java and C++ all take a name in other scripts (`café`, `かんそ`). So
     //< the writer expects it to work. KSPL's names are ASCII ("Identifiers and naming rules" in
-    //< `docs/SPEC-language.md`), and the expected list alone does not say why `か` is refused.
+    //< `docs/SPEC-programming-language.md`), and the expected list alone does not say why `か` is
+    //< refused.
     if pos >= src.len || src[pos] < 0x80U8
         return false
     $end: = pos + 1
@@ -627,14 +628,14 @@ priv fn starts_item(src: U8[], at: Sz): Bool //<
     //< Whether an item of a list can begin at `at`
     //<
     //< That is a name, a number, a literal, a bracket, an enum's `.value` or a parameter's `$`, and
-    //< none of `carrying_words`.
+    //< none of `CARRYING_WORDS`.
     c: = src[at]
     if !(c.is_alnum() || c == '"' || c == '\'' || c == '(' || c == '.' || c == '$')
         return false
     w: = src.sub(at, word_end(src, at) - at)
-    return !w.is_one_of(U8[][]::carrying_words)
+    return !w.is_one_of(U8[][]::CARRYING_WORDS)
 
-priv const carrying_words: U8[][5] = ::{ "as", "in", "catch", "if", "else" } //<
+priv const CARRYING_WORDS: U8[][5] = ::{ "as", "in", "catch", "if", "else" } //<
     //< The words that stand between two values and continue the first, rather than starting an item
 
 priv fn ends_item(c: U8): Bool //< whether an item of a list can end with the byte

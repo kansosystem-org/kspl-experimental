@@ -14,19 +14,19 @@ import "tests/support/conventions_scan" as scan + { Sample }
 import "tests/support/harness"
 import "tests/support/harness_text"
 
-priv const max_words: Sz = 25 //< the cap on a sentence, a table cell's or a list item's included
-priv const max_heading_words: Sz = 10
+priv const MAX_WORDS: Sz = 25 //< the cap on a sentence, a table cell's or a list item's included
+priv const MAX_HEADING_WORDS: Sz = 10
 
-priv const lead_words: Sz = 8 //< how many of a sentence's first words a finding shows
+priv const LEAD_WORDS: Sz = 8 //< how many of a sentence's first words a finding shows
 
 // ==========================================
 // The documents not yet in plain language
 // **Each is skipped whole**, and the list only shrinks. A listed document that passes fails the
 // check. So it is taken off once its last long sentence is split. A document not listed passes.
 // ==========================================
-priv const not_converted: U8[][_] = ::{}
+priv const NOT_CONVERTED: U8[][_] = ::{}
 
-priv const quoted_whole: U8[][_] = ::{ "LICENSE.md" } //<
+priv const QUOTED_WHOLE: U8[][_] = ::{ "LICENSE.md" } //<
     //< The documents whose text is another's words, quoted whole
     //<
     //< **They are never converted**: the MIT license is read in its own words, or not at all.
@@ -73,11 +73,11 @@ priv fn count_words(text: U8[]): Sz //< how many words the text holds
     return n
 
 priv fn lead_of(text: U8[], arena: Arena$@): U8[] //<
-    //< the text's first `lead_words` words, on one line
+    //< the text's first `LEAD_WORDS` words, on one line
     t: = text.trim_spaces()
     $n: Sz = 0
     $i: Sz = 0
-    for i < t.len && n < lead_words
+    for i < t.len && n < LEAD_WORDS
         if is_letter(t[i])
             n += 1
             i = word_end(t, i)
@@ -201,7 +201,7 @@ priv fn sentence_ends(text: U8[], at: Sz): Sz //<
 priv fn judge(u: Unit@, from: Sz, to: Sz, text: U8[], out: List<|Finding|>$@, arena: Arena$@) //<
     //< Adds a finding for `text[from..to]` if it is over its cap
     part: = text.sub(from, to - from)
-    cap: = max_heading_words if u.heading else max_words
+    cap: = MAX_HEADING_WORDS if u.heading else MAX_WORDS
     n: = count_words(part)
     if n <= cap
         return
@@ -247,11 +247,11 @@ priv fn check_documents(arena: Arena$@)
         if harness.is_private_doc(rel, own@)
             continue
         published.push(rel)
-        if listed(U8[][]::quoted_whole, rel)
+        if listed(U8[][]::QUOTED_WHOLE, rel)
             continue
         seen += 1
         found: = over_long(harness.read_under_root(rel), arena)
-        if listed(U8[][]::not_converted, rel)
+        if listed(U8[][]::NOT_CONVERTED, rel)
             if found.len == 0
                 stale
                     .push(arena.text().s(rel).s(": it passes now; take it off the list").take())
@@ -260,13 +260,13 @@ priv fn check_documents(arena: Arena$@)
             bad
                 .push(arena.text().s(rel).s(":\{f.line\}: \{f.words\} words (cap \{f.cap\}): \"")
                 .s(f.lead).s(" …\"").take())
-    gone(U8[][]::not_converted, published@, stale@, arena)
-    gone(U8[][]::quoted_whole, published@, stale@, arena)
-    n: = arena.text().s("a sentence in a document holds at most \{max_words\} words, a heading ")
-        .s("\{max_heading_words\} (the length alone; an instruction's 20 is left to review)").take()
+    gone(U8[][]::NOT_CONVERTED, published@, stale@, arena)
+    gone(U8[][]::QUOTED_WHOLE, published@, stale@, arena)
+    n: = arena.text().s("a sentence in a document holds at most \{MAX_WORDS\} words, a heading ")
+        .s("\{MAX_HEADING_WORDS\} (the length alone; an instruction's 20 is left to review)").take()
     verdict.check_list(n, seen, "documents", bad@, "Split it (docs/SPEC-plain-language.md)")
     verdict.check_list("the documents not yet in plain language are listed, and only those",
-        not_converted.len + quoted_whole.len, "names", stale@,
+        NOT_CONVERTED.len + QUOTED_WHOLE.len, "names", stale@,
         "mend the lists in `tests/support/conventions_plain.kspl`")
 
 priv fn gone(names: U8[][], published: List<|U8[]|>@, stale: List<|U8[]|>$@, arena: Arena$@) //<
@@ -279,7 +279,7 @@ priv fn gone(names: U8[][], published: List<|U8[]|>@, stale: List<|U8[]|>$@, are
 priv fn has_over_long(text: U8[], arena: Arena$@): Bool //< the judgment the samples are held to
     return over_long(text, arena).len > 0
 
-priv const samples: Sample[_] = ::{
+priv const SAMPLES: Sample[_] = ::{
     // 26 words, then 25.
     Sample::{ .text =
         "The gate reads every document in the tree and counts the words of each sentence, so a \
@@ -336,6 +336,6 @@ priv const samples: Sample[_] = ::{
 }
 
 fn run(arena: Arena$@)
-    scan.check_samples("the count of a sentence's words can fire", Sample[]::samples, "samples",
+    scan.check_samples("the count of a sentence's words can fire", Sample[]::SAMPLES, "samples",
         has_over_long, arena)
     check_documents(arena)

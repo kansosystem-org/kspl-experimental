@@ -14,14 +14,14 @@ import "kspeg/rule" { Rule }
 import "std/mem" { Arena }
 import "std/str" // `equals`
 
-const max_expected_labels: Sz = 8 //< how many `expected` labels one position can carry.
+const MAX_EXPECTED_LABELS: Sz = 8 //< how many `expected` labels one position can carry.
     //<
     //< Caution: Keep the number in this one place; with copies, raising one would write past the
     //< buffer another sized. **Raising it does not help**: what overflows is the operators that
     //< could continue an expression (after `x: = 1`, some thirty are recorded and `';'` comes
     //< last).
 
-const no_skippable: Sz = -1 //< the position that means "no skippable attempt is open".
+const NO_SKIPPABLE: Sz = -1 //< the position that means "no skippable attempt is open".
     //<
     //< Caution: **It must be a value that matches no position**: with 0, a failure at the start of
     //< the file would count as skippable.
@@ -58,7 +58,7 @@ pub struct Fail_track //< one input's failure record: how far it got, and what c
         //< Caution: **Count only the failures inside the token** (where recording is suppressed).
         //< An ordinary rule failing inside it (an expression inside interpolation) records at its
         //< own position. Counted here too, it would list the token's name at that position as well.
-    skippable_start: Sz //< where the innermost open skippable attempt began, or `no_skippable`
+    skippable_start: Sz //< where the innermost open skippable attempt began, or `NO_SKIPPABLE`
         //<
         //< **Save it and restore it.** Attempts nest, so leaving it overwritten makes an outer
         //< attempt look at an inner position.
@@ -72,15 +72,15 @@ impl Fail_track
         return arena
             .create(Fail_track::{
             .expected_labels =
-                Expected$@::arena.alloc(sizeof(Expected) * max_expected_labels),
-            .skippable_start = no_skippable,
+                Expected$@::arena.alloc(sizeof(Expected) * MAX_EXPECTED_LABELS),
+            .skippable_start = NO_SKIPPABLE,
         })
 
     pub fn reset(r: Self$@) //< empties the record for a new run, keeping its label buffer
         r.max_fail_pos = 0
         r.expected_label_count = 0
         r.deepest_try = 0
-        r.skippable_start = no_skippable
+        r.skippable_start = NO_SKIPPABLE
 
     pub fn track_token_fail( //< records that a lexical token could not be read, under its own name
         //<
@@ -124,7 +124,7 @@ impl Fail_track
                     break
             if found
                 return
-            if r.expected_label_count < max_expected_labels
+            if r.expected_label_count < MAX_EXPECTED_LABELS
                 (r.expected_labels + r.expected_label_count)$ = add
                 r.expected_label_count += 1
                 return
@@ -132,7 +132,7 @@ impl Fail_track
             // that could continue the expression fill the list. The `';'` ending the statement then
             // never gets in (the order is explained at `order_expected`). The labels that stopped
             // the parse never exceed the cap (one position requires no more than its grammar has).
-            for i in Range.asc(max_expected_labels)
+            for i in Range.asc(MAX_EXPECTED_LABELS)
                 if (r.expected_labels + i).is_optional
                     (r.expected_labels + i)$ = add
                     return
@@ -160,7 +160,7 @@ impl Fail_track
         //< expression. **Put the rest after them instead of dropping them.** What need not be
         //< written can still be written there (after `f(`, both a parameter and a `)` can).
         //< Caution: **Keep the order within each group**: inside to outside says which is closest.
-        $sorted: Expected[max_expected_labels] = ::{}
+        $sorted: Expected[MAX_EXPECTED_LABELS] = ::{}
         $n: Sz = 0
         for pass in Range.asc(2)
             for i in Range.asc(r.expected_label_count)

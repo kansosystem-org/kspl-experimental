@@ -304,7 +304,7 @@ The steps, the marks a fixture carries and the rules each fixture folder keeps a
 | [`ksplc/docs/DESIGN-tools.md`](docs/DESIGN-tools.md) | How the language server, the formatter and `ksplc run` work inside, and how the tools' settings are read. | Whoever changes `lsp/`, `fmt/`, `ksplc run` or a setting |
 | [`ksplc/docs/HOWTO-extend.md`](docs/HOWTO-extend.md) | The steps for a diagnostic code, an AST node kind, a primitive type, a subcommand, a target machine and the seed update. | Whoever extends the compiler; needs a clone that builds |
 | [`ksplc/docs/HOWTO-add-a-fixture.md`](docs/HOWTO-add-a-fixture.md) | The steps for adding a fixture to a suite: the folder, the case's head and marks, and the rules each fixture folder keeps. | Whoever adds or moves a test case; needs a clone that builds |
-| [`docs/SPEC-language.md`](../docs/SPEC-language.md) | The language specification being implemented. | Whoever writes KSPL, and whoever changes ksplc |
+| [`docs/SPEC-programming-language.md`](../docs/SPEC-programming-language.md) | The language specification being implemented. | Whoever writes KSPL, and whoever changes ksplc |
 | [`docs/HOWTO-build.md`](../docs/HOWTO-build.md) | The build procedure and the two-stage bootstrap. | Whoever changes ksplc. Needs a C compiler |
 | [`docs/SPEC-gates.md`](../docs/SPEC-gates.md) | What every gate checks, per platform. | Whoever changes ksplc |
 | [std](../std/README.md) | The standard library the compiler is itself written on; every file it publishes is listed by `ksplc doc std`. | Whoever changes ksplc |

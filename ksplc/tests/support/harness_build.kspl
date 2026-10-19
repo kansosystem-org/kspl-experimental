@@ -53,12 +53,12 @@ priv fn below(path: U8[], dir: U8[]): U8[] //<
         return path
     return path.sub_from(prefix.len)
 
-const default_cflags: U8[][_] = ::{ "-std=c99", "-O0" } //<
+const DEFAULT_CFLAGS: U8[][_] = ::{ "-std=c99", "-O0" } //<
     //< The default options for building the generated C
     //<
     //< Adding more keeps these two.
 
-pub const llvm_cflags: U8[][_] = ::{ "-Wno-override-module", "-mllvm", "-fast-isel=false" } //<
+pub const LLVM_CFLAGS: U8[][_] = ::{ "-Wno-override-module", "-mllvm", "-fast-isel=false" } //<
     //< The options for building LLVM IR
     //<
     //< **Do not drop `-fast-isel=false`**: the fast selector folds some instructions itself and
@@ -118,8 +118,8 @@ fn exe_job(gen: U8[], exe: U8[], llvm: Bool): Exe_job //<
     //< builds many at once (`harness.run_all`).
     arena: = harness.arena()
     if llvm
-        return build_job(harness.cc(), U8[][]::{ gen }, exe, U8[][]::llvm_cflags, true, true, arena)
-    return build_job(harness.cc(), U8[][]::{ gen }, exe, U8[][]::default_cflags, false, true, arena)
+        return build_job(harness.cc(), U8[][]::{ gen }, exe, U8[][]::LLVM_CFLAGS, true, true, arena)
+    return build_job(harness.cc(), U8[][]::{ gen }, exe, U8[][]::DEFAULT_CFLAGS, false, true, arena)
 
 fn build_exe(gen: U8[][], exe: U8[], cflags: U8[][]): verdict.Run_out //<
     //< Links the C ksplc generated and makes an executable
@@ -145,7 +145,7 @@ fn build_exe_unflagged(gen: U8[][], exe: U8[], cflags: U8[][]): verdict.Run_out 
 fn build_llvm_exe(gen: U8[][], exe: U8[], cflags: U8[][]): verdict.Run_out //<
     //< Links the LLVM IR ksplc generated and makes an executable
     //<
-    //< The options must be `llvm_cflags`; the C runtime is built from `emit-runtime` and linked
+    //< The options must be `LLVM_CFLAGS`; the C runtime is built from `emit-runtime` and linked
     //< alongside.
     arena: = harness.arena()
     return build(harness.cc(), gen, exe, cflags, true, true, arena)
@@ -183,8 +183,8 @@ fn build_and_run(src: U8[], dir: U8[], stem: U8[], ksplc_args: U8[][], llvm: Boo
     if !r.exited_with(0)
         return Built::{ .built = false, .code = .none, .out = r.out }
     b: =
-        (build_llvm_exe(U8[][]::{ gen }, exe, U8[][]::llvm_cflags) if llvm
-        else build_exe(U8[][]::{ gen }, exe, U8[][]::default_cflags))
+        (build_llvm_exe(U8[][]::{ gen }, exe, U8[][]::LLVM_CFLAGS) if llvm
+        else build_exe(U8[][]::{ gen }, exe, U8[][]::DEFAULT_CFLAGS))
     if !b.exited_with(0)
         return Built::{ .built = false, .code = .none, .out = b.out }
     out: = harness.run(U8[][]::{ exe })

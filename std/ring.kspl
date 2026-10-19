@@ -12,11 +12,11 @@ priv fn step(i: Sz, n: Sz, cap: Sz): Sz
 //   n: = r.write("hello");        // bytes stored (a partial write is allowed)
 //   chunk: = r.peek();             // only the contiguous part up to the wrap
 //   r.consume(chunk.len);
-pub struct Ring<|const cap: Sz|> //< a fixed-size byte queue held in memory the caller owns
+pub struct Ring<|const CAP: Sz|> //< a fixed-size byte queue held in memory the caller owns
     priv buf: U8$[] //<
-        //< The caller's storage, exactly `cap` bytes (`new` refuses any other length)
-    // The next write and read positions, in `[0, cap)`. **Only `step` advances them** (a missing
-    // `% cap` writes out of range).
+        //< The caller's storage, exactly `CAP` bytes (`new` refuses any other length)
+    // The next write and read positions, in `[0, CAP)`. **Only `step` advances them** (a missing
+    // `% CAP` writes out of range).
     priv head: Sz
     priv tail: Sz
     priv count: Sz //<
@@ -25,28 +25,28 @@ pub struct Ring<|const cap: Sz|> //< a fixed-size byte queue held in memory the 
         //< **Without it, full and empty look the same** (both have head == tail), unless one byte
         //< is left unused.
 
-impl<|const cap: Sz|> Ring<|cap|>
+impl<|const CAP: Sz|> Ring<|CAP|>
     pub fn new( //< makes a queue over memory the caller owns
         //<
-        //< **A buffer of any length but `cap` stops the program**, naming both. If shorter, the
-        //< queue would write past its end. If longer, the bytes past `cap` would never be used,
-        //< though the caller sized them. Take both from one constant (`U8[cap]`).
-        buf: U8$[], //< the queue's storage, exactly `cap` bytes
-    ): Ring<|cap|>
-        // cap == 0 would divide by 0 in `step`; this catches the configuration mistake here, not
+        //< **A buffer of any length but `CAP` stops the program**, naming both. If shorter, the
+        //< queue would write past its end. If longer, the bytes past `CAP` would never be used,
+        //< though the caller sized them. Take both from one constant (`U8[CAP]`).
+        buf: U8$[], //< the queue's storage, exactly `CAP` bytes
+    ): Ring<|CAP|>
+        // CAP == 0 would divide by 0 in `step`; this catches the configuration mistake here, not
         // later.
-        assert(cap > 0, "Ring.new: cap must be greater than 0")
-        if buf.len != cap
+        assert(CAP > 0, "Ring.new: cap must be greater than 0")
+        if buf.len != CAP
             $m: = Panic_msg.new()
-            panic(m.s("Ring.new: the buffer holds ").n(buf.len).s(" bytes, but cap is ").n(cap)
+            panic(m.s("Ring.new: the buffer holds ").n(buf.len).s(" bytes, but cap is ").n(CAP)
                 .slice())
-        return Ring<|cap|>::{ .buf = buf, .head = 0, .tail = 0, .count = 0 }
+        return Ring<|CAP|>::{ .buf = buf, .head = 0, .tail = 0, .count = 0 }
 
     pub fn len(r: Self@): Sz //< how many bytes the queue holds
         return r.count
 
     pub fn free_space(r: Self@): Sz //< how many more bytes would fit
-        return cap - r.count
+        return CAP - r.count
 
     pub fn is_empty(r: Self@): Bool //< whether the queue holds nothing
         return r.count == 0
@@ -68,7 +68,7 @@ impl<|const cap: Sz|> Ring<|cap|>
         n: = src.len if src.len < room else room
         for i in Range.asc(n)
             r.buf[r.head] = src[i]
-            r.head = step(r.head, 1, cap)
+            r.head = step(r.head, 1, CAP)
         r.count += n
         return n
 
@@ -79,7 +79,7 @@ impl<|const cap: Sz|> Ring<|cap|>
         n: = dst.len if dst.len < r.count else r.count
         for i in Range.asc(n)
             dst[i] = r.buf[r.tail]
-            r.tail = step(r.tail, 1, cap)
+            r.tail = step(r.tail, 1, CAP)
         r.count -= n
         return n
 
@@ -90,7 +90,7 @@ impl<|const cap: Sz|> Ring<|cap|>
         //< a `write` that wraps around overwrites it.
         if r.count == 0
             return U8[]::{ .ptr = null, .len = 0 }
-        to_end: = cap - r.tail
+        to_end: = CAP - r.tail
         n: = r.count if r.count < to_end else to_end
         return U8[]::{ .ptr = r.buf.ptr + r.tail, .len = n }
 
@@ -100,5 +100,5 @@ impl<|const cap: Sz|> Ring<|cap|>
     )
         // A negative n would move `tail` below 0, and the next read would index before the buffer.
         assert(n >= 0 && n <= r.count, "Ring.consume: n is negative or exceeds the buffered bytes")
-        r.tail = step(r.tail, n, cap)
+        r.tail = step(r.tail, n, CAP)
         r.count -= n

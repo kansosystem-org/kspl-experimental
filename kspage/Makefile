@@ -76,14 +76,17 @@ export KSPAGE_IMPORTS_NOTE := what is borrowed from outside is the two in port/w
 
 web:
 	@echo "# BUILDING kspage for the browser (wasm32, freestanding)"
+	@test -f "$(WASM_BUILTINS)" || { \
+	  echo "clang's wasm32 builtins are not installed. The link needs them."; \
+	  printf 'clang reported: %s\n' "$(WASM_BUILTINS)"; \
+	  echo "MSYS2 UCRT64: pacman -S --needed mingw-w64-ucrt-x86_64-wasi-compiler-rt"; \
+	  echo "Debian/Ubuntu: install libclang-rt-<version>-dev-wasm32 for your clang version"; \
+	  exit 1; }
 	@mkdir -p "$(OUT)/gen" "$(WEB)"
 	"$(KSPLC)" --freestanding --machine=$(WASM_MACHINE) $(WEB_SRC)/bridge.kspl \
 		"$(OUT)/gen/kspage_bridge.c"
 	$(WASM_CC) -c "$(OUT)/gen/kspage_bridge.c" -o "$(OUT)/gen/kspage_bridge.o"
 	$(WASM_CC) -c $(WEB_SRC)/rt.c -o "$(OUT)/gen/kspage_rt.o"
-	@test -f "$(WASM_BUILTINS)" || { echo "clang's wasm32 builtins are not installed \
-	(libclang-rt-<version>-dev-wasm32; .devcontainer/Dockerfile names it): the link needs them"; \
-	exit 1; }
 	$(WASM_LD) "$(OUT)/gen/kspage_bridge.o" "$(OUT)/gen/kspage_rt.o" "$(WASM_BUILTINS)" \
 		-o "$(WEB)/kspage.wasm"
 	# Caution: **Do not line the sources' names up here**: the template names what is bound
@@ -215,6 +218,7 @@ test-served: $(KSPAGE_PROBE_PAGE)
 		echo "name the server: make test-served KSSRV=<path to kssrv>"; exit 2; fi; \
 	$(kspage_no_browser); \
 	root="$(KSPAGE_SERVED_ROOT)"; rm -rf "$$root"; mkdir -p "$$root/lib"; \
+	"$(KSPLC)" run content/example.kspl "$$root/sample.kspage" || exit 1; \
 	cp "$(KSPAGE_PROBE_PAGE)" "$$root/index.html"; \
 	log="$(OUT)/kspage_served.log"; : > "$$log"; \
 	"$(KSSRV)" $(KSPAGE_SERVED_PORT) "$$root" --local > "$$log" 2>&1 & \

@@ -22,23 +22,23 @@ pub typedef Panic_hook = fn(msg: U8$[]): Void //<
     //< The default, `null`, stops execution without printing a message.
 pub $panic_hook: Panic_hook = Panic_hook::null
 
-priv const panic_msg_cap: Sz = 128 //<
+priv const PANIC_MSG_CAP: Sz = 128 //<
     //< The maximum number of message bytes stored in a panic record
     //<
     //< The port's linker script reserves `.noinit_panic` as RAM that startup does not zero.
     //< After a warm reset without power loss, `take_panic_record()` can read the record.
     //< Recording a panic does not trigger a reset. The caller must arrange one, for example with a
     //< watchdog.
-priv const panic_stack_words: Sz = 16
-priv const panic_magic: U32 = 0x4B505244 // ASCII "KPRD"
+priv const PANIC_STACK_WORDS: Sz = 16
+priv const PANIC_MAGIC: U32 = 0x4B505244 // ASCII "KPRD"
 
 priv struct _Panic_record
     magic: U32
     msg_len: Sz
-    msg: U8[panic_msg_cap]
+    msg: U8[PANIC_MSG_CAP]
     sp: Sz
     stack_len: Sz
-    stack: Sz[panic_stack_words]
+    stack: Sz[PANIC_STACK_WORDS]
 #cfg(freestanding)
 #section(".noinit_panic")
 priv $_panic_rec: _Panic_record = ::{}
@@ -52,20 +52,20 @@ extern "C"
 
 #cfg(freestanding)
 priv fn record_panic(msg: U8$[])
-    _panic_rec.msg_len = msg.len if msg.len < panic_msg_cap else panic_msg_cap
+    _panic_rec.msg_len = msg.len if msg.len < PANIC_MSG_CAP else PANIC_MSG_CAP
     msg_dst: = _panic_rec.msg[0]@
     for i in Range.asc(_panic_rec.msg_len)
         (msg_dst + i)$ = msg[i]
     sp: = kspl_get_sp()
     _panic_rec.sp = sp
     // The port reports readable words. Unknown bounds leave the fragment empty.
-    words: = kspl_panic_stack_words(sp, panic_stack_words) if sp != 0 else 0
+    words: = kspl_panic_stack_words(sp, PANIC_STACK_WORDS) if sp != 0 else 0
     _panic_rec.stack_len = words
     sp_ptr: = Sz$@::sp
     stack_dst: = _panic_rec.stack[0]@
     for i in Range.asc(words)
         (stack_dst + i)$ = (sp_ptr + i)$
-    _panic_rec.magic = panic_magic
+    _panic_rec.magic = PANIC_MAGIC
 
 pub struct Panic_info //< information about a panic from the previous run
     //<
@@ -78,7 +78,7 @@ pub struct Panic_info //< information about a panic from the previous run
 // Reading clears the record so the next startup does not report it again.
 #cfg(freestanding)
 pub fn take_panic_record(): Panic_info? //< the previous run's panic, if present
-    if _panic_rec.magic != panic_magic
+    if _panic_rec.magic != PANIC_MAGIC
         return .none
     info: = Panic_info::{ .msg = U8$[]::{ .ptr = _panic_rec.msg[0]@, .len = _panic_rec.msg_len },
         .sp = _panic_rec.sp, .stack_len = _panic_rec.stack_len }
@@ -128,7 +128,7 @@ pub fn panic( //< stops without libc and sends the message to the panic hook
     _line: Sz = caller_line,
 )
     // **The record excludes the source location.** A path would reduce message space within
-    // `panic_msg_cap`. Without a console, the record is the only available report.
+    // `PANIC_MSG_CAP`. Without a console, the record is the only available report.
     // The location parameters let `assert` call either version.
     record_panic(msg)
     if panic_hook != null
@@ -147,10 +147,10 @@ pub fn assert( //< stops the program unless the condition holds
 pub struct Panic_msg //< a fixed-size panic message buffer with no allocation
     //<
     //< This buffer requires no `io`. **String interpolation (`\{v\}`) is unavailable here.**
-    //< Caution: The buffer silently discards bytes beyond `panic_msg_cap`.
+    //< Caution: The buffer silently discards bytes beyond `PANIC_MSG_CAP`.
     //< Reporting another failure during a panic would leave no recovery path.
     //< Do not use this buffer in place of `Str_builder`.
-    priv buf: U8[panic_msg_cap]
+    priv buf: U8[PANIC_MSG_CAP]
     priv len: Sz
 
 impl Panic_msg
@@ -158,7 +158,7 @@ impl Panic_msg
         return Panic_msg::{ .buf = ::{}, .len = 0 }
 
     priv fn put(r: Self$@, c: U8)
-        if r.len < panic_msg_cap
+        if r.len < PANIC_MSG_CAP
             r.buf[r.len] = c
             r.len += 1
 
@@ -373,7 +373,8 @@ pub fn map<|T, U|>( //< applies a function to the value, if there is one
     //< **Write both type arguments** for this free function: `map<|I32, Sz|>(o, f)`.
     //< A method with its own type parameter (`fn map<|U|>`) could also work, like `select` in
     //< `std/seq`.
-    //< See "A name on the impl that the receiver leaves open" in `../docs/DESIGN-language.md`.
+    //< See "A name on the impl that the receiver leaves open" in
+    //< `../docs/DESIGN-programming-language.md`.
     o: T?, //< the value that can be absent
     f: fn(x: T): U, //< the function applied to a present value
 ): U? //< `f`'s result, or none if `o` is none
@@ -507,7 +508,7 @@ pub trait Index_ref<|Idx, Output|> //< what `x[i]` desugars to through a read-on
     //<
     //< **Immutable content requires this trait**, because `Index_place.at` returns a mutable
     //< `Output$@`. The compiler selects `Index_place` for writable receivers and `Index_ref` for
-    //< read-only receivers. See "Indexing" in `../docs/SPEC-language.md`.
+    //< read-only receivers. See "Indexing" in `../docs/SPEC-programming-language.md`.
     fn at_ref( //< the element's read-only address, so nothing is copied
         r: Self,
         index: Idx, //< which element
@@ -535,7 +536,7 @@ pub trait Iter<|T|> //< a sequence that only yields items in order, with no leng
 pub fn bounds_panic( //< the one message every container stops with when an index is out of range
     //<
     //< Every container uses this message, matching the built-in bounds check.
-    //< See "Conditions that stop execution at run time" in `../docs/SPEC-language.md`.
+    //< See "Conditions that stop execution at run time" in `../docs/SPEC-programming-language.md`.
     //< Caution: **Pass the caller's location.** A default would report `std/lang`, making a
     //< caller's error appear to be a library bug.
     func_name: U8$[], //< the method that was called, so the container can be identified
@@ -562,7 +563,8 @@ impl<|T|> T$[]: Index_place<|Sz, T|> //< so an element of a writable slice can b
     //< This implementation applies only to mutable slices, as the `$` on the type specifies.
     //< The `Self@` receiver only reads the slice descriptor.
     //< Requiring `Self$@` would prevent writing elements through a slice stored in a read-only
-    //< frame. See "The receiver shape an implementation declared" in `../docs/SPEC-language.md`.
+    //< frame. See "The receiver shape an implementation declared" in
+    //< `../docs/SPEC-programming-language.md`.
     #inline
     pub fn at(r: Self@, index: Sz, file: U8[], line: Sz): T$@ //< the element's address
         if index < 0 || index >= r.len
@@ -589,8 +591,8 @@ pub trait Cast<|Output|> //< what `Output::value` desugars to where C would not 
 // ============================ The marker traits ============================
 pub trait Ref_counted //< the compiler counts copies and scope exits for this type
     //<
-    //< See "Why ARC is expressed as a trait" in `docs/DESIGN-language.md` for the reason to use a
-    //< trait.
+    //< See "Why ARC is expressed as a trait" in `docs/DESIGN-programming-language.md` for the
+    //< reason to use a trait.
     //< Caution: **Keep these methods `priv`, including in implementations.** Manual calls duplicate
     //< compiler-generated calls and corrupt the count. **Use `r: Self@` in implementations.**
     //< Generated calls also pass addresses of immutable bindings. A `Self$@` receiver would make
@@ -644,8 +646,8 @@ pub trait Callable1<|A, Ret|> //< a callable value that takes one argument, with
     //<
     //< Caution: **Declare the receiver as `Self`.** An implementation can take `Self@`; a generated
     //< adapter converts between them. See "Why a trait's receiver is fixed to a bare `Self`" in
-    //< `docs/DESIGN-language.md`. An implementing value uses the trait representation `{obj,
-    //< vtable}`. It cannot cross the C boundary or escape through `return`.
+    //< `docs/DESIGN-programming-language.md`. An implementing value uses the trait representation
+    //< `{obj, vtable}`. It cannot cross the C boundary or escape through `return`.
     pub fn call(r: Self, a: A): Ret //< calls it
 
 pub trait Callable2<|A, B, Ret|> //< a callable value that takes two arguments, with its captures

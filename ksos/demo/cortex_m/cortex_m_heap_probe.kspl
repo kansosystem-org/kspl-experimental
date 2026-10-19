@@ -17,10 +17,10 @@ $arena_buf: U8[1024]
 
 // 7's tasks: each round makes one of each way a task ends. Suppose one of them fails to return a
 // context or a slot. The port's 33 contexts then run out within a dozen rounds.
-priv const churn_rounds: I32 = 40
-priv const churn_stack: Sz = 1024
-priv const churn_low: I32 = 1 // below the coordinator's 2: it never runs before its delete
-priv const churn_high: I32 = 3 // above it: it runs inside create_dyn
+priv const CHURN_ROUNDS: I32 = 40
+priv const CHURN_STACK: Sz = 1024
+priv const CHURN_LOW: I32 = 1 // below the coordinator's 2: it never runs before its delete
+priv const CHURN_HIGH: I32 = 3 // above it: it runs inside create_dyn
 $churn_made: I32 = 0
 $churn_ran: I32 = 0
 $tcb_churn: Task
@@ -36,17 +36,17 @@ fn churn_return(_arg: Void$@): Void //< returns from its entry; the coordinator 
     churn_ran += 1
 
 fn churn_coord(_arg: Void$@): Void
-    for $i: I32 = 0; i < churn_rounds; i += 1
-        switch Task.create_dyn(churn_never, null, churn_low, "never", churn_stack)
+    for $i: I32 = 0; i < CHURN_ROUNDS; i += 1
+        switch Task.create_dyn(churn_never, null, CHURN_LOW, "never", CHURN_STACK)
         case .some(t)
             churn_made += 1
             t.delete_dyn()
         case .none {}
-        switch Task.create_dyn(churn_self, null, churn_high, "self", churn_stack)
+        switch Task.create_dyn(churn_self, null, CHURN_HIGH, "self", CHURN_STACK)
         case .some
             churn_made += 1
         case .none {}
-        switch Task.create_dyn(churn_return, null, churn_high, "return", churn_stack)
+        switch Task.create_dyn(churn_return, null, CHURN_HIGH, "return", CHURN_STACK)
         case .some(t)
             churn_made += 1
             t.delete_dyn()
@@ -153,8 +153,8 @@ fn ksos_main()
     task.start_scheduler() // returns once churn_coord has returned
     dyn.reap_pending() // the last self-deleted task waits for this
     con.check("120 create_dyn / delete_dyn against 33 contexts all succeed",
-        churn_made == 3 * churn_rounds)
-    con.check("each churned task ran exactly as its kind should", churn_ran == 2 * churn_rounds)
+        churn_made == 3 * CHURN_ROUNDS)
+    con.check("each churned task ran exactly as its kind should", churn_ran == 2 * CHURN_ROUNDS)
     con.check("every churned Task and stack went back to the heap",
         heap_used_bytes() == used_before)
 

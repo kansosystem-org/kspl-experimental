@@ -13,20 +13,20 @@ import "ksplc/sema/type/display" as sema_type_display
 import "std/ds" { List }
 import "std/str" { Str_builder }
 
-priv const sig_one_line_max: Sz = 100 //<
+priv const SIG_ONE_LINE_MAX: Sz = 100 //<
     //< How wide the one-line form may be before the parameters are laid out one per line
     //<
     //< It is the formatter's column limit (`../fmt/style.kspl`'s `.column_limit`). So a
     //< declaration the source keeps on one line is kept on one line here too. `make
     //< test-conventions` keeps the two numbers in step.
 
-priv const sig_param_indent: U8[] = "    " //<
+priv const SIG_PARAM_INDENT: U8[] = "    " //<
     //< How far each parameter's line is indented where the parameters take a line each
     //<
     //< It is one level of the formatter's (`../fmt/style.kspl`'s `.indent_width`), so the
     //< parameters stand where the source puts them; `make test-conventions` keeps the two in step.
 
-priv const sig_max_param_lines: Sz = 16 //<
+priv const SIG_MAX_PARAM_LINES: Sz = 16 //<
     //< How many parameters are laid out before the rest is given as a count
     //<
     //< It is above any hand-written declaration, so only generated input is cut short.
@@ -35,8 +35,8 @@ priv fn write_self_spelling(type_node: Ast_node$@, out: Str_builder$@): Bool //<
     //< It writes a type written `Self` as is, and returns true if it did
     //<
     //< **It takes precedence over every type id.** `Self` is the fixed spelling rather than a type
-    //< to resolve ("Traits (`trait`)" in `../../docs/SPEC-language.md`). On a template, the ids
-    //< around it belong to whatever was instantiated last (`r: Self` would read `r: U8[]`).
+    //< to resolve ("Traits (`trait`)" in `../../docs/SPEC-programming-language.md`). On a template,
+    //< the ids around it belong to whatever was instantiated last (`r: Self` would read `r: U8[]`).
     if type_node == null
         return false
     spelt: = type_node.self_type_spelling()
@@ -61,7 +61,7 @@ fn write_type_of(c: Sema_ctx$@, type_node: Ast_node$@, own_id: I32, out: Str_bui
         out.s(t_str)
         return
     if type_node == null || c == null
-        out.s(base_core.unknown_type_name)
+        out.s(base_core.UNKNOWN_TYPE_NAME)
         return
     // Caution: **Take the whole spelling, not the path's last name.** `get_path_name` answers "what
     // is this path called", so on a desugared slice it returns only the element and a `U8[][]`
@@ -116,7 +116,7 @@ fn format_fn_sig(c: Sema_ctx$@, fn_node: Ast_node$@, src: U8[]): Str_builder //<
             break
 
     $res: = Str_builder.new()
-    if !described && flat.len <= sig_one_line_max
+    if !described && flat.len <= SIG_ONE_LINE_MAX
         res.s(flat.slice())
         return res
 
@@ -125,10 +125,10 @@ fn format_fn_sig(c: Sema_ctx$@, fn_node: Ast_node$@, src: U8[]): Str_builder //<
     fn_node.sig_parts(parts@)
     res.s("(\n")
     for i in Range.asc(parts.len)
-        if i == sig_max_param_lines
-            res.s(sig_param_indent).s("// ... \{parts.len - i\} more\n")
+        if i == SIG_MAX_PARAM_LINES
+            res.s(SIG_PARAM_INDENT).s("// ... \{parts.len - i\} more\n")
             break
-        res.s(sig_param_indent)
+        res.s(SIG_PARAM_INDENT)
         base_ast_spell.write_sig_part(parts.get(i),
             fn(part: base_ast_spell.Sig_part, out: Str_builder$@; c: Sema_ctx$@): Bool {
             return spell_for_editor(c, part, out);

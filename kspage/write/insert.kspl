@@ -32,7 +32,7 @@ enum Surface_end //< the result of inserting a slide
     in_cell //< the cursor is inside a table cell, where a slide cannot go
     nowhere //< the cursor is not inside a paragraph
     no_style //< the document has no style that arranges its children on a slide with a size
-    too_deep //< its frames would stand deeper than a document holds (`limit.most_nesting`)
+    too_deep //< its frames would stand deeper than a document holds (`limit.MOST_NESTING`)
 
 enum Sketch //< a slide's layout sketch
     //<
@@ -53,11 +53,11 @@ fn sketch_from(name: U8[]): Sketch //< gets a sketch from a name
         return .halved
     return .whole
 
-priv const pad_share: F32 = 0.0625F32 //< the margin around a frame, and the title's height
+priv const PAD_SHARE: F32 = 0.0625F32 //< the margin around a frame, and the title's height
     //<
     //< Both are a fraction of the slide's size (in px, a frame would stick out when the size
     //< changes).
-priv const title_share: F32 = 0.2F32
+priv const TITLE_SHARE: F32 = 0.2F32
 
 priv fn role_of(sheet: Sheet$@, how: Arrange, sized: Bool): Style$@? //<
     //< The first of the styles with that arrangement
@@ -119,9 +119,9 @@ priv fn sketched(made: Block$@, plan: Sketch, wide: F32, high: F32) //<
     //< Caution: **Place at least one frame** (a child with no frame cannot be grabbed). **Put one
     //< text in each** (the cursor stands only on a box, and a box comes only from a text).
     //< Only the frame filling the slide has no margin.
-    pad_x: = wide * pad_share
-    pad_y: = high * pad_share
-    title_h: = high * title_share
+    pad_x: = wide * PAD_SHARE
+    pad_y: = high * PAD_SHARE
+    title_h: = high * TITLE_SHARE
     body_y: = pad_y + title_h + pad_y
     body_h: = high - body_y - pad_y
     inner: = wide - pad_x - pad_x
@@ -167,8 +167,8 @@ priv fn first_spot(sheet: Sheet$@, holder: Block$@): Rect //<
                 .w = room.width / 2.0F32, .h = room.height / 2.0F32 }
     return Rect::{ .x = 8.0, .y = 8.0, .w = 120.0, .h = 80.0 }
 
-priv const cell_name: U8[] = "cell" //< the name of the style a new table's cells get
-priv const line_color: U32 = 0xd0d7deU32 //< the color of the lines a new table is drawn with
+priv const CELL_NAME: U8[] = "cell" //< the name of the style a new table's cells get
+priv const LINE_COLOR: U32 = 0xd0d7deU32 //< the color of the lines a new table is drawn with
 
 priv fn dress_cell(cell: Style$@, want: Align) //<
     //< Sets a new cell style's look: the padding, and the line the grid is drawn with
@@ -178,7 +178,7 @@ priv fn dress_cell(cell: Style$@, want: Align) //<
     cell.align = want
     cell.pad = 6.0
     cell.rule_width = 1.0
-    cell.rule_color = line_color
+    cell.rule_color = LINE_COLOR
 
 impl Editor
     priv fn cell_styled(r: Self$@, st: Step$@, sheet: Sheet$@): U8[] //<
@@ -193,9 +193,9 @@ impl Editor
             s: = sheet.styles.get(i)
             if style.cell_like(s) && s.align.same_align(.left)
                 return s.name
-        if had: = sheet.find(cell_name)
+        if had: = sheet.find(CELL_NAME)
             return had.name
-        switch r.styled(st, sheet, cell_name, .flow)
+        switch r.styled(st, sheet, CELL_NAME, .flow)
         case .some(made)
             $want: Style = made$
             dress_cell(want@, .left)
@@ -345,7 +345,7 @@ impl Editor
         //< True if inserted. The caller decides the size (the core cannot read an image). It does
         //< not hold the image itself, only its source. It gets one text, for a caption. **One
         //< larger than a document holds is placed at the largest size it holds, its proportions
-        //< kept** (`limit.most_length`). Kept as given, the saved file would not load.
+        //< kept** (`limit.MOST_LENGTH`). Kept as given, the saved file would not load.
         if r.shut()
             return false
         room: = r.room_after_caret(page)
@@ -357,7 +357,7 @@ impl Editor
         made: = doc.new_block("", r.arena)
         // Caution: Copy the source. What is passed in is the input field's current text.
         made.image = r.arena.dup_str(src)
-        most: = F32::limit.most_length
+        most: = F32::limit.MOST_LENGTH
         big: = w if w > h else h
         scale: = most / big if big > most else 1.0F32
         made.image_w = limit.length_in(w * scale)
@@ -410,7 +410,7 @@ impl Editor
             moved = true
         switch fresh.fill
         case .none
-            fresh.fill = .some(style.drawn_color)
+            fresh.fill = .some(style.DRAWN_COLOR)
             moved = true
         case .some {}
         if !moved
@@ -431,7 +431,7 @@ impl Editor
         case .none
             if fresh.rule_width <= 0.0
                 fresh.rule_width = 2.0F32
-                fresh.rule_color = style.drawn_color
+                fresh.rule_color = style.DRAWN_COLOR
         case .some {}
         if fresh.rule_width == s.rule_width && s.shape.same_shape(what)
             return

@@ -4,6 +4,7 @@
 //< matrix-product kernel is pure KSPL by default.** It has no dependencies and is written so that
 //< Clang's auto-vectorization works. It hands off to BLAS only in a `--define=blas` build. Read
 //< this file first.
+import "std/checked_int"
 import "std/math"
 import "std/mem" { Arena }
 import "std/prng"
@@ -17,7 +18,7 @@ pub enum Tensor_error //< why an operation could not run on the shapes it was gi
     rank_mismatch //< the number of dimensions is not what the operation expects
     shape_mismatch //< a dimension's size does not match, such as the inner-product dimension
     out_of_bounds //< a row number outside the tensor; a bad element index stops the program
-pub const max_tensor_elems: Sz = 100000000 //< the most elements one tensor can hold.
+pub const MAX_TENSOR_ELEMS: Sz = 100000000 //< the most elements one tensor can hold.
     //<
     //< The cap `new` enforces, which fits cfg(freestanding)'s 32-bit Sz (800MB even at F64). It is
     //< pub so safetensors.get_tensor, which bypasses `new`, applies the same cap.
@@ -52,15 +53,16 @@ impl<|T|> Tensor<|T|>
         ndim: = shape.len
         $size: Sz = 1
 
-        shape_ptr: = Sz$@::arena.alloc(ndim * sizeof(Sz))
+        shape_bytes: = ndim.checked_mul(sizeof(Sz)) catch panic("Tensor shape storage is too large")
+        shape_ptr: = Sz$@::arena.alloc(shape_bytes)
         for $i: = I32::ndim - 1; i >= 0; i -= 1
             s: = shape[i]
             (shape_ptr + i)$ = s
             // Caution: **Check before multiplying.** A multiply first and then a compare with
-            // `max_tensor_elems` lets through a product that overflowed Sz and wrapped below the
+            // `MAX_TENSOR_ELEMS` lets through a product that overflowed Sz and wrapped below the
             // cap. The wrap can land on any multiple of 256. `new` cannot fail and is called from
             // many places, so it stops at once on what should never happen.
-            if s > 0 && size > max_tensor_elems / s
+            if s > 0 && size > MAX_TENSOR_ELEMS / s
                 // Always print which dimension held which value. Without the values, nobody can
                 // tell the cause apart: a bug in the caller or in code generation. The intent is
                 // that of "A program keeps its own output on an abnormal exit" in
@@ -87,7 +89,8 @@ impl<|T|> Tensor<|T|>
                 panic(b.slice())
             size *= s
 
-        data_ptr: = T$@::arena.alloc(size * sizeof(T))
+        data_bytes: = size.checked_mul(sizeof(T)) catch panic("Tensor element storage is too large")
+        data_ptr: = T$@::arena.alloc(data_bytes)
         return Tensor<|T|>.from_raw_parts(data_ptr, shape_ptr, ndim, size, arena)
     pub fn dup( //< a copy in another arena, flattened to one dimension
         //<
@@ -456,7 +459,7 @@ fn matmul_kernel<|T|>(c: T$@, a: T$@, b: T$@, m: Sz, k: Sz, n: Sz)
 
 #cfg(blas)
 fn matmul_kernel<|T|>(c: T$@, a: T$@, b: T$@, m: Sz, k: Sz, n: Sz)
-    blas_gemm<|T|>(cblas_no_trans, cblas_no_trans, m, n, k, a, k, b, n, c, n) // C = A@B
+    blas_gemm<|T|>(CBLAS_NO_TRANS, CBLAS_NO_TRANS, m, n, k, a, k, b, n, c, n) // C = A@B
 
 // C = A @ B^T (A:[m,k], B:[n,k] -> C:[m,n]): each output an inner product of two rows.
 #cfg(!blas)
@@ -501,7 +504,7 @@ fn transb_kernel<|T|>(c: T$@, a: T$@, b: T$@, m: Sz, k: Sz, n: Sz) //<
 
 #cfg(blas)
 fn transb_kernel<|T|>(c: T$@, a: T$@, b: T$@, m: Sz, k: Sz, n: Sz)
-    blas_gemm<|T|>(cblas_no_trans, cblas_trans, m, n, k, a, k, b, k, c, n) // C = A@B^T
+    blas_gemm<|T|>(CBLAS_NO_TRANS, CBLAS_TRANS, m, n, k, a, k, b, k, c, n) // C = A@B^T
 
 // ---------------------------------------------------------
 // An optional backend: only a `--define=blas` build calls BLAS's gemm by FFI. By default cfg(blas)
@@ -513,11 +516,11 @@ fn transb_kernel<|T|>(c: T$@, a: T$@, b: T$@, m: Sz, k: Sz, n: Sz)
 
 // CBLAS's enum values, as `cblas.h` numbers them.
 #cfg(blas)
-const cblas_row_major: I32 = 101 //< CBLAS_ORDER: rows stored one after another
+const CBLAS_ROW_MAJOR: I32 = 101 //< CBLAS_ORDER: rows stored one after another
 #cfg(blas)
-const cblas_no_trans: I32 = 111 //< CBLAS_TRANSPOSE: the matrix as it is
+const CBLAS_NO_TRANS: I32 = 111 //< CBLAS_TRANSPOSE: the matrix as it is
 #cfg(blas)
-const cblas_trans: I32 = 112 //< CBLAS_TRANSPOSE: the matrix transposed
+const CBLAS_TRANS: I32 = 112 //< CBLAS_TRANSPOSE: the matrix transposed
 
 #cfg(blas)
 #link("openblas")
@@ -532,7 +535,7 @@ fn blas_gemm<|T|>(ta: I32, tb: I32, m: Sz, n: Sz, k: Sz, a: T$@, lda: Sz, b: T$@
     ldc: Sz) //<
         //< cfg(blas): the shared dispatch to BLAS gemm, C = op(A)@op(B) with alpha=1 and beta=0
         //<
-        //< It is RowMajor and transposes by ta/tb (`cblas_no_trans` / `cblas_trans`); it picks
+        //< It is RowMajor and transposes by ta/tb (`CBLAS_NO_TRANS` / `CBLAS_TRANS`); it picks
         //< sgemm or dgemm by the element size (F32 or F64 only). matmul and grad.kspl's backward
         //< gemm share it.
     mi: = I32::m
@@ -542,8 +545,8 @@ fn blas_gemm<|T|>(ta: I32, tb: I32, m: Sz, n: Sz, k: Sz, a: T$@, lda: Sz, b: T$@
     ldb_i: = I32::ldb
     ldc_i: = I32::ldc
     if sizeof(T) == 4
-        cblas_sgemm(cblas_row_major, ta, tb, mi, ni, ki, F32::1.0, F32$@::a, lda_i, F32$@::b, ldb_i,
+        cblas_sgemm(CBLAS_ROW_MAJOR, ta, tb, mi, ni, ki, F32::1.0, F32$@::a, lda_i, F32$@::b, ldb_i,
             F32::0.0, F32$@::c, ldc_i)
     else
-        cblas_dgemm(cblas_row_major, ta, tb, mi, ni, ki, F64::1.0, F64$@::a, lda_i, F64$@::b, ldb_i,
+        cblas_dgemm(CBLAS_ROW_MAJOR, ta, tb, mi, ni, ki, F64::1.0, F64$@::a, lda_i, F64$@::b, ldb_i,
             F64::0.0, F64$@::c, ldc_i)

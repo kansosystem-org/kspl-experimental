@@ -182,7 +182,7 @@ export async function run(ks, open) {
   // --- A page's header and footer ---
   // **It is a row apart from the document's boxes** (its coordinates are from the page's top left).
   // The marks in the text (`{page}`, `{pages}`) are the core's — `page_mark` and
-  // `count_mark` in `kspage/lay/chrome.kspl` — so those needles stay as they are until that side
+  // `COUNT_MARK` in `kspage/lay/chrome.kspl` — so those needles stay as they are until that side
   // moves.
   const chromeText = (i) => {
     const len = w.kspage_web_chrome_text(i);

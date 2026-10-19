@@ -54,7 +54,7 @@ struct Gate //< one gate: what `make` is asked for, and where it runs
 
 // Caution: **The order is the order they run in.** A gate can use what one before it built (the
 // self-host builds stage2, which perf-log measures again).
-const gates: Gate[_] = ::{
+const GATES: Gate[_] = ::{
     Gate::{ .log = "selfhost", .args = "self-host", .par = .serial, .verdict = true,
         .shard = .core, .macos = true, .stops = true },
     // **Only macOS runs every package's tests in one program**: Linux and Windows run each
@@ -88,7 +88,7 @@ const gates: Gate[_] = ::{
     // On a fall, remake the record with `make surface` and commit it with its diff.
     Gate::{ .log = "surface", .args = "test-surface", .par = .serial, .verdict = true,
         .shard = .linux, .macos = false, .stops = false },
-    // The tour is generated from its program; `make tour` remakes it.
+    // The tour is generated from its program; `make tutorial` remakes it.
     Gate::{ .log = "docs", .args = "test-docs", .par = .serial, .verdict = true, .shard = .linux,
         .macos = false, .stops = false },
     Gate::{ .log = "suites_b", .args = "test-suites-b", .par = .synced, .verdict = false,
@@ -168,14 +168,14 @@ enum Set //< a set of gates one command runs, named as `make` names it
     ci_shard_rest //< `make ci-shard-rest`
     ci_shard_linux //< `make ci-shard-linux`: what Linux alone runs
 
-const set_order: Set[_] = ::{ Set.ci, Set.ci_macos, Set.ci_shard_core, Set.ci_shard_rest,
+const SET_ORDER: Set[_] = ::{ Set.ci, Set.ci_macos, Set.ci_shard_core, Set.ci_shard_rest,
     Set.ci_shard_linux } //< every set, so a name can be read back
 
 fn set_from(name: U8[], arena: Arena$@): Set? //< the set a name spells, if any
     //<
     //< **A name is the variant's with `_` written `-`** (`ci-shard-core`), so `make`, the workflow
     //< and this table spell it one way.
-    for s in set_order
+    for s in SET_ORDER
         if s.variant_name().replace("_", "-", arena).equals(name)
             return .some(s)
     return .none
@@ -206,7 +206,7 @@ struct Expected_skip //< one SKIP a platform's round may print
     on: U8[] //< the platforms it is expected on, space-separated: `linux`, `darwin`, `win32`
     says: U8[] //< a piece of the line that tells its reason apart
 
-const expected_skips: Expected_skip[_] = ::{
+const EXPECTED_SKIPS: Expected_skip[_] = ::{
     Expected_skip::{ .on = "linux win32 darwin", .says = "this machine has no IPv6 at all" },
     Expected_skip::{ .on = "win32 darwin", .says = "the loopback holds no `::1`" },
     Expected_skip::{ .on = "win32 darwin", .says = "x86_64-w64-mingw32-gcc is not installed" },
@@ -285,7 +285,7 @@ struct Switch_skip //< one SKIP a gate prints where a switch is turned off and t
     name: U8[] //< the switch, as `mk/test.mk` names it
     says: U8[] //< a piece of the line that tells its reason apart
 
-const switch_skips: Switch_skip[_] = ::{
+const SWITCH_SKIPS: Switch_skip[_] = ::{
     Switch_skip::{ .name = "KANSO_REQUIRE_ASAN", .says = "holds no sanitizer runtime" },
     Switch_skip::{ .name = "KANSO_REQUIRE_ASAN",
         .says = "cannot build with the address and undefined-behaviour sanitizers" },
@@ -306,23 +306,23 @@ fn is_expected_skip(line: U8[], platform: U8[], relaxed: U8[]): Bool //<
     //< Whether a row holds this SKIP line: one of the platform's, or one of a switch turned off
     //<
     //< `relaxed` holds the switches turned off, space-separated (`--relaxed` in `tools/ci.kspl`).
-    for e in expected_skips
+    for e in EXPECTED_SKIPS
         if lists(e.on, platform) && line.find_str(e.says).is_some()
             return true
-    for w in switch_skips
+    for w in SWITCH_SKIPS
         if lists(relaxed, w.name) && line.find_str(w.says).is_some()
             return true
     return false
 
 fn unknown_switch(relaxed: U8[], arena: Arena$@): U8[]? //<
-    //< A switch named in `relaxed` that no row of `switch_skips` names, if any
+    //< A switch named in `relaxed` that no row of `SWITCH_SKIPS` names, if any
     //<
     //< **Refused rather than ignored**: its gates' skips would fail the round with no row to blame.
     for name in relaxed.split(' ', arena)
         if name.len == 0
             continue
         $known: = false
-        for w in switch_skips
+        for w in SWITCH_SKIPS
             if w.name.equals(name)
                 known = true
         if !known
@@ -346,9 +346,9 @@ priv fn lists(words: U8[], word: U8[]): Bool //< whether a space-separated list 
 // later `make ci-summary` (another process, another workflow step) reads what this one saw.
 // ==========================================
 
-const log_dir: U8[] = "out/log/ci" //< where the gates' logs go
-const suite_log_dir: U8[] = "out/log/suite" //< where each suite's own log goes (`SUITE_LOG_DIR`)
-const end_ext: U8[] = ".end" //< the file beside a log holding `<exit code> <seconds>`
+const LOG_DIR: U8[] = "out/log/ci" //< where the gates' logs go
+const SUITE_LOG_DIR: U8[] = "out/log/suite" //< where each suite's own log goes (`SUITE_LOG_DIR`)
+const END_EXT: U8[] = ".end" //< the file beside a log holding `<exit code> <seconds>`
 
 struct Judge //< what a SKIP line is held against: the round's platform and the switches off
     platform: U8[] //< make's `PLATFORM`; empty where it names none, and then no SKIP is judged
@@ -367,10 +367,10 @@ struct Outcome //< what one gate left
     causes: List<|Cause|> //< why it fell, empty where it passed (`causes`)
 
 fn log_path(log: U8[], arena: Arena$@): U8[] //< where a gate's log is
-    return arena.text().s(log_dir).c('/').s(log).s(".log").take()
+    return arena.text().s(LOG_DIR).c('/').s(log).s(".log").take()
 
 fn end_path(log: U8[], arena: Arena$@): U8[] //< where a gate's exit code and seconds are
-    return arena.text().s(log_dir).c('/').s(log).s(end_ext).take()
+    return arena.text().s(LOG_DIR).c('/').s(log).s(END_EXT).take()
 
 fn outcomes(j: Judge@, arena: Arena$@): List<|Outcome|> //<
     //< What the gates left, in the table's order
@@ -378,7 +378,7 @@ fn outcomes(j: Judge@, arena: Arena$@): List<|Outcome|> //<
     //< **A gate with no log did not run** and is left out; one with a log and no `.end` was cut
     //< short, and counts as fallen.
     $out: = List<|Outcome|>.new(arena)
-    for g in gates
+    for g in GATES
         text: = io.read_file(log_path(g.log, arena)) catch
             continue
         held: = arena.dup_str(text)
@@ -417,10 +417,10 @@ fn outcome_of(g: Gate, text: U8[], ended: U8[], j: Judge@, arena: Arena$@): Outc
 // whole job and leaves no word of which gate hung. Locally, nothing else would stop it at all.
 // ==========================================
 
-priv const notice_us: I64 = 15000000I64 //< how often a gate still running is named on the screen
-priv const over_cap_head: U8[] = "# gate " //< the cap's line, around the gate's log and the cap
-priv const over_cap_mid: U8[] = " ran over "
-priv const over_cap_tail: U8[] = " s and was stopped"
+priv const NOTICE_US: I64 = 15000000I64 //< how often a gate still running is named on the screen
+priv const OVER_CAP_HEAD: U8[] = "# gate " //< the cap's line, around the gate's log and the cap
+priv const OVER_CAP_MID: U8[] = " ran over "
+priv const OVER_CAP_TAIL: U8[] = " s and was stopped"
 
 fn run_capped(argv: U8[][], name: U8[], log: U8[], cap_s: I64, started: I64): I32 //<
     //< Runs one gate's command to its end, naming it while it runs: its exit code, 127 unstarted
@@ -430,7 +430,7 @@ fn run_capped(argv: U8[][], name: U8[], log: U8[], cap_s: I64, started: I64): I3
     //< screen and the end of `log`, where `causes` names it first. The gate then fails with 1.
     $child: = subproc.spawn_limited(argv, "", I32::(cap_s * 1000I64)) catch
         return 127
-    $next: = started + notice_us
+    $next: = started + NOTICE_US
     for
         // Waited on only until it comes back ended or timed out, it is never reaped before.
         switch child.wait(I32::((next - sys.mono_us() + 999I64) / 1000I64)).unwrap_or(.ended(1))
@@ -442,11 +442,11 @@ fn run_capped(argv: U8[][], name: U8[], log: U8[], cap_s: I64, started: I64): I3
                 io.out()
                     .s("# still running \{name\}: \{(now - started) / 1000000I64\}s (\{log\})\n")
                     .flush()
-                next = now + notice_us
+                next = now + NOTICE_US
         case .timed_out
             $line: = Str_builder.new()
             defer line.free()
-            line.s(over_cap_head).s(name).s(over_cap_mid).s("\{cap_s\}").s(over_cap_tail).c('\n')
+            line.s(OVER_CAP_HEAD).s(name).s(OVER_CAP_MID).s("\{cap_s\}").s(OVER_CAP_TAIL).c('\n')
             io.out().s(line.slice()).flush()
             $f: = io.open(log, "ab") catch
                 return 1
@@ -476,25 +476,25 @@ struct Cause //< one line of a fallen gate's log that says why it fell
     kind: Cause_kind
     line: U8[]
 
-const cause_order: Cause_kind[_] = ::{ Cause_kind.over_cap, Cause_kind.panic, Cause_kind.fail,
+const CAUSE_ORDER: Cause_kind[_] = ::{ Cause_kind.over_cap, Cause_kind.panic, Cause_kind.fail,
     Cause_kind.unexpected_skip, Cause_kind.result, Cause_kind.make } //<
         //< The kinds read from the lines, most telling first
         //<
         //< `no_verdict` and `tail` are added after them, where the gate's own say nothing.
 
-const causes_shown: Sz = 6 //<
+const CAUSES_SHOWN: Sz = 6 //<
     //< How many of a gate's causes the summary lists, the tail apart; its log holds the rest
-const tail_shown: Sz = 8 //< how many of a log's last lines stand in where nothing names a cause
-const cause_width: Sz = 400 //< the bytes of one line the summary keeps; its log holds it whole
+const TAIL_SHOWN: Sz = 8 //< how many of a log's last lines stand in where nothing names a cause
+const CAUSE_WIDTH: Sz = 400 //< the bytes of one line the summary keeps; its log holds it whole
 
 priv fn kind_of(line: U8[], log: U8[], j: Judge@): Cause_kind? //< the cause a line names, if any
     //<
     //< Caution: **The cap's line counts for the gate it names alone.** A gate's own tests print
     //< one for a fake gate, which is no cause of theirs.
     t: = line.trim_spaces()
-    if t.starts_with(over_cap_head) && t.sub_from(over_cap_head.len).starts_with(log) &&
-        t.sub_from(over_cap_head.len + log.len).starts_with(over_cap_mid) &&
-        t.ends_with(over_cap_tail)
+    if t.starts_with(OVER_CAP_HEAD) && t.sub_from(OVER_CAP_HEAD.len).starts_with(log) &&
+        t.sub_from(OVER_CAP_HEAD.len + log.len).starts_with(OVER_CAP_MID) &&
+        t.ends_with(OVER_CAP_TAIL)
         return .some(.over_cap)
     if t.starts_with("panic: ")
         return .some(.panic)
@@ -523,7 +523,7 @@ fn causes(text: U8[], log: U8[], verdict: Bool, j: Judge@, arena: Arena$@): List
     $passed: = false
     for line in lines
         passed = passed || line.trim_spaces().starts_with("RESULT: ALL PASS")
-    for k in cause_order
+    for k in CAUSE_ORDER
         for line in lines
             if got: = kind_of(line, log, j)
                 if got == k && !holds(out@, line.trim_spaces())
@@ -536,7 +536,7 @@ fn causes(text: U8[], log: U8[], verdict: Bool, j: Judge@, arena: Arena$@): List
             .push(Cause::{ .kind = .no_verdict, .line = "it printed no `RESULT: ALL PASS` line" })
     $from: = lines.len
     $kept: Sz = 0
-    for from > 0 && kept < tail_shown
+    for from > 0 && kept < TAIL_SHOWN
         from -= 1
         if lines.get(from).trim_spaces().len > 0
             kept += 1
@@ -563,8 +563,8 @@ fn put_cause(c: Cause, b: Str_builder$@) //< one cause as the summary marks it
     if c.kind == Cause_kind.tail
         b.s("| ")
     $n: = c.line.len
-    if n > cause_width
-        n = cause_width
+    if n > CAUSE_WIDTH
+        n = CAUSE_WIDTH
         // Back to a character's first byte, so a cut never splits a UTF-8 sequence.
         for n > 0 && (c.line[n] & 0xC0U8) == 0x80U8
             n -= 1
@@ -597,7 +597,7 @@ fn digest_plain(outs: List<|Outcome|>@, jobs: I64, j: Judge@, b: Str_builder$@) 
     //< the gate. Each is in the gate's log, and one no row holds is listed as a cause.
     t: = tally(outs)
     b.s("# the gates that ran (a SKIP line is a check that did not run; each gate's whole log is ")
-        .s(log_dir).s("/<gate>.log)\n")
+        .s(LOG_DIR).s("/<gate>.log)\n")
     for i in Range.asc(outs.len)
         o: = outs.get(i)
         $row: = Str_builder.new()
@@ -628,16 +628,16 @@ fn digest_plain(outs: List<|Outcome|>@, jobs: I64, j: Judge@, b: Str_builder$@) 
             c: = o.causes.get(k)
             if c.kind != Cause_kind.tail
                 named += 1
-            if named > causes_shown
+            if named > CAUSES_SHOWN
                 continue
             b.s("#   ").s(o.log).s(": ")
             put_cause(c, b)
             b.c('\n')
-        if named > causes_shown
-            b.s("#   ").s(o.log).s(": … and \{named - causes_shown\} more in its log\n")
-        b.s("#   ").s(o.log).s(": its whole log is ").s(log_dir).c('/').s(o.log).s(".log\n")
+        if named > CAUSES_SHOWN
+            b.s("#   ").s(o.log).s(": … and \{named - CAUSES_SHOWN\} more in its log\n")
+        b.s("#   ").s(o.log).s(": its whole log is ").s(LOG_DIR).c('/').s(o.log).s(".log\n")
     if t.unexpected > 0
-        b.s("# UNEXPECTED: no row of `expected_skips` in tools/ci_gates.kspl holds that SKIP for ")
+        b.s("# UNEXPECTED: no row of `EXPECTED_SKIPS` in tools/ci_gates.kspl holds that SKIP for ")
             .s(j.platform).s("; bring its tool back, or add the row where this platform cannot ")
             .s("have it\n")
 
@@ -670,11 +670,11 @@ fn reset_logs(arena: Arena$@): Bool //<
     //< Caution: **Stop the round on a file that stays.** An old log left in place reads as this
     //< round's PASS for a gate that never ran. A folder that is not there holds nothing to remove.
     $all_gone: = true
-    for dir in U8[][]::{ log_dir, suite_log_dir }
+    for dir in U8[][]::{ LOG_DIR, SUITE_LOG_DIR }
         names: = fs.read_dir(dir, arena) catch
             continue
         for name in names
-            if name.ends_with(".log") || name.ends_with(end_ext) || name.ends_with(".times")
+            if name.ends_with(".log") || name.ends_with(END_EXT) || name.ends_with(".times")
                 path: = fs.join(dir, name, arena)
                 fs.remove_path(path) catch
                     io.err().s("ci: an earlier round's \{path\} cannot be removed\n")

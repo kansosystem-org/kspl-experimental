@@ -85,5 +85,5 @@ ksplc info std-dir                          # names the std/ beside ksplc
 | `ksplc --help` | the subcommands (`run` / `lint` / `fmt` / `info` / `clean` / `doc`) and options |
 | `ksplc doc std` | every file of the bundled `std/`, one line each; `ksplc doc std/io` shows one file's declarations, and `ksplc doc std/io.out` one entry |
 | `ksplc lint <file>` | what is flagged before it becomes an error (an unused import, a no-op `as`, and the like) |
-| `docs/SPEC-language.md` in the Kanso repository | the language specification |
+| `docs/SPEC-programming-language.md` in the Kanso repository | the language specification |
 | `ksplc/docs/SPEC-tools.md` in the Kanso repository | the tools' specification (the cache, the link flags, `##lint`) |

@@ -23,24 +23,24 @@ import "std/strfmt" as _strfmt
 import "std/strnum"
 import "std/verdict"
 
-// Both the descriptors and the driver are read: `desc_ntb_params` is in the driver, so reading
+// Both the descriptors and the driver are read: `DESC_NTB_PARAMS` is in the driver, so reading
 // only one gives a silent "not found".
-priv const sources: U8[][2] = ::{ "drivers/rp2040/usb_desc.kspl", "drivers/rp2040/usb_cdc.kspl" }
+priv const SOURCES: U8[][2] = ::{ "drivers/rp2040/usb_desc.kspl", "drivers/rp2040/usb_cdc.kspl" }
 
-priv const arrays: U8[][7] = ::{ "desc_device", "desc_config", "desc_lang", "desc_manufacturer",
-    "desc_product", "desc_mac", "desc_ntb_params" }
+priv const ARRAYS: U8[][7] = ::{ "DESC_DEVICE", "DESC_CONFIG", "DESC_LANG", "DESC_MANUFACTURER",
+    "DESC_PRODUCT", "DESC_MAC", "DESC_NTB_PARAMS" }
 
-priv const t_iface: Sz = 0x04 //< the descriptor types
-priv const t_endpoint: Sz = 0x05
-priv const t_iad: Sz = 0x0B
-priv const t_cs_iface: Sz = 0x24
+priv const T_IFACE: Sz = 0x04 //< the descriptor types
+priv const T_ENDPOINT: Sz = 0x05
+priv const T_IAD: Sz = 0x0B
+priv const T_CS_IFACE: Sz = 0x24
 
-priv const sub_union: Sz = 0x06 //< the subtypes of CS_INTERFACE
-priv const sub_ethernet: Sz = 0x0F
+priv const SUB_UNION: Sz = 0x06 //< the subtypes of CS_INTERFACE
+priv const SUB_ETHERNET: Sz = 0x0F
 
-priv const ncm_subclass: Sz = 0x0D
-priv const cdc_data_class: Sz = 0x0A
-priv const ncm_proto_ntb: Sz = 0x01
+priv const NCM_SUBCLASS: Sz = 0x0D
+priv const CDC_DATA_CLASS: Sz = 0x0A
+priv const NCM_PROTO_NTB: Sz = 0x01
 
 priv struct Arr
     found: Bool
@@ -55,7 +55,7 @@ priv struct Item //< one descriptor's offset, length and type
 priv fn read_sources(arena: Arena$@): U8[]
     $b: = Str_builder.new()
     defer b.free()
-    for rel in sources
+    for rel in SOURCES
         body: = io.read_file(rel) catch
             panic(U8$[]::arena.text().s("cannot read \{rel\}; run the tests from ksos's folder")
                 .take())
@@ -86,8 +86,8 @@ priv fn parse_u8_array(src: U8[], name: U8[], arena: Arena$@): Arr //<
     //< Finds `<name>: U8[N] = ::{ … }`
     //<
     //< The same form for a const global array and a local array.
-    //< Caution: **Check that what precedes the name is not part of a word**, or `desc_mac` matches
-    //< `xdesc_mac` and another array is checked.
+    //< Caution: **Check that what precedes the name is not part of a word**, or `DESC_MAC` matches
+    //< `xDESC_MAC` and another array is checked.
     head: = arena.text().s("\{name\}: U8[").take()
     $i: Sz = 0
     for i + head.len <= src.len
@@ -171,14 +171,14 @@ priv fn parse_int(t: U8[]): Sz //< decimal, and `0x` hex
             if d: = c.hex_val()
                 n = n * 16 + Sz::d
             else
-                return bad_value
+                return BAD_VALUE
         return n
     for c in t
         if !c.is_digit()
-            return bad_value
-    return Sz::(t.to_i64() catch bad_value)
+            return BAD_VALUE
+    return Sz::(t.to_i64() catch BAD_VALUE)
 
-priv const bad_value: Sz = 0xFFFF //< the value for what could not be read
+priv const BAD_VALUE: Sz = 0xFFFF //< the value for what could not be read
     //<
     //< It is a size that no byte of any descriptor can hold.
 
@@ -204,26 +204,26 @@ priv fn check_lengths(names: List<|U8[]|>@, got: List<|Arr|>@, arena: Arena$@)
 priv fn check_blength(names: List<|U8[]|>@, got: List<|Arr|>@, arena: Arena$@) //<
     //< A descriptor's first byte is its own length
     //<
-    //< Only desc_ntb_params is handled separately, since it starts with a wLength.
+    //< Only DESC_NTB_PARAMS is handled separately, since it starts with a wLength.
     //< The configuration descriptor declares its own 9 bytes; wTotalLength covers the whole.
     for i in Range.asc(names.len)
         nm: = names.get(i)
         a: = got.get(i)
-        if nm.equals("desc_ntb_params") || a.vals.len == 0
+        if nm.equals("DESC_NTB_PARAMS") || a.vals.len == 0
             continue
-        want: = a.vals.len if !nm.equals("desc_config") else a.vals.get(0)
+        want: = a.vals.len if !nm.equals("DESC_CONFIG") else a.vals.get(0)
         check(arena.text().s(nm).s(": bLength agrees with the array's length").take(),
             a.vals.get(0) == want,
             arena.text().s("bLength=\{a.vals.get(0)\} len=\{a.vals.len\}").take())
 
-priv const string_descs: U8[][3] = ::{ "desc_manufacturer", "desc_product", "desc_mac" } //<
+priv const STRING_DESCS: U8[][3] = ::{ "DESC_MANUFACTURER", "DESC_PRODUCT", "DESC_MAC" } //<
     //< The string descriptors, checked for a NUL at their end
     //<
     //< Caution: Leave no NUL at a string descriptor's end: bLength sets the length, and a 0 reaches
     //< the host as a character ("ksos CDC\0").
 
 priv fn check_no_trailing_nul(names: List<|U8[]|>@, got: List<|Arr|>@, arena: Arena$@)
-    for nm in string_descs
+    for nm in STRING_DESCS
         at: = find_arr(names, nm)
         if at == 0
             continue
@@ -292,9 +292,9 @@ priv fn check_reply_len(src: U8[], arena: Arena$@) //<
                 .push(arena.text().s(name)
                 .s(": reply_ep0 says \{passed\}, the array holds \{a.vals.len\}").take())
     check("the length passed to reply_ep0 agrees with the descriptor's array", bad.len == 0,
-        "; ".join(bad, arena))
+        "; ".join(bad.slice(), arena))
 
-priv fn last_segment(expr: U8[]): U8[] //< takes `desc_device` out of `usb_desc.desc_device`
+priv fn last_segment(expr: U8[]): U8[] //< takes `DESC_DEVICE` out of `usb_desc.DESC_DEVICE`
     //<
     //< Empty if the string cannot be read as an identifier.
     $at: Sz = 0
@@ -341,7 +341,7 @@ priv fn iface_nums(cfg: List<|Sz|>@, items: List<|Item|>@, arena: Arena$@): List
     //< The list of interface numbers (ascending, no duplicates)
     $out: = List<|Sz|>.new(arena)
     for it in items
-        if it.kind != t_iface
+        if it.kind != T_IFACE
             continue
         push_new(out@, cfg.get(it.at + 2))
     return ascending(out@, arena)
@@ -380,7 +380,7 @@ priv fn check_ep_counts(cfg: List<|Sz|>@, items: List<|Item|>@, arena: Arena$@) 
     $actual: Sz = 0
     $open: = false
     for it in items
-        if it.kind == t_iface
+        if it.kind == T_IFACE
             if open && declared != actual
                 bad
                     .push(arena.text().s("IF\{num\} alt\{alt\}: \{declared\} != \{actual\}").take())
@@ -389,32 +389,32 @@ priv fn check_ep_counts(cfg: List<|Sz|>@, items: List<|Item|>@, arena: Arena$@) 
             declared = cfg.get(it.at + 4)
             actual = 0
             open = true
-        else if it.kind == t_endpoint && open
+        else if it.kind == T_ENDPOINT && open
             actual += 1
     if open && declared != actual
         bad
             .push(arena.text().s("IF\{num\} alt\{alt\}: \{declared\} != \{actual\}").take())
     check("configuration descriptor: bNumEndpoints agrees with the real endpoint count",
-        bad.len == 0, "; ".join(bad, arena))
+        bad.len == 0, "; ".join(bad.slice(), arena))
 
 priv fn check_union(cfg: List<|Sz|>@, items: List<|Item|>@, nums: List<|Sz|>@, arena: Arena$@) //<
     //< Checks that what a Union functional descriptor (subtype 0x06) points at exists
     $bad: = List<|U8[]|>.new(arena)
     for it in items
-        if it.kind != t_cs_iface || cfg.get(it.at + 2) != sub_union
+        if it.kind != T_CS_IFACE || cfg.get(it.at + 2) != SUB_UNION
             continue
         for k in Range.asc(it.len - 3)
             target: = cfg.get(it.at + 3 + k)
             if !has_num(nums, target)
                 bad.push(arena.text().s("union -> IF\{target\}").take())
     check("the Union functional descriptor points at an interface that exists", bad.len == 0,
-        "; ".join(bad, arena))
+        "; ".join(bad.slice(), arena))
 
 priv fn check_iad(cfg: List<|Sz|>@, items: List<|Item|>@, nums: List<|Sz|>@, arena: Arena$@) //<
     //< Checks that the range an IAD covers exists
     $bad: = List<|U8[]|>.new(arena)
     for it in items
-        if it.kind != t_iad
+        if it.kind != T_IAD
             continue
         first: = cfg.get(it.at + 2)
         count: = cfg.get(it.at + 3)
@@ -422,7 +422,8 @@ priv fn check_iad(cfg: List<|Sz|>@, items: List<|Item|>@, nums: List<|Sz|>@, are
             if !has_num(nums, first + k)
                 bad
                     .push(arena.text().s("IAD \{first\}+\{count\} -> IF\{first + k\}").take())
-    check("every interface an IAD covers exists", bad.len == 0, "; ".join(bad, arena))
+    check("every interface an IAD covers exists", bad.len == 0,
+        "; ".join(bad.slice(), arena))
 
 // ==========================================
 // The descriptor's endpoints and init()'s enable_ep must agree
@@ -445,7 +446,7 @@ priv fn desc_eps(cfg: List<|Sz|>@, items: List<|Item|>@, arena: Arena$@): List<|
     //< The descriptor's view: bit7 of bEndpointAddress is the direction, the low 4 bits the number
     $out: = List<|Sz|>.new(arena)
     for it in items
-        if it.kind != t_endpoint
+        if it.kind != T_ENDPOINT
             continue
         a: = cfg.get(it.at + 2)
         push_new(out@, ep_key(a & 0x0F, (a & 0x80) != 0))
@@ -492,22 +493,22 @@ priv fn same_nums(a: List<|Sz|>@, b: List<|Sz|>@): Bool
 priv fn check_ncm(cfg: List<|Sz|>@, items: List<|Item|>@, arena: Arena$@)
     $comm: = List<|Sz|>.new(arena)
     for it in items
-        if it.kind == t_iface && cfg.get(it.at + 5) == 0x02 &&
-            cfg.get(it.at + 6) == ncm_subclass
+        if it.kind == T_IFACE && cfg.get(it.at + 5) == 0x02 &&
+            cfg.get(it.at + 6) == NCM_SUBCLASS
             comm.push(it.at)
     check("CDC-NCM has exactly one control interface", comm.len == 1,
         arena.text().s("count=\{comm.len\}").take())
     if comm.len == 0
         return
     ctrl: = cfg.get(comm.get(0) + 2)
-    $data: Sz = bad_value
+    $data: Sz = BAD_VALUE
     for it in items
-        if it.kind == t_cs_iface && cfg.get(it.at + 2) == sub_union &&
+        if it.kind == T_CS_IFACE && cfg.get(it.at + 2) == SUB_UNION &&
             cfg.get(it.at + 3) == ctrl
             data = cfg.get(it.at + 4)
-    check("CDC-NCM's Union points at the data interface", data != bad_value,
+    check("CDC-NCM's Union points at the data interface", data != BAD_VALUE,
         arena.text().s("no union for IF\{ctrl\}").take())
-    if data == bad_value
+    if data == BAD_VALUE
         return
     check_ncm_data(cfg, items, data, arena)
 
@@ -517,7 +518,7 @@ priv fn check_ncm_data(cfg: List<|Sz|>@, items: List<|Item|>@, data: Sz, arena: 
     $proto_set: = List<|Sz|>.new(arena)
     $class_set: = List<|Sz|>.new(arena)
     for it in items
-        if it.kind != t_iface || cfg.get(it.at + 2) != data
+        if it.kind != T_IFACE || cfg.get(it.at + 2) != data
             continue
         // Folds alt (0/1) and the endpoint count (0 or 2) into one number.
         alt_list.push(cfg.get(it.at + 3) * 256 + cfg.get(it.at + 4))
@@ -532,9 +533,9 @@ priv fn check_ncm_data(cfg: List<|Sz|>@, items: List<|Item|>@, data: Sz, arena: 
     check("CDC-NCM's data interface holds alt 0 (no endpoints) / alt 1 (endpoints)", ok,
         alt_text(alts@, arena))
     check("CDC-NCM's data interface declares the NTB protocol",
-        protos.len == 1 && protos.get(0) == ncm_proto_ntb, nums_text(protos@, arena))
+        protos.len == 1 && protos.get(0) == NCM_PROTO_NTB, nums_text(protos@, arena))
     check("CDC-NCM's data interface is of the CDC data class",
-        classes.len == 1 && classes.get(0) == cdc_data_class, nums_text(classes@, arena))
+        classes.len == 1 && classes.get(0) == CDC_DATA_CLASS, nums_text(classes@, arena))
 
 priv fn alt_text(alts: List<|Sz|>@, arena: Arena$@): U8[]
     b: = arena.text().s("[")
@@ -548,7 +549,7 @@ priv fn check_ethernet(cfg: List<|Sz|>@, items: List<|Item|>@, arena: Arena$@) /
     //< The Ethernet Networking functional descriptor (subtype 0x0f)
     $eth: = List<|Sz|>.new(arena)
     for it in items
-        if it.kind == t_cs_iface && cfg.get(it.at + 2) == sub_ethernet
+        if it.kind == T_CS_IFACE && cfg.get(it.at + 2) == SUB_ETHERNET
             eth.push(it.at)
     check("there is exactly one Ethernet Networking functional descriptor", eth.len == 1,
         arena.text().s("count=\{eth.len\}").take())
@@ -584,26 +585,26 @@ fn test_usb_descriptors(arena: Arena$@) //<
     src: = read_sources(arena)
     $names: = List<|U8[]|>.new(arena)
     $got: = List<|Arr|>.new(arena)
-    for nm in arrays
+    for nm in ARRAYS
         names.push(nm)
         got.push(parse_u8_array(src, nm, arena))
     check_lengths(names@, got@, arena)
     check_blength(names@, got@, arena)
     check_no_trailing_nul(names@, got@, arena)
-    ntb: = got.get(find_arr(names@, "desc_ntb_params") - 1)
+    ntb: = got.get(find_arr(names@, "DESC_NTB_PARAMS") - 1)
     if ntb.vals.len > 0
-        check("desc_ntb_params: wLength agrees with the array's length",
+        check("DESC_NTB_PARAMS: wLength agrees with the array's length",
             u16_at(ntb.vals@, 0) == ntb.vals.len,
             arena.text().s("wLength=\{u16_at(ntb.vals@, 0)\} len=\{ntb.vals.len\}").take())
     check_reply_len(src, arena)
-    cfg: = got.get(find_arr(names@, "desc_config") - 1)
+    cfg: = got.get(find_arr(names@, "DESC_CONFIG") - 1)
     if cfg.vals.len > 0
         check_config(cfg.vals@, src, arena)
-    mac: = got.get(find_arr(names@, "desc_mac") - 1)
+    mac: = got.get(find_arr(names@, "DESC_MAC") - 1)
     if mac.vals.len > 0
         check_mac(mac.vals@, arena)
     // The device descriptor declares a composite device (IAD).
-    dev: = got.get(find_arr(names@, "desc_device") - 1)
+    dev: = got.get(find_arr(names@, "DESC_DEVICE") - 1)
     if dev.vals.len > 6
         check("the device descriptor declares Miscellaneous/Common/IAD",
             dev.vals.get(4) == 0xEF && dev.vals.get(5) == 0x02 && dev.vals.get(6) == 0x01,

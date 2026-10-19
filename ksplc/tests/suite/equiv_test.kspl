@@ -20,9 +20,9 @@ import "std/str"
 import "std/strfmt" as _strfmt
 import "std/verdict"
 
-priv const src: U8[] = "tests/prog/equiv.kspl"
+priv const SRC: U8[] = "tests/prog/equiv.kspl"
 
-priv const trap_cflags: U8[][_] = ::{ "-std=c99", "-O0",
+priv const TRAP_CFLAGS: U8[][_] = ::{ "-std=c99", "-O0",
     "-fsanitize=alignment,signed-integer-overflow",
     "-fsanitize-trap=alignment,signed-integer-overflow" } //<
         //< C's traps for what C leaves undefined and KSPL defines, which stop the program
@@ -31,7 +31,7 @@ priv const trap_cflags: U8[][_] = ::{ "-std=c99", "-O0",
         //< **At `-O0` a misaligned store or an `int` overflow still answers right.** So only a trap
         //< shows that the C is undefined. A word store to a `#packed` field faults on a Cortex-M0.
 
-priv const trap_probe: U8[] =
+priv const TRAP_PROBE: U8[] =
     """static int words[2];
 int main(void) {
     volatile int one = 1;
@@ -41,11 +41,11 @@ int main(void) {
 }
 """ //< a misaligned store, which a build with trap_cflags must stop on
 
-priv const packed_fn: U8[] = "_wire_fill(" //<
+priv const PACKED_FN: U8[] = "_wire_fill(" //<
     //< how the IR names `wire_fill` (`tests/prog/equiv_shapes.kspl`)
-priv const packed_gep: U8[] = "_Wire, ptr " //< a GEP into `Wire` itself, not into `Wire_pair`
+priv const PACKED_GEP: U8[] = "_Wire, ptr " //< a GEP into `Wire` itself, not into `Wire_pair`
 
-priv const packed_ir_sample: U8[] =
+priv const PACKED_IR_SAMPLE: U8[] =
     """define void @x_wire_fill(ptr %ws) {
     %1 = getelementptr inbounds %x_Wire, ptr %ws, i32 0, i32 1
     store i32 7, ptr %1, align 1
@@ -71,7 +71,7 @@ priv fn build_run(llvm: Bool, gen: U8[], exe: U8[], cflags: U8[][], arena: Arena
     $args: = List<|U8[]|>.new(arena)
     if llvm
         args.push("--to=llvm")
-    args.push(src)
+    args.push(SRC)
     args.push(gen)
     g: = harness.ksplc(args.slice())
     if !g.exited_with(0)
@@ -185,14 +185,14 @@ priv fn packed_scan(ir: U8[], arena: Arena$@): Packed_scan //<
     $inside: = false
     for line in ir.lines(arena)
         if line.starts_with("define ") || line.starts_with("}")
-            inside = line.starts_with("define ") && line.find_str(packed_fn).is_some()
+            inside = line.starts_with("define ") && line.find_str(PACKED_FN).is_some()
             continue
         t: = line.trim_spaces()
         if !inside || t.len == 0
             continue
         through: = holds(held@, ptr_operand(t))
         if t.find_str("= getelementptr ").is_some()
-            if through || t.find_str(packed_gep).is_some()
+            if through || t.find_str(PACKED_GEP).is_some()
                 held.push(defined_reg(t))
             continue
         is_access: = t.find_str("= load ").is_some() || t.starts_with("store ")
@@ -211,7 +211,7 @@ fn main(): I32
     c_gen: = fs.join(work, "c.c", arena)
     c: =
         build_run(false, c_gen, fs.join(work, "c.exe", arena),
-        U8[][]::harness_build.default_cflags, arena)
+        U8[][]::harness_build.DEFAULT_CFLAGS, arena)
     if !c.ok
         verdict.check("the C backend's build", false, c.out)
         return harness.finish()
@@ -231,7 +231,7 @@ fn main(): I32
     else
         alt_exe: = fs.join(work, "c_alt.exe", arena)
         a: = harness_build.build_exe_with(alt_cc, U8[][]::{ c_gen }, alt_exe,
-            U8[][]::harness_build.default_cflags)
+            U8[][]::harness_build.DEFAULT_CFLAGS)
         if !a.exited_with(0)
             verdict.check("the C build under the other compiler", false, a.out)
         else
@@ -240,7 +240,7 @@ fn main(): I32
                 first_diff(c.out, alt.out, arena))
     l: =
         build_run(true, fs.join(work, "l.ll", arena), fs.join(work, "l.exe", arena),
-        U8[][]::harness_build.llvm_cflags, arena)
+        U8[][]::harness_build.LLVM_CFLAGS, arena)
     if !l.ok
         verdict.check("the LLVM backend's build", false, l.out)
         return harness.finish()
@@ -252,16 +252,16 @@ fn main(): I32
 priv fn check_traps(work: U8[], c_gen: U8[], want: U8[], arena: Arena$@) //<
     //< The C built with trap_cflags prints what the plain build does, and the traps can fire
     probe_c: = fs.join(work, "trap_probe.c", arena)
-    io.write_file(probe_c, trap_probe) catch
+    io.write_file(probe_c, TRAP_PROBE) catch
         verdict.check("a misaligned store stops a build with C's traps", false,
             "cannot write the probe")
         return
     probe_exe: = fs.join(work, "trap_probe.exe", arena)
-    pb: = harness_build.build_exe(U8[][]::{ probe_c }, probe_exe, U8[][]::trap_cflags)
+    pb: = harness_build.build_exe(U8[][]::{ probe_c }, probe_exe, U8[][]::TRAP_CFLAGS)
     verdict.check("a misaligned store stops a build with C's traps",
         pb.exited_with(0) && !harness.run(U8[][]::{ probe_exe }).exited_with(0), pb.out)
     trap_exe: = fs.join(work, "c_trap.exe", arena)
-    tb: = harness_build.build_exe(U8[][]::{ c_gen }, trap_exe, U8[][]::trap_cflags)
+    tb: = harness_build.build_exe(U8[][]::{ c_gen }, trap_exe, U8[][]::TRAP_CFLAGS)
     if !tb.exited_with(0)
         verdict.check("the C build with C's traps", false, tb.out)
         return
@@ -274,7 +274,7 @@ priv fn check_traps(work: U8[], c_gen: U8[], want: U8[], arena: Arena$@) //<
 
 priv fn check_packed_ir(ll: U8[], arena: Arena$@) //<
     //< Every load and store genllvm makes through a `#packed` field carries the field's alignment
-    sample: = packed_scan(packed_ir_sample, arena)
+    sample: = packed_scan(PACKED_IR_SAMPLE, arena)
     verdict.check("the IR scan finds the accesses through a `#packed` field with no `align`",
         sample.seen == 3 && sample.bad.len == 2,
         arena.text().s("seen \{sample.seen\}, without `align` \{sample.bad.len\}").take())

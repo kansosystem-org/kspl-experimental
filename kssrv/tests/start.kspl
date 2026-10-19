@@ -18,17 +18,17 @@ struct Started //< the result of waiting for the startup
     child: subproc.Child?
     why: U8[]
 
-priv const ready_line: U8[] = "kssrv: I: listening on" //<
+priv const READY_LINE: U8[] = "kssrv: I: listening on" //<
     //< The line kssrv prints once it is listening
     //<
     //< **The `I:` is the logger's level column**: `std/log`'s separator splits the tag, the level
     //< and the text (`log_new` in `kssrv/main.kspl`). With it in here, the wait fails if the line
     //< format ever changes, instead of the line silently going unseen.
-priv const ready_timeout_us: I64 = 300000000I64 //<
+priv const READY_TIMEOUT_US: I64 = 300000000I64 //<
     //< The cap on waiting until it is ready (microseconds)
     //<
     //< Training time varies widely between environments.
-priv const ready_poll_ms: I32 = 50
+priv const READY_POLL_MS: I32 = 50
 
 fn start_server(exe: U8[], root: U8[], out_log: U8[], err_log: U8[], pt: I32, flags: U8[][],
     arena: Arena$@): Started //<
@@ -50,7 +50,7 @@ fn start_server(exe: U8[], root: U8[], out_log: U8[], err_log: U8[], pt: I32, fl
         return Started::{ .child = .none, .why = "it could not be started" }
     scratch: = Arena.new(1024 * 1024)
     defer scratch.free()
-    deadline: = sys.mono_us() + ready_timeout_us
+    deadline: = sys.mono_us() + READY_TIMEOUT_US
     for sys.mono_us() < deadline
         mark: = scratch.save()
         if !child.alive()
@@ -59,13 +59,13 @@ fn start_server(exe: U8[], root: U8[], out_log: U8[], err_log: U8[], pt: I32, fl
                 why.s(" (exit code \{code\})")
             return Started::{ .child = .none,
                 .why = why.s("\n").s(read_log(out_log, err_log, arena)).take() }
-        if read_log(out_log, err_log, scratch).find_str(ready_line).is_some()
+        if read_log(out_log, err_log, scratch).find_str(READY_LINE).is_some()
             return Started::{ .child = .some(child), .why = "ok" }
         scratch.restore(mark)
-        sys.sleep_ms(ready_poll_ms)
+        sys.sleep_ms(READY_POLL_MS)
     child.kill()
     return Started::{ .child = .none,
-        .why = arena.text().s("the wait ran out with '\{ready_line\}' never put out\n")
+        .why = arena.text().s("the wait ran out with '\{READY_LINE\}' never put out\n")
         .s(read_log(out_log, err_log, arena)).take() }
 
 struct Running //< a kssrv that came up, and the two logs that say why a check on it failed
@@ -107,7 +107,7 @@ impl Running
     fn stop(r: Self$@) //< kills the server
         r.child.kill()
 
-priv const log_tail: Sz = 2000 //< how much of the log's end goes into the error message
+priv const LOG_TAIL: Sz = 2000 //< how much of the log's end goes into the error message
 
 fn read_log(out_log: U8[], err_log: U8[], arena: Arena$@): U8[] //<
     //< Returns the end of the standard output log, then the end of the standard error log
@@ -120,4 +120,4 @@ priv fn tail_of(path: U8[], arena: Arena$@): U8[]
     body: = io.read_file(path) catch
         return ""
     text: = U8[]::arena.dup_str(body)
-    return text if text.len <= log_tail else text.sub_from(text.len - log_tail)
+    return text if text.len <= LOG_TAIL else text.sub_from(text.len - LOG_TAIL)

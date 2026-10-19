@@ -12,12 +12,12 @@ import "std/str"
 import "std/strfmt" as _strfmt
 import "std/verdict"
 
-const sample_dir: U8[] = "tests/notation" //< the samples' directory, from the package's top
+const SAMPLE_DIR: U8[] = "tests/notation" //< the samples' directory, from the package's top
     //<
     //< **Kept apart from the suite's own**, so this file relies on nothing there.
 
 fn sample_path(stem: U8[], arena: Arena$@): U8[] //< a sample's path
-    return fs.join(sample_dir, arena.text().s(stem).s(".kspl").take(), arena)
+    return fs.join(SAMPLE_DIR, arena.text().s(stem).s(".kspl").take(), arena)
 
 priv fn to_crlf(body: U8[], arena: Arena$@): U8[] //< widens `\n` to `\r\n`
     //<
@@ -76,20 +76,20 @@ fn check_crlf(work: U8[], stem: U8[], arena: Arena$@) //<
 
 // A `"""` text holds the file's own bytes, the one place a checkout's terminator could reach the
 // program. **The same source has to be the same program** (the reason is at the file header).
-priv const raw_text_src: U8[] =
-    "priv const text: U8[] = \"\"\"one\ntwo\n\"\"\"\n\nfn main(): I32\n    return I32::text.len\n"
+priv const RAW_TEXT_SRC: U8[] =
+    "priv const TEXT: U8[] = \"\"\"one\ntwo\n\"\"\"\n\nfn main(): I32\n    return I32::TEXT.len\n"
 
 fn check_crlf_raw_text(work: U8[], arena: Arena$@)
     at: = fs.join(work, "crlf_raw.kspl", arena)
     gen_lf: = fs.join(work, "crlf_raw_lf.c", arena)
     gen_crlf: = fs.join(work, "crlf_raw_crlf.c", arena)
-    io.write_file(at, raw_text_src) catch
+    io.write_file(at, RAW_TEXT_SRC) catch
         _bad: = verdict.check("a raw text can be written (LF)", false, at)
         return
     ra: = harness.ksplc(U8[][]::{ at, gen_lf })
     if !verdict.check("a raw text builds (LF)", ra.exited_with(0), ra.out)
         return
-    io.write_file(at, to_crlf(raw_text_src, arena)) catch
+    io.write_file(at, to_crlf(RAW_TEXT_SRC, arena)) catch
         _bad: = verdict.check("a raw text can be written (CRLF)", false, at)
         return
     rb: = harness.ksplc(U8[][]::{ at, gen_crlf })

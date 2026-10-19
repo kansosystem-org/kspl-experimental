@@ -14,7 +14,7 @@ import "std/mem" { Arena }
 import "std/verdict"
 
 // A type, a member, and a label in the detail.
-priv const argp_src: U8[] =
+priv const ARGPARSE_SRC: U8[] =
     """//< reading the command line
 
 pub struct Parser //< the declarations
@@ -28,7 +28,7 @@ impl Parser
 """
 
 // Publishes nothing.
-priv const inner_src: U8[] =
+priv const INNER_SRC: U8[] =
     """//< what only the package reaches
 
 fn helper(): I32 //< not published
@@ -36,7 +36,7 @@ fn helper(): I32 //< not published
 """
 
 // Parameters and a return, and `sub` beside `sub_from`, whose parts sort after `sub_from`.
-priv const run_src: U8[] =
+priv const RUN_SRC: U8[] =
     """pub fn run( //< runs one child
   argv: U8[][], //< the executable and its arguments
   cwd: U8[], //< the working place
@@ -56,7 +56,7 @@ pub fn sub_from( //< from a place to the end
 """
 
 // A summary with an explanation after it, and names that link and names that do not.
-priv const mem_src: U8[] =
+priv const MEM_SRC: U8[] =
     """pub struct Arena //< a bump allocator.
   //<
   //< Everything goes at once.
@@ -71,7 +71,7 @@ pub fn drop_all() //< as `Arena.free` does, or `mem.Arena`; not `mem.gone` or `i
 """
 
 // Two declarations whose headings reduce to one anchor.
-priv const math_src: U8[] =
+priv const MATH_SRC: U8[] =
     """#cfg(!freestanding)
 pub fn cos(x: F64): F64 //< libm's
   return x
@@ -81,10 +81,10 @@ pub fn cos(x: F64): F64 //< its own
   return x
 """
 
-priv const broken_src: U8[] = """pub fn broken( //< never closed
+priv const BROKEN_SRC: U8[] = """pub fn broken( //< never closed
 """
 
-priv const fine_src: U8[] = """pub fn fine() //< reads well
+priv const FINE_SRC: U8[] = """pub fn fine() //< reads well
   return
 """
 
@@ -106,50 +106,50 @@ fn main(): I32
     none: = U8[][]::{}
     io.out().s("# ksplc doc: a file, an entry, a folder\n")
     dir: = harness.sandbox("doc")
-    names: = U8[][]::{ "pk/argp.kspl", "pk/inner.kspl", "pk/run.kspl", "pk/mem.kspl",
+    names: = U8[][]::{ "pk/argparse.kspl", "pk/inner.kspl", "pk/run.kspl", "pk/mem.kspl",
         "pk/math.kspl", "pk2/broken.kspl", "pk2/fine.kspl" }
     fs.write_tree(dir, names,
-        U8[][]::{ argp_src, inner_src, run_src, mem_src, math_src, broken_src, fine_src }, arena)
+        U8[][]::{ ARGPARSE_SRC, INNER_SRC, RUN_SRC, MEM_SRC, MATH_SRC, BROKEN_SRC, FINE_SRC }, arena)
         catch
         return harness.fatal("cannot place the material")
 
     // **One file, its own entries**: a type at the second level, its member one step in.
-    page: = doc(dir, U8[][]::{ "pk/argp" }, arena)
+    page: = doc(dir, U8[][]::{ "pk/argparse" }, arena)
     harness_markers.check("a file's reference holds its title, description, types and members",
-        U8[][]::{ "# pk/argp — the API reference", "reading the command line", "\n## `Parser`\n",
-        "\n### `Parser.flag`\n", "pub fn flag(r: Self$@)", "a switch taking no value" }, none,
-        page.out)
+        U8[][]::{ "# pk/argparse — the API reference", "reading the command line",
+        "\n## `Parser`\n", "\n### `Parser.flag`\n", "pub fn flag(r: Self$@)",
+        "a switch taking no value" }, none, page.out)
     // The detail is joined into one line, so a label would land mid-paragraph unless split.
     harness_markers.check("a label in a description opens a paragraph of its own",
         U8[][]::{ "a switch taking no value.\n\nCaution: **Keep it.**" }, none, page.out)
 
     // **Asked for a type, its members come with it**; asked for a member, only the member.
-    ty: = doc(dir, U8[][]::{ "pk/argp.Parser" }, arena)
+    ty: = doc(dir, U8[][]::{ "pk/argparse.Parser" }, arena)
     harness_markers.check("an entry asked for by name comes with its members",
         U8[][]::{ "## `Parser`", "### `Parser.flag`" }, U8[][]::{ "## Contents" }, ty.out)
-    one: = doc(dir, U8[][]::{ "pk/argp.Parser.flag" }, arena)
+    one: = doc(dir, U8[][]::{ "pk/argparse.Parser.flag" }, arena)
     harness_markers.check("a member asked for comes alone", U8[][]::{ "### `Parser.flag`" },
         U8[][]::{ "\n## `Parser`\n" }, one.out)
 
     // **A folder lists each file that publishes**, with its count; the file's own row is no entry.
     list: = doc(dir, U8[][]::{ "pk" }, arena)
     harness_markers.check("a folder lists each publishing file with its count and summary",
-        U8[][]::{ "* `pk/argp` — 2 entries. reading the command line", "* `pk/run` — " },
+        U8[][]::{ "* `pk/argparse` — 2 entries. reading the command line", "* `pk/run` — " },
         U8[][]::{ "pk/inner", "could not be read" }, list.out)
     // **A last part of `.` or `..` is a folder**, not a name cut at its first `.`.
     pk_dir: = fs.join(dir, "pk", arena)
     here: = doc(pk_dir, U8[][]::{ "." }, arena)
     harness_markers.check("`ksplc doc .` lists the current folder, its files named from it",
-        U8[][]::{ "* `argp` — 2 entries" }, U8[][]::{ "no file or folder" }, here.out)
+        U8[][]::{ "* `argparse` — 2 entries" }, U8[][]::{ "no file or folder" }, here.out)
     up: = doc(pk_dir, U8[][]::{ ".." }, arena)
     harness_markers.check("`ksplc doc ..` lists the folder above",
-        U8[][]::{ "* `../pk/argp` — 2 entries", "* `../pk2/fine`" },
+        U8[][]::{ "* `../pk/argparse` — 2 entries", "* `../pk2/fine`" },
         U8[][]::{ "no file or folder" }, up.out)
     inside: = doc(dir, U8[][]::{ "pk/." }, arena)
     harness_markers.check("a folder named with a last `.` is that folder",
-        U8[][]::{ "* `pk/./argp` — 2 entries" }, U8[][]::{ "no file or folder" }, inside.out)
+        U8[][]::{ "* `pk/./argparse` — 2 entries" }, U8[][]::{ "no file or folder" }, inside.out)
     // The specification's own example: the extension is read as an entry's key.
-    ext: = doc(dir, U8[][]::{ "pk/argp.kspl" }, arena)
+    ext: = doc(dir, U8[][]::{ "pk/argparse.kspl" }, arena)
     verdict.check("a name written with its extension asks for the entry `kspl`",
         !ext.exited_with(0) &&
         ext.out.find_str("publishes nothing called 'kspl'").is_some(), ext.out)
@@ -210,7 +210,7 @@ fn main(): I32
     verdict.check("a name that resolves to nothing fails and says what it looked for",
         !gone.exited_with(0) &&
         gone.out.find_str("no file or folder is called 'pk/nope'").is_some(), gone.out)
-    miss: = doc(dir, U8[][]::{ "pk/argp.Nope" }, arena)
+    miss: = doc(dir, U8[][]::{ "pk/argparse.Nope" }, arena)
     verdict.check("an entry the file does not publish fails",
         !miss.exited_with(0) &&
         miss.out.find_str("publishes nothing called 'Nope'").is_some(), miss.out)

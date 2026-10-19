@@ -2,7 +2,7 @@
 //<
 //< **Which child of the normalized layout is which is known here and nowhere else** (beside
 //< `ast_place.kspl` and `ast_spell.kspl` for their own questions). So a change to the grammar is
-//< met in one file. The marks a synthesized node carries (`if_bind_mark`, `made_by_compiler`,
+//< met in one file. The marks a synthesized node carries (`IF_BIND_MARK`, `made_by_compiler`,
 //< `is_left_by_break`) and the reading of attributes stand here too.
 import "ksplc/base/ast" { Ast_node, Loc }
 import "ksplc/base/ast_kinds" as base_ast_kinds
@@ -15,35 +15,35 @@ import "std/str"
 // null.
 ##lint(H0701 = off)
 
-const if_bind_mark: U8[] = "stmt_switch_if_bind" //<
+const IF_BIND_MARK: U8[] = "stmt_switch_if_bind" //<
     //< The mark on a `switch` synthesized to unwrap an `Option`
     //<
     //< Caution: **Keep it apart from an ordinary switch's "stmt_switch", with one mark per kind of
     //< synthesis.** A diagnostic names what the user wrote, and one shared mark would say
     //< `if <name>: = <expr>` on a `for x in` line.
-const for_in_mark: U8[] = "stmt_switch_for_in"
+const FOR_IN_MARK: U8[] = "stmt_switch_for_in"
 
-const propagated_error: I32 = 1 //<
+const PROPAGATED_ERROR: I32 = 1 //<
     //< `ival` on a throw made by lowering `!`; both backends extend its trace
 
-priv const compiler_made: I32 = 1 //<
+priv const COMPILER_MADE: I32 = 1 //<
     //< The mark in `ival` on a declaration the compiler made rather than one the user wrote
     //<
     //< `made_by_compiler` below reads it.
 
-priv const sugar_made: I32 = 1 //<
+priv const SUGAR_MADE: I32 = 1 //<
     //< The mark in `ival` on a type path a sugar postfix folded into (`I32?`, `U8[]`)
     //<
     //< `mark_sugar_made` sets it, `is_sugar_made` reads it.
 
-priv const left_by_break: I32 = 1 //<
+priv const LEFT_BY_BREAK: I32 = 1 //<
     //< The mark in `ival` on a `for` / `if` / `switch` / labelled block that a `break` leaves
     //<
     //< `mark_left_by_break` sets it, `is_left_by_break` reads it.
     //< Caution: **Here 0 is not the safe value**: a missing mark reads a loop as endless. So a
     //< `break` that sema builds (the `Iter` shape of `for x in`) is inferred like a written one.
 
-priv const library_file_suffixes: U8[][6] = ::{ ".a", ".so", ".dylib", ".tbd", ".lib", ".dll" } //<
+priv const LIBRARY_FILE_SUFFIXES: U8[][6] = ::{ ".a", ".so", ".dylib", ".tbd", ".lib", ".dll" } //<
     //< The endings that turn a library's name into a file name
     //<
     //< The linker adds the one its platform wants (`-lopenblas` finds `libopenblas.so`, `.a`,
@@ -59,7 +59,7 @@ priv fn is_library_name(s: U8[]): Bool //< whether it names a library as `-l` ta
     for ch in s
         if !(ch.is_alnum() || ch == '+' || ch == '.' || ch == '-')
             return false
-    for suffix in library_file_suffixes
+    for suffix in LIBRARY_FILE_SUFFIXES
         if s.ends_with(suffix)
             return false
     return true
@@ -118,7 +118,7 @@ impl Ast_node
         //< It sits at the position of what it was made for. Treated as written, it doubles that
         //< name or lands on unrelated text.
         return r != null && (r.kind_id == .k_decl_impl || r.kind_id == .k_decl_fn) &&
-            r.ival == compiler_made
+            r.ival == COMPILER_MADE
 
     fn place_as_made(r: Ast_node$@, origin: Loc) //<
         //< It moves a declaration the compiler made to `origin`, marking it and its methods
@@ -131,7 +131,7 @@ impl Ast_node
             return
         r.loc = origin
         if r.kind_id == .k_decl_impl || r.kind_id == .k_decl_fn
-            r.ival = compiler_made
+            r.ival = COMPILER_MADE
         for child in r.children
             child.place_as_made(origin)
 
@@ -140,14 +140,14 @@ impl Ast_node
         //<
         //< The one writer is `fold_sugar_postfixes` in `../parse/desugar_slice.kspl`.
         if r != null && r.kind_id == .k_type_path
-            r.ival = sugar_made
+            r.ival = SUGAR_MADE
 
     fn is_sugar_made(r: Ast_node$@): Bool //<
         //< Whether a sugar postfix wrote this type path, rather than the source spelling it out
         //<
         //< `check_spelled_out_sugar` reads it: an `Option<|I32|>` the source spells out is refused,
         //< the one `I32?` folds into is not.
-        return r != null && r.kind_id == .k_type_path && r.ival == sugar_made
+        return r != null && r.kind_id == .k_type_path && r.ival == SUGAR_MADE
 
     fn mark_left_by_break(r: Ast_node$@) //<
         //< Records that a `break` leaves this statement, as sema resolved the `break`'s target
@@ -156,14 +156,14 @@ impl Ast_node
         //< `../sema/body/stmt.kspl`). Sema decides there once which construct an unlabelled `break`
         //< leaves, through any `switch` or `if` between. The flow checks read the answer.
         if r != null
-            r.ival = left_by_break
+            r.ival = LEFT_BY_BREAK
 
     fn is_left_by_break(r: Ast_node$@): Bool //<
         //< Whether a `break` leaves this statement, so control can continue after it
         //<
         //< It is true whatever the inside does: `blk: { if c { break blk; } return 1; }` can still
         //< end.
-        return r != null && r.ival == left_by_break &&
+        return r != null && r.ival == LEFT_BY_BREAK &&
             (r.kind_id == .k_stmt_for || r.kind_id == .k_stmt_if || r.kind_id == .k_stmt_switch ||
             r.kind_id == .k_stmt_labeled_block)
 
@@ -217,9 +217,9 @@ impl Ast_node
         //< **A diagnostic's wording is decided here.** Add each new mark here too, or that
         //< synthesis silently accepts "a subject that is not an Option"
         //< (`../sema/body/switch.kspl`).
-        if r.text.equals(if_bind_mark)
+        if r.text.equals(IF_BIND_MARK)
             return "if <name>: = <expr>"
-        if r.text.equals(for_in_mark)
+        if r.text.equals(FOR_IN_MARK)
             return "for <name> in <expr>"
         return ""
 
@@ -272,9 +272,9 @@ impl Ast_node
         return false
     fn has_mut_binding_marker(r: Ast_node$@): Bool //< whether a binding is mutable
         //<
-        //< Unmarked is immutable ("The two axes of mutability" in docs/SPEC-language.md). So it
-        //< looks for a `$` before the identifier: one level down on a local variable
-        //< (`k_decl_var_item`), directly on a parameter.
+        //< Unmarked is immutable ("The two axes of mutability" in
+        //< docs/SPEC-programming-language.md). So it looks for a `$` before the identifier: one
+        //< level down on a local variable (`k_decl_var_item`), directly on a parameter.
         for c in r.children
             if c.kind_id == .k_identifier
                 return false
@@ -461,7 +461,7 @@ impl Ast_node
     fn has_import_plus(r: Self$@): Bool //< whether the `+` of `import "p" + { A };` was written
         //<
         //< **With it, the alias comes in too**; without, only the selected names ("Which names an
-        //< import brings in" in `../../docs/SPEC-language.md`).
+        //< import brings in" in `../../docs/SPEC-programming-language.md`).
         return r.find_child(.k_decl_import_plus) != null
 
     fn get_import_alias(r: Self$@): U8[] //<

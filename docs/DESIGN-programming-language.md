@@ -2,7 +2,7 @@
 
 **This document says why the language is the way it is.** It answers two kinds of question: "why does KSPL do this differently from other languages?" and "why does this restriction exist?".
 
-What the language *is* belongs to the specification, [`SPEC-language.md`](SPEC-language.md). For the rules alone, that is all you need. Read this document when two readings of the specification disagree, and before you propose a change to it. The principles its reasons rest on are in [`DESIGN-principles.md`](DESIGN-principles.md). Why the source text is written as it is (the indentation notation, names, keywords, line ends, long strings and documentation comments) is in [`DESIGN-notation.md`](DESIGN-notation.md).
+What the language *is* belongs to the specification, [`SPEC-programming-language.md`](SPEC-programming-language.md). For the rules alone, that is all you need. Read this document when two readings of the specification disagree, and before you propose a change to it. The principles its reasons rest on are in [`DESIGN-principles.md`](DESIGN-principles.md). Why the source text is written as it is (the indentation notation, names, keywords, line ends, long strings and documentation comments) is in [`DESIGN-notation.md`](DESIGN-notation.md).
 
 ## Symbols and syntax
 
@@ -12,7 +12,7 @@ What the language *is* belongs to the specification, [`SPEC-language.md`](SPEC-l
 
 KSPL writes these two operators *after* the value. `val@` takes the address of `val`, and `ptr$` reads what `ptr` points at. Read left to right, the code then follows the data.
 
-Both are **postfix** (docs/SPEC-language.md §6.2):
+Both are **postfix** (docs/SPEC-programming-language.md §6.2):
 
 ```kspl
 val: = 100
@@ -103,11 +103,11 @@ Guards gain little. A lookahead before both tries cuts the calls, and the time, 
 
 **What keeping `::` costs the writer, and the answer**: a Rust or C++ writer's `Arena::new(1024)`, read as a cast, gives three errors, none naming the fix. So where `T` is a module, or a type holding `name`, and `name` is nothing in scope, `T::name` is read as the path meant. It is reported as one error naming `Arena.new`. A cast of a value in scope (`I32::count`) is left alone.
 
-**The one weakness of `.` everywhere** is that a local named like an imported module hides the module: below `io: = 5`, `io.out()` reads the local. Such a local or parameter is a warning at its declaration (`[W0502]` in [`../ksplc/docs/SPEC-diagnostics.md`](../ksplc/docs/SPEC-diagnostics.md)), not an error, since shadowing stays legal ("4.5 Scope and shadowing" in [`SPEC-language.md`](SPEC-language.md)). A second separator for modules (Swift 6.3's `Module::name`) would collide with the cast. `json::Val` and `Sz::n` have one shape, and only name resolution could tell them apart.
+**The one weakness of `.` everywhere** is that a local named like an imported module hides the module: below `io: = 5`, `io.out()` reads the local. Such a local or parameter is a warning at its declaration (`[W0502]` in [`../ksplc/docs/SPEC-diagnostics.md`](../ksplc/docs/SPEC-diagnostics.md)), not an error, since shadowing stays legal ("4.5 Scope and shadowing" in [`SPEC-programming-language.md`](SPEC-programming-language.md)). A second separator for modules (Swift 6.3's `Module::name`) would collide with the cast. `json::Value` and `Sz::n` have one shape, and only name resolution could tell them apart.
 
 ### Why immutability is the default
 
-**A variable cannot be changed unless you mark it with `$`: immutability is the default** (docs/SPEC-language.md §4.2), for three reasons:
+**A variable cannot be changed unless you mark it with `$`: immutability is the default** (docs/SPEC-programming-language.md §4.2), for three reasons:
 
 1. **A marker goes on the minority side.** In this repository most local declarations and parameters are immutable (to recount, grep a tree that `ksplc lint` passes). Marking them would waste much.
 2. **Writing shows up in the type.** With mutability the default, the source does not say what can be written. Nobody notices a write through a pointer that slips past the checks.
@@ -119,7 +119,7 @@ Guards gain little. A lookahead before both tries cuts the calls, and the time, 
 
 Where a generic declares that its type parameter can be mutable, the `$` goes in front: `struct Slice<|$T|>`, not `Slice<|T$|>`.
 
-The rule is `docs/SPEC-language.md`, 3.3. Three reasons put the marker in front:
+The rule is `docs/SPEC-programming-language.md`, 3.3. Three reasons put the marker in front:
 
 1. **`$`'s position keeps its meaning.** The three marker positions of "Why immutability is the default" are all prefix and all mean "mutable", while postfix `$` is dereferencing in expressions.
 2. **Postfix requires lookahead.** A `$` inside a type starts `$[` or `$@` (`Box<|I32$|>` is rejected with `expected '[' or '@'`). Admitting `T$` makes what follows `$` one of three things: `[`, `@`, or the end of the type. A type argument can also be an expression (`type_arg = type_expr | expr`; `<|4|>` and `<|bound|>` are in actual use), where a postfix `$` would overlap `p$`.
@@ -137,10 +137,10 @@ The rule is `docs/SPEC-language.md`, 3.3. Three reasons put the marker in front:
 
 Inside a function, `x: = 5` lets the compiler work out the type. A declaration outside every function must write its type.
 
-Top-level declarations (`const`, variables, `extern` variables: everything declared outside a function) must carry a type annotation, and only local variables are inferred (docs/SPEC-language.md §4.1), because:
+Top-level declarations (`const`, variables, `extern` variables: everything declared outside a function) must carry a type annotation, and only local variables are inferred (docs/SPEC-programming-language.md §4.1), because:
 
 1. **It follows an existing line.** Parameters, return values, `struct` fields and enum payloads all state their type. A top-level declaration is the file's interface, not a local variable. So requiring the annotation joins existing policy and adds no restriction.
-2. **Inferring it would bring in a new failure mode.** Inference runs in declaration order, so a function body before a global would see a stale type. Avoiding that needs a pass typing every global before any function body. Globals depend on one another (`pub const b = a * 2;`), so it also needs resolution in dependency order and cycle detection. That is the ground of C++'s static initialization order problem. There, one global can be read before another file's global that it depends on is set.
+2. **Inferring it would bring in a new failure mode.** Inference runs in declaration order, so a function body before a global would see a stale type. Avoiding that needs a pass typing every global before any function body. Globals depend on one another (`pub const B = a * 2;`), so it also needs resolution in dependency order and cycle detection. That is the ground of C++'s static initialization order problem. There, one global can be read before another file's global that it depends on is set.
 3. **It does not balance.** It saves one type name, and gains only brevity.
 
 **What is given up**: omitting a type name at the top level.
@@ -162,7 +162,7 @@ Top-level declarations (`const`, variables, `extern` variables: everything decla
 * **Deleting it keeps the type.** An annotation doing work is not reported: a literal takes its type from it, a conversion follows it, and `::{ … }` or `.small` are typed by it. Nor is a cast that [I0301] calls unnecessary, since deleting both would leave the value's own type.
 * **The verdict holds for every type argument.** The check compares what is written, so a generic's line reads the same in each instantiation. A call is the exception: its type is its callee's, which an impl for one instance can change. So a call inside a generic is left alone.
 
-**An enum's type at its variant goes where the place already gives it.** The language lets the name go in these places ("6.6.2 Where the type may be omitted" in [`SPEC-language.md`](SPEC-language.md)):
+**An enum's type at its variant goes where the place already gives it.** The language lets the name go in these places ("6.6.2 Where the type may be omitted" in [`SPEC-programming-language.md`](SPEC-programming-language.md)):
 
 * a declaration's written type, and the place `=` assigns to;
 * a call's parameter, and a variant's payload;
@@ -182,7 +182,7 @@ There, `return Option<|I32|>.some(n)` writes the type twice, once in the signatu
 
 A number converts to another type without a cast only when no value can be lost, such as `I32` to `I64`. Integers and reals never convert silently, and two operands of different types meet only where one type holds every value of the other.
 
-The permitted range is in [`docs/SPEC-language.md`, 6.4](SPEC-language.md).
+The permitted range is in [`docs/SPEC-programming-language.md`, 6.4](SPEC-programming-language.md).
 
 Rust and Swift allow no implicit numeric conversion, though both keep reference coercions implicit (`&mut T` → `&T`, Deref coercion). Rust has not accepted proposals to make widening implicit. Chiefly, a mixed-width expression (`Foo(x * (y + z))`) **computes at the narrow width and then widens**, which hides the overflow.
 
@@ -215,7 +215,7 @@ priv fn f(): Shape!Err
 
 ### A cast to an enum gives one of its variants
 
-**An enum value is one of the variants its declaration lists.** An exhaustive `switch` names every variant and no `default`, and `variant_name` names each one. Both read a value that is none of them as the last one they test. So a number cast to an enum (`E::x`) must be a tag. The rules are "6.4 Type conversion (`::`) and implicit casts" in [`SPEC-language.md`](SPEC-language.md).
+**An enum value is one of the variants its declaration lists.** An exhaustive `switch` names every variant and no `default`, and `variant_name` names each one. Both read a value that is none of them as the last one they test. So a number cast to an enum (`E::x`) must be a tag. The rules are "6.4 Type conversion (`::`) and implicit casts" in [`SPEC-programming-language.md`](SPEC-programming-language.md).
 
 * **A constant is caught at translation time**, as a constant divisor of 0 is: what is fixed then is not left to run time.
 * **The run-time check costs a comparison per variant where a number becomes an enum**, and nothing where an enum is only read.
@@ -226,24 +226,24 @@ priv fn f(): Shape!Err
 
 **No second conversion returns `E?`.** It would be a second spelling of what `E::x` writes (Principle 6). And every caller would handle an absence, even where the number came from `I32::e` a line before. A number from outside is checked as other input is, before the cast. The cast's own check then guards against a mistake, as the bounds check guards an index.
 
-**Raw memory can still hold a value that is no tag**: a write through a pointer cast, or a C function filling the enum. That is undefined, as a dangling pointer is ([`docs/SPEC-language.md`, 14.2](SPEC-language.md)). The cast is the one ordinary way a number becomes an enum, so the rule holds there (Principle 8).
+**Raw memory can still hold a value that is no tag**: a write through a pointer cast, or a C function filling the enum. That is undefined, as a dangling pointer is ([`docs/SPEC-programming-language.md`, 14.2](SPEC-programming-language.md)). The cast is the one ordinary way a number becomes an enum, so the rule holds there (Principle 8).
 
 ### A cast from floating point to an integer saturates
 
-**`I32::x` always gives an answer, and the same one on every target and backend.** NaN gives `0`, a value below the type's range its minimum, a value above it its maximum, and anything else is truncated toward zero. The rules are "6.4 Type conversion (`::`) and implicit casts" in [`SPEC-language.md`](SPEC-language.md).
+**`I32::x` always gives an answer, and the same one on every target and backend.** NaN gives `0`, a value below the type's range its minimum, a value above it its maximum, and anything else is truncated toward zero. The rules are "6.4 Type conversion (`::`) and implicit casts" in [`SPEC-programming-language.md`](SPEC-programming-language.md).
 
 * **Not undefined.** C leaves a value the type cannot hold undefined, and each target's instruction answers its own way. x86-64 gives the minimum for every such value, NaN included, while Arm saturates. An optimizer folding a constant can answer anything. A cast left undefined would print a different number per target, per backend and per optimization level. A sensor reading out of range would carry no sign of it.
 * **Saturating, not stopping.** A cast is how a value is brought into a narrower range on purpose (a sample clipped to `I16`, a coordinate to a pixel). There the nearest bound is the answer wanted. Stopping the program would make every such cast need a range check first. That check is written by hand, with bounds that are easy to get wrong by one. Arm's conversion instruction saturates and gives NaN `0` itself, so on a microcontroller the rule costs nothing; x86-64 pays two comparisons.
 * **NaN gives `0`**, the one integer that claims no magnitude, as Arm's instruction answers.
 * **Each width saturates at its own bounds.** `I8::300.0` is `127`, not `300` narrowed through `I32` to `44`: going through a wider type first would bring back the wrap the rule exists to avoid.
 
-**A constant that does not fit is a compile error**, as a constant integer overflow is (6.8 in [`SPEC-language.md`](SPEC-language.md)). What is fixed at translation time is not left to the rule for run time. `I32::1.0e20` written in the source is a mistake, never a deliberate clip. The width checked is the one every target holds, so `Sz::3.0e9` is refused on a 64-bit machine too. One fold decides it (`float_cast_of` in `ksplc/sema/decl/fold_float.kspl`). Both backends write a constant cast as that fold's value. So the C compiler and LLVM never fold it a second time.
+**A constant that does not fit is a compile error**, as a constant integer overflow is (6.8 in [`SPEC-programming-language.md`](SPEC-programming-language.md)). What is fixed at translation time is not left to the rule for run time. `I32::1.0e20` written in the source is a mistake, never a deliberate clip. The width checked is the one every target holds, so `Sz::3.0e9` is refused on a 64-bit machine too. One fold decides it (`float_cast_of` in `ksplc/sema/decl/fold_float.kspl`). Both backends write a constant cast as that fold's value. So the C compiler and LLVM never fold it a second time.
 
 **`to_i32` and its kin say none instead** (`x.to_i32(): I32?`, on `F64` and `F32`, in `std/math`, not in `std/lang`, which every program carries whether it calls them or not). Saturation hides that a bound was reached; a caller who must know, such as one reading a number from a file, needs the absence. The two do not spell one thing twice (Principle 6): the cast answers for every input, the method answers whether the input had an answer. Without the method, that caller writes the bounds by hand. The right ones are open one past the range (`-128.9` fits `I8`), which a hand-written check easily gets wrong. The name follows `std/strnum`'s `to_i64` for a string.
 
 ### A tag names another variant through its enum
 
-**`b = E.a + 1` is written with the enum's name, and a bare `a` is refused** ("3.4 Enums (`enum`)" in [`SPEC-language.md`](SPEC-language.md)). A variant is named `E.a` or, where an enum is expected, `.a`. Say a tag expression could read `a` alone. That would open one place where the enum's names stand bare beside the file's own. A `const a` in the same file would then mean two things, depending on where it is written. The refusal names `E.a`, the spelling that folds. A bare `a` meant as an alias cannot arise either: two variants sharing a tag are refused.
+**`b = E.a + 1` is written with the enum's name, and a bare `a` is refused** ("3.4 Enums (`enum`)" in [`SPEC-programming-language.md`](SPEC-programming-language.md)). A variant is named `E.a` or, where an enum is expected, `.a`. Say a tag expression could read `a` alone. That would open one place where the enum's names stand bare beside the file's own. A `const a` in the same file would then mean two things, depending on where it is written. The refusal names `E.a`, the spelling that folds. A bare `a` meant as an alias cannot arise either: two variants sharing a tag are refused.
 
 ### A slice is a std struct, under generics' rules
 
@@ -270,13 +270,13 @@ There is no built-in slice. `std/lang` declares `struct Slice<|$T|> { ptr: T$@; 
 
 #### `impl<|T|> T$[]` is an ordinary generic impl
 
-`T$[]` is sugar for `Slice<|$T|>`, so adding methods to every slice is no different from adding a method to `List<|T|>` (docs/SPEC-language.md §9.3).
+`T$[]` is sugar for `Slice<|$T|>`, so adding methods to every slice is no different from adding a method to `List<|T|>` (docs/SPEC-programming-language.md §9.3).
 
 #### Immutable and mutable instances: one C struct, two KSPL types
 
 A read-only slice and a writable slice are two KSPL types, so the compiler keeps them apart. The generated C uses one struct for both, so passing a writable slice where a read-only one is expected costs no cast.
 
-`U8$[]` passes where `U8[]` is declared (docs/SPEC-language.md §3.3), yet **as KSPL types they stay two**. Immutability rides on the field's type, so the `p` of `Box<|$I32|>` is `I32$@` and that of `Box<|I32|>` is `I32@`. In C they are one struct, so the one step of weakening emits no cast. With a struct each, the generated C would refuse to pass one where the other is declared. How the C name drops the mark belongs to the compiler ("Immutability marks in a type" in [`../ksplc/docs/DESIGN-sema.md`](../ksplc/docs/DESIGN-sema.md)).
+`U8$[]` passes where `U8[]` is declared (docs/SPEC-programming-language.md §3.3), yet **as KSPL types they stay two**. Immutability rides on the field's type, so the `p` of `Box<|$I32|>` is `I32$@` and that of `Box<|I32|>` is `I32@`. In C they are one struct, so the one step of weakening emits no cast. With a struct each, the generated C would refuse to pass one where the other is declared. How the C name drops the mark belongs to the compiler ("Immutability marks in a type" in [`../ksplc/docs/DESIGN-sema.md`](../ksplc/docs/DESIGN-sema.md)).
 
 **The body is instantiated per instance**, so a write to the element inside the immutable version is rejected at translation time, not at run time.
 
@@ -284,7 +284,7 @@ A read-only slice and a writable slice are two KSPL types, so the compiler keeps
 
 `impl U8[] { ... }` adds methods to byte slices alone, and it cannot overlap a general impl.
 
-`impl U8[] { ... }` needs **no new notation**. An impl's target is a type expression: a template when it holds the impl's own type argument, and that one instance when it does not. The matching rules are docs/SPEC-language.md §9.3 (the check is `impl_target_rejects` in `ksplc/sema/decl/mono.kspl`).
+`impl U8[] { ... }` needs **no new notation**. An impl's target is a type expression: a template when it holds the impl's own type argument, and that one instance when it does not. The matching rules are docs/SPEC-programming-language.md §9.3 (the check is `impl_target_rejects` in `ksplc/sema/decl/mono.kspl`).
 
 **Overlap is rejected.** Otherwise the template's table would overwrite by name, keeping whichever impl was collected later (Principle 5). Swift's "the more specialized one wins" is not adopted: a reader cannot tell which one is in effect.
 
@@ -302,7 +302,7 @@ A read-only slice and a writable slice are two KSPL types, so the compiler keeps
 
 #### A name on the impl that the receiver leaves open
 
-`impl<|T, U|> List<|T|>` cannot be written (docs/SPEC-language.md §3.3): **the receiver's type does not determine `U`**, since `List<|I32|>` says nothing about it.
+`impl<|T, U|> List<|T|>` cannot be written (docs/SPEC-programming-language.md §3.3): **the receiver's type does not determine `U`**, since `List<|I32|>` says nothing about it.
 
 Caution: **It must not pass silently.** The grammar accepts it, so `collect_impl_decl` in `ksplc/sema/decl/collect.kspl` rejects it at the declaration.
 
@@ -356,13 +356,13 @@ The design already infers what is determined and asks for the rest. Where `T` is
 
 Refusing them while taking the specialization would make a plain function harder to pass than a generic one. A declaration with no type is the same question: the type a local takes from its initializer ("Why type inference is limited to local variables"). The answer is in the text where the name is written. Writing the function type out instead would repeat what the declaration already says. The bare `same` names no one function, so it stays a compile error there as everywhere. **`F` becomes a function-pointer type**, the same for every function of that signature. So two functions of one signature pass through one instance of `apply`, and a variable of that type holds either.
 
-**Type arguments after a function that declares none would bind nothing and change nothing** (Principle 5), so "8.1 Definitions" in [`SPEC-language.md`](SPEC-language.md) refuses them.
+**Type arguments after a function that declares none would bind nothing and change nothing** (Principle 5), so "8.1 Definitions" in [`SPEC-programming-language.md`](SPEC-programming-language.md) refuses them.
 
 **What is given up**: `f: fn(x: I32): I32 = same`, leaving the specialization to the expected type. Each use costs the few characters of `<|I32|>`.
 
 #### A method as a value is named through its type
 
-The rules are "8.1 Definitions" in [`SPEC-language.md`](SPEC-language.md); this section holds why.
+The rules are "8.1 Definitions" in [`SPEC-programming-language.md`](SPEC-programming-language.md); this section holds why.
 
 **Every type argument is written, each where it belongs**: a generic type's on the type, the method's own after the method (`Keeper<|I32|>.pair<|U8|>`). Each instance of `Keeper` has its own copy of each method. A generic method has one copy per specialization. So a value names one, as in "A generic function used as a value names its specialization". The bare `Keeper.keep` and `Meter.same` are compile errors that say what to write.
 
@@ -376,15 +376,15 @@ The rules are "8.1 Definitions" in [`SPEC-language.md`](SPEC-language.md); this 
 
 A type argument can be a constant, as in `Ring<|512|>`. That is how a buffer of fixed size lives inside a type where no heap (memory allocated at run time) is available.
 
-What can be written is in [`docs/SPEC-language.md`, "3.3 Structs (`struct`)"](SPEC-language.md#33-structs-struct).
+What can be written is in [`docs/SPEC-programming-language.md`, "3.3 Structs (`struct`)"](SPEC-programming-language.md#33-structs-struct).
 
-**It is the only way to embed fixed-capacity memory in a type where no heap is available.** The declaration alone fixes the size of `struct Buf<|const n: Sz|> { data: U8[n]; }`. So it works where `alloc` cannot be called. That is in an interrupt handler, before the scheduler starts, and right after a freestanding boot. (A freestanding boot is a program starting with no operating system under it.) With the value on the type, `% n` is also a constant in the generated C. So no software division is called, even on a target without hardware divide.
+**It is the only way to embed fixed-capacity memory in a type where no heap is available.** The declaration alone fixes the size of `struct Buf<|const N: Sz|> { data: U8[N]; }`. So it works where `alloc` cannot be called. That is in an interrupt handler, before the scheduler starts, and right after a freestanding boot. (A freestanding boot is a program starting with no operating system under it.) With the value on the type, `% N` is also a constant in the generated C. So no software division is called, even on a target without hardware divide.
 
-**Arithmetic cannot be written in the argument position**, because the notation as written is the canonical name. Naming by the folded value would turn `true` into `1` and land a `Bool` type argument on a different type. Write the arithmetic in the `const`'s definition: a `Foo<|n|>` given `const n: Sz = 4 * 2;` is the same type as `Foo<|8|>`. The array-length position (`T[rows * cols]`) creates no canonical name, so arithmetic is accepted there: the only place two positions treat the same value differently.
+**Arithmetic cannot be written in the argument position**, because the notation as written is the canonical name. Naming by the folded value would turn `true` into `1` and land a `Bool` type argument on a different type. Write the arithmetic in the `const`'s definition: a `Foo<|N|>` given `const N: Sz = 4 * 2;` is the same type as `Foo<|8|>`. The array-length position (`T[ROWS * COLS]`) creates no canonical name, so arithmetic is accepted there: the only place two positions treat the same value differently.
 
 **A parameter's kind is checked where the argument is written, a generic's own declaration included.** `fn f<|const N: Sz|>(h: Hold<|N|>@)` passes a value where `Hold` takes a type, and is refused at the declaration, whether or not anything calls `f`. Left to a call, the mistake would show as the call's argument failing to match. That blames the caller for the declaration's error. And a generic nobody calls yet would keep it hidden.
 
-**A capacity on the type fixes the memory's size at translation time only where the memory is embedded in the type.** Where the memory is passed separately, it is passed as a slice. The receiver compares the slice's length with the type argument when it is handed over. `std/ring.kspl`'s `Ring<|cap|>.new` takes a `U8$[]` and stops the program unless its length is `cap`. So the two guarantee different things. The type argument keeps the arithmetic constant (the wrap `% cap` needs no division at run time). The slice carries the bounds, which every access then checks. A bare address would carry no length, and a capacity differing from the buffer would write out of bounds unseen.
+**A capacity on the type fixes the memory's size at translation time only where the memory is embedded in the type.** Where the memory is passed separately, it is passed as a slice. The receiver compares the slice's length with the type argument when it is handed over. `std/ring.kspl`'s `Ring<|CAP|>.new` takes a `U8$[]` and stops the program unless its length is `CAP`. So the two guarantee different things. The type argument keeps the arithmetic constant (the wrap `% CAP` needs no division at run time). The slice carries the bounds, which every access then checks. A bare address would carry no length, and a capacity differing from the buffer would write out of bounds unseen.
 
 **A `const` parameter is read off the argument where it stands as an array's length or as a generic's value argument.** `sum(s)` with `s: I32[3]` makes `N` of `fn sum<|const N: Sz|>(v: I32[N])` 3. `cap(b@)` with `b: Buf<|8|>` makes `N` of `fn cap<|const N: Sz|>(b: Buf<|N|>@)` 8. Each is part of the argument's type. So the argument determines the value as uniquely as it determines a type parameter standing bare. See "A generic's type arguments are inferred from the actual arguments". Writing `sum<|3|>(s)` or `cap<|8|>(b@)` would repeat what the declaration of `s` or `b` already says. The two are one value to the rule: `fn fit<|const N: Sz|>(b: Buf<|N|>@, v: I32[N])` takes `N` from either argument. Where two arguments fix it to different values, the call is refused naming both. Say it took the first, as a type parameter does. The instance would then refuse the second argument alone, though either can be the wrong one.
 
@@ -432,7 +432,7 @@ One place decides how many elements a range really holds: `sub_count(count, star
 
 ### Where permission lives changes with whether it is owned
 
-**A read-only container (the receiver) protects its elements only if it owns them.** A `List` allocated its elements and owns them, so a read-only `List` protects them. A slice only borrows memory someone else owns, so there the container's permission and its elements' are separate axes, and the slice's element type decides. So whether `a[i] = v` passes through a read-only receiver is decided by the receiver that the `Index_place` implementation declares (`index_stops_permission_walk` in `ksplc/sema/decl/access.kspl`; the rule is docs/SPEC-language.md §6.1.2):
+**A read-only container (the receiver) protects its elements only if it owns them.** A `List` allocated its elements and owns them, so a read-only `List` protects them. A slice only borrows memory someone else owns, so there the container's permission and its elements' are separate axes, and the slice's element type decides. So whether `a[i] = v` passes through a read-only receiver is decided by the receiver that the `Index_place` implementation declares (`index_stops_permission_walk` in `ksplc/sema/decl/access.kspl`; the rule is docs/SPEC-programming-language.md §6.1.2):
 
 | Container | What it declares | What speaks for permission |
 | :-- | :-- | :-- |
@@ -466,7 +466,7 @@ Caution: **Do not choose it when the receiver is read-only.** `at` takes `Self$@
 
 `typedef User_id = I32;` gives `I32` a second name; it does not make a new type. For a type the compiler keeps apart, declare a struct with one field.
 
-The rule is "3.5 Typedefs (`typedef`)" in [`SPEC-language.md`](SPEC-language.md).
+The rule is "3.5 Typedefs (`typedef`)" in [`SPEC-programming-language.md`](SPEC-programming-language.md).
 
 **The reason**: a typedef told apart from its type would be "the same type, but remembered". Every value would carry one of two spellings, and every feature would have to say which. Examples are a variant built through the typedef, and a function called through it. Another is a value returned where the typedef is declared.
 
@@ -478,7 +478,7 @@ Rust's `type`, Swift's `typealias`, C's `typedef` and Go's `type A = B` all name
 
 `false < true` works, but arithmetic and shifts (`true + true`) do not, and no number converts to `Bool` by a cast: write `x != 0`.
 
-The operators `Bool` takes, and the answers arithmetic would silently change, are in "6.1 The operator list and precedence" in [`SPEC-language.md`](SPEC-language.md).
+The operators `Bool` takes, and the answers arithmetic would silently change, are in "6.1 The operator list and precedence" in [`SPEC-programming-language.md`](SPEC-programming-language.md).
 
 **The reason ordering stays**: `false < true` has one fixed meaning, and sorting on a boolean key is genuinely needed.
 
@@ -488,7 +488,7 @@ The operators `Bool` takes, and the answers arithmetic would silently change, ar
 
 ### Why an unsigned minus and a fixed-answer comparison are refused
 
-`-u` on an unsigned integer, and an integer compared with a constant outside every value its type holds (`x == -1` with `x: U8`), are compile errors. The rules are in "6.8 Integer arithmetic: folding, overflow, division, shifts" in [`SPEC-language.md`](SPEC-language.md).
+`-u` on an unsigned integer, and an integer compared with a constant outside every value its type holds (`x == -1` with `x: U8`), are compile errors. The rules are in "6.8 Integer arithmetic: folding, overflow, division, shifts" in [`SPEC-programming-language.md`](SPEC-programming-language.md).
 
 **Both are written but do nothing a writer meant** (Principle 5). An unsigned type holds no negative, so `-u` can only wrap: with `u: U32 = 5` it is `4294967291`. A `U8` compared with `-1` computes at `I32`, where the `U8` is widened to `0` … `255`, so the answer is false whatever the value.
 
@@ -503,6 +503,8 @@ The operators `Bool` takes, and the answers arithmetic would silently change, ar
 **What is given up**: C's `-u` idiom for "the two's complement of an unsigned" needs `0 - u`, three characters more.
 
 ### Why the size and index type `Sz` is signed
+
+The short spelling is explained in "Why the size type is named `Sz`" in [`DESIGN-notation.md`](DESIGN-notation.md#why-the-size-type-is-named-sz).
 
 `Sz`, the type of sizes and indices, can be negative, unlike C's `size_t`. A subtraction that goes below zero then stays visibly negative instead of turning into a huge number.
 
@@ -537,7 +539,7 @@ A value that can be absent is written `T?`. It is `std/lang`'s `Option<|T|>`, fo
 
 ### `T!E` is sugar for `Result<|T, E|>`
 
-A result is written `T!E`, folded in the parse into `std/lang`'s enum `Result<|T, E|>` as `T?` is folded into `Option<|T|>`. The rules, the desugaring included, are "8.3 Error handling" in [`SPEC-language.md`](SPEC-language.md); this section holds why.
+A result is written `T!E`, folded in the parse into `std/lang`'s enum `Result<|T, E|>` as `T?` is folded into `Option<|T|>`. The rules, the desugaring included, are "8.3 Error handling" in [`SPEC-programming-language.md`](SPEC-programming-language.md); this section holds why.
 
 **Why a library type, not the compiler's own**: one mechanism then serves the optional and the result. And a result is a value like any other.
 
@@ -545,7 +547,7 @@ A result is written `T!E`, folded in the parse into `std/lang`'s enum `Result<|T
 * **What the enum gives.** Layout, reference counting and code generation are the enum's, so nothing about a result is special past the sugar and the three operators.
 * **`!` and `catch` stay**: they are what makes failure cheap to pass on, and a `switch` alone would make every call site three lines.
 * **The long form is refused as a type** so that a result is spelled one way (Principle 6). An expression keeps it only because no `!` can stand there.
-* **A result crosses no C boundary because its layout is the enum's tagged union** ("11.1 Types that cannot cross the C boundary" in [`SPEC-language.md`](SPEC-language.md)). A C caller gets a status and an out-parameter, written as such.
+* **A result crosses no C boundary because its layout is the enum's tagged union** ("11.1 Types that cannot cross the C boundary" in [`SPEC-programming-language.md`](SPEC-programming-language.md)). A C caller gets a status and an out-parameter, written as such.
 
 **A result nobody takes apart is refused because the type says the call can fail.** A failure dropped in silence breaks that promise where nothing shows it. A warning would leave the second reading accepted, and the same code would compile clean on a machine that turns warnings off.
 
@@ -562,7 +564,7 @@ A result is written `T!E`, folded in the parse into `std/lang`'s enum `Result<|T
 
 In a trait's declaration, a method's receiver is always written plain `Self`. Each implementation chooses for itself whether it takes the receiver by value or through a pointer it can write through.
 
-A `trait` method's receiver **is written only as a bare `Self`**; `Self@` / `Self$@` are compile errors (docs/SPEC-language.md §5.3). The implementation can receive it in any form.
+A `trait` method's receiver **is written only as a bare `Self`**; `Self@` / `Self$@` are compile errors (docs/SPEC-programming-language.md §5.3). The implementation can receive it in any form.
 
 ```kspl
 pub trait Writer
@@ -595,13 +597,13 @@ flowchart LR
 
 **A guarantee that "the receiver is not rewritten"** would need a marker per method (for example `fn draw(r: Self) # readonly;`). The receiver's type cannot carry that contract: the thunk makes the receiver rewritable, and the fat pointer makes no copy.
 
-Omitting a parameter's type, and `Self` on a parameter **other than the receiver**, are separate rules (docs/SPEC-language.md §5.1, §5.3). The second exists because a thunk would pass the fat pointer where a concrete type is expected. That fails at the C stage with no KSPL diagnostic (`ksplc/docs/DESIGN-sema.md` "The Sema layer: it knows the types").
+Omitting a parameter's type, and `Self` on a parameter **other than the receiver**, are separate rules (docs/SPEC-programming-language.md §5.1, §5.3). The second exists because a thunk would pass the fat pointer where a concrete type is expected. That fails at the C stage with no KSPL diagnostic (`ksplc/docs/DESIGN-sema.md` "The Sema layer: it knows the types").
 
 #### When a temporary can be the receiver
 
 `f().m()` calls a method on a temporary result. It is allowed when `m` only reads its receiver, and refused when `m` writes, because the write would land in a hidden copy.
 
-The rule is docs/SPEC-language.md §5.2:
+The rule is docs/SPEC-programming-language.md §5.2:
 
 | `m` declares | `f().m()` | Why |
 | :-- | :-- | :-- |
@@ -612,7 +614,7 @@ The rule is docs/SPEC-language.md §5.2:
 
 **Rejecting a writing receiver**: the slot is a copy. A write through `Self$@` would vanish where the caller cannot see it, and `make_point().set_n(5)` would be a call doing nothing (Principle 5).
 
-**So a receiver takes `$` only when the method rewrites the receiver's own memory.** A write to what a descriptor points at does not need it, since only the descriptor is copied. The `fill` example is in docs/SPEC-language.md §5.2. The line is "was it declared as writing", so it can be read off the declaration of `m` alone, and the protection needs no borrow checker.
+**So a receiver takes `$` only when the method rewrites the receiver's own memory.** A write to what a descriptor points at does not need it, since only the descriptor is copied. The `fill` example is in docs/SPEC-programming-language.md §5.2. The line is "was it declared as writing", so it can be read off the declaration of `m` alone, and the protection needs no borrow checker.
 
 **Operators and casts use the same slot**: `a + b` desugars to `a.add(b)` and `Dest::x` to `x.cast()`, whose receivers can be temporaries too.
 
@@ -654,7 +656,7 @@ flowchart TD
 
 **(5) If (1) to (4) do not decide it, a trait:**
 
-* The attribute table's rule keeps no exceptions: removing an attribute leaves the executable's logical structure unchanged (docs/SPEC-language.md chapter 10). That rule is what gives the gate "an unknown attribute is an error" its meaning.
+* The attribute table's rule keeps no exceptions: removing an attribute leaves the executable's logical structure unchanged (docs/SPEC-programming-language.md chapter 10). That rule is what gives the gate "an unknown attribute is an error" its meaning.
 * A marker that later grows a method requirement gains one prototype, and the user's code does not change. The cost is one FQN constant and a conformance call, not a check written by hand.
 
 **The trait's costs are accepted:**
@@ -667,7 +669,7 @@ flowchart TD
 
 A type gets automatic reference counting by conforming to the trait `Ref_counted`, not through an `#arc` attribute. Only the trait lets the compiler check that the type really has `retain` and `release`.
 
-The rule is docs/SPEC-language.md §8.4.2. An attribute such as `#arc` fails on three counts.
+The rule is docs/SPEC-programming-language.md §8.4.2. An attribute such as `#arc` fails on three counts.
 
 **1. An attribute cannot check the requirement.** ARC means "provide retain/release". To synthesize the calls, the compiler looks up `<type name>.retain` / `<type name>.release` by name, and inserts nothing if the lookup fails. An attribute on a type lacking them would disable ARC with no diagnostic, where a trait's conformance check stops it (3.2.1 (2)).
 
@@ -753,7 +755,7 @@ flowchart LR
 
 **A table rather than a body per library.** `Json_codable { fn to_json(…) }` names a `std/json` type in its signature. Once ksplc synthesized its body, it would be a compiler-known trait. "Why compiler-known traits are confined to `std/lang`" puts those in `std/lang`, which can import only `std/libc`. A table's signature needs only `U8[]`, `Sz` and an enum, so it can live anywhere: in `std/reflect`, not `std/lang` ("Why compiler-known traits are confined to `std/lang`"). And one mechanism serves both `json` and `db`.
 
-**The compiler writes the table only for an `impl` with an empty body**, as a person would write it. It leaves an `impl` with a body alone (the rule is "5.5 Worked example: synthesizing a field table with `Reflectable`" in [`SPEC-language.md`](SPEC-language.md)). A body written by hand is the way out for another key mapping, or for a type the table cannot express. The trait is matched by FQN, as every compiler-known trait is ("Why compiler-known traits are confined to `std/lang`"). How the compiler builds the table is ksplc's: `synthesize_reflect_impls` in `ksplc/sema/decl/reflect.kspl`. It is also pass 2a' in [`../ksplc/docs/DESIGN-sema.md`](../ksplc/docs/DESIGN-sema.md), under this heading:
+**The compiler writes the table only for an `impl` with an empty body**, as a person would write it. It leaves an `impl` with a body alone (the rule is "5.5 Worked example: synthesizing a field table with `Reflectable`" in [`SPEC-programming-language.md`](SPEC-programming-language.md)). A body written by hand is the way out for another key mapping, or for a type the table cannot express. The trait is matched by FQN, as every compiler-known trait is ("Why compiler-known traits are confined to `std/lang`"). How the compiler builds the table is ksplc's: `synthesize_reflect_impls` in `ksplc/sema/decl/reflect.kspl`. It is also pass 2a' in [`../ksplc/docs/DESIGN-sema.md`](../ksplc/docs/DESIGN-sema.md), under this heading:
 
 * "The internal flow: registration, type inference, then generic instantiation"
 
@@ -767,7 +769,7 @@ The table's own shape (nesting, widths, containers) is `std`'s ("The field table
 
 **The table is not a translation-time value (no `fieldsof(T)`).** Constant folding answers an `I64` (`ksplc/sema/decl/eval.kspl`), and an aggregate would be a new kind of translation-time value. `offsetof` is one more scalar beside `sizeof`, one notation (the chapter "One notation per purpose" in [`DESIGN-principles.md`](DESIGN-principles.md)).
 
-**An `offsetof` it cannot answer is rejected**, neither left undefined nor answered with a stand-in (the cases are docs/SPEC-language.md §6.7). With neither inheritance nor virtual function tables, every `struct` has a fixed layout. So nothing forces an undefined case, and a request with no answer becomes an error (Principle 5).
+**An `offsetof` it cannot answer is rejected**, neither left undefined nor answered with a stand-in (the cases are docs/SPEC-programming-language.md §6.7). With neither inheritance nor virtual function tables, every `struct` has a fixed layout. So nothing forces an undefined case, and a request with no answer becomes an error (Principle 5).
 
 **No mechanism renames keys.** The mapping is fixed as "field name = key, type = the value's kind". To change it, write the `impl` body by hand so no synthesis applies.
 
@@ -841,9 +843,9 @@ Note: This is revisited only under the condition in "Whether a callback arrives 
 
 **What is given up**:
 
-* **It cannot be carried out.** Where the writer must decide the environment's lifetime, put the captures in a `struct` and pass that as an argument (docs/SPEC-language.md appendix A).
+* **It cannot be carried out.** Where the writer must decide the environment's lifetime, put the captures in a `struct` and pass that as an argument (docs/SPEC-programming-language.md appendix A).
 * **The call goes through a vtable**, one level more than an anonymous function's direct call.
-* **A closure cannot be captured.** A capture points at the body a name refers to. So it would take in the environment struct, not a `Callable`. Composition passes an argument instead (docs/SPEC-language.md §8.1.3). Say so in the diagnostic, or the user reads `_anon_env_N`, a type name they never wrote (`append_closure_capture_note` in `ksplc/sema/session/ctx.kspl`).
+* **A closure cannot be captured.** A capture points at the body a name refers to. So it would take in the environment struct, not a `Callable`. Composition passes an argument instead (docs/SPEC-programming-language.md §8.1.3). Say so in the diagnostic, or the user reads `_anon_env_N`, a type name they never wrote (`append_closure_capture_note` in `ksplc/sema/session/ctx.kspl`).
 * **It cannot be placed at the top level**, even with zero captures. The environment is a temporary on the caller's frame. `block_depth` in `ksplc/parse/desugar.kspl` decides it, and a diagnostic says so. So a reused predicate cannot be given a name. A function pointer can be named once and passed from several functions. An API taking a `Callable` needs a closure in each function using it.
 * **Diagnostics can name synthesized declarations absent from the source** (`_anon_env_N` / `_anon_env_new_N` / `_anon_env_v_N`), placed where the closure was written.
 * **An outer name used in an anonymous function's body gives `undefined path or identifier`.** That suggests a typo, so the diagnostic adds that capture is impossible (`append_anon_fn_capture_note` in `ksplc/sema/session/ctx.kspl`).
@@ -875,7 +877,7 @@ A chain such as `xs.where(…).select(…)` from `std/seq` can replace a hand-wr
 
 Do not bring these into `ksplc`'s inner loops (tens of thousands of runs per compilation), nor into `std/` or `ksos/`. `ksai/`, with its examples `ksai/examples/qwen_infer` and `ksai/examples/llama_engine`, is out of scope too: it does inference and training per layer, token and element throughout.
 
-**Only a loop that filters, maps or counts a `List` is replaced.** `std/seq` extends `List<|T|>`, so a loop over a slice (a `json.Val$[]`, a `U8[]`) stays. So does one that uses the index itself (`rejoin_replaced(lines, i, …)`), since `std/seq` has no variant passing a position.
+**Only a loop that filters, maps or counts a `List` is replaced.** `std/seq` extends `List<|T|>`, so a loop over a slice (a `json.Value$[]`, a `U8[]`) stays. So does one that uses the index itself (`rejoin_replaced(lines, i, …)`), since `std/seq` has no variant passing a position.
 
 ### Why a closure is not written after the call
 
@@ -894,13 +896,13 @@ over: = fn(x: I32; floor: I32): Bool
 big: = count_over(xs, over)
 ```
 
-A `fn` right behind a call's `)` is an error whose Note names both forms (`forbidden_spelling_hint` in `ksplc/parse/syntax_msg.kspl`). "Features not carried" in [`SPEC-language.md`](SPEC-language.md) lists it.
+A `fn` right behind a call's `)` is an error whose Note names both forms (`forbidden_spelling_hint` in `ksplc/parse/syntax_msg.kspl`). "Features not carried" in [`SPEC-programming-language.md`](SPEC-programming-language.md) lists it.
 
 **What would reopen it**: calls that read as statements of their own, written many times over (SwiftUI's view builders, Kotlin's type-safe builders). There, naming each closure first would become the bulk of the text. KSPL writes none.
 
 ### A compared function's name takes the other side's type
 
-The rules are "8.1 Definitions" in [`SPEC-language.md`](SPEC-language.md); this section holds why.
+The rules are "8.1 Definitions" in [`SPEC-programming-language.md`](SPEC-programming-language.md); this section holds why.
 
 **A function's name takes its type from where it is written** ("A generic function used as a value names its specialization"). In a comparison, the position is the other side. `==` asks the same question in either order, so the order the sides are written in cannot decide whether the name has a type. The other side is typed first, whichever it is.
 
@@ -942,7 +944,7 @@ The rules are "8.1 Definitions" in [`SPEC-language.md`](SPEC-language.md); this 
 | 4.4 | Warns where a block can be left before the `defer` that frees a value | A value with no `defer` at all |
 | 4.5 | Keeps a counted value a `switch` arm binds alive for the whole arm | A pointer to the binding (`a@`) kept past the arm |
 
-**Raw pointers are set apart rather than banned.** `T@` is a first-class type, and unchecked access has its own form, `(p + i)$` (docs/SPEC-language.md §6.2.1), so C-level control need not move into a library.
+**Raw pointers are set apart rather than banned.** `T@` is a first-class type, and unchecked access has its own form, `(p + i)$` (docs/SPEC-programming-language.md §6.2.1), so C-level control need not move into a library.
 
 **What is given up: how a type's memory is managed has to be read from its name.** Raw pointers and ARC live side by side, so the reader checks which one manages a type. Consistency is chosen per project, not by the language. The lints [W0601] and [I0602], off by default, find code departing from the chosen policy ([`../ksplc/docs/SPEC-diagnostics.md`](../ksplc/docs/SPEC-diagnostics.md)).
 
@@ -950,25 +952,25 @@ The rules are "8.1 Definitions" in [`SPEC-language.md`](SPEC-language.md); this 
 
 KSPL checks one simple thing instead of every pointer's lifetime: once a `Move_only` value is handed over, the old name cannot be used again.
 
-Conformance to `Move_only` forbids implicitly copying an owning handle, such as an OS lock or a file descriptor. There a duplicate means a double free (docs/SPEC-language.md §5.4). Rust's borrow checker is not adopted.
+Conformance to `Move_only` forbids implicitly copying an owning handle, such as an OS lock or a file descriptor. There a duplicate means a double free (docs/SPEC-programming-language.md §5.4). Rust's borrow checker is not adopted.
 
 **Why no borrow checker**: Rust's borrow checker proves that no reference outlives the data it points at. It also proves that no two places change the same data at once. That proof tracks an order of magnitude more. It infers the region of code each reference is valid in. It excludes aliases (two live references to one place where one writes). It would also reject the raw pointers (`T@`) KSPL code uses routinely. Move-only tracks one thing, "this binding can no longer be read", and local data flow suffices for that.
 
 **Why a move rather than a ban on copying**: a ban makes construction impossible. `Mutex<|T|>::{ .mutex = m, … }` copies `m`, and so does binding the result of `Raw_mutex.new()`. Ownership passes there and leaves no duplicate, so what fits is a move invalidating the original.
 
-**Which reads are moves**: the rule (docs/SPEC-language.md §5.4) lists the reads that do not duplicate. They are a method's or field's receiver, and the target of `@` / `$` / `[`. Every other read as a value is a move. Listing the moves instead (assignment, arguments, struct literals, `return`) would be longer, and a position added later would be easy to miss.
+**Which reads are moves**: the rule (docs/SPEC-programming-language.md §5.4) lists the reads that do not duplicate. They are a method's or field's receiver, and the target of `@` / `$` / `[`. Every other read as a value is a move. Listing the moves instead (assignment, arguments, struct literals, `return`) would be longer, and a position added later would be easy to miss.
 
 **Why a field moves on its own, rather than taking its binding with it**: a struct can hold more than one owning handle. Handing one over while keeping the others is ordinary work (a pair of pipe ends, one given to a child process). Three answers were possible. Refusing to move a field at all forces the whole struct to be taken apart by a function written for it. Moving the whole binding on a field's move refuses the other fields for no reason. Tracking the field's path costs one path per read of a `Move_only` field, which is rare, and frees both. So the path is tracked. The moved field, what lies below it, and the binding read as a whole are refused. A new value in the field revives it, as one in the binding does. Only a path inside the binding's own value is tracked. A field reached through a pointer lies in memory the binding does not own, which is the pointer limit below.
 
 **Why a loop's body is followed until nothing changes**: the body's end leads back to its start. So a move on one pass meets the next pass's read. Following the body once, from the state before the loop, can never see that. The analysis walks the body again from the state its end leaves, until the state at its start stops changing. Moves and releases only accumulate, so this ends, mostly after one walk. The report on a move found that way says it came from an earlier pass. The line that moved the value stands below the use, where a reader would not look.
 
-**What is given up**: duplication through a pointer goes undetected. So the check is not sound, meaning it does not catch every case. The limit is stated in docs/SPEC-language.md §5.4.
+**What is given up**: duplication through a pointer goes undetected. So the check is not sound, meaning it does not catch every case. The limit is stated in docs/SPEC-programming-language.md §5.4.
 
 ### Why `defer` has no capture list
 
 A `defer` block runs when its scope ends, and it reads the variables as they are then, not as they were when the `defer` line was reached.
 
-A `defer` carries only its body, which reads outer variables **on leaving the scope** (docs/SPEC-language.md §8.4.1). Nothing freezes them at registration (the moment the `defer` line runs).
+A `defer` carries only its body, which reads outer variables **on leaving the scope** (docs/SPEC-programming-language.md §8.4.1). Nothing freezes them at registration (the moment the `defer` line runs).
 
 **Freezing at registration would be wrong**: for a value struct, freeing the frozen copy does not free the real thing.
 
@@ -994,7 +996,7 @@ Go's `defer` is immediate only in evaluating its arguments. Its block form, whic
 
 **Why there is no capture list**: reading on leaving, a capture list would do nothing at run time. It would still tell the reader which variables the block touches, but unenforced it is a comment: writable but ineffective (Principle 5).
 
-**To keep a value from registration time**, copy it yourself (the idiom is in [`docs/SPEC-language.md`, 8.4](SPEC-language.md)).
+**To keep a value from registration time**, copy it yourself (the idiom is in [`docs/SPEC-programming-language.md`, 8.4](SPEC-programming-language.md)).
 
 Caution: **Should freezing at registration ever be needed, do not spell it `defer a, b { … }`.** It could not be told from the existing `defer`, which reads on leaving, and would break silently. Give it its own notation.
 
@@ -1079,13 +1081,13 @@ A store's place outlives the frame when it is a global. It does so too when it l
 
 * **It asks only where a later `defer` in the same block frees the value.** A value freed by hand, passed on or kept has another shape. Calling it a leak would be a false report.
 * **A shape rather than every path.** Checkers that follow a resource along every path pay in false reports. A rule read off the code as written, like Error Prone's `MustBeClosed`, does not. The gap before a `defer` is such a rule.
-* **`Owned` says which values are asked about.** `Owned` is the trait whose `free()` the compiler reads as freeing the value. It is the same contract the use-after-free check reads (docs/SPEC-language.md §8.4.5), so a type taking part in one takes part in the other.
+* **`Owned` says which values are asked about.** `Owned` is the trait whose `free()` the compiler reads as freeing the value. It is the same contract the use-after-free check reads (docs/SPEC-programming-language.md §8.4.5), so a type taking part in one takes part in the other.
 
 **What is given up**: a value with no later `defer` in the block, never freed at all, is not this warning's to find.
 
 ### Why a `switch` arm's binding holds its own count
 
-A `switch` arm's binding, and `if v: = o`'s, is a copy of the payload. So ARC counts it as any other copy: one retain where the arm starts, one release wherever it ends (docs/SPEC-language.md §8.4.2).
+A `switch` arm's binding, and `if v: = o`'s, is a copy of the payload. So ARC counts it as any other copy: one retain where the arm starts, one release wherever it ends (docs/SPEC-programming-language.md §8.4.2).
 
 **The alternative is a borrow**: the binding reads the payload in place and owns nothing. That costs no count, but the payload then lives only as long as the subject holds it. An arm can let the subject go while the binding is still named. Examples are `s = .none`, and a call that empties the container the subject came from. Proving that an arm never does so is a borrow checker's work. KSPL does not do it ("Why there is no borrow checker, only a move-only marker"). Unproven, one assignment in the arm frees the value under the binding, with nothing on the page to show it.
 
@@ -1160,7 +1162,7 @@ A `priv` type in a `pub` function's return (`pub fn open(): File_stream$@`) pass
 * **A non-`pub` field.** Its access is checked at the use site, so the value does not leave, whatever its type. Only a `pub struct`'s `pub` field leaks.
 * **`main`'s return.** Only the start-up code receives it, and that code names no type: it turns the value into an exit status and a message. So `fn main(): Void!Er` with a `priv enum Er` leaks nothing, while the advice to narrow the function could not be followed, since `main` cannot be `priv`.
 
-**What is compared is effective visibility**: a member reaches no wider than what encloses it (docs/SPEC-language.md §9.4). Without that, every `pub` member of a type closed to its file would be a false report.
+**What is compared is effective visibility**: a member reaches no wider than what encloses it (docs/SPEC-programming-language.md §9.4). Without that, every `pub` member of a type closed to its file would be a false report.
 
 **A `priv` type in a `pub struct`'s `pub` field is never what is wanted**; one of the two marks is wrong. Narrow the field if the outside does not read it, and widen the type if it does. An opaque handle is a `pub` type with non-`pub` members, and its name can then appear in a diagnostic.
 
@@ -1168,7 +1170,7 @@ A `priv` type in a `pub` function's return (`pub fn open(): File_stream$@`) pass
 
 ### Why a typedef cannot be published wider than its target
 
-**A typedef cannot be more visible than any type it names**, walking inside the type expression on its right. A `pub typedef` of a `priv` type is refused. The rule and its examples are "3.5.1 Visibility" in [`SPEC-language.md`](SPEC-language.md).
+**A typedef cannot be more visible than any type it names**, walking inside the type expression on its right. A `pub typedef` of a `priv` type is refused. The rule and its examples are "3.5.1 Visibility" in [`SPEC-programming-language.md`](SPEC-programming-language.md).
 
 **The reason**: a typedef puts a type's name outward. A wider one lets code that cannot name the target receive its value through the typedef. That is the state that "Why a narrow type cannot stand where visibility is wide" forbids. Here it has the shape of a `priv` on one declaration overridden by another. With visibility decided away from the declaration, how far a type reaches could no longer be read from its declaration alone.
 
@@ -1203,7 +1205,7 @@ Caution: **Mixing them makes a correct program fail to build only when the numbe
 
 A file can add methods to a built-in type such as `U8[]`. You can call such a method only in a file that imports the file adding it, just as for any other type.
 
-A method another file adds to a type is called only where that file is imported ("An extension method requires the import" in [`SPEC-language.md`, 9.3](SPEC-language.md#93-adding-a-method-to-another-files-type)). **A built-in type is no exception: it counts as `std/lang`'s**, the file every file imports. So the methods written there need nothing, and one that `std/str` adds needs `std/str`.
+A method another file adds to a type is called only where that file is imported ("An extension method requires the import" in [`SPEC-programming-language.md`, 9.3](SPEC-programming-language.md#93-adding-a-method-to-another-files-type)). **A built-in type is no exception: it counts as `std/lang`'s**, the file every file imports. So the methods written there need nothing, and one that `std/str` adds needs `std/str`.
 
 **Exempting built-in types would break two things.** A method on one would then resolve in every file once any file of the program loaded its definer:
 
@@ -1241,7 +1243,7 @@ Swift closes the same hole with `MemberImportVisibility`, and Rust, C# and Kotli
 
 A function marked `#export` (callable from C) cannot use a type whose memory layout is KSPL's own. An example is a slice, even one buried inside a struct.
 
-The list of such types is docs/SPEC-language.md §11.1.
+The list of such types is docs/SPEC-programming-language.md §11.1.
 
 Caution: **Do not look at the outermost layer only.** Merely wrapping (`struct W { items: U8[] }`) would slip past. When the reason is its layout, refusing a bare slice but passing one inside a struct makes no sense. A struct's fields are followed recursively.
 
@@ -1273,7 +1275,7 @@ Caution: **Writing `long` as `I64` breaks silently on Windows.** The 32-bit retu
 
 ### The library an `extern` block needs is named on the block
 
-**`#link("openblas")` on an `extern` block names the library its declarations are found in.** So a program taking in a binding takes its library with it, and no build file carries the name. The rules are "11.5 Naming the library an `extern` block needs (`#link`)" in [`SPEC-language.md`](SPEC-language.md); this section holds why.
+**`#link("openblas")` on an `extern` block names the library its declarations are found in.** So a program taking in a binding takes its library with it, and no build file carries the name. The rules are "11.5 Naming the library an `extern` block needs (`#link`)" in [`SPEC-programming-language.md`](SPEC-programming-language.md); this section holds why.
 
 | Decision | Why |
 | :-- | :-- |
@@ -1335,7 +1337,7 @@ flowchart LR
 
 | Decision | Why |
 | :-- | :-- |
-| 1. **One description of each machine** (`machines` in [`../ksplc/base/target.kspl`](../ksplc/base/target.kspl)) | A width written where it is used answers for one machine only. With every reader taking it from one row, a fold cannot use one width while the layout uses another. A new machine is one row |
+| 1. **One description of each machine** (`MACHINES` in [`../ksplc/base/target.kspl`](../ksplc/base/target.kspl)) | A width written where it is used answers for one machine only. With every reader taking it from one row, a fold cannot use one width while the layout uses another. A new machine is one row |
 | 2. **The C compiler checks every number ksplc folds**, at the source line that asked for it | ksplc's layout is a copy of the C compiler's, and a copy is tied to its original by a check (Principle 4). The C compiler is the one party that knows the machine it builds for. Where the two disagree, a `typedef` of negative size stops the build, and its name says which machine ksplc laid the number out for |
 | 3. **Only a folded number makes the C target-specific** | A `sizeof` left in a function body stays the C compiler's own and is right on any machine. A program that folds nothing carries no check, and its C builds for any machine as it did |
 | 4. **The machine is named to both, rather than read by ksplc from the C compiler** | ksplc translates without a C compiler at hand: the editor's analysis, `ksplc lint`, a build whose C is compiled elsewhere. The default is the machine ksplc runs on, which every hosted build targets. A build for a chip writes the triple once and hands it to both (`CM_MACHINE` in [`../ksos/Makefile`](../ksos/Makefile)) |
@@ -1346,4 +1348,4 @@ flowchart LR
 * **The C of a program that folds a size builds only for machines that lay that type out alike.** One C for a 32-bit and a 64-bit machine needs the size left in a function body, where the C compiler answers it.
 * **The editor analyses for the machine it runs on.** The language server takes no `--machine`, so a static `if` on a size is shown as that machine takes it. On a machine the table lacks, it refuses to start, naming that machine.
 * **The LLVM backend lays out only 8-byte pointers** and refuses `--to=llvm` for any other machine, rather than writing IR with wrong offsets.
-* **A constant expression is still checked at the bound every machine guarantees** (`Sz` at 32 bits, SPEC-language.md §6.8), whatever machine is named. So a source that compiles for one machine is not refused for another for its arithmetic.
+* **A constant expression is still checked at the bound every machine guarantees** (`Sz` at 32 bits, SPEC-programming-language.md §6.8), whatever machine is named. So a source that compiles for one machine is not refused for another for its arithmetic.

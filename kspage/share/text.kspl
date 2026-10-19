@@ -14,18 +14,18 @@ import "std/chars"
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
 
-priv const line_name: U8[] = "line" //<
+priv const LINE_NAME: U8[] = "line" //<
     //< The name given to the line style of a text that declares no language
-priv const line_spacing: F32 = 1.1 //<
+priv const LINE_SPACING: F32 = 1.1 //<
     //< The line height's ratio, and the character size (a multiple of the parent's)
     //<
     //< Do not reuse prose's line spacing: 1.4 is too wide for code, where reading lines against
     //< each other wants more lines on one screen.
-priv const size_scale: F32 = 0.9
-priv const number_gap: U8[] = " " //< the space after a line's number
+priv const SIZE_SCALE: F32 = 0.9
+priv const NUMBER_GAP: U8[] = " " //< the space after a line's number
     //<
     //< The marker builds the number itself (`../model/marker.kspl`).
-priv const digit_width_em: F32 = 0.65 //<
+priv const DIGIT_WIDTH_EM: F32 = 0.65 //<
     //< The character width (in ems) used for the line-number gutter, counted per digit
     //<
     //< Caution: **Do not make the gutter a fixed width** — it follows the digits of the line count
@@ -35,7 +35,7 @@ priv const digit_width_em: F32 = 0.65 //<
 priv fn gutter_for(lines: Sz, root: Font): F32 //<
     //< The width (pixels) of the line-number gutter for a document of `lines` lines
     //<
-    //< It includes the space after the number. `number_gap` must be ASCII: its width is counted as
+    //< It includes the space after the number. `NUMBER_GAP` must be ASCII: its width is counted as
     //< a digit's, so a wide character makes the gutter too narrow.
     // Do not count digits by multiplying (it overflows. [W0103]); dividing only goes down.
     $digits: Sz = 1
@@ -43,7 +43,7 @@ priv fn gutter_for(lines: Sz, root: Font): F32 //<
     for rest >= 10 && digits < 12
         rest /= 10
         digits += 1
-    return F32::(digits + number_gap.len) * root.size_px * size_scale * digit_width_em
+    return F32::(digits + NUMBER_GAP.len) * root.size_px * SIZE_SCALE * DIGIT_WIDTH_EM
 
 fn sheet_for(root: Font, spoken: U8[], arena: Arena$@): Sheet$@ //<
     //< The style table of a text form
@@ -55,13 +55,13 @@ fn sheet_for(root: Font, spoken: U8[], arena: Arena$@): Sheet$@ //<
     sheet: = Sheet.new(root, arena)
     $mono: paint.Font_spec = paint.inherit_all()
     mono.family = .some("monospace")
-    mono.size_px = .some(root.size_px * size_scale)
-    line: = sheet.add(spoken if spoken.len > 0 else line_name, mono)
+    mono.size_px = .some(root.size_px * SIZE_SCALE)
+    line: = sheet.add(spoken if spoken.len > 0 else LINE_NAME, mono)
     line.wrap = false
-    line.line_spacing = line_spacing
+    line.line_spacing = LINE_SPACING
     // The line numbers. They are not written into the text (`write`). The marker's own mechanism is
     // used (Principle 6); to hide them, remove the style's marker.
-    line.marker = .number(number_gap)
+    line.marker = .number(NUMBER_GAP)
     // This sets one digit's width; `read` below sets it again from the digit count.
     line.indent = gutter_for(0, root)
     return sheet
@@ -76,7 +76,7 @@ priv fn line_style(sheet: Sheet$@): U8[] //<
         s: = sheet.styles.get(i)
         if !s.wrap && s.outline <= 0
             return s.name
-    fresh: = sheet.add(line_name, paint.inherit_all())
+    fresh: = sheet.add(LINE_NAME, paint.inherit_all())
     fresh.wrap = false
     return fresh.name
 

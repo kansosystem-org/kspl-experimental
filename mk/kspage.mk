@@ -58,9 +58,9 @@ test-kspage-open: kssrv $(KSPAGE_OPEN_EXE)
 
 KSPAGE_SAMPLE := $(OUT_DIR)/sample.kspage
 
-$(KSPAGE_SAMPLE): $(STAGE1_EXE)
+$(KSPAGE_SAMPLE): $(STAGE1_EXE) $(wildcard kspage/content/*.kspl kspage/model/*.kspl kspage/share/*.kspl)
 	@echo "# WRITING a document to double-click"
-	./$(STAGE1_EXE) run tools/kspage_doc.kspl $(KSPAGE_SAMPLE)
+	./$(STAGE1_EXE) run kspage/content/example.kspl $(KSPAGE_SAMPLE)
 
 # ==========================================
 # Making it open on a double-click (`make kspage`)

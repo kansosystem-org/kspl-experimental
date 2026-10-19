@@ -17,28 +17,28 @@ import "ksos/drivers/rp2040/clocks"
 import "ksos/drivers/rp2040/pwm"
 
 // The two ends of the duty, in parts per thousand. **The pulse width sets them, not the angle.**
-priv const duty_min_permille: U32 = 25 // 2.5% = 0.5ms / 20ms
-priv const duty_max_permille: U32 = 125 // 12.5% = 2.5ms / 20ms
-const angle_max: I32 = 180 //< the angle of the longest pulse; 0 is the shortest
+priv const DUTY_MIN_PERMILLE: U32 = 25 // 2.5% = 0.5ms / 20ms
+priv const DUTY_MAX_PERMILLE: U32 = 125 // 12.5% = 2.5ms / 20ms
+const ANGLE_MAX: I32 = 180 //< the angle of the longest pulse; 0 is the shortest
 
 // **50Hz = clk_sys / (DIV × (TOP+1))**. DIV's integer part has only 8 bits, so TOP takes the rest.
-priv const pwm_div_int: U32 = 250
-priv const period_hz: U32 = 50
-priv const pwm_top: U32 = clocks.sys_hz / (pwm_div_int * period_hz) - 1
+priv const PWM_DIV_INT: U32 = 250
+priv const PERIOD_HZ: U32 = 50
+priv const PWM_TOP: U32 = clocks.SYS_HZ / (PWM_DIV_INT * PERIOD_HZ) - 1
 
 fn init(pin: U32) //< sets up one pin for a servo
     //<
     //< **The period is per slice**, shared with the slice's other channel.
     pwm.init_pin(pin)
-    pwm.config_slice(pwm.slice_of(pin), pwm_div_int, 0, pwm_top)
+    pwm.config_slice(pwm.slice_of(pin), PWM_DIV_INT, 0, PWM_TOP)
 
 fn set_angle(pin: U32, angle: I32) //< sets an angle in degrees
     //<
-    //< **An angle outside 0 to `angle_max` is clamped first.** A mechanism that allows less
+    //< **An angle outside 0 to `ANGLE_MAX` is clamped first.** A mechanism that allows less
     //< clamps before calling this.
-    a: = U32::(0 if angle < 0 else (angle_max if angle > angle_max else angle))
-    span: = duty_max_permille - duty_min_permille
-    permille: = duty_min_permille + (a * span / U32::angle_max)
+    a: = U32::(0 if angle < 0 else (ANGLE_MAX if angle > ANGLE_MAX else angle))
+    span: = DUTY_MAX_PERMILLE - DUTY_MIN_PERMILLE
+    permille: = DUTY_MIN_PERMILLE + (a * span / U32::ANGLE_MAX)
     // **Compute in parts per thousand**; in percent, 180 degrees get only 10 steps.
-    level: = (pwm_top + 1) * permille / 1000
+    level: = (PWM_TOP + 1) * permille / 1000
     pwm.set_level(pin, level)

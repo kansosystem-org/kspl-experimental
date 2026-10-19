@@ -4,8 +4,8 @@
 //< position where the subject is written.
 //< **A cell is one shape, reached one way, written in one position.** Its outcome is not listed
 //< per cell. `outcome` derives it from the rows' properties, each rule naming the section of
-//< `docs/SPEC-language.md` that states it. So a new shape, way or position is one row, and its
-//< cells follow. `generic_matrix_test.kspl` writes and judges the programs.
+//< `docs/SPEC-programming-language.md` that states it. So a new shape, way or position is one row,
+//< and its cells follow. `generic_matrix_test.kspl` writes and judges the programs.
 //< Caution: **An outcome is either a run printing a value or a refusal at the user's line.** A C
 //< compiler's or LLVM's error is never an outcome. It is a ksplc bug wherever it shows.
 import "std/mem" { Arena }
@@ -21,7 +21,7 @@ import "std/str"
 // with a field more. So a cell that reaches it prints another number, not a C error.
 // Each answer is built from the sizes of its type arguments, so a type argument bound to another
 // type prints another number too.
-const library: U8[] =
+const LIBRARY: U8[] =
     """{VIS}fn gf<|T|>(_x: T): Sz
   return {BASE} + 100 + sizeof(T)
 
@@ -61,7 +61,7 @@ fn library_text(vis: U8[], decoy: Bool, arena: Arena$@): U8[] //< the library wi
     fvis: = "pub " if vis.equals("pub ") else ""
     pad: =
         arena.text().s("  ").s(fvis).s("pad: I64\n").take() if decoy else ""
-    return library.replace("{VIS}", vis, arena).replace("{FVIS}", fvis, arena)
+    return LIBRARY.replace("{VIS}", vis, arena).replace("{FVIS}", fvis, arena)
         .replace("{BASE}", "1000" if decoy else "0", arena).replace("{PAD}", pad, arena)
 
 // ==========================================
@@ -105,38 +105,38 @@ struct Shape //< one shape a generic takes
     offset: U8[] //< what `offsetof(…, v)` prints (a type alone)
     read: U8[] //< what reading a value through a type position prints (a type alone)
 
-priv const fn_init: U8[] = "7" //< what a function-like subject's type positions are given
-priv const fn_rd: U8[] = "Sz::x"
+priv const FN_INIT: U8[] = "7" //< what a function-like subject's type positions are given
+priv const FN_RD: U8[] = "Sz::x"
 
-const shapes: Shape[_] = ::{
+const SHAPES: Shape[_] = ::{
     Shape::{ .name = "gf", .what = "a generic free function", .kind = .function, .owner = .gf,
         .recv = false, .own = true, .v = "{G}<|U16|>", .vo = "{G}", .vt = "",
         .ty = "fn(x: U16): Sz", .a = "2U16", .rv = "", .mw = "", .mi = "", .av = "",
-        .init = fn_init, .rd = fn_rd, .addr = "null", .want = "102", .size = "", .offset = "",
+        .init = FN_INIT, .rd = FN_RD, .addr = "null", .want = "102", .size = "", .offset = "",
         .read = "" },
     Shape::{ .name = "get", .what = "a plain method of a generic type", .kind = .member,
         .owner = .box, .recv = true, .own = false, .v = "{B}.get", .vo = "", .vt = "{BB}.get",
         .ty = "fn(r: {B}@): Sz", .a = "recv@", .rv = "recv", .mw = "", .mi = "get", .av = "",
-        .init = fn_init, .rd = fn_rd, .addr = "null", .want = "208", .size = "", .offset = "",
+        .init = FN_INIT, .rd = FN_RD, .addr = "null", .want = "208", .size = "", .offset = "",
         .read = "" },
     Shape::{ .name = "mk", .what = "a static function of a generic type", .kind = .member,
         .owner = .box, .recv = false, .own = false, .v = "{B}.mk", .vo = "", .vt = "{BB}.mk",
-        .ty = "fn(x: I64): Sz", .a = "7", .rv = "", .mw = "", .mi = "", .av = "", .init = fn_init,
-        .rd = fn_rd, .addr = "null", .want = "308", .size = "", .offset = "", .read = "" },
+        .ty = "fn(x: I64): Sz", .a = "7", .rv = "", .mw = "", .mi = "", .av = "", .init = FN_INIT,
+        .rd = FN_RD, .addr = "null", .want = "308", .size = "", .offset = "", .read = "" },
     Shape::{ .name = "gm", .what = "a generic method of a generic type", .kind = .member,
         .owner = .box, .recv = true, .own = true, .v = "{B}.gm<|U16|>", .vo = "{B}.gm",
         .vt = "{BB}.gm<|U16|>", .ty = "fn(r: {B}@, y: U16): Sz", .a = "recv@, 2U16", .rv = "recv",
-        .mw = "gm<|U16|>", .mi = "gm", .av = "2U16", .init = fn_init, .rd = fn_rd, .addr = "null",
+        .mw = "gm<|U16|>", .mi = "gm", .av = "2U16", .init = FN_INIT, .rd = FN_RD, .addr = "null",
         .want = "482", .size = "", .offset = "", .read = "" },
     Shape::{ .name = "gen", .what = "a generic static method of a plain type", .kind = .member,
         .owner = .plain, .recv = false, .own = true, .v = "{P}.gen<|U16|>", .vo = "{P}.gen",
         .vt = "", .ty = "fn(y: U16): Sz", .a = "2U16", .rv = "", .mw = "", .mi = "", .av = "",
-        .init = fn_init, .rd = fn_rd, .addr = "null", .want = "502", .size = "", .offset = "",
+        .init = FN_INIT, .rd = FN_RD, .addr = "null", .want = "502", .size = "", .offset = "",
         .read = "" },
     Shape::{ .name = "genr", .what = "a generic method of a plain type", .kind = .member,
         .owner = .plain, .recv = true, .own = true, .v = "{P}.genr<|U16|>", .vo = "{P}.genr",
         .vt = "", .ty = "fn(r: {P}@, y: U16): Sz", .a = "precv@, 2U16", .rv = "precv",
-        .mw = "genr<|U16|>", .mi = "genr", .av = "2U16", .init = fn_init, .rd = fn_rd,
+        .mw = "genr<|U16|>", .mi = "genr", .av = "2U16", .init = FN_INIT, .rd = FN_RD,
         .addr = "null", .want = "602", .size = "", .offset = "", .read = "" },
     Shape::{ .name = "box", .what = "a generic type", .kind = .type, .owner = .box, .recv = false,
         .own = false, .v = "{B}", .vo = "", .vt = "{BB}", .ty = "fn(x: I64): Sz", .a = "7",
@@ -187,7 +187,7 @@ struct Access //< one way of reaching the library
         //< At a line of the program's file that writes the name. Texts parted by a tab are
         //< alternatives: any one of them will do.
 
-const accesses: Access[_] = ::{
+const ACCESSES: Access[_] = ::{
     Access::{ .name = "here_priv", .what = "declared priv in the same file", .home = .here,
         .vis = "priv ", .reach = .direct, .decoy = .none, .via = .name, .refusal = "" },
     Access::{ .name = "here_pub", .what = "declared pub in the same file", .home = .here,
@@ -369,7 +369,7 @@ struct Position //< one position a subject is written in
     top_subject: Bool //< the subject stands at the top, where `Self` does not reach
     type_too: Bool //< a type is the subject too (its value group refuses it)
 
-const positions: Position[_] = ::{
+const POSITIONS: Position[_] = ::{
     Position::{ .name = "call_w", .what = "called, every type argument written",
         .group = .call_written, .top = "",
         .fns = "priv fn probe_{N}(): Sz\n@@  return {V}({A})\n\n", .top_subject = false,

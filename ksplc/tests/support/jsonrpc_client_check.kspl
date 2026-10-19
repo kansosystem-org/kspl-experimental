@@ -11,20 +11,20 @@ import "std/mem" { Arena }
 import "std/str"
 import "std/verdict"
 
-priv const flood_lines: Sz = 3000 //< how many lines the flooding peer writes
+priv const FLOOD_LINES: Sz = 3000 //< how many lines the flooding peer writes
     //<
     //< Multiplied by one line's length, it decides how far past the pipe's buffer the output goes.
 
-priv const flood_line: U8[] = //< the line the flooding peer writes
+priv const FLOOD_LINE: U8[] = //< the line the flooding peer writes
     "flooding stderr so the pipe buffer fills while the reader waits on stdout"
 
-priv const notes_before_answer: Sz = 100 //<
+priv const NOTES_BEFORE_ANSWER: Sz = 100 //<
     //< How many notifications the bursting peer sends before the answer
     //<
     //< **It stands for "one per open document"**, which a language server sends on reanalysis. The
     //< point is that no count breaks it.
 
-priv const wait_ms: I32 = 60000 //< how long a peer may take
+priv const WAIT_MS: I32 = 60000 //< how long a peer may take
 
 fn run(exe: U8[], arena: Arena$@) //< every check of the client, with exe as `ksplc`
     verdict.check("the id after I32's top is 1, not a negative that makes a notification",
@@ -43,7 +43,7 @@ priv fn check_stderr_flood(exe: U8[], dir: U8[], arena: Arena$@) //<
     name: = "the client reads to the end of a peer that floods standard error, keeping its tail"
     src: = fs.join(dir, "flood.kspl", arena)
     script: = arena.text().s("import \"std/io\"\n\nfn main(): I32\n")
-        .s("  for _k in Range.asc(\{flood_lines\})\n    io.err().s(\"").s(flood_line)
+        .s("  for _k in Range.asc(\{FLOOD_LINES\})\n    io.err().s(\"").s(FLOOD_LINE)
         .s("\\n\")\n  return 0\n").take()
     io.write_file(src, script) catch
         verdict.check(name, false, "the flooding script cannot be written")
@@ -52,14 +52,14 @@ priv fn check_stderr_flood(exe: U8[], dir: U8[], arena: Arena$@) //<
         verdict.check(name, false, "the flooding peer does not start")
         return
     defer c.free()
-    _frame: = c.read_msg(wait_ms, null) catch e
+    _frame: = c.read_msg(WAIT_MS, null) catch e
         switch e
         case .closed
             kept: = c.err_tail().len
             // Caution: **Check what is held, not only what is handed out.** The flood is far
             // longer than the tail, and holding all of it grows with the server's run.
             verdict.check(name,
-                kept > 0 && c.err.len == kept && kept < flood_lines * (flood_line.len + 1), "")
+                kept > 0 && c.err.len == kept && kept < FLOOD_LINES * (FLOOD_LINE.len + 1), "")
         case .timed_out
             verdict.check(name, false, "the peer stalled: stderr was not drained while waiting")
         case .broken
@@ -78,7 +78,7 @@ priv fn check_notification_burst(exe: U8[], dir: U8[], arena: Arena$@) //<
         .s("import \"std/io\"\nimport \"std/jsonrpc\"\nimport \"std/str\" { Str_builder }\n\n")
         .s("priv fn put_frame(body: U8[])\n  $f: = Str_builder.new()\n  defer f.free()\n")
         .s("  jsonrpc.frame_into(f@, body)\n  io.out().s(f.slice())\n\n")
-        .s("fn main(): I32\n  for _k in Range.asc(\{notes_before_answer\})\n")
+        .s("fn main(): I32\n  for _k in Range.asc(\{NOTES_BEFORE_ANSWER\})\n")
         .s("    put_frame(\"{\\\"jsonrpc\\\":\\\"2.0\\\",\\\"method\\\":\\\"note\\\"}\")\n")
         .s("  \
             put_frame(\"{\\\"jsonrpc\\\":\\\"2.0\\\",\\\"id\\\":1,\\\"result\\\":{\\\"ok\\\":1}}\")\n")
@@ -92,8 +92,8 @@ priv fn check_notification_burst(exe: U8[], dir: U8[], arena: Arena$@) //<
     defer c.free()
     $b: = Json_builder.new(arena)
     // Before the peer answers it may already be gone, so a refused write is no failure here.
-    c.notify("note", b.obj().build(), wait_ms, null) catch {}
-    got: = c.request("probe", b.obj().build(), wait_ms, null) catch e
+    c.notify("note", b.obj().build(), WAIT_MS, null) catch {}
+    got: = c.request("probe", b.obj().build(), WAIT_MS, null) catch e
         switch e
         case .broken
             verdict.check(name, false, "the answer was given up on behind the notifications")

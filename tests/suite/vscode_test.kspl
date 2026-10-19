@@ -21,13 +21,13 @@ import "std/verdict"
 import "tests/support/harness"
 import "tests/support/harness_text" as htext
 
-priv const probe_stem: U8[] = "probe file" //< the name used for `make debug-file`'s check
+priv const PROBE_STEM: U8[] = "probe file" //< the name used for `make debug-file`'s check
     //<
     //< Caution: **Include a space.** make's `$(notdir)` / `$(basename)` split on whitespace, so a
     //< naive recipe turns `probe file.kspl` into another name and F5 starts the last executable.
-priv const probe_dir: U8[] = "out/vscode_test src"
+priv const PROBE_DIR: U8[] = "out/vscode_test src"
 
-priv const probe_src: U8[] =
+priv const PROBE_SRC: U8[] =
     "import \"std/io\"
 
 fn main(): I32
@@ -63,7 +63,7 @@ priv fn strip_line_comments(text: U8[], arena: Arena$@): U8$[] //<
         b.s(raw.sub(0, cut)).c('\n')
     return arena.dup_str(b.slice())
 
-priv fn is_obj(v: json.Val): Bool //< whether it is an object
+priv fn is_obj(v: json.Value): Bool //< whether it is an object
     //<
     //< `get` returns `null_val` for a missing key too, so this tells "could not be read" apart.
     switch v
@@ -72,7 +72,7 @@ priv fn is_obj(v: json.Val): Bool //< whether it is an object
     default {}
     return false
 
-priv fn load_jsonc(path: U8[], arena: Arena$@): json.Val
+priv fn load_jsonc(path: U8[], arena: Arena$@): json.Value
     text: = io.read_file(path) catch
         return .null_val
     defer dealloc(Void$@::text.ptr)
@@ -120,17 +120,17 @@ priv fn workspace_rel(text: U8[], from: Sz): U8[] //<
                 break
         return rest.sub(0, end)
 
-priv fn labels_of(tasks: json.Val, arena: Arena$@): List<|U8[]|>
+priv fn labels_of(tasks: json.Value, arena: Arena$@): List<|U8[]|>
     $out: = List<|U8[]|>.new(arena)
     for t in tasks.get("tasks").arr_list(arena)
         out.push(t.get("label").as_str().unwrap_or(""))
     return out
 
-priv fn arg_text(a: json.Val): U8[] //< one argument's text, written bare or quoted (`value`)
+priv fn arg_text(a: json.Value): U8[] //< one argument's text, written bare or quoted (`value`)
     return (a.as_str().unwrap_or("") if !is_obj(a)
         else a.get("value").as_str().unwrap_or(""))
 
-priv const suite_lists: U8[][_] = ::{ "mk/test.mk", "ksplc/Makefile" } //<
+priv const SUITE_LISTS: U8[][_] = ::{ "mk/test.mk", "ksplc/Makefile" } //<
     //< The files whose `SUITES` / `LINUX_SUITES` name what `make test-<name>` runs
 
 priv fn typable(arena: Arena$@): List<|U8[]|> //<
@@ -146,14 +146,14 @@ priv fn typable(arena: Arena$@): List<|U8[]|> //<
         name: = rest.sub(0, rest.find_char(' ').unwrap_or(rest.len))
         if !name.ends_with("*")
             out.push(name)
-    for rel in suite_lists
+    for rel in SUITE_LISTS
         text: = harness.read_under_root(rel)
         for head in U8[][]::{ "SUITES := ", "LINUX_SUITES := " }
             for s in htext.make_list(text, head, arena)
                 out.push(arena.text().s("test-").s(s).take())
     return out
 
-priv fn check_make_targets(tasks: json.Val, arena: Arena$@) //<
+priv fn check_make_targets(tasks: json.Value, arena: Arena$@) //<
     //< Checks that each `make <target>` in `tasks.json` names a target that really exists
     $names: = typable(arena)
     for t in tasks.get("tasks").arr_list(arena)
@@ -165,7 +165,7 @@ priv fn check_make_targets(tasks: json.Val, arena: Arena$@) //<
         verdict.check(name, htext.has(names@, cmd.target),
             "neither `make help` lists it nor is it a suite's `test-<name>`")
 
-priv fn check_launch(launch: json.Val, labels: List<|U8[]|>$@, root: U8[], arena: Arena$@) //<
+priv fn check_launch(launch: json.Value, labels: List<|U8[]|>$@, root: U8[], arena: Arena$@) //<
     //< `launch.json`'s preLaunchTask and initCommands
     for c in launch.get("configurations").arr_list(arena)
         name: = c.get("name").as_str().unwrap_or("")
@@ -181,7 +181,7 @@ priv fn check_launch(launch: json.Val, labels: List<|U8[]|>$@, root: U8[], arena
             title: = arena.text().s("launch.json[\{name\}]: '\{rel\}' really exists").take()
             verdict.check(title, fs.exists(fs.join(root, rel, arena)), "")
 
-priv const absent_fmt: U8[] = "C_FMT=kanso-absent-clang-format -i" //<
+priv const ABSENT_FMT: U8[] = "C_FMT=kanso-absent-clang-format -i" //<
     //< A formatter no machine has, standing in for a machine without clang-format
 
 priv fn check_debug_file(root: U8[], fmt: U8[], arena: Arena$@) //<
@@ -193,15 +193,15 @@ priv fn check_debug_file(root: U8[], fmt: U8[], arena: Arena$@) //<
         "debug-file: the output name matches ${fileBasenameNoExtension}.exe (with a space)"
     if fmt.len > 0
         name = "debug-file: without clang-format it builds, and says the C is untidied"
-    src_dir: = fs.join(root, probe_dir, arena)
+    src_dir: = fs.join(root, PROBE_DIR, arena)
     fs.mkdir_all(src_dir) catch
         verdict.check(name, false, "the material's place cannot be made")
         return
-    rel: = arena.text().s("\{probe_dir\}/\{probe_stem\}.kspl").take()
+    rel: = arena.text().s("\{PROBE_DIR\}/\{PROBE_STEM\}.kspl").take()
     src: = fs.join(root, rel, arena)
-    exe: = arena.text().s("\{root\}/out/\{probe_stem\}.exe").take()
-    gen: = arena.text().s("\{root\}/out/\{probe_stem\}.c").take()
-    io.write_file(src, probe_src) catch
+    exe: = arena.text().s("\{root\}/out/\{PROBE_STEM\}.exe").take()
+    gen: = arena.text().s("\{root\}/out/\{PROBE_STEM\}.c").take()
+    io.write_file(src, PROBE_SRC) catch
         verdict.check(name, false, "cannot write the material")
         return
     fs.remove_path(exe) catch { // Not being there is fine.
@@ -261,9 +261,10 @@ priv fn check_release_assets(root: U8[], arena: Arena$@) //<
         verdict.check(title, htext.has(labels@, pre), "")
     check_build_task(tasks, launch, arena)
 
-priv const build_label: U8[] = "kanso-build-current-file" //< the task F5 builds with
+priv const BUILD_LABEL: U8[] = "kanso-build-current-file" //< the task F5 builds with
 
-priv fn side_of(v: json.Val, key: U8[]): json.Val //< a platform's branch (`windows`), or v itself
+priv fn side_of(v: json.Value, key: U8[]): json.Value //<
+    //< a platform's branch (`windows`), or v itself
     //<
     //< Empty is the default; a key with no branch of its own falls back to the default, as VS Code
     //< reads it.
@@ -271,22 +272,22 @@ priv fn side_of(v: json.Val, key: U8[]): json.Val //< a platform's branch (`wind
         return v
     return v.get(key)
 
-priv fn check_build_task(tasks: json.Val, launch: json.Val, arena: Arena$@) //<
+priv fn check_build_task(tasks: json.Value, launch: json.Value, arena: Arena$@) //<
     //< The build task is `ksplc build`, writing what launch.json starts, on each platform
     //<
     //< **The link words are ksplc's**, so none is written in the task to drift. What can drift is
     //< the executable's name. A name out of step makes F5 start the last one built.
-    $build: = json.Val.null_val
+    $build: = json.Value.null_val
     $found: = false
     for t in tasks.get("tasks").arr_list(arena)
-        if t.get("label").as_str().unwrap_or("").equals(build_label)
+        if t.get("label").as_str().unwrap_or("").equals(BUILD_LABEL)
             build = t
             found = true
     if !verdict.check("release-assets tasks.json: the build task is there", found, "")
         return
-    $program: = json.Val.null_val
+    $program: = json.Value.null_val
     for c in launch.get("configurations").arr_list(arena)
-        if c.get("preLaunchTask").as_str().unwrap_or("").equals(build_label)
+        if c.get("preLaunchTask").as_str().unwrap_or("").equals(BUILD_LABEL)
             program = c
     for key in U8[][]::{ "", "windows" }
         side: = side_of(build, key)
@@ -312,11 +313,11 @@ priv fn check_build_task(tasks: json.Val, launch: json.Val, arena: Arena$@) //<
 // rules stand in one file.
 // ==========================================
 
-priv const ext_dir: U8[] = ".vscode/extensions/kspl"
+priv const EXT_DIR: U8[] = ".vscode/extensions/kspl"
 
 priv fn check_extension(root: U8[], arena: Arena$@) //<
     //< Checks that the files the extension points at exist, and how `.kspl` is opened
-    dir: = fs.join(root, ext_dir, arena)
+    dir: = fs.join(root, EXT_DIR, arena)
     pkg: = load_jsonc(fs.join(dir, "package.json", arena), arena)
     if !verdict.check("extension: package.json can be read", is_obj(pkg), "")
         return
@@ -352,18 +353,18 @@ priv fn check_extension(root: U8[], arena: Arena$@) //<
 // The extension's client side, run under node
 // ==========================================
 
-priv const host_js: U8[] = "tests/support/vscode_host.js"
+priv const HOST_JS: U8[] = "tests/support/vscode_host.js"
 
 priv struct Sent //< one message the fake server read
     method: U8[]
     version: I32 //< -1 where the message carries none
     text: U8[]
 
-priv fn sent_by_client(root: U8[], arena: Arena$@): json.Val //<
+priv fn sent_by_client(root: U8[], arena: Arena$@): json.Value //<
     //< What `vscode_host.js` printed: the messages, and how often the panel came forward
     out: = ksplc_harness
-        .run(U8[][]::{ "node", fs.join(root, host_js, arena),
-        fs.join(fs.join(root, ext_dir, arena), "extension.js", arena) })
+        .run(U8[][]::{ "node", fs.join(root, HOST_JS, arena),
+        fs.join(fs.join(root, EXT_DIR, arena), "extension.js", arena) })
     if !out.exited_with(0)
         verdict.check("extension client: the session runs under node", false, out.out)
         return .null_val
@@ -446,7 +447,7 @@ fn main(): I32
     $labels: = labels_of(tasks, arena)
     check_launch(launch, labels@, root, arena)
     check_debug_file(root, "", arena)
-    check_debug_file(root, absent_fmt, arena)
+    check_debug_file(root, ABSENT_FMT, arena)
     check_release_assets(root, arena)
     check_extension(root, arena)
     check_client(root, arena)

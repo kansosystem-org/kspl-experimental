@@ -15,34 +15,35 @@ import "tests/support/conventions_scan" as scan
 import "tests/support/harness"
 import "tests/support/harness_text" as htext
 
-priv const spec_tools: U8[] = "ksplc/docs/SPEC-tools.md" //<
+priv const SPEC_TOOLS: U8[] = "ksplc/docs/SPEC-tools.md" //<
     //< The same specification the diagnostic codes' check reads
 
 // ==========================================
 // The CLI's entry points agree between the implementation and the specification The canonical
-// source is the implementation (the declarations passed to argp).
+// source is the implementation (the declarations passed to argparse).
 // Each direction checks a different range.
 // ==========================================
-priv const main_file: U8[] = "ksplc/main.kspl"
+priv const MAIN_FILE: U8[] = "ksplc/main.kspl"
 
-priv const argp_builtin: U8[][_] = ::{ "--help" } //< the entry point argp provides by itself
+priv const ARGPARSE_BUILTIN: U8[][_] = ::{ "--help" } //<
+    //< the entry point argparse provides by itself
     //<
     //< There is no declaration in `main.kspl`, but the documents' table lists them.
 
-priv const undocumented_ok: U8[][_] = ::{ "lsp-worker" } //<
+priv const UNDOCUMENTED_OK: U8[][_] = ::{ "lsp-worker" } //<
     //< What may be in the implementation and not in the documents
     //<
     //< Caution: Do not add one whose reason cannot be written: this is the only record of "it is
     //< not written in the documents". `lsp-worker` is the inner process that lsp's supervisor
     //< starts.
 
-priv const cli_doc_placeholder: U8[][_] = ::{ "--name", "--foo", "--gc-sections", "--out-implib" } //<
+priv const CLI_DOC_PLACEHOLDER: U8[][_] = ::{ "--name", "--foo", "--gc-sections", "--out-implib" } //<
     //< The forms that appear in the documents and are not ksplc's entry points
     //<
     //< This is not the place to silence a typo.
 
 priv fn collect_impl_cli(out: List<|U8[]|>$@, arena: Arena$@)
-    src: = harness.read_under_root(main_file)
+    src: = harness.read_under_root(MAIN_FILE)
     for head in U8[][]::{ "p.subcommand(\"", "p.subcommand_trailing(\"", "p.command_flag(\"",
         "p.flag(\"", "p.str_opt(\"", "p.str_list_opt(\"" }
         for w in scan.find_all(src, head, "\"", arena)
@@ -83,7 +84,7 @@ priv fn collect_dash_words(text: U8[], out: List<|U8[]|>$@) //<
         i = k
 
 priv fn check_cli(arena: Arena$@)
-    spec: = harness.read_under_root(spec_tools)
+    spec: = harness.read_under_root(SPEC_TOOLS)
     $impl_cli: = List<|U8[]|>.new(arena)
     collect_impl_cli(impl_cli@, arena)
     $mentioned: = List<|U8[]|>.new(arena)
@@ -97,12 +98,12 @@ priv fn check_cli(arena: Arena$@)
         if htext.has(mentioned@, w)
             continue
         $ok: = false
-        for u in undocumented_ok
+        for u in UNDOCUMENTED_OK
             if w.equals(u)
                 ok = true
         if !ok
             bad
-                .push(arena.text().s("in ").s(main_file).s(" and no text in ").s(spec_tools).s(": ")
+                .push(arena.text().s("in ").s(MAIN_FILE).s(" and no text in ").s(SPEC_TOOLS).s(": ")
                 .s(w).take())
     // A form listed in the table's rows (`| `-…` |`) must be in the implementation.
     for row in scan.find_line_starts(spec, "| `-", " |", arena)
@@ -111,13 +112,13 @@ priv fn check_cli(arena: Arena$@)
             if opt.len == 0 || !opt.starts_with("-")
                 continue
             $known: = htext.has(impl_cli@, opt)
-            for b in argp_builtin
+            for b in ARGPARSE_BUILTIN
                 if opt.equals(b)
                     known = true
             if !known
                 bad
-                    .push(arena.text().s("in ").s(spec_tools).s("'s table and no declaration in ")
-                    .s(main_file).s(": ").s(opt).take())
+                    .push(arena.text().s("in ").s(SPEC_TOOLS).s("'s table and no declaration in ")
+                    .s(MAIN_FILE).s(": ").s(opt).take())
     verdict.check_list("the CLI's entry points agree between the implementation and the spec",
         impl_cli.len, "entry points", bad@,
         "each subcommand needs its row and section in ksplc/docs/SPEC-tools.md, and the spec names \
@@ -136,10 +137,10 @@ priv fn check_cli(arena: Arena$@)
             if !w.starts_with("--") || htext.has(impl_cli@, w)
                 continue
             $ok: = false
-            for b in argp_builtin
+            for b in ARGPARSE_BUILTIN
                 if w.equals(b)
                     ok = true
-            for ph in cli_doc_placeholder
+            for ph in CLI_DOC_PLACEHOLDER
                 if w.equals(ph)
                     ok = true
             if !ok
@@ -164,45 +165,45 @@ priv fn cut_at_any(s: U8[], seps: U8[]): U8[] //<
 // Caution: **Compare all three**, or "a key in the table, accepted, doing nothing" slips in
 // (Principle 5).
 // ==========================================
-priv const style_src: U8[] = "ksplc/fmt/style.kspl" //<
+priv const STYLE_SRC: U8[] = "ksplc/fmt/style.kspl" //<
     //< The file holding the style keys accepted
     //<
     //< **The accepted list and the reader are in two files.** `ksplc/fmt/style.kspl` holds the
     //< accepted spelling and `ksplc/fmt/printer.kspl` the field the formatter reads, so one name
     //< here would check only one of the two.
-priv const read_src: U8[] = "ksplc/fmt/printer.kspl"
+priv const READ_SRC: U8[] = "ksplc/fmt/printer.kspl"
 
-priv const style_keys: U8[][_] = ::{ "IndentWidth", "ColumnLimit", "AllowShortBlocks" } //<
+priv const STYLE_KEYS: U8[][_] = ::{ "IndentWidth", "ColumnLimit", "AllowShortBlocks" } //<
     //< The table's key name -> the field the formatter reads
     //<
     //< Caution: Add a field and add it in here too.
-priv const style_fields: U8[][_] = ::{ "indent_width", "column_limit", "allow_short_blocks" }
+priv const STYLE_FIELDS: U8[][_] = ::{ "indent_width", "column_limit", "allow_short_blocks" }
 
 priv fn check_style(arena: Arena$@)
-    spec: = harness.read_under_root(spec_tools)
-    src: = harness.read_under_root(style_src)
-    read: = harness.read_under_root(read_src)
+    spec: = harness.read_under_root(SPEC_TOOLS)
+    src: = harness.read_under_root(STYLE_SRC)
+    read: = harness.read_under_root(READ_SRC)
     $spec_keys: = scan.find_all(spec, "| **`", "`** |", arena)
-    $impl_keys: = scan.find_all(src, "_key: U8[] = \"", "\"", arena)
+    $impl_keys: = scan.find_all(src, "_KEY: U8[] = \"", "\"", arena)
     $bad: = List<|U8[]|>.new(arena)
     scan.diff_into(spec_keys@, impl_keys@,
-        arena.text().s("\{spec_tools\}'s table").take(), style_src, bad@, arena)
-    scan.diff_into(impl_keys@, spec_keys@, style_src,
-        arena.text().s("\{spec_tools\}'s table").take(), bad@, arena)
+        arena.text().s("\{SPEC_TOOLS\}'s table").take(), STYLE_SRC, bad@, arena)
+    scan.diff_into(impl_keys@, spec_keys@, STYLE_SRC,
+        arena.text().s("\{SPEC_TOOLS\}'s table").take(), bad@, arena)
     for i in Range.asc(3)
-        if !htext.has(impl_keys@, style_keys[i])
+        if !htext.has(impl_keys@, STYLE_KEYS[i])
             bad
-                .push(arena.text().s(style_keys[i]).s(": in this test's pairing table and not in ")
-                .s(style_src).s("'s list").take())
+                .push(arena.text().s(STYLE_KEYS[i]).s(": in this test's pairing table and not in ")
+                .s(STYLE_SRC).s("'s list").take())
             continue
         // "The reader", apart from the declaration and the default: `r.config.<field>`.
-        want: = arena.text().s(".config.").s(style_fields[i]).take()
+        want: = arena.text().s(".config.").s(STYLE_FIELDS[i]).take()
         if read.find_str(want).is_none()
             bad
-                .push(arena.text().s(style_keys[i]).s(" is accepted and ").s(read_src)
+                .push(arena.text().s(STYLE_KEYS[i]).s(" is accepted and ").s(READ_SRC)
                 .s(" does not read `").s(want).s("`").take())
     verdict.check_list("`--style`'s keys agree across the spec, the code and the reader",
-        style_keys.len, "keys", bad@,
+        STYLE_KEYS.len, "keys", bad@,
         "a `--style` key must stand in SPEC-tools.md, the formatter's table and its reader alike")
 
 // ==========================================
@@ -210,7 +211,7 @@ priv fn check_style(arena: Arena$@)
 // Caution: **Do not leave a target out of the documents.** ksos records hardware confirmations
 // in the documents. With no path to the entry point that confirms, it cannot be tried again.
 // ==========================================
-priv const ksos_mk: U8[] = "ksos/Makefile"
+priv const KSOS_MK: U8[] = "ksos/Makefile"
 
 priv fn mk_var_words(text: U8[], name: U8[], out: List<|U8[]|>$@, arena: Arena$@) //<
     //< Lists the words of a `<name> := …`, each up to its first `:`
@@ -239,15 +240,15 @@ priv fn mk_var_words(text: U8[], name: U8[], out: List<|U8[]|>$@, arena: Arena$@
 // Caution: **When you add a family, add it here too.** Otherwise the gate stops seeing that
 // family's targets. (A `make <target>` named in the documents still fails as "in the .md and not in
 // ksos/Makefile".)
-priv const ksos_families: U8[][2][_] = ::{::{ "KSOS_POSIX_TEMPLATED", "ksos-" },
+priv const KSOS_FAMILIES: U8[][2][_] = ::{::{ "KSOS_POSIX_TEMPLATED", "ksos-" },
     ::{ "KSOS_POSIX_PANIC", "ksos-" }, ::{ "KSOS_CM_DEMOS", "ksos-cm-" },
     ::{ "KSOS_CM0_DEMOS", "ksos-cm0-" }, ::{ "KSOS_NRF51_DEMOS", "ksos-nrf51-" },
     ::{ "KSOS_RP2040_DEMOS", "ksos-rp2040-" } }
 
 priv fn check_ksos_targets(arena: Arena$@)
     $targets: = List<|U8[]|>.new(arena)
-    mk_text: = harness.read_under_root(ksos_mk)
-    for fam in ksos_families
+    mk_text: = harness.read_under_root(KSOS_MK)
+    for fam in KSOS_FAMILIES
         $sufs: = List<|U8[]|>.new(arena)
         mk_var_words(mk_text, fam[0], sufs@, arena)
         for i in Range.asc(sufs.len)
@@ -282,8 +283,8 @@ priv fn check_ksos_targets(arena: Arena$@)
             else
                 break
     $bad: = List<|U8[]|>.new(arena)
-    scan.diff_into(targets@, runnable@, ksos_mk, "a document in the `make ...` shape", bad@, arena)
-    scan.diff_into(runnable@, targets@, ".md", ksos_mk, bad@, arena)
+    scan.diff_into(targets@, runnable@, KSOS_MK, "a document in the `make ...` shape", bad@, arena)
+    scan.diff_into(runnable@, targets@, ".md", KSOS_MK, bad@, arena)
     verdict.check_list("ksos's make targets agree with the documents", targets.len, "targets", bad@,
         "a make target the documents name must exist in ksos/Makefile, and the reverse")
 
@@ -291,7 +292,7 @@ priv fn check_ksos_targets(arena: Arena$@)
 // std's list of files agrees with what is really there
 // ==========================================
 
-priv const std_record: U8[] = "std/SURFACE.txt" //<
+priv const STD_RECORD: U8[] = "std/SURFACE.txt" //<
     //< The record of what std publishes, one row per declaration, the file's logical name first
     //<
     //< **A file that publishes nothing has no row**, and to std's users a file `ksplc doc std` does
@@ -305,13 +306,13 @@ priv fn check_std_list(arena: Arena$@)
             continue
         files.push(rel.sub_from(4).strip_suffix(".kspl"))
     $recorded: = List<|U8[]|>.new(arena)
-    for line in harness.read_under_root(std_record).lines(arena)
+    for line in harness.read_under_root(STD_RECORD).lines(arena)
         tab: = line.find_char('\t').unwrap_or(0)
         if line.starts_with("std/") && tab > 4
             scan.push_unique(recorded@, line.sub(4, tab - 4))
     $bad: = List<|U8[]|>.new(arena)
-    scan.diff_into(files@, recorded@, "what is really there", std_record, bad@, arena)
-    scan.diff_into(recorded@, files@, std_record, "what is really there", bad@, arena)
+    scan.diff_into(files@, recorded@, "what is really there", STD_RECORD, bad@, arena)
+    scan.diff_into(recorded@, files@, STD_RECORD, "what is really there", bad@, arena)
     verdict.check_list("every std file publishes something, and the record names no other",
         files.len, "files", bad@,
         "remake the record with `make surface`, or give the file something `pub`")
@@ -320,21 +321,21 @@ priv fn check_std_list(arena: Arena$@)
 // The Flash region reserved for the record agrees between the driver and the linker script
 // ==========================================
 
-priv const flash_drv: U8[] = "ksos/drivers/rp2040/flash.kspl" //<
+priv const FLASH_DRV: U8[] = "ksos/drivers/rp2040/flash.kspl" //<
     //< The driver that holds the Flash region reserved for the record
     //<
     //< **When they disagree, the link passes even where the image reaches the record's region.**
     //< The ASSERT sees only "the image does not come this far". So a change to the driver alone
     //< puts the record at **a place nobody looks at**.
-priv const flash_ld: U8[] = "ksos/port/rp2040/link.ld"
+priv const FLASH_LD: U8[] = "ksos/port/rp2040/link.ld"
 
-priv const drv_head: U8[] = "const region_base: Sz = " //<
+priv const DRV_HEAD: U8[] = "const REGION_BASE: Sz = " //<
     //< The marker in front of the number, on each side
     //<
     //< Caution: **Do not hard-code the marker's length**: the column drifts on an edit and fails as
     //< "not found", which reads like a differing value. **Do not put the visibility into the
     //< marker**: a `pub` comes and goes; it is stripped before reading.
-priv const ld_head: U8[] = "ASSERT(_flash_image_end <= ORIGIN(FLASH) + "
+priv const LD_HEAD: U8[] = "ASSERT(_flash_image_end <= ORIGIN(FLASH) + "
 
 priv fn value_at(rest: U8[]): U8[] //< takes the number written at the start of `rest`
     //<
@@ -347,17 +348,17 @@ priv fn value_at(rest: U8[]): U8[] //< takes the number written at the start of 
 
 priv fn check_flash(arena: Arena$@)
     $drv: U8[] = ""
-    for line in harness.read_under_root(flash_drv).lines(arena)
+    for line in harness.read_under_root(FLASH_DRV).lines(arena)
         bare: = line.strip_prefix("pub ").trim_spaces()
-        if bare.starts_with(drv_head)
-            drv = value_at(bare.sub_from(drv_head.len))
+        if bare.starts_with(DRV_HEAD)
+            drv = value_at(bare.sub_from(DRV_HEAD.len))
     $ld: U8[] = ""
-    for line in harness.read_under_root(flash_ld).lines(arena)
-        if at: = line.find_str(ld_head)
-            ld = value_at(line.sub_from(at + ld_head.len))
+    for line in harness.read_under_root(FLASH_LD).lines(arena)
+        if at: = line.find_str(LD_HEAD)
+            ld = value_at(line.sub_from(at + LD_HEAD.len))
     ok: = drv.len > 0 && ld.len > 0 && drv.equals(ld)
-    why: = arena.text().s(flash_drv).s(": ").s("(not found)" if drv.len == 0 else drv).s("\n")
-        .s(flash_ld).s(": ").s("(not found)" if ld.len == 0 else ld).take()
+    why: = arena.text().s(FLASH_DRV).s(": ").s("(not found)" if drv.len == 0 else drv).s("\n")
+        .s(FLASH_LD).s(": ").s("(not found)" if ld.len == 0 else ld).take()
     verdict.check("the Flash place for the record agrees between the driver and the linker script",
         ok, why)
 

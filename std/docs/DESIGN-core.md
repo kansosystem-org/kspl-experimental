@@ -11,7 +11,7 @@ When you add or change a file, check whether the table can gain a row. If it can
 
 ## Words used in this document
 
-**This table explains the words of `std` that appear across many sections.** A word used in one section only is explained where it appears. Every package shares some words: arena, ARC, trait, generic, vtable, thunk, hosted, freestanding, libc, the C runtime, the seed, Principle N and the rest. They are in "Words used throughout" in [`../../docs/DESIGN-principles.md`](../../docs/DESIGN-principles.md#words-used-throughout). *Gate* and the other words with one fixed meaning in every document are in "Terms of art" in [`../../docs/SPEC-documents.md`](../../docs/SPEC-documents.md#terms-of-art). The notation of the examples (`T@`, `U8[]`, `T!E` and the rest) is "The notation the examples use" in [`../../docs/DESIGN-principles.md`](../../docs/DESIGN-principles.md#the-notation-the-examples-use). The language's own rules are in [`../../docs/SPEC-language.md`](../../docs/SPEC-language.md).
+**This table explains the words of `std` that appear across many sections.** A word used in one section only is explained where it appears. Every package shares some words: arena, ARC, trait, generic, vtable, thunk, hosted, freestanding, libc, the C runtime, the seed, Principle N and the rest. They are in "Words used throughout" in [`../../docs/DESIGN-principles.md`](../../docs/DESIGN-principles.md#words-used-throughout). *Gate* and the other words with one fixed meaning in every document are in "Terms of art" in [`../../docs/SPEC-documents.md`](../../docs/SPEC-documents.md#terms-of-art). The notation of the examples (`T@`, `U8[]`, `T!E` and the rest) is "The notation the examples use" in [`../../docs/DESIGN-principles.md`](../../docs/DESIGN-principles.md#the-notation-the-examples-use). The language's own rules are in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md).
 
 | Word | What it means here |
 | :-- | :-- |
@@ -30,10 +30,10 @@ When you add or change a file, check whether the table can gain a row. If it can
 | :-- | :-- | :-- |
 | A problem other libraries are known for | any | [What was inherited, and what was changed](#what-was-inherited-and-what-was-changed) |
 | Memory: who frees what | `mem`, `refcount`, `ds` | [Memory and ownership](DESIGN-core.md#memory-and-ownership) |
-| Text, numbers, bytes | `chars`, `str`, `strfmt`, `strnum`, `buf`, `bytes` | [Strings, numbers and bytes](DESIGN-core.md#strings-numbers-and-bytes) |
+| Text, numbers, bytes | `chars`, `str`, `strfmt`, `strnum`, `buf`, `bytes`, `checked_int` | [Strings, numbers and bytes](DESIGN-core.md#strings-numbers-and-bytes) |
 | Lists, maps, loops, chains | `ds`, `seq`, `lang`, `ring` | [Containers and iteration](DESIGN-core.md#containers-and-iteration) |
 | Reporting failures, logging | every file's `T!E`, `log` | [Failures and the log](#failures-and-the-log) |
-| Arguments, output, tests, children, the clock | `argp`, `io`, `verdict`, `fuzz`, `subproc`, `sys` | [The process](DESIGN-system.md#the-process-arguments-output-children-and-the-clock) |
+| Arguments, output, tests, children, the clock | `argparse`, `io`, `verdict`, `fuzz`, `subproc`, `sys` | [The process](DESIGN-system.md#the-process-arguments-output-children-and-the-clock) |
 | Paths and directories | `fs` | [Files and paths](DESIGN-system.md#files-and-paths) |
 | Locks, threads, sockets, JSON | `thread`, `reactor`, `stack_limit`, `net`, `jsonrpc`, `reflect`, `json`, `json_struct` | [Threads, networking and the data formats](DESIGN-system.md#threads-networking-and-the-data-formats) |
 | Patterns | `regex` | [Regular expressions](DESIGN-core.md#regular-expressions) |
@@ -64,7 +64,7 @@ Each row is a bug or attack that other libraries are known for. It says what the
 | File | The problem | Seen in | What `std` does |
 | :-- | :-- | :-- | :-- |
 | `str` | **A NUL byte cuts a string short** ("the poison NUL byte"). A KSPL string carries its length, so it can hold a byte 0. C reads a string only up to its first 0. So a conversion to a C string silently drops everything after it. PHP and Java had path checks bypassed this way | C's strings | `to_cstr()` returns `U8$@?`: `.none` when the input holds a NUL. `switch` must cover every case, so the caller has to handle it. `contains_nul()` is public too |
-| `checked_int` | **Signed overflow is undefined behavior**: the C compiler can assume it never happens, so optimization changes the result | C's integer arithmetic | The plain operators wrap around (`mod 2^N`) whatever the signedness. The generated code goes through the unsigned type of the same width, which erases C's undefined behavior. **Only overflow detection is chosen by type** (`Ci8` through `Cu64`). There is no wrapping type, since the plain operators already are that |
+| `checked_int` | **Signed overflow is undefined behavior**: the C compiler can assume it never happens, so optimization changes the result | C's integer arithmetic | The plain operators wrap around (`mod 2^N`) whatever the signedness. The generated code goes through the unsigned type of the same width, which erases C's undefined behavior. Native `checked_*` methods report failure; `Ci8` through `Cu64` and `Csz` keep checks on a formula’s operators. There is no wrapping type, since the plain operators already are that |
 | `option` | **Null references**: a forgotten check for `null` still compiles | A raw pointer's `null` | `T?`'s content comes out only through `switch`. The linter's [H0701] proposes `T?` for a raw pointer returned as `null` |
 | `chars`, `regex`, `subproc` and the rest | **"None" spelt as a value of the answer's own type**: a `-1`, an empty string or a flag beside the value. A forgotten check still compiles, and the stand-in flows on as data. Examples are `-1` as an index or as a digit of a number, and an empty string as a name | C's `EOF` and `-1`, an `indexOf` or `find` answering -1 | "There can be none" is `T?`, and "it failed" is `T!E`, never a stand-in ("Absent or failed: one rule" below) |
 | `mem` | **Double free and use after free** | `malloc` / `free` | The arena (`Arena`) is the main route, and `defer` shows in the code where memory is freed. The compiler traces the paths for a use after the free |
@@ -102,18 +102,18 @@ Each row is a bug or attack that other libraries are known for. It says what the
 
 | File | The problem | Seen in | What `std` does |
 | :-- | :-- | :-- | :-- |
-| `json_struct` | **A key's name is written twice, once for the writer and once for the reader.** n fields take 2n lines, and a fix of only one silently fills in the default | `serde`'s derive, Swift's `Codable`, Jackson's annotations, nlohmann's macros | The round-trip functions (`json_struct.from_struct` / `json_struct.into_struct`) walk `std/reflect`'s table of a type's fields. **ksplc synthesizes the table and `fields()` from an empty `impl X: reflect.Reflectable {}`** ([5.5 in `../../docs/SPEC-language.md`](../../docs/SPEC-language.md#55-worked-example-synthesizing-a-field-table-with-reflectable)). Synthesized, the table cannot drift from the type's declaration. A drift would give no diagnostic, and would show as reads and writes of the neighbouring field. A key cannot be given another name: it is the field's name |
+| `json_struct` | **A key's name is written twice, once for the writer and once for the reader.** n fields take 2n lines, and a fix of only one silently fills in the default | `serde`'s derive, Swift's `Codable`, Jackson's annotations, nlohmann's macros | The round-trip functions (`json_struct.from_struct` / `json_struct.into_struct`) walk `std/reflect`'s table of a type's fields. **ksplc synthesizes the table and `fields()` from an empty `impl X: reflect.Reflectable {}`** ([5.5 in `../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#55-worked-example-synthesizing-a-field-table-with-reflectable)). Synthesized, the table cannot drift from the type's declaration. A drift would give no diagnostic, and would show as reads and writes of the neighbouring field. A key cannot be given another name: it is the field's name |
 | `json_struct` | **A missing value silently becomes a default** | The same | A missing key and a `null` one are refused with different values (`missing_field` / `field_type`). So no sentinel default such as `as_int64().unwrap_or(-1)` folds two causes into one value |
-| `json_struct` | **An integer is silently narrowed into a smaller field** | The same | **An integer that the field cannot hold is refused** (`field_type`), not narrowed. Examples are 70000 into a `U16`, and -1 into a `U8`. On a write, so is a `U64` past the largest `I64`, the widest integer a `Val` holds. Whether it fits is `std/reflect`'s `fits_int` |
+| `json_struct` | **An integer is silently narrowed into a smaller field** | The same | **An integer that the field cannot hold is refused** (`field_type`), not narrowed. Examples are 70000 into a `U16`, and -1 into a `U8`. On a write, so is a `U64` past the largest `I64`, the widest integer a `Value` holds. Whether it fits is `std/reflect`'s `fits_int` |
 | `json` | **Stack exhaustion from deep nesting** (the billion-laughs family): a document nested very deep makes a recursive reader run out of stack and crash | JSON parsers in general | Nesting stops at `max_nesting_depth = 500` with a `Json_error`, not a panic |
-| `json` | **Duplicate keys**: implementations read `{"a":1,"a":2}` differently, so two parsers given the same document see different values | The same | Refused (`Json_error.duplicate_key`), as I-JSON requires. A document that two readers can read differently is not one document. Whether the first or the last wins, one of them is wrong. A sender that repeats a key gets back an error that names it. One value is not dropped without a word. `Obj_builder.set` replaces, so a built object never holds a repeat either. Past a few members, the parser checks the keys with a set. So a hostile object cannot make the check quadratic. `Val.get` walks a linked list, and `max_nesting_depth` does not bound the member count |
+| `json` | **Duplicate keys**: implementations read `{"a":1,"a":2}` differently, so two parsers given the same document see different values | The same | Refused (`Json_error.duplicate_key`), as I-JSON requires. A document that two readers can read differently is not one document. Whether the first or the last wins, one of them is wrong. A sender that repeats a key gets back an error that names it. One value is not dropped without a word. `Object_builder.set` replaces, so a built object never holds a repeat either. Past a few members, the parser checks the keys with a set. So a hostile object cannot make the check quadratic. `Value.get` walks a linked list, and `max_nesting_depth` does not bound the member count |
 | `json` | **A read that cannot say "there is none".** A read with a default gives `""` both for an absent key and for an empty string. It gives 0 both for an absent number and for a written 0. It gives the same again for a value of another kind. So a sender's misspelt key reads as a real value | Python's `dict.get`, Jackson's `asText()` / `asInt()`, Go's zero-filled fields | Each read of a kind returns an option (`as_str(): U8[]?`, `as_int64(): I64?`, …). Absent, `null` and another kind give nothing, while `""` and 0 are values. `find` tells an absent member from a `null` one. Only a path still reads absent as `null` (`get`, `get_at`). So `v.get("a").get("b").as_str()` stays one line ("A JSON read says when there is no value" in [`DESIGN-system.md`](DESIGN-system.md)) |
 
 **Threads**
 
 | File | The problem | Seen in | What `std` does |
 | :-- | :-- | :-- | :-- |
-| `thread` | **Nothing says which types can cross threads.** So a non-atomic reference count or a raw pointer gets handed over casually | POSIX threads | **Not handled.** A constraint on `spawn`'s argument types guarantees nothing. It checks only the argument, and sharing through a global goes unchecked. And "the constraint is met" would not mean safe. The grounds are "Why data races are not prevented by the type system" in [`../../docs/DESIGN-language.md`](../../docs/DESIGN-language.md#why-data-races-are-not-prevented-by-the-type-system). What exists is a choice by type name (`Rc` / `Arc`, `Mutex<\|T\|>` / a plain value) |
+| `thread` | **Nothing says which types can cross threads.** So a non-atomic reference count or a raw pointer gets handed over casually | POSIX threads | **Not handled.** A constraint on `spawn`'s argument types guarantees nothing. It checks only the argument, and sharing through a global goes unchecked. And "the constraint is met" would not mean safe. The grounds are "Why data races are not prevented by the type system" in [`../../docs/DESIGN-programming-language.md`](../../docs/DESIGN-programming-language.md#why-data-races-are-not-prevented-by-the-type-system). What exists is a choice by type name (`Rc` / `Arc`, `Mutex<\|T\|>` / a plain value) |
 
 ### Known holes, and what would fill them
 
@@ -121,7 +121,7 @@ Two known problems are not handled. For each, the table says why it is open and 
 
 | File | What is not handled | Why it stays open | What would fill it |
 | :-- | :-- | :-- | :-- |
-| `reflect` | **The round-trip functions cannot walk a container of containers (`List<\|List<\|T\|>\|>`).** Nor can they walk an option that holds a container or an option | **One hole stops both.** The description of such a field needs a kind whose content kind refers to itself. So `Field_kind` would need a payload. Both backends can write such a payload into the table's global initializer. What is missing is the kind itself, its synthesis and the walkers that read it | A payload on the list and option kinds that names the contents' kind. The synthesis writes it, and the round-trip walkers read it, all in one change. The kind is not added ahead of time: a shape that nobody can walk would then be writable. That is Principle 5; the mechanism is [5.5 in `../../docs/SPEC-language.md`](../../docs/SPEC-language.md#55-worked-example-synthesizing-a-field-table-with-reflectable) |
+| `reflect` | **The round-trip functions cannot walk a container of containers (`List<\|List<\|T\|>\|>`).** Nor can they walk an option that holds a container or an option | **One hole stops both.** The description of such a field needs a kind whose content kind refers to itself. So `Field_kind` would need a payload. Both backends can write such a payload into the table's global initializer. What is missing is the kind itself, its synthesis and the walkers that read it | A payload on the list and option kinds that names the contents' kind. The synthesis writes it, and the round-trip walkers read it, all in one change. The kind is not added ahead of time: a shape that nobody can walk would then be writable. That is Principle 5; the mechanism is [5.5 in `../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#55-worked-example-synthesizing-a-field-table-with-reflectable) |
 | `Map` | **Hash flooding.** An attacker sends many keys chosen to land in the same slot, so every lookup slows to a crawl: an algorithmic-complexity attack. PHP, Python, Ruby and Java all issued CVEs and added hash randomization | No attacker's key reaches a `Map`. The packages that take keys from outside do not use `Map` (`http` keeps its headers in a linked list too). `make test-conventions` holds which packages those are. **When that check fails, design the hash seed then.** It fails exactly where a key from outside gets in | Decided already. `str.hash` is FNV-1a plus extra mixing with a fixed seed. `Hashable`'s `hash(r: Self): U32` cannot take a seed, so the signature changes to pass one per `Map`. Randomization by default is ruled out. The compiler uses `Map` heavily, and an iteration order that changes per run makes the generated C differ per run. That breaks self-hosting's zero-difference check, where the compiler builds itself twice and both outputs must be identical |
 
 ## Memory and ownership
@@ -165,7 +165,7 @@ Pass `null` where a function takes an arena, and it works on the heap instead. *
 | One block: a string or bytes | `mem.dealloc(Void$@::s.ptr)` |
 | A `List` | `xs.free()`, after the strings that each element owns. Those are a string each for `fs.read_dir` and `fs.walk_files`, `out` for `verdict.run_children`, the two outputs for `subproc.run_many`, and `name` and `data` for `fuzz.gather`. A list placed on the heap and handed out as a pointer (`List.create`) then gives back its own block with `mem.dealloc(Void$@::xs)` ([below](#a-lists-free-leaves-the-list-itself)) |
 | A child's two outputs (`subproc.run_capture`) | Each with `mem.dealloc`. A child that did not start has empty ones, which free as nothing |
-| A value of many blocks. Examples are a JSON document (`json.parse`), a `Json_builder`, an HTTP request or response, and the headers that `http.headers` builds. Others are a query's pairs, an `argp.Parser`, and the fuzz driver's `Findings` and `Setup` | `v.free()`, which lets all of it go at once ([below](#a-value-of-many-blocks-keeps-its-own-arena)) |
+| A value of many blocks. Examples are a JSON document (`json.parse`), a `Json_builder`, an HTTP request or response, and the headers that `http.headers` builds. Others are a query's pairs, an `argparse.Parser`, and the fuzz driver's `Findings` and `Setup` | `v.free()`, which lets all of it go at once ([below](#a-value-of-many-blocks-keeps-its-own-arena)) |
 | The fields that `json_struct.into_struct` fills in the caller's struct | Each string with `mem.dealloc` and each list with `free()`, as above. **A refusal leaves the fields that it filled before it**, freed the same way |
 
 **What a function does not return, it frees before it returns**, `null` or not. Examples are a path joined on the way, a list that it sorts from, and the object that it encodes into text. That work goes in `mem.scratch(arena)`. With an arena, that is the caller's arena from a mark, rewound to the mark on the way out. Given `null`, it is an arena of the function's own, freed on the way out. So the caller's arena keeps the result alone, however many calls pass through it and however many fail. With `null`, the caller owes a free for the result alone.
@@ -176,7 +176,7 @@ Pass `null` where a function takes an arena, and it works on the heap instead. *
 
 #### A list's `free()` leaves the list itself
 
-**`free()` gives back what a list holds, never the block that the list stands in.** A list from `new` stands in the caller's variable. A list that `create` put in an arena goes with the arena. So only a list that `create` put on the heap leaves a block behind. If `free()` gave that one back, every list would have to carry where it stands. That is 8 more bytes on each list's 32, paid by every list for the few made on the heap. The many small lists that a tree keeps in each node would pay too. So the caller who passed `null` gives the block back, as for any one block: `xs.free()`, then `mem.dealloc(Void$@::xs)`. The compiler reads that `dealloc` as the block's own release, not as a use of what `free()` released. It refuses any use after it ("8.4.5 Tracking a free with `Owned`" in [`../../docs/SPEC-language.md`](../../docs/SPEC-language.md#845-tracking-a-free-with-owned)).
+**`free()` gives back what a list holds, never the block that the list stands in.** A list from `new` stands in the caller's variable. A list that `create` put in an arena goes with the arena. So only a list that `create` put on the heap leaves a block behind. If `free()` gave that one back, every list would have to carry where it stands. That is 8 more bytes on each list's 32, paid by every list for the few made on the heap. The many small lists that a tree keeps in each node would pay too. So the caller who passed `null` gives the block back, as for any one block: `xs.free()`, then `mem.dealloc(Void$@::xs)`. The compiler reads that `dealloc` as the block's own release, not as a use of what `free()` released. It refuses any use after it ("8.4.5 Tracking a free with `Owned`" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#845-tracking-a-free-with-owned)).
 
 #### A value of many blocks keeps its own arena
 
@@ -193,7 +193,7 @@ Pass `null` where a function takes an arena, and it works on the heap instead. *
 
 * **Every `switch` over a value writes each variant's own field alone** (`case .str_val(s)`). It never writes a field for the arena, which it does not read.
 * **What frees is in one place**: the document that `parse` returns. A value that a `Json_builder` makes lives in the builder's arena, and the builder frees it.
-* **A part cannot be freed at all.** `doc.val` is a `json.Val`, and so is every value read out of it (`get`, `get_at`, `arr_list`). A `json.Val` has no `free()`. So a free of a part is a compile error, instead of a call that frees nothing.
+* **A part cannot be freed at all.** `doc.val` is a `json.Value`, and so is every value read out of it (`get`, `get_at`, `arr_list`). A `json.Value` has no `free()`. So a free of a part is a compile error, instead of a call that frees nothing.
 
 A document parsed into the caller's arena holds nothing to free, so it is enough to keep `doc.val` alone.
 
@@ -203,7 +203,7 @@ Caution: **The arena of its own takes a whole chunk at its first allocation**, h
 
 **No free function takes the arena as an argument** (an `alloc_in(arena, n)`). It would be a second spelling of `arena.alloc(n)`.
 
-The rules of the language itself (`defer`, ARC, arenas) are "8.4 The memory management model" in [`../../docs/SPEC-language.md`](../../docs/SPEC-language.md#84-the-memory-management-model-defer--arc--arenas). The sections below say how `std` uses them.
+The rules of the language itself (`defer`, ARC, arenas) are "8.4 The memory management model" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#84-the-memory-management-model-defer--arc--arenas). The sections below say how `std` uses them.
 
 ### The names of the reference-counting types
 
@@ -221,7 +221,7 @@ Caution: **Do not confuse `Arc` with ARC in a document.** ARC (upper case) is Au
 
 ### Release takes the value apart
 
-**When the last owner of an `Rc<|T|>` or `Arc<|T|>` lets go, the `T` inside is taken apart too.** That is as when a `T` on the stack leaves its scope. **That is what lets a shared tree or graph be built from `Rc`.** A release that stopped at the outer value would leak every `Rc` held inside it. The rule, what it costs the writer and what a cycle needs are in one place. That place is "8.4.2 Automatic reference counting via `Ref_counted` conformance" in [`../../docs/SPEC-language.md`](../../docs/SPEC-language.md#842-automatic-reference-counting-via-ref_counted-conformance). The costs are where the time goes, a long chain's recursion, and which thread or handler runs the release.
+**When the last owner of an `Rc<|T|>` or `Arc<|T|>` lets go, the `T` inside is taken apart too.** That is as when a `T` on the stack leaves its scope. **That is what lets a shared tree or graph be built from `Rc`.** A release that stopped at the outer value would leak every `Rc` held inside it. The rule, what it costs the writer and what a cycle needs are in one place. That place is "8.4.2 Automatic reference counting via `Ref_counted` conformance" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#842-automatic-reference-counting-via-ref_counted-conformance). The costs are where the time goes, a long chain's recursion, and which thread or handler runs the release.
 
 **Both wrappers hold one implicit weak count for all strong owners together.** It stays held while the last owner takes the value apart. The value can hold the last explicit weak handle to its own block. That handle's release must not free the block under that call. The wrappers share one private layout of the control block, and one initialization. `Rc` updates its counts directly. `Arc` uses atomic operations, so a single atomic decrement decides which thread frees the block.
 
@@ -234,9 +234,13 @@ The caller cannot reach the storage. So anything that the container fails to rel
 | Promise | How | What breaks without it |
 | :-- | :-- | :-- |
 | **Zero freshly allocated capacity** | `mem.zero` on new storage | A store of an element is an ordinary assignment, so the compiler inserts a release of the value that it overwrites. A release of leftover garbage as if it were ARC crashes |
-| **Give the ownership back when discarding** | `free` assigns an empty (the zero value) to the remaining elements, and `remove` to the removed one. A resize assigns one to every slot that it moved a pair from. In a `Map`, the key gets one as well as the value, since a key that holds an `Rc` is counted too | `mem.zero` runs no release. Without an assignment, the compiler has nowhere to insert one |
+| **Give the ownership back when discarding** | `clear` assigns the zero value to each element; `free` calls it before releasing storage. `pop` and `remove_at` clear the vacated last slot. A map's `remove` clears the removed pair, and a resize clears each moved pair's old slot. Keys holding an `Rc` are counted too | `mem.zero` runs no release. Without an assignment, the compiler has nowhere to insert one |
 
 **An `Rc<|T|>` element's own release takes its value apart** ("Release takes the value apart", above). So a container of `Rc` needs nothing more.
+
+**`pop()` returns `T?`: an empty list has no last element.** It keeps the returned value alive before clearing its slot. The result therefore owns its ARC count independently of the list. Capacity stays available for another push.
+
+**`clear()` releases elements and keeps capacity; `free()` also resets capacity and gives back heap storage.** Arena storage stays until the arena releases it. A caller reusing a list can choose `clear` without allocating another buffer. Clearing visits every element, even for plain values. A large buffer of plain values can deliberately reset its length when constant-time reuse matters. Caution: **A length reset on ARC elements leaks their ownership**, since those slots are no longer visited by `free`. Neither operation frees resources owned through raw pointers or manual `free()` methods.
 
 ### A constructor's name says where the returned thing goes
 
@@ -261,6 +265,8 @@ Caution: **Do not mark an arena parameter with a suffix**, least of all `_in`. `
 | `trim_*` / `strip_*`, `chars.sub` / `sub_from` | No | A view into the input |
 | `replace` / `join` | Yes | A copy |
 | `split` / `lines` | Yes | A `List` placed in the arena, whose elements are still views |
+
+**Joining borrows a read-only slice of pieces.** An array, a list's `slice()` and a borrowed `sub()` can all supply it. Requiring a `List` would force an array or a range to allocate a container just to be read. The caller supplies that view explicitly, so no intermediate list of pieces is needed. Empty pieces still have separators between them. So joining ranges from `split('\n')` preserves a final newline represented by an empty last piece.
 
 Caution: **Do not judge by `U8[]` against `U8$[]`.** `sub_mut` returns a writable view without an allocation, so the return type cannot tell. The arguments can.
 
@@ -296,11 +302,11 @@ So `restore` first looks for the mark's chunk among its own, with the same walk 
 
 To be a key of `Map<|K, V|>`, a type must conform to the trait `ds.Hashable<|Key|>`, which asks for `hash` and `equals`. A type that does not conform gets an error where you used it, not one deep inside `std`.
 
-Caution: **Do not express a requirement by name agreement alone.** It is then written nowhere, and a key type that fails it gets a distant error inside `std/ds.kspl`. Where there is a requirement, express it as a trait. The rule is ② in `docs/DESIGN-language.md` "The order of decision". Every key type declares its conformance (std's own are `I32` / `Sz` / `U8[]`). `Map`'s constraint `K: Hashable<|K|>` then reports a type that does not conform, where the user wrote it. It reports it as not implementing this trait. It does not report `has no field or method named 'hash'` inside std.
+Caution: **Do not express a requirement by name agreement alone.** It is then written nowhere, and a key type that fails it gets a distant error inside `std/ds.kspl`. Where there is a requirement, express it as a trait. The rule is ② in `docs/DESIGN-programming-language.md` "The order of decision". Every key type declares its conformance (std's own are `I32` / `Sz` / `U8[]`). `Map`'s constraint `K: Hashable<|K|>` then reports a type that does not conform, where the user wrote it. It reports it as not implementing this trait. It does not report `has no field or method named 'hash'` inside std.
 
-**`Hashable.equals` and `Eq` are different requirements.** `Eq` is what `==` desugars to. `Hashable.equals` asks, by an explicit call, whether two keys are the same. `U8[]` deliberately does not implement `Eq`. `a == b` would become an O(N) comparison of contents. And a reader could not tell whether `==` compares contents or pointers. That is the reason why `switch` cannot take a `U8[]` subject (`docs/SPEC-language.md` §6.1).
+**`Hashable.equals` and `Eq` are different requirements.** `Eq` is what `==` desugars to. `Hashable.equals` asks, by an explicit call, whether two keys are the same. `U8[]` deliberately does not implement `Eq`. `a == b` would become an O(N) comparison of contents. And a reader could not tell whether `==` compares contents or pointers. That is the reason why `switch` cannot take a `U8[]` subject (`docs/SPEC-programming-language.md` §6.1).
 
-The other key arrives as the type argument `Key`, as in `std/lang`'s `Add` / `Eq`. The reason is that `Self` cannot be written on an argument other than the receiver (the value before the `.`). The rule is `docs/DESIGN-language.md` "Why a trait's receiver is fixed to a bare `Self`". The compiler rejects such a `Self` at the definition. It does not let it fail in the C compiler with no KSPL diagnostic.
+The other key arrives as the type argument `Key`, as in `std/lang`'s `Add` / `Eq`. The reason is that `Self` cannot be written on an argument other than the receiver (the value before the `.`). The rule is `docs/DESIGN-programming-language.md` "Why a trait's receiver is fixed to a bare `Self`". The compiler rejects such a `Self` at the definition. It does not let it fail in the C compiler with no KSPL diagnostic.
 
 **The built-in types' conformances go in std.** In the compiler, an implementation that exists to make a type a key of std's containers would invert the layers. So `Sz`'s `Hashable` sits in `std/ds.kspl` beside what requires it.
 
@@ -331,7 +337,7 @@ Every loop over a collection is written `for x in xs`. The type of `xs`, not the
 | A `.len` field and an index (`List`, arrays) | Indexing, `xs[i]` |
 | A conformance to `std/lang`'s `Iter<\|T\|>` (`next(): T?`) | Calling `next()` until it returns none |
 
-The rule is `docs/SPEC-language.md` 7.2, the reasoning `docs/DESIGN-principles.md` 9.2.
+The rule is `docs/SPEC-programming-language.md` 7.2, the reasoning `docs/DESIGN-principles.md` 9.2.
 
 **Do not make a `has_next` / `next` pair.** It would bring a second notation into std, `for it.has_next() { x: = it.next(); … }`. That is also why `Iter` holds only `next`. Split in two, a call of only one of them becomes writable.
 
@@ -339,7 +345,7 @@ The rule is `docs/SPEC-language.md` 7.2, the reasoning `docs/DESIGN-principles.m
 
 | | Functions | Driven by |
 | :-- | :-- | :-- |
-| Eager: returns a `List` | `str.split` / `json.Val.arr_list` / `fs.read_dir`, and each `std/seq` operation that needs the whole (`order_by` / `distinct`) | Nothing: the work is done on return |
+| Eager: returns a `List` | `str.split` / `json.Value.arr_list` / `fs.read_dir`, and each `std/seq` operation that needs the whole (`order_by` / `distinct`) | Nothing: the work is done on return |
 | Lazy: a chain | Only `where` / `select` | `for x in`, `to_list(arena)` or `count()` |
 
 **A function that returns elements in order and can allocate them all is eager, and returns a `List`.** A `List` carries `.len` and an index, so `for x in` walks it by index. It is not given `Iter`, which would win over the index. The eager side allocates more. So only code that tolerates a slowdown (tools, example code) can rely on it. Where code cannot rely on it, `std/` itself included, is for `docs/DESIGN-principles.md` 8.3 to say.
@@ -358,22 +364,22 @@ The diagram shows how `xs.where(p).select(f)` nests one stage inside the next, a
 flowchart LR
     L["a List"] --> S["List_seq: walks the list"]
     S -->|"where(p)"| K["Keep: keeps what passes p"]
-    K -->|"select(f)"| C["Conv: passes each through f"]
+    K -->|"select(f)"| C["Conversion: passes each through f"]
     C --> D["for x in / to_list / count"]
 ```
 
-`std/seq`'s `Keep` and `Conv` each write `where` / `select` / `to_list` per stage. Only `count`, which needs nothing but `next`, is a trait's default body, on `std/lang`'s `Iter`. **The three stay per stage for different reasons.**
+`std/seq`'s `Keep` and `Conversion` each write `where` / `select` / `to_list` per stage. Only `count`, which needs nothing but `next`, is a trait's default body, on `std/lang`'s `Iter`. **The three stay per stage for different reasons.**
 
 | Method | Could it be a trait's default body? | Why it stays per stage |
 | :-- | :-- | :-- |
 | `where` / `select` | **No** | Their return type puts `Self` in a type-argument position (`Keep<\|Self, T\|>`). A trait that holds that shape cannot be implemented, even when the method has a default body. The body is copied into a generic implementation such as `Keep<\|S, T\|>`'s, and there that `Self` is not resolved |
-| `to_list` | **Yes, and it stays by choice** | Its return, `List<\|T\|>`, holds no `Self`. `std/lang`'s `Iter` cannot take it. That file imports only `std/libc`, so it cannot name `List` / `Arena`. A trait in `std/seq` itself can, and one body serves both stages. The trait's type parameter becomes each stage's element type, `T` for `Keep` and `U` for `Conv` ("5.1 Traits (`trait`)" in [`../../docs/SPEC-language.md`](../../docs/SPEC-language.md)) |
+| `to_list` | **Yes, and it stays by choice** | Its return, `List<\|T\|>`, holds no `Self`. `std/lang`'s `Iter` cannot take it. That file imports only `std/libc`, so it cannot name `List` / `Arena`. A trait in `std/seq` itself can, and one body serves both stages. The trait's type parameter becomes each stage's element type, `T` for `Keep` and `U` for `Conversion` ("5.1 Traits (`trait`)" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md)) |
 
 **A fold of `to_list` alone saves one of its two bodies.** With two kinds of stage, that does not pay off. Fold once the kinds grow, since that is when the count multiplies. `where` / `select` can join only once that `Self` is resolved.
 
 **A chain can be driven any number of times.** The receiver is taken by value, so `for` and `to_list` each advance their own copy. A Python generator, by contrast, is empty after one pass.
 
-Caution: **Assemble and consume a chain in the same frame** (the same function call). A predicate's environment sits on the caller's frame. So a chain returned from a function points at a dead frame ("Why capture is made explicit and escape is forbidden" in [`../../docs/DESIGN-language.md`](../../docs/DESIGN-language.md)).
+Caution: **Assemble and consume a chain in the same frame** (the same function call). A predicate's environment sits on the caller's frame. So a chain returned from a function points at a dead frame ("Why capture is made explicit and escape is forbidden" in [`../../docs/DESIGN-programming-language.md`](../../docs/DESIGN-programming-language.md)).
 
 ### Only `where` and `select` ride on the chain; a predicate is a `Callable1`
 
@@ -390,9 +396,9 @@ There is no `sum`. Without overloading, it would be one method per numeric type,
 
 A predicate (a test that returns `Bool`), selector or comparator is taken as `Callable1` / `Callable2`. So a caller passes a closure as it is. A *closure* is a function value that carries variables from the place where it was made (its *captures*).
 
-Caution: **Do not turn it back into a function pointer.** `where` / `any` / `all` are useless unless the predicate can be given what is searched for. "Does it contain this node" could not be written, and a plain `for` would replace them. A function value with a capture carries the function and its environment. One function pointer cannot hold both ([`../../docs/SPEC-language.md`](../../docs/SPEC-language.md) 8.1, "Closures").
+Caution: **Do not turn it back into a function pointer.** `where` / `any` / `all` are useless unless the predicate can be given what is searched for. "Does it contain this node" could not be written, and a plain `for` would replace them. A function value with a capture carries the function and its environment. One function pointer cannot hold both ([`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md) 8.1, "Closures").
 
-**Whether a callback is a function pointer or a `Callable` depends on whether it needs a capture.** The rule is "Whether a callback arrives as a function pointer or a `Callable`" in [`../../docs/DESIGN-language.md`](../../docs/DESIGN-language.md). `std/fs`'s `skip_dir` makes do with a constant set of names, so it takes a function pointer. `std/thread`'s `spawn` has no choice, since its `entry` crosses the C boundary. Do not reason "it is a predicate, so a `Callable`". A `Callable` where no capture is needed stops one named predicate from being passed to several functions.
+**Whether a callback is a function pointer or a `Callable` depends on whether it needs a capture.** The rule is "Whether a callback arrives as a function pointer or a `Callable`" in [`../../docs/DESIGN-programming-language.md`](../../docs/DESIGN-programming-language.md). `std/fs`'s `skip_dir` makes do with a constant set of names, so it takes a function pointer. `std/thread`'s `spawn` has no choice, since its `entry` crosses the C boundary. Do not reason "it is a predicate, so a `Callable`". A `Callable` where no capture is needed stops one named predicate from being passed to several functions.
 
 ### A test or comparison gets `T@`; `select` gets the element
 
@@ -404,7 +410,7 @@ sorted: = names.order_by(fn(a: U8[]@, b: U8[]@; ): I32 {
 }, arena)
 ```
 
-* **A copy per call is a copy that the move check cannot see.** `order_by` compares each element O(log n) times, and `distinct` O(n) times. Handed by value, each call reads the element out of the list's memory through a pointer. The move check does not follow that pointer ("5.4 Worked example: forbidding copies with `Move_only`" in [`../../docs/SPEC-language.md`](../../docs/SPEC-language.md)). For a `Move_only` element, such as an owning handle like a lock, `std` would duplicate it with no diagnostic. Handed a `T@`, the call copies nothing.
+* **A copy per call is a copy that the move check cannot see.** `order_by` compares each element O(log n) times, and `distinct` O(n) times. Handed by value, each call reads the element out of the list's memory through a pointer. The move check does not follow that pointer ("5.4 Worked example: forbidding copies with `Move_only`" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md)). For a `Move_only` element, such as an owning handle like a lock, `std` would duplicate it with no diagnostic. Handed a `T@`, the call copies nothing.
 * **`where` on a chain needs it to be correct at all.** Its `next` asks the test about the element that it then returns. By value, that is two moves of one element, which the instance for a `Move_only` element refuses. With `T@`, it is one.
 * **`select` takes the element**, called once per element. The move is the one that the conversion makes, and the move check sees it.
 * **The cost**: a closure reads a scalar with `$` (`fn(a: I32@, b: I32@; ): I32 { return a$ - b$; }`). A field or a method needs none, since `.` dereferences.
@@ -424,11 +430,11 @@ Caution: **Do not move the message building back into `at`.** The cost does not 
 
 `Ring` (`std/ring.kspl`) is a fixed-size circular buffer for one job. An interrupt handler writes a little at a time, and a task reads in bulk. It never waits and never locks; the caller decides both.
 
-An *interrupt handler* (ISR) is code that the hardware runs the moment an event arrives, cutting into whatever was running. The diagram shows the path that `Ring<|const cap: Sz|>` sits on.
+An *interrupt handler* (ISR) is code that the hardware runs the moment an event arrives, cutting into whatever was running. The diagram shows the path that `Ring<|const CAP: Sz|>` sits on.
 
 ```mermaid
 flowchart LR
-    I["interrupt handler"] -->|"write: returns how much fit"| R["Ring over the caller's cap bytes"]
+    I["interrupt handler"] -->|"write: returns how much fit"| R["Ring over the caller's CAP bytes"]
     R -->|"peek: a slice, no copy"| T["task"]
     T -->|"consume"| R
     T --> D["device"]
@@ -438,11 +444,11 @@ flowchart LR
 
 **Why it does not lock**: the right exclusion depends on where the ring sits. Between a handler and a task, it is to disable interrupts. Between cores, it is a hardware spinlock. On a single-threaded host, it is nothing. Any one built in is too much or too little elsewhere.
 
-**Why the capacity is a const generic, and the caller supplies the buffer**: a container that an interrupt handler touches cannot live on the heap. `alloc` takes a lock, so an ISR that calls it freezes. With the capacity in the type, `% cap` is a constant in the generated C. So even a target without hardware division (Armv6-M) calls no software division.
+**Why the capacity is a const generic, and the caller supplies the buffer**: a container that an interrupt handler touches cannot live on the heap. `alloc` takes a lock, so an ISR that calls it freezes. With the capacity in the type, `% CAP` is a constant in the generated C. So even a target without hardware division (Armv6-M) calls no software division.
 
-**No type guarantees the wraparound.** A modular type for the index would stop a forgotten `% cap`. But the type spreads into signatures and needs a conversion at every boundary. Rust's `std::num::Wrapping` shows this: methods such as `wrapping_add` are the usual way there. Instead, `head` / `tail` are `priv`, and only `step` advances them. Tests, not the type, catch a forgotten one. `make debug`'s ring tests always cross the wraparound, since writes that do not cross pass with or without `% cap`.
+**No type guarantees the wraparound.** A modular type for the index would stop a forgotten `% CAP`. But the type spreads into signatures and needs a conversion at every boundary. Rust's `std::num::Wrapping` shows this: methods such as `wrapping_add` are the usual way there. Instead, `head` / `tail` are `priv`, and only `step` advances them. Tests, not the type, catch a forgotten one. `make debug`'s ring tests always cross the wraparound, since writes that do not cross pass with or without `% CAP`.
 
-**The storage is a slice of exactly `cap` bytes.** `Ring<|cap|>.new` stops the program when the slice has any other length, and names both lengths. If it were shorter, the queue would write past its end. If it were longer, bytes that the caller sized would never be used: a capacity that looks larger than it is. The slice's bounds check stays on every byte. It costs one comparison, while the wrap stays `% cap` on the type, a constant.
+**The storage is a slice of exactly `CAP` bytes.** `Ring<|CAP|>.new` stops the program when the slice has any other length, and names both lengths. If it were shorter, the queue would write past its end. If it were longer, bytes that the caller sized would never be used: a capacity that looks larger than it is. The slice's bounds check stays on every byte. It costs one comparison, while the wrap stays `% CAP` on the type, a constant.
 
 **Why `peek()` returns a slice into the buffer**: most embedded send paths stream what accumulated straight to the device. A copy out would add a working buffer. The cost: `peek()` returns only the contiguous part up to the wraparound. So a caller that takes everything goes round `peek` → `consume` twice. A join of the parts inside would need a memmove, which defeats the point.
 
@@ -465,13 +471,13 @@ Two functions cannot move to `chars`. `equals` is one of `Hashable`'s required m
 
 A function that makes a new string for you returns `U8[]`, the read-only type, even though you own the copy. A writable `U8$[]` comes back only from a function whose job is to give you a writable buffer.
 
-A function that **returns a newly allocated string** returns a `U8[]`. Examples are `fs.join`, `str.replace`, `json.Val.as_str`, `sys.get_env` and the rest. One returns a `U8$[]` only where a writable buffer was asked for. Those are `arena.dup_str` / `Str_builder.slice` / `chars.sub_mut`, and the buffer that `rand.fill` receives.
+A function that **returns a newly allocated string** returns a `U8[]`. Examples are `fs.join`, `str.replace`, `json.Value.as_str`, `sys.get_env` and the rest. One returns a `U8$[]` only where a writable buffer was asked for. Those are `arena.dup_str` / `Str_builder.slice` / `chars.sub_mut`, and the buffer that `rand.fill` receives.
 
-**Write permission spreads through generics.** The conversion from writable to read-only (`U8$[]` → `U8[]`) applies only one level deep, to a built-in type constructor. `List<|U8$[]|>` cannot become `List<|U8[]|>`. The reason is that user-written generics are invariant: their type arguments must match exactly. The rule is "6.4 Type conversion (`::`) and implicit casts" in `docs/SPEC-language.md`. Suppose `fs.walk_files` returned a `List<|U8$[]|>`. The caller would then carry the `$` into every variable, field and argument. And it could not pass the list to a function that takes `List<|U8[]|>`. One character in the return type fixes every type that the caller writes.
+**Write permission spreads through generics.** The conversion from writable to read-only (`U8$[]` → `U8[]`) applies only one level deep, to a built-in type constructor. `List<|U8$[]|>` cannot become `List<|U8[]|>`. The reason is that user-written generics are invariant: their type arguments must match exactly. The rule is "6.4 Type conversion (`::`) and implicit casts" in `docs/SPEC-programming-language.md`. Suppose `fs.walk_files` returned a `List<|U8$[]|>`. The caller would then carry the `$` into every variable, field and argument. And it could not pass the list to a function that takes `List<|U8[]|>`. One character in the return type fixes every type that the caller writes.
 
 **"The caller frees it" is no reason to return it mutable.** A free needs no write permission (`dealloc` takes it through an explicit cast). A caller that needs to rewrite the string uses a function that fills a buffer (`rand.fill`). Or it uses one that copies (`arena.dup_str`).
 
-C also keeps writability in the type (`char *` against `const char *`). `strdup` returns `char *`, so every type in the caller becomes `char *`. KSPL carries axis 2, the `$` just before `[]`, in the type too. So a returned `U8$[]` would get stuck the way C does. **Axis 1 (the binding's `$`) remains.** With a `U8[]` returned, the caller still chooses whether the variable later takes a different string. (The two axes are "4.2 The two axes of mutability" in [`../../docs/SPEC-language.md`](../../docs/SPEC-language.md#42-the-two-axes-of-mutability).)
+C also keeps writability in the type (`char *` against `const char *`). `strdup` returns `char *`, so every type in the caller becomes `char *`. KSPL carries axis 2, the `$` just before `[]`, in the type too. So a returned `U8$[]` would get stuck the way C does. **Axis 1 (the binding's `$`) remains.** With a `U8[]` returned, the caller still chooses whether the variable later takes a different string. (The two axes are "4.2 The two axes of mutability" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#42-the-two-axes-of-mutability).)
 
 ### `dedent`, which removes common indentation, empties a whitespace-only line
 
@@ -506,7 +512,7 @@ String interpolation (`"n=\{n\}"`, which puts the value of `n` into the text) al
 
 It is Zig's three-way split (`w.print` / `bufPrint` / `allocPrint`) without the allocator argument. A `Str_builder` allocates on its own.
 
-**Interpolation that yields a value is not taken.** Examples are Python's f-string, Go's `Sprintf` and C++'s `std::format`. That notation returns a new string whose memory something else frees. In Python and Go, that is the garbage collector; in C++, it is `std::string`'s destructor. KSPL frees nothing that it was not told to. So the same notation would hide an allocation and a lifetime (to the end of the enclosing block). That goes against `docs/DESIGN-language.md`'s "Responsibility can only be assigned for what the writer can see". Before you add a fourth shape, confirm that it cannot be written with the three.
+**Interpolation that yields a value is not taken.** Examples are Python's f-string, Go's `Sprintf` and C++'s `std::format`. That notation returns a new string whose memory something else frees. In Python and Go, that is the garbage collector; in C++, it is `std::string`'s destructor. KSPL frees nothing that it was not told to. So the same notation would hide an allocation and a lifetime (to the end of the enclosing block). That goes against `docs/DESIGN-programming-language.md`'s "Responsibility can only be assigned for what the writer can see". Before you add a fourth shape, confirm that it cannot be written with the three.
 
 **Why two writers?** `std/str` has the growing `Str_builder`. `std/buf` has `Buf_writer`, which writes into the caller's array and never allocates. Some places cannot allocate (freestanding). Some must not allocate inside a loop. A `Str_builder.new()` with its `defer b.free()` in a control loop costs a malloc/free every round. Yet output of unpredictable length, forced into a fixed buffer, spreads the decision to truncate across its callers. Both are `Writer`s, so interpolation works with either. **The choice is "can it allocate" and nothing else.** A split by speed or by an upper bound would make two ways to one purpose.
 
@@ -526,7 +532,7 @@ Caution: **Do not free the old buffer before the copy.** The copy then reads fre
 
 `std` prints floating-point numbers with its own code, not with C's `printf`. The same code runs on bare metal, where there is no C library. It prints the same digits on every platform.
 
-`std/strfmt` does not take a floating-point number's digits from libc's `%f`. The shortest digits come from Raffaello Giulietti's Schubfach. It reads one power of ten from a table, and 64-bit products decide the digits ("One table of powers of ten serves both directions" below). The digits of `.N` are assembled exactly with `std/bignat`, and cut at a fixed place. `std/bignat` does arithmetic on numbers with as many digits as needed (*multiple precision*). One implementation serves hosted and freestanding alike. What it prints is in `docs/SPEC-language.md`, in two sections: "3.6.1 The default notation for primitives" and "3.6.2 Format specifiers". This section holds why.
+`std/strfmt` does not take a floating-point number's digits from libc's `%f`. The shortest digits come from Raffaello Giulietti's Schubfach. It reads one power of ten from a table, and 64-bit products decide the digits ("One table of powers of ten serves both directions" below). The digits of `.N` are assembled exactly with `std/bignat`, and cut at a fixed place. `std/bignat` does arithmetic on numbers with as many digits as needed (*multiple precision*). One implementation serves hosted and freestanding alike. What it prints is in `docs/SPEC-programming-language.md`, in two sections: "3.6.1 The default notation for primitives" and "3.6.2 Format specifiers". This section holds why.
 
 **Why here**: freestanding has no libc. Yet `Str_builder` conforms to `Writer`, and the vtable references every method's thunk. So `snprintf` would be linked into a bare-metal program that never writes a float. The linker's removal of unused code (`--gc-sections`) cannot drop a thunk.
 
@@ -544,7 +550,7 @@ NaN and infinity (`nan` / `inf` / `-inf`) pad to a width with spaces. The `0` fl
 
 `std/strnum`'s `to_f64` turns text into an F64 with code written in KSPL, not with C's `strtod`. So it works on bare metal too, gives the same answer everywhere, and rounds every text correctly.
 
-**Why**: left to `strtod`, `to_f64` could exist only under `cfg(!freestanding)`. `std/json` and `std/argp` call it. So **a build for a microcontroller would fail at type checking**. One implementation that returns the same value everywhere outweighs the acceptance of strings that vary with the environment.
+**Why**: left to `strtod`, `to_f64` could exist only under `cfg(!freestanding)`. `std/json` and `std/argparse` call it. So **a build for a microcontroller would fail at type checking**. One implementation that returns the same value everywhere outweighs the acceptance of strings that vary with the environment.
 
 **What is given up**: `strtod`'s `inf`, `nan` and hexadecimal floating point. JSON's numbers never hold them, and a configuration value holds them only ambiguously.
 
@@ -558,9 +564,9 @@ NaN and infinity (`nan` / `inf` / `-inf`) pad to a width with spaces. The `0` fl
 
 Caution: **The 19 digits are significant ones: a leading 0 counts as none.** The third step starts from the F64 that the 19 digits give, and its ulp steps reach only a few ulp. Take the 0s of `0.0000301…` (the fixed form that `std/json` writes for a small decimal). Counted among the 19, they leave that start further off than the steps reach. The text then reads as another F64.
 
-Why those limits, and why 768 digits of mantissa are enough to read, is `pow10_max` / `f64_exact_digits` in `std/strnum.kspl`. So regression tests can compare for equality, against literals that the C compiler rounded correctly.
+Why those limits, and why 768 digits of mantissa are enough to read, is `POW10_MAX` / `F64_EXACT_DIGITS` in `std/strnum.kspl`. So regression tests can compare for equality, against literals that the C compiler rounded correctly.
 
-Caution: **Cap both the mantissa and the exponent.** Otherwise a 20th digit overflows U64. And the exponent of `1e999999999` overflows I64, which turns infinity into 0. The caps and their reasons are `f64_mantissa_digits` / `f64_exp_digits_limit` in `std/strnum.kspl`.
+Caution: **Cap both the mantissa and the exponent.** Otherwise a 20th digit overflows U64. And the exponent of `1e999999999` overflows I64, which turns infinity into 0. The caps and their reasons are `F64_MANTISSA_DIGITS` / `F64_EXP_DIGITS_LIMIT` in `std/strnum.kspl`.
 
 ### One table of powers of ten serves both directions
 
@@ -583,13 +589,21 @@ The code that applies a format specifier (the `:08` or `.2` in `\{v:08\}`) is wr
 
 `std/strfmt.kspl` implements `fmt_spec` / `fmt_prec` / `fmt_hex` / `fmt_char` separately for twelve built-in types. Each delegates to the shared `int_fmt_spec` / `hex_fmt_spec` / `float_fmt_spec`. So the impls read as one shape repeated. **They are not folded, because the return type differs per type.** It is `Int_fmt` (signed, and `U8` through `U32`), `Uint_fmt` (`U64`) or `Float_fmt` (`F32` / `F64`). A default body declares one return type.
 
-Note: `std/checked_int.kspl`'s eight types stay apart for the same reason. There, the promoted type and the boundary value differ per type, and they are the body itself. Generics would need a trait that holds an associated type and constant. Examples are Rust's associated type / const, and Swift's `static var max`. KSPL has neither. When they arrive, `checked_int` is the first to use them.
+### Checked arithmetic shares its checks
+
+**Native methods own overflow detection.** I64 and U64 hold the two algorithms. Narrower types calculate in I64 or U64, then check their own bounds before converting. `Sz` checks the target machine's width. No associated type or constant is needed.
+
+**A formula keeps its checked type.** `Ci8` through `Cu64` and `Csz` name instances of `Signed` or `Unsigned` in `std/checked_int.kspl`. Convert each input once, then keep the formula's ordinary operators until reading the final `.val`. Each operator checks its intermediate result and panics on failure. The wrappers keep long formulas readable; they do not offer recovery from an operator's panic. Each family shares its methods and operators; signed and unsigned stay separate because only signed values support negation.
+
+**A calculation that must recover uses methods.** A size multiplication can return `Sz!Checked_error` without constructing a wrapper. A longer calculation propagates each method's failure with `!`, or handles it with `catch`. Containers keep their local size check, so importing a List brings no checked wrappers into every string program. Application limits still need their own checks: fitting in `Sz` does not mean a tensor or request is acceptably small.
+
+**Importing checks changes no native operator.** Hashes and random generators depend on wrapping. A checked wrapper makes a whole formula stop on overflow; a native method marks one operation whose caller handles failure.
 
 ### Hexadecimal uses a format specifier; the wrapper adds only `0x`
 
 Write hexadecimal as `\{v:x\}` or `\{v:08x\}`. The wrapper `strfmt.hex(v, n)` exists only to put `0x` in front.
 
-The rules of the hexadecimal specifier (with no `0x`) are "3.6.2 Format specifiers" in `docs/SPEC-language.md`. This section holds why.
+The rules of the hexadecimal specifier (with no `0x`) are "3.6.2 Format specifiers" in `docs/SPEC-programming-language.md`. This section holds why.
 
 **Each item that a specifier can set has its own method.** Only a type that the item applies to implements it:
 
@@ -870,7 +884,7 @@ Output is usually held in memory and written out in batches (*buffered*). An `er
 
 A log line can carry the file and line of the code that wrote it. The position arrives without the call spelling it out. Whether it is printed is set once per logger, not per line.
 
-`say` and `at` end with `file: U8[] = caller_file, line: Sz = caller_line`. So the caller's position arrives without the call spelling it out ("The caller's position" in [`../../docs/SPEC-language.md`](../../docs/SPEC-language.md) 8.1.1). `assert` uses the same mechanism. **Whether the position is printed is `new`'s `place`, set once per logger**, with no second way in.
+`say` and `at` end with `file: U8[] = caller_file, line: Sz = caller_line`. So the caller's position arrives without the call spelling it out ("The caller's position" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md) 8.1.1). `assert` uses the same mechanism. **Whether the position is printed is `new`'s `place`, set once per logger**, with no second way in.
 
 Caution: **Do not make it a choice per call.** One row would carry three fields and the next five. A spreadsheet cannot filter a column that moves, which is the whole reason for the separator. A ragged row is worse than one with no place.
 
@@ -898,7 +912,7 @@ An import of one `std` file compiles that file and the files that it imports, an
 
 The tiers that this gives are the table "How many files one import brings along" in [std](../README.md).
 
-**Each std file builds when it alone is imported** (`make test-thin-use` watches it). A conformance is the trap. `impl I32: Formattable` holds wherever `std/strfmt` is in the program, even in a file that does not import it. So take a file that uses interpolation without an import of `std/strfmt`. It breaks only for an outside user who imports that file alone. Such a file imports the conformance's file as an *anchor*. That is an import kept only so that the file comes along, as in `as _strfmt`. The rule is "9.3 Adding a method to another file's type" in [`../../docs/SPEC-language.md`](../../docs/SPEC-language.md#93-adding-a-method-to-another-files-type).
+**Each std file builds when it alone is imported** (`make test-thin-use` watches it). A conformance is the trap. `impl I32: Formattable` holds wherever `std/strfmt` is in the program, even in a file that does not import it. So take a file that uses interpolation without an import of `std/strfmt`. It breaks only for an outside user who imports that file alone. Such a file imports the conformance's file as an *anchor*. That is an import kept only so that the file comes along, as in `as _strfmt`. The rule is "9.3 Adding a method to another file's type" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#93-adding-a-method-to-another-files-type).
 
 **No std file is inside an import cycle** (`make test-thin-use` again). With a cycle, the use of one brings the other along. The tiers collapse, and nothing can be selected.
 

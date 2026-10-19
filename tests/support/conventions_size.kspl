@@ -14,9 +14,9 @@ import "std/verdict"
 import "tests/support/conventions_scan" as scan + { Sample }
 import "tests/support/harness"
 
-priv const max_file_lines: Sz = 1000
+priv const MAX_FILE_LINES: Sz = 1000
 
-priv const warn_file_lines: Sz = 900 //< the line count that marks a file as near the cap
+priv const WARN_FILE_LINES: Sz = 900 //< the line count that marks a file as near the cap
     //<
     //< **It names them without failing**: the cap is a cliff crossed mid-work, where a split cuts
     //< by line count rather than by reason (Principle 3).
@@ -39,13 +39,13 @@ priv fn check_sizes(arena: Arena$@)
             continue
         files += 1
         lines: = harness.read_under_root(rel).lines(arena)
-        if lines.len > max_file_lines
+        if lines.len > MAX_FILE_LINES
             over_file
-                .push(arena.text().s(rel).s(": \{lines.len\} lines (cap \{max_file_lines\})").take())
+                .push(arena.text().s(rel).s(": \{lines.len\} lines (cap \{MAX_FILE_LINES\})").take())
         // Caution: **Include the files over the cap too**, or they escape without a written split.
-        if lines.len > warn_file_lines
+        if lines.len > WARN_FILE_LINES
             near_file.push(rel)
-    n1: = arena.text().s("one file within \{max_file_lines\} lines (Principle 3)").take()
+    n1: = arena.text().s("one file within \{MAX_FILE_LINES\} lines (Principle 3)").take()
     verdict.check_list(n1, files, "files", over_file@,
         "split the file where its README's plan says (Principle 3)")
     check_plans(near_file@, arena)
@@ -54,7 +54,7 @@ priv fn check_sizes(arena: Arena$@)
 // How a file near the cap splits
 // ==========================================
 
-priv const plan_head: U8[] = "Files near the limit and how they split" //<
+priv const PLAN_HEAD: U8[] = "Files near the limit and how they split" //<
     //< The heading of the section that says how a file splits
     //<
     //< Below is the sentence that says explicitly that the section is empty. **Both are text from
@@ -66,22 +66,22 @@ priv fn plan_readme_of(rel: U8[], arena: Arena$@): U8[] //<
     if cut: = rel.find_char('/')
         return arena.text().s(rel.sub(0, cut)).s("/README.md").take()
     return "README.md"
-priv const none_lead: U8[] = "No file" //<
+priv const NONE_LEAD: U8[] = "No file" //<
     //< The two texts of the sentence that says the section is empty
     //<
     //< Caution: **Make both texts distinctive.** Matching `lines` alone hits text about the cap
     //< itself, such as "1000 lines per file".
-priv const none_tail: U8[] = "exceeds 900 lines"
+priv const NONE_TAIL: U8[] = "exceeds 900 lines"
 
 priv fn claims_none(line: U8[], _arena: Arena$@): Bool //<
     //< Whether that line says explicitly "there is no file over it here"
     //<
     //< **The line count itself is not checked here** (`check_plans` below does); built into the
     //< judgment, it would make the sample table impossible to write.
-    return line.find_str(none_lead).is_some() && line.find_str(none_tail).is_some()
+    return line.find_str(NONE_LEAD).is_some() && line.find_str(NONE_TAIL).is_some()
 
 // The texts that hit `claims_none` and the texts that do not.
-priv const none_samples: Sample[_] = ::{
+priv const NONE_SAMPLES: Sample[_] = ::{
     Sample::{ .text = "**No file in ksplc exceeds 900 lines today.** Next…", .hits = true },
     Sample::{ .text = "No file in std exceeds 900 lines", .hits = true },
     Sample::{ .text = "The files that exceed 900 lines are the following two", .hits = false },
@@ -109,7 +109,7 @@ priv fn plan_body(readme: U8[], arena: Arena$@): U8[] //<
         if d > 0
             if depth > 0 && d <= depth
                 depth = 0
-            if ln.find_str(plan_head).is_some()
+            if ln.find_str(PLAN_HEAD).is_some()
                 depth = d
             continue
         if depth > 0
@@ -137,7 +137,7 @@ priv struct Plan_sample //< the texts that hit `planned` and the texts that do n
     rel: U8[]
     hits: Bool
 
-priv const plan_samples: Plan_sample[_] = ::{
+priv const PLAN_SAMPLES: Plan_sample[_] = ::{
     Plan_sample::{ .readme =
         "## Files near the limit and how they split\n\n`a/b.kspl` puts X out.\n", .rel = "a/b.kspl",
         .hits = true },
@@ -172,10 +172,10 @@ priv fn claim_under(line: U8[], readme_rel: U8[], arena: Arena$@): U8[] //<
     //< its folder, the line matches no file and passes next to one over the cap (Principle 8).
     //< The scope comes from the claim's words ("No file in kspeg exceeds 900 lines" is `kspeg/`'s).
     //< When it names none, it is its README's folder.
-    if lead: = line.find_str(none_lead)
-        if tail: = line.find_str(none_tail)
+    if lead: = line.find_str(NONE_LEAD)
+        if tail: = line.find_str(NONE_TAIL)
             if tail > lead
-                from: = lead + none_lead.len
+                from: = lead + NONE_LEAD.len
                 mid: = line.sub(from, tail - from).trim_spaces()
                 if mid.starts_with("in ")
                     name: = mid.sub_from(3).trim_spaces()
@@ -188,7 +188,7 @@ priv struct Scope_sample //< one claim, and the prefix it should speak for
     readme: U8[]
     under: U8[]
 
-priv const scope_samples: Scope_sample[_] = ::{
+priv const SCOPE_SAMPLES: Scope_sample[_] = ::{
     Scope_sample::{ .line = "**No file in kspeg exceeds 900 lines today.**", .readme = "README.md",
         .under = "kspeg/" },
     // **A claim naming no folder falls back to its own folder.**
@@ -213,9 +213,9 @@ priv fn check_plans(near: List<|U8[]|>@, arena: Arena$@) //<
         readme: = harness.read_under_root(readme_rel)
         if readme.len == 0 || !planned(readme, rel, arena)
             bad
-                .push(arena.text().s(rel).s(" is over \{warn_file_lines\} lines and \"")
-                .s(plan_head).s("\" in ").s(readme_rel).s(" does not name it").take())
-    n1: = arena.text().s("a file over \{warn_file_lines\} lines has how it splits in the README")
+                .push(arena.text().s(rel).s(" is over \{WARN_FILE_LINES\} lines and \"")
+                .s(PLAN_HEAD).s("\" in ").s(readme_rel).s(" does not name it").take())
+    n1: = arena.text().s("a file over \{WARN_FILE_LINES\} lines has how it splits in the README")
         .take()
     verdict.check_list(n1, near.len, "files", bad@,
         "where it splits is decided when it comes near the cap (Principle 3)")
@@ -229,12 +229,12 @@ priv fn check_plans(near: List<|U8[]|>@, arena: Arena$@) //<
                 continue
             claims += 1
             under: = claim_under(ln, readme_rel, arena)
-            // Caution: **Check the line count here too.** The README's number and `warn_file_lines`
+            // Caution: **Check the line count here too.** The README's number and `WARN_FILE_LINES`
             // are written separately, so if not tied, one of them changes alone (Principle 4).
-            if ln.find_str(arena.text().s("\{warn_file_lines\}").take()).is_none()
+            if ln.find_str(arena.text().s("\{WARN_FILE_LINES\}").take()).is_none()
                 stale
-                    .push(arena.text().s(readme_rel).s(": the \"").s(none_lead)
-                    .s("\" line says a number other than \{warn_file_lines\}").take())
+                    .push(arena.text().s(readme_rel).s(": the \"").s(NONE_LEAD)
+                    .s("\" line says a number other than \{WARN_FILE_LINES\}").take())
             for rel in near
                 if under.len > 0 && rel.starts_with(under)
                     stale
@@ -244,65 +244,65 @@ priv fn check_plans(near: List<|U8[]|>@, arena: Arena$@) //<
         stale@, "where one is over, delete that sentence and write how it splits")
 
 priv fn check_fires(arena: Arena$@)
-    scan.check_samples("the judgment of \"no file is over it\" can fire", Sample[]::none_samples,
+    scan.check_samples("the judgment of \"no file is over it\" can fire", Sample[]::NONE_SAMPLES,
         "none_samples", claims_none, arena)
     $k: = List<|U8[]|>.new(arena)
-    for s in plan_samples
+    for s in PLAN_SAMPLES
         if planned(s.readme, s.rel, arena) != s.hits
             want: = "hit" if s.hits else "not hit"
             k
                 .push(arena.text().s("\"").s(s.rel).s("\" should be ").s(want)
                 .s(" and came out the other way").take())
     verdict.check_list("the judgment of whether the splitting section names it can fire",
-        plan_samples.len, "samples", k@,
+        PLAN_SAMPLES.len, "samples", k@,
         "the table of what is hit and what is not is `plan_samples`")
     $u: = List<|U8[]|>.new(arena)
-    for s in scope_samples
+    for s in SCOPE_SAMPLES
         got: = claim_under(s.line, s.readme, arena)
         if !got.equals(s.under)
             u
                 .push(arena.text().s("\"").s(s.line).s("\" should speak for ").s(s.under)
                 .s(" and came out ").s(got).take())
     verdict.check_list("the reading of what a \"there is none\" line speaks for can fire",
-        scope_samples.len, "samples", u@, "the table of claims is `scope_samples`")
+        SCOPE_SAMPLES.len, "samples", u@, "the table of claims is `scope_samples`")
 
 // ==========================================
 // The hover's widths follow the formatter's. A comment past the width is the formatter's to cut
 // (`ksplc/fmt/comment.kspl`), so `make test-fmt-tree` holds it.
 // ==========================================
 
-priv const width_file: U8[] = "ksplc/fmt/style.kspl" //<
+priv const WIDTH_FILE: U8[] = "ksplc/fmt/style.kspl" //<
     //< The formatter's source, where the width is read from
     //<
     //< **The number is the formatter's, read from its source.** `column_limit` in
     //< `ksplc/fmt/style.kspl` is the source file's width, code and prose alike, so this check
     //< takes it from there rather than holding a second copy (Principle 4).
-priv const width_mark: U8[] = ".column_limit = "
+priv const WIDTH_MARK: U8[] = ".column_limit = "
 
 priv fn source_width(arena: Arena$@): Sz //< the width the formatter keeps
     //<
     //< Where it cannot be read, 0 — and the check below fails rather than passing on a number of
     //< its own.
-    for got in scan.find_all(harness.read_under_root(width_file), width_mark, ",", arena)
+    for got in scan.find_all(harness.read_under_root(WIDTH_FILE), WIDTH_MARK, ",", arena)
         return got.trim_spaces().parse_size(0) catch 0
     return 0
 
-priv const hover_width_file: U8[] = "ksplc/lsp/spell.kspl" //<
+priv const HOVER_WIDTH_FILE: U8[] = "ksplc/lsp/spell.kspl" //<
     //< Where the hover's one-line signature holds its own copy of the width
     //<
     //< The copy must agree with the formatter's width. If they differ, the hover breaks a signature
     //< the source keeps on one line, or keeps one it broke. Neither shows as a failure, only as
     //< a hover unlike the file.
-priv const hover_width_mark: U8[] = "priv const sig_one_line_max: Sz = "
+priv const HOVER_WIDTH_MARK: U8[] = "priv const SIG_ONE_LINE_MAX: Sz = "
 
-priv const hover_indent_mark: U8[] = "priv const sig_param_indent: U8[] = \"" //<
+priv const HOVER_INDENT_MARK: U8[] = "priv const SIG_PARAM_INDENT: U8[] = \"" //<
     //< Where the hover's parameter lines hold their own copy of one indentation level
-priv const indent_mark: U8[] = ".indent_width = " //< the formatter's level, in `width_file`
+priv const INDENT_MARK: U8[] = ".indent_width = " //< the formatter's level, in `WIDTH_FILE`
 
 priv fn source_level(arena: Arena$@): Sz //< the formatter's default level, 0 where unread
     //<
     //< **The first is the default** (`Config.default_fmt`); a later one is the `--style` reader's.
-    for got in scan.find_all(harness.read_under_root(width_file), indent_mark, ",", arena)
+    for got in scan.find_all(harness.read_under_root(WIDTH_FILE), INDENT_MARK, ",", arena)
         return got.trim_spaces().parse_size(0) catch 0
     return 0
 
@@ -311,15 +311,15 @@ priv fn check_hover_indent(arena: Arena$@) //<
     level: = source_level(arena)
     $bad: = List<|U8[]|>.new(arena)
     $seen: Sz = 0
-    for got in scan.find_all(harness.read_under_root(hover_width_file), hover_indent_mark, "\"",
+    for got in scan.find_all(harness.read_under_root(HOVER_WIDTH_FILE), HOVER_INDENT_MARK, "\"",
         arena)
         seen += 1
         if got.len != level || got.trim_spaces().len != 0 || level == 0
-            off: = arena.text().s(hover_width_file).s(": the hover indents a parameter by ")
+            off: = arena.text().s(HOVER_WIDTH_FILE).s(": the hover indents a parameter by ")
                 .s("\{got.len\}, the formatter by \{level\}").take()
             bad.push(off)
     if seen == 0
-        unread: = arena.text().s(hover_width_file).s(": `").s(hover_indent_mark)
+        unread: = arena.text().s(HOVER_WIDTH_FILE).s(": `").s(HOVER_INDENT_MARK)
             .s("` cannot be read, so the two indents cannot be held together").take()
         bad.push(unread)
     verdict.check_list("the hover indents a parameter by the formatter's level", seen, "indents",
@@ -331,17 +331,17 @@ priv fn check_hover_width(arena: Arena$@)
     $seen: Sz = 0
     // **The declaration closes on the line, not on a `;`**: the default notation writes no
     // terminator, and the `seen == 0` branch below reports "nothing read" explicitly.
-    for got in scan.find_all(harness.read_under_root(hover_width_file), hover_width_mark, "\n",
+    for got in scan.find_all(harness.read_under_root(HOVER_WIDTH_FILE), HOVER_WIDTH_MARK, "\n",
         arena)
         seen += 1
         n: = got.trim_spaces().parse_size(0) catch 0
         if n != limit || limit == 0
             bad
-                .push(arena.text().s(hover_width_file)
+                .push(arena.text().s(HOVER_WIDTH_FILE)
                 .s(": the hover lays out past \{n\}, the formatter ").s("wraps at \{limit\}").take())
     if seen == 0
         bad
-            .push(arena.text().s(hover_width_file).s(": `").s(hover_width_mark)
+            .push(arena.text().s(HOVER_WIDTH_FILE).s(": `").s(HOVER_WIDTH_MARK)
             .s("` cannot be read, so the two widths cannot be held together").take())
     verdict.check_list("the hover breaks a signature at the width the formatter wraps at", seen,
         "widths", bad@, "move both numbers, or take the copy out")

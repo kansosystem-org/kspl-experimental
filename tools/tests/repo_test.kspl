@@ -67,7 +67,7 @@ fn test_the_block_marks() //< a block comment's ends are per extension, empty wh
     assert(css.open.equals("/*") && css.close.equals("*/"), ".css's block is /* */")
     html: = path_kind.block_marks("kspage/port/web/page.html")
     assert(html.open.equals("<!--") && html.close.equals("-->"), ".html's block is <!-- -->")
-    // **KSPL has no block comment** ("Comments" in `../../docs/SPEC-language.md`).
+    // **KSPL has no block comment** ("Comments" in `../../docs/SPEC-programming-language.md`).
     assert(path_kind.block_marks("a/b.kspl").open.len == 0, ".kspl holds no block")
     assert(path_kind.block_marks("Makefile").open.len == 0, "Makefile holds no block")
     verdict.pass("the block's ends are chosen per extension, and one with none returns empty.")
@@ -134,14 +134,14 @@ fn test_a_set_is_named_as_make_names_it(arena: Arena$@) //< `-` for `_`, and not
     // The variant's own spelling is not a target's, so it must not run a set.
     assert(named("ci_shard_core", arena).len == 0, "the variant's spelling is refused")
     assert(named("ci-shard-none", arena).len == 0, "a shard no job runs as a set is refused")
-    for s in ci_gates.set_order
+    for s in ci_gates.SET_ORDER
         back: = named(s.variant_name().replace("_", "-", arena), arena)
         assert(back.equals(s.variant_name()), "every set reads back from its own name")
     verdict.pass("a set is named as make names it, and only so.")
 
 fn test_the_shards_part_ci() //< `ci` selects what the host runs natively
     verdict.start("[tools/ci_gates] how the gates are dealt out test...")
-    for g in ci_gates.gates
+    for g in ci_gates.GATES
         core: = ci_gates.Set.ci_shard_core.runs(g)
         rest: = ci_gates.Set.ci_shard_rest.runs(g)
         linux: = ci_gates.Set.ci_shard_linux.runs(g)
@@ -161,9 +161,9 @@ fn test_the_shards_part_ci() //< `ci` selects what the host runs natively
 // lines that look alike (expected SKIPs, a `pass` line saying "panic", make's other `***`).
 // ==========================================
 
-priv const win: U8[] = "win32" //< the platform the samples are judged for
+priv const WIN: U8[] = "win32" //< the platform the samples are judged for
 
-priv const log_unexpected_skip: U8[] =
+priv const LOG_UNEXPECTED_SKIP: U8[] =
     """
 pass extract-rest: kssrv builds and tests from a copy holding nothing else
 SKIP extract-rest: kssrv's own tests: kssrv: a link inside the root cannot get outside: a link cannot be made with `ln -s` in this environment
@@ -173,13 +173,13 @@ RESULT: ALL PASS (3 skipped) -> kssrv's own tests, kssrv's own tests, ksplc's ow
 # TEST SUITES (half A) PASSED (5 suites)
 """
 
-priv const log_label: U8[] = //< a gate whose check's label names the word SKIP
+priv const LOG_LABEL: U8[] = //< a gate whose check's label names the word SKIP
     """
 pass conventions: every SKIP reason the tree can print is held by a row
 RESULT: ALL PASS
 """
 
-priv const log_fail: U8[] =
+priv const LOG_FAIL: U8[] =
     """
 pass extract-ksplc: ksplc's suite cli passes from the copy
 FAIL extract-ksplc: ksplc's suite spawn passes from the copy: FAIL spawn: a prompt to a terminal shows before the read: [harness] it could not start
@@ -190,7 +190,7 @@ make[2]: *** [mk/test.mk:144: test-extract-ksplc] エラー 1
 make[2]: *** 未完了のジョブを待っています....
 """
 
-priv const log_panic: U8[] =
+priv const LOG_PANIC: U8[] =
     """
 FAIL extract-rest: std builds and tests from a copy holding nothing else: --- its last 4 lines ---
 pass Sys: a crash is 139, a panic 134, exit(3) 3, and a child exiting -1 reads as finished.
@@ -199,7 +199,7 @@ panic: a write of 4 GiB should send a piece at std/tests/net_test:460
 make: *** [Makefile:20: test] Error 134
 """
 
-priv const log_unread: U8[] =
+priv const LOG_UNREAD: U8[] =
     """
 ./out/ksplc_seed.exe ksplc/main.kspl out/stage1.c
 clang -std=c99 -O0 -g -c out/stage1.c -o out/stage1.o
@@ -209,7 +209,7 @@ out/stage1.c:1234:5: error: use of undeclared identifier 'kspl_x'
 make: *** [Makefile:210: out/ksplc_stage1.exe] エラー 1
 """
 
-priv const log_arm: U8[] =
+priv const LOG_ARM: U8[] =
     """
 #   SKIP: test-ksos-link arm-none-eabi-gcc was not found.
 RESULT: SKIPPED (no ARM toolchain)
@@ -217,18 +217,18 @@ RESULT: SKIPPED (no ARM toolchain)
 
 priv fn gate_named(log: U8[]): ci_gates.Gate //< the table's row for a gate, by its log's name
     $at: Sz = 0
-    for at < ci_gates.gates.len && !ci_gates.gates[at].log.equals(log)
+    for at < ci_gates.GATES.len && !ci_gates.GATES[at].log.equals(log)
         at += 1
-    assert(at < ci_gates.gates.len, "the samples name gates of the table")
-    return ci_gates.gates[at]
+    assert(at < ci_gates.GATES.len, "the samples name gates of the table")
+    return ci_gates.GATES[at]
 
 priv fn sample(log: U8[], text: U8[], ended: U8[], arena: Arena$@): Outcome //<
     //< What one sample gate left, judged for Windows
-    j: = ci_gates.Judge::{ .platform = win, .relaxed = "" }
+    j: = ci_gates.Judge::{ .platform = WIN, .relaxed = "" }
     return ci_gates.outcome_of(gate_named(log), text, ended, j@, arena)
 
 priv fn summarised(outs: List<|Outcome|>@, arena: Arena$@): U8[] //< the screen's summary of them
-    j: = ci_gates.Judge::{ .platform = win, .relaxed = "" }
+    j: = ci_gates.Judge::{ .platform = WIN, .relaxed = "" }
     $b: = Str_builder.new()
     defer b.free()
     ci_gates.digest_plain(outs, 12I64, j@, b@)
@@ -247,9 +247,9 @@ fn test_a_green_round_stays_short(arena: Arena$@) //<
     $outs: = List<|Outcome|>.new(arena)
     outs
         .push(sample("selfhost", "RESULT: ALL PASS (self-hosting, c backend)\n", "0 30\n", arena))
-    outs.push(sample("link_abi", log_arm, "0 5\n", arena))
+    outs.push(sample("link_abi", LOG_ARM, "0 5\n", arena))
     // A check's label may name the word: a line opening with `pass` is no skip.
-    outs.push(sample("docs", log_label, "0 1\n", arena))
+    outs.push(sample("docs", LOG_LABEL, "0 1\n", arena))
     p: = summarised(outs@, arena)
     assert(p.find_str("#   selfhost       PASS 30s\n").is_some(), "a gate that passed is one line")
     assert(p.find_str("#   docs           PASS 1s\n").is_some(),
@@ -278,8 +278,8 @@ fn test_an_unexpected_skip_is_named_last(arena: Arena$@) //<
     //< The SKIP that failed a gate is the summary's last word, marked apart from the expected ones
     verdict.start("[tools/ci_gates] a gate failing on a SKIP no row holds test...")
     $outs: = List<|Outcome|>.new(arena)
-    outs.push(sample("suites_a", log_unexpected_skip, "1 270\n", arena))
-    outs.push(sample("link_abi", log_arm, "0 9\n", arena))
+    outs.push(sample("suites_a", LOG_UNEXPECTED_SKIP, "1 270\n", arena))
+    outs.push(sample("link_abi", LOG_ARM, "0 9\n", arena))
     p: = summarised(outs@, arena)
     assert(p.find_str("#   suites_a       FAIL 270s    3 SKIP lines, 1 UNEXPECTED\n").is_some(),
         "the gate's row counts the SKIP that failed it apart")
@@ -299,7 +299,7 @@ fn test_a_fail_line_is_named_last(arena: Arena$@) //<
     //< A FAIL line comes first among a gate's causes
     verdict.start("[tools/ci_gates] a gate failing on a FAIL line test...")
     $outs: = List<|Outcome|>.new(arena)
-    outs.push(sample("suites_a", log_fail, "2 418\n", arena))
+    outs.push(sample("suites_a", LOG_FAIL, "2 418\n", arena))
     p: = summarised(outs@, arena)
     first: =
         "#   suites_a: FAIL extract-ksplc: ksplc's suite spawn passes from the copy: FAIL spawn: a \
@@ -318,7 +318,7 @@ fn test_a_fail_line_is_named_last(arena: Arena$@) //<
 fn test_a_panic_is_named_last(arena: Arena$@) //< a panic inside a quoted tail is found
     verdict.start("[tools/ci_gates] a gate failing on a panic test...")
     $outs: = List<|Outcome|>.new(arena)
-    outs.push(sample("suites_a", log_panic, "2 134\n", arena))
+    outs.push(sample("suites_a", LOG_PANIC, "2 134\n", arena))
     p: = summarised(outs@, arena)
     first: =
         "#   suites_a: panic: a write of 4 GiB should send a piece at std/tests/net_test:460\n#   \
@@ -332,7 +332,7 @@ fn test_a_log_saying_nothing_shows_its_tail(arena: Arena$@) //<
     //< Where no line of the gate's own names a cause, its last lines stand in
     verdict.start("[tools/ci_gates] a gate failing with nothing recognisable test...")
     $outs: = List<|Outcome|>.new(arena)
-    outs.push(sample("selfhost", log_unread, "2 13\n", arena))
+    outs.push(sample("selfhost", LOG_UNREAD, "2 13\n", arena))
     outs.push(sample("lint", "", "", arena))
     p: = summarised(outs@, arena)
     first: =
@@ -394,8 +394,8 @@ fn test_the_page_lists_what_needs_attention(arena: Arena$@) //<
     verdict.start("[tools/ci_gates] the summary page test...")
     $outs: = List<|Outcome|>.new(arena)
     outs.push(sample("selfhost", "RESULT: ALL PASS\n", "0 30\n", arena))
-    outs.push(sample("link_abi", log_arm, "0 5\n", arena))
-    outs.push(sample("debug", log_fail, "1 7\n", arena))
+    outs.push(sample("link_abi", LOG_ARM, "0 5\n", arena))
+    outs.push(sample("debug", LOG_FAIL, "1 7\n", arena))
     $md: = Str_builder.new()
     defer md.free()
     ci_gates.digest_md(outs@, 4I64, "linux ci-shard-core", md@)

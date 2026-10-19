@@ -33,7 +33,7 @@ import "std/mem" { Arena, dealloc }
 import "std/str" { Str_builder }
 import "std/sys"
 
-priv const layout_scratch_bytes: Sz = 8 * 1024 * 1024 //<
+priv const LAYOUT_SCRATCH_BYTES: Sz = 8 * 1024 * 1024 //<
     //< The scratch area for converting the indentation notation
     //<
     //< Caution: **Make it well larger than one document.** The converted text is copied into the
@@ -88,7 +88,7 @@ priv fn init_doc_compiler(server: Server$@, ptr: Doc_state$@, src: U8[]?): pipel
     compiler.parse_file(doc_path(ptr.uri_perm), src, false) catch {}
     return compiler
 
-priv fn search_word(hint: U8[], src: U8[], params: json.Val): U8[] //<
+priv fn search_word(hint: U8[], src: U8[], params: json.Value): U8[] //<
     //< The name used to pre-filter the files to read
     //<
     //< Where `hint` is empty it is taken from the source at `params`' position. **The source holds
@@ -142,7 +142,7 @@ priv fn workspace_source(server: Server$@, uri: U8[]): U8[]? //<
     return .some(base_core.arena.dup_str(mended_from_disk(src)))
 
 priv fn build_workspace_state(server: Server$@, target_uri: U8[], search_hint: U8[],
-    params: json.Val): Doc_state$@
+    params: json.Value): Doc_state$@
     target_src: = workspace_source(server, target_uri)
     ptr: = base_core.arena
         .create(Doc_state::{ .uri_perm = base_core.arena.dup_str(target_uri),
@@ -201,7 +201,7 @@ priv fn build_workspace_state(server: Server$@, target_uri: U8[], search_hint: U
     ptr.source_map = compiler.source_map
     return ptr
 
-priv const test_poison_scheme: U8[] = "kspl-test-poison:" //<
+priv const TEST_POISON_SCHEME: U8[] = "kspl-test-poison:" //<
     //< The URI scheme of a document whose analysis crashes the worker, a test hook for quarantine
     //<
     //< An editor names a document by `file:` or `untitled:`, so no real one reaches it, as no
@@ -209,7 +209,7 @@ priv const test_poison_scheme: U8[] = "kspl-test-poison:" //<
     //< the supervisor starts crashes on it again, as on a text that really crashes the analysis.
 
 priv fn build_document_state(server: Server$@, src: U8[], uri: U8[], send_diag: Bool): Doc_state$@
-    if uri.starts_with(test_poison_scheme)
+    if uri.starts_with(TEST_POISON_SCHEME)
         panic("injected test crash while analysing a document")
     uri_perm: = base_core.arena.dup_str(uri)
     src_perm: = base_core.arena.dup_str(src)
@@ -259,7 +259,7 @@ priv fn build_document_state(server: Server$@, src: U8[], uri: U8[], send_diag: 
     return ptr
 
 impl Server
-    fn dispatch(r: Self$@, method: U8[], params: json.Val, id_val: json.Val, arena: Arena$@) //<
+    fn dispatch(r: Self$@, method: U8[], params: json.Value, id_val: json.Value, arena: Arena$@) //<
         //< It routes one message to its handler
         //<
         //< **Each method is named once, here**, with the state it is answered from built in its own
@@ -274,7 +274,7 @@ impl Server
             r.handle_did_open_change(method, params)
         else if method.equals("textDocument/didClose")
             r.handle_did_close(params)
-        else if method.equals(lsp_msg.restore_method)
+        else if method.equals(lsp_msg.RESTORE_METHOD)
             r.handle_restore(params)
         else if method.equals("textDocument/completion")
             r.handle_completion_req(params, id_val, arena)
@@ -313,7 +313,7 @@ impl Server
         else
             answer_unknown(id_val, arena)
 
-    priv fn document_state(r: Self$@, params: json.Val, id_val: json.Val, arena: Arena$@):
+    priv fn document_state(r: Self$@, params: json.Value, id_val: json.Value, arena: Arena$@):
         Doc_state$@? //<
             //< The analysed state of the document a request names
             //<
@@ -325,7 +325,7 @@ impl Server
         lsp_msg.send_null_response(id_val, arena)
         return .none
 
-    priv fn workspace_state(r: Self$@, params: json.Val): Doc_state$@ //<
+    priv fn workspace_state(r: Self$@, params: json.Value): Doc_state$@ //<
         //< The workspace analysed for one request; the caller frees it (`drop_workspace_state`)
         //<
         //< Caution: **Do not ask the client for the filter's search word.** The server holds the
@@ -353,14 +353,15 @@ impl Server
         ws.free()
         r.reset_current_state()
 
-    priv fn handle_completion_req(r: Self$@, params: json.Val, id_val: json.Val, arena: Arena$@) //<
-        //< It answers a completion request
-        //<
-        //< **Analyse again with the half-typed word replaced by a synthesized name.** Half-typed
-        //< text does not parse (the heading of `lsp/complete.kspl`). So `latest_state`, built from
-        //< that text, holds no tree and is not used.
-        //< Caution: **Always discard the built state and rewind**, or the arena grows with every
-        //< keystroke.
+    priv fn handle_completion_req(r: Self$@, params: json.Value, id_val: json.Value,
+        arena: Arena$@) //<
+            //< It answers a completion request
+            //<
+            //< **Analyse again with the half-typed word replaced by a synthesized name.**
+            //< Half-typed text does not parse (the heading of `lsp/complete.kspl`). So
+            //< `latest_state`, built from that text, holds no tree and is not used.
+            //< Caution: **Always discard the built state and rewind**, or the arena grows with
+            //< every keystroke.
         uri: = params.get("textDocument").get("uri").as_str().unwrap_or("")
         $text: U8[] = ""
         switch r.docs.open_text(uri)
@@ -391,10 +392,10 @@ impl Server
             r.latest_state = build_document_state(r, text, uri, false)
         default {}
 
-    fn handle_did_open_change(r: Self$@, method: U8[], params: json.Val)
+    fn handle_did_open_change(r: Self$@, method: U8[], params: json.Value)
         text_doc: = params.get("textDocument")
         uri: = text_doc.get("uri").as_str().unwrap_or("")
-        $src_val: = json.Val.null_val
+        $src_val: = json.Value.null_val
 
         if method.equals("textDocument/didOpen")
             src_val = text_doc.get("text")
@@ -407,7 +408,7 @@ impl Server
         sent: = src_val.as_str().unwrap_or("")
         // The indentation problems found while converting are **collected, not reported here** (the
         // reason is at `parse_load.layout_notes`); `pipeline.kspl` reports them once sema starts.
-        scratch: = Arena.new(layout_scratch_bytes)
+        scratch: = Arena.new(LAYOUT_SCRATCH_BYTES)
         defer scratch.free()
         $laid_notes: = List<|parse_layout.Note|>.new(scratch)
         if src: = r.store_converted(uri, sent, laid_notes@, scratch)
@@ -422,7 +423,7 @@ impl Server
                 parse_load.record_layout_notes(doc_name(uri).strip_kspl_ext(), kept)
             r.latest_state = build_document_state(r, src, uri, true)
 
-    fn handle_restore(r: Self$@, params: json.Val) //<
+    fn handle_restore(r: Self$@, params: json.Value) //<
         //< It takes one open document's text from a supervisor that restarted it, without analysing
         //<
         //< **A restart must not make the next answer wait for every open document.** The
@@ -431,7 +432,7 @@ impl Server
         //< two processes: watcher and analyser" in `../docs/DESIGN-tools.md`). The
         //< conversion's notes are dropped: that didOpen converts again and records them.
         text_doc: = params.get("textDocument")
-        scratch: = Arena.new(layout_scratch_bytes)
+        scratch: = Arena.new(LAYOUT_SCRATCH_BYTES)
         defer scratch.free()
         $notes: = List<|parse_layout.Note|>.new(scratch)
         _held: = r.store_converted(text_doc.get("uri").as_str().unwrap_or(""),
@@ -455,19 +456,19 @@ impl Server
         r.reset_current_state()
         return .some(src)
 
-    fn handle_did_close(r: Self$@, params: json.Val)
+    fn handle_did_close(r: Self$@, params: json.Value)
         uri: = params.get("textDocument").get("uri").as_str().unwrap_or("")
         if uri.len > 0
             r.docs.close(uri)
             if r.latest_state != null && r.latest_state.uri_perm.equals(uri)
                 r.reset_current_state()
 
-priv fn answer_initialize(params: json.Val, id_val: json.Val, arena: Arena$@)
+priv fn answer_initialize(params: json.Value, id_val: json.Value, arena: Arena$@)
     $b: = Json_builder.new(arena)
     // For stability CodeAction and InlayHint are disabled.
     // textDocumentSync=1 (Full): didChange's contentChanges[0].text is the whole document, so
     // handle_did_open_change looks only at index 0.
-    cap: = b.obj().set("textDocumentSync", b.int_val(lsp_msg.sync_full))
+    cap: = b.obj().set("textDocumentSync", b.int_val(lsp_msg.SYNC_FULL))
         .set("hoverProvider", b.bool_val(true)).set("definitionProvider", b.bool_val(true))
         .set("renameProvider", rename_options(params, b@))
         .set("referencesProvider", b.bool_val(true))
@@ -483,7 +484,7 @@ priv fn answer_initialize(params: json.Val, id_val: json.Val, arena: Arena$@)
     result: = b.obj().set("capabilities", cap).build()
     lsp_msg.send_response(id_val, result, arena)
 
-priv fn rename_options(params: json.Val, b: Json_builder$@): json.Val //<
+priv fn rename_options(params: json.Value, b: Json_builder$@): json.Value //<
     //< The rename capability: with `prepareProvider` where the client can ask it
     //<
     //< **Only a client that says it sends `prepareRename` is told it is answered.** The protocol
@@ -496,7 +497,7 @@ priv fn rename_options(params: json.Val, b: Json_builder$@): json.Val //<
     default {}
     return b.bool_val(true)
 
-priv fn completion_options($b: Json_builder): json.Val //<
+priv fn completion_options($b: Json_builder): json.Value //<
     //< The completion capability's options
     //<
     //< Caution: **Do not declare `triggerCharacters`.** Only the editor, which watches the typing,
@@ -504,7 +505,7 @@ priv fn completion_options($b: Json_builder): json.Val //<
     //< common complaint about this feature. It answers only when asked.
     return b.obj().build()
 
-priv fn answer_unknown(id_val: json.Val, arena: Arena$@) //<
+priv fn answer_unknown(id_val: json.Value, arena: Arena$@) //<
     //< A method this server does not handle: an error to a request, nothing to a notification
     switch id_val
     case .null_val {}

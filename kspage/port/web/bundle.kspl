@@ -17,13 +17,13 @@ import "std/mem" { dealloc }
 import "std/str" { Str_builder }
 import "std/sys"
 
-priv const mark_head: U8[] = "__KSPAGE_" //< the start of every mark
+priv const MARK_HEAD: U8[] = "__KSPAGE_" //< the start of every mark
     //<
     //< Every text starting with this is a mark, and an unknown one is refused. Let through
     //< silently, a typo shows only when the page is opened.
-priv const mark_wasm: U8[] = "__KSPAGE_WASM_BASE64__"
-priv const mark_file: U8[] = "__KSPAGE_FILE:"
-priv const mark_tail: U8[] = "__"
+priv const MARK_WASM: U8[] = "__KSPAGE_WASM_BASE64__"
+priv const MARK_FILE: U8[] = "__KSPAGE_FILE:"
+priv const MARK_TAIL: U8[] = "__"
 
 priv enum Bundle_error
     usage //< the argument count does not match
@@ -64,17 +64,17 @@ priv fn safe_name(name: U8[]): Bool //< whether it is safe as a text's name
 
 priv fn put_mark(out: Str_builder$@, page: U8[], at: Sz, dir: U8[], blob: U8[]): Sz!Bundle_error //<
     //< Writes out one mark's contents, and returns the length of the mark consumed
-    if page.starts_with(mark_wasm, at)
+    if page.starts_with(MARK_WASM, at)
         out.s(blob)
-        return mark_wasm.len
-    if !page.starts_with(mark_file, at)
+        return MARK_WASM.len
+    if !page.starts_with(MARK_FILE, at)
         io.err()
             .s("bundle: unknown mark: \
                 \{page.sub(at, 32 if at + 32 <= page.len else page.len - at)\}\n")
         throw .bad_mark
-    from: = at + mark_file.len
+    from: = at + MARK_FILE.len
     $end: Sz = 0
-    switch page.sub_from(from).find_str(mark_tail)
+    switch page.sub_from(from).find_str(MARK_TAIL)
     case .some(i)
         end = i
     case .none
@@ -90,7 +90,7 @@ priv fn put_mark(out: Str_builder$@, page: U8[], at: Sz, dir: U8[], blob: U8[]):
     body: = read_or_report(where.slice())!
     defer dealloc(Void$@::body.ptr)
     out.s(body)
-    return from + end + mark_tail.len - at
+    return from + end + MARK_TAIL.len - at
 
 priv fn bundle(template: U8[], wasm: U8[], out: U8[]): Void!Bundle_error
     page_raw: = read_or_report(template)!
@@ -100,8 +100,8 @@ priv fn bundle(template: U8[], wasm: U8[], out: U8[]): Void!Bundle_error
     page: = page_raw
     // Caution: **The wasm mark must be present** — a template without it bundles fine and fails
     // only when opened.
-    if page.find_str(mark_wasm).is_none()
-        io.err().s("bundle: the template has no \{mark_wasm\}: \{template\}\n")
+    if page.find_str(MARK_WASM).is_none()
+        io.err().s("bundle: the template has no \{MARK_WASM\}: \{template\}\n")
         throw .no_wasm
     blob: = base64.encode(blob_raw, null)
     defer dealloc(Void$@::blob.ptr)
@@ -113,7 +113,7 @@ priv fn bundle(template: U8[], wasm: U8[], out: U8[]): Void!Bundle_error
     defer built.free()
     $at: Sz = 0
     for at < page.len
-        switch page.sub_from(at).find_str(mark_head)
+        switch page.sub_from(at).find_str(MARK_HEAD)
         case .some(step)
             next: = at + step
             built.s(page.sub(at, step))

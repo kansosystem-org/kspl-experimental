@@ -1,10 +1,10 @@
 #!/usr/bin/env -S ksplc run
 //< It checks from both sides that an extension method needs its defining file imported
 //<
-//< The convention is in "An extension method requires the import" in `docs/SPEC-language.md`.
-//< It is not a fixture case (`tests/negative/`), which is one file. "Visible yet not imported"
-//< needs **three files**: one declares the type, one adds the method, one brings it into the
-//< caller's unit.
+//< The convention is in "An extension method requires the import" in
+//< `docs/SPEC-programming-language.md`. It is not a fixture case (`tests/negative/`), which is one
+//< file. "Visible yet not imported" needs **three files**: one declares the type, one adds the
+//< method, one brings it into the caller's unit.
 //< Caution: Always pair a case that fires with one that does not. The gate breaks whether it is
 //< too tight or too loose.
 import "ksplc/tests/support/harness"
@@ -19,7 +19,7 @@ import "std/verdict"
 // The base of three files; only `main.kspl` is swapped per case. `mid.kspl` only brings
 // `ext.kspl` into the compilation unit; without it the method is undefined and the gate is never
 // reached.
-priv const ty_src: U8[] = """pub struct Point
+priv const TY_SRC: U8[] = """pub struct Point
   pub x: I32
 
 pub struct Box<|T|>
@@ -27,7 +27,7 @@ pub struct Box<|T|>
 
 """
 
-priv const ext_src: U8[] =
+priv const EXT_SRC: U8[] =
     """import "ty"
 impl ty.Point
   pub fn plain(r: Self@): I32 { return r.x * 2; }
@@ -37,10 +37,10 @@ impl ty.Point
 impl<|T|> ty.Box<|T|>
   pub fn unbox(r: Self@): T { return r.v; }
 
-pub const ext_tag: I32 = 9
+pub const EXT_TAG: I32 = 9
 """
 
-priv const mid_src: U8[] =
+priv const MID_SRC: U8[] =
     """import "ty"
 import "ext"
 pub fn touch(): I32
@@ -49,19 +49,19 @@ pub fn touch(): I32
 
 """
 
-priv const head: U8[] = """import "std/io"
+priv const HEAD: U8[] = """import "std/io"
 import "ty"
 import "mid"
 """
 
-priv const body: U8[] = """fn main(): I32
+priv const BODY: U8[] = """fn main(): I32
   p: ty.Point = ty.Point::{ .x = 21 }
 """
 
-priv const import_ext: U8[] = """import "ext"
+priv const IMPORT_EXT: U8[] = """import "ext"
 """
 
-priv const import_ext_sel: U8[] = """import "ext" { ext_tag }
+priv const IMPORT_EXT_SEL: U8[] = """import "ext" { EXT_TAG }
 """
 
 priv fn check_case(slot: U8[], name: U8[], main_src: U8[], expect: U8[][], deny: U8[][],
@@ -72,7 +72,7 @@ priv fn check_case(slot: U8[], name: U8[], main_src: U8[], expect: U8[][], deny:
         //< root every case fails with the same "cannot read".
     dir: = harness.sandbox(arena.text().s("extimp_\{slot\}").take())
     fs.write_tree(dir, U8[][]::{ "ty.kspl", "ext.kspl", "mid.kspl", "main.kspl" },
-        U8[][]::{ ty_src, ext_src, mid_src, main_src }, arena) catch
+        U8[][]::{ TY_SRC, EXT_SRC, MID_SRC, main_src }, arena) catch
         verdict.check(name, false, "cannot place the material")
         return
     $args: = List<|U8[]|>.new(arena)
@@ -97,25 +97,25 @@ fn main(): I32
     io.out().s("# requiring the import for an extension method: 12\n")
 
     check_case("plain", "it cannot be called with no import",
-        main_src(U8[][]::{ head, body, "  io.out().s(\"\\{p.plain()\\}\\n\")\n  return 0\n\n" }),
+        main_src(U8[][]::{ HEAD, BODY, "  io.out().s(\"\\{p.plain()\\}\\n\")\n  return 0\n\n" }),
         U8[][]::{ "cannot call extension method 'plain'" }, none, false, arena)
 
     // A generic method's Sema_symbol is not made until the monomorphisation. Unless the caller
     // makes it, the visibility check and the import requirement are skipped entirely.
     check_case("gen", "a generic method cannot be called with no import either",
-        main_src(U8[][]::{ head, body,
+        main_src(U8[][]::{ HEAD, BODY,
         "  io.out().s(\"\\{p.gen<|I32|>(0)\\}\\n\")\n  return 0\n\n" }),
         U8[][]::{ "cannot call extension method 'gen'" }, none, false, arena)
 
     check_case("privgen", "a priv generic method cannot be called even once imported",
-        main_src(U8[][]::{ head, import_ext, body,
+        main_src(U8[][]::{ HEAD, IMPORT_EXT, BODY,
         "  io.out().s(\"\\{p.hidden_gen<|I32|>(0)\\}\\n\")\n  return 0\n\n" }),
         U8[][]::{ "cannot access symbol" }, none, false, arena)
 
     // Keep the name as the user wrote it; a synthesised one (`type.method`, `..._Box_I32_unbox`) is
     // not found by a search of the original text.
     check_case("spelling", "the diagnostic's name is as the user wrote it",
-        main_src(U8[][]::{ head,
+        main_src(U8[][]::{ HEAD,
         """fn main(): I32
   b: ty.Box<|I32|> = ty.Box<|I32|>::{ .v = 7 }
   io.out().s("\{b.unbox()\}\n")
@@ -125,14 +125,14 @@ fn main(): I32
         U8[][]::{ "cannot call extension method 'unbox'" }, U8[][]::{ "Box_I32" }, false, arena)
 
     check_case("alias", "an import alias satisfies it",
-        main_src(U8[][]::{ head, import_ext, body,
+        main_src(U8[][]::{ HEAD, IMPORT_EXT, BODY,
         "  io.out().s(\"\\{p.plain()\\}\\n\")\n  return 0\n\n" }), none, U8[][]::{ "error:" }, false,
         arena)
 
     // A selective import is no less "that file explicitly imported".
     check_case("selective", "a selective import satisfies it",
-        main_src(U8[][]::{ head, import_ext_sel, body,
-        "  io.out().s(\"\\{p.plain() + ext_tag\\}\\n\")\n  return 0\n\n" }), none,
+        main_src(U8[][]::{ HEAD, IMPORT_EXT_SEL, BODY,
+        "  io.out().s(\"\\{p.plain() + EXT_TAG\\}\\n\")\n  return 0\n\n" }), none,
         U8[][]::{ "error:" }, false, arena)
 
     // An impl on a built-in type (`impl U8[]`) is an extension like any other: its file must be
@@ -213,7 +213,7 @@ fn main(): I32
     // The import that makes an extension method hold must not be called "unused": following that
     // advice would stop it compiling.
     check_case("notunused", "no I0401 on the selective import that makes an extension method hold",
-        main_src(U8[][]::{ head, import_ext_sel, body,
+        main_src(U8[][]::{ HEAD, IMPORT_EXT_SEL, BODY,
         "  io.out().s(\"\\{p.plain() + mid.touch()\\}\\n\")\n  return 0\n\n" }), none,
         U8[][]::{ "[I0401]", "[I0401]" }, true, arena)
     return harness.finish()

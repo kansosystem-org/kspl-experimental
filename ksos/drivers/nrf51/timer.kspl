@@ -11,39 +11,39 @@ import "ksos/drivers/mmio"
 // counter reaches CC[0]. The interrupt stays raised until it is written back to 0.
 // ==========================================
 
-const irq: U32 = 8 //< TIMER0's NVIC line
+const IRQ: U32 = 8 //< TIMER0's NVIC line
 
-const base: U32 = 0x40008000
-const tasks_start: U32 = base + 0x000
-const tasks_stop: U32 = base + 0x004
-const tasks_clear: U32 = base + 0x00c
-const events_compare0: U32 = base + 0x140
-const shorts: U32 = base + 0x200
-const intenset: U32 = base + 0x304
-const mode: U32 = base + 0x504
-const bitmode: U32 = base + 0x508
-const prescaler: U32 = base + 0x510
-const cc0: U32 = base + 0x540
+const BASE: U32 = 0x40008000
+const TASKS_START: U32 = BASE + 0x000
+const TASKS_STOP: U32 = BASE + 0x004
+const TASKS_CLEAR: U32 = BASE + 0x00c
+const EVENTS_COMPARE0: U32 = BASE + 0x140
+const SHORTS: U32 = BASE + 0x200
+const INTENSET: U32 = BASE + 0x304
+const MODE: U32 = BASE + 0x504
+const BITMODE: U32 = BASE + 0x508
+const PRESCALER: U32 = BASE + 0x510
+const CC0: U32 = BASE + 0x540
 
-const shorts_compare0_clear: U32 = 1U32 << 0
-const shorts_compare0_stop: U32 = 1U32 << 8
-const inten_compare0: U32 = 1U32 << 16
-const prescaler_1mhz: U32 = 4 // 16 MHz >> 4
+const SHORTS_COMPARE0_CLEAR: U32 = 1U32 << 0
+const SHORTS_COMPARE0_STOP: U32 = 1U32 << 8
+const INTEN_COMPARE0: U32 = 1U32 << 16
+const PRESCALER_1MHZ: U32 = 4 // 16 MHz >> 4
 
 fn start_once(us: U32) //< raises TIMER0's interrupt once, `us` microseconds from now
     //<
     //< The counter stops and clears itself at the compare (SHORTS), so it raises nothing more
     //< until the next call. The handler must call `ack`.
-    mmio.write32(tasks_stop, 1)
-    mmio.write32(tasks_clear, 1)
-    mmio.write32(mode, 0)
-    mmio.write32(bitmode, 3)
-    mmio.write32(prescaler, prescaler_1mhz)
-    mmio.write32(cc0, us)
-    mmio.write32(shorts, shorts_compare0_clear | shorts_compare0_stop)
-    mmio.write32(events_compare0, 0)
-    mmio.write32(intenset, inten_compare0)
-    mmio.write32(tasks_start, 1)
+    mmio.write32(TASKS_STOP, 1)
+    mmio.write32(TASKS_CLEAR, 1)
+    mmio.write32(MODE, 0)
+    mmio.write32(BITMODE, 3)
+    mmio.write32(PRESCALER, PRESCALER_1MHZ)
+    mmio.write32(CC0, us)
+    mmio.write32(SHORTS, SHORTS_COMPARE0_CLEAR | SHORTS_COMPARE0_STOP)
+    mmio.write32(EVENTS_COMPARE0, 0)
+    mmio.write32(INTENSET, INTEN_COMPARE0)
+    mmio.write32(TASKS_START, 1)
 
 fn ack() //< lowers the interrupt (clears COMPARE[0]'s event); its handler calls it first
-    mmio.write32(events_compare0, 0)
+    mmio.write32(EVENTS_COMPARE0, 0)

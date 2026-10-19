@@ -12,28 +12,28 @@ import "ksos/kernel/sync"
 import "ksos/kernel/task"
 import "std/ring"
 
-const uart0_intstatus: U32 = 0x4000400c
-const ctrl_rx_inten: U32 = 0x8
-const intstatus_rx: U32 = 0x2
+const UART0_INTSTATUS: U32 = 0x4000400c
+const CTRL_RX_INTEN: U32 = 0x8
+const INTSTATUS_RX: U32 = 0x2
 
-const uart0_rx_irq: U32 = 0 // external IRQ0 (the mps2-an385's UART0 RX)
+const UART0_RX_IRQ: U32 = 0 // external IRQ0 (the mps2-an385's UART0 RX)
 
-const rx_size: Sz = 16 //< how many received bytes wait for the task before more are dropped
+const RX_SIZE: Sz = 16 //< how many received bytes wait for the task before more are dropped
 // The bytes the handler has taken from the data register, oldest first. **One count of `rx_held`
 // stands for each byte here**, so `getc` reads only what a count promised.
-priv $rx_buf: U8[rx_size]
-priv $rx: ring.Ring<|rx_size|>
+priv $rx_buf: U8[RX_SIZE]
+priv $rx: ring.Ring<|RX_SIZE|>
 priv $rx_held: sync.Sem
 priv $rx_isr_count: U32 = 0
 priv $rx_received: U32 = 0
 priv $rx_dropped: U32 = 0
 
 fn init() //< sets the baud rate, enables TX and RX, the RX interrupt, and NVIC IRQ0
-    rx = ring.Ring<|rx_size|>.new(U8$[]::rx_buf) // before the interrupt can fire
+    rx = ring.Ring<|RX_SIZE|>.new(U8$[]::rx_buf) // before the interrupt can fire
     rx_held.init(0)
     uart.init() // the baud divisor: QEMU ignores it, a real board does not
-    mmio.write32(uart.uart0_ctrl, uart.ctrl_tx_enable | uart.ctrl_rx_enable | ctrl_rx_inten)
-    scs.enable_irq(uart0_rx_irq)
+    mmio.write32(uart.UART0_CTRL, uart.CTRL_TX_ENABLE | uart.CTRL_RX_ENABLE | CTRL_RX_INTEN)
+    scs.enable_irq(UART0_RX_IRQ)
 
 fn putc(c: U8): Void!mmio.Driver_error //< sends one byte (sending still polls)
     //<
@@ -50,10 +50,10 @@ fn puts(s: U8[]): Void!mmio.Driver_error
 // cause of a byte that arrived in between is lost with it, and that byte is never taken.
 #export
 fn uart0_irq0_handler()
-    mmio.write32(uart0_intstatus, intstatus_rx) // write-1-to-clear
+    mmio.write32(UART0_INTSTATUS, INTSTATUS_RX) // write-1-to-clear
     rx_isr_count += 1
-    for (mmio.read32(uart.uart0_state) & uart.state_rx_full) != 0
-        one: = U8[1]::{ U8::mmio.read32(uart.uart0_data) }
+    for (mmio.read32(uart.UART0_STATE) & uart.STATE_RX_FULL) != 0
+        one: = U8[1]::{ U8::mmio.read32(uart.UART0_DATA) }
         if rx.write(U8[]::one) == 1
             rx_received += 1
             rx_held.give() // wakes a task waiting in getc

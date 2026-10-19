@@ -24,9 +24,9 @@ import "std/json" + { Json_builder }
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
 
-priv const no_name: U8[] = "there is no name here to rename"
+priv const NO_NAME: U8[] = "there is no name here to rename"
 
-fn handle_prepare(state: Doc_state$@, params: json.Val, id_val: json.Val, arena: Arena$@) //<
+fn handle_prepare(state: Doc_state$@, params: json.Value, id_val: json.Value, arena: Arena$@) //<
     //< `textDocument/prepareRename`: the name's range and text, or why it cannot be renamed
     //<
     //< **Only where it is declared is asked**, from the document's own analysis: the uses need the
@@ -34,12 +34,12 @@ fn handle_prepare(state: Doc_state$@, params: json.Val, id_val: json.Val, arena:
     switch lsp_uses.target_at(state, params)
     case .some(t)
         if state.sema == null
-            lsp_msg.send_error_response(id_val, lsp_msg.request_failed, no_name, arena)
+            lsp_msg.send_error_response(id_val, lsp_msg.REQUEST_FAILED, NO_NAME, arena)
             return
         name: = t.name.text.get_generic_base_name()
         def_file: = t.def.loc.file()
         if def_file.len > 0 && !in_workspace(def_file, arena)
-            lsp_msg.send_error_response(id_val, lsp_msg.request_failed,
+            lsp_msg.send_error_response(id_val, lsp_msg.REQUEST_FAILED,
                 read_only(name, def_file, true, arena), arena)
             return
         pos: = lsp_uses.position_of(state.sema, t.name)
@@ -48,16 +48,16 @@ fn handle_prepare(state: Doc_state$@, params: json.Val, id_val: json.Val, arena:
         lsp_msg.send_response(id_val,
             b.obj().set("range", range).set("placeholder", b.str_val(name)).build(), arena)
     default
-        lsp_msg.send_error_response(id_val, lsp_msg.request_failed, no_name, arena)
+        lsp_msg.send_error_response(id_val, lsp_msg.REQUEST_FAILED, NO_NAME, arena)
 
-fn handle_rename(ws_state: Doc_state$@, parser: kspeg.Target$@, params: json.Val,
-    id_val: json.Val, arena: Arena$@) //<
+fn handle_rename(ws_state: Doc_state$@, parser: kspeg.Target$@, params: json.Value,
+    id_val: json.Value, arena: Arena$@) //<
         //< `textDocument/rename`: the uses as per-file edits, or why the rename is refused
         //<
         //< **Rewrite the declaration too**, or the workspace no longer compiles.
     new_name: = params.get("newName").as_str().unwrap_or("")
     if new_name.len == 0
-        lsp_msg.send_error_response(id_val, lsp_msg.invalid_params,
+        lsp_msg.send_error_response(id_val, lsp_msg.INVALID_PARAMS,
             "a rename names the new name in 'newName'", arena)
         return
     $t: = Target::{ .def = null, .name = null, .stands_for = null }
@@ -65,7 +65,7 @@ fn handle_rename(ws_state: Doc_state$@, parser: kspeg.Target$@, params: json.Val
     case .some(got)
         t = got
     default
-        lsp_msg.send_error_response(id_val, lsp_msg.request_failed, no_name, arena)
+        lsp_msg.send_error_response(id_val, lsp_msg.REQUEST_FAILED, NO_NAME, arena)
         return
     old_name: = t.name.text.get_generic_base_name()
     $why: = name_refusal(new_name, parser, arena)
@@ -77,11 +77,11 @@ fn handle_rename(ws_state: Doc_state$@, parser: kspeg.Target$@, params: json.Val
         why = Clash::{ .c = ws_state.sema, .old_name = old_name, .new_name = new_name,
             .arena = arena }.refusal(spots@)
     if why.len > 0
-        lsp_msg.send_error_response(id_val, lsp_msg.request_failed, why, arena)
+        lsp_msg.send_error_response(id_val, lsp_msg.REQUEST_FAILED, why, arena)
         return
     send_edits(spots@, new_name, id_val, arena)
 
-priv fn send_edits(spots: List<|Spot|>@, new_name: U8[], id_val: json.Val, arena: Arena$@) //<
+priv fn send_edits(spots: List<|Spot|>@, new_name: U8[], id_val: json.Value, arena: Arena$@) //<
     //< The rename's answer: the places as per-file edits, in the walk's order
     $b: = Json_builder.new(arena)
     $changes: = b.obj()
@@ -154,7 +154,7 @@ priv fn place_refusal(spots: List<|Spot|>@, name: U8[], arena: Arena$@): U8[] //
 // ③ The new name is free where it lands
 // ==========================================
 
-priv const max_scan_depth: Sz = 200 //< how deep a scope is searched for its declarations
+priv const MAX_SCAN_DEPTH: Sz = 200 //< how deep a scope is searched for its declarations
 
 priv fn is_scope(n: Ast_node$@): Bool //< whether a node opens a scope its declarations belong to
     switch n.kind_id
@@ -197,7 +197,7 @@ priv fn declared_in(scope: Ast_node$@, file: U8[], name: U8[], depth: Sz): Ast_n
             continue
         if decl_name(child).equals(name)
             return .some(child)
-        if !is_scope(child) && depth < max_scan_depth
+        if !is_scope(child) && depth < MAX_SCAN_DEPTH
             if found: = declared_in(child, file, name, depth + 1)
                 return .some(found)
     return .none

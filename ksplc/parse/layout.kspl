@@ -53,12 +53,12 @@ enum Note_kind
         //< goes on and this note is the one report (`if x { f() }; g()` reads as `if x { f() }
         //< g()`).
 
-priv const tab_byte: U8 = '\t' //< one level of indentation
+priv const TAB_BYTE: U8 = '\t' //< one level of indentation
     //<
     //< Caution: **Do not guess its width.** Levels are told apart only by deeper or shallower; a
     //< fixed width would mistake a line continued by indentation for a level.
 
-priv const cr_byte: U8 = '\r' //< the `\r` at the end of a line (CRLF)
+priv const CR_BYTE: U8 = '\r' //< the `\r` at the end of a line (CRLF)
     //<
     //< **Do not treat it as a character.** A CRLF blank line would read as not blank, and a
     //< terminator or brace put after the `\r` breaks the text. **Do not drop a `\r` inside a
@@ -67,16 +67,16 @@ priv const cr_byte: U8 = '\r' //< the `\r` at the end of a line (CRLF)
 // The block-opening headings that need no `;` after the block closes; **any other gets one** (the
 // `r: = f() catch` kind, a block inside an expression). `"label:"` is a marker: no name contains a
 // `:`.
-priv const block_heads: U8[][14] = ::{ "fn", "struct", "enum", "trait", "impl", "extern", "if",
+priv const BLOCK_HEADS: U8[][14] = ::{ "fn", "struct", "enum", "trait", "impl", "extern", "if",
     "else", "for", "switch", "case", "default", "defer", "label:" }
 
-priv const labelled_heads: U8[][3] = ::{ "for", "switch", "if" } //<
+priv const LABELLED_HEADS: U8[][3] = ::{ "for", "switch", "if" } //<
     //< What a label can stand before (a bare block's label stands alone: `is_label_only`)
     //<
     //< Caution: **Not every block heading**: `p: fn(x: I32): Bool = fn(…)` would read as the label
     //< `p:` before `fn`, and the closure's block then got no `;` after it.
 
-priv const head_skips: U8[][2] = ::{ "pub", "priv" } //<
+priv const HEAD_SKIPS: U8[][2] = ::{ "pub", "priv" } //<
     //< The words that can come before a heading without being the heading
 
 priv struct Phys //< one physical line
@@ -118,7 +118,7 @@ priv struct Insert //< one insertion
         //< **A one-line block's `;` replaces the space before its `}`**, so no column moves
         //< (diagnostics and the editor read positions from the converted text).
 
-priv const max_line_opens: Sz = 32 //< how many brackets one physical line can hold open at once
+priv const MAX_LINE_OPENS: Sz = 32 //< how many brackets one physical line can hold open at once
 
 priv struct Line_open //< a bracket opened on the physical line being walked
     at: Sz
@@ -196,7 +196,7 @@ priv fn scan_phys(src: U8[], notes: List<|Note|>$@, semis: List<|Insert|>$@, are
         opens.has_closed = false
         // Caution: **Note a tab only on a line with contents.** A line of only tabs is blank, and
         // a note on it leaves nothing to fix.
-        tab_at: = i if i < src.len && src[i] == tab_byte && open_str == 0 else -1
+        tab_at: = i if i < src.len && src[i] == TAB_BYTE && open_str == 0 else -1
         $code_end: = i
         $done: = false
         for !done && i < src.len
@@ -252,7 +252,7 @@ priv fn scan_phys(src: U8[], notes: List<|Note|>$@, semis: List<|Insert|>$@, are
                 i += 1
                 code_end = i + 1
             i += 1
-            if c != ' ' && c != tab_byte && c != cr_byte
+            if c != ' ' && c != TAB_BYTE && c != CR_BYTE
                 code_end = i
         line_end: = i
         if i < src.len
@@ -272,8 +272,8 @@ priv fn scan_phys(src: U8[], notes: List<|Note|>$@, semis: List<|Insert|>$@, are
     return out
 
 priv struct Line_opens //< the brackets held open on the physical line being walked
-    items: Line_open[max_line_opens]
-    n: Sz //< how many are open; past `max_line_opens` the ones beyond are counted, not kept
+    items: Line_open[MAX_LINE_OPENS]
+    n: Sz //< how many are open; past `MAX_LINE_OPENS` the ones beyond are counted, not kept
     import_seg: Bool //<
         //< the statement outside every bracket is an `import`, whose `{ … }` is a value
     seg_from: Sz //< where the statement outside every bracket starts
@@ -289,7 +289,7 @@ impl Line_opens
         //< `}` before it already ended** (`block_end`), which the caller turns into a space.
         c: = src[i]
         if c == '(' || c == '[' || c == '{'
-            if r.n < max_line_opens
+            if r.n < MAX_LINE_OPENS
                 value: =
                     c == '{' &&
                     (r.import_seg || (i >= 2 && src[i - 1] == ':' && src[i - 2] == ':'))
@@ -299,11 +299,11 @@ impl Line_opens
         else if c == ')' || c == ']' || c == '}'
             if r.n > 0
                 r.n -= 1
-                if c == '}' && r.n < max_line_opens && r.items[r.n].kind == '{'
+                if c == '}' && r.n < MAX_LINE_OPENS && r.items[r.n].kind == '{'
                     supply_block_end(src, r.items[r.n], i, semis)
                     from: =
                         (r.items[r.n - 1].stmt_from
-                        if r.n > 0 && r.n <= max_line_opens && r.items[r.n - 1].kind == '{'
+                        if r.n > 0 && r.n <= MAX_LINE_OPENS && r.items[r.n - 1].kind == '{'
                         else r.seg_from)
                     r.has_closed = true
                     r.closed_at = i
@@ -311,11 +311,11 @@ impl Line_opens
                         is_block_head(heading_of(src, skip_spaces(src, from, i), i))
         else if c == ';'
             $before: = i
-            for before > 0 && (src[before - 1] == ' ' || src[before - 1] == tab_byte)
+            for before > 0 && (src[before - 1] == ' ' || src[before - 1] == TAB_BYTE)
                 before -= 1
             if r.has_closed && r.closed_ends && before > 0 && before - 1 == r.closed_at
                 return true
-            if r.n > 0 && r.n <= max_line_opens && r.items[r.n - 1].kind == '{'
+            if r.n > 0 && r.n <= MAX_LINE_OPENS && r.items[r.n - 1].kind == '{'
                 r.items[r.n - 1].stmt_from = i + 1
         return false
 
@@ -337,7 +337,7 @@ priv fn supply_block_end(src: U8[], o: Line_open, close: Sz, semis: List<|Insert
     //< It follows the same rule as a line's end: a statement ending in `}` takes one unless its
     //< heading opens a block.
     $last: = close - 1
-    for last > o.at && (src[last] == ' ' || src[last] == tab_byte)
+    for last > o.at && (src[last] == ' ' || src[last] == TAB_BYTE)
         last -= 1
     if last == o.at || src[last] == ';'
         return
@@ -465,7 +465,7 @@ priv fn joins_above(src: U8[], lead_start: Sz, lead_end: Sz, lead_indent: Sz, in
 priv fn holds_no_code(src: U8[], at: Sz): Bool //<
     //< Whether the line from `at`, outside every string, holds blanks and at most a line comment
     $j: = at
-    for j < src.len && (src[j] == ' ' || src[j] == tab_byte || src[j] == cr_byte)
+    for j < src.len && (src[j] == ' ' || src[j] == TAB_BYTE || src[j] == CR_BYTE)
         j += 1
     return j >= src.len || src[j] == '\n' || src.starts_with("//", j)
 
@@ -512,7 +512,7 @@ priv fn head_word(src: U8[], from: Sz, to: Sz): U8[] //< a logical line's leadin
     $word: U8[] = ""
     // Caution: **Limit the number of rounds.** Only the visibility and a label are skipped, so
     // anything beyond that is broken source (rejecting it is the compiler's job).
-    for _k in Range.asc(head_skips.len + 2)
+    for _k in Range.asc(HEAD_SKIPS.len + 2)
         $e: = s
         for e < to && src[e].is_alnum()
             e += 1
@@ -536,7 +536,7 @@ priv fn head_word(src: U8[], from: Sz, to: Sz): U8[] //< a logical line's leadin
             s = skip_spaces(src, e + 1, to)
             continue
         $skip: = false
-        for h in head_skips
+        for h in HEAD_SKIPS
             if word.equals(h)
                 skip = true
         if !skip
@@ -555,10 +555,10 @@ priv fn next_word(src: U8[], from: Sz, to: Sz): U8[]
     return src.sub(s, e - s)
 
 priv fn is_labelled_head(word: U8[]): Bool
-    return word.is_one_of(U8[][]::labelled_heads)
+    return word.is_one_of(U8[][]::LABELLED_HEADS)
 
 priv fn is_block_head(word: U8[]): Bool
-    return word.is_one_of(U8[][]::block_heads)
+    return word.is_one_of(U8[][]::BLOCK_HEADS)
 
 fn heads_a_block(code: U8[]): Bool //<
     //< Whether a line's leading word, after `pub` / `priv`, opens a block, or the line is a label
@@ -621,9 +621,8 @@ fn to_braces(src: U8[], notes: List<|Note|>$@, arena: Arena$@): U8[] //<
         // as the heading, so comparing with `<` would push the next heading while the level is
         // still open.
         for stack.len > 0 && cur.indent <= stack.get(stack.len - 1).indent
-            top: = stack.get(stack.len - 1)
-            stack.len -= 1
-            close_block(ins@, top, last_end)
+            if top: = stack.pop()
+                close_block(ins@, top, last_end)
         // Whether the siblings are aligned; by here `cur` is a direct child of the top level.
         // Caution: **Check after closing** — before it, the comparison would be against a
         // level already left.
@@ -650,12 +649,11 @@ fn to_braces(src: U8[], notes: List<|Note|>$@, arena: Arena$@): U8[] //<
                 ins.push(Insert::{ .at = cur.code_end, .text = ";" })
         last_end = cur.code_end
     for stack.len > 0
-        top: = stack.get(stack.len - 1)
-        stack.len -= 1
-        close_block(ins@, top, last_end)
+        if top: = stack.pop()
+            close_block(ins@, top, last_end)
     return splice(src, ins@, arena)
 
-priv const defer_statement: U8[] = "defer statement" //<
+priv const DEFER_STATEMENT: U8[] = "defer statement" //<
     //< The head word for a `defer` holding one statement (`defer buf.free()`)
     //<
     //< It opens no level of its own.
@@ -674,7 +672,7 @@ priv fn heading_of(src: U8[], from: Sz, to: Sz): U8[] //<
     $s: = from + 5
     for s < to && src[s] == ' '
         s += 1
-    return head if s >= to || src[s] == '{' else defer_statement
+    return head if s >= to || src[s] == '{' else DEFER_STATEMENT
 
 priv fn closes_inline_block(src: U8[], cur: Logical): Bool //<
     //< Whether the line opens and closes a block on itself
@@ -690,7 +688,7 @@ priv fn ends_in_block_end(src: U8[], cur: Logical): Bool //<
     if src[cur.code_end - 1] != ';' || !is_block_head(cur.head)
         return false
     $before: = cur.code_end - 1
-    for before > cur.code_start && (src[before - 1] == ' ' || src[before - 1] == tab_byte)
+    for before > cur.code_start && (src[before - 1] == ' ' || src[before - 1] == TAB_BYTE)
         before -= 1
     return before > cur.code_start && src[before - 1] == '}'
 
@@ -716,7 +714,7 @@ priv fn arms_follow(cur: Logical, lines: List<|Logical|>@, n: Sz): Bool //<
     return next.indent == cur.indent && next.head.equals("case")
 
 priv fn close_block(ins: List<|Insert|>$@, top: Frame, at: Sz) //<
-    //< It closes a block, with a `;` after unless its heading word is in `block_heads`
+    //< It closes a block, with a `;` after unless its heading word is in `BLOCK_HEADS`
     ins.push(Insert::{ .at = at, .text = " }" if is_block_head(top.head) else " };" })
 
 priv fn splice(src: U8[], ins: List<|Insert|>@, arena: Arena$@): U8[] //<

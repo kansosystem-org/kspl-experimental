@@ -13,7 +13,7 @@
 import "std/chars"
 import "std/ds" { List }
 import "std/mem" + { dealloc, Arena }
-import "std/regex_node" { byte_count, max_groups, max_repeat_count, Slots, reset_slots, Rx_kind,
+import "std/regex_node" { BYTE_COUNT, MAX_GROUPS, MAX_REPEAT_COUNT, Slots, reset_slots, Rx_kind,
     Rx_node, new_node, new_group_node, new_class_node, set_range, free_rx_node, free_rx_alts, Inst,
     Emitter }
 import "std/stack_limit" { Stack_limit }
@@ -30,13 +30,13 @@ pub enum Regex_error //< why a pattern could not be compiled
     too_many_groups //< there are more capturing groups than `max_groups`
     unsupported_backreference //< `\1`…`\9`, which refer to a captured string inside the pattern
 
-priv const max_nesting_depth: Sz = 500 //<
+priv const MAX_NESTING_DEPTH: Sz = 500 //<
     //< The deepest group nesting compile() accepts
     //<
     //< compile() walks group nesting recursively (parse_atom -> parse_alts -> parse_seq ->
     //< parse_atom_quant -> parse_atom). The limit exists for the same reason as json.kspl's
     //< max_nesting_depth (stack exhaustion).
-priv const stack_margin: Sz = 64 * 1024 //<
+priv const STACK_MARGIN: Sz = 64 * 1024 //<
     //< The stack kept free below where compiling stops
     //<
     //< **The counts are sized for the main thread.** A thread's stack can be far smaller (512KB by
@@ -67,7 +67,7 @@ priv fn class_from_escape(c: U8): Rx_node$@ //<
     if n.neg
         lower = c + ('a' - 'A')
     // **From the same predicates the matcher uses**, so `\w` and `\b` cannot disagree.
-    for i in Range.asc(byte_count)
+    for i in Range.asc(BYTE_COUNT)
         b: = U8::i
         n.set[i] =
             (b.is_digit() if lower == 'd' else is_word_byte(b) if lower == 'w' else b.is_space())
@@ -79,7 +79,7 @@ priv fn add_class_escape(n: Rx_node$@, c: U8) //<
     //< **A negated form adds the complement**; it does not negate the whole class. Touching `n.neg`
     //< would invert `[^\D]`.
     sub: = class_from_escape(c)
-    for i in Range.asc(byte_count)
+    for i in Range.asc(BYTE_COUNT)
         if sub.set[i] != sub.neg
             n.set[i] = true
     free_rx_node(sub)
@@ -263,7 +263,7 @@ impl Compiler
             return n
         if c == '('
             r.depth += 1
-            if r.depth > max_nesting_depth || r.stack.near()
+            if r.depth > MAX_NESTING_DEPTH || r.stack.near()
                 // Caution: Stop recursing here; only recording the excess still exhausts the stack.
                 r.fail(.too_deep)
                 r.depth -= 1
@@ -275,7 +275,7 @@ impl Compiler
             if r.peek() == '?' && r.pos + 1 < r.pat.len && (r.pat.ptr + r.pos + 1)$ == ':'
                 r.advance()
                 r.advance()
-            else if r.groups >= max_groups
+            else if r.groups >= MAX_GROUPS
                 r.fail(.too_many_groups)
             else
                 gidx = I32::r.groups
@@ -363,7 +363,7 @@ impl Compiler
         for r.peek().is_digit()
             v = v * 10 + Sz::(r.advance() - '0')
             digits += 1
-            if v > max_repeat_count
+            if v > MAX_REPEAT_COUNT
                 return false
         out$ = I32::v
         return digits > 0
@@ -548,7 +548,7 @@ priv fn first_bytes(prog: List<|Inst|>$@, first: Bool$[]): Bool //<
     //<
     //< It follows every step that reads no byte, taking each test as passing. A byte left out
     //< would skip a start that matches, while one too many only costs a look.
-    for i in Range.asc(byte_count)
+    for i in Range.asc(BYTE_COUNT)
         first[i] = false
     $seen: = List<|Bool|>.new_with_cap(prog.len, null)
     defer seen.free()
@@ -567,7 +567,7 @@ priv fn first_bytes(prog: List<|Inst|>$@, first: Bool$[]): Bool //<
         case .done
             return true
         case .byte
-            for c in Range.asc(byte_count)
+            for c in Range.asc(BYTE_COUNT)
                 if atom_matches(step.node, U8::c)
                     first[c] = true
         case .jump
@@ -626,7 +626,7 @@ pub struct Regex //< one compiled pattern, matched against any number of texts
         //< The number of capturing groups, **fixed at compile time**, not counted per find.
     priv anchored: Bool //<
         //< Whether every alternative starts with `^`, **fixed at compile time**.
-    priv first: Bool[byte_count] //< the bytes a match can begin with
+    priv first: Bool[BYTE_COUNT] //< the bytes a match can begin with
     priv may_be_empty: Bool //< whether a match can be empty, so no start can be skipped
 
 priv fn alts_all_anchored(alts: List<|List<|Rx_node$@|>|>$@): Bool //<
@@ -651,7 +651,7 @@ impl Regex
         pattern: U8[], //< the pattern's text
     ): Regex$@!Regex_error
         $c: = Compiler::{ .pat = pattern, .pos = 0, .depth = 0,
-            .stack = Stack_limit.later(stack_margin), .err = .none, .groups = 0 }
+            .stack = Stack_limit.later(STACK_MARGIN), .err = .none, .groups = 0 }
         $alts: = c.parse_alts()
         if c.pos < c.pat.len
             // a ')' is left over == there was no matching '('

@@ -67,7 +67,7 @@ impl Ast_node
         ctx.jump_stack
             .push(sema_session_ctx.Jump_label::{ .name = label_name, .is_loop = false,
             .name_node = label_node, .stmt = r })
-        defer ctx.jump_stack.len -= 1
+        defer ctx.jump_stack.pop()
 
         cond_node: = r.get_switch_cond()
         r.ice_assert(cond_node != null, "switch statement is missing a condition expression")
@@ -94,7 +94,7 @@ impl Ast_node
         // rejected while a `switch` on the same value passes. The message still names what the user
         // wrote.
         subject_base: = ctx.env.instance_base(ctx.env.get_clean_real_type(target_id))
-        if spelling.len > 0 && !subject_base.equals(base_core.option_fqn)
+        if spelling.len > 0 && !subject_base.equals(base_core.OPTION_FQN)
             ctx.clear_scratch()
                 .s("'\{spelling\}' binds an 'Option'. '\{ctx.env.display(target_id)\}' is not one. \
                     Use 'switch' and name every variant. Adding a variant later then causes an \
@@ -102,10 +102,11 @@ impl Ast_node
             ctx.err(cond_node, ctx.scratch.slice())
             throw .analysis_failed
 
-        // Scalars only ("Branching" in docs/SPEC-language.md). **If not rejected, the C compiler
-        // reports it**: a slice in C's `switch` is a **raw C error**. See "Failing fast through an
-        // exception or an ICE" in ksplc/docs/DESIGN-compiler.md. The rule exists because comparing
-        // a `U8[]` is O(N). `.equals()` and an `if` show that cost, where a branch would hide it.
+        // Scalars only ("Branching" in docs/SPEC-programming-language.md). **If not rejected, the C
+        // compiler reports it**: a slice in C's `switch` is a **raw C error**. See "Failing fast
+        // through an exception or an ICE" in ksplc/docs/DESIGN-compiler.md. The rule exists because
+        // comparing a `U8[]` is O(N). `.equals()` and an `if` show that cost, where a branch would
+        // hide it.
         if enum_def == null && !ctx.env.is_integer(target_id) && !ctx.env.is_bool(target_id) &&
             !sema_type_env.is_unknown(target_id)
             // Show the type as written (`U8[]`), not its C spelling.

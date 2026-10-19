@@ -348,7 +348,7 @@ impl Editor
             r.open = new_step(r.caret, r.arena)
             // Anything new drops the redo steps (otherwise redo jumps to a text that does not
             // match).
-            r.redone.len = 0
+            r.redone.clear()
         return r.open
 
     fn break_group(r: Self$@) //< closes the open step
@@ -378,13 +378,13 @@ impl Editor
     priv fn step_over(r: Self$@, from: List<|Step$@|>$@, to: List<|Step$@|>$@): Bool //<
         //< Reverses the last step of `from` and records the reversal in `to` (undo and redo alike)
         r.break_group()
-        if from.len <= 0 || r.shut()
+        if r.shut()
             return false
-        st: = from.get(from.len - 1)
-        from.len -= 1
-        back: = new_step(st.after, r.arena)
-        apply_inverse(r, st, back)
-        back.after = st.before
-        to.push(back)
-        r.caret = st.before
-        return true
+        if st: = from.pop()
+            back: = new_step(st.after, r.arena)
+            apply_inverse(r, st, back)
+            back.after = st.before
+            to.push(back)
+            r.caret = st.before
+            return true
+        return false

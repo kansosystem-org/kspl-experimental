@@ -16,34 +16,34 @@ import "std/strfmt"
 import "std/sys"
 import "std/verdict"
 
-const state_ok: Sz = 0 //< the verdict's three states
+const STATE_OK: Sz = 0 //< the verdict's three states
     //<
     //< Caution: Do not confuse "it cannot be confirmed in this environment" with "it failed".
-const state_failed: Sz = 1
-const state_skip: Sz = 2
+const STATE_FAILED: Sz = 1
+const STATE_SKIP: Sz = 2
 
 struct Outcome
     state: Sz
     why: U8[]
 
 fn ok_result(): Outcome
-    return Outcome::{ .state = state_ok, .why = "" }
+    return Outcome::{ .state = STATE_OK, .why = "" }
 
 fn failed(why: U8[]): Outcome
-    return Outcome::{ .state = state_failed, .why = why }
+    return Outcome::{ .state = STATE_FAILED, .why = why }
 
 fn broke(what: U8[], out: U8[], arena: Arena$@): Outcome //<
     //< It makes one failure out of "what did not happen" and the output at the time
     return failed(arena.text().s(what).s("\n").s(out).take())
 
 fn skipped(why: U8[]): Outcome
-    return Outcome::{ .state = state_skip, .why = why }
+    return Outcome::{ .state = STATE_SKIP, .why = why }
 
 priv fn report(name: U8[], r: Outcome)
-    if r.state == state_skip
+    if r.state == STATE_SKIP
         verdict.skip_check(name, r.why)
         return
-    verdict.check(name, r.state == state_ok, r.why)
+    verdict.check(name, r.state == STATE_OK, r.why)
 
 // ==========================================
 // The working directory and the cache location
@@ -149,7 +149,7 @@ fn obj_state(work: U8[], since: I64, arena: Arena$@): Objs
             out.fresh += 1
     return out
 
-const wait_limit_us: I64 = 5000000 //< the longest wait_for_mtime_tick waits, in microseconds
+const WAIT_LIMIT_US: I64 = 5000000 //< the longest wait_for_mtime_tick waits, in microseconds
 
 fn wait_for_mtime_tick(probe: U8[], after: I64): I64 //<
     //< It waits until a file's time passes after and returns the time it reached
@@ -158,7 +158,7 @@ fn wait_for_mtime_tick(probe: U8[], after: I64): I64 //<
     //< **`fs.stat`'s mtime is in seconds**, so two builds in a row show **everything rebuilt as
     //< "left alone"**. The file's own clock decides the wait; a monotonic second is not its tick.
     start: = sys.mono_us()
-    for sys.mono_us() - start <= wait_limit_us
+    for sys.mono_us() - start <= WAIT_LIMIT_US
         io.write_file(probe, "x") catch
             return 0I64
         st: = fs.stat(probe) catch
@@ -218,7 +218,7 @@ fn build_probe(work: U8[], arena: Arena$@): U8[] //<
     //< Caution: **Build it before replacing CC**, which it uses. **The name must state the
     //< notation.** `cc_probe_src` is in braces, and as `.kspl` it never builds. That looks like
     //< "it cannot be run with the stand-in cc".
-    fs.write_tree(work, U8[][]::{ "cc_probe.kspl" }, U8[][]::{ run_progs.cc_probe_src }, arena)
+    fs.write_tree(work, U8[][]::{ "cc_probe.kspl" }, U8[][]::{ run_progs.CC_PROBE_SRC }, arena)
         catch
         return ""
     gen: = fs.join(work, "cc_probe.c", arena)
@@ -227,7 +227,7 @@ fn build_probe(work: U8[], arena: Arena$@): U8[] //<
     if !g.exited_with(0)
         return ""
     exe: = fs.join(work, "cc_probe.exe", arena)
-    b: = harness_build.build_exe(U8[][]::{ gen }, exe, U8[][]::harness_build.default_cflags)
+    b: = harness_build.build_exe(U8[][]::{ gen }, exe, U8[][]::harness_build.DEFAULT_CFLAGS)
     return "" if !b.exited_with(0) else exe
 
 struct Seen //< what the record shows, read one line at a time, counting only the `ARG:` lines

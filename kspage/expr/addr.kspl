@@ -12,7 +12,7 @@
 //   a: = addr.parse_addr(c@);
 // ==========================================
 import "std/chars"
-import "std/checked_int" { Ci64 }
+import "std/checked_int"
 import "std/str" { Str_builder }
 
 struct Reader //< the position a text is read from, front to back
@@ -37,7 +37,7 @@ fn skip_ws(c: Reader$@)
     for c.pos < c.src.len && c.src[c.pos] == ' '
         c.pos += 1
 
-const broken_ref: U8[] = "#REF!" //< the mark for a position that can no longer be pointed at
+const BROKEN_REF: U8[] = "#REF!" //< the mark for a position that can no longer be pointed at
     //<
     //< **It must be the same text as the mark that is shown** (`error_text` in
     //< `expr/value.kspl`).
@@ -74,26 +74,24 @@ fn is_spot(a: Addr): Bool
     default {}
     return false
 
-priv fn push_digit(acc: Sz?, base: I64, d: I64): Sz? //<
+priv fn push_digit(acc: Sz?, base: Sz, d: Sz): Sz? //<
     //< Adds one digit to the number
     //<
-    //< Caution: **Return "none" once it overflows.** A signed overflow has no defined result (the
-    //< language specification's "A signed overflow at run time is undefined"). A formula's text
-    //< puts no cap on the digits. **`Sz`'s width depends on the target**, so the check is at 32
-    //< bits. A number past that points at no cell anyway.
+    //< Caution: **Return "none" once it overflows.** A formula's text puts no cap on the digits.
+    //< **Keep the same 32-bit limit on every target**: a number past that points at no cell.
     $v: Sz = 0
     switch acc
     case .some(got)
         v = got
     case .none
         return .none
-    scaled: = (Ci64::(I64::v)).checked_mul(Ci64::base) catch
+    scaled: = v.checked_mul(base) catch
         return .none
-    sum: = scaled.checked_add(Ci64::d) catch
+    sum: = scaled.checked_add(d) catch
         return .none
-    if sum.val > 2147483647I64
+    if sum > 2147483647
         return .none
-    return .some(Sz::sum.val)
+    return .some(sum)
 
 fn parse_addr(c: Reader$@): Addr //< reads a position in A1 form
     //<

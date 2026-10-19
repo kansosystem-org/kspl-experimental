@@ -5,7 +5,7 @@
 import "kspeg/engine"
 import "kspeg/rule" { Kspeg_signal, Rule, Rule_entry, collect_keywords, collect_references,
     fold_keyword_choices, keyword_set_boundary, keyword_set_rule, left_recursive_rule,
-    max_parse_depth, walk_limit }
+    MAX_PARSE_DEPTH, walk_limit }
 import "std/chars"
 import "std/ds" { List, Map }
 import "std/mem" { Arena }
@@ -17,11 +17,11 @@ import "std/str" // `equals`
 // Caution: **Reject an escape it does not know.** `unescape_to_arena` is meant for JSON and passes
 // an unknown `\X` through as the character, so `\d` would silently become `d`, showing up only as
 // a wrong match far away.
-priv const bad_escape_msg: U8[] =
+priv const BAD_ESCAPE_MSG: U8[] =
     "Unknown escape in a literal (valid: \\n \\r \\t \\\" \\' \\\\ \\[ \\] \\- \\uXXXX)"
 
 // For a `\u` that decodes to several bytes inside a character class.
-priv const wide_in_class_msg: U8[] =
+priv const WIDE_IN_CLASS_MSG: U8[] =
     "\\u above 007F is not allowed in a character class (a class matches one byte at a time)"
 
 priv fn is_kspeg_escape(ec: U8): Bool
@@ -99,9 +99,9 @@ impl Meta
         for i < raw.len
             if (raw.ptr + i)$ == '\\'
                 if i + 1 >= raw.len || !is_kspeg_escape((raw.ptr + i + 1)$)
-                    throw .fatal(bad_escape_msg)
+                    throw .fatal(BAD_ESCAPE_MSG)
                 if ascii_only && (raw.ptr + i + 1)$ == 'u' && !is_ascii_escape(raw, i + 2)
-                    throw .fatal(wide_in_class_msg)
+                    throw .fatal(WIDE_IN_CLASS_MSG)
                 i += 2
                 continue
             i += 1
@@ -131,7 +131,7 @@ impl Meta
         // parse_primary, so both limits are checked here too, as in Rule.parse.
         r.depth += 1
         defer r.depth -= 1
-        if r.depth > max_parse_depth || r.stack.near()
+        if r.depth > MAX_PARSE_DEPTH || r.stack.near()
             throw .fatal("Grammar definition nested too deeply")
 
         r.skip_ws()
@@ -246,8 +246,8 @@ impl Meta
             def_res: = r.parse_definition()!
             rules.push(def_res)
 
-        const default_rules_str: U8[] = "\n_Space = [ \\t\\r\\n]*\n_Boundary = [A-Za-z0-9_]\n"
-        $default_meta: = Meta.new(default_rules_str, r.arena)
+        const DEFAULT_RULES_STR: U8[] = "\n_Space = [ \\t\\r\\n]*\n_Boundary = [A-Za-z0-9_]\n"
+        $default_meta: = Meta.new(DEFAULT_RULES_STR, r.arena)
         for
             default_meta.skip_ws()
             if default_meta.is_eof()

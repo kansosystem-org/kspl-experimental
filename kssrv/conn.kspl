@@ -16,16 +16,16 @@ import "std/refcount" { Rc }
 import "std/str" { Str_builder }
 import "std/sys"
 
-const max_conns: Sz = 128 //< the cap on connections open at once
+const MAX_CONNS: Sz = 128 //< the cap on connections open at once
     //<
     //< The table is fixed-length; a free slot is an ARC handle's zero value (`Rc.empty()`).
 
-const max_conns_per_peer: Sz = 16 //< the cap on connections from one address, facing outward
+const MAX_CONNS_PER_PEER: Sz = 16 //< the cap on connections from one address, facing outward
     //<
     //< Without it one machine takes every slot and shuts everyone else out. A browser opens six
     //< per host, so the rest leaves room for several behind one address (a NAT).
 
-const conn_arena_chunk: Sz = 16 * 1024 //< how far each connection's working arena grows
+const CONN_ARENA_CHUNK: Sz = 16 * 1024 //< how far each connection's working arena grows
     //<
     //< It is rewound per request, so the size of the largest single request is enough.
 
@@ -105,7 +105,7 @@ struct Conn
     answers_head: Bool
     // When its last answer went out and its sending side was closed, on the monotonic clock; 0
     // while it still answers. From then on what the peer sends is read and thrown away until the
-    // peer closes, or `linger_us` passes (`conn_read` in `kssrv/main.kspl`).
+    // peer closes, or `LINGER_US` passes (`conn_read` in `kssrv/main.kspl`).
     // Caution: **Do not close the socket with the peer's bytes unread.** The OS then answers with a
     // reset. On Windows, a reset throws away the answer the peer has not read yet. So a client
     // still sending a body past the cap never sees its 413.
@@ -116,7 +116,7 @@ struct Conn
     // design, so the sweep's usual reason does not apply (`sweep_done` in `kssrv/main.kspl`).
     holding: Bool
     // When a byte last went either way, on the monotonic clock; set at accept. A connection quiet
-    // for `idle_conn_us` is dropped (`sweep_done` in `kssrv/main.kspl`), a holding one excepted.
+    // for `IDLE_CONN_US` is dropped (`sweep_done` in `kssrv/main.kspl`), a holding one excepted.
     moved_us: I64
     // When the first byte of the request still arriving came, on the monotonic clock; 0 while no
     // request is partly read. **A request must arrive whole within `request_time_us`**, however
@@ -128,8 +128,8 @@ struct Conn
     need: Sz
     head_from: Sz //< where the search for the head's end resumes in `inbuf`
     // The peer's address as text, for the cap on connections from one address
-    // (`max_conns_per_peer`).
-    peer: U8[net.addr_text_max]
+    // (`MAX_CONNS_PER_PEER`).
+    peer: U8[net.ADDR_TEXT_MAX]
     peer_len: Sz
     // The file whose bytes still go out after `outbuf` (`queue_file`); its stream is null when
     // none. **Read a chunk at a time as the connection drains**, so a large file is never held
@@ -142,7 +142,7 @@ struct Conn_table //< the connection table
     //< Caution: **Put the array in a struct's field.** `@` on an array makes a pointer to the first
     //< element, which cannot be subscripted. Through the struct, `t.slots[i]` stays a place
     //< expression and overwriting a slot releases the old value.
-    slots: Rc<|Conn|>[max_conns]
+    slots: Rc<|Conn|>[MAX_CONNS]
 
 impl Ctx
     fn is_local(r: Self$@): Bool //< whether it serves one user on this machine (`--local`)
@@ -163,7 +163,7 @@ fn regular_file_size(path: U8[]): Sz? //<
 fn conn_new(stream: net.Tcp_stream$@, serial: I64): Rc<|Conn|>
     fresh: Conn = ::{
         .stream = stream,
-        .arena = Arena.new(conn_arena_chunk),
+        .arena = Arena.new(CONN_ARENA_CHUNK),
         .inbuf = Str_builder.new(),
         .outbuf = Str_builder.new(),
         .serial = serial,
@@ -184,7 +184,7 @@ fn any_holding(t: Conn_table$@): Bool //< whether a page is holding the server o
     //<
     //< **This is what "someone is using me" means.** Stopping when nobody is depends on it alone
     //< ("Keeping the server alive while a page is open" in `../docs/SPEC-local-server.md`).
-    for i in Range.asc(max_conns)
+    for i in Range.asc(MAX_CONNS)
         if !t.slots[i].is_empty() && t.slots[i].get().holding
             return true
     return false
@@ -194,7 +194,7 @@ fn open_serial(t: Conn_table$@, serial: I64): Bool //< whether that connection i
     //< **A connection is dropped only once its answer is sent or it broke** (`conn_send` in
     //< `kssrv/main.kspl`), so false means nothing is left to send on it. **One lingering after its
     //< last answer counts as closed**: everything has been sent on it.
-    for i in Range.asc(max_conns)
+    for i in Range.asc(MAX_CONNS)
         if !t.slots[i].is_empty() && t.slots[i].get().serial == serial
             return t.slots[i].get().lingering_since_us == 0I64
     return false
@@ -202,7 +202,7 @@ fn open_serial(t: Conn_table$@, serial: I64): Bool //< whether that connection i
 fn table_find_free(t: Conn_table$@): Sz //< looks for a free slot
     //<
     //< -1 if there is none.
-    for i in Range.asc(max_conns)
+    for i in Range.asc(MAX_CONNS)
         if t.slots[i].is_empty()
             return i
     return -1
@@ -257,7 +257,7 @@ fn queue_file(c: Conn$@, ctype: U8[], file: io.File_stream, length: Sz, keep: Bo
 fn peer_count(t: Conn_table$@, peer: U8[]): Sz //<
     //< how many open connections come from that address
     $n: Sz = 0
-    for i in Range.asc(max_conns)
+    for i in Range.asc(MAX_CONNS)
         if t.slots[i].is_empty()
             continue
         c: = t.slots[i].get()

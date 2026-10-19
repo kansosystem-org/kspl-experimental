@@ -2,8 +2,8 @@
 //<
 //< C evaluates a call's arguments, an operator's two sides and a compound literal's fields in an
 //< order of its own choosing. gcc takes a call's arguments from the right, clang from the left.
-//< KSPL evaluates them left to right ("Evaluation order" in docs/SPEC-language.md). So an operand
-//< that a later operand could disturb is moved into a temporary ahead of the statement.
+//< KSPL evaluates them left to right ("Evaluation order" in docs/SPEC-programming-language.md). So
+//< an operand that a later operand could disturb is moved into a temporary ahead of the statement.
 //< It also places the retain that an operand taken with a count owes, so a later operand's `!`
 //< never leaves that count behind. See "The rules for implementing ARC" in
 //< ksplc/docs/DESIGN-lower.md.
@@ -22,7 +22,7 @@ import "ksplc/sema/type/scope" { Sema_symbol }
 import "std/ds" { List }
 import "std/str"
 
-priv const max_order_depth: Sz = 200 //<
+priv const MAX_ORDER_DEPTH: Sz = 200 //<
     //< How deep the classifying walk goes before it gives the cautious answer (`acts`)
     //<
     //< Past it an operand is only moved into a temporary when it need not be, which changes nothing
@@ -171,7 +171,7 @@ impl Ast_node
         //< around it.
         if r == null
             return .fixed
-        if depth >= max_order_depth
+        if depth >= MAX_ORDER_DEPTH
             return .acts
         switch r.kind_id
         case .k_integer, .k_float, .k_bool, .k_char, .k_string, .k_null, .k_literal, .k_keyword,
@@ -228,7 +228,7 @@ impl Ast_node
     priv fn is_translation_constant(r: Self$@, depth: Sz): Bool //<
         //< Whether translation knows the value (and has refused a zero divisor or a wide shift)
         //<
-        if r == null || depth >= max_order_depth
+        if r == null || depth >= MAX_ORDER_DEPTH
             return false
         switch r.kind_id
         case .k_integer, .k_char, .k_expr_sizeof, .k_expr_offsetof
@@ -273,7 +273,7 @@ impl Ast_node
         //< Whether the place's address is the same wherever in the statement it is taken
         //<
         //< A name, and a field of a place with a fixed address reached without a pointer.
-        if r == null || depth >= max_order_depth
+        if r == null || depth >= MAX_ORDER_DEPTH
             return false
         if r.is_path_or_ident()
             return true
@@ -311,7 +311,7 @@ impl Ast_node
         $chain: = List<|Ast_node$@|>.new(null)
         defer chain.free()
         $holder: = r
-        for _i in Range.asc(max_order_depth)
+        for _i in Range.asc(MAX_ORDER_DEPTH)
             if holder == null || lctx.sema.packed_place_align(holder) == 0
                 break
             chain.push(holder)

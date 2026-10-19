@@ -14,28 +14,28 @@ import "ksplc/sema/type/query" as sema_type_query
 import "std/ds" { Map }
 import "std/str" { Str_builder }
 
-priv const max_c_type_depth: Sz = 1000 //<
+priv const MAX_C_TYPE_DEPTH: Sz = 1000 //<
     //< The depth limit for map_c_type_to's recursive walk down a `@` pointer chain
     //<
     //< The parser does not count a repeated `@` as depth, so `f: I32@@@...@` could exhaust the
     //< native stack here. Past it, had_error is set and a fallback type returned (a compile error
     //< through codegen_failed).
 
-priv const max_zero_init_braces: Sz = 192 //<
+priv const MAX_ZERO_INIT_BRACES: Sz = 192 //<
     //< The maximum number of nested brace pairs in a zero initializer
     //<
     //< Caution: **Stop it in ksplc.** Otherwise the user gets the C compiler's `bracket nesting
     //< level exceeded` instead of a KSPL diagnostic. The reason is the same as max_block_nesting's
     //< ("Failing fast through an exception or an ICE" in ksplc/docs/DESIGN-compiler.md).
 
-priv const guaranteed_type_postfix: Sz = 64 //<
+priv const GUARANTEED_TYPE_POSTFIX: Sz = 64 //<
     //< The number of a type's postfix levels the specification guarantees; the diagnostics name it
     //<
-    //< The guarantee is among the implementation limits in docs/SPEC-language.md.
+    //< The guarantee is among the implementation limits in docs/SPEC-programming-language.md.
     //< Caution: **Do not show max_zero_init_braces in a diagnostic.** It counts brace pairs, which
     //< outnumber the postfix levels, so it would promise more levels than can be written.
 
-const file_local_word: U8[] = "static KSPL_UNUSED " //<
+const FILE_LOCAL_WORD: U8[] = "static KSPL_UNUSED " //<
     //< The storage word of a definition only its translation unit sees
     //<
     //< Whether it is used **depends on the user's program**, so C's unused warning would be a false
@@ -60,7 +60,7 @@ struct Emit_split //< which file of the generated C a Genc_ctx writes, decided b
         //<
         //< It is a name rather than a path, as it is in the same folder as the unit's `.c`.
 
-const whole_output: Emit_split = Emit_split::{ .part = .whole, .unit_count = 1, .unit_index = 0,
+const WHOLE_OUTPUT: Emit_split = Emit_split::{ .part = .whole, .unit_count = 1, .unit_index = 0,
     .shared_header = "" } //< one translation unit, not split
 
 fn unit_for(file_path: U8[], unit_count: Sz): Sz //<
@@ -176,7 +176,7 @@ impl Genc_ctx
         //< tentative definition. Elsewhere the forward declaration is `extern` and the definition
         //< has no word.
         if base_core.is_library()
-            return file_local_word
+            return FILE_LOCAL_WORD
         return "" if definition else "extern "
 
     fn free(r: Self$@)
@@ -280,7 +280,7 @@ impl Genc_ctx
 
     fn map_c_type_to_impl(r: Self$@, type_id: I32, w: Writer, depth: Sz, suppress_const: Bool):
         Writer
-        if depth >= max_c_type_depth
+        if depth >= MAX_C_TYPE_DEPTH
             if !r.had_error
                 // Caution: **Report it with `sema.err`**, so it has a position (`last_node`, the
                 // declaration being written) and is counted (the summary agrees with the exit
@@ -288,7 +288,7 @@ impl Genc_ctx
                 // without one.
                 r.sema.clear_scratch()
                     .s("pointer type nesting too deep for the C backend. The language guarantees \
-                        \{guaranteed_type_postfix\} type postfix stages. The C type spelling nests \
+                        \{GUARANTEED_TYPE_POSTFIX\} type postfix stages. The C type spelling nests \
                         one level per stage")
                 if r.last_node != null
                     r.sema.err(r.last_node, r.sema.scratch.slice())
@@ -357,12 +357,12 @@ impl Genc_ctx
         raw: = r.zero_init_depth(type_id, 0)
         // Even a scalar gets one pair (`x = {0}` is valid C).
         pairs: = 1 if raw < 1 else raw
-        if pairs > max_zero_init_braces
+        if pairs > MAX_ZERO_INIT_BRACES
             // One pair only: the translation fails anyway, and mismatched braces would add a C
             // compiler error on top.
             r.sema.clear_scratch()
                 .s("type nests too deep to zero-initialize in the C backend. The language \
-                    guarantees \{guaranteed_type_postfix\} type postfix stages. A fixed-size array \
+                    guarantees \{GUARANTEED_TYPE_POSTFIX\} type postfix stages. A fixed-size array \
                     requires two brace pairs per stage. C compilers reject deeper bracket nesting")
             r.sema.err(site, r.sema.scratch.slice())
             r.had_error = true
@@ -379,7 +379,7 @@ impl Genc_ctx
         //<
         //< It follows **the first element** and counts 1 per aggregate it enters. A scalar is 0
         //< (with too many, -Wbraced-scalar-init fires instead).
-        if depth >= max_c_type_depth
+        if depth >= MAX_C_TYPE_DEPTH
             return 0
         real_id: = r.env.get_clean_real_type(type_id)
         switch r.env.get_info(real_id)
@@ -408,9 +408,9 @@ impl Genc_ctx
         //< With only one, the names disagree, and with bad luck it silently reads a different
         //< variable of the same name.
         if val.is_made_name()
-            return r.s(base_c_name.made_name_c_prefix).s(val.made_stem())
+            return r.s(base_c_name.MADE_NAME_C_PREFIX).s(val.made_stem())
         if val.needs_c_escape()
-            return r.s(val).s(base_c_name.c_name_suffix)
+            return r.s(val).s(base_c_name.C_NAME_SUFFIX)
         return r.s(val)
 
 impl Genc_ctx: Writer

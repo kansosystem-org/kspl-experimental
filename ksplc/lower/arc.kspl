@@ -2,7 +2,8 @@
 //<
 //< It is Swift-style automatic reference counting: the compiler inserts the calls.
 //< **A type is managed only through conformance to `Ref_counted` in `std/lang`** (there is no
-//< attribute; the reason is "Why ARC is expressed as a trait" in `../../docs/DESIGN-language.md`).
+//< attribute; the reason is "Why ARC is expressed as a trait" in
+//< `../../docs/DESIGN-programming-language.md`).
 
 // ==========================================
 //   - Every time an ARC-managed type's value is copied (a read of existing memory), a retain() is
@@ -28,7 +29,7 @@ import "ksplc/sema/type/query" as sema_type_query
 import "std/ds" { List }
 import "std/str" { Str_builder }
 
-priv const max_arc_emit_depth: Sz = 1000 //<
+priv const MAX_ARC_EMIT_DEPTH: Sz = 1000 //<
     //< The depth limit for emit_managed_op's walk over the owning positions
     //<
     //< The owning positions are a struct's fields, an enum's payload and an array's elements.
@@ -36,16 +37,16 @@ priv const max_arc_emit_depth: Sz = 1000 //<
     //< chain from overflowing the native stack (as max_type_layout_depth in sema/session/ctx.kspl
     //< does).
 
-priv const max_arc_place_depth: Sz = 1000 //<
+priv const MAX_ARC_PLACE_DEPTH: Sz = 1000 //<
     //< The depth limit for the place-expression check's walk down pointers and fields
     //<
     //< The same idea as max_extract_type_name_depth in ast_ext.kspl: it stops even on broken
     //< input.
 
-priv const arc_payload_bind_prefix: U8[] = "_arc_pay_" //<
+priv const ARC_PAYLOAD_BIND_PREFIX: U8[] = "_arc_pay_" //<
     //< The prefix of the name of a synthesized enum payload binding
 
-priv const arc_helper_param_name: U8[] = "_arc_self" //< the chain helper's parameter name
+priv const ARC_HELPER_PARAM_NAME: U8[] = "_arc_self" //< the chain helper's parameter name
     //<
     //< It lives only in the helper's own function scope, so it cannot collide with the user's code.
 
@@ -62,7 +63,7 @@ impl Arc_helper_parts
         //<
         //< def_node must point at the parameter declaration. genllvm looks up a local variable's ID
         //< by that identity; without it, the IR refers to an undefined SSA value.
-        ref_node: = Ast_node.build_ident(arc_helper_param_name, r.ptr_id, loc)
+        ref_node: = Ast_node.build_ident(ARC_HELPER_PARAM_NAME, r.ptr_id, loc)
         ref_node.def_node = r.param
         return ref_node
 
@@ -95,7 +96,7 @@ priv fn expand_place_index_ops(lctx: Lowering_ctx$@, n: Ast_node$@, depth: Sz) /
     //< **The ARC decision happens before lower_default, so a cloned subscript is not expanded
     //< yet.** genc emits `[` only for a built-in slice or array, so an unexpanded receiver is an
     //< `emit_postfix_array` ICE (reading, writing or `for x in` over a `List<|Rc<|T|>|>`).
-    if n == null || depth >= max_arc_place_depth
+    if n == null || depth >= MAX_ARC_PLACE_DEPTH
         return
     if n.kind_id == .k_expr_postfix && lctx.sema.env.is_place_index_node(n)
         n.lower_postfix_index_operator(lctx)
@@ -112,7 +113,7 @@ priv fn expand_place_index_ops(lctx: Lowering_ctx$@, n: Ast_node$@, depth: Sz) /
 fn emit_managed_op(lctx: Lowering_ctx$@, recv: Ast_node$@, type_id: I32, method_name: U8[],
     out: List<|Ast_node$@|>$@, depth: Sz)
     expand_place_index_ops(lctx, recv, 0)
-    if depth >= max_arc_emit_depth
+    if depth >= MAX_ARC_EMIT_DEPTH
         if !lctx.sema.has_error()
             lctx.sema.err(recv, "type nesting too deep for automatic retain/release")
         return
@@ -184,7 +185,7 @@ priv fn get_or_create_arc_helper(lctx: Lowering_ctx$@, type_id: I32, method_name
 priv fn build_arc_helper_signature(lctx: Lowering_ctx$@, helper_name: U8[], ptr_id: I32,
     loc: base_ast.Loc): Arc_helper_parts //<
         //< It builds the helper's signature `fn <name>(p: T@)`, returning the param node too.
-    param: = Ast_node.build_synth_param(arc_helper_param_name,
+    param: = Ast_node.build_synth_param(ARC_HELPER_PARAM_NAME,
         lctx.sema.env.get_str(ptr_id), ptr_id, loc)
     params: = Ast_node.new(.k_param_list, "params", loc).add_child(param)
     void_id: = I32::sema_type_env.Builtin_type_id.void_type
@@ -263,7 +264,7 @@ priv fn emit_managed_enum_op(lctx: Lowering_ctx$@, parts: Arc_helper_parts,
         ops: = List<|Ast_node$@|>.create(base_core.arena)
         // Bindings match the fields by position, so even a field that needs no operation is bound.
         for f in v.payload_fields
-            bind_name: = lctx.gen_indexed_name(arc_payload_bind_prefix)
+            bind_name: = lctx.gen_indexed_name(ARC_PAYLOAD_BIND_PREFIX)
             bind_node: = Ast_node.build_ident(bind_name, f.type_id, loc)
             pat.add_child(bind_node)
             if !lctx.sema.env.type_is_managed(f.type_id)
@@ -546,7 +547,7 @@ impl Ast_node
 
     priv fn arc_part_of_fresh(r: Self$@, lctx: Lowering_ctx$@, depth: Sz): Bool //<
         //< Whether a chain of such reads ends at a fresh value, which lower_arc_part_of_fresh holds
-        if depth >= max_arc_place_depth || !lctx.can_own_temporaries()
+        if depth >= MAX_ARC_PLACE_DEPTH || !lctx.can_own_temporaries()
             return false
         node: = r.arc_unwrapped()
         if !node.arc_reads_part(lctx)
@@ -586,7 +587,7 @@ impl Ast_node
 
     priv fn arc_pointer_read(r: Self$@, lctx: Lowering_ctx$@, depth: Sz): Bool //<
         //< Whether a chain of `.` / `[` / `$` reaches its memory through a pointer a call yields
-        if r == null || depth >= max_arc_place_depth
+        if r == null || depth >= MAX_ARC_PLACE_DEPTH
             return false
         if r.kind_id == .k_expr_primary && r.children.len > 0
             return r.get_primary_inner_expr().arc_pointer_read(lctx, depth + 1)
@@ -632,7 +633,7 @@ impl Ast_node
         //<
         //< A retain/release receiver is a **clone** of the expression, so a call in it would run
         //< twice.
-        if r == null || depth >= max_arc_place_depth
+        if r == null || depth >= MAX_ARC_PLACE_DEPTH
             return true // when unsure, assume "there is a call" (so no clone is made)
         if r.kind_id == .k_expr_postfix
             op: = r.get_postfix_op()
@@ -651,7 +652,7 @@ impl Ast_node
         //< Caution: Identifiers and paths alone are not enough: `y: = s.f;` would get no retain,
         //< and freeing y frees a live `s.f` (a use after free). One that contains a call (`f().x`)
         //< reads a +1 temporary and must not count (a double retain).
-        if r == null || depth >= max_arc_place_depth
+        if r == null || depth >= MAX_ARC_PLACE_DEPTH
             return false
         k: = r.kind_id
         if k == .k_identifier || k == .k_expr_path || k == .k_type_path

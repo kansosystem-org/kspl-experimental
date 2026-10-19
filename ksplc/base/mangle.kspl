@@ -1,21 +1,21 @@
 //< Turns KSPL's names and type names into C / LLVM identifiers
 //<
 //< Caution: **Do not write a copy of this in each caller**, or one type gets two names, and that
-//< shows only at link time. The words of a type name (`core.immut_mark` / `slice_fqn`) live in
+//< shows only at link time. The words of a type name (`core.IMMUT_MARK` / `slice_fqn`) live in
 //< `ksplc/base/core.kspl`.
 //< **These are extension methods, so a caller must import this file** ("An extension method
-//< requires the import" in `docs/SPEC-language.md`).
+//< requires the import" in `docs/SPEC-programming-language.md`).
 import "ksplc/base/core"
 import "std/str" { Str_builder }
 
-const kspl_prefix: U8[] = "kspl_" //< what every generated global symbol's name begins with
+const KSPL_PREFIX: U8[] = "kspl_" //< what every generated global symbol's name begins with
 
 impl U8[]
     fn has_kspl_prefix(r: U8[]): Bool //< whether a symbol's name already begins with `kspl_`
-        return r.starts_with(kspl_prefix)
+        return r.starts_with(KSPL_PREFIX)
 
     fn kspl_symbol_to(r: U8[], w: Writer): Writer //< the name with `kspl_` in front, never twice
-        return w.s(r) if r.has_kspl_prefix() else w.s(kspl_prefix).s(r)
+        return w.s(r) if r.has_kspl_prefix() else w.s(KSPL_PREFIX).s(r)
 
     fn find_char_out(r: U8[], ch: U8): I32
         $depth: = 0
@@ -77,13 +77,13 @@ impl U8[]
             // `U8_Const_Slice`). mangle_type_id_to_impl in sema/type/naming.kspl places it
             // elsewhere. But this one names only symbols (monomorphization instances), never
             // types. So the two do not collide.
-            if r.sub_from(i).starts_with(core.immut_mark)
+            if r.sub_from(i).starts_with(core.IMMUT_MARK)
                 if has_output
                     res = res.s("_")
                 res = res.s("Const")
                 pending_under = false
                 has_output = true
-                i += I32::core.immut_mark.len
+                i += I32::core.IMMUT_MARK.len
                 continue
             if i + 1 < r.len && (r.ptr + i)$ == '[' && (r.ptr + i + 1)$ == ']'
                 if has_output
@@ -146,9 +146,9 @@ impl U8[]
         //< dependencies in gen/c/root.kspl.
         $s1: = r
         // The mark can sit inside the `@` (`U8 immut@`), so the two are removed in turn.
-        for s1.ends_with("@") || s1.ends_with(core.immut_mark)
+        for s1.ends_with("@") || s1.ends_with(core.IMMUT_MARK)
             if s1.ends_with("@")
                 s1 = s1.sub(0, s1.len - 1)
             else
-                s1 = s1.sub(0, s1.len - core.immut_mark.len)
+                s1 = s1.sub(0, s1.len - core.IMMUT_MARK.len)
         return s1

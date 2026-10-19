@@ -3,7 +3,7 @@
 //< **A SKIP no row holds fails its gate on the platform that prints it** (`expected_skips`). A
 //< reason printed only on Windows or macOS is first seen by that platform's round. This check
 //< reads each reason where it is written, so a new one gets its row in the same change.
-//< **It reads the forms in `forms` and the make files' lines.** A SKIP written another way is
+//< **It reads the forms in `FORMS` and the make files' lines.** A SKIP written another way is
 //< still printed, and goes unread (Principle 8 in `docs/DESIGN-principles.md`).
 import "std/chars"
 import "std/ds" { List }
@@ -13,15 +13,15 @@ import "std/verdict"
 import "tests/support/conventions_scan" as scan + { Sample }
 import "tests/support/harness"
 
-priv const gates_src: U8[] = "tools/ci_gates.kspl" //< where the rows are
-priv const says_head: U8[] = ".says = " //< what opens a row's piece, in both of its tables
+priv const GATES_SRC: U8[] = "tools/ci_gates.kspl" //< where the rows are
+priv const SAYS_HEAD: U8[] = ".says = " //< what opens a row's piece, in both of its tables
 
 struct Form //< a call that prints a SKIP line, and which of its arguments is the reason
     name: U8[] //< the function, called as `<receiver>.<name>(`
     receiver: U8[] //< the module it is called through; empty takes any (an import's alias)
     reason_at: Sz //< the reason's place among the arguments, from 0
 
-const forms: Form[_] = ::{ Form::{ .name = "skip", .receiver = "verdict", .reason_at = 0 },
+const FORMS: Form[_] = ::{ Form::{ .name = "skip", .receiver = "verdict", .reason_at = 0 },
     Form::{ .name = "skip_check", .receiver = "verdict", .reason_at = 1 },
     Form::{ .name = "require_or_skip", .receiver = "", .reason_at = 2 },
     Form::{ .name = "skipped", .receiver = "run_case", .reason_at = 0 } } //<
@@ -32,7 +32,7 @@ struct Relay //< a function that hands on a reason written elsewhere, which is r
     fn_name: U8[]
     why: U8[] //< where the reason it hands on is written, and so read
 
-const relays: Relay[_] = ::{
+const RELAYS: Relay[_] = ::{
     Relay::{ .file = "ksplc/tests/support/harness.kspl", .fn_name = "require_or_skip",
         .why = "its callers' `lacks`" },
     Relay::{ .file = "ksplc/tests/support/run_case.kspl", .fn_name = "report",
@@ -45,7 +45,7 @@ struct Held_by_none //< a reason no platform's round lets through, on purpose
     says: U8[] //< a piece of the reason, as a row would name it
     why: U8[] //< why every round that prints it should fail
 
-const held_by_none: Held_by_none[_] = ::{
+const HELD_BY_NONE: Held_by_none[_] = ::{
     Held_by_none::{ .says = " is absent (put it in this environment and it runs)",
         .why = "pytools runs in the Linux round alone, whose image holds every module it needs" },
 }
@@ -67,7 +67,7 @@ struct Lit //< one string literal of a source
 struct Source //< a source with each literal and comment turned to spaces, its newlines kept
     code: U8[] //< the text the calls are found in; a literal keeps its opening `"`
     lits: List<|Lit|>
-    consts: List<|U8[]|> //< `name`, then its text, for each `const name: U8[] = "<text>"`
+    consts: List<|U8[]|> //< `name`, then its text, for each `const NAME: U8[] = "<text>"`
 
 priv fn blank(b: str.Arena_text$@, src: U8[], from: Sz, to: Sz) //<
     //< Spaces for a span, its newlines kept
@@ -195,14 +195,14 @@ priv fn pieces_of(s: Source@, l: Lit@, arena: Arena$@): List<|U8[]|> //<
 // The reasons a source's calls print, each as the literal pieces a row may name
 // **A reason with no literal at its call is followed one step.** It goes to the name it is bound
 // to in the same function (`why: = …`), or to the `return` lines of the file's function it calls.
-// Anything else is read only where `relays` says it is written.
+// Anything else is read only where `RELAYS` says it is written.
 // ==========================================
 
 struct Reason //< one reason a call prints
     line: Sz //< its call's line, from 1
     fn_name: U8[] //< the function the call stands in
     pieces: List<|U8[]|> //< its literal text; empty where none could be read
-    relayed: Bool //< handed on from where `relays` says it is written, and read there
+    relayed: Bool //< handed on from where `RELAYS` says it is written, and read there
 
 priv struct Span //< a stretch of a source, by offsets
     from: Sz
@@ -324,7 +324,7 @@ priv fn returns_of(s: Source@, name: U8[], arena: Arena$@): List<|List<|U8[]|>|>
     return out
 
 priv fn is_relay(path: U8[], fn_name: U8[]): Bool
-    for r in relays
+    for r in RELAYS
         if r.file.equals(path) && r.fn_name.equals(fn_name)
             return true
     return false
@@ -358,11 +358,11 @@ priv fn read_at(path: U8[], s: Source@, sp: Span, at: Sz, arena: Arena$@): List<
     return out
 
 fn reasons_in(path: U8[], src: U8[], arena: Arena$@): List<|Reason|> //<
-    //< The reasons the calls of `forms` in one KSPL source print
+    //< The reasons the calls of `FORMS` in one KSPL source print
     s: = read_source(src, arena)
     code: = s.code
     $out: = List<|Reason|>.new(arena)
-    for f in forms
+    for f in FORMS
         needle: = arena.text().c('.').s(f.name).c('(').take()
         $at: Sz = 0
         for
@@ -384,7 +384,7 @@ fn reasons_in(path: U8[], src: U8[], arena: Arena$@): List<|Reason|> //<
 // The make files' SKIP lines
 // ==========================================
 
-priv const make_marks: U8[][_] = ::{ "SKIP ", "SKIP:", "SKIPPED (" } //<
+priv const MAKE_MARKS: U8[][_] = ::{ "SKIP ", "SKIP:", "SKIPPED (" } //<
     //< What opens a SKIP line a recipe prints; `a SKIP;` in a sentence opens none
 
 fn make_reasons(src: U8[], arena: Arena$@): List<|Reason|> //<
@@ -397,7 +397,7 @@ fn make_reasons(src: U8[], arena: Arena$@): List<|Reason|> //<
         t: = lines.get(i).trim_start()
         if t.starts_with("#")
             continue
-        for m in make_marks
+        for m in MAKE_MARKS
             if at: = t.find_str(m)
                 if at == 0 || !t[at - 1].is_alnum()
                     $p: = List<|U8[]|>.new(arena)
@@ -413,7 +413,7 @@ fn make_reasons(src: U8[], arena: Arena$@): List<|Reason|> //<
 // ==========================================
 
 fn holder(r: Reason@, rows: U8[][]): U8[] //<
-    //< The row or `held_by_none` piece holding a reason, empty where none does
+    //< The row or `HELD_BY_NONE` piece holding a reason, empty where none does
     //<
     //< **A row is held whole inside one piece**: an interpolation can stand for anything, so a row
     //< matched across one holds nothing.
@@ -421,7 +421,7 @@ fn holder(r: Reason@, rows: U8[][]): U8[] //<
         for row in rows
             if p.find_str(row).is_some()
                 return row
-        for h in held_by_none
+        for h in HELD_BY_NONE
             if p.find_str(h.says).is_some()
                 return h.says
     return ""
@@ -452,10 +452,10 @@ fn rows_of(src: U8[], arena: Arena$@): List<|U8[]|> //< every row's piece, of bo
     $out: = List<|U8[]|>.new(arena)
     $at: Sz = 0
     for
-        hit: = s.code.sub_from(at).find_str(says_head)
+        hit: = s.code.sub_from(at).find_str(SAYS_HEAD)
         if hit.is_none()
             break
-        at = at + hit.unwrap_or(0) + says_head.len
+        at = at + hit.unwrap_or(0) + SAYS_HEAD.len
         for k in Range.asc(s.lits.len)
             l: = s.lits.get(k)
             if l.at == at && l.holes.len == 0
@@ -463,11 +463,11 @@ fn rows_of(src: U8[], arena: Arena$@): List<|U8[]|> //< every row's piece, of bo
     return out
 
 // Caution: **Keep the call inside a raw string on the miss side.** A program a test writes is no
-// round's, and a plain search hits it. The rows these samples are held against are `sample_rows`.
-priv const sample_rows: U8[][_] = ::{ "Windows has no FIFO a path names", "node is not installed",
+// round's, and a plain search hits it. The rows these samples are held against are `SAMPLE_ROWS`.
+priv const SAMPLE_ROWS: U8[][_] = ::{ "Windows has no FIFO a path names", "node is not installed",
     "does not take --target", "no ARM toolchain" }
 
-priv const reason_samples: Sample[_] = ::{
+priv const REASON_SAMPLES: Sample[_] = ::{
     Sample::{ .text = "fn t()\n    verdict.skip(\"a reason no row names\")\n", .hits = true },
     Sample::{ .text = "fn t()\n    verdict.skip(\"Windows has no FIFO a path names\")\n",
         .hits = false },
@@ -497,14 +497,14 @@ priv const reason_samples: Sample[_] = ::{
     Sample::{ .text = "fn t()\n    h.require_or_skip(n, \"S\", \"a tool is missing\")\n",
         .hits = true },
     Sample::{ .text =
-        "priv const p: U8[] =\n    \"\"\"\n  verdict.skip(\"a fixture's own\")\n\"\"\"\n",
+        "priv const P: U8[] =\n    \"\"\"\n  verdict.skip(\"a fixture's own\")\n\"\"\"\n",
         .hits = false },
     Sample::{ .text =
         "fn t()\n    // verdict.skip(\"a reason no row names\")\n    x: = nums.skip(2, null)\n",
         .hits = false },
 }
 
-priv const make_samples: Sample[_] = ::{
+priv const MAKE_SAMPLES: Sample[_] = ::{
     Sample::{ .text = "\t@echo \"RESULT: SKIPPED (no ARM toolchain)\"\n", .hits = false },
     Sample::{ .text = "\t@echo \"SKIP x: a reason no row names\"\n", .hits = true },
     Sample::{ .text = "\t@printf '#   SKIP: a reason no row names'\n", .hits = true },
@@ -514,19 +514,19 @@ priv const make_samples: Sample[_] = ::{
 
 priv fn misses_kspl(text: U8[], arena: Arena$@): Bool
     reasons: = reasons_in("sample.kspl", text, arena)
-    return unheld("sample.kspl", reasons@, U8[][]::sample_rows, arena).len > 0
+    return unheld("sample.kspl", reasons@, U8[][]::SAMPLE_ROWS, arena).len > 0
 
 priv fn misses_make(text: U8[], arena: Arena$@): Bool
     reasons: = make_reasons(text, arena)
-    return unheld("Makefile", reasons@, U8[][]::sample_rows, arena).len > 0
+    return unheld("Makefile", reasons@, U8[][]::SAMPLE_ROWS, arena).len > 0
 
 priv fn check_reasons_held(arena: Arena$@) //<
     //< Every SKIP reason the tree can print is held by a row, so no platform's round meets it first
-    $rows: = rows_of(harness.read_under_root(gates_src), arena)
+    $rows: = rows_of(harness.read_under_root(GATES_SRC), arena)
     $bad: = List<|U8[]|>.new(arena)
     $seen: Sz = 0
     $used: = List<|U8[]|>.new(arena)
-    $files: = harness.tracked_matching(U8[][]::scan.kspl_specs)
+    $files: = harness.tracked_matching(U8[][]::scan.KSPL_SPECS)
     for rel in harness.tracked_matching(U8[][]::{ "*.mk", "*Makefile" })
         files.push(rel)
     for rel in files
@@ -546,12 +546,12 @@ priv fn check_reasons_held(arena: Arena$@) //<
         for f in unheld(rel, reasons@, rows.slice(), arena)
             bad.push(f)
     // An entry no reason needs any more holds nothing up: it goes, as a row would stay unread.
-    for h in held_by_none
+    for h in HELD_BY_NONE
         if !scan_has(used@, h.says)
             bad
                 .push(arena.text().s("`held_by_none`'s \"").s(h.says).s("\" holds no reason (")
                 .s(h.why).s("): remove it").take())
-    for r in relays
+    for r in RELAYS
         if !scan_has(used@,
             arena.text().s(r.file).c(' ').s(r.fn_name).take())
             bad
@@ -560,10 +560,10 @@ priv fn check_reasons_held(arena: Arena$@) //<
                 .take())
     if rows.len == 0
         bad
-            .push(arena.text().s(gates_src).s(" holds no `").s(says_head).s("` row to read").take())
+            .push(arena.text().s(GATES_SRC).s(" holds no `").s(SAYS_HEAD).s("` row to read").take())
     verdict.check_list("every SKIP reason the tree can print is held by a row", seen, "reasons",
         bad@,
-        "add its row to `expected_skips` (or `switch_skips`) in tools/ci_gates.kspl, for each \
+        "add its row to `EXPECTED_SKIPS` (or `SWITCH_SKIPS`) in tools/ci_gates.kspl, for each \
             platform that prints it")
 
 priv fn scan_has(list: List<|U8[]|>@, want: U8[]): Bool
@@ -574,7 +574,7 @@ priv fn scan_has(list: List<|U8[]|>@, want: U8[]): Bool
 
 fn run(arena: Arena$@) //< this section's entry point
     scan.check_samples("the reading of a test's SKIP reasons fires on its samples",
-        Sample[]::reason_samples, "reason_samples", misses_kspl, arena)
+        Sample[]::REASON_SAMPLES, "reason_samples", misses_kspl, arena)
     scan.check_samples("the reading of a make file's SKIP lines fires on its samples",
-        Sample[]::make_samples, "make_samples", misses_make, arena)
+        Sample[]::MAKE_SAMPLES, "make_samples", misses_make, arena)
     check_reasons_held(arena)

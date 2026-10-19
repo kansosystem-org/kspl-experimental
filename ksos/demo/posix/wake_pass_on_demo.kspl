@@ -17,8 +17,8 @@ import "ksos/kernel/sync"
 import "ksos/kernel/task" + { Task }
 import "std/verdict"
 
-priv const coord_prio: I32 = 5 //< above every waiter, so a woken waiter stays ready, unrun
-priv const waiter_prio: I32 = 2
+priv const COORD_PRIO: I32 = 5 //< above every waiter, so a woken waiter stays ready, unrun
+priv const WAITER_PRIO: I32 = 2
 
 $g_mutex: sync.Mutex
 $g_sem: sync.Sem
@@ -102,8 +102,8 @@ fn coordinator(_arg: Void$@): Void
     // --- unlock, then the woken waiter is deleted ---
     verdict.start("[ksos] a deleted woken waiter passes an unlock on")
     g_mutex.lock()
-    tcb_m1.create(U8$[]::stack_m1, mutex_waiter, null, waiter_prio, "m1")
-    tcb_m2.create(U8$[]::stack_m2, mutex_waiter, null, waiter_prio, "m2")
+    tcb_m1.create(U8$[]::stack_m1, mutex_waiter, null, WAITER_PRIO, "m1")
+    tcb_m2.create(U8$[]::stack_m2, mutex_waiter, null, WAITER_PRIO, "m2")
     Task.delay(1) // m1, then m2, wait on the mutex
     g_mutex.unlock() // wakes m1, which stays ready below coord
     tcb_m1.delete()
@@ -114,8 +114,8 @@ fn coordinator(_arg: Void$@): Void
 
     // --- give, then the woken waiter is suspended ---
     verdict.start("[ksos] a suspended woken waiter passes a give on")
-    tcb_s1.create(U8$[]::stack_s1, sem_waiter, null, waiter_prio, "s1")
-    tcb_s2.create(U8$[]::stack_s2, sem_waiter, null, waiter_prio, "s2")
+    tcb_s1.create(U8$[]::stack_s1, sem_waiter, null, WAITER_PRIO, "s1")
+    tcb_s2.create(U8$[]::stack_s2, sem_waiter, null, WAITER_PRIO, "s2")
     Task.delay(1) // s1, then s2, wait on the semaphore
     g_sem.give() // wakes s1
     tcb_s1.suspend()
@@ -133,8 +133,8 @@ fn coordinator(_arg: Void$@): Void
 
     // --- send, then the woken receiver is deleted ---
     verdict.start("[ksos] a deleted woken receiver passes a send on")
-    tcb_r1.create(U8$[]::stack_r1, receiver, null, waiter_prio, "r1")
-    tcb_r2.create(U8$[]::stack_r2, receiver, null, waiter_prio, "r2")
+    tcb_r1.create(U8$[]::stack_r1, receiver, null, WAITER_PRIO, "r1")
+    tcb_r2.create(U8$[]::stack_r2, receiver, null, WAITER_PRIO, "r2")
     Task.delay(1) // r1, then r2, wait for data
     assert(g_q.try_send(42), "wake_pass_on: the empty queue refused a send")
     tcb_r1.delete()
@@ -146,8 +146,8 @@ fn coordinator(_arg: Void$@): Void
     // --- recv, then the woken sender is suspended ---
     verdict.start("[ksos] a suspended woken sender passes the room on")
     assert(g_room.try_send(0), "wake_pass_on: the empty queue refused a send")
-    tcb_w1.create(U8$[]::stack_w1, sender, Void$@::g_id_w1@, waiter_prio, "w1")
-    tcb_w2.create(U8$[]::stack_w2, sender, Void$@::g_id_w2@, waiter_prio, "w2")
+    tcb_w1.create(U8$[]::stack_w1, sender, Void$@::g_id_w1@, WAITER_PRIO, "w1")
+    tcb_w2.create(U8$[]::stack_w2, sender, Void$@::g_id_w2@, WAITER_PRIO, "w2")
     Task.delay(1) // w1, then w2, wait for room
     _first: = g_room.try_recv() // makes room and wakes w1
     tcb_w1.suspend()
@@ -182,6 +182,6 @@ fn main(): I32
     g_room.init(g_roombuf[0]@, 1)
     g_lend_mutex.init()
     g_lend_done.init(0)
-    tcb_coord.create(U8$[]::stack_coord, coordinator, null, coord_prio, "coord")
+    tcb_coord.create(U8$[]::stack_coord, coordinator, null, COORD_PRIO, "coord")
     task.start_scheduler()
     return verdict.finish()

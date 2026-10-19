@@ -298,7 +298,7 @@ priv fn exec_code(conn: db.Db$@, sql: U8[]): I32 //< the code `exec` fails with,
         return code_of(e)
     return 0
 
-priv const busy_path: U8[] = "out/ksbind_busy_test.db" //< the file two connections share
+priv const BUSY_PATH: U8[] = "out/ksbind_busy_test.db" //< the file two connections share
 
 fn test_db_error_codes()
     verdict.start("[Db] an error carrying SQLite's result code test...")
@@ -312,15 +312,15 @@ fn test_db_error_codes()
 
     // **A busy database is told from a broken constraint**: a second connection meets the lock.
     fs.mkdir_all("out") catch panic("the folder for the shared file should be made")
-    fs.remove_path(busy_path) catch {}
-    holder: = db.Db.open(busy_path) catch panic("the shared file should open")
+    fs.remove_path(BUSY_PATH) catch {}
+    holder: = db.Db.open(BUSY_PATH) catch panic("the shared file should open")
     holder.exec("CREATE TABLE t (n INTEGER)") catch panic("create table should not fail")
     holder.exec("BEGIN EXCLUSIVE") catch panic("the exclusive lock should be taken")
-    other: = db.Db.open(busy_path) catch panic("a second connection should open")
+    other: = db.Db.open(BUSY_PATH) catch panic("a second connection should open")
     busy: = exec_code(other, "INSERT INTO t (n) VALUES (1)")
     other.free()
     holder.free()
-    fs.remove_path(busy_path) catch {}
+    fs.remove_path(BUSY_PATH) catch {}
     assert(busy == 5, "a write against another connection's lock carries SQLITE_BUSY (5)")
     verdict.pass("A broken constraint, a syntax error and a busy database carry their own codes.")
 
@@ -405,13 +405,13 @@ fn test_db_exec_refuses_rows()
     conn.free()
     verdict.pass("exec refuses a SELECT and a RETURNING before either runs.")
 
-priv const db_base: U8[] = "out/tmp/ksbind_db" //< where a test that needs a database file makes it
+priv const DB_BASE: U8[] = "out/tmp/ksbind_db" //< where a test that needs a database file makes it
 
 fn test_db_free_with_a_statement_open()
     verdict.start("[Db] freeing the database while a statement is still open test...")
     arena: = Arena.new(4 * 1024)
     defer arena.free()
-    dir: = fs.mkdir_unique(db_base, "db_", arena) catch panic("the scratch folder should be made")
+    dir: = fs.mkdir_unique(DB_BASE, "db_", arena) catch panic("the scratch folder should be made")
     path: = fs.join(dir, "t.db", arena)
     // **In WAL mode the `-wal` file stands while a connection is open.** The last one to close
     // removes it, so the file tells whether the connection closed.

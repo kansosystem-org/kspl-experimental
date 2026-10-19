@@ -24,11 +24,11 @@ priv fn hex_bytes(text: U8[], out: Str_builder$@): Bool //< appends the bytes sp
         return false
     return true
 
-priv const id_max: Sz = 2147483647 //< the largest ID an `I32` holds
-pub const unk_id: I32 = 0 //< `<unk>`, the ID a byte the vocabulary lacks is encoded as
+priv const ID_MAX: Sz = 2147483647 //< the largest ID an `I32` holds
+pub const UNK_ID: I32 = 0 //< `<unk>`, the ID a byte the vocabulary lacks is encoded as
 
 pub fn parse_token_id(text: U8[]): I32? //< a decimal ID that fits an `I32`, or none
-    n: = text.to_count(id_max) catch
+    n: = text.to_count(ID_MAX) catch
         return .none
     return .some(I32::n)
 
@@ -117,7 +117,7 @@ pub struct Tokenizer //< the vocabulary and merge rules that turn text into toke
     pub arena: Arena$@ //< the arena for every word, every rule and every cached chunk
         //<
         //< **Nothing a call returns is put here** (`encode` and `decode` take the caller's arena),
-        //< so a tokenizer kept for a server's lifetime grows only up to `chunk_cache_cap`.
+        //< so a tokenizer kept for a server's lifetime grows only up to `CHUNK_CACHE_CAP`.
     priv chunk_cache: Map<|U8[], I32$[]|>$@ //< a chunk merged before -> its IDs
         //<
         //< **A text repeats its words**, and merging one again gives the same IDs; GPT-2's encoder
@@ -125,7 +125,7 @@ pub struct Tokenizer //< the vocabulary and merge rules that turn text into toke
     priv edits: Sz //< how many times a word or a rule was added; any change restarts the cache
     priv cache_edits: Sz //< `edits` when the cache was started
 
-priv const chunk_cache_cap: Sz = 65536 //< how many chunks the cache holds at most
+priv const CHUNK_CACHE_CAP: Sz = 65536 //< how many chunks the cache holds at most
 
 impl Tokenizer
     pub fn new( //< an empty tokenizer, to be filled by `load` or by `add_token` / `add_merge`
@@ -239,7 +239,7 @@ impl Tokenizer
         //< Splits into chunks (`chunk_end`) and within each chunk merges the pair of the smallest
         //< rank every time; no merge crosses a chunk, as during training.
         r: Self$@,
-        text: U8[], //< the text; any byte sequence works, a byte the vocabulary lacks as `unk_id`
+        text: U8[], //< the text; any byte sequence works, a byte the vocabulary lacks as `UNK_ID`
         arena: Arena$@, //< the arena the list of IDs is allocated from; nothing else is
     ): List<|I32|>$@
         tokens: = List<|I32|>.create(arena)
@@ -268,7 +268,7 @@ impl Tokenizer
         first: = out.len
         for i in Range.asc(chunk.len)
             b: = U8[]::{ .ptr = chunk.ptr + i, .len = 1 }
-            out.push(r.vocab.get(b).unwrap_or(unk_id))
+            out.push(r.vocab.get(b).unwrap_or(UNK_ID))
         for
             if out.len - first < 2
                 break
@@ -290,7 +290,7 @@ impl Tokenizer
             out.len -= 1
         // Caution: **Stop filling at the cap** instead of growing forever: a tokenizer kept for a
         // server's lifetime sees an endless stream of new words.
-        if r.chunk_cache.len < chunk_cache_cap
+        if r.chunk_cache.len < CHUNK_CACHE_CAP
             $kept: = List<|I32|>.new_with_cap(out.len - first, r.arena)
             for id in out.sub_from(first)
                 kept.push(id)

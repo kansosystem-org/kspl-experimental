@@ -29,7 +29,7 @@ A *diagnostic* is a message the compiler prints about your code (an error, a war
 
 **Put a verdict in one function, and have every caller look only at its return value.** If the same check is written twice, a fix reaches one copy and not the other. The cases easily missed:
 
-* **When a `defer` body is analysed.** It runs when the scope is left (docs/DESIGN-language.md "Why `defer` has no capture list"). If `sema/flow/track.kspl` analysed it in the state at registration, `b.free();` after `defer b.free()`, a double free, would pass with zero diagnostics. `df_stmt_block_scope` applies the registered bodies at the block's end, to the state on leaving, in reverse order of registration (LIFO, the order they run in). **Every early exit applies them too, to its own state** (`df_check_defers_on_exit` in `sema/flow/stmt.kspl`):
+* **When a `defer` body is analysed.** It runs when the scope is left (docs/DESIGN-programming-language.md "Why `defer` has no capture list"). If `sema/flow/track.kspl` analysed it in the state at registration, `b.free();` after `defer b.free()`, a double free, would pass with zero diagnostics. `df_stmt_block_scope` applies the registered bodies at the block's end, to the state on leaving, in reverse order of registration (LIFO, the order they run in). **Every early exit applies them too, to its own state** (`df_check_defers_on_exit` in `sema/flow/stmt.kspl`):
   * `return`, `throw` and `!` apply the bodies of every enclosing block;
   * `break` and `continue` apply those inside the statement sema resolved the jump to (the jump's `def_node`);
   * `fallback` applies those inside its `catch`.
@@ -67,7 +67,7 @@ Caution: **Do not use this flag to suppress the use-after-free check as well.** 
 
 **Strip the wrapping.** `dealloc` takes a `Void$@`, so a real call nearly always carries a cast (`dealloc(Void$@::p)`). The `@` and the `::` are stripped recursively back to the original local. Unstripped, the check catches almost nothing.
 
-**A pointer's `free()` leaves a block that `dealloc` can still name** (`p.free()` then `dealloc(Void$@::p)`, the rule in 8.4.5 of [`../../docs/SPEC-language.md`](../../docs/SPEC-language.md#845-tracking-a-free-with-owned)). `Df_state` keeps two may-sets:
+**A pointer's `free()` leaves a block that `dealloc` can still name** (`p.free()` then `dealloc(Void$@::p)`, the rule in 8.4.5 of [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#845-tracking-a-free-with-owned)). `Df_state` keeps two may-sets:
 * `freed_vars`, what is released, any use of which is refused;
 * `gone_vars`, what has nothing left to give back.
 
@@ -184,7 +184,7 @@ A `priv` method is registered too. The caller checks visibility (`check_visibili
 
 #### A call's missing defaults are filled by copies
 
-**When a call leaves out arguments that have default values, Sema adds copies of the defaults to the call.** So the backends see a call written out in full (the language's ruling is [8.1.1 of `../../docs/SPEC-language.md`](../../docs/SPEC-language.md#811-default-arguments)). **A call can be short of arguments by no more than the run of defaulted parameters at the tail.** There, `fill_default_args` in `sema/body/call_defaults.kspl` appends the declaration's default values to the `k_expr_args`.
+**When a call leaves out arguments that have default values, Sema adds copies of the defaults to the call.** So the backends see a call written out in full (the language's ruling is [8.1.1 of `../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#811-default-arguments)). **A call can be short of arguments by no more than the run of defaulted parameters at the tail.** There, `fill_default_args` in `sema/body/call_defaults.kspl` appends the declaration's default values to the `k_expr_args`.
 
 **Append a copy.** One node attached to several calls leaks the `type_id` one analysis writes into the others.
 
@@ -223,7 +223,7 @@ Caution: **Do not drop the `=` inside a parameter.** A default value is read as 
 
 Caution: **Call this check inside Sema.** After Lower and code generation, the diagnostic would come only once a broken `.c` is written, never from `ksplc lint`. And a cyclic type would first hit one of Lower's own depth ceilings (retain/release insertion, name mangling). Its position-less cut-off would take the proper diagnostic's place.
 
-**This sweep does not report a too-deep but non-cyclic chain.** The layer that refuses it is decided where that layer needs the size or the code. Reported here first, the later stages' ceilings (`max_arc_emit_depth` in `lower/arc.kspl` and the like) would never be hit by anything.
+**This sweep does not report a too-deep but non-cyclic chain.** The layer that refuses it is decided where that layer needs the size or the code. Reported here first, the later stages' ceilings (`MAX_ARC_EMIT_DEPTH` in `lower/arc.kspl` and the like) would never be hit by anything.
 
 **Three walks follow a value's parts**, at the four owning positions of the chapter "The rules for implementing ARC" in [`DESIGN-lower.md`](DESIGN-lower.md). They are the size in `sema/decl/layout.kspl`, and the ARC contents and the structural markers in `sema/type/arc.kspl`. Each cuts cycles itself, since the walks run in no guaranteed order. One that does not reaches the depth ceiling before the infinite-size report, and ends in a cut-off with no position.
 
@@ -247,7 +247,7 @@ Caution: **Folding does not guarantee it for a `const`.** Folding (`eval_constex
 
 **Width and signedness come from the operands' type**, so the declaration's type need not be passed. `I8::127 + I8::1` overflows as `I8` even where it would fit an `I64` (`fit_or_report`).
 
-Note: **An unsigned wrap is not an overflow**: `U8::255 + U8::1` is 0, `mod 2^8`, as docs/SPEC-language.md §6.8 says. In the generated C an integer promotion intervenes, so the C compiler still warns "256 becomes 0" (`-Wconstant-conversion`). The value is right, and the warning remains.
+Note: **An unsigned wrap is not an overflow**: `U8::255 + U8::1` is 0, `mod 2^8`, as docs/SPEC-programming-language.md §6.8 says. In the generated C an integer promotion intervenes, so the C compiler still warns "256 becomes 0" (`-Wconstant-conversion`). The value is right, and the warning remains.
 
 ### Each depth limit is set by what breaks first
 
@@ -258,20 +258,20 @@ Note: **An unsigned wrap is not an overflow**: `U8::255 + U8::1` is 0, `mod 2^8`
 | KSPEG's parse depth (`kspeg/rule.kspl`) | the parser's own native stack | a crash on a deep expression |
 | the AST's copying / validation / walking (`base/ast.kspl`) | each walk's recursion | the same |
 | the type chain, the alias chain, the layout, the monomorphization | each layer's mutual recursion | the same |
-| the method table's chain (`max_method_chain_depth` in `sema/decl/mono_queue.kspl`) | **the instantiation queue** | it never returns, with no diagnostic |
-| the constant folding (`max_constexpr_depth` in `sema/decl/eval.kspl`) | the folding's recursion and the translation time | a crash, or no return, at the declaration count × the depth |
-| block nesting (`max_block_nesting` in `sema/body/stmt.kspl`) | **the C backend's output** | the generated C exceeds the C compiler's bracket-depth limit |
-| the zero initializer's braces (`max_zero_init_braces` in `gen/c/ctx.kspl`) | **the C backend's output** | the same |
+| the method table's chain (`MAX_METHOD_CHAIN_DEPTH` in `sema/decl/mono_queue.kspl`) | **the instantiation queue** | it never returns, with no diagnostic |
+| the constant folding (`MAX_CONSTEXPR_DEPTH` in `sema/decl/eval.kspl`) | the folding's recursion and the translation time | a crash, or no return, at the declaration count × the depth |
+| block nesting (`MAX_BLOCK_NESTING` in `sema/body/stmt.kspl`) | **the C backend's output** | the generated C exceeds the C compiler's bracket-depth limit |
+| the zero initializer's braces (`MAX_ZERO_INIT_BRACES` in `gen/c/ctx.kspl`) | **the C backend's output** | the same |
 
 **The method table's limit cannot be replaced by call depth.** The instantiation queue (`Mono_state.pending_methods`) turns recursion into iteration, so the call depth (`mono_depth`) returns to 0 with each item. But chaining "a generic method returning a self one level deeper" advances as many levels as are chained. "Where the instantiation queue is drained" in [`DESIGN-sema.md`](DESIGN-sema.md) says how a level advances, and why the body and the table share one count.
 
-**Do not set it to `max_mono_depth`.** That limit is 128 because legitimate nesting can go deep, while the chain is held to 32 (`max_method_chain_depth` in `sema/decl/mono_queue.kspl`). Each level of the chain builds a whole method table. So at 128, cutting off a runaway takes so long that it looks like a hang.
+**Do not set it to `MAX_MONO_DEPTH`.** That limit is 128 because legitimate nesting can go deep, while the chain is held to 32 (`MAX_METHOD_CHAIN_DEPTH` in `sema/decl/mono_queue.kspl`). Each level of the chain builds a whole method table. So at 128, cutting off a runaway takes so long that it looks like a hang.
 
 **The folding's limit cannot be replaced by the AST's depth.** A constant's references dive across declarations (`eval_ident_or_path`), so they can go deeper than the one expression the parser accepted.
 
 **Return the cut-off apart from `not_constant`** (`Sema_error.nesting_too_deep`). As the same value, the quiet folding entry point (`eval_constexpr_quiet`) swallows it as "not a constant". The user then sees a different diagnostic, such as an error in an array size. Kept apart, the re-folding in `report_init_overflow` picks it up and reports the depth.
 
-**A chain cut at the limit is one error, reported at the head of the fold that met it** (`report_cut_chain` in `sema/decl/eval.kspl`). "Implementation limits" in [`../../docs/SPEC-language.md`](../../docs/SPEC-language.md) asks this of every cutoff. Each constant down a long chain is folded on its own (`report_init_overflow`), and every one past the limit is cut again. Reported where each walk stopped, one chain gave an error per constant, each on a line that says nothing of the chain. So the constants a reported cut went through are kept (`Resolving_state.cut_reported`), and a cut through any of them is the same chain. An array length taken from a cut chain names the depth too, not "a size that is not positive".
+**A chain cut at the limit is one error, reported at the head of the fold that met it** (`report_cut_chain` in `sema/decl/eval.kspl`). "Implementation limits" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md) asks this of every cutoff. Each constant down a long chain is folded on its own (`report_init_overflow`), and every one past the limit is cut again. Reported where each walk stopped, one chain gave an error per constant, each on a line that says nothing of the chain. So the constants a reported cut went through are kept (`Resolving_state.cut_reported`), and a cut through any of them is the same chain. An array length taken from a cut chain names the depth too, not "a size that is not positive".
 
 **A refused typedef (too deep, circular) is the unknown type** (`resolve_written_type` in `sema/decl/resolve.kspl`). Named as a type of its own, each use added a mismatch (`expected 'A999', but got 'I32'`) that hid the refusal. An alias whose chain ends in a refused one is refused with no second error.
 

@@ -32,13 +32,13 @@ struct Pointer //< one name in backticks, found in a comment's text
     len: Sz //< how long the name is, call brackets left off
     end: Sz //< just past the closing backtick
 
-priv const file_words: U8[][3] = ::{ "in ", "of ", "inside " } //<
+priv const FILE_WORDS: U8[][3] = ::{ "in ", "of ", "inside " } //<
     //< The words that tie a name to its file (`` `name` in `file` ``)
     //<
     //< They match the document check's spelling ("Linking documents to source" in
     //< `../../../docs/SPEC-documents.md`).
 
-priv const file_exts: U8[][12] = ::{ "kspl", "ksplb", "md", "c", "h", "txt", "cfg", "json", "html",
+priv const FILE_EXTS: U8[][12] = ::{ "kspl", "ksplb", "md", "c", "h", "txt", "cfg", "json", "html",
     "js", "css", "mk" } //<
         //< The endings that make a name read as a file's name
         //<
@@ -111,7 +111,7 @@ priv fn tied_to_file(text: U8[], after: Sz): Bool //<
     if i + 1 < text.len && text[i] == '(' && text[i + 1] == '`'
         return true
     j2: = base_lines.skip_blanks(text, i)
-    for word in file_words
+    for word in FILE_WORDS
         if text.starts_with(word, j2) && j2 + word.len < text.len && text[j2 + word.len] == '`'
             return true
     return false
@@ -207,7 +207,7 @@ priv fn bare_type(spelled: U8[]): U8[] //<
         i += 1
     return spelled.sub(0, i)
 
-priv const decl_words: U8[][6] = ::{ "fn ", "struct ", "enum ", "trait ", "typedef ", "const " } //<
+priv const DECL_WORDS: U8[][6] = ::{ "fn ", "struct ", "enum ", "trait ", "typedef ", "const " } //<
     //< The words a declaration of a function, a type or a constant opens with
 
 priv fn names_at(text: U8[], at: Sz, name: U8[]): Bool //< whether `name` is a whole word at `at`
@@ -240,7 +240,7 @@ priv fn declares_in_text(text: U8[], name: U8[]): Bool //<
                 i += 5
             else
                 break
-        for word in decl_words
+        for word in DECL_WORDS
             if text.starts_with(word, i) && names_at(text, i + word.len, name)
                 return true
         if names_at(text, i, name)
@@ -321,7 +321,7 @@ priv fn member_of(c: Sema_ctx$@, cur: At, part: U8[], next: At$@): Step //<
     return .unsure
 
 priv fn names_a_file(part: U8[]): Bool //< whether the last part is a file's tail (`edit.kspl`)
-    return part.is_one_of(U8[][]::file_exts)
+    return part.is_one_of(U8[][]::FILE_EXTS)
 
 fn pointed_at(c: Sema_ctx$@, root: Ast_node$@, file: U8[], at: Sz, name: U8[]): Pointed //<
     //< What `name`, written in a comment at position `at` of `file`, stands for
@@ -373,14 +373,14 @@ fn read_in_scope(c: Sema_ctx$@, file: U8[], name: U8[]): Pointed //<
         return .unsure
     return .found(cur.node)
 
-priv const max_local_depth: Sz = 256 //< how deep the search for a local goes before giving up
+priv const MAX_LOCAL_DEPTH: Sz = 256 //< how deep the search for a local goes before giving up
     //<
     //< **Giving up answers "not hidden"**, so a pathological nesting is reported rather than
     //< silenced.
 
 priv fn declares_local(n: Ast_node$@, name: U8[], depth: Sz): Bool //<
     //< Whether a variable named `name` is declared anywhere inside `n`
-    if n == null || depth > max_local_depth
+    if n == null || depth > MAX_LOCAL_DEPTH
         return false
     if n.kind_id == .k_decl_var || n.kind_id == .k_decl_var_item || n.kind_id == .k_decl_const
         id: = n.get_var_decl_id()

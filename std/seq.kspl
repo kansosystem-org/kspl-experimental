@@ -15,7 +15,7 @@ import "std/chars" as _chars // brings in the methods that classify and slice ch
 import "std/ds" { List }
 import "std/mem" { Arena }
 
-priv const sort_run: Sz = 16 //< the run length `order_by` sorts by insertion before merging
+priv const SORT_RUN: Sz = 16 //< the run length `order_by` sorts by insertion before merging
 
 pub struct List_seq<|T|> //< the start of a chain; reads a `List` and advances a position
     //<
@@ -45,11 +45,11 @@ impl<|S: Iter<|T|>, T|> Keep<|S, T|>: Iter<|T|> //< so a `for` can drive it
             else
                 return .none
 
-pub struct Conv<|S, T, U|> //< the adapter that passes each element through a function
+pub struct Conversion<|S, T, U|> //< the adapter that passes each element through a function
     priv src: S
     priv f: Callable1<|T, U|>
 
-impl<|S: Iter<|T|>, T, U|> Conv<|S, T, U|>: Iter<|U|> //< so a `for` can drive it
+impl<|S: Iter<|T|>, T, U|> Conversion<|S, T, U|>: Iter<|U|> //< so a `for` can drive it
     pub fn next(r: Self$@): U? //< the next element, already converted, or nothing
         if v: = r.src.next()
             return .some(r.f.call(v))
@@ -69,8 +69,8 @@ impl<|S: Iter<|T|>, T|> Keep<|S, T|>
     pub fn select<|U|>( //< adds a conversion to the chain; reads nothing yet
         r: Self,
         f: Callable1<|T, U|>, //< what each element becomes
-    ): Conv<|Keep<|S, T|>, T, U|>
-        return Conv<|Keep<|S, T|>, T, U|>::{ .src = r, .f = f }
+    ): Conversion<|Keep<|S, T|>, T, U|>
+        return Conversion<|Keep<|S, T|>, T, U|>::{ .src = r, .f = f }
 
     pub fn to_list( //< drives the chain and collects the results; the first allocation
         r: Self,
@@ -81,18 +81,18 @@ impl<|S: Iter<|T|>, T|> Keep<|S, T|>
             out.push(v)
         return out
 
-impl<|S: Iter<|T|>, T, U|> Conv<|S, T, U|>
+impl<|S: Iter<|T|>, T, U|> Conversion<|S, T, U|>
     pub fn where( //< adds a condition to the chain; reads nothing yet
         r: Self,
         pred: Callable1<|U@, Bool|>, //< the condition an element must meet to pass
-    ): Keep<|Conv<|S, T, U|>, U|>
-        return Keep<|Conv<|S, T, U|>, U|>::{ .src = r, .pred = pred }
+    ): Keep<|Conversion<|S, T, U|>, U|>
+        return Keep<|Conversion<|S, T, U|>, U|>::{ .src = r, .pred = pred }
 
     pub fn select<|V|>( //< adds one more conversion to the chain; reads nothing yet
         r: Self,
         f: Callable1<|U, V|>, //< what each element becomes
-    ): Conv<|Conv<|S, T, U|>, U, V|>
-        return Conv<|Conv<|S, T, U|>, U, V|>::{ .src = r, .f = f }
+    ): Conversion<|Conversion<|S, T, U|>, U, V|>
+        return Conversion<|Conversion<|S, T, U|>, U, V|>::{ .src = r, .f = f }
 
     pub fn to_list( //< drives the chain and collects the results; the first allocation
         r: Self,
@@ -119,11 +119,12 @@ impl<|T|> List<|T|>
         //<
         //< Caution: **Do not turn it into a free function.** `U` is decided at the call site, not
         //< by the receiver ("A name on the impl that the receiver leaves open" in
-        //< `../docs/DESIGN-language.md`).
+        //< `../docs/DESIGN-programming-language.md`).
         r: Self@,
         f: Callable1<|T, U|>, //< what each element becomes
-    ): Conv<|List_seq<|T|>, T, U|>
-        return Conv<|List_seq<|T|>, T, U|>::{ .src = List_seq<|T|>::{ .xs = r, .i = 0 }, .f = f }
+    ): Conversion<|List_seq<|T|>, T, U|>
+        return Conversion<|List_seq<|T|>, T, U|>::{ .src = List_seq<|T|>::{ .xs = r, .i = 0 },
+            .f = f }
 
     priv fn copy_range(r: Self@, from: Sz, to: Sz, arena: Arena$@): List<|T|> //<
         //< A new list copying [from, to), for take/skip
@@ -200,8 +201,8 @@ impl<|T|> List<|T|>
         for i in Range.asc(r.len)
             out.push((r.ptr + i)$)
         n: = out.len
-        for $lo: Sz = 0; lo < n; lo += sort_run
-            hi: = (lo + sort_run) if lo + sort_run < n else n
+        for $lo: Sz = 0; lo < n; lo += SORT_RUN
+            hi: = (lo + SORT_RUN) if lo + SORT_RUN < n else n
             // Where the element goes is found before anything shifts, so each comparison points
             // at it in the list.
             for $i: Sz = lo + 1; i < hi; i += 1
@@ -214,7 +215,7 @@ impl<|T|> List<|T|>
                 for $k: = i; k > j; k -= 1
                     out.set(k, out.get(k - 1))
                 out.set(j, item)
-        if n <= sort_run
+        if n <= SORT_RUN
             return out
         // Caution: **Take from the right run only when it is strictly smaller.** Taking it on a tie
         // reverses equal elements, and the sort is no longer stable.
@@ -223,7 +224,7 @@ impl<|T|> List<|T|>
             spare.push(out.get(i))
         $from: = out
         $to: = spare
-        for $width: Sz = sort_run; width < n; width *= 2
+        for $width: Sz = SORT_RUN; width < n; width *= 2
             for $lo: Sz = 0; lo < n; lo += 2 * width
                 mid: = (lo + width) if lo + width < n else n
                 hi: = (lo + 2 * width) if lo + 2 * width < n else n

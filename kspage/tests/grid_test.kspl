@@ -597,9 +597,42 @@ fn test_a_column_is_added_to_every_row(arena: Arena$@) //< a column is added the
     assert(ed.add_line(page, .column) == cells.Line_end.done, "it was added")
     assert(table.children.get(0).children.len == 3, "the first row gains a column")
     assert(table.children.get(1).children.len == 3, "the second row gains one too")
+    assert(table.size_of(.column, 1).is_none(), "an automatic column stays automatic")
     assert(ed.undo(), "it can be put back in one")
     assert(table.children.get(1).children.len == 2, "put back, every row returns to what it was")
     verdict.pass("a column goes into every row, one each, and is put back all together.")
+
+fn test_an_added_column_keeps_the_current_columns_width(arena: Arena$@)
+    verdict.start("[kspage/grid] inserting a column into a full-width table test...")
+    d: = Doc.new(arena)
+    table: = base.two_by_two(d)
+    table.set_size(.column, 0, .some(120.0))
+    table.set_size(.column, 1, .some(80.0))
+    sheet: = base.grid_sheet(arena)
+    ed: = edit.new_editor(d)
+    page: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+    ed.caret = caret.at(page.boxes.get(0).inline, 0)
+
+    assert(ed.add_line(page, .column) == cells.Line_end.done, "a column goes after the first")
+    after: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+    assert(base.near(after.cells.get(0).rect.w, 120.0), "the current column keeps its width")
+    assert(base.near(after.cells.get(1).rect.w, 120.0), "the new column takes the same width")
+    assert(base.near(after.cells.get(2).rect.w, 80.0), "the following column keeps its width")
+    assert(base.near(after.cells.get(2).rect.x, 240.0), "the table grows beyond the available width")
+    assert(ed.undo(), "one undo removes the column and its width")
+    back: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+    assert(back.cells.len == 4 && base.near(back.cells.get(1).rect.w, 80.0),
+        "undo restores the old columns and widths")
+    assert(ed.redo(), "the column can be restored")
+    again: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+    assert(base.near(again.cells.get(1).rect.w, 120.0), "redo restores its width too")
+
+    last: = table.children.get(0).children.get(2)
+    ed.caret = caret.at(last.inlines.get(0), 0)
+    assert(ed.add_line(again, .column) == cells.Line_end.done, "a column goes after the last")
+    end: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+    assert(base.near(end.cells.get(3).rect.w, 80.0), "at the end it takes the last column's width")
+    verdict.pass("an inserted column remains visible without shrinking the existing columns.")
 
 fn test_dropping_a_row_moves_its_size_spec_too(arena: Arena$@) //<
     //< The deleted row's setting goes with it, so the rows after it do not shift

@@ -17,19 +17,19 @@
 import "std/bytes"
 import "std/chars"
 
-const ethertype_arp: U16 = 0x0806
-const ethertype_ipv4: U16 = 0x0800
-const arp_hw_ethernet: U16 = 1
-const arp_op_request: U16 = 1
-const arp_op_reply: U16 = 2
-const ip_proto_udp: U8 = 17
-const ip_proto_tcp: U8 = 6
+const ETHERTYPE_ARP: U16 = 0x0806
+const ETHERTYPE_IPV4: U16 = 0x0800
+const ARP_HW_ETHERNET: U16 = 1
+const ARP_OP_REQUEST: U16 = 1
+const ARP_OP_REPLY: U16 = 2
+const IP_PROTO_UDP: U8 = 17
+const IP_PROTO_TCP: U8 = 6
 
-const tcp_flag_fin: U8 = 0x01
-const tcp_flag_syn: U8 = 0x02
-const tcp_flag_rst: U8 = 0x04
-const tcp_flag_psh: U8 = 0x08
-const tcp_flag_ack: U8 = 0x10
+const TCP_FLAG_FIN: U8 = 0x01
+const TCP_FLAG_SYN: U8 = 0x02
+const TCP_FLAG_RST: U8 = 0x04
+const TCP_FLAG_PSH: U8 = 0x08
+const TCP_FLAG_ACK: U8 = 0x10
 
 fn ip4(a: U8, b: U8, c: U8, d: U8): U32 //<
     //< Builds a 32-bit IPv4 address value from the four octets a.b.c.d
@@ -90,8 +90,8 @@ fn checksum16(buf: U8[], off: Sz, len: Sz): U16 //<
     //< Computes the 16-bit one's-complement checksum of RFC 1071 over the range [off, off+len)
     return checksum16_finish(checksum16_step(0, buf, off, len))
 
-const eth_hdr_len: Sz = 14
-const eth_min_frame: Sz = 60
+const ETH_HDR_LEN: Sz = 14
+const ETH_MIN_FRAME: Sz = 60
 
 priv fn pad_to_min(out: U8$[], len: Sz): Sz //<
     //< Pads with 0 to Ethernet's minimum frame length and returns the full length after padding
@@ -99,11 +99,11 @@ priv fn pad_to_min(out: U8$[], len: Sz): Sz //<
     //< Caution: A frame under 60 bytes breaks the standard, and some peers silently drop it.
     //< **Every function that builds a frame goes through this just before returning**, rather
     //< than padding in each place.
-    if len >= eth_min_frame
+    if len >= ETH_MIN_FRAME
         return len
-    tail: = out.sub_mut(len, eth_min_frame - len)
+    tail: = out.sub_mut(len, ETH_MIN_FRAME - len)
     tail.fill(0)
-    return eth_min_frame
+    return ETH_MIN_FRAME
 
 priv fn fits(out: U8$[], need: Sz): Bool //<
     //< Whether a frame of need bytes (plus the 0 padding to the minimum length) fits out
@@ -111,33 +111,33 @@ priv fn fits(out: U8$[], need: Sz): Bool //<
     //< Caution: **Check it before starting to write.** `copy_from` and `sub_mut` silently truncate
     //< what does not fit. The full length then comes back for a partial frame. The caller then
     //< sends bytes from outside the buffer onto the wire.
-    want: = need if need > eth_min_frame else eth_min_frame
+    want: = need if need > ETH_MIN_FRAME else ETH_MIN_FRAME
     return out.len >= want
 
-const ipv4_hdr_len: Sz = 20 // with no options, as every frame built here has
-const eth_ipv4_len: Sz = eth_hdr_len + ipv4_hdr_len
+const IPV4_HDR_LEN: Sz = 20 // with no options, as every frame built here has
+const ETH_IPV4_LEN: Sz = ETH_HDR_LEN + IPV4_HDR_LEN
 
 priv fn put_eth_ipv4(buf: U8$[], ends: Ends, proto: U8, ip_payload_len: Sz) //<
     //< Writes the Ethernet header and an IPv4 header with no options, checksum and all
     //<
     //< ip_payload_len is what follows the IPv4 header (the UDP or TCP header plus its payload).
     //< The caller has checked with fits that it all fits.
-    const ip_off: Sz = eth_hdr_len
+    const IP_OFF: Sz = ETH_HDR_LEN
     put_mac(buf, 0, ends.dst_mac)
     put_mac(buf, 6, ends.src_mac)
-    buf.put_u16_be(12, ethertype_ipv4)
-    buf[ip_off] = 0x45 // version=4, IHL=5 (20 bytes, no options)
-    buf[ip_off + 1] = 0 // DSCP/ECN
-    buf.put_u16_be(ip_off + 2, U16::(ipv4_hdr_len + ip_payload_len))
-    buf.put_u16_be(ip_off + 4, 0) // identification
-    buf.put_u16_be(ip_off + 6, 0) // flags/fragment offset
-    buf[ip_off + 8] = 64 // TTL
-    buf[ip_off + 9] = proto
-    buf.put_u16_be(ip_off + 10, 0) // checksum (computed below)
-    buf.put_u32_be(ip_off + 12, ends.src_ip)
-    buf.put_u32_be(ip_off + 16, ends.dst_ip)
-    ip_csum: = checksum16(buf, ip_off, ipv4_hdr_len)
-    buf.put_u16_be(ip_off + 10, ip_csum)
+    buf.put_u16_be(12, ETHERTYPE_IPV4)
+    buf[IP_OFF] = 0x45 // version=4, IHL=5 (20 bytes, no options)
+    buf[IP_OFF + 1] = 0 // DSCP/ECN
+    buf.put_u16_be(IP_OFF + 2, U16::(IPV4_HDR_LEN + ip_payload_len))
+    buf.put_u16_be(IP_OFF + 4, 0) // identification
+    buf.put_u16_be(IP_OFF + 6, 0) // flags/fragment offset
+    buf[IP_OFF + 8] = 64 // TTL
+    buf[IP_OFF + 9] = proto
+    buf.put_u16_be(IP_OFF + 10, 0) // checksum (computed below)
+    buf.put_u32_be(IP_OFF + 12, ends.src_ip)
+    buf.put_u32_be(IP_OFF + 16, ends.dst_ip)
+    ip_csum: = checksum16(buf, IP_OFF, IPV4_HDR_LEN)
+    buf.put_u16_be(IP_OFF + 10, ip_csum)
 
 priv struct Ipv4_view //< what ipv4_view found
     ok: Bool
@@ -153,21 +153,21 @@ priv fn ipv4_view(buf: U8[], len: Sz, proto: U8, min_payload: Sz): Ipv4_view //<
     //< payload would be read as one: an ICMP "echo request" sends the peer's data back under our
     //< IP.
     none: Ipv4_view = ::{ .ok = false, .hdr_len = 0, .total = 0 }
-    if len < eth_ipv4_len + min_payload || buf.get_u16_be(12) != ethertype_ipv4
+    if len < ETH_IPV4_LEN + min_payload || buf.get_u16_be(12) != ETHERTYPE_IPV4
         return none
-    ver_ihl: = buf[eth_hdr_len]
+    ver_ihl: = buf[ETH_HDR_LEN]
     hdr_len: Sz = (ver_ihl & 0x0f) * 4
-    if (ver_ihl >> 4) != 4 || hdr_len < ipv4_hdr_len
+    if (ver_ihl >> 4) != 4 || hdr_len < IPV4_HDR_LEN
         return none
     // The low 13 bits are the fragment offset and the bit above them MF; either set means a
     // fragment.
-    if (buf.get_u16_be(eth_hdr_len + 6) & 0x3fff) != 0
+    if (buf.get_u16_be(ETH_HDR_LEN + 6) & 0x3fff) != 0
         return none
-    total: Sz = buf.get_u16_be(eth_hdr_len + 2)
+    total: Sz = buf.get_u16_be(ETH_HDR_LEN + 2)
     // Drop it if the declared length has not arrived (reading further goes outside the buffer).
-    if total < hdr_len + min_payload || eth_hdr_len + total > len
+    if total < hdr_len + min_payload || ETH_HDR_LEN + total > len
         return none
-    if buf[eth_hdr_len + 9] != proto
+    if buf[ETH_HDR_LEN + 9] != proto
         return none
     return ::{ .ok = true, .hdr_len = hdr_len, .total = total }
 
@@ -177,16 +177,16 @@ priv fn ipv4_view(buf: U8[], len: Sz, proto: U8, min_payload: Sz): Ipv4_view //<
 // addressed to us.
 // ==========================================
 
-const arp_frame_len: Sz = 42
-const ip_proto_icmp: U8 = 1
-const icmp_echo_request: U8 = 8
-const icmp_echo_reply: U8 = 0
+const ARP_FRAME_LEN: Sz = 42
+const IP_PROTO_ICMP: U8 = 1
+const ICMP_ECHO_REQUEST: U8 = 8
+const ICMP_ECHO_REPLY: U8 = 0
 
 priv fn put_arp_header(out: U8$[], op: U16, sender_mac: Mac, sender_ip: U32) //<
     //< Bytes 12 to 31 of an ARP frame: its EtherType, then the fields up to the sender's address
-    out.put_u16_be(12, ethertype_arp)
-    out.put_u16_be(14, arp_hw_ethernet)
-    out.put_u16_be(16, ethertype_ipv4) // ARP's proto field is the protocol's EtherType
+    out.put_u16_be(12, ETHERTYPE_ARP)
+    out.put_u16_be(14, ARP_HW_ETHERNET)
+    out.put_u16_be(16, ETHERTYPE_IPV4) // ARP's proto field is the protocol's EtherType
     out[18] = 6 // hwlen
     out[19] = 4 // protolen
     out.put_u16_be(20, op)
@@ -195,14 +195,14 @@ priv fn put_arp_header(out: U8$[], op: U16, sender_mac: Mac, sender_ip: U32) //<
 
 fn build_arp_reply(out: U8$[], req: U8[], len: Sz, our_ip: U32, our_mac: Mac): Sz //<
     //< Answers an ARP request. 0 if it is not asking about our_ip.
-    if len < arp_frame_len || !fits(out, arp_frame_len)
+    if len < ARP_FRAME_LEN || !fits(out, ARP_FRAME_LEN)
         return 0
-    if req.get_u16_be(12) != ethertype_arp || req.get_u16_be(20) != arp_op_request
+    if req.get_u16_be(12) != ETHERTYPE_ARP || req.get_u16_be(20) != ARP_OP_REQUEST
         return 0 // not ARP, or not a request
     // Caution: **Check the declared sizes before reading by offset.** The offsets 22, 28 and 38
     // hold only for hwlen=6 / protolen=4; otherwise unrelated bytes go out as "that peer's
     // address".
-    if req.get_u16_be(14) != arp_hw_ethernet || req.get_u16_be(16) != ethertype_ipv4 ||
+    if req.get_u16_be(14) != ARP_HW_ETHERNET || req.get_u16_be(16) != ETHERTYPE_IPV4 ||
         req[18] != 6 || req[19] != 4
         return 0
     if req.get_u32_be(38) != our_ip
@@ -210,9 +210,9 @@ fn build_arp_reply(out: U8$[], req: U8[], len: Sz, our_ip: U32, our_mac: Mac): S
     out.copy_from(0, req.sub(6, 6)) // the destination = the requester
     out.copy_from(32, req.sub(22, 6)) // target MAC = the requester
     put_mac(out, 6, our_mac)
-    put_arp_header(out, arp_op_reply, our_mac, our_ip)
+    put_arp_header(out, ARP_OP_REPLY, our_mac, our_ip)
     out.copy_from(38, req.sub(28, 4)) // target IP = the requester
-    return pad_to_min(out, arp_frame_len)
+    return pad_to_min(out, ARP_FRAME_LEN)
 
 fn build_icmp_echo_reply(out: U8$[], req: U8[], len: Sz, our_ip: U32, our_mac: Mac): Sz //<
     //< Answers an ICMP echo request (a ping)
@@ -220,50 +220,50 @@ fn build_icmp_echo_reply(out: U8$[], req: U8[], len: Sz, our_ip: U32, our_mac: M
     //< 0 if it is not an echo request addressed to our_ip.
     //< Caution: **Return the identifier, the sequence number and the payload unchanged**, or
     //< the peer cannot match them and the ping looks unanswered.
-    ip: = ipv4_view(req, len, ip_proto_icmp, 8)
-    if !ip.ok || req.get_u32_be(eth_hdr_len + 16) != our_ip
+    ip: = ipv4_view(req, len, IP_PROTO_ICMP, 8)
+    if !ip.ok || req.get_u32_be(ETH_HDR_LEN + 16) != our_ip
         return 0
     ihl: = ip.hdr_len
     ip_total: = ip.total
-    if req[eth_hdr_len + ihl] != icmp_echo_request
+    if req[ETH_HDR_LEN + ihl] != ICMP_ECHO_REQUEST
         return 0
-    total: = eth_hdr_len + ip_total
+    total: = ETH_HDR_LEN + ip_total
     if !fits(out, total)
         return 0
     out.copy_from(0, req.sub(6, 6)) // the destination = the sender
     put_mac(out, 6, our_mac)
-    out.put_u16_be(12, ethertype_ipv4)
+    out.put_u16_be(12, ETHERTYPE_IPV4)
     // Copy the IP packet as it is, then rewrite only the direction and the type.
-    out.copy_from(eth_hdr_len, req.sub(eth_hdr_len, ip_total))
-    out[eth_hdr_len + 8] = 64 // a fresh TTL
-    out.put_u32_be(eth_hdr_len + 12, our_ip)
-    out.copy_from(eth_hdr_len + 16, req.sub(eth_hdr_len + 12, 4)) // the destination = the sender
+    out.copy_from(ETH_HDR_LEN, req.sub(ETH_HDR_LEN, ip_total))
+    out[ETH_HDR_LEN + 8] = 64 // a fresh TTL
+    out.put_u32_be(ETH_HDR_LEN + 12, our_ip)
+    out.copy_from(ETH_HDR_LEN + 16, req.sub(ETH_HDR_LEN + 12, 4)) // the destination = the sender
     // Caution: **Zero the checksum before recomputing it**, or it is added in twice (IP and ICMP
     // each have one).
-    out.put_u16_be(eth_hdr_len + 10, 0)
-    ip_sum: = checksum16(out, eth_hdr_len, ihl)
-    out.put_u16_be(eth_hdr_len + 10, ip_sum)
-    out[eth_hdr_len + ihl] = icmp_echo_reply
-    out.put_u16_be(eth_hdr_len + ihl + 2, 0)
-    icmp_sum: = checksum16(out, eth_hdr_len + ihl, ip_total - ihl)
-    out.put_u16_be(eth_hdr_len + ihl + 2, icmp_sum)
+    out.put_u16_be(ETH_HDR_LEN + 10, 0)
+    ip_sum: = checksum16(out, ETH_HDR_LEN, ihl)
+    out.put_u16_be(ETH_HDR_LEN + 10, ip_sum)
+    out[ETH_HDR_LEN + ihl] = ICMP_ECHO_REPLY
+    out.put_u16_be(ETH_HDR_LEN + ihl + 2, 0)
+    icmp_sum: = checksum16(out, ETH_HDR_LEN + ihl, ip_total - ihl)
+    out.put_u16_be(ETH_HDR_LEN + ihl + 2, icmp_sum)
     return pad_to_min(out, total)
 
 fn build_arp_request(buf: U8$[], sender_mac: Mac, sender_ip: U32, target_ip: U32): Sz //<
     //< Builds a broadcast ARP request (who-has target_ip? tell sender_ip) into buf
     //<
     //< It returns the full length after padding, or 0 if it does not fit (see fits).
-    if !fits(buf, arp_frame_len)
+    if !fits(buf, ARP_FRAME_LEN)
         return 0
     bcast: = buf.sub_mut(0, 6)
     bcast.fill(0xFF) // the destination = the broadcast
     put_mac(buf, 6, sender_mac)
-    put_arp_header(buf, arp_op_request, sender_mac, sender_ip)
+    put_arp_header(buf, ARP_OP_REQUEST, sender_mac, sender_ip)
     target_mac: = buf.sub_mut(32, 6)
     target_mac.fill(0) // target MAC (unknown on a request, so 0)
     buf.put_u32_be(38, target_ip)
 
-    return pad_to_min(buf, arp_frame_len)
+    return pad_to_min(buf, ARP_FRAME_LEN)
 
 struct Arp_reply
     ok: Bool
@@ -291,7 +291,7 @@ fn probe_arp(buf: U8[], len: Sz): Arp_probe //<
     //< shows who sent the ARP that arrived.
     none: Arp_probe = ::{ .is_arp = false, .op = 0, .sender_ip = 0,
         .sender_mac = ::{ .hi = 0, .lo = 0 } }
-    if len < arp_frame_len || buf.get_u16_be(12) != ethertype_arp
+    if len < ARP_FRAME_LEN || buf.get_u16_be(12) != ETHERTYPE_ARP
         return none
     return ::{ .is_arp = true, .op = buf.get_u16_be(20), .sender_ip = buf.get_u32_be(28),
         .sender_mac = get_mac(buf, 22) }
@@ -301,7 +301,7 @@ fn parse_arp_reply(buf: U8[], len: Sz, expect_sender_ip: U32): Arp_reply //<
     //<
     //< If it is not, the result's ok is false.
     arp: = probe_arp(buf, len)
-    ok: = arp.is_arp && arp.op == arp_op_reply && arp.sender_ip == expect_sender_ip
+    ok: = arp.is_arp && arp.op == ARP_OP_REPLY && arp.sender_ip == expect_sender_ip
     if !ok
         return ::{ .ok = false, .sender_mac = ::{ .hi = 0, .lo = 0 } }
     return ::{ .ok = true, .sender_mac = arp.sender_mac }
@@ -311,21 +311,21 @@ fn build_udp_packet(buf: U8$[], ends: Ends, payload: U8[]): Sz //<
     //<
     //< The UDP checksum is 0 (allowed on IPv4). It returns the padded full length, or 0 if it
     //< does not fit (see fits).
-    const udp_off: Sz = eth_ipv4_len
-    const payload_off: Sz = udp_off + 8
+    const UDP_OFF: Sz = ETH_IPV4_LEN
+    const PAYLOAD_OFF: Sz = UDP_OFF + 8
     udp_len: Sz = 8 + payload.len
-    if !fits(buf, eth_ipv4_len + udp_len)
+    if !fits(buf, ETH_IPV4_LEN + udp_len)
         return 0
-    put_eth_ipv4(buf, ends, ip_proto_udp, udp_len)
+    put_eth_ipv4(buf, ends, IP_PROTO_UDP, udp_len)
 
-    buf.put_u16_be(udp_off, ends.src_port)
-    buf.put_u16_be(udp_off + 2, ends.dst_port)
-    buf.put_u16_be(udp_off + 4, U16::udp_len)
-    buf.put_u16_be(udp_off + 6, 0) // checksum=0 (optional on IPv4)
+    buf.put_u16_be(UDP_OFF, ends.src_port)
+    buf.put_u16_be(UDP_OFF + 2, ends.dst_port)
+    buf.put_u16_be(UDP_OFF + 4, U16::udp_len)
+    buf.put_u16_be(UDP_OFF + 6, 0) // checksum=0 (optional on IPv4)
 
-    buf.copy_from(payload_off, payload)
+    buf.copy_from(PAYLOAD_OFF, payload)
 
-    return pad_to_min(buf, payload_off + payload.len)
+    return pad_to_min(buf, PAYLOAD_OFF + payload.len)
 
 struct Tcp_segment
     ok: Bool
@@ -341,25 +341,25 @@ fn build_tcp_segment(buf: U8$[], ends: Ends, seq: U32, ack: U32, flags: U8, payl
     //< The caller manages seq/ack; flags combines tcp_flag_* (tcp_flag_syn to open,
     //< tcp_flag_ack|tcp_flag_psh for data). The window is fixed (no congestion or flow
     //< control).
-    const tcp_off: Sz = eth_ipv4_len
-    const tcp_hdr_len: Sz = 20 // fixed, with no options
-    const payload_off: Sz = tcp_off + tcp_hdr_len
-    tcp_total_len: Sz = tcp_hdr_len + payload.len
-    if !fits(buf, eth_ipv4_len + tcp_total_len)
+    const TCP_OFF: Sz = ETH_IPV4_LEN
+    const TCP_HDR_LEN: Sz = 20 // fixed, with no options
+    const PAYLOAD_OFF: Sz = TCP_OFF + TCP_HDR_LEN
+    tcp_total_len: Sz = TCP_HDR_LEN + payload.len
+    if !fits(buf, ETH_IPV4_LEN + tcp_total_len)
         return 0
-    put_eth_ipv4(buf, ends, ip_proto_tcp, tcp_total_len)
+    put_eth_ipv4(buf, ends, IP_PROTO_TCP, tcp_total_len)
 
-    buf.put_u16_be(tcp_off, ends.src_port)
-    buf.put_u16_be(tcp_off + 2, ends.dst_port)
-    buf.put_u32_be(tcp_off + 4, seq)
-    buf.put_u32_be(tcp_off + 8, ack)
-    buf[tcp_off + 12] = 0x50 // data offset=5 words (20 bytes, no options), reserved=0
-    buf[tcp_off + 13] = flags
-    buf.put_u16_be(tcp_off + 14, 4096) // window (fixed; no congestion or flow control)
-    buf.put_u16_be(tcp_off + 16, 0) // checksum (computed later)
-    buf.put_u16_be(tcp_off + 18, 0) // urgent pointer (unused)
+    buf.put_u16_be(TCP_OFF, ends.src_port)
+    buf.put_u16_be(TCP_OFF + 2, ends.dst_port)
+    buf.put_u32_be(TCP_OFF + 4, seq)
+    buf.put_u32_be(TCP_OFF + 8, ack)
+    buf[TCP_OFF + 12] = 0x50 // data offset=5 words (20 bytes, no options), reserved=0
+    buf[TCP_OFF + 13] = flags
+    buf.put_u16_be(TCP_OFF + 14, 4096) // window (fixed; no congestion or flow control)
+    buf.put_u16_be(TCP_OFF + 16, 0) // checksum (computed later)
+    buf.put_u16_be(TCP_OFF + 18, 0) // urgent pointer (unused)
 
-    buf.copy_from(payload_off, payload)
+    buf.copy_from(PAYLOAD_OFF, payload)
 
     // TCP's pseudo header (RFC 793): src_ip (4) + dst_ip (4) + zero (1) + proto (1) + the TCP
     // length (2), summed with the segment through checksum16_step.
@@ -370,14 +370,14 @@ fn build_tcp_segment(buf: U8$[], ends: Ends, seq: U32, ack: U32, flags: U8, payl
     ps.put_u32_be(0, ends.src_ip)
     ps.put_u32_be(4, ends.dst_ip)
     pseudo[8] = 0
-    pseudo[9] = ip_proto_tcp
+    pseudo[9] = IP_PROTO_TCP
     ps.put_u16_be(10, U16::tcp_total_len)
     tcp_csum_acc: = checksum16_step(0, U8[]::pseudo, 0, 12)
     tcp_csum: =
-        checksum16_finish(checksum16_step(tcp_csum_acc, buf, tcp_off, tcp_total_len))
-    buf.put_u16_be(tcp_off + 16, tcp_csum)
+        checksum16_finish(checksum16_step(tcp_csum_acc, buf, TCP_OFF, tcp_total_len))
+    buf.put_u16_be(TCP_OFF + 16, tcp_csum)
 
-    return pad_to_min(buf, payload_off + payload.len)
+    return pad_to_min(buf, PAYLOAD_OFF + payload.len)
 
 fn parse_tcp_segment(buf: U8[], len: Sz, expect_src_ip: U32, expect_src_port: U16,
     expect_dst_port: U16): Tcp_segment //<
@@ -389,20 +389,20 @@ fn parse_tcp_segment(buf: U8[], len: Sz, expect_src_ip: U32, expect_src_port: U1
         //< peer_seq would run ahead. Every later segment would then fail on a seq mismatch.
     none: Tcp_segment = ::{ .ok = false, .flags = 0, .seq = 0, .ack = 0, .payload_off = 0,
         .payload_len = 0 }
-    const min_tcp_hdr: Sz = 20
-    ip: = ipv4_view(buf, len, ip_proto_tcp, min_tcp_hdr)
-    if !ip.ok || buf.get_u32_be(eth_hdr_len + 12) != expect_src_ip
+    const MIN_TCP_HDR: Sz = 20
+    ip: = ipv4_view(buf, len, IP_PROTO_TCP, MIN_TCP_HDR)
+    if !ip.ok || buf.get_u32_be(ETH_HDR_LEN + 12) != expect_src_ip
         return none
     ip_hdr_len: = ip.hdr_len
     ip_total: = ip.total
-    tcp_off: = eth_hdr_len + ip_hdr_len
+    tcp_off: = ETH_HDR_LEN + ip_hdr_len
     if buf.get_u16_be(tcp_off) != expect_src_port ||
         buf.get_u16_be(tcp_off + 2) != expect_dst_port
         return none
     // Caution: **Take the TCP header's length from its data offset**, or TCP options make the
     // payload start in the middle of them. Drop a data offset < 5.
     tcp_hdr_len: Sz = (buf[tcp_off + 12] >> 4) * 4
-    if tcp_hdr_len < min_tcp_hdr || ip_hdr_len + tcp_hdr_len > ip_total
+    if tcp_hdr_len < MIN_TCP_HDR || ip_hdr_len + tcp_hdr_len > ip_total
         return none
     return ::{
         .ok = true,

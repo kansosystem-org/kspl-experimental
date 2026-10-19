@@ -13,25 +13,25 @@ import "std/verdict"
 // Caution: **Do not test only the annotated shape.** It uses the declared type as it is, and it
 // passes even with the inference path broken.
 // ==========================================
-priv const words: U8[][3] = ::{ "alpha", "beta", "gamma" }
-priv const left: I64[3] = ::{ 1, 2, 3 }
-priv const right: I64[3] = ::{ 10, 20, 30 }
+priv const WORDS: U8[][3] = ::{ "alpha", "beta", "gamma" }
+priv const LEFT: I64[3] = ::{ 1, 2, 3 }
+priv const RIGHT: I64[3] = ::{ 10, 20, 30 }
 
 fn test_const_copy_binding()
     verdict.start("[sema] a binding copied from an immutable value is writable test...")
     // Make a mutable binding by inference alone, and assign to it later.
-    $w: = words[1]
+    $w: = WORDS[1]
     assert(w.equals("beta"), "the copy must start as the element it was made from")
-    w = words[0]
+    w = WORDS[0]
     assert(w.equals("alpha"), "a mutable binding copied from a const element must be assignable")
     // A ternary assigns to a temporary from its branches, both immutable arrays.
-    pick: = words[0].len == 5
-    chosen: = left if pick else right
+    pick: = WORDS[0].len == 5
+    chosen: = LEFT if pick else RIGHT
     assert(chosen[0] == 1I64, "a conditional over const arrays must copy the chosen one")
     // The copied array is writable (the owner decides its elements' immutability).
-    $mine: = left
+    $mine: = LEFT
     mine[0] = 99I64
-    assert(mine[0] == 99I64 && left[0] == 1I64, "writing the copy must not touch the original")
+    assert(mine[0] == 99I64 && LEFT[0] == 1I64, "writing the copy must not touch the original")
     verdict.pass("")
 
 // ==========================================
@@ -60,7 +60,7 @@ fn test_inferred_length_from_a_row()
 
 fn test_cast_of_an_element_to_its_own_type()
     verdict.start("[sema] a cast of an immutable element to its own type test...")
-    p: = Pair::pairs[1]
+    p: = Pair::PAIRS[1]
     m: I32[3][2] = ::{::{ 1, 2, 3 }, ::{ 4, 5, 6 } }
     $row: = I32[3]::m[1]
     row[0] = 40
@@ -76,25 +76,25 @@ fn test_cast_of_an_element_to_its_own_type()
 // constant never reaches this case** (emit_llvm_const_float in gen/llvm/decl.kspl).
 // Caution: **Do not list only values that round-trip** (`1.0` and `0.5` pass in decimal too).
 // ==========================================
-priv const scales: F32[6] = ::{ 2.0, 1.5, 1.25, 1.0, 0.875, 0.85 } //<
+priv const SCALES: F32[6] = ::{ 2.0, 1.5, 1.25, 1.0, 0.875, 0.85 } //<
     //< Values that round-trip and values that do not, mixed
 priv struct Pair //< an F32 inside a struct is the same route
     a: F32
     b: F32
-priv const pairs: Pair[2] = ::{ Pair::{ .a = 0.1, .b = 0.85 }, Pair::{ .a = 0.5, .b = 3.14 } }
-priv const separated: F32[2] = ::{ 1_000.5, 2_500.25F32 } //<
+priv const PAIRS: Pair[2] = ::{ Pair::{ .a = 0.1, .b = 0.85 }, Pair::{ .a = 0.5, .b = 3.14 } }
+priv const SEPARATED: F32[2] = ::{ 1_000.5, 2_500.25F32 } //<
     //< A `_` separator and a type suffix are removed before the value is read
 
 fn test_a_const_float_array_keeps_its_values()
     verdict.start("[genllvm] an immutable F32 array keeps its values test...")
     // Caution: **Compare against the value rounded to F32** (compared as F64, 0.85 does not match).
-    assert(scales[0] == 2.0F32 && scales[3] == 1.0F32, "a round-tripping value stays as it is")
-    assert(scales[4] == 0.875F32, "a fraction that is a power of two stays as it is")
-    assert(scales[5] == F32::0.85, "a value that does not round-trip is held as written too")
-    assert(scales[1] > scales[2] && scales[2] > scales[3], "the order is not broken")
-    assert(pairs[0].b == F32::0.85 && pairs[1].b == F32::3.14, "the same holds inside a struct")
-    assert(pairs[0].a == F32::0.1, "0.1 is held as written too")
-    assert(separated[0] == 1000.5F32 && separated[1] == 2500.25F32,
+    assert(SCALES[0] == 2.0F32 && SCALES[3] == 1.0F32, "a round-tripping value stays as it is")
+    assert(SCALES[4] == 0.875F32, "a fraction that is a power of two stays as it is")
+    assert(SCALES[5] == F32::0.85, "a value that does not round-trip is held as written too")
+    assert(SCALES[1] > SCALES[2] && SCALES[2] > SCALES[3], "the order is not broken")
+    assert(PAIRS[0].b == F32::0.85 && PAIRS[1].b == F32::3.14, "the same holds inside a struct")
+    assert(PAIRS[0].a == F32::0.1, "0.1 is held as written too")
+    assert(SEPARATED[0] == 1000.5F32 && SEPARATED[1] == 2500.25F32,
         "a separator or a suffix does not cut the value short")
     verdict.pass("an F32 that does not round-trip in decimal is held as the value written too.")
 
@@ -102,23 +102,23 @@ fn test_a_const_float_array_keeps_its_values()
 // A float constant computed from others folds on LLVM as C's compiler folds it for genc
 // (`fold_float` in `ksplc/gen/llvm/decl.kspl`); LLVM refused `pi * 2.0` and `I32::2.9`.
 // ==========================================
-priv const fold_pi: F64 = 3.25
-priv const fold_twice: F64 = fold_pi * 2.0
-priv const fold_third: F64 = 1.0 / 3.0
-priv const fold_neg: F64 = -(fold_pi - 0.25)
-priv const fold_down: I32 = I32::2.9
-priv const fold_down_neg: I32 = I32::(-2.9)
-priv const fold_up: F64 = F64::3
-priv const fold_small: F32 = 1.5F32 / 3.0F32
-priv const fold_table: F64[2] = ::{ fold_pi * 2.0, fold_third }
+priv const FOLD_PI: F64 = 3.25
+priv const FOLD_TWICE: F64 = FOLD_PI * 2.0
+priv const FOLD_THIRD: F64 = 1.0 / 3.0
+priv const FOLD_NEG: F64 = -(FOLD_PI - 0.25)
+priv const FOLD_DOWN: I32 = I32::2.9
+priv const FOLD_DOWN_NEG: I32 = I32::(-2.9)
+priv const FOLD_UP: F64 = F64::3
+priv const FOLD_SMALL: F32 = 1.5F32 / 3.0F32
+priv const FOLD_TABLE: F64[2] = ::{ FOLD_PI * 2.0, FOLD_THIRD }
 
 fn test_a_computed_float_constant_folds()
     verdict.start("[genllvm] a float constant computed from others folds test...")
-    assert(fold_twice == 6.5 && fold_neg == -3.0 && fold_up == 3.0, "arithmetic and a cast fold")
-    assert(fold_third == 1.0 / 3.0, "a division rounds as at run time")
-    assert(fold_down == 2 && fold_down_neg == -2, "a float cast to an integer truncates toward zero")
-    assert(fold_small == 0.5F32, "an F32 folds at F32")
-    assert(fold_table[0] == 6.5 && fold_table[1] == fold_third, "inside an array as well")
+    assert(FOLD_TWICE == 6.5 && FOLD_NEG == -3.0 && FOLD_UP == 3.0, "arithmetic and a cast fold")
+    assert(FOLD_THIRD == 1.0 / 3.0, "a division rounds as at run time")
+    assert(FOLD_DOWN == 2 && FOLD_DOWN_NEG == -2, "a float cast to an integer truncates toward zero")
+    assert(FOLD_SMALL == 0.5F32, "an F32 folds at F32")
+    assert(FOLD_TABLE[0] == 6.5 && FOLD_TABLE[1] == FOLD_THIRD, "inside an array as well")
     verdict.pass("each computed float constant holds the value C's fold gives.")
 
 // ==========================================
@@ -130,7 +130,7 @@ struct Const_row
     name: U8[]
     n: I32
 
-priv const const_rows: Const_row[_] = ::{
+priv const CONST_ROWS: Const_row[_] = ::{
     ::{ .name = "a", .n = 1 },
     ::{ .name = "b", .n = 2 },
 }
@@ -138,10 +138,10 @@ priv const const_rows: Const_row[_] = ::{
 fn test_const_struct_array()
     verdict.start("[genc] a top-level immutable const struct array test...")
     $total: I32 = 0
-    for row in const_rows
+    for row in CONST_ROWS
         total += row.n
     assert(total == 3, "a top-level const array of structs must be readable")
-    assert(const_rows[0].name.equals("a"), "element fields must survive the emission order")
+    assert(CONST_ROWS[0].name.equals("a"), "element fields must survive the emission order")
     verdict.pass("")
 fn test_multi_dim_array() //< that multi-dimensional fixed-length arrays share one struct tag in C
     //<

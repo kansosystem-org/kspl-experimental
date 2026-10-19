@@ -23,19 +23,19 @@ $tcb: Task
 $stack: U8[2048]
 $ln: con.Line
 
-const resp_cap: Sz = 1024 //< the limit on how much of the response is kept
+const RESP_CAP: Sz = 1024 //< the limit on how much of the response is kept
     //<
     //< Room for the status line and the end of the header; nc.drain_stream discards the rest.
 
 // Global: too large for the task stack (2048).
-$resp_buf: U8[resp_cap]
+$resp_buf: U8[RESP_CAP]
 
-const our_port: U16 = 54321
-const peer_port: U16 = 8080 // `python -m http.server 8080`
-const our_isn: U32 = 7000 // a fixed value (a demo; real use randomizes it)
-const request: U8[] = "GET / HTTP/1.1\r\nHost: 192.168.137.1\r\nConnection: close\r\n\r\n"
+const OUR_PORT: U16 = 54321
+const PEER_PORT: U16 = 8080 // `python -m http.server 8080`
+const OUR_ISN: U32 = 7000 // a fixed value (a demo; real use randomizes it)
+const REQUEST: U8[] = "GET / HTTP/1.1\r\nHost: 192.168.137.1\r\nConnection: close\r\n\r\n"
 
-const line_interval_ms: U32 = 1000
+const LINE_INTERVAL_MS: U32 = 1000
 
 // (c)'s results, appended to (b)'s line every second.
 priv $arp_ok: Bool = false
@@ -48,22 +48,22 @@ priv $tx_fail: U32 = 0
 priv fn run_http(): Bool //< the HTTP stage
     //<
     //< true if it succeeded.
-    if !nc.open(ln@, our_port, peer_port, our_isn)
+    if !nc.open(ln@, OUR_PORT, PEER_PORT, OUR_ISN)
         return false
     con.say(ln@, "[tcp]", "handshake ok (http)")
 
     // A real run of tcp_conn.tcp_stream_send; nc.send_all resends after a partial send.
-    sent_ok: = nc.send_all(request.ptr, request.len)
+    sent_ok: = nc.send_all(REQUEST.ptr, REQUEST.len)
     ln.reset()
     ln.str("[http] sent=")
-    ln.u32(U32::request.len if sent_ok else 0)
+    ln.u32(U32::REQUEST.len if sent_ok else 0)
     _s1: = ln.flush()
     if !sent_ok
         con.say(ln@, "[http]", "FAILED to send the request")
         nc.close_conn()
         return false
 
-    got: = nc.read_stream(U8$[]::resp_buf, nc.wait_frame_ms)
+    got: = nc.read_stream(U8$[]::resp_buf, nc.WAIT_FRAME_MS)
     if got == 0
         con.say(ln@, "[http]", "TIMEOUT: no response body")
         nc.close_conn()
@@ -88,7 +88,7 @@ priv fn run_http(): Bool //< the HTTP stage
 
     // It closes **only after the rest has been read** (the reason is at nc.drain_stream). This is
     // where **a response spanning several segments** tests tcp_stream_recv's seq tracking.
-    total: = got + nc.drain_stream(nc.wait_frame_ms)
+    total: = got + nc.drain_stream(nc.WAIT_FRAME_MS)
     ln.reset()
     ln.str("[http] total=")
     ln.u32(U32::total)
@@ -114,7 +114,7 @@ priv fn wait_link_up() //< (a) Prints the state every second until the link come
         ln.u32(usb.ncm_alt_setting())
         ln.str(" link=down")
         _sent: = ln.flush()
-        boot.pump(line_interval_ms)
+        boot.pump(LINE_INTERVAL_MS)
     con.say(ln@, "[ncm]", "link=up")
 
 priv fn say_peer_mac()
@@ -204,7 +204,7 @@ priv fn answer_forever() //< (b) Never returns
     //< The lines **that keep flowing** are the sign of life.
     $ticks: U32 = 0
     for
-        $budget: U32 = line_interval_ms
+        $budget: U32 = LINE_INTERVAL_MS
         for
             n: = nc.next_frame(budget@)
             if n == 0

@@ -9,26 +9,26 @@ import "std/ds" { List }
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
 
-const fence_laid: U8[] = "```kspl" //< the fences collected, and the notation each names
+const FENCE_LAID: U8[] = "```kspl" //< the fences collected, and the notation each names
     //<
     //< **Both are here**, or the brace fragments (` ```ksplb `) rot unread.
-const fence_braced: U8[] = "```ksplb"
-priv const fence_close: U8[] = "```"
-const snippet_fn: U8[] = "_doc_snippet" //< the function a fragment's statements are wrapped in
+const FENCE_BRACED: U8[] = "```ksplb"
+priv const FENCE_CLOSE: U8[] = "```"
+const SNIPPET_FN: U8[] = "_doc_snippet" //< the function a fragment's statements are wrapped in
 
 // The keywords that start a declaration when they open a line; `#` (an attribute or a directive)
 // starts one too.
-priv const top_level: U8[][] = U8[][]::{ "import", "embed", "pub", "priv", "fn", "struct", "enum",
+priv const TOP_LEVEL: U8[][] = U8[][]::{ "import", "embed", "pub", "priv", "fn", "struct", "enum",
         "trait", "impl", "typedef", "extern", "const",
 }
 
-priv const elision: U8[][] = U8[][]::{ "...", "…" } //< the mark of the writer's omission
+priv const ELISION: U8[][] = U8[][]::{ "...", "…" } //< the mark of the writer's omission
 
-priv const beside_mark: U8[] = "is beside it" //< a first line naming the file a program needs
+priv const BESIDE_MARK: U8[] = "is beside it" //< a first line naming the file a program needs
 
-priv const error_mark: U8[] = "error" //< a trailing comment opening with it marks a refused line
+priv const ERROR_MARK: U8[] = "error" //< a trailing comment opening with it marks a refused line
 
-const added_line: Sz = -1 //< `Shape.from` for a line the wrapping added
+const ADDED_LINE: Sz = -1 //< `Shape.from` for a line the wrapping added
 
 struct Snippet //< one fragment
     //<
@@ -40,7 +40,7 @@ struct Snippet //< one fragment
 
 struct Shape //< a fragment laid out as a file the compiler reads
     lines: List<|U8[]|>$@ //< the file's lines
-    from: List<|Sz|>$@ //< for each, the fragment's line it is (from 0), or `added_line`
+    from: List<|Sz|>$@ //< for each, the fragment's line it is (from 0), or `ADDED_LINE`
 
 fn collect(doc: U8[], text: U8[], out: List<|Snippet|>$@, arena: Arena$@) //<
     //< Collects the KSPL fences from one document, in either notation
@@ -55,9 +55,9 @@ fn collect(doc: U8[], text: U8[], out: List<|Snippet|>$@, arena: Arena$@) //<
         lineno += 1
         t: = raw.trim_spaces()
         if !inside
-            if t.equals(fence_laid) || t.equals(fence_braced)
+            if t.equals(FENCE_LAID) || t.equals(FENCE_BRACED)
                 inside = true
-                laid = t.equals(fence_laid)
+                laid = t.equals(FENCE_LAID)
                 // Caution: **Remove the fence's own indentation from every body line.** A fence in
                 // a list item carries its indentation, which the indentation notation reads as
                 // structure: a block never opened.
@@ -65,7 +65,7 @@ fn collect(doc: U8[], text: U8[], out: List<|Snippet|>$@, arena: Arena$@) //<
                 start = lineno
                 body.clear()
             continue
-        if t.equals(fence_close)
+        if t.equals(FENCE_CLOSE)
             inside = false
             out
                 .push(Snippet::{ .doc = doc, .line = start,
@@ -117,7 +117,7 @@ priv fn opens_word(text: U8[], word: U8[]): Bool //< whether the text opens with
     return text.len == word.len || !text[word.len].is_alnum()
 
 fn is_mark(ln: U8[]): Bool //< whether the line is code that ends in `// error`
-    return code_of(ln).trim_spaces().len > 0 && opens_word(comment_text(ln), error_mark)
+    return code_of(ln).trim_spaces().len > 0 && opens_word(comment_text(ln), ERROR_MARK)
 
 fn is_stray_mark(ln: U8[]): Bool //<
     //< Whether the line looks like a mark the check cannot read
@@ -126,7 +126,7 @@ fn is_stray_mark(ln: U8[]): Bool //<
     text: = comment_text(ln)
     if code_of(ln).trim_spaces().len == 0
         t: = text.strip_prefix("✗").trim_spaces()
-        return opens_word(t, error_mark) || opens_word(t, "Error")
+        return opens_word(t, ERROR_MARK) || opens_word(t, "Error")
     return opens_word(text, "Error")
 
 priv fn indent_of(ln: U8[]): Sz
@@ -176,7 +176,7 @@ fn has_elision(lines: List<|U8[]|>@): Bool //<
     //< inside one.
     for raw in lines
         code: = code_of(raw)
-        for e in elision
+        for e in ELISION
             if code.find_str(e).is_some()
                 return true
     return false
@@ -187,7 +187,7 @@ fn names_a_sibling(lines: List<|U8[]|>@): Bool //<
         t: = raw.trim_spaces()
         if t.len == 0
             continue
-        return t.starts_with("//") && t.find_str(beside_mark).is_some()
+        return t.starts_with("//") && t.find_str(BESIDE_MARK).is_some()
     return false
 
 fn is_whole(lines: List<|U8[]|>@): Bool //< whether it holds `main`, so it is a whole program
@@ -206,7 +206,7 @@ priv fn starts_top_level(ln: U8[]): Bool
     t: = ln.trim_spaces()
     if t.starts_with("#")
         return true
-    for kw in top_level
+    for kw in TOP_LEVEL
         if !t.starts_with(kw)
             continue
         rest: = t.sub_from(kw.len)
@@ -258,15 +258,15 @@ fn wrapped(lines: List<|U8[]|>@, laid: Bool, arena: Arena$@): Shape //<
     if !any
         return out
     out.lines
-        .push(arena.text().s("fn \{snippet_fn\}()").s("" if laid else " {").take())
-    out.from.push(added_line)
+        .push(arena.text().s("fn \{SNIPPET_FN\}()").s("" if laid else " {").take())
+    out.from.push(ADDED_LINE)
     for i in stmts
         ln: = lines.get(i)
         out.lines.push(arena.text().s("  ").s(ln).take() if ln.len > 0 else "")
         out.from.push(i)
     if !laid
         out.lines.push("}")
-        out.from.push(added_line)
+        out.from.push(ADDED_LINE)
     return out
 
 fn text_without(s: Shape@, dropped: List<|Bool|>@, arena: Arena$@): U8[] //<
@@ -274,7 +274,7 @@ fn text_without(s: Shape@, dropped: List<|Bool|>@, arena: Arena$@): U8[] //<
     b: = arena.text()
     for i in Range.asc(s.lines.len)
         at: = s.from.get(i)
-        if at == added_line || !dropped.get(at)
+        if at == ADDED_LINE || !dropped.get(at)
             b.s(s.lines.get(i))
         b.c('\n')
     return b.take()

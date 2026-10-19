@@ -8,9 +8,9 @@
 
 A *client* is any program that sends the server HTTP requests. It can be a browser, `curl`, your own code, or the small robot car described under "Steering the car". A client is written against this document, so a change here is a change to what somebody else's code depends on.
 
-How to start it is in [`kssrv/README.md`](../README.md), and why the server is shaped this way is in [`DESIGN-server.md`](DESIGN-server.md). The five endpoints a page opened in a browser can use are set one level up, in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md). That document is the agreement between the client page and this server and belongs to neither. Where the two documents meet, it is the canonical source (the one place the rule lives).
+How to start it is in [`kssrv/README.md`](../README.md). The five endpoints a page opened in a browser can use are set one level up, in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md). That document is the agreement between the client page and this server and belongs to neither. Where the two documents meet, it is the canonical source (the one place the rule lives).
 
-**The server runs in one of two modes, picked when it starts**, and several answers below depend on the mode. Why one flag decides all of this is "Local use and outward-facing use are split by one decision" in [`DESIGN-server.md`](DESIGN-server.md).
+**The server runs in one of two modes, picked when it starts**, and several answers below depend on the mode.
 
 | Mode | Started as | Who can reach it | What it offers besides the files |
 | :-- | :-- | :-- | :-- |

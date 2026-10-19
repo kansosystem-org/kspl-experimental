@@ -12,7 +12,7 @@ import "std/str"
 import "std/sys"
 import "std/verdict"
 
-const src: U8[] = """import "std/io"
+const SRC: U8[] = """import "std/io"
 
 fn main(): I32
     io.out().s("ok\n")
@@ -60,14 +60,14 @@ fn case_dir(name: U8[], slot: U8[], rels: U8[][], bodies: U8[][]): U8[] //<
 // (`lib_here/` for the package `mylib`).
 // ==========================================
 
-priv const named_cfg: U8[] = "[package]\nname = mylib\n"
+priv const NAMED_CFG: U8[] = "[package]\nname = mylib\n"
 
-priv const named_thing: U8[] = """fn hello(): U8[]
+priv const NAMED_THING: U8[] = """fn hello(): U8[]
     return "named"
 
 """
 
-priv const named_main: U8[] =
+priv const NAMED_MAIN: U8[] =
     """import "mylib/thing"
 import "std/io"
 
@@ -77,16 +77,16 @@ fn main(): I32
 
 """
 
-priv const named_stray: U8[] = """import "otherlib/x"
+priv const NAMED_STRAY: U8[] = """import "otherlib/x"
 
 fn main(): I32
     return 0
 
 """
 
-priv const used_cfg: U8[] = "[package]\nname = mylib\nuses = otherlib\n"
+priv const USED_CFG: U8[] = "[package]\nname = mylib\nuses = otherlib\n"
 
-priv const used_main: U8[] =
+priv const USED_MAIN: U8[] =
     """import "otherlib/x"
 import "std/io"
 
@@ -96,13 +96,13 @@ fn main(): I32
 
 """
 
-priv const used_x: U8[] = """pub fn hi(): U8[]
+priv const USED_X: U8[] = """pub fn hi(): U8[]
     return "used"
 
 """
 
 // An embed names its file the way an import does: by its package, or beside the file.
-priv const embed_main: U8[] =
+priv const EMBED_MAIN: U8[] =
     """import "std/io"
 embed "mylib/data/note.txt" as note
 embed "beside.txt" as beside
@@ -113,7 +113,7 @@ fn main(): I32
 
 """
 
-priv const embed_stray: U8[] =
+priv const EMBED_STRAY: U8[] =
     """embed "otherlib/x.txt" as x
 
 fn main(): I32
@@ -124,14 +124,14 @@ fn main(): I32
 
 """
 
-priv const embed_said: U8[] = "named data\nbeside\n"
+priv const EMBED_SAID: U8[] = "named data\nbeside\n"
 
 priv fn named_dir(name: U8[], slot: U8[]): U8[] //<
     //< a directory with the package `mylib` in lib_here/
     return case_dir(name, slot,
         U8[][]::{ "lib_here/ksplc.cfg", "lib_here/thing.kspl", "lib_here/probe/main.kspl",
         "lib_here/probe/stray.kspl" },
-        U8[][]::{ named_cfg, named_thing, named_main, named_stray })
+        U8[][]::{ NAMED_CFG, NAMED_THING, NAMED_MAIN, NAMED_STRAY })
 
 fn case_named_anywhere(std: U8[], arena: Arena$@) //<
     //< It runs a named package from its own folder, from one below it and from the one above
@@ -184,11 +184,11 @@ fn case_named_inner_cfg(std: U8[], arena: Arena$@) //<
         ksplc_env(U8[][]::{ "run", "lib_here/probe/main.kspl" }, dir, std, "", arena)
     verdict.check("and from the folder above the package", above.out.equals("named\n"), above.out)
 
-priv const dotted_cfg: U8[] = "[package]\nname = mylib\n\n[lint]\nW0206 = off\n"
+priv const DOTTED_CFG: U8[] = "[package]\nname = mylib\n\n[lint]\nW0206 = off\n"
 
 // **One function is called and one is not.** The called one's symbol carries the file's name
 // into the C. The uncalled one fires [W0206] unless a setting turns it off.
-priv const outside_lone: U8[] =
+priv const OUTSIDE_LONE: U8[] =
     """priv fn unused_helper(): I32
     return 3
 
@@ -227,7 +227,7 @@ fn case_named_dotted(std: U8[], arena: Arena$@) //<
         plain.exited_with(0) && dotted.exited_with(0) && a.len > 0 && a.equals(b),
         arena.text().s(plain.out).s(dotted.out).take())
     fs.write_tree(dir, U8[][]::{ "lib_here/ksplc.cfg", "outside/lone.kspl" },
-        U8[][]::{ dotted_cfg, outside_lone }, arena) catch
+        U8[][]::{ DOTTED_CFG, OUTSIDE_LONE }, arena) catch
         verdict.check(name, false, "cannot place the file outside the package")
         return
     top: = fs.join(dir, "lib_here", arena)
@@ -245,10 +245,10 @@ fn case_named_dotted(std: U8[], arena: Arena$@) //<
 // ==========================================
 // A file outside every package, named through `..`, is the file its plain name names. It is one
 // module with one set of globals, in the package its folded name says ("import syntax and path
-// resolution" in docs/SPEC-language.md).
+// resolution" in docs/SPEC-programming-language.md).
 // ==========================================
 
-priv const dotted_counter: U8[] =
+priv const DOTTED_COUNTER: U8[] =
     """$count: I32 = 0
 
 pub fn bump(): I32
@@ -261,21 +261,21 @@ fn peek(): I32
 
 """
 
-priv const dotted_bumper: U8[] = """import "../lib/n"
+priv const DOTTED_BUMPER: U8[] = """import "../lib/n"
 
 pub fn g(): I32
     return n.bump()
 
 """
 
-priv const dotted_peeker: U8[] = """import "../lib/n"
+priv const DOTTED_PEEKER: U8[] = """import "../lib/n"
 
 pub fn h(): I32
     return n.peek()
 
 """
 
-priv const dotted_twice: U8[] =
+priv const DOTTED_TWICE: U8[] =
     """import "lib/n"
 import "sub/m"
 
@@ -285,7 +285,7 @@ fn main(): I32
 
 """
 
-priv const dotted_peek_main: U8[] = """import "sub/p"
+priv const DOTTED_PEEK_MAIN: U8[] = """import "sub/p"
 
 fn main(): I32
     return p.h()
@@ -301,7 +301,7 @@ fn case_unit_dotted(std: U8[], arena: Arena$@) //<
     dir: =
         case_dir(name, "unit_dotted",
         U8[][]::{ "lib/n.kspl", "sub/m.kspl", "sub/p.kspl", "main.kspl", "peek.kspl" },
-        U8[][]::{ dotted_counter, dotted_bumper, dotted_peeker, dotted_twice, dotted_peek_main })
+        U8[][]::{ DOTTED_COUNTER, DOTTED_BUMPER, DOTTED_PEEKER, DOTTED_TWICE, DOTTED_PEEK_MAIN })
     if dir.len == 0
         return
     twice: = ksplc_env(U8[][]::{ "run", "main.kspl" }, dir, std, "", arena)
@@ -327,7 +327,7 @@ fn case_named_uses(std: U8[], arena: Arena$@) //<
         stray.out.find_str("not say it uses 'otherlib'").is_some(), stray.out)
     fs.write_tree(dir,
         U8[][]::{ "lib_here/ksplc.cfg", "lib_here/probe/used.kspl", "deps/otherlib/x.kspl" },
-        U8[][]::{ used_cfg, used_main, used_x }, arena) catch
+        U8[][]::{ USED_CFG, USED_MAIN, USED_X }, arena) catch
         verdict.check(name, false, "cannot place the used package")
         return
     deps: = fs.join(dir, "deps", arena)
@@ -349,19 +349,19 @@ fn case_named_embed(std: U8[], arena: Arena$@) //<
     fs.write_tree(dir,
         U8[][]::{ "lib_here/probe/embed.kspl", "lib_here/probe/embed_stray.kspl",
         "lib_here/data/note.txt", "lib_here/probe/beside.txt", "otherlib/x.txt" },
-        U8[][]::{ embed_main, embed_stray, "named data\n", "beside\n", "other\n" }, arena) catch
+        U8[][]::{ EMBED_MAIN, EMBED_STRAY, "named data\n", "beside\n", "other\n" }, arena) catch
         verdict.check(name, false, "cannot place the embedded files")
         return
     top: = fs.join(dir, "lib_here", arena)
     own: = ksplc_env(U8[][]::{ "run", "probe/embed.kspl" }, top, std, "", arena)
-    verdict.check(name, own.out.equals(embed_said), own.out)
+    verdict.check(name, own.out.equals(EMBED_SAID), own.out)
     below: =
         ksplc_env(U8[][]::{ "run", "embed.kspl" }, fs.join(top, "probe", arena), std, "", arena)
-    verdict.check("and from a folder below the package's top", below.out.equals(embed_said),
+    verdict.check("and from a folder below the package's top", below.out.equals(EMBED_SAID),
         below.out)
     above: =
         ksplc_env(U8[][]::{ "run", "lib_here/probe/embed.kspl" }, dir, std, "", arena)
-    verdict.check("and from the folder above it", above.out.equals(embed_said), above.out)
+    verdict.check("and from the folder above it", above.out.equals(EMBED_SAID), above.out)
     stray: =
         ksplc_env(U8[][]::{ "probe/embed_stray.kspl", "stray.c" }, top, std, "", arena)
     verdict.check("an embed of a package not listed in uses is refused at the embed",
@@ -403,7 +403,7 @@ fn case_named_elsewhere(std: U8[], arena: Arena$@) //<
     dir: =
         case_dir(name, "named_elsewhere",
         U8[][]::{ "proj/main.kspl", "proj/mylib/ksplc.cfg", "proj/mylib/thing.kspl" },
-        U8[][]::{ named_main, "[package]\nname = otherlib\n", named_thing })
+        U8[][]::{ NAMED_MAIN, "[package]\nname = otherlib\n", NAMED_THING })
     if dir.len == 0
         return
     r: =
@@ -416,7 +416,7 @@ fn case_named_elsewhere(std: U8[], arena: Arena$@) //<
     if outer.len == 0
         return
     fs.write_tree(outer, U8[][]::{ "ksplc.cfg", "plain/main.kspl" },
-        U8[][]::{ "[lint]\nZ9999 = on\n", src }, arena) catch
+        U8[][]::{ "[lint]\nZ9999 = on\n", SRC }, arena) catch
         verdict.check("the settings above a package do not reach into it", false,
             "cannot place the settings")
         return

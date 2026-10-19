@@ -6,7 +6,7 @@ import "std/chars"
 import "std/checked_int" + { Ci32, Cu32 as My_cu32, Checked_error }
 import "std/ds" + { Map }
 import "std/io"
-import "std/math" { pi as math_pi, sqrt as math_sqrt }
+import "std/math" { PI as math_pi, sqrt as math_sqrt }
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
 import "std/verdict"
@@ -634,7 +634,7 @@ priv struct Off_nested
 // It folds in a constant's context too.
 // Caution: **Do not leave this out.** The C passes it to C's `offsetof`, but a constant's
 // initializer and `--to=llvm` use ksplc's fold: two paths.
-priv const off_table: Sz[3] = ::{
+priv const OFF_TABLE: Sz[3] = ::{
     offsetof(Off_padded, a),
     offsetof(Off_padded, b),
     offsetof(Off_padded, c),
@@ -657,9 +657,9 @@ fn test_offsetof()
     assert(offsetof(Off_nested, h) == 0, "before the nesting it is 0")
     assert(offsetof(Off_nested, inner) == 8, "the nesting rounds up to the inner type's alignment")
 
-    first: = off_table[0]
-    second: = off_table[1]
-    third: = off_table[2]
+    first: = OFF_TABLE[0]
+    second: = OFF_TABLE[1]
+    third: = OFF_TABLE[2]
     assert(first == 0, "it folds in a constant's context too (the head)")
     assert(second == 8, "it crosses the padding in a constant's context too")
     assert(third == 16, "it keeps counting on in a constant's context too")
@@ -699,17 +699,17 @@ fn test_generic_struct_fills_as_plain()
     verdict
         .pass("#packed, #align and an array field's elements take effect on a generic's instance.")
 
-priv fn const_arg_of<|const n: I32|>(): I32 //< the value its const type argument carries
-    return n
+priv fn const_arg_of<|const N: I32|>(): I32 //< the value its const type argument carries
+    return N
 
-priv const minus_three: I32 = -3
+priv const MINUS_THREE: I32 = -3
 
 fn test_negative_const_type_arg()
     verdict.start("[Generics] a negative literal as a const type argument test...")
     // A negated literal is a unary node, not a literal. Read by its text alone, the argument is
     // `-`, and the instance returns `-;` (const_type_arg_value in sema/decl/resolve.kspl).
     assert(const_arg_of<|-3|>() == -3, "a negative literal reaches the body as its value")
-    assert(const_arg_of<|minus_three|>() == -3, "a const of the same value gives the same instance")
+    assert(const_arg_of<|MINUS_THREE|>() == -3, "a const of the same value gives the same instance")
     assert(const_arg_of<|3|>() == 3, "a positive literal stays apart from the negative one")
     verdict.pass("a negative literal passed as a const type argument carries its value.")
 
@@ -740,7 +740,7 @@ fn test_noreturn_as_catch_value()
     verdict.pass("a `#noreturn` call passes as catch's alternative value.")
 
 priv fn bind_probe(n: I32): I32? //<
-    //< `if name: = expr { … }` binds an Option ("Branching" in `../../docs/SPEC-language.md`)
+    //< `if name: = expr { … }` binds an Option ("Branching" in `../../docs/SPEC-programming-language.md`)
     //<
     //< Caution: **Check that the body is skipped when the binding fails**, or a non-empty `.none`
     //< branch passes. **Check that `else` means "when there was none" too.**
@@ -842,8 +842,8 @@ fn test_if_bind_in_else_if()
 
 // ==========================================
 // A `for` with no condition that no `break` leaves never ends, so a function can end on it
-// ("Loops" in `../../docs/SPEC-language.md`). The shapes that still need a `return` after the loop
-// are the cases `endless_for_*` in `tests/negative/control.kspl`.
+// ("Loops" in `../../docs/SPEC-programming-language.md`). The shapes that still need a `return`
+// after the loop are the cases `endless_for_*` in `tests/negative/control.kspl`.
 // ==========================================
 priv fn first_square_above(n: I32): I32 //< the first i whose square exceeds n
     $i: I32 = 0
@@ -881,7 +881,7 @@ priv struct Sz_of_value
     b: U8[3]
 
 priv $sz_global: Sz_of_value = ::{}
-priv const sz_of_global: Sz = sizeof(sz_global)
+priv const SZ_OF_GLOBAL: Sz = sizeof(sz_global)
 
 priv fn sz_of_param(p: I16): Sz
     return sizeof(p)
@@ -895,5 +895,5 @@ fn test_sizeof_of_a_value()
     assert(sz_of_param(1) == 2, "a parameter too")
     assert(sizeof(v.a) == 8 && sizeof(v.b) == 3 && sizeof(v.b[1]) == 1, "a field and an element")
     assert(sizeof(arr[0]) == 8 && sizeof(arr) == 32, "an array's element and the whole array")
-    assert(sz_of_global == sizeof(Sz_of_value), "a global's name folds in a constant")
+    assert(SZ_OF_GLOBAL == sizeof(Sz_of_value), "a global's name folds in a constant")
     verdict.pass("a value's name in sizeof reads as the value, and its type's size comes out.")

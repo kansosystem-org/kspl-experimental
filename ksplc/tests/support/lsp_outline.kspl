@@ -16,8 +16,8 @@ import "std/verdict"
 
 // **A local inside a body and a constant's own value are no part of the outline**; `inner` and
 // `helper` are there to be left out.
-priv const outline_src: U8[] =
-    """priv const limit: Sz = 4
+priv const OUTLINE_SRC: U8[] =
+    """priv const LIMIT: Sz = 4
 
 struct Pair
   left: I32
@@ -45,11 +45,11 @@ fn main(): I32
   return helper
 
 """
-priv const outline_uri: U8[] = "file:///o.kspl"
+priv const OUTLINE_URI: U8[] = "file:///o.kspl"
 
 // The source cut off inside `main`: the declarations before the error still come back.
-priv const broken_src: U8[] = "struct Kept\n  a: I32\n\n\nfn main(): I32\n  var x = 1\n\n"
-priv const broken_uri: U8[] = "file:///ob.kspl"
+priv const BROKEN_SRC: U8[] = "struct Kept\n  a: I32\n\n\nfn main(): I32\n  var x = 1\n\n"
+priv const BROKEN_URI: U8[] = "file:///ob.kspl"
 
 priv struct Seen //< one symbol as the check reads it
     name: U8[]
@@ -57,11 +57,11 @@ priv struct Seen //< one symbol as the check reads it
     depth: Sz
     inside: Bool //< whether the selection lies inside the range
 
-priv fn line_char(v: json.Val): I64 //< a position as one number, the line before the character
+priv fn line_char(v: json.Value): I64 //< a position as one number, the line before the character
     return v.get("line").as_int64().unwrap_or(-1I64) * 100000I64 + v.get("character").as_int64()
         .unwrap_or(-1I64)
 
-priv fn collect(list: json.Val, depth: Sz, out: List<|Seen|>$@, arena: Arena$@)
+priv fn collect(list: json.Value, depth: Sz, out: List<|Seen|>$@, arena: Arena$@)
     for one in list.arr_list(arena)
         range: = one.get("range")
         sel: = one.get("selectionRange")
@@ -80,29 +80,29 @@ priv fn found(seen: List<|Seen|>$@, name: U8[], kind: I32, depth: Sz): Bool //<
             return true
     return false
 
-priv fn ask(c: jsonrpc_client.Client$@, uri: U8[], src: U8[], arena: Arena$@): json.Val //<
+priv fn ask(c: jsonrpc_client.Client$@, uri: U8[], src: U8[], arena: Arena$@): json.Value //<
     //< Opens `src` and returns the answer to `documentSymbol` (null where none came)
-    c.notify("textDocument/didOpen", lsp_client.did_open(uri, src, arena), lsp_client.send_ms, arena)
+    c.notify("textDocument/didOpen", lsp_client.did_open(uri, src, arena), lsp_client.SEND_MS, arena)
         catch {}
     got: = lsp_client.answer(c, "textDocument/documentSymbol", lsp_client.at_doc(uri, arena),
-        lsp_client.read_ms, arena)
+        lsp_client.READ_MS, arena)
     lsp_client.close(c, uri, arena)
     return got
 
-fn run_outline(c: jsonrpc_client.Client$@, caps: json.Val, arena: Arena$@) //<
+fn run_outline(c: jsonrpc_client.Client$@, caps: json.Value, arena: Arena$@) //<
     //< Checks the outline of a source that parses and of one that does not
     verdict.check("it names documentSymbol among its capabilities",
         caps.get("documentSymbolProvider").as_bool().unwrap_or(false),
         lsp_client.dump(caps, arena))
 
-    got: = ask(c, outline_uri, outline_src, arena)
+    got: = ask(c, OUTLINE_URI, OUTLINE_SRC, arena)
     d: = lsp_client.dump(got, arena)
     $seen: = List<|Seen|>.new(arena)
     collect(got.get("result"), 0, seen@, arena)
     // The protocol's numbers: Constant 14, Struct 23, Field 8, Enum 10, EnumMember 22,
     // Interface 11, Method 6, Function 12.
     verdict.check("the top-level declarations come out at the top",
-        found(seen@, "limit", 14I32, 0) && found(seen@, "Pair", 23I32, 0) &&
+        found(seen@, "LIMIT", 14I32, 0) && found(seen@, "Pair", 23I32, 0) &&
         found(seen@, "Side", 10I32, 0) && found(seen@, "Shape", 11I32, 0) &&
         found(seen@, "main", 12I32, 0), d)
     verdict.check("a type's fields and variants nest under it",
@@ -121,7 +121,7 @@ fn run_outline(c: jsonrpc_client.Client$@, caps: json.Val, arena: Arena$@) //<
     verdict.check("each name's place lies inside its declaration's range", !outside, d)
 
     // **A document that fails to parse gets what parsed around the error**, as its colouring does.
-    bad: = ask(c, broken_uri, broken_src, arena)
+    bad: = ask(c, BROKEN_URI, BROKEN_SRC, arena)
     $bad_seen: = List<|Seen|>.new(arena)
     collect(bad.get("result"), 0, bad_seen@, arena)
     verdict.check("a source that does not parse still lists what parsed",
@@ -147,7 +147,7 @@ struct Toks //< it decodes `semanticTokens/full`'s answer
     // Whether there was one whose length was 0 or under.
     empty: Bool
 
-fn read_tokens(data: json.Val, types: Sz, arena: Arena$@): Toks
+fn read_tokens(data: json.Value, types: Sz, arena: Arena$@): Toks
     // A JSON array is a linked list, copied into a list to index (`arr_list` in `std/json`).
     nums: = data.arr_list(arena)
     n: = nums.len
@@ -178,7 +178,7 @@ fn read_tokens(data: json.Val, types: Sz, arena: Arena$@): Toks
         got.count += 1
     return got
 
-fn off_words(data: json.Val, src: U8[], arena: Arena$@): Sz //<
+fn off_words(data: json.Value, src: U8[], arena: Arena$@): Sz //<
     //< How many tokens do not cover one whole name as written
     //<
     //< **A colour on anything but a name is a token nobody wrote there.** One the compiler made,
@@ -226,7 +226,7 @@ priv fn is_name_char(ch: U8): Bool
 // Not a suite. ksplc's `lsp` suite uses it on a file in its own folder, and the root's `lsp-tree`
 // on the repository's whole tree. So what `lsp-tree` calls is `pub`.
 // ==========================================
-const heavy_ms: I32 = 60000 //< the default (15 seconds) is not enough
+const HEAVY_MS: I32 = 60000 //< the default (15 seconds) is not enough
     //<
     //< A didOpen analyses the document's whole import tree, as many files as a workspace query. At
     //< the default a slow disk misses, and "no answer" cannot be told from "the timeout expired".
@@ -234,7 +234,7 @@ const heavy_ms: I32 = 60000 //< the default (15 seconds) is not enough
 pub struct Prepared //<
     //< What prepareCallHierarchy gave: the first item and the raw response
     pub found: Bool
-    pub item: json.Val
+    pub item: json.Value
     pub raw: U8[]
 
 pub fn prepare_fn(c: jsonrpc_client.Client$@, rel: U8[], text: U8[], decl: U8[], arena: Arena$@):
@@ -243,11 +243,11 @@ pub fn prepare_fn(c: jsonrpc_client.Client$@, rel: U8[], text: U8[], decl: U8[],
         //<
         //< Caution: **Return the raw response too**: with no item, only it tells "the worker has no
         //< answer" from "the timeout expired".
-    c.notify("textDocument/didOpen", lsp_client.did_open(rel, text, arena), lsp_client.send_ms,
+    c.notify("textDocument/didOpen", lsp_client.did_open(rel, text, arena), lsp_client.SEND_MS,
         arena) catch {}
     line: = decl_line(text, decl, arena)
     pos: = lsp_client.at_pos(rel, line, decl.len - 1, arena)
-    msg: = c.request("textDocument/prepareCallHierarchy", pos, heavy_ms, arena) catch e
+    msg: = c.request("textDocument/prepareCallHierarchy", pos, HEAVY_MS, arena) catch e
         return Prepared::{ .found = false, .item = .null_val, .raw = end_text(e) }
     items: = msg.val.get("result")
     list: = items.arr_list(arena)
@@ -261,16 +261,16 @@ pub struct Incoming //< the result of incomingCalls: the array of callers
     //<
     //< Caution: **Do not discard why it came back empty.** "It does not have it", "the timeout
     //< expired" and "the supervisor killed the worker" are each fixed in a different place.
-    pub calls: List<|json.Val|> //< the incoming calls, empty where none came
+    pub calls: List<|json.Value|> //< the incoming calls, empty where none came
     pub timed_out: Bool //< whether the timeout expired before an answer
 
-pub fn incoming(c: jsonrpc_client.Client$@, item: json.Val, arena: Arena$@): Incoming //<
+pub fn incoming(c: jsonrpc_client.Client$@, item: json.Value, arena: Arena$@): Incoming //<
     //< who calls `item`
     //<
     //< **It walks the workspace**, as references does, so it waits as long (`walk_ms`).
     $b: = Json_builder.new(arena)
     params: = b.obj().set("item", item).build()
     msg: =
-        c.request("callHierarchy/incomingCalls", params, lsp_client.walk_ms, arena) catch
-        return Incoming::{ .calls = List<|json.Val|>.new(arena), .timed_out = true }
+        c.request("callHierarchy/incomingCalls", params, lsp_client.WALK_MS, arena) catch
+        return Incoming::{ .calls = List<|json.Value|>.new(arena), .timed_out = true }
     return Incoming::{ .calls = msg.val.get("result").arr_list(arena), .timed_out = false }

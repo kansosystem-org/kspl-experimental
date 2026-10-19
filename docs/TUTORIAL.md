@@ -1,10 +1,10 @@
-# A tour of KSPL
+# A tutorial of KSPL
 
-**This page teaches KSPL by walking through one small program, one declaration at a time.** It is for programmers who know another language, such as Python, JavaScript or C. Each section shows one piece of the program and says what that piece teaches. At the end, `main` puts the pieces together, and the page shows what the program prints. Joined in order, the code blocks are the whole program, which the gates compile and run; it is also one file, [`../ksplc/tests/notation/tour.kspl`](../ksplc/tests/notation/tour.kspl).
+**This page teaches KSPL by walking through one small program, one declaration at a time.** It is for programmers who know another language, such as Python, JavaScript or C. Each section shows one piece of the program and says what that piece teaches. At the end, `main` puts the pieces together, and the page shows what the program prints. Joined in order, the code blocks are the whole program, which the gates compile and run; it is also one file, [`../ksplc/tests/notation/tutorial.kspl`](../ksplc/tests/notation/tutorial.kspl).
 
 **To run it, or anything of your own, the quick start is in the root [`../README.md`](../README.md).** It fetches `ksplc`, writes a first file and runs it in three steps. Nothing on this page needs more than that.
 
-**Do not edit this page.** It is written by `make tour` from the program and the program's own output, and `make test-docs` refuses a page older than its program.
+**Do not edit this page.** It is written by `make tutorial` from the program and the program's own output, and `make test-docs` refuses a page older than its program.
 
 ## The types you will meet
 
@@ -22,7 +22,7 @@
 ## The steps
 
 1. **Bringing in what the program uses** — `import`
-1. **Naming a value, and why the type is written** — `limit`
+1. **Naming a value, and why the type is written** — `LIMIT`
 1. **Saying something, and what a function looks like** — `greet`
 1. **A changing binding, and the three shapes of a loop** — `count_up`
 1. **Values laid side by side** — `Point`
@@ -60,7 +60,7 @@ import "std/strfmt" as _strfmt // the route reaching `\{x\}`'s `fmt`; `_` asks f
 **A `const` cannot be assigned to.** `Sz` is the type for sizes and counts. At the top of a file the type is written out rather than inferred. A top-level name is the file's interface, and a reader of another file has only this line to go on. Inside a function the type can be left off.
 
 ```kspl
-priv const limit: Sz = 4
+priv const LIMIT: Sz = 4
 ```
 
 ## Saying something, and what a function looks like
@@ -261,7 +261,7 @@ priv fn gather(arena: Arena$@): List<|U8[]|>
         out.push(w)
         seen += 1
     outer: for
-        for k in Range.asc(limit)
+        for k in Range.asc(LIMIT)
             if k == 2
                 break outer
     return out
@@ -337,5 +337,5 @@ defer comes out last.
 
 | You want to | Read |
 | :-- | :-- |
-| Look a rule up: the language rule by rule, not for reading through | [`SPEC-language.md`](SPEC-language.md) |
+| Look a rule up: the language rule by rule, not for reading through | [`SPEC-programming-language.md`](SPEC-programming-language.md) |
 | Set a project of your own up. That covers an executable to hand out and a program split over files. It also covers VS Code with the language server and the debugger | [`HOWTO-set-up-a-project.md`](HOWTO-set-up-a-project.md) |

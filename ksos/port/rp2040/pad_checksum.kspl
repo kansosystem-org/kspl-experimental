@@ -10,7 +10,7 @@ import "std/chars" // tests on one character, and slicing
 import "std/io"
 import "std/sys"
 
-priv const pad: Sz = 256
+priv const PAD: Sz = 256
 // The output buffer.
 // Caution: It must be the same length as pad (the last 4 bytes are the checksum).
 priv $buf: U8[256]
@@ -34,8 +34,8 @@ fn main(): I32
     src: = io.read_file(in_path) catch e
         io.err().s("pad_checksum: cannot read \{in_path\}: \{e\}\n")
         return 1
-    if src.len > pad - 4
-        io.err().s("pad_checksum: stage2 too large: \{src.len\} bytes (max \{pad - 4\})\n")
+    if src.len > PAD - 4
+        io.err().s("pad_checksum: stage2 too large: \{src.len\} bytes (max \{PAD - 4\})\n")
         return 1
 
     // 1. Apply CRC32 to the 252 bit-reversed bytes (the unused tail is zero-filled; reversed, it is
@@ -45,12 +45,12 @@ fn main(): I32
     for i in Range.asc(src.len)
         out[i] = U8::bitrev(src[i], 8)
     all: = U8[]::buf
-    ck: = bitrev(all.sub(0, pad - 4).crc32(0xffffffff), 32)
+    ck: = bitrev(all.sub(0, PAD - 4).crc32(0xffffffff), 32)
 
     // 2. The output is the data **before** reversing, plus the checksum in little endian.
     out.fill(0)
     _n: = out.copy_from(0, src)
-    out.put_u32_le(pad - 4, ck)
+    out.put_u32_le(PAD - 4, ck)
 
     out_path: = args.get(2)
     io.write_file(out_path, all) catch e

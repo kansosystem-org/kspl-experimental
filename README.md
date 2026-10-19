@@ -9,7 +9,7 @@
 
 **Only what you write happens.** No garbage collector frees unused memory in the background. Memory allocation requires an explicit request. No exception skips your code. A function that can fail declares that in its type.
 
-**Follow the three [Quick start](#-quick-start-write-and-run-your-first-program) steps below.** Get the compiler `ksplc`. Save the four-line program as `hello.kspl`. Run `ksplc run hello.kspl`. Then read [`docs/TOUR.md`](docs/TOUR.md) to learn the language in short steps.
+**Follow the three [Quick start](#-quick-start-write-and-run-your-first-program) steps below.** Get the compiler `ksplc`. Save the four-line program as `hello.kspl`. Run `ksplc run hello.kspl`. Then read [`docs/TUTORIAL.md`](docs/TUTORIAL.md) to learn the language in short steps.
 
 "Kanso" (簡素, simplicity) names the project’s design philosophy. KSPL is its first product. Kanso OS, Kanso Server, the AI engine, Kanso DataBase and Kanso Doc follow the same philosophy. Their folders appear in "Repository layout" below.
 
@@ -72,7 +72,7 @@ Put the C compiler `clang` on your PATH before starting. `ksplc` passes its gene
 
   `run` compiles, links and runs the program in one command. It prints `Hello, Kanso!`.
 
-Next, read [`docs/HOWTO-set-up-a-project.md`](docs/HOWTO-set-up-a-project.md) for arguments, working folders, distributable executables, programs with several files and VS Code. [`docs/TOUR.md`](docs/TOUR.md) teaches the language.
+Next, read [`docs/HOWTO-set-up-a-project.md`](docs/HOWTO-set-up-a-project.md) for arguments, working folders, distributable executables, programs with several files and VS Code. [`docs/TUTORIAL.md`](docs/TUTORIAL.md) teaches the language.
 
 ## 🧭 How it is designed
 
@@ -89,7 +89,7 @@ Each row is one idea that shapes the whole language, and what it means when you 
 | **A compiler a tool can read** | `--diagnostic-format=json` requests error messages as JSON. `ksplc explain <code>` explains each message code. Editors, scripts and AI models can read this output directly. |
 | **AI runs in it** | KSPL runs and trains AI models (`ksai/`). The models need no second implementation language. The same code runs on microcontrollers and servers. |
 
-Read [`docs/DESIGN-principles.md`](docs/DESIGN-principles.md) for the reasons behind these ideas. Its section "Models write it, and AI runs in it" covers the last two rows. [`docs/SPEC-language.md`](docs/SPEC-language.md) defines imports in "The three strict rules of path resolution". Its section "8.4 The memory management model: `defer` / ARC / arenas" covers how to choose memory management.
+Read [`docs/DESIGN-principles.md`](docs/DESIGN-principles.md) for the reasons behind these ideas. Its section "Models write it, and AI runs in it" covers the last two rows. [`docs/SPEC-programming-language.md`](docs/SPEC-programming-language.md) defines imports in "The three strict rules of path resolution". Its section "8.4 The memory management model: `defer` / ARC / arenas" covers how to choose memory management.
 
 ## 📊 What works, and how far
 
@@ -166,13 +166,13 @@ Note: **Only RP2040 files under `ksos/` require attribution to the Raspberry Pi 
 
 ## 📖 Further reading
 
-A document’s name identifies its kind. `TOUR` teaches the language; `HOWTO-` gives task instructions. `SPEC-` defines rules; `DESIGN` explains their reasons. "Document naming" in [`docs/SPEC-documents.md`](docs/SPEC-documents.md) defines these kinds. A folder’s listing gives its reading order. The layout table above maps the repository.
+A document’s name identifies its kind. `TUTORIAL` teaches the language; `HOWTO-` gives task instructions. `SPEC-` defines rules; `DESIGN` explains their reasons. "Document naming" in [`docs/SPEC-documents.md`](docs/SPEC-documents.md) defines these kinds. A folder’s listing gives its reading order. The layout table above maps the repository.
 
 | Document | What it is for | Who reads it |
 | :-- | :-- | :-- |
-| [`docs/TOUR.md`](docs/TOUR.md) | The language one step at a time, through one program the gates run | Whoever is learning KSPL; start here after the quick start |
+| [`docs/TUTORIAL.md`](docs/TUTORIAL.md) | The language one step at a time, through one program the gates run | Whoever is learning KSPL; start here after the quick start |
 | [`docs/HOWTO-set-up-a-project.md`](docs/HOWTO-set-up-a-project.md) | After the quick start: arguments, an executable, several files, VS Code | Whoever writes KSPL and has `ksplc` |
-| [`docs/SPEC-language.md`](docs/SPEC-language.md) | The language specification | Whoever writes KSPL and needs the exact rule |
+| [`docs/SPEC-programming-language.md`](docs/SPEC-programming-language.md) | The language specification | Whoever writes KSPL and needs the exact rule |
 | [`docs/HOWTO-build.md`](docs/HOWTO-build.md) | Building `ksplc` from source, the tests, and the environment for each platform | Whoever has no prebuilt `ksplc`, and whoever changes Kanso; both need a C compiler and Make |
 | [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) | Building from source, the gates, and the rules for changing Kanso | Whoever is about to change Kanso |
 | [`docs/README.md`](docs/README.md) | Every document that belongs to no single package, and who each is for | Whoever looks for a document not listed here |

@@ -8,7 +8,7 @@ function kspageProbeStore(ks) {
   const typed = app.text();
   const written = app.save();
   // Caution: **Do not hunt in a packed shape** (the save's shape is one value per line, with one
-  // space after the key. `kspage/share/store.kspl`'s `spacing`).
+  // space after the key. `kspage/share/store.kspl`'s `SPACING`).
   check(written.indexOf("\"kspage\": 6") >= 0, "the version goes into the text written out");
   // **The answer is the reason rather than a true or false** (`api.js`'s `load`). An empty
   // text is "it could be read", and a refusal names its reason. "It cannot be read" and "too
@@ -205,11 +205,22 @@ function kspageProbeStore(ks) {
       check(child.kspage.text().indexOf(placeMark) < 0
         && child.document.getElementById("local-path").value === "",
       "a window arrived at afresh comes up on the sample, carrying no place");
+      // A reload can abort the pending IndexedDB write. Wait for its transaction to finish,
+      // not merely for the document to appear on screen.
+      const store = child.kspage.keepStore;
+      const keepWhere = store.keepWhere;
+      let placed = null;
+      store.keepWhere = (tab, where) => {
+        placed = keepWhere(tab, where);
+        return placed;
+      };
       const field = child.document.getElementById("local-path");
       field.value = "again.kspage";
       field.dispatchEvent(new child.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
       check(await until(() => child.kspage.text().indexOf(placeMark) >= 0, "the place to open"),
         "the other window opens the place");
+      check(placed !== null, "opening the document asks to keep its place");
+      await placed;
       check(await readAgain(child), "the other window is read again");
       check(await until(() => child.kspage.text().indexOf(placeMark) >= 0, "the place reopened"),
         "a page read again comes up on the document it had open (" + child.kspage.text() + ")");

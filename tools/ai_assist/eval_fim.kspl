@@ -11,39 +11,31 @@
 //   ./out/eval_fim.exe --model=empty    # the lower bound (nothing inserted): 0% by construction
 //   ./out/eval_fim.exe --model=native   # ksai/examples/fim_coder, K candidates per hole
 // ==========================================
-import "std/argp"
+import "std/argparse"
 import "std/chars"
 import "std/ds" { List }
 import "std/io"
 import "std/json" { Json_builder }
 import "std/mem" { Arena }
-import "std/str" { Str_builder }
+import "std/str" + { Str_builder }
 import "std/strfmt"
 import "std/subproc"
 import "std/sys"
 import "tools/ai_assist/ksplc_oracle" as oracle
 
-priv const holes_per_file: Sz = 8 // the most holes taken from one file
-priv const stride: Sz = 3 // every third line that holds text is tried as a hole
-priv const stem: U8[] = "_eval_tmp"
-priv const vocab_path: U8[] = "tools/ai_assist/tokenizer/vocab.txt"
-priv const merges_path: U8[] = "tools/ai_assist/tokenizer/merges.txt"
-priv const holes_path: U8[] = "out/eval_fim_holes.jsonl"
-priv const answers_path: U8[] = "out/eval_fim_answers.jsonl"
-priv const coder_wait_ms: I32 = 3600000 // the cap on one run of the model over every hole
+priv const HOLES_PER_FILE: Sz = 8 // the most holes taken from one file
+priv const STRIDE: Sz = 3 // every third line that holds text is tried as a hole
+priv const STEM: U8[] = "_eval_tmp"
+priv const VOCAB_PATH: U8[] = "tools/ai_assist/tokenizer/vocab.txt"
+priv const MERGES_PATH: U8[] = "tools/ai_assist/tokenizer/merges.txt"
+priv const HOLES_PATH: U8[] = "out/eval_fim_holes.jsonl"
+priv const ANSWERS_PATH: U8[] = "out/eval_fim_answers.jsonl"
+priv const CODER_WAIT_MS: I32 = 3600000 // the cap on one run of the model over every hole
 
 priv struct Hole
     prefix: U8[]
     middle: U8[]
     suffix: U8[]
-
-priv fn join_lines(lines: List<|U8[]|>$@, start: Sz, end: Sz, arena: Arena$@): U8[]
-    b: = arena.text()
-    for $i: Sz = start; i < end; i += 1
-        if i > start
-            b.c('\n')
-        b.s(lines[i])
-    return b.take()
 
 priv fn holes_of(code: U8[], arena: Arena$@): List<|Hole|> //<
     //< The holes taken from one file: single non-blank lines, **each one needed for the compile**
@@ -55,15 +47,15 @@ priv fn holes_of(code: U8[], arena: Arena$@): List<|Hole|> //<
     lines: = arena.create(code.split('\n', arena))
     $out: = List<|Hole|>.new(arena)
     $seen: Sz = 0
-    for $i: Sz = 1; i + 1 < lines.len && out.len < holes_per_file; i += 1
+    for $i: Sz = 1; i + 1 < lines.len && out.len < HOLES_PER_FILE; i += 1
         if lines[i].trim_spaces().len == 0
             continue
         seen += 1
-        if seen % stride != 0
+        if seen % STRIDE != 0
             continue
-        prefix: = arena.text().s(join_lines(lines, 0, i, arena)).c('\n').take()
-        suffix: = arena.text().c('\n').s(join_lines(lines, i + 1, lines.len, arena)).take()
-        if oracle.compiles(arena.text().s(prefix).s(suffix).take(), stem, arena)
+        prefix: = arena.text().s("\n".join(lines.sub(0, i), arena)).c('\n').take()
+        suffix: = arena.text().c('\n').s("\n".join(lines.sub_from(i + 1), arena)).take()
+        if oracle.compiles(arena.text().s(prefix).s(suffix).take(), STEM, arena)
             continue
         out.push(Hole::{ .prefix = prefix, .middle = lines[i], .suffix = suffix })
     return out
@@ -81,24 +73,24 @@ priv fn native_answers(holes: List<|Hole|>$@, coder: U8[], weights: U8[], sample
         b.obj().set("prefix", b.str_val(h.prefix)).set("suffix", b.str_val(h.suffix)).build()
             .dump(text@)
         text.c('\n')
-    io.write_file(holes_path, text.slice()) catch
-        io.err().s("[error] cannot write \{holes_path\}\n")
+    io.write_file(HOLES_PATH, text.slice()) catch
+        io.err().s("[error] cannot write \{HOLES_PATH\}\n")
         sys.exit(1)
     argv: = U8[][]::{ coder, "complete",
-        arena.text().s("--vocab=").s(vocab_path).take(),
-        arena.text().s("--merges=").s(merges_path).take(),
+        arena.text().s("--vocab=").s(VOCAB_PATH).take(),
+        arena.text().s("--merges=").s(MERGES_PATH).take(),
         arena.text().s("--weights=").s(weights).take(),
-        arena.text().s("--in=").s(holes_path).take(),
-        arena.text().s("--out=").s(answers_path).take(),
+        arena.text().s("--in=").s(HOLES_PATH).take(),
+        arena.text().s("--out=").s(ANSWERS_PATH).take(),
         arena.text().s("--samples=").s(samples).take() }
-    r: = subproc.run_capture(argv, "", coder_wait_ms, 1024 * 1024, arena) catch
+    r: = subproc.run_capture(argv, "", CODER_WAIT_MS, 1024 * 1024, arena) catch
         io.err().s("[error] \{coder\} could not be started\n")
         sys.exit(1)
     if !r.exited_with(0)
         io.err().s("[error] \{coder\} did not answer\n\{r.stderr_data\}")
         sys.exit(1)
-    recs: = oracle.load_jsonl(answers_path, arena) catch
-        io.err().s("[error] cannot read \{answers_path\}\n")
+    recs: = oracle.load_jsonl(ANSWERS_PATH, arena) catch
+        io.err().s("[error] cannot read \{ANSWERS_PATH\}\n")
         sys.exit(1)
     if recs.len != holes.len
         io.err().s("[error] \{holes.len\} holes went out, \{recs.len\} answers came back\n")
@@ -126,7 +118,7 @@ priv fn first_passing(h: Hole, cands: List<|U8[]|>$@, arena: Arena$@): Sz //<
                 again = true
         if again
             continue
-        if oracle.compiles(arena.text().s(h.prefix).s(c).s(h.suffix).take(), stem, arena)
+        if oracle.compiles(arena.text().s(h.prefix).s(c).s(h.suffix).take(), STEM, arena)
             return i
     return cands.len
 
@@ -141,7 +133,7 @@ fn main() //< measures the completion's compile-pass and exact-match rates
     $coder: U8[] = "out/fim_coder.exe"
     $weights: U8[] = "out/fim_coder.safetensors"
     $samples: U8[] = "4"
-    p: = argp.Parser
+    p: = argparse.Parser
         .create(sys.program_name(), "measure the compile-pass rate of FIM completion over val.jsonl",
         arena)
     p.str_opt("--model", model@, "the model scored (oracle / empty / native)")
@@ -155,7 +147,7 @@ fn main() //< measures the completion's compile-pass and exact-match rates
 
     $val_path: = Str_builder.new()
     defer val_path.free()
-    val_path.s(oracle.corpus_dir).s("/val.jsonl")
+    val_path.s(oracle.CORPUS_DIR).s("/val.jsonl")
     recs: = oracle.load_jsonl(val_path.slice(), arena) catch
         io.err().s("[error] cannot read \{val_path.slice()\} (run build_corpus first)\n")
         sys.exit(1)
@@ -166,7 +158,7 @@ fn main() //< measures the completion's compile-pass and exact-match rates
     $skipped: Sz = 0
     for rec in recs
         code: = rec.get("code").as_str().unwrap_or("")
-        if !oracle.compiles(code, stem, arena)
+        if !oracle.compiles(code, STEM, arena)
             skipped += 1
             continue
         files += 1

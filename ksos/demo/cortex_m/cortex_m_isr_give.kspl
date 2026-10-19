@@ -13,7 +13,7 @@ import "ksos/drivers/cortex_m/scs"
 import "ksos/kernel/sync"
 import "ksos/kernel/task" + { Task }
 
-const irq0: U32 = 0 //< the interrupt raised: no hardware of either QEMU board raises it here
+const IRQ0: U32 = 0 //< the interrupt raised: no hardware of either QEMU board raises it here
 
 $g_sem_mid: sync.Sem
 $g_sem_high: sync.Sem
@@ -43,7 +43,7 @@ fn waiter(arg: Void$@): Void //< waits on the semaphore given, then records its 
     g_ran += 1
 
 fn raise_irq0() //< pends IRQ0 and waits until the core has taken it
-    scs.set_pending(irq0)
+    scs.set_pending(IRQ0)
     // The barriers make the write reach the NVIC, and the core take the interrupt, before the next
     // instruction.
     __kspl_asm_volatile("dsb")
@@ -51,7 +51,7 @@ fn raise_irq0() //< pends IRQ0 and waits until the core has taken it
 
 fn low(_arg: Void$@): Void
     con.puts("=== Kanso OS (Cortex-M) gives from an ISR switch on the handler's return ===\n")
-    scs.enable_irq(irq0)
+    scs.enable_irq(IRQ0)
     raise_irq0()
     con.check("the interrupt handler ran and gave", g_gives == 1)
     con.check("both tasks woken by the ISR's gives ran before the interrupted task's next line",

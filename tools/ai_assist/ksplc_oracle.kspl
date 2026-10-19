@@ -17,8 +17,8 @@ import "std/strfmt" as _strfmt
 import "std/subproc"
 import "std/sys"
 
-const ksplc_path: U8[] = "out/ksplc_stage1.exe" //< the compiler every measure here uses
-const corpus_dir: U8[] = "tools/ai_assist/corpus" //< where the temporary source is written
+const KSPLC_PATH: U8[] = "out/ksplc_stage1.exe" //< the compiler every measure here uses
+const CORPUS_DIR: U8[] = "tools/ai_assist/corpus" //< where the temporary source is written
 
 fn close_or_die(f: io.File_stream$@, path: U8[]) //< closes a file, or stops the run if it cannot
     //<
@@ -29,26 +29,26 @@ fn close_or_die(f: io.File_stream$@, path: U8[]) //< closes a file, or stops the
         io.err().s("error: could not finish writing '\{path\}' (the file is incomplete)\n")
         sys.exit(1)
     f.free()
-pub const uncompilable: I32 = 999 //< no verdict: the run never started, timed out or ended early
+pub const UNCOMPILABLE: I32 = 999 //< no verdict: the run never started, timed out or ended early
 
-priv const compile_timeout_ms: I32 = 60000
-priv const output_cap: Sz = 1024 * 1024
+priv const COMPILE_TIMEOUT_MS: I32 = 60000
+priv const OUTPUT_CAP: Sz = 1024 * 1024
 
 pub struct Compile_result //< what one run of the compiler said
-    pub error_count: I32 //< the closing object's `errors`, or `uncompilable` where there is none
+    pub error_count: I32 //< the closing object's `errors`, or `UNCOMPILABLE` where there is none
     stderr_data: U8$[] //< what the compiler wrote, a JSON object a line; empty if it never started
         //<
         //< Not `stderr`, which is a macro in the Windows (MSVC UCRT) headers (see
         //< std/sys.Run_result).
 
-fn load_jsonl(path: U8[], arena: Arena$@): json.Val$[]!io.Io_error //< one JSON record per line
+fn load_jsonl(path: U8[], arena: Arena$@): json.Value$[]!io.Io_error //< one JSON record per line
     //<
     //< Shared by the corpus tools. A blank line is skipped, but broken JSON panics, so a broken
     //< corpus is noticed at once.
     data: = io.read_file(path)!
     defer dealloc(Void$@::data.ptr)
 
-    $list: = List<|json.Val|>.new(arena)
+    $list: = List<|json.Value|>.new(arena)
     for raw_line in data.lines(arena)
         line: = U8$[]::raw_line.trim_spaces()
         if line.len == 0
@@ -78,38 +78,38 @@ fn closing_errors(stderr_data: U8[], arena: Arena$@): I32? //<
 
 pub fn compile_errors( //< runs one source through ksplc and counts the errors it reports
     //<
-    //< The temporary source is `corpus_dir/{stem}.kspl`, and it is deleted before this returns.
+    //< The temporary source is `CORPUS_DIR/{stem}.kspl`, and it is deleted before this returns.
     source: U8[], //< the program to compile; it is written to a file unchanged
     stem: U8[], //< names the temporary file, so two callers running at once do not collide
     arena: Arena$@, //< where the captured output is allocated
-): Compile_result //< the error count and the messages; `uncompilable` if it gave no verdict
+): Compile_result //< the error count and the messages; `UNCOMPILABLE` if it gave no verdict
     $src_path: = Str_builder.new()
     defer src_path.free()
-    src_path.s(corpus_dir).c('/').s(stem).s(".kspl")
+    src_path.s(CORPUS_DIR).c('/').s(stem).s(".kspl")
     $out_path: = Str_builder.new()
     defer out_path.free()
-    out_path.s(corpus_dir).c('/').s(stem).s(".c")
+    out_path.s(CORPUS_DIR).c('/').s(stem).s(".c")
 
-    fs.mkdir(corpus_dir) catch {} // fails harmlessly if it already exists
+    fs.mkdir(CORPUS_DIR) catch {} // fails harmlessly if it already exists
 
     io.write_file(src_path.slice(), source) catch
-        return Compile_result::{ .error_count = uncompilable, .stderr_data = "" }
+        return Compile_result::{ .error_count = UNCOMPILABLE, .stderr_data = "" }
 
-    argv: = U8[][]::{ ksplc_path, "--diagnostic-format=json", src_path.slice(),
+    argv: = U8[][]::{ KSPLC_PATH, "--diagnostic-format=json", src_path.slice(),
         out_path.slice() }
     // Caution: **Do not replace this with `subproc.run`.** A nonzero exit is what is counted here;
     // thrown as an error, every input meant to be counted would end up in the catch.
-    got: = subproc.run_capture(argv, "", compile_timeout_ms, output_cap, arena)
+    got: = subproc.run_capture(argv, "", COMPILE_TIMEOUT_MS, OUTPUT_CAP, arena)
 
     // Deleting a file that was never made (the compile failed) fails harmlessly.
     fs.remove_path(src_path.slice()) catch {}
     fs.remove_path(out_path.slice()) catch {}
 
     r: = got catch
-        return Compile_result::{ .error_count = uncompilable, .stderr_data = "" }
+        return Compile_result::{ .error_count = UNCOMPILABLE, .stderr_data = "" }
     if r.exit_code.is_none()
-        return Compile_result::{ .error_count = uncompilable, .stderr_data = "" }
-    n: = closing_errors(r.stderr_data, arena).unwrap_or(uncompilable)
+        return Compile_result::{ .error_count = UNCOMPILABLE, .stderr_data = "" }
+    n: = closing_errors(r.stderr_data, arena).unwrap_or(UNCOMPILABLE)
     return Compile_result::{ .error_count = n, .stderr_data = r.stderr_data }
 
 pub fn compiles(source: U8[], stem: U8[], arena: Arena$@): Bool //< whether it compiles cleanly

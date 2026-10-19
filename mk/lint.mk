@@ -52,7 +52,7 @@ LINT_TARGETS := ksplc/main.kspl tests/debug/main.kspl ksai/examples/llama_engine
 	ksos/port/rp2040/pad_checksum.kspl ksos/port/rp2040/elf2uf2.kspl \
 	$(filter-out $(LINT_TARGETS_OWN),$(TOOL_MAINS)) tools/kspage_aim.kspl tools/tests/open_together.kspl \
 	ksai/benches/run_bench.kspl \
-	kspage/port/web/bundle.kspl kspage/tests/open_prog.kspl ksai/tests/read_prog.kspl \
+	kspage/port/web/bundle.kspl kspage/content/example.kspl kspage/tests/open_prog.kspl ksai/tests/read_prog.kspl \
 	std/tests/read_prog.kspl $(filter-out $(LINT_TARGETS_OWN),$(wildcard */tests/fuzz_main.kspl)) \
 	ksai/tests/main.kspl ksbind/tests/main.kspl ksdb/tests/main.kspl kspeg/tests/main.kspl \
 	kssrv/tests/main.kspl \

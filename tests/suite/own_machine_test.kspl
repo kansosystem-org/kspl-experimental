@@ -15,7 +15,7 @@ import "std/sys"
 import "std/verdict"
 import "tests/support/harness"
 
-priv const absent_fmt: U8[] = "C_FMT=kanso-absent-clang-format -i" //<
+priv const ABSENT_FMT: U8[] = "C_FMT=kanso-absent-clang-format -i" //<
     //< A formatter no machine has, standing in for a machine without clang-format
 
 priv fn read_held(path: U8[], arena: Arena$@): U8[] //<
@@ -33,7 +33,7 @@ priv fn check_seed_needs_fmt(arena: Arena$@) //<
     name: = "commit-seed: without clang-format it stops, says why, and leaves the seed as it was"
     seed: = fs.join(harness.root(), "ksplc/seed.c", arena)
     before: = read_held(seed, arena)
-    r: = harness.make(U8[][]::{ "LOGGING=1", "commit-seed", absent_fmt })
+    r: = harness.make(U8[][]::{ "LOGGING=1", "commit-seed", ABSENT_FMT })
     after: = read_held(seed, arena)
     if r.exited_with(0) || !r.out.find_str("needs clang-format").is_some()
         why: = arena.text()
@@ -100,7 +100,7 @@ priv fn check_switch_values(arena: Arena$@) //<
         r.out.find_str("KANSO_REQUIRE_CHOWN=yes: only 0 or 1").is_some(),
         arena.text().s("exit \{r.code.unwrap_or(-1)\}\n").s(r.out).take())
 
-priv const switch_probe: U8[] = //<
+priv const SWITCH_PROBE: U8[] = //<
     //< A suite of one check that lacks its tool, through the harness every suite uses
     "import \"ksplc/tests/support/harness\" as ksplc_harness
 import \"std/sys\"
@@ -120,7 +120,7 @@ priv fn check_switch_message(arena: Arena$@) //<
     name_off: = "a switch at 0 lets the same check skip"
     dir: = harness.sandbox("switch_probe")
     probe: = fs.join(dir, "probe.kspl", arena)
-    io.write_file(probe, switch_probe) catch
+    io.write_file(probe, SWITCH_PROBE) catch
         verdict.check(name_on, false, "the probe cannot be written")
         return
     sys.set_env("KANSO_REQUIRE_PROBE", "1") catch panic("the switch cannot be set")
@@ -135,7 +135,7 @@ priv fn check_switch_message(arena: Arena$@) //<
         off.exited_with(0) && off.out.find_str("SKIP").is_some() &&
         !off.out.find_str("FAIL").is_some(), off.out)
 
-priv const native_ci_probe: U8[] =
+priv const NATIVE_CI_PROBE: U8[] =
     """import "std/io"
 import "std/str"
 import "std/sys"
@@ -157,7 +157,7 @@ priv fn check_windows_ci_is_native(arena: Arena$@) //< Docker is deliberately ma
     if !verdict.check("the native CI probe builds", built.exited_with(0), built.out)
         return
     src: = fs.join(dir, "commands.kspl", arena)
-    io.write_file(src, native_ci_probe) catch panic("cannot write the native CI stand-ins")
+    io.write_file(src, NATIVE_CI_PROBE) catch panic("cannot write the native CI stand-ins")
     make: = fs.join(dir, "make_probe.exe", arena)
     docker: = fs.join(dir, "docker.exe" if sys.is_windows() else "docker", arena)
     for path in U8[][]::{ make, docker }

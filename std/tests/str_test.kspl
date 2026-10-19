@@ -5,7 +5,6 @@
 import "std/bignat" + { Bignat }
 import "std/buf" { Buf_writer }
 import "std/chars"
-import "std/checked_int" { Ci32, Cu8 }
 import "std/io"
 import "std/math"
 import "std/mem" + { Arena }
@@ -66,12 +65,22 @@ fn test_str_ops(arena: Arena$@)
     assert("x".trim_spaces().equals("x"), "trim_spaces: there is nothing to drop")
 
     // --- join: round-trips with split ---
-    assert(", ".join("a,b,c".split(',', arena), arena).equals("a, b, c"), "join")
-    assert(",".join("a,b,c".split(',', arena), arena).equals("a,b,c"),
-        "join: a round trip with split")
-    one: = "-".join("x".split(',', arena), arena)
+    $pieces: = "a,b,c".split(',', arena)
+    assert(", ".join(pieces.slice(), arena).equals("a, b, c"), "join")
+    assert(",".join(pieces.slice(), arena).equals("a,b,c"), "join: a round trip with split")
+    one: = "-".join(U8[][]::{ "x" }, arena)
     assert(one.equals("x"), "join: no separator when there is one element")
-    assert("".join("a,b".split(',', arena), arena).equals("ab"), "join: an empty separator")
+    assert("".join(pieces.sub(0, 2), arena).equals("ab"), "join: an empty separator")
+    assert("-".join(U8[][]::{}, arena).len == 0, "join: no pieces is empty")
+    assert("-".join(U8[][]::{ "", "x", "" }, arena).equals("-x-"),
+        "join: empty pieces keep their separators")
+    $code_lines: = "first\nmiddle\nlast\n".split('\n', arena)
+    prefix: = "\n".join(code_lines.sub(0, 1), arena)
+    middle: = "\n".join(code_lines.sub(1, 1), arena)
+    suffix: = "\n".join(code_lines.sub_from(2), arena)
+    rebuilt: = arena.text().s(prefix).c('\n').s(middle).c('\n').s(suffix).take()
+    assert(rebuilt.equals("first\nmiddle\nlast\n"),
+        "join: borrowed line ranges preserve the trailing newline")
 
     // --- lines: drops a \r at a line's end and does not make an empty line from a trailing newline
     // ---
@@ -394,7 +403,7 @@ fn test_pow10_table() //< every power of ten the float conversions read is exact
     //< moves a float's digits only where that power is used.
     //< `floor_log10_pow2` is checked over every exponent an F64 or an F32 has.
     verdict.start("[bignat] the 128-bit powers of ten test...")
-    for q in Range.new(bignat.pow10_q_min, bignat.pow10_q_max + 1, 1)
+    for q in Range.new(bignat.POW10_Q_MIN, bignat.POW10_Q_MAX + 1, 1)
         assert(pow10_entry_exact(I32::q), "pow10_128(q) must be 10^q's top 128 bits, truncated")
     for e in Range.new(-1100, 1101, 1)
         for three_quarters in Bool[]::{ false, true }
@@ -434,7 +443,7 @@ fn test_arena_text(arena: Arena$@) //< a writer that allocates and returns the r
     assert(arena.text().take().len == 0, "length 0 when nothing is written")
     verdict.pass("It stays for the arena's lifetime, and two of them do not break each other.")
 
-priv const self_append_src: U8[] = //< a child that writes builders from views of their own bytes
+priv const SELF_APPEND_SRC: U8[] = //< a child that writes builders from views of their own bytes
     //<
     //< Each source is past 1 KiB: glibc scribbles over a freed block only above that size.
     """import "std/chars"
@@ -480,7 +489,7 @@ fn test_builder_writes_its_own_bytes(ksplc: U8[], arena: Arena$@) //< ksplc runs
     sys.set_env("MALLOC_PERTURB_", "165") catch panic("set_env should succeed")
     sys.set_env("MallocScribble", "1") catch panic("set_env should succeed")
     r: =
-        subproc.run_capture(sys_test.child_argv(ksplc, "self_append", self_append_src, arena), "",
+        subproc.run_capture(sys_test.child_argv(ksplc, "self_append", SELF_APPEND_SRC, arena), "",
         300000, 1 << 20, arena) catch panic("the child must start")
     sys.unset_env("MALLOC_PERTURB_") catch panic("unset_env should succeed")
     sys.unset_env("MallocScribble") catch panic("unset_env should succeed")
@@ -612,31 +621,3 @@ fn test_builder_room_and_c_strings()
     assert("a\u0000b".to_cstr().is_none(), "to_cstr: none for text holding a NUL")
     assert(str.from_cstr(null).len == 0, "from_cstr: a null pointer is empty")
     verdict.pass("reserve makes room and keeps the text; to_cstr and from_cstr round-trip.")
-
-priv const div_overflow_src: U8[] = //< a child dividing the least I32 by -1, checked
-    """import "std/checked_int" { Ci32 }
-
-fn main()
-  least: = Ci32::(-2147483647 - 1)
-  _q: = least / Ci32::(-1)
-"""
-
-priv const div_zero_src: U8[] = //< a child dividing by 0, checked
-    """import "std/checked_int" { Cu8 }
-
-fn main()
-  _q: = Cu8::7U8 / Cu8::0U8
-"""
-
-fn test_checked_div(ksplc: U8[], arena: Arena$@) //< ksplc runs the children
-    verdict.start("[checked_int] `/` on checked integers...")
-    assert((Ci32::7 / Ci32::2).val == 3 && (Ci32::(-7) / Ci32::2).val == -3,
-        "Ci32: the quotient rounds toward 0")
-    assert((Cu8::255U8 / Cu8::16U8).val == 15U8, "Cu8: the quotient of the largest value")
-    overflow_stops: = sys_test.child_stops_with(ksplc, "div_overflow", div_overflow_src,
-        "Ci32 overflow or division by zero (div)", arena)
-    assert(overflow_stops, "the least I32 divided by -1 must stop the program, not wrap")
-    zero_stops: = sys_test.child_stops_with(ksplc, "div_zero", div_zero_src,
-        "Cu8 division by zero (div)", arena)
-    assert(zero_stops, "a checked division by 0 must stop the program")
-    verdict.pass("`/` gives the quotient, and stops on overflow and on 0.")

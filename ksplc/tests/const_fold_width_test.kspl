@@ -8,70 +8,70 @@
 import "std/str" { Str_builder }
 import "std/verdict"
 
-priv const u64_bit40: U64 = 1U64 << 40 //< width: a 64-bit left shift
-priv const u64_bit63: U64 = 1U64 << 63
-priv const i64_bit40: I64 = 1I64 << 40
-priv const u32_bit31: U32 = 1U32 << 31
-priv const sz_bit20: Sz = 1Sz << 20 //<
+priv const U64_BIT40: U64 = 1U64 << 40 //< width: a 64-bit left shift
+priv const U64_BIT63: U64 = 1U64 << 63
+priv const I64_BIT40: I64 = 1I64 << 40
+priv const U32_BIT31: U32 = 1U32 << 31
+priv const SZ_BIT20: Sz = 1Sz << 20 //<
     //< `Sz` is ptrdiff_t, whose width varies, so the C writes an `(Sz)` cast, not a suffix
     //<
     //< Without it a 32-bit int shift is undefined. Keep the amount under 32, valid for a 32-bit
     //< `Sz` (32 and above is rejected: the case shift_count_out_of_range in
     //< tests/negative/numbers.kspl).
 
-priv const i64_min_folded: I64 = -9223372036854775807 - 1 //<
+priv const I64_MIN_FOLDED: I64 = -9223372036854775807 - 1 //<
     //< The expected type's propagation: a negative literal placed on a `-`'s left side
     //<
     //< Caution: **Do not write a suffix.** This checks that the declared type propagates; if it is
     //< lost, the default I32 truncates the value (0 from the fold, -1 from the code).
-priv const i64_neg_left: I64 = -4294967296 - 1
-priv const i64_min_literal: I64 = -9223372036854775808 //<
+priv const I64_NEG_LEFT: I64 = -4294967296 - 1
+priv const I64_MIN_LITERAL: I64 = -9223372036854775808 //<
     //< I64's minimum written as one literal: the minus and the digits fold as one value
     //<
     //< Its magnitude alone fits no I64, and C reads it as unsigned with a warning.
-priv const i64_min_len: I32[I32::(i64_min_literal >> 63) + 2] = ::{ 7 }
+priv const I64_MIN_LEN: I32[I32::(I64_MIN_LITERAL >> 63) + 2] = ::{ 7 }
 
 priv enum Tag_min: I64 //< an I64 tag at the minimum, written as one literal
     lo = -9223372036854775808
     hi = 9223372036854775807
 
-priv const u32_wrap: U32 = 1U32 - 2U32 //<
+priv const U32_WRAP: U32 = 1U32 - 2U32 //<
     //< Sign: division, remainder, right shift and ordering against a wrapped unsigned value
-priv const u32_wrap_div: U32 = (1U32 - 2U32) / 2U32
-priv const u32_wrap_mod: U32 = (1U32 - 2U32) % 10U32
-priv const u32_wrap_shr: U32 = (1U32 - 2U32) >> 1U32
-priv const u32_wrap_gt: Bool = (1U32 - 2U32) > 1U32
+priv const U32_WRAP_DIV: U32 = (1U32 - 2U32) / 2U32
+priv const U32_WRAP_MOD: U32 = (1U32 - 2U32) % 10U32
+priv const U32_WRAP_SHR: U32 = (1U32 - 2U32) >> 1U32
+priv const U32_WRAP_GT: Bool = (1U32 - 2U32) > 1U32
 
-priv const u8_wrap: U8 = U8::255 + U8::1 //< an unsigned narrower than `int`
+priv const U8_WRAP: U8 = U8::255 + U8::1 //< an unsigned narrower than `int`
     //<
     //< **C promotes to int**; unless the code converts the result back to the type, it is not
     //< `mod 2^N` and the fold and the code disagree.
-priv const u8_mul: U8 = U8::16 * U8::16
-priv const u16_wrap: U16 = U16::65535 + U16::1
-priv const u8_shl: U8 = U8::128 << U8::1
+priv const U8_MUL: U8 = U8::16 * U8::16
+priv const U16_WRAP: U16 = U16::65535 + U16::1
+priv const U8_SHL: U8 = U8::128 << U8::1
 
-priv const u64_top_div: U64 = 18446744073709551615U64 / 2U64 //< u64's upper half
+priv const U64_TOP_DIV: U64 = 18446744073709551615U64 / 2U64 //< u64's upper half
     //<
     //< It is a negative bit pattern in I64, so folding it as signed changes the answer.
     //< Caution: Only the left operand decides a shift's result type, so write `U64` on that side
     //< too.
-priv const u64_top_shr: U64 = 18446744073709551615U64 >> 1U64
-priv const u64_top_gt: Bool = 18446744073709551615U64 > 1U64
+priv const U64_TOP_SHR: U64 = 18446744073709551615U64 >> 1U64
+priv const U64_TOP_GT: Bool = 18446744073709551615U64 > 1U64
 
-priv const cast_trunc: Sz = U8::300 //< a cast folds as it converts: the low bits
+priv const CAST_TRUNC: Sz = U8::300 //< a cast folds as it converts: the low bits
     //<
     //< Caution: **Use each folded value somewhere that cannot be computed later**: an array length,
     //< an enum tag, a constant another refers to. A value C computes at run time hides the fold.
-priv const cast_sign: I64 = I8::200 * 2I64
-priv const cast_back: I32 = U8::(0 - 1)
-priv const cast_u16: I32 = U16::70000 + 0
-priv const cast_u32_shr: I32 = I32::(U32::-1 >> 1U32)
-priv const cast_ref: I32 = cast_base + 1 //< a constant naming another, folded through its cast
-priv const cast_base: I32 = U8::511
-priv const cast_len: I32[cast_trunc] = ::{}
-priv const not_len: I32[~0U8 / 51U8] = ::{ 1, 2, 3, 4, 5 } //<
+priv const CAST_SIGN: I64 = I8::200 * 2I64
+priv const CAST_BACK: I32 = U8::(0 - 1)
+priv const CAST_U16: I32 = U16::70000 + 0
+priv const CAST_U32_SHR: I32 = I32::(U32::-1 >> 1U32)
+priv const CAST_REF: I32 = CAST_BASE + 1 //< a constant naming another, folded through its cast
+priv const CAST_BASE: I32 = U8::511
+priv const CAST_LEN: I32[CAST_TRUNC] = ::{}
+priv const NOT_LEN: I32[~0U8 / 51U8] = ::{ 1, 2, 3, 4, 5 } //<
     //< `~` wraps at a narrow width: 255 / 51
-priv const div_neg: I32[-10 / -3] = ::{ 1, 2, 3 } //<
+priv const DIV_NEG: I32[-10 / -3] = ::{ 1, 2, 3 } //<
     //< a signed division folds at the operands' width
 
 priv enum Tag_unsigned: U32 //< an enum tag folds before anything is typed, so the suffix decides
@@ -101,29 +101,29 @@ fn test_const_fold_width()
 
 priv fn check_global_folds() //<
     //< A global `const` folds at its declared width and sign
-    assert(u64_bit40 == 1099511627776, "1U64 << 40 must shift a 64-bit operand")
-    assert(u64_bit63 == 9223372036854775808, "1U64 << 63 must reach the top bit")
-    assert(i64_bit40 == 1099511627776, "1I64 << 40 must shift a 64-bit operand")
-    assert(u32_bit31 == 2147483648, "1U32 << 31 must reach the top bit of U32")
-    assert(sz_bit20 == 1048576, "1Sz << 20 must keep the platform width of Sz")
+    assert(U64_BIT40 == 1099511627776, "1U64 << 40 must shift a 64-bit operand")
+    assert(U64_BIT63 == 9223372036854775808, "1U64 << 63 must reach the top bit")
+    assert(I64_BIT40 == 1099511627776, "1I64 << 40 must shift a 64-bit operand")
+    assert(U32_BIT31 == 2147483648, "1U32 << 31 must reach the top bit of U32")
+    assert(SZ_BIT20 == 1048576, "1Sz << 20 must keep the platform width of Sz")
 
-    assert(cast_trunc == 44 && cast_len.len == 44, "U8::300 folds to 44, an array length too")
-    assert(cast_sign == -112, "I8::200 folds to -56")
-    assert(cast_back == 255 && cast_u16 == 4464, "a cast keeps the target's low bits")
-    assert(cast_u32_shr == 2147483647, "a cast to U32 makes the shift unsigned")
-    assert(cast_ref == 256, "a constant naming another sees its cast")
+    assert(CAST_TRUNC == 44 && CAST_LEN.len == 44, "U8::300 folds to 44, an array length too")
+    assert(CAST_SIGN == -112, "I8::200 folds to -56")
+    assert(CAST_BACK == 255 && CAST_U16 == 4464, "a cast keeps the target's low bits")
+    assert(CAST_U32_SHR == 2147483647, "a cast to U32 makes the shift unsigned")
+    assert(CAST_REF == 256, "a constant naming another sees its cast")
     assert(U32::Tag_unsigned.a == 2147483647U32 && U32::Tag_unsigned.b == 2147483648U32,
         "an enum tag folds unsigned where the suffix says so")
     assert(U8::Tag_wrap.p == 44U8, "a U8 tag wraps at its width")
-    assert(u32_wrap == 4294967295, "unsigned subtraction must wrap to 2^32-1")
-    assert(u32_wrap_div == 2147483647, "unsigned division must not treat the operand as -1")
-    assert(u32_wrap_mod == 5, "unsigned modulo must not treat the operand as -1")
-    assert(u32_wrap_shr == 2147483647, "unsigned right shift must not sign-extend")
-    assert(u32_wrap_gt, "unsigned comparison must not treat the operand as -1")
+    assert(U32_WRAP == 4294967295, "unsigned subtraction must wrap to 2^32-1")
+    assert(U32_WRAP_DIV == 2147483647, "unsigned division must not treat the operand as -1")
+    assert(U32_WRAP_MOD == 5, "unsigned modulo must not treat the operand as -1")
+    assert(U32_WRAP_SHR == 2147483647, "unsigned right shift must not sign-extend")
+    assert(U32_WRAP_GT, "unsigned comparison must not treat the operand as -1")
 
-    assert(u64_top_div == 9223372036854775807, "U64 division must use the full 64-bit range")
-    assert(u64_top_shr == 9223372036854775807, "U64 right shift must not sign-extend")
-    assert(u64_top_gt, "U64 comparison must use the full 64-bit range")
+    assert(U64_TOP_DIV == 9223372036854775807, "U64 division must use the full 64-bit range")
+    assert(U64_TOP_SHR == 9223372036854775807, "U64 right shift must not sign-extend")
+    assert(U64_TOP_GT, "U64 comparison must use the full 64-bit range")
 
 priv fn check_shift_propagation() //<
     //< A local's declared type reaches a shift's left side
@@ -145,9 +145,9 @@ priv fn check_negated_left() //<
     // (otherwise pointer subtraction stops it from propagating).
     // Caution: **Test a negative literal too.** A unary minus is a separate node. Left out of the
     // exception, `-4294967296` truncates at I32 and quietly gives `-1`, past the range check.
-    assert(i64_min_folded == -9223372036854775807I64 - 1I64,
+    assert(I64_MIN_FOLDED == -9223372036854775807I64 - 1I64,
         "a folded negated literal on the left of '-' must be computed at the declared I64")
-    assert(i64_neg_left == -4294967297, "a folded negated literal must keep its I64 value")
+    assert(I64_NEG_LEFT == -4294967297, "a folded negated literal must keep its I64 value")
     local_neg_left: I64 = -4294967296 - 1
     local_min: I64 = -9223372036854775807 - 1
     assert(local_neg_left == -4294967297,
@@ -173,13 +173,13 @@ priv fn check_global_wraps() //<
     // The values that go through the fold.
     // Caution: **Test both a global `const` and a local**: sema's fold (`fit_result`) and the
     // generated code can disagree.
-    assert(u8_wrap == U8::0, "U8 addition must wrap mod 2^8")
-    assert(u8_mul == U8::0, "U8 multiplication must wrap mod 2^8")
-    assert(u16_wrap == U16::0, "U16 addition must wrap mod 2^16")
-    assert(u8_shl == U8::0, "U8 left shift must wrap mod 2^8")
-    assert(I32::u8_wrap == 0, "a folded U8 wrap must stay wrapped when widened")
-    assert(not_len.len == 5, "~0U8 must fold to 255 at U8's width, not to -1")
-    assert(div_neg.len == 3, "-10 / -3 must fold to 3")
+    assert(U8_WRAP == U8::0, "U8 addition must wrap mod 2^8")
+    assert(U8_MUL == U8::0, "U8 multiplication must wrap mod 2^8")
+    assert(U16_WRAP == U16::0, "U16 addition must wrap mod 2^16")
+    assert(U8_SHL == U8::0, "U8 left shift must wrap mod 2^8")
+    assert(I32::U8_WRAP == 0, "a folded U8 wrap must stay wrapped when widened")
+    assert(NOT_LEN.len == 5, "~0U8 must fold to 255 at U8's width, not to -1")
+    assert(DIV_NEG.len == 3, "-10 / -3 must fold to 3")
 
 priv fn check_narrow_wraps() //<
     //< A narrow unsigned wraps at the declared width at every operation
@@ -332,9 +332,9 @@ priv fn check_min_rendering() //<
 priv fn check_min_literal() //<
     //< `-9223372036854775808` is I64's minimum, folded, generated and as a tag
     local: I64 = -9223372036854775808
-    assert(i64_min_literal == local && local == -9223372036854775807I64 - 1,
+    assert(I64_MIN_LITERAL == local && local == -9223372036854775807I64 - 1,
         "-9223372036854775808 must be I64's minimum, folded and computed alike")
-    assert(i64_min_len.len == 1, "the minimum folds as a value an array length can use")
+    assert(I64_MIN_LEN.len == 1, "the minimum folds as a value an array length can use")
     assert(I64::Tag_min.lo == local && I64::Tag_min.hi == -(local + 1),
         "an I64 tag at the minimum must keep its value")
 

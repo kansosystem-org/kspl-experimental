@@ -74,7 +74,7 @@ One record on flash looks like this.
 
 Erased flash has every bit at 1, so an unwritten `len` reads as `0xFFFF`. With the length field at the head and `0xFFFF` as the empty marker, **the end is found without writing an extra marker**. With `crc` first instead, a record whose CRC happens to be `0xFFFFFFFF` would read as empty.
 
-**The price is a content cap of `0xFFFE` bytes**, since the empty marker takes `0xFFFF` (`max_payload` in `log.kspl`). A small sector caps it lower ("One record is kept inside one sector" below).
+**The price is a content cap of `0xFFFE` bytes**, since the empty marker takes `0xFFFF` (`MAX_PAYLOAD` in `log.kspl`). A small sector caps it lower ("One record is kept inside one sector" below).
 
 **The CRC covers `len` and `kind` too.** Over the content alone, a garbled length would pass as a correct record of another length and shift every record after it.
 

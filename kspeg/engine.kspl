@@ -12,7 +12,7 @@
 import "kspeg/expected" { Expected, Fail_track }
 import "kspeg/memo" { Memo_key, Memo_table }
 import "kspeg/rule" { Keyword_set, Kspeg_signal, Rule, Rule_entry, collect_keywords,
-    compute_first_bytes, max_parse_depth, char_class_matches, sub_rules, walk_limit }
+    compute_first_bytes, MAX_PARSE_DEPTH, char_class_matches, sub_rules, walk_limit }
 import "std/chars" // classifying and extracting one character
 import "std/ds" { List, Map }
 import "std/mem" { Arena }
@@ -51,7 +51,7 @@ priv struct Memo_val //< what a rule answered at a position, as the memo keeps i
     end_pos: Sz //< where the input stood after it
     node: Node$@ //< the node it built, if it built one
 
-const memo_trial_writes: I64 = 1024 //<
+const MEMO_TRIAL_WRITES: I64 = 1024 //<
     //< How many writes a rule gets to show the memo pays off before the memo is turned off for it
     //<
     //< Set high so that one unlucky file does not turn off a rule that answers now and then. The
@@ -71,7 +71,7 @@ pub struct Rule_prof //< what one rule cost, counted rather than timed
     pub calls: I64 //< how many times it was reached, memo hits included
     pub memo_off: Bool //< whether memoization was turned off for this rule
         //<
-        //< It never answered within its allowance of writes (`memo_trial_writes`). It is reported
+        //< It never answered within its allowance of writes (`MEMO_TRIAL_WRITES`). It is reported
         //< beside the counts so that a wrong allowance shows up instead of quietly slowing the
         //< parse.
     pub memo_hits: I64 //< how many of those the memo answered, saving a re-parse.
@@ -543,7 +543,7 @@ impl Rule
 
         ctx.depth += 1
         defer ctx.depth -= 1
-        if ctx.depth > max_parse_depth || ctx.stack.near()
+        if ctx.depth > MAX_PARSE_DEPTH || ctx.stack.near()
             // Caution: **Do not stop with a `mismatch`.** It means "try the next alternative", so
             // an outer choice, optional or repetition swallows it and the search goes on.
             // The position is kept here (the reason is at `depth_exceeded_pos`).
@@ -595,7 +595,7 @@ impl Rule
         // speed, so a wrong decision costs time, never a wrong answer.
         skip_memo: =
             is_upper ||
-            (!rule_entry.memo_answered && rule_entry.memo_writes >= memo_trial_writes)
+            (!rule_entry.memo_answered && rule_entry.memo_writes >= MEMO_TRIAL_WRITES)
         key: = Memo_key::{ .rule_id = r_id, .pos = start_pos, .syn = start_mode, .sup = start_sup }
 
         if prof != null && skip_memo && !is_upper
