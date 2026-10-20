@@ -284,6 +284,16 @@ function kspageProbeRibbon(ks) {
   check(document.querySelectorAll("#side .slide").length >= 1,
     "the slides' knobs line up");
 
+  // Drags with a drawing tool from (x0, y0) to (x1, y1) on the canvas, whose place on the screen
+  // is `at` (taken by the caller). `keys` adds a held key, such as `{ shiftKey: true }`.
+  const penDrag = (at, x0, y0, x1, y1, keys) => {
+    const pen = (x, y, type) => canvas.dispatchEvent(new PointerEvent(type, Object.assign(
+      { clientX: at.left + x, clientY: at.top + y, bubbles: true, cancelable: true }, keys || {})));
+    pen(x0, y0, "pointerdown");
+    pen(x1, y1, "pointermove");
+    pen(x1, y1, "pointerup");
+  };
+
   // The list of a slide's content. **The row is the stacking order** (the top is the front).
   const faceSpot = app.regions().find((one) => one.kind === "absolute");
   // It hunts down as far as a frame (the reason is at `facePart` above).
@@ -352,11 +362,7 @@ function kspageProbeRibbon(ks) {
       }
       const before = app.objects().length;
       const at = canvas.getBoundingClientRect();
-      const pen = (x, y, type) => canvas.dispatchEvent(new PointerEvent(type,
-        { clientX: at.left + x, clientY: at.top + y, bubbles: true, cancelable: true }));
-      pen(faceSpot.x + 20, faceSpot.y + 20, "pointerdown");
-      pen(faceSpot.x + 90, faceSpot.y + 60, "pointermove");
-      pen(faceSpot.x + 90, faceSpot.y + 60, "pointerup");
+      penDrag(at, faceSpot.x + 20, faceSpot.y + 20, faceSpot.x + 90, faceSpot.y + 60);
       const drew = app.objects();
       check(drew.length === before + 1,
         "one shape grows by however much it was dragged");
@@ -374,12 +380,8 @@ function kspageProbeRibbon(ks) {
       // **This can be seen nowhere else**: the drag's band is built by the page's side.
       shapesMenu.querySelector("summary").click();
       document.getElementById("draw-box").click();
-      const square = (x, y, type) => canvas.dispatchEvent(new PointerEvent(type,
-        { clientX: at.left + x, clientY: at.top + y, shiftKey: true, bubbles: true,
-          cancelable: true }));
-      square(faceSpot.x + 20, faceSpot.y + 20, "pointerdown");
-      square(faceSpot.x + 100, faceSpot.y + 50, "pointermove");
-      square(faceSpot.x + 100, faceSpot.y + 50, "pointerup");
+      penDrag(at, faceSpot.x + 20, faceSpot.y + 20, faceSpot.x + 100, faceSpot.y + 50,
+        { shiftKey: true });
       const evened = app.objects().find((one) => one.picked);
       check(evened !== undefined && Math.round(evened.w) === Math.round(evened.h),
         "pulling with Shift makes the sides the same (" + (evened === undefined ? "none"
@@ -405,11 +407,7 @@ function kspageProbeRibbon(ks) {
     if (boxKey !== null) {
       boxKey.click();
       const at = canvas.getBoundingClientRect();
-      const pen = (x, y, type) => canvas.dispatchEvent(new PointerEvent(type,
-        { clientX: at.left + x, clientY: at.top + y, bubbles: true, cancelable: true }));
-      pen(30, 14, "pointerdown");
-      pen(90, 44, "pointermove");
-      pen(90, 44, "pointerup");
+      penDrag(at, 30, 14, 90, 44);
       const flowDrew = app.objects();
       check(flowDrew.length === flowWas + 1,
         "over the body too the shapes grow by however much it was dragged ("
@@ -429,9 +427,7 @@ function kspageProbeRibbon(ks) {
       // the nudge moves that one alone.
       shapesOn.closest("details.menu").querySelector("summary").click();
       document.getElementById("draw-box").click();
-      pen(120, 14, "pointerdown");
-      pen(170, 44, "pointermove");
-      pen(170, 44, "pointerup");
+      penDrag(at, 120, 14, 170, 44);
       check(app.objects().length === flowWas + 2, "two line up over the body");
       const rows = document.querySelectorAll("#objects .item .who");
       check(rows.length === 2, "two come out in the list (" + rows.length + ")");

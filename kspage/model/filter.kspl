@@ -1,5 +1,4 @@
 //< Narrows a table's rows by a condition (a filter)
-//<
 //< **It is a view, not a change to the document.** The conditions belong to the reader
 //< ([`over.kspl`](over.kspl)'s `Over.filters`): nothing is saved, and a formula still counts
 //< every row (as in Excel, where `SUBTOTAL` is the opt-in). The layout asks one question,
@@ -7,13 +6,11 @@
 import "kspage/model/doc" { Block, Tile }
 import "std/chars"
 import "std/ds" { List }
-import "std/str"
 import "std/strnum"
 
 enum Keep //< how a cell's text is matched
-    //<
-    //< Caution: **Do not move or rename an existing name**: the page passes the kind by its index
-    //< in `KEEP_ORDER` (`../port/web/state.kspl`), read back by name (`make test` pins every one).
+    //< Caution: **Do not rename a variant**: the page passes the kind by its name (`make test`
+    //< pins every one).
     is //< the same text, ignoring case
     is_not //< any other text
     holds //< contains the text, ignoring case
@@ -32,24 +29,12 @@ impl Keep
             return false
 
 fn keep_from(name: U8[]): Keep //< the kind with that name
-    //<
     //< **An unknown name means "is"** (the plainest reading of a typed value).
-    for k in ALL_KEEPS
-        if k.variant_name().equals(name)
-            return k
-    return .is
-
-priv const ALL_KEEPS: Keep[8] = ::{ .is, .is_not, .holds, .above, .below, .blank, .filled,
-    .one_of } //<
-        //< Every kind, for reading one back by its name
-        //<
-        //< Caution: **List a new variant here too**, or its name reads back as "is" (`make test`
-        //< pins every name).
+    return Keep.from_variant_name(name).unwrap_or(.is)
 
 struct Filter //< one condition on one column of one table
     table: Block$@ //<
         //< The table being filtered
-        //<
         //< **An identity, not a name**, cleared with the document (a name would outlive it).
     column: Sz //< the column, counting merged cells (a tile's column)
     keep: Keep
@@ -70,7 +55,6 @@ fn make_filter(table: Block$@, column: Sz, keep: Keep, text: U8[]): Filter //< o
 
 priv fn holds_text(hay: U8[], needle: U8[]): Bool //<
     //< whether needle appears inside hay, ignoring case
-    //<
     //< **An empty needle matches everything** (as Excel's "contains" left blank does).
     if needle.len == 0
         return true
@@ -85,7 +69,6 @@ priv fn holds_text(hay: U8[], needle: U8[]): Bool //<
     return false
 
 fn passes(f: Filter, shown: U8[]): Bool //< whether a cell showing that text is kept
-    //<
     //< **It matches the visible text**, not the formula (as sorting does).
     switch f.keep
     case .is
@@ -108,13 +91,11 @@ fn passes(f: Filter, shown: U8[]): Bool //< whether a cell showing that text is 
         return one_of(shown, f.text)
 
 const VALUE_SEP: U8 = '\n' //< what separates one chosen value from the next inside `Filter.text`
-    //<
     //< **A run holds no line break**, so no value contains this byte (`text_at` below).
     //< **Each value is written followed by this byte**, so the byte alone means "the blank cells",
     //< distinct from "nothing chosen" (an empty text).
 
 priv fn one_of(shown: U8[], set: U8[]): Bool //< whether the text is one of the chosen values
-    //<
     //< **Nothing chosen keeps nothing** (unticking everything); the way back is removing the
     //< filter, not an empty set meaning "all".
     $at: Sz = 0
@@ -127,7 +108,6 @@ priv fn one_of(shown: U8[], set: U8[]): Bool //< whether the text is one of the 
     return false
 
 priv fn text_at(tiles: List<|Tile|>$@, r: Sz, column: Sz): U8[] //< the text a cell shows
-    //<
     //< **A position covered by a merge, or past the row's end, shows nothing.**
     for $i: Sz = 0; i < tiles.len; i += 1
         t: = tiles.get(i)
@@ -140,7 +120,6 @@ priv fn text_at(tiles: List<|Tile|>$@, r: Sz, column: Sz): U8[] //< the text a c
 fn row_shown(filters: List<|Filter|>$@, kept: Block$@, table: Block$@, row: Block$@,
     tiles: List<|Tile|>$@, r: Sz): Bool //<
         //< Whether row r of the table is laid out
-        //<
         //< **The heading row is always laid out**, and so is the kept row (the cursor's). It must
         //< not vanish while the user works in it (in Numbers' live filtering it can). Every other
         //< row must pass every filter, or it is left out.
@@ -154,7 +133,6 @@ fn row_shown(filters: List<|Filter|>$@, kept: Block$@, table: Block$@, row: Bloc
 
 fn column_narrowed(filters: List<|Filter|>$@, table: Block$@, column: Sz): Bool //<
     //< Whether a condition is set on that one column
-    //<
     //< **The heading's own arrow is drawn from this**, so which column is filtered shows at a
     //< glance.
     if filters == null

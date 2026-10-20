@@ -1,5 +1,4 @@
 //< The drawing attributes of a character, and reading and writing a color as text
-//<
 //< Caution: **Build a style's name in one place only.** The code that inserts text and the code
 //< that lays it out both build it. The two looks disagree once only one of them is changed.
 //< **Do not name the file `ink`**: with the natural variable `ink: Ink`, `ink.drawn(…)` would be
@@ -10,7 +9,6 @@ import "std/str" { Str_builder }
 import "std/strfmt"
 
 struct Font_spec //< the font settings
-    //<
     //< **Every field can be "not set".** A field that is not set comes from the parent.
     family: U8[]?
     size_px: F32?
@@ -26,7 +24,6 @@ fn inherit_all(): Font_spec //< sets nothing (everything stays as the parent's)
     }
 
 struct Ink //< the decoration applied at drawing time
-    //<
     //< **A color is `0xRRGGBB`, with no transparency.** "Not set" is `.none` (black is a real
     //< setting). **They do not go into `Font`**, the key for measuring (none of these changes the
     //< size). A paragraph's fill is `Style.fill`.
@@ -39,12 +36,10 @@ struct Ink //< the decoration applied at drawing time
 
 fn inherit_ink(): Ink //<
     //< Sets nothing (everything stays as the parent's)
-    //<
     //< The characters keep the screen's color, no background is painted, and no line is drawn.
     return Ink::{ .color = .none, .background = .none, .underline = .none, .strike = .none }
 
 struct Accent //< the emphasis applied without a style name (bold and italic)
-    //<
     //< **They cannot go into `Ink`**: both change the measurements. **`false` is the setting "not
     //< bold" or "not italic"**, or a run inside a bold paragraph could not be made normal weight.
     bold: Bool?
@@ -54,13 +49,11 @@ fn inherit_accent(): Accent //< sets neither (they stay as the parent's)
     return Accent::{ .bold = .none, .italic = .none }
 
 const BOLD_WEIGHT: U16 = 700U16 //< the weight written for bold
-    //<
     //< Caution: **Write the normal weight too** (drop the setting and the parent's bold remains).
 const PLAIN_WEIGHT: U16 = 400U16
 
 fn accent_into(spec: Font_spec, accent: Accent): Font_spec //<
     //< Copies the emphasis onto a style's font settings
-    //<
     //< **The typeface and the size are not touched** (an emphasis sets only the weight and italic).
     $out: Font_spec = spec
     out.weight = .none
@@ -82,14 +75,12 @@ fn resolve_ink(spec: Ink, parent: Ink): Ink //< the decoration with spec laid ov
     return out
 
 fn drawn(spec: Bool?): Bool //< whether the setting is present and `true`
-    //<
     //< **Not set draws none** (by default, characters have no line).
     if v: = spec
         return v
     return false
 
 fn color_from(text: U8[]): U32? //< reads `#rrggbb`
-    //<
     //< **Anything but six digits is "not set"** (not a partial black). The `#` may be left out.
     at: Sz = 1 if text.len > 0 && text[0] == '#' else 0
     if text.len - at != 6
@@ -103,11 +94,9 @@ fn color_from(text: U8[]): U32? //< reads `#rrggbb`
     return .some(v)
 
 fn hex_into(v: U32, sb: Str_builder$@) //< writes a color in six hex digits
-    //<
     //< Caution: **Pad it to six digits** (neither CSS nor `<input type="color">` reads fewer).
-    for $shift: Sz = 20; shift >= 0; shift -= 4
-        nib: = U8::((v >> U32::shift) & 0xfU32)
-        sb.c(nib.to_hex_lower())
+    //< It writes only the low 24 bits, since a number from JS can be larger.
+    sb.s("\{v & 0xffffffU32:06x\}")
 
 fn color_into(v: U32, sb: Str_builder$@) //< writes a color as `#rrggbb`
     sb.c('#')
@@ -126,7 +115,6 @@ fn any_ink(ink: Ink): Bool //< whether the decoration sets anything at all
 
 fn span_name(ink: Ink, accent: Accent, out: Str_builder$@): Bool //<
     //< Builds a style name from the settings of the decoration and the emphasis
-    //<
     //< **The same settings must give the same name**, or the style table grows at every layout.
     //< Caution: **Do not change the order of the fields**, and **add any new field at the end**, or
     //< a name made earlier no longer matches.
@@ -158,7 +146,6 @@ fn any_accent(accent: Accent): Bool //< whether the emphasis sets anything
 
 fn resolve(spec: Font_spec, parent: Font): Font //<
     //< the font with spec laid over parent
-    //<
     //< **It takes a `Font_spec`, not a name**, or a typo passes silently as "not set"; looking a
     //< name up is `Sheet.find`'s job.
     $out: Font = parent

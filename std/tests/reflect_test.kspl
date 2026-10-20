@@ -1,6 +1,4 @@
-#!/usr/bin/env -S ksplc run
 //< Tests of the round trip through `std/reflect`'s field table
-//<
 //< The round trip is `std/json`'s `from_struct` / `into_struct`.
 
 // ==========================================
@@ -52,7 +50,6 @@ priv struct Derived //<
 impl Derived: reflect.Reflectable {}
 
 priv struct Half //< a nested struct
-    //<
     //< **Two fields have this type**, and its table is merged into one per file.
     ms: I64
     bytes: I64
@@ -65,7 +62,6 @@ priv struct Both
 impl Both: reflect.Reflectable {}
 
 priv struct Doc //< a container
-    //<
     //< **It covers both an element that is a number and one that is a struct.**
     name: U8[]
     nums: List<|I64|>
@@ -74,7 +70,6 @@ priv struct Doc //< a container
 impl Doc: reflect.Reflectable {}
 
 priv struct Spec //< fields that are either present or absent
-    //<
     //< **It also covers content that is a struct.**
     family: U8[]?
     size_px: F64?
@@ -84,7 +79,6 @@ priv struct Spec //< fields that are either present or absent
 impl Spec: reflect.Reflectable {}
 
 priv struct Widths //< the widths of a number
-    //<
     //< Caution: **Always include the unsigned types, `F32` and `Sz`.** If they are not covered
     //< here, the round trip breaks as soon as one `U16` appears in a declaration. An example is a
     //< file format whose every field is that width.
@@ -103,7 +97,6 @@ priv struct Widths //< the widths of a number
 impl Widths: reflect.Reflectable {}
 
 priv struct Narrow_bag //< a number with a width, carried in a container and in an option too
-    //<
     //< **The width of an element or of an option's content comes from `extra.elem_size`**, a path
     //< separate from the field's own `extra.width`.
     codes: List<|U16|>
@@ -417,29 +410,26 @@ fn test_reflect_fits_int()
         .start("[Reflect] an integer checked against a field's sign and width before it is stored \
             test...")
     // Each width's edges: the last value it holds, and the first it does not.
+    signed: = reflect.Field_kind.int_field
+    unsigned: = reflect.Field_kind.uint_field
     signed_edges: =
-        reflect.fits_int(.int_field, 1, 127) && !reflect.fits_int(.int_field, 1, 128) &&
-        reflect.fits_int(.int_field, 1, -128) && !reflect.fits_int(.int_field, 1, -129) &&
-        reflect.fits_int(.int_field, 2, 32767) && !reflect.fits_int(.int_field, 2, 32768) &&
-        reflect.fits_int(.int_field, 4, -2147483648) &&
-        !reflect.fits_int(.int_field, 4, 2147483648) &&
-        reflect.fits_int(.int_field, 8, -9223372036854775807I64 - 1)
+        signed.fits_int(1, 127) && !signed.fits_int(1, 128) && signed.fits_int(1, -128) &&
+        !signed.fits_int(1, -129) && signed.fits_int(2, 32767) && !signed.fits_int(2, 32768) &&
+        signed.fits_int(4, -2147483648) && !signed.fits_int(4, 2147483648) &&
+        signed.fits_int(8, -9223372036854775807I64 - 1)
     assert(signed_edges, "reflect: a signed field holds exactly its own range")
     unsigned_edges: =
-        reflect.fits_int(.uint_field, 1, 255) && !reflect.fits_int(.uint_field, 1, 256) &&
-        reflect.fits_int(.uint_field, 2, 65535) && !reflect.fits_int(.uint_field, 2, 65536) &&
-        reflect.fits_int(.uint_field, 4, 4294967295) &&
-        !reflect.fits_int(.uint_field, 4, 4294967296) &&
-        reflect.fits_int(.uint_field, 8, 9223372036854775807)
+        unsigned.fits_int(1, 255) && !unsigned.fits_int(1, 256) && unsigned.fits_int(2, 65535) &&
+        !unsigned.fits_int(2, 65536) && unsigned.fits_int(4, 4294967295) &&
+        !unsigned.fits_int(4, 4294967296) && unsigned.fits_int(8, 9223372036854775807)
     assert(unsigned_edges, "reflect: an unsigned field holds exactly its own range")
     // Caution: **A negative value into an unsigned field is refused at every width**, the widest
     // too. There it would come back as a huge positive number.
-    no_negative: =
-        !reflect.fits_int(.uint_field, 1, -1) && !reflect.fits_int(.uint_field, 8, -1)
+    no_negative: = !unsigned.fits_int(1, -1) && !unsigned.fits_int(8, -1)
     assert(no_negative, "reflect: a negative value does not fit an unsigned field")
     other: =
-        !reflect.fits_int(.int_field, 3, 0) && !reflect.fits_int(.float_field, 8, 0) &&
-        !reflect.fits_int(.bool_field, 1, 0)
+        !signed.fits_int(3, 0) && !reflect.Field_kind.float_field.fits_int(8, 0) &&
+        !reflect.Field_kind.bool_field.fits_int(1, 0)
     assert(other, "reflect: a width or a kind that is not an integer's holds nothing")
 
     // **`Sz` is signed**, so its table says so, and a negative length fits.
@@ -447,7 +437,7 @@ fn test_reflect_fits_int()
     gap: = sample.fields()[0]
     sz_signed: =
         gap.kind == reflect.Field_kind.int_field &&
-        reflect.fits_int(gap.kind, gap.extra.width, -1)
+        gap.kind.fits_int(gap.extra.width, -1)
     assert(sz_signed, "reflect: an Sz field is signed in its table")
     verdict.pass("A field holds only what its sign and width hold, and an Sz field is signed.")
 
@@ -513,7 +503,6 @@ fn test_json_struct_out_of_range(arena: Arena$@)
 
 fn test_reflect_load_store() //<
     //< Each width stored and read back, signed and unsigned, and a float through either width
-    //<
     //< **The same bytes read two ways**: -1 stored in one byte is -1 signed and 255 unsigned, so a
     //< reader that sign-extends the wrong kind shows here.
     verdict.start("[Reflect] storing and loading a field of each width test...")

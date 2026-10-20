@@ -1,5 +1,4 @@
 //< A lightweight regular-expression engine: compile a pattern, then match it against text
-//<
 //< A character matches itself. `\.` and `\*` write the ones that mean something else. **Matching
 //< takes time linear in the text, whatever the pattern.** Every way through the pattern runs side
 //< by side, so no pattern or text can make a search hang. **Going past any limit is refused,
@@ -14,8 +13,7 @@ import "std/chars"
 import "std/ds" { List }
 import "std/mem" + { dealloc, Arena }
 import "std/regex_node" { BYTE_COUNT, MAX_GROUPS, MAX_REPEAT_COUNT, Slots, reset_slots, Rx_kind,
-    Rx_node, new_node, new_group_node, new_class_node, set_range, free_rx_node, free_rx_alts, Inst,
-    Emitter }
+    Rx_node, new_group_node, new_class_node, set_range, free_rx_node, free_rx_alts, Inst, Emitter }
 import "std/stack_limit" { Stack_limit }
 
 pub enum Regex_error //< why a pattern could not be compiled
@@ -32,24 +30,20 @@ pub enum Regex_error //< why a pattern could not be compiled
 
 priv const MAX_NESTING_DEPTH: Sz = 500 //<
     //< The deepest group nesting compile() accepts
-    //<
     //< compile() walks group nesting recursively (parse_atom -> parse_alts -> parse_seq ->
     //< parse_atom_quant -> parse_atom). The limit exists for the same reason as json.kspl's
     //< max_nesting_depth (stack exhaustion).
 priv const STACK_MARGIN: Sz = 64 * 1024 //<
     //< The stack kept free below where compiling stops
-    //<
     //< **The counts are sized for the main thread.** A thread's stack can be far smaller (512KB by
     //< default on macOS). So a walk also asks where its stack ends ("A deep walk asks where its
     //< stack ends" in `std/docs/DESIGN-system.md`).
 
 priv fn is_word_byte(c: U8): Bool //< whether the byte is a word character (`\w` and `\b`)
-    //<
     //< A letter, a digit or `_` (`is_alnum` counts `_`).
     return c.is_alnum()
 
 priv fn is_word_edge(text: U8[], ti: Sz): Bool //< whether position ti is a word boundary
-    //<
     //< **It has no width.** Positions outside either end count as "not a word character".
     before: = ti > 0 && is_word_byte((text.ptr + ti - 1)$)
     after: = ti < text.len && is_word_byte((text.ptr + ti)$)
@@ -75,7 +69,6 @@ priv fn class_from_escape(c: U8): Rx_node$@ //<
 
 priv fn add_class_escape(n: Rx_node$@, c: U8) //<
     //< Adds a `\d` or similar inside `[...]` to the class being built
-    //<
     //< **A negated form adds the complement**; it does not negate the whole class. Touching `n.neg`
     //< would invert `[^\D]`.
     sub: = class_from_escape(c)
@@ -87,7 +80,6 @@ priv fn add_class_escape(n: Rx_node$@, c: U8) //<
 // ==================== Compiling (a pattern string -> an Rx_node tree) ====================
 priv struct Compiler //<
     //< The state of one compile() call while it reads the pattern
-    //<
     //< Caution: **Do not throw partway through the parse.** An error goes into err, and the tree is
     //< always returned complete; a throw partway would leak the nodes allocated so far. Freeing
     //< happens in one place, compile().
@@ -98,13 +90,11 @@ priv struct Compiler //<
     err: Regex_error?
     groups: Sz //<
         //< The number of capturing groups assigned so far.
-        //<
         //< Caution: **Number groups in the order their opening parentheses are read**, as other
         //< implementations do; in closing order, nested numbers swap.
 
 priv fn quantify_group(g: Rx_node$@, min_count: I32, max_count: I32, lazy: Bool): Rx_node$@ //<
     //< Attaches a quantifier to a group
-    //<
     //< **`?` is not a repetition**: an empty alternative expresses it (`{0,1}` gives the same
     //< tree). An empty alternative placed after gives the longest match; placed before, the
     //< shortest.
@@ -122,7 +112,7 @@ priv fn quantify_group(g: Rx_node$@, min_count: I32, max_count: I32, lazy: Bool)
             alts.push(inner)
             alts.push(List<|Rx_node$@|>.new(null))
         return new_group_node(alts, -1)
-    n: = new_node(.group_repeat)
+    n: = Rx_kind.group_repeat.new_node()
     n.sub = g
     n.lazy = lazy
     n.min_count = min_count
@@ -131,7 +121,6 @@ priv fn quantify_group(g: Rx_node$@, min_count: I32, max_count: I32, lazy: Bool)
 
 impl Compiler
     fn fail(r: Self$@, e: Regex_error) //< remembers only the first error found
-        //<
         //< Later errors follow from the first one.
         switch r.err
         case .none
@@ -140,7 +129,6 @@ impl Compiler
 
     fn failed(r: Self$@): Bool //<
         //< Once an error is found, every loop checks this and stops at once
-        //<
         //< Otherwise a loop spins at a position that does not advance, or recurses past the limit.
         return r.err.is_some()
 
@@ -153,7 +141,6 @@ impl Compiler
         return c
 
     fn escaped_char(r: Self$@): U8 //< reads the one character after `\` as a plain character
-        //<
         //< Caution: **Refuse a letter or digit that is not in the list.** Swallowed as a literal,
         //< it silently fails to match (see the caution at the top of this file). A symbol is
         //< itself: `\.`, `\*` and `\[` must not be refused.
@@ -219,7 +206,6 @@ impl Compiler
 
     fn parse_atom(r: Self$@): Rx_node$@ //<
         //< Parses one atom, without its quantifier
-        //<
         //< An atom is a literal, `.`, a class, an escape, a group or an anchor.
         c: = r.advance()
         // Caution: **Do not swallow a quantifier's symbol (or `{`) as a literal.** `*a` and `a**`
@@ -227,13 +213,13 @@ impl Compiler
         // repeat". A literal is written `\*` or `[*]`.
         if c == '*' || c == '+' || c == '?' || c == '{'
             r.fail(.dangling_quantifier)
-            return new_node(.lit)
+            return Rx_kind.lit.new_node()
         if c == '.'
-            return new_node(.any)
+            return Rx_kind.any.new_node()
         if c == '^'
-            return new_node(.start_anchor)
+            return Rx_kind.start_anchor.new_node()
         if c == '$'
-            return new_node(.end_anchor)
+            return Rx_kind.end_anchor.new_node()
         if c == '['
             return r.parse_class()
         if c == '\\'
@@ -241,7 +227,7 @@ impl Compiler
             // become a literal 0, a pattern that matches nothing, with no error.
             if r.pos >= r.pat.len
                 r.fail(.invalid_escape)
-                return new_node(.lit)
+                return Rx_kind.lit.new_node()
             e: = r.advance()
             if is_class_escape(e)
                 return class_from_escape(e)
@@ -250,15 +236,15 @@ impl Compiler
             // Match.group.
             if e >= '0' && e <= '9'
                 r.fail(.unsupported_backreference)
-                return new_node(.lit)
+                return Rx_kind.lit.new_node()
             // A word boundary. **It has no width**, so no quantifier attaches (parse_atom_quant
             // refuses `\b*` for the same reason as an anchor).
             if e == 'b'
-                return new_node(.word_boundary)
+                return Rx_kind.word_boundary.new_node()
             if e == 'B'
-                return new_node(.not_word_boundary)
+                return Rx_kind.not_word_boundary.new_node()
             r.pos -= 1 // escaped_char advances one character itself
-            n: = new_node(.lit)
+            n: = Rx_kind.lit.new_node()
             n.ch = r.escaped_char()
             return n
         if c == '('
@@ -287,7 +273,7 @@ impl Compiler
                 r.advance()
             r.depth -= 1
             return new_group_node(alts, gidx)
-        n: = new_node(.lit)
+        n: = Rx_kind.lit.new_node()
         n.ch = c
         return n
 
@@ -323,7 +309,7 @@ impl Compiler
             lazy = true
         if atom.kind == .group
             return quantify_group(atom, min_count, max_count, lazy)
-        n: = new_node(.repeat)
+        n: = Rx_kind.repeat.new_node()
         n.sub = atom
         n.min_count = min_count
         n.max_count = max_count
@@ -332,7 +318,6 @@ impl Compiler
 
     fn parse_repeat_bounds(r: Self$@, min_out: I32$@, max_out: I32$@): Bool //<
         //< Reads the count after `{` (`{n}`, `{n,}`, `{n,m}`; the `{` is already read)
-        //<
         //< false if the count is malformed; invalid_repeat is recorded.
         //< Caution: **Do not swallow a malformed `{` as a character.** `a{3` would silently match
         //< only the three characters `a{3` (see the caution at the top of this file).
@@ -356,7 +341,6 @@ impl Compiler
         return true
 
     fn parse_repeat_number(r: Self$@, out: I32$@): Bool //< reads one decimal count
-        //<
         //< false when there is no digit, or the count exceeds max_repeat_count.
         $v: Sz = 0
         $digits: Sz = 0
@@ -413,7 +397,6 @@ priv fn holds(kind: Rx_kind, text: U8[], ti: Sz): Bool //< whether a zero-width 
         return !is_word_edge(text, ti)
 
 priv struct Threads //< the ways alive at one byte, in priority order, each with its slots
-    //<
     //< A sparse set: `has` and `put` cost one look each, and emptying it is `len = 0`.
     len: Sz //< how many states are in it
     order: Sz$@ //< the states, highest priority first; only the first `len` mean anything
@@ -438,13 +421,11 @@ priv struct Frame //< one entry of the walk through steps that read no byte
     v: Sz
 
 priv struct Vm //< what one search needs besides the program, made once for find_all's every match
-    //<
     //< **One block holds both generations, the walk and the slots**, so a search on a short line
     //< costs one allocation, not one per table.
     block: Sz$@
     width: Sz //<
         //< The slots a way holds: the match's start, its end, then each group's two
-        //<
         //< 0 for `is_match`, which needs no position and stops at the first match it meets.
     now: Threads
     next: Threads
@@ -474,17 +455,17 @@ priv fn copy_slots(to: Sz$@, from: Sz$@, width: Sz) //< a way's slots, a handful
     for $i: Sz = 0; i < width; i += 1
         (to + i)$ = (from + i)$
 
-impl Vm
-    fn free(r: Self$@)
+impl Vm: Drop //< frees its block when its owner leaves scope
+    priv fn drop(r: Self$@)
         dealloc(Void$@::r.block)
 
+impl Vm
     fn push(r: Self$@, f: Frame)
         (r.walk + r.walk_len)$ = f
         r.walk_len += 1
 
     fn add(r: Self$@, prog: List<|Inst|>$@, to: Threads$@, pc0: Sz, text: U8[], p: Sz) //<
         //< Adds the way at step pc0, with the slots in `r.slots`, and every way it reaches at p
-        //<
         //< Through the steps that read no byte, by a list rather than recursion. A state already
         //< there is passed by: one of higher priority reached it first.
         $f: = Frame::{ .restore = false, .pc = pc0, .k = 0, .v = 0 }
@@ -500,7 +481,6 @@ impl Vm
 
     fn follow(r: Self$@, prog: List<|Inst|>$@, to: Threads$@, pc0: Sz, k0: Sz, text: U8[], p: Sz) //<
         //< Follows one way from step pc0 to a byte step, the end, or a state already put
-        //<
         //< Each other way a split offers, and each slot to put back, goes on the walk for `add`.
         $pc: = pc0
         $k: = k0
@@ -541,11 +521,8 @@ impl Vm
             default
                 pc += 1 // .check that holds
 
-impl Vm: Manual_free {} //< it owns its block and frees it in `free()`.
-
 priv fn first_bytes(prog: List<|Inst|>$@, first: Bool$[]): Bool //<
     //< Marks in `first` every byte a match can begin with; true when a match can be empty
-    //<
     //< It follows every step that reads no byte, taking each test as passing. A byte left out
     //< would skip a start that matches, while one too many only costs a look.
     for i in Range.asc(BYTE_COUNT)
@@ -593,7 +570,6 @@ impl Match
         return r.caps.count
 
     pub fn group( //< what that group captured, or none if it did not take part
-        //<
         //< **A group that matched empty is `.some("")`**, apart from one that did not take part
         //< (`(a)|b` against `b`). **The result is a view into text**, by the original text's
         //< indices. Caution: **A group the pattern lacks stops the program**, 0 included: the
@@ -619,7 +595,6 @@ pub struct Regex //< one compiled pattern, matched against any number of texts
     priv alts: List<|List<|Rx_node$@|>|> //< the tree, which the program's steps read
     priv prog: List<|Inst|> //< the program a match runs
     states: Sz //< how many states the program holds: the most ways alive at one byte
-        //<
         //< Package-wide, so `std/tests` can hold a search to its bound.
     priv pc_of: List<|Sz|> //< per state, its step
     priv groups: Sz //<
@@ -631,7 +606,6 @@ pub struct Regex //< one compiled pattern, matched against any number of texts
 
 priv fn alts_all_anchored(alts: List<|List<|Rx_node$@|>|>$@): Bool //<
     //< Whether every alternative starts with `^`
-    //<
     //< Caution: **Make it false if even one does not start with it**; otherwise a match found by
     //< moving the start is missed. A `^` inside a group (`(^a|^b)c`) gives false: it errs toward
     //< skipping the optimization, which only costs speed.
@@ -645,7 +619,6 @@ priv fn alts_all_anchored(alts: List<|List<|Rx_node$@|>|>$@): Bool //<
 
 impl Regex
     pub fn compile( //< reads a pattern once, so it can be matched many times
-        //<
         //< Caution: **On failure, free the tree before throwing.** The parse returns the whole tree
         //< even on an error (Compiler's description says why); this is the only place it is freed.
         pattern: U8[], //< the pattern's text
@@ -688,7 +661,6 @@ impl Regex
 
     priv fn search(r: Self$@, text: U8[], from: Sz, vm: Vm$@): Bool //<
         //< Searches text from `from`, leaving the match in `vm.best` and `vm.end`
-        //<
         //< **Every start runs in the same pass**, a later start with lower priority than the ways
         //< already alive. The match found is the leftmost. Among those it is the one the pattern's
         //< order prefers. With `vm.width` 0 it stops at the first match it meets.
@@ -745,14 +717,12 @@ impl Regex
         return m
 
     fn visits( //< how many states one search through the text visits: its work
-        //<
         //< It is at most `states` for each byte, plus one. It is package-wide, so `std/tests` can
         //< hold a search to that bound and check that the work grows linearly with the text.
         r: Self$@,
         text: U8[], //< the text to search
     ): Sz
         $vm: = new_vm(r.states, r.width())
-        defer vm.free()
         _found: = r.search(text, 0, vm@)
         return vm.visits
 
@@ -761,13 +731,11 @@ impl Regex
         text: U8[], //< the text to search
     ): Match?
         $vm: = new_vm(r.states, r.width())
-        defer vm.free()
         if !r.search(text, 0, vm@)
             return .none
         return .some(r.found(vm@))
 
     pub fn find_all( //< every matched span; the search resumes past each one
-        //<
         //< Front to back; **even an empty match advances one byte**, and no match is an empty list.
         //< An element holds a whole `Slots`. Why it is eager, and how it differs from Python's
         //< `findall`, is in "Every match comes back in a `List`, with no lazy iterator" in
@@ -778,7 +746,6 @@ impl Regex
     ): List<|Match|>
         $out: = List<|Match|>.new(arena)
         $vm: = new_vm(r.states, r.width())
-        defer vm.free()
         $from: Sz = 0
         for from <= text.len && r.search(text, from, vm@)
             m: = r.found(vm@)
@@ -791,7 +758,6 @@ impl Regex
         text: U8[], //< the text to search
     ): Bool
         $vm: = new_vm(r.states, 0)
-        defer vm.free()
         return r.search(text, 0, vm@)
 
     pub fn free(r: Self$@) //< frees the compiled tree and its program

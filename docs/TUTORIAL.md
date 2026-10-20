@@ -31,14 +31,14 @@
 1. **Keeping the promise** — `Point`
 1. **Saying what a thing is, behind it** — `Span`
 1. **One of a few, and a variant that carries something** — `Shade`
-1. **Reading an enum with `switch`** — `shade_name`
+1. **Reading an enum with `switch`** — `Shade`
 1. **A generic, and a function handed over** — `twice_of`
 1. **An error is a value, and it is listed** — `Step_error`
 1. **Failing, and a return type that says so** — `step`
 1. **Passing a failure on with `!`** — `step_twice`
 1. **Automatic ownership** — `pick_builder`
 1. **Leaving early** — `note`
-1. **Where the braces have to stay** — `tally`
+1. **Where the braces have to stay** — `Shade`
 1. **A global, and why there is one here** — `seen`
 1. **Where memory comes from, and leaving two loops** — `gather`
 1. **Putting it together** — `main`
@@ -151,17 +151,18 @@ priv enum Shade
 
 ## Reading an enum with `switch`
 
-**A `case` binds what its variant carries**: `.mid(level)` names the payload (the value the variant carries) for that arm alone. `default` takes the rest. The `if … else` here is the expression form: it stands where a value is wanted, not where a statement is.
+**A `case` binds what its variant carries**: `.mid(level)` names the payload (the value the variant carries) for that arm alone. `default` takes the rest. The `if … else` here is the expression form: it stands where a value is wanted, not where a statement is. A function of one enum is the enum's method, so the call reads `shade.name()`.
 
 ```kspl
-priv fn shade_name(s: Shade): U8[]
-    switch s
-    case .dark
-        return "dark"
-    case .mid(level)
-        return "mid" if level > 0 else "mid0"
-    default
-        return "light"
+impl Shade
+    fn name(r: Self): U8[]
+        switch r
+        case .dark
+            return "dark"
+        case .mid(level)
+            return "mid" if level > 0 else "mid0"
+        default
+            return "light"
 ```
 
 ## A generic, and a function handed over
@@ -229,17 +230,18 @@ priv fn note(on: Bool)
 
 ## Where the braces have to stay
 
-**A block holding only a comment cannot be written by indentation.** A comment is not a statement, so laid out by indentation the block would be empty. The braces are kept for that arm alone. Every `case` and `default` sits at the `switch`'s column, the first on the line below it.
+**A block holding only a comment cannot be written by indentation.** A comment is not a statement, so laid out by indentation the block would be empty. The braces are kept for that arm alone. Every `case` and `default` sits at the `switch`'s column, the first on the line below it. A `case` that uses nothing its variant carries names the variant alone.
 
 ```kspl
-priv fn tally(s: Shade)
-    switch s
-    case .dark
-        seen += 1
-    case .mid(_level) {
-        // A variant that is not counted. As a sample it holds no content.
-    } default
-        seen += 2
+impl Shade
+    fn tally(r: Self)
+        switch r
+        case .dark
+            seen += 1
+        case .mid {
+            // A variant that is not counted. As a sample it holds no content.
+        } default
+            seen += 2
 ```
 
 ## A global, and why there is one here
@@ -299,8 +301,8 @@ fn main(): I32
     b.s("held")
     note(true)
     note(false)
-    tally(.dark)
-    tally(.mid(1))
+    Shade.dark.tally()
+    Shade.mid(1).tally()
     words: = gather(arena)
     // **It carries a label.** A block with no heading cannot be told from a continuation of the
     // statement before it. So a block of its own is written only with a label in front.
@@ -309,7 +311,7 @@ fn main(): I32
     defer io.out().s("defer comes out last.\n")
     io.out().s("area=\{p.area()\} moved=(\{moved.x\},\{moved.y\})\n")
     io.out().s("span=\{span.to - span.from\}\n")
-    io.out().s("shade=\{shade_name(.mid(1))\}/\{shade_name(.dark)\}\n")
+    io.out().s("shade=\{Shade.mid(1).name()\}/\{Shade.dark.name()\}\n")
     io.out().s("step=\{ok\}/\{bad\}/\{far\} twice=\{twice_of<|I32|>(5, add_i32)\}\n")
     io.out().s("count=\{count_up(6)\} words=\{words.len\} seen=\{seen\} b=\{b.slice()\}\n")
     io.out().s("twice=\{step_twice(1) catch -1\}/\{step_twice(999) catch -1\}\n")

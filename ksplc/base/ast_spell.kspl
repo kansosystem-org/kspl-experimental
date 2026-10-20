@@ -1,5 +1,4 @@
 //< Spelling a node back as text: a type's name, a path, a function's signature
-//<
 //< The accessors (`ast_ext.kspl`) say which child is what. This file instead walks the tree into
 //< a string, with its own depth limit. **Spellings are built here and nowhere else.** A mangled
 //< name, a diagnostic and the generated C's type names must agree, so do not rebuild one in the
@@ -19,14 +18,12 @@ import "std/sys"
 
 priv const MAX_EXTRACT_TYPE_NAME_DEPTH: Sz = 1000 //<
     //< The depth limit for extract_type_name_to's walk down a postfix chain
-    //<
     //< Caution: A postfix chain (`I32@@@@...@`) escapes the parser's max_parse_depth. It could
     //< overflow extract_type_name_to's native stack (max_mangle_depth in sema/type/naming.kspl
     //< too).
 
 fn mentions_ident(text: U8[], name: U8[]): Bool //<
     //< Whether `name` appears as one identifier word inside a type's spelling `text`
-    //<
     //< Caution: Do not match by substring: a `T` is found inside `Total` or `List`. It lives in one
     //< place so the capture copying (`parse/desugar.kspl`) and an impl's type-argument check
     //< (`sema/decl/collect.kspl`) share it.
@@ -44,7 +41,6 @@ fn mentions_ident(text: U8[], name: U8[]): Bool //<
     return false
 
 struct Sig_part //< one piece of a function's signature: a parameter, or the return type
-    //<
     //< **The name is empty on the return type**, and on the `...` of a C variadic, which has no
     //< type node either.
     name: U8[]
@@ -56,7 +52,6 @@ struct Sig_part //< one piece of a function's signature: a parameter, or the ret
 fn write_sig_part(part: Sig_part, spell: Callable2<|Sig_part, Str_builder$@, Bool|>,
     out: Str_builder$@): Bool //<
         //< One parameter, `name: Type = default` or `...`, its type written by `spell`
-        //<
         //< It returns false where `spell` could not write the type.
     if part.is_rest
         out.s("...")
@@ -71,7 +66,6 @@ fn write_sig_part(part: Sig_part, spell: Callable2<|Sig_part, Str_builder$@, Boo
 fn write_sig(fn_node: Ast_node$@, spell: Callable2<|Sig_part, Str_builder$@, Bool|>,
     out: Str_builder$@): Bool //<
         //< A function's signature on one line, `(a: I32, b: I32 = 2): I32`, types spelt by `spell`
-        //<
         //< **Only this function decides what a signature holds** (which children are parameters,
         //< the `...`, the defaults, the return type). So the editor's hover and its completion list
         //< show one signature. Only a type's spelling is up to the caller. It returns false where
@@ -103,7 +97,6 @@ fn write_sig_ret(fn_node: Ast_node$@, spell: Callable2<|Sig_part, Str_builder$@,
 impl Ast_node
     fn get_import_path_text(r: Self$@): U8[]? //<
         //< An import path's contents (the spelling without its quotes)
-        //<
         //< `.none` where it is not a plain `"..."`.
         //< Caution: **Strip the quotes here and nowhere else.** An import's path can be any
         //< `String`, interpolated (`"a\{x\}"`) or raw (`"""a"""`), and counting by hand silently
@@ -117,7 +110,6 @@ impl Ast_node
 
     fn sig_parts(r: Self$@, out: List<|Sig_part|>$@) //<
         //< A function's parameters in order, including the `...` of a C variadic
-        //<
         //< Caution: **Do not walk the parameter list by hand.** Its children include the `(`, `,`
         //< and `)` literals, and `Param_cursor` (ast_ext.kspl) skips the `...`.
         list: = r.get_fn_params()
@@ -147,7 +139,6 @@ impl Ast_node
 
     priv fn last_path_segment_node(r: Self$@): Ast_node$@ //<
         //< A path node's trailing segment, before any `type_args`
-        //<
         //< The path node is an expr_path, a type_path or a generic_path.
         //< null without children. get_path_name and extract_case_variant share it.
         len: = r.children.len
@@ -237,7 +228,6 @@ impl Ast_node
 
     fn mentions_self_type(r: Self$@): Bool //<
         //< whether a `Self` appears anywhere in a type expression
-        //<
         //< `Self` / `Self$@` / `Self[]` / `Foo<|Self|>` all give true. It runs before name
         //< resolution, so matching the spelling is enough.
         if r == null
@@ -251,19 +241,16 @@ impl Ast_node
 
     fn names_self_type(r: Self$@): Bool //<
         //< Whether the type expression **is** `Self` itself (possibly with a `@` / `$@` postfix)
-        //<
         //< Caution: **Do not confuse it with `mentions_self_type`**, which is true for
         //< `Wrap<|Self|>` too: "is the implementing type" versus "contains it somewhere".
         if r == null
             return false
         $spelled: = r.extract_type_name()
-        defer spelled.free()
         base: = spelled.slice()
         return base.equals("Self") || base.equals("Self@") || base.equals("Self$@")
 
     fn self_type_spelling(r: Self$@): U8[] //<
         //< How a type that is `Self` itself is written (`Self`, `Self@`, `Self$@`), or ""
-        //<
         //< Caution: **Keep the `$`.** extract_type_name drops it (a type's name says nothing about
         //< writing through it). Shown without it, a receiver written `Self$@` reads as one that
         //< cannot be written through.

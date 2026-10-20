@@ -1,5 +1,4 @@
 //< The code-generation context shared across the C backend (Genc_ctx)
-//<
 //< The fluent wrapper over the output Writer, the #line directives, and the mapping from a KSPL
 //< type to its C spelling. The rest of genc writes through it.
 import "ksplc/base/ast" { Ast_node }
@@ -13,37 +12,33 @@ import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/naming" as sema_type_naming
 import "ksplc/sema/type/query" as sema_type_query
 import "std/ds" { Map }
+import "std/math"
 import "std/str" { Str_builder }
 
 priv const MAX_C_TYPE_DEPTH: Sz = 1000 //<
     //< The depth limit for map_c_type_to's recursive walk down a `@` pointer chain
-    //<
     //< The parser does not count a repeated `@` as depth, so `f: I32@@@...@` could exhaust the
     //< native stack here. Past it, had_error is set and a fallback type returned (a compile error
     //< through codegen_failed).
 
 priv const MAX_ZERO_INIT_BRACES: Sz = 192 //<
     //< The maximum number of nested brace pairs in a zero initializer
-    //<
     //< Caution: **Stop it in ksplc.** Otherwise the user gets the C compiler's `bracket nesting
     //< level exceeded` instead of a KSPL diagnostic. The reason is the same as max_block_nesting's
     //< ("Failing fast through an exception or an ICE" in ksplc/docs/DESIGN-compiler.md).
 
 priv const GUARANTEED_TYPE_POSTFIX: Sz = 64 //<
     //< The number of a type's postfix levels the specification guarantees; the diagnostics name it
-    //<
     //< The guarantee is among the implementation limits in docs/SPEC-programming-language.md.
     //< Caution: **Do not show max_zero_init_braces in a diagnostic.** It counts brace pairs, which
     //< outnumber the postfix levels, so it would promise more levels than can be written.
 
 const FILE_LOCAL_WORD: U8[] = "static KSPL_UNUSED " //<
     //< The storage word of a definition only its translation unit sees
-    //<
     //< Whether it is used **depends on the user's program**, so C's unused warning would be a false
     //< alarm; KSPL loses no diagnostic by `KSPL_UNUSED`.
 
 enum Emit_part //< which part of the generated C is being written
-    //<
     //< `shared_decls` and `unit` **walk the same AST more than once and write different things**.
     //< Something meant for one (a static prototype, embedded data) written by the other becomes a
     //< duplicate definition or an undefined reference at link time. Genc_ctx.writes_decls /
@@ -58,7 +53,6 @@ struct Emit_split //< which file of the generated C a Genc_ctx writes, decided b
     unit_index: Sz //< when part is .unit, the number of the unit being written
     shared_header: U8[] //<
         //< The file name of the shared header a unit `#include`s (part .unit only)
-        //<
         //< It is a name rather than a path, as it is in the same folder as the unit's `.c`.
 
 const WHOLE_OUTPUT: Emit_split = Emit_split::{ .part = .whole, .unit_count = 1, .unit_index = 0,
@@ -66,7 +60,6 @@ const WHOLE_OUTPUT: Emit_split = Emit_split::{ .part = .whole, .unit_count = 1, 
 
 fn unit_for(file_path: U8[], unit_count: Sz): Sz //<
     //< The number of the unit a file's (`std/io` and the like) definitions go into
-    //<
     //< **Decide it from the file path alone.** Balancing by size or by order of appearance lets an
     //< unrelated edit move definitions between units and invalidate every cached object. A new unit
     //< count reassigns everything (every unit is rebuilt).
@@ -82,19 +75,16 @@ struct Genc_ctx
     last_char: U8
     sema: Sema_ctx$@ //<
         //< The semantic context this generation reads from
-        //<
         //< The whole Sema_ctx rather than only env. Only it says whether a constant expression
         //< folds (try_eval_constexpr). That decides whether a shift amount needs a run-time check.
         //< Genllvm_ctx has the same field.
     env: sema_type_env.Env$@
-    current_impl_name: U8$[]
     current_ret_id: I32
     source_map: Map<|U8[], U8$[]|>$@
     last_line: Sz
     last_file: U8[]
     last_node: Ast_node$@ //<
         //< The node the last `#line` was emitted for
-        //<
         //< **Diagnostics from the type mapping point at this.**
         //< map_c_type_to takes only a `type_id` behind the fluent `.t()` used all over genc. So a
         //< position argument would spread through nearly all of it. This node already points at the
@@ -104,23 +94,19 @@ struct Genc_ctx
     had_error: Bool //< whether a fatal error (an embed read failure, say) occurred during codegen
     assign_tmp_seq: Sz //<
         //< The running number of the C temporary that fixes an assignment's evaluation order
-        //<
         //< See emit_assign_stmt.
     split: Emit_split
     top_level_var: Bool //<
         //< Whether a top-level global is being written
-        //<
         //< **It only tells a global from a local variable**: emit_var_decl writes both, and only a
         //< global gets the linkage setting.
     const_init_depth: Sz //<
         //< Whether a top-level `const`'s initializer is being written, as a nesting count
-        //<
         //< **Only here is a reference to a constant emitted as its value rather than by name**
         //< (emit_path_or_literal in gen/c/expr.kspl). C's initializer must be a constant
         //< expression, and in C99 the name of an object, `const` or not, is not one.
     brace_init: Bool //<
         //< Whether the expression about to be written stands where C reads an initializer's braces
-        //<
         //< That is a file-scope initializer itself, or a member of one written in braces. There an
         //< aggregate is written as plain braces (`{ .x = 1 }`), not as a compound literal
         //< (`(P){ .x = 1 }`). **C99 takes no compound literal as a file-scope initializer**, which
@@ -128,7 +114,6 @@ struct Genc_ctx
         //< not constant". emit_expr reads and clears it, so it never reaches a nested operand.
     addr_root: Ast_node$@ //<
         //< The name an `x@` being written takes the address of, or null
-        //<
         //< **It is written by name even in a `const`'s initializer.** `&name` is a C99 address
         //< constant. The address of the value written out is no constant at all.
 
@@ -139,20 +124,17 @@ impl Genc_ctx
         scratch: = Str_builder.new()
         return base_core.arena
             .create(Genc_ctx::{ .out = out, .last_char = '\n', .sema = sema, .env = sema.env,
-            .current_impl_name = "", .current_ret_id = 0, .source_map = source_map, .last_line = 0,
-            .last_file = "", .last_node = null, .scratch = scratch, .had_error = false,
-            .split = split, .top_level_var = false, .const_init_depth = 0, .brace_init = false,
-            .addr_root = null })
+            .current_ret_id = 0, .source_map = source_map, .last_line = 0, .last_file = "",
+            .last_node = null, .scratch = scratch, .had_error = false, .split = split,
+            .top_level_var = false, .const_init_depth = 0, .brace_init = false, .addr_root = null })
 
     fn writes_decls(r: Self$@): Bool //<
         //< Whether this pass writes the declarations every unit sees
-        //<
         //< Those are the type definitions, the non-static prototypes and the extern declarations.
         return r.split.part != .unit
 
     fn writes_bodies(r: Self$@): Bool //<
         //< Whether this pass writes the definitions
-        //<
         //< Those are the function bodies, the globals' definitions and the embedded data.
         return r.split.part != .shared_decls
 
@@ -164,7 +146,6 @@ impl Genc_ctx
 
     fn owns_singleton(r: Self$@): Bool //<
         //< Whether the unit being written holds the definitions that only one unit can hold
-        //<
         //< Those are the runtime's body half and the main wrapper.
         if r.split.part != .unit
             return true
@@ -172,7 +153,6 @@ impl Genc_ctx
 
     fn global_word(_r: Self$@, definition: Bool): U8[] //<
         //< The storage word before a top-level variable's, constant's or embed's declarator
-        //<
         //< **In a library every one is `static`** (`--library`), its forward declaration a
         //< tentative definition. Elsewhere the forward declaration is `extern` and the definition
         //< has no word.
@@ -199,7 +179,6 @@ impl Genc_ctx
 
     fn open_compound(r: Self$@, type_id: I32, as_init: Bool): Genc_ctx$@ //<
         //< It writes a compound literal's `(T)` by the mangled name, unless as_init
-        //<
         //< Where braces stand alone (Genc_ctx.brace_init) it writes nothing.
         if !as_init
             r.s("(").m(type_id).s(")")
@@ -213,14 +192,12 @@ impl Genc_ctx
 
     fn result_open_to(r: Self$@, type_id: I32, variant: U8[]): Genc_ctx$@ //<
         //< It opens a Result's compound literal at a variant, `(R){ .tag = kspl_R_ok`
-        //<
         //< The caller adds the payload, if any, and the closing ` }`. The tag constant is the one
         //< emit_enum_decl in types.kspl declares.
         real_id: = r.env.get_clean_real_type(type_id)
         return r.s("(").m(real_id).s("){ .tag = kspl_").m(real_id).s("_\{variant\}")
 
     fn t_ret(r: Self$@, type_id: I32): Genc_ctx$@ //< like `t`, for a function's return type only
-        //<
         //< C ignores a const on a value (non-pointer) return type, and -Wignored-qualifiers warns
         //< about it. So the const that `t` keeps for a local, a parameter or a field is dropped
         //< here.
@@ -229,7 +206,6 @@ impl Genc_ctx
 
     fn type_name_carries_const(r: Self$@, type_id: I32): Bool //<
         //< Whether the type name already emits a `const `, or it is a raw pointer
-        //<
         //< A function pointer is not checked here. Its `const` goes inside the declarator rather
         //< than before the type name, so the declarator code decides (const_goes_in_declarator in
         //< gen/c/decl.kspl).
@@ -237,7 +213,6 @@ impl Genc_ctx
 
     fn emit_line_directive(r: Self$@, node: Ast_node$@, again: Bool = false) //<
         //< It writes a #line for the node into the generated C where the position changes
-        //<
         //< The directives are always written, so a C compile error's position and lldb's stepping
         //< match the source line. `again` writes one on the same line too. C counts each line it
         //< reads past a directive, so a statement Lower expanded into several C lines drifts.
@@ -348,7 +323,6 @@ impl Genc_ctx
 
     fn emit_zero_init(r: Self$@, type_id: I32, site: Ast_node$@) //<
         //< It emits the initializer that fills type_id's value with zeros (`{0}` / `{{0}}` / …)
-        //<
         //< **Match the number of braces to the type.** Where C's `{0}` meets an aggregate first
         //< element, -Wmissing-braces fires (`Rc[2]` needs `{{0}}`). A warning spoils the -Wall
         //< check on the generated C.
@@ -356,7 +330,7 @@ impl Genc_ctx
         //< Otherwise a rejection for depth gives the user one line without a position.
         raw: = r.zero_init_depth(type_id, 0)
         // Even a scalar gets one pair (`x = {0}` is valid C).
-        pairs: = 1 if raw < 1 else raw
+        pairs: = math.max(raw, 1)
         if pairs > MAX_ZERO_INIT_BRACES
             // One pair only: the translation fails anyway, and mismatched braces would add a C
             // compiler error on top.
@@ -376,7 +350,6 @@ impl Genc_ctx
 
     priv fn zero_init_depth(r: Self$@, type_id: I32, depth: Sz): Sz //<
         //< The number of brace pairs a zero initializer needs
-        //<
         //< It follows **the first element** and counts 1 per aggregate it enters. A scalar is 0
         //< (with too many, -Wbraced-scalar-init fires instead).
         if depth >= MAX_C_TYPE_DEPTH
@@ -394,7 +367,7 @@ impl Genc_ctx
         case .enum_type(def)
             // An enum without payloads is an integer typedef in C.
             return 0 if def.is_scalar() else 1 // `{ the tag, the payload }`
-        case .trait_type(_def)
+        case .trait_type
             return 1 // `{ obj, vtable }`
         default {}
         // Anything that reaches here is a scalar in C (a number, a Bool, a pointer, Void).
@@ -402,7 +375,6 @@ impl Genc_ctx
 
 impl Genc_ctx
     fn nm(r: Self$@, val: U8[]): Self$@ //< it emits a KSPL identifier into C
-        //<
         //< A C reserved word gets a suffix, and a made name its own spelling (`c_safe_name_to`).
         //< Caution: **Pass both the declaration and every reference of a plain name through here.**
         //< With only one, the names disagree, and with bad luck it silently reads a different
@@ -448,9 +420,9 @@ priv fn emits_c_const(env: sema_type_env.Env$@, type_id: I32): Bool //<
         return false
     info: = env.get_info(type_id)
     switch info
-    case .pointer(_b)
+    case .pointer
         return false
-    case .array(_b, _s)
+    case .array
         return false
     default {}
     return true

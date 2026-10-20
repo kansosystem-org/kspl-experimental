@@ -1,5 +1,4 @@
 //< Whether a file's line terminator changes anything
-//<
 //< Not a suite; part of `../suite/notation_test.kspl`.
 //< **The line terminator belongs to the file, not the program.** Nothing downstream can tell the
 //< two apart: the C, a raw text's bytes, what `ksplc fmt` writes back (`to_lf` in
@@ -13,14 +12,12 @@ import "std/strfmt" as _strfmt
 import "std/verdict"
 
 const SAMPLE_DIR: U8[] = "tests/notation" //< the samples' directory, from the package's top
-    //<
     //< **Kept apart from the suite's own**, so this file relies on nothing there.
 
 fn sample_path(stem: U8[], arena: Arena$@): U8[] //< a sample's path
     return fs.join(SAMPLE_DIR, arena.text().s(stem).s(".kspl").take(), arena)
 
 priv fn to_crlf(body: U8[], arena: Arena$@): U8[] //< widens `\n` to `\r\n`
-    //<
     //< **It makes the file as a Windows editor saves it.**
     //< Caution: **Widen every newline regardless of content**, strings included, as the editor
     //< does. A `\r\n` is not doubled.
@@ -35,7 +32,7 @@ priv fn to_crlf(body: U8[], arena: Arena$@): U8[] //< widens `\n` to `\r\n`
 
 fn copy_into(from: U8[], to: U8[], stem: U8[], arena: Arena$@): Bool //<
     //< copies a sample, reporting a failure
-    src: = io.read_file(from) catch
+    src: = io.read_file(from, null) catch
         return verdict.check(arena.text().s(stem).s(": the sample can be read").take(), false, from)
     io.write_file(to, src) catch
         return verdict.check(arena.text().s(stem).s(": they can be copied to the working directory")
@@ -44,7 +41,6 @@ fn copy_into(from: U8[], to: U8[], stem: U8[], arena: Arena$@): Bool //<
 
 fn check_crlf(work: U8[], stem: U8[], arena: Arena$@) //<
     //< Whether an indentation-notation file saved as CRLF generates the same C as LF
-    //<
     //< Caution: **Put them in the same directory and build.** A symbol's name and `#line` come from
     //< the source's path, so other paths differ by name, not newline. `#line` stays in the
     //< comparison: **the lines do not move** with the terminator.
@@ -52,7 +48,7 @@ fn check_crlf(work: U8[], stem: U8[], arena: Arena$@) //<
     at: = fs.join(work, arena.text().s(stem).s(".kspl").take(), arena)
     gen_lf: = fs.join(work, "crlf_lf.c", arena)
     gen_crlf: = fs.join(work, "crlf_crlf.c", arena)
-    src: = io.read_file(laid) catch
+    src: = io.read_file(laid, null) catch
         _bad: = verdict.check(arena.text().s(stem).s(": the sample can be read (CRLF)").take(),
             false, laid)
         return
@@ -105,7 +101,7 @@ fn check_crlf_raw_text(work: U8[], arena: Arena$@)
 // used — a `\r` left in a comment would mix two.
 fn check_crlf_fmt(work: U8[], arena: Arena$@)
     at: = fs.join(work, "crlf_fmt.kspl", arena)
-    src: = io.read_file(sample_path("comments", arena)) catch
+    src: = io.read_file(sample_path("comments", arena), null) catch
         _bad: = verdict.check("the sample can be read (CRLF formatting)", false, at)
         return
     want: = to_crlf(src, arena)
@@ -115,7 +111,7 @@ fn check_crlf_fmt(work: U8[], arena: Arena$@)
     r: = harness.ksplc_bare(U8[][]::{ "fmt", "--in-place", at })
     if !verdict.check("a CRLF source formats", r.exited_with(0), r.out)
         return
-    got: = io.read_file(at) catch
+    got: = io.read_file(at, null) catch
         _bad: = verdict.check("the formatted CRLF source can be read", false, at)
         return
     _same: = verdict.check("formatting hands the file back the terminator it came with",

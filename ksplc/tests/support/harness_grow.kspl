@@ -1,5 +1,4 @@
 //< Builds, just before the run, the fixtures that check a depth limit rejects its input
-//<
 //< It is not a suite but a part of `tests/support/harness_expect.kspl`.
 //< Caution: **Keep the limit as a copy** (`limit`), and **change it with the original** — with
 //< `depth` below the limit it **fails immediately**, never quietly. The step count has room to
@@ -12,7 +11,6 @@ import "std/str" { Str_builder }
 import "std/strfmt" as _strfmt
 
 priv enum Chain //< what chain to build
-    //<
     //< **Only how a step is written differs; the shape is the same for all.**
     struct_field //< a struct's field embeds the next struct
     arc_field //< the same shape, with the innermost holding an ARC-managed type
@@ -32,7 +30,6 @@ priv struct Grown //< one fixture to build
     chain: Chain
     once: Bool //<
         //< Whether the refusal must be the only error
-        //<
         //< SPEC-language's "Implementation limits" forbids a cutoff that surfaces as other errors
         //< (a type mismatch, a repeat per step of the chain). This is how a fixture holds that.
 
@@ -82,7 +79,6 @@ priv const GROWN: Grown[_] = ::{
         .chain = .const_ref, .once = true },
 }
 priv fn write_head(out: Str_builder$@, g: Grown) //< the fixture's header
-    //<
     //< Caution: **Always write the `EXPECT` line** (the runner fails a fixture with no mark). The
     //< header also says where it was built from, to trace a file found nowhere else.
     out.s("// It confirms ").s(g.why).s("\n")
@@ -93,7 +89,6 @@ priv fn write_head(out: Str_builder$@, g: Grown) //< the fixture's header
         out.s("// EXPECT: Finished with 1 error(s)\n")
 
 priv fn write_struct_chain(out: Str_builder$@, depth: Sz) //< the struct chain
-    //<
     //< Only the innermost holds an ordinary field, and the chain ends there.
     for i in Range.asc(depth)
         out.s("struct S\{i\}\n  f: S\{i + 1\}\n\n")
@@ -101,7 +96,6 @@ priv fn write_struct_chain(out: Str_builder$@, depth: Sz) //< the struct chain
 
 priv fn write_arc_chain(out: Str_builder$@, depth: Sz) //<
     //< The same shape, a chain whose innermost holds an ARC-managed type
-    //<
     //< Caution: **Write them from the inside out.** Otherwise a field's type names something that
     //< has not yet appeared (the chain does not rely on a forward reference).
     out.s("import \"std/refcount\" { Rc }\n\n")
@@ -111,7 +105,6 @@ priv fn write_arc_chain(out: Str_builder$@, depth: Sz) //<
     out.s("\nfn use_it(_v: S1) {}\n")
 
 priv fn write_generic_chain(out: Str_builder$@, depth: Sz) //< the generic struct chain
-    //<
     //< Each points at the next through a pointer (embedded by value, the size is not decided).
     for i in Range.asc(depth)
         out.s("struct G\{i\}<|T|>\n  f: G\{i + 1\}<|T|>$@\n\n")
@@ -119,7 +112,6 @@ priv fn write_generic_chain(out: Str_builder$@, depth: Sz) //< the generic struc
     out.s("\nfn main()\n  x: G0<|I32|>$@ = null\n  _y: = x\n\n")
 
 priv fn write_alias_chain(out: Str_builder$@, depth: Sz) //< the alias chain
-    //<
     //< The innermost points at a real type.
     for i in Range.asc(depth)
         out.s("typedef A\{i\} = A\{i + 1\}\n")
@@ -127,7 +119,6 @@ priv fn write_alias_chain(out: Str_builder$@, depth: Sz) //< the alias chain
 
 priv fn write_alias_chain_back(out: Str_builder$@, depth: Sz) //<
     //< The alias chain written the other way, the innermost first
-    //<
     //< **The resolver walks it from the inside**, so the cut falls on a later alias, and the
     //< variable's type is one that was refused.
     out.s("typedef A0 = I32\n")
@@ -137,7 +128,6 @@ priv fn write_alias_chain_back(out: Str_builder$@, depth: Sz) //<
 
 priv fn write_const_chain(out: Str_builder$@, depth: Sz) //<
     //< The constant chain
-    //<
     //< **Each constant is defined by the one written before it.** So every one of them is folded on
     //< its own, and the later ones are cut short too. A refusal per constant must not come.
     out.s("const C0: I32 = 1\n")
@@ -162,7 +152,6 @@ priv fn write_body(out: Str_builder$@, g: Grown)
 
 fn write_all(dir: U8[], arena: Arena$@): List<|U8[]|> //<
     //< Builds the list under `dir` and returns the paths written
-    //<
     //< What could not be built is left out (the runner fails on the count). **Where the step count
     //< is below the limit, fail immediately**, or it fails as "the diagnostic does not appear",
     //< hiding the relation to the limit.
@@ -184,6 +173,5 @@ fn write_all(dir: U8[], arena: Arena$@): List<|U8[]|> //<
     return made
 
 fn count(): Sz //< the number of fixtures to build
-    //<
     //< The runner uses it to fail when "not one could be built".
     return GROWN.len

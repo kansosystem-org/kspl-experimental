@@ -1,5 +1,4 @@
 //< The set of LoRA adapters a block carries, and their names in a safetensors file
-//<
 //< `Qkv_lora` and `Mlp_lora` gather the adapters per block, named
 //< `blocks.{i}.{group}.{name}.lora_{a,b,scale}`. **It takes an already parsed `Safetensors`, not a
 //< path** (paths are `ksai/model_file`'s job), so bare-metal code reading `embed`ed bytes pays for
@@ -17,7 +16,6 @@ import "std/mem" { Arena }
 import "std/str" { Str_builder }
 
 pub struct Lora_widths //< the widths of the base layer an adapter read from a file is added to
-    //<
     //< The file's A has to be `[in_dim, rank]` and its B `[rank, out_dim]`. Take them from the
     //< base layer's weights (`Linear.weights.shape`), so that what is checked is what it meets.
     pub in_dim: Sz //< the base layer's input width
@@ -25,7 +23,6 @@ pub struct Lora_widths //< the widths of the base layer an adapter read from a f
 
 priv fn tensor_name(b: Str_builder$@, i: Sz, group: U8[], name: U8[], part: U8[]): U8$[] //<
     //< A LoRA tensor's name, "blocks.{i}.{group}.{name}.lora_{part}"
-    //<
     //< It is the only place `lora_load_from` and `lora_save_into` build this name.
     //< Caution: **If the reader's and the writer's names disagree, a saved adapter silently becomes
     //< unreadable.** **The result is a view into `b`**, so use it before `b` is used again.
@@ -37,11 +34,11 @@ priv fn tensor_name(b: Str_builder$@, i: Sz, group: U8[], name: U8[], part: U8[]
 priv fn adapter_error(e: st.Safetensors_error, name: U8[]): st.Safetensors_error //<
     //< Error labels outlive the temporary strings used to look up a tensor.
     switch e
-    case .tensor_not_found(_name)
+    case .tensor_not_found
         return .tensor_not_found(name)
-    case .dtype_mismatch(_name)
+    case .dtype_mismatch
         return .dtype_mismatch(name)
-    case .shape_mismatch(_name)
+    case .shape_mismatch
         return .shape_mismatch(name)
     default
         return e
@@ -49,7 +46,6 @@ priv fn adapter_error(e: st.Safetensors_error, name: U8[]): st.Safetensors_error
 priv fn lora_load_from(out: Lora<|F32|>$@, $s: st.Safetensors, i: Sz, group: U8[], name: U8[],
     want: Lora_widths, arena: Arena$@): Void!st.Safetensors_error //<
         //< Reads block i's adapter "{group}.{name}", written elsewhere, into `out` for inference
-        //<
         //< The writer is an on-device trainer or a LoRA fine-tuner. Exchange through safetensors is
         //< always F32, so it uses the concrete type (`Safetensors_writer.add` is F32-only).
     $b: = Str_builder.new()
@@ -87,14 +83,12 @@ priv fn lora_save_into(l: Lora<|F32|>, w: st.Safetensors_writer$@, i: Sz, group:
     w.add(tensor_name(b@, i, group, name, "scale"), sc)
 
 pub struct Qkv_lora<|T|> //< one block's attention adapters, on Q and V as in the paper
-    //<
     //< **Several models share this shape**, so it is defined once here.
     pub q: Lora<|T|> //< the adapter on the query projection
     pub v: Lora<|T|> //< the adapter on the value projection
 
 impl<|T|> Qkv_lora<|T|>
     pub fn load_set_from( //< reads every block's attention adapters in one call
-        //<
         //< The names read are "blocks.{i}.attn.{q,v}.lora_{a,b,scale}".
         //< It takes a parsed Safetensors, not a path (the reason is in this file's header); on bare
         //< metal, pass `embed`ed bytes through `Safetensors.load_from_bytes` first.
@@ -112,7 +106,6 @@ impl<|T|> Qkv_lora<|T|>
             lora_load_from(entry.v@, s, i, "attn", "v", v, arena)!
         return adapters
     pub fn save_set_into( //< the inverse of `load_set_from`: writes every block's adapters
-        //<
         //< The caller prepares the `Safetensors_writer` (as with `load_set_from`), and its
         //< `finish()` produces the bytes; for a quick local save, `Lora.save_raw` is lighter.
         adapters: Qkv_lora<|T|>$@, //< the array `load_set_from` returns, or one trained here
@@ -126,7 +119,6 @@ impl<|T|> Qkv_lora<|T|>
             lora_save_into((adapters + i).v, w, i, "attn", "v", arena)
 
 pub struct Mlp_lora<|T|> //< one block's feed-forward adapters, the counterpart of `Qkv_lora`
-    //<
     //< The adapters on the MLP's fc1/fc2, used with Qkv_lora when the feed-forward part is also
     //< tuned on the device.
     pub fc1: Lora<|T|> //< the adapter on the widening layer
@@ -134,7 +126,6 @@ pub struct Mlp_lora<|T|> //< one block's feed-forward adapters, the counterpart 
 
 impl<|T|> Mlp_lora<|T|>
     pub fn load_set_from( //< reads every block's feed-forward adapters in one call
-        //<
         //< The names read are "blocks.{i}.mlp.{fc1,fc2}.lora_{a,b,scale}". It takes an already
         //< parsed Safetensors, not a path (the same as `Qkv_lora.load_set_from`).
         s: st.Safetensors, //< the model already parsed, from a file or from bytes in flash
@@ -151,7 +142,6 @@ impl<|T|> Mlp_lora<|T|>
             lora_load_from(entry.fc2@, s, i, "mlp", "fc2", fc2, arena)!
         return adapters
     pub fn save_set_into( //< the inverse of `load_set_from`: writes every block's adapters
-        //<
         //< The same shape as `Qkv_lora.save_set_into`.
         adapters: Mlp_lora<|T|>$@, //< the array `load_set_from` returns, or one trained here
         n_layers: Sz, //< how many of them are written

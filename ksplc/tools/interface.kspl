@@ -1,5 +1,4 @@
 //< Writes a library's interface from its `#export` functions (`--library=`)
-//<
 //< **The library and its interface come out of one compilation**, so they cannot drift. The form
 //< follows the file's extension (`form_of`): a C header, or a KSPL file whose `extern "C"` block a
 //< KSPL caller imports. The types the signatures name are written beside the functions.
@@ -29,7 +28,6 @@ import "std/str" { Str_builder }
 
 priv const MAX_TYPE_WALK_DEPTH: Sz = 1000 //<
     //< The depth limit for walking inside a type
-    //<
     //< It matches max_type_layout_depth in sema/decl/layout.kspl.
 
 enum Form //< the interface a file's extension asks for
@@ -50,7 +48,6 @@ priv struct Named //< a `struct` or an `enum` the interface declares, in the ord
     is_enum: Bool
     body: Bool //<
         //< Whether its fields are written
-        //<
         //< **A `struct` passed by value always is**: C needs its layout. One reached only through a
         //< pointer is written as a handle unless every field is `pub` and can cross to C.
     node: Ast_node$@ //< its declaration, for its summary; null where none is found
@@ -136,7 +133,6 @@ impl Walk
 
     priv fn handle_opens(r: Self$@, def: sema_type_def.Struct_def$@): Bool //<
         //< Whether a `struct` reached through a pointer shows its fields
-        //<
         //< **Only where every field is `pub` and can cross to C.** A field kept inside the package
         //< stays out of the caller's reach in C as well.
         for f in def.fields_list
@@ -152,9 +148,9 @@ impl Walk
         switch r.c.env.get_info(id)
         case .const_of(b)
             return r.crosses(b, depth + 1)
-        case .pointer(_b)
+        case .pointer
             return true
-        case .fn_type(_s)
+        case .fn_type
             return true
         case .struct_type(def)
             if r.short_name(id).len == 0 || def.is_packed || def.align_attr > 0
@@ -166,8 +162,7 @@ impl Walk
         case .enum_type(def)
             return def.is_scalar()
         default
-            return c_scalar(r.c.env.get_str(id)).len > 0 ||
-                id == I32::sema_type_env.Builtin_type_id.void_ptr
+            return c_scalar(id).len > 0 || id == I32::sema_type_env.Builtin_type_id.void_ptr
 
     priv fn short_name(r: Self$@, id: I32): U8[] //<
         //< A `struct`'s or `enum`'s name as declared; empty for a generic's instance or a slice
@@ -178,9 +173,9 @@ impl Walk
     fn nameable(r: Self$@, id: I32): Bool //<
         //< Whether a pointer's target can be named in C; one that cannot is written `void`
         switch r.c.env.get_info(id)
-        case .pointer(_b)
+        case .pointer
             return true
-        case .fn_type(_s)
+        case .fn_type
             return true
         default
             return r.c_name_of(id).len > 0 ||
@@ -190,26 +185,19 @@ impl Walk
         //< The C name of a built-in type, a `struct` or an `enum`; empty for any other
         if id == I32::sema_type_env.Builtin_type_id.void_type
             return "void"
-        scalar: = c_scalar(r.c.env.get_str(id))
+        scalar: = c_scalar(id)
         if scalar.len > 0
             return scalar
         switch r.c.env.get_info(id)
-        case .struct_type(_d)
+        case .struct_type
             return r.short_name(id)
         case .enum_type(def)
             return r.short_name(id) if def.is_scalar() else ""
         default
             return ""
 
-priv fn c_scalar(kspl: U8[]): U8[] //< a built-in type's C spelling; empty for any other
-    names: = U8[][]::{ "I8", "I16", "I32", "I64", "U8", "U16", "U32", "U64", "Sz", "F32", "F64",
-        "Bool", "Void" }
-    c_names: = U8[][]::{ "int8_t", "int16_t", "int32_t", "int64_t", "uint8_t", "uint16_t",
-        "uint32_t", "uint64_t", "ptrdiff_t", "float", "double", "bool", "void" }
-    for i in Range.asc(names.len)
-        if kspl.equals(names[i])
-            return c_names[i]
-    return ""
+priv fn c_scalar(id: I32): U8[] //< a built-in type's C spelling; empty for any other
+    return sema_type_env.BUILTIN_TYPES[id].c_name if sema_type_env.is_builtin(id) else ""
 
 // ==========================================
 // Spelling a type in C (a declarator around a name) and in KSPL
@@ -218,7 +206,6 @@ priv fn c_scalar(kspl: U8[]): U8[] //< a built-in type's C spelling; empty for a
 impl Walk
     fn c_decl(r: Self$@, raw: I32, inner: U8[], leaf_const: Bool, out: Str_builder$@, depth: Sz) //<
         //< It writes the type `raw` as C declares `inner` (a name, or empty for a bare type)
-        //<
         //< **The declarator grows from the inside out**, as C reads it: a pointer puts `*` before
         //< `inner`, a function pointer wraps it as `(*inner)(...)`.
         if depth >= MAX_TYPE_WALK_DEPTH
@@ -261,7 +248,7 @@ impl Walk
 
     priv fn is_fn(r: Self$@, id: I32): Bool //< whether it is a function pointer
         switch r.c.env.get_info(r.c.env.get_clean_real_type(id))
-        case .fn_type(_s)
+        case .fn_type
             return true
         default
             return false
@@ -309,10 +296,10 @@ impl Walk
                 out.s(": ")
                 r.k_type(sig.ret_id, out, depth + 1)
             return
-        case .struct_type(_d)
+        case .struct_type
             out.s(r.short_name(id))
             return
-        case .enum_type(_d)
+        case .enum_type
             out.s(r.short_name(id))
             return
         default {}
@@ -409,7 +396,6 @@ priv fn c_doc(doc: U8[], indent: U8[], out: Str_builder$@) //< a summary as a C 
 
 priv fn c_ident(name: U8[]): U8[] //< a parameter's or a field's name as C may write it
     $safe: = name.c_safe_name()
-    defer safe.free()
     return base_core.arena.dup_str(safe.slice())
 
 priv fn guard_of(out_path: U8[]): U8[] //< the include guard, from the file's name
@@ -482,7 +468,6 @@ priv fn render_c(walk: Walk$@, exports: List<|Export|>$@, out_path: U8[]): U8[]
 
 priv fn bodies_in_order(walk: Walk$@): List<|Named|> //<
     //< The `struct`s whose fields are written, each after those it holds by value
-    //<
     //< C needs a type complete where a value of it is held.
     $out: = List<|Named|>.new(base_core.arena)
     $done: = Map<|I32, Bool|>.new(base_core.arena)
@@ -503,7 +488,7 @@ priv fn visit_body(walk: Walk$@, id: I32, done: Map<|I32, Bool|>$@, out: List<|N
         for f in def.fields_list
             inner: = walk.c.env.get_clean_real_type(f.type_id)
             switch walk.c.env.get_info(inner)
-            case .struct_type(_d)
+            case .struct_type
                 visit_body(walk, inner, done, out, depth + 1)
             default {}
     default {}
@@ -511,10 +496,9 @@ priv fn visit_body(walk: Walk$@, id: I32, done: Map<|I32, Bool|>$@, out: List<|N
 
 priv fn render_c_enum(walk: Walk$@, name: U8[], def: sema_type_def.Enum_def$@, out: Str_builder$@) //<
     //< A scalar enum as the library's C carries it: its base type, and its tags
-    //<
     //< A C enumerator is an `int`, so tags past it are macros of the enum's type, as genc writes
     //< them (`emit_enum_decl` in `../gen/c/types.kspl`).
-    out.s("typedef ").s(c_scalar(walk.c.env.get_str(def.base_type_id))).s(" \{name\};\n")
+    out.s("typedef ").s(c_scalar(def.base_type_id)).s(" \{name\};\n")
     if !def.tags_fit_i32()
         unsigned: = walk.c.env.is_unsigned(def.base_type_id)
         for v in def.variants_list

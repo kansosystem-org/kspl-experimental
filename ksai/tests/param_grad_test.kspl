@@ -8,6 +8,7 @@ import "ksai/nn_grad" as ai_nn_grad
 import "ksai/sampler" as ai_sampler
 import "ksai/tensor" { Tensor }
 import "ksai/tests/grad_test"
+import "std/math"
 import "std/mem" + { Arena }
 import "std/prng"
 import "std/str"
@@ -23,15 +24,12 @@ import "std/verdict"
 // ==========================================
 
 priv const FD_EPS: F64 = 1.0e-5 //< the finite difference's step
-    //<
     //< It is a central difference, so the truncation error scales as eps^2.
 priv const PROBE_LR: F64 = 1.0e-2 //< the SGD step used to recover the analytic gradient
-    //<
     //< **If it is too small, the difference is lost in rounding.**
 
 priv fn spread(t: Tensor<|F64|>, seed: Sz) //<
     //< Sets one weight to deterministic, **non-uniform** values
-    //<
     //< Caution: **Do not fill it with the same value.** `nn.Linear.new`'s default is 0.1 in every
     //< element, and then every output unit gets the same value. **A gradient with rows and columns
     //< swapped then matches anyway**, so the mistake cannot be found.
@@ -41,7 +39,6 @@ priv fn spread(t: Tensor<|F64|>, seed: Sz) //<
 
 priv fn grad_from_step(w: Tensor<|F64|>, before: Tensor<|F64|>, arena: Arena$@): Tensor<|F64|> //<
     //< Recovers the gradient from how far SGD moved the weight, then restores the weight
-    //<
     //< Caution: **Restore it.** Otherwise the finite difference after this measures the gradient at
     //< a different point.
     g: = Tensor<|F64|>.new(w.shape, arena)
@@ -50,32 +47,14 @@ priv fn grad_from_step(w: Tensor<|F64|>, before: Tensor<|F64|>, arena: Arena$@):
         (w.data + i)$ = (before.data + i)$
     return g
 
-priv fn max_gap(w: Tensor<|F64|>, g: Tensor<|F64|>, loss: Callable1<|Sz, F64|>): F64 //<
-    //< Returns the largest gap between the analytic gradient and the finite difference, for `w`
-    $worst: = 0.0
-    for k in Range.asc(w.size)
-        saved: = (w.data + k)$
-        (w.data + k)$ = saved + FD_EPS
-        l_plus: = loss.call(0)
-        (w.data + k)$ = saved - FD_EPS
-        l_minus: = loss.call(0)
-        (w.data + k)$ = saved
-        d: = (l_plus - l_minus) / (2.0 * FD_EPS) - (g.data + k)$
-        ad: = -d if d < 0.0 else d
-        if ad > worst
-            worst = ad
-    return worst
-
 priv fn ones_like(t: Tensor<|F64|>, arena: Arena$@): Tensor<|F64|> //<
     //< A dout filled with 1
-    //<
     //< The loss is L = Σ out, so the output-side gradient is 1 everywhere.
     d: = Tensor<|F64|>.new(t.shape, arena)
     d.fill(1.0)
     return d
 
 priv struct Param //< one weight to match
-    //<
     //< The name is there only to show which weight failed.
     name: U8$[]
     w: Tensor<|F64|>
@@ -93,11 +72,10 @@ priv fn recover(ps: Param$[], work: Arena$@) //<
 
 priv fn check_all(ps: Param[], tol: F64, loss: Callable1<|Sz, F64|>) //<
     //< Checks the listed weights, one at a time
-    //<
     //< Caution: **Do not write the loss out separately for each weight.** Every weight of one model
     //< uses the same loss; with separate copies, one using another model goes unnoticed.
     for p in ps
-        gap: = max_gap(p.w, p.g, loss)
+        gap: = grad_test.max_gap(p.w, p.g, FD_EPS, loss)
         assert(gap < tol, p.name)
 
 fn test_linear_weight_grad()
@@ -333,7 +311,6 @@ fn test_attention_lora_weight_grad()
     verdict.pass("")
 
 fn test_block_lora_weight_grad() //< LoRA over the whole block
-    //<
     //< **The MLP side's A/B (fc1/fc2) go through different code from the attention side's**
     //< (`Mlp.backward_lora_grads` in `ksai/nn_grad.kspl`). So this can be wrong even where the
     //< attention side is right.
@@ -440,7 +417,7 @@ fn test_lora_finetune(arena: Arena$@)
     for i in Range.asc(base.weights.size)
         base_sum_after += (base.weights.data + i)$
     base_drift: = base_sum_after - base_sum_before
-    base_drift_abs: = -base_drift if base_drift < 0.0 else base_drift
+    base_drift_abs: = math.abs(base_drift)
     assert(base_drift_abs < 1.0e-9, "LoRA: base weights must stay frozen")
 
     base_out: = base.forward(x)
@@ -476,19 +453,15 @@ fn test_attention_lora_grad(arena: Arena$@)
     dout.fill(1.0)
     dx: = att.backward_lora(c@, dout, 0.0, q_lora@, v_lora@)
 
-    eps: = 1.0e-5
-    for k in Range.asc(x.size)
-        saved: = (x.data + k)$
-        (x.data + k)$ = saved + eps
-        l_plus: = grad_test.tsum_f64(att.train_forward_lora(x, q_lora@, v_lora@).out)
-        (x.data + k)$ = saved - eps
-        l_minus: = grad_test.tsum_f64(att.train_forward_lora(x, q_lora@, v_lora@).out)
-        (x.data + k)$ = saved
-        numeric: = (l_plus - l_minus) / (2.0 * eps)
-        analytic: = (dx.data + k)$
-        diff: = numeric - analytic
-        ad: = -diff if diff < 0.0 else diff
-        assert(ad < 1.0e-4, "Attn+LoRA: dX must match finite difference")
+    ap: = att@
+    qp: = q_lora@
+    vp: = v_lora@
+    gap: = grad_test.max_gap(x, dx, FD_EPS,
+        fn(_i: Sz; ap: ai_nn.Self_attention<|F64|>$@, x: Tensor<|F64|>,
+        qp: ai_lora.Lora<|F64|>$@, vp: ai_lora.Lora<|F64|>$@): F64 {
+        return grad_test.tsum_f64(ap.train_forward_lora(x, qp, vp).out);
+    })
+    assert(gap < 1.0e-4, "Attn+LoRA: dX must match finite difference")
     // A snapshot of the base weight (wq), to check it is still frozen after training
     $wq_sum_before: = 0.0
     for i in Range.asc(att.wq.weights.size)
@@ -507,7 +480,7 @@ fn test_attention_lora_grad(arena: Arena$@)
     for i in Range.asc(att.wq.weights.size)
         wq_sum_after += (att.wq.weights.data + i)$
     drift: = wq_sum_after - wq_sum_before
-    drift_abs: = -drift if drift < 0.0 else drift
+    drift_abs: = math.abs(drift)
     assert(drift_abs < 1.0e-9, "Attn+LoRA: base wq must stay frozen during LoRA training")
     said: = arena.text()
         .s("the backward pass of an Attention with Qkv_lora inserted matches numerical \
@@ -542,21 +515,18 @@ fn test_block_lora_grad(arena: Arena$@)
     dout.fill(1.0)
     dx: = blk.backward_lora(c@, dout, 0.0, q_lora@, v_lora@, fc1_lora@, fc2_lora@)
 
-    eps: = 1.0e-5
-    for k in Range.asc(x.size)
-        saved: = (x.data + k)$
-        (x.data + k)$ = saved + eps
-        fwd_plus: = blk.train_forward_lora(x, q_lora@, v_lora@, fc1_lora@, fc2_lora@)
-        l_plus: = grad_test.tsum_f64(fwd_plus.out)
-        (x.data + k)$ = saved - eps
-        fwd_minus: = blk.train_forward_lora(x, q_lora@, v_lora@, fc1_lora@, fc2_lora@)
-        l_minus: = grad_test.tsum_f64(fwd_minus.out)
-        (x.data + k)$ = saved
-        numeric: = (l_plus - l_minus) / (2.0 * eps)
-        analytic: = (dx.data + k)$
-        diff: = numeric - analytic
-        ad: = -diff if diff < 0.0 else diff
-        assert(ad < 1.0e-3, "Block+LoRA: dX must match finite difference")
+    bp: = blk@
+    qp: = q_lora@
+    vp: = v_lora@
+    f1p: = fc1_lora@
+    f2p: = fc2_lora@
+    gap: = grad_test.max_gap(x, dx, FD_EPS,
+        fn(_i: Sz; bp: ai_nn.Transformer_block<|F64|>$@, x: Tensor<|F64|>,
+        qp: ai_lora.Lora<|F64|>$@, vp: ai_lora.Lora<|F64|>$@, f1p: ai_lora.Lora<|F64|>$@,
+        f2p: ai_lora.Lora<|F64|>$@): F64 {
+        return grad_test.tsum_f64(bp.train_forward_lora(x, qp, vp, f1p, f2p).out);
+    })
+    assert(gap < 1.0e-3, "Block+LoRA: dX must match finite difference")
 
     // Snapshots of the base weights (attention.wq / attention_norm / ffn.fc1), one from each path,
     // to check they stay frozen.
@@ -577,11 +547,11 @@ fn test_block_lora_grad(arena: Arena$@)
     assert(after < before, "Block+LoRA: SGD must reduce the sum-of-outputs loss")
 
     wq_drift_raw: = grad_test.tsum_f64(blk.attention.wq.weights) - wq_before
-    wq_drift: = -wq_drift_raw if wq_drift_raw < 0.0 else wq_drift_raw
+    wq_drift: = math.abs(wq_drift_raw)
     norm_drift_raw: = grad_test.tsum_f64(blk.attention_norm.weight) - norm_before
-    norm_drift: = -norm_drift_raw if norm_drift_raw < 0.0 else norm_drift_raw
+    norm_drift: = math.abs(norm_drift_raw)
     fc1_drift_raw: = grad_test.tsum_f64(blk.ffn.fc1.weights) - fc1_before
-    fc1_drift: = -fc1_drift_raw if fc1_drift_raw < 0.0 else fc1_drift_raw
+    fc1_drift: = math.abs(fc1_drift_raw)
     assert(wq_drift < 1.0e-9, "Block+LoRA: attention.wq must stay frozen")
     assert(norm_drift < 1.0e-9, "Block+LoRA: attention_norm must stay frozen")
     assert(fc1_drift < 1.0e-9, "Block+LoRA: ffn.fc1 must stay frozen")
@@ -622,7 +592,7 @@ fn test_lora_raw_persist()
     out1: = reloaded.forward(x)
     for i in Range.asc(out0.size)
         diff: = (out0.data + i)$ - (out1.data + i)$
-        ad: = -diff if diff < 0.0 else diff
+        ad: = math.abs(diff)
         assert(ad < 1.0e-9, "Lora.load_raw output must exactly match the original after round-trip")
     verdict
         .pass(sa.text().s("(raw_size=\{I32::lora.raw_size()\} bytes, 0 libc.malloc calls)").take())

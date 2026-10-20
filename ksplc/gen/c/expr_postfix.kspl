@@ -1,5 +1,4 @@
 //< The C backend's postfix chain (`.` / `[]` / `()` / `::`), beside the rest of `expr.kspl`
-//<
 //< **Some places write the same subexpression twice** (a subscript names the receiver for `.ptr`
 //< and for the bounds check's `.len`), so a side effect would run twice. `lower/expr.kspl` copies
 //< such values to temporaries first (`ksplc/tests/lang_test.kspl` checks the count).
@@ -89,7 +88,6 @@ impl Ast_node
 
     fn emit_ptr_adjusted_receiver(r: Self$@, c: Genc_ctx$@, depth: I32) //<
         //< It writes depth-1 '*'s before the receiver, for a multi-level pointer (Foo@@)
-        //<
         //< This is automatic dereferencing; at depth<=1 it writes nothing.
         //< The caller picks the following '->' / '.' by depth.
         if depth > 1
@@ -106,17 +104,18 @@ impl Ast_node
         r.ice_assert(member_node != null, "emit_postfix_dot: expr_postfix '.' missing target member")
         depth: = c.env.ptr_depth(expr_node.type_id)
         base_id: = c.env.receiver_base_id(expr_node.type_id)
-        if c.env.is_result(base_id)
-            // Lower's view of a Result (build_result_access in base/ast.kspl), off the enum's tag
-            // and payload.
+        if c.env.is_result(base_id) || c.env.is_option(base_id)
+            // Lower's view of a Result or an Option (build_result_access in base/ast.kspl), off
+            // the enum's tag and payload.
             // The tag test is a comparison, bracketed by its precedence (get_c_expr_precedence in
             // expr.kspl).
             expr_node.emit_ptr_adjusted_receiver(c, depth)
             c.s("->" if depth >= 1 else ".")
             if member_node.text.equals("is_err")
-                c.s("tag == kspl_").m(c.env.get_clean_real_type(base_id)).s("_err")
+                c.s("tag == kspl_").m(c.env.get_clean_real_type(base_id)).s("_")
+                    .s(c.env.caught_variant(base_id, false))
             else if member_node.text.equals("val")
-                c.s("payload.ok.value")
+                c.s("payload.").s(c.env.caught_variant(base_id, true)).s(".value")
             else
                 c.s("payload.err.error")
             return
@@ -126,6 +125,17 @@ impl Ast_node
         // declared suffix and only the C compiler's "undeclared" shows it.
         c.s("->" if depth >= 1 else ".")
         c.nm(member_node.text)
+
+    fn emit_payload_access(r: Ast_node$@, c: Genc_ctx$@) //<
+        //< Lower's read of a payload field, `<subject>.payload.<variant>.<field>`
+        //< build_payload_access in base/ast.kspl says what it holds.
+        subject: = r.get_child(0)
+        variant: = c.env.variant_at(subject.type_id, r.ival) catch
+            r.ice_panic("genc: a payload read names no variant")
+            return
+        subject.emit_expr_as_receiver(c)
+        c.s(".payload.").s(variant.name).s(".")
+        c.nm(r.get_child(1).text)
 
     fn emit_postfix_array(r: Ast_node$@, c: Genc_ctx$@, expr_node: Ast_node$@)
         r.ice_assert(r.children.len >= 3, "emit_postfix_array: access missing index")
@@ -238,7 +248,6 @@ impl Ast_node
 
     priv fn emit_float_to_int(r: Ast_node$@, c: Genc_ctx$@, expr_node: Ast_node$@, target_id: I32) //<
         //< A cast from floating point to an integer: a constant's value, else the saturating call
-        //<
         //< Caution: **Never a bare C cast.** C leaves a value the type cannot hold undefined (NaN
         //< included); KSPL saturates it, as `kspl_F64_to_I32` and its kin in `runtime/core.h` do.
         switch r.float_cast_of(c.sema, false)
@@ -295,7 +304,6 @@ impl Ast_node
 
     priv fn addr_place_root(r: Ast_node$@): Ast_node$@? //<
         //< The name at the root of a place reached through `.` and `[`, if there is one
-        //<
         //< An index is a value and is not the root, so a constant there is still written out.
         $at: = r
         for at != null && at.kind_id == .k_expr_postfix
@@ -310,7 +318,6 @@ impl Ast_node
 priv fn emit_intrinsic_call(c: Genc_ctx$@, intr: sema_body_call.Intrinsic, args_node: Ast_node$@):
     Bool //<
         //< It writes an intrinsic's call as the C it stands for; false where it wrote none
-        //<
         //< A volatile access missing its arguments falls back to an ordinary call, which C rejects.
     switch intr
     case .read_volatile
@@ -379,7 +386,6 @@ priv fn is_obj_ptr(c: Genc_ctx$@, type_id: I32): Bool //< whether C carries it a
 
 priv fn crosses_fn_obj(c: Genc_ctx$@, operand: Ast_node$@, target_id: I32): Bool //<
     //< Whether a cast goes between a function and an object pointer, and is written as a call
-    //<
     //< **`null` is no such crossing**: a null pointer constant converts to a function pointer in
     //< ISO C. Nor is a file-scope initializer, which takes no call: there the plain cast is the
     //< one spelling left, which gcc's `-pedantic` reports.

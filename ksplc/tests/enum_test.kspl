@@ -1,4 +1,5 @@
-//< Enums: the tag each variant holds, a variant written short, and `Option`'s sugar
+//< Enums: tags, a variant written short, the list of variants, and `Option`'s sugar
+import "std/fs"
 import "std/str" // `equals`
 import "std/verdict"
 
@@ -100,6 +101,40 @@ fn test_variant_in_array()
         inner = k.size()
     case .none {}
     assert(inner == 8 && held[1].is_none(), "a payload inside an element")
+    verdict.pass("")
+
+// ==========================================
+// The list of an enum's variants and the lookup by name, which the compiler makes for an enum whose
+// variants carry no payload. The order is the declaration's, whatever tags are written. A name is
+// matched whole: a prefix, a longer name and an empty one find nothing.
+// ==========================================
+priv enum Clash //< a variant named like the list: the variant wins, and the lookup is still made
+    variants
+    other
+
+fn test_enum_variant_list()
+    verdict.start("[enum] the list of variants and the lookup by name test...")
+    all: = Tagged.variants()
+    assert(all.len == 6 && all[0] == Tagged.by_name && all[5] == Tagged.counted,
+        "the list holds every variant in the declaration's order")
+    again: = Tagged.variants()
+    assert(all.ptr == again.ptr, "every call returns the same constant elements")
+    for v in Tagged.variants()
+        assert(Tagged.from_variant_name(v.variant_name()).unwrap_or(.by_cast) == v,
+            "each variant's name reads back as that variant")
+    assert(Wide_tag.from_variant_name("next").unwrap_or(.top) == Wide_tag.next,
+        "a wide tag reads back")
+    assert(Tagged.from_variant_name("by").is_none(), "a prefix finds nothing")
+    assert(Tagged.from_variant_name("counted_").is_none(), "a longer name finds nothing")
+    assert(Tagged.from_variant_name("").is_none(), "an empty name finds nothing")
+    assert(Byte_tag.variants().len == 2 && Byte_tag.variants()[1] == Byte_tag.hi,
+        "a one-byte enum's list")
+    assert(Clash.from_variant_name("variants").unwrap_or(.other) == Clash.variants,
+        "a variant named like the list keeps its name, and the lookup finds it")
+    kinds: = fs.File_kind.variants()
+    assert(kinds.len > 0 && kinds[0] == fs.File_kind.file, "another file's public enum")
+    assert(fs.File_kind.from_variant_name("dir").unwrap_or(.file) == fs.File_kind.dir,
+        "another file's public enum reads back")
     verdict.pass("")
 
 // ==========================================

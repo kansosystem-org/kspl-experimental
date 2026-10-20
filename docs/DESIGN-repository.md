@@ -206,7 +206,7 @@ So the file would only repeat them, in two files if both the convention and GitH
 * **Each package has a second door**, its `<package>/tests/main.kspl`, run by its own `Makefile`. `tools/` has none, so the root's `debug-tools` runs it. The `$(error)` in `mk/test.mk` stops make at start for a second folder like it. It passes its own compiler where a run takes one (`run_std(ksplc, arena)`). The parameter types hold both doors to one shape, and both are compiled on every round (`make debug` and `make test-extract`).
 * **`ksbind` has the second door alone**: its tests link libraries from outside the toolchain, which `make debug` must not need.
 
-**Each package's entry point is `<package>/tests/all.kspl`, and its opening comment says what the package's tests inspect.**
+**Each package's entry point is `<package>/tests/all.kspl`, and its opening comment says what the package's tests inspect.** It holds the package's suite and imports the package's files of tests. The suite runs every function named `test_…` in those files. So a test is written once, as its own declaration ("8.5 Tests: functions named `test_`, run by a suite" in [`SPEC-programming-language.md`](SPEC-programming-language.md)). Adding a test touches no list. Adding a file of tests adds one import line.
 
 **The remaining boundary is closed by opening exactly one entry point as `pub`**: one function that runs everything, like `run_kspage` in `kspage/tests/all.kspl`.
 
@@ -502,6 +502,15 @@ Caution: **Get the order wrong and the seed is left holding a stale `std`.** `ma
 **So Clang-Format is optional everywhere but one step.** Where it is not installed, `make debug-file` leaves its C as generated and says so in one line. Untidied C builds and debugs the same. So stopping F5 for it would cost the person more than it gives. `make commit-seed` stops instead, and says why. `ksplc/seed.c` is tidied in git. A seed written untidied would change every one of its lines, and bury the real change in the history.
 
 Caution: **Do not drop `-g`.** When a shipped executable dies, that is the only place a position comes from.
+
+### A language rule is a lint, not a text check
+
+**A rule about how KSPL source is written is checked by `ksplc lint`, never by a check under `tests/` that reads the text.** The compiler's lints read the tree the compiler parsed, its comment runs and its resolved names. A check under `tests/` reads a file's text only for a rule of this repository. Examples are the words a document uses, the row that holds a reason to skip, and two copies that must match.
+
+* **Each reader of its own reads strings and comments a little differently.** One takes a `//` inside a string for a comment, another a `"""` inside a comment for a string. The compiler reads them once, for every check.
+* **A line-by-line reader misses what spans lines.** A signature wrapped over several lines, or a type behind a `typedef`, escapes it. The lint reads the declaration and its resolved type.
+* **The lint answers where the code is written.** The editor shows the finding as the line is typed, and `ksplc explain` says why ("Static analysis and the linter" in [`../ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md)).
+* **What it gives up**: the lint sees only the files the lint gate's entry points read. A fixture compiled alone (`ksplc/tests/negative/`, `ksplc/tests/lint/`) is no entry point, so its comments are not measured. **The lint of one entry point checks every file it reads**, so an unused `priv` in an imported file is reported too ([W0206]).
 
 ### Where CI's time goes, and what shrinks it
 

@@ -1,5 +1,4 @@
 //< Rewrites KSPL's literals as C strings
-//<
 //< It covers floating-point, integer, character and string literals, and each uses only spellings
 //< that read back as the same value.
 //< Caution: **Do not make a copy.** `embed` (`decl.kspl`) also writes bytes into a string literal,
@@ -16,7 +15,6 @@ import "std/strfmt"
 
 fn append_c_string_byte(out: Writer, b: U8) //<
     //< It appends one byte as the contents of a C string literal
-    //<
     //< It uses only a spelling that reads back as the same byte.
     //< The callers are `emit_string_literal` below and `emit_embed_decl` in `decl.kspl`.
     //< Caution: **Escape the `?`**: C99 replaces trigraphs such as `??(` before lexing. **An
@@ -43,7 +41,6 @@ fn append_c_string_byte(out: Writer, b: U8) //<
 
 priv fn decimal_exceeds_i64_max(digits: U8[]): Bool //<
     //< Whether a decimal constant's digits exceed I64::MAX, judged on the digits only
-    //<
     //< C99 tries int / long / long long for a decimal constant, and one fits unless it exceeds the
     //< 19-digit I64::MAX.
     //< So it exceeds at 20 digits, or at 19 digits that compare above I64::MAX.
@@ -56,7 +53,6 @@ priv fn decimal_exceeds_i64_max(digits: U8[]): Bool //<
 
 fn emit_folded_i64(c: Genc_ctx$@, v: I64) //<
     //< It writes a value the constant folder produced as a C `long long` constant
-    //<
     //< Caution: **I64::MIN has no literal in C.** `-9223372036854775808` is a minus applied to
     //< 9223372036854775808, which fits no signed type, so the compiler warns and the type becomes
     //< unsigned. It is written as `(-9223372036854775807LL - 1)`, as `<stdint.h>` writes INT64_MIN.
@@ -68,7 +64,6 @@ fn emit_folded_i64(c: Genc_ctx$@, v: I64) //<
 impl Ast_node
     fn emit_negated_i64_min(r: Ast_node$@, c: Genc_ctx$@): Bool //<
         //< It writes `-r` as I64's minimum where literal r's magnitude is 2^63, saying if it did
-        //<
         //< Negated as written, C reads the magnitude as unsigned and warns (emit_folded_i64).
         if r.kind_id != .k_integer ||
             r.text.parse_int_literal_u64().value != 9223372036854775808U64
@@ -120,7 +115,6 @@ impl Ast_node
 
     fn emit_char_literal(r: Ast_node$@, c: Genc_ctx$@) //<
         //< It emits a character literal as its byte value
-        //<
         //< Caution: **Do not pass the spelling to C's lexer** (as in emit_string_literal):
         //< `'\b'` is 8 in C and 'b' in KSPL. Emitted as a value, it cannot be misread.
         c.s("\{base_literal.char_literal_byte(r.text)\}")

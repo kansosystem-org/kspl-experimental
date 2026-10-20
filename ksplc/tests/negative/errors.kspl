@@ -1,9 +1,7 @@
 //< Errors: `catch`, results and the error cap
-//<
 //< Each case below is compiled alone, as the file its head names.
 // ==== case catch_block_without_fallback
 //< A `catch` block whose value can be read must provide one
-//<
 //< Falling off its end silently leaves the binding at the zero value. `catch alt()` hands the value
 //< over (Principle 8 in `../../../docs/DESIGN-principles.md`). `catch { }` reads as "ignore the
 //< failure" and is the same hole. The four shapes handing the value to nobody must pass (`EXPECT-NOT`).
@@ -14,13 +12,13 @@
 import "std/io"
 
 priv fn counted(): Sz!io.Io_error
-  body: = io.read_file("/nowhere/at/all")!
+  body: = io.read_file("/nowhere/at/all", null)!
   return body.len
 
 fn main(): I32
-  worked: = io.read_file("/nowhere/at/all") catch
+  worked: = io.read_file("/nowhere/at/all", null) catch
     io.out().s("it failed\n")
-  quiet: = io.read_file("/nowhere/at/all") catch {}
+  quiet: = io.read_file("/nowhere/at/all", null) catch {}
   _unread: = counted() catch {}
   counted() catch {}
   // These two are read. They stand because the handler never finishes. One leaves by a call that
@@ -32,10 +30,9 @@ fn main(): I32
   io.out().s("\{worked.len\}/\{quiet.len\}/\{from_panic\}/\{from_loop\}\n")
   return 0
 // ==== case catch_on_non_result
-//< A `catch` cannot be written on an expression that is not a Result
-//<
+//< A `catch` cannot be written on an expression that is neither a Result nor an Option
 //< Both operators reject a plain value before code generation; valid Results still pass.
-// EXPECT: 'catch' operator can only be applied to a Result type
+// EXPECT: 'catch' cannot be written on type 'I32'. Write it only on a result ('T!E') or an optional ('T?')
 // EXPECT: '!' operator can only be applied to a Result type
 // EXPECT-NOT: is_err
 import "std/ds" { List }
@@ -78,12 +75,12 @@ fn main(): I32
   io.out().s("\{bad_call\}\{bad_index\}\{ok_expr\}\{ok_block\}\{ok_elem\}\n")
   ar.free()
   return 0
-// ==== case catch_on_option
-//< A `catch` on an Option is refused, and the hint names the Option's own idiom
-//<
+// ==== case option_catch_with_value
+//< A `catch` on an Option takes no substitute value, and the note names `unwrap_or`
 //< A `Map`'s miss is none, not a failure, so `m[k] catch v` is the habit this catches.
-// EXPECT: 'catch' operator can only be applied to a Result type
-// EXPECT: Hint: the operand has type 'I32?'. Its 'none' represents absence of a value, not failure
+//< `unwrap_or` already gives a value in `.none`'s place; a second spelling of it is refused.
+// EXPECT: 'catch' with a value cannot be written on an optional ('I32?'). Give the value with 'unwrap_or' instead
+// EXPECT: Note: write 'opt.unwrap_or(v)' to use 'v' where 'opt' is '.none'.
 import "std/ds" { Map }
 import "std/mem" { Arena }
 
@@ -94,9 +91,45 @@ fn main(): I32
   got: = m[2] catch -3
   ar.free()
   return got
+// ==== case option_catch_block_reaches_end
+//< A `catch` block on an Option must leave, wherever its value goes
+//< Its end reached, the binding would hold nothing. So the value is always bound after the
+//< `catch`, a statement's included. A `fallback` would be `unwrap_or`'s second spelling.
+// EXPECT: the 'catch' block on an optional ('I32?') can reach its end. End it with 'return', 'throw', 'break', 'continue' or a call that does not return, such as 'panic'
+// EXPECT: 'fallback' cannot be written in a 'catch' block on an optional. Leave the block with 'return', 'throw', 'break' or 'continue'
+// EXPECT: an optional ('I32?') has no error value, so its 'catch' takes no name. Remove 'e' and write 'catch { … }'
+// EXPECT-NOT: must produce a value
+priv fn find(k: I32): I32?
+  return .some(k) if k > 0 else .none
+
+priv fn reaches(): I32
+  v: = find(1) catch
+    find(2) catch { return 0 }
+  return v
+
+priv fn as_statement()
+  find(3) catch {}
+
+priv fn with_fallback(): I32
+  v: = find(4) catch
+    fallback 5
+  return v
+
+priv fn with_name(): I32
+  v: = find(6) catch e
+    return 0
+  return v
+
+fn main(): I32
+  as_statement()
+  // These stand: each block leaves, by a call that declares `#noreturn` or by a loop.
+  a: = find(7) catch
+    panic("this fixture is never run")
+  b: = find(8) catch
+    for {}
+  return reaches() + with_fallback() + with_name() + a + b
 // ==== case catch_substitute_wrong_type
 //< A `catch`'s substitute has the success type, so a float does not stand in for an `I32`
-//<
 //< **Let it through and the backends part**: C keeps 2 from `2.5`, LLVM emits `i32 2.5`, which
 //< does not build. A float literal takes no integer type anywhere (`x: I32 = 2.5`, an argument).
 // EXPECT: implicit conversion between 'F64' and 'I32' is forbidden
@@ -120,7 +153,6 @@ fn main(): I32
   return v + w + x + take(3.5)
 // ==== case error_cap_counts_itself
 //< Compilation stops at 50 errors, the cap's own line being the 50th
-//<
 //< **Counted apart from the 50, the summary says 51** while the specification promises 50
 //< ("Compilation stops at 50 errors" in ksplc/docs/SPEC-tools.md).
 // EXPECT: error: expected 'I32', but got 'Bool'
@@ -190,9 +222,8 @@ fn main()
   _v59: I32 = true
 // ==== case question_after_value
 //< A `?` after a value is refused: it marks an optional type, and `f()!` passes a failure on
-//<
 //< Rust's `f()?` is the likely slip (`forbidden_spelling_hint` in `../../parse/syntax_msg.kspl`).
-// EXPECT: question_after_value.kspl:10:13: error: expected
+// EXPECT: question_after_value.kspl:9:13: error: expected
 // EXPECT: '?' marks an optional type ('I32?' is 'Option<|I32|>'). It does nothing after a value
 fn h(): I32!I32
     return 1
@@ -202,9 +233,8 @@ fn g(): I32!I32
     return a
 // ==== case result_error_type_optional
 //< `T!E?` is refused: `?` would fold into the error type, which cannot be optional
-//<
 //< The note names both readings the writer may have meant.
-// EXPECT: result_error_type_optional.kspl:9:9: error: an error type cannot be optional
+// EXPECT: result_error_type_optional.kspl:8:9: error: an error type cannot be optional
 // EXPECT: Write an optional result as '(T!E)?'. If only the result's value can be absent, write 'T?!E'
 enum E
     bad
@@ -225,11 +255,10 @@ fn main()
     _v: = g(Result<|I32, E|>.ok(1))
 // ==== case result_dropped
 //< A result nobody takes apart is refused: a statement, and a binding whose name opens with `_`
-//<
 //< `_` silences the unread-variable warning, so it would drop the failure with no word. `catch {}`
 //< drops it on purpose, and a binding read later keeps it (the `EXPECT-NOT`).
+// EXPECT: result_dropped.kspl:14:5: error: a result of type 'I32!result_dropped.E' is dropped
 // EXPECT: result_dropped.kspl:15:5: error: a result of type 'I32!result_dropped.E' is dropped
-// EXPECT: result_dropped.kspl:16:5: error: a result of type 'I32!result_dropped.E' is dropped
 // EXPECT: Finished with 2 error(s)
 enum E
     bad
@@ -245,7 +274,6 @@ fn main()
     _n: = b catch 0
 // ==== case result_type_spelled_whole
 //< A Result type is spelled with its error type, `I32!I32`, never `I32!`
-//<
 //< **The language has no `T!` shorthand**, so a diagnostic writing `I32!` names a type nobody
 //< can write (`display_type_to` in `ksplc/sema/type/display.kspl`).
 // EXPECT: function 'g' is expected to return 'I32!I32', but control may reach the end
@@ -257,36 +285,34 @@ fn main()
   _v: = g() catch 0
 // ==== case result_written_with_question
 //< The old result spelling `I32?I32` names the `!` form: `I32?` is an optional, and whole
-//<
 //< The failure lands on the name after it (`forbidden_spelling_hint` in
 //< `../../parse/syntax_msg.kspl`).
-// EXPECT: result_written_with_question.kspl:7:13: error: expected
+// EXPECT: result_written_with_question.kspl:6:13: error: expected
 // EXPECT: a result is written with '!' ('I32!Io_error'). 'I32?' is an optional type. No type name follows it.
 fn h(): I32?I32
     return .some(1)
 // ==== case sugar_spelled_out
 //< A slice or an optional spelled out as a type is refused, naming the short form
-//<
 //< The check refuses each place a type is written: a field, a `typedef`'s right side, a parameter,
 //< a return type, a type argument, a grouped type and an `impl`'s target. Expressions count too.
 //< A grouped type is a result or a function type. An expression whose head is `Option` keeps the
 //< long form: no postfix can stand there. The types `T?` and `T[]` fold into pass (`kept`, `short`).
-// EXPECT: sugar_spelled_out.kspl:30:9: error: an optional type is written 'T?'
-// EXPECT: sugar_spelled_out.kspl:31:10: error: a slice type is written 'T[]'
-// EXPECT: sugar_spelled_out.kspl:33:17: error: an optional type is written 'T?'
-// EXPECT: sugar_spelled_out.kspl:35:17: error: a slice type is written 'T[]'
-// EXPECT: sugar_spelled_out.kspl:37:20: error: an optional type is written 'T?'
-// EXPECT: sugar_spelled_out.kspl:37:36: error: an optional type is written 'T?'
-// EXPECT: sugar_spelled_out.kspl:42:18: error: an optional type is written 'T?'
-// EXPECT: sugar_spelled_out.kspl:45:17: error: an optional type is written 'T?'
-// EXPECT: sugar_spelled_out.kspl:48:19: error: a slice type is written 'T[]'
-// EXPECT: sugar_spelled_out.kspl:55:11: error: an optional type is written 'T?'
-// EXPECT: sugar_spelled_out.kspl:62:20: error: an optional type is written 'T?'
-// EXPECT: sugar_spelled_out.kspl:64:19: error: a slice type is written 'T[]'
+// EXPECT: sugar_spelled_out.kspl:29:9: error: an optional type is written 'T?'
+// EXPECT: sugar_spelled_out.kspl:30:10: error: a slice type is written 'T[]'
+// EXPECT: sugar_spelled_out.kspl:32:17: error: an optional type is written 'T?'
+// EXPECT: sugar_spelled_out.kspl:34:17: error: a slice type is written 'T[]'
+// EXPECT: sugar_spelled_out.kspl:36:20: error: an optional type is written 'T?'
+// EXPECT: sugar_spelled_out.kspl:36:36: error: an optional type is written 'T?'
+// EXPECT: sugar_spelled_out.kspl:41:18: error: an optional type is written 'T?'
+// EXPECT: sugar_spelled_out.kspl:44:17: error: an optional type is written 'T?'
+// EXPECT: sugar_spelled_out.kspl:47:19: error: a slice type is written 'T[]'
+// EXPECT: sugar_spelled_out.kspl:54:11: error: an optional type is written 'T?'
+// EXPECT: sugar_spelled_out.kspl:61:20: error: an optional type is written 'T?'
+// EXPECT: sugar_spelled_out.kspl:63:19: error: a slice type is written 'T[]'
 // EXPECT: Finished with 12 error(s)
-// EXPECT-NOT: sugar_spelled_out.kspl:52:
-// EXPECT-NOT: sugar_spelled_out.kspl:63:
-// EXPECT-NOT: sugar_spelled_out.kspl:68:
+// EXPECT-NOT: sugar_spelled_out.kspl:51:
+// EXPECT-NOT: sugar_spelled_out.kspl:62:
+// EXPECT-NOT: sugar_spelled_out.kspl:67:
 import "std/ds" { List }
 import "std/mem" { Arena }
 

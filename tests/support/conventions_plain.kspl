@@ -1,5 +1,4 @@
 //< A published document's sentence holds at most 25 words, its heading at most 10 (not the suite)
-//<
 //< The rule is "Length" in `docs/SPEC-plain-language.md`; this file only counts.
 //< Caution: **It sees the length alone** (Principle 8 in `docs/DESIGN-principles.md`). It cannot
 //< tell an instruction (20 words) from a description (25), so it holds every sentence to 25. One
@@ -12,7 +11,6 @@ import "std/strfmt" as _strfmt
 import "std/verdict"
 import "tests/support/conventions_scan" as scan + { Sample }
 import "tests/support/harness"
-import "tests/support/harness_text"
 
 priv const MAX_WORDS: Sz = 25 //< the cap on a sentence, a table cell's or a list item's included
 priv const MAX_HEADING_WORDS: Sz = 10
@@ -28,7 +26,6 @@ priv const NOT_CONVERTED: U8[][_] = ::{}
 
 priv const QUOTED_WHOLE: U8[][_] = ::{ "LICENSE.md" } //<
     //< The documents whose text is another's words, quoted whole
-    //<
     //< **They are never converted**: the MIT license is read in its own words, or not at all.
 
 // ==========================================
@@ -87,7 +84,6 @@ priv fn lead_of(text: U8[], arena: Arena$@): U8[] //<
 
 priv fn plain(text: U8[], arena: Arena$@): U8[] //<
     //< The text as a reader counts it: no link target, no `*`, `[` or `]`
-    //<
     //< A code span becomes `` `_` ``, which holds no word. It keeps its line ends, so a sentence's
     //< line is still right.
     b: = arena.text()
@@ -231,12 +227,6 @@ priv fn over_long(src: U8[], arena: Arena$@): List<|Finding|> //<
 // The check, and its samples
 // ==========================================
 
-priv fn listed(names: U8[][], rel: U8[]): Bool
-    for n in names
-        if n.equals(rel)
-            return true
-    return false
-
 priv fn check_documents(arena: Arena$@)
     $bad: = List<|U8[]|>.new(arena)
     $stale: = List<|U8[]|>.new(arena)
@@ -247,11 +237,11 @@ priv fn check_documents(arena: Arena$@)
         if harness.is_private_doc(rel, own@)
             continue
         published.push(rel)
-        if listed(U8[][]::QUOTED_WHOLE, rel)
+        if (U8[][]::QUOTED_WHOLE).contains(rel)
             continue
         seen += 1
         found: = over_long(harness.read_under_root(rel), arena)
-        if listed(U8[][]::NOT_CONVERTED, rel)
+        if (U8[][]::NOT_CONVERTED).contains(rel)
             if found.len == 0
                 stale
                     .push(arena.text().s(rel).s(": it passes now; take it off the list").take())
@@ -272,7 +262,7 @@ priv fn check_documents(arena: Arena$@)
 priv fn gone(names: U8[][], published: List<|U8[]|>@, stale: List<|U8[]|>$@, arena: Arena$@) //<
     //< Adds to `stale` each listed name that is no published document
     for rel in names
-        if !harness_text.has(published, rel)
+        if !published.contains(rel)
             stale
                 .push(arena.text().s(rel).s(": no such published document").take())
 

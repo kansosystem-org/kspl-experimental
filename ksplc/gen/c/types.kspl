@@ -1,5 +1,4 @@
 //< Generates C99 for struct / enum / trait declarations
-//<
 //< Field layouts, tagged unions (enums), vtable types and a trait's wrapper struct. The thunks are
 //< synthesized in ksplc/lower/root.kspl as ordinary decl_fn / decl_const. Forward declarations
 //< are in decl.kspl; expressions and statements in expr.kspl / stmt.kspl.
@@ -95,7 +94,6 @@ impl Ast_node
 
     fn emit_variant_payload(r: Ast_node$@, cg: Genc_ctx$@) //<
         //< A variant's payload as a struct member of the enum's union, named after the variant
-        //<
         //< A variant with no payload, or only `Void` fields, writes nothing: C has no empty struct.
         if r.payload_fields_held(cg) == 0
             return
@@ -116,7 +114,6 @@ impl Ast_node
 
     fn emit_vtable_param(r: Ast_node$@, cg: Genc_ctx$@, pi: Sz) //<
         //< It writes one argument of a vtable's function pointer
-        //<
         //< pi is the argument's position. **The first (pi==0) is always a `void*`**: the receiver's
         //< type differs per implementation.
         p_name: = r.get_decl_id_text()
@@ -135,7 +132,6 @@ impl Ast_node
 
     fn emit_trait_decl(r: Ast_node$@, cg: Genc_ctx$@) //<
         //< It emits a trait's C struct and the struct of its vtable
-        //<
         //< Note: The walk of a vtable's function pointers is like emit_param_list in
         //< gen/c/decl.kspl, but the two cannot be merged. This one always makes the first argument
         //< (the receiver) a void* (the pi==0 branch).
@@ -190,17 +186,9 @@ impl Ast_node
         target_node: = r.get_decl_type_node()
         r.ice_assert(target_node != null, "emit_node: impl_decl missing target type_expr")
 
-        t_id: = target_node.type_id
-
-        old_impl: = cg.current_impl_name
-        if t_id != 0
-            cg.current_impl_name = cg.mangled_in_scratch(t_id)
-
         for child in r.children
             if child.kind_id == .k_decl_fn && child.is_emittable()
                 child.emit(cg)
-
-        cg.current_impl_name = old_impl
 
     fn emit_struct_decl(r: Ast_node$@, cg: Genc_ctx$@)
         cg.emit_line_directive(r)

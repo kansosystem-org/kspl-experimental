@@ -1,5 +1,4 @@
 //< Percent-encoding (RFC 3986), and the query-string form `application/x-www-form-urlencoded`
-//<
 //< For putting text safely into an HTTP path or a query parameter; decoding returns the original
 //< text unchanged.
 import "std/chars"
@@ -10,12 +9,10 @@ pub enum Url_error //< why a piece of a URL could not be decoded
 
 priv fn is_unreserved(c: U8): Bool //<
     //< Whether c is an "unreserved" character (RFC 3986 §2.3)
-    //<
     //< These are ALPHA, DIGIT, "-", ".", "_" and "~".
     return c.is_alnum() || c == '-' || c == '.' || c == '_' || c == '~'
 
 pub fn encode( //< percent-encodes a piece of text so it can go inside a URL
-    //<
     //< An unreserved character stays as it is; any other byte becomes the hex form `%XX`.
     s: U8[], //< the plain text, not yet escaped
     arena: Arena$@, //< where the result goes; null means the heap, freed with `dealloc`
@@ -37,7 +34,6 @@ pub fn encode( //< percent-encodes a piece of text so it can go inside a URL
     return out
 
 pub fn decode_component( //< percent-decodes a path piece, leaving `+` as a `+`
-    //<
     //< **"+" does not become a space.** Only application/x-www-form-urlencoded writes a space as
     //< "+"; in a URI path a "+" is just a "+" (RFC 3986). `parse_query` reads a query's "+" as a
     //< space.
@@ -79,7 +75,6 @@ priv fn decode_impl(s: U8[], plus_is_space: Bool, arena: Arena$@): U8[]!Url_erro
 // Parsing a query string (the "a=1&b=2" form)
 // ---------------------------------------------------------
 pub struct Query //< a query string's pairs, in the order they appear; there can be none
-    //<
     //< **A pair is reached through it, never through a pointer that can be null.** So an empty
     //< query is a value like any other (`find`, `each`, `is_empty`), as `http.Headers` is.
     priv first: Query_param$@ //< the first pair; null for none
@@ -92,13 +87,11 @@ pub struct Query_param //< one `name=value` pair of a query string, as `Query.ea
 
 impl Query
     pub fn free(r: Self$@) //< lets go every pair, when `parse_query` was given null
-        //<
         //< Parsed into an arena, it frees nothing: that arena does.
         $own: = r.own
         own.free()
 
     pub fn find( //< the value of the first pair with that name, or nothing
-        //<
         //< The name is compared byte for byte, after decoding (`a%20b` is found as `a b`).
         r: Self,
         name: U8[], //< the decoded name to look for
@@ -127,17 +120,14 @@ impl Query_seq: Iter<|Query_param@|> //< so a `for` drives it
         return .some(p)
 
 pub fn parse_query( //< splits a query string into its pairs
-    //<
     //< Each name and value is percent-decoded, a `+` read as a space as a form writes it, and
     //< copied into the arena, in order. An empty query (`""`, `"?"`, `"&&"`) gives no pairs.
     query: U8[], //< the text after the `?`; a leading `?` is dropped
     arena: Arena$@, //< where the pairs go; null means an arena of the pairs' own and a `free()`
 ): Query!Url_error //< the pairs; a broken `%XX` fails, having left nothing behind
     $work: = mem.scratch(arena)
-    $q: = pairs_of(query, work.arena) catch e
-        work.free()
-        throw e
-    q.own = work.own
+    $q: = pairs_of(query, work.arena)!
+    q.own = work.keep()
     return q
 
 priv fn pairs_of(query: U8[], arena: Arena$@): Query!Url_error //< parse_query's work

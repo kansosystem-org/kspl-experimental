@@ -1,5 +1,4 @@
 //< The entry point that runs kspeg's tests together
-//<
 //< **This is the one contract this package exports.** The tests live inside `kspeg/`. So they
 //< reach what they inspect directly, and no `pub` is added just for a test ("A test of a
 //< unit's inside goes inside that unit" in `../../docs/DESIGN-repository.md`).
@@ -7,13 +6,18 @@
 import "kspeg/tests/engine_test"
 import "kspeg/tests/memo_test"
 import "std/mem" { Arena }
+import "std/suite"
+
+priv struct Tests //< what kspeg's tests take: the arena they parse on
+    arena: Arena$@
+
+impl Tests: suite.Suite {}
 
 pub fn run_kspeg() //<
     //< Every test, with the arena they parse on set up here
-    //<
     //< **It takes no arguments**, so its two callers (`make debug`'s and this package's own `main`)
     //< have no argument list that could drift apart.
     arena: = Arena.new(8 * 1024 * 1024)
     defer arena.free()
-    engine_test.test_engine(arena)
-    memo_test.test_memo(arena)
+    $t: = Tests::{ .arena = arena }
+    t.run()

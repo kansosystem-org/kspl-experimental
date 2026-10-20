@@ -1,5 +1,4 @@
 //< The pass that registers struct / enum / trait **contents** in the type table
-//<
 //< collect records what is declared; this resolves the contents, which need every name to exist,
 //< so the order is always collect → registry.
 //< Caution: **Do not register the same type twice.** Instantiations bring the same base name many
@@ -26,7 +25,6 @@ import "std/ds" { Map }
 import "std/str"
 
 enum Reg_type_res //< the result of trying to register a type
-    //<
     //< `invalid`: the name could not be registered (the caller reports it).
     ok(name: U8[], fqn: U8[], type_id: I32)
     invalid
@@ -75,11 +73,7 @@ impl Ast_node
     fn build_trait_registry(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error
         switch r.get_registry_target(c)
         case .ok(target_name, target_fqn, _id)
-            $trait_def: sema_type_def.Trait_def$@ = null
-            switch c.env.get_trait_def(target_fqn)
-            case .some(id)
-                trait_def = id
-            case .none
+            trait_def: sema_type_def.Trait_def$@ = c.env.get_trait_def(target_fqn) catch
                 return
 
             trait_vis: = r.get_visibility()
@@ -104,7 +98,6 @@ impl Ast_node
 
     fn build_type_registry(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error //<
         //< Dispatches on the declaration's kind to fill it in
-        //<
         //< Caution: **Code that needs a declaration filled in calls this**, so no caller misses a
         //< kind.
         switch r.kind_id
@@ -117,11 +110,8 @@ impl Ast_node
     fn build_struct_registry(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error
         switch r.get_registry_target(c)
         case .ok(_name, target_fqn, _id)
-            $struct_def: sema_type_def.Struct_def$@ = null
-            switch c.env.get_struct_def(target_fqn)
-            case .some(sd)
-                struct_def = sd
-            case .none
+            struct_def: sema_type_def.Struct_def$@ =
+                c.env.get_struct_def(target_fqn) catch
                 return
             // Caution: **Clear it before resolving the fields.** A field's type can request the
             // layout (`f: U8[sizeof(S)]`), and clearing it later fills the declaration in twice.
@@ -144,7 +134,6 @@ impl Ast_node
     fn fill_struct_fields(r: Ast_node$@, c: Sema_ctx$@, struct_def: sema_type_def.Struct_def$@):
         Void!Sema_error //<
             //< Resolves a struct declaration's (self's) layout attributes and fields to struct_def
-            //<
             //< build_struct_registry and a generic struct's instantiation (instantiate_struct in
             //< mono.kspl) both fill through here. So an instance is checked as a plain struct is.
         if r.has_attribute("packed")
@@ -208,7 +197,6 @@ impl Ast_node
     priv fn lint_manual_owner_struct(r: Ast_node$@, c: Sema_ctx$@,
         struct_def: sema_type_def.Struct_def$@, target_fqn: U8[]) //<
             //< [I0602] Suggests a reference-counted type for a struct managing ownership by hand
-            //<
             //< Such a struct is non-ARC and has a raw pointer and its own 'free'. std/ is not
             //< checked: its primitives are what ARC is built on.
             //< Caution: Do not add a two-way switch such as per-diagnostic state here. Only
@@ -245,7 +233,6 @@ impl Ast_node
         variant_def: sema_type_def.Enum_variant$@, enum_vis: sema_type_scope.Visibility):
         Void!Sema_error //<
             //< Resolves an enum variant's (self's) payload fields, registering them in variant_def.
-            //<
             //< enum_vis is the enum's own visibility: a payload field has none of its own (public
             //< below).
         for f_list in r.children
@@ -285,11 +272,7 @@ impl Ast_node
     fn build_enum_registry(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error
         switch r.get_registry_target(c)
         case .ok(_name, target_fqn, _id)
-            $enum_def: sema_type_def.Enum_def$@ = null
-            switch c.env.get_enum_def(target_fqn)
-            case .some(d)
-                enum_def = d
-            case .none
+            enum_def: sema_type_def.Enum_def$@ = c.env.get_enum_def(target_fqn) catch
                 return
             // For the same reason as at the matching point in build_struct_registry.
             if enum_def.pending_decl == null
@@ -307,7 +290,6 @@ impl Ast_node
     fn fill_enum_variants(r: Ast_node$@, c: Sema_ctx$@, enum_def: sema_type_def.Enum_def$@,
         type_id: I32, declare_syms: Bool): Void!Sema_error //<
             //< Resolves an enum declaration's (self's) base type and variants into enum_def
-            //<
             //< The counterpart of fill_struct_fields. `declare_syms` adds each variant to the name
             //< table as `Enum.variant`; a generic enum's instance passes false and is reached
             //< through its type.
@@ -383,7 +365,6 @@ impl Ast_node
 
     priv fn bare_sibling_variant(r: Ast_node$@, c: Sema_ctx$@, tag: Ast_node$@): Ast_node$@? //<
         //< A bare name in a tag expression that names a variant of this enum (self)
-        //<
         //< **A tag names a sibling as `E.a`, as every other place does.** There is one spelling for
         //< a variant, and no scope where the enum's names stand bare beside the file's. A bare name
         //< that resolves (a `const a`) is that name, not the variant.
@@ -417,7 +398,6 @@ impl Sema_ctx
 
     priv fn check_enum_tag_range(r: Self$@, node: Ast_node$@, v: I64, base_id: I32): Bool //<
         //< Whether the tag fits the enum's base type; where not, it reports and answers false
-        //<
         //< The counter after the last written tag is checked as well: `b` after `a = 255` in a
         //< `U8`.
         bounds: = r.env.int_bounds(base_id)

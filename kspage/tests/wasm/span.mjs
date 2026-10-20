@@ -48,7 +48,8 @@ export const opens = material({
 });
 
 export function run(ks) {
-  const { w, scratch, read, out, stage, geom, boxOf, find, save, md, styleNames } = ks;
+  const { w, scratch, read, out, stage, geom, boxOf, find, save, md, styleNames, styleData,
+    setStyleData } = ks;
 
   // --- Laying a decoration on what is chosen ---
   // **Do not have a run carry a colour directly.** The style's name is built out of the
@@ -164,18 +165,15 @@ export function run(ks) {
   // --- The underline and the strike-through ---
   // **It has to reach the box.** Into the style but not passed to the box, and the canvas
   // draws no line.
-  // What comes to the box is a resolved 0 or 1 ("no specification" is not drawing).
-  const decorOf = (i) => {
-    w.kspage_web_style_decor(i, scratch);
-    return read(4);
-  };
+  // What comes to the box is a resolved 0 or 1 ("no specification" is not drawing). In the style
+  // a line left out carries no specification.
   const underAt = styleNames().indexOf(underStyle);
   check(underAt >= 0, "the material has the underline's style");
   const bodyAt = styleNames().indexOf(bodyStyle);
   check(bodyAt >= 0, "the material has the body's style");
-  const lined = decorOf(underAt);
-  check(lined[0] === 1 && lined[1] === 1, "the underline's specification can be read");
-  check(lined[2] === 0, "the strike-through carries no specification");
+  const lined = styleData(underAt);
+  check(lined.underline === true, "the underline's specification can be read");
+  check(lined.strike === undefined, "the strike-through carries no specification");
   w.kspage_web_layout(300);
   const linedBox = find(underStyle);
   check(linedBox >= 0, "the box the underline was laid on is there");
@@ -183,11 +181,11 @@ export function run(ks) {
   check(boxOf(linedBox)[13] === 0, "a line not laid on is 0");
   // **"Do not draw" is one of the specifications.** Make 0 the mark of no specification and the
   // parent's line cannot be put out.
-  check(w.kspage_web_set_style_decor(bodyAt, 1, 0, 1, 1) === 1,
+  check(setStyleData(bodyAt, { ...styleData(bodyAt), underline: false, strike: true }) === 1,
     "a line's specification can be laid on the paragraph");
-  const off = decorOf(bodyAt);
-  check(off[0] === 1 && off[1] === 0, "\"do not draw the underline\" can be read back");
-  check(off[2] === 1 && off[3] === 1, "the strike-through is drawn");
+  const off = styleData(bodyAt);
+  check(off.underline === false, "\"do not draw the underline\" can be read back");
+  check(off.strike === true, "the strike-through is drawn");
   w.kspage_web_layout(300);
   // The paragraph says "do not draw", so only the run the underline was laid on carries one.
   check(boxOf(linedBox)[12] === 1, "the run's specification beats the paragraph's");
@@ -198,6 +196,6 @@ export function run(ks) {
   const wasWidth = boxOf(linedBox)[2];
   w.kspage_web_undo();
   w.kspage_web_layout(300);
-  check(decorOf(bodyAt)[0] === 0, "in one step the line's specification is gone");
+  check(styleData(bodyAt).underline === undefined, "in one step the line's specification is gone");
   check(near(boxOf(linedBox)[2], wasWidth), "putting the line out does not change the width");
 }

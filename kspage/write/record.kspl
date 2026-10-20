@@ -1,5 +1,4 @@
 //< The shape of the undo record
-//<
 //< The operation that undoes one change (`Op`), and the unit one undo takes back (`Step`).
 //< This file does not change the document.
 //< Every kind of change is held in one list, style table changes included (the style table is
@@ -13,21 +12,18 @@ import "std/ds" { List }
 import "std/mem" { Arena }
 
 struct Text_op //< the operation that undoes one text change
-    //<
     //< Inserting and deleting are each other's inverse, stored in the same shape.
     inline: Inline$@
     at: Sz
     put_back: Bool //< true restores the text (it was deleted); false deletes it (it was inserted)
     text: List<|U8|>$@ //<
         //< The text to restore.
-        //<
         //< Caution: **Copy it before deleting.** After deleting it cannot be read.
         //< A computed value does not change the text, so the restored text is the formula
         //< (`Inline.show_value`).
     len: Sz
 
 struct Size_op //< the operation that restores a column's width (or a row's height)
-    //<
     //< Caution: **Also record "it was not set"**, or restored as 0 a size that followed its
     //< contents becomes fixed.
     table: Block$@
@@ -36,14 +32,12 @@ struct Size_op //< the operation that restores a column's width (or a row's heig
     was: F32?
 
 struct Span_op //< the operation that changes a cell's merge
-    //<
     //< Caution: **Keep the old extent** (that is the value restored).
     cell: Block$@
     was_rows: Sz
     was_cols: Sz
 
 struct Line_op //< the operation that adds or removes one table row (or column)
-    //<
     //< Caution: **Keep the removed block.** What is restored is the same object; made anew, the
     //< record's other operations point at another block, and undoing its text dangles.
     //< For a row, `blocks` is that row; for a column, the cell removed from each row.
@@ -54,7 +48,6 @@ struct Line_op //< the operation that adds or removes one table row (or column)
     blocks: List<|Block$@|>$@
     spans: List<|Sz|>$@ //<
         //< For a column being restored, how many columns each row's cell spanned before.
-        //<
         //< 0 where it had no cell there. Empty where the column is a new one.
         //< Caution: **It cannot be recomputed from the table.** A cell narrowed from two columns
         //< looks like one that spanned one, so the rows would get out of step.
@@ -62,7 +55,6 @@ struct Line_op //< the operation that adds or removes one table row (or column)
         //< The size setting of that row or column. Restore it with the row or column.
 
 struct Run_op //< the operation that adds or removes one inline
-    //<
     //< For splitting and joining inlines when a style is applied. Keep the removed inline (the same
     //< reason as `Line_op`).
     block: Block$@
@@ -71,7 +63,6 @@ struct Run_op //< the operation that adds or removes one inline
     run: Inline$@
 
 struct Block_op //< the operation that adds or removes one block
-    //<
     //< For splitting and joining a paragraph.
     //< Caution: **Keep the removed block.** What is restored is the same object (the same reason as
     //< `Line_op`). Where `parent` is null it is at the top level of the document.
@@ -85,20 +76,17 @@ struct Style_op //< the operation that restores an inline's style name
     was: U8[]
 
 struct Href_op //< the operation that restores an inline's link
-    //<
     //< Caution: **Record it separately from the style name.** In one operation, when two windows
     //< set an inline's style and link separately, undoing the later also reverts the other.
     run: Inline$@
     was: U8[]
 
 struct Note_op //< the operation that restores an inline's note
-    //<
     //< Caution: **Record it separately from the style name** (the same reason as `Href_op`).
     run: Inline$@
     was: U8[]
 
 struct Remark_op //< the operation that restores an inline's annotation
-    //<
     //< Caution: **Record the text and who wrote it together**, or one undo leaves an annotation
     //< with no way to tell whose it is.
     run: Inline$@
@@ -106,13 +94,11 @@ struct Remark_op //< the operation that restores an inline's annotation
     was_by: U8[]
 
 struct Block_face_op //< the operation that restores a paragraph's style name
-    //<
     //< Caution: **Record it separately from an inline's style** (the same reason as `Href_op`).
     block: Block$@
     was: U8[]
 
 struct Refer_op //< the operation that restores what the body refers to
-    //<
     //< The number is not kept (a number is counted at layout time).
     run: Inline$@
     was: U8[]
@@ -130,18 +116,15 @@ struct Step_op //< the operation that restores the step at which a frame appears
     was: Sz
 
 struct Look_op //< the operation that restores a style's font settings
-    //<
     //< Caution: **Record it whole rather than per field**, or "there was none" and "it was 0" look
     //< the same.
     style: Style$@
     was: Style //<
         //< The whole contents before the change (the name does not change).
-        //<
         //< Caution: **Do not save it per field** — a newly added field is silently missed, and that
         //< field alone is not restored.
 
 struct Sheet_op //< the operation that adds or removes one style in the style table
-    //<
     //< Caution: **Keep the removed style.** What is restored is the same object (the same reason as
     //< `Line_op`).
     sheet: Sheet$@
@@ -150,14 +133,12 @@ struct Sheet_op //< the operation that adds or removes one style in the style ta
     style: Style$@
 
 struct Paper_op //< the operation that restores the paper settings
-    //<
     //< Caution: **Record it whole rather than per field** (the same reason as `Look_op`; on paper,
     //< 0 means "do not split", "the container's width" or "no limit").
     sheet: Sheet$@
     was: Paper
 
 struct Frame_op //< the operation that restores a slide frame's position
-    //<
     //< Caution: **Also record "no position was set".** A frame with none covers the whole slide;
     //< restored as a rectangle of 0 it can no longer be seen.
     block: Block$@
@@ -207,7 +188,6 @@ fn push_op(into: Step$@, arena: Arena$@, n: Inline$@, at: Sz, put_back: Bool, le
 
 fn last_moved(into: Step$@, table: Block$@, axis: Axis, index: Sz): Bool //<
     //< Whether the step ends with a move of the same position in the same table
-    //<
     //< While dragging, the first setting saved is enough to undo.
     if into.ops.len <= 0
         return false
@@ -220,7 +200,6 @@ fn last_moved(into: Step$@, table: Block$@, axis: Axis, index: Sz): Bool //<
 
 fn last_framed(into: Step$@, b: Block$@): Bool //<
     //< Whether the step ends with a move of the same frame
-    //<
     //< No record is added while it is being dragged (the same reason as `last_moved`).
     if into.ops.len <= 0
         return false

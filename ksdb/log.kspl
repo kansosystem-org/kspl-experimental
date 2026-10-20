@@ -1,5 +1,4 @@
 //< An append-only log whose records can still be read after a power cut
-//<
 //< The smallest way for a device to keep a sensor's time series, or a policy it was sent.
 //< **It never rewrites a record.** It only appends, so every finished record survives a power
 //< cut. A binding to SQLite does not fit here. It hands the work to libsqlite3 by FFI, which
@@ -13,6 +12,7 @@
 import "ksdb/store" { Store }
 import "std/bytes"
 import "std/chars" // classifying and extracting one character
+import "std/math"
 
 // Using it:
 //   store: = ram.make(U8$[]::buf, 4096);        // a 4KB sector
@@ -28,11 +28,9 @@ priv const CRC_AT: Sz = 4 //< the CRC (U32) of the header before it and of the c
 priv const CRC_SEED: U32 = 0xffffffff //< CRC-32 starts from this and is finished by xoring it
 
 pub const MAX_PAYLOAD: Sz = 0xfffe //< the largest content one record can hold.
-    //<
     //< `0xFFFF` marks an empty slot, so it cannot be a content length.
 priv const EMPTY_LEN: U16 = 0xffff //< the `len` an erased slot reads as (nothing is written yet)
 priv const CHUNK_SIZE: Sz = 64 //< how many bytes are read at a time
-    //<
     //< Caution: The buffer lives on the stack, so keep it small: a microcontroller's task stack is
     //< only a few kilobytes.
 
@@ -42,7 +40,6 @@ pub enum Ksdb_error //< why an append or a read failed
     write_failed //< the medium refused a write or an erase.
     too_small //< the `dst` passed to `last` or `Cursor.read` is shorter than the content.
     not_found //< no record of that kind exists.
-        //<
         //< Caution: **Do not report "there is none" as length 0.** A record with empty content is
         //< legitimate (see the caution on `Cursor`'s `started`). An empty record would then read as
         //< "there is none": the writer wrote it, cannot read it back, and nothing shows why.
@@ -53,7 +50,6 @@ pub struct Log //< an append-only log on one `Store` that can be read again afte
     priv tail: Sz
 
 priv fn align4(n: Sz): Sz //< rounds up to a multiple of 4
-    //<
     //< Caution: **Keep record boundaries aligned.** Otherwise the header's 2-byte integer sits at
     //< an odd address, and a target that reads it directly faults.
     return (n + 3) - ((n + 3) % 4)
@@ -63,7 +59,6 @@ priv fn record_span(payload_len: Sz): Sz //<
     return align4(HEADER_SIZE + payload_len)
 
 priv struct Chunks //< a read of `left` bytes from `at`, one chunk at a time
-    //<
     //< Caution: **It holds no buffer**; the caller passes one `CHUNK_SIZE` array to every `next`,
     //< so a walk costs one chunk of stack however long the range.
     priv store: Store
@@ -72,7 +67,7 @@ priv struct Chunks //< a read of `left` bytes from `at`, one chunk at a time
 
 impl Chunks
     priv fn next(r: Self$@, chunk: U8$[]): U8[] //< reads the next part of the range into chunk
-        n: = r.left if r.left < chunk.len else chunk.len
+        n: = math.min(r.left, chunk.len)
         v: = chunk.sub_mut(0, n)
         r.store.read_at(r.at, v)
         r.at += n
@@ -81,7 +76,6 @@ impl Chunks
 
 priv fn crc_range(store: Store, at: Sz, len: Sz, seed: U32): U32 //<
     //< Computes the CRC of `len` bytes from `at`, continuing from `seed`
-    //<
     //< `crc32` can be continued, so reading in chunks gives the same value as reading all at once.
     $c: U32 = seed
     $chunk: U8[CHUNK_SIZE] = ::{}
@@ -96,7 +90,6 @@ priv fn head_crc(header: U8[]): U32 //<
 
 priv fn record_is_valid(store: Store, at: Sz, header: U8[]): Bool //<
     //< Whether the CRC of the record at `at`, whose header has been read into `header`, matches
-    //<
     //< The CRC covers the header except its own crc field.
     c: =
         crc_range(store, at + HEADER_SIZE, header.get_u16_le(LEN_AT), head_crc(header))
@@ -116,7 +109,6 @@ priv fn cursor(store: Store, end: Sz): Cursor //< a walk over the records in [0,
 
 impl Log
     pub fn open(store: Store): Log //< scans the medium and opens the log where it can append
-        //<
         //< **It scans on every open**: a position stored separately would be a second source of
         //< truth, and after a power cut they would disagree. **If the scan ends where the medium is
         //< not erased, it moves to the next sector**: a half-written record cannot be written over.
@@ -142,7 +134,6 @@ impl Log
         return Log::{ .store = store, .tail = after_last }
 
     pub fn append( //< adds one record without crossing a sector boundary or erasing anything
-        //<
         //< **A record stays inside one sector**: if it spanned two, erasing one would leave only
         //< the header in the other. **No sector is erased here**, since erasing `tail`'s sector
         //< would take its finished records with it. A region not erased is only skipped; erasing is
@@ -187,7 +178,6 @@ impl Log
         r.tail += span
 
     pub fn reset(r: Self$@): Void!Ksdb_error //< erases the whole medium; the records are lost
-        //<
         //< Use it before a device's first write, and after someone has copied the records off a
         //< full log. A device is erased when it leaves the factory, not after it has been written.
         $at: Sz = 0
@@ -201,7 +191,6 @@ impl Log
         return r.tail
 
     pub fn iter(r: Self$@): Cursor //< a walk over the records, oldest first
-        //<
         //< It is separate from `Log`, so appending during a scan breaks neither.
         // It stops at `tail`: going to `capacity` would walk the erased sectors to the end for the
         // same answer, which costs too much in a loop.
@@ -209,7 +198,6 @@ impl Log
 
     priv fn find_last(r: Self$@, kind: U16): Cursor!Ksdb_error //<
         //< The cursor on the newest record of `kind`, or `not_found`
-        //<
         //< Copying and comparing use the same search; reading stays in `Cursor.read`.
         $found: Cursor? = .none
         $it: = r.iter()
@@ -221,7 +209,6 @@ impl Log
         throw .not_found
 
     pub fn last( //< copies out the newest record of that kind and returns its length
-        //<
         //< This is how a device keeps a policy it was sent. The same kind is appended again and
         //< again and **the newest one wins**. So a power cut mid-write leaves the old policy in
         //< force. A caller that is fine with 0 when there is none can write `catch 0`.
@@ -233,7 +220,6 @@ impl Log
         return it.read(dst)!
 
     pub fn last_equals( //< whether the newest record of that kind already holds this data
-        //<
         //< false if there is none. **It lets the caller skip writing what has not changed.** Each
         //< append uses up space: a policy of a few KB fills the medium in a few dozen writes.
         //< It needs no output buffer. It reads in chunks, since a second record-sized buffer costs
@@ -257,12 +243,10 @@ impl Log
         return true
 
 pub struct Cursor //< a walk over the records, oldest first, kept separate from the `Log`
-    //<
     //< **It looks only up to `end`, the range `open` checked**: a half-written record can lie
     //< beyond it, so the scan must not go further.
     priv store: Store
     pub at: Sz //< the start of the record it points at now.
-        //<
         //< `Log.open` reads it to find the end of the last record.
     priv end: Sz
     // Whether it has advanced to the first record.
@@ -274,7 +258,6 @@ pub struct Cursor //< a walk over the records, oldest first, kept separate from 
 
 impl Cursor
     pub fn next(r: Self$@): Bool //< moves to the next record; false when none is left
-        //<
         //< Caution: **It must not stop at a garbled record.** A power cut can leave one
         //< half-written record, and stopping there would make everything appended after it (in the
         //< next sector) unreadable forever.
@@ -307,7 +290,6 @@ impl Cursor
         return r.at + HEADER_SIZE
 
     pub fn read( //< copies the current record's content out and returns its length
-        //<
         //< **A record longer than `dst` is refused, not cut**: a cut record reads as a whole
         //< shorter
         //< one, and nothing shows that its end is missing. `len` says beforehand how much room it

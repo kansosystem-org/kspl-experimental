@@ -1,5 +1,4 @@
 //< The position where the parse failed, and the list of what could have come there
-//<
 //< A syntax error's `expected …` is built from it. **This layer holds only how far the parse got
 //< and what could stand there**; it never reads the input itself. `kspeg/engine` applies the rule
 //< tree; `kspeg/rule` represents a rule.
@@ -15,58 +14,48 @@ import "std/mem" { Arena }
 import "std/str" // `equals`
 
 const MAX_EXPECTED_LABELS: Sz = 8 //< how many `expected` labels one position can carry.
-    //<
     //< Caution: Keep the number in this one place; with copies, raising one would write past the
     //< buffer another sized. **Raising it does not help**: what overflows is the operators that
     //< could continue an expression (after `x: = 1`, some thirty are recorded and `';'` comes
     //< last).
 
 const NO_SKIPPABLE: Sz = -1 //< the position that means "no skippable attempt is open".
-    //<
     //< Caution: **It must be a value that matches no position**: with 0, a failure at the start of
     //< the file would count as skippable.
 
 pub struct Expected //< one thing that could have come where the parse stopped
-    //<
     //< Caution: **Do not mix literal text with a rule's name.** Literal text (`';'`) is typed as it
     //< stands; a rule's name (`Identifier`) is not, and in the same quotes it reads as though
     //< typing `'Identifier'` would work. Only the code that records it knows which, so it is kept.
     pub text: U8[] //< the literal text, or a rule's name when `is_rule` is set
     pub is_rule: Bool //< whether it is a rule's name rather than text a user types.
-        //<
         //< The report phrases the two differently.
     pub is_optional: Bool //< whether nothing had to be written here, so it did not stop the parse.
-        //<
         //< An optional or a repetition that gave up before reading a character. **Ignoring this
         //< fills the list with ways to continue.** Forget a `;` after an expression, and every
         //< operator is listed at that position before `';'`. Yet only `';'` stopped the parse.
         //< Pass the list through `order_expected` before reporting it.
 
 pub struct Fail_track //< one input's failure record: how far it got, and what could go there
-    //<
     //< Caution: **Do not move the fields back into `Target`**: that makes the import cycle named at
     //< the top of this file. There is one per input (`Target` creates and holds it); a `Target`
     //< that only lends its grammar leaves its own unused.
     pub max_fail_pos: Sz //< the furthest position where an expected spelling did not match.
-        //<
         //< **A failure cut off by depth is not recorded here** (`Target.depth_exceeded_pos` keeps
         //< it).
     pub expected_labels: Expected$@ //< what could have come at that position, up to the cap
     pub expected_label_count: Sz //< how many of those are in use
     pub deepest_try: Sz //< how far the lexical token being read has got.
-        //<
         //< Caution: **Count only the failures inside the token** (where recording is suppressed).
         //< An ordinary rule failing inside it (an expression inside interpolation) records at its
         //< own position. Counted here too, it would list the token's name at that position as well.
     skippable_start: Sz //< where the innermost open skippable attempt began, or `NO_SKIPPABLE`
-        //<
         //< **Save it and restore it.** Attempts nest, so leaving it overwritten makes an outer
         //< attempt look at an inner position.
 
 impl Fail_track
     pub fn new(arena: Arena$@): Fail_track$@ //<
         //< an empty record; its label buffer is allocated once
-        //<
         //< Caution: **Allocate `expected_labels` here, once.** Allocating per record grows the
         //< arena with every failure, and one parse can fail over a million times.
         return arena
@@ -83,7 +72,6 @@ impl Fail_track
         r.skippable_start = NO_SKIPPABLE
 
     pub fn track_token_fail( //< records that a lexical token could not be read, under its own name
-        //<
         //< Caution: **Do not record a failure from inside the token as it is** (`character class`,
         //< or one inside `_Name`). **Do not check the suppression here**: the caller
         //< (parse_reference_impl) has already decided whether to record.
@@ -138,7 +126,6 @@ impl Fail_track
                     return
 
     pub fn demote_expected_since( //< marks what a dropped branch recorded as not what stopped it
-        //<
         //< Another branch read the input, so the dropped branch's failure did not stop the parse.
         //< **Change only the mark; do not drop the label** (that text can still be written there).
         //< If the failure position has advanced, the list was rebuilt, so every label is marked.
@@ -154,7 +141,6 @@ impl Fail_track
 
     pub fn order_expected(r: Self$@) //<
         //< moves what stopped the parse to the front, before reporting
-        //<
         //< Labels at one position are recorded from the inside outward. Without reordering, the
         //< fixes (`';'` / `')'` / `'}'`) are buried behind operators that could continue the
         //< expression. **Put the rest after them instead of dropping them.** What need not be

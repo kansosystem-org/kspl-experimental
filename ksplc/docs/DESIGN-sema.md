@@ -73,7 +73,7 @@ Inside the one package `ksplc/`, calling `body` from `decl` needs no `pub`. Only
 | `sema/session` | `c_boundary`, `ctx`, `import_table` | below: `state` / above: `imports`, `pointer` |
 | `sema/decl` | `access`, `eval`, `layout`, `mono`, `mono_name`, `mono_queue`, `mono_target`, `name`, `registry`, `resolve`, `trait_check`, `trait_default` | below: `declare`, `subst` / above: `attrs`, `collect`, `reflect`, `type_check` |
 | `sema/flow` | `field`, `report`, `stmt`, `track` | below: `release` |
-| `sema/body` | `binary`, `call`, `call_args`, `dot`, `expr`, `for_in`, `postfix`, `stmt`, `stmt_escape`, `struct_literal`, `switch`, `write_perm` | below: `analyze`, `call_defaults`, `coerce`, `generic_infer`, `lint_stmt`, `literal`, `resolve_path` / above: `infer` |
+| `sema/body` | `binary`, `call`, `call_args`, `dot`, `expr`, `for_in`, `postfix`, `stmt`, `stmt_escape`, `struct_literal`, `switch`, `write_perm` | below: `analyze`, `call_defaults`, `coerce`, `generic_infer`, `lint_stmt`, `lint_written`, `literal`, `resolve_path` / above: `infer` |
 
 **To find the edge that breaks a mass, compute the strongly connected components.** Counting the edges against one chosen import direction fails, because the count changes with the order chosen. An import with `_` (importing an extension method) is an edge too: even with no function called, it widens the mass.
 
@@ -146,6 +146,7 @@ flowchart TD
     * Resolving the fields' types instantiates generics. Run before 2a, an instantiated `List<|T|>` gets no methods (`push` becomes "there is no such method").
     * 2a has already handed out the `const` names, so `collect` hands out the synthesized ones itself. What it makes is registered as hand-written declarations are.
     * The kind comes from the resolved type, because the name would mistake a `typedef`. A `List<|T|>` is recognised by resolving the written generic base to an FQN (fully qualified name, such as `std.ds.List`); the rules below hold the rest.
+  * After 2a', 2a'' writes the `run` of each `impl S: suite.Suite` (`synthesize_suite_runs` in `sema/decl/suite.kspl`). It must come before 2b for the same reason as 2a': 2b registers the method it adds. **It writes `run` as source and parses it** (`parse_synth_decls` in `parse/load.kspl`), then moves the method onto the `impl`, at the `impl`'s position (`place_as_made`). Every test is checked before any source is written. So a refusal (a parameter with no field, a `priv` test in another file) is reported at the test. It never shows as a call the analysis refuses inside the written `run`. The order it calls the tests in is "8.5 Tests: functions named `test_`, run by a suite" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md).
 * **Pass 3**: filling the registry itself in (the fields, the variants, the method signatures), and `validate_all_type_exprs`.
 * **Pass 4**: checking a `const` declaration's body (`check_const_decl_storage`; it needs the field list, so it follows 3).
 * **Pass 5**: checking that no member's visibility is wider than its enclosing declaration's; it matches type ids, so it follows 2b and 3.
@@ -184,7 +185,7 @@ Caution: **Do not add a path that bypasses it.** Such a path returns a size of 0
 
 **A machine's widths come from one table**: `MACHINES` in `base/target.kspl`, one row per machine ksplc knows. A row holds a pointer's width, a function pointer's and `Sz`'s. It also holds the alignment of `I64` / `U64` / `F64` in a struct, and the LLVM triple. `calc_type_layout` in `sema/decl/layout.kspl` and `Sz`'s width (`get_primitive_bit_size` in `sema/type/query.kspl`) read the row `current` resolves: `--machine`'s, else the one ksplc runs on, which `kspl_host_machine` in `gen/runtime/hosted.c` names from the C compiler's own macros. Everything else is laid out from those widths, so a slice is a pointer and an `Sz`, a trait value two pointers.
 
-* **Every subcommand that lays values out asks for the machine before it starts** (`machine_refusal_to` in `usage.kspl`, the subcommands in `MACHINE_FACES`). On a host the table lacks, each says so, naming the triple `kspl_host_machine` built, rather than reaching `current` and stopping with an internal error. **The language server refuses too, on standard error, rather than take a machine from a setting.** The reasons:
+* **Every subcommand that lays values out asks for the machine before it starts** (`machine_refusal_to` in `cli.kspl`, for each row of `FACES` marked `lays_out`). On a host the table lacks, each says so, naming the triple `kspl_host_machine` built, rather than reaching `current` and stopping with an internal error. **The language server refuses too, on standard error, rather than take a machine from a setting.** The reasons:
   * Every machine the tree is built on has a row.
   * A guessed machine would show a static `if` that the compile then decides otherwise.
   * A machine named in `ksplc.cfg` beside `--machine` would be a second way to name it (Principle 6).
@@ -225,6 +226,7 @@ The record holds the type, what was measured, the number and the node that asked
 | `eval.kspl` | translation-time constants (an array's size, an enum tag, `#align`), from all over `collect` / `infer` / `expr` / `stmt` / `postfix` / `resolve` |
 | `analyze.kspl` | right after each function's `infer_stmts`. The walk it calls (defined variables and use-after-free, following one body's paths as a CFG would) is an independent engine, run once per function. `check_unused_imports` / `check_unused_symbols` are the one global final check, at the end of `infer.run` |
 | `lint_stmt.kspl` / `literal.kspl` | the statement-level lints (`if`, `for`, an accumulating overflow and so on), fired inline during the dispatch in `stmt.kspl` / `infer.kspl` / `switch.kspl`, not gathered in `analyze.kspl` |
+| `lint_written.kspl` | the lints on how declarations are written (`lang.`, a function of one enum, an arena's default). `infer.run` walks the written tree once, before a template's body is dropped |
 
 (A *CFG*, control-flow graph, is the map of every path execution can take through a function.)
 

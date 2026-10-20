@@ -7,6 +7,7 @@ import "ksai/tensor" { Tensor }
 import "std/buf" { Buf_writer }
 import "std/bytes" as std_bytes
 import "std/io"
+import "std/math"
 import "std/mem" + { Arena }
 import "std/str" { Str_builder }
 import "std/verdict"
@@ -37,7 +38,7 @@ fn test_arena_from_buffer()
         panic("matmul shape mismatch")
     for i in Range.asc(y.size)
         diff: = (y.data + i)$ - 3.0
-        ad: = -diff if diff < 0.0 else diff
+        ad: = math.abs(diff)
         assert(ad < 1.0e-6, "Arena.from_buffer: ksai matmul must work on a static buffer")
     after_ops: = mem.heap_requested_total_bytes()
     assert(after_ops == heap_before,
@@ -55,11 +56,10 @@ fn test_arena_from_buffer()
     verdict
         .pass(tw.s("(used \{used_bytes\}/\{I32::(sizeof(Sz) * 8192)\} bytes, 0 libc.malloc calls)")
         .slice())
-    test_from_buffer_unaligned()
+    check_from_buffer_unaligned()
 
-fn test_from_buffer_unaligned() //<
+fn check_from_buffer_unaligned() //<
     //< Checks that an arena over an unaligned buffer still hands out aligned addresses
-    //<
     //< Caution: **Given a buffer at an unaligned address, the addresses it hands out must still be
     //< aligned.** The naturally aligned `Sz[8192]` above cannot tell who does the aligning. If this
     //< breaks, a Cortex-M's alignment fault loops in the default handler: it hangs with no sign.
@@ -119,7 +119,6 @@ fn test_tensor_operators(arena: Arena$@)
     verdict.pass("`a + b` / `a - b` / `a * b` / `t[i]` all work via real operator syntax.")
 priv fn fill_first(t: Tensor<|F32|>, val: F32) //<
     //< Writes into an element of a `Tensor` received by value
-    //<
     //< **No `$` is written on the receiver.** It is the same way ksai's `matmul_into` /
     //< `grad_matmul_input_into` receive a destination.
     t[0] = val
@@ -226,7 +225,7 @@ fn test_quantize_roundtrip(arena: Arena$@)
     for i in Range.asc(w.size)
         orig: = F64::(w.data + i)$
         got: = F64::(dw.data + i)$
-        diff: = -(orig - got) if (orig - got) < 0.0 else (orig - got)
+        diff: = math.abs(orig - got)
         assert(diff <= tol, "quantize/dequantize roundtrip error must stay within one scale step")
 
     // A matrix product on weights quantized and expanded back stays close to the unquantized result
@@ -239,7 +238,7 @@ fn test_quantize_roundtrip(arena: Arena$@)
     for i in Range.asc(y_ref.size)
         orig: = F64::(y_ref.data + i)$
         got: = F64::(y_quant.data + i)$
-        diff: = -(orig - got) if (orig - got) < 0.0 else (orig - got)
+        diff: = math.abs(orig - got)
         assert(diff <= 1.0,
             "matmul on dequantized weights must stay close to the unquantized result")
 
@@ -284,7 +283,6 @@ fn test_safetensors_roundtrip(arena: Arena$@)
     verdict.pass("not one element is garbled over the header length, header and data round trip.")
 fn test_model_file_leaves_no_heap(arena: Arena$@) //<
     //< That a model file is read once, into its arena, and leaves nothing on the heap
-    //<
     //< **The bytes, refused or not, belong to the arena passed in.** Read onto the heap first, a
     //< load holds the file twice at its peak. Left there, a server that reloads files grows by a
     //< file per load. Freeing the arena has to return the heap to where it was.
@@ -374,7 +372,6 @@ fn test_model_file_leaves_no_heap(arena: Arena$@) //<
 
 priv fn blob_of(header: U8[], payload_len: Sz, arena: Arena$@, payload: U8[] = ""): U8[] //<
     //< Builds a whole safetensors byte sequence from a header and the data part
-    //<
     //< The data part is `payload` followed by `payload_len` zero bytes.
     //< **Pad with spaces up to an 8-byte boundary** (as the writer does;
     //< `Safetensors_writer.finish`).
@@ -393,7 +390,6 @@ priv fn blob_of(header: U8[], payload_len: Sz, arena: Arena$@, payload: U8[] = "
 
 priv fn refuses(what: U8$[], header: U8[], payload_len: Sz, arena: Arena$@) //<
     //< That the declared range is rejected
-    //<
     //< **Rejecting up front and rejecting later both count as rejected** (neither returns a view).
     data: = blob_of(header, payload_len, arena)
     $st: = ai_st.Safetensors.load_from_bytes(data, arena) catch
@@ -448,7 +444,6 @@ fn test_safetensors_refuses_a_bad_range(arena: Arena$@)
         .pass("no view is returned whichever of the named range, the form or the dtype is broken.")
 fn test_safetensors_refuses_a_mismatch(arena: Arena$@) //<
     //< Checks that the reader rejects a file whose shape or dtype does not match
-    //<
     //< The content is plain bytes, so a wrong load fails only in **some matmul much later**, with
     //< no hint of which tensor is wrong.
     verdict.start("[Safetensors] refusing a weight whose form or dtype does not fit test...\n")
@@ -545,7 +540,7 @@ fn test_safetensors_reads_a_file_as_written(arena: Arena$@)
     fits: = Lora_widths::{ .in_dim = 2, .out_dim = 2 }
     Qkv_lora<|F32|>.load_set_from(st_l, 1, fits, fits, arena) catch e
         switch e
-        case .shape_mismatch(_name)
+        case .shape_mismatch
             refused = true
         default {}
     assert(refused, "an adapter whose scale holds no value is refused as a shape mismatch")

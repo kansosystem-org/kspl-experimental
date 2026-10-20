@@ -52,9 +52,9 @@ The pipeline's folders come first, in the order the data flows (the two backends
 
 Directly in this folder:
 
-* [`main.kspl`](main.kspl) — the entry point: it reads the command line and starts each subcommand, with the usage text in [`usage.kspl`](usage.kspl).
+* [`main.kspl`](main.kspl) — the entry point: it starts the subcommand [`cli.kspl`](cli.kspl) read from the command line. The usage text is in [`usage.kspl`](usage.kspl).
 * [`pipeline.kspl`](pipeline.kspl) — the `Compiler` that runs the stages in order.
-* [`source_checks.kspl`](source_checks.kspl) — the checks on the source's own spelling (the indentation, a `//<` that reaches nothing, a comment's pointer), run once the declarations are collected.
+* [`source_checks.kspl`](source_checks.kspl) — the checks on the source's own spelling, run once the declarations are collected. They read the indentation, a `//<` that reaches nothing, a comment's pointer, and a comment's length and place.
 
 ### parse/ — the Parse layer
 
@@ -85,7 +85,7 @@ The design is "The Parse layer: from text to an AST (Desugar included)" in [`ksp
 | [`session/`](sema/session/) | What is shared through one analysis? | `ctx` holds `Sema_ctx` itself, the diagnostics, and declaring a symbol. Then `state`. `import_table` / `imports` hold the import declarations and their ledger. `pointer` says what a comment's pointer stands for. `c_boundary` says what the generated C cannot hold. `prof` gives the breakdown of sema's time |
 | [`decl/`](sema/decl/) | What is there, under what name, and of what type? | `collect` (the entry point), `declare`, `registry` / `layout`, `resolve`, `name` (what a written name names), `access`, `attrs`, `eval`, `reflect`, `type_check`, the generics (`mono*` / `subst`), the traits (`trait_check` / `trait_default`) |
 | [`flow/`](sema/flow/) | Which state is a binding in, and when? | `track`, `stmt` (branching and joining), `release`, `report` (the diagnostics) |
-| [`body/`](sema/body/) | Is the code right? | `infer` (the main walk), the expressions, the statements, the calls (`generic_infer` reads a call's type arguments off its arguments), the coercions, `lint_stmt` |
+| [`body/`](sema/body/) | Is the code right? | `infer` (the main walk), the expressions, the statements, the calls (`generic_infer` reads a call's type arguments off its arguments), the coercions, `lint_stmt` and `lint_written` |
 
 ```sh
 make debug-ksplc   # the compiler's own tests, the type checks and the diagnostics among them
@@ -289,6 +289,9 @@ The steps, the marks a fixture carries and the rules each fixture folder keeps a
 * **`make fmt` uses the seed**, so in a split that touches the grammar, run `make commit-seed` first (why is "The bootstrap, and keeping the seed in step" in [`ksplc/docs/DESIGN-compiler.md`](docs/DESIGN-compiler.md)).
 * [`fmt/printer.kspl`](fmt/printer.kspl): **the decisions on where a line breaks** move to a new `fmt/wrap.kspl`, an `impl Formatter` as `fmt/trivia.kspl` is. That is `calc_will_break`, `reader_joins`, `ends_open_catch`, `break_before_choice` and `wrap_before_next_element`. The cut lies between deciding a break and writing tokens: `write_token` and `format_internal` stay, and call across it.
 * [`sema/flow/track.kspl`](sema/flow/track.kspl): call-release effects and raw-storage argument checks move into `sema/flow/call.kspl`. Local state, expression traversal and assignment tracking remain together.
+* [`tests/lang_test.kspl`](tests/lang_test.kspl): **the tests of generic functions** (`test_generic_fn_returning_own_type_param` to `test_instantiation_before_generic_impl`) move into a new file of tests, `lang_generic_test.kspl`, beside it.
+* [`tests/lang_types_test.kspl`](tests/lang_types_test.kspl): **the tests of a trait upcast** (`test_trait_upcast_lifetimes` and the three after it) move into a new file of tests, `lang_upcast_test.kspl`, beside it.
+* **A file of tests splits with no list to edit.** The new file needs one import line in `tests/all.kspl`, whose suite then runs its `test_…` functions.
 * **A suite splits where what it reads splits.** Some answers need the repository's whole tree, such as a common word read across every package, or a rename reaching another package's files. A copy of this folder has no such tree, so this folder does not ask them. The queries this folder can answer for itself stay in `lsp`, with this folder as the workspace.
 
 ## Further reading

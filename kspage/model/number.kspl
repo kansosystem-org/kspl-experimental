@@ -1,5 +1,4 @@
 //< Numbers and references
-//<
 //< **A number is not written into the document**: the position in the list, collected again each
 //< time, is the number itself. **The counting happens in this one place**, on the document side
 //< (before layout). Pure functions.
@@ -12,22 +11,18 @@ import "std/mem" { Arena }
 import "std/str" { Str_builder }
 
 struct Note //< one note
-    //<
     //< **It holds no number** (its position in the list is the number).
     text: U8[]
     from: Inline$@ //<
         //< The run that placed the mark, kept so the list can link back to it
-        //<
         //< **The text is not copied** (a run changes with editing).
 
 struct Serial //< one block that gets a running number
-    //<
     //< **It holds no number** (as with a note). It counts from one per style name.
     block: Block$@
     style: U8[] //< that style's name. **It is not copied** (the style table holds the text)
 
 struct Heading //< one heading
-    //<
     //< **It builds the table of contents**, collected at layout time.
     text: U8[]
     level: Sz //< the depth. **1 is the outermost** (`Style.outline`)
@@ -35,13 +30,11 @@ struct Heading //< one heading
         //< Which heading this is, **for references from the body** (the name is `block.name`).
     number: U8[] //<
         //< The chapter number's text ("1.2.3")
-        //<
         //< **It is empty on a heading that gets no number** (its mark is not `Marker.outline`).
         //< **It does not go into the document**: `number_headings` fills it in again at every
         //< layout.
 
 priv fn joined_text(b: Block$@, arena: Arena$@): U8[] //< one block's texts joined
-    //<
     //< Caution: **Take a copy** (a run moves elsewhere with editing).
     sb: = arena.text()
     for $i: Sz = 0; i < b.inlines.len; i += 1
@@ -49,7 +42,6 @@ priv fn joined_text(b: Block$@, arena: Arena$@): U8[] //< one block's texts join
     return sb.take()
 
 fn collect_notes(b: Block$@, out: List<|Note|>$@) //< collects the notes in document order
-    //<
     //< Caution: **Walk the nesting too** (a note inside a cell is a note as well).
     //< **The position in the list is the number itself**, so the mark and the list cannot drift.
     for $i: Sz = 0; i < b.inlines.len; i += 1
@@ -60,7 +52,6 @@ fn collect_notes(b: Block$@, out: List<|Note|>$@) //< collects the notes in docu
         collect_notes(b.children.get(i), out)
 
 fn note_number(notes: List<|Note|>$@, n: Inline$@): Sz //< the number of n's note
-    //<
     //< **0 where there is none.**
     //< **The counting happens in this one place** (the reason is at `serial_number`).
     for $i: Sz = 0; i < notes.len; i += 1
@@ -70,7 +61,6 @@ fn note_number(notes: List<|Note|>$@, n: Inline$@): Sz //< the number of n's not
 
 fn collect_headings(b: Block$@, sheet: Sheet$@, out: List<|Heading|>$@, arena: Arena$@) //<
     //< Collects the headings in document order
-    //<
     //< Caution: **Walk the nesting too** (a heading inside a cell is a heading as well).
     if s: = sheet.find(b.style)
         if s.outline > 0
@@ -83,7 +73,6 @@ fn collect_headings(b: Block$@, sheet: Sheet$@, out: List<|Heading|>$@, arena: A
 
 priv fn in_chapters(sheet: Sheet$@, b: Block$@): Bool //<
     //< Whether that heading goes into the body's list of chapters
-    //<
     //< **An unknown style name goes in** (a typo does not make a number vanish).
     if s: = sheet.find(b.style)
         return s.in_chapters
@@ -91,12 +80,10 @@ priv fn in_chapters(sheet: Sheet$@, b: Block$@): Bool //<
 
 fn number_headings(heads: List<|Heading|>$@, sheet: Sheet$@, arena: Arena$@) //<
     //< Gives out the chapter numbers
-    //<
     //< Caution: **Call it after collecting.** **Depths can be skipped**: a counted heading can show
     //< no number text (its mark is not `Marker.outline`). Stop counting at the mark, and depth 2
     //< comes out as "2" rather than "1.2".
     $counts: = List<|Sz|>.new(arena)
-    defer counts.free()
     $sb: = Str_builder.new()
     for $i: Sz = 0; i < heads.len; i += 1
         h: = heads.get(i)
@@ -122,7 +109,6 @@ fn number_headings(heads: List<|Heading|>$@, sheet: Sheet$@, arena: Arena$@) //<
 
 fn heading_number(heads: List<|Heading|>$@, b: Block$@): U8[] //<
     //< b's chapter number, among the headings that have one
-    //<
     //< **Empty where there is none.**
     for $i: Sz = 0; i < heads.len; i += 1
         h: = heads.get(i)
@@ -132,7 +118,6 @@ fn heading_number(heads: List<|Heading|>$@, b: Block$@): U8[] //<
 
 fn collect_serials(b: Block$@, sheet: Sheet$@, out: List<|Serial|>$@) //<
     //< Collects the blocks that get a running number, in document order
-    //<
     //< Caution: **Walk the nesting too** (a figure inside a cell is a figure as well).
     //< **The position in the list is the number itself** (as with notes).
     if s: = sheet.find(b.style)
@@ -143,7 +128,6 @@ fn collect_serials(b: Block$@, sheet: Sheet$@, out: List<|Serial|>$@) //<
 
 fn serial_number(serials: List<|Serial|>$@, b: Block$@): Sz //<
     //< b's position among the blocks of the same style
-    //<
     //< **0 where there is none** (numbers start at one).
     //< **The counting happens in this one place**, or a figure's number differs between the screen
     //< and the written Markdown.
@@ -160,7 +144,6 @@ fn serial_number(serials: List<|Serial|>$@, b: Block$@): Sz //<
 fn refer_into(out: Str_builder$@, sheet: Sheet$@, serials: List<|Serial|>$@,
     heads: List<|Heading|>$@, name: U8[]): Bool //<
         //< Builds into out the text that refers to what name points at; true if built
-        //<
         //< A running number or a chapter number can be referred to, **but only on a block that has
         //< one**. A sibling number changes with what comes between.
         //< Caution: **Check the running numbers first**, or the answer depends on the order of the
@@ -186,7 +169,6 @@ fn refer_into(out: Str_builder$@, sheet: Sheet$@, serials: List<|Serial|>$@,
 fn number_refs(b: Block$@, sheet: Sheet$@, serials: List<|Serial|>$@, heads: List<|Heading|>$@,
     arena: Arena$@) //<
         //< Writes the target's number into a reference in the body
-        //<
         //< Caution: **Call it after the formulas are computed and before layout**: called first, a
         //< reference's text is cleared (`show_free` in `expr/calc.kspl`). The text's arena is
         //< `Inline.shown`'s.

@@ -1,7 +1,6 @@
 //< Uses C's reserved words, the target headers' macros and the compiler's own names as KSPL names
-//<
 //< They stand at every position the generated C writes a name bare. Bare, each expands into a C
-//< error. One spelled like a name the compiler makes (`made_names`) would read the compiler's.
+//< error. One spelled like a name the compiler makes (`test_made_names`) would read the compiler's.
 // ==========================================
 // Caution: **Include the names the preamble headers `#define`** (`is_preamble_macro` in
 // `base/c_name.kspl`). **Include the ones erased with `#undef`** (`Sig_row`: from the declaration
@@ -33,7 +32,6 @@ struct Stat_row //< the names only the definition half's headers replace
     AF_INET: I32
 
 struct Sig_row //< the names the declaration half's headers `#define`
-    //<
     //< Erased with `#undef`, they are written bare; stop erasing them and this file fails to build.
     si_pid: I32
     sa_handler: I32
@@ -43,12 +41,10 @@ struct Sig_row //< the names the declaration half's headers `#define`
     math_errhandling: I32
     bool: I32 //<
         //< The one name here that cannot be erased, so it takes a suffix
-        //<
         //< The C has `typedef bool Bool;`. Declaration and reference must agree on the suffixed
         //< name.
 
 struct Crt_row //< the names Windows's CRT `#define`s
-    //<
     //< **Linux cannot trigger them** (glibc's `stdin` expands to itself; the rest are not macros).
     //< On that CRT each expands to another name (`stderr` to `(__acrt_iob_func(2))`).
     // They are erased with `#undef`, so they are written as bare names.
@@ -62,7 +58,6 @@ struct Crt_row //< the names Windows's CRT `#define`s
     stderr: I32
 
 struct Vendor_row //< the words a C compiler keeps for itself beyond the standard's list
-    //<
     //< **The first three break on Linux too.** C11's `_Atomic` and GCC's `__thread` are keywords to
     //< gcc and clang in every mode. Clang reads `__cdecl` as one on every target. The rest
     //< break only where Microsoft's extensions are on (clang's MSVC target). `std/fs.kspl` uses
@@ -78,7 +73,6 @@ struct Vendor_row //< the words a C compiler keeps for itself beyond the standar
     L__FUNCTION__: I32
     __cdecl_kw: I32 //<
         //< The name `__cdecl` is renamed to, placed beside it
-        //<
         //< It starts with `__` too and so is renamed in turn. That is why the pair is allowed. If
         //< not, the C compiler would reject it here.
 
@@ -124,7 +118,6 @@ priv fn twice(auto: I32): I32
     return auto * 2
 
 priv fn matched(n: I32): I32 //< matches a `switch` against a name spelled like a reserved word
-    //<
     //< **Renaming it only at the declaration is not enough.**
     //< Caution: **Test a name that gets rewritten too** (a local carrying `$`).
     $near: I32? = .none
@@ -164,14 +157,14 @@ priv fn for_in_beside_own(): I32 //< a `for … in` beside locals spelled as its
         total += x + _for_coll1
     return total + _for_idx_s1
 
-fn made_names() //< the source's names never meet the names the compiler makes beside them
+fn test_made_names() //< the source's names never meet the names the compiler makes beside them
     verdict.start("[Genc] a local spelled like a compiler-made one stays the source's test...")
     assert(catch_reads_own_e() == 43, "made names: a catch block reads the source's _e")
     assert(temps_beside_own() == 3, "made names: Lower's temporaries leave the source's alone")
     assert(for_in_beside_own() == 117, "made names: a for … in leaves the source's locals alone")
     verdict.pass("each name the compiler makes is one no source can spell.")
 
-fn run()
+fn test_c_keyword_names()
     verdict.start("[Genc] using a C reserved word as an identifier test...")
     assert(matched(3) == 6, "C keyword names: switch on a keyword-named local")
     auto: Rect = ::{ .int = 3, .float = 4, .far = 9, .NULL = 5 }

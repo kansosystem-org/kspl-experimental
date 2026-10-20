@@ -1,5 +1,4 @@
 //< Self-attention's forward and backward passes for training
-//<
 //< Inference (`ksai/nn`) runs one token at a time against a KV cache. Training takes the whole
 //< sequence at once. So a whole-sequence forward pass with a causal mask lives here, **sharing the
 //< weights**. What the forward pass computes is kept in `Attention_train` for the backward pass,
@@ -68,7 +67,6 @@ priv fn attn_backward_core<|T|>(c: Attention_train<|T|>$@, $dcontext: Tensor<|T|
 
 impl<|T|> Tensor<|T|>
     priv fn causal_softmax(r: Self$@, scale: F64): Tensor<|T|> //< a causal softmax per row
-        //<
         //< self=the raw scores [S,S], scaled by `scale` before the softmax; position i sees only
         //< j<=i. The output is on `self.arena`.
         assert(r.shape.len == 2, "causal_softmax expects 2D [S,S]")
@@ -95,7 +93,6 @@ impl<|T|> Tensor<|T|>
         return attn
     priv fn causal_softmax_grad(r: Self$@, dattn: Tensor<|T|>, scale: F64): Tensor<|T|> //<
         //< The backward pass of the causal softmax
-        //<
         //< self=softmax's output A[S,S], dattn=the upstream gradient. dscore[i,j] =
         //< A[i,j]*(dattn[i,j]
         //< - Σ_k A[i,k]dattn[i,k]) * scale (j<=i only)
@@ -119,7 +116,6 @@ impl<|T|> Tensor<|T|>
 
 impl<|T|> nn.Self_attention<|T|>
     pub fn train_forward( //< runs the whole sequence at once, keeping what the backward pass needs
-        //<
         //< It is `train_forward_lora` with no adapter (null skips both delta paths).
         r: Self$@,
         x: Tensor<|T|>, //< every position's input together, [S,d]
@@ -172,7 +168,6 @@ impl<|T|> nn.Self_attention<|T|>
         u.update(r.wo.weights, g.wo)
 
     pub fn train_forward_lora( //< the same as `train_forward`, with the adapters' delta added
-        //<
         //< It does not update the base weights (wq/wk/wv/wo) at all. It adds the adapters' delta
         //< to Q's and V's outputs (symmetrical with inference's `forward_lora`).
         r: Self$@,
@@ -199,7 +194,6 @@ impl<|T|> nn.Self_attention<|T|>
         return Attention_train<|T|>::{ .out = out, .x = x, .q_rope = qr, .k_rope = kr,
             .attn_weights = attn, .v = v, .context = context, .scale = scale }
     pub fn backward_lora( //< one step on the adapters only; the four base weights stay frozen
-        //<
         //< The returned gradient is the sum of the base path and the adapter path.
         r: Self$@,
         c: Attention_train<|T|>$@, //< what `train_forward_lora` kept for this same input

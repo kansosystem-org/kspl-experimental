@@ -1,6 +1,5 @@
 #!/usr/bin/env -S ksplc run
 //< Checks that the page's JS **parses as syntax**
-//<
 //< Caution: **Do not drop the second tier.** The page and the checks both run **concatenated into
 //< one `<script>`** (see `kspage/port/web/page.html` and `KSPAGE_PROBE` in `kspage/Makefile`).
 //< node is already required (`make test-kspage-wasm`). **Only syntax is checked.**
@@ -22,21 +21,17 @@ import "std/verdict"
 import "tests/support/harness"
 
 priv const CHECK_TIMEOUT_MS: I32 = 30000 //< the wait for `node --check`
-    //<
     //< **Only syntax is checked, so it can be short**, but long enough for a busy machine.
 priv const OUTPUT_CAP: Sz = 64 * 1024 //< the cap on the captured output
-    //<
     //< node's syntax error is about a dozen lines, so this is enough.
 
 priv fn no_node(path: U8[], arena: Arena$@): U8[] //< the report when node cannot be started
-    //<
     //< Caution: **Never let a failure to start pass**, or with no node **it goes green having
     //< checked nothing**.
     return arena.text().s(path).s(": node cannot be started (it is in `.devcontainer/Dockerfile`. ")
         .s("To run it locally, install Node.js and put it on PATH)").take()
 
 priv fn check_one(path: U8[], arena: Arena$@): U8[] //< puts one file through `node --check`
-    //<
     //< Empty if it passes, and the report if it fails.
     argv: = U8[][]::{ "node", "--check", path }
     r: = subproc.run_capture(argv, "", CHECK_TIMEOUT_MS, OUTPUT_CAP, arena) catch
@@ -56,7 +51,6 @@ priv fn check_one(path: U8[], arena: Arena$@): U8[] //< puts one file through `n
 
 priv fn said_line(text: U8[], arena: Arena$@): U8[] //<
     //< The line of node's output that names the error (empty if there is none)
-    //<
     //< Caution: **Do not report all of it** (about a dozen lines per finding). **Split it with
     //< `lines`**: split by hand, Windows's CRLF leaves an invisible `\r` ("a test does not cut a
     //< child's output into lines by hand" in `tests/support/conventions_win.kspl`).
@@ -68,12 +62,11 @@ priv fn said_line(text: U8[], arena: Arena$@): U8[] //<
 
 priv fn check_joined(what: U8[], slug: U8[], files: List<|U8[]|>@, arena: Arena$@) //<
     //< Concatenates the files and puts the result through `node --check`
-    //<
     //< **Sorting by name is fine**: a collision does not depend on order (a copy of the page's load
     //< order would drift).
     $body: = Str_builder.new()
     for i in Range.asc(files.len)
-        text: = io.read_file(files.get(i)) catch
+        text: = io.read_file(files.get(i), null) catch
             ksplc_harness
                 .fatal(arena.text().s("cannot read: ").s(files.get(i)).take())
             return

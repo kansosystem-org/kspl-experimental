@@ -1,5 +1,4 @@
 //< What to say when the syntax cannot be parsed
-//<
 //< **This file only guesses from the text that could not be parsed.** Loading and analysis belong
 //< to `load.kspl`; this file reads only `kspeg`'s list of expectations and the source text (**one
 //< way**: it does not import `load.kspl`). Each guess targets one known shape.
@@ -12,6 +11,7 @@ import "ksplc/base/literal" { interpolation_open_at, literal_end }
 import "ksplc/parse/layout" { heads_a_block }
 import "ksplc/parse/line_cont" { takes_value_on_its_line }
 import "std/chars"
+import "std/math"
 import "std/str" { Str_builder }
 import "std/strfmt" as _strfmt // the `:x` of a hint
 
@@ -24,7 +24,6 @@ priv fn skip_space_back(src: U8[], pos: Sz): Sz
 
 priv fn enclosing_block_head(src: U8[], pos: Sz): U8[] //<
     //< The heading word (`enum` / `struct` / `fn` …) of the level enclosing the failure position
-    //<
     //< Empty where none is found. **Comments and strings are not skipped**: a `{` in one can shift
     //< the result, but the answer only chooses a note, never a verdict.
     $depth: Sz = 0
@@ -66,7 +65,6 @@ priv fn word_end(head: U8[], at: Sz): Sz //< the end of the word running from `a
 
 priv fn starts_a_statement(src: U8[], pos: Sz): Bool //<
     //< Whether a statement begins at that position
-    //<
     //< **The start of a body counts too**, so the first statement of a function is one.
     before: = skip_space_back(src, pos)
     return (true if before < 0
@@ -74,7 +72,6 @@ priv fn starts_a_statement(src: U8[], pos: Sz): Bool //<
 
 priv fn forbidden_spelling_hint(src: U8[], pos: Sz): U8[] //<
     //< The sentence explaining a spelling **the specification chose not to have**, or empty
-    //<
     //< The expected set alone (`expected 'pub', 'priv', …`) does not say a decision exists. Each
     //< shape is recognized by looking at both sides of the failure position.
     if pos < 0 || pos > src.len
@@ -130,7 +127,6 @@ priv fn forbidden_spelling_hint(src: U8[], pos: Sz): U8[] //<
 
 priv fn is_switch_head(src: U8[], from: Sz, to: Sz): Bool //<
     //< Whether the line's text up to `to` is a `switch` and its subject alone, a label allowed
-    //<
     //< **A `case` written makes it not**: a `{` failing after one is that arm's own.
     $code: = src.sub(from, to - from).trim_spaces()
     e: = word_end(code, 0)
@@ -141,7 +137,6 @@ priv fn is_switch_head(src: U8[], from: Sz, to: Sz): Bool //<
 
 priv fn odd_indent_name(src: U8[], pos: Sz): U8[] //<
     //< The name of what starts the failing line looking like whitespace but is not, or empty
-    //<
     //< Caution: **Text can look like indentation without counting as it.** Only the ASCII space
     //< counts (`layout.kspl`), so such a line is at column 0 and the error says "a declaration
     //< ought to come". **Check for the fullwidth space first.**
@@ -166,7 +161,6 @@ priv fn odd_indent_name(src: U8[], pos: Sz): U8[] //<
 
 priv fn block_head_without_body(src: U8[], pos: Sz): Bool //<
     //< Whether the failing line is a heading that opens a level with no deeper line after it
-    //<
     //< **An empty level and one holding only comments are both this**: a comment line makes no
     //< level. It looks only at whether the next line with contents is deeper.
     if pos < 0 || pos > src.len
@@ -221,7 +215,6 @@ priv fn code_line(src: U8[], at: Sz): Code_line //< the line beginning at `at`
 
 priv fn drop_mended_tail(code: U8[]): U8[] //<
     //< The line's own text, without the marks the indentation reader added after it
-    //<
     //< The text read here is the parser's, whose lines end in that reader's ` {` / `;` / ` }`
     //< (`to_braces` in `layout.kspl`).
     $n: = code.len
@@ -236,7 +229,6 @@ priv fn drop_mended_tail(code: U8[]): U8[] //<
 
 priv fn next_code_line(src: U8[], after: Code_line): Code_line //<
     //< The first line after `after` holding code
-    //<
     //< Blank lines and comment lines are skipped, as the indentation notation skips them.
     $l: = code_line(src, after.next_at)
     for l.code.len == 0 && l.next_at <= src.len
@@ -253,7 +245,6 @@ priv fn starts_with_word(code: U8[], w: U8[]): Bool //< whether the code's first
 
 priv fn append_split_value_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool //<
     //< It writes the sentence naming the parentheses a value split onto a deeper line needs
-    //<
     //< It does so where the failing line continues a value onto a deeper line in a way the
     //< indentation notation does not accept.
     //<
@@ -287,7 +278,6 @@ priv fn append_split_value_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool //
 
 priv fn append_trailing_defer_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool //<
     //< It writes the sentence saying a `defer` must start its own statement, where it fails on one
-    //<
     //< The sentence includes the line to write: the call as written, or, for a bare call, with the
     //< declared name in front.
     //<
@@ -308,12 +298,10 @@ priv fn append_trailing_defer_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool
 
 priv const OTHER_TYPEDEF_WORDS: U8[][4] = ::{ "alias", "type", "typealias", "using" } //<
     //< The words other languages use to give a type another name, where KSPL writes `typedef`
-    //<
     //< They are D's; Rust's, Go's and Python's; Swift's and Kotlin's; C++'s.
 
 priv fn append_typedef_spelling_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool //<
     //< It writes the `typedef` line to use instead of another language's or C's type alias
-    //<
     //< It does so where the failing line gives a type another name with another language's keyword
     //< or in C's order.
     //<
@@ -352,7 +340,6 @@ priv fn append_typedef_spelling_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bo
 
 priv fn append_statement_word_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool //<
     //< It writes KSPL's head where a statement opens with `while`, `loop` or `match`
-    //<
     //< Each reads as a name followed by what no name takes, so the expectation list alone leads
     //< nowhere. **The words stay names**: the note only explains an error the line already has.
     if pos < 0 || pos > src.len
@@ -386,7 +373,6 @@ priv fn append_statement_word_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool
 
 priv fn statement_start(src: U8[], pos: Sz): Sz //<
     //< Where the statement holding `pos` starts
-    //<
     //< That is after the `;` or the opening bracket before it; a bracket closed along the way is
     //< skipped whole.
     //<
@@ -409,7 +395,6 @@ priv fn statement_start(src: U8[], pos: Sz): Sz //<
 
 priv fn declared_name(src: U8[], from: Sz): U8[] //<
     //< The name a statement beginning at `from` declares (`buf` of `$buf: = …`), or empty
-    //<
     //< **A `::` is not a declaration's `:`.** `T::{ … }` and a cast hold one after a name.
     $s: = from
     for s < src.len &&
@@ -439,7 +424,6 @@ priv const MAX_OPEN: Sz = 64 //< how many brackets can be open before the count 
 
 priv fn append_unclosed_bracket_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool //<
     //< It writes the sentence naming where an unclosed `(` or `[` around the failure opened
-    //<
     //< The rule is "What a syntax error names" in `../docs/DESIGN-parse.md`.
     //<
     //< **"Never closed" is checked over the rest of the text.** A bracket closed further on means
@@ -476,7 +460,6 @@ priv fn append_unclosed_bracket_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bo
 
 priv fn innermost_open(src: U8[], pos: Sz): Sz //<
     //< Where the innermost bracket still open at `pos` opened, or -1 where none is
-    //<
     //< It is also -1 where they nest deeper than `max_open`.
     $open: Sz[MAX_OPEN] = ::{}
     $n: Sz = 0
@@ -504,7 +487,6 @@ priv fn innermost_open(src: U8[], pos: Sz): Sz //<
 
 priv fn opened_by_layout(src: U8[], at: Sz): Bool //<
     //< Whether the `{` at `at` is one the indentation reader put in, rather than one written
-    //<
     //< The reader puts ` {` at the end of a heading's code (`to_braces` in `layout.kspl`). A
     //< written `{` that ends a line stands inside a call's brackets (a closure's body) or after
     //< `::` (a value). A written block's `{` has its body on its own line.
@@ -520,7 +502,6 @@ priv fn opened_by_layout(src: U8[], at: Sz): Bool //<
 
 priv fn append_non_ascii_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool //<
     //< It writes the sentence naming a character outside ASCII where a name or a mark was expected
-    //<
     //< Python, Rust, Swift, Java and C++ all take a name in other scripts (`café`, `かんそ`). So
     //< the writer expects it to work. KSPL's names are ASCII ("Identifiers and naming rules" in
     //< `docs/SPEC-programming-language.md`), and the expected list alone does not say why `か` is
@@ -538,7 +519,6 @@ priv fn append_non_ascii_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool //<
 
 priv fn append_missing_comma_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool //<
     //< It writes the sentence naming a `,` that can be missing between two items of a list
-    //<
     //< It does so where two items stand side by side inside a list's brackets ("What a syntax
     //< error names" in `../docs/DESIGN-parse.md`).
     //<
@@ -566,11 +546,10 @@ priv fn append_missing_comma_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool 
 
 priv fn append_leading_zero_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool //<
     //< It writes the sentence naming a decimal integer that starts with `0`, which KSPL refuses
-    //<
     //< C reads `0755` as octal (493), and KSPL has no octal literal, so the spelling is not read at
     //< all rather than read as a different number. The failure lands on the digits' end (a float's
     //< `.` was expected) or on the `0` itself.
-    $start: = pos if pos < src.len else src.len
+    $start: = math.min(pos, src.len)
     for start > 0 && (src[start - 1].is_digit() || src[start - 1] == '_')
         start -= 1
     if start >= src.len || src[start] != '0' || start + 1 >= src.len ||
@@ -600,7 +579,6 @@ priv fn append_leading_zero_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool /
 
 priv fn append_integer_exponent_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool //<
     //< It writes the sentence naming an exponent written on an integer (`1e5`)
-    //<
     //< C, Rust and Python read `1e5` as a floating-point number. KSPL takes an exponent only after
     //< a `.`. So the failure lands on the `e`, with an expected set that does not say why.
     if pos <= 0 || pos + 1 >= src.len || (src[pos] != 'e' && src[pos] != 'E')
@@ -626,7 +604,6 @@ priv fn append_integer_exponent_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bo
 
 priv fn starts_item(src: U8[], at: Sz): Bool //<
     //< Whether an item of a list can begin at `at`
-    //<
     //< That is a name, a number, a literal, a bracket, an enum's `.value` or a parameter's `$`, and
     //< none of `CARRYING_WORDS`.
     c: = src[at]
@@ -646,14 +623,12 @@ priv fn is_closer(c: U8): Bool //< whether the byte closes a bracket
 
 priv fn append_place(msg: Str_builder$@, src: U8[], at: Sz) //<
     //< It writes `line L, column C` for a position, counted as the diagnostic's heading counts
-    //<
     //< `get_line_info` in `../base/core.kspl` does the count.
     info: = src.get_line_info(at, src.line_starts(base_core.arena))
     msg.s("line \{info.line\}, column \{info.disp_col\}")
 
 priv fn text_step(src: U8[], i: Sz): Sz //<
     //< Where a walk over the text continues after `i`
-    //<
     //< That is past a literal or a line comment starting there, or one byte further.
     c: = src[i]
     if c == '"' || c == '\''
@@ -664,7 +639,6 @@ priv fn text_step(src: U8[], i: Sz): Sz //<
 
 priv fn append_expected(msg: Str_builder$@, e: Expected, laid_out: Bool, in_laid_block: Bool) //<
     //< It writes one expected item
-    //<
     //< A name goes in quotes and a kind in a readable phrasing. **Do not quote a kind**:
     //< `'Primitive_type'` reads as text to type, not the name of what can come there.
     //< **The indentation notation writes no statement's `;` and no block's `}`.** They are named
@@ -689,7 +663,6 @@ priv fn append_expected(msg: Str_builder$@, e: Expected, laid_out: Bool, in_laid
 
 fn parse_error_at(src: U8[], pos: Sz): Sz //<
     //< Where the syntax error found at `pos` is reported
-    //<
     //< That is `pos`, or **the opening quote of a string that runs to the end of the text**. The
     //< parser fails only where the text runs out, far below the quote the writer left open.
     at: = unclosed_string_at(src, pos)
@@ -700,7 +673,6 @@ fn parse_error_at(src: U8[], pos: Sz): Sz //<
 
 priv fn unclosed_string_at(src: U8[], pos: Sz): Sz //<
     //< Where a string still open at the end of the text opens, or -1
-    //<
     //< It is -1 too where that string opens after `pos`, so the failure is not inside it.
     //< **Only a string reaching the end counts.** An ordinary string can hold a line end. So one
     //< that a later quote closes is text the parser read, and its mistake shows where it ends.
@@ -715,7 +687,6 @@ priv fn unclosed_string_at(src: U8[], pos: Sz): Sz //<
 
 priv fn closes_at_end(src: U8[], at: Sz): Bool //<
     //< Whether the string opening at `at` closes on the text's last byte
-    //<
     //< literal_end runs both a string closed there and one never closed to the end.
     quote: = "\"\"\"" if src.starts_with("\"\"\"", at) else "\""
     return src.len - at >= 2 * quote.len && src.ends_with(quote)
@@ -723,7 +694,6 @@ priv fn closes_at_end(src: U8[], at: Sz): Bool //<
 fn build_parse_error_msg(target_parser: kspeg.Target$@, src: U8[], pos: Sz, laid_out: Bool):
     Str_builder //<
         //< It builds the message for the syntax error at `pos`
-        //<
         //< Caution: **Take `laid_out`.** In the indentation notation a heading line holds no `{`.
         //< So the guess that "the ternary's `if` is not matched" would fire wrongly (on an empty
         //< level, or one holding only comments). This is the one place where the wording differs by

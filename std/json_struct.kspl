@@ -1,5 +1,4 @@
 //< Round-trips a whole struct to and from JSON by walking `std/reflect`'s field table
-//<
 //< **The key names are written nowhere**: a key is the field's own name (the grounds are in
 //< "a table-returning trait" in `../docs/DESIGN-programming-language.md`).
 
@@ -15,7 +14,6 @@ import "std/mem" + { Arena }
 import "std/reflect"
 
 priv const LIST_PTR_OFF: Sz = offsetof(List<|U8|>, ptr) //< the positions inside a `List<|T|>`
-    //<
     //< **They do not depend on T**, so the ones for `U8` serve for all. The check is
     //< `tests/reflect_test.kspl`'s "reflect: a container's ptr position does not depend on the
     //< element's type", and the same for `len` (`make debug`).
@@ -30,7 +28,6 @@ priv fn element_field($f: reflect.Field_info): reflect.Field_info //<
     return f
 
 pub fn from_struct<|T: reflect.Reflectable|>( //< copies a reflectable value into a JSON object
-    //<
     //< `v` is a `T@`: passed by value, the field offsets would point into a temporary.
     //< **A `U64` past the largest `I64` is refused** (`field_type`), not written as a negative
     //< number: `I64` is the widest integer a `Value` holds.
@@ -42,7 +39,6 @@ pub fn from_struct<|T: reflect.Reflectable|>( //< copies a reflectable value int
 priv fn obj_of(base: U8@, tbl: reflect.Field_info[], b: Json_builder$@, depth: Sz):
     Value!Json_error //<
         //< Walks one table and builds one object
-        //<
         //< **Nesting is handled by calling itself**; a nested struct arrives as bytes and a table,
         //< not as a type.
     if depth > MAX_NESTING_DEPTH
@@ -73,7 +69,7 @@ priv fn value_of(at: U8@, f: reflect.Field_info, b: Json_builder$@, depth: Sz): 
         // is written as `-1` (`../std/reflect.kspl`'s `load_uint`).
         got: = reflect.load_uint(at, f.extra.width)
         // **A `U64` past the largest `I64` comes back negative**, and would be written so.
-        if !reflect.fits_int(f.kind, f.extra.width, got)
+        if !f.kind.fits_int(f.extra.width, got)
             throw .field_type(f.name)
         return b.int_val(got)
     case .float_field
@@ -102,7 +98,6 @@ priv fn value_of(at: U8@, f: reflect.Field_info, b: Json_builder$@, depth: Sz): 
     return .null_val
 
 pub fn into_struct<|T: reflect.Reflectable|>( //< copies a JSON object into a reflectable value
-    //<
     //< **A field whose key is missing or of another kind is refused** (why is at `Json_error`). So
     //< is an integer the field cannot hold: 70000 into a `U16`. With `null`, free each string it
     //< wrote with `dealloc` and each list with `free()`. A refusal leaves those written before it.
@@ -163,7 +158,7 @@ priv fn fill_value(at: U8$@, f: reflect.Field_info, got: Value, arena: Arena$@, 
         case .int_val(n)
             // Caution: **Refuse a value the field cannot hold, never narrow it**: narrowed, 70000
             // reads as 4464 in a `U16`, and -1 as 255 in a `U8`.
-            if !reflect.fits_int(f.kind, f.extra.width, n)
+            if !f.kind.fits_int(f.extra.width, n)
                 throw .field_type(f.name)
             reflect.store_int(at, f.extra.width, n)
         default

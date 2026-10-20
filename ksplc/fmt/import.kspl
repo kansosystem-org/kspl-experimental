@@ -1,5 +1,4 @@
 //< Sorts the run of `import`s by name (a stage before the formatter)
-//<
 //< It rebuilds the original text in the new order and parses it again, rather than reordering the
 //< tree. The rewritten region starts at the first import, and a blank line separates groups.
 //< Caution: **Do not reorder by looking at lines**: a test fixture (`"""…"""`) can hold an
@@ -11,12 +10,12 @@ import "ksplc/base/lines" { line_end, line_start, skip_blanks }
 import "ksplc/base/literal" { literal_end }
 import "std/chars" // the one-character checks
 import "std/ds" { List }
+import "std/math"
 import "std/mem" { Arena }
 import "std/seq"
 import "std/str" { Str_builder }
 
 priv struct Item //< the unit of reordering
-    //<
     //< Positions are offsets into the original; `end` excludes the newline.
     //< Caution: **Keep `lead` and `body` apart.** The `lead` of a group's first item (the comments
     //< after a blank line) is that group's heading; merged in, the reordering moves it mid-group.
@@ -30,7 +29,6 @@ priv struct Item //< the unit of reordering
     new_group: Bool //< a blank line sits before this item (a new group starts here)
 
 priv fn stmt_end_from(src: U8[], from: Sz): Sz //< it returns just after the `import`'s `;`
-    //<
     //< A `;` inside a string literal is not counted.
     $i: = from
     for i < src.len
@@ -52,7 +50,6 @@ priv fn with_trailing_comment(src: U8[], end: Sz): Sz //<
 
 priv fn lead_start(src: U8[], body_start: Sz, floor: Sz): Sz //<
     //< It returns the start of the comment and attribute lines directly above `body_start`
-    //<
     //< It does not go back beyond `floor`, nor across a blank line (a group's separator).
     $at: = body_start
     for at > floor
@@ -61,7 +58,7 @@ priv fn lead_start(src: U8[], body_start: Sz, floor: Sz): Sz //<
         if (src.ptr + le)$ != '\n'
             break
         start: = line_start(src, le)
-        ls: = start if start > floor else floor
+        ls: = math.max(start, floor)
         trimmed: = U8[]::{ .ptr = src.ptr + ls, .len = le - ls }.trim_spaces()
         if trimmed.len == 0
             break // a blank line separates groups
@@ -97,7 +94,6 @@ priv fn has_blank_line(src: U8[], from: Sz, to: Sz): Bool //<
 
 priv fn collect_items(src: U8[], root: Ast_node$@, arena: Arena$@): List<|Item|> //<
     //< It collects the import items at the head of the file
-    //<
     //< It stops at the first declaration that is not an import.
     $items: = List<|Item|>.new(arena)
     $prev_end: Sz = 0
@@ -115,7 +111,7 @@ priv fn collect_items(src: U8[], root: Ast_node$@, arena: Arena$@): List<|Item|>
         // Caution: **The first item's floor is its declaration's start, attributes included.** A
         // `#cfg` above the first `import` belongs to it. Left outside the region, it stays put
         // while its import moves. The file's heading comments stay outside.
-        decl_start: = top.loc.offset if top.loc.offset < body_start else body_start
+        decl_start: = math.min(top.loc.offset, body_start)
         floor: = prev_end if items.len > 0 else decl_start
         start: = lead_start(src, body_start, floor)
         items
@@ -136,7 +132,6 @@ priv fn sorted_indices(items: List<|Item|>@, lo: Sz, hi: Sz, arena: Arena$@): Li
 
 fn reorder(src: U8[], root: Ast_node$@, arena: Arena$@): U8[] //<
     //< It returns the original with the run of imports put into name order
-    //<
     //< Where nothing moves it returns `src` unchanged.
     //< Caution: **Where it returns something other than `src`, the caller must parse again.** The
     //< positions move, and the old tree would attach the comments to other lines.

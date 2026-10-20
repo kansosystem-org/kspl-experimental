@@ -1,5 +1,4 @@
 //< The one lowering walk: the dispatch on each node's kind, and blocks, branches and loops
-//<
 //< Every node is lowered through `lower` here. Three files add the kinds they own to the same walk.
 //< `expr.kspl` adds expressions, `!`, a `catch` and its `fallback`. `defer.kspl` adds cleanups and
 //< the ways out that run them, and `arc.kspl` adds retain and release. `ctx.kspl` holds the state.
@@ -7,6 +6,7 @@ import "ksplc/base/ast" as base_ast + { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_kinds" as base_ast_kinds
 import "ksplc/base/ast_place" as base_ast_place
+import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/core" as base_core
 import "ksplc/base/diag" as base_diag
 import "ksplc/lower/arc" as lower_arc
@@ -17,13 +17,13 @@ import "ksplc/lower/expr" as lower_expr
 import "ksplc/sema/session/ctx" { Sema_ctx }
 import "ksplc/sema/type/arc" as sema_type_arc
 import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as sema_type_query
 import "std/ds" { List, Map }
 import "std/io"
 import "std/sys"
 
 const MAX_LOWER_DEPTH: Sz = 2000 //<
     //< The depth limit for lower's recursion, and for the walks of lower/verify and lower/prune
-    //<
     //< A postfix chain (`x$$$...$;`) is outside the parser's max_parse_depth; every recursion here
     //< goes through r.lower().
     //< Caution: **Do not make it small**: prune's walk cut off here drops a live function.
@@ -224,7 +224,6 @@ impl Ast_node
     fn wrap_stmt_with_break_label(r: Ast_node$@, inner_kind: base_ast_kinds.Ast_kind,
         inner_text: U8[], loc: base_ast.Loc, brk_label: U8[], needs_label: Bool) //<
             //< It wraps a labelled statement a break refers to as `{ <the statement>; label: }`
-            //<
             //< The wrapper is a stmt_block. lower_stmt_if, lower_stmt_for and lower_stmt_switch use
             //< it. **With no label to place, it wraps nothing**: the wrapper would be a scope
             //< holding only the statement (a loop's init is scoped by `emit_loop_stmt` itself).
@@ -390,10 +389,94 @@ impl Ast_node
                 if expr_node: = child.first_expr()
                     expr_node.lower(lctx)
 
+        r.group_switch_arms(lctx)
         is_brk_used: = lctx.pop_jump_ctx().break_used
 
         if is_jumpable && is_brk_used
             r.wrap_stmt_with_break_label(.k_stmt_switch, "switch", r.loc, brk_label, true)
+
+    fn group_switch_arms(r: Ast_node$@, lctx: Lowering_ctx$@) //<
+        //< Gathers a `switch`'s flat children into one `switch_arm` per `case` or `default`
+        //< An arm holds its labels, then its block (`build_switch_arm` in `base/ast.kspl`). A label
+        //< naming a variant of the subject's enum keeps its `case_pattern`, the variant's index in
+        //< `ival`; any other label is its value. The first pattern's payload bindings become
+        //< declarations at the head of the block. So the backends resolve nothing again.
+        //< Caution: **Every `switch` that reaches a backend comes through here**, a synthesized
+        //< one too (`emit_managed_enum_op` in `arc.kspl`): the backends read arms only.
+        subject: = r.get_switch_cond()
+        arms: = base_ast.new_ast_node_list()
+        arms.push(r.get_child(0))
+        arms.push(subject)
+        $arm: Ast_node$@ = null
+        $first_pattern: Ast_node$@ = null
+        $is_first: = false
+        for $i: Sz = 2; i < r.children.len; i += 1
+            child: = r.get_child(i)
+            child.ice_assert(child.kind_id != .k_switch_arm, "group_switch_arms: grouped twice")
+            if child.is_keyword("case") || child.is_keyword("default")
+                arm = Ast_node.build_switch_arm(child.is_keyword("default"), child.loc)
+                arms.push(arm)
+                first_pattern = null
+                is_first = true
+            else if child.kind_id == .k_stmt_block
+                child.ice_assert(arm != null, "group_switch_arms: a block outside an arm")
+                if first_pattern != null
+                    first_pattern.declare_payload_bindings(lctx, subject, child)
+                arm.add_child(child)
+                arm = null
+            else if !child.is_literal(",")
+                child.ice_assert(arm != null, "group_switch_arms: a pattern outside an arm")
+                label: = child.switch_label(lctx, subject.type_id)
+                if is_first && label.kind_id == .k_case_pattern
+                    first_pattern = label
+                is_first = false
+                arm.add_child(label)
+        r.children = arms
+
+    priv fn switch_label(r: Ast_node$@, lctx: Lowering_ctx$@, subject_id: I32): Ast_node$@ //<
+        //< What a backend writes for the pattern r: its `case_pattern` naming a variant, else its value
+        if r.kind_id != .k_case_pattern
+            return r
+        switch r.extract_case_variant()
+        case .variant(v_name_node, _start)
+            if v_name_node != null
+                idx: = lctx.sema.env.variant_index(subject_id, v_name_node.text)
+                if idx >= 0
+                    r.ival = idx
+                    return r
+        default {}
+        return r.first_expr().unwrap_or(r.get_child(0))
+
+    priv fn declare_payload_bindings(r: Ast_node$@, lctx: Lowering_ctx$@, subject: Ast_node$@,
+        block: Ast_node$@) //<
+            //< Declares the bindings of the variant pattern r at the head of block, each read from
+            //< its payload field
+            //< A binding pairs with the payload's fields by position. Its declaration keeps the
+            //< binding's identity (`def_node`), so every reference, and ARC's count for it
+            //< (`register_arc_arm_bindings` in `arc.kspl`), names the same local.
+        variant: = lctx.sema.env.variant_at(subject.type_id, r.ival) catch
+            r.ice_panic("declare_payload_bindings: the pattern names no variant")
+            return
+        $start: Sz = 0
+        switch r.extract_case_variant()
+        case .variant(_v, s)
+            start = s
+        default {}
+        $field_idx: Sz = 0
+        $at: Sz = 0
+        for k in Range.new(start, r.children.len, 1)
+            b: = r.get_child(k)
+            if b.kind_id != .k_identifier
+                continue
+            if field_idx < variant.payload_fields.len
+                f: = variant.payload_fields.get(field_idx)
+                read: = Ast_node.build_payload_access(subject.clone(), r.ival, f.name,
+                    I32::field_idx, f.type_id, b.loc)
+                decl: = lctx.build_let_decl(b.text, f.type_id, read, b.loc)
+                decl.get_var_decl_id().def_node = b
+                block.insert_child(at, decl)
+                at += 1
+            field_idx += 1
 
     fn lower_default(r: Ast_node$@, lctx: Lowering_ctx$@)
         for child in r.children

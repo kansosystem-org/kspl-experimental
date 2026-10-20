@@ -1,5 +1,4 @@
 //< The lookups by name instantiating a generic needs: a method's template, type arguments as text
-//<
 //< An instance's own names are not made here: they are derived from its record
 //< (`Instance` in `../type/env.kspl`), never read back.
 import "ksplc/base/ast" { Ast_node }
@@ -20,7 +19,6 @@ struct Method_template //< a method declaring type parameters of its own, and it
 
 fn lookup_method_template(r: Sema_ctx$@, owner_id: I32, method_name: U8[]): Method_template? //<
     //< The template of the method method_name of the type owner_id
-    //<
     //< **A method with its own type parameters (`Holder<|T|>.to<|U|>`) can be looked up only
     //< here.** It is not in the method table but instantiated at the call site (instantiate_fn in
     //< `mono.kspl`). An instance's is found under its template's FQN, read from the instance's
@@ -55,9 +53,8 @@ priv fn instance_method_template(r: Sema_ctx$@, inst: sema_type_env.Instance, ow
 
 fn introduces_own_generic_param(m_node: Ast_node$@, impl_gen_params: Ast_node$@): Bool //<
     //< Whether m_node's type parameters hold a name not in impl_gen_params (the impl block's own)
-    //<
     //< collect.kspl inserts the impl's T into a method that has none. So having .k_type_gen_params
-    //< does not tell is_some from map<|U|>.
+    //< does not tell is_some from select<|U|>.
     m_params: = m_node.find_child(.k_type_gen_params)
     if m_params == null
         return false
@@ -86,7 +83,6 @@ fn unknown_type_str(): Str_builder //<
 
 fn type_base_name_len(s: U8[]): Sz //<
     //< The length of a type name's base, before postfix modifiers (`$@` / `@` / `$[]` / `!E`)
-    //<
     //< The base runs as long as identifier characters and `.` continue.
     $i: Sz = 0
     for i < s.len
@@ -100,7 +96,6 @@ fn type_base_name_len(s: U8[]): Sz //<
 impl Sema_ctx
     fn canonicalize_one_type_arg(r: Self$@, arg: U8[]): Str_builder //<
         //< One type argument as an impl's target spells it, each name made an FQN (`c_mod.Plain$@`)
-        //<
         //< This matters for correctness: `Plain$@` and `c_mod.Plain$@` would be two types, and the
         //< impl would attach to neither (impl_target_rejects in mono_target.kspl).
         $out: = Str_builder.new()
@@ -115,7 +110,6 @@ impl Sema_ctx
             $inst: =
                 r.instantiate_struct(fqn_base, r.canonical_type_ids(inner)) catch Str_builder.new()
             out.s(inst.slice()).s(suffix)
-            inst.free()
         default
             base_len: = type_base_name_len(arg)
             if base_len == 0
@@ -130,12 +124,10 @@ impl Sema_ctx
         for pos in Range.asc(args_str.count_type_args())
             $one: = r.canonicalize_one_type_arg(args_str.nth_type_arg(pos))
             ids.push(r.env.get_or_add(one.slice()))
-            one.free()
         return ids.slice()
 
     fn type_ids_of_text(r: Self$@, args_str: U8[]): I32[] //<
         //< The types a list of type arguments names as spelt, one id per argument, no name resolved
-        //<
         //< For the one binding of spellings, a trait's defaults copied into an impl
         //< (bind_trait_decl_params in trait_default.kspl).
         $ids: = List<|I32|>.new(base_core.arena)

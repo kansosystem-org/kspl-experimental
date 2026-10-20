@@ -1,5 +1,4 @@
 //< Reads and writes the industry-standard safetensors format: a JSON header and raw bytes
-//<
 //< **The read is zero-copy.** A `Tensor` is a view into the raw bytes. So inference can run
 //< straight from weights embedded as bytes on a Cortex-M with no file system.
 
@@ -16,7 +15,6 @@ import "std/mem" + { Arena }
 import "std/str" { Str_builder }
 
 pub enum Safetensors_error //< why a weights file could not be read or written
-    //<
     //< I/O, a broken header and a missing tensor are recoverable run-time conditions. So they
     //< propagate as an error union (?E) for the caller to handle.
     read_failed //< the file could not be read
@@ -29,7 +27,6 @@ pub enum Safetensors_error //< why a weights file could not be read or written
 
 priv fn dtype_bytes(name: U8[]): Sz //<
     //< the size in bytes of one element of the named dtype
-    //<
     //< Caution: **Do not let an unknown dtype through in the hope that it works.** The content is
     //< just bytes. A read at another width garbles the numbers with no error. F16 read as F32
     //< turns two elements into one meaningless value. Only the width is checked, so F32 and
@@ -51,7 +48,6 @@ pub struct Safetensors //< a parsed header and weights, borrowed for their arena
 
 impl Safetensors
     pub fn load_from_bytes( //< reads the header of a file the caller already holds in memory
-        //<
         //< **The function that opens a file lives elsewhere** (`ksai/model_file`): here it would
         //< need `std/io`, and code that only uses tensors would pay for file I/O. The bytes belong
         //< to the caller (typically `embed "model.safetensors" as model_bytes;`) and must outlive
@@ -81,7 +77,6 @@ impl Safetensors
         return r.header
 
     pub fn get_tensor<|T|>( //< one tensor, borrowing aligned elements or copying misaligned ones
-        //<
         //< Caution: **An aligned result borrows from the file.** Its elements are not copied, so
         //< the backing bytes must stay alive while the tensor is used. A misaligned result uses
         //< an aligned copy in the supplied arena instead.
@@ -157,7 +152,6 @@ impl Safetensors
 
         return Tensor<|T|>.from_raw_parts(data_ptr, shape_ptr, ndim, size, arena)
     pub fn map_into<|T|>( //< maps one tensor from the file into `dst`, rejecting a different shape
-        //<
         //< Caution: **Check the shape before swapping the weights in.** The model is built with its
         //< own dimensions. Weights that do not fit fail later in some matmul, with no hint of
         //< which tensor differs. Typically, a different checkpoint was passed.
@@ -176,7 +170,6 @@ impl Safetensors
         dst$ = got
 
 pub struct Safetensors_writer //< collects tensors one at a time and writes one file at the end
-    //<
     //< Writes trained weights (F32, row-major contiguous) out in the safetensors format. `add` puts
     //< the name into the header and the bytes into the data. `save` writes one file.
     //< data_offsets follows the order added, so it streams without holding on to the tensors.
@@ -187,7 +180,6 @@ pub struct Safetensors_writer //< collects tensors one at a time and writes one 
 
 impl Safetensors_writer
     pub fn new(): Safetensors_writer //< an empty writer; `finish()` frees it
-        //<
         //< **It takes no arena.** `finish()` frees head, data and meta, so they must live on the
         //< heap. An `_in` would misstate where the memory goes ("A constructor's name says
         //< where the returned thing goes" in `std/README.md`).
@@ -196,7 +188,6 @@ impl Safetensors_writer
         return Safetensors_writer::{ .head = head, .data = Str_builder.new(),
             .meta = Str_builder.new(), .count = 0 }
     pub fn set_meta( //< one entry under `__metadata__`; the order of calls does not matter
-        //<
         //< `__metadata__` is safetensors' standard optional table of strings, for what a reader
         //< needs in order to use the weights (a preprocessing constant, the format's version).
         //< finish writes them all at the end.
@@ -228,7 +219,6 @@ impl Safetensors_writer
         r.data.s(U8$[]::{ .ptr = U8$@::t.data, .len = nbytes })
         r.count += 1
     pub fn finish(r: Self$@): Str_builder //< the whole file as bytes, header and weights
-        //<
         //< For a destination that is not a file (sending it over a network, reading it back in
         //< memory); it pairs with load / load_from_bytes.
         //< **Call it only once**: it releases the builder's three buffers, and the caller frees the

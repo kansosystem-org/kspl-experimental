@@ -1,5 +1,4 @@
 //< The main body of the compilation pipeline
-//<
 //< The Compiler that chains parse -> sema -> lower -> codegen, and its error type Compile_error,
 //< shared by the CLI (main) and the LSP (lsp/worker).
 import "kspeg/engine" as kspeg
@@ -44,7 +43,6 @@ import "std/sys"
 
 fn emit_runtime(out_path: U8[]): Void!Compile_error //<
     //< It writes the runtime's source as one translation unit (`emit-runtime`)
-    //<
     //< The user builds it with their own tools rather than using a prebuilt `.a` ("Embedding the
     //< runtime" in ksplc/docs/DESIGN-backends.md). **The contents change with `--freestanding`**,
     //< so emit it with the same options as the generated C it links with. **No analysis runs at
@@ -53,12 +51,10 @@ fn emit_runtime(out_path: U8[]): Void!Compile_error //<
         throw .io(e)
     gen_runtime.write_unit(out_file@)
     out_file.flush()
-    out_file.free()
 
 fn print_stats_report(elapsed_us: I64, arena_used: Sz, arena_cap: Sz, arena_head: Arena_headroom,
     peak_heap: Sz) //<
         //< It prints `--stats`' report once, on standard error; only this function lays it out.
-        //<
         //< **Put the summary (`[Overall]`) at the end**: a terminal shows the last screen;
         //< `make perf-log` uses `cat`.
         //< Caution: **Do not change the names `Compile time` / `AST Arena headroom` / `System Peak
@@ -117,7 +113,6 @@ fn print_stats_report(elapsed_us: I64, arena_used: Sz, arena_cap: Sz, arena_head
     io.err().s(tail.slice())
 
 priv fn print_layer(label: U8[], stage: base_stats.Stage) //< one stage's line
-    //<
     //< **The time and the arena use share one line**, so the log alone says which stage grew. Where
     //< the clock is broken it says `N/A`, not a misleading `0 ms`.
     //< Caution: **Print the bytes there too**: the memory allocated is measured the same way on a
@@ -250,7 +245,7 @@ impl Compiler
 
         t3: = sys.mono_us()
         sema_session_prof.prof.init()
-        sema_decl_collect.run(r.root_file, sema)!
+        sema_decl_collect.run(r.root_file, sema, r.base_parser)!
         t_collect: = sys.mono_us()
         sema_session_prof.prof.collect_us = t_collect - t3
         // Caution: **After Pass 0 of the collecting, not before it** (the reason is at
@@ -326,7 +321,6 @@ impl Compiler
             gen_llvm_module.run(r.root_file, cg, r.root_file.loc.file())
             cg.flush()
             codegen_failed = cg.had_error
-            out_file.free()
         if codegen_failed
             throw .codegen
 
@@ -334,7 +328,6 @@ impl Compiler
 
     fn emit_c_units(r: Self$@, out_path: U8[], units: Sz): Bool!Compile_error //<
         //< It writes the generated C split into several translation units
-        //<
         //< `out_path` gives only the `<stem>` (its last extension dropped); **no file of that name
         //< is created**, and every `.c` is linked. It walks the AST units+1 times, a new Ctx per
         //< walk. `<stem>.h`     … the shared header every unit `#include`s (types, prototypes,
@@ -371,7 +364,6 @@ impl Compiler
         gen_c_root.run(r.root_file, cg)
         cg.flush()
         failed: = cg.had_error
-        out_file.free()
         return failed
 
 impl Compiler: Manual_free {}

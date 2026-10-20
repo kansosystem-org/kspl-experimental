@@ -1,5 +1,4 @@
 //< The repository's side of the base every tests/*_test.kspl uses
-//<
 //< **It starts ksplc's harness (`../../ksplc/tests/support/harness.kspl`) on the repository's
 //< paths.** A suite ends, runs a child and runs the compiler under test through that one
 //< (`ksplc_harness.*`). It finds here what knows the repository: its root, `make` from
@@ -20,7 +19,6 @@ import "std/verdict"
 priv $root_dir: U8[] = "" //< `root`'s answer, settled by `begin`
 
 fn begin(chunk_size: Sz): Arena$@ //< starts a suite on the repository's paths
-    //<
     //< They go to `ksplc_harness.begin_at`, whose `finish` / `fatal` end the suite;
     //< children start in the root. Caution: **Call it once, at the start of `main`.** **Do not
     //< free what it returns with a `defer`** (a double free).
@@ -38,7 +36,6 @@ fn begin(chunk_size: Sz): Arena$@ //< starts a suite on the repository's paths
 
 priv fn absolute(path: U8[], arena: Arena$@): U8[] //<
     //< the path from the root, joined onto the working directory
-    //<
     //< Caution: **Always return the root as an absolute path.** A child started in another cwd
     //< (`run_in`) reads a relative root **from its own cwd** and fails to start.
     return fs.absolute(path, arena) catch
@@ -48,7 +45,6 @@ fn root(): U8[] //< the repository's root, absolute
     return root_dir
 
 priv fn find_root(arena: Arena$@): U8[] //< the repository's root, as `begin` settles it
-    //<
     //< `KANSO_ROOT` has the highest priority; without it, the search goes up from the running
     //< script.
     //< Caution: **Do not count the levels**: a script may be at any depth under the root. **Do not
@@ -72,7 +68,6 @@ priv fn find_root(arena: Arena$@): U8[] //< the repository's root, as `begin` se
 
 priv fn is_root_dir(dir: U8[], arena: Arena$@): Bool //<
     //< whether it is a folder holding the landmark files
-    //<
     //< Caution: **Check for two.** `Makefile` alone matches a package's folder too.
     return fs.exists(fs.join(dir, "Makefile", arena)) &&
         fs.is_dir(fs.join(dir, "ksplc", arena))
@@ -84,11 +79,20 @@ priv fn compiler_under_test(top: U8[], arena: Arena$@): U8[] //<
     //< `out/ksplc_stage1.exe`, which CI replaces with `KANSO_CC_EXE`
     explicit: = sys.get_env("KANSO_CC_EXE").unwrap_or("")
     if explicit.len > 0
-        return arena.dup_str(explicit)
+        return absolute(explicit, arena)
     return fs.join(top, STAGE1_REL, arena)
 
+fn ksplc_argv_anywhere(args: U8[][]): U8[][] //<
+    //< `ksplc_harness.ksplc_argv` with `--pkg-src-dir=` the root, for a run in another folder
+    //< From the root a package is found by its folder; elsewhere, only by the option.
+    arena: = ksplc_harness.arena()
+    $all: = List<|U8[]|>.new(arena)
+    all.push(arena.text().s("--pkg-src-dir=").s(root_dir).take())
+    for a in args
+        all.push(a)
+    return ksplc_harness.ksplc_argv(all.slice())
+
 fn private_docs(): List<|U8[]|> //< the documents a clone carries beyond the published copy
-    //<
     //< Entries split at spaces from `KANSO_PRIVATE_DOCS`, which only such a clone sets; unset, the
     //< list is empty. An entry is a file name, or a folder from the top ending in `/`. A check that
     //< names documents takes these as the clone's own (`is_private_doc`).
@@ -102,7 +106,6 @@ fn private_docs(): List<|U8[]|> //< the documents a clone carries beyond the pub
 
 fn is_private_doc(rel: U8[], own: List<|U8[]|>@): Bool //<
     //< Whether a tracked path is one of the clone's own documents (`private_docs`)
-    //<
     //< **A folder's entry takes everything under it**; any other matches the file's name.
     for o in own
         if o.ends_with("/") && rel.starts_with(o) || sys.get_file_name(rel).equals(o)
@@ -118,7 +121,6 @@ fn make(args: U8[][]): verdict.Run_out //< runs `make` once (`make_argv`)
 
 fn make_argv(args: U8[][]): U8[][] //<
     //< The argv that runs `make` with these arguments, for one run or for a `subproc.Job`
-    //<
     //< **Do not let it rebuild stage1 (`-o`)**: under `make -j test-ci` another suite may be
     //< running it, and on Windows a running exe cannot be replaced. **Do not call `make` by name
     //< (`KANSO_MAKE`)**: PATH may give a different make.
@@ -142,7 +144,6 @@ fn make_argv(args: U8[][]): U8[][] //<
 
 fn sandbox(name: U8[]): U8[] //<
     //< Makes a workspace for this suite only and returns it (`out/tmp/<name>_<mark>`)
-    //<
     //< A suite that cannot make one stops (`ksplc_harness.sandbox`).
     //< It deletes the previous run's `<name>_…` folders first: no Makefile empties `out/tmp`.
     //< Caution: **Do not delete a fixed folder and then create it.** Where it cannot be deleted (a
@@ -153,7 +154,6 @@ fn sandbox(name: U8[]): U8[] //<
 
 priv fn sweep_old_dirs(base: U8[], prefix: U8[], arena: Arena$@) //<
     //< Deletes the `<prefix>…` folders directly under base
-    //<
     //< Caution: **Do not report a failure to delete**: the cleanup would hide the real result, and
     //< this run's workspace has another name.
     entries: = fs.read_dir(base, arena) catch
@@ -165,7 +165,6 @@ priv fn sweep_old_dirs(base: U8[], prefix: U8[], arena: Arena$@) //<
         remove_tree(full)
 
 fn remove_tree(dir: U8[]) //< deletes a whole tree
-    //<
     //< Caution: **Pass it only paths inside the workspace.** A failure to delete is not reported
     //< (check with fs.exists). **It stays out of `std/fs`**: its check-then-descend race is
     //< harmless only over a tree that only this run made.
@@ -173,7 +172,6 @@ fn remove_tree(dir: U8[]) //< deletes a whole tree
     fs.remove_path(dir) catch {}
 
 priv const MAX_CLEAR_DEPTH: Sz = 32 //< how deep deleting a workspace this run made descends
-    //<
     //< Caution: **Do not pass anything but a workspace here.** **Remove a link without following
     //< it**: followed, it deletes what it points at, even outside the workspace (`fs.is_link`
     //< first).
@@ -202,7 +200,6 @@ priv $texts: Map<|U8[], U8[]|>$@ = null //< `read_under_root`'s answers, by the 
 
 fn tracked(): List<|U8[]|> //<
     //< The tracked files plus the untracked files that are not ignored, asked of git once a suite
-    //<
     //< Caution: **Do not pass a wildcard to `git ls-files`** (the reason is at `tracked_matching`
     //< below); the caller narrows the list. **Do not list the tracked files alone**: a new file is
     //< absent until committed and slips past the check. **Every call shares one list**: change none
@@ -225,7 +222,6 @@ enum Run_error
 
 fn read_under_root(rel: U8[]): U8[] //<
     //< Reads a file under the root (length 0 where it cannot be read), once a suite
-    //<
     //< The repository's files are LF by `.gitattributes`. Caution: **What is written under the root
     //< after the first read is not seen**: the text is the one read first.
     arena: = ksplc_harness.arena()
@@ -233,12 +229,24 @@ fn read_under_root(rel: U8[]): U8[] //<
         texts = arena.create(Map<|U8[], U8[]|>.new(arena))
     if known: = texts.get(rel)
         return known
-    body: = io.read_file(fs.join(root_dir, rel, arena)) catch ""
+    body: = io.read_file(fs.join(root_dir, rel, arena), arena) catch ""
     texts.set(arena.dup_str(rel), body)
     return body
 
+fn copy_tracked(dir: U8[], to: U8[], keep_prefix: Bool): Bool //<
+    //< Copies the files `tracked` lists under the folder dir into to; false where none is copied
+    //< keep_prefix keeps `dir/` in each copy's path; otherwise each lands right under to.
+    arena: = ksplc_harness.arena()
+    $rels: = List<|U8[]|>.new(arena)
+    $bodies: = List<|U8[]|>.new(arena)
+    for rel in tracked_matching(U8[][]::{ dir })
+        rels.push(rel if keep_prefix else rel.sub_from(dir.len + 1))
+        bodies.push(read_under_root(rel))
+    fs.write_tree(to, rels.slice(), bodies.slice(), arena) catch
+        return false
+    return rels.len > 0
+
 priv fn spec_match(path: U8[], spec: U8[]): Bool //< whether it matches git's pathspec
-    //<
     //< **A `*` crosses a `/`** (`*.md` matches at any level), unlike a shell's or fnmatch's; `**`
     //< is the same as `*`. A pattern with no wildcard names a folder too (as in git).
     if spec.find_char('*').is_none() && spec.find_char('?').is_none()
@@ -268,7 +276,6 @@ priv fn glob_at(path: U8[], i: Sz, spec: U8[], j: Sz): Bool //<
 
 fn tracked_matching(patterns: U8[][]): List<|U8[]|> //<
     //< the files git knows that match the pathspec
-    //<
     //< Caution: **Do not walk the working tree**: it picks up artifacts and leftovers too. **Do not
     //< pass a pathspec to `git ls-files`.** On Windows a `git.exe` on MSYS2's runtime **expands the
     //< wildcards itself**. So `*.md` shrinks to the top level and goes green unseen.

@@ -1,6 +1,5 @@
 #!/usr/bin/env -S ksplc run
 //< The test that pins down that the normalised AST's disk cache is "faster and nothing more"
-//<
 //< ksplc caches the normalised AST per file and skips KSPEG's parse next time
 //< (`ksplc/parse/ast_cache.kspl`). **An artefact that differs with and without the cache would be
 //< a lie.** So it always compares "cold vs warm, byte for byte", and the hit and miss counts
@@ -14,6 +13,7 @@ import "std/ds" { List }
 import "std/fs"
 import "std/io"
 import "std/json" { Json_builder }
+import "std/math"
 import "std/mem" { Arena }
 import "std/str"
 import "std/strfmt" as _strfmt
@@ -28,7 +28,6 @@ priv const LSP_MS: I32 = 60000 //<
     //< The wide wait: with nothing cached the language server reads the whole of std
 
 priv struct Counts //< `--stats`'s hits and misses
-    //<
     //< If it cannot be read, ok is false.
     ok: Bool
     hits: Sz
@@ -75,18 +74,16 @@ priv fn build(dir: U8[], cache: U8[], stem: U8[], src: U8[], extra: U8[][], aren
         return Built::{ .ok = false, .gen = "",
             .counts = Counts::{ .ok = false, .hits = 0, .misses = 0, .stores = 0 },
             .out = r.out }
-    text: = io.read_file(gen) catch ""
+    text: = io.read_file(gen, null) catch ""
     return Built::{ .ok = true, .gen = text, .counts = parse_counts(r.out, arena), .out = r.out }
 
 priv const KEY_AT: Sz = 9 //<
     //< Where the key's hexadecimal starts in an entry, behind the magic and the format's version
-    //<
     //< Those two are `MAGIC` and `FORMAT_VERSION` in `../../parse/ast_cache.kspl`.
     //< **Written here so the second half fails the key check**, not both the version check.
 
 priv fn break_entries(cache: U8[], arena: Arena$@): Sz //<
     //< It breaks every entry, writing each back to its own place
-    //<
     //< Caution: **Break all of them.** Break only some and, when those belong to another key
     //< (another `--define`, another generation), everything hits and the check tests nothing.
     files: = fs.walk_files(cache, fs.skip_none, arena) catch
@@ -96,17 +93,17 @@ priv fn break_entries(cache: U8[], arena: Arena$@): Sz //<
         path: = f
         if !path.ends_with(".ksast")
             continue
-        data: = io.read_file(path) catch
+        data: = io.read_file(path, null) catch
             continue
         text: = data
         if broken % 2 == 0
             // It fails the length check.
-            io.write_file(path, text.sub(0, 20 if text.len > 20 else text.len)) catch
+            io.write_file(path, text.sub(0, math.min(text.len, 20))) catch
                 continue
         else
             // It fails the key check.
             b: = arena.text()
-            b.s(text.sub(0, KEY_AT if text.len > KEY_AT else text.len))
+            b.s(text.sub(0, math.min(KEY_AT, text.len)))
             for _i in Range.asc(16)
                 b.c('0')
             if text.len > KEY_AT + 16
@@ -118,7 +115,6 @@ priv fn break_entries(cache: U8[], arena: Arena$@): Sz //<
 
 priv fn cfg_probe_line(src: U8[]): Sz //<
     //< The line the dropped `cfg_probe` is on, counted from the `#cfg()` above it
-    //<
     //< **The number is not written here**; written twice, it drifts with nothing saying so.
     if at: = src.find_str("#cfg(ac_cache_probe)")
         $n: Sz = 0
@@ -130,12 +126,11 @@ priv fn cfg_probe_line(src: U8[]): Sz //<
 
 priv fn cfg_reason(cache: U8[], arena: Arena$@): U8[] //<
     //< What the editor answers at the range a `#cfg()` dropped, with `cache` as the cache directory
-    //<
     //< The reason is the normalization's other result, read by the editor
     //< (`send_cfg_inactive_hover` in `../../lsp/hover.kspl`). **A hit that returns only the
     //< declarations is exactly the lie this file rejects.**
     sys.set_env("KSPLC_CACHE_DIR", cache) catch panic("KSPLC_CACHE_DIR could not be set")
-    src: = io.read_file(FIXTURE) catch
+    src: = io.read_file(FIXTURE, null) catch
         return ""
     // The workspace is the package's top, where the suite runs (an empty path inherits it).
     $c: =
@@ -153,7 +148,6 @@ priv fn cfg_reason(cache: U8[], arena: Arena$@): U8[] //<
     return lsp_client.hover_text(got)
 
 priv fn other_spelling(exe: U8[]): U8[] //< it points at the same executable by a different path
-    //<
     //< `argv[0]`'s path, size and time decide the generation's key. So another path makes **a new
     //< generation in the same directory** with no copy of the executable.
     return harness.arena().text().s("\{sys.get_dir_name(exe)\}/./\{sys.get_file_name(exe)\}").take()
@@ -206,7 +200,7 @@ fn main(): I32
     // Caution: **Rewrite the file at the same path.** A copy under another name changes the file
     // name in the key instead, so it passes even with the key blind to the content.
     marker: = "io.out().s(\"ac="
-    src: = io.read_file(FIXTURE) catch
+    src: = io.read_file(FIXTURE, null) catch
         return harness.fatal("the fixture cannot be read")
     verdict.check("the fixture has exactly one mark to rewrite", src.count_str(marker) == 1,
         arena.text().s("\{src.count_str(marker)\} places").take())

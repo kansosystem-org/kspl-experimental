@@ -1,0 +1,630 @@
+//< Reading `ksplc`'s command line: which subcommand was asked for, with which options and inputs
+//< **Each subcommand is a row of `FACES` and a variant of `Mode`.** The row declares it to
+//< `std/argparse`, gives its usage line, and says whether it needs a machine; `read_mode` turns it
+//< into a `Mode`. Each option names the subcommands it takes effect on (`only_for`), and argparse
+//< refuses it on any other (Principle 5 in docs/DESIGN-principles.md). The usage text is
+//< `usage.kspl`'s; doing what was asked is `main.kspl`'s.
+import "ksplc/base/core" as base_core
+import "ksplc/base/diag" as base_diag
+import "ksplc/base/lint_codes" as base_lint_codes
+import "ksplc/base/target" as base_target
+import "ksplc/fmt/style" as fmt_style
+import "ksplc/tools/explain" as tools_explain
+import "ksplc/tools/interface" as tools_interface
+import "ksplc/usage"
+import "std/argparse"
+import "std/chars"
+import "std/ds" { List }
+import "std/io"
+import "std/str" { Str_builder }
+import "std/strnum" // `to_i64`
+import "std/sys"
+
+priv const MAX_SPLIT_UNITS: Sz = 256 //< `--split=`'s upper bound
+    //< Each translation unit reads the whole shared header again, so **a split far beyond the core
+    //< count is slower**. The bound catches an accident (a mistyped order of magnitude).
+
+enum Face //< a subcommand
+    //< **A subcommand is named after its variant**, with `_` written `-` (`emit_runtime` is
+    //< `emit-runtime`). So the parser, the usage and every message use one spelling.
+    compile
+    run
+    build
+    fmt
+    lint
+    lsp
+    lsp_worker
+    info
+    clean
+    emit_runtime
+    explain
+    doc
+
+priv enum Declared //< how argparse is told of a subcommand
+    default_face //< chosen when no subcommand is named; its name is never typed
+    named
+    trailing //< its target's rest is the script's own (`ksplc run s.kspl --x`)
+    hidden //< left out of the usage: only the language server starts it
+
+priv struct Face_row //< a subcommand, and all ksplc says about it
+    face: Face
+    declared: Declared
+    help: U8[] //< the one line the usage's list of commands shows beside it
+    form: U8[] //< what follows `ksplc <name>` in its usage line
+    lays_out: Bool //<
+        //< Whether it lays values out, and so needs a machine ksplc has widths for
+        //< `info` asks for it only on its `machine` subject. `fmt` and `doc` parse alone and read
+        //< no type, so they run on a machine the table lacks.
+
+priv const FACES: Face_row[12] = ::{ Face_row::{ .face = .compile, .declared = .default_face,
+    .help = "", .form = "[options...] <input.kspl> <output.c>", .lays_out = true },
+    Face_row::{ .face = .run, .declared = .trailing, .help = "build a script and run it",
+    .form = "[options...] <script.kspl> | - | --eval=<source> [args...]", .lays_out = true },
+    Face_row::{ .face = .build, .declared = .named, .help = "build an executable from a program",
+    .form = "[options...] <input.kspl> <output.exe>", .lays_out = true },
+    Face_row::{ .face = .fmt, .declared = .named, .help = "format the source",
+    .form = "[options...] <input.kspl>...", .lays_out = false },
+    Face_row::{ .face = .lint, .declared = .named, .help = "do the static analysis alone",
+    .form = "[options...] <input.kspl>", .lays_out = true },
+    Face_row::{ .face = .lsp, .declared = .named, .help = "run as the language server", .form = "",
+    .lays_out = true },
+    Face_row::{ .face = .lsp_worker, .declared = .hidden, .help = "", .form = "",
+    .lays_out = true },
+    Face_row::{ .face = .info, .declared = .named, .help = "answer a query", .form = "<subject>",
+    .lays_out = true },
+    Face_row::{ .face = .clean, .declared = .named, .help = "empty the disk cache", .form = "",
+    .lays_out = false },
+    Face_row::{ .face = .emit_runtime, .declared = .named,
+    .help = "write the C runtime's source out as one translation unit",
+    .form = "[options...] <output.c>", .lays_out = false },
+    Face_row::{ .face = .explain, .declared = .named,
+    .help = "print what a diagnostic code means and what to do about it", .form = "<code>",
+    .lays_out = false },
+    Face_row::{ .face = .doc, .declared = .named,
+    .help = "print what a file, one entry or a folder publishes, from its source",
+    .form = "<file>[.<name>] | <folder>", .lays_out = false } } //<
+        //< Every subcommand, in the order the usage lists them
+        //< Caution: **Give a new `Face` its row here.** Without one, it is never declared, and its
+        //< name is read as an input file.
+
+impl Face
+    fn face_name(f: Self): U8[] //< the subcommand as the command line writes it
+        return f.variant_name().replace("_", "-", base_core.arena)
+
+    priv fn row(f: Self): Face_row //< the subcommand's row in `FACES`
+        for r in FACES
+            if r.face == f
+                return r
+        base_diag.ice_panic("ksplc: a subcommand has no row in FACES (ksplc/cli.kspl)")
+        return FACES[0]
+
+    priv fn check_machine(f: Self) //<
+        //< It refuses a machine ksplc has no widths for, or one genllvm cannot lay out
+        //< **Refused, never guessed**: a guess folds sizes the C compiler disagrees with.
+        //< Caution: **The refusal goes to standard error**, the language server's too. Its
+        //< standard output is the protocol, where a line of text reads as a broken message.
+        $said: = Str_builder.new()
+        machine_refusal_to(f.face_name(), base_core.config.machine, base_target.host_name(), said@)
+        if said.len > 0
+            usage.error_exit(said.slice())
+        if !base_core.is_llvm_target()
+            return
+        llvm_name: = base_target.named_name()
+        if found: = base_target.find(llvm_name)
+            if found.llvm_triple.len == 0
+                refusal: = base_core.arena.text()
+                    .s("--to=llvm: the LLVM backend lays out only machines with 8-byte pointers. \
+                        '\{llvm_name\}' is not one. Write C for it (--to=c, the default)\n").take()
+                usage.error_exit(refusal)
+
+priv fn face_named(name: U8[]): Face //< the subcommand argparse chose, by its name
+    for row in FACES
+        if row.face.face_name().equals(name)
+            return row.face
+    base_diag.ice_panic("ksplc: argparse chose a subcommand FACES does not hold")
+    return .compile
+
+enum Mode //< what the tool was asked to do
+    compile(in_path: U8[], out_path: U8[], deps_path: U8[], libs_path: U8[]) //<
+        //< It translates one file.
+        //< Where deps_path is not empty, the list of every source read is written there
+        //< (`--emit-deps=`). Where libs_path is not empty, the libraries the program names are
+        //< written there (`--emit-libs=`).
+    fmt(in_files: List<|U8[]|>$@, in_place: Bool, config: fmt_style.Config)
+    lsp
+    lsp_worker
+    lint(in_path: U8[])
+    run(script: U8[], script_args: List<|U8[]|>$@) //<
+        //< It builds a script and runs it, with the result cached (ksplc/tools/run.kspl).
+        //< A script of `-` is read from standard input.
+    run_source(source: U8[], script_args: List<|U8[]|>$@) //<
+        //< It builds the program `--eval=` gave and runs it, as `run` does a script
+    build(in_path: U8[], out_path: U8[], cflags: U8[]) //<
+        //< It builds one executable, with cflags after ksplc's own flags (ksplc/tools/run.kspl).
+    info(topic: usage.Info_topic) //<
+        //< a query (`ksplc info <subject>`). It prints the answer and exits
+    clean //<
+        //< The cleanup (`ksplc clean`): it empties the disk cache
+        //< It is kept apart from the query: on the same subcommand as a subject that only reads, a
+        //< typo could become a deletion.
+    emit_runtime(out_path: U8[]) //<
+        //< It writes the C runtime's source out as one translation unit
+        //< `--to=llvm`'s IR links against it ("The backends (Genc / Genllvm) and the runtime
+        //< ABI" in ksplc/docs/DESIGN-backends.md).
+    explain(code: U8[]) //< it prints one diagnostic code's section of the diagnostics specification
+    doc(target: U8[]) //< it prints what a file, an entry or a folder publishes (`tools/doc.kspl`)
+
+priv struct Cli //< what the command line asked for, before it is checked
+    fmt_in_place: Bool
+    to_name: U8[]
+    fmt_config: fmt_style.Config
+    script_args: List<|U8[]|>$@
+    deps_path: U8[]
+    libs_path: U8[]
+    surface_scope: U8[]
+    style: U8[]
+    std_dir: U8[]
+    pkg_src_dir: U8[]
+    split_units: U8[]
+    diag_format: U8[]
+    cflags: U8[]
+    sanitize: U8[]
+    eval_source: U8[]
+    lint_specs: List<|U8[]|>$@
+
+priv fn declare_faces(p: argparse.Parser$@, o: Cli$@) //< it declares every row of `FACES`
+    // A mode is a command rather than a flag, so that argparse sees it set twice. As a flag,
+    // `ksplc fmt --lsp` would pass, and the later one would silently win.
+    for row in FACES
+        name: = row.face.face_name()
+        $help: = row.help
+        if row.face == Face.info
+            help = usage.help_with_topics(row.help, usage.info_topics())
+        switch row.declared
+        case .default_face
+            p.default_command(name)
+        case .named
+            p.subcommand(name, help)
+        case .trailing
+            p.subcommand_trailing(name, help, o.script_args)
+        case .hidden
+            p.subcommand_hidden(name)
+        if row.form.len > 0
+            p.command_form(name, row.form)
+
+priv fn declare_options(p: argparse.Parser$@, o: Cli$@) //< it declares every subcommand and option
+    //< Caution: **Give every option its `only_for`.** Left out, the option takes effect everywhere,
+    //< and `--help` lists it on the line "on every subcommand".
+    declare_faces(p, o)
+    p.positional("<input.kspl>... [output]")
+    p.str_list_opt("--define", base_core.config.defines,
+        "define a flag for #cfg() (it can be repeated)")
+    p.only_for("--define", "compile run build lint")
+    p.str_opt("--emit-deps", o.deps_path@, "where to write the list of every source read")
+    p.only_for("--emit-deps", "compile")
+    p.str_opt("--emit-libs", o.libs_path@,
+        "where to write the libraries the program names with #link, as -l words")
+    p.only_for("--emit-libs", "compile")
+    p.str_opt("--emit-surface", base_core.config.surface_path@,
+        "where to write the published API record for comparing versions")
+    p.only_for("--emit-surface", "compile")
+    p.str_opt("--surface-scope", o.surface_scope@,
+        "what --emit-surface writes: pub (default) for the published API, or all for everything a \
+            sibling file can reach. Use all for a package that publishes nothing")
+    // `doc` reads it as the record does: `all` shows what a package keeps to itself too.
+    p.only_for("--surface-scope", "compile doc")
+    p.str_opt("--machine", base_core.config.machine@,
+        "the machine the output is for, as a triple (the default is the one ksplc runs on)")
+    // Not `run` / `build`: they compile for the machine ksplc runs on and start or link the result
+    // there. Lint, since a folded size decides a static `if` and an `##error`.
+    p.only_for("--machine", "compile lint")
+    p.str_opt("--std-dir", o.std_dir@, "where to look for the standard library")
+    p.only_for("--std-dir", "compile run build lint info doc")
+    p.str_opt("--pkg-src-dir", o.pkg_src_dir@,
+        "where to look for the source of a package other than std")
+    p.only_for("--pkg-src-dir", "compile run build lint doc")
+    p.str_opt("--split", o.split_units@,
+        "the number of translation units to split the generated C into (the default is 1)")
+    p.only_for("--split", "compile")
+    p.str_opt("--eval", o.eval_source@,
+        "run the program written here instead of a script file: --eval='<source>'")
+    // Only `run`: a compile writes a file named after its input, and a source with no file names
+    // none (standard input, `-`, is the compile's way in).
+    p.only_for("--eval", "run")
+    p.str_opt("--cflags", o.cflags@,
+        "flags for the C compiler, added after ksplc's own so the last one wins (\"-O0 -g\")")
+    p.only_for("--cflags", "build")
+    p.str_opt("--sanitize", o.sanitize@,
+        "the sanitizers the program is built with, separated by commas: address, thread, memory, \
+            and build's undefined (the C compiler's -fsanitize= names)")
+    // Not `run`: it caches one program a script, which a sanitized one would have to be kept apart
+    // from; `build` makes one. Not `emit-runtime`: the runtime is C, which the C compiler marks.
+    p.only_for("--sanitize", "compile build")
+    p.str_opt("--style", o.style@, "the formatting settings (\"IndentWidth: 4, ColumnLimit: 100\")")
+    p.only_for("--style", "fmt")
+    p.str_opt("--to", o.to_name@, "what a compile's output is written in: c (the default) or llvm")
+    // Not `info`: `link-libs` / `exe-flags` follow the C compiler's target triple (`target_kind` in
+    // ksplc/tools/run.kspl), which the language written does not change.
+    p.only_for("--to", "compile")
+    p.str_list_opt("--lint", o.lint_specs, "lint's CODE=off|on|error (it can be repeated)")
+    // A compile too, whose diagnostics it can silence as well.
+    p.only_for("--lint", "compile lint")
+    p.str_opt("--diagnostic-format", o.diag_format@,
+        "how diagnostics are written: text (the default) or json (one JSON object per line)")
+    p.only_for("--diagnostic-format", "compile lint")
+    p.flag("--stats", base_core.config.enable_stats@,
+        "report the time per phase (for fmt, report cache usage)")
+    p.only_for("--stats", "compile fmt")
+    p.flag("--freestanding", base_core.config.is_freestanding@,
+        "generate for an environment with no OS")
+    // Caution: **Make it apply to lint too**, or a package built only freestanding (`kspage/`'s
+    // browser entry point) misses the `#cfg(freestanding)` declarations and cannot be linted.
+    p.only_for("--freestanding", "compile emit-runtime lint")
+    p.flag("--program", base_core.config.is_program@,
+        "require main() because the output is a program (run and build set this option)")
+    p.only_for("--program", "compile")
+    p.str_list_opt("--library", base_core.config.interface_paths,
+        "build a library and write its interface: .h for C, .kspl for KSPL. Repeat this option for \
+            more interfaces. Only #export functions are externally visible. The library keeps its \
+            own runtime and std")
+    p.only_for("--library", "compile")
+    p.flag("--in-place", o.fmt_in_place@, "write the formatting result back into the source")
+    p.only_for("--in-place", "fmt")
+
+priv fn refuse_command_line(e: argparse.Argument_error) //<
+    //< it reports a command line argparse refused, and exits
+    switch e
+    case .help_requested
+        // On run, argparse passes a `--help` after the script to the script, so this one is
+        // ksplc's.
+        usage.print_usage(io.out())
+        sys.exit(0)
+    case .unknown_option(n)
+        // Caution: Never treat an unknown option as an input file name. A typo would be ignored. A
+        // path cut by the shell's word splitting would fail as file names, with the cause unseen.
+        io.err().s("Error: unknown option: \{n\}\n")
+        usage.usage_exit()
+    case .multiple_commands
+        usage.error_exit("Error: Multiple execution modes specified.\n")
+    case .not_for_command(name, face, faces)
+        // Every option names its subcommands, and ksplc has a default, so face is never empty.
+        said: = base_core.arena.text()
+            .s("ksplc \{face\}: '\{name\}' does not take effect on this subcommand. It takes effect \
+                on: \{faces\}\n").take()
+        usage.error_exit(said)
+    default
+        io.err().s("Error: \{e\}\n")
+        usage.usage_exit()
+
+priv fn apply_options(o: Cli$@, face: Face) //<
+    //< It checks the options every mode shares and puts them into the configuration
+    // **An unknown name is rejected rather than replaced by the default.** Otherwise a mistyped
+    // scope would write only the published API and look as though it had worked.
+    if o.surface_scope.equals("all")
+        base_core.config.surface_all = true
+    else if o.surface_scope.len > 0 && !o.surface_scope.equals("pub")
+        usage
+            .error_exit(base_core.arena.text().s("--surface-scope: expected pub or all, not ")
+            .s(o.surface_scope).c('\n').take())
+    // Rejected rather than replaced by text, as `--surface-scope` is: a typo would look like a
+    // tool reading no diagnostics at all.
+    if o.diag_format.equals("json")
+        base_core.config.diag_json = true
+    else if o.diag_format.len > 0 && !o.diag_format.equals("text")
+        usage.error_exit("--diagnostic-format: expected text or json\n")
+    // **The report is text on standard error**, the stream json leaves to its objects.
+    if base_core.config.diag_json && base_core.config.enable_stats
+        usage
+            .error_exit("--stats cannot be combined with --diagnostic-format=json. Its report is \
+                text on standard error, where json writes only JSON objects\n")
+    // `--to` names what the output is written in; a compile's languages are c and llvm.
+    if face == Face.compile && o.to_name.equals("llvm")
+        base_core.config.target = .llvm
+    else if face == Face.compile && o.to_name.len > 0 && !o.to_name.equals("c")
+        usage.error_exit("--to: a compile writes 'c' or 'llvm'\n")
+    // `info` asks only on its `machine` subject, once the subject is read (`read_mode`).
+    if face != Face.info
+        face.check_machine()
+    if o.split_units.len > 0
+        n: = o.split_units.to_i64() catch 0
+        if n < 1 || n > I64::MAX_SPLIT_UNITS
+            usage.error_exit("--split: expected a number from 1 to 256\n")
+        base_core.config.unit_count = Sz::n
+    // Only the C backend can split. genllvm has no forward-declaration phase ("Genllvm (LLVM IR):
+    // why the structure differs" in ksplc/docs/DESIGN-backends.md), and it emits the string pool at
+    // the end. Accepted without effect, it would break Principle 5.
+    if base_core.config.unit_count > 1 && base_core.is_llvm_target()
+        usage.error_exit("--split: only the C backend can split output into translation units.\n")
+    if base_core.is_library()
+        refuse_with_library()
+        check_interface_paths()
+    if base_core.config.is_freestanding
+        // It ties is_freestanding to cfg(freestanding), so this flag alone enables std/sys's
+        // freestanding panic and the like, with no --define=freestanding to remember.
+        base_core.config.defines.push("freestanding")
+    check_sanitize(o, face)
+    base_core.config.sanitize = o.sanitize
+    if o.style.len > 0
+        // fmt_printer holds the name used in the diagnostic. Kept apart from the list of
+        // accepted keys, the two would drift, and a newly added key would be missing from the
+        // diagnostic.
+        bad: = fmt_style.apply_style(o.style, o.fmt_config@, base_core.arena)
+        if bad.len > 0
+            usage.error_exit(bad)
+    // Applied one at a time, in order; overwriting would keep only the last (so a
+    // str_list_opt).
+    for spec in o.lint_specs
+        apply_lint_setting(spec)
+    if o.std_dir.len > 0
+        base_core.config.std_dir = o.std_dir
+    if o.pkg_src_dir.len > 0
+        base_core.config.pkg_src_dir = o.pkg_src_dir
+
+priv fn only_input(in_files: List<|U8[]|>$@, face: Face): U8[] //<
+    //< The one input a subcommand takes; any other count exits with the subcommand's usage line
+    if in_files.len != 1
+        usage.command_usage_exit(face.face_name())
+    return in_files.get(0)
+
+priv fn source_input(path: U8[]): U8[] //<
+    //< A source named on the command line; a name in braces (`.ksplb`) or the old `.kspls` exits
+    //< **Braces are only what the parser reads** ("The indentation notation (`.kspl`)" in
+    //< docs/DESIGN-notation.md). Read as the indentation notation, such a file would fail at its
+    //< first line with an error that does not say why. **A `.kspls` is the old name of a source.**
+    //< Named with its extension, it would still be read. But every `import` of its siblings opens
+    //< `.kspl`, and would not find them.
+    if path.ends_with(".ksplb")
+        usage
+            .error_exit(base_core.arena.text()
+            .s("\{path\}: a KSPL source is a .kspl file, written in the indentation notation\n")
+            .take())
+    if path.ends_with(".kspls")
+        said: = base_core.arena.text()
+            .s("\{path\}: a KSPL source is a .kspl file. Rename this file and the files beside it \
+                from .kspls to .kspl\n").take()
+        usage.error_exit(said)
+    return path
+
+priv fn read_mode(p: argparse.Parser$@, face: Face, in_files: List<|U8[]|>$@, o: Cli$@): Mode //<
+    //< The mode the subcommand names, with its inputs checked
+    switch face
+    case .fmt
+        if in_files.len == 0
+            usage.command_usage_exit(face.face_name())
+        for f in in_files
+            source_input(f)
+        return .fmt(in_files, o.fmt_in_place, o.fmt_config)
+    case .lsp
+        return .lsp
+    case .lsp_worker
+        return .lsp_worker
+    case .lint
+        return .lint(source_input(only_input(in_files, face)))
+    case .info
+        if in_files.len != 1
+            usage
+                .error_exit(usage.usage_for_topics(face.face_name(), usage.info_topics()))
+        topic: = usage.parse_info_topic(in_files.get(0))
+        usage.refuse_unread_std_dir(p, topic)
+        switch topic
+        case .machine
+            face.check_machine()
+        default {}
+        return .info(topic)
+    case .clean
+        // **It takes no subject**: there is one thing to clean, and a word after it would change
+        // nothing.
+        if in_files.len != 0
+            usage.command_usage_exit(face.face_name())
+        return .clean
+    case .emit_runtime
+        return .emit_runtime(only_input(in_files, face))
+    case .explain
+        asked: = only_input(in_files, face)
+        code: = tools_explain.canonical_code(asked, base_core.arena)
+        // An error has no code, so a message the reader wants explained may well have none.
+        if !base_lint_codes.is_known(code)
+            msg: = base_core.arena.text().s("ksplc explain: '").s(asked)
+                .s("' is not a diagnostic code. Only warnings, information diagnostics and hints \
+                    carry codes. The table is in ksplc/docs/SPEC-diagnostics.md. An error's message \
+                    explains the error.\n").take()
+            usage.error_exit(msg)
+        return .explain(code)
+    case .doc
+        return .doc(source_input(only_input(in_files, face)))
+    case .run
+        // The program is the option's, so every argument after the options is the program's own.
+        if p.saw("--eval")
+            args: = List<|U8[]|>.create(base_core.arena)
+            for f in in_files
+                args.push(f)
+            for a in o.script_args
+                args.push(a)
+            return .run_source(o.eval_source, args)
+        if in_files.len == 0
+            usage.command_usage_exit(face.face_name())
+        // `--to=llvm` / `--freestanding` / `--library` are not valid for run, and argparse has
+        // already refused them (`only_for` in `declare_options`).
+        return .run(source_input(in_files.get(0)), o.script_args)
+    case .build
+        if in_files.len != 2
+            usage.command_usage_exit(face.face_name())
+        return .build(source_input(in_files.get(0)), in_files.get(1), o.cflags)
+    case .compile
+        if in_files.len != 2
+            // It rejects "too many" as well as "too few". Suppose it silently used the first two.
+            // Then a path cut by the shell's word splitting (one containing a space) would compile
+            // an unrelated file for no clear reason.
+            if in_files.len > 2
+                io.err().s("Error: too many input files (expected <input.kspl> <output.c>):\n")
+                for f in in_files
+                    io.err().s("  ").s(f).c('\n')
+            usage.usage_exit()
+        return .compile(source_input(in_files.get(0)), in_files.get(1), o.deps_path, o.libs_path)
+
+impl Mode
+    fn new(): Self //< the mode the process's command line asks for; a refused line exits
+        base_core.config.defines = List<|U8[]|>.create(base_core.arena)
+        base_core.config.interface_paths = List<|U8[]|>.create(base_core.arena)
+        base_core.config.target = .c
+        $o: = Cli::{ .fmt_in_place = false, .to_name = "",
+            .fmt_config = fmt_style.Config.default_fmt(),
+            .script_args = List<|U8[]|>.create(base_core.arena), .deps_path = "", .libs_path = "",
+            .surface_scope = "", .style = "", .std_dir = "", .pkg_src_dir = "", .split_units = "",
+            .diag_format = "", .cflags = "", .sanitize = "", .eval_source = "",
+            .lint_specs = List<|U8[]|>.create(base_core.arena) }
+        p: = argparse.Parser.create("ksplc", "", base_core.arena)
+        // Kept so print_usage can build the usage list from the declarations.
+        usage.cli = p
+        declare_options(p, o@)
+        // Caution: **argparse refuses an option on a subcommand it does not take effect on while
+        // parsing**, before any option is applied. Checked after, an option that has no effect
+        // would still have its side effects (a cfg, a setting).
+        p.parse(sys.args(), base_core.arena) catch e
+            refuse_command_line(e)
+
+        in_files: = p.rest
+        // The default subcommand (compile) is declared, so argparse always chooses one.
+        face: = face_named(p.command.unwrap_or(""))
+        // Caution: **A bare `-` is standard input only as the source of a compile or a run.**
+        // argparse passes it on as "standard input"; anywhere else it is an accident of word
+        // splitting.
+        for i in Range.asc(in_files.len)
+            reads_stdin: = i == 0 && (face == Face.compile || face == Face.run)
+            if in_files.get(i).equals(base_core.STDIN_NAME) && !reads_stdin
+                io.err().s("Error: unknown option: -\n")
+                usage.usage_exit()
+        usage.refuse_empty_values(p)
+        apply_options(o@, face)
+        return read_mode(p, face, in_files, o@)
+
+fn machine_refusal_to(face: U8[], named: U8[], host: U8[], m: Str_builder$@) //<
+    //< Why the subcommand cannot lay values out for the machine, onto m; nothing where it can
+    //< `named` is `--machine`'s (empty where none is given), `host` the machine ksplc runs on.
+    //< **Every subcommand whose row says `lays_out` asks this before it starts**: a machine left
+    //< unasked reaches the layout and stops ksplc with an internal error, naming no fix.
+    if !face_named(face).row().lays_out
+        return
+    name: = named if named.len > 0 else host
+    if _known: = base_target.find(name)
+        return
+    if named.len > 0
+        m.s("--machine: '\{name\}' is not a machine ksplc knows.")
+    else
+        m
+            .s("ksplc \{face\}: the machine ksplc runs on ('\{host\}') is not in its table of \
+                machines. ksplc therefore has no widths for laying out values. A compile or a lint \
+                names the machine the output is for with --machine=<triple>.")
+    m.s(" The machines it knows: ")
+    base_target.known_names_to(m)
+    m.c('\n')
+
+priv fn refuse_with_library() //<
+    //< It refuses an option `--library` cannot work with
+    //< Each needs a symbol of the library visible outside it, which `--library` makes `static`
+    //< ("How linkage is chosen" in ksplc/docs/DESIGN-backends.md).
+    if base_core.config.is_program
+        usage
+            .error_exit("--library: --program cannot be combined. A library has no main(). Its \
+                '#export' functions are its entry points\n")
+    if base_core.config.unit_count > 1
+        usage
+            .error_exit("--library: --split cannot be combined. The units reach each other's \
+                functions, which a library makes static. Build a library as one unit\n")
+    if base_core.is_llvm_target()
+        usage
+            .error_exit("--library: --to=llvm cannot be combined. The IR links its runtime from \
+                another file, but a library needs its own runtime. Build a library with --to=c\n")
+    if base_core.config.is_freestanding
+        usage
+            .error_exit("--library: --freestanding cannot be combined. The C compiler calls \
+                bare-metal runtime helpers, such as __aeabi_memcpy, by name from any object. These \
+                helpers cannot be private. A bare-metal image is built from source\n")
+
+priv const SANITIZER_NAMES: U8[][4] = ::{ "address", "thread", "memory", "undefined" } //<
+    //< The sanitizers `--sanitize=` takes, by the names the C compiler's `-fsanitize=` takes
+    //< The first three are LLVM's function attributes too (`sanitize_<name>`). `undefined` is not:
+    //< its checks are written by clang's front end, so only C takes it.
+
+priv fn check_sanitize(o: Cli$@, face: Face) //<
+    //< It refuses `--sanitize` where it cannot take effect, and `-fsanitize=` in build's `--cflags`
+    //< **One way to ask** (Principle 6): `build` hands its C compiler `-fsanitize=` from
+    //< `--sanitize`, so the same word in `--cflags` would be a second. Which machine has which
+    //< sanitizer is the C compiler's to say: it refuses `-fsanitize=thread` for Windows itself.
+    if face == Face.build
+        for w in o.cflags.split(' ', base_core.arena)
+            if w.starts_with("-fsanitize=")
+                usage
+                    .error_exit("--cflags: name the sanitizers with --sanitize=<names>, which hands \
+                        the C compiler its -fsanitize=\n")
+    if o.sanitize.len == 0
+        return
+    if base_core.config.is_freestanding
+        usage
+            .error_exit("--sanitize: --freestanding cannot be combined. A sanitizer's runtime uses \
+                the OS to map shadow memory and write reports. No sanitizer runtime is built for \
+                bare metal\n")
+    if face == Face.compile && !base_core.is_llvm_target()
+        usage
+            .error_exit("--sanitize: the C compiler instruments generated C. Give that compiler \
+                -fsanitize=<names>. When compiling to LLVM, --sanitize marks the IR because it does \
+                not pass through a front end\n")
+    for name in o.sanitize.split(',', base_core.arena)
+        if !name.is_one_of(U8[][]::SANITIZER_NAMES)
+            said: = base_core.arena.text().s("--sanitize: '").s(name)
+                .s("' is not a sanitizer ksplc knows:")
+            for i in Range.asc(SANITIZER_NAMES.len)
+                said.s(", " if i > 0 else " ").s(SANITIZER_NAMES[i])
+            usage.error_exit(said.c('\n').take())
+        if name.equals("undefined") && base_core.is_llvm_target()
+            usage
+                .error_exit("--sanitize=undefined: its checks are written into C by clang's front \
+                    end, which LLVM IR does not pass through. KSPL's own checks stop an index, a \
+                    shift, a divisor or an enum's tag out of range in either backend. For the \
+                    remaining checks, build through C (ksplc build --sanitize=undefined)\n")
+
+priv fn check_interface_paths() //<
+    //< It refuses a `--library=` interface that cannot be written
+    //< The form follows the extension, so any other name would leave the reader guessing what was
+    //< meant; a path named twice would be written twice.
+    paths: = base_core.config.interface_paths
+    for i in Range.asc(paths.len)
+        path: = paths.get(i)
+        switch tools_interface.form_of(path)
+        case .none
+            why: = base_core.arena.text().s("--library: '").s(path)
+                .s("' names neither form of interface. End it in .h for C, or in .kspl for KSPL\n")
+                .take()
+            usage.error_exit(why)
+        default {}
+        for j in Range.asc(i)
+            if paths.get(j).equals(path)
+                why: = base_core.arena.text().s("--library: '").s(path).s("' is named twice\n")
+                    .take()
+                usage.error_exit(why)
+
+priv fn apply_lint_setting(spec: U8[]) //< it applies one `--lint=CODE=level`
+    //< Both the code and the level are checked against the registry, and an unknown one is an
+    //< error. So a typo cannot silently do nothing (the same rule as `##lint`).
+    $eq: Sz = 0
+    switch spec.find_char('=')
+    case .some(at)
+        eq = at
+    case .none
+        usage.error_exit("--lint expects CODE=level (for example --lint=I0307=off)\n")
+    code: = spec.sub(0, eq)
+    level_name: = spec.sub_from(eq + 1)
+    if !base_lint_codes.is_known(code)
+        why: = base_lint_codes.unknown_code_msg(code)
+        usage.error_exit(base_core.arena.text().s("--lint: \{why\}\n").take())
+    switch base_lint_codes.Lint_level.from_variant_name(level_name)
+    case .some(level)
+        base_lint_codes.set_global_level(code, level)
+        // Raising it to an error also means "run that check" (the intent must be to reject it in an
+        // ordinary build too).
+        switch level
+        case .error
+            base_core.config.cli_raises_lint = true
+        default {}
+    case .none
+        usage.error_exit("--lint: unknown level (expected 'off', 'on', or 'error')\n")

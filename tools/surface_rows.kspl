@@ -1,5 +1,4 @@
 //< The API record's text format: how it is written, read and compared
-//<
 //< It is kept apart from its caller `tools/surface.kspl`: a `main` here would **silently replace
 //< the entry point's `main`** where a test imports it.
 //< Caution: **Do not fix only one of how the header is written and how it is skipped.** They are a
@@ -22,7 +21,6 @@ struct Row //< one unit compared
     text: U8[] //< the text of that entry
 
 fn rows_of(data: U8[], arena: Arena$@): List<|Row|> //< the record's text as a list of rows
-    //<
     //< Lines starting with `#` and blank lines are skipped (they are the header).
     $out: = List<|Row|>.new(arena)
     $ls: = data.lines(null)
@@ -44,7 +42,6 @@ fn rows_of(data: U8[], arena: Arena$@): List<|Row|> //< the record's text as a l
     return out
 
 struct Parts //< one row taken apart into its four fields
-    //<
     //< **`Row` holds two halves, compared by key**; code that reads the entries wants all four.
     file: U8[] //< the file's logical name
     key: U8[] //< the entry's key within that file
@@ -52,23 +49,19 @@ struct Parts //< one row taken apart into its four fields
     doc: U8[] //< its own description (**empty where there is none**)
     owner: U8[] //<
         //< The key of the declaration this row describes part of (a parameter, or the return value)
-        //<
         //< **Empty where the row is the declaration itself.**
     part: U8[] //<
         //< A parameter's name. **Empty with a non-empty `owner`, the row is the return value.**
-        //<
         //< Caution: **Read `owner` first.** Empty here means two different things on its own.
     of_file: Bool //<
         //< Whether the row is the file's own description (**the text is in `doc`**)
 
 priv const PART_MARK: U8 = '~' //<
     //< The character that separates a declaration's key from the part a row describes
-    //<
     //< **The compiler decides it** (`ksplc/tools/surface.kspl`). No name contains it, so a key
     //< holding one is a part.
 
 fn parts_of(r: Row): Parts //< takes one row apart
-    //<
     //< Caution: **Split rows here and nowhere else**; a second place that splits on tabs goes wrong
     //< the day a column is added.
     // With no tab, the whole half is the first field and the second is empty.
@@ -97,7 +90,6 @@ fn parts_of(r: Row): Parts //< takes one row apart
     }
 
 fn is_declaration(r: Row): Bool //< whether the row is a declaration in its own right
-    //<
     //< False for a parameter, the return value, and the file's own description.
     //< **The record keeps only these**; `ksplc doc` shows everything ("Why the record and the
     //< reference are two renderings" in [`tools/docs/DESIGN-tools.md`](docs/DESIGN-tools.md)).
@@ -105,7 +97,6 @@ fn is_declaration(r: Row): Bool //< whether the row is a declaration in its own 
     return !p.of_file && p.owner.len <= 0
 
 priv fn text_of(rows: List<|Row|>$@, key: U8[]): U8[] //< looks up by key
-    //<
     //< Empty if there is none. It holds one package, so a linear search is enough.
     for r in rows
         if r.key.equals(key)
@@ -113,7 +104,6 @@ priv fn text_of(rows: List<|Row|>$@, key: U8[]): U8[] //< looks up by key
     return ""
 
 priv fn has_key(rows: List<|Row|>$@, key: U8[]): Bool //< whether the key is there
-    //<
     //< Caution: **Do not judge by the length `text_of` returns** (a row's text may be empty).
     for r in rows
         if r.key.equals(key)
@@ -128,7 +118,6 @@ priv fn write_row(b: Str_builder$@, mark: U8[], key: U8[]) //<
     b.c('\n')
 
 fn undocumented( //< lists the published entries with no description, and returns how many
-    //<
     //< The fourth column is the summary, so a row whose text holds no tab has none.
     //< Caution: **Check the current sources, not the record** (what was committed). A declaration
     //< added in the same change is not in it. So the entry that most needs a sentence gets through.
@@ -145,13 +134,11 @@ fn undocumented( //< lists the published entries with no description, and return
 
 priv fn twin_spelling(text: U8[], arena: Arena$@): U8[] //<
     //< A signature with the unused mark taken off its parameters' names
-    //<
     //< **An argument is passed by place, not by name**, and one twin may leave unused what the
     //< other uses (`_file` against `file`).
     return text.replace("(_", "(", arena).replace(", _", ", ", arena)
 
 fn drifted_twins( //< lists the names declared once per `#cfg` whose signatures differ
-    //<
     //< **A caller is checked only against the twin its own build picks.** So a twin that drifts
     //< breaks just the builds that pick it (a freestanding one, which no hosted run compiles).
     rows: List<|Row|>$@, //< the package as it is now
@@ -181,7 +168,6 @@ fn drifted_twins( //< lists the names declared once per `#cfg` whose signatures 
     return n
 
 fn classify( //< writes the differences out and returns how many there were
-    //<
     //< Compares the record with the current sources.
     //< Caution: **Write the removed entries first.** Only a removal breaks a user's build, and it
     //< also decides how far the version is raised.

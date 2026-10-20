@@ -1,5 +1,4 @@
 //< Checks that a copy of the pilot policy kept elsewhere still drives like the one served here
-//<
 //< **This server does not know where copies are kept.** Whoever keeps one names it (`make
 //< check-pilot-copy COPY=<file>` in `kssrv/Makefile`). This starts the server and fetches the
 //< policy it serves. It compares the copy with it at every point the car's sweep visits.
@@ -13,7 +12,7 @@ import "kssrv/tests/start" { bring_up }
 import "std/ds" { List }
 import "std/fs"
 import "std/io"
-import "std/mem" { Arena, dealloc }
+import "std/mem" { Arena }
 import "std/str" // `arena.text()`
 import "std/strfmt" as _strfmt
 import "std/sys"
@@ -21,11 +20,6 @@ import "std/verdict"
 
 priv const USAGE: U8[] = "usage: ksplc run tests/copy.kspl <kssrv> <copy> <work_dir>" //<
     //< the arguments, in order (`make check-pilot-copy` in `kssrv/Makefile` passes them)
-
-priv const COPY_PORT: I32 = 18398 //< the port the server listens on for this check
-    //<
-    //< Caution: **Keep it different from the ports in `kssrv/tests/main.kspl`**: that suite may be
-    //< running at the same time.
 
 fn main(): I32
     verdict.begin("kssrv")
@@ -47,11 +41,11 @@ fn main(): I32
 priv fn fetch(exe: U8[], root: U8[], work: U8[], arena: Arena$@): pilot.Blob? //<
     //< The policy the server serves; the server is stopped before this returns
     started: =
-        bring_up(exe, root, work, "kssrv", COPY_PORT, U8[][]::{},
+        bring_up(exe, root, work, "kssrv", U8[][]::{},
         "kssrv comes into a state where it can answer", arena)
     if got: = started
         $srv: = got
-        r: = client.get(COPY_PORT, "/api/pilot", "", arena) catch e
+        r: = client.get(srv.port, "/api/pilot", "", arena) catch e
             srv.failed("GET /api/pilot is answered", e.reason(), arena)
             srv.stop()
             return .none
@@ -64,7 +58,6 @@ priv fn fetch(exe: U8[], root: U8[], work: U8[], arena: Arena$@): pilot.Blob? //
 
 priv fn compare(served: pilot.Blob, copy_path: U8[], arena: Arena$@) //<
     //< Compares the copy with the served policy: first its version, then its move at every point
-    //<
     //< Caution: **Matching manoeuvres are not enough; the versions must match too**
     //< (`__metadata__.kspl_pilot`). The version names the order of the features and the meaning of
     //< the manoeuvre table, which no tensor shows. A reader refuses a version it does not know.
@@ -85,15 +78,12 @@ priv fn compare(served: pilot.Blob, copy_path: U8[], arena: Arena$@) //<
         found@, fresh)
 
 priv fn read_blob(path: U8[], arena: Arena$@): pilot.Blob? //< the copy, read as a policy
-    body: = io.read_file(path) catch
+    data: = io.read_file(path, arena) catch
         return .none
-    data: = U8[]::arena.dup_str(body)
-    dealloc(body.ptr)
     return car.to_blob(data, arena)
 
 priv fn sweep(served: pilot.Blob, copy: pilot.Blob, found: List<|U8[]|>$@, arena: Arena$@) //<
     //< Every point where the copy's manoeuvre differs from the served one
-    //<
     //< **A close call is left out of the verdict.** Where the served policy barely prefers one
     //< manoeuvre, the two computations can disagree for that reason alone (`car.TIGHT_MARGIN`).
     scratch: = Arena.new(1024 * 1024)

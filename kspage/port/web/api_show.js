@@ -4,8 +4,14 @@
 // them; the cutting is a view, and the document does not change.**
 // ==========================================
 function kspageApiShow(ks) {
-  const { w, outText, scratch, nums, draw, acted, paintCrop, paintChrome, paperOf, regionAt,
+  const { w, enc, outText, scratch, nums, draw, acted, paintCrop, paintChrome, paperOf, handOver,
     cramps } = ks;
+  // Puts one page's settings in place **as a saved document's are read** (`paperOf`'s names).
+  // **No redraw**: the caller lays out next.
+  const putPaper = (data) => {
+    const bytes = enc.encode(JSON.stringify(data));
+    if (handOver(bytes)) w.kspage_web_set_paper(bytes.length);
+  };
   Object.assign(ks.api, {
     // Draws page `i` onto `target`'s canvas at 1:1 (a document that is not split is one sheet).
     // **The margins apply here** (the layout knows none); printing uses one canvas per page.
@@ -17,12 +23,13 @@ function kspageApiShow(ks) {
     // `@page`. **Decide whether to borrow only here** (`paper.js`'s `@page` uses it too).
     printPaper() {
       const was = paperOf();
-      if (was.width > 0 && was.height > 0) {
+      if (was.page_width > 0 && was.page_height > 0) {
         return was;
       }
-      w.kspage_web_default_paper(scratch);
-      const [width, height, left, top, right, bottom] = nums(6);
-      return { width, height, left, top, right, bottom, band: 0, reading: was.reading };
+      const use = JSON.parse(outText(w.kspage_web_default_paper()));
+      if (was.reading_width) use.reading_width = was.reading_width;
+      use.band = 0;
+      return use;
     },
     // Draws every page; `make(i)` returns page `i`'s canvas (null draws nothing).
     // **Lay out once and ask the page count once** (not in the `for` condition).
@@ -31,13 +38,11 @@ function kspageApiShow(ks) {
       // canvas mid-line. **Borrow the margins with the size**, since a margin of 0 leaves the
       // bands nowhere to go. A document with paper set borrows nothing.
       const was = paperOf();
-      const bare = was.width <= 0 || was.height <= 0;
+      const bare = !(was.page_width > 0 && was.page_height > 0);
       if (bare) {
         // Caution: **Do not write the numbers here** (`a4_portrait` in `../../model/paper.kspl`
         // holds them; `printPaper` decides what to borrow).
-        const use = this.printPaper();
-        w.kspage_web_set_paper(use.width, use.height, use.left, use.top, use.right, use.bottom,
-          was.reading);
+        putPaper(this.printPaper());
       }
       // **Lay out for paper** (no cursor: the formula being typed in prints its value). Where
       // memory runs out, no page is drawn (the net reports it).
@@ -53,8 +58,7 @@ function kspageApiShow(ks) {
       // Caution: **Restore the borrowed page and lay out again**, or the screen stays split into
       // pages at the document's width (the settings silently vanish).
       if (bare) {
-        w.kspage_web_set_paper(was.width, was.height, was.left, was.top, was.right, was.bottom,
-          was.reading);
+        putPaper(was);
       }
       // **Back to the screen's background color**: `draw` reads the theme again and lays out.
       draw();
@@ -70,11 +74,13 @@ function kspageApiShow(ks) {
       const box = p.band > 0
         ? [from, i * p.band, column, p.band]
         : [from, 0, column, Math.max(w.kspage_web_height(), 1)];
-      const outW = p.width > 0 ? p.width : box[2] + p.left + p.right;
-      const outH = p.height > 0 ? p.height : box[3] + p.top + p.bottom;
+      const left = p.margin_left || 0;
+      const top = p.margin_top || 0;
+      const outW = p.page_width > 0 ? p.page_width : box[2] + left + (p.margin_right || 0);
+      const outH = p.page_height > 0 ? p.page_height : box[3] + top + (p.margin_bottom || 0);
       // **White page, black text** (in a dark screen's colors the text is invisible on paper).
       paintCrop(target, count, box, outW, outH, window.devicePixelRatio || 1,
-        { scale: 1, x: p.left, y: p.top, ink: "black", paper: "white" });
+        { scale: 1, x: left, y: top, ink: "black", paper: "white" });
       // Caution: **Draw the header and footer after cropping** (they sit in the margins, outside
       // the crop); the coordinates are already from the page's top left.
       paintChrome(target, i + 1, total);
@@ -87,8 +93,8 @@ function kspageApiShow(ks) {
       const out = [];
       for (let i = 0; i < w.kspage_web_region_count(); i++) {
         w.kspage_web_region(i, scratch);
-        const [x, y, rw, rh, kind] = nums(5);
-        out.push({ x, y, w: rw, h: rh, kind: regionAt(kind).key });
+        const [x, y, rw, rh] = nums(4);
+        out.push({ x, y, w: rw, h: rh, kind: outText(w.kspage_web_region_kind(i)) });
       }
       return out;
     },

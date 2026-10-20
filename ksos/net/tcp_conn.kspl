@@ -1,5 +1,4 @@
 //< Sends and receives bytes while keeping one TCP connection's seq/ack state
-//<
 //< Built on `build_tcp_segment` / `parse_tcp_segment` in `ksos/net/mini_ipv4.kspl`, which hold
 //< no state. This file holds it. send's and recv's signatures match mbedtls_ssl_send_t's and
 //< mbedtls_ssl_recv_t's. So a caller can pass them to mbedtls_ssl_set_bio as they are.
@@ -10,19 +9,16 @@ import "std/chars"
 
 const MBEDTLS_ERR_SSL_WANT_READ: I32 = -0x6900 //<
     //< The constant mbedtls_ssl_recv_t uses to say "there is no data to read right now"
-    //<
     //< It is MBEDTLS_ERR_SSL_WANT_READ, from mbedtls/ssl.h; the caller reads again later. This file
     //< includes none of mbedTLS's headers.
 
 const MBEDTLS_ERR_NET_CONN_RESET: I32 = -0x0050 //<
     //< What recv returns once the peer has reset the connection (RST)
-    //<
     //< It is MBEDTLS_ERR_NET_CONN_RESET, from mbedtls/net_sockets.h. The peer's FIN reads as 0
     //< instead, the end of the stream in mbedtls_ssl_recv_t's contract.
 
 const MAX_FRAME_PAYLOAD: Sz = 1400 //<
     //< The limit on a send payload that fits one Ethernet frame
-    //<
     //< It is the MTU of 1500 minus the headers, with a margin.
     //< Beyond it, tcp_stream_send sends part (send_t allows it) and the caller calls again.
 
@@ -50,7 +46,6 @@ struct Tcp_conn
 
 fn make(link: netlink.Link, ends: net.Ends, our_seq: U32, peer_seq: U32): Tcp_conn //<
     //< Builds the state right after the 3-way handshake
-    //<
     //< The caller resolves ARP and does the handshake with `ksos/net/mini_ipv4.kspl` (see
     //< `ksos/demo/rp2040/rp2040_net_probe.kspl`).
     //< Pass our_seq and peer_seq as they are after each side's SYN has used one.
@@ -86,7 +81,6 @@ fn tcp_stream_send(ctx: Void$@, buf: U8@, len: Sz): I32
     return I32::n
 
 priv fn send_ack(conn: Tcp_conn$@) //< tells the peer everything before peer_seq has arrived
-    //<
     //< Without it the peer resends what it sent, and stops sending once its window is full. The
     //< outcome is not waited on: a lost ACK is sent again when the peer's resend arrives.
     seg_len: = net.build_tcp_segment(U8$[]::conn.tx_scratch, conn.ends, conn.our_seq,
@@ -96,7 +90,6 @@ priv fn send_ack(conn: Tcp_conn$@) //< tells the peer everything before peer_seq
 
 priv fn take_pending(conn: Tcp_conn$@, buf: U8$@, len: Sz): Sz //<
     //< Returns as much of the payload left in rx_scratch as fits the buffer
-    //<
     //< It keeps the rest for later.
     //< peer_seq advances **only by what was actually returned**. The ACK goes once the whole
     //< segment has gone. Only then is rx_scratch free for the next one.

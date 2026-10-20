@@ -1,5 +1,4 @@
 //< What a hover answers: which positions answer, what it says on a value, and a declaration's docs
-//<
 //< Not a suite; `../suite/lsp_test.kspl` runs each part.
 import "ksplc/tests/support/jsonrpc_client"
 import "ksplc/tests/support/lsp_client"
@@ -335,13 +334,11 @@ impl Row
 fn wrapped(a1: I32, a2: I32, a3: I32, a4: I32, a5: I32, a6: I32, a7: I32, a8: I32,
   a9: I32): I32 //<
   //< The summary of a head that closes on a later line
-  //<
-  //< The detail behind the parting mark.
+  //< The detail on the line after it.
   return a1 + a9 - a2 - a3 - a4 - a5 - a6 - a7 - a8
 
 
 fn pointing(): Sz //< what `Row.put` gives back, never `r.text` alone
-  //<
   //< Keep [`Row.put`](https://example.test/kept) as written.
   return 0
 
@@ -397,12 +394,11 @@ priv fn check_hover_doc(c: jsonrpc_client.Client$@, arena: Arena$@)
     w2_text: = lsp_client.hover_text(w2_got.val)
     verdict.check("a head closing on a later line carries its run",
         w2_text.find_str("The summary of a head that closes on a later line").is_some() &&
-        w2_text.find_str("The detail behind the parting mark.").is_some(),
+        w2_text.find_str("The detail on the line after it.").is_some(),
         lsp_client.why(c, arena.text().s("'").s(w2_text).s("'").take(), arena))
-    // A mark with no text inside a run separates the summary from the detail (PEP 257's blank
-    // line).
-    verdict.check("a mark carrying no text parts the summary from the detail",
-        w2_text.find_str("later line.\n\nThe detail behind").is_some(),
+    // **The run's first line is the summary**, and the line boundary parts it from the detail.
+    verdict.check("the first line is the summary, set apart from the detail",
+        w2_text.find_str("later line.\n\nThe detail on").is_some(),
         lsp_client.why(c, arena.text().s("'").s(w2_text).s("'").take(), arena))
 
     // Caution: **Test a field too.** It has no contents, and searching for a `{` would find the
@@ -423,7 +419,6 @@ priv fn check_hover_doc(c: jsonrpc_client.Client$@, arena: Arena$@)
 
 priv fn check_hover_params(c: jsonrpc_client.Client$@, arena: Arena$@) //<
     //< It checks a hover shows the parameters one per line, each with its own `//<`
-    //<
     //< The lines are as the source has them.
     //< A parameter with no comment stays bare, and a run continued below joins its parameter's
     //< line.
@@ -441,7 +436,7 @@ priv fn check_hover_params(c: jsonrpc_client.Client$@, arena: Arena$@) //<
         return
     text: = lsp_client.hover_text(got.val)
     verdict.check("a hover lays a described parameter out on its own line",
-        text.find_str("\n    at: Sz, //< which column it starts in Counted from 0, not 1.\n")
+        text.find_str("\n    at: Sz, //< which column it starts in. Counted from 0, not 1.\n")
         .is_some(),
         lsp_client.why(c, arena.text().s("\'").s(text).s("\'").take(), arena))
     verdict.check("a parameter that describes nothing stands with nothing behind it",
@@ -491,7 +486,6 @@ priv fn check_hover_params(c: jsonrpc_client.Client$@, arena: Arena$@) //<
 
 priv fn check_hover_links(c: jsonrpc_client.Client$@, arena: Arena$@) //<
     //< A name the description mentions is shown as a link to where it is declared
-    //<
     //< **It is resolved as `[W0211]` resolves it**, through the description's scope: `Row.put`
     //< links, `r.text` (unknown head) stays text, and so does `io.out` where a parameter `io` hides
     //< the module.

@@ -1,5 +1,4 @@
 //< `textDocument/semanticTokens/full`: the colouring of names, read from the syntax tree
-//<
 //< It comes on top of the editor's own grammar colouring; a document with no tree gets an empty
 //< answer (`handle`). A call's target is not coloured as a call: it cannot be told apart from a
 //< call through a function-pointer variable.
@@ -26,7 +25,6 @@ import "std/str"
 priv const TOKEN_TYPES: U8[][8] = ::{ "namespace", "type", "struct", "enum", "interface",
     "function", "property", "parameter" }
 priv const T_NAMESPACE: I32 = 0I32 //< the number per kind
-    //<
     //< Caution: **Keep it in step with the list above.**
 priv const T_TYPE: I32 = 1I32
 priv const T_STRUCT: I32 = 2I32
@@ -37,13 +35,11 @@ priv const T_PROPERTY: I32 = 6I32
 priv const T_PARAMETER: I32 = 7I32
 
 priv const TOKEN_MODS: U8[][1] = ::{ "declaration" } //< the modifiers attached
-    //<
     //< **Only `declaration`** (the others would be guesswork). The position in the list is the bit.
 priv const M_NONE: I32 = 0I32
 priv const M_DECL: I32 = 1I32
 
 priv struct Tok //< one token to send
-    //<
     //< **It holds the byte position** (the conversion to UTF-16 happens once, at the end).
     offset: Sz
     bytes: Sz
@@ -51,7 +47,6 @@ priv struct Tok //< one token to send
     mods: I32
 
 fn provider(b: Json_builder$@): json.Value //< the capability declared in `initialize`
-    //<
     //< Caution: **Always send the `legend`** — that list, and nothing else, defines what the
     //< numbers mean.
     $types: = b.arr()
@@ -66,7 +61,6 @@ fn provider(b: Json_builder$@): json.Value //< the capability declared in `initi
 
 priv fn kind_of_decl(k: base_ast_kinds.Ast_kind): I32 //<
     //< The token type number for a declaration's kind
-    //<
     //< **An unknown declaration kind is not sent** (-1).
     switch k
     case .k_decl_fn, .k_decl_fn_proto
@@ -90,7 +84,6 @@ priv fn kind_of_decl(k: base_ast_kinds.Ast_kind): I32 //<
 
 priv fn gather(node: Ast_node$@, file: U8[], out: List<|Tok|>$@) //<
     //< It walks the tree and collects the tokens to send
-    //<
     //< Caution: **Do not send the same position twice** (the editor applies the colour twice). A
     //< declaration sends one identifier child, a type position only its leaf identifiers.
     // **Nothing the compiler generated is sent** (`made_by_compiler` in `../base/ast_ext.kspl`).
@@ -138,7 +131,6 @@ priv fn add_ids(node: Ast_node$@, file: U8[], kind: I32, mods: I32, out: List<|T
 
 priv fn add_one(node: Ast_node$@, file: U8[], kind: I32, mods: I32, out: List<|Tok|>$@) //<
     //< It sends one token
-    //<
     //< **A node from another file is not sent** (the answer covers one file).
     if node == null || node.text.len <= 0 || !node.loc.file().equals(file)
         return
@@ -148,7 +140,6 @@ priv fn add_one(node: Ast_node$@, file: U8[], kind: I32, mods: I32, out: List<|T
 
 priv fn position_order(a: Tok@, b: Tok@): I32 //<
     //< By position in the file
-    //<
     //< **The walk order is not necessarily the order of the names** (normalization moves nodes).
     //< So the collected tokens are sorted this way before they are packed.
     if a.offset == b.offset
@@ -157,7 +148,6 @@ priv fn position_order(a: Tok@, b: Tok@): I32 //<
 
 priv fn packed(src: U8[], toks: List<|Tok|>$@, b: Json_builder$@, arena: Arena$@): json.Value //<
     //< It packs the collected tokens into the LSP's number array
-    //<
     //< **Each token is five numbers** (the line's difference, the column's difference, the length,
     //< the kind, the modifiers). **Each difference is from the previous token.** On the same line
     //< the column is a difference too. After a line change the column counts from its start.
@@ -194,7 +184,6 @@ priv fn packed(src: U8[], toks: List<|Tok|>$@, b: Json_builder$@, arena: Arena$@
 
 fn handle(state: Doc_state$@, id_val: json.Value, arena: Arena$@) //<
     //< It answers `textDocument/semanticTokens/full`
-    //<
     //< Caution: **Answer empty for a document that is not open** (dropped silently, the editor
     //< waits).
     $b: = Json_builder.new(arena)

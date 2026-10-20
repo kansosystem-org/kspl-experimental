@@ -1,5 +1,4 @@
 //< The material `../suite/fmt_test.kspl` formats: each input, and the shape it must come out in
-//<
 //< Not a suite. **Each constant is data its case reads**, written by hand in the shape the
 //< formatter must give. `make fmt` does not reach inside a string, so it cannot put one right.
 
@@ -574,6 +573,73 @@ fn main(): I32
     return I32::(r.text.len + already(0) + wrapped(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) - 1
 """
 
+// An empty `//<` right below a run's summary, in each place a run starts: a file's head, behind a
+// declaration, behind a field, under an anchor and behind a parameter. **Only that one goes**: the
+// empty `//<` between two paragraphs of the detail stays, and so does a blank line.
+const SRC_AFTER_SUMMARY_IN: U8[] =
+    """//< A file's own summary
+//<
+//< Its detail, first paragraph.
+//<
+//< Its detail, second paragraph.
+import "std/io"
+
+priv struct Row //< one row
+    //<
+    //< The detail of a row.
+    text: U8[] //< the text
+        //<
+        //< kept as typed
+    width: Sz //< how wide it stands
+
+priv fn twice(m: I32,
+    n: I32, //< the number
+        //<
+        //< of any sign
+): I32 //<
+    //< n doubled
+    //<
+    //<
+    //< A negative is doubled the same way.
+    //<
+    //< Nothing is clamped.
+    return n * 2 + m
+
+fn main(): I32
+    r: Row = ::{ .text = "a", .width = 1 }
+    io.out().s(r.text)
+    return twice(0, 0)
+"""
+
+const SRC_AFTER_SUMMARY_OUT: U8[] =
+    """//< A file's own summary
+//< Its detail, first paragraph.
+//<
+//< Its detail, second paragraph.
+import "std/io"
+
+priv struct Row //< one row
+    //< The detail of a row.
+    text: U8[] //< the text
+        //< kept as typed
+    width: Sz //< how wide it stands
+
+priv fn twice(m: I32,
+    n: I32, //< the number
+        //< of any sign
+): I32 //<
+    //< n doubled
+    //< A negative is doubled the same way.
+    //<
+    //< Nothing is clamped.
+    return n * 2 + m
+
+fn main(): I32
+    r: Row = ::{ .text = "a", .width = 1 }
+    io.out().s(r.text)
+    return twice(0, 0)
+"""
+
 // A block on one line: its last `;` is left out.
 const SRC_BARE_LINE_IN: U8[] =
     """pub fn one(x: I32): I32 { return x + 1; }
@@ -612,10 +678,9 @@ fn main(): I32
     return x
 """
 
-// The above's expected value.
+// The above's expected value. The empty `//<` below the summary is dropped.
 const SRC_COMMENT_CUT_OUT: U8[] =
     """//< Comments that cross the column limit, cut at the last space that fits
-//<
 //< This detail paragraph has one line that runs far past the hundredth column because a name in it
 //< grew. The next line of the same paragraph takes the carried words at its start.
 //< This line runs past the limit too, and the line below it is a caution, so its words stand alone
@@ -658,7 +723,6 @@ const SRC_CATCH_WIDE_OUT: U8[] =
 // reader joins the next line. The file's own summary stays one line while its detail is cut.
 const SRC_NARROW_IN: U8[] =
     """//< A file whose own summary is far too long for forty columns
-//<
 //< Its detail is cut where it crosses the limit, as detail may be.
 import "std/str" as str_module + { Str_builder }
 
@@ -676,7 +740,6 @@ fn a_function_with_a_long_name(n: I32): I32
 
 const SRC_NARROW_OUT: U8[] =
     """//< A file whose own summary is far too long for forty columns
-//<
 //< Its detail is cut where it crosses
 //< the limit, as detail may be.
 import "std/str" as str_module + { Str_builder }

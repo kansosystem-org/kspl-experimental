@@ -1,5 +1,4 @@
 //< The formatter's decisions on where a space goes and where a line may break
-//<
 //< It also decides where a string literal carried onto the next line is cut.
 //<
 //< **It touches none of `Formatter`'s state.** The answer depends only on the previous token, the
@@ -8,6 +7,7 @@
 import "ksplc/base/literal" as base_literal
 import "ksplc/fmt/kinds" as fmt_kinds
 import "std/chars" // the one-character checks and matches
+import "std/math"
 import "std/str" { Str_builder }
 
 struct Fmt_flags
@@ -19,7 +19,6 @@ struct Fmt_flags
     in_type_expr: Bool
     last_was_postfix_mark: Bool //<
         //< Whether the last token was a postfix `!` (`f()!`, `T!E`), not a prefix "not"
-        //<
         //< It spaces as an operand's tail: no operator spacing after it, as after `)`.
 // ---------------------------------------------------------
 // Spacing & Wrapping Rules
@@ -142,7 +141,6 @@ fn calc_spacing_requirement(last_txt: U8[], text: U8[], flags: Fmt_flags, no_spa
 fn check_line_wrap(last_txt: U8[], text: U8[], require_space: Bool, current_col: Sz, space_len: Sz,
     text_len: Sz, limit: Sz, dot_break_ok: Bool, after_catch: Bool): Bool //<
         //< Whether the line breaks before `text`, where it passes `limit` and a break is safe there
-        //<
         //< dot_break_ok is whether the `.` may be a wrapping candidate. It comes from
         //< pending_dot_break_ok: a true chain, or a call with no `,` (see has_multi_dot_chain /
         //< chain_segment_has_comma). As in clang-format, a single call wraps on its `,` before its
@@ -175,7 +173,6 @@ fn check_line_wrap(last_txt: U8[], text: U8[], require_space: Bool, current_col:
 
 fn join_string_lines(text: U8[], out: Str_builder$@): Bool //<
     //< It writes a literal's spelling into `out` with every line continuation taken out
-    //<
     //< It returns false for a literal that is not laid out at all, and `out` is then to be
     //< ignored. Such a literal is a raw text (`"""`), a character literal, or one holding a line
     //< terminator of its own.
@@ -202,7 +199,6 @@ fn join_string_lines(text: U8[], out: Str_builder$@): Bool //<
 
 fn string_piece_end(text: U8[], from: Sz, budget: Sz): Sz //<
     //< How much of a joined literal goes on this line, counted from `from`
-    //<
     //< `text.len` where the rest fits, otherwise just past the last space leaving room for the `\`.
     //< `from` where none fits, so a word longer than the line is written whole.
     //< Caution: **Do not break at a space inside `\{ … \}` or in a run of spaces.** The first is
@@ -228,4 +224,4 @@ fn string_piece_end(text: U8[], from: Sz, budget: Sz): Sz //<
             (text.ptr + i + 1)$ != '\t'
             best = i + 1
         i += 1
-    return best if best > from else from
+    return math.max(best, from)

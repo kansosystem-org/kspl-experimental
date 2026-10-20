@@ -1,5 +1,4 @@
 //< The queue of deferred work, and where it is drained
-//<
 //< An instantiation's method table, trait conformance and constraints are queued and built
 //< separately; this file queues and drains them. Instantiation itself is in `sema/decl/mono.kspl`.
 //<
@@ -19,7 +18,6 @@ import "std/ds" { List }
 import "std/str"
 
 priv const MAX_METHOD_CHAIN_DEPTH: Sz = 32 //< the limit on the method-table chain
-    //<
     //< **It is separate from `MAX_MONO_DEPTH` (mono.kspl)**, the call depth, which can go deep.
     //< This counts levels of "A's table or body instantiates B, B's instantiates another…".
     //< Caution: **Do not raise it much**: stopping a runaway would take seconds and look like a
@@ -28,7 +26,6 @@ priv const MAX_METHOD_CHAIN_DEPTH: Sz = 32 //< the limit on the method-table cha
 impl Sema_ctx
     fn mark_constraint_failed(r: Self$@) //<
         //< Records a type-argument constraint violation against the currently bound instantiation
-        //<
         //< It turns off that instantiation's body check.
         name: = r.mono.current_inst_name
         if name.len == 0
@@ -37,7 +34,6 @@ impl Sema_ctx
 
     fn has_failed_constraint(r: Self$@, inst_name: U8[]): Bool //<
         //< Whether that instantiation violates a type-argument constraint
-        //<
         //< Where it does, its body is not type-checked.
         if inst_name.len == 0
             return false
@@ -45,7 +41,6 @@ impl Sema_ctx
 
     fn snapshot_generic_args(r: Self$@): List<|sema_session_state.Generic_arg|>$@ //<
         //< Copies the currently bound type arguments
-        //<
         //< Deferred work runs after the bindings are removed, so the code that records it keeps a
         //< copy.
         snapshot: = List<|sema_session_state.Generic_arg|>.create(base_core.arena)
@@ -56,7 +51,6 @@ impl Sema_ctx
     fn queue_fn_body(r: Self$@, node: Ast_node$@, impl_name: U8[], depth: Sz, shown: U8[],
         site: Ast_node$@) //<
             //< Queues an instantiated body for inference **exactly once**
-            //<
             //< The call site and the method table both queue it, in no fixed order (is_body_queued
             //< in sema/type/scope.kspl). `shown` and `site` are what a diagnostic in the body
             //< names (Pending_inst); the first to queue it gives them.
@@ -73,7 +67,6 @@ impl Sema_ctx
 
     fn ensure_instance_methods(r: Self$@, type_id: I32): Void!Sema_error //<
         //< Builds the method table of the instance type_id where its building was deferred
-        //<
         //< Caution: **Every function that reads a table must go through here**, or the table is
         //< missing with no diagnostic.
         // **Strip the pointer and immutability first.** The table is under the plain
@@ -95,7 +88,6 @@ impl Sema_ctx
 
     fn build_entrusted_tables(r: Self$@) //<
         //< Builds every method table deferred until a lookup, for a caller with no type to look by
-        //<
         //< For example, a hover asking which type has a function.
         held: = r.mono.deferred_methods
         if held == null || held.len == 0
@@ -123,7 +115,6 @@ impl Sema_ctx
 
     fn put_off_constraint(r: Self$@, constraint_node: Ast_node$@, target_id: I32): Bool //<
         //< Defers a constraint check, recording a copy of the bindings; true if deferred
-        //<
         //< It defers nothing while that queue is being drained. The caller is
         //< check_type_constraint in sema/decl/resolve.kspl.
         if r.mono.draining_constraints
@@ -138,14 +129,12 @@ impl Sema_ctx
 
     fn drain_pending_constraints(r: Self$@) //<
         //< Runs all the deferred constraint checks
-        //<
         //< The reason for deferring them is at Pending_constraint in sema/session/state.kspl.
         //< Call it outside error suppression, that is, at a phase boundary (pipeline.kspl).
         r.drain_pending_constraints_for("")
 
     fn drain_pending_constraints_for(r: Self$@, inst_name: U8[]) //<
         //< Runs the pending constraint checks; with inst_name, only that instantiation's
-        //<
         //< Caution: **Before building one item, drain only that instantiation's checks.** One not
         //< yet built has an empty conformance table, and a correct type is rejected.
         // Under suppression the queue is **discarded, not drained**: check_type_constraint would
@@ -199,7 +188,6 @@ impl Sema_ctx
 
     fn drain_pending_instances(r: Self$@): Void!Sema_error //<
         //< Builds queued instances' method tables and trait conformances until the queue empties
-        //<
         //< The queue grows during the walk: read the raw len on every iteration (`for x in list`
         //< copies len at the start and misses new items). On re-entry it only queues; nested, the
         //< inner run would clobber the outer bindings.

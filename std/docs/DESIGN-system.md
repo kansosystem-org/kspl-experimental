@@ -53,6 +53,18 @@ Caution: **Anything that starts with `-` and that no declaration knows is an err
 
 Joining a value to a short letter (`-Dflag`) needs its own matching rule. The cost is typing. The lines that repeat an option are in build files and scripts, which are written once. `--help` has no `-h` either: a rule with one exception is two rules to learn. And `-h` means something else elsewhere: human-readable sizes for `ls -h` and `df -h`, and no file names for `grep -h`. The parser refuses a `-h` as an unknown option, and the refusal prints the usage. So the reader still gets what they came for.
 
+### An option names the subcommands it takes effect on
+
+**An option given with a subcommand that does not act on it is refused.** `p.only_for("--in-place", "fmt")` limits `--in-place` to `fmt`. The refusal (`not_for_command`) names the subcommands that take the option. Accepted, the option would do nothing, and the writer would believe that it took effect. An option without `only_for` takes effect on every subcommand.
+
+**Where an option stands on the line does not matter.** `--std-dir=x info std-dir` and `info --std-dir=x std-dir` mean the same. The parser checks the scope once it has read the whole line. The other design ties an option to a level of the line: the program's options before the subcommand's name, the subcommand's own after it. The user must then remember each option's level. An option that several subcommands share needs a copy at each level.
+
+**One subcommand can be the default** (`default_command`). The parser chooses it when the line names none, as `ksplc a.kspl a.c` compiles. Its name is never typed: two ways to ask for one thing are two spellings to learn (Principle 6 in [`../../docs/DESIGN-principles.md`](../../docs/DESIGN-principles.md)). The name still stands in the usage, in `command` and in `only_for`.
+
+**Each subcommand can carry its usage line** (`command_form`). The usage then opens with one line per subcommand, and it lists the options that each subcommand takes. `print_command_usage` writes the line of one subcommand, for the refusal of its arguments. The parser writes these lists from the declarations, so no copy kept by hand drifts.
+
+The price: a scope is a string of names, separated by spaces. A name that no declaration knows stops the program at the declaration, as `saw` does. So the mistake shows at the first run, not at compile time.
+
 ### A program keeps its own output on an abnormal exit
 
 Output that waits in a buffer is lost when a program crashes. A program whose last lines matter, such as the test harness, asks for its output to be written out at every newline.
@@ -88,7 +100,9 @@ Standard error waits for nothing: each call is written at once.
 
 ### A write to a freed file stream stops the program
 
-`File_stream.free()` closes the C stream and leaves the handle null. **A later write stops the program with a message**, since a `Writer` call returns no failure. Otherwise the bytes would go to standard output or into the closed stream, and be lost. The program would carry on and exit 0. `read` and `sync` can report a failure, so they refuse it as `invalid_arg`. **`File_stream` is `Move_only`** for the same reason: a copy would keep the stream that its original closes. Standard output and standard error are `File_stream`s opened on the first call to `out()` / `err()`. They are never a null that stands for them.
+**A `File_stream` closes itself when its owner leaves scope** (`Drop`). `free()` closes it sooner, closing the C stream and leaving the handle null, and the compiler refuses a use of that local after it. **A later write through a pointer stops the program with a message**, since a `Writer` call returns no failure. Otherwise the bytes would go to standard output or into the closed stream, and be lost. The program would carry on and exit 0. `read` and `sync` can report a failure, so they refuse it as `invalid_arg`. A copy would keep the stream that its original closes, so a `File_stream` moves instead (`Drop` brings that rule).
+
+**Standard output and standard error are not `File_stream`s.** The whole program shares them and nothing closes them, so `out()` / `err()` hand out a stream of another type, opened on the first call. It is never a null that stands for them. It also lives in a global, where an owner that frees itself cannot.
 
 ### A crash names what happened, in one line
 
@@ -650,7 +664,9 @@ A second lock on the holding thread is a bug in the program. The first holder ca
 
 `Raw_mutex` and `Cond_var` are small values, not pointers to the heap, so the creation of one allocates nothing. They cannot be copied, because a copy could free the OS object twice.
 
-`Raw_mutex` and `Cond_var` hold one number (`I64`) that names the OS-side object. They need not stay at one address. So `new()` returns a value with no heap allocation, and `Mutex<|T|>` holds it by value too. That is one allocation and one indirection fewer than a returned pointer (`Mutex<|I32|>.new()` adds 0 bytes to the heap). `free()` destroys only the OS-side object. The value itself lives as long as the place that it sits in. **As a value type, a copy could free twice.** So both conform to `Move_only`, which forbids copies.
+`Raw_mutex` and `Cond_var` hold one number (`I64`) that names the OS-side object. They need not stay at one address. So `new()` returns a value with no heap allocation, and `Mutex<|T|>` holds it by value too. That is one allocation and one indirection fewer than a returned pointer (`Mutex<|I32|>.new()` adds 0 bytes to the heap). **Both destroy the OS-side object when their owner leaves scope** (`Drop`). The value itself lives as long as the place that it sits in. A `Mutex<|T|>` holds its lock and its value by value, so it is destroyed with them, and lets its value go too. **As a value type, a copy could free twice.** So each moves instead of being copied, the rule `Drop` brings.
+
+A lock kept in memory that the program allocated by hand is let go by hand too. `mem.drop_at` runs its cleanup before the block is given back.
 
 ### A bounded condition wait names how it ended
 

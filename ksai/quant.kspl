@@ -1,5 +1,4 @@
 //< Symmetric int8 quantization for weights, with its own scale per row
-//<
 //< **The aim is to save memory, not to speed up the arithmetic.** Right before a matrix product it
 //< expands the weights back to `F32`/`F64` once. It then uses the existing matmul unchanged, so the
 //< auto-vectorization and the numerics stay exactly as they are.
@@ -13,7 +12,6 @@ import "std/math"
 import "std/mem" { Arena }
 
 pub struct Quantized_tensor //< a weight matrix stored one byte per element, with a scale per row
-    //<
     //< dequantized[i][j] = data[i][j] * scales[i]. The quantization is symmetric, so it holds no
     //< zero point, and a quantized value is kept within [-127, 127].
     pub data: I8$@ //< the quantized values, rows*cols of them, row by row
@@ -23,7 +21,6 @@ pub struct Quantized_tensor //< a weight matrix stored one byte per element, wit
 
 impl<|T|> Tensor<|T|>
     pub fn quantize( //< the same matrix at one byte per element; a rank other than 2 is rejected
-        //<
         //< **The caller chooses where to allocate.** Memory is saved only if the original is
         //< dropped after quantizing; on the original's arena, dropping it would drop the quantized
         //< copy too.
@@ -43,7 +40,7 @@ impl<|T|> Tensor<|T|>
             $max_abs: F64 = 0.0
             for j in Range.asc(cols)
                 v: = F64::(r.data + row_off + j)$
-                av: = -v if v < 0.0 else v
+                av: = math.abs(v)
                 if av > max_abs
                     max_abs = av
             // The scale is max_abs / 127; an all-zero row uses 1 (no division by zero, and its
@@ -66,7 +63,6 @@ impl<|T|> Tensor<|T|>
 
 impl Quantized_tensor
     pub fn dequantize<|T|>( //< the matrix restored to full width, ready for a normal matrix product
-        //<
         //< After that, the existing matmul and the rest work unchanged.
         r: Self$@,
         arena: Arena$@, //< the arena to allocate from; usually a short-lived one, not the weights'

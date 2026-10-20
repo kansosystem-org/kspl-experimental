@@ -1,5 +1,4 @@
 //< Links the compiler's output into an executable, and runs it
-//<
 //< **This is the only place that calls the C compiler and the linker.** So a suite that does not
 //< need them does not depend on them. [`harness.kspl`](harness.kspl) holds the rest.
 import "ksplc/tests/support/harness"
@@ -15,7 +14,6 @@ import "std/verdict"
 
 pub fn query_words(topic: U8[], out: List<|U8[]|>$@, arena: Arena$@): Bool //<
     //< It asks ksplc's info subcommand for topic and appends the answer's words to out
-    //<
     //< Caution: **Do not copy the link options here.** ksplc knows the libraries and the stack size
     //< (`info link-libs` / `info exe-flags`); a copy that misses an addition builds differently —
     //< and on Linux nothing shows.
@@ -33,7 +31,6 @@ pub fn query_words(topic: U8[], out: List<|U8[]|>$@, arena: Arena$@): Bool //<
 
 fn exe_flags(): List<|U8[]|>$@ //<
     //< The options ksplc says it "passes when building an executable"
-    //<
     //< Empty on some targets (Windows's linker does not drop unreferenced sections); a check
     //< measuring an option's effect reads empty as "out of scope here".
     //< Caution: **Do not pass these in your own `harness.cc()` call.** Only the functions below
@@ -45,7 +42,6 @@ fn exe_flags(): List<|U8[]|>$@ //<
 
 priv fn below(path: U8[], dir: U8[]): U8[] //<
     //< A path below dir, spelled from dir (anything else is returned unchanged)
-    //<
     //< Caution: **A path passed to the C compiler goes through this**, with the compiler started in
     //< the executable's folder. An absolute path holding non-ASCII arrives garbled at MSYS2's ld.
     prefix: = harness.arena().text().s(dir).c('/').take()
@@ -55,18 +51,15 @@ priv fn below(path: U8[], dir: U8[]): U8[] //<
 
 const DEFAULT_CFLAGS: U8[][_] = ::{ "-std=c99", "-O0" } //<
     //< The default options for building the generated C
-    //<
     //< Adding more keeps these two.
 
 pub const LLVM_CFLAGS: U8[][_] = ::{ "-Wno-override-module", "-mllvm", "-fast-isel=false" } //<
     //< The options for building LLVM IR
-    //<
     //< **Do not drop `-fast-isel=false`**: the fast selector folds some instructions itself and
     //< answers differently from the C backend. `-Wno-override-module` silences the warning that the
     //< IR's target name differs from clang's default.
 
 struct Exe_job //< the command that builds an executable, to run beside others (`harness.run_all`)
-    //<
     //< **Where why is not empty, the command could not be composed**, and why says what failed.
     job: subproc.Job
     why: U8[]
@@ -75,11 +68,11 @@ priv fn failed_job(why: U8[]): Exe_job
     return Exe_job::{ .job = subproc.Job::{ .argv = U8[][]::{}, .cwd = "" }, .why = why }
 
 priv fn build_job(cc: U8[], gen: U8[][], exe: U8[], cflags: U8[][], llvm: Bool, flagged: Bool,
-    arena: Arena$@): Exe_job //<
+    libs: U8[], arena: Arena$@): Exe_job //<
         //< The command that builds the executable exe from the generated files gen
-        //<
         //< Caution: **Only this function composes it**, or a caller that misses an addition builds
         //< differently. The libraries go **after** the inputs (GNU ld resolves from the left).
+        //< `libs` is the file `--emit-libs=` wrote, or empty for none.
     dir: = sys.get_dir_name(exe)
     $argv: = List<|U8[]|>.new(arena)
     argv.push(cc)
@@ -96,6 +89,8 @@ priv fn build_job(cc: U8[], gen: U8[][], exe: U8[], cflags: U8[][], llvm: Bool, 
         if !made.exited_with(0)
             return failed_job(arena.text().s("[harness] emit-runtime failed\n").s(made.out).take())
         argv.push(below(rt, dir))
+    if libs.len > 0
+        argv.push(arena.text().c('@').s(below(libs, dir)).take())
     if !query_words("link-libs", argv@, arena)
         return failed_job("[harness] the link options could not be asked of ksplc")
     if flagged && !query_words("exe-flags", argv@, arena)
@@ -106,20 +101,24 @@ priv fn build_job(cc: U8[], gen: U8[][], exe: U8[], cflags: U8[][], llvm: Bool, 
 
 priv fn build(cc: U8[], gen: U8[][], exe: U8[], cflags: U8[][], llvm: Bool, flagged: Bool,
     arena: Arena$@): verdict.Run_out //< it builds the executable exe from the generated files gen
-    j: = build_job(cc, gen, exe, cflags, llvm, flagged, arena)
+    return run_job(build_job(cc, gen, exe, cflags, llvm, flagged, "", arena))
+
+priv fn run_job(j: Exe_job): verdict.Run_out //<
+    //< runs a build job, or answers why it was not composed
     if j.why.len > 0
         return verdict.Run_out::{ .code = .none, .out = j.why }
     return harness.run_in(j.job.argv, j.job.cwd)
 
 fn exe_job(gen: U8[], exe: U8[], llvm: Bool): Exe_job //<
     //< The command that builds one generated file into an executable
-    //<
     //< With the options `build_exe` and `build_llvm_exe` are given by default, for a suite that
     //< builds many at once (`harness.run_all`).
     arena: = harness.arena()
     if llvm
-        return build_job(harness.cc(), U8[][]::{ gen }, exe, U8[][]::LLVM_CFLAGS, true, true, arena)
-    return build_job(harness.cc(), U8[][]::{ gen }, exe, U8[][]::DEFAULT_CFLAGS, false, true, arena)
+        return build_job(harness.cc(), U8[][]::{ gen }, exe, U8[][]::LLVM_CFLAGS, true, true, "",
+            arena)
+    return build_job(harness.cc(), U8[][]::{ gen }, exe, U8[][]::DEFAULT_CFLAGS, false, true, "",
+        arena)
 
 fn build_exe(gen: U8[][], exe: U8[], cflags: U8[][]): verdict.Run_out //<
     //< Links the C ksplc generated and makes an executable
@@ -128,14 +127,12 @@ fn build_exe(gen: U8[][], exe: U8[], cflags: U8[][]): verdict.Run_out //<
 
 fn build_exe_with(cc: U8[], gen: U8[][], exe: U8[], cflags: U8[][]): verdict.Run_out //<
     //< Links the C ksplc generated with the C compiler cc instead of `harness.cc()`
-    //<
     //< It is for a check that puts one generated C through two compilers.
     arena: = harness.arena()
     return build(cc, gen, exe, cflags, false, true, arena)
 
 fn build_exe_unflagged(gen: U8[][], exe: U8[], cflags: U8[][]): verdict.Run_out //<
     //< Links **without passing** the options for building
-    //<
     //< **It is only for one side of a comparison that measures an option's effect.** Otherwise use
     //< build_exe: without the options the executable grows, and Windows crashes on stack
     //< exhaustion. The libraries are still passed, or it would not link.
@@ -144,14 +141,21 @@ fn build_exe_unflagged(gen: U8[][], exe: U8[], cflags: U8[][]): verdict.Run_out 
 
 fn build_llvm_exe(gen: U8[][], exe: U8[], cflags: U8[][]): verdict.Run_out //<
     //< Links the LLVM IR ksplc generated and makes an executable
-    //<
     //< The options must be `LLVM_CFLAGS`; the C runtime is built from `emit-runtime` and linked
     //< alongside.
     arena: = harness.arena()
     return build(harness.cc(), gen, exe, cflags, true, true, arena)
 
+pub fn build_listed_exe(gen: U8[], exe: U8[], cflags: U8[][], llvm: Bool, libs: U8[]):
+    verdict.Run_out //<
+        //< Links one generated file, and the libraries its `--emit-libs=` file libs names
+        //< An empty libs names none. For the LLVM IR, cflags must hold `LLVM_CFLAGS`, as at
+        //< `build_llvm_exe`.
+    j: =
+        build_job(harness.cc(), U8[][]::{ gen }, exe, cflags, llvm, true, libs, harness.arena())
+    return run_job(j)
+
 struct Built //< whether it built, and the result of running it
-    //<
     //< **Where built is false, out is the failure's explanation**, not the program's output.
     built: Bool
     code: I32? //< the exit code; none where it did not build, or did not end
@@ -160,7 +164,6 @@ struct Built //< whether it built, and the result of running it
 fn build_and_run(src: U8[], dir: U8[], stem: U8[], ksplc_args: U8[][], llvm: Bool = false,
     cwd: U8[] = ""): Built //<
         //< Turns a source into an executable and runs it
-        //<
         //< Set `llvm` and it builds with `--to=llvm`; set `cwd` and the compiler runs there, so a
         //< source outside any package is named as `src` is written from it.
         //< Caution: **The stop message must be the same on both** backends, which keep the wording

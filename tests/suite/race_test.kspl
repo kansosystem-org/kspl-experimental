@@ -1,6 +1,5 @@
 #!/usr/bin/env -S ksplc run
 //< The programs that start threads, built with ThreadSanitizer, run with no data race reported
-//<
 //< **This stands where a type-system check does not** ("Why data races are not prevented by
 //< the type system" in `docs/DESIGN-programming-language.md`). It finds the races the tests reach,
 //< never the ones they miss. A report fails the gate, the runtime's and libc's included. Nothing is
@@ -23,22 +22,19 @@ import "std/subproc"
 import "std/sys"
 import "std/verdict"
 import "tests/support/harness"
-import "tests/support/harness_sanitizer" + { Built }
+import "tests/support/harness_sanitizer" + { Built, Sample }
 
 // `-g` and the frame pointer keep a report's stack readable down to the `.kspl` line. The
 // optimisation level is each build's (`build`).
 priv const TSAN_CFLAGS: U8[][_] = ::{ "-g", "-fno-omit-frame-pointer", "-fsanitize=thread" }
 priv const OPT_FOR_RUN: U8[] = "-O1" //< for a program whose run takes longer than its build
-    //<
     //< ThreadSanitizer's advice, for its speed.
 priv const OPT_FOR_BUILD: U8[] = "-O0" //< for one whose build takes longer than its run
-    //<
     //< **ksplc is one**: its C takes 75 s to build at `-O1` and 9 s at `-O0`, for a session of a
     //< few seconds (measured). The sanitizer watches every access at `-O0` too.
 
 priv const SELF_PATH: U8[] = "tests/suite/race_test.kspl"
 priv const RACE_STACK_KIB: U8[] = "4096" //< the stack limit every raced run starts under, in KiB
-    //<
     //< **The sanitizer, not the program, sets it.** Past about 8 MiB of the main thread's stack,
     //< ThreadSanitizer crashes inside itself in a third to half of runs (measured; 7 MiB never).
     //< std's stack test walks to the end of whatever limit it is given. The shell that starts the
@@ -85,7 +81,6 @@ priv const GLOBAL_HEAD: U8[] = "  Location is global '" //< where the report nam
 
 priv fn races_in(text: U8[], arena: Arena$@): List<|U8[]|> //<
     //< One line per report in a sanitizer's log: its summary, and the global it names
-    //<
     //< **The global goes with it**: an error's trace records at a `!`, so a summary alone points
     //< at the `!` and not at what raced. **A pure function of one text** (`REPORT_SAMPLES`).
     $out: = List<|U8[]|>.new(arena)
@@ -114,12 +109,11 @@ priv fn races_in(text: U8[], arena: Arena$@): List<|U8[]|> //<
     return out
 
 priv fn tallied(races: List<|U8[]|>@, arena: Arena$@): U8[] //<
-    //< Each distinct report once, with how many times it came, the root's prefix cut off its paths
+    //< Each distinct report once, with how many times it came
     $seen: = List<|U8[]|>.new(arena)
     $counts: = List<|Sz|>.new(arena)
-    prefix: = arena.text().s(harness.root()).c('/').take()
     for k in Range.asc(races.len)
-        short: = races.get(k).replace(prefix, "", arena)
+        short: = races.get(k)
         $at: Sz = -1
         for i in Range.asc(seen.len)
             if seen.get(i).equals(short)
@@ -134,34 +128,21 @@ priv fn tallied(races: List<|U8[]|>@, arena: Arena$@): U8[] //<
         out.s("\{counts.get(i)\}x ").s(seen.get(i)).c('\n')
     return out.take()
 
-struct Sample
-    text: U8[]
-    races: Sz
-
 priv const REPORT_SAMPLES: Sample[_] = ::{
     Sample::{ .text =
         "==1==\nWARNING: ThreadSanitizer: data race (pid=1)\n  Write of size 4\n\n  Location is \
             global 'n' of size 4\nSUMMARY: ThreadSanitizer: data race a.kspl:3 in f\n",
-        .races = 1 },
+        .reports = 1 },
     Sample::{ .text =
         "WARNING: ThreadSanitizer: data race\nWARNING: ThreadSanitizer: lock-order-inversion\n",
-        .races = 2 },
+        .reports = 2 },
     // A forked child's leftover count, with no report of its own.
-    Sample::{ .text = "ThreadSanitizer: reported 17 warnings\n", .races = 0 },
-    Sample::{ .text = "", .races = 0 },
+    Sample::{ .text = "ThreadSanitizer: reported 17 warnings\n", .reports = 0 },
+    Sample::{ .text = "", .reports = 0 },
 }
-
-priv fn check_reading_fires(arena: Arena$@)
-    $bad: = List<|U8[]|>.new(arena)
-    for s in REPORT_SAMPLES
-        if races_in(s.text, arena).len != s.races
-            bad.push(arena.text().s("misread: ").s(s.text).take())
-    verdict.check_list("a sanitizer's report is read as one race each", REPORT_SAMPLES.len,
-        "samples", bad@, "the table is `report_samples`")
 
 priv fn build(dir: U8[], entry: U8[], exe: U8[], opt: U8[], arena: Arena$@): Built //<
     //< Compiles entry (from the folder dir) to C and links it with the sanitizer into exe
-    //<
     //< `opt` is `opt_for_run` or `opt_for_build`.
     $flags: = List<|U8[]|>.new(arena)
     for f in TSAN_CFLAGS
@@ -171,16 +152,7 @@ priv fn build(dir: U8[], entry: U8[], exe: U8[], opt: U8[], arena: Arena$@): Bui
 
 priv fn reports_in(log_dir: U8[], arena: Arena$@): List<|U8[]|> //<
     //< Every race the sanitizer logged under log_dir, one process's log per `tsan.<pid>`
-    $out: = List<|U8[]|>.new(arena)
-    names: = fs.read_dir(log_dir, arena) catch
-        return out
-    for name in names
-        if name.starts_with("tsan.")
-            text: = io.read_file(fs.join(log_dir, name, arena)) catch
-                fallback ""
-            for r in races_in(text, arena)
-                out.push(r)
-    return out
+    return harness_sanitizer.reports_in(log_dir, "tsan.", races_in, arena)
 
 struct Raced //< one sanitized run: the check it reports to, where it runs, and what
     name: U8[] //< the check; several runs may share one, and it fails if any of them does
@@ -204,7 +176,6 @@ priv fn sanitized(log_dir: U8[], env: U8[][], argv: U8[][], arena: Arena$@): U8[
 
 priv fn run_all_raced(runs: List<|Raced|>@, work: U8[], arena: Arena$@) //<
     //< Runs every run side by side, then reports one check per name, in the order first named
-    //<
     //< **The parts run at once**: under the sanitizer a part takes many times its usual time.
     //< **Each process writes its own log** (`tsan.<pid>`), so a child the program starts is heard
     //< too. **Each check has its own log folder**, set
@@ -260,7 +231,6 @@ priv fn check_fires(work: U8[], arena: Arena$@) //<
 
 priv fn race_tests(work: U8[], deps: Str_builder$@, runs: List<|Raced|>$@, arena: Arena$@) //<
     //< The packages whose own tests start threads: std's, and ksplc's
-    //<
     //< **Only these**: the other packages' tests start none (`check_covered` holds it), so the
     //< sanitizer's time on them would watch one thread. Each runs from its folder, as its own
     //< `make test` runs it.
@@ -304,7 +274,6 @@ priv fn build_all(name: U8[], pkg: U8[], entries: U8[][], work: U8[], deps: Str_
 
 priv fn race_ksai(work: U8[], deps: Str_builder$@, runs: List<|Raced|>$@, arena: Arena$@) //<
     //< ksai's examples and the tests that run them (`ksai/Makefile`'s `test`)
-    //<
     //< fim_coder trains on two threads there.
     name: = "ksai's examples and their tests run with no data race"
     exes: =
@@ -324,7 +293,6 @@ priv fn race_ksai(work: U8[], deps: Str_builder$@, runs: List<|Raced|>$@, arena:
 
 priv fn race_ksbind(work: U8[], deps: Str_builder$@, runs: List<|Raced|>$@, arena: Arena$@) //<
     //< ksbind's tests (`ksbind/Makefile`'s `test`), where the libraries it binds link
-    //<
     //< The TLS test serves its handshake from a second thread.
     //< **Only a link that fails can skip, and only where `KSBIND_REQUIRE_LIBS` is not `1`**, as in
     //< ksbind's own `make test`. Linux's image holds OpenSSL and SQLite, so there it fails.
@@ -399,7 +367,6 @@ impl Lsp_session
 
 priv fn play_lsp_session(exe: U8[], log_dir: U8[], top: U8[], arena: Arena$@): List<|U8[]|> //<
     //< An editor's session with the server, returning what went wrong; empty where it all answered
-    //<
     //< **Each step gives the reading thread something to do beside the main loop.** A crash comes
     //< with more messages at once, read while the worker is restarted and handed the documents.
     //< In a pause, the main loop analyses the documents nobody asked for while the thread waits on
@@ -499,7 +466,8 @@ priv fn check_covered(deps: U8[], arena: Arena$@) //<
 
 fn main(): I32
     arena: = harness.begin(64 * 1024 * 1024)
-    check_reading_fires(arena)
+    harness_sanitizer.check_reading_fires("a sanitizer's report is read as one race each",
+        Sample[]::REPORT_SAMPLES, races_in, arena)
     work: = harness.sandbox("race")
     said: = harness_sanitizer.runs_with(work, U8[][]::{ "-fsanitize=thread" }, U8[][]::{}, arena)
     if said.len > 0

@@ -1,4 +1,4 @@
-import { check, near, material, para, grid } from "./shell.mjs";
+import { check, near, material, para, grid, shared } from "./shell.mjs";
 
 export const subject = "A table's cells, its formulas, and its columns' widths and seams.";
 
@@ -15,13 +15,12 @@ export const subject = "A table's cells, its formulas, and its columns' widths a
 // file's material.
 export const opens = material({
   styles: [
-    { name: "body", space_after: 12.0 },
-    { name: "strong", weight: 700 },
-    { name: "table", space_before: 12.0, space_after: 12.0, arrange: "grid" },
-    { name: "cell", pad: 4.0, rule_width: 1.0, rule_color: "#cccccc" },
-    { name: "heading-cell", pad: 4.0, rule_width: 1.0, rule_color: "#cccccc", fill: "#f0f0f0" },
-    { name: "amount", places: 0, grouped: true, prefix: "$", pad: 4.0, rule_width: 1.0,
-      rule_color: "#cccccc" },
+    shared.body,
+    shared.strong,
+    shared.table,
+    shared.cell,
+    shared.headingCell,
+    shared.amount,
   ],
   blocks: [
     para("body", "It is a body that carries no formula. What is pressed here is outside the table."),
@@ -44,7 +43,7 @@ export const opens = material({
 });
 
 export function run(ks) {
-  const { w, scratch, read, geom, find, type, typed, setTyped, leaveCell, stage } = ks;
+  const { w, scratch, read, out, geom, find, type, typed, setTyped, leaveCell, stage } = ks;
 
   // --- The heading rows the window keeps in view ---
   // Each table names a band: its rectangle and its first row's, kept at the window's top.
@@ -66,16 +65,16 @@ export function run(ks) {
   // cursor's row stays; a formula counts every row; "show all" brings them back.
   const priceBox = geom(find("120"));
   w.kspage_web_click(priceBox[0] + 1, priceBox[1] + priceBox[3] / 2, 0);
-  check(w.kspage_web_filter(3, stage("100")) === 1, "the table can be narrowed to prices above 100");
+  check(w.kspage_web_filter(stage("above\t100")) === 1, "the table can be narrowed to prices above 100");
   check(find("80") < 0 && find("120") >= 0, "the 80 row is left out and the 120 row stays");
   check(find("Total") < 0, "the total's row, with no price, is left out too");
   w.kspage_web_rows_shown(scratch);
   check(read(4).join() === "1,3,1,1", `one of three rows is shown and the table is narrowed (${read(4).join()})`);
   check(find("760") >= 0, "a formula still counts the rows left out (the summary's sum stands)");
-  check(w.kspage_web_filter(4, stage("100")) === 1, "the condition on the column is replaced");
+  check(w.kspage_web_filter(stage("below\t100")) === 1, "the condition on the column is replaced");
   check(find("120") >= 0 && find("80") >= 0,
     "the row the cursor stands in stays though its price is not below 100, and the 80 row is back");
-  check(w.kspage_web_filter(3, stage("many")) === -1, "a word where a number is wanted is refused");
+  check(w.kspage_web_filter(stage("above\tmany")) === -1, "a word where a number is wanted is refused");
   check(w.kspage_web_unfilter() === 1, "show all takes the condition off");
   check(find("80") >= 0 && find("Total") >= 0, "every row is back");
   check(w.kspage_web_unfilter() === 0, "with nothing narrowed there is nothing to take off");
@@ -127,7 +126,7 @@ export function run(ks) {
   check(ks.csv().split("\n")[1] === "3,120,$360", `CSV writes its value (${ks.csv().split("\n")[1]})`);
   check(ks.md().includes("$360") && !ks.md().includes("A2"), "Markdown writes its value");
   // As a formula's text it would sort after the numbers; as its value the rows are in order.
-  check(w.kspage_web_sort_rows(0) === -3, "it sorts by its value (the rows are already in order)");
+  check(out(w.kspage_web_sort_rows(0)) === "in_order", "it sorts by its value (the rows are already in order)");
   const paperCount = w.kspage_web_layout_paper(300);
   const onPaper = Array.from({ length: paperCount }, (_, i) => ks.textOf(i));
   check(onPaper.includes("$360") && !onPaper.includes("=A2*B2"), "paper shows its value");
@@ -251,17 +250,17 @@ export function run(ks) {
 
   // --- Joining cells ---
   // **A cell taken in comes away from the document** (else its text is there, unseen). **The cells
-  // are chosen by dragging across them** (`extend`); one cell alone is refused by its own number.
+  // are chosen by dragging across them** (`extend`); one cell alone is refused by its own name.
   const headSpot = geom(find("The look"));
   const nextSpot = geom(find("The order"));
   w.kspage_web_click(headSpot[0] + 1, headSpot[1] + 1, 0);
   const wasBoxCount = w.kspage_web_layout(300);
   check(find("The order") >= 0, "the cell to be taken in is there");
-  check(w.kspage_web_merge_cells() === -2, "one cell alone is refused by its own number");
+  check(out(w.kspage_web_merge_cells()) === "alone", "one cell alone is refused by its own name");
   check(w.kspage_web_layout(300) === wasBoxCount, "a refused merge moves not one box");
   // Caution: **Press the far cell with `extend`**, or the choosing collapses to that one cell.
   w.kspage_web_click(nextSpot[0] + 1, nextSpot[1] + 1, 1);
-  check(w.kspage_web_merge_cells() === 1, "the cells dragged across can be joined");
+  check(out(w.kspage_web_merge_cells()) === "done", "the cells dragged across can be joined");
   check(w.kspage_web_layout(300) === wasBoxCount - 1, "the boxes drop by one");
   check(find("The order") === -1, "the text of the cell taken in comes away from the document");
   // A joined cell does not narrow (it is its columns' widths together).
@@ -277,14 +276,14 @@ export function run(ks) {
   check(find("The order") >= 0, "going back returns the text taken in too");
   // Outside the table it does not bite.
   w.kspage_web_click(0, 4, 0);
-  check(w.kspage_web_merge_cells() === 0, "over the body nothing is joined");
+  check(out(w.kspage_web_merge_cells()) === "outside", "over the body nothing is joined");
   check(w.kspage_web_split_cell() === 0, "over the body nothing is undone");
 
   // --- Adding and dropping a row ---
   // **Move a row and move the formulas with it** (else the amount points at the empty row).
   const headAt = geom(find("Qty"));
   w.kspage_web_click(headAt[0] + 1, headAt[1] + headAt[3] / 2, 0);
-  check(w.kspage_web_add_line(0) === 1, "inside a table a row can be added");
+  check(out(w.kspage_web_add_line(0)) === "done", "inside a table a row can be added");
   check(find("$360") >= 0 && find("$400") >= 0,
     "the amount goes on pointing at the same quantity and price");
   check(find("760") >= 0,
@@ -316,7 +315,7 @@ export function run(ks) {
     check(ks.load(opens) === 1, `the table can be opened again before ${how}`);
     const price = geom(find("120"));
     w.kspage_web_click(price[0] + 1, price[1] + price[3] / 2, 0);
-    check(w.kspage_web_filter(3, stage("100")) === 1, `the table is narrowed before ${how}`);
+    check(w.kspage_web_filter(stage("above\t100")) === 1, `the table is narrowed before ${how}`);
     check(other() === 1, `${how} opens over the narrowed table`);
     w.kspage_web_layout(300);
     check(w.kspage_web_unfilter() === 0, `after ${how} no filter is left to take off`);

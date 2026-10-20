@@ -1,5 +1,4 @@
 //< What a name in a comment refers to, resolved in the scope of the file holding the comment
-//<
 //< **It resolves as the code beside the comment would.** It looks at a parameter or a local where
 //< the comment is (`hidden_by_local`), the file's own declarations, its imports and the prelude.
 //< Then it looks at the members of what those name. `[W0211]` and the hover's links both ask here,
@@ -34,20 +33,17 @@ struct Pointer //< one name in backticks, found in a comment's text
 
 priv const FILE_WORDS: U8[][3] = ::{ "in ", "of ", "inside " } //<
     //< The words that tie a name to its file (`` `name` in `file` ``)
-    //<
     //< They match the document check's spelling ("Linking documents to source" in
     //< `../../../docs/SPEC-documents.md`).
 
 priv const FILE_EXTS: U8[][12] = ::{ "kspl", "ksplb", "md", "c", "h", "txt", "cfg", "json", "html",
     "js", "css", "mk" } //<
         //< The endings that make a name read as a file's name
-        //<
         //< So `edit.kspl` behind an import named `edit` reads as a file.
         //< **Only a name that resolves to nothing is read this way** (`File_stream.c` is a method).
 
 priv fn read_name(text: U8[], from: Sz, close: Sz): Sz //<
     //< How long the dotted name filling `[from, close)` is, or 0 where the span holds anything else
-    //<
     //< It is the form `[W0211]` reads: at least two parts. **Call brackets may close it**
     //< (`io.out()`, `mem.dealloc(text.ptr)`), and then they have to run to the span's end:
     //< `io.out().s("x")` is a fragment of code, not a name.
@@ -83,7 +79,6 @@ priv fn read_name(text: U8[], from: Sz, close: Sz): Sz //<
 
 priv fn is_foreign(text: U8[], open: Sz): Bool //<
     //< Whether the name is introduced as another product's (`Python's \`json.dumps\``)
-    //<
     //< **The house style already phrases it this way**, so such a name needs nothing more.
     if open < 4 || text[open - 1] != ' ' || text[open - 2] != 's' || text[open - 3] != '\''
         return false
@@ -94,7 +89,6 @@ priv fn is_foreign(text: U8[], open: Sz): Bool //<
 
 priv fn tied_to_file(text: U8[], after: Sz): Bool //<
     //< Whether the name is followed by its file, a list of names too (`` `a` / `b` in `file` ``)
-    //<
     //< **The document check reads that spelling**; reading it here too would make a second reader.
     $i: = after
     for
@@ -118,7 +112,6 @@ priv fn tied_to_file(text: U8[], after: Sz): Bool //<
 
 fn next_pointer(text: U8[], from: Sz): Pointer //<
     //< The next name in backticks at or past `from` that points at a declaration
-    //<
     //< A pointer is a dotted name (`Owner.member`), with call brackets after it or without. **Two
     //< spellings are skipped**: a name introduced as another product's, and a name tied to its
     //< file, which the document check reads (`make test-docref`).
@@ -131,7 +124,6 @@ fn next_pointer(text: U8[], from: Sz): Pointer //<
 
 fn next_dotted(text: U8[], from: Sz): Pointer //<
     //< The next dotted name in backticks at or past `from`, whatever surrounds it
-    //<
     //< `len` is 0 where there is none. `ksplc doc` links what this finds (`linked` in
     //< `../../tools/doc.kspl`), so the two read one form.
     $i: = from
@@ -151,7 +143,6 @@ fn next_dotted(text: U8[], from: Sz): Pointer //<
 fn link_names(text: U8[], scan: fn(text: U8[], from: Sz): Pointer, prefix: U8[],
     resolve: Callable1<|U8[], U8[]|>): U8[] //<
         //< Links the names the reader finds, preserving existing links and unresolved names
-        //<
         //< The caller chooses which names to read and where they point. Only the rewriting is
         //< shared by the CLI reference and editor hover.
     $out: = Str_builder.new()
@@ -206,7 +197,6 @@ priv fn on_symbol(sym: Sema_symbol$@, fqn: U8[]): At
 
 priv fn head_of(c: Sema_ctx$@, file: U8[], head: U8[], out: At$@): Bool //<
     //< What the first part names in `file`'s own scope
-    //<
     //< **The file's own declaration is checked first**: a name the prelude brings in yields to one
     //< the file declares, as in the code.
     if own: = declared_in(c, file, head)
@@ -245,7 +235,6 @@ priv fn names_at(text: U8[], at: Sz, name: U8[]): Bool //< whether `name` is a w
 
 priv fn declares_in_text(text: U8[], name: U8[]): Bool //<
     //< Whether some line of `text` declares `name`
-    //<
     //< A function, a type or a constant counts, or a field, a variant or a variable at the start of
     //< a line.
     //< **Only the start of a line is read**, so a comment, which starts with `//`, never counts.
@@ -277,7 +266,6 @@ priv fn declares_in_text(text: U8[], name: U8[]): Bool //<
 
 priv fn left_out_by_cfg(c: Sema_ctx$@, file: U8[], name: U8[]): Bool //<
     //< Whether `file` declares `name` inside a range `#cfg` excluded from this compilation
-    //<
     //< **Another configuration has it**, so a reference to it is correct even though this
     //< compilation has no such declaration (`mem.init_freestanding_heap` exists only under
     //< `freestanding`).
@@ -294,7 +282,6 @@ priv fn left_out_by_cfg(c: Sema_ctx$@, file: U8[], name: U8[]): Bool //<
 
 priv fn type_member(c: Sema_ctx$@, owner: At, part: U8[], next: At$@): Step //<
     //< The member `part` of the type `owner` names: a method, a variant, a field
-    //<
     //< **A method another file adds is on the same table**, found while that file is compiled.
     key: = join_dotted_name(owner.fqn, part)
     sym: = c.symtab.by_fqn.get(key).unwrap_or(null)
@@ -352,7 +339,6 @@ priv fn names_a_file(part: U8[]): Bool //< whether the last part is a file's tai
 
 fn pointed_at(c: Sema_ctx$@, root: Ast_node$@, file: U8[], at: Sz, name: U8[]): Pointed //<
     //< What `name`, written in a comment at position `at` of `file`, stands for
-    //<
     //< `root` is the compilation's tree, where the function containing `at` is found, so that its
     //< parameters and locals are asked before the file's own names.
     got: = read_in_scope(c, file, name)
@@ -365,7 +351,6 @@ fn pointed_at(c: Sema_ctx$@, root: Ast_node$@, file: U8[], at: Sz, name: U8[]): 
 
 fn read_in_scope(c: Sema_ctx$@, file: U8[], name: U8[]): Pointed //<
     //< What the dotted `name` stands for in `file`'s own scope, with no local in the way
-    //<
     //< **The caller knows the locals.** For a comment, they are those of the function it is in
     //< (`pointed_at`). For the analysis, they are the scopes it has open (a `::` written as a path,
     //< in `../body/postfix.kspl`).
@@ -401,7 +386,6 @@ fn read_in_scope(c: Sema_ctx$@, file: U8[], name: U8[]): Pointed //<
     return .found(cur.node)
 
 priv const MAX_LOCAL_DEPTH: Sz = 256 //< how deep the search for a local goes before giving up
-    //<
     //< **Giving up answers "not hidden"**, so a pathological nesting is reported rather than
     //< silenced.
 
@@ -437,7 +421,6 @@ priv fn enclosing_fn(root: Ast_node$@, file: U8[], at: Sz): Ast_node$@? //<
 
 priv fn hidden_by_local(root: Ast_node$@, file: U8[], at: Sz, head: U8[]): Bool //<
     //< Whether a parameter or a local named `head` is in scope at position `at` of `file`
-    //<
     //< **A comment in a function is read in that function's scope**: `doc.arena` there is the
     //< parameter's field even where the file imports a module `doc`.
     if fn_node: = enclosing_fn(root, file, at)

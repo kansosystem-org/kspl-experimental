@@ -19,9 +19,8 @@ function kspageApi(ks) {
     return true;
   };
 
-  const { w, mem, canvas, enc, str, outText, colorText, colorNum, scratch, nums, draw, acted, stage,
-  type, compose, ime, bar, paperOf, armGroupBreak, handOver,
-  SHAPES, ALIGNS, MARKS, DATINGS, COLLECTS, SKETCHES } = ks;
+  const { w, mem, canvas, enc, str, outText, colorText, colorNum, scratch, nums, draw, acted, ended,
+  stage, type, compose, ime, bar, paperOf, armGroupBreak, handOver } = ks;
   // The safety net for exhausted memory (`kspage.js`'s `ks.cramps`).
   const { cramps } = ks;
   const api = {
@@ -51,15 +50,18 @@ function kspageApi(ks) {
       draw();
     },
     // `picturesHeld` counts the external images blocked on opening; `paper` is one page's settings
-    // (**`band` is the content height** minus margins; width 0 the container's, height 0 unsplit).
+    // **as their saved text names them**, a field left out being 0 (`draw.js`'s `paperOf`; **`band`
+    // is the content height** minus margins).
     // Caution: **Ask after drawing** (nothing is counted before); not 0, a bare frame is "blocked".
     picturesHeld() { return ks.picturesHeld ? ks.picturesHeld() : 0; },
     paper() { return paperOf(); },
-    // Replaces one page's settings whole. An omitted field is passed as 0 (unset).
-    setPaper(spec) {
-      w.kspage_web_set_paper(spec.width || 0, spec.height || 0, spec.left || 0,
-        spec.top || 0, spec.right || 0, spec.bottom || 0, spec.reading || 0);
+    // Replaces one page's settings whole, **read as a saved document is** (out of range, nothing
+    // changes); true if read. **A field left out is 0** (unset); `band` is not read.
+    setPaper(data) {
+      const bytes = enc.encode(JSON.stringify(data));
+      const took = handOver(bytes) && w.kspage_web_set_paper(bytes.length) !== 0;
       draw();
+      return took;
     },
     // How many pages the layout makes. **It only reads, never lays out** (otherwise it would lay
     // out several times per keystroke); every changing entry point redraws, so read after.
@@ -112,23 +114,6 @@ function kspageApi(ks) {
     // The bytes of the arena in use and of the whole memory, for the debug log and the status bar.
     room() {
       return { used: w.kspage_web_heap_used(), all: w.kspage_web_heap_room() };
-    },
-    // Whether style `i` "starts a new page before it" (no effect where pages do not split).
-    styleBreaks(i) { return w.kspage_web_style_breaks(i) !== 0; },
-    // Replaces it, **as one undo step.**
-    setStyleBreaks(i, on) {
-      const took = w.kspage_web_set_style_breaks(i, on ? 1 : 0) !== 0;
-      if (took) draw();
-      return took;
-    },
-    // Whether style `i` "is included in chapters". **False keeps it out of the contents and the
-    // chapter numbers** (a title page, a colophon). The heading map can still jump to it.
-    styleInChapters(i) { return w.kspage_web_style_in_chapters(i) !== 0; },
-    // Replaces it, **as one undo step.**
-    setStyleInChapters(i, on) {
-      const took = w.kspage_web_set_style_in_chapters(i, on ? 1 : 0) !== 0;
-      if (took) draw();
-      return took;
     },
     // The headings **as of the last layout**: depth 1 is a chapter, `number` is empty if none.
     headings() {
@@ -204,17 +189,16 @@ function kspageApi(ks) {
       draw();
       return true;
     },
+    // Leaves the current table through a new paragraph, including at the document's end.
+    paragraphAfterTable() {
+      const made = w.kspage_web_paragraph_after_table() !== 0;
+      if (made) draw();
+      return made;
+    },
     // Adds a row or column after the cursor: **empty if added, else the reason** (the rule of
     // `setBlockStyle`).
     addLine(axis) {
-      const got = w.kspage_web_add_line(axis === "column" ? 1 : 0);
-      if (got === 1) {
-        draw();
-        return "";
-      }
-      if (got === -1) return "The document is open for reading alone";
-      if (got === -2) return "A merged cell here already covers 1000 columns, the most one may";
-      return "Click inside a table's cell";
+      return ended(w.kspage_web_add_line(axis === "column" ? 1 : 0));
     },
     // Deletes the cursor's row or column (false outside a table).
     dropLine(axis) {
@@ -266,22 +250,11 @@ function kspageApi(ks) {
     },
     // **The template is not kept** (the frames belong to the document). Empty if the slide went
     // in, else **the reason**, **never merged into one** (the rule of `setBlockStyle`).
+    // `plan` is the frames inside (`Sketch`'s variant name: "whole", "titled", "halved").
     insertSurface(name, plan) {
-      const len = stage(name);
-      if (len <= 0) return "The style's name is too long";
-      const kind = Math.max(SKETCHES.indexOf(plan), 0);
-      const end = w.kspage_web_insert_surface(len, kind);
-      if (end === 1) {
-        draw();
-        return "";
-      }
-      if (end === -1) return "A slide cannot stand inside a table's cell. Click outside the table";
-      if (end === -2) {
-        return "This document holds no slide style. A slide's size is set by its style";
-      }
-      if (end === -3) return "The document is open for reading alone";
-      if (end === -4) return "Slides inside slides go no deeper here: blocks nest 32 levels at most";
-      return "Click in the body first, and the slide goes in after that paragraph";
+      const len = stage(`${plan}\t${name}`);
+      if (len < 0) return "The style's name is too long";
+      return ended(w.kspage_web_insert_surface(len));
     },
     // Inserts one image after the cursor's paragraph, **sized by the caller**, the document holding
     // only the source. **Read memory only after getting the arena** (as `paste`).
@@ -330,16 +303,7 @@ function kspageApi(ks) {
     // is "down" (smallest first) or "up". Empty if sorted, else **the reason**, **never merged into
     // one** (the rule of `setBlockStyle`; merged, a merge would get "click in a cell").
     sortRows(how) {
-      const end = w.kspage_web_sort_rows(how === "up" ? 1 : 0);
-      if (end === 1) {
-        draw();
-        return "";
-      }
-      if (end === -1) return "Split the cell merged down the page first, then sort";
-      if (end === -2) return "There are not two rows under the heading to put in order";
-      if (end === -3) return "The rows are already in this order";
-      if (end === -4) return "The document is open for reading alone";
-      return "Click inside a table's cell";
+      return ended(w.kspage_web_sort_rows(how === "up" ? 1 : 0));
     },
     // Copies the cell's text into the cells beyond it, up to the table's edge (autofill); `how` is
     // "down" or "right". **References inside a formula shift** (only `$A$1` stays put).
@@ -349,17 +313,19 @@ function kspageApi(ks) {
     // Inserts one collecting block after the cursor's paragraph (`what` "contents" or "notes").
     // **Its contents are not inserted** (built at every layout). A missing style is made.
     insertGathered(name, what) {
-      const len = stage(name);
+      if (name.length <= 0) return false;
+      const len = stage(`${what}\t${name}`);
       if (len <= 0) return false;
-      return acted(w.kspage_web_insert_gathered(len, what === "notes" ? 2 : 1));
+      return acted(w.kspage_web_insert_gathered(len));
     },
     // Inserts one chart after the cursor's paragraph (`kind` "bars" / "lines"). **The range needs
     // the table's name** (`Details!C2:C4`; a chart in the flow has no table of its own), and **the
-    // contents do not enter the document**. The name and range share the arena, separated by a tab.
+    // contents do not enter the document**. The kind, name and range share the arena, separated by
+    // tabs.
     insertChart(name, range, kind) {
-      const len = stage(`${name}\t${range}`);
+      const len = stage(`${kind}\t${name}\t${range}`);
       if (len <= 0) return false;
-      return acted(w.kspage_web_insert_chart(len, Math.max(COLLECTS.indexOf(kind), 0)));
+      return acted(w.kspage_web_insert_chart(len));
     },
     // The note on the cursor's inline. **Empty means none.**
     note() {
@@ -452,15 +418,14 @@ function kspageApi(ks) {
       const [x, y, cw, ch, found] = nums(5);
       return found === 0 ? null : [x, y, cw, ch];
     },
-    // Filters the cursor's table to the rows whose cell in the cursor's column matches: `kind` is a
-    // name in KEEPS (`is`, `is_not`, `holds`, `above`, `below`, `blank`, `filled`), `text` a value.
-    // **A view** (nothing is saved, the cursor's row is always shown); empty if it filtered, else
-    // **the reason**.
+    // Filters the cursor's table to the rows whose cell in the cursor's column matches: `kind` is
+    // `Keep`'s variant name (`is`, `is_not`, `holds`, `above`, `below`, `blank`, `filled`), `text` a
+    // value. **A view** (nothing is saved, the cursor's row is always shown); empty if it filtered,
+    // else **the reason**.
     filterRows(kind, text) {
-      const no = ks.KEEPS.indexOf(kind);
-      const len = text.length > 0 ? stage(text) : 0;
+      const len = stage(`${kind}\t${text}`);
       if (len < 0) return "The value is too long";
-      const end = w.kspage_web_filter(no < 0 ? 0 : no, len);
+      const end = w.kspage_web_filter(len);
       if (end === 1) {
         draw();
         return "";

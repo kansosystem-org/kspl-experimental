@@ -1,6 +1,5 @@
 #!/usr/bin/env -S ksplc run
 //< It checks that KSPL handles **every one** of the names the declaration-half headers `#define`
-//<
 //< Caution: **Do not keep the list of replaced names by hand.** Which names get replaced changes
 //< with libc's version. A name erased by `#undef` disappears from `-dM -E`'s output, so the output
 //< itself lists the names not yet erased. **Do not pin down which names or how many pass**, only
@@ -18,12 +17,10 @@ import "std/verdict"
 
 priv const IMPL_MARK: U8[] = "/* ---- kspl runtime implementation half ---- */\n" //<
     //< The mark for the start of the definition half
-    //<
     //< The source is `IMPL_HALF_MARK` in `ksplc/gen/runtime.kspl`.
 
 priv fn is_kspl_identifier(name: U8[], keywords: Map<|U8[], Bool|>$@): Bool //<
     //< Whether the name can be written as a KSPL identifier
-    //<
     //< **A name that cannot be written is out of scope.** `true` / `false` stop at KSPL's syntax
     //< diagnostic before reaching C.
     if name.len == 0
@@ -37,7 +34,6 @@ priv fn is_kspl_identifier(name: U8[], keywords: Map<|U8[], Bool|>$@): Bool //<
 
 priv fn is_snake_case(name: U8[]): Bool //<
     //< Whether [I0502] stays silent on name at every position where a bare name is written
-    //<
     //< Those positions are a local variable, a formal parameter and a field.
     //< **This sets the check's scope.** Loosen it and the test demands names the naming check
     //< rejects; tighten it and names that really can collide are missed.
@@ -64,7 +60,6 @@ priv fn keywords_of(arena: Arena$@): Map<|U8[], Bool|>$@ //<
 
 priv fn object_macro_name(line: U8[]): U8[] //<
     //< From one line of `cc -dM -E`, it extracts an object-like macro's name
-    //<
     //< Caution: **Do not include the function-like form (`#define max(a,b) ...`).** It expands only
     //< before a `(`, so an identifier of the same name is safe. A space right after the name tells
     //< them apart.
@@ -81,7 +76,6 @@ priv fn object_macro_name(line: U8[]): U8[] //<
 
 priv fn program_using(names: List<|U8[]|>, arena: Arena$@): U8[] //<
     //< It builds one KSPL program that uses each of names wherever a bare name is written
-    //<
     //< Caution: **Put them into one program.** One per name means dozens of builds; in one, the C
     //< compiler's error still names the name that failed.
     b: = arena.text()
@@ -115,11 +109,7 @@ fn main(): I32
     if !e.exited_with(0)
         return harness.fatal(arena.text().s("emit-runtime failed\n\{e.out\}").take())
     text: = harness.read_generated(rt)
-    $cut: Sz = 0
-    switch text.find_str(IMPL_MARK)
-    case .some(at)
-        cut = at
-    case .none
+    cut: Sz = text.find_str(IMPL_MARK) catch
         return harness.fatal("no mark for the body half (impl_half_mark in ksplc/gen/runtime.kspl)")
     decl: = fs.join(work, "decl_half.c", arena)
     half: = arena.text()

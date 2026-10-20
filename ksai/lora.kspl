@@ -1,5 +1,4 @@
 //< Fine-tuning through LoRA: a low-rank pair trained in place of a frozen linear layer
-//<
 //< It adds the delta of the low-rank matrices A·B to a frozen base layer's output. **Only A and B
 //< are trained**, so the device itself can fine-tune with few parameters. Every intermediate value
 //< lives on an arena, so the allocation is predictable.
@@ -15,7 +14,6 @@ import "std/mem" + { Arena }
 import "std/prng"
 
 pub struct Grads<|T|> //< the gradients of A and B, ready to pass to an optimizer
-    //<
     //< Caution: **`backward_grads` allocates the tensors on `x.arena`**, so use them before
     //< rewinding `x`'s arena.
     pub da: Tensor<|T|> //< the gradient of A, shaped [in, rank]
@@ -46,7 +44,6 @@ impl<|T|> Lora<|T|>
         b.fill(0.0)
         return Lora<|T|>::{ .a = a, .b = b, .scale = T::(alpha / F64::rank) }
     pub fn forward( //< the delta (x·A·B) * scale, which the caller adds to the base output
-        //<
         //< The result is allocated on `x`'s arena.
         r: Self$@,
         $x: Tensor<|T|>, //< the same input the base layer was given, [m, in]
@@ -57,7 +54,6 @@ impl<|T|> Lora<|T|>
             panic("Lora.forward: matmul shape mismatch")
         return xab.scale(r.scale)
     pub fn backward_grads( //< writes the gradients of A and B to `g`; returns the input's gradient
-        //<
         //< **It does not update**, so the caller picks the optimizer (SGD / Adam); `backward` below
         //< is built on it. It returns `dx` so a LoRA in an intermediate layer can be summed with
         //< the base path's dx and passed further back.
@@ -85,7 +81,6 @@ impl<|T|> Lora<|T|>
         r.b.sgd_step(g.db, lr)
         return dx
     pub fn raw_size(r: Self$@): Sz //< how many bytes `save_raw` writes
-        //<
         //< The bundle (`save_set_into` / `load_set_from` in `ksai/lora_set`) builds its tensor
         //< names, and a saved file, in `Str_builder`s on the global heap. **On bare metal, call
         //< `mem.init_freestanding_heap()` first**, or an arena-only build panics. This is the

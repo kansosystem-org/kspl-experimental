@@ -1,5 +1,4 @@
 //< Reads a literal's spelling
-//<
 //< It covers strings, characters and numbers, each read from the spelling in the source.
 //< Caution: **Do not write a copy of this.** Fix only one copy and they drift apart as "the
 //< contents differ only when built through C".
@@ -7,11 +6,11 @@
 //< a C string** to `ksplc/gen/c/literal.kspl` (one per layer).
 import "std/chars"
 import "std/checked_int"
+import "std/math"
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
 
 struct Number_u64 //< the result of converting a numeric literal to U64
-    //<
     //< Caution: **Do not silently wrap an overflow.** Otherwise an out-of-range literal passes on
     //< as an in-range value, until the C compiler says `integer literal is too large`
     //< ("Failing fast through an exception or an ICE" in ksplc/docs/DESIGN-compiler.md).
@@ -20,7 +19,6 @@ struct Number_u64 //< the result of converting a numeric literal to U64
     overflow: Bool //< it does not fit in U64
 
 fn literal_escape_byte(ec: U8): U8 //< the byte that the character after a backslash stands for
-    //<
     //< **This table is the canonical source**: constant evaluation (eval_char in
     //< sema/decl/eval.kspl) and both backends' string output use it.
     return (10 if ec == 'n' else 13 if ec == 'r' else 9 if ec == 't' else 39 if ec == '\''
@@ -28,7 +26,6 @@ fn literal_escape_byte(ec: U8): U8 //< the byte that the character after a backs
 
 fn is_known_escape(ec: U8): Bool //<
     //< Whether a character can follow a backslash inside a literal
-    //<
     //< Caution: **List the accepted escapes here and nowhere else.** literal_escape_byte turns an
     //< unlisted one into the character itself, so `'\b'` (8 in C) would silently become `'b'`
     //< (Principle 5 in docs/DESIGN-principles.md). **Keep the `{` and `}`**, as interpolation is
@@ -38,7 +35,6 @@ fn is_known_escape(ec: U8): Bool //<
 
 fn line_continuation_span(text: U8[], at: Sz, end: Sz): Sz //<
     //< How far a `\` at a line's end reaches
-    //<
     //< It reaches past the line terminator and past the next line's indent.
     //< 0 where there is none; asked before `is_known_escape`. It stands for **no byte at all**.
     //< Caution: **The next line's indent goes with it**, or re-indenting the block would change the
@@ -66,7 +62,6 @@ enum Literal_fault //< the reason a literal's spelling is invalid
 
 struct Literal_check //<
     //< The fault found in a spelling, with its position and length
-    //<
     //< The length is counted from the backslash.
     //< **Decide the length here too.** If the caller counted it again, a `"\u12"` short of digits
     //< would copy everything up to the closing quote into the diagnostic.
@@ -75,7 +70,6 @@ struct Literal_check //<
     len: Sz
 
 fn escape_code_point(text: U8[], at: Sz): I32? //< the code point a `\uXXXX` stands for
-    //<
     //< `at` is the backslash's index; none without four hexadecimal digits (as hex4 in std/chars).
     return text.hex4(at + 2)
 
@@ -93,7 +87,6 @@ impl Literal_step
 
 fn literal_step(text: U8[], at: Sz, end: Sz, is_raw: Bool): Literal_step //<
     //< The step starting at `at` in a string literal's body, which ends at `end`
-    //<
     //< **The only reader of the escapes**: `literal_span` counts with it and `append_literal_bytes`
     //< writes with it, so a string's reported length and the bytes either backend emits agree.
     b: = (text.ptr + at)$
@@ -110,7 +103,6 @@ fn literal_step(text: U8[], at: Sz, end: Sz, is_raw: Bool): Literal_step //<
 
 fn literal_end(src: U8[], at: Sz): Sz //<
     //< Where the string or character literal that starts at `at` ends
-    //<
     //< It skips a raw string's closing `"""`, the byte after each `\`, and a string inside an
     //< interpolation (`\{ … \}`). So that string's quote does not close the outer one. A character
     //< literal also stops at a line's end, where a broken one would otherwise run on.
@@ -120,14 +112,12 @@ fn literal_end(src: U8[], at: Sz): Sz //<
 
 fn interpolation_open_at(src: U8[], at: Sz, pos: Sz): Sz //<
     //< Where the innermost interpolation of the literal at `at` still open at `pos` opens, or -1
-    //<
     //< It is the position of its `\{`. A string inside the interpolation that `pos` falls in is
     //< not entered: its own literal answers for it.
     return walk_literal(src, at, pos).open
 
 priv const MAX_OPEN_INTERPOLATIONS: Sz = 16 //<
     //< How deep walk_literal keeps where the interpolations of one literal open
-    //<
     //< Deeper ones are still counted, so the literal's end stays right; only where one opened is
     //< forgotten.
 
@@ -137,7 +127,6 @@ priv struct Literal_walk //< where walk_literal stopped, and what was open there
 
 priv fn walk_literal(src: U8[], at: Sz, stop: Sz): Literal_walk //<
     //< It walks the literal at `at` up to its end or to `stop`, whichever comes first
-    //<
     //< **literal_end and interpolation_open_at both read through here**, so the two never disagree
     //< on what an interpolation spans.
     if at >= src.len
@@ -176,11 +165,10 @@ priv fn walk_literal(src: U8[], at: Sz, stop: Sz): Literal_walk //<
             return Literal_walk::{ .end = j, .open = -1 }
         j += 1
     open: = opens[depth - 1] if depth > 0 && depth <= MAX_OPEN_INTERPOLATIONS else -1
-    return Literal_walk::{ .end = j if j < src.len else src.len, .open = open }
+    return Literal_walk::{ .end = math.min(j, src.len), .open = open }
 
 fn literal_fault(text: U8[], one_byte: Bool): Literal_check //<
     //< It finds the first fault in a literal's spelling
-    //<
     //< `.none` where there is none. Strings and characters are checked the same way; a raw string
     //< (`"""`) is not checked, as a backslash means nothing there.
     //< Caution: **Pass `one_byte` as true for a character literal**, which neither `'é'` nor `'€'`
@@ -228,7 +216,6 @@ fn literal_fault(text: U8[], one_byte: Bool): Literal_check //<
 
 fn char_literal_byte(text: U8[]): U8 //<
     //< The byte a character literal's spelling (`'a'` / `'\n'` / `'A'`) stands for
-    //<
     //< 0 for a spelling shorter than three characters; pass only what passed the syntax check.
     //< Caution: **Do not pass a `\u` to literal_escape_byte**, which returns `'u'` for it.
     //< literal_fault checks that it fits in one byte.
@@ -250,7 +237,6 @@ struct Str_span //<
 
 impl U8[]
     fn literal_span(r: U8[]): Str_span //< it measures a string literal's spelling
-        //<
         //< It lives here so genc and genllvm agree on the length. A raw (\"\"\") drops only the
         //< newline right after the opening """, as modern languages do.
         if r.len >= 6 && r.starts_with("\"\"\"")
@@ -275,7 +261,6 @@ impl U8[]
 
     fn append_literal_bytes(r: U8[], out: Writer, emit: fn(out: Writer, b: U8)) //<
         //< It appends the bytes a string literal's spelling stands for to out
-        //<
         //< **Both backends write these bytes**, each with its own escapes (`gen/c/literal.kspl`,
         //< `gen/llvm/ctx.kspl`); only `literal_step` reads the spelling.
         span: = r.literal_span()
@@ -290,7 +275,6 @@ impl U8[]
                 emit(out, step.byte)
 
     fn literal_value(r: U8[], arena: Arena$@): U8[] //< the bytes a string literal stands for
-        //<
         //< For a string the compiler reads itself (`##error`'s message, `embed`'s path). Caution:
         //< **Do not cut the quotes off by hand.** `"a\"b"` would keep its backslash. A path read
         //< one way at loading and another way at emitting names two files.
@@ -302,7 +286,6 @@ impl U8[]
 
     fn append_clean_number(r: U8[], out: Str_builder$@, stops: U8[]): I32 //<
         //< It writes a numeric literal's body into out, without '_', stopping at any of stops
-        //<
         //< It returns where it stopped (-1 if it never stopped); the caller handles the type
         //< suffix.
         for i in Range.asc(r.len)
@@ -315,7 +298,6 @@ impl U8[]
 
     fn parse_clean_number_u64(r: U8[]): Number_u64 //<
         //< It converts a literal body already cleaned by append_clean_number to U64
-        //<
         //< It handles the 0x/0b prefixes.
         //< It reads only the digits and ignores the type. One code generator path **cleans a
         //< literal and emits it as it is** (emit_llvm_integer_literal in gen/llvm/expr.kspl). That
@@ -343,7 +325,6 @@ impl U8[]
 
     fn parse_int_literal_u64(r: U8[]): Number_u64 //<
         //< An integer literal's absolute value as U64; it ignores the sign
-        //<
         //< The spelling can use `_` separators, `0x`/`0b`, and a type suffix.
         //< In source, `-1` is unary minus on `1`; the caller handles the sign.
         $clean: = Str_builder.new()

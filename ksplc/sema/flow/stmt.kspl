@@ -1,5 +1,4 @@
 //< The dataflow analysis, statement by statement
-//<
 //< Tracking expressions and bindings is in `sema/flow/track.kspl`; this file handles only
 //< **branching and merging**, per statement kind. How to merge (intersection or union) is decided
 //< by `Df_set.merge_is_intersect`.
@@ -39,11 +38,17 @@ impl Ast_node
         state.apply_merged_state(sema_flow_track.intersect_states(state_then, state_else))
 
     fn bind_pattern_payload(r: Self$@, c: sema_flow_track.Df_ctx$@,
-        case_state: sema_flow_track.Df_state$@, bound_names: List<|U8[]|>$@, payload_start: Sz) //<
+        case_state: sema_flow_track.Df_state$@, bound_names: List<|U8[]|>$@, payload_start: Sz,
+        written: Bool) //<
             //< Registers the identifiers in `case .A(x)`'s payload as locals of this case.
-            //<
+            //< `written`: whether the user wrote the `switch` ([I0313] judges only such a payload).
             //< Caution: **Use `bound_names` to avoid registering twice**, or `case .A(x), .B(x)`
             //< gets the unused diagnostic twice.
+        // **Only a payload of names alone is judged whole**: one holding a value matches by it.
+        $judged: Ast_node$@ = r if written else null
+        for $pidx: = payload_start; pidx < r.children.len; pidx += 1
+            if r.get_child(pidx).kind_id != .k_identifier
+                judged = null
         for $pidx: = payload_start; pidx < r.children.len; pidx += 1
             pchild: = r.get_child(pidx)
             if pchild.kind_id != .k_identifier
@@ -56,7 +61,7 @@ impl Ast_node
             if is_dup
                 continue
             bound_names.push(pchild.text)
-            c.add_local(pchild)
+            c.add_bound_local(pchild, judged)
             case_state.bind(pchild, true)
 
     fn process_df_switch_case(r: Self$@, c: sema_flow_track.Df_ctx$@,
@@ -76,7 +81,8 @@ impl Ast_node
             if case_child.kind_id == .k_case_pattern
                 switch case_child.extract_case_variant()
                 case .variant(_v_node, payload_start)
-                    case_child.bind_pattern_payload(c, case_state, bound_names, payload_start)
+                    case_child.bind_pattern_payload(c, case_state, bound_names, payload_start,
+                        r.synthesized_option_spelling().len == 0)
                 default {}
                 case_child.analyze_df_node(c, case_state)
             else
@@ -110,7 +116,6 @@ impl Ast_node
 
     fn df_stmt_for(r: Self$@, c: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@) //<
         //< Walks a loop until the state at its head stops changing, then leaves by its exits
-        //<
         //< **A pass starts from what the last one left at the back edge.** So the next pass sees a
         //< move or a release in the body. Moves and releases only grow and initializations only
         //< shrink, so this ends. A diagnostic a later pass repeats is the same text at the same
@@ -146,7 +151,6 @@ impl Ast_node
     priv fn df_loop_pass(r: Self$@, c: sema_flow_track.Df_ctx$@,
         head: sema_flow_track.Df_state$@, target: Sz): sema_flow_track.Df_state$@ //<
             //< Walks the loop's condition, body and step once from `head`
-            //<
             //< Returns the state at the back edge, unreachable where no path loops back. The
             //< exits of this pass are left in the target's `jump_state`, those of a pass before
             //< it dropped.
@@ -181,7 +185,6 @@ impl Ast_node
 
     fn df_stmt_defer(r: Self$@, c: sema_flow_track.Df_ctx$@, _state: sema_flow_track.Df_state$@) //<
         //< A defer body is not analyzed here, only registered
-        //<
         //< Caution: **It must not be analyzed against the state at registration.** It runs when the
         //< scope is left, so `b.free();` after `defer b.free()` would pass with zero diagnostics.
         if def_block: = r.get_defer_block()
@@ -190,7 +193,6 @@ impl Ast_node
     fn df_stmt_block_scope(r: Self$@, c: sema_flow_track.Df_ctx$@,
         state: sema_flow_track.Df_state$@) //<
             //< Walks the block, then analyzes its defer bodies LIFO against the state at its end
-            //<
             //< That is the order they run in. `reachable` is set meanwhile (a defer runs even after
             //< a return). An early exit analyzes them against its own state as well
             //< (df_check_defers_on_exit).
@@ -221,7 +223,6 @@ impl Ast_node
 
     priv fn defers_left_behind(r: Self$@, c: sema_flow_track.Df_ctx$@): Sz //<
         //< How many of the registered defer bodies stay registered when this jump leaves
-        //<
         //< `return` and `throw` leave them all. A `break` or `continue` leaves the statement sema
         //< resolved it to (`def_node`, set by infer_stmt_break_continue in sema/body/stmt.kspl),
         //< and a `fallback` the innermost `catch`.
@@ -236,7 +237,6 @@ impl sema_flow_track.Df_ctx
     fn df_check_defers_on_exit(r: Self$@, exit: Ast_node$@, state: sema_flow_track.Df_state$@,
         keep: Sz): sema_flow_track.Df_state$@ //<
             //< Analyzes the defer bodies an exit runs, LIFO, against the state at that exit
-            //<
             //< **Each exit has its own state**: checked only at the block's end, `defer use(x)`
             //< before `if early { return; }` and `x = 4` would pass, and read `x` uninitialized on
             //< the early path. A copy of the state is used, since the path ends here; it is
@@ -261,7 +261,6 @@ impl sema_flow_track.Df_ctx
 
     fn find_exit_target(r: Self$@, jump: Ast_node$@): Sz? //<
         //< The index of the exit target a jump leaves, as sema resolved it
-        //<
         //< A `break` or `continue` leaves the statement in its `def_node` (set by
         //< infer_stmt_break_continue in sema/body/stmt.kspl), a `fallback` the innermost `catch`.
         for $i: = r.exit_targets.len; i > 0; i -= 1
@@ -273,7 +272,6 @@ impl sema_flow_track.Df_ctx
 
     fn record_jump(r: Self$@, jump: Ast_node$@, at: sema_flow_track.Df_state$@) //<
         //< Merges the state a `break`, `continue` or `fallback` carries into the target it leaves
-        //<
         //< `at` is the state after the defer bodies the jump runs. A jump with no target is an
         //< erroneous one sema already reported.
         k: = jump.kind_id
@@ -297,7 +295,6 @@ impl sema_flow_track.Df_state
     fn adds_to(back: Self$@, head: sema_flow_track.Df_state$@, c: sema_flow_track.Df_ctx$@,
         known: Sz): Bool //<
             //< Whether a loop's back edge brings what its head's state lacks
-            //<
             //< Only the locals declared before the loop count (`known`, their number in
             //< `c.locals`): one declared in the body starts afresh at its declaration on every
             //< pass (`bind`).
@@ -313,7 +310,6 @@ impl sema_flow_track.Df_set
     fn adds_known_to(r: Self$@, other: sema_flow_track.Df_set$@, c: sema_flow_track.Df_ctx$@,
         known: Sz): Bool //<
             //< Whether r holds an item `other` lacks whose local is one of the first `known` locals
-            //<
             //< An item of `moved_fields` counts by the local it is a field of.
         for v in r.items
             if other.contains(v)

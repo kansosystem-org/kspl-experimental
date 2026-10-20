@@ -1,5 +1,4 @@
 //< Tests of `std/mem` and the counted references
-//<
 //< What an arena keeps across a reset, the marks it rewinds to, the heap's counters under threads,
 //< and `Rc` / `Arc` balancing their counts.
 import "std/http"
@@ -11,6 +10,10 @@ import "std/str"
 import "std/tests/sys_test"
 import "std/thread"
 import "std/verdict"
+
+fn back_to(before: Sz, what: U8$[]) //< checks that the heap came back to where it stood
+    //< The one heap check for std's tests: `before` is `mem.heap_used_bytes()` read at the start.
+    assert(mem.heap_used_bytes() == before, what)
 
 // ==========================================
 // std/mem: what an arena keeps when it is reset for another round.
@@ -72,11 +75,6 @@ fn test_arena_restore()
 // std/mem: a function's work in an arena the caller lent it ("A null arena is the heap, for every
 // function" in std/docs/DESIGN-core.md).
 // ==========================================
-priv fn json_refused(src: U8[], a: Arena$@): Bool //< whether `json.parse` refuses src
-    _doc: = json.parse(src, a) catch
-        return true
-    return false
-
 fn test_lent_arena_keeps_the_result_alone()
     verdict.start("[Arena] a lent arena keeps a function's result alone...")
     a: = Arena.new(64 * KIB)
@@ -88,7 +86,7 @@ fn test_lent_arena_keeps_the_result_alone()
         n: = http.request_length(whole, 0, a) catch 0
         assert(n == whole.len, "Arena: request_length still reads a whole head")
         _r: = http.parse_request(part, 0, a) catch null
-        assert(json_refused("{\"a\": [1, 2", a), "Arena: a document cut short is refused")
+        assert(json.parse("{\"a\": [1, 2", a).is_err(), "Arena: a document cut short is refused")
     assert(a.get_total_used() == before,
         "Arena: request_length, and a parse that fails, leave nothing in the caller's arena")
     // A function writing its result while it works keeps the result whole.
@@ -114,7 +112,6 @@ fn main()
 """
 
 priv const RESTORE_BEFORE_RESET_SRC: U8[] = //< a child that rewinds to a mark from before reset
-    //<
     //< After the reset the one chunk is kept and holds more than the mark did. So only the count
     //< of resets tells the mark is stale.
     """import "std/mem" { Arena }
@@ -207,7 +204,7 @@ fn test_heap_counters_across_threads()
         ts[i].join_and_free()
     // Each thread's handle is on the heap too, freed by its join.
     want: = CHURN_THREADS * (Sz::CHURN_ROUNDS * CHURN_BYTES + sizeof(thread.Thread))
-    assert(mem.heap_used_bytes() == used0, "Mem: the bytes in use return to where they started")
+    back_to(used0, "Mem: the bytes in use return to where they started")
     assert(mem.heap_requested_total_bytes() - total0 == want,
         "Mem: the running total counts every byte each thread asked for")
     assert(mem.heap_peak_used_bytes() >= used0 + CHURN_BYTES,
@@ -237,8 +234,7 @@ fn test_rc_refcount()
     verdict.start("[Rc] ARC automatic reference counting (shared by plain assignment) test...")
     heap_before: = mem.heap_used_bytes()
     rc_shared_body()
-    heap_after: = mem.heap_used_bytes()
-    assert(heap_after == heap_before,
+    back_to(heap_before,
         "Rc must be auto-freed once all owners leave scope (no leak, no double-free)")
     verdict.pass("It is shared by plain assignment and freed automatically as the scope is left.")
 // ==========================================
@@ -272,8 +268,7 @@ fn test_arc_refcount_concurrent()
     verdict.start("[Arc] ARC concurrent copy/destroy atomicity storm test (4 threads x 5000)...")
     heap_before: = mem.heap_used_bytes()
     arc_storm_body()
-    heap_after: = mem.heap_used_bytes()
-    assert(heap_after == heap_before,
+    back_to(heap_before,
         "refcount must return to the pre-test heap baseline (no leak, no double-free)")
     verdict
         .pass("The value survives simultaneous copying and automatic destruction on 4 threads, and \
@@ -291,7 +286,6 @@ priv fn weak_alive_body()
 
 priv fn make_dropped_weak(): Weak_rc<|I32|> //<
     //< Creates an rc inside the scope and returns a Weak_rc downgraded from it
-    //<
     //< rc's release takes strong to 0, but the weak remains, so the control block is not freed.
     $rc: = Rc<|I32|>.new(42)
     w: = rc.downgrade()
@@ -312,9 +306,7 @@ fn test_weak_upgrade()
     heap_before: = mem.heap_used_bytes()
     weak_alive_body()
     weak_after_drop_body()
-    heap_after: = mem.heap_used_bytes()
-    assert(heap_after == heap_before,
-        "heap must return to the baseline once both strong and weak reach zero")
+    back_to(heap_before, "heap must return to the baseline once both strong and weak reach zero")
     verdict
         .pass("upgrade succeeds while alive, fails once every strong is gone, and everything is \
             freed automatically.")
@@ -367,9 +359,7 @@ fn test_weak_arc_concurrent()
     heap_before: = mem.heap_used_bytes()
     weak_arc_storm_body()
     weak_arc_after_drop_body()
-    heap_after: = mem.heap_used_bytes()
-    assert(heap_after == heap_before,
-        "heap must return to the baseline after the storm + after-drop scenario")
+    back_to(heap_before, "heap must return to the baseline after the storm + after-drop scenario")
     verdict
         .pass("The value survives simultaneous downgrade/upgrade on 4 threads and is freed \
             automatically in the end, with no leak.")

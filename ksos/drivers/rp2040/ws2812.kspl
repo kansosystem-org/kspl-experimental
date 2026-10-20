@@ -1,5 +1,4 @@
 //< Drives WS2812 (daisy-chained full-colour LEDs) from one pin
-//<
 //< WS2812 uses one line at 800kHz, where **the length of the High pulse is the bit's value**.
 
 // ==========================================
@@ -20,28 +19,23 @@ import "ksos/drivers/rp2040/timer"
 import "ksos/kernel/task"
 
 priv const BIT_COUNTS: U32 = clocks.SYS_HZ / 800000 //< one bit's period, in counts
-    //<
     //< It counts clk_sys with no divisor, so 1 count = 1/clk_sys.
     //< Caution: **Keep it an expression, not a number**, or a changed clk_sys gives wrong colours
     //< even with correct wiring.
 priv const BIT_TOP: U32 = BIT_COUNTS - 1 //<
     //< PWM's TOP is the wrap value, so the period is TOP+1 counts
 priv const HIGH_0: U32 = clocks.SYS_HZ / 2500000 //< the High pulse's length
-    //<
     //< 0 is 0.4us (= 1/2.5MHz) and 1 is 0.8us (= 1/1.25MHz).
 priv const HIGH_1: U32 = clocks.SYS_HZ / 1250000
 priv const TAIL_GATE: U32 = HIGH_1 + 2 //<
     //< The count at which the next period's duty may be written
-    //<
     //< Caution: **It must be after `HIGH_1`** (before it, the pulse is cut short). It is a
     //< boundary, not a margin, so +2 is enough; more narrows the window for the write.
 
 priv const LATCH_US: U32 = 80 //< the Low time in µs at the end that latches the colours
-    //<
     //< The standard's minimum is 50µs; this leaves some margin.
 
 const MAX_PIXELS: Sz = 8 //< how many LEDs can be sent at once
-    //<
     //< **The bytes in wire order are built here**, so to send more, enlarge this array.
 priv $wire: U8[MAX_PIXELS*3]
 
@@ -59,7 +53,6 @@ priv $ready: Bool = false
 
 fn init(pin: U32): Void!mmio.Driver_error //<
     //< Connects the pin to the PWM for WS2812, ready to send
-    //<
     //< **It starts at duty 0 (Low)**; otherwise a pulse from the previous value gives an LED a
     //< garbled colour.
     ready = false
@@ -78,7 +71,6 @@ fn init(pin: U32): Void!mmio.Driver_error //<
     ready = true
 
 priv fn fill_wire(pixels: U32[]): Sz //< builds the bytes sent on the line
-    //<
     //< Each LED is given as 0xRRGGBB and reordered into **G, R, B**.
     $n: Sz = 0
     for c in pixels
@@ -112,8 +104,12 @@ priv fn send_window(ctr: U32, cc: U32, lo: U32, hi: U32, low: U32, len: Sz)
     for mmio.read32(ctr) < TAIL_GATE {}
     mmio.write32(cc, low)
 
+fn rgb(r: Bool, g: Bool, b: Bool, level: U32): U32 //< one LED's colour as 0xRRGGBB
+    //< Each lit channel is set to `level`. The board's limit gives it (`WS2812_LEVEL`).
+    return ((level if r else 0U32) << 16U32) | ((level if g else 0U32) << 8U32) | (level if b
+        else 0U32)
+
 fn send(pixels: U32[]): Bool //< sends the LEDs' colours (one LED = 0xRRGGBB)
-    //<
     //< true once they are sent.
     //< **Interrupts are off while it sends** (30µs per LED), so do not call it every loop.
     if !ready || pixels.len > MAX_PIXELS

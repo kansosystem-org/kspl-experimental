@@ -1,5 +1,4 @@
 //< Saves the normalized AST to disk so the next run can skip KSPEG's parse
-//<
 //< Parsing takes most of ksplc's time (more so for small inputs, since std is always read). A
 //< build parses each file once, but **every start of ksplc parses again**. This saves that
 //< parse. The unit is one file, and the key must include ksplc's own identity
@@ -22,13 +21,11 @@ import "std/sys"
 priv const MAGIC: U8[] = "KSAST"
 
 priv const FORMAT_VERSION: U32 = 4 //< the format's version
-    //<
     //< **Raise it whenever a node's fields, their order or the way the key is built change.**
     //< Otherwise a new reader reads an old file and silently breaks. Rebuilding ksplc changes every
     //< key anyway. This guards what would still be read (a file placed by hand, for example).
 
 priv const MAX_NODES: Sz = 8 * 1024 * 1024 //< the most nodes one entry can hold
-    //<
     //< It stops a broken file's `n_nodes` from asking for a huge allocation; no real entry nears
     //< it.
 
@@ -41,7 +38,6 @@ priv fn temp_nonce(): Sz
     return nonce
 
 struct Stats //< the hits and misses --stats prints
-    //<
     //< Caution: Without it, nobody can notice a cache that silently goes unused. Things only get
     //< slower while the results stay right (tests/suite/ast_cache_test.kspl checks it).
     hits: Sz
@@ -55,7 +51,6 @@ $stats: Stats = ::{}
 
 priv fn build_paths(logical_name: U8[], src: U8[], path: Str_builder$@, key: Str_builder$@): Bool //<
     //< It writes the cache file's path into path and the key's hexadecimal into key
-    //<
     //< The path is `<cache directory>/ast/<64 hex digits>.ksast`.
     //<
     //< It returns false where the path cannot be determined (the cache is then not used).
@@ -89,7 +84,6 @@ priv fn put_u32(out: Str_builder$@, v: U32)
     out.s(U8$[]::buf)
 
 priv struct Str_table //< the table of the strings an entry holds
-    //<
     //< Each string is stored only once (identifiers appear over and over).
     ids: Map<|U8[], Sz|>$@
     items: List<|U8[]|>$@
@@ -104,7 +98,6 @@ impl Str_table
 
     priv fn intern(r: Self$@, s: U8[]): Sz //<
         //< The number of `s` in the table, adding it if new
-        //<
         //< 0 is reserved for the empty string: empty node text is common, so it does not go in the
         //< table.
         if s.len == 0
@@ -118,13 +111,11 @@ impl Str_table
         return id
 
 priv const U32_MAX: I64 = 0xFFFFFFFF //< the largest U32
-    //<
     //< Caution: Hold it as `I64`, not `Sz`: `Sz` is ptrdiff_t, at most 2^31-1 on a 32-bit target,
     //< so the value compared is widened to I64.
 
 priv fn write_subtree(node: Ast_node$@, tbl: Str_table$@, body: Str_builder$@, count: Sz$@): Bool //<
     //< It writes the nodes in pre-order
-    //<
     //< Each node is followed by its n_children subtrees, so the tree is restored without indices. A
     //< value that does not fit in U32 returns false, and the cache is not used.
     if node == null
@@ -145,7 +136,6 @@ priv fn write_subtree(node: Ast_node$@, tbl: Str_table$@, body: Str_builder$@, c
 
 fn store(logical_name: U8[], src: U8[], decls: List<|Ast_node$@|>$@) //<
     //< It saves decls (the top-level declarations this file adds to root) in the cache
-    //<
     //< A failure is still a success for the caller: the file is just parsed again next time.
     //< **Every node's `loc.file` must be logical_name** (one per entry, as parse_raw_ast produces);
     //< otherwise nothing is saved, rather than a wrong file name.
@@ -209,7 +199,6 @@ fn store(logical_name: U8[], src: U8[], decls: List<|Ast_node$@|>$@) //<
 // ==========================================
 
 priv struct Cursor //< a read cursor over an entry's bytes
-    //<
     //< Caution: Always check the bytes remaining before reading anything.
     data: U8[]
     pos: Sz
@@ -277,13 +266,12 @@ priv fn read_subtree(cur: Cursor$@, strs: List<|U8[]|>$@, logical_name: U8[], bu
 
 fn load(logical_name: U8[], src: U8[], decls: List<|Ast_node$@|>$@): Bool //<
     //< True where decls could be restored from the cache
-    //<
     //< Otherwise it adds nothing and returns false (the caller parses as usual).
     $path: = Str_builder.new()
     $key: = Str_builder.new()
     if !build_paths(logical_name, src, path@, key@)
         return false
-    data: = io.read_file(path.slice()) catch
+    data: = io.read_file(path.slice(), null) catch
         stats.misses += 1
         return false
     defer dealloc(Void$@::data.ptr)
@@ -368,7 +356,6 @@ fn load(logical_name: U8[], src: U8[], decls: List<|Ast_node$@|>$@): Bool //<
     return true
 
 fn print_stats() //< it prints the hits and misses, only under --stats
-    //<
     //< Caution: **Keep the string `[AST Cache] `**: `tests/suite/ast_cache_test.kspl` looks for it
     //< in the line (the indentation can change). It is printed apart from the timing, since a count
     //< means something even where the timing does not.

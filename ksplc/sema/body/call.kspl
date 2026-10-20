@@ -1,5 +1,4 @@
 //< Infers a call `f(…)`: the callee its name names, a generic's instance, and the result's type
-//<
 //< It covers a function or method by name, an enum variant with a payload, and a call through a
 //< function value. It also covers the intrinsics the compiler builds in (`__kspl_<name>`).
 //< `call_args.kspl` matches the arguments against the parameters. `generic_infer.kspl` reads a
@@ -33,7 +32,6 @@ import "std/str" { Str_builder }
 fn check_variant_call_arity(c: Sema_ctx$@, node: Ast_node$@, args_node: Ast_node$@,
     variant_def: sema_type_def.Enum_variant$@, has_call_syntax: Bool) //<
         //< Checks the argument count of a call to an enum variant, `()` on a payload-free one too
-        //<
         //< `Enum.variant(...)`, `.variant(...)` and a bare `.variant` / `Enum.variant` all use it.
     if variant_def == null
         return
@@ -141,7 +139,6 @@ fn with_args(fn_tmpl: sema_decl_mono.Fn_instance, args: I32[]): sema_decl_mono.F
 
 fn refuse_type_args_on_plain_fn(c: Sema_ctx$@, fn_name: U8[], type_args: Ast_node$@) //<
     //< Reports type arguments written after a function that declares none
-    //<
     //< They would bind nothing and change nothing (Principle 5), called or named as a value.
     c.clear_scratch()
         .s("function '\{fn_name\}' is not generic. Remove the type arguments '\{type_args.text\}'")
@@ -154,7 +151,6 @@ priv fn callee_name(left: Ast_node$@): U8[] //< the name a generic call's callee
 priv fn refuses_fn_name_binding(c: Sema_ctx$@, left: Ast_node$@, args_node: Ast_node$@,
     inferred: I32[]): Bool //<
         //< Rejects a type argument bound to a function's name that gives no function type
-        //<
         //< A function's name gives a type parameter the function type of the one function it names
         //< (fn_value_type_id in sema/body/resolve_path.kspl). A variadic function has none, since
         //< no function type holds its `...`. So the binding is left with the mark
@@ -188,7 +184,6 @@ priv fn instance_for_written_args(c: Sema_ctx$@, node: Ast_node$@,
     fn_tmpl: sema_decl_mono.Fn_instance, written: Ast_node$@, def_node: Ast_node$@):
     Ast_node$@?!Sema_error //<
         //< The instance a generic call names by its written type arguments, before its arguments
-        //<
         //< None where they are to be inferred from the arguments. **Known first, they type the
         //< arguments** as any call's parameters do: `maxg<|U8|>(200, 100)` takes two `U8`s, and
         //< `Box<|P|>.make(::{ .x = 2 })` builds a `P` (an `I32` and an untyped literal before).
@@ -201,7 +196,6 @@ priv fn instance_for_written_args(c: Sema_ctx$@, node: Ast_node$@,
     c.generics.inst_site = node
     defer c.generics.inst_site = prev_inst_site
     $inst_name: = c.instantiate_fn(with_args(fn_tmpl, args), false)!
-    defer inst_name.free()
     inst_sym: = c.symtab.resolve(inst_name.slice()).unwrap_or(null)
     return .some(inst_sym.node) if inst_sym != null && inst_sym.node != null else .none
 
@@ -209,7 +203,6 @@ priv fn infer_generic_call_result(c: Sema_ctx$@, node: Ast_node$@, left: Ast_nod
     fn_tmpl: sema_decl_mono.Fn_instance, written: Ast_node$@, is_method_access: Bool,
     def_node: Ast_node$@, args_node: Ast_node$@, cur_type_id: I32): I32!Sema_error //<
         //< Instantiates a generic call from its type arguments and returns the return type
-        //<
         //< written is the `<|…|>` that names them at the call, or null where they are inferred from
         //< the arguments. It also rewrites def_node and the node's kind to the instance.
     $type_id: = cur_type_id
@@ -231,7 +224,6 @@ priv fn infer_generic_call_result(c: Sema_ctx$@, node: Ast_node$@, left: Ast_nod
     c.generics.inst_site = node
     defer c.generics.inst_site = prev_inst_site
     $inst_name: = c.instantiate_fn(with_args(fn_tmpl, inst_args), false)!
-    defer inst_name.free()
 
     inst_sym: = c.symtab.resolve(inst_name.slice()).unwrap_or(null)
     if inst_sym != null
@@ -261,7 +253,6 @@ priv fn infer_generic_call_result(c: Sema_ctx$@, node: Ast_node$@, left: Ast_nod
     return type_id
 fn resolves_to_named_fn(left: Ast_node$@): Bool //<
     //< Whether the path expression resolved to a named function's declaration
-    //<
     //< A method_access uses the member's. This one test serves both a call target
     //< (`is_indirect_fn_ptr_call` below) and an unannotated binding (`sema/body/stmt.kspl`).
     //< Caution: **A call's result is a value, whatever function made it.** The call node carries
@@ -281,7 +272,6 @@ fn resolves_to_named_fn(left: Ast_node$@): Bool //<
 
 priv fn is_indirect_fn_ptr_call(c: Sema_ctx$@, left: Ast_node$@, target_id: I32): Bool //<
     //< Whether this call is an indirect call through a function pointer **value**
-    //<
     //< Caution: **Do not decide by the target's type alone.** A named function's symbol holds **the
     //< return type** in type_id (resolve_ret_type_or_void in collect_fn_def). So `fn cb(): Cb` (Cb
     //< a function pointer alias) looks like a function pointer. `cb()` would be typed as Cb's
@@ -290,7 +280,6 @@ priv fn is_indirect_fn_ptr_call(c: Sema_ctx$@, left: Ast_node$@, target_id: I32)
 
 priv fn holds_call_method(c: Sema_ctx$@, type_id: I32): Bool //<
     //< Whether a value of that type is called through a `call` method (a `Callable1`)
-    //<
     //< A trait's methods live on the trait, not in the type table, so both are checked.
     base: = c.env.receiver_base_id(type_id)
     switch c.env.get_info(base)
@@ -309,7 +298,6 @@ priv fn holds_call_method(c: Sema_ctx$@, type_id: I32): Bool //<
 
 priv fn report_field_called(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@, field_id: I32) //<
     //< Reports a field written with `()` as though it were a method (`args.len()`)
-    //<
     //< The advice is to drop the `()`, except for **a field holding a `Callable1`** (called through
     //< its `call`) and a pointer to a function pointer (dereferenced first).
     member: = left.get_postfix_member().text
@@ -491,7 +479,6 @@ priv fn callee_symbol(left: Ast_node$@, named_sym: Sema_symbol$@, is_method_acce
 priv fn report_unresolved_callee(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@,
     parts: sema_decl_name.Named_fn, fqn_lookup: U8[]) //<
         //< Reports a called name that names no function
-        //<
         //< **Report a callee once**: where resolving its name already reported it, a second report
         //< is the same mistake counted twice. So is an instance whose type arguments were refused
         //< having no methods (check_type_constraint reports it at the type's use).
@@ -507,7 +494,6 @@ priv fn report_unresolved_callee(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node
 priv fn refuses_stray_type_args(c: Sema_ctx$@, parts: sema_decl_name.Named_fn, fn_name: U8[],
     is_template: Bool, is_through_template: Bool, sym: Sema_symbol$@, is_method_access: Bool): Bool //<
         //< Whether it reported type arguments written where nothing binds them
-        //<
         //< Caution: **Reject a type argument with nothing to bind to.** The type arguments of a
         //< generic type's method are **fixed by the receiver's instance**, so ones written at the
         //< call bind nothing. A method declaring **its own** (`fn m<|T|>(…)`) is a template and
@@ -533,7 +519,6 @@ priv fn refuses_stray_type_args(c: Sema_ctx$@, parts: sema_decl_name.Named_fn, f
 priv fn refuses_value_called(c: Sema_ctx$@, node: Ast_node$@, sym: Sema_symbol$@, target_id: I32):
     Bool //<
         //< Whether it reported a call of a value that is no function
-        //<
         //< A named function's symbol holds **the return type** in type_id, so the call's type is
         //< right for it. For a plain variable, it would emit `I32 y = x(1);` with no diagnostic and
         //< a raw C error.
@@ -564,7 +549,6 @@ priv fn callee_decl(left: Ast_node$@, sym: Sema_symbol$@, template: Ast_node$@,
 priv fn infer_value_call(c: Sema_ctx$@, node: Ast_node$@, callee_id: I32, args_node: Ast_node$@):
     I32!Sema_error //<
         //< Infers a call through a function value: its arguments by the value's type, its result
-        //<
         //< It is rejected where the type has no signature. The marker type of a bare function name
         //< in a generic call (generic_fn_value_type_id) says only "a function".
     switch c.env.fn_sig_of(callee_id)
@@ -585,7 +569,6 @@ enum Intrinsic //< a call the compiler builds in: `__kspl_<name>(…)`, declared
     inline_c //< `__kspl_inline_c("…")`: C source embedded as it stands (the C target only)
 
 fn intrinsic_of(name: U8[]): Intrinsic //< the intrinsic a callee's name calls
-    //<
     //< **Sema and both backends tell an intrinsic by this alone.**
     if name.equals("__kspl_read_volatile")
         return .read_volatile
@@ -599,7 +582,6 @@ fn intrinsic_of(name: U8[]): Intrinsic //< the intrinsic a callee's name calls
 
 priv fn finish_intrinsic(node: Ast_node$@, left: Ast_node$@, id: I32): I32 //<
     //< The shared tail of intrinsic resolution
-    //<
     //< It sets the type on node and left, turns left into an identifier, and returns id.
     node.type_id = id
     left.type_id = id

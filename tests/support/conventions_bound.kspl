@@ -1,7 +1,6 @@
 //< Keeps the boundaries of packages and folders from widening unnoticed
-//<
 //< It is not a suite of its own; it is a part of conventions.
-//< **Each of these builds either way**: an upward import, a drift in a numbered list, an entry
+//< **Each of these builds either way**: an upward import, a page's list of names drifting, an entry
 //< point nobody calls. So the check reads the text to check the boundaries.
 //< `tests/support/conventions_match.kspl` checks the implementation against the documents, the
 //< grammar and the colouring.
@@ -14,7 +13,6 @@ import "std/sys"
 import "std/verdict"
 import "tests/support/conventions_scan" as scan
 import "tests/support/harness"
-import "tests/support/harness_text" as htext
 
 // ==========================================
 // The dependencies that cross sema's layers sema is layered, from the bottom, type / session /
@@ -24,7 +22,6 @@ import "tests/support/harness_text" as htext
 priv const SEMA_CTX: U8[] = "ksplc/sema/session/ctx.kspl"
 
 priv fn hook_name(line: U8[]): U8[] //< whether the field has the form `name: fn(`
-    //<
     //< Caution: **Do not check the visibility** (a member cannot be wider than what encloses it).
     //< A filter by the modifier counts zero and goes silent the day the text changes.
     t: = line.trim_spaces().strip_prefix("pub ").strip_prefix("priv ")
@@ -55,7 +52,6 @@ priv fn imports_from(rel: U8[], prefix: U8[], out: List<|U8[]|>$@, arena: Arena$
 
 priv const SIDEWAYS_ALLOWED: U8[][_] = ::{ "ksplc/sema/flow/stmt.kspl -> ksplc/sema/decl/eval" } //<
     //< The sideways flows allowed
-    //<
     //< **Add to them and decl and flow merge into one layer.** The one here lets flow count the
     //< branches of a condition folded to a constant.
 
@@ -110,7 +106,7 @@ priv fn check_sema_layers(arena: Arena$@)
             bad
                 .push(arena.text().s("a sideways flow not in the list: ").s(sideways.get(i)).take())
     for a in SIDEWAYS_ALLOWED
-        if !htext.has(sideways@, a)
+        if !sideways.contains(a)
             bad
                 .push(arena.text().s("a sideways flow that has gone (delete it from the list): ")
                 .s(a).take())
@@ -183,84 +179,6 @@ priv fn check_ksos_layers(arena: Arena$@)
         "the run is in \"What is here\" in ksos/README.md")
 
 // ==========================================
-// The boundary's lists (the order of the strings passed by number) **A number is read in the same
-// order on both sides.** The core passes a number (`*_order` in `port/web/state.kspl`). The
-// screen looks up names by it (`port/web/draw.js`).
-// ==========================================
-priv const ORDER_HOME: U8[] = "kspage/port/web/state.kspl"
-priv const ORDER_SCREEN: U8[] = "kspage/port/web/draw.js"
-
-priv fn order_of(src: U8[], name: U8[], arena: Arena$@): List<|U8[]|> //<
-    //< The tab-separated text following a `priv const <name>_ORDER: U8[] =`
-    $out: = List<|U8[]|>.new(arena)
-    head: = arena.text().s("priv const ").s(name).s("_ORDER: U8[] =").take()
-    if at: = src.find_str(head)
-        rest: = src.sub_from(at + head.len)
-        if open: = rest.find_str("\"")
-            body: = rest.sub_from(open + 1)
-            if end: = body.find_str("\"")
-                // **It is read as text, so the separator is the two characters `\\t`** (not a
-                // tab itself).
-                $left: U8[] = body.sub(0, end)
-                for left.len > 0
-                    if cut: = left.find_str("\\t")
-                        out.push(left.sub(0, cut))
-                        left = left.sub_from(cut + 2)
-                    else
-                        out.push(left)
-                        return out
-    return out
-
-priv fn js_list_of(src: U8[], name: U8[], head_mark: U8[], arena: Arena$@): List<|U8[]|> //<
-    //< The list of a `const <name> = ["a", "b", …];`
-    //<
-    //< Caution: **Pick it up in order** (drop the repeats and the order drifts).
-    $out: = List<|U8[]|>.new(arena)
-    head: = arena.text().s("const ").s(name).s(" = [").take()
-    if at: = src.find_str(head)
-        rest: = src.sub_from(at + head.len)
-        if end: = rest.find_str("];")
-            for w in scan.find_all(rest.sub(0, end), head_mark, "\"", arena)
-                out.push(w)
-    return out
-
-priv const ORDER_PAIRS: U8[][_] = ::{ "SHAPE", "SHAPES", "DATING", "DATINGS", "COLLECT", "COLLECTS",
-    "SKETCH", "SKETCHES", "KEEP", "KEEPS" }
-
-priv fn diff_order(core: List<|U8[]|>@, js: List<|U8[]|>@, home: U8[], label: U8[],
-    bad: List<|U8[]|>$@, arena: Arena$@) //<
-        //< Names where two lists disagree.
-        //<
-        //< Caution: **Compare the positions, not just the count**: the same strings in another
-        //< order point a number at something else.
-    scan.diff_into(core, js, home, ORDER_SCREEN, bad, arena)
-    scan.diff_into(js, core, ORDER_SCREEN, home, bad, arena)
-    for k in Range.asc(core.len)
-        if k < js.len && !core.get(k).equals(js.get(k))
-            bad
-                .push(arena.text().s(label).s("'s number \{k\} is ").s(core.get(k)).s(" and ")
-                .s(ORDER_SCREEN).s(" has ").s(js.get(k)).take())
-
-priv fn check_boundary_order(arena: Arena$@)
-    home: = harness.read_under_root(ORDER_HOME)
-    screen: = harness.read_under_root(ORDER_SCREEN)
-    $bad: = List<|U8[]|>.new(arena)
-    $seen: Sz = 0
-    for i in Range.asc(ORDER_PAIRS.len)
-        if i % 2 != 0
-            continue
-        $core: = order_of(home, ORDER_PAIRS[i], arena)
-        $js: = js_list_of(screen, ORDER_PAIRS[i + 1], "\"", arena)
-        if core.len <= 0 || js.len <= 0
-            bad
-                .push(arena.text().s(ORDER_PAIRS[i]).s(": the run cannot be read").take())
-            continue
-        seen += core.len
-        diff_order(core@, js@, ORDER_HOME, ORDER_PAIRS[i], bad@, arena)
-    verdict.check_list("the boundary's runs agree on both sides", seen, "entries", bad@,
-        "a number goes through when it drifts (a square is drawn where a circle was meant)")
-
-// ==========================================
 // The reference-direction table matches the list the check holds. **The canonical source is the
 // table in `docs/SPEC-documents.md`**.
 // Only the directions between implementations are compared.
@@ -270,7 +188,6 @@ priv const DIR_COPY: U8[] = "tests/suite/docref_test.kspl"
 
 priv fn units_of(md: U8[], row: U8[], arena: Arena$@): List<|U8[]|> //<
     //< Picks up the packages' names (`` `x/` ``) in that tier's row of the table
-    //<
     //< **Other rows start with the same words** (a tier's name heads another table's column too).
     //< So the answer is **the row in which at least one package can be picked up**.
     $out: = List<|U8[]|>.new(arena)
@@ -285,7 +202,6 @@ priv fn units_of(md: U8[], row: U8[], arena: Arena$@): List<|U8[]|> //<
 
 priv fn arrows_of(md: U8[], arena: Arena$@): List<|U8[]|> //<
     //< Picks up the allowed directions (`` `A→B` ``) in the whole document
-    //<
     //< It may be in the table's row or the note below it. **A direction the tiers decide is not
     //< written as an arrow**; only "is it somewhere in the document" is checked.
     //< Caution: **Do not read it as guaranteeing "it is in the table".**
@@ -297,7 +213,6 @@ priv fn arrows_of(md: U8[], arena: Arena$@): List<|U8[]|> //<
 
 priv fn copy_targets(src: U8[], unit: U8[], arena: Arena$@): List<|U8[]|> //<
     //< The targets of one `layer_to` line the check holds, without its first word
-    //<
     //< The line has the form `"ksplc docs std root"`.
     $out: = List<|U8[]|>.new(arena)
     head: = arena.text().s("\"").s(unit).s(" ").take()
@@ -312,14 +227,14 @@ priv fn copy_targets(src: U8[], unit: U8[], arena: Arena$@): List<|U8[]|> //<
 priv fn check_reference_arrows(arena: Arena$@)
     md: = harness.read_under_root(DIR_CANON)
     copy: = harness.read_under_root(DIR_COPY)
-    $units: = units_of(md, "| implementation ", arena)
-    $leaves: = units_of(md, "| leaf ", arena)
-    $arrows: = arrows_of(md, arena)
+    units: = units_of(md, "| implementation ", arena)
+    leaves: = units_of(md, "| leaf ", arena)
+    arrows: = arrows_of(md, arena)
     $bad: = List<|U8[]|>.new(arena)
     if units.len <= 0 || leaves.len <= 0 || arrows.len <= 0
         bad.push("the table's tier rows cannot be read")
     for from in units
-        $targets: = copy_targets(copy, from, arena)
+        targets: = copy_targets(copy, from, arena)
         if targets.len <= 0
             bad
                 .push(arena.text().s(from).s(": there is no list of destinations in ").s(DIR_COPY)
@@ -332,11 +247,10 @@ priv fn check_reference_arrows(arena: Arena$@)
         // neither**; require an arrow for it.
         for k in Range.asc(targets.len)
             to: = targets.get(k)
-            if to.equals(from) ||
-                (!htext.has(units@, to) && !htext.has(leaves@, to))
+            if to.equals(from) || (!units.contains(to) && !leaves.contains(to))
                 continue
             want: = arena.text().s(from).s("→").s(to).take()
-            if !htext.has(arrows@, want)
+            if !arrows.contains(want)
                 bad
                     .push(arena.text().s(want).s(": ").s(DIR_COPY).s(" lets it through and ")
                     .s(DIR_CANON).s("'s table does not hold it").take())
@@ -347,7 +261,7 @@ priv fn check_reference_arrows(arena: Arena$@)
             if cut == 0 || !a.sub(0, cut).equals(from)
                 continue
             to: = a.sub_from(cut + 3)
-            if !htext.has(targets@, to)
+            if !targets.contains(to)
                 bad
                     .push(arena.text().s(a).s(": it is in ").s(DIR_CANON).s("'s table and ")
                     .s(DIR_COPY).s(" does not let it through").take())
@@ -356,40 +270,48 @@ priv fn check_reference_arrows(arena: Arena$@)
         "drifting makes the shape \"the documents forbid it and the check lets it through\"")
 
 // ==========================================
-// The menu's choices send only the strings the core knows **A string it does not know falls back
-// to number 0.** So a stale page shows only as "it was chosen and something different comes out".
+// The page's lists of the core's names **An enum crosses the boundary as its variant name**, so a
+// list on the page holds the names of the core's enum. **A name it does not know reads as the
+// kind's default**, so a stale page shows only as "it was chosen and something different comes
+// out", and a reason with no words shows only as its bare name.
 // ==========================================
 
-priv const MENU_FLY: U8[] = "kspage/port/web/command.js" //<
-    //< The same list is in three places: the core, the drawing code and the page
-    //<
-    //< The checks above compare the first two; this one compares the page with the core.
-priv const MENU_FORM: U8[] = "kspage/port/web/form.js"
+priv const MENU_FLY: U8[] = "kspage/port/web/command.js" //< the choices for inserting
+priv const MENU_FORM: U8[] = "kspage/port/web/form.js" //< the choices in the style form
+priv const NAME_WORDS: U8[] = "kspage/port/web/draw.js" //< the words for a name the core passes
 
-// A list of five (the name of where the choices live / the canonical file / the name / the
-// canonical form / the file holding the choices). `page.html` holds only where the set is placed.
+// A list of four (the name of where the choices live / the enum's file / the enum / the file
+// holding the choices). `page.html` holds only where the set is placed.
 // Caution: **Do not return to a `<select>`** (the check is "no `<select>` is left in a menu" in
 // `kspage/tests/browser/menu.js`).
-priv const MENU_PAIRS: U8[][_] = ::{ "DATED_PICKS", "kspage/port/web/state.kspl", "DATING", "order",
-    MENU_FORM, "ALIGN_PICKS", "kspage/model/style.kspl", "Align", "enum", MENU_FORM, "MARK_PICKS",
-    "kspage/model/marker.kspl", "Marker", "enum", MENU_FORM, "COLLECT_PICKS",
-    "kspage/port/web/state.kspl", "COLLECT", "order", MENU_FORM, "STYLE_SHAPE_PICKS",
-    "kspage/port/web/state.kspl", "SHAPE", "order", MENU_FORM, "WHEN_PICKS",
-    "kspage/model/style_when.kspl", "Compare", "enum", MENU_FORM, "SKETCH_PICKS",
-    "kspage/port/web/state.kspl", "SKETCH", "order", MENU_FLY, "SHAPE_PICKS",
-    "kspage/port/web/state.kspl", "SHAPE", "order", MENU_FLY, "KEEP_PICKS",
-    "kspage/port/web/state.kspl", "KEEP", "order", MENU_FLY }
+priv const MENU_PAIRS: U8[][_] = ::{ "DATED_PICKS", "kspage/model/day.kspl", "Dating", MENU_FORM,
+    "ALIGN_PICKS", "kspage/model/style.kspl", "Align", MENU_FORM, "MARK_PICKS",
+    "kspage/model/marker.kspl", "Marker", MENU_FORM, "COLLECT_PICKS", "kspage/model/collect.kspl",
+    "Collect", MENU_FORM, "WHEN_PICKS", "kspage/model/style_when.kspl", "Compare", MENU_FORM,
+    "SKETCH_PICKS", "kspage/write/insert.kspl", "Sketch", MENU_FLY, "SHAPE_PICKS",
+    "kspage/model/style.kspl", "Shape", MENU_FLY, "KEEP_PICKS", "kspage/model/filter.kspl", "Keep",
+    MENU_FLY }
 
-priv const OWN_DOOR: U8[][_] = ::{ "source", "imports" } //<
+priv const OWN_DOOR: U8[][_] = ::{ "one_of" } //<
     //< The kinds that correctly stay out of the choices
-    //<
     //< Caution: **Write the reason.**
-    //< `source` and `imports` need a file's name besides the text (`insertPulls` in
-    //< `kspage/port/web/api_look.js`), so they have buttons of their own (`source.js`).
+    //< `one_of` keeps a set of values ticked one by one, so it has a panel of its own
+    //< (`narrow.js`).
+
+priv fn js_list_of(src: U8[], name: U8[], head_mark: U8[], arena: Arena$@): List<|U8[]|> //<
+    //< The list of a `const <name> = ["a", "b", …];`
+    //< Caution: **Pick it up in order** (drop the repeats and the order drifts).
+    $out: = List<|U8[]|>.new(arena)
+    head: = arena.text().s("const ").s(name).s(" = [").take()
+    if at: = src.find_str(head)
+        rest: = src.sub_from(at + head.len)
+        if end: = rest.find_str("];")
+            for w in scan.find_all(rest.sub(0, end), head_mark, "\"", arena)
+                out.push(w)
+    return out
 
 priv fn choices_of(id: U8[], where: U8[], arena: Arena$@): List<|U8[]|> //<
     //< The list of strings the page sends
-    //<
     //< **It lives in one place**: the `const <name> = [["text", "label"], …]` in the JS that builds
     //< the set.
     return js_list_of(harness.read_under_root(where), id, "[\"", arena)
@@ -398,25 +320,23 @@ priv fn check_menu_choices(arena: Arena$@)
     $bad: = List<|U8[]|>.new(arena)
     $seen: Sz = 0
     for i in Range.asc(MENU_PAIRS.len)
-        if i % 5 != 0
+        if i % 4 != 0
             continue
         id: = MENU_PAIRS[i]
-        src: = harness.read_under_root(MENU_PAIRS[i + 1])
-        $core: = order_of(src, MENU_PAIRS[i + 2], arena)
-        if MENU_PAIRS[i + 3].equals("enum")
-            core = enum_order(src, MENU_PAIRS[i + 2], arena)
-        $ui: = choices_of(id, MENU_PAIRS[i + 4], arena)
+        core: =
+            enum_order(harness.read_under_root(MENU_PAIRS[i + 1]), MENU_PAIRS[i + 2], arena)
+        ui: = choices_of(id, MENU_PAIRS[i + 3], arena)
         if core.len <= 0 || ui.len <= 0
             bad.push(arena.text().s(id).s(": the run cannot be read").take())
             continue
         seen += ui.len
         for k in Range.asc(ui.len)
-            if !htext.has(core@, ui.get(k))
+            if !core.contains(ui.get(k))
                 bad
                     .push(arena.text().s(id).s(" puts ").s(ui.get(k)).s(" out and ")
-                    .s(MENU_PAIRS[i + 1]).s(" does not know it").take())
+                    .s(MENU_PAIRS[i + 2]).s(" does not know it").take())
         for k in Range.asc(core.len)
-            if htext.has(ui@, core.get(k))
+            if ui.contains(core.get(k))
                 continue
             $excused: = false
             for j in Range.asc(OWN_DOOR.len)
@@ -427,18 +347,28 @@ priv fn check_menu_choices(arena: Arena$@)
                     .push(arena.text().s(core.get(k)).s(" cannot be chosen from ").s(id)
                     .s(" (where it holds an entry point of its own,")
                     .s(" add it to own_door with its reason)").take())
-    verdict.check_list("the menu's choices line up with the core's texts", seen, "entries", bad@,
-        "a text it does not know drops to number 0 (something different comes out)")
+    verdict.check_list("the menu's choices line up with the core's names", seen, "entries", bad@,
+        "a name it does not know reads as the kind's default (something different comes out)")
 
-// ==========================================
-// No `pub` builds up under an entry point **[I0402] cannot check it.** It uses the setting found
-// from the entry point's file. So at a demo's entry point it names the kernel's and drivers' `pub`
-// too (those stay, as a promise to their users).
-// ==========================================
-priv const ENTRY_TREES: U8[][_] = ::{ "ksos/demo" }
+priv const RIBBON_SCREEN: U8[] = "kspage/port/web/ribbon.js" //<
+    //< The shapes the ribbon can choose are `Shape`'s names and no others
+    //< The choices may be a strict subset (the ribbon holds a shortcut, not the list).
+
+priv fn check_ribbon_shapes(arena: Arena$@)
+    known: =
+        enum_order(harness.read_under_root("kspage/model/style.kspl"), "Shape", arena)
+    $bad: = List<|U8[]|>.new(arena)
+    picked: =
+        js_list_of(harness.read_under_root(RIBBON_SCREEN), "SHAPES", "shape: \"", arena)
+    for i in Range.asc(picked.len)
+        if !known.contains(picked.get(i))
+            bad
+                .push(arena.text().s(picked.get(i)).s(": ").s(RIBBON_SCREEN)
+                .s(" lets it be chosen and Shape does not know it").take())
+    verdict.check_list("the shapes the ribbon chooses are the core's", picked.len, "shapes", bad@,
+        "a name it does not know reads as a box (a rectangle comes out when pressed)")
 
 priv fn enum_order(src: U8[], name: U8[], arena: Arena$@): List<|U8[]|> //< a text enum's list
-    //<
     //< Caution: **Read it with the `priv` / `pub` stripped off.**
     $out: = List<|U8[]|>.new(arena)
     // **Do not require a `{`**: the default notation opens the block by indentation, so the list
@@ -477,79 +407,57 @@ priv fn enum_order(src: U8[], name: U8[], arena: Arena$@): List<|U8[]|> //< a te
             out.push(t.sub(0, k))
     return out
 
-// The entry points whose numbered list is the text enum as it is. **The text side's `switch` is
-// exhaustive, so nothing is forgotten; the screen side passes a dropped one** (read as the first
-// kind). A list of four (the text's file / the enum / the screen's list / the prefix cutting the
-// text out); a `key: "` prefix means a table with labels.
-priv const ENUM_PAIRS: U8[][_] = ::{ "kspage/model/marker.kspl", "Marker", "MARKS", "\"",
-    "kspage/model/style.kspl", "Align", "ALIGNS", "\"", "kspage/model/style_when.kspl", "Compare",
-    "COMPARES", "\"", "kspage/model/style.kspl", "Arrange", "REGIONS", "key: \"" }
+// The names the core passes out that the page puts into words. A list of three (the enum's file /
+// the enum / the page's list in `draw.js`). **Every name must have its words, and every word must
+// belong to a name**: one with none shows as its bare name, and a word for a name that is gone
+// stays behind unseen. `done` and `none` are no refusal, so they need none.
+priv const WORD_PAIRS: U8[][_] = ::{ "kspage/model/style.kspl", "Arrange", "REGIONS",
+    "kspage/write/cells.kspl", "Line_end", "REFUSALS", "kspage/write/cells.kspl", "Merge_end",
+    "REFUSALS", "kspage/write/cells.kspl", "Sort_end", "REFUSALS", "kspage/write/insert.kspl",
+    "Surface_end", "REFUSALS", "kspage/write/block.kspl", "Block_style_end", "REFUSALS",
+    "kspage/expr/calc.kspl", "Name_fault", "REFUSALS" }
 
-priv const RIBBON_SCREEN: U8[] = "kspage/port/web/ribbon.js" //<
-    //< The shapes the menu can choose are the shapes in the numbered list and no others
-    //<
-    //< **A string it does not know falls back to number 0**: mistyped, a square silently appears
-    //< (`Math.max(indexOf, 0)` in `api.js`). The choices may be a strict subset.
-
-priv fn check_ribbon_shapes(arena: Arena$@)
-    $known: = js_list_of(harness.read_under_root(ORDER_SCREEN), "SHAPES", "\"", arena)
-    $bad: = List<|U8[]|>.new(arena)
-    picked: =
-        js_list_of(harness.read_under_root(RIBBON_SCREEN), "SHAPES", "shape: \"", arena)
-    for i in Range.asc(picked.len)
-        if !htext.has(known@, picked.get(i))
-            bad
-                .push(arena.text().s(picked.get(i)).s(": ").s(RIBBON_SCREEN)
-                .s(" lets it be chosen and it is not in ").s(ORDER_SCREEN).s("'s run").take())
-    verdict.check_list("the shapes the menu chooses are in the numbered run", picked.len, "shapes",
-        bad@, "a text it does not know drops to number 0 (a square comes out when pressed)")
-
-priv fn bound_of(src: U8[], name: U8[], arena: Arena$@): U8[] //<
-    //< The kind named as the number's ceiling
-    //<
-    //< **Empty where there is none.** Only the form `> Sz::<module>.<Enum>.<kind>` is searched for,
-    //< so a ceiling written as a number cannot be seen from here.
-    //< Caution: **Always write a ceiling as a name** (`port/web/state.kspl`).
-    mark: = arena.text().s("> Sz::").take()
-    tail: = arena.text().s(".").s(name).s(".").take()
-    for line in src.lines(arena)
-        if at: = line.find_str(mark)
-            rest: = line.sub_from(at + mark.len)
-            if hit: = rest.find_str(tail)
-                word: = rest.sub_from(hit + tail.len)
-                $k: Sz = 0
-                for k < word.len && (word[k].is_alnum() || word[k] == '_')
-                    k += 1
-                return word.sub(0, k)
-    return ""
-
-priv fn check_enum_order(arena: Arena$@)
-    screen: = harness.read_under_root(ORDER_SCREEN)
+priv fn check_name_words(arena: Arena$@)
+    screen: = harness.read_under_root(NAME_WORDS)
     $bad: = List<|U8[]|>.new(arena)
     $seen: Sz = 0
-    for i in Range.asc(ENUM_PAIRS.len)
-        if i % 4 != 0
+    $named: = List<|U8[]|>.new(arena)
+    for i in Range.asc(WORD_PAIRS.len)
+        if i % 3 != 0
             continue
-        $core: =
-            enum_order(harness.read_under_root(ENUM_PAIRS[i]), ENUM_PAIRS[i + 1], arena)
-        $js: = js_list_of(screen, ENUM_PAIRS[i + 2], ENUM_PAIRS[i + 3], arena)
-        if core.len <= 0 || js.len <= 0
+        core: =
+            enum_order(harness.read_under_root(WORD_PAIRS[i]), WORD_PAIRS[i + 1], arena)
+        words: = js_list_of(screen, WORD_PAIRS[i + 2], "[\"", arena)
+        if core.len <= 0 || words.len <= 0
             bad
-                .push(arena.text().s(ENUM_PAIRS[i + 1]).s(": the run cannot be read").take())
+                .push(arena.text().s(WORD_PAIRS[i + 1]).s(": the run cannot be read").take())
             continue
         seen += core.len
-        diff_order(core@, js@, ENUM_PAIRS[i], ENUM_PAIRS[i + 1], bad@, arena)
-        // An entry point taking its number from the text's list names the list's last as its
-        // ceiling.
-        bound: =
-            bound_of(harness.read_under_root(ORDER_HOME), ENUM_PAIRS[i + 1], arena)
-        last: = core.get(core.len - 1)
-        if bound.len > 0 && !bound.equals(last)
-            bad
-                .push(arena.text().s(ENUM_PAIRS[i + 1]).s("'s ceiling is ").s(bound)
-                .s(" and the run's last is ").s(last).take())
-    verdict.check_list("an enum's run agrees with the screen's side", seen, "entries", bad@,
-        "a kind dropped is read as the first kind (it goes the moment the marks are opened)")
+        for k in Range.asc(core.len)
+            name: = core.get(k)
+            if name.equals("done") || name.equals("none")
+                continue
+            scan.push_unique(named@,
+                arena.text().s(WORD_PAIRS[i + 2]).s(" ").s(name).take())
+            if !words.contains(name)
+                bad
+                    .push(arena.text().s(WORD_PAIRS[i + 1]).s(".").s(name).s(" has no words in ")
+                    .s(NAME_WORDS).s("'s ").s(WORD_PAIRS[i + 2]).take())
+    for list in U8[][]::{ "REGIONS", "REFUSALS" }
+        for word in js_list_of(screen, list, "[\"", arena)
+            if !named.contains(arena.text().s(list).s(" ").s(word).take())
+                bad
+                    .push(arena.text().s(NAME_WORDS).s("'s ").s(list).s(" holds ").s(word)
+                    .s(", which no enum it lists names").take())
+    verdict.check_list("every name the core passes out has the page's words", seen, "names", bad@,
+        "a name with no words shows on the screen as it is spelt in the code")
+
+// ==========================================
+// No `pub` builds up under an entry point **[I0402] cannot check it.** It uses the setting found
+// from the entry point's file. So at a demo's entry point it names the kernel's and drivers' `pub`
+// too (those stay, as a promise to their users).
+// ==========================================
+priv const ENTRY_TREES: U8[][_] = ::{ "ksos/demo" }
 
 priv fn check_no_pub_in_entries(arena: Arena$@)
     $bad: = List<|U8[]|>.new(arena)
@@ -580,7 +488,6 @@ priv const WEB_JS: U8[] = "kspage/port/web/*.js"
 
 priv fn web_names_in(src: U8[], out: List<|U8[]|>$@) //<
     //< Picks up the names starting with `kspage_web_`
-    //<
     //< Caution: **Read to the end of the name**, or a name mentioned mid-sentence picks up
     //< everything after it.
     $rest: U8[] = src
@@ -596,7 +503,6 @@ priv fn web_names_in(src: U8[], out: List<|U8[]|>$@) //<
             return
 
 priv fn web_exports(arena: Arena$@): List<|U8[]|> //< the exported entry points
-    //<
     //< Caution: **Check only a `fn` at the start of a line** (count the places that mention a name
     //< mid-sentence and the entry points multiply).
     $out: = List<|U8[]|>.new(arena)
@@ -639,7 +545,6 @@ priv fn check_wasm_boundary(arena: Arena$@)
 
 priv const SPELL_STEM: U8[] = "stem" //<
     //< The form that matches stems; an entry is heading, holder, text, form, prefix to skip
-    //<
     //< Caution: **Keep the matching form per list** (`KSPAGE_PROBE` lists stems; the others file
     //< names). **The holder itself is not required to be listed**: `page.html` would have to name
     //< itself. The prefix leaves out a folder whose own guide holds its list (`tools/ai_assist/`),
@@ -683,7 +588,6 @@ priv const HAND_LISTS: U8[][_] = ::{ "the list of make's checks", "kspage/Makefi
 
 priv fn check_hand_lists(arena: Arena$@) //<
     //< Whether the body of the file holding the list names that folder's real files one by one
-    //<
     //< Caution: **Check only whether it is in the body.** The three lists are written differently
     //< (a make variable, a `__KSPAGE_FILE:` mark, a Markdown link). A check that relies on the
     //< format goes silent the day a list is rewritten.
@@ -713,13 +617,12 @@ priv fn check_hand_lists(arena: Arena$@) //<
 
 fn run(arena: Arena$@)
     check_sema_layers(arena)
-    check_enum_order(arena)
+    check_name_words(arena)
     check_ribbon_shapes(arena)
     check_menu_choices(arena)
     check_reference_arrows(arena)
     check_kspage_layers(arena)
     check_ksos_layers(arena)
-    check_boundary_order(arena)
     check_no_pub_in_entries(arena)
     check_wasm_boundary(arena)
     check_hand_lists(arena)

@@ -1,5 +1,4 @@
 //< A byte-level BPE tokenizer: text to a token-ID sequence and back
-//<
 //< `encode` and `decode` are the conversions, and the pre-trained `vocab.txt` / `merges.txt` are
 //< loaded from here. **Training the tokenizer is not here**: a separate tool produces the BPE
 //< merge rules, and this file only loads and uses them.
@@ -11,7 +10,6 @@ import "std/str" { Str_builder }
 import "std/strnum" // `to_count`
 
 priv fn hex_bytes(text: U8[], out: Str_builder$@): Bool //< appends the bytes spelt in hex
-    //<
     //< Restores vocab.txt's byte sequences; false, with part of them appended, when the text is
     //< not whole bytes written as hex digits. The digit decoding itself is `U8.hex_val`.
     if text.len % 2 != 0
@@ -38,7 +36,6 @@ priv fn bare_line(line: U8[]): U8[] //< a line without the `\r` a CRLF file leav
 pub enum Load_error //< why `Tokenizer.load` refused a vocabulary or its merges
     io(err: io.Io_error) //< a file could not be read
     broken(path: U8[], line: Sz) //< a line is not one `train_bpe.kspl` writes; the file and the
-        //<
         //< line's number from 1 (`load_text` names `vocabulary` or `merges` for the file).
         //< **Refused, not skipped**: a word or a rule dropped in silence makes every text it
         //< touches encode to other IDs, which nothing downstream can notice.
@@ -51,7 +48,6 @@ impl Bpe_key
         return Bpe_key::{ .val = ((U64::a) << 32) | (U64::b) }
 
 impl Bpe_key: ds.Hashable<|Bpe_key|> //< so a pair of token IDs can stand as a map's key
-    //<
     //< The two hashes below skip `ds.fmix32`. Token IDs are consecutive numbers whose low bits are
     //< already spread. So mixing would only add an operation to each BPE merge lookup.
     fn hash(r: Self@): U32
@@ -71,7 +67,6 @@ impl Token_key: ds.Hashable<|Token_key|> //< so a token ID can stand as a map's 
 
 priv fn char_class(c: U8): I32 //<
     //< The character classes used in the GPT-2/Qwen family's pre-splitting (the pretokenizer)
-    //<
     //< ASCII-based (0=space, 1=letter, 2=digit, 3=other), since KSPL's code and prompts are mostly
     //< ASCII; a non-ASCII byte is "other". "_" is a Punctuation_Connector, not a letter, so snake
     //< case's "_" becomes a chunk of its own, as in a real GPT-2-family tokenizer.
@@ -86,7 +81,6 @@ priv fn char_class(c: U8): I32 //<
 
 priv fn chunk_end(text: U8[], start: Sz): Sz //<
     //< Where the chunk starting at `start` ends: the core of GPT-2's regular-expression splitting
-    //<
     //< A reduced ASCII version. In a run of spaces, the last one is held back to join the next
     //< chunk as its leading space (" foo" -> [" ", " foo"]). Otherwise a run of letters, of digits,
     //< or of other bytes is one chunk. English contractions ("'s") get no special handling (it
@@ -115,11 +109,9 @@ pub struct Tokenizer //< the vocabulary and merge rules that turn text into toke
     priv merge_rank: Map<|Bpe_key, I32|>$@ //< a pair -> its rank (0 is first); true BPE needs it
     pub next_rank: I32 //< the rank the next `add_merge` gets; the call order is the rank
     pub arena: Arena$@ //< the arena for every word, every rule and every cached chunk
-        //<
         //< **Nothing a call returns is put here** (`encode` and `decode` take the caller's arena),
         //< so a tokenizer kept for a server's lifetime grows only up to `CHUNK_CACHE_CAP`.
     priv chunk_cache: Map<|U8[], I32$[]|>$@ //< a chunk merged before -> its IDs
-        //<
         //< **A text repeats its words**, and merging one again gives the same IDs; GPT-2's encoder
         //< keeps the same cache. **It holds only while nothing is added** (`edits`).
     priv edits: Sz //< how many times a word or a rule was added; any change restarts the cache
@@ -151,7 +143,6 @@ impl Tokenizer
         r.edits += 1
 
     pub fn add_merge( //< adds one merge rule: this pair, when adjacent, becomes that one word
-        //<
         //< Caution: **The call order is the rank**, so the rules must arrive in priority order
         //< (`load()` and `train_bpe.kspl`'s merges.txt already do).
         r: Self$@,
@@ -173,17 +164,16 @@ impl Tokenizer
         vocab_path: U8[], //< the vocabulary file, one word per line
         merges_path: U8[], //< the merge rules, in priority order
     ): Void!Load_error //< a file that cannot be read, or the first line that is not an entry
-        vocab_data: = io.read_file(vocab_path) catch e
+        vocab_data: = io.read_file(vocab_path, null) catch e
             throw .io(e)
         defer dealloc(Void$@::vocab_data.ptr)
-        merges_data: = io.read_file(merges_path) catch e
+        merges_data: = io.read_file(merges_path, null) catch e
             throw .io(e)
         defer dealloc(Void$@::merges_data.ptr)
         r.add_vocab(vocab_data, vocab_path)!
         r.add_merges(merges_data, merges_path)!
 
     pub fn load_text( //< loads the two files' texts already in memory, with no file read
-        //<
         //< For a program with no filesystem, or texts `embed`ded at build time. A broken line is
         //< named in `vocabulary` or `merges`, as a file's path would be.
         r: Self$@,
@@ -234,7 +224,6 @@ impl Tokenizer
             throw .broken(name, i + 1)
 
     pub fn encode( //< the token IDs for a text
-        //<
         //< Splits into chunks (`chunk_end`) and within each chunk merges the pair of the smallest
         //< rank every time; no merge crosses a chunk, as during training.
         r: Self$@,
@@ -251,7 +240,6 @@ impl Tokenizer
 
     priv fn bpe_chunk(r: Self$@, chunk: U8[], out: List<|I32|>$@) //<
         //< Merges one pre-split chunk by BPE, smallest rank first, and appends its token IDs to out
-        //<
         //< **The merging is done in place at the end of `out`.** So a chunk not in the cache
         //< allocates nothing on the tokenizer's arena unless the cache keeps it.
         // Otherwise a word or rule added since the cache started could merge a cached chunk anew.
@@ -306,7 +294,6 @@ impl Tokenizer
         return text.take()
 
     pub fn decode_one( //< the text for one ID, for printing each generated token as it comes
-        //<
         //< **It allocates nothing**: the result is the vocabulary's own bytes, which stay valid
         //< while
         //< the tokenizer's arena does. An ID not in the vocabulary gives an empty text.

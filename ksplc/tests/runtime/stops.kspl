@@ -1,10 +1,8 @@
 //< The programs that must stop at run time, each case built and run alone on both backends
-//<
 //< Each case is compiled as the file its head names, outside any package. So a stop's position
 //< reads `at <case>:<line>`.
 // ==== case array_index_constant_out_of_bounds
 //< Even with an index known at translation time, **out of range must stop at run time**
-//<
 //< The generated message has a container's shape, `in <what>` ("Conditions that stop execution
 //< at run time" in `../../../docs/SPEC-programming-language.md`).
 //< Caution: **Check the position too.** Wrapped wrongly, the LLVM pool's file name loses both ends.
@@ -22,7 +20,6 @@ fn main(): I32
     return 0
 // ==== case crash_null_dereference
 //< A write through a null pointer is a crash the OS stops, and the program says so in one line
-//<
 //< Not a run-time check: the OS refuses the access, and the runtime's handler names it ("A crash
 //< says what happened" in `../../gen/runtime/hosted.c`). The code is still the fault's own, 139.
 // EXPECT: crash: null pointer dereference (
@@ -37,7 +34,6 @@ fn main(): I32
     return 0
 // ==== case crash_stack_overflow
 //< A recursion that runs the main thread's stack out says so, though no stack is left to say it on
-//<
 //< Caution: **The handler needs room reserved before the stack runs out.** POSIX uses a separate
 //< stack; Windows reserves room on this thread's stack. Without it, the line can be lost.
 // EXPECT: crash: stack overflow (
@@ -55,7 +51,6 @@ fn main(): I32
     return 0
 // ==== case crash_stack_overflow_on_thread
 //< A `std/thread` thread that runs its stack out says so too
-//<
 //< Each such thread reserves room for the handler before its entry point (`kspl_thread_spawn`).
 // EXPECT: crash: stack overflow (
 // EXPECT: exit code 139
@@ -81,7 +76,6 @@ fn main(): I32
     return 0
 // ==== case dealloc_arena_pointer
 //< Passing a pointer an arena allocated to `mem.dealloc` must stop before touching the heap
-//<
 //< **Neither the type nor translation tells them apart** (both `alloc_as<|T|>()` return `T$@`). So
 //< only the start of `dealloc` can stop it. Libc cannot be relied on: glibc can let it pass. On
 //< freestanding a fake header joins the free list: **the heap breaks with nobody reporting it**.
@@ -101,7 +95,6 @@ fn main(): I32
     return 0
 // ==== case dealloc_interior_pointer
 //< Passing a pointer to the **inside** of an allocation to `mem.dealloc` must stop
-//<
 //< `dealloc` may receive only the exact pointer `mem.alloc` returned. `Rc.get()` points inside the
 //< control block, so 16 bytes back is not malloc's address; a field's or element's is alike.
 //< ARC itself is out of reach (`Rc` has no `free()`; `ctrl`, `retain` and `release` are `priv`).
@@ -120,7 +113,6 @@ fn main(): I32
     return 0
 // ==== case divide_by_zero
 //< When a divisor known only at run time is 0, the program must stop instead of dividing
-//<
 //< Sema rejects a divisor known to be 0 (the case divide_by_zero in tests/negative/numbers.kspl),
 //< which cannot notice a run-time zero getting through.
 //< Caution: The divisor must be **decided at run time**, or the test never reaches its check.
@@ -139,7 +131,6 @@ fn main(): I32
     return 0
 // ==== case enum_cast_from_no_tag
 //< A cast to an enum from a value known only at run time stops where the value is none of its tags
-//<
 //< **Let it through and an exhaustive `switch` takes a value it never lists**, as its last arm. A
 //< constant is refused at translation time (the case cast_to_enum in `../negative/numbers.kspl`).
 //< The base `U8` shows the value is checked before it is narrowed: 300 must not pass as 44.
@@ -166,7 +157,6 @@ fn main(): I32
     return 0
 // ==== case index_place_write_out_of_bounds
 //< Even an index that returns a place and **writes** must stop when out of range
-//<
 //< A type of its own (`Index_place.at`) handles the index, and the stop names the user's line.
 //< Caution: **Do not write `$` on the receiver.** The `at` below declares `Self@`, so a value
 //< received by value can be written to as well ("Indexing" in
@@ -197,7 +187,6 @@ fn main(): I32
     return 0
 // ==== case list_get_out_of_bounds
 //< When List.get's index is out of range, it must stop instead of reading
-//<
 //< Tested apart from a slice's index. Both call `std/lang`'s bounds_panic, but the callers differ
 //< (`List.get` returns a value, `Slice.at_ref` a place). So either check can vanish alone.
 //< The case index_place_write_out_of_bounds covers **writing** through a method that returns a
@@ -219,7 +208,6 @@ fn main(): I32
     return 0
 // ==== case main_fails_with_code_past_255
 //< A `main` failing with a number past 255 exits with 1, not with the number's low 8 bits
-//<
 //< A shell sees only those bits, so 256 would read as 0, success; the suite's non-zero check is
 //< the test. The line names the number as thrown.
 // EXPECT: [Kanso] Error: main() failed with code 256
@@ -231,7 +219,6 @@ fn main(): Void!I32
     may()!
 // ==== case main_fails_with_enum_variant
 //< A `main` failing with an enum's first variant exits non-zero, naming the variant and its route
-//<
 //< The first variant's tag is 0, so an exit status taken from the tag would read as success. The
 //< error type is `priv`: only the start-up code receives `main`'s return, so nothing leaks.
 // EXPECT: [Kanso] Error: main() failed with bad
@@ -265,7 +252,6 @@ fn main(): I32
     return 0
 // ==== case shift_amount_out_of_range
 //< A run-time shift amount outside the width must stop the program instead of shifting
-//<
 //< Sema rejects a constant shift amount (the case shift_count_out_of_range in
 //< tests/negative/numbers.kspl). This is the run-time path, whose message the code generator
 //< writes.
@@ -286,7 +272,6 @@ fn main(): I32
     return 0
 // ==== case shift_amount_wider_than_width
 //< A shift amount of a wider type is checked whole, before it meets the shifted value's width
-//<
 //< **Narrowed first, the amount wraps into range**: a `U64` amount of 2^32 becomes 0 at an `I32`'s
 //< width, and `1 << m` gives 1 with no stop, on both backends.
 //< Caution: The shift amount must be **decided at run time** (why: the case divide_by_zero).
@@ -305,7 +290,6 @@ fn main(): I32
     return 0
 // ==== case shift_amount_unsigned_past_sign
 //< An unsigned shift amount with its top bit set is reported as the number it is
-//<
 //< The check takes the amount in 64 signed bits, so a `U64` of 2^64-1 reads there as -1 unless the
 //< stop is told the amount's type is unsigned.
 //< Caution: The shift amount must be **decided at run time** (why: the case divide_by_zero).
@@ -324,7 +308,6 @@ fn main(): I32
     return 0
 // ==== case slice_index_out_of_bounds
 //< When a slice's index is out of range, it must stop instead of reading
-//<
 //< Caution: The index must be **decided at run time**, or a reader takes it for a constant's test.
 //< A slice is `Slice<|$T|>` ("`T[]` is sugar for `Slice<|$T|>`" in
 //< `../../../docs/DESIGN-programming-language.md`), so `bounds_panic` in `std/lang` stops it and
@@ -347,7 +330,6 @@ fn main(): I32
     return 0
 // ==== case slice_struct_out_of_bounds
 //< Out of range on a slice held in a struct
-//<
 //< **Report the place of use.** The code generator embeds the position for the built-in slice. The
 //< struct version's `Index_ref.at_ref` takes the caller's position as a default argument ("Default
 //< arguments" in `docs/SPEC-programming-language.md`). `std/lang`'s bounds_panic writes the

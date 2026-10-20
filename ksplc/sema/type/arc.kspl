@@ -1,5 +1,4 @@
 //< Classifies shared ownership, automatic cleanup and ownership moves
-//<
 //< An extension to `Env` in `sema/type/env.kspl`; it does not hold the type table itself.
 //< Caution: **The decision here (`type_has_arc_content` / `type_is_managed`) and the emission in
 //< `lower/arc.kspl` (`emit_managed_op`) must always change together.** Fix only one and it breaks
@@ -20,14 +19,12 @@ priv const MEMO_YES: I32 = 2 //< decided: it does
 
 priv const MAX_MOVE_ONLY_DEPTH: Sz = 1000 //<
     //< The safety limit on the recursion depth of is_move_only's structural derivation
-    //<
     //< Memoization collapses repeat visits, so the depth is the chain of *distinct* embedded types
     //< (struct S1{f:S2}, struct S2{f:S3}, ...). No node is available for a diagnostic, so, like
     //< max_mangle_depth, it stops with io.err() + sys.exit(1).
 
 priv const ARC_TRAIT_FQN: U8[] = "std.lang.Ref_counted" //<
     //< The FQNs of the traits the compiler knows
-    //<
     //< Each means this declaration alone, not a same-named other (see is_arc_type).
 priv const MOVE_ONLY_TRAIT_FQN: U8[] = "std.lang.Move_only"
 priv const MANUAL_FREE_TRAIT_FQN: U8[] = "std.lang.Manual_free"
@@ -35,7 +32,6 @@ priv const DROP_TRAIT_FQN: U8[] = "std.lang.Drop"
 
 fn shadowed_known_trait(trait_fqn: U8[]): U8[] //<
     //< The known trait (listed above) that trait_fqn only shares a name with, or empty
-    //<
     //< Such a trait is a different declaration with the same name.
     //< Returns empty if there are none. **Only these four are looked at**: a same-named operator
     //< trait errors on its own, but these four, matched by FQN, would silently stop working.
@@ -54,7 +50,6 @@ impl sema_type_env.Env
 
     fn is_arc_type(r: Self$@, type_id: I32): Bool //<
         //< Whether the type_id itself is ARC-managed
-        //<
         //< That is a struct conforming to Ref_counted in std/mem.kspl.
         //< Decided strictly by the declaration's FQN. A match on the name's last part would let any
         //< trait named `Ref_counted` turn ARC on, doubling a hand-kept count into a use-after-free
@@ -66,7 +61,7 @@ impl sema_type_env.Env
         bare: = r.get_clean_real_type(type_id)
         $is_struct: = false
         switch r.get_info(bare)
-        case .struct_type(_def)
+        case .struct_type
             is_struct = true
         default {}
         if !is_struct
@@ -75,7 +70,6 @@ impl sema_type_env.Env
 
     priv fn owned_parts(r: Self$@, real_id: I32, out: List<|I32|>$@) //<
         //< The types of the positions a value of real_id owns, one level down
-        //<
         //< They are a struct's fields, every variant's payloads, and an array's element (a
         //< zero-length array owns none). They are also a Result's success payload (its error side
         //< is an error enum's tag). A pointer or a slice borrows. A scalar, a trait value or a
@@ -99,7 +93,6 @@ impl sema_type_env.Env
 
     fn type_has_arc_content(r: Self$@, type_id: I32): Bool //<
         //< True if what the type owns as a value holds an ARC-managed type, directly or nested
-        //<
         //< Only owning positions are walked (`owned_parts`). Miss one and lower/arc.kspl inserts
         //< no retain/release and the value leaks (the rules are named in this file's header).
         $resolving: = List<|I32|>.new(null)
@@ -116,7 +109,6 @@ impl sema_type_env.Env
     priv fn type_has_arc_content_impl(r: Self$@, type_id: I32, memo: Map<|I32, I32|>$@,
         resolving: List<|I32|>$@): Bool //<
             //< Whether type_id holds an ARC-managed type as a value field, at any depth
-            //<
             //< Caution: **Do not remove the memoization** (type_id -> memo_no / memo_yes). One type
             //< is referenced from several fields, so cycle detection alone leaves fanout^d time.
             //< **Nor add a depth limit**, which would take away calc_type_layout's diagnostic on a
@@ -156,7 +148,6 @@ impl sema_type_env.Env
 
     fn type_is_managed(r: Self$@, type_id: I32): Bool //<
         //< Whether its lifetime needs automatic cleanup
-        //<
         //< ARC values share ownership; Drop values transfer it. Aggregates own their value fields.
         return r.is_arc_type(type_id) || r.type_has_drop(type_id) ||
             r.type_has_arc_content(type_id)
@@ -177,7 +168,6 @@ impl sema_type_env.Env
 
     fn has_release_contract(r: Self$@, target_id: I32): Bool //<
         //< Whether target_id is a type that owns an instance and releases it with `free()`
-        //<
         //< An explicit `Manual_free` or `Drop` supplies this contract. It is not derived from
         //< fields: an owning part alone does not promise that the containing type has `free()`.
         bare: = r.strip_ptr_full(target_id)
@@ -185,7 +175,6 @@ impl sema_type_env.Env
 
     fn is_move_only(r: Self$@, target_id: I32): Bool //<
         //< Whether target_id is Move_only (implicit copying forbidden)
-        //<
         //< Drop supplies this rule too. Otherwise an explicit marker or an owning field supplies
         //< it.
         $memo: = Map<|I32, I32|>.new(null)
@@ -197,7 +186,6 @@ impl sema_type_env.Env
     priv fn derives_marker(r: Self$@, target_id: I32, memo: Map<|I32, I32|>$@,
         resolving: List<|I32|>$@, move_only: Bool, depth: Sz): Bool //<
             //< Whether target_id derives move-only behavior or automatic cleanup from its fields
-            //<
             //< The positions walked are `owned_parts`' ("Worked example: forbidding copies with
             //< `Move_only`" in docs/SPEC-programming-language.md). **Keep the memo and break cycles
             //< with resolving**, as type_has_arc_content_impl does.

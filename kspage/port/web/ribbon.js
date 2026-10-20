@@ -25,9 +25,10 @@ function kspageRibbon(ui) {
   // takes from the end. So it is the order they survive a narrow screen (`../../docs/DESIGN-application.md`'s
   // "The band's right side is not left empty"). A contextual group goes before the others, so it
   // stays when it appears (`when`: `"cells"` in a table, `"frame"` on a selected frame). The shapes:
-  // **a shortcut, not the list** (the menu's `shape-kind`; the numbers are `draw.js`'s `SHAPES`).
-  // Caution: **The text must be a name the core knows.** An unknown name becomes number 0, so a
-  // typo silently inserts a rectangle (`make test-conventions` checks it).
+  // **a shortcut, not the list** (the menu's `shape-kind`; the names are `Shape`'s variants in
+  // `../../model/style.kspl`).
+  // Caution: **The text must be a name the core knows.** An unknown name reads as a box, so a typo
+  // silently inserts a rectangle (`make test-conventions` checks it).
   const SHAPES = [
     { id: "draw-box", mark: "▭", label: "Rectangle", shape: "box" },
     { id: "draw-round", mark: "▢", label: "Rounded", shape: "round_box" },

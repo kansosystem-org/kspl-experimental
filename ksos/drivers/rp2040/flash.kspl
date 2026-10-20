@@ -1,5 +1,4 @@
 //< Uses the RP2040's QSPI flash as a storage medium that can be erased and written
-//<
 //< The base for an append-only record inside the device: read, write where erased, erase a
 //< sector; the caller builds the rest (`Store` in `ksdb/store.kspl`).
 //< **Call `init` once before using it.** It looks up the ROM functions' addresses, and if it
@@ -16,24 +15,19 @@ import "std/bytes"
 import "std/chars" // tests on one character, and slicing
 
 priv const XIP_BASE: U32 = 0x10000000 //< the start address where the flash is visible under XIP
-    //<
     //< A read is a plain read from here.
 
 const PAGE_SIZE: Sz = 256 //< the unit of writing
-    //<
     //< The boot ROM's program accepts only a multiple of this.
 const SECTOR_SIZE: Sz = 4096 //< the unit of erasing
-    //<
     //< The boot ROM's erase accepts only a multiple of this.
 
 priv const BLOCK_SIZE: U32 = 65536 //< the "larger erase" size passed to the boot ROM's erase
-    //<
     //< The ROM uses 0xd8 (a 64KB block erase) where the range is aligned, else the 4KB sector
     //< erase.
 priv const BLOCK_ERASE_CMD: U8 = 0xd8
 
 const REGION_BASE: Sz = 0x1f0000 //< the region reserved for the record
-    //<
     //< Caution: **It must equal the ASSERT in `ksos/port/rp2040/link.ld`** (which checks at link
     //< time that the firmware image does not reach here). **It is at the end, so the record
     //< survives rewriting the firmware**; a full erase (picotool erase) removes it.
@@ -42,7 +36,6 @@ const REGION_SIZE: Sz = 0x10000
 // --- the boot ROM's functions (the function table in the RP2040 data sheet's "Bootrom") ---
 priv const ROM_FUNC_TABLE_AT: U32 = 0x14 //<
     //< The table addresses are stored at the start of the ROM as fixed 2-byte values
-    //<
     //< The ROM never changes, so they are not read volatile.
 priv const ROM_LOOKUP_AT: U32 = 0x18
 
@@ -73,7 +66,6 @@ priv fn rom_hword(at: U32): U32
     return p$
 
 priv fn rom_func(c1: U8, c2: U8): U32 //< looks up a function in the ROM's function table
-    //<
     //< 0 if it is not found.
     lookup_at: = rom_hword(ROM_LOOKUP_AT)
     table: = rom_hword(ROM_FUNC_TABLE_AT)
@@ -83,7 +75,6 @@ priv fn rom_func(c1: U8, c2: U8): U32 //< looks up a function in the ROM's funct
     return lookup(table, U32::c1 | (U32::c2 << 8))
 
 fn init(): Void!mmio.Driver_error //< looks up the ROM functions' addresses
-    //<
     //< **`not_found` unless all six are found**; with one missing the window has no way back.
     at_connect = rom_func('I', 'F')
     at_exit_xip = rom_func('E', 'X')
@@ -122,7 +113,6 @@ priv fn in_window(do_erase: Bool, at: U32, data: U8@)
 
 priv fn run_in_window(do_erase: Bool, at: U32, in_page: Sz, part: U8[]) //<
     //< Disables interrupts around staging a write's part of a page and the window
-    //<
     //< **An ISR lives in flash**: an interrupt inside the window fetches an instruction from an
     //< unreadable address, with no way back. Staging under the same mask keeps `stage` one
     //< writer's, at the cost of a 256-byte copy beside a page program's far longer window.
@@ -135,7 +125,6 @@ priv fn run_in_window(do_erase: Bool, at: U32, in_page: Sz, part: U8[]) //<
     task.irq_restore(s)
 
 fn read_at(at: Sz, dst: U8$[]) //< reads dst.len bytes from at
-    //<
     //< at is the offset from the start of the region.
     //< A plain XIP read; the ROM's flush after a write drops the cache, so nothing is stale.
     if at < 0 || dst.len < 0 || at + dst.len > REGION_SIZE
@@ -145,7 +134,6 @@ fn read_at(at: Sz, dst: U8$[]) //< reads dst.len bytes from at
     _n: = d.copy_from(0, src)
 
 fn program_at(at: Sz, src: U8[]): Bool //< writes src to at
-    //<
     //< **true once it is written.** **It does not check that the area is erased** (the caller
     //< does). A write can only clear unerased bits to 0, with no error. **Untouched bytes are
     //< written as 0xFF**, which leaves a flash cell unchanged. So a later write can add to the same
@@ -167,7 +155,6 @@ fn program_at(at: Sz, src: U8[]): Bool //< writes src to at
     return true
 
 fn erase_sector(at: Sz): Bool //< erases the sector that contains at
-    //<
     //< **true once it is erased.**
     if !ready
         return false

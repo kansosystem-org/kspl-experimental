@@ -30,10 +30,11 @@ function kspageProbePaint(ks) {
   // **This can be seen nowhere else.** With the drawing order wrong, the fill covers the
   // characters and the line juts into the neighbouring cell, told only by pixels. The fill and the
   // line take different colours, so the fill cannot pass for a line.
-  app.setStyleEdge(h1At, { width: 2, color: "#ff00ff", fill: "#0000ff" });
-  const walled = app.styleEdge(h1At);
-  check(walled.width === 2 && walled.fill === "#0000ff",
-    "the frame and fill settled can be read back (" + walled.width + "/" + walled.fill + ")");
+  app.setStyleData(h1At,
+    { ...app.styleData(h1At), rule_width: 2, rule_color: "#ff00ff", fill: "#0000ff" });
+  const walled = app.styleData(h1At);
+  check(walled.rule_width === 2 && walled.fill === "#0000ff",
+    "the frame and fill settled can be read back (" + walled.rule_width + "/" + walled.fill + ")");
   const band = bandAt();
   let blues = 0;
   let walls = 0;
@@ -43,10 +44,11 @@ function kspageProbePaint(ks) {
   }
   check(blues > 0, "the paragraph's fill comes out on the canvas (" + blues + " pixels)");
   check(walls > 0, "the paragraph's frame comes out on the canvas (" + walls + " pixels)");
-  // See that it can be deleted too; the fill holds an "unset", so what deletes it is apart.
-  app.setStyleEdge(h1At, { width: 0, color: "#ff00ff", fill: null });
-  const bare = app.styleEdge(h1At);
-  check(bare.width === 0 && bare.fill === null, "the frame and fill can be deleted");
+  // See that it can be deleted too: a field left out is "unset".
+  app.setStyleData(h1At, { ...app.styleData(h1At), rule_width: undefined, fill: undefined });
+  const bare = app.styleData(h1At);
+  check(bare.rule_width === undefined && bare.fill === undefined,
+    "the frame and fill can be deleted");
 
   // 21. The underline comes out on the canvas.
   //
@@ -60,11 +62,10 @@ function kspageProbePaint(ks) {
     }
     return n;
   };
-  app.setStyleLook(h1At, { family: null, sizePx: 28, weight: 700, italic: null,
-    color: "#0000ff", background: null });
+  app.setStyleData(h1At, { ...app.styleData(h1At), color: "#0000ff", background: undefined });
   const plainInk = blueOf();
-  app.setStyleDecor(h1At, { underline: true, strike: null });
-  check(app.styleDecor(h1At).underline === true, "the line settled can be read back");
+  app.setStyleData(h1At, { ...app.styleData(h1At), underline: true, strike: undefined });
+  check(app.styleData(h1At).underline === true, "the line settled can be read back");
   const withLine = blueOf();
   check(withLine > plainInk,
     "the pixels grow by the underline's worth (" + plainInk + " -> " + withLine + ")");
@@ -117,14 +118,17 @@ function kspageProbePaint(ks) {
   const sortWas = app.text();
   document.getElementById("sort-down").click();
   check(app.text() !== sortWas, "the button is wired to sorting");
+  check(document.getElementById("narrow").hidden, "sorting closes the filter menu to expose the rows");
   check(document.activeElement === ime, "after the press the focus goes back to the input field");
   // A refusal says why: sorted again the same way, the status says the rows are in order, not
   // "click inside a table's cell".
   const note = document.getElementById("note");
   check(note.textContent === "", "a sort that acted leaves no notice");
+  app.openNarrow();
   document.getElementById("sort-down").click();
   check(note.textContent === "The rows are already in this order",
     "sorted again the same way, the notice names the reason");
+  check(document.getElementById("narrow").hidden, "an already sorted column also closes the menu");
   undoKey();
   check(app.text() === sortWas, "the rows are put back after sorting");
   // A table's name no formula could reach is refused, and the notice says which rule it broke.

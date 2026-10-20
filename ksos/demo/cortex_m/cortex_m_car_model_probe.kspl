@@ -1,5 +1,4 @@
 //< A probe showing that the car's prediction network can really learn on bare metal
-//<
 //< The net is `ksos/demo/common/car_model`, on soft float. **What it checks is not "the loss fell"
 //< but the predictions beating "the same as the previous round".** The floor's rules stay hidden
 //< from the net. Also: the weights survive a save and a load, and a mismatched scale is rejected.
@@ -11,11 +10,9 @@ import "std/mem" { Arena }
 $storage: Sz[8192] = ::{}
 
 priv const DRIVE_CAP: U32 = 30 //< the scale for normalizing the manoeuvre
-    //<
     //< Caution: It must equal the cap applied to the wheels.
 
 priv const WARMUP_STEPS: U32 = 40 //< the number of learning steps
-    //<
     //< **One round is one step**, minutes of the car's run. **Made shorter, it cannot beat "the
     //< same as the previous round".**
 priv const TOTAL_STEPS: U32 = 1500
@@ -24,7 +21,6 @@ priv const PROBE_LINE: U32 = 6 //<
 
 priv fn pos_of(line: U32): I32 //<
     //< Where on the sensor the line is, as -3 to 3 (positive = right as seen from the car)
-    //<
     //< Packed like `track.read_bits` (left << 2 | middle << 1 | right; 1 = black). **Lost (0)
     //< counts as 3**, whichever side it left by.
     if line == 4U32
@@ -40,7 +36,6 @@ priv fn pos_of(line: U32): I32 //<
     return 3
 
 priv fn enc_of(pos: I32): U32 //< turns a position back into three bits
-    //<
     //< Past either end it is lost (0).
     if pos == -2
         return 4U32
@@ -56,7 +51,6 @@ priv fn enc_of(pos: I32): U32 //< turns a position back into three bits
 
 priv fn next_line(t: U32, line: U32, lon: I32, lat: I32, rot: I32): U32 //<
     //< The stand-in for the floor
-    //<
     //< **The net cannot see which way the bend goes** (`t` is not passed). So the error never
     //< reaches 0. **The bar is beating "the same as the previous round".** No forward, no change.
     if lon <= 0
@@ -67,7 +61,6 @@ priv fn next_line(t: U32, line: U32, lon: I32, lat: I32, rot: I32): U32 //<
     return enc_of(pos_of(line) + bend - correction)
 
 priv fn probe_answer(dst: F32$[], arena: Arena$@) //< copies out the answer to the fixed question
-    //<
     //< Caution: **Do not compare the packed 0 to 7** (too coarse). **Ask the same question twice**:
     //< the input includes the previous bits, which a single pass would leave to chance.
     for _pass in Range.asc(2)
@@ -86,7 +79,6 @@ priv fn same(a: F32[], b: F32[]): Bool //< whether the three raw values are equa
 
 priv fn pick(t: U32, line: U32, out_lat: I32$@, out_rot: I32$@): I32 //<
     //< Chooses one manoeuvre to send
-    //<
     //< It steers towards the line, with sideways movement mixed in while centred.
     //< Caution: **Vary the manoeuvre per round** (one alone teaches only one band). **Always move
     //< forward**, or all it learns is "stopped, nothing changes".

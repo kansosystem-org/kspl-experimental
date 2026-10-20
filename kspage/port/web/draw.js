@@ -32,14 +32,14 @@ function kspageDraw(ks) {
     return Array.from(nums(4));
   };
 
-  // One page's settings. **`band` is the content height** (minus the margins; it decides the page
-  // interval and the break). Width 0 means "the container's width", height 0 "do not split";
-  // `reading` is the width the body is not widened past (0: no limit).
+  // One page's settings, **as their saved text names them** (`page_width`, `page_height`, the four
+  // `margin_*`, `reading_width`). **A field left out is 0**: width 0 means "the container's width",
+  // height 0 "do not split", and `reading_width` 0 "no limit". `band` is added: **the content
+  // height** (minus the margins; it decides the page interval and the break), which is not saved.
   const paperOf = () => {
-    w.kspage_web_paper(scratch);
-    const [pw, ph, left, top, right, bottom, band, reading] =
-      nums(8);
-    return { width: pw, height: ph, left, top, right, bottom, band, reading };
+    const p = JSON.parse(outText(w.kspage_web_paper()));
+    p.band = w.kspage_web_paper_band();
+    return p;
   };
 
   // How the boxes are read: **the document's boxes and the page's bands are two sets** (their
@@ -109,16 +109,6 @@ function kspageDraw(ks) {
     ctx.letterSpacing = gap;
   }
 
-  // The shapes a band is drawn as. **A list of numbers, not the list offered to choose from** (that
-  // is the menu's: `ribbon.js`'s `SHAPES`). **The list is the wasm's exactly**
-  // (`port/web/state.kspl`'s `SHAPE_ORDER`, separate from the enum's order in the source).
-  // **Do not move an existing entry** — a saved document is read by name, but this bridge passes by
-  // number (`make test-conventions` checks that both sides match).
-  const SHAPES = ["box", "ellipse", "fall_line", "rise_line", "fall_arrow", "rise_arrow",
-    "fall_arrow_back", "rise_arrow_back", "round_box", "triangle", "diamond"];
-  // How a filter matches a cell (`KEEP_ORDER` in `state.kspl`, `Keep` in `model/filter.kspl`).
-  // The same rule as the shapes: **do not move an existing entry.**
-  const KEEPS = ["is", "is_not", "holds", "above", "below", "blank", "filled"];
   // The closed shapes (the inside is painted). **The rest are lines along the band's diagonal.**
   const CLOSED = ["box", "round_box", "ellipse", "triangle", "diamond"];
   // Whether it is a shape drawn along the band's diagonal.
@@ -198,15 +188,16 @@ function kspageDraw(ks) {
     const seen = [];
     for (let i = 0; i < count; i++) {
       w.kspage_web_panel(i, scratch);
-      const one = Array.from(nums(9));
+      const one = Array.from(nums(8));
       if (crop && (one[0] > crop[0] + crop[2] || one[0] + one[2] < crop[0] ||
         one[1] > crop[1] + crop[3] || one[1] + one[3] < crop[1])) continue;
+      // The shape comes as `Shape`'s variant name.
+      one.push(outText(w.kspage_web_panel_shape(i)));
       seen.push(one);
     }
     g.save();
     for (const one of seen) {
-      const [x, y, pw, ph, , , hasFill, fill, shape] = one;
-      const kind = SHAPES[shape] || SHAPES[0];
+      const [x, y, pw, ph, , , hasFill, fill, kind] = one;
       // **A line and an arrow are not filled** (no enclosed inside).
       if (hasFill === 0 || plain || pw <= 0 || ph <= 0 || diagonal(kind)) continue;
       g.fillStyle = colorText(fill);
@@ -218,8 +209,7 @@ function kspageDraw(ks) {
       g.fill();
     }
     for (const one of seen) {
-      const [x, y, pw, ph, edge, color, , , shape] = one;
-      const kind = SHAPES[shape] || SHAPES[0];
+      const [x, y, pw, ph, edge, color, , , kind] = one;
       // Caution: **Draw a line and an arrow even where one side is 0.** A horizontal line is a
       // band of height 0 (with both 0, there is nothing to draw).
       const flat = diagonal(kind);
@@ -329,35 +319,10 @@ function kspageDraw(ks) {
   }
 
 
-  // **The list is exactly the numbers the core returns** (`Arrange`'s order). **This is the only
-  // list** (with name and text kept separately, one alone would grow when a kind is added).
-  const REGIONS = [
-    { key: "flow", label: "Prose" },
-    { key: "grid", label: "Table" },
-    { key: "absolute", label: "Slide" },
-  ];
-  const regionAt = (kind) => REGIONS[kind] || { key: "", label: "" };
-  // A paragraph's alignment. **The list is exactly the numbers the core returns** (`Align`'s
-  // order); the justification's spacing is the core's per box.
-  const ALIGNS = ["left", "center", "right", "justify"];
-  // The comparison of a value, **in the core's numbers too** (`Compare`'s order); reading and
-  // writing share it (`indexOf` gives the number).
-  const COMPARES = ["none", "above", "below", "equal"];
-  // The marker, **in the core's numbers too** (`Marker`'s order). **Drop one and that marker reads
-  // as "no marker"**, vanishing when the style field opens.
-  const MARKS = ["none", "bullet", "number", "serial", "outline"];
-  // The markers that pass two texts, **separated by a tab in the one arena**: a running number
-  // `before\tafter`, a chapter number `separator\tafter`. One list, so reading and writing agree.
-  const PAIRED_MARKS = ["serial", "outline"];
-  // The date format, **in the core's numbers too** (`Dating`'s order). A date is days since
-  // 1970-01-01.
-  const DATINGS = ["none", "plain", "long"];
-  // What is built at layout time, **in the core's numbers too** (`Collect`'s order); bars and lines
-  // come from the range's values, not the document.
-  const COLLECTS = ["none", "contents", "notes", "bars", "lines"];
-  // A slide's layout sketch, **in the numbers the core reads** (`Sketch`'s order); it acts once at
-  // insertion.
-  const SKETCHES = ["whole", "titled", "halved"];
+  // A region's label, **by `Arrange`'s variant name** (the core passes the name). **This is the
+  // only list** (`make test-conventions` checks that it names every way of laying out).
+  const REGIONS = [["flow", "Prose"], ["grid", "Table"], ["absolute", "Slide"]];
+  const regionLabels = new Map(REGIONS);
   // A region's frame, outlining in pale gray the band that is prose, a table or a slide. It has a
   // label, since the frame alone does not say which tool applies there.
   // Caution: **Draw it only on the editing screen.** Printing and presenting go through
@@ -375,14 +340,14 @@ function kspageDraw(ks) {
     g.textBaseline = "top";
     for (let i = 0; i < count; i++) {
       w.kspage_web_region(i, scratch);
-      const [x, y, rw, rh, kind] = nums(5);
+      const [x, y, rw, rh] = nums(4);
       if (rw <= 0 || rh <= 0) continue;
       // A line is centered on the path; not offset by half a pixel, a 1px line blurs to 2px.
       g.strokeRect(Math.round(x) + 0.5, Math.round(y) + 0.5,
         Math.round(rw) - 1, Math.round(rh) - 1);
       // The label. **Cover the spot with the background before writing** — the frame shares its
       // place with the body's text.
-      const label = regionAt(kind).label;
+      const label = regionLabels.get(outText(w.kspage_web_region_kind(i))) || "";
       const lw = g.measureText(label).width;
       if (label.length <= 0 || rw < lw + 12 || rh < 18) continue;
       const lx = x + rw - lw - 5;
@@ -568,7 +533,7 @@ function kspageDraw(ks) {
     // The page breaks.
     // Caution: **Draw them after the contents** (before, the text covers them). **Their interval is
     // the content height**, not the page's (smaller by the margins).
-    const band = paperOf().band;
+    const band = w.kspage_web_paper_band();
     if (band > 0) {
       ctx.save();
       ctx.strokeStyle = ink;
@@ -747,6 +712,44 @@ function kspageDraw(ks) {
     if (done) ks.draw();
     return done;
   };
+  // The page's words for a refusal, **by the reason's variant name** (an entry point that can
+  // refuse for several reasons writes the name out). **One name has one meaning wherever it
+  // comes from**, so the words are kept once here (`make test-conventions` checks that every
+  // reason the core can give has its words).
+  const REFUSALS = [
+    ["shut", "The document is open for reading alone"],
+    ["outside", "Click inside a table's cell"],
+    ["too_wide", "A merged cell here already covers 1000 columns, the most one may"],
+    ["alone", "Drag across two or more cells first"],
+    ["ragged", "A cell already merged reaches outside what was selected"],
+    ["merged", "Split the cell merged down the page first, then sort"],
+    ["too_few", "There are not two rows under the heading to put in order"],
+    ["in_order", "The rows are already in this order"],
+    ["nowhere", "Click in the body first, and the slide goes in after that paragraph"],
+    ["in_cell", "A slide cannot stand inside a table's cell. Click outside the table"],
+    ["no_style", "This document holds no slide style. A slide's size is set by its style"],
+    ["too_deep", "Slides inside slides go no deeper here: blocks nest 32 levels at most"],
+    ["no_paragraph", "Click inside a paragraph and then choose"],
+    ["no_such_style", "There is no style of this name in this document"],
+    ["wrong_kind", "A table's or a slide's style cannot be applied to a paragraph"],
+    ["separator", "A table's name cannot hold a space, a line break or any of + - * / ( ) , : < > "
+      + "= ! (a formula would end the name there). Join the words with _ (Q1_sales)"],
+    ["leading", "A table's name cannot start with a digit or # (a formula would read a number or "
+      + "a mark)"],
+    ["type_name", "A table's name cannot start with Day (a formula reads that as the date type)"],
+  ];
+  const refusals = new Map(REFUSALS);
+  // What an entry point that writes out its result's variant name ended with: **"" where it acted**
+  // (`done`; it redraws), else the reason in the page's words. `own` holds the words one action
+  // puts on a reason **where its fix differs** (where to click, what grew too wide).
+  ks.ended = (len, own = {}) => {
+    const end = outText(len);
+    if (end === "done") {
+      ks.draw();
+      return "";
+    }
+    return own[end] || refusals.get(end) || end;
+  };
   // **The helpers passed to the code that draws onto another canvas
   // ([`draw_crop.js`](draw_crop.js)).** Printing, previews and thumbnails go through the same path
   // as here, or print and screen disagree. **The colors are passed as functions that ask**, not as
@@ -770,16 +773,4 @@ function kspageDraw(ks) {
   // The arrow keys' directions. **The key handler reads them** (moving a frame shares the number
   // fields' entry point).
   ks.ARROW_STEPS = ARROW_STEPS;
-  // The list of names. **The boundary passes by number**, so a reordered list would read an old
-  // text as something else.
-  ks.SHAPES = SHAPES;
-  ks.KEEPS = KEEPS;
-  ks.ALIGNS = ALIGNS;
-  ks.COMPARES = COMPARES;
-  ks.MARKS = MARKS;
-  ks.PAIRED_MARKS = PAIRED_MARKS;
-  ks.DATINGS = DATINGS;
-  ks.COLLECTS = COLLECTS;
-  ks.SKETCHES = SKETCHES;
-  ks.regionAt = regionAt;
 }

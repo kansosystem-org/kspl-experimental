@@ -1,17 +1,13 @@
-//< Checked arithmetic on native integers, and checked values for formulas
-//<
+//< Checked arithmetic on native integers
 //< Import this file to call `checked_*` on I8 through U64 and Sz; failures return Checked_error.
-//< For formulas, convert each input once to Ci8 through Cu64 or Csz. Their `+ - * /` and signed
-//< unary `-` panic on failure. Keep intermediate values wrapped; read the result through `.val`.
-//< Native operators still wrap. Converting a finished formula does not check its earlier steps.
-//< Each signedness shares one generic body. Native operations use I64 or U64, then check narrower
-//< bounds before converting.
+//< Native operators still wrap: a checked operation does not change later operations on its result.
+//< Native operations use I64 or U64, then check narrower bounds before converting.
 
 pub enum Checked_error //< why an operation could not give a result
     overflow //< the result does not fit in the type
     div_by_zero //< the divisor was 0
 
-pub trait Checked_arithmetic<|T|> //< the native operations a checked value delegates to
+pub trait Checked_arithmetic<|T|> //< checked arithmetic, implemented by each native integer type
     fn checked_add(r: Self, rhs: T): T!Checked_error //< the sum, or overflow
     fn checked_sub(r: Self, rhs: T): T!Checked_error //< the difference, or overflow
     fn checked_mul(r: Self, rhs: T): T!Checked_error //< the product, or overflow
@@ -19,78 +15,6 @@ pub trait Checked_arithmetic<|T|> //< the native operations a checked value dele
 
 pub trait Checked_negation<|T|> //< checked negation, available only for signed integers
     fn checked_neg(r: Self): T!Checked_error //< the negated value, or overflow
-
-pub struct Signed<|T: Checked_arithmetic<|T|>|> //<
-    //< a signed integer whose arithmetic operators panic on failure
-    pub val: T //< the plain value
-
-pub struct Unsigned<|T: Checked_arithmetic<|T|>|> //<
-    //< an unsigned integer whose arithmetic operators panic on failure
-    pub val: T //< the plain value
-
-pub typedef Ci8 = Signed<|I8|> //< a checked `I8`
-pub typedef Ci16 = Signed<|I16|> //< a checked `I16`
-pub typedef Ci32 = Signed<|I32|> //< a checked `I32`
-pub typedef Ci64 = Signed<|I64|> //< a checked `I64`
-pub typedef Cu8 = Unsigned<|U8|> //< a checked `U8`
-pub typedef Cu16 = Unsigned<|U16|> //< a checked `U16`
-pub typedef Cu32 = Unsigned<|U32|> //< a checked `U32`
-pub typedef Cu64 = Unsigned<|U64|> //< a checked `U64`
-pub typedef Csz = Signed<|Sz|> //< a checked `Sz`
-
-impl<|T|> Signed<|T|>
-    pub fn checked_add(r: Self, rhs: Self): Self!Checked_error //< the checked sum
-        return Self::{ .val = r.val.checked_add(rhs.val)! }
-    pub fn checked_sub(r: Self, rhs: Self): Self!Checked_error //< the checked difference
-        return Self::{ .val = r.val.checked_sub(rhs.val)! }
-    pub fn checked_mul(r: Self, rhs: Self): Self!Checked_error //< the checked product
-        return Self::{ .val = r.val.checked_mul(rhs.val)! }
-    pub fn checked_div(r: Self, rhs: Self): Self!Checked_error //< the checked quotient
-        return Self::{ .val = r.val.checked_div(rhs.val)! }
-
-impl<|T|> Signed<|T|>: Add<|Signed<|T|>, Signed<|T|>|> //< checked addition
-    pub fn add(r: Self$@, rhs: Self): Self //< the checked operation; failure stops the program
-        return r.checked_add(rhs) catch panic("checked integer overflow (add)")
-impl<|T|> Signed<|T|>: Sub<|Signed<|T|>, Signed<|T|>|> //< checked subtraction
-    pub fn sub(r: Self$@, rhs: Self): Self //< the checked operation; failure stops the program
-        return r.checked_sub(rhs) catch panic("checked integer overflow (sub)")
-impl<|T|> Signed<|T|>: Mul<|Signed<|T|>, Signed<|T|>|> //< checked multiplication
-    pub fn mul(r: Self$@, rhs: Self): Self //< the checked operation; failure stops the program
-        return r.checked_mul(rhs) catch panic("checked integer overflow (mul)")
-impl<|T|> Signed<|T|>: Div<|Signed<|T|>, Signed<|T|>|> //< checked division
-    pub fn div(r: Self$@, rhs: Self): Self //< the checked operation; failure stops the program
-        return r.checked_div(rhs) catch panic("checked integer overflow or division by zero (div)")
-
-impl<|T|> Unsigned<|T|>
-    pub fn checked_add(r: Self, rhs: Self): Self!Checked_error //< the checked sum
-        return Self::{ .val = r.val.checked_add(rhs.val)! }
-    pub fn checked_sub(r: Self, rhs: Self): Self!Checked_error //< the checked difference
-        return Self::{ .val = r.val.checked_sub(rhs.val)! }
-    pub fn checked_mul(r: Self, rhs: Self): Self!Checked_error //< the checked product
-        return Self::{ .val = r.val.checked_mul(rhs.val)! }
-    pub fn checked_div(r: Self, rhs: Self): Self!Checked_error //< the checked quotient
-        return Self::{ .val = r.val.checked_div(rhs.val)! }
-
-impl<|T|> Unsigned<|T|>: Add<|Unsigned<|T|>, Unsigned<|T|>|> //< checked addition
-    pub fn add(r: Self$@, rhs: Self): Self //< the checked operation; failure stops the program
-        return r.checked_add(rhs) catch panic("checked integer overflow (add)")
-impl<|T|> Unsigned<|T|>: Sub<|Unsigned<|T|>, Unsigned<|T|>|> //< checked subtraction
-    pub fn sub(r: Self$@, rhs: Self): Self //< the checked operation; failure stops the program
-        return r.checked_sub(rhs) catch panic("checked integer overflow (sub)")
-impl<|T|> Unsigned<|T|>: Mul<|Unsigned<|T|>, Unsigned<|T|>|> //< checked multiplication
-    pub fn mul(r: Self$@, rhs: Self): Self //< the checked operation; failure stops the program
-        return r.checked_mul(rhs) catch panic("checked integer overflow (mul)")
-impl<|T|> Unsigned<|T|>: Div<|Unsigned<|T|>, Unsigned<|T|>|> //< checked division
-    pub fn div(r: Self$@, rhs: Self): Self //< the checked operation; failure stops the program
-        return r.checked_div(rhs) catch panic("checked integer overflow or division by zero (div)")
-
-impl<|T: Checked_negation<|T|>|> Signed<|T|> //< checked signed negation
-    pub fn checked_neg(r: Self): Self!Checked_error //< the negated value, or overflow
-        return Self::{ .val = r.val.checked_neg()! }
-impl<|T: Checked_negation<|T|>|> Signed<|T|>: Neg<|Signed<|T|>|> //<
-    //< checked negation
-    pub fn neg(r: Self$@): Self //< the checked negation; overflow stops the program
-        return r.checked_neg() catch panic("checked integer overflow (neg)")
 
 // ==================== The full-width operations ====================
 priv const I64_MAX: I64 = 9223372036854775807I64
@@ -261,32 +185,3 @@ impl U32: Checked_arithmetic<|U32|> //< checked arithmetic on a native value
         return U32::fit_unsigned(U64::r * rhs, U32_MAX)!
     pub fn checked_div(r: Self, rhs: U32): U32!Checked_error //< the checked quotient
         return U32::fit_unsigned((U64::r).checked_div(rhs)!, U32_MAX)!
-
-// ==================== A plain value enters a formula ====================
-impl I8: Cast<|Ci8|> //< conversion into a checked value
-    pub fn cast(r: Self$@): Ci8 //< the same value, now checked
-        return Ci8::{ .val = r$ }
-impl I16: Cast<|Ci16|> //< conversion into a checked value
-    pub fn cast(r: Self$@): Ci16 //< the same value, now checked
-        return Ci16::{ .val = r$ }
-impl I32: Cast<|Ci32|> //< conversion into a checked value
-    pub fn cast(r: Self$@): Ci32 //< the same value, now checked
-        return Ci32::{ .val = r$ }
-impl I64: Cast<|Ci64|> //< conversion into a checked value
-    pub fn cast(r: Self$@): Ci64 //< the same value, now checked
-        return Ci64::{ .val = r$ }
-impl U8: Cast<|Cu8|> //< conversion into a checked value
-    pub fn cast(r: Self$@): Cu8 //< the same value, now checked
-        return Cu8::{ .val = r$ }
-impl U16: Cast<|Cu16|> //< conversion into a checked value
-    pub fn cast(r: Self$@): Cu16 //< the same value, now checked
-        return Cu16::{ .val = r$ }
-impl U32: Cast<|Cu32|> //< conversion into a checked value
-    pub fn cast(r: Self$@): Cu32 //< the same value, now checked
-        return Cu32::{ .val = r$ }
-impl U64: Cast<|Cu64|> //< conversion into a checked value
-    pub fn cast(r: Self$@): Cu64 //< the same value, now checked
-        return Cu64::{ .val = r$ }
-impl Sz: Cast<|Csz|> //< conversion into a checked value
-    pub fn cast(r: Self$@): Csz //< the same value, now checked
-        return Csz::{ .val = r$ }

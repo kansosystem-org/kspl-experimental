@@ -1,5 +1,4 @@
 //< Checks that the heap and the atomics work on Armv6-M (stage 6d in ksos/docs/HOWTO-bring-up.md)
-//<
 //< Armv6-M has no LDREX/STREX, so ksplc's freestanding runtime does not define the atomic helpers.
 //< **Linking successfully is not enough.**
 
@@ -31,7 +30,6 @@ priv $pass_count: U32 = 0
 priv $fail_count: U32 = 0
 
 priv fn check(ln: con.Line$@, name: U8[], ok: Bool) //< prints one check result as one line
-    //<
     //< **It prints after checking, not before.** A hang happens at the moment the atomics are
     //< touched, so "that line never appeared" means "it stopped there".
     if ok
@@ -45,7 +43,6 @@ priv fn check(ln: con.Line$@, name: U8[], ok: Bool) //< prints one check result 
     boot.pump(30) // run USB a little, until the host has taken the line
 
 priv fn run_heap(ln: con.Line$@) //< alloc's basic behaviour (= kspl_atomic_cas's spinlock)
-    //<
     //< It starts over from heap_init every time. With the previous run's free list carried over,
     //< the "reuse" and "coalescing" checks mean nothing from the second run on.
     heap.heap_init(U8$[]::heap_buf)
@@ -74,7 +71,6 @@ priv fn run_heap(ln: con.Line$@) //< alloc's basic behaviour (= kspl_atomic_cas'
     heap.heap_free(big)
 
 priv fn run_atomics(ln: con.Line$@) //< exercises all four atomics (add/cas/load/store) directly
-    //<
     //< Through the heap, only cas is exercised.
     //< Caution: **Check right after each operation.** If all run first and are checked together at
     //< the end, the load() in each check sees only the final state. After operations that rewrite
@@ -91,7 +87,6 @@ priv fn run_atomics(ln: con.Line$@) //< exercises all four atomics (add/cas/load
     check(ln, "atomic: cas fails on a mismatch", !rejected && a.load() == 42)
 
 priv fn run_arc(ln: con.Line$@) //< for Arc the compiler inserts retain/release automatically
-    //<
     //< The release runs where the block is left, so kspl_atomic_add/cas are exercised on the same
     //< path real code takes.
     $rc_ok: = false
@@ -102,7 +97,6 @@ priv fn run_arc(ln: con.Line$@) //< for Arc the compiler inserts retain/release 
     check(ln, "Arc: new/clone/get and scope-exit release", rc_ok)
 
 priv fn run_http_parse(ln: con.Line$@) //< arena and std/http.parse_response
-    //<
     //< Arena.alloc's growth path refers to the global heap, so without atomics it cannot link even
     //< if it never gets there at run time.
     $arena: = Arena.from_buffer(arena_buf@, 2048)

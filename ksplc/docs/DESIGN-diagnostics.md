@@ -39,7 +39,7 @@ A *diagnostic* is a message the compiler prints about your code (an error, a war
 * **The walk over the structural markers.** Deriving `Move_only` follows an `enum`'s payloads and an array's elements as well as a `struct`'s fields, in the one walk `derives_marker` (`sema/type/arc.kspl`). Without them, a struct that holds an array of owning handles (`H[2]`) can be copied silently.
 * **Resolving an operator trait.** Unary and binary operators, `[]` reads and `[]=` writes all use the one `resolve_operator_call` in `sema/decl/trait_check.kspl`. Each caller handles all three `Op_method` cases (`user` / `builtin` / `failed`). A trait implemented with no method found by name is the compiler's own inconsistency. Silently taking the built-in path would ignore the user's implementation.
 * **The subscript's type.** `Index` / `Index_mut` / `Index_place` take it from the implementation's declaration, for reads and writes alike (`operator_index_param_id` in `sema/decl/trait_check.kspl`). Fixed at `Sz`, `m["k"]` on a `Map<|U8[], I32|>` would always fail with "expected 'Sz'". An instantiated method's parameter node can lack its `type_id` even after the names are substituted. So the type is resolved again in the declaring file's context.
-* **`!` and `catch`.** Both accept a Result and nothing else (`sema/body/postfix.kspl`, and `infer_catch_chain` in `sema/body/expr.kspl`). Miss the check in one, and the backends read a tag and a payload off a value that has neither. The C compiler then fails with zero diagnostics from ksplc (Principle 2).
+* **`!` and `catch`.** `!` accepts a Result and nothing else, and `catch` a Result or an Option (`sema/body/postfix.kspl`, and `infer_catch_chain` in `sema/body/expr.kspl`). Miss the check in one, and the backends read a tag and a payload off a value that has neither. The C compiler then fails with zero diagnostics from ksplc (Principle 2).
 
 **`a[i]` on a type that implements `Index_place` (the index that returns a place) is resolved before `Index` / `Index_mut`.** `infer_postfix_array` in `sema/body/postfix.kspl` does it, probing with `has_implemented_operator_trait`. (`check_operator_trait` reports a missing implementation, so it cannot probe.) `at` returns a mutable pointer to the element, but the node's `type_id` is the pointee (the element type). `lower_postfix_index_operator` in `lower/expr.kspl` rebuilds the node as `a.at(i)$`, a dereference in place with no temporary. So reading, assigning, compound assigning and `a[i]@` all take genc's one path for postfix `$` (`(*(...))`). The `get` side returns a value via a temporary, so `a[i]@` there would point at a temporary, and is refused.
 
@@ -311,7 +311,7 @@ The check would then report "undefined type 'Box'" while the instance was still 
 
 Caution: **Do not ask the type table whether another file declares a short name.** Its short keys are whatever spelling a position registered first, so the answer would change with the order files are read in.
 
-**A selector's existence is checked at the `import` line** (`bind_import_symbols`, which also binds the name in the braces to that declaration, as a use). Checked at the use, a typo causes no diagnostic until the name is used, and the `import` line looks as if it works.
+**A selector's existence is checked at the `import` line** (`check_import_symbols` in `sema/decl/access.kspl`, which also binds the name in the braces to that declaration, as a use). Checked at the use, a typo causes no diagnostic until the name is used, and the `import` line looks as if it works.
 
 #### A written type's name is read once, from its tree
 
@@ -385,7 +385,7 @@ Caution: **Do not consult it with the qualification stripped.** A short name ans
 
 ### Explanations come from the specification, and only codes have one
 
-**`ksplc explain <code>` prints that code's section of the diagnostics specification, [`SPEC-diagnostics.md`](SPEC-diagnostics.md), compiled into ksplc** (`ksplc/tools/explain.kspl`). `ksplc explain W0702` prints W0702's. So an edit to the specification reaches the command on the next build, with no second copy to drift (Principle 6). `ksplc/base/lint_codes.kspl` says which codes exist: an unregistered code is rejected before the text is searched.
+**`ksplc explain <code>` prints that code's section of the diagnostics specification, [`SPEC-diagnostics.md`](SPEC-diagnostics.md), compiled into ksplc** (`ksplc/tools/explain.kspl`). `ksplc explain W0207` prints W0207's. So an edit to the specification reaches the command on the next build, with no second copy to drift (Principle 6). `ksplc/base/lint_codes.kspl` says which codes exist: an unregistered code is rejected before the text is searched.
 
 **Only a warning, an information or a hint has an explanation, because only they carry a code** ("An error has no number" in [`SPEC-tools.md`](SPEC-tools.md)). So an error's message must say what went wrong and what to write instead, in the line the reader already has. Elm does this for every message.
 
@@ -393,7 +393,7 @@ Caution: **Do not consult it with the qualification stripped.** A short name ans
 
 **The text is printed as the Markdown it is, followed by the document and chapter it came from.** Its links count from `ksplc/docs/`, and a bare section number in it is that document's. A section runs to the next heading outside a code block; nothing else marks its end.
 
-**It is written for a model as much as for a person.** An agent that meets `[W0702]` asks for that one section instead of reading the whole specification into its context. It cannot use a pager, so none is used.
+**It is written for a model as much as for a person.** An agent that meets `[W0207]` asks for that one section instead of reading the whole specification into its context. It cannot use a pager, so none is used.
 
 **Two gates hold it.** `make test-conventions` checks that every registered code has a section and every section a code (`tests/support/conventions_match.kspl`). `make test-cli` checks that each section prints alone, without running into the next (`case_explain` in `tests/suite/cli_test.kspl`).
 

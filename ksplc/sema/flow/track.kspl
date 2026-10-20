@@ -1,5 +1,4 @@
 //< The dataflow analysis of one function body: each local binding's state, through the expressions
-//<
 //< `analyze_definite_initialization` walks the body once, keeping which locals are initialized and
 //< which released, and whether each is read, mutated or reassigned. Branching and merging per
 //< statement are in `sema/flow/stmt.kspl`; how a state is reported is in `sema/flow/report.kspl`.
@@ -22,7 +21,6 @@ import "std/ds" { List }
 import "std/str"
 
 struct Df_set //< the "set of local declaration nodes" the dataflow tracks
-    //<
     //< One type for sets that differ only in merge direction, so the set operations are written
     //< once. **These structs and Df_ctx belong only to the dataflow's four files**; they are not
     //< priv only because of the file split. From elsewhere, add a function that returns the result
@@ -30,7 +28,6 @@ struct Df_set //< the "set of local declaration nodes" the dataflow tracks
     items: List<|Ast_node$@|> //< held by value, so a state is one allocation with its sets
     merge_is_intersect: Bool //<
         //< The merge's direction: true = intersection, false = union
-        //<
         //< Intersection is must, as "initialized"; union is may, as "released or moved".
 
 impl Df_set
@@ -38,8 +35,13 @@ impl Df_set
         return Df_set::{ .items = List<|Ast_node$@|>.new(base_core.arena),
             .merge_is_intersect = merge_is_intersect }
 
-    fn contains(r: Self$@, v: Ast_node$@): Bool
-        return df_list_contains(r.items@, v)
+    fn contains(r: Self$@, v: Ast_node$@): Bool //< whether v is held (null never is)
+        if v == null
+            return false
+        for item in r.items
+            if item == v
+                return true
+        return false
 
     fn add(r: Self$@, v: Ast_node$@)
         if v != null && !r.contains(v)
@@ -60,7 +62,6 @@ impl Df_set
 
     fn fill_merged(r: Self$@, a: Df_set$@, b: Df_set$@) //<
         //< Fills r, an empty set, with a and b merged in r's direction (intersection / union)
-        //<
         //< Filled in place, so a merge allocates no set beside the new state's own.
         if r.merge_is_intersect
             for v in a.items
@@ -76,18 +77,15 @@ struct Df_state
     freed_vars: Df_set //< the locals possibly released (may-be-freed, for use-after-free)
     gone_vars: Df_set //<
         //< The released locals possibly with nothing left to give back, not even to `dealloc`
-        //<
         //< A pointer's `free()` releases what it points at and leaves the block, which only
         //< `dealloc` may name afterwards; every other release puts the local here too.
     moved_vars: Df_set //< the locals possibly moved (may-be-moved, for Move_only)
     carried_vars: Df_set //<
         //< The locals in freed_vars or moved_vars only by way of an earlier pass of a loop
-        //<
         //< A report on one says so (sema/flow/report.kspl). The line that moved or freed it is
         //< below the use, and without the note the reader looks above it in vain.
     moved_fields: Df_set //<
         //< The field reads that possibly moved a `Move_only` field out of a local (`take(b.m)`)
-        //<
         //< Each item is the `.` node of that read. Its path is worked out from the node when needed
         //< (field_path_root, field_path_text). That is rare, as few reads move a field.
     reachable: Bool
@@ -113,13 +111,7 @@ impl Df_state
 
     fn apply_merged_state(r: Self$@, merged: Df_state$@) //<
         //< Writes a branch merge's result back into itself
-        r.init_vars = merged.init_vars
-        r.freed_vars = merged.freed_vars
-        r.gone_vars = merged.gone_vars
-        r.moved_vars = merged.moved_vars
-        r.carried_vars = merged.carried_vars
-        r.moved_fields = merged.moved_fields
-        r.reachable = merged.reachable
+        r$ = merged$
 
     fn contains(r: Self$@, v: Ast_node$@): Bool
         return r.init_vars.contains(v)
@@ -155,7 +147,6 @@ impl Df_state
 
     fn bind(r: Self$@, v: Ast_node$@, has_value: Bool) //<
         //< A declaration starts a binding afresh: with a value or without, and nothing released
-        //<
         //< **A loop walks a declaration in its body more than once** (df_stmt_for in
         //< sema/flow/stmt.kspl). So what the last pass did to the binding must not reach this one.
         if has_value
@@ -168,7 +159,6 @@ impl Df_state
 
     fn forget_moved_fields(r: Self$@, root: Ast_node$@, at: Ast_node$@) //<
         //< Clears the moved fields of `root` at the path `at` or below it, once it holds a value
-        //<
         //< A null `at`, or a bare name, is the whole binding. The path's text is made only when
         //< something was moved, which is rare.
         if r.moved_fields.items.len == 0
@@ -189,8 +179,10 @@ struct Local_state
         //< The binding axis: the name is given a new value (`x = v` / `x += v`); it decides `$x`.
     is_mutated: Bool //<
         //< The value axis: what the name holds is changed in place
-        //<
         //< It is also set by a receiver's method call or `@` / `[` / `$` (for W0208 and similar).
+    pattern: Ast_node$@ //<
+        //< The `case` pattern whose payload binds it, where the user wrote that payload; else null
+        //< [I0313] reads it: a pattern none of whose bindings is read needs no payload.
 
 struct Df_ctx
     sema: Sema_ctx$@
@@ -199,11 +191,9 @@ struct Df_ctx
     has_reported_unreachable: Bool
     suppress_move: Bool //<
         //< Set during a read that copies no value, so a Move_only binding's ownership does not move
-        //<
         //< Such a read is a receiver, or the target of `@` / `$` / `[`.
     pending_defers: List<|Ast_node$@|>$@ //<
         //< The defer bodies the enclosing blocks registered, in the order they were registered
-        //<
         //< A block analyzes its own at its end, and each early exit those it leaves
         //< (df_stmt_block_scope and df_check_defers_on_exit).
     exit_targets: List<|Df_exit_target|>$@ //<
@@ -212,7 +202,6 @@ struct Df_ctx
     reported_in_defers: Df_set //< the reads in defer bodies already reported at an early exit
     in_field_path: Bool //<
         //< Set while walking the receivers inside a field path (`b.m.x`)
-        //<
         //< The moved-field check is made once, for the whole path, at its outermost `.`; a
         //< receiver inside it is not a read of the whole binding.
 
@@ -221,7 +210,6 @@ struct Df_exit_target //< a statement a jump can leave, and the defers registere
     defers_before: Sz //< pending_defers' length on entering it; leaving runs the bodies past it
     jump_state: Df_state$@ //<
         //< The states merged from the jumps that leave it (`break`, `fallback`), else null
-        //<
         //< **What follows the statement starts from this as well as from its own end.** A binding
         //< set before every `break` is set after the loop, and one moved before any is moved.
         //< A `for` also merges its condition's exit here.
@@ -248,7 +236,6 @@ impl Ast_node
 
     fn is_bare_name_target(r: Self$@): Bool //<
         //< Whether an assignment's left-hand side is a "bare name"
-        //<
         //< `x` / `(x)` are true, `r.f` / `a[i]` / `p$` false: the binding axis versus the value
         //< axis, for [I0601] and the definite-initialization tracking.
         $curr: = r
@@ -265,7 +252,6 @@ impl Ast_node
 
     fn write_crosses_indirection(r: Self$@, c: Df_ctx$@): Bool //<
         //< Whether the path to the assignment destination crosses a pointer or a slice
-        //<
         //< A value's field (`v.f = x`) or element does not cross: it writes the binding (the axes
         //< are at Local_state). An unresolved type does not cross either; the only cost is [I0601]
         //< missing a spare `$`.
@@ -358,7 +344,6 @@ impl Ast_node
 
     priv fn report_unreachable(r: Self$@, c: Df_ctx$@) //<
         //< [W0201] Warns of a statement nothing reaches, unless one is already reported
-        //<
         //< Empty statements, blocks, labels and declarations are passed over. The mark points at
         //< the statement's keyword, else at a leading name or literal.
         if r.kind_id == .k_empty || r.kind_id == .k_stmt_block || r.kind_id == .k_stmt_label ||
@@ -407,7 +392,6 @@ impl Ast_node
 
     fn df_type_array_sizes(r: Self$@, c: Df_ctx$@, state: Df_state$@) //<
         //< Walks the array-size expression written in a type annotation (the `n` of `a: I32[n]`)
-        //<
         //< Without it, an in-function `const` used only as an array size gets a false [W0207]
         //< "unused".
         if r == null
@@ -494,7 +478,6 @@ impl Ast_node
 
     fn df_expr_catch(r: Self$@, c: Df_ctx$@, state: Df_state$@) //<
         //< Walks `expr catch …`: the expression on both paths, then the failure path apart
-        //<
         //< What follows starts from the success path, the catch block's end and each `fallback`
         //< (record_jump). Caution: **Walk the expression before the paths part**: walked on the
         //< failure path alone, a move in it is lost wherever that path ends in `return`.
@@ -531,7 +514,6 @@ impl Ast_node
 
     fn mark_value_receiver_reassigned(r: Self$@, c: Df_ctx$@) //<
         //< Sets the binding axis on a method call whose receiver is **a value**
-        //<
         //< A value is not a pointer or a slice, so a `Self$@` method amounts to writing the binding
         //< itself, as `v.f = x` does. Otherwise [I0601] says "`$` is not needed". A pointer or
         //< slice receiver, or one reached through them (`s[0].m()`, `p.f.m()`), writes the pointee.
@@ -557,7 +539,6 @@ impl Ast_node
 
     fn get_direct_local_def(r: Self$@): Ast_node$@? //<
         //< The receiver of `.free()` / `.dealloc()`, only where it is a bare identifier
-        //<
         //< get_assign_target_def would take `r.list.free()` as releasing `r`.
         $curr: = r
         if curr != null && curr.kind_id == .k_expr_primary && curr.children.len > 0
@@ -570,7 +551,6 @@ impl Ast_node
 
     fn get_addressed_local_def(r: Self$@): Ast_node$@? //<
         //< The local's declaration node, where the argument is that bare local or its address
-        //<
         //< The address is an explicit one, such as the `f@` of `close_it(f@)`.
         //< This lets passing a pointer be tracked across the call (mark_call_freed_args).
         if direct: = r.get_direct_local_def()
@@ -584,7 +564,6 @@ impl Ast_node
 
     fn mark_free_call_if_any(r: Self$@, c: Df_ctx$@, state: Df_state$@) //<
         //< Registers a bare local's `.free()` / `.dealloc()` in freed_vars
-        //<
         //< `r.field.free()` is not tracked, avoiding false positives.
         $freed_expr: Ast_node$@ = null
         $frees_the_pointer: = false
@@ -620,7 +599,6 @@ impl Ast_node
 
     priv fn release_kept_block_if_any(r: Self$@, state: Df_state$@) //<
         //< Lets a `dealloc` name a pointer whose `free()` left its block, before the call is walked
-        //<
         //< **Giving the block back is not a use of what `free()` released**: `p.free()` then
         //< `dealloc(Void$@::p)` frees a list `create(null)` placed on the heap. The call's own
         //< registration then puts `p` in gone_vars, so any later use is refused, another `dealloc`
@@ -632,7 +610,6 @@ impl Ast_node
 
     priv fn warn_if_arena_handout(r: Self$@, def: Ast_node$@, c: Df_ctx$@) //<
         //< [W0104] Warns when a pointer an arena handed out is passed to a call that releases it
-        //<
         //< **Only for the free-function form (`dealloc(x)`).** `x.free()` releases `x`'s
         //< **contents**, which is correct for an arena's container
         //< (`m: = arena.create(Map.new(null))` + `defer m.free()`).
@@ -654,7 +631,6 @@ impl Ast_node
 
     fn mark_call_freed_args(r: Self$@, c: Df_ctx$@, state: Df_state$@) //<
         //< Marks a bare local argument released where the callee always releases that parameter
-        //<
         //< The call is `foo(x)`, `obj.m(x)` or `T.m(x)`.
         //< **A method call shifts the parameters by one** (the receiver), or `a` is checked as
         //< self.
@@ -684,7 +660,6 @@ impl Ast_node
 
     fn df_method_access(r: Self$@, c: Df_ctx$@, state: Df_state$@) //<
         //< Walks a field access's or method call's receiver without counting it as a use as a value
-        //<
         //< `x.field` does not move x. It does, however, **run the already-released check**.
         //< Caution: **The freed check must not be suppressed along with it here**, even though some
         //< `.free()` only resets a buffer: `p.free(); p.v` / `p.get()` would go undiagnosed.
@@ -702,7 +677,6 @@ impl Ast_node
 
     priv fn cast_makes_mutable_view(r: Self$@, c: Df_ctx$@): Bool //<
         //< Whether a prefix cast's destination is a writable indirection
-        //<
         //< That is a mutable slice or a mutable pointer.
         //< **This also sets the binding axis**: without `$` the C declaration is `const`, and a
         //< write through `U8$[]::buf` hits read-only memory.
@@ -717,7 +691,6 @@ impl Ast_node
 
     priv fn lends_binding_writable(r: Self$@, c: Df_ctx$@): Bool //<
         //< Whether this `@` / `[` / mutable-view cast hands out the root binding's storage writable
-        //<
         //< Only the `$` before the name allows that (the binding axis).
         //< **Only a path that crosses no pointer or slice reaches that storage.** Fields and a
         //< fixed-length array's elements are part of the value (see Local_state). A read through
@@ -812,15 +785,6 @@ impl Ast_node
                     local directly")
             c.has_error = true
 
-fn df_list_contains(list: List<|Ast_node$@|>$@, v: Ast_node$@): Bool //<
-    //< Whether v is held in a node list (null never is)
-    if v == null
-        return false
-    for item in list
-        if item == v
-            return true
-    return false
-
 fn intersect_states(s1: Df_state$@, s2: Df_state$@): Df_state$@
     if !s1.reachable
         return s2.clone()
@@ -839,13 +803,16 @@ fn intersect_states(s1: Df_state$@, s2: Df_state$@): Df_state$@
 impl Df_ctx
     fn add_local(r: Self$@, v: Ast_node$@) //<
         //< Starts tracking a local binding, once
-        //<
         //< A defer body is analyzed at each exit that leaves it, so its declarations come here
         //< again. A second entry would never be marked read, and would be reported unused.
+        r.add_bound_local(v, null)
+
+    fn add_bound_local(r: Self$@, v: Ast_node$@, pattern: Ast_node$@) //<
+        //< Starts tracking a local, once, which `pattern`'s payload binds where it is not null
         if r.find_local(v) < 0
             r.locals
                 .push(Local_state::{ .node = v, .is_read = false, .is_reassigned = false,
-                .is_mutated = false })
+                .is_mutated = false, .pattern = pattern })
 
     fn enter_exit_target(r: Self$@, stmt: Ast_node$@) //<
         //< the matching leave is leave_exit_target
@@ -902,5 +869,21 @@ fn analyze_definite_initialization(c: Sema_ctx$@, fn_node: Ast_node$@, block: As
 
     if !c.suppress_errors
         for local in ctx.locals
-            sema_flow_report.check_local_usage(c, local)
+            if local.pattern == null || ctx.reads_payload(local.pattern)
+                sema_flow_report.check_local_usage(c, local)
+            else if ctx.binds_first(local)
+                sema_flow_report.report_unread_payload(c, local.pattern)
     return !ctx.has_error
+
+impl Df_ctx
+    fn reads_payload(r: Self$@, pattern: Ast_node$@): Bool //< whether any binding of it is read
+        for local in r.locals
+            if local.pattern == pattern && local.is_read
+                return true
+        return false
+
+    fn binds_first(r: Self$@, st: Local_state): Bool //< whether `st` is its pattern's first binding
+        for local in r.locals
+            if local.pattern == st.pattern
+                return local.node == st.node
+        return false

@@ -1,5 +1,4 @@
 //< Converts between a date and a count of days
-//<
 //< **A date is a number**: the count of days since the origin day (1970-01-01), so it works in
 //< arithmetic. **Days before the origin are negative.**
 //< These are pure functions that know no document, cell or style. **"Today" is not stored**, or
@@ -8,19 +7,16 @@ import "std/chars"
 import "std/str" { Str_builder }
 
 priv const EPOCH_YEAR: I64 = 1970I64 //< the origin day
-    //<
     //< **Change this and every date in every saved document shifts.**
 
 priv const DAYS_PER_400: I64 = 146097I64 //<
     //< the days in one 400-year cycle of the leap rule
 
 fn leap(y: I64): Bool //< whether it is a leap year
-    //<
     //< **A multiple of 100 is excluded, and a multiple of 400 is included again.**
     return (y % 4I64 == 0I64 && y % 100I64 != 0I64) || y % 400I64 == 0I64
 
 fn month_days(y: I64, m: I64): I64 //< the days in that month of that year
-    //<
     //< **The month is 1 to 12** (outside that, 0).
     if m < 1I64 || m > 12I64
         return 0I64
@@ -32,7 +28,6 @@ fn month_days(y: I64, m: I64): I64 //< the days in that month of that year
 
 priv fn shifted_days(y: I64, m: I64, d: I64): I64 //<
     //< The days from 0000-03-01 to y-m-d, on a calendar whose year starts in March
-    //<
     //< **Counting starts from March so that the leap day comes at the year's end.**
     era_year: = y - (1I64 if m <= 2I64 else 0I64)
     era: = (era_year if era_year >= 0I64 else era_year - 399I64) / 400I64
@@ -44,13 +39,11 @@ priv fn shifted_days(y: I64, m: I64, d: I64): I64 //<
     return era * DAYS_PER_400 + day_of_era
 
 priv const YEAR_REACH: I64 = 10000000000000I64 //< the furthest year either way: 10 to the 13th
-    //<
     //< **Its count of days (under 4×10^15) is a whole number that an F64 holds exactly** (up to 2
     //< to the 53rd). So the day a formula names is the day it reads back. Further out the count
     //< would be rounded, and far further the reckoning here overflows an I64.
 
 fn days_of(y: I64, m: I64, d: I64): I64? //< the days from the origin day to y-m-d
-    //<
     //< **A date that does not exist on the calendar is not returned** (2026-02-30 and the like),
     //< nor one past `YEAR_REACH`.
     if y > YEAR_REACH || y < -YEAR_REACH || d < 1I64 || d > month_days(y, m)
@@ -58,7 +51,6 @@ fn days_of(y: I64, m: I64, d: I64): I64? //< the days from the origin day to y-m
     return .some(shifted_days(y, m, d) - shifted_days(EPOCH_YEAR, 1I64, 1I64))
 
 struct Civil //< the year, the month and the day computed from a count of days
-    //<
     //< **The three are computed together** (separately, the same division would run three times).
     year: I64
     month: I64
@@ -78,7 +70,6 @@ fn civil_of(days: I64): Civil
     return Civil::{ .year = y, .month = m, .day = d }
 
 enum Dating //< how a date is shown
-    //<
     //< **`none` does not show it as a date** (it stays a number).
     //< Caution: **Do not rename a variant**: its name is the spelling a saved text holds (`make
     //< test` pins every one).
@@ -90,7 +81,6 @@ enum Dating //< how a date is shown
 
 impl Dating
     fn same_dating(a: Self, b: Dating): Bool //< whether the way of showing is the same
-        //<
         //< It compares the names, not numbers (the reason is at `same_arrange` in `style.kspl`).
         return a.variant_name().equals(b.variant_name())
 
@@ -102,23 +92,16 @@ priv const MONTH_NAMES: U8[][13] = ::{ "", "January", "February", "March", "Apri
     "July", "August", "September", "October", "November", "December" }
 
 fn dating_from(name: U8[]): Dating //< reads a way of showing a date from a name
-    //<
     //< **An unknown name means "do not show it as a date".**
-    if name.equals("plain")
-        return .plain
-    if name.equals("long")
-        return .long
-    return .none
+    return Dating.from_variant_name(name).unwrap_or(.none)
 
 priv fn two(out: Str_builder$@, v: I64) //< writes it padded to two digits
-    //<
     //< **A one-digit month or day gets a leading 0**, so sorting the text sorts the dates.
     if v >= 0I64 && v < 10I64
         out.c('0')
     out.s("\{v\}")
 
 fn write_day(out: Str_builder$@, days: I64, how: Dating) //< writes a count of days as a date
-    //<
     //< **With `Dating.none` it writes nothing** (the caller writes it as a number).
     c: = civil_of(days)
     switch how
@@ -133,21 +116,18 @@ fn write_day(out: Str_builder$@, days: I64, how: Dating) //< writes a count of d
     case .none {}
 
 priv struct Read //< the result of reading one number
-    //<
     //< **The end position alone is not enough** (reading nothing ends at the same position).
     end: Sz
     ok: Bool
 
 priv const NUMBER_CAP: I64 = 9999I64 //< the cap on one number read from a text
-    //<
     //< **Without a cap an I64 overflows** (four digits are enough for a year).
 
 priv fn number_at(text: U8[], from: Sz, mark: U8[]): Read //<
     //< Reads one number at `from` and looks for `mark` after it
-    //<
     //< The caller gives the mark (`-`, or a space); an empty mark always matches.
     $at: Sz = from
-    for at < text.len && text[at] >= '0' && text[at] <= '9'
+    for at < text.len && text[at].is_digit()
         at += 1
     if at == from
         return Read::{ .end = at, .ok = false }
@@ -156,7 +136,6 @@ priv fn number_at(text: U8[], from: Sz, mark: U8[]): Read //<
     return Read::{ .end = at, .ok = true }
 
 priv fn number_of(text: U8[], from: Sz, to: Sz): I64 //< reads one number
-    //<
     //< Caution: **Do not call it on a range not yet read** (check first with `number_at`).
     $v: I64 = 0I64
     for $i: Sz = from; i < to; i += 1
@@ -168,7 +147,6 @@ priv fn number_of(text: U8[], from: Sz, to: Sz): I64 //< reads one number
 
 priv fn month_at(text: U8[], from: Sz): I64 //<
     //< The month whose name is written at `from`, followed by a space
-    //<
     //< **0 means no match.**
     //< Caution: **Start from 1.** Index 0 holds the empty text, and an empty text matches anywhere.
     names: = U8[][]::MONTH_NAMES
@@ -220,7 +198,6 @@ priv fn read_long(text: U8[]): I64? //<
     return days_of(year, month, number_of(text, 0, d.end))
 
 fn day_of(text: U8[]): I64? //< reads a text as a date
-    //<
     //< **Only the two formats it writes can be read.** Where it cannot read the text it returns
     //< nothing (0 would turn a typo into the origin day).
     if v: = read_plain(text)

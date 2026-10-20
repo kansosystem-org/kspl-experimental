@@ -1,5 +1,4 @@
 //< Computes a type's memory layout (size, alignment and field offsets)
-//<
 //< Methods added to `Sema_ctx` in `sema/session/ctx.kspl`; results are cached in its
 //< `Layout_state` (`sema/session/state.kspl`).
 //< **Only this file interprets `#packed` / `#align(N)`.** The C side writes them onto
@@ -22,13 +21,13 @@ import "ksplc/sema/type/display" as sema_type_display
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
 import "std/ds" { List, Map }
+import "std/math"
 import "std/str" + { Str_builder }
 
 priv const MAX_TYPE_LAYOUT_DEPTH: Sz = 1000 //<
     //< calc_type_layout's safety limit, on the reasoning of max_nesting_depth in std/json.kspl
 
 priv struct Fields_walk //< `walk_fields`' answer
-    //<
     //< `stopped`: `stop_at` was reached, and `size` is that field's offset.
     size: Sz
     align: Sz
@@ -50,7 +49,6 @@ priv fn low_align(align: Sz, offset: Sz): Sz //< the alignment left `offset` byt
 impl Sema_ctx
     priv fn report_infinite_size(r: Self$@, type_id: I32) //<
         //< The one place an infinite size is reported
-        //<
         //< Caution: Keep the wording and the position in this one place; per-caller copies drift.
         if r.has_error()
             return
@@ -62,7 +60,6 @@ impl Sema_ctx
         r.err(r.layout.field, r.scratch.slice())
 
     priv fn reset_layout_memo(r: Self$@) //< recreates the cache of measured layouts
-        //<
         //< Caution: the memo is arena-allocated, but its entries array is on the heap (a Map made
         //< with a null arena). Free it first, or every reset leaks.
         r.layout.memo.free()
@@ -71,7 +68,6 @@ impl Sema_ctx
 
     fn check_type_layouts(r: Self$@, root_file: Ast_node$@) //<
         //< Checks that sizes are finite, to get calc_type_layout's diagnostics
-        //<
         //< **Every declared struct / enum**, for holding itself by value
         //< (`check_infinite_size_types`), and **the top-level variables' and constants' types**,
         //< for an over-deep chain too.
@@ -96,7 +92,6 @@ impl Sema_ctx
 
     fn check_infinite_size_types(r: Self$@) //<
         //< Checks, for **every** declared struct / enum, whether it holds itself as a value
-        //<
         //< Caution: **Measure every type, needed or not.** Otherwise a type used only in a local or
         //< a field gets C's incomplete-type error instead of KSPL's diagnostic. See "Failing fast
         //< through an exception or an ICE" in ksplc/docs/DESIGN-compiler.md. **Call it before
@@ -115,9 +110,9 @@ impl Sema_ctx
         for $id: Sz = 1; id < count; id += 1
             $is_aggregate: = false
             switch r.env.get_info(I32::id)
-            case .struct_type(_s)
+            case .struct_type
                 is_aggregate = true
-            case .enum_type(_e)
+            case .enum_type
                 is_aggregate = true
             default {}
             if is_aggregate
@@ -132,7 +127,6 @@ impl Sema_ctx
 
     priv fn check_packed_managed_fields(r: Self$@) //<
         //< Refuses an ARC-managed field that `#packed` leaves under-aligned
-        //<
         //< Its count is kept through the field's address: lower/arc.kspl passes `field@` to the
         //< retain and release helpers. Such a field cannot give that address
         //< ("refuse_packed_address").
@@ -157,7 +151,6 @@ impl Sema_ctx
     fn ensure_type_registry(r: Self$@, type_id: I32, err_node: base_ast.Ast_node$@):
         Void!Sema_error //<
             //< Before a layout is measured, **fills in the structs / enums it contains**
-            //<
             //< It fills in only those not yet filled.
             //< The field list is complete only after Pass 3 of `sema/decl/collect.kspl`.
             //< Caution: **The `sizeof` path must go through here** (eval_sizeof in
@@ -191,7 +184,6 @@ impl Sema_ctx
     priv fn fill_registry(r: Self$@, type_id: I32, decl: base_ast.Ast_node$@,
         err_node: base_ast.Ast_node$@): Void!Sema_error //<
             //< Fills in one declaration, recording a cycle where filling it needs its own size
-            //<
             //< report_registry_cycle reports the cycle.
             //< Caution: **Save the current file and type.** This interrupts another declaration,
             //< and `build_*_registry` reads the file in `make_fqn` and overwrites
@@ -222,7 +214,6 @@ impl Sema_ctx
 
     fn report_registry_cycle(r: Self$@) //<
         //< Reports the accumulated "`sizeof` whose size depends on itself" errors
-        //<
         //< Caution: Call it once, where diagnostics are kept (end of run in
         //< sema/decl/collect.kspl).
         if r.resolving.registry_cycle_at == null
@@ -236,7 +227,6 @@ impl Sema_ctx
     priv fn calc_fields_layout(r: Self$@, fields: List<|sema_type_def.Struct_field$@|>$@,
         resolving: List<|I32|>$@, track_align: Bool): sema_session_state.Type_layout //<
             //< Computes a field list's offsets from the start
-            //<
             //< It serves a struct (track_align=!is_packed) and an enum variant's payload
             //< (track_align=true).
             //< Caution: **Set `Layout_state.field` to the field before measuring.** A cycle's
@@ -249,7 +239,6 @@ impl Sema_ctx
     priv fn walk_fields(r: Self$@, fields: List<|sema_type_def.Struct_field$@|>$@,
         resolving: List<|I32|>$@, track_align: Bool, stop_at: U8[]): Fields_walk //<
             //< Walks a field list in layout order, the single ordering sizeof and offsetof share
-            //<
             //< With a name in `stop_at` it stops at that field, `size` being its offset
             //< (`offsetof`).
             //< Caution: **Do not make a second copy of the ordering.** `sizeof` and `offsetof`
@@ -262,7 +251,7 @@ impl Sema_ctx
             fs: = r.calc_type_layout(field.type_id, resolving)
             r.layout.field = outer_field
             if track_align
-                align = fs.align if fs.align > align else align
+                align = math.max(fs.align, align)
                 offset = align_to(offset, fs.align)
             // Caution: **Check after rounding up**, or the `b` of `struct { a: U8; b: I64; }` is 1
             // rather than 8 (only `--to=llvm` and the folding silently differ; C uses
@@ -274,7 +263,6 @@ impl Sema_ctx
 
     fn enum_payload_offset(r: Self$@, type_id: I32): Sz //<
         //< Where a tagged enumeration's payload starts
-        //<
         //< **C cannot be asked here.** The payload is an anonymous union in C with no name to point
         //< at, so ksplc's layout is the canonical source (as for `sizeof`).
         real_id: = r.env.get_clean_real_type(type_id)
@@ -289,21 +277,19 @@ impl Sema_ctx
     priv fn enum_parts(r: Self$@, enum_def: sema_type_def.Enum_def$@, resolving: List<|I32|>$@):
         Enum_parts //<
             //< A tagged enumeration's tag, and where and how large the payloads' union is
-            //<
             //< Caution: **Place the payload only here.** calc_type_layout and enum_payload_offset
             //< read it, and a second placement would let the size and the offset disagree.
         tag: = r.calc_type_layout(enum_def.base_type_id, resolving)
         $payload: = sema_session_state.Type_layout::{ .size = 0, .align = 1 }
         for v in enum_def.variants_list
             p_lay: = r.calc_fields_layout(v.payload_fields, resolving, true)
-            payload.size = p_lay.size if p_lay.size > payload.size else payload.size
-            payload.align = p_lay.align if p_lay.align > payload.align else payload.align
+            payload.size = math.max(p_lay.size, payload.size)
+            payload.align = math.max(p_lay.align, payload.align)
         return Enum_parts::{ .tag = tag,
             .payload_offset = align_to(tag.size, payload.align), .payload = payload }
 
     fn payload_field_offset(r: Self$@, v_def: sema_type_def.Enum_variant$@, field_name: U8[]): Sz //<
         //< Where a variant's payload field lies, counted from the payload's start
-        //<
         //< The same walk as a struct's `offsetof` (`walk_fields`), over the variant's fields.
         $resolving: = List<|I32|>.new(null)
         defer resolving.free()
@@ -339,7 +325,6 @@ impl Sema_ctx
 
     fn packed_place_align(r: Self$@, place: Ast_node$@): Sz //<
         //< The alignment a place inside a `#packed` struct keeps, 0 where it keeps its type's own
-        //<
         //< Such a field, and all inside it, can start at any byte. **Every reader of a place's
         //< alignment calls it**: genc and genllvm make the access byte-wise, and sema refuses the
         //< address (`refuse_packed_address` below).
@@ -351,7 +336,6 @@ impl Sema_ctx
 
     fn refuse_packed_address(r: Self$@, place: Ast_node$@, how: U8[]): Bool //<
         //< Reports `how` taking the address of a place `#packed` leaves under-aligned
-        //<
         //< False where the place keeps its type's alignment. A pointer carries no alignment of its
         //< own, so each access through it would assume the type's.
         kept: = r.packed_place_align(place)
@@ -369,7 +353,6 @@ impl Sema_ctx
 
     fn refuse_packed_receiver(r: Self$@, recv: Ast_node$@, method: Ast_node$@, written: U8[]) //<
         //< refuse_packed_address for a receiver that `method` takes by pointer
-        //<
         //< A method call, a user operator and a subscript through `Index_place` / `Index_ref` alike
         //< pass `recv@`; `written` is what the source shows (`bump`, `+`, `[]`). A receiver that
         //< is not a place is copied to a temporary first, so it is not one.
@@ -386,7 +369,6 @@ impl Sema_ctx
 
     priv fn place_kept_align(r: Self$@, place: Ast_node$@, depth: Sz): Sz //<
         //< The alignment a place's address is sure of, 0 where no `#packed` struct holds it
-        //<
         //< A step through a pointer starts afresh: what it points at is laid out at its type's own.
         if place == null || depth >= MAX_TYPE_LAYOUT_DEPTH
             return 0
@@ -435,7 +417,6 @@ impl Sema_ctx
     fn record_folded(r: Self$@, type_id: I32, measure: sema_session_state.Layout_measure, value: Sz,
         at: Ast_node$@) //<
             //< Records a layout number that goes into the output folded, for C to check
-            //<
             //< **Every reader of a folded layout number calls it** (`sizeof`, `offsetof`,
             //< reflection's payload offset, a slice cast's element sizes). A type C cannot spell
             //< (an unbound type parameter, `Void`) is left out: no number of it reaches the C.
@@ -479,7 +460,6 @@ impl Sema_ctx
 
     fn type_layout(r: Self$@, type_id: I32): sema_session_state.Type_layout //<
         //< The size and alignment of the type type_id, measured afresh
-        //<
         //< The entry point for code that needs one size; it holds the cycle list calc_type_layout
         //< walks.
         $resolving: = List<|I32|>.new(null)
@@ -520,7 +500,6 @@ impl Sema_ctx
     priv fn calc_type_layout(r: Self$@, type_id: I32, resolving: List<|I32|>$@):
         sema_session_state.Type_layout //<
             //< The size and alignment of the type type_id
-            //<
             //< resolving detects cycles only; a long non-cycling embedding chain could exhaust the
             //< native stack, hence max_type_layout_depth.
             //< Caution: **Do not reset the memo during the sweep** (the reason is at
@@ -556,10 +535,10 @@ impl Sema_ctx
         machine: = base_target.current()
 
         switch info
-        case .pointer(_b)
+        case .pointer
             res.align = machine.pointer_bytes
             res.size = machine.pointer_bytes
-        case .trait_type(_d)
+        case .trait_type
             // A trait value is two pointers: the object and its vtable.
             res.align = machine.pointer_bytes
             res.size = 2 * machine.pointer_bytes

@@ -250,26 +250,42 @@ function kspageProbeMenu(ks) {
   document.getElementById("style-apply").click();
   check(document.getElementById("note").textContent === "Changed the style",
     "the fields land all together (" + document.getElementById("note").textContent + ")");
-  check(app.styleMark(itemAt).text === "‣", "the sign typed goes into the style");
+  check(app.styleData(itemAt).bullet === "‣", "the sign typed goes into the style");
   // **One press comes back in one** (a step stacked for an unchanged field would undo nothing).
   undoKey();
-  check(app.styleMark(itemAt).text === "• ", "one undo returns to the original sign");
+  check(app.styleData(itemAt).bullet === "• ", "one undo returns to the original sign");
   // The serial-number fields: **a misspelt id leaves the core unhurt**, dropping "Fig. " alone.
   check(ks.flyPick("style-mark", "A running number"),
     "\"A running number\" can be chosen from the kinds of mark");
   document.getElementById("style-mark-before").value = "Fig. ";
   document.getElementById("style-mark-text").value = ". ";
   document.getElementById("style-apply").click();
-  const serial = app.styleMark(itemAt);
-  check(serial.kind === "serial" && serial.before === "Fig. " && serial.text === ". ",
+  const serial = app.styleData(itemAt);
+  check(serial.bullet === undefined && serial.serial_before === "Fig. "
+    && serial.serial_after === ". ",
     "the texts before and after the number go in from the fields ("
-      + serial.before + "|" + serial.text + ")");
+      + serial.serial_before + "|" + serial.serial_after + ")");
   // **Count over the whole document.** With body text in between it does not go back to 1.
   check(app.markdown().indexOf("Fig. 1. ") >= 0 && app.markdown().indexOf("Fig. 2. ") >= 0,
     "the serial numbers come out in what is written out");
   undoKey();
-  check(app.styleMark(itemAt).kind === "bullet",
+  check(app.styleData(itemAt).bullet === "• " && app.styleData(itemAt).serial_after === undefined,
     "one undo returns to the original kind of mark");
+  // A chapter number's two texts go in from the same fields (the separator and what follows).
+  check(ks.flyPick("style-mark", "A chapter number"),
+    "\"A chapter number\" can be chosen from the kinds of mark");
+  document.getElementById("style-mark-before").value = ".";
+  document.getElementById("style-mark-text").value = " ";
+  document.getElementById("style-apply").click();
+  const chapter = app.styleData(itemAt);
+  check(chapter.outline_sep === "." && chapter.outline_after === " ",
+    "the separator and what follows go in from the fields ("
+      + chapter.outline_sep + "|" + chapter.outline_after + ")");
+  check(ks.flyPick("style-pick", "heading") && ks.flyPick("style-pick", "bullet")
+    && ks.flyTick("style-mark") === "A chapter number",
+    "choosing afresh shows the chapter number again (" + ks.flyTick("style-mark") + ")");
+  undoKey();
+  check(app.styleData(itemAt).bullet === "• ", "one undo returns to the original mark again");
 
   // 11. The formula field: **not rewritten while typed on**, and the focus back after the swap.
   const bar = document.getElementById("formula");

@@ -1,6 +1,5 @@
 #!/usr/bin/env -S ksplc run
 //< Stage 0 / ③: deriving the BPE vocabulary and merges from the corpus
-//<
 //< ksai/tokenizer only "runs on the vocab/merges it is given", so training from the corpus is done
 //< here.
 
@@ -32,12 +31,10 @@ priv const MERGES_OUT: U8[] = "tools/ai_assist/tokenizer/merges.txt"
 
 priv const WORD_PATTERN: U8[] = "[A-Za-z_][A-Za-z0-9_]*|\\d+|\\s+|." //<
     //< A simple pre-split for code (identifier / number / whitespace run / any other character)
-    //<
     //< The trailing `.` takes any one character; without it the splitting stops at the first other
     //< character and the rest of the text is dropped.
 
 priv const PAIR_SHIFT: Sz = 1048576 //< how a pair is packed to be a Map key
-    //<
     //< An id is below the vocabulary size, so 2^20 is enough.
 
 struct Word //< one word of the corpus, with how often it was seen
@@ -62,7 +59,6 @@ priv fn load_text(path: U8[], arena: Arena$@): U8[] //<
     // Caution: Copy it into the arena; once returned, the Str_builder's heap memory cannot be
     // freed.
     out: = arena.dup_str(b.slice())
-    b.free()
     return out
 
 priv fn count_words(text: U8[], arena: Arena$@): Map<|U8[], Sz|>$@ //<
@@ -86,7 +82,6 @@ priv fn count_words(text: U8[], arena: Arena$@): Map<|U8[], Sz|>$@ //<
 
 priv fn build_corpus(words: Map<|U8[], Sz|>$@, arena: Arena$@): List<|Word|> //<
     //< Turns the word table into "a list of byte ids plus the occurrence count"
-    //<
     //< Words that give the same list are not combined: it would only save time, the answer
     //< unchanged.
     $out: = List<|Word|>.new(arena)
@@ -100,7 +95,6 @@ priv fn build_corpus(words: Map<|U8[], Sz|>$@, arena: Arena$@): List<|Word|> //<
 
 priv fn best_pair(corpus: List<|Word|>$@, arena: Arena$@): Merge //<
     //< Counts the pairs of adjacent ids and returns the most common
-    //<
     //< Where nothing occurs twice or more, `.id = -1`.
     //< Caution: **Break ties explicitly.** The Map's order depends on the table's size and hashing,
     //< so one corpus could give different vocabularies. The smaller packed key (a high, b low)
@@ -142,7 +136,6 @@ priv fn apply_merge(corpus: List<|Word|>$@, a: I32, b: I32, new_id: I32) //<
         ids.len = write
 
 priv fn init_expand(arena: Arena$@): List<|U8[]|> //< id -> a byte sequence
-    //<
     //< 0 is <unk> and empty, 1..256 are the individual bytes, and 257 and above are the merged
     //< words.
     $out: = List<|U8[]|>.new(arena)

@@ -1,9 +1,7 @@
 //< Attributes: where `#` attributes may stand and what each takes
-//<
 //< Each case below is compiled alone, as the file its head names.
 // ==== case attr_align_not_power_of_two
 //< The N of `#align(N)` being positive is not enough; it has to be a power of two
-//<
 //< **Let it through and it fails on the C compiler's side.** On a variable, the error points at a
 //< line of the generated C. So the reader cannot find the `.kspl` line that was written
 //< (docs/DESIGN-principles.md Principle 5).
@@ -18,7 +16,6 @@ fn main(): I32
   return s.v
 // ==== case attr_cfg_boolean_operator
 //< `#cfg(a && b)` is not accepted either
-//<
 //< Before, it gated on the first identifier alone and the remaining attribute expression fell
 //< straight into the generated C, becoming "a C error absent from the KSPL source".
 // EXPECT: '#cfg' takes exactly one flag name
@@ -30,7 +27,6 @@ fn main(): I32
   return combined()
 // ==== case attr_cfg_comparison
 //< `#cfg(sizeof(Sz) == 8)` is not accepted either
-//<
 //< `#cfg` drops before declarations are gathered, when no name or type is resolved, so a comparison
 //< has no material. The refusal names a destination: `##error(cond, msg)`, evaluated after the
 //< types are attached, takes a comparison (and sounds if it misses).
@@ -44,7 +40,6 @@ fn main(): I32
   return only_on_64bit()
 // ==== case attr_cfg_extern_block_dropped
 //< A `#cfg` put on an `extern` block drops the whole block
-//<
 //< The declarations inside need not be written one by one.
 //< The flag not standing, the names inside exist nowhere.
 // EXPECT: undefined path or identifier 'kspl_cfg_probe_a'
@@ -57,7 +52,6 @@ fn main(): I32
   return kspl_cfg_probe_a()
 // ==== case attr_cfg_extern_block_kept
 //< The opposite case
-//<
 //< Where the flag stands, the block's content stays as it is (get the argument count wrong and it
 //< is properly type-checked). Had it dropped, it would be a different diagnostic, "undefined".
 // ARGS: --define=cfg_probe_flag
@@ -70,7 +64,6 @@ fn main(): I32
   return kspl_cfg_probe_a(1, 2)
 // ==== case attr_cfg_logical_combination
 //< `#cfg`'s argument is only "one flag name" or "`!` and one flag name"
-//<
 //< There is no logical combination.
 //< Accept it in silence and `all(a, b)` is read as "a flag named `all`", so unless `all`
 //< is defined this declaration always vanishes. Whoever wrote it meaning AND gets no clue at all.
@@ -83,7 +76,6 @@ fn main(): I32
   return combined()
 // ==== case attr_fn_align_llvm_backend
 //< An `#align(N)` on a function is an error on the LLVM backend
-//<
 //< genc merely copies the expression into C as it stands, so the constant value is kept nowhere.
 //< The LLVM side needs a number and cannot emit one, so rather than dropping it in silence it is
 //< an error. An `#align(N)` on a struct is folded by sema, so it takes effect on both backends.
@@ -96,7 +88,6 @@ fn main(): I32
   return 0
 // ==== case attr_interrupt_llvm_backend
 //< `#interrupt` is implemented only on the C backend (LLVM IR has no portable counterpart)
-//<
 //< Whoever writes an attribute that works on one backend alone believes it is in effect. So it is
 //< an error, not silently ignored.
 // ARGS: --to=llvm
@@ -108,7 +99,6 @@ fn main(): I32
   return 0
 // ==== case attr_link_not_a_name
 //< `#link` takes one library name as `-l` does: not a flag, a file, a path, or two names
-//<
 //< The name reaches the link line as the one word `-l<name>`, and a build script's shell as a word
 //< (`$(cat prog.libs)`). A flag or a search path in the source is a link line for one machine only.
 //< The rule is `is_library_name` in `ksplc/base/ast_ext.kspl`.
@@ -151,12 +141,11 @@ fn main(): I32
   return 0
 // ==== case attr_noreturn_comes_back
 //< A `#noreturn` function is refused each way control comes back: `return`, `throw`, `!`, its end
-//<
 //< C trusts the attribute and only warns, and a caller compiled on the promise runs on into
 //< whatever follows the call. A function literal inside is a body of its own; the passing side ends.
-// EXPECT: attr_noreturn_comes_back.kspl:18:9: error: 'return' returns to the caller, but the function is declared '#noreturn'
-// EXPECT: attr_noreturn_comes_back.kspl:22:5: error: 'throw' returns to the caller
-// EXPECT: attr_noreturn_comes_back.kspl:27:11: error: '!' returns to the caller
+// EXPECT: attr_noreturn_comes_back.kspl:17:9: error: 'return' returns to the caller, but the function is declared '#noreturn'
+// EXPECT: attr_noreturn_comes_back.kspl:21:5: error: 'throw' returns to the caller
+// EXPECT: attr_noreturn_comes_back.kspl:26:11: error: '!' returns to the caller
 // EXPECT: function 'case_falls_off' is declared '#noreturn', but control may reach the end of its body
 // EXPECT: Finished with 4 error(s)
 import "std/sys"
@@ -200,27 +189,22 @@ fn main()
     ends(1)
 // ==== case attr_on_extern_struct
 //< No attribute (other than `#cfg`) can be written on an `extern` struct
-//<
-//< The generated C puts out only a forward declaration (`typedef struct X X;`). So neither an
-//< attribute that sets the layout nor a mark on the name has anywhere to go. Silently ignored,
-//< its writer goes on believing it is in effect.
+//< The generated C puts out only a forward declaration (`typedef struct X X;`). So an
+//< attribute that sets the layout has nowhere to go. Silently ignored, its writer goes on
+//< believing it is in effect.
 // EXPECT: attribute '#align' cannot be written on an 'extern' struct
 // EXPECT: attribute '#packed' cannot be written on an 'extern' struct
-// EXPECT: attribute '#deprecated' cannot be written on an 'extern' struct
 // EXPECT-NOT: [
 extern "C"
   #align(8)
   struct Aligned_c
   #packed
   struct Packed_c
-  #deprecated
-  struct Old_c
 
 fn main(): I32
   return 0
 // ==== case attr_on_fn
 //< One subject, with one function for each of its shapes
-//<
 //< The marks are every function's marks gathered at the head. The same mark written N times
 //< must match N places.
 // EXPECT: attributes '#inline' and '#noinline' contradict each other
@@ -254,7 +238,6 @@ fn main()
   case_export_priv()
 // ==== case attr_on_stmt_wrong
 //< The only attribute writable on a statement is `#cfg`
-//<
 //< Anything else has nobody to read it there, so it is an error as on a declaration.
 //< Caution: **The spelling check must take effect here too.** Normalisation eats `#cfg` and sema
 //< picks the rest up (elide_attributed_stmt in ksplc/parse/normalize.kspl), or they vanish.
@@ -276,7 +259,6 @@ fn main(): I32
   return 0
 // ==== case attr_section_needs_noinline
 //< A function's `#section` takes effect only when paired with `#noinline`
-//<
 //< An optimising C compiler expands the body into the caller, so the named section holds nothing
 //< (under `-Os` it vanishes). Let through silently, whoever placed it believes it is there. On
 //< bare metal, code meant to run while XIP is stopped still executes from Flash (Principle 5).
@@ -289,7 +271,6 @@ fn main(): I32
   return I32::burn(1)
 // ==== case attr_section_not_a_name
 //< `#section` takes one plain name of letters, digits, `_` and `.`
-//<
 //< The name reaches the C, the LLVM IR and the assembler's `.section` line as written. A quote, a
 //< `\`, a trigraph (`??/` under `-std=c99`) or a `;` would end it early, and what followed would be
 //< code the source never declared. The rule is `is_section_name` in `ksplc/base/ast_ext.kspl`.
@@ -320,7 +301,6 @@ fn main(): I32
   return g_trigraph + g_semicolon + g_empty + g_unquoted + g_two + g_fine
 // ==== case attr_wrong_target
 //< An attribute is accepted only at a position listed in its "target" field
-//<
 //< The table in chapter 10 of docs/SPEC-programming-language.md. An attribute at the wrong position has its
 //< spelling and name right, so letting it through in silence leaves no clue that "it is written
 //< yet nothing happens" (Principle 5).
@@ -328,7 +308,7 @@ fn main(): I32
 // EXPECT: attribute '#inline' does nothing here. It applies to functions
 // EXPECT: attribute '#packed' does nothing here. It applies to structs
 // EXPECT: attribute '#interrupt' does nothing here. It applies to functions
-// EXPECT: attribute '#deprecated' does nothing here
+// EXPECT: attribute '#export' does nothing here. It applies to functions, variables, and constants
 // EXPECT: attribute '#align' does nothing here. It applies to structs, functions, variables, and
 // constants
 // EXPECT: attribute '#link' does nothing here. It applies to 'extern' blocks
@@ -346,9 +326,8 @@ pub fn takes(p: I32): I32
 #interrupt
 pub const LIMIT: I32 = 4
 
-// A `typedef` does not appear inside an expression, so putting the deprecation mark on it leaves
-// nowhere for it to sound.
-#deprecated
+// A `typedef` makes no symbol, so there is no name for `#export` to keep.
+#export
 pub typedef Meters = I32
 
 #align(8)
@@ -364,3 +343,14 @@ pub fn cosine(x: F64): F64
 fn main(): I32
   io.out().s("unreachable\n")
   return 0
+// ==== case deprecated_is_unknown
+//< `#deprecated` is refused as any unknown attribute is
+//< There is no mark that keeps a replaced declaration usable with a warning. A writer who brings
+//< the habit from another language learns at once that the mark does nothing.
+// EXPECT: unknown attribute '#deprecated'
+#deprecated
+fn old_way(): I32
+  return 1
+
+fn main(): I32
+  return old_way()

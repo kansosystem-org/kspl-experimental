@@ -1,5 +1,4 @@
 //< What ksplc's suites rely on: the compiler they inspect, the std it reads, and their scratch
-//<
 //< **One ksplc runs a suite, which inspects another.** `make test-suites` gives every suite the
 //< compiler under inspection and its scratch directory first, and runs it with another ksplc.
 //< Built with the one inspected, a broken compiler and a failed check look the same. The checks
@@ -26,7 +25,6 @@ priv fn open_suite(chunk_size: Sz) //<
     suite_arena = Arena.new(chunk_size)
 
 fn begin(chunk_size: Sz): Arena$@ //< starts a suite, and returns the arena it allocates from
-    //<
     //< Caution: **Call it once, at the start of `main`, and do not free what it returns** —
     //< `finish` and `fatal` do. Every line carries the suite's name (`KANSO_SUITE`). **The paths
     //< are decided here**, before a case changes the environment they are read from.
@@ -59,7 +57,6 @@ fn begin(chunk_size: Sz): Arena$@ //< starts a suite, and returns the arena it a
 
 pub fn begin_at(chunk_size: Sz, compiler: U8[], std: U8[], place: U8[], cwd: U8[]): Arena$@ //<
     //< Starts a suite on paths its caller has settled, for a harness built on this one
-    //<
     //< Each path is absolute: the compiler under inspection, its std, the scratch place and where
     //< `run` starts a child. **The scratch place is used as it is**, so its caller keeps it clean.
     //< Caution: **Call it once, at the start of `main`, and do not free what it returns**, as at
@@ -75,7 +72,6 @@ fn more_args(): U8[][] //< the suite's arguments after the two paths, for it to 
     return more
 
 priv fn refuse_inside_package(dir: U8[]) //< stops if the scratch directory is inside a package
-    //<
     //< **A file under a folder whose `ksplc.cfg` names a package belongs to that package.** So a
     //< case's files there would compile under its `uses` and fail for another reason.
     //< Caution: **Ask the compiler under inspection** (`info package`, in that folder). Do not
@@ -100,7 +96,6 @@ priv fn end_suite()
         suite_arena = null
 
 pub fn finish(): I32 //< prints the `RESULT:` line and returns the verdict as the exit code
-    //<
     //< **`return finish()` from `main`.** The suite's arena is freed here (`begin`'s).
     code: = verdict.finish()
     end_suite()
@@ -113,7 +108,6 @@ pub fn fatal(msg: U8[]): I32 //< ends a suite that cannot go on (its input files
 
 pub fn require_or_skip( //<
     //< a check this machine lacks a tool for: a failure where required, else a SKIP
-    //<
     //< **Required where the switch reads `1`**, as the repository sets it where CI's image holds
     //< every tool (`REQUIRE_SWITCHES` in `mk/test.mk`). **The failure says how to run without it**,
     //< so a machine lacking the tool is not left with a red it cannot act on.
@@ -140,7 +134,6 @@ pub fn ksplc_exe(): U8[] //< the compiler under inspection, from the root
 priv $std_path: U8[] = "" //< `std_dir`'s answer, set as the suite begins
 
 pub fn std_dir(): U8[] //< the std given to the compiler under inspection (`--std-dir=`)
-    //<
     //< Caution: **Pass it explicitly on every run** (`ksplc_argv`): a case whose working directory
     //< is a scratch directory would otherwise look for a `std` beside it.
     return std_path
@@ -160,7 +153,6 @@ priv fn settle_std_dir(): U8[] //<
 
 pub fn ksplc_argv(args: U8[][]): U8[][] //<
     //< the compiler under inspection's argv, `--std-dir=` first
-    //<
     //< For a `subproc.Job` run side by side; for one run, call `ksplc`.
     $argv: = List<|U8[]|>.new(suite_arena)
     argv.push(under)
@@ -173,7 +165,6 @@ pub fn ksplc(args: U8[][]): verdict.Run_out //< runs the compiler under inspecti
     return run(ksplc_argv(args))
 
 pub fn ksplc_bare(args: U8[][]): verdict.Run_out //< runs it once without `--std-dir=` in front
-    //<
     //< Caution: **Call `fmt`, `clean` and `emit-runtime` with this one.** They read no standard
     //< library and so take no `--std-dir`, which they reject.
     $argv: = List<|U8[]|>.new(suite_arena)
@@ -182,10 +173,9 @@ pub fn ksplc_bare(args: U8[][]): verdict.Run_out //< runs it once without `--std
         argv.push(a)
     return run(argv.slice())
 
-pub fn read_generated(path: U8[]): U8[] //< the text the compiler wrote, its newlines made LF
-    //<
-    //< Text mode on Windows writes each `\n` as `\r\n`.
-    body: = io.read_file(path) catch
+pub fn read_generated(path: U8[]): U8[] //< the text a run wrote, its newlines made LF
+    //< Empty where the file cannot be read. Text mode on Windows writes each `\n` as `\r\n`.
+    body: = io.read_file(path, null) catch
         return ""
     defer dealloc(Void$@::body.ptr)
     return body.replace("\r\n", "\n", suite_arena)
@@ -201,7 +191,6 @@ pub fn cc(): U8[] //< the C compiler: `CC` where it is set, and clang otherwise,
     return "clang"
 
 fn cc_target(): U8[] //< the C compiler's target triple (`cc -dumpmachine`), empty where unknown
-    //<
     //< It is for a case whose subject differs by target.
     //< Caution: **Choose no link flag by it** — ask the compiler for those (`harness_build`).
     r: = run(U8[][]::{ cc(), "-dumpmachine" })
@@ -212,12 +201,10 @@ fn cc_target(): U8[] //< the C compiler's target triple (`cc -dumpmachine`), emp
 // ==========================================
 
 pub fn tmp_dir(): U8[] //< this run's scratch directory
-    //<
     //< `begin`'s is a fresh folder inside the place it was given; `begin_at`'s is the place itself.
     return scratch
 
 pub fn sandbox(name: U8[]): U8[] //< a directory of its own for one case, made fresh
-    //<
     //< **A suite that cannot make one stops** (`fatal`): the scratch place is broken, so every case
     //< after it would fail for the same reason. Nothing here removes it: whoever hands over the
     //< scratch place empties it (for `begin`, the Makefile, before the next run).
@@ -232,7 +219,6 @@ pub fn sandbox(name: U8[]): U8[] //< a directory of its own for one case, made f
 // ==========================================
 
 pub fn run(argv: U8[][]): verdict.Run_out //< runs argv where the suite starts children
-    //<
     //< That is the working directory the suite began in, or the folder `begin_at` names.
     return run_capped(argv, start_dir, verdict.DEFAULT_TIMEOUT_MS)
 
@@ -244,7 +230,6 @@ pub fn run_in(argv: U8[][], cwd: U8[]): verdict.Run_out //< runs it in the given
 
 pub fn run_capped(argv: U8[][], cwd: U8[], timeout_ms: I32): verdict.Run_out //<
     //< Runs it with a given timeout
-    //<
     //< **Only a case whose failure mode is not stopping uses this**
     //< (`verdict.DEFAULT_TIMEOUT_MS`'s).
     return verdict.run_child(argv, cwd, timeout_ms, suite_arena)

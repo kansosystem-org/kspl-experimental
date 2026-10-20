@@ -142,7 +142,7 @@ function kspageForm(ui) {
       { id: id, name: name, picks: () => ALIGNS,
         now: () => {
           const at = paraAt();
-          return at < 0 ? "" : app.stylePara(at).align;
+          return at < 0 ? "" : app.styleData(at).align || "left";
         },
         run: (value) => {
           const at = paraAt();
@@ -150,9 +150,9 @@ function kspageForm(ui) {
             deny("The alignment lands on a paragraph style. Click on some text");
             return;
           }
-          const spec = Object.assign({}, app.stylePara(at));
-          spec.align = value;
-          tell(app.setStylePara(at, spec), "", "The alignment cannot be changed");
+          const data = app.styleData(at);
+          data.align = value;
+          tell(app.setStyleData(at, data), "", "The alignment cannot be changed");
           app.focus();
         } })),
   };
@@ -208,13 +208,13 @@ function kspageForm(ui) {
     paintStyles(0);
   };
 
-  // Shows the chosen style's look in the fields. **Empty means "unset"**. **Only the colors cannot
-  // be empty** (`<input type="color">`), so the checkbox beside says whether one is used. The
-  // choices inside a panel.
+  // Shows the chosen style in the fields. **Empty means "unset"**. **Only the colors cannot be
+  // empty** (`<input type="color">`), so the checkbox beside says whether one is used. The choices
+  // inside a panel.
   // Caution: **Do not go back to a `<select>`.** Groups down to the second level and a field on
   // the third would show one "choose one" in two forms. A group in a panel does not close on a
   // click (a `details` stays open; the header of `fly.js`). **The list lives here** (copied into
-  // `page.html`, it would be two). **Its values match the core's** (`menu_pairs` in
+  // `page.html`, it would be two). **Its values are the core's variant names** (`menu_pairs` in
   // `tests/support/conventions_bound.kspl` checks them).
   const ITALIC_PICKS = [["", "Italic as the parent's"], ["1", "Italic"], ["0", "Not italic"]];
   const DATED_PICKS = [["none", "As a number"], ["plain", "2026-08-18"],
@@ -232,14 +232,6 @@ function kspageForm(ui) {
     ["0", "Outside the chapter row (not in the contents or the numbering)"]];
   const COLLECT_PICKS = [["none", "Do not gather"], ["contents", "Table of contents"],
     ["notes", "Footnote list"], ["bars", "Bar chart"], ["lines", "Line chart"]];
-  // **The same list as `command.js`'s `SHAPE_PICKS`** (the shape inserted there, the style's here);
-  // both are checked against the core's list.
-  const STYLE_SHAPE_PICKS = [["box", "Rectangle"], ["round_box", "Rounded rectangle"],
-    ["ellipse", "Ellipse"], ["triangle", "Triangle"], ["diamond", "Diamond"],
-    ["fall_line", "Line, down-right"], ["rise_line", "Line, up-right"],
-    ["fall_arrow", "Arrow, down-right"], ["rise_arrow", "Arrow, up-right"],
-    ["fall_arrow_back", "Arrow, down-right reversed"],
-    ["rise_arrow_back", "Arrow, up-right reversed"]];
   const WHEN_PICKS = [["none", "No condition"], ["above", "Greater than"],
     ["below", "Less than"], ["equal", "Equal to"]];
   // Builds one group inside a panel (`fly.js` holds the value).
@@ -269,8 +261,7 @@ function kspageForm(ui) {
   const leadBox = document.getElementById("style-lead");
   const indentBox = document.getElementById("style-indent");
   const wrapBox = document.getElementById("style-wrap");
-  // The page break, **separate from the paragraph-settings entry point** (not grown to ten
-  // arguments).
+  // The page break before the paragraph.
   const breaksBox = document.getElementById("style-breaks");
   // The columns. **Empty and 1 both mean no columns** (the width comes from the count and the gap).
   const columnsBox = document.getElementById("style-columns");
@@ -305,60 +296,86 @@ function kspageForm(ui) {
   // nothing).
   const edgeBox = document.getElementById("style-edge");
   const edgeColor = document.getElementById("style-edge-color");
-  const shapeBox = panelFly("style-shape", "The shape's form", STYLE_SHAPE_PICKS);
+  // The shape inserted and the style's shape share one list (`command.js`'s `SHAPE_PICKS`).
+  const shapeBox = panelFly("style-shape", "The shape's form", ui.shapePicks);
   const hasFill = document.getElementById("style-has-fill");
   const fillBox = document.getElementById("style-fill");
+  // **The fields are read from and written into the style's saved text** (`app.styleData`), by
+  // its field names (`kspage/share/store.kspl`'s `style_val`). **A field left out is unset or
+  // holds its default.**
+  const textOf = (v) => (v === undefined ? "" : String(v));
+  const triOf = (v) => (v === undefined ? "" : (v ? "1" : "0"));
+  // Sets one field, or leaves it out where the value is `undefined` (unset).
+  const put = (data, key, value) => {
+    if (value === undefined) {
+      delete data[key];
+    } else {
+      data[key] = value;
+    }
+  };
+  const numOf = (box) => (box.value === "" ? undefined : Number(box.value));
+  // A length that cannot be below 0 (a column gap, the inner space, a line's thickness): **below
+  // 0 is 0**, or the band would be smaller than its contents.
+  const lengthOf = (box) => (box.value === "" ? undefined : Math.max(Number(box.value), 0));
+  // The fields that hold a marker's texts, by its kind: the text after (or the mark itself), then
+  // the text before (or the separator) for a kind with two. **Which field is present gives the
+  // kind**, read in `MARK_PICKS`' order as the core reads it.
+  const MARK_FIELDS = { bullet: ["bullet"], number: ["number_after"],
+    serial: ["serial_after", "serial_before"], outline: ["outline_after", "outline_sep"] };
+  // What a style collects: **the field named after the kind is true** (none: no field).
+  const COLLECTS = COLLECT_PICKS.map((one) => one[0]).filter((kind) => kind !== "none");
+  // The condition: **the field `when_<how>` holds the number compared with** (none: no field).
+  const WHENS = WHEN_PICKS.map((one) => one[0]).filter((how) => how !== "none");
   function showFont() {
     const at = Number(pick.now());
     if (!(at >= 0)) return;
-    const spec = app.styleLook(at);
-    family.value = spec.family === null ? "" : spec.family;
-    sizeBox.value = spec.sizePx === null ? "" : spec.sizePx;
-    weightBox.value = spec.weight === null ? "" : spec.weight;
-    italicBox.set(spec.italic === null ? "" : (spec.italic ? "1" : "0"));
-    hasColor.checked = spec.color !== null;
-    hasBack.checked = spec.background !== null;
+    const s = app.styleData(at);
+    if (s === null) return;
+    family.value = textOf(s.family);
+    sizeBox.value = textOf(s.size_px);
+    weightBox.value = textOf(s.weight);
+    italicBox.set(triOf(s.italic));
+    hasColor.checked = s.color !== undefined;
+    hasBack.checked = s.background !== undefined;
     // Caution: With no setting, leave the color swatch alone, or the color chosen earlier is lost.
-    if (spec.color !== null) colorBox.value = spec.color;
-    if (spec.background !== null) backBox.value = spec.background;
-    const para = app.stylePara(at);
-    alignBox.set(para.align);
-    leadBox.value = para.spacing === 0 ? "" : para.spacing;
-    indentBox.value = para.indent === 0 ? "" : para.indent;
-    wrapBox.checked = para.wrap;
-    breaksBox.checked = app.styleBreaks(at);
-    columnsBox.value = para.columns > 1 ? para.columns : "";
-    columnGap.value = para.columnGap === 0 ? "" : para.columnGap;
-    padBox.value = para.pad === 0 ? "" : para.pad;
-    const num = app.styleNumber(at);
-    grouped.checked = num.grouped;
-    percent.checked = num.percent;
-    hasPlaces.checked = num.places !== null;
-    placesBox.value = num.places === null ? "" : num.places;
-    prefixBox.value = num.prefix;
-    suffixBox.value = num.suffix;
-    datedBox.set(num.dated);
-    const decor = app.styleDecor(at);
-    underBox.set(decor.underline === null ? "" : (decor.underline ? "1" : "0"));
-    strikeBox.set(decor.strike === null ? "" : (decor.strike ? "1" : "0"));
-    const mark = app.styleMark(at);
-    markBox.set(mark.kind);
-    markBefore.value = mark.before;
-    markText.value = mark.text;
-    const heading = app.styleOutline(at);
-    outlineBox.value = heading.level === 0 ? "" : heading.level;
-    chaptersBox.set(app.styleInChapters(at) ? "1" : "0");
-    collectBox.set(heading.collect);
-    const when = app.styleWhen(at);
-    whenBox.set(when.how);
-    whenThan.value = when.how === "none" ? "" : when.than;
-    whenThen.set(when.then);
-    const edge = app.styleEdge(at);
-    edgeBox.value = edge.width === 0 ? "" : edge.width;
-    edgeColor.value = edge.color;
-    hasFill.checked = edge.fill !== null;
-    if (edge.fill !== null) fillBox.value = edge.fill;
-    shapeBox.set(edge.shape);
+    if (s.color !== undefined) colorBox.value = s.color;
+    if (s.background !== undefined) backBox.value = s.background;
+    alignBox.set(s.align || "left");
+    leadBox.value = textOf(s.line_spacing);
+    indentBox.value = textOf(s.indent);
+    wrapBox.checked = s.wrap !== false;
+    breaksBox.checked = s.break_before === true;
+    columnsBox.value = s.columns > 1 ? s.columns : "";
+    columnGap.value = textOf(s.column_gap);
+    padBox.value = textOf(s.pad);
+    grouped.checked = s.grouped === true;
+    percent.checked = s.percent === true;
+    hasPlaces.checked = s.places !== undefined;
+    placesBox.value = textOf(s.places);
+    prefixBox.value = textOf(s.prefix);
+    suffixBox.value = textOf(s.suffix);
+    datedBox.set(s.dated || "none");
+    underBox.set(triOf(s.underline));
+    strikeBox.set(triOf(s.strike));
+    const mark = MARK_PICKS.map((one) => one[0])
+      .find((kind) => kind in MARK_FIELDS && s[MARK_FIELDS[kind][0]] !== undefined) || "none";
+    const fields = MARK_FIELDS[mark] || [];
+    markBox.set(mark);
+    markText.value = fields.length > 0 ? textOf(s[fields[0]]) : "";
+    markBefore.value = fields.length > 1 ? textOf(s[fields[1]]) : "";
+    outlineBox.value = s.outline > 0 ? s.outline : "";
+    chaptersBox.set(s.in_chapters === false ? "0" : "1");
+    collectBox.set(COLLECTS.find((kind) => s[kind] === true) || "none");
+    const how = WHENS.find((one) => s[`when_${one}`] !== undefined) || "none";
+    whenBox.set(how);
+    whenThan.value = how === "none" ? "" : textOf(s[`when_${how}`]);
+    whenThen.set(textOf(s.when_then));
+    edgeBox.value = s.rule_width > 0 ? s.rule_width : "";
+    // As for the text's colors: with no line, the swatch keeps the color chosen earlier.
+    if (s.rule_color !== undefined) edgeColor.value = s.rule_color;
+    hasFill.checked = s.fill !== undefined;
+    if (s.fill !== undefined) fillBox.value = s.fill;
+    shapeBox.set(s.shape || "box");
   }
   // Choosing a color checks the use-it box too (otherwise the choice silently does nothing).
   colorBox.addEventListener("input", () => { hasColor.checked = true; });
@@ -401,71 +418,64 @@ function kspageForm(ui) {
     app.focus();
   });
 
-  // **Replacing happens only on a click** (the reason is in the header).
+  // **Replacing happens only on a click** (the reason is in the header), **as one undo step**.
+  // Caution: **Start from the style read** — a field with no box here (the space before and after,
+  // a slide's size, the next style) would otherwise be dropped.
   document.getElementById("style-apply").addEventListener("click", () => {
     const at = Number(pick.now());
-    // Caution: **Carry the current space before and after over** — they have no field, so 0 would
-    // delete them.
-    const was = app.stylePara(at);
-    const num = (box) => (box.value === "" ? null : Number(box.value));
-    const done = app.setStyleLook(at, {
-      family: family.value === "" ? null : family.value,
-      sizePx: num(sizeBox),
-      weight: num(weightBox),
-      italic: italicBox.now() === "" ? null : italicBox.now() === "1",
-      color: hasColor.checked ? colorBox.value : null,
-      background: hasBack.checked ? backBox.value : null,
-    });
-    const laid = app.setStylePara(at, {
-      align: alignBox.now(),
-      spacing: leadBox.value === "" ? 0 : Number(leadBox.value),
-      spaceBefore: was.spaceBefore,
-      spaceAfter: was.spaceAfter,
-      indent: indentBox.value === "" ? 0 : Number(indentBox.value),
-      wrap: wrapBox.checked,
-      columns: columnsBox.value === "" ? 0 : Number(columnsBox.value),
-      columnGap: columnGap.value === "" ? 0 : Number(columnGap.value),
-      pad: padBox.value === "" ? 0 : Number(padBox.value),
-    });
-    app.setStyleBreaks(at, breaksBox.checked);
-    const shown = app.setStyleNumber(at, {
-      places: hasPlaces.checked && placesBox.value !== "" ? Number(placesBox.value) : null,
-      grouped: grouped.checked,
-      percent: percent.checked,
-      prefix: prefixBox.value,
-      suffix: suffixBox.value,
-      dated: datedBox.now(),
-    });
-    const lined = app.setStyleDecor(at, {
-      underline: underBox.now() === "" ? null : underBox.now() === "1",
-      strike: strikeBox.now() === "" ? null : strikeBox.now() === "1",
-    });
-    const marked = app.setStyleMark(at, {
-      kind: markBox.now(),
-      before: markBefore.value,
-      text: markText.value,
-    });
-    const edged = app.setStyleEdge(at, {
-      width: edgeBox.value === "" ? 0 : Number(edgeBox.value),
-      color: edgeColor.value,
-      fill: hasFill.checked ? fillBox.value : null,
-      shape: shapeBox.now(),
-    });
-    const outlined = app.setStyleOutline(at, {
-      level: outlineBox.value === "" ? 0 : Number(outlineBox.value),
-      collect: collectBox.now(),
-    });
-    // **A separate entry point** (an added argument lets a caller's wrong order pass the type check
-    // — `face_edit.kspl`'s `kspage_web_style_breaks`).
-    const chaptered = app.setStyleInChapters(at, chaptersBox.now() === "1");
-    const whened = app.setStyleWhen(at, {
-      how: whenBox.now(),
-      than: whenThan.value === "" ? 0 : Number(whenThan.value),
-      then: whenThen.now(),
-    });
-    const all =
-      done && shown && laid && edged && marked && lined && outlined && chaptered && whened;
-    tell(all, "Changed the style", "This style cannot be changed");
+    const s = app.styleData(at);
+    if (s === null) {
+      deny("This style cannot be changed");
+      app.focus();
+      return;
+    }
+    put(s, "family", family.value === "" ? undefined : family.value);
+    put(s, "size_px", numOf(sizeBox));
+    put(s, "weight", numOf(weightBox));
+    put(s, "italic", italicBox.now() === "" ? undefined : italicBox.now() === "1");
+    put(s, "color", hasColor.checked ? colorBox.value : undefined);
+    put(s, "background", hasBack.checked ? backBox.value : undefined);
+    put(s, "align", alignBox.now());
+    put(s, "line_spacing", numOf(leadBox));
+    put(s, "indent", numOf(indentBox));
+    put(s, "wrap", wrapBox.checked ? undefined : false);
+    put(s, "break_before", breaksBox.checked ? true : undefined);
+    put(s, "columns", numOf(columnsBox));
+    put(s, "column_gap", lengthOf(columnGap));
+    put(s, "pad", lengthOf(padBox));
+    put(s, "places", hasPlaces.checked ? numOf(placesBox) : undefined);
+    put(s, "grouped", grouped.checked ? true : undefined);
+    put(s, "percent", percent.checked ? true : undefined);
+    put(s, "prefix", prefixBox.value === "" ? undefined : prefixBox.value);
+    put(s, "suffix", suffixBox.value === "" ? undefined : suffixBox.value);
+    put(s, "dated", datedBox.now() === "none" ? undefined : datedBox.now());
+    put(s, "underline", underBox.now() === "" ? undefined : underBox.now() === "1");
+    put(s, "strike", strikeBox.now() === "" ? undefined : strikeBox.now() === "1");
+    // Caution: **Clear every kind's fields first** (the first present gives the kind). For a
+    // kind with two texts, **write the text before too** (left out, "Figure " or the separator is
+    // lost and the number stands alone).
+    for (const fields of Object.values(MARK_FIELDS)) {
+      for (const key of fields) delete s[key];
+    }
+    const fields = MARK_FIELDS[markBox.now()] || [];
+    if (fields.length > 0) s[fields[0]] = markText.value;
+    if (fields.length > 1) s[fields[1]] = markBefore.value;
+    const width = lengthOf(edgeBox);
+    put(s, "rule_width", width > 0 ? width : undefined);
+    put(s, "rule_color", edgeColor.value);
+    put(s, "fill", hasFill.checked ? fillBox.value : undefined);
+    put(s, "shape", shapeBox.now());
+    put(s, "outline", numOf(outlineBox));
+    put(s, "in_chapters", chaptersBox.now() === "1" ? undefined : false);
+    for (const kind of COLLECTS) delete s[kind];
+    if (COLLECTS.includes(collectBox.now())) s[collectBox.now()] = true;
+    for (const one of WHENS) delete s[`when_${one}`];
+    delete s.when_then;
+    if (WHENS.includes(whenBox.now())) {
+      s[`when_${whenBox.now()}`] = whenThan.value === "" ? 0 : Number(whenThan.value);
+      s.when_then = whenThen.now();
+    }
+    tell(app.setStyleData(at, s), "Changed the style", "This style cannot be changed");
     app.focus();
   });
   // Creates a style. **Where the name exists it creates none** (a second could never be looked up).

@@ -1,5 +1,4 @@
 //< Log lines that carry a level, so a run can keep only the lines serious enough to matter
-//<
 //< **It imports nothing.** The destination is a `Writer` and nothing else is used. So the same
 //< call works on a host and on a microcontroller with no libc. `std/io`'s `out()` is a
 //< `Writer`, and so is a device console's line buffer. **A line below the threshold is never
@@ -12,7 +11,6 @@
 // `std/docs/DESIGN-core.md`.
 // ==========================================
 pub enum Level //< how serious a line is, and so whether it is emitted at all
-    //<
     //< Most serious first. **These are the four words of the diagnostic ladder** (the ladder in
     //< `../docs/SPEC-programming-language.md`), so the product uses one vocabulary for severity.
     //< **The meaning still differs**: here a level decides whether the line is emitted at all.
@@ -35,14 +33,12 @@ impl Level
 
     priv fn pressing(r: Self): Bool //<
         //< Whether a line at this level is flushed once it ends, instead of waiting in a buffer
-        //<
         //< **Only the two most serious levels.** A killed run loses its buffered tail, which is
         //< where the failure was reported ("Error and warning lines are flushed at once" in
         //< `std/docs/DESIGN-core.md`).
         return r.rank() <= Level.warning.rank()
 
     priv fn word(r: Self): U8[] //< the mark written on the line
-        //<
         //< **One letter, so the column has the same width on every row**, for the eye and for a
         //< filter.
         switch r
@@ -56,7 +52,6 @@ impl Level
             return "H"
 
 priv fn put_num(w: Writer, v: Sz) //< writes a number as decimal
-    //<
     //< Caution: **Do not use `std/strfmt`'s `Formattable` numbers here**: this file promises to
     //< import nothing.
     if v >= 10
@@ -64,7 +59,6 @@ priv fn put_num(w: Writer, v: Sz) //< writes a number as decimal
     w.c('0' + U8::(v % 10))
 
 priv struct Pushing //< the writer a serious line's body goes through, passing each piece on at once
-    //<
     //< **Nothing tells the logger when a body written through `at` ends.** So the line cannot be
     //< pushed at its close as `say`'s is. Each piece goes out as it is written instead.
     dest: Writer
@@ -83,7 +77,6 @@ impl Pushing: Writer //< so `at` can hand it out as a serious line's destination
         return r
 
 pub struct Log //< a destination, the lowest level it keeps, and the fields written before a body
-    //<
     //< Caution: **This logger owns its destination.** Anything else written there lands in the
     //< middle of a line, because a line ends only when the next one starts (`at` below). This file
     //< cannot enforce that, so it is stated, not promised (Principle 8 in
@@ -100,7 +93,6 @@ pub struct Log //< a destination, the lowest level it keeps, and the fields writ
 
 impl Log
     pub fn new( //< creates a logger
-        //<
         //< **A body is written unquoted.** **Whether the place is written is chosen here, not per
         //< line**, so the columns do not shift ("The caller's position is a default argument" in
         //< `std/docs/DESIGN-core.md`).
@@ -132,7 +124,6 @@ impl Log
         return .some(r.dest)
 
     pub fn say( //< writes one whole line
-        //<
         //< **It takes text that is already built**; anything that carries a value goes through
         //< `at`.
         //< Caution: **In a wrapper of your own, do not leave the place to its default.**
@@ -151,7 +142,6 @@ impl Log
         r.end_line()
 
     pub fn done(r: Self$@) //< ends the open line, if there is one, and flushes
-        //<
         //< **Call it before the program exits**, or the last line is written without its line end.
         r.end_line()
         r.dest.flush()
@@ -177,7 +167,6 @@ impl Log
         r.hurry = lv.pressing()
 
     priv fn end_line(r: Self$@) //< ends the open line
-        //<
         //< It does nothing when no line is open, so calling it twice is safe.
         //< Caution: **A serious line is flushed here, not by the caller.** Otherwise an `error` on
         //< a new path waits unseen in a buffer and is lost with the tail (Principle 8 in

@@ -1,5 +1,4 @@
 //< Builds the thunks and vtables for a trait value
-//<
 //< An `x as I` becomes the pair of "the subject's address" and "that type's vtable for I".
 //< Caution: **Do not copy how the key is built.** genc and genllvm print the same
 //< `kspl_vtable_impl_<conforming type>_<trait>`, so if the base-type stripping drifts, only the
@@ -21,7 +20,6 @@ import "std/ds" { List, Map }
 
 priv fn vtable_key(c: Sema_ctx$@, target_id: I32, trait_id: I32): U8[] //<
     //< The vtable key an upcast names
-    //<
     //< It is built from the same pair as the `kspl_vtable_impl_<conforming type>_<trait>` printed
     //< by emit_upcast_expr in gen/c/expr.kspl and by gen/llvm/expr_agg.kspl.
     //< Caution: **Take the base type with receiver_base_id.** The upcast's side comes from the
@@ -34,7 +32,6 @@ priv fn vtable_key(c: Sema_ctx$@, target_id: I32, trait_id: I32): U8[] //<
 
 priv fn collect_upcast_keys(r: Ast_node$@, c: Sema_ctx$@, out: Map<|U8[], Bool|>$@) //<
     //< It collects the (conforming type, trait) pairs the upcasts in this tree need
-    //<
     //< It limits the vtable constants to **the pairs needed, and no others**. Otherwise a
     //< conformance that grows per instance (`impl<|T|> List<|T|>: Index`) would keep producing
     //< constants and thunks nobody upcasts to.
@@ -69,7 +66,6 @@ fn generate_trait_thunks(root: Ast_node$@, c: Sema_ctx$@)
         root.add_child(new_decl)
 
 priv struct Thunk_parts //< the result of building a thunk's signature
-    //<
     //< It holds p0 and the other parameter nodes, for the body's def_node links.
     thunk_fn: Ast_node$@
     p0: Ast_node$@
@@ -104,7 +100,6 @@ priv fn build_thunk_signature(c: Sema_ctx$@, req_m: Sema_symbol$@, perm_thunk_na
 priv fn resolve_impl_target(c: Sema_ctx$@, req_m: Sema_symbol$@, t_id: I32, clean_t_id: I32,
     t_mangled: U8[]): Impl_target //<
         //< Step 2: the target type's implementing method: call name, receiver passing, return type
-        //<
         //< Where none is found, the call name is the default mangled name.
     m_name: = req_m.name
     $res: = Impl_target::{ .name = "", .is_self_ptr = true, .ret_id = 0, .def_node = req_m.node }
@@ -132,7 +127,6 @@ priv fn resolve_impl_target(c: Sema_ctx$@, req_m: Sema_symbol$@, t_id: I32, clea
 priv fn build_thunk_body(c: Sema_ctx$@, parts: Thunk_parts, target: Impl_target,
     req_m: Sema_symbol$@, i_id: I32, clean_t_id: I32, loc: base_ast.Loc): Ast_node$@ //<
         //< Step 3: it builds the thunk body `{ return <impl>((T@)r, ...); }`
-        //<
         //< A return of the trait itself is upcast. A Void one is a statement plus an empty return.
     block: = Ast_node.build_block(loc)
 
@@ -211,11 +205,8 @@ priv fn emit_trait_vtable(c: Sema_ctx$@, t_id: I32, i_id: I32, loc: base_ast.Loc
     if !needed.get(vtable_key(c, clean_t_id, i_id)).unwrap_or(false)
         return
 
-    $trait_def: sema_type_def.Trait_def$@ = null
-    switch c.env.get_trait_def(c.env.get_str(i_id))
-    case .some(id)
-        trait_def = id
-    case .none
+    trait_def: sema_type_def.Trait_def$@ =
+        c.env.get_trait_def(c.env.get_str(i_id)) catch
         return
 
     t_mangled: = base_core.arena.dup_str(c.mangled_in_scratch(clean_t_id))

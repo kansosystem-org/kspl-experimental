@@ -1,320 +1,23 @@
-//< How KSPL's own source is written
-//<
+//< How the repository's own checks and messages are written
 //< It is not a suite of its own; it is a part of conventions.
 //<
-//< **Each of these builds either way** (a payload nobody uses, clauses that could be folded
-//< together), so the check reads the text (Principle 5 turned round). The canonical source is
-//< `../../docs/SPEC-programming-language.md`.
+//< It finds a walk's verdict that gives no fix, and a compiler message that shows a type's
+//< internal name. **The language's own rules on how source is written are `ksplc`'s lints**, which
+//< `make lint` runs ("Static analysis and the linter" in `../../ksplc/docs/SPEC-tools.md`).
 //< `tests/suite/conventions_test.kspl` checks how a document is written, and
 //< `tests/support/conventions_match.kspl` checks where "two things written separately drift
 //< silently".
 import "std/chars"
-import "std/ds" { List }
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
 import "std/verdict"
 import "tests/support/conventions_scan" as scan + { Sample }
 import "tests/support/harness"
-import "tests/support/harness_text" as htext
-
-priv fn empty_case_payloads(line: U8[], arena: Arena$@): List<|U8[]|>$@ //<
-    //< Picks "a payload written on a `case` with an empty body" out of one line
-    //<
-    //< Caution: **Keep the judging in this one place**, where the table showing it can fire reaches
-    //< it. A line may hold two clauses, so it returns the text picked up, not a yes or no.
-    found: = arena.create(List<|U8[]|>.new(arena))
-    // **Strings and comments are dropped first**, so this clause's own explanation is not hit.
-    code: = scan.strip_code(line, arena)
-    $at: Sz = 0
-    for at < code.len
-        if hit: = code.sub(at, code.len - at).find_str("case ")
-            head: = at + hit + 5
-            // The pattern runs to the first `{`.
-            if open: = code.sub(head, code.len - head).find_str("{")
-                pat: = code.sub(head, open)
-                shut: = head + open + 1
-                // Only a clause with an empty body is checked (where a `{}` follows).
-                if shut < code.len && code[shut] == '}' && pat.find_str("(").is_some()
-                    found.push(arena.dup_str(pat.trim_spaces()))
-                at = shut
-            else
-                break
-        else
-            break
-    return found
-
-priv fn check_empty_case_payload(arena: Arena$@) //<
-    //< A payload's brackets are not written on an empty `case`
-    //<
-    //< The rule is "Write the payload only when it is needed" in
-    //< `../../docs/SPEC-programming-language.md`.
-    //<
-    //< **List discarded names and the reader sees only "something is extracted".** When nothing is
-    //< used inside, `.variant` is enough, and the exhaustiveness check still works.
-    $seen: Sz = 0
-    $bad: = List<|U8[]|>.new(arena)
-    for rel in harness.tracked_matching(U8[][]::scan.KSPL_SPECS)
-        $i: Sz = 0
-        for line in harness.read_under_root(rel).lines(arena)
-            i += 1
-            seen += 1
-            for pat in empty_case_payloads(line, arena)
-                bad
-                    .push(arena.text().s(rel).s(":\{i\}: a payload is written on an empty case (")
-                    .s(pat).s(")").take())
-    verdict.check_list("no payload is written on an empty case", seen, "lines", bad@,
-        "write `.variant` where it is not used inside (branches shaped apart fold with a comma)")
-
-// The samples for the judgment of an empty `case`.
-// Caution: **Check the count picked up**: a yes or no cannot notice one of two clauses missed.
-// **Include a clause with a body, and cases in a comment and a string** (the side that must not
-// hit).
-priv const PAYLOAD_SAMPLES: U8[][_] = ::{ "    case .add(a, b) {}", "    case .add {}",
-    "    case .add(a) { work(); }", "    case .add(a) {} case .sub(b) {}",
-    "    // do not write case .add(a) {}", "    s: = \"case .add(a) {}\";", "    default {}" }
-priv const PAYLOAD_WANT: Sz[_] = ::{ 1, 0, 0, 2, 0, 0, 0 } //<
-    //< The expected count for each sample
-    //<
-    //< In order: 1 / 0 (no payload) / 0 (it has a body) / 2 / 0 (a comment) / 0 (a string) / 0
-    //< (`default` is not checked)
-
-priv fn check_payload_fires(arena: Arena$@)
-    $bad: = List<|U8[]|>.new(arena)
-    for i in Range.asc(PAYLOAD_SAMPLES.len)
-        got: = empty_case_payloads(PAYLOAD_SAMPLES[i], arena).len
-        if got != PAYLOAD_WANT[i]
-            bad
-                .push(arena.text().s("took \{got\} out of \"").s(PAYLOAD_SAMPLES[i])
-                .s("\" (it should be \{PAYLOAD_WANT[i]\})").take())
-    verdict.check_list("the judgment of an empty case can fire", PAYLOAD_SAMPLES.len, "samples",
-        bad@, "the judgment misreads its own samples: mend the judgment, not the table")
-
-// ==========================================
-// A function of one enum is a method in that enum's impl ("A function of one enum is its method"
-// in `../../docs/DESIGN-principles.md`)
-// ==========================================
-
-priv fn after_visibility(line: U8[]): U8[] //< the line with a leading `pub ` or `priv ` taken off
-    if line.starts_with("pub ")
-        return line.sub_from(4)
-    if line.starts_with("priv ")
-        return line.sub_from(5)
-    return line
-
-priv fn name_at(t: U8[], at: Sz): U8[] //< the identifier starting at `at`, or empty
-    $e: = at
-    for e < t.len && (t[e].is_alnum() || t[e] == '_')
-        e += 1
-    return t.sub(at, e - at)
-
-priv fn skip_blanks(t: U8[], at: Sz): Sz
-    $i: = at
-    for i < t.len && (t[i] == ' ' || t[i] == '\t')
-        i += 1
-    return i
-
-priv fn enum_declared(line: U8[]): U8[] //< the name a top-level `enum` line declares, or empty
-    t: = after_visibility(line)
-    return name_at(t, 5) if t.starts_with("enum ") else ""
-
-priv fn enum_taken_first(line: U8[], enums: List<|U8[]|>@): U8[] //<
-    //< The enum a top-level function takes as its first parameter, where `enums` names it
-    //<
-    //< It is empty otherwise.
-    //< Caution: **Keep the judging in this one place**, where the samples below reach it. **The
-    //< first parameter's type is the whole name**: `State@`, `State[]` or `mod.State` is another
-    //< type, and an indented `fn` is already in an impl.
-    t: = after_visibility(line)
-    if !t.starts_with("fn ")
-        return ""
-    $i: = 3 + name_at(t, 3).len
-    if i >= t.len || t[i] != '('
-        return ""
-    i = skip_blanks(t, i + 1)
-    i = skip_blanks(t, i + name_at(t, i).len)
-    if i >= t.len || t[i] != ':'
-        return ""
-    i = skip_blanks(t, i + 1)
-    ty: = name_at(t, i)
-    after: = i + ty.len
-    if ty.len == 0 ||
-        after < t.len &&
-        (t[after] == '@' || t[after] == '[' || t[after] == '<' || t[after] == '.' ||
-        t[after] == '$')
-        return ""
-    return ty if htext.has(enums, ty) else ""
-
-priv fn fixture_text(rel: U8[]): Bool //< a fixture whose functions are what a test compiles
-    return rel.starts_with("ksplc/tests/negative/") || rel.starts_with("ksplc/tests/parse/") ||
-        rel.starts_with("ksplc/tests/lint/") || rel.starts_with("ksplc/tests/notation/")
-
-priv fn check_enum_functions(arena: Arena$@) //<
-    //< No top-level function takes an enum of its own file as its first parameter
-    //<
-    //< **The enum must be declared in the same file.** One from another file or package is skipped,
-    //< since its impl would then hold that package's view of it. What this misses still breaks the
-    //< rule (Principle 8 in `../../docs/DESIGN-principles.md`).
-    $seen: Sz = 0
-    $bad: = List<|U8[]|>.new(arena)
-    for rel in harness.tracked_matching(U8[][]::scan.KSPL_SPECS)
-        if fixture_text(rel)
-            continue
-        lines: = harness.read_under_root(rel).lines(arena)
-        $enums: = List<|U8[]|>.new(arena)
-        $in_raw: = false
-        for line in lines
-            was: = in_raw
-            in_raw = scan.flip_raw(line, in_raw)
-            if !(was && in_raw) && enum_declared(line).len > 0
-                enums.push(enum_declared(line))
-        if enums.len == 0
-            continue
-        in_raw = false
-        $i: Sz = 0
-        for line in lines
-            i += 1
-            seen += 1
-            was: = in_raw
-            in_raw = scan.flip_raw(line, in_raw)
-            if was && in_raw
-                continue
-            e: = enum_taken_first(line, enums@)
-            if e.len > 0
-                bad
-                    .push(arena.text().s(rel).s(":\{i\}: a function takes `").s(e)
-                    .s("` first; make it a method of `impl ").s(e).s("`").take())
-    verdict.check_list("a function of one enum is a method in its impl", seen, "lines", bad@,
-        "move it into the enum's impl as `fn f(x: Self, ...)` and call it as `x.f(...)`")
-
-// The samples for `enum_taken_first`, with `State` as the file's one enum.
-// Caution: **Include the side that must not hit**: a method, a pointer, a qualified name, an
-// enum taken second, a comment.
-priv const ENUM_SAMPLES: U8[][_] = ::{ "fn text(s: State): U8[]", "pub fn show(s: State, on: Bool)",
-    "priv fn color(s: State): U32", "fn text(s: State): U8[] {", "  fn text(s: Self): U8[]",
-    "fn at(s: State@): U8[]", "fn from(s: other.State)", "fn pair(n: I32, s: State)",
-    "fn other(s: Mode)", "// fn text(s: State)" }
-priv const ENUM_WANT: Bool[_] = ::{ true, true, true, true, false, false, false, false, false,
-    false }
-
-priv fn check_enum_functions_fire(arena: Arena$@)
-    $enums: = List<|U8[]|>.new(arena)
-    enums.push("State")
-    $bad: = List<|U8[]|>.new(arena)
-    for i in Range.asc(ENUM_SAMPLES.len)
-        got: = enum_taken_first(ENUM_SAMPLES[i], enums@).len > 0
-        if got != ENUM_WANT[i]
-            bad
-                .push(arena.text().s("\"").s(ENUM_SAMPLES[i]).s("\" was read as ")
-                .s("a function of the enum" if got else "fine").take())
-    verdict.check_list("the judgment of a function of one enum can fire", ENUM_SAMPLES.len,
-        "samples", bad@, "the judgment misreads its own samples: mend the judgment, not the table")
-
-// ==========================================
-// An arena parameter carries no default ("A default argument is allowed only for a foldable
-// constant" in `../../docs/DESIGN-principles.md`)
-// ==========================================
-
-priv fn names_arena(ty: U8[]): Bool //< whether a type's text names `Arena` as a whole word
-    $at: Sz = 0
-    for at < ty.len
-        if hit: = ty.sub_from(at).find_str("Arena")
-            start: = at + hit
-            end: = start + 5
-            if (start == 0 || !ty[start - 1].is_alnum() && ty[start - 1] != '_') &&
-                (end >= ty.len || !ty[end].is_alnum() && ty[end] != '_')
-                return true
-            at = end
-        else
-            return false
-    return false
-
-priv fn is_compound_eq(code: U8[], at: Sz): Bool //< whether the `=` at `at` belongs to `==`, `<=`
-    if at + 1 < code.len && code[at + 1] == '='
-        return true
-    return at > 0 && "=!<>+-*/%&|^".find_char(code[at - 1]).is_some()
-
-priv fn defaults_an_arena(line: U8[], arena: Arena$@): Bool //<
-    //< Whether the line gives a parameter whose type names `Arena` a default
-    //<
-    //< A default is one literal followed by `,` or `)`, which no variable's initializer is; the
-    //< declaration runs back to the `(` or `,` before it. Caution: **Keep the judging in this one
-    //< place**, where the samples below reach it. What it misses (a typedef of the pointer) still
-    //< breaks the rule (Principle 8 in `../../docs/DESIGN-principles.md`).
-    code: = scan.strip_code(line, arena)
-    $at: Sz = 0
-    for at < code.len
-        eq: = at
-        at += 1
-        if code[eq] != '=' || is_compound_eq(code, eq)
-            continue
-        $v: = eq + 1
-        for v < code.len && code[v] == ' '
-            v += 1
-        $end: = v
-        for end < code.len &&
-            (code[end].is_alnum() || "_.-'\"".find_char(code[end]).is_some())
-            end += 1
-        $after: = end
-        for after < code.len && code[after] == ' '
-            after += 1
-        if end == v || after >= code.len || code[after] != ',' && code[after] != ')'
-            continue
-        $from: = eq
-        for from > 0 && code[from - 1] != '(' && code[from - 1] != ','
-            from -= 1
-        decl: = code.sub(from, eq - from)
-        if colon: = decl.find_char(':')
-            if decl.find_char(')').is_none() && names_arena(decl.sub_from(colon + 1))
-                return true
-    return false
-
-priv fn check_arena_default(arena: Arena$@) //<
-    //< No parameter taking an arena has a default
-    //<
-    //< **Omitted, the call would not say where it allocates**; the global heap is `null`, written
-    //< at the call.
-    $seen: Sz = 0
-    $bad: = List<|U8[]|>.new(arena)
-    for rel in harness.tracked_matching(U8[][]::scan.KSPL_SPECS)
-        $i: Sz = 0
-        for line in harness.read_under_root(rel).lines(arena)
-            i += 1
-            seen += 1
-            if defaults_an_arena(line, arena)
-                bad
-                    .push(arena.text().s(rel).s(":\{i\}: ").s(line.trim_spaces()).take())
-    verdict.check_list("no arena parameter carries a default", seen, "lines", bad@,
-        "drop the `= null`, and have each heap caller write `null` (why: this section's head)")
-
-// The samples for `defaults_an_arena`.
-// Caution: **Include the side that must not hit.** These are a variable's initializer (top-level,
-// local, mutable), a comparison, a default on another type, a function type taking an arena, a
-// string.
-priv const ARENA_DEFAULT_SAMPLES: Sample[_] = ::{
-    Sample::{ .text = "    arena: Arena$@ = null, //< where the elements go", .hits = true },
-    Sample::{ .text = "fn new(loc: Loc, arena: Arena$@ = null): Node$@", .hits = true },
-    Sample::{ .text = "fn grow(n: Sz, a: mem.Arena$@ = null) {", .hits = true },
-    Sample::{ .text = "  fn at(r: Self@, scratch: Arena@ = null, n: Sz = 0): I32", .hits = true },
-    Sample::{ .text = "$arena: Arena$@ = null", .hits = false },
-    Sample::{ .text = "priv $suite_arena: Arena$@ = null", .hits = false },
-    Sample::{ .text = "    a: Arena$@ = pick(x, y)", .hits = false },
-    Sample::{ .text = "    if arena == null", .hits = false },
-    Sample::{ .text = "fn starts_with(r: U8[], prefix: U8[], offset: Sz = 0): Bool",
-        .hits = false },
-    Sample::{ .text = "  cb: fn(a: Arena$@): Void = null,", .hits = false },
-    Sample::{ .text = "    s: = \"fn f(a: Arena$@ = null)\"", .hits = false },
-    Sample::{ .text = "// arena: Arena$@ = null, is refused", .hits = false },
-}
-
-priv fn check_arena_default_fires(arena: Arena$@)
-    scan.check_samples("the judgment of an arena's default can fire",
-        Sample[]::ARENA_DEFAULT_SAMPLES, "arena_default_samples", defaults_an_arena, arena)
 
 priv const LIST_CALL: U8[] = "verdict.check_list(" //< the call whose last argument is the fix
 
 priv fn has_hintless_list(src: U8[], arena: Arena$@): Bool //<
     //< Whether a source calls `verdict.check_list` with an empty fix, outside a `\"\"\"` string
-    //<
     //< **A failing walk then names what is wrong but not what to do**, and the reader has to find
     //< the check's source to learn it. The fix is the call's last argument.
     $code: = Str_builder.new()
@@ -386,7 +89,6 @@ priv const INTERNAL_NAME_CALL: U8[] = "get_str(" //< the call that gives a type'
 
 priv fn interpolates_internal_name(line: U8[], _arena: Arena$@): Bool //<
     //< Whether a line puts a type's internal name into an interpolation (`\{…get_str(…)…\}`)
-    //<
     //< **An interpolation writes text for a person**, and the internal name is C's spelling
     //< (`std_lang_Option_I32`, `U8 immut`); `display` (`ksplc/sema/type/display.kspl`) writes what
     //< the user wrote. A name bound first and interpolated later escapes this reading and still
@@ -435,10 +137,4 @@ priv fn check_internal_names(arena: Arena$@) //<
 
 fn run(arena: Arena$@)
     check_hintless_lists(arena)
-    check_empty_case_payload(arena)
-    check_payload_fires(arena)
-    check_enum_functions(arena)
-    check_enum_functions_fire(arena)
-    check_arena_default(arena)
-    check_arena_default_fires(arena)
     check_internal_names(arena)

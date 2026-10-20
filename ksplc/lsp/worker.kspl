@@ -1,5 +1,4 @@
 //< The worker: analyses and answers the requests the supervisor forwards, one at a time
-//<
 //< The supervisor (`server.kspl`) owns the stdio with the editor; a worker that crashes or hangs
 //< is restarted and handed the open documents' texts, each analysed later. **Every method is
 //< routed in one place** (`dispatch`), each named once. Its own branch builds the state it is
@@ -35,13 +34,11 @@ import "std/sys"
 
 priv const LAYOUT_SCRATCH_BYTES: Sz = 8 * 1024 * 1024 //<
     //< The scratch area for converting the indentation notation
-    //<
     //< Caution: **Make it well larger than one document.** The converted text is copied into the
     //< store and into Doc_state, so this is discarded each round.
 
 priv fn doc_name(uri: U8[]): U8[] //<
     //< The logical name the compiler knows a document or a walked file by
-    //<
     //< Inside a package that declares its name it is `<name>/<path from the package root>`,
     //< wherever the editor was opened (`name_entry` in `../base/package.kspl`).
     //< Caution: **Every lookup names a file through here.** The source map, the document's own
@@ -51,7 +48,6 @@ priv fn doc_name(uri: U8[]): U8[] //<
 
 priv fn doc_path(uri: U8[]): U8[] //<
     //< A document's path as the pipeline takes an entry file, without the default extension
-    //<
     //< Caution: **Give the pipeline this, never `doc_name`.** The pipeline names what it is given
     //< itself, as with a path from the command line. A name read as a path again gets the
     //< package's name twice (`mypkg/mypkg/lib`).
@@ -90,7 +86,6 @@ priv fn init_doc_compiler(server: Server$@, ptr: Doc_state$@, src: U8[]?): pipel
 
 priv fn search_word(hint: U8[], src: U8[], params: json.Value): U8[] //<
     //< The name used to pre-filter the files to read
-    //<
     //< Where `hint` is empty it is taken from the source at `params`' position. **The source holds
     //< only the bare identifier**. So the fully qualified name that the call hierarchy sends is
     //< cut to its last part: searched whole, it matches no file. Off a name the answer is empty,
@@ -104,7 +99,6 @@ priv fn search_word(hint: U8[], src: U8[], params: json.Value): U8[] //<
     return word_at(src, lsp_msg.offset_at(src, params))
 
 priv fn word_at(src: U8[], at: Sz): U8[] //< the identifier at that position
-    //<
     //< Caution: **Do not narrow what counts as a name.** Narrowed, a cursor on a name yields no
     //< search word. Then it answers without reading the file that must have matched.
     if at >= src.len
@@ -119,7 +113,6 @@ priv fn word_at(src: U8[], at: Sz): U8[] //< the identifier at that position
 
 priv fn mended_from_disk(raw: U8[]): U8[] //<
     //< A source read straight from disk, normalized and converted into braces
-    //<
     //< **Every path that reads the disk itself goes through here.** `pipeline.Compiler.parse_file`
     //< takes what it is given as is (`../parse/load.kspl` normalizes and converts only what it
     //< opened). So a path skipping this parses nothing, or reads a Windows checkout's files as
@@ -135,7 +128,7 @@ priv fn workspace_source(server: Server$@, uri: U8[]): U8[]? //<
     $file_path: = Str_builder.new()
     file_path.s(uri.strip_file_uri())
     file_path.ensure_kspl_ext()
-    src: = io.read_file(file_path.slice()) catch
+    src: = io.read_file(file_path.slice(), null) catch
         return .none
     defer dealloc(Void$@::src.ptr)
     return .some(base_core.arena.dup_str(mended_from_disk(src)))
@@ -172,7 +165,7 @@ priv fn build_workspace_state(server: Server$@, target_uri: U8[], search_hint: U
         already_loaded: = loaded_set.get(logical).unwrap_or(0) != 0
 
         if !already_loaded
-            src_text: = io.read_file(file_path) catch U8$[]::{ .ptr = null, .len = 0 }
+            src_text: = io.read_file(file_path, null) catch U8$[]::{ .ptr = null, .len = 0 }
             if src_text.ptr != null
                 // **Narrow by the whole identifier, not by a substring.** `at` occurs inside
                 // `that`, `data` and `validate`, and every file hit that way is parsed and analysed
@@ -202,7 +195,6 @@ priv fn build_workspace_state(server: Server$@, target_uri: U8[], search_hint: U
 
 priv const TEST_POISON_SCHEME: U8[] = "kspl-test-poison:" //<
     //< The URI scheme of a document whose analysis crashes the worker, a test hook for quarantine
-    //<
     //< An editor names a document by `file:` or `untitled:`, so no real one reaches it, as no
     //< editor sends the `$/ksplTest*` messages. Its name travels with the document: every worker
     //< the supervisor starts crashes on it again, as on a text that really crashes the analysis.
@@ -260,7 +252,6 @@ priv fn build_document_state(server: Server$@, src: U8[], uri: U8[], send_diag: 
 impl Server
     fn dispatch(r: Self$@, method: U8[], params: json.Value, id_val: json.Value, arena: Arena$@) //<
         //< It routes one message to its handler
-        //<
         //< **Each method is named once, here**, with the state it is answered from built in its own
         //< branch. `initialize`'s capabilities are just below, so what is declared and what is
         //< routed can be read side by side.
@@ -315,7 +306,6 @@ impl Server
     priv fn document_state(r: Self$@, params: json.Value, id_val: json.Value, arena: Arena$@):
         Doc_state$@? //<
             //< The analysed state of the document a request names
-            //<
             //< Where that document is not open, it answers null itself and returns none.
         uri: = params.get("textDocument").get("uri").as_str().unwrap_or("")
         r.ensure_latest_state(uri)
@@ -326,7 +316,6 @@ impl Server
 
     priv fn workspace_state(r: Self$@, params: json.Value): Doc_state$@ //<
         //< The workspace analysed for one request; the caller frees it (`drop_workspace_state`)
-        //<
         //< Caution: **Do not ask the client for the filter's search word.** The server holds the
         //< position and the source; asking would keep the same thing in two places. Only the call
         //< hierarchy has no position, so its search word is the `item.data` the server returned.
@@ -344,7 +333,6 @@ impl Server
 
     priv fn drop_workspace_state(r: Self$@, ws: Doc_state$@) //<
         //< It frees a workspace state, and the document state built before it
-        //<
         //< Caution: **Do not keep `latest_state` past it.** The rewind clears what the compiler
         //< keeps in module-level variables (the ranges a `#cfg()` dropped, the text as written,
         //< the diagnostics: `wind_back`). The document state's answers read them. Kept, its hover
@@ -355,7 +343,6 @@ impl Server
     priv fn handle_completion_req(r: Self$@, params: json.Value, id_val: json.Value,
         arena: Arena$@) //<
             //< It answers a completion request
-            //<
             //< **Analyse again with the half-typed word replaced by a synthesized name.**
             //< Half-typed text does not parse (the heading of `lsp/complete.kspl`). So
             //< `latest_state`, built from that text, holds no tree and is not used.
@@ -424,7 +411,6 @@ impl Server
 
     fn handle_restore(r: Self$@, params: json.Value) //<
         //< It takes one open document's text from a supervisor that restarted it, without analysing
-        //<
         //< **A restart must not make the next answer wait for every open document.** The
         //< supervisor sends each document's analysis later, as a didOpen. It sends it before the
         //< first request naming it, or while the editor is idle ("The language server runs as
@@ -440,7 +426,6 @@ impl Server
     priv fn store_converted(r: Self$@, uri: U8[], sent: U8[],
         notes: List<|parse_layout.Note|>$@, scratch: Arena$@): U8[]? //<
             //< It stores a document's text in the brace notation and returns it; none if not stored
-            //<
             //< The indentation notation is converted into braces here (`parse/layout.kspl`).
             //< Caution: **Convert it just once, at the entry point** (the other one is
             //< `parse/load.kspl`, which reads the disk). **The store holds the converted text
@@ -485,7 +470,6 @@ priv fn answer_initialize(params: json.Value, id_val: json.Value, arena: Arena$@
 
 priv fn rename_options(params: json.Value, b: Json_builder$@): json.Value //<
     //< The rename capability: with `prepareProvider` where the client can ask it
-    //<
     //< **Only a client that says it sends `prepareRename` is told it is answered.** The protocol
     //< allows the options only then. The method is handled whatever is declared.
     said: = params.get("capabilities").get("textDocument").get("rename").get("prepareSupport")
@@ -498,7 +482,6 @@ priv fn rename_options(params: json.Value, b: Json_builder$@): json.Value //<
 
 priv fn completion_options($b: Json_builder): json.Value //<
     //< The completion capability's options
-    //<
     //< Caution: **Do not declare `triggerCharacters`.** Only the editor, which watches the typing,
     //< can decide when to show it. Declare a `.` and **the list pops up unasked**. That is the most
     //< common complaint about this feature. It answers only when asked.

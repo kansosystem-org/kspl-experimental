@@ -1,6 +1,5 @@
 #!/usr/bin/env -S ksplc run
 //< Stage 0 / ①: building the KSPL corpus
-//<
 //< It collects every source in the repository and can normalize them through ksplc fmt. It drops
 //< duplicates by content hash, splits deterministically into train/val per file, and writes JSONL.
 
@@ -18,6 +17,7 @@ import "std/chars"
 import "std/ds" { List, Map }
 import "std/fs"
 import "std/io"
+import "std/math"
 import "std/mem" + { Arena, dealloc }
 import "std/sha256"
 import "std/str" { Str_builder }
@@ -32,7 +32,6 @@ priv const FMT_TIMEOUT_MS: I32 = 60000
 priv const OUTPUT_CAP: Sz = 4 * 1024 * 1024
 priv const NUM_FMT_WORKERS: Sz = 8 //<
     //< How many workers normalize() runs under --fmt, each starting a ksplc child per file
-    //<
     //< The work is mostly waiting on I/O, so it need not match the CPU core count. A fixed value
     //< avoids adding an OS-dependent way to read the core count.
 
@@ -68,7 +67,8 @@ priv fn find_kspl_files(arena: Arena$@): List<|U8[]|>$@
 // ② Normalizing (through ksplc fmt only with --fmt; on a failure it falls back to the raw source)
 // ==========================================
 priv fn normalize(rel_path: U8[], use_fmt: Bool, arena: Arena$@): U8$[]
-    raw: = io.read_file(rel_path) catch panic("cannot read a file just found by the directory walk")
+    raw: = io.read_file(rel_path, null)
+        catch panic("cannot read a file just found by the directory walk")
     defer dealloc(Void$@::raw.ptr)
     raw_copy: = arena.dup_str(raw)
     if !use_fmt
@@ -104,7 +104,6 @@ fn fmt_worker_entry(arg: Fmt_worker_args$@): Void$@ //< one worker's share of th
 
 priv fn normalize_all(files: List<|U8[]|>$@, use_fmt: Bool, arena: Arena$@): List<|Rec|>$@ //<
     //< Runs normalize() on every file in `files` (starting ksplc fmt with --fmt)
-    //<
     //< Without --fmt it only reads files, so it runs in order (threads would cost more). The result
     //< keeps the `files` order (the caller's dedup and train/val split depend on it).
     result: = List<|Rec|>.create(arena)
@@ -115,7 +114,7 @@ priv fn normalize_all(files: List<|U8[]|>$@, use_fmt: Bool, arena: Arena$@): Lis
             result.push(Rec::{ .path = rel, .code = code })
         return result
 
-    num_workers: = NUM_FMT_WORKERS if n >= NUM_FMT_WORKERS else n
+    num_workers: = math.min(NUM_FMT_WORKERS, n)
     results: = Rec$@::arena.alloc(n * sizeof(Rec))
 
     worker_arenas: = List<|Arena$@|>.create(arena)

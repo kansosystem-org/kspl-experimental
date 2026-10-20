@@ -1,0 +1,23 @@
+//< `suite.Suite`: which `test_` functions a suite runs, in what order, and what each is handed
+//< The suite under test is `suite_reach/probe.kspl`'s, not this package's own, so a mistake shows
+//< as a wrong record instead of as tests that silently stop running.
+import "ksplc/tests/suite_reach/probe"
+import "std/mem" { Arena }
+import "std/str" // `equals`
+import "std/verdict"
+
+priv const RECORD: U8[] =
+    "<test_takes_nothing test_takes_nothing> <test_takes_a_field field test_takes_a_field> \
+        <test_takes_two n=7 test_takes_two> <test_imported imported test_imported> " //<
+            //< what the probe's suite records, test by test
+            //< The suite's own file first, then the file it imports, each in the order declared.
+            //< `before_each` writes `<` and the name, `after_each` the name and `>`.
+
+fn test_suite_runs_named_tests()
+    verdict
+        .start("[Suite] a suite runs every test_ function it reaches, in order, handed its fields")
+    arena: = Arena.new(4096)
+    defer arena.free()
+    said: = probe.run_probe(arena)
+    assert(said.equals(RECORD), arena.dup_str(said))
+    verdict.pass("a suite runs its file's tests, then its import's, in order")

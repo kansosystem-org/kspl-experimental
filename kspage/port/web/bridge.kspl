@@ -1,5 +1,4 @@
 //< The bridge to a browser
-//<
 //< Two things cross it: font metrics borrowed from JS (the canvas's `measureText`) wrapped as a
 //< `Font_source`, and the laid-out boxes, written in a form JS can read.
 //< Caution: **Do not bring layout decisions in here** — line breaking, inheritance and baseline
@@ -41,7 +40,6 @@ import "std/mem" + { Arena }
 
 priv fn row_of_caret(): Block$@? //<
     //< The block holding the cursor's paragraph — in a table, the row
-    //<
     //< Outside a table it is the paragraph's parent, which a filter ignores. None at the document's
     //< top level or with no cursor.
     if ed.caret.inline == null
@@ -197,7 +195,6 @@ fn kspage_web_input_cap(): Sz
     return INPUT_CAP
 
 priv fn drop_span(): Bool //< deletes the selection
-    //<
     //< This is the only place that joins the spanned paragraphs into one. The core's `insert` and
     //< the like delete only the text, leaving an empty paragraph and its marker.
     return page != null && ed.start_replacement(page)
@@ -205,10 +202,9 @@ priv fn drop_span(): Bool //< deletes the selection
 // Types the `len` bytes written in at the cursor.
 #export
 fn kspage_web_type(len: Sz)
-    if len <= 0 || len > INPUT_CAP
-        return
-    drop_span()
-    ed.insert(U8[]::{ .ptr = input@, .len = len })
+    if text: = state.typed_nonempty(len)
+        drop_span()
+        ed.insert(text)
 
 // **At a paragraph's start it joins with the paragraph before** (else a split cannot be undone by
 // deleting). Where it cannot join (a table cell, a paragraph with nested blocks) it deletes one.
@@ -268,6 +264,13 @@ fn kspage_web_select_all(): I32
     ensure()
     return 1 if ed.select_all() else 0
 
+// Inserts a paragraph after the cursor's table and moves into it; 0 outside a table or read-only.
+#export
+fn kspage_web_paragraph_after_table(): I32
+    if page == null
+        return 0
+    return 1 if ed.paragraph_after_table(page) else 0
+
 // Moves the cursor to the next cell (the previous one with `back` not 0); 1 if it moved.
 // Caution: **Call it after layout.** **It acts only inside a table** (0 outside, leaving the key
 // to the caller).
@@ -288,10 +291,9 @@ fn kspage_web_move_row(up: I32): I32
 // Replaces the text being composed (not yet committed) with the `len` bytes written in.
 #export
 fn kspage_web_compose(len: Sz)
-    if len < 0 || len > INPUT_CAP
-        return
-    drop_span()
-    ed.set_preedit(U8[]::{ .ptr = input@, .len = len })
+    if text: = state.typed(len)
+        drop_span()
+        ed.set_preedit(text)
 
 // Commits the text being composed as it is.
 #export
@@ -389,9 +391,8 @@ fn kspage_web_typed(): Sz
 // (what shows is the computed result).
 #export
 fn kspage_web_set_typed(len: Sz)
-    if len < 0 || len > INPUT_CAP
-        return
-    ed.set_source(U8[]::{ .ptr = input@, .len = len })
+    if text: = state.typed(len)
+        ed.set_source(text)
 
 // ---- Copy, cut and paste ----
 
@@ -421,10 +422,9 @@ fn kspage_web_paste(len: Sz): I32
 #export
 fn kspage_web_find(len: Sz, back: I32): I32
     ensure()
-    if len <= 0 || len > INPUT_CAP
-        return 0
-    needle: = U8[]::{ .ptr = input@, .len = len }
-    return 1 if ed.find_next(needle, back != 0) else 0
+    if needle: = state.typed_nonempty(len)
+        return 1 if ed.find_next(needle, back != 0) else 0
+    return 0
 
 // How many times the `len` bytes in the typing arena appear in the whole document. **It only
 // counts** (neither the cursor nor the selection moves). Called on every keystroke, it walks the
@@ -433,10 +433,9 @@ fn kspage_web_find(len: Sz, back: I32): I32
 #export
 fn kspage_web_count(len: Sz): Sz
     ensure()
-    if len <= 0 || len > INPUT_CAP
-        return 0
-    needle: = U8[]::{ .ptr = input@, .len = len }
-    return find.count_matches(ed.doc, needle)
+    if needle: = state.typed_nonempty(len)
+        return find.count_matches(ed.doc, needle)
+    return 0
 
 // Replaces using `the text to find\tthe replacement` in the typing arena, returning the number
 // replaced; with `all` 0, only the next one. **Without a tab it does nothing** (an empty
@@ -475,36 +474,26 @@ fn kspage_web_drop_frame(): I32
 // too**, since the grid picker belongs to the page.
 #export
 fn kspage_web_insert_table(len: Sz, rows: Sz, cols: Sz): I32
-    if page == null || len <= 0 || len > INPUT_CAP
+    if page == null
         return 0
-    name: = U8[]::{ .ptr = input@, .len = len }
-    return 1 if ed.insert_table(page, sheet, name, rows, cols) else 0
+    if name: = state.typed_nonempty(len)
+        return 1 if ed.insert_table(page, sheet, name, rows, cols) else 0
+    return 0
 
-// Inserts one slide in the style named in the same arena; 1 if inserted. `plan` gives the frames
-// inside: 0 one filling the slide, 1 a title and a body, 2 a title and two columns.
+// Inserts one slide after the cursor's paragraph, from `sketch\tname` in the typing arena. The
+// sketch gives the frames inside (`insert.Sketch`'s variant name: `whole` one filling the slide,
+// `titled` a title and a body, `halved` a title and two columns), and the name the slide's style.
+// Writes the result's variant name (`insert.Surface_end`) and returns its length.
 // Caution: **The style of that name must exist first** — it sets the slide's size, and a missing
 // one is not made. The template is not kept (the document holds the frames).
 #export
-fn kspage_web_insert_surface(len: Sz, plan: I32): I32
-    if page == null || len <= 0 || len > INPUT_CAP
-        return 0
-    name: = U8[]::{ .ptr = input@, .len = len }
-    // Return the reason as a number (the rule at `kspage_web_set_block_style` in `face.kspl`).
-    // 1 inserted, 0 the cursor is in no paragraph, -1 inside a table cell, -2 no slide style.
-    // -3 open read-only, -4 its frames would stand deeper than a document holds.
-    switch ed.insert_surface(page, sheet, name, state.sketch_at(plan))
-    case .done
-        return 1
-    case .nowhere
-        return 0
-    case .in_cell
-        return -1
-    case .no_style
-        return -2
-    case .shut
-        return -3
-    case .too_deep
-        return -4
+fn kspage_web_insert_surface(len: Sz): Sz
+    ensure()
+    two: = state.split_input(len)
+    if page == null || !two.found || two.tail.len <= 0
+        return state.say(insert.Surface_end.nowhere.variant_name())
+    end: = ed.insert_surface(page, sheet, two.tail, insert.sketch_from(two.head))
+    return state.say(end.variant_name())
 
 // ---- The fills and the lines ----
 
@@ -515,13 +504,12 @@ fn kspage_web_panel_count(): Sz
         return 0
     return page.panels.len
 
-// Writes nine values into out for fill and line `i`. They are x / y / w / h / the line's
-// thickness / the line's color / whether there is a fill / the fill's color / the shape to draw.
-// Thickness 0 draws no line. **They come in document order**, so drawn in order the inner ones
-// end up on top.
+// Writes eight values into out for fill and line `i`. They are x / y / w / h / the line's
+// thickness / the line's color / whether there is a fill / the fill's color. Thickness 0 draws no
+// line. **They come in document order**, so drawn in order the inner ones end up on top.
 #export
 fn kspage_web_panel(i: Sz, out: F32$@)
-    state.clear_out(out, 9)
+    state.clear_out(out, 8)
     if page == null || i < 0 || i >= page.panels.len
         return
     one: = page.panels.get(i)
@@ -529,7 +517,14 @@ fn kspage_web_panel(i: Sz, out: F32$@)
     (out + 4)$ = one.width
     (out + 5)$ = F32::one.color
     state.color_into(out + 6, one.fill)
-    (out + 8)$ = state.shape_no(one.shape)
+
+// Writes the shape fill and line `i` is drawn in (`style.Shape`'s variant name) and returns the
+// length; 0 when there is no such panel.
+#export
+fn kspage_web_panel_shape(i: Sz): Sz
+    if page == null || i < 0 || i >= page.panels.len
+        return 0
+    return state.say(page.panels.get(i).shape.variant_name())
 
 // ---- Regions ----
 
@@ -541,18 +536,22 @@ fn kspage_web_region_count(): Sz
         return 0
     return page.regions.len
 
-// Writes five values into out for region `i` (x / y / w / h / kind: 0 prose, 1 a table, 2 a slide,
-// `Arrange`'s list). Five 0s when absent (kind 0 with size 0 draws nothing).
+// Writes four values into out for region `i` (x / y / w / h). Four 0s when absent (size 0 draws
+// nothing).
 #export
 fn kspage_web_region(i: Sz, out: F32$@)
     $spot: = Rect::{ .x = 0.0, .y = 0.0, .w = 0.0, .h = 0.0 }
-    $kind: F32 = 0.0
     if page != null && i >= 0 && i < page.regions.len
-        r: = page.regions.get(i)
-        spot = r.rect
-        kind = state.arrange_no(r.kind)
+        spot = page.regions.get(i).rect
     state.rect_into(out, spot)
-    (out + 4)$ = kind
+
+// Writes how region `i` lays out (`style.Arrange`'s variant name: `flow` prose, `grid` a table,
+// `absolute` a slide) and returns the length; 0 when there is no such region.
+#export
+fn kspage_web_region_kind(i: Sz): Sz
+    if page == null || i < 0 || i >= page.regions.len
+        return 0
+    return state.say(page.regions.get(i).kind.variant_name())
 
 // ---- The heading rows the window keeps in view ----
 
@@ -663,7 +662,6 @@ fn kspage_web_move_surface(from: Sz, to: Sz): I32
     return 1 if ed.move_block(at, aim) else 0
 
 priv fn block_no(b: Block$@): Sz //< which of the document's blocks that block is
-    //<
     //< When absent it returns the count itself (the caller can refuse). The document is reached
     //< through `ed` (`doc` is a file's name in this file).
     for $i: Sz = 0; i < ed.doc.blocks.len; i += 1
@@ -693,9 +691,11 @@ fn kspage_web_aside(): Sz
 #export
 fn kspage_web_set_aside(len: Sz): I32
     ensure()
-    if page == null || len < 0 || len > INPUT_CAP
+    if page == null
         return 0
-    return 1 if ed.set_aside(page, U8[]::{ .ptr = input@, .len = len }) else 0
+    if text: = state.typed(len)
+        return 1 if ed.set_aside(page, text) else 0
+    return 0
 
 // Writes five values into out for the cursor's cell (x / y / w / h / whether found): **only which
 // cell the cursor is in.** Whether a formula may be written is `kspage_web_takes_formula` (a cell's

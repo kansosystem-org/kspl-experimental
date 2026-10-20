@@ -1,5 +1,4 @@
 //< The ABI pass: gives every declaration and reference its C name
-//<
 //< A method call becomes a plain call with its receiver as the first argument.
 //< It runs after the walk and the thunks (`root.kspl`, `vtable.kspl`), so by then every name
 //< the program uses, synthesized ones included, is in the tree.
@@ -19,16 +18,14 @@ import "std/chars" // the one-character tests and cuts
 import "std/ds" { Map }
 import "std/str"
 fn run(r: Ast_node$@, c: Sema_ctx$@) //< the ABI conversion pass's entry point
-    //<
     //< It overwrites names with their mangled forms in place, recursively over the whole tree.
     base_diag.ice_assert(r != null, "abi.apply: file_node is null")
     $verbatim: = verbatim_c_names(c)
     defer verbatim.free()
-    r.apply_abi_recursive(c, verbatim@)
+    r.apply_abi_recursive(c, verbatim@, 0)
 
 priv fn verbatim_c_names(c: Sema_ctx$@): Map<|U8[], Bool|> //<
     //< The C names the program's globals keep as written (an `extern` block's, an `#export`)
-    //<
     //< A local of such a name takes a made one, as a local hiding a local does. C would read the
     //< local itself in its own initializer, where KSPL reads the global (`libc.abs` is `abs`).
     $names: = Map<|U8[], Bool|>.new(null)
@@ -39,7 +36,9 @@ priv fn verbatim_c_names(c: Sema_ctx$@): Map<|U8[], Bool|> //<
     return names
 
 impl Ast_node
-    priv fn apply_abi_recursive(r: Ast_node$@, c: Sema_ctx$@, verbatim: Map<|U8[], Bool|>$@)
+    priv fn apply_abi_recursive(r: Ast_node$@, c: Sema_ctx$@, verbatim: Map<|U8[], Bool|>$@,
+        owner_id: I32) //<
+            //< owner_id: the type of the `impl` whose direct child r is, or 0
         if r == null
             return
         kind: = r.kind_id
@@ -48,15 +47,17 @@ impl Ast_node
             // unchanged, so rewriting would break the variant name.
             return
 
+        target: = r.get_decl_type_node() if kind == .k_decl_impl else null
+        child_owner_id: = target.type_id if target != null else 0
         for child in r.children
-            child.apply_abi_recursive(c, verbatim)
+            child.apply_abi_recursive(c, verbatim, child_owner_id)
 
         if kind == .k_identifier || kind == .k_expr_path
             r.name_hiding_local(verbatim)
         switch kind
         case .k_decl_fn, .k_decl_var, .k_decl_const, .k_decl_embed, .k_decl_struct, .k_decl_enum,
             .k_decl_typedef, .k_decl_trait
-            r.transform_decl_name(c)
+            r.transform_decl_name(c, owner_id)
         case .k_expr_postfix
             op_node: = r.get_postfix_op()
             if op_node != null && op_node.text.equals("(")
@@ -69,7 +70,6 @@ impl Ast_node
 
     priv fn name_hiding_local(r: Ast_node$@, verbatim: Map<|U8[], Bool|>$@) //<
         //< Gives a local hiding another of its name a C name of its own (`hiding_local_name`)
-        //<
         //< It renames the declared name and every reference alike. Both reach the declaration's
         //< symbol: a reference and a declared name through `def_node`, a `switch` arm's or a
         //< `catch`'s binding through its own `sym_ptr`. The name is made from the symbol alone, so
@@ -81,20 +81,13 @@ impl Ast_node
             c_name: = base_c_name.hiding_local_name(sym.name, sym.hidden_count)
             r.flatten_to_identifier(c_name)
 
-    priv fn transform_decl_name(r: Ast_node$@, c: Sema_ctx$@)
+    priv fn transform_decl_name(r: Ast_node$@, c: Sema_ctx$@, owner_id: I32) //<
+        //< Gives a declaration its final C name, which both backends write as it stands
+        //< owner_id: the type of the `impl` r is a method of, or 0
         id_node: = r.find_child(.k_identifier)
         r.ice_assert(id_node != null, "transform_decl_name: declaration node missing identifier")
 
-        $sym: Sema_symbol$@ = null
-        switch get_global_symbol_by_def(r)
-        case .some(s)
-            sym = s
-        case .none
-            return
-
-        is_method_name: = sym.flags.is_method || sym.name.find_char_out('.') >= 0
-
-        if is_method_name || r.is_generic_inst_node()
+        sym: Sema_symbol$@ = get_global_symbol_by_def(r) catch
             return
 
         w: = c.clear_scratch()
@@ -105,6 +98,9 @@ impl Ast_node
             // file's path lost the dot of a folder like `.hidden`. The type's name kept it as `_`,
             // so the C declared one name and used another.
             c.env.mangle_type_id_to(sym.type_id, w)
+        else if owner_id != 0
+            // A method takes its type's name in front, spelled from the type as above.
+            c.env.mangle_type_id_to(owner_id, w.s(base_mangle.KSPL_PREFIX)).s("_").s(id_node.text)
         else
             get_c_identifier_for_sym_to(sym, id_node.text, w)
 
@@ -113,7 +109,6 @@ impl Ast_node
 
     fn receiver_wants_ptr(r: Ast_node$@, c: Sema_ctx$@): Bool //<
         //< Whether the method that the method access `r` calls takes its receiver by pointer
-        //<
         //< With no definition to say, **it answers true** but for a slice: else a needed temporary
         //< is missed and the C breaks.
         //< Note: The code that makes the temporary (`lower/expr.kspl`) uses this, so it is not
@@ -131,7 +126,6 @@ impl Ast_node
 
     fn receiver_is_pointer(r: Ast_node$@, c: Sema_ctx$@): Bool //<
         //< Whether the function definition `r` takes its first argument (the receiver) by pointer
-        //<
         //< True where the signature does not say, as receiver_wants_ptr answers.
         fn_sig: = r.find_child(.k_type_fn_sig)
         if fn_sig == null
@@ -234,7 +228,7 @@ impl Ast_node
 
         info: = c.env.get_info(c.env.get_real_type(base_id))
         switch info
-        case .trait_type(_d)
+        case .trait_type
             return
         default {}
 
@@ -290,18 +284,17 @@ impl Ast_node
 
 fn get_c_identifier_for_sym_to(sym: Sema_symbol$@, base_name: U8[], w: Writer): Writer //<
     //< It writes the C name of what sym names (base_name where sym names no value or type)
-    //<
     //< The entry point asks it for the functions it calls outside the tree (gen/entry.kspl).
     if sym == null || (!sym.kind.is_value() && !sym.kind.is_type())
         return w.s(base_name)
 
     is_method_name: = sym.flags.is_method || sym.name.find_char_out('.') >= 0
 
-    // Caution: **A method must not go through here.** A method's name is `type.method`, which is
-    // not a C identifier. The code that emits the body (`write_c_fn_name` in `gen/c/decl.kspl`)
-    // does not use the plain name inside an impl. Pass only this through and the C, with no
-    // diagnostic, has the mangled name in the definition and the plain one in the call. A method
-    // has this option only where an `#export` was written, and `sema/decl/attrs.kspl` rejects that.
+    // Caution: **A method must not take its name as written.** A method's name is `type.method`,
+    // which is not a C identifier, and its declaration always takes its type's name in front
+    // (transform_decl_name). A plain name here would leave the C, with no diagnostic, a call to a
+    // function that is not defined. A method has this option only where an `#export` was
+    // written, and `sema/decl/attrs.kspl` rejects that.
     if !is_method_name && sym.uses_verbatim_c_name()
         return w.s(sym.name)
     if sym.name.equals("main") || sym.name.equals("kspl_main")
@@ -330,7 +323,6 @@ fn get_c_identifier_for_sym_to(sym: Sema_symbol$@, base_name: U8[], w: Writer): 
 
 priv fn is_private_symbol(sym: Sema_symbol$@): Bool //<
     //< Whether sym is a file-private value whose C name needs the file's prefix
-    //<
     //< A file_private symbol is unique only per file. So in C's flat global namespace it can
     //< collide with a same-named private symbol in another file.
     //< A prefix spelling the file path makes it unique (write_priv_prefix_to).
@@ -342,7 +334,6 @@ priv fn is_private_symbol(sym: Sema_symbol$@): Bool //<
 
 priv fn get_global_symbol_by_def(def_node: Ast_node$@): Sema_symbol$@? //<
     //< The symbol of a definition node, found through `sym_ptr` only
-    //<
     //< Caution: **Do not search the table for it.** Every path that adds to the global table sets
     //< `sym.node.sym_ptr` (define_symbol in `sema/decl/scope.kspl`, `sema/session/ctx.kspl`,
     //< `sema/decl/mono.kspl`); a new path must too, or the name is emitted unmangled.

@@ -12,6 +12,14 @@ import "std/mem" { Arena }
 import "std/prng"
 import "std/str" { Str_builder }
 
+// The names of the weights each block holds, after its prefix `model.layers.{i}`.
+// Caution: **`load_weights` and `save` both walk this one table**, with `block_weights` in the same
+// order. Two lists drift apart, and a saved file then fails to load or loads a weight into the
+// wrong place.
+priv const BLOCK_WEIGHT_KEYS: U8[][8] = ::{ ".self_attn.wq.weight", ".self_attn.wk.weight",
+    ".self_attn.wv.weight", ".self_attn.wo.weight", ".mlp.fc1.weight", ".mlp.fc2.weight",
+    ".input_layernorm.weight", ".post_attention_layernorm.weight" }
+
 struct Mini_llama<|T|>
     priv token_embed: ai_nn.Embedding<|T|>
     priv blocks: ai_nn.Transformer_block<|T|>$[]
@@ -67,7 +75,6 @@ impl<|T|> Mini_llama<|T|>
             .lm_head = ai_nn.Linear<|T|>.new(dim, vocab_size, model_arena) }
     fn randomize(r: Self$@, rng: prng.Prng$@) //<
         //< The random initialization for training from scratch (breaking the symmetry)
-        //<
         //< Matrix weights get uniform random values and the normalization weights 1.0, for training
         //< without a safetensors file.
         // Caution: **Do not list the weight tensors one by one** (the reason is at
@@ -80,7 +87,6 @@ impl<|T|> Mini_llama<|T|>
     fn load_weights(r: Self$@, $st: ai_safetensors.Safetensors, arena: Arena$@):
         Void!ai_safetensors.Safetensors_error //<
             //< Loads the real weights from a safetensors file, as a zero-copy mapping
-            //<
             //< **A file whose shapes do not match the dimensions `new` built is rejected here**
             //< (the reason is at `map_into` in `ksai/safetensors.kspl`).
         io.err().s("\n[Model] Zero-copy mapping weights from Safetensors...\n")
@@ -92,22 +98,9 @@ impl<|T|> Mini_llama<|T|>
         $b: = Str_builder.new()
 
         for i in Range.asc(r.blocks.len)
-            k_wq: = key(b@, i, ".self_attn.wq.weight")
-            st.map_into<|F32|>(k_wq, r.blocks[i].attention.wq.weights@, arena)!
-            k_wk: = key(b@, i, ".self_attn.wk.weight")
-            st.map_into<|F32|>(k_wk, r.blocks[i].attention.wk.weights@, arena)!
-            k_wv: = key(b@, i, ".self_attn.wv.weight")
-            st.map_into<|F32|>(k_wv, r.blocks[i].attention.wv.weights@, arena)!
-            k_wo: = key(b@, i, ".self_attn.wo.weight")
-            st.map_into<|F32|>(k_wo, r.blocks[i].attention.wo.weights@, arena)!
-            k_fc1: = key(b@, i, ".mlp.fc1.weight")
-            st.map_into<|F32|>(k_fc1, r.blocks[i].ffn.fc1.weights@, arena)!
-            k_fc2: = key(b@, i, ".mlp.fc2.weight")
-            st.map_into<|F32|>(k_fc2, r.blocks[i].ffn.fc2.weights@, arena)!
-            k_an: = key(b@, i, ".input_layernorm.weight")
-            st.map_into<|F32|>(k_an, r.blocks[i].attention_norm.weight@, arena)!
-            k_fn: = key(b@, i, ".post_attention_layernorm.weight")
-            st.map_into<|F32|>(k_fn, r.blocks[i].ffn_norm.weight@, arena)!
+            ws: = r.block_weights(i)
+            for k in Range.asc(BLOCK_WEIGHT_KEYS.len)
+                st.map_into<|F32|>(key(b@, i, BLOCK_WEIGHT_KEYS[k]), ws[k], arena)!
         io.err().s("[Model] Weight mapping completed successfully!\n\n")
     fn save(r: Self$@, path: U8[]): Void!ai_safetensors.Safetensors_error //<
         //< Writes the trained weights to a safetensors file (the same naming as load_weights)
@@ -117,27 +110,19 @@ impl<|T|> Mini_llama<|T|>
         w.add("lm_head.weight", r.lm_head.weights)
         $b: = Str_builder.new()
         for i in Range.asc(r.blocks.len)
-            k_wq: = key(b@, i, ".self_attn.wq.weight")
-            w.add(k_wq, r.blocks[i].attention.wq.weights)
-            k_wk: = key(b@, i, ".self_attn.wk.weight")
-            w.add(k_wk, r.blocks[i].attention.wk.weights)
-            k_wv: = key(b@, i, ".self_attn.wv.weight")
-            w.add(k_wv, r.blocks[i].attention.wv.weights)
-            k_wo: = key(b@, i, ".self_attn.wo.weight")
-            w.add(k_wo, r.blocks[i].attention.wo.weights)
-            k_fc1: = key(b@, i, ".mlp.fc1.weight")
-            w.add(k_fc1, r.blocks[i].ffn.fc1.weights)
-            k_fc2: = key(b@, i, ".mlp.fc2.weight")
-            w.add(k_fc2, r.blocks[i].ffn.fc2.weights)
-            k_an: = key(b@, i, ".input_layernorm.weight")
-            w.add(k_an, r.blocks[i].attention_norm.weight)
-            k_fn: = key(b@, i, ".post_attention_layernorm.weight")
-            w.add(k_fn, r.blocks[i].ffn_norm.weight)
+            ws: = r.block_weights(i)
+            for k in Range.asc(BLOCK_WEIGHT_KEYS.len)
+                w.add(key(b@, i, BLOCK_WEIGHT_KEYS[k]), ws[k]$)
         ai_file.save_safetensors(w@, path)!
+    priv fn block_weights(r: Self$@, i: Sz): Tensor<|T|>$@[8] //<
+        //< Block i's weights, in the order of `BLOCK_WEIGHT_KEYS`
+        blk: = r.blocks[i]@
+        return ::{ blk.attention.wq.weights@, blk.attention.wk.weights@,
+            blk.attention.wv.weights@, blk.attention.wo.weights@, blk.ffn.fc1.weights@,
+            blk.ffn.fc2.weights@, blk.attention_norm.weight@, blk.ffn_norm.weight@ }
     fn forward_hidden(r: Self$@, token_id: I32, start_pos: Sz, compute_arena: Arena$@):
         Tensor<|T|> //<
             //< The forward pass up to just before the LM head
-            //<
             //< It returns the normalized hidden state (norm_h), the lm_head input LoRA fine-tuning
             //< needs.
         $h: = r.token_embed.forward(token_id, compute_arena)
@@ -186,7 +171,6 @@ impl<|T|> Mini_llama<|T|>
         return g
     fn apply_grads(r: Self$@, g: Model_grads<|T|>$@, u: ai_optim.Updater<|T|>$@) //<
         //< Moves every weight by `g`, as one step of `u`
-        //<
         //< **Every gradient first, then every step**: an optimizer with memory (Adam) sees each
         //< weight once per step, in the same order every step (`Updater`'s pairing).
         u.begin_step()
@@ -197,7 +181,6 @@ impl<|T|> Mini_llama<|T|>
         r.lm_head.apply_grads(g.head@, u)
     fn train_step(r: Self$@, tokens: List<|I32|>$@, target: I32, lr: F64, arena: Arena$@): F64 //<
         //< One step of end-to-end training (teacher forcing, predicting the final position)
-        //<
         //< Every layer back-propagated with SGD so the sequence's next token becomes target; it
         //< returns the cross-entropy loss.
         $cache: = r.train_forward(tokens, arena)
@@ -210,7 +193,6 @@ impl<|T|> Mini_llama<|T|>
     fn loss_seq(r: Self$@, tokens: List<|I32|>$@, targets: I32$[], from: Sz, arena: Arena$@):
         Seq_loss //<
             //< The mean cross-entropy over every position, and over those from `from` on
-            //<
             //< The weights stay untouched (a held-out measure). **One forward pass gives both.**
             //< The tail is the part a caller asks the model to write (a FIM sequence's middle). The
             //< whole also includes what it was only given.
@@ -225,7 +207,6 @@ impl<|T|> Mini_llama<|T|>
     fn grads_seq(r: Self$@, tokens: List<|I32|>$@, targets: I32$[], arena: Arena$@):
         Seq_grads<|T|> //<
             //< Every position trained at once (`targets[t]` follows `tokens[t]`); weights only read
-            //<
             //< **It writes only to `arena`**, so each thread can take one sequence of a batch; the
             //< batch's gradient is their sum via `accumulate`.
         $cache: = r.train_forward(tokens, arena)
@@ -236,6 +217,5 @@ impl<|T|> Mini_llama<|T|>
 
 priv fn key(b: Str_builder$@, i: Sz, suffix: U8[]): U8[] //<
     //< Builds a safetensors weight key ("model.layers.{i}{suffix}")
-    //<
-    //< It has the same role as the same-named helper in ksai/examples/qwen_infer/main.kspl.
+    //< It has the same role as the same-named helper in ksai/examples/qwen_infer/model.kspl.
     return b.clear().s("model.layers.\{I32::i\}").s(suffix).slice()

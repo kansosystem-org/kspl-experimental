@@ -1,11 +1,11 @@
 //< The state every layer shares: the arenas, the compiler's configuration and the string pools
-//<
 //< `arena` holds the compilation's data, and `perm_arena` what must outlive a language-server
 //< request. `config` is what the command line asked for. `pools` turns node kinds, names and
 //< sources' logical names into numbers. **A name one layer writes and another matches stands here
 //< once** (`SLICE_FQN`, `OPTION_FQN`, the format methods). So the two never spell it apart.
 import "std/chars" as std_chars
 import "std/ds" { List, Map }
+import "std/math"
 import "std/mem" + { Arena, alloc, dealloc }
 import "std/str" { Str_builder }
 import "std/sys"
@@ -13,31 +13,26 @@ import "std/sys"
 const MAX_AST_KINDS: I32 = 512
 
 const IMMUT_MARK: U8[] = " immut" //< the immutability marker of the type's internal representation
-    //<
     //< In source, "unmarked is immutable" (the `$` goes only on a mutable level). The string keeps
     //< it apart from KSPL's `const` (a compile-time constant) and the C output's `const`.
 
 const SLICE_FQN: U8[] = "std.lang.Slice" //<
     //< The FQN of the borrowed contiguous region (`Slice<|$T|>` in `std/lang`)
-    //<
     //< A `T[]` is sugar for this (`../parse/desugar_slice.kspl`).
     //< Caution: **Keep the string in one place.** Sema's three layers (the type query, the
     //< instantiation, the cast check) and genc all match on this name.
 
 fn slice_ident(): U8[] //< the last word of `SLICE_FQN` (`Slice`)
-    //<
     //< **This is the identifier put into the AST.**
     //< Caution: **Do not write the bare name directly.** That breaks "keep it in one place" above:
     //< after a rename, the desugaring would still insert the old name.
     return SLICE_FQN.fqn_last()
 
 const UNKNOWN_TYPE_NAME: U8[] = "Unknown" //< the name of a type not yet known
-    //<
     //< The parser writes it for an omitted type; Env registers it at `Builtin_type_id.unknown`.
 
 const OPTION_FQN: U8[] = "std.lang.Option" //<
     //< The FQN of a value that can be absent (`T?`, the enum `Option` in `std/lang`)
-    //<
     //< A `T?` is sugar for this (`../parse/desugar_slice.kspl`).
     //< Caution: **Match an Option by this and `instance_base`**, never by its mangled name's shape.
 
@@ -47,7 +42,6 @@ fn option_ident(): U8[] //<
 
 const RESULT_FQN: U8[] = "std.lang.Result" //<
     //< The FQN of a value or an error (`T!E`, the enum `Result` in `std/lang`)
-    //<
     //< A `T!E` is sugar for this (`../parse/desugar_slice.kspl`).
     //< Caution: **Match a Result by this and `instance_base`**, never by its mangled name's shape.
 
@@ -57,7 +51,6 @@ fn result_ident(): U8[] //<
 
 const FMT_METHOD_CHAR: U8[] = "fmt_char" //<
     //< The method names that the format spec `\{value:SPEC\}` desugars to
-    //<
     //< Caution: **Keep the strings in one place.** Two places match on the same name: the builder
     //< (`build_call` in `../parse/format_spec.kspl`), and the code that rewords "there is no such
     //< method" in terms of the format spec (`format_spec_item` in `../sema/body/dot.kspl`). If
@@ -67,7 +60,6 @@ const FMT_METHOD_PREC: U8[] = "fmt_prec"
 const FMT_METHOD_SPEC: U8[] = "fmt_spec"
 const FMT_METHOD_FILE: U8[] = "std/strfmt" //<
     //< The file that defines the four, which a file using a SPEC imports
-    //<
     //< The rule is "An extension method requires the import" in
     //< `../../docs/SPEC-programming-language.md`.
 
@@ -135,7 +127,6 @@ struct Compiler_config
     is_lint: Bool
     run_lint_checks: Bool //<
         //< Whether to run the lint analysis
-        //<
         //< True under `is_lint` or any `##lint(CODE = error)` / `--lint=CODE=error`, so a check
         //< raised to an error runs in an ordinary build too (docs/DESIGN-principles.md Principle
         //< 5).
@@ -146,43 +137,35 @@ struct Compiler_config
         //< whether the command line raised a code to an error (`--lint=CODE=error`)
     recover_syntax: Bool //<
         //< Whether a file that fails to parse is read again with the recovery rules enabled.
-        //<
         //< **Only the editor sets it.** Set on a compile, input that must be rejected would be
         //< accepted (the grounds are "Only the editor's parse recovers from a syntax error" in
         //< `../docs/DESIGN-tools.md`).
     is_freestanding: Bool
     sanitize: U8[] //<
         //< The sanitizers `--sanitize=` named, separated by `,` as written; empty names none
-        //<
         //< genllvm marks every function it writes for each (`sanitize_<name>`), and `ksplc build`
-        //< hands the list to the C compiler as `-fsanitize=`. `check_sanitize` in `main.kspl`
+        //< hands the list to the C compiler as `-fsanitize=`. `check_sanitize` in `cli.kspl`
         //< refuses a name or a subcommand it cannot serve.
     is_program: Bool //<
         //< Whether the output must become a program, so a missing `main` is an error (`--program`)
-        //<
         //< `ksplc run` and `ksplc build` pass it to the compile they start. A plain compile can
         //< lack `main`, since its C can be linked with one written elsewhere.
     machine: U8[] //<
         //< The machine `--machine=` named; empty is the one ksplc runs on
-        //<
         //< **Read it through `current` in `target.kspl`**, which resolves the empty default.
     unit_count: Sz //<
         //< How many translation units to split the generated C into (`--split=`)
-        //<
         //< It is 0 where `--split=` is not given.
         //< **Do not read it directly**: read it through unit_count_or_one, which counts 0 as 1.
     interface_paths: List<|U8[]|>$@ //<
         //< Where a library's interfaces go (`--library=`, repeated); a library is built if any
-        //<
         //< Each extension picks its form (`form_of` in `tools/interface.kspl`). **Read whether a
         //< library is built through `is_library`**: a caller that bypasses the CLI leaves it null.
     surface_path: U8[] //<
         //< Where to write the record of the published API (`--emit-surface=`; empty writes none).
-        //<
         //< It is for comparing two versions, so it writes every declaration, generics too.
     surface_all: Bool //<
         //< Whether the record holds everything a sibling file can use, not just what is published
-        //<
         //< It is `--surface-scope=all`; **the default is the published API only**.
         //< **It is for a package that publishes nothing**, whose files use one another without
         //< `pub` and whose published record is empty. Not for comparing two versions: a changed
@@ -190,31 +173,26 @@ struct Compiler_config
     enable_stats: Bool
     diag_json: Bool //<
         //< Whether a diagnostic is printed as one JSON object per line rather than as text
-        //<
         //< It is `--diagnostic-format=json`; `print_json` in `diag.kspl` is the only writer.
     defines: List<|U8[]|>$@
     std_dir: U8[] //<
         //< The standard library's folder, empty until std_dir() resolves it; read it through that.
     std_dir_origin: U8[] //<
         //< Where std_dir() took std_dir from, for the note on a missing std (`base/locate.kspl`)
-        //<
         //< Empty where `--std-dir=` set std_dir before std_dir() first ran. Always a literal.
     pkg_src_dir: U8[] //<
         //< The folder of packages other than `std`
-        //<
         //< **Empty is a valid answer** (the current folder only), so the length does not say
         //< whether it is resolved. Read it through pkg_src_dir().
     pkg_src_dir_known: Bool
 $config: Compiler_config = ::{}
 
 fn unit_count_or_one(): Sz //< the generated C's split count
-    //<
     //< A 0, where no `--split=` is given, counts as 1.
-    return 1 if config.unit_count < 1 else config.unit_count
+    return math.max(config.unit_count, 1)
 
 typedef Progress_hook = fn() //<
     //< The hook that tells the caller "still working" during long work
-    //<
     //< Caution: **Use this hook instead of calling lsp from a lower layer**: parse or pipeline
     //< importing lsp would reverse the dependency. Where nothing sets it (ksplc itself, the tests)
     //< it stays null and a call does nothing.
@@ -222,14 +200,12 @@ $progress_hook: Progress_hook = Progress_hook::null
 
 priv const PROGRESS_EVERY_US: I64 = 1000000I64 //<
     //< The time between two reports [microseconds]
-    //<
     //< Caution: **Do not throttle by "once every N calls".** One iteration's cost varies by orders
     //< of magnitude, so counting lets **only the slow loops exceed the window**. **Keep it well
     //< under the supervisor's window** (`WORKER_TIMEOUT_MS` in `ksplc/lsp/server.kspl`).
 $progress_last_us: I64 = 0I64
 
 fn report_progress() //< it tells the caller "still working" during long work
-    //<
     //< **The caller need not count.** The throttling lives here, so call it freely inside a heavy
     //< loop.
     if progress_hook == null
@@ -243,14 +219,12 @@ fn report_progress() //< it tells the caller "still working" during long work
     progress_hook()
 
 fn is_library(): Bool //< whether a library is built (`--library=`)
-    //<
     //< Only its `#export` symbols then have external linkage. Everything else, its runtime and std
     //< included, is `static`, so two libraries in one program each keep their own (`KSPL_LINK` in
     //< `gen/runtime/core.h`).
     return config.interface_paths != null && config.interface_paths.len > 0
 
 fn is_llvm_target(): Bool //< whether the output goes to the LLVM IR backend
-    //<
     //< The checks whose accepted spelling depends on the backend share it (check_ffi_safety in
     //< sema/session/ctx.kspl, __kspl_inline_c in sema/body/call.kspl).
     switch config.target
@@ -261,7 +235,6 @@ fn is_llvm_target(): Bool //< whether the output goes to the LLVM IR backend
 
 const DEFINES_ENV_NAME: U8[] = "KSPLC_DEFINES" //<
     //< The environment variable that carries the `#cfg()` flags the LSP sets for analysis
-    //<
     //< It passes the same thing as `--define`.
     //< Caution: **Do not read it when compiling.** If it were read there, one source would silently
     //< build into something different whenever the Makefile's `--define` and the environment
@@ -269,7 +242,6 @@ const DEFINES_ENV_NAME: U8[] = "KSPLC_DEFINES" //<
 
 fn append_defines_from_env() //<
     //< It adds the `#cfg()` flags given through the environment variable to config.defines
-    //<
     //< The separators are a comma and whitespace.
     //< Caution: **Allocate the copy from perm_arena.** A flag lives as long as the process; on the
     //< arena the LSP rewinds, the next request frees it.
@@ -284,7 +256,6 @@ fn append_defines_from_env() //<
         start = i + 1
 
 const SOURCE_EXT: U8[] = ".kspl" //< the extension of a KSPL source file
-    //<
     //< **The string lives here and nowhere else.** Four things depend on it: the file an `import`
     //< opens (`append_file_path`), and the extension a name drops (`strip_kspl_ext`). The other two
     //< are the extension a diagnostic or `#line` adds back, and the check that a named file is a
@@ -293,14 +264,12 @@ const SOURCE_EXT: U8[] = ".kspl" //< the extension of a KSPL source file
 
 const STDIN_NAME: U8[] = "-" //<
     //< the name of a program read from standard input, or given by `--eval=`
-    //<
     //< **It has no file, so it is named as a command line names standard input.** It stands in
     //< the current folder: a relative import resolves from there. A diagnostic shows it as it is,
     //< with no extension added (`with_source_ext`).
 
 fn source_of(map: Map<|U8[], U8$[]|>$@, file: U8[]): U8$[] //<
     //< the text a source map holds for `file`
-    //<
     //< An `import`'s name has no extension, so a miss retries with source_ext added; "" if
     //< neither.
     //< Caution: **Look a file's text up only through here**, so every reader agrees on the retry.
@@ -312,7 +281,6 @@ fn source_of(map: Map<|U8[], U8$[]|>$@, file: U8[]): U8$[] //<
     return map.get(named.slice()).unwrap_or("")
 
 const FILE_URI_SCHEME: U8[] = "file://" //< the scheme an LSP document URI carries
-    //<
     //< **Input and output share it**, so a document cannot come in under one spelling and go back
     //< out under another.
 
@@ -321,7 +289,6 @@ struct Global_pools
     priv symbol_names: String_pool$@
     priv source_files: String_pool$@ //<
         //< The sources' logical names.
-        //<
         //< Caution: **Do not store the name itself in a tree node.** There can be millions of
         //< nodes, so a 16-byte slice per node costs the tree's size where one per file is enough. A
         //< node holds a 4-byte number, which `base_ast.Loc.file` looks up.
@@ -330,7 +297,6 @@ $pools: Global_pools = ::{}
 impl Global_pools
     fn init(r: Self$@) //<
         //< It creates the three pools, empty
-        //<
         //< Caution: **Intern the node kinds before anything else uses the kind pool** (`init` in
         //< `setup.kspl` does it next). Then a kind's number in the pool equals its enum value.
         if r.ast_kinds != null
@@ -352,19 +318,16 @@ impl Global_pools
         return r.symbol_names.intern(name)
 
     fn name_text(r: Self$@, name: U8[]): U8[] //< the pool's one copy of a name, kept to the end
-        //<
         //< **A name built from parts is kept here** (an FQN, a path's segments joined by `.`), each
         //< distinct name once, NUL-terminated. Such a name is built again on every read of it. A
         //< copy on the arena per read costs a string per read, megabytes on a self-host.
         return r.symbol_names.list.get(r.symbol_names.intern(name))
 
     fn intern_file(r: Self$@, file: U8[]): I32 //< turns a source's logical name into a number
-        //<
         //< An empty name is 0, and `get_file_str` returns empty for it too.
         return r.source_files.intern(file)
 
     fn get_file_str(r: Self$@, file_id: I32): U8[] //< turns a number back into a logical name
-        //<
         //< An unknown number returns empty (treated the same as no name).
         if r.source_files != null && file_id >= 0 && file_id < I32::r.source_files.list.len
             return r.source_files.list.get(file_id)
@@ -383,7 +346,6 @@ impl Global_pools
 impl Str_builder
     fn s_path_as_dots(r: Self$@, path: U8[]): Str_builder$@ //<
         //< A file path written as the qualifier of a fully qualified name
-        //<
         //< This rule lives here and nowhere else.
         //< A separator becomes the `.` between parts, and **a `.` inside the name becomes `_`**
         //< (the extension a non-default notation keeps). So the result can be written in source.
@@ -406,7 +368,6 @@ impl U8[]
 
     fn with_source_ext(r: U8[]): U8[] //<
         //< The name spelt as its file: `SOURCE_EXT` added where the last part has no extension
-        //<
         //< **A name with an extension is a file named as it is** (the grammar's `.kspeg`, a parser
         //< fixture), so nothing is added to it. Only a logical name (`std/io`) carries none. Nor is
         //< anything added to `STDIN_NAME`, which names no file.
@@ -459,7 +420,6 @@ impl U8[]
 
     fn get_line_info(r: U8[], target_offset: Sz, starts: List<|Sz|>$@): Line_info //<
         //< char_idx: the UTF-16 code-unit offset given to the LSP (a surrogate pair's worth is +2)
-        //<
         //< disp_col: the 1-based display column for the CLI's diagnostic display (in code points).
         //< Caution: **Always pass the line-start table (line_starts).** Recounting makes N lookups
         //< in one file O(size × N). **Do not write a second conversion**: line_for_offset gives the
@@ -486,9 +446,34 @@ impl U8[]
                 i += step
         return info
 
+    fn offset_of_utf16(r: U8[], line_idx: Sz, char_idx: Sz, starts: List<|Sz|>$@): Sz //<
+        //< get_line_info's inverse: the byte offset of a UTF-16 code-unit offset in a line
+        //< line_idx is 0-based, an index into `starts`. A character past a line's end lands on
+        //< that line's end. A line before the first lands on the text's start, and a line past
+        //< the last on its end. A character inside a surrogate pair lands on the pair's start.
+        if line_idx < 0
+            return 0
+        if line_idx >= starts.len
+            return r.len
+        $col: Sz = 0
+        $i: = starts.get(line_idx)
+        for i < r.len && col < char_idx
+            c: = (r.ptr + i)$
+            if c == '\n'
+                return i
+            if c == '\r'
+                i += 1
+                continue
+            step: = r.next_codepoint(i)
+            units: = 2 if step == 4 else 1
+            if col + units > char_idx
+                return i
+            col += units
+            i += step
+        return i
+
     fn line_starts(r: U8[], arena: Arena$@): List<|Sz|>$@ //<
         //< Each line's starting byte offset (ascending; index 0 is 0, the start of line 1)
-        //<
         //< Caution: **Build it once per file and pass it along** (the reason is at get_line_info
         //< above).
         starts: = arena.create(List<|Sz|>.new(arena))
@@ -500,7 +485,6 @@ impl U8[]
 
 fn line_for_offset(starts: List<|Sz|>$@, offset: Sz): Sz //<
     //< The 1-based line number of the offset, by binary search in the table from `line_starts`
-    //<
     //< Caution: The table must come from `line_starts` (ascending, with 0 first).
     $lo: Sz = 0
     $hi: Sz = starts.len
@@ -511,6 +495,12 @@ fn line_for_offset(starts: List<|Sz|>$@, offset: Sz): Sz //<
         else
             hi = mid
     return lo
+
+fn by_descending(a: I64, b: I64): I32 //< an `order_by` result that puts the larger count first
+    //< Caution: **Do not compare by subtraction.** An `I64` difference does not fit in `I32`.
+    if a == b
+        return 0
+    return -1 if a > b else 1
 
 impl String_pool: Manual_free {}
 impl Global_pools: Manual_free {}

@@ -1,5 +1,4 @@
 //< Converts a string to a number: `to_i64`, `to_f64` and `parse_size`
-//<
 //< The other direction is `std/strfmt`. **The digits and the rounding form one contract**, so
 //< changing only one side breaks the round trip; `make debug`'s `test_strnum_roundtrip` pins it.
 //< **Freestanding needs no libc either**: the parser is one implementation on both targets.
@@ -7,7 +6,6 @@ import "std/bignat" + { Bignat }
 import "std/chars" // classifying one character
 
 pub enum Strnum_error //< why a string could not be read as a number
-    //<
     //< It is separate from `std/str`'s `Str_error`, which has the same two variants. Using that one
     //< would make a program that only reads numbers pay for all of `std/str`, and form a cycle.
     invalid_format //< the text does not have the shape of a number
@@ -15,34 +13,27 @@ pub enum Strnum_error //< why a string could not be read as a number
 
 priv const F64_MANTISSA_DIGITS: Sz = 19 //<
     //< How many decimal digits `to_f64` takes into the significand
-    //<
     //< Caution: Stop at 19. The 20th overflows a U64 (10^20 > 2^64); the digits past it are judged
     //< in multiple precision when they decide the rounding.
 priv const F64_EXP_DIGITS_LIMIT: I64 = 1000000000I64 //< the cap on the exponent part
-    //<
     //< Caution: **Do not cap it near F64's range (±400).** The 0s after the decimal point are
     //< subtracted from the scale, so capping `0.000…1e4001`'s exponent at 400 gives a wrong value.
 priv const POW10_MAX: Sz = 22 //< the powers of 10 an F64 can hold **exactly**.
-    //<
     //< **Stop at 10^22.** 10^23 does not fit an F64 exactly, and "significand x 10^n rounds
     //< once" holds only within this range.
 priv const F64_EXACT_MANTISSA: U64 = 9007199254740992U64 //<
     //< The fast path is exact only when the significand is below this value, 2^53
-    //<
     //< An integer below 2^53 fits an F64 exactly.
 priv const F64_EXACT_DIGITS: Sz = 768 //<
     //< The most significant digits the slow path reads
-    //<
     //< **768 is enough.** The midpoint between two neighbouring F64s ends within 767 decimal
     //< digits, so later digits matter only as "not 0".
 priv const F64_REFINE_STEPS: I32 = 4 //<
     //< The most times the slow path adjusts the value by 1 ulp
-    //<
     //< It starts from the F64 nearest the 19 digits kept. The text lies between that and the
     //< one nearest those digits plus 1, at most 1 ulp apart. Only a bug in the algorithm goes past.
 priv const F64_TIE_Q_MIN: I64 = -4I64 //<
     //< The smallest power of 10 at which w x 10^q can lie exactly halfway between two F64s
-    //<
     //< A tie is an odd number 54 bits wide times a power of 2. Below this, 5^-q must divide w and
     //< leaves under 54 bits; above f64_tie_q_max, 5^q alone is wider.
 priv const F64_TIE_Q_MAX: I64 = 23I64 //< the largest such power
@@ -123,7 +114,6 @@ impl U8[]
         return body.parse_int_core(0, is_neg@)!
 
     pub fn to_count( //< the whole string as digits alone (`1*DIGIT`), no larger than `limit`
-        //<
         //< **No sign, space or other character is taken**: a protocol's length field (HTTP's and
         //< JSON-RPC's `Content-Length`) is refused whole rather than read as what precedes it.
         r: U8[],
@@ -142,7 +132,6 @@ impl U8[]
         return n
 
     pub fn to_f64(r: U8[]): F64!Strnum_error //< the whole string as a floating-point number
-        //<
         //< The shape is JSON's number (`-12.5e-3`). **It does not use `strtod`.** Freestanding has
         //< no libc. The same value on both targets matters more than strtod's `inf`, `nan` and
         //< hex floating point, which are **not accepted** here.
@@ -243,7 +232,6 @@ priv fn leading_zeros(v: U64): U64 //< how many 0 bits stand above the highest 1
 
 priv fn nearest_f64(w: U64, q: I64): U64 //<
     //< The bits of the F64 nearest w x 10^q, a tie to the even one
-    //<
     //< It is Eisel-Lemire as fast_float does it. w times the top 128 bits of 10^q gives the top 55
     //< bits of the product. Mushtak and Lemire prove those always round right. The low half of
     //< the table is read only when a carry from below could reach those bits.
@@ -293,7 +281,6 @@ priv fn nearest_f64(w: U64, q: I64): U64 //<
     return (U64::power2 << 52U64) | (mant & bignat.F64_MANTISSA_MASK)
 
 priv struct Decimal_text //< the input to `to_f64`'s slow path
-    //<
     //< The value is `digits x 10^exp10` (or slightly more, if `sticky`).
     digits: Bignat
     exp10: I64
@@ -302,7 +289,6 @@ priv struct Decimal_text //< the input to `to_f64`'s slow path
 
 priv fn collect_decimal(body: U8[]): Decimal_text //<
     //< Collects the significant digits from the text (whose shape `to_f64` has already checked)
-    //<
     //< Leading 0s are not counted; the decimal point goes into the scale. Past 768 digits, integer
     //< digits go into the scale and fraction digits are discarded; a non-0 one sets `sticky`.
     $d: Decimal_text = ::{}
@@ -359,7 +345,6 @@ priv fn collect_decimal(body: U8[]): Decimal_text //<
 
 priv fn cmp_scaled(d: Decimal_text@, pow10: Bignat@, q: U64, t: I64): I32 //<
     //< Compares the true value `d` with `q x 2^t` (-1 / 0 / 1)
-    //<
     //< A negative power is multiplied into the other side (the arbitrary precision has no
     //< division). `pow10` is `10^|d.exp10|`, which the caller keeps so it is not rebuilt on each
     //< call.
@@ -383,7 +368,6 @@ priv fn cmp_scaled(d: Decimal_text@, pow10: Bignat@, q: U64, t: I64): I32 //<
 #noinline
 priv fn refine_f64(body: U8[], approx: U64): U64 //<
     //< Moves `approx` (an F64's bits, 0 or more) to the bits of the F64 nearest the text
-    //<
     //< It is Clinger's AlgorithmR. A neighbour is the bit pattern +/-1 (IEEE 754 is ordered by
     //< magnitude over the positives). Above the upper midpoint it moves up, below the lower one it
     //< moves down; otherwise it is done.

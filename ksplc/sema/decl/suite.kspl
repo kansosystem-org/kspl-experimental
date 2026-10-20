@@ -1,0 +1,318 @@
+//< Writes the `run` of each `impl S: suite.Suite`, and reports a test that would not run
+//< `run` calls every function named `test_…` in the suite's own file, then in each file it
+//< imports, in the order the import lines stand ("8.5 Tests: functions named `test_`, run by a
+//< suite" in `../../../docs/SPEC-programming-language.md`). **It runs in collect's Pass 2a'', after
+//< the `Reflectable` tables and before 2b**, which registers the method it adds.
+//< **The method is written as source and parsed** (`parse_synth_decls` in
+//< `../../parse/load.kspl`), then moved onto the `impl` it was made for.
+import "kspeg/engine" as kspeg
+import "ksplc/base/ast" as base_ast + { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/base/core" as base_core
+import "ksplc/base/diag" as base_diag
+import "ksplc/parse/load" as parse_load
+import "ksplc/sema/decl/layout" as sema_decl_layout
+import "ksplc/sema/decl/name" as sema_decl_name
+import "ksplc/sema/decl/resolve" as sema_decl_resolve
+import "ksplc/sema/session/ctx" { Sema_ctx }
+import "ksplc/sema/type/def" as sema_type_def
+import "ksplc/sema/type/display" as sema_type_display
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as sema_type_query
+import "ksplc/sema/type/scope" as sema_type_scope
+import "std/chars" // `starts_with`
+import "std/ds" { List, Map }
+import "std/str" { Str_builder }
+
+priv const TRAIT_FQN: U8[] = "std.suite.Suite" //< the trait a suite conforms to
+    //< **If `std/suite` renames it or its methods, change these too** (the top of
+    //< `../../../std/suite.kspl`).
+priv const RUN_NAME: U8[] = "run" //< the method this file writes
+priv const BEFORE_NAME: U8[] = "before_each" //< the method called before each test
+priv const AFTER_NAME: U8[] = "after_each" //< the method called after each test
+
+priv const TEST_PREFIX: U8[] = "test_" //< the start of a test's name
+
+priv struct Reached //< one test a suite calls, and how its file reaches it
+    decl: Ast_node$@
+    prefix: U8[] //< the import alias and its `.`; empty for a test in the suite's own file
+
+impl Sema_ctx
+    fn synthesize_suite_runs(r: Self$@, root: Ast_node$@, parser: kspeg.Target$@) //<
+        //< Writes every suite's `run`, and reports the tests no suite runs
+        //< Caution: **Collect the tests in one walk before any suite is written**, or a suite
+        //< met before its tests' file finds none.
+        tests: = base_core.arena
+            .create(Map<|U8[], List<|Ast_node$@|>$@|>.new(base_core.arena))
+        $has_main: = false
+        for top_node in root.children
+            d: = top_node.unwrap_top_level()
+            if d.kind_id != .k_decl_fn || d.made_by_compiler()
+                continue
+            file: = d.loc.file()
+            name: = d.get_decl_id_text()
+            if name.equals("main") && file.equals(r.main_file)
+                has_main = true
+            if name.starts_with(TEST_PREFIX)
+                $list: = tests.get(file).unwrap_or(null)
+                if list == null
+                    list = base_core.arena
+                        .create(List<|Ast_node$@|>.new(base_core.arena))
+                    tests.set(file, list)
+                list.push(d)
+        run_by: = base_core.arena.create(Map<|U8[], Bool|>.new(base_core.arena))
+        reached_files: = base_core.arena.create(Map<|U8[], Bool|>.new(base_core.arena))
+        for top_node in root.children
+            child: = top_node.unwrap_top_level()
+            if child.kind_id != .k_decl_impl
+                continue
+            r.set_current_file(child.loc.file())
+            if r.is_suite_impl(child)
+                r.write_suite_run(child, root, tests, run_by, reached_files, parser)
+        // **Only a program can say a test is left out**: a file compiled alone (an editor's view,
+        // a library) has no suite of its own to run it.
+        if !has_main
+            return
+        r.suite_files = reached_files
+        for entry in tests.items()
+            for d in entry.value
+                if !run_by.get(key_of_test(d)).unwrap_or(false)
+                    r.report_test_not_run(d)
+
+    fn check_uncalled_in_suite_files(r: Self$@) //<
+        //< Reports [W0503]: a function in a file a suite reaches that nothing calls
+        //< A test with a misspelt name (`tset_sum`) is such a function: no suite runs it, and no
+        //< other code calls it. **It runs after every body is analysed**, since only then is each
+        //< function's use known, and only for a program (`synthesize_suite_runs` sets the files).
+        if r.suppress_errors || r.suite_files == null
+            return
+        switch r.bodies
+        case .everywhere {}
+        case .main_file
+            return
+        case .mentioning
+            return
+        for entry in r.suite_files.items()
+            file_env: = r.env.files.get(entry.key).unwrap_or(null)
+            if file_env == null
+                continue
+            for s in file_env.symbols.items()
+                sym: = s.value
+                if sym.node == null || sym.node.kind_id != .k_decl_fn || sym.flags.is_used ||
+                    sym.flags.is_method || sym.flags.is_generated_instance ||
+                    sym.flags.is_export || sym.node.made_by_compiler()
+                    continue
+                name: = sym.node.get_decl_id_text()
+                if name.starts_with(TEST_PREFIX) || name.starts_with("_") ||
+                    name.equals("main") || sym.name.find_str("._anon_").is_some()
+                    continue
+                site: = sym.node.find_child(.k_identifier)
+                r.clear_scratch()
+                    .s("[W0503] '\{name\}' stands in a file of tests, but nothing calls it and its \
+                        name does not start with 'test_', so no suite runs it. If it is a test, \
+                        name it 'test_…'. Otherwise call it, or remove it")
+                r.warn(site if site != null else sym.node, r.scratch.slice())
+
+    priv fn report_test_not_run(r: Self$@, d: Ast_node$@) //< reports [W0214]
+        site: = d.find_child(.k_identifier)
+        r.clear_scratch()
+            .s("[W0214] '\{d.get_decl_id_text()\}' is named like a test, but no suite in this \
+                program runs it. A suite runs the tests of its own file and of the files that file \
+                imports. Import this file from the file that holds the suite")
+        r.warn(site if site != null else d, r.scratch.slice())
+
+    priv fn is_suite_impl(r: Self$@, impl_node: Ast_node$@): Bool //<
+        //< Whether it is an `impl X: suite.Suite`
+        //< Caution: **Match by FQN**, as `Reflectable` is matched: a file's own `trait Suite` is
+        //< not it.
+        path: = impl_node.find_child(.k_expr_path)
+        if path == null || path.children.len == 0
+            return false
+        return r.read_written_type(path).fqn.equals(TRAIT_FQN)
+
+    priv fn write_suite_run(r: Self$@, impl_node: Ast_node$@, root: Ast_node$@,
+        tests: Map<|U8[], List<|Ast_node$@|>$@|>$@, run_by: Map<|U8[], Bool|>$@,
+        reached_files: Map<|U8[], Bool|>$@, parser: kspeg.Target$@) //<
+            //< Writes one suite's `run` into its `impl`; on a refusal it reports and writes none
+        if impl_node.find_child(.k_type_gen_params) != null
+            r.err(impl_node,
+                "a suite cannot be generic. Its 'run' calls each test with the suite's own fields, \
+                    so it is written once, for one struct")
+            return
+        for m in impl_node.children
+            if m.kind_id == .k_decl_fn && m.get_decl_id_text().equals(RUN_NAME)
+                r.err(m,
+                    "a suite's 'run' is written by the compiler. It calls every 'test_…' function \
+                        of this file and of the files it imports. Remove this 'run'. To act around \
+                        each test, write 'before_each' or 'after_each'")
+                return
+        fields: = r.suite_fields(impl_node) catch
+            return
+        file: = impl_node.loc.file()
+        reached_files.set(file, true)
+        $reached: = List<|Reached|>.new(null)
+        defer reached.free()
+        if own: = tests.get(file)
+            for d in own
+                reached.push(Reached::{ .decl = d, .prefix = "" })
+        for top_node in root.children
+            imp: = top_node.unwrap_top_level()
+            if imp.kind_id == .k_decl_import && imp.loc.file().equals(file)
+                r.add_imported_tests(imp, tests, reached@, reached_files)
+        $src: = Str_builder.new()
+        src.s("impl ").s(impl_node.find_text(.k_type_expr)).s(" {\n  fn ").s(RUN_NAME)
+            .s("(r: Self$@) {\n")
+        $ok: = true
+        for one in reached
+            if !r.write_test_call(one, fields, impl_node, src@)
+                ok = false
+            run_by.set(key_of_test(one.decl), true)
+        src.s("  }\n}\n")
+        if !ok
+            return
+        made: = base_core.arena.create(List<|Ast_node$@|>.new(null))
+        defer made.free()
+        parse_load.parse_synth_decls(src.slice(), file, parser, made) catch
+            base_diag.ice_panic("suite: the synthesized 'run' failed to parse")
+            return
+        base_diag.ice_assert(made.len == 1 && made.get(0).kind_id == .k_decl_impl,
+            "suite: the synthesized source is not one impl")
+        method: = made.get(0).find_child(.k_decl_fn)
+        base_diag.ice_assert(method != null, "suite: the synthesized impl holds no 'run'")
+        method.place_as_made(impl_node.loc)
+        impl_node.add_child(method)
+
+    priv fn suite_fields(r: Self$@, impl_node: Ast_node$@):
+        List<|sema_type_def.Struct_field$@|>$@? //<
+            //< The fields of the struct the suite is, which its tests take by name
+            //< `.none` once the reason is reported. **An enum is a suite with no fields**: a struct
+            //< cannot be empty, and the tests of some packages take nothing.
+        target: = impl_node.find_child(.k_type_expr)
+        if target == null
+            return .none
+        type_id: = target.resolve_type(r) catch 0
+        if type_id == 0
+            return .none
+        r.ensure_type_registry(type_id, impl_node) catch
+            return .none
+        real_id: = r.env.get_clean_real_type(type_id)
+        if sd: = r.env.get_struct_def(r.env.base_type_name(real_id))
+            if sd.fields_list != null
+                return .some(sd.fields_list)
+        if _ed: = r.env.get_enum_def(r.env.base_type_name(real_id))
+            return .some(base_core.arena
+                .create(List<|sema_type_def.Struct_field$@|>.new(base_core.arena)))
+        r.err(impl_node,
+            "a suite is a struct, whose fields are the values its tests take, or an enum, whose \
+                tests take nothing")
+        return .none
+
+    priv fn add_imported_tests(r: Self$@, imp: Ast_node$@,
+        tests: Map<|U8[], List<|Ast_node$@|>$@|>$@, reached: List<|Reached|>$@,
+        reached_files: Map<|U8[], Bool|>$@) //<
+            //< Adds the tests of the file one import line names, called through its alias
+        clean: = imp.get_import_path_text().unwrap_or("")
+        if clean.len == 0
+            return
+        file: = imp.loc.file()
+        $target_sb: = file.resolve_import_path(clean)
+        found: = tests.get(target_sb.slice()).unwrap_or(null)
+        if found == null || found.len == 0
+            return
+        // **Only a file holding a test is a file of tests**: an imported library is not one.
+        reached_files.set(base_core.arena.dup_str(target_sb.slice()), true)
+        // A selective import with no `+` names no alias, so the suite has no way to the tests.
+        if imp.get_decl_import_selector_list() != null && !imp.has_import_plus()
+            r.clear_scratch()
+                .s("this file holds a suite, and '\{clean\}' holds 'test_…' functions, but the \
+                    import names no alias to call them through. Import the file whole ('import \
+                    \"\{clean\}\"'), or add '+' ('import \"\{clean\}\" + { ... }')")
+            r.err(imp, r.scratch.slice())
+            return
+        $alias: = imp.get_import_alias()
+        if alias.len == 0
+            alias = clean.default_import_alias()
+        prefix: = base_core.arena.text().s(alias).c('.').take()
+        for d in found
+            reached.push(Reached::{ .decl = d, .prefix = prefix })
+
+    priv fn write_test_call(r: Self$@, one: Reached,
+        fields: List<|sema_type_def.Struct_field$@|>$@, impl_node: Ast_node$@, src: Str_builder$@):
+        Bool //<
+            //< Writes the three calls one test takes; false, with the reason reported, if it cannot
+            //< Caution: **Check everything before writing**: a call the analysis refuses later
+            //< would be reported at the suite, far from the test that must change.
+        d: = one.decl
+        name: = d.get_decl_id_text()
+        suite: = impl_node.find_text(.k_type_expr)
+        old_file: = r.file_name
+        defer r.set_current_file(old_file)
+        r.set_current_file(d.loc.file())
+        $ok: = true
+        if d.find_child(.k_type_gen_params) != null
+            r.clear_scratch()
+                .s("test '\{name\}' is generic, but the suite '\{suite\}' has no type argument to \
+                    give it. Write the test for one type")
+            r.err(d, r.scratch.slice())
+            ok = false
+        if !d.loc.file().equals(impl_node.loc.file()) && d.get_visibility() == .file_private
+            r.clear_scratch()
+                .s("test '\{name\}' is 'priv', so the suite '\{suite\}' in another file cannot call \
+                    it. Remove 'priv'")
+            r.err(d, r.scratch.slice())
+            ok = false
+        ret: = d.get_decl_type_node()
+        if ret != null
+            ret_id: = ret.resolve_type(r) catch 0
+            if ret_id != 0 && !sema_type_env.is_void(ret_id)
+                r.clear_scratch()
+                    .s("test '\{name\}' returns '\{r.env.display(ret_id)\}', which no suite reads. \
+                        A test returns nothing, and stops the program to fail (an 'assert' or a \
+                        'panic')")
+                r.err(ret, r.scratch.slice())
+                ok = false
+        $args: = Str_builder.new()
+        for p in base_ast_ext.Param_cursor.new(d.get_fn_params(), false)
+            p_name: = p.find_text(.k_identifier)
+            if !r.check_test_param(p, p_name, name, fields, suite)
+                ok = false
+                continue
+            if args.len > 0
+                args.s(", ")
+            args.s("r.").s(p_name)
+        if !ok
+            return false
+        src.s("    r.").s(BEFORE_NAME).s("(\"").s(name).s("\");\n")
+        src.s("    ").s(one.prefix).s(name).s("(").s(args.slice()).s(");\n")
+        src.s("    r.").s(AFTER_NAME).s("(\"").s(name).s("\");\n")
+        return true
+
+    priv fn check_test_param(r: Self$@, p: Ast_node$@, p_name: U8[], test: U8[],
+        fields: List<|sema_type_def.Struct_field$@|>$@, suite: U8[]): Bool //<
+            //< Whether the suite has a field named as the parameter, of the same type
+        $p_id: I32 = 0
+        t_node: = p.get_decl_type_node()
+        if t_node != null
+            p_id = t_node.resolve_type(r) catch 0
+        for f in fields
+            if !f.name.equals(p_name)
+                continue
+            if p_id == 0 || f.type_id == p_id
+                return true
+            r.clear_scratch()
+                .s("test '\{test\}' takes '\{p_name\}: \{r.env.display(p_id)\}', but the field \
+                    '\{p_name\}' of the suite '\{suite\}' is '\{r.env.display(f.type_id)\}'. A \
+                    suite hands each test its field of the same name, so the two types must be the \
+                    same")
+            r.err(p, r.scratch.slice())
+            return false
+        r.clear_scratch()
+            .s("test '\{test\}' takes '\{p_name\}', but the suite '\{suite\}' has no field \
+                '\{p_name\}'. A suite hands each test its field of the same name. Add the field to \
+                the suite, or take the value another way")
+        r.err(p, r.scratch.slice())
+        return false
+
+priv fn key_of_test(d: Ast_node$@): U8[] //< the key a test is found by: its file and its name
+    return base_core.arena.text().s(d.loc.file()).s("::").s(d.get_decl_id_text()).take()

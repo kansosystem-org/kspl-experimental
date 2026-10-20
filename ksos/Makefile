@@ -47,6 +47,8 @@ row_field = $(word $(2),$(subst :, ,$(1)))
 row_keys = $(foreach r,$(1),$(call row_field,$(r),1))
 # $(call rows_missing,<rows>,<field>): the rows that leave that field out, for an `$(error)`.
 rows_missing = $(strip $(foreach r,$(1),$(if $(call row_field,$(r),$(2)),,$(r))))
+# $(call us,<suffix>): the suffix as a file name's part (`-` becomes `_`).
+us = $(subst -,_,$(1))
 
 LLVM_VER := $(shell clang --version | sed -n 's/.*version \([0-9]*\).*/\1/p' | head -1)
 LLD      := $(shell command -v ld.lld      || command -v ld.lld-$(LLVM_VER)      || echo ld.lld)
@@ -187,8 +189,8 @@ endif
 define ksos_posix_demo_rule
 ksos-$(1):
 	@echo "# BUILDING KANSO OS (POSIX demo/posix/$(2).kspl)"
-	$$(call posix_link,demo/posix/$(2).kspl,ksos_$(subst -,_,$(1)))
-	$$(call ksos_capped_run,./$$(POSIX_OUT)/ksos_$(subst -,_,$(1)).exe)
+	$$(call posix_link,demo/posix/$(2).kspl,ksos_$(call us,$(1)))
+	$$(call ksos_capped_run,./$$(POSIX_OUT)/ksos_$(call us,$(1)).exe)
 endef
 $(foreach r,$(KSOS_POSIX_TEMPLATED),$(eval $(call ksos_posix_demo_rule,$(call row_field,$(r),1),$(call row_field,$(r),2))))
 
@@ -215,13 +217,15 @@ $(error a panic demo has no ksos_posix_panic_needle_: $(ksos_posix_panic_missing
 endif
 
 # $(call ksos_posix_panic_rule,<suffix>)
+# The demo's output is copied set off with `| `. Its panic is expected, so it must not open a line
+# with `panic: `: the CI summary lists such a line as a cause, ahead of the gate's own FAIL line.
 define ksos_posix_panic_rule
 ksos-$(1):
 	@echo "# BUILDING KANSO OS (POSIX demo/posix/panic_demo.kspl $(1), which must panic)"
-	$$(call posix_link,demo/posix/panic_demo.kspl,ksos_$(subst -,_,$(1)))
-	@$$(call ksos_capped,./$$(POSIX_OUT)/ksos_$(subst -,_,$(1)).exe $(1) >$$(POSIX_OUT)/ksos_$(subst -,_,$(1)).out 2>&1); \
-	cat $$(POSIX_OUT)/ksos_$(subst -,_,$(1)).out >&2; \
-	if grep -q "$(ksos_posix_panic_needle_$(1))" $$(POSIX_OUT)/ksos_$(subst -,_,$(1)).out; then \
+	$$(call posix_link,demo/posix/panic_demo.kspl,ksos_$(call us,$(1)))
+	@$$(call ksos_capped,./$$(POSIX_OUT)/ksos_$(call us,$(1)).exe $(1) >$$(POSIX_OUT)/ksos_$(call us,$(1)).out 2>&1); \
+	sed 's/^/| /' $$(POSIX_OUT)/ksos_$(call us,$(1)).out >&2; \
+	if grep -q "$(ksos_posix_panic_needle_$(1))" $$(POSIX_OUT)/ksos_$(call us,$(1)).out; then \
 		echo "RESULT: ALL PASS (ksos-$(1): the kernel stopped with the expected message)"; \
 	else \
 		echo "RESULT: SOME FAILED (1) -> ksos-$(1): expected message not found"; exit 1; \
@@ -231,17 +235,14 @@ $(foreach r,$(KSOS_POSIX_PANIC),$(eval $(call ksos_posix_panic_rule,$(r))))
 
 CM_DIR  := port/cortex_m
 CM_OUT  := $(OUT)/ksos_cm
-CM_OBJS := $(CM_OUT)/startup.o $(CM_OUT)/switch.o $(CM_OUT)/port.o $(CM_OUT)/semihost.o
+# Each object is named after its source, so one rule builds the assembly and one the C.
+CM_OBJS := $(CM_OUT)/startup.o $(CM_OUT)/switch.o $(CM_OUT)/ksos_port_cm.o $(CM_OUT)/semihost.o
 
 $(CM_OUT):
 	@mkdir -p $@
-$(CM_OUT)/port.o: $(CM_DIR)/ksos_port_cm.c | $(CM_OUT)
+$(CM_OUT)/%.o: $(CM_DIR)/%.S | $(CM_OUT)
 	$(CM_CC) -c $< -o $@
-$(CM_OUT)/semihost.o: $(CM_DIR)/semihost.c | $(CM_OUT)
-	$(CM_CC) -c $< -o $@
-$(CM_OUT)/switch.o: $(CM_DIR)/switch.S | $(CM_OUT)
-	$(CM_CC) -c $< -o $@
-$(CM_OUT)/startup.o: $(CM_DIR)/startup.S | $(CM_OUT)
+$(CM_OUT)/%.o: $(CM_DIR)/%.c | $(CM_OUT)
 	$(CM_CC) -c $< -o $@
 
 # $(call bare_link,<cc>,<out dir>,<link.ld>,<objects>,<libgcc>,<src.kspl>,<elf>,<stem>,<machine>):
@@ -259,14 +260,25 @@ endef
 # $(call cm_link,<src.kspl>,<elf>[,<stem>]): a Cortex-M3 build (`bare_link`).
 cm_link = $(call bare_link,$(CM_CC),$(CM_OUT),$(CM_DIR)/link.ld,$(CM_OBJS),$(LIBGCC_CM),$(1),$(2),$(3),$(CM_MACHINE))
 
-# $(call cm_qemu,<elf>): runs it on MPS2-AN385 (Cortex-M3), under the cap (`ksos_capped_run`), the
-# only stop for a hung demo. QEMU's exit status is the demo's verdict (`con.exit`).
+# $(call qemu_run,<machine>,<cpu>,<elf>): runs it on a QEMU board, under the cap
+# (`ksos_capped_run`), the only stop for a hung demo. QEMU's exit status is the demo's verdict.
 # Caution: **Keep `-icount shift=auto`**: it makes the board's clock count executed instructions.
 # Without it the SysTick follows the host's clock, and a host that stalls QEMU gets two ticks
 # delivered back to back to catch up, which no real board does: the control loop's period check
 # then sees a one-tick slip in about one run in ten (`cortex_m_control_ai_probe.kspl`).
-cm_qemu = $(call ksos_capped_run,qemu-system-arm -M mps2-an385 -cpu cortex-m3 \
-    -display none -monitor none -serial null -semihosting -icount shift=auto -kernel $(1) </dev/null)
+qemu_run = $(call ksos_capped_run,qemu-system-arm -M $(1) -cpu $(2) \
+    -display none -monitor none -serial null -semihosting -icount shift=auto -kernel $(3) </dev/null)
+
+# $(call qemu_demo_rule,<family>,<suffix>,<source stem>,<objects>,<OUT>,<link>,<machine>,<cpu>,<where>)
+# `ksos-<family>-<suffix>` builds `<source stem><suffix>.kspl` into `<OUT>/ksos_<family>_<suffix>.elf`
+# (`-` becomes `_`) with the <link> macro, and runs it (`qemu_run`). <where> is the name of the
+# variable that says what it runs on, since that text can hold a comma.
+define qemu_demo_rule
+ksos-$(1)-$(2): $(4)
+	@echo "# BUILDING+RUNNING $(3)$(call us,$(2)).kspl on $$($(9)) bare metal"
+	$$(call $(6),$(3)$(call us,$(2)).kspl,$(5)/ksos_$(1)_$(call us,$(2)).elf)
+	$$(call qemu_run,$(7),$(8),$(5)/ksos_$(1)_$(call us,$(2)).elf)
+endef
 
 # The cooperative demo: the build, plus checking the vector table and PendSV with objdump.
 ksos-cm: $(CM_OBJS)
@@ -281,7 +293,7 @@ ksos-cm: $(CM_OBJS)
 # Runs that ELF under QEMU (mps2-an385); output and exit go through ARM semihosting.
 ksos-cm-run: ksos-cm
 	@echo "# RUNNING KANSO OS (Cortex-M) on QEMU mps2-an385"
-	$(call cm_qemu,$(CM_OUT)/ksos_cm.elf)
+	$(call qemu_run,mps2-an385,cortex-m3,$(CM_OUT)/ksos_cm.elf)
 
 # --- The demos run under QEMU ------------------------------------------------------
 # A row is `<suffix>`: `ksos-cm-<suffix>` builds `ksos/demo/cortex_m/cortex_m_<suffix>.kspl` into
@@ -305,14 +317,8 @@ ksos-cm-uart-irq-echo: $(CM_OBJS)
 	@rm -f $(CM_OUT)/uart_irq_echo_test.sock
 	$(call ksos_capped_run,python3 tests/uart_probe.py irq $(CM_OUT)/ksos_cm_uart_irq_echo.elf)
 
-# $(call ksos_cm_demo_rule,<suffix>)
-define ksos_cm_demo_rule
-ksos-cm-$(1): $$(CM_OBJS)
-	@echo "# BUILDING+RUNNING demo/cortex_m/cortex_m_$(subst -,_,$(1)).kspl on Cortex-M (thumbv7m) bare metal"
-	$$(call cm_link,demo/cortex_m/cortex_m_$(subst -,_,$(1)).kspl,$$(CM_OUT)/ksos_cm_$(subst -,_,$(1)).elf)
-	$$(call cm_qemu,$$(CM_OUT)/ksos_cm_$(subst -,_,$(1)).elf)
-endef
-$(foreach r,$(KSOS_CM_DEMOS),$(eval $(call ksos_cm_demo_rule,$(r))))
+CM_WHERE := Cortex-M (thumbv7m)
+$(foreach r,$(KSOS_CM_DEMOS),$(eval $(call qemu_demo_rule,cm,$(r),demo/cortex_m/cortex_m_,$$(CM_OBJS),$$(CM_OUT),cm_link,mps2-an385,cortex-m3,CM_WHERE)))
 
 # --- The Armv6-M CPU layer (Cortex-M0/M0+), shared by every Armv6-M chip -----------
 # startup/switch come from cortex_m0, the port's C and the semihosting from cortex_m. Built once,
@@ -325,17 +331,13 @@ CM0_MACHINE := thumbv6m-none-eabi
 CM0_CC   := clang --target=$(CM0_MACHINE) -mcpu=cortex-m0plus -ffreestanding -Wall -Os \
     -ffunction-sections -fdata-sections
 LIBGCC_CM0 := $(shell arm-none-eabi-gcc -mcpu=cortex-m0plus -mthumb -print-libgcc-file-name 2>/dev/null)
-CM0_OBJS := $(CM0_OUT)/startup.o $(CM0_OUT)/switch.o $(CM0_OUT)/port.o $(CM0_OUT)/semihost.o
+CM0_OBJS := $(CM0_OUT)/startup.o $(CM0_OUT)/switch.o $(CM0_OUT)/ksos_port_cm.o $(CM0_OUT)/semihost.o
 
 $(CM0_OUT):
 	@mkdir -p $@
-$(CM0_OUT)/startup.o: $(CM0_DIR)/startup.S | $(CM0_OUT)
+$(CM0_OUT)/%.o: $(CM0_DIR)/%.S | $(CM0_OUT)
 	$(CM0_CC) -c $< -o $@
-$(CM0_OUT)/switch.o: $(CM0_DIR)/switch.S | $(CM0_OUT)
-	$(CM0_CC) -c $< -o $@
-$(CM0_OUT)/port.o: $(CM_DIR)/ksos_port_cm.c | $(CM0_OUT)
-	$(CM0_CC) -c $< -o $@
-$(CM0_OUT)/semihost.o: $(CM_DIR)/semihost.c | $(CM0_OUT)
+$(CM0_OUT)/%.o: $(CM_DIR)/%.c | $(CM0_OUT)
 	$(CM0_CC) -c $< -o $@
 
 # --- The nRF51 under QEMU (`-M microbit`, a Cortex-M0): the Armv6-M layer run -------
@@ -355,11 +357,6 @@ $(NRF51_OUT)/vectors.o: $(NRF51_DIR)/vectors.S | $(NRF51_OUT)
 # $(call nrf51_link,<src.kspl>,<elf>[,<stem>]): an nRF51 build (`bare_link`).
 nrf51_link = $(call bare_link,$(CM0_CC),$(NRF51_OUT),$(NRF51_DIR)/link.ld,$(NRF51_LINK_OBJS),$(LIBGCC_CM0),$(1),$(2),$(3),$(CM0_MACHINE))
 
-# $(call nrf51_qemu,<elf>): runs it on the micro:bit, as `cm_qemu` does on the MPS2 (the same
-# cap, semihosting verdict and `-icount`).
-nrf51_qemu = $(call ksos_capped_run,qemu-system-arm -M microbit -cpu cortex-m0 \
-    -display none -monitor none -serial null -semihosting -icount shift=auto -kernel $(1) </dev/null)
-
 # A row is `<suffix>`: `ksos-cm0-<suffix>` builds `ksos/demo/cortex_m/cortex_m_<suffix>.kspl`, a
 # Cortex-M demo shared with `KSOS_CM_DEMOS`, into `$(NRF51_OUT)/ksos_cm0_<suffix>.elf` (`-`
 # becomes `_`) and runs it. **A demo runs here only if it fits 16 KB of RAM and needs no atomics**
@@ -368,27 +365,15 @@ nrf51_qemu = $(call ksos_capped_run,qemu-system-arm -M microbit -cpu cortex-m0 \
 KSOS_CM0_DEMOS := min preempt mq pi event timeout isr-block isr-unlock isr-give stack-guard \
     panic-probe
 
-# $(call ksos_cm0_demo_rule,<suffix>)
-define ksos_cm0_demo_rule
-ksos-cm0-$(1): $$(NRF51_LINK_OBJS)
-	@echo "# BUILDING+RUNNING demo/cortex_m/cortex_m_$(subst -,_,$(1)).kspl on Cortex-M0 (thumbv6m, QEMU microbit) bare metal"
-	$$(call nrf51_link,demo/cortex_m/cortex_m_$(subst -,_,$(1)).kspl,$$(NRF51_OUT)/ksos_cm0_$(subst -,_,$(1)).elf)
-	$$(call nrf51_qemu,$$(NRF51_OUT)/ksos_cm0_$(subst -,_,$(1)).elf)
-endef
-$(foreach r,$(KSOS_CM0_DEMOS),$(eval $(call ksos_cm0_demo_rule,$(r))))
+CM0_WHERE := Cortex-M0 (thumbv6m, QEMU microbit)
+$(foreach r,$(KSOS_CM0_DEMOS),$(eval $(call qemu_demo_rule,cm0,$(r),demo/cortex_m/cortex_m_,$$(NRF51_LINK_OBJS),$$(NRF51_OUT),nrf51_link,microbit,cortex-m0,CM0_WHERE)))
 
 # A row is `<suffix>`: `ksos-nrf51-<suffix>` builds `ksos/demo/nrf51/nrf51_<suffix>.kspl`, a demo
 # that uses the nRF51's own peripherals, into `$(NRF51_OUT)/ksos_nrf51_<suffix>.elf` and runs it.
 KSOS_NRF51_DEMOS := wfi
 
-# $(call ksos_nrf51_demo_rule,<suffix>)
-define ksos_nrf51_demo_rule
-ksos-nrf51-$(1): $$(NRF51_LINK_OBJS)
-	@echo "# BUILDING+RUNNING demo/nrf51/nrf51_$(subst -,_,$(1)).kspl on the nRF51 (Cortex-M0, QEMU microbit) bare metal"
-	$$(call nrf51_link,demo/nrf51/nrf51_$(subst -,_,$(1)).kspl,$$(NRF51_OUT)/ksos_nrf51_$(subst -,_,$(1)).elf)
-	$$(call nrf51_qemu,$$(NRF51_OUT)/ksos_nrf51_$(subst -,_,$(1)).elf)
-endef
-$(foreach r,$(KSOS_NRF51_DEMOS),$(eval $(call ksos_nrf51_demo_rule,$(r))))
+NRF51_WHERE := the nRF51 (Cortex-M0, QEMU microbit)
+$(foreach r,$(KSOS_NRF51_DEMOS),$(eval $(call qemu_demo_rule,nrf51,$(r),demo/nrf51/nrf51_,$$(NRF51_LINK_OBJS),$$(NRF51_OUT),nrf51_link,microbit,cortex-m0,NRF51_WHERE)))
 
 # --- Raspberry Pi Pico / Pico W (RP2040, Cortex-M0+) real-chip port ----------------
 # RP2040 is Armv6-M (Thumb-1): its CPU layer is the Armv6-M one above.
@@ -453,13 +438,13 @@ KSOS_RP2040_DEMOS := buzzer board motor:UF2_HINT_MOTOR net car-loop car-pilot ca
 # $(call ksos_rp2040_demo_rule,<suffix>,<hint or empty>)
 define ksos_rp2040_demo_rule
 ksos-rp2040-$(1): $$(RP2040_LINK_OBJS) | $$(RP2040_OUT)
-	@echo "# BUILDING KANSO OS (demo/rp2040/rp2040_$(subst -,_,$(1))_probe.kspl) -> flashable UF2"
-	$$(call rp2040_link,demo/rp2040/rp2040_$(subst -,_,$(1))_probe.kspl,$$(RP2040_OUT)/ksos_rp2040_$(subst -,_,$(1)).elf,$(subst -,_,$(1)))
+	@echo "# BUILDING KANSO OS (demo/rp2040/rp2040_$(call us,$(1))_probe.kspl) -> flashable UF2"
+	$$(call rp2040_link,demo/rp2040/rp2040_$(call us,$(1))_probe.kspl,$$(RP2040_OUT)/ksos_rp2040_$(call us,$(1)).elf,$(call us,$(1)))
 	@echo "# --- sections (boot2@0x10000000 FLASH, isr_vector@0x10000100, RAM@0x20000000) ---"
-	$$(OBJDUMP) -h $$(RP2040_OUT)/ksos_rp2040_$(subst -,_,$(1)).elf
-	"$$(KSPLC)" run $$(RP2040_DIR)/elf2uf2.kspl $$(RP2040_OUT)/ksos_rp2040_$(subst -,_,$(1)).elf \
-		$$(RP2040_OUT)/ksos_rp2040_$(subst -,_,$(1)).uf2
-	@printf 'OUTPUT: %s %s\n' "$$(RP2040_OUT)/ksos_rp2040_$(subst -,_,$(1)).uf2" "$$$$$(or $(2),UF2_HINT_COPY)"
+	$$(OBJDUMP) -h $$(RP2040_OUT)/ksos_rp2040_$(call us,$(1)).elf
+	"$$(KSPLC)" run $$(RP2040_DIR)/elf2uf2.kspl $$(RP2040_OUT)/ksos_rp2040_$(call us,$(1)).elf \
+		$$(RP2040_OUT)/ksos_rp2040_$(call us,$(1)).uf2
+	@printf 'OUTPUT: %s %s\n' "$$(RP2040_OUT)/ksos_rp2040_$(call us,$(1)).uf2" "$$$$$(or $(2),UF2_HINT_COPY)"
 endef
 $(foreach r,$(KSOS_RP2040_DEMOS),$(eval $(call ksos_rp2040_demo_rule,$(call row_field,$(r),1),$(call row_field,$(r),2))))
 

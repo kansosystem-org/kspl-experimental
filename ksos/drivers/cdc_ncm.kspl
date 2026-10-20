@@ -1,5 +1,4 @@
 //< Builds and parses CDC-NCM frames (NTB16)
-//<
 //< NCM does not stream raw 802.3 frames over the bus; it packs them into a container called an
 //< **NTB (NCM Transfer Block)** and carries that.
 //< **NTH16's wBlockLength gives the length.**
@@ -15,19 +14,16 @@ import "std/bytes"
 import "std/chars"
 
 const NTH16_LEN: Sz = 12 //< the NTH16's size
-    //<
     //< This value goes into wHeaderLength too.
 const DPE16_LEN: Sz = 4 //< one DPE's size (a position and length pair)
 const NDP16_MIN_LEN: Sz = 16 //<
     //< The smallest NDP16 [bytes]
-    //<
     //< A 4-byte signature, a 2-byte length, 2 bytes for the next NDP, one real entry and one
     //< terminator.
 // The header size of an NTB holding a single frame. The datagram starts at this offset.
 const ONE_DATAGRAM_OVERHEAD: Sz = NTH16_LEN + NDP16_MIN_LEN
 
 priv fn write_sig(out: U8$[], off: Sz, d: U8) //< writes a signature
-    //<
     //< Both are little endian, so the bytes read in order: NTH16 = "NCMH", NDP16 (with no CRC) =
     //< "NCM0"
     out[off] = 'N'
@@ -39,7 +35,6 @@ priv fn has_sig(b: U8[], off: Sz, d: U8): Bool
     return b[off] == 'N' && b[off + 1] == 'C' && b[off + 2] == 'M' && b[off + 3] == d
 
 priv fn wr16(out: U8$[], off: Sz, v: Sz) //< NCM's fields are all little endian
-    //<
     //< The callers handle lengths and positions as Sz, so these two wrap std/bytes's U16 versions
     //< (rather than making every call write `U16::`).
     out.put_u16_le(off, U16::v)
@@ -49,7 +44,6 @@ priv fn rd16(b: U8[], off: Sz): Sz
 
 fn build_one(out: U8$[], frame: U8[], len: Sz, seq: Sz): Sz //<
     //< Builds an NTB holding a single frame
-    //<
     //< Caution: **Make the NDP's and the datagrams' positions multiples of 4.** GET_NTB_PARAMETERS
     //< declares wNdpInDivisor = 4 and wNdpInAlignment = 4, so anything else breaks that promise (12
     //< and 28 are both multiples of 4, so this layout meets it). **Reject `len > frame.len`.**
@@ -78,7 +72,6 @@ fn build_one(out: U8$[], frame: U8[], len: Sz, seq: Sz): Sz //<
 
 fn block_length(b: U8[], have: Sz): Sz //<
     //< Reads the total byte count of an NTB that is still being received
-    //<
     //< 0 if it cannot be read yet. It also returns 0 when the signature does not match, so the
     //< caller does not wait forever on a stream that is out of step.
     if have < NTH16_LEN || !has_sig(b, 0, 'H')
@@ -91,7 +84,6 @@ struct Datagram //< the NTB's index-th datagram (0-based)
     len: Sz
 
 fn datagram_at(b: U8[], total: Sz, index: Sz): Datagram //< extracts the index-th datagram
-    //<
     //< **The NDPs can form a chain** (wNextNdpIndex), so after reading the first table it goes on
     //< to the next. Code that assumes one entry per NTB loses the second and later entries when the
     //< host sends several together.

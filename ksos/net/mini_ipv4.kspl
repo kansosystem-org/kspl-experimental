@@ -1,5 +1,4 @@
 //< The smallest ARP/IPv4/UDP/TCP stack
-//<
 //< It only builds and parses raw Ethernet frames: no fragmentation, no IP options, no routing
 //< table, one default gateway. **This file knows nothing of the hardware.** Sending and receiving
 //< are the caller's, through the `Link` in `ksos/net/link.kspl`.
@@ -40,7 +39,6 @@ struct Mac //< a MAC address (6 bytes), held as two U32
     lo: U32 //< the bottom 4
 
 struct Ends //< who a frame goes from and to: each end's MAC, IPv4 address and port
-    //<
     //< The ports are read only by UDP and TCP.
     src_mac: Mac
     dst_mac: Mac
@@ -51,21 +49,18 @@ struct Ends //< who a frame goes from and to: each end's MAC, IPv4 address and p
 
 fn put_mac(buf: U8$[], off: Sz, mac: Mac) //<
     //< Writes a MAC into buf at off
-    //<
     //< **It uses the _le writers, not _be.** This writes the two U32 back in the original byte
     //< order, not in network order. get_mac reads it back the same way.
     buf.put_u32_le(off, mac.lo)
     buf.put_u16_le(off + 4, U16::mac.hi)
 
 fn get_mac(buf: U8[], off: Sz): Mac //< reads back a MAC in the form put_mac wrote
-    //<
     //< off is the start of the MAC. It is also how a 6-byte MAC (a driver's mac_addr) becomes a
     //< Mac, so no caller writes the shifts again.
     return Mac::{ .hi = buf.get_u16_le(off + 4), .lo = buf.get_u32_le(off) }
 
 fn checksum16_step(acc: U32, buf: U8[], off: Sz, len: Sz): U32 //<
     //< Continues the unfinished 16-bit one's-complement sum defined by RFC 1071
-    //<
     //< It adds [off, off+len) into acc without folding the carry or inverting. So a sum can span
     //< separate buffers (TCP's pseudo header plus the segment) with no copy. A single region
     //< needs only checksum16.
@@ -79,7 +74,6 @@ fn checksum16_step(acc: U32, buf: U8[], off: Sz, len: Sz): U32 //<
 
 fn checksum16_finish(acc: U32): U16 //<
     //< Turns the sum built by checksum16_step into the checksum
-    //<
     //< It folds in the carry and takes the one's complement.
     $sum: U32 = acc
     for (sum >> 16) != 0
@@ -95,7 +89,6 @@ const ETH_MIN_FRAME: Sz = 60
 
 priv fn pad_to_min(out: U8$[], len: Sz): Sz //<
     //< Pads with 0 to Ethernet's minimum frame length and returns the full length after padding
-    //<
     //< Caution: A frame under 60 bytes breaks the standard, and some peers silently drop it.
     //< **Every function that builds a frame goes through this just before returning**, rather
     //< than padding in each place.
@@ -107,7 +100,6 @@ priv fn pad_to_min(out: U8$[], len: Sz): Sz //<
 
 priv fn fits(out: U8$[], need: Sz): Bool //<
     //< Whether a frame of need bytes (plus the 0 padding to the minimum length) fits out
-    //<
     //< Caution: **Check it before starting to write.** `copy_from` and `sub_mut` silently truncate
     //< what does not fit. The full length then comes back for a partial frame. The caller then
     //< sends bytes from outside the buffer onto the wire.
@@ -119,7 +111,6 @@ const ETH_IPV4_LEN: Sz = ETH_HDR_LEN + IPV4_HDR_LEN
 
 priv fn put_eth_ipv4(buf: U8$[], ends: Ends, proto: U8, ip_payload_len: Sz) //<
     //< Writes the Ethernet header and an IPv4 header with no options, checksum and all
-    //<
     //< ip_payload_len is what follows the IPv4 header (the UDP or TCP header plus its payload).
     //< The caller has checked with fits that it all fits.
     const IP_OFF: Sz = ETH_HDR_LEN
@@ -146,7 +137,6 @@ priv struct Ipv4_view //< what ipv4_view found
 
 priv fn ipv4_view(buf: U8[], len: Sz, proto: U8, min_payload: Sz): Ipv4_view //<
     //< Whether a received frame holds a whole, unfragmented IPv4 packet of proto
-    //<
     //< min_payload is the least that must follow the IPv4 header (the next header's fixed part).
     //< Caution: **Take the header's length from the IHL.** Otherwise the next header is read from
     //< the middle of the IP options. **Drop a fragment.** A later one has no next header. Its
@@ -216,7 +206,6 @@ fn build_arp_reply(out: U8$[], req: U8[], len: Sz, our_ip: U32, our_mac: Mac): S
 
 fn build_icmp_echo_reply(out: U8$[], req: U8[], len: Sz, our_ip: U32, our_mac: Mac): Sz //<
     //< Answers an ICMP echo request (a ping)
-    //<
     //< 0 if it is not an echo request addressed to our_ip.
     //< Caution: **Return the identifier, the sequence number and the payload unchanged**, or
     //< the peer cannot match them and the ping looks unanswered.
@@ -251,7 +240,6 @@ fn build_icmp_echo_reply(out: U8$[], req: U8[], len: Sz, our_ip: U32, our_mac: M
 
 fn build_arp_request(buf: U8$[], sender_mac: Mac, sender_ip: U32, target_ip: U32): Sz //<
     //< Builds a broadcast ARP request (who-has target_ip? tell sender_ip) into buf
-    //<
     //< It returns the full length after padding, or 0 if it does not fit (see fits).
     if !fits(buf, ARP_FRAME_LEN)
         return 0
@@ -271,7 +259,6 @@ struct Arp_reply
 
 fn frame_ethertype(buf: U8[], len: Sz): U16 //<
     //< Returns a received frame's EtherType unchanged (0 = too short)
-    //<
     //< For diagnosis: with mDNS/LLMNR/IPv6 frames mixed in, it tells "nothing arrived" apart from
     //< "it is being skipped".
     if len < 14
@@ -286,7 +273,6 @@ struct Arp_probe
 
 fn probe_arp(buf: U8[], len: Sz): Arp_probe //<
     //< If it is an ARP frame, returns its content unchanged, **without matching it**
-    //<
     //< For diagnosis: parse_arp_reply says nothing when the expected peer itself is wrong, so this
     //< shows who sent the ARP that arrived.
     none: Arp_probe = ::{ .is_arp = false, .op = 0, .sender_ip = 0,
@@ -298,7 +284,6 @@ fn probe_arp(buf: U8[], len: Sz): Arp_probe //<
 
 fn parse_arp_reply(buf: U8[], len: Sz, expect_sender_ip: U32): Arp_reply //<
     //< Returns the sender MAC if buf[0..len) is an ARP reply from expect_sender_ip
-    //<
     //< If it is not, the result's ok is false.
     arp: = probe_arp(buf, len)
     ok: = arp.is_arp && arp.op == ARP_OP_REPLY && arp.sender_ip == expect_sender_ip
@@ -308,7 +293,6 @@ fn parse_arp_reply(buf: U8[], len: Sz, expect_sender_ip: U32): Arp_reply //<
 
 fn build_udp_packet(buf: U8$[], ends: Ends, payload: U8[]): Sz //<
     //< Builds Ethernet (14) + IPv4 (20, no options) + UDP (8) + payload
-    //<
     //< The UDP checksum is 0 (allowed on IPv4). It returns the padded full length, or 0 if it
     //< does not fit (see fits).
     const UDP_OFF: Sz = ETH_IPV4_LEN
@@ -337,7 +321,6 @@ struct Tcp_segment
 
 fn build_tcp_segment(buf: U8$[], ends: Ends, seq: U32, ack: U32, flags: U8, payload: U8[]): Sz //<
     //< Builds Ethernet (14) + IPv4 (20, no options) + TCP (20, no options) + payload
-    //<
     //< The caller manages seq/ack; flags combines tcp_flag_* (tcp_flag_syn to open,
     //< tcp_flag_ack|tcp_flag_psh for data). The window is fixed (no congestion or flow
     //< control).
@@ -382,7 +365,6 @@ fn build_tcp_segment(buf: U8$[], ends: Ends, seq: U32, ack: U32, flags: U8, payl
 fn parse_tcp_segment(buf: U8[], len: Sz, expect_src_ip: U32, expect_src_port: U16,
     expect_dst_port: U16): Tcp_segment //<
         //< Whether a received frame is a TCP segment matching src_ip/src_port/dst_port
-        //<
         //< It returns the flags, seq, ack and payload position; the checksum is not checked.
         //< Caution: **Take the payload's length from IP's Total Length.** The frame's length
         //< includes Ethernet's padding of short frames. So a pure ACK would add 6 zero bytes, and

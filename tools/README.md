@@ -21,7 +21,7 @@ Most tools come in pairs. The program you run holds `main`. A second file holds 
 | `tutorial.kspl` / `tutorial_page.kspl` | The tour of the language (`docs/TUTORIAL.md`), generated from its program. `make tutorial` regenerates it. `make test-docs` fails on a drift. It also fails when the page's code blocks, joined in order, do not run as the program does. |
 | **The repository and its CI** | |
 | `seed_sum.kspl` | Records which compiler source `ksplc/seed.c` was taken from (`make commit-seed`), and checks the tree still holds it (`make test-seed-sum`), so a change under `ksplc/` that skipped the re-bake fails a gate. |
-| `repo_stat.kspl` / `repo_stat_path.kspl` | Writes the repository's size as one page of text, counting the files git lists: the tracked, and the untracked that are not ignored. |
+| `repo_stat.kspl` / `repo_stat_path.kspl` | Writes the repository's size as one page of text, counting the files git lists: the tracked, and the untracked that are not ignored. It totals each file's role apart: functional code, test code, tooling and prose. |
 | `ci.kspl` / `ci_gates.kspl` | The CI's gate table and runner. `make ci` runs what the host runs natively: core and rest everywhere, and the Linux-only gates on Linux. `make ci-summary` asks for the job's summary page. How the gates are read is in [`docs/SPEC-gates.md`](../docs/SPEC-gates.md). |
 | `msys2-packages.txt` | The MSYS2 UCRT64 packages `make ci` needs on Windows. CI's Windows job and the release's Windows build install it through `.github/actions/msys2-ucrt64/`. "The environment for each platform" in [`docs/HOWTO-build.md`](../docs/HOWTO-build.md) installs it by hand. Both read this one list, so the two cannot drift apart. |
 | **Editing and debugging** | |

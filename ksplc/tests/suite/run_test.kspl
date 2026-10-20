@@ -1,6 +1,5 @@
 #!/usr/bin/env -S ksplc run
 //< The test that pins down `ksplc run`'s behaviour
-//<
 //< run "runs a script in one command" and caches the build (`ksplc/tools/run.kspl`). So **not
 //< running an old artefact** is what makes it correct. Each way a dependency can change is pinned
 //< one at a time. The cache directory is always the working directory.
@@ -21,17 +20,14 @@ import "std/verdict"
 
 priv const STRIP_MUST_SHRINK_PERCENT: Sz = 95 //<
     //< How much the executable should shrink (a lower bound) when unreferenced sections are dropped
-    //<
     //< Caution: **Do not write it as an absolute byte count.** An executable's size differs by
     //< orders of magnitude per platform; **link the same C with and without the option and
     //< compare**.
 
 priv const MAX_RUN_SLOTS: Sz = 64 //< the cap on the number of slots left in the directory
-    //<
     //< A copy of max_run_slots in `ksplc/tools/run.kspl`; a drift fails the check, never silently.
 
 priv const RUN_SLOT_SPARE_SECS: I64 = 3600 //< how long a used slot is spared the sweep
-    //<
     //< A copy of run_slot_spare_secs in `ksplc/tools/run.kspl`. The two sweep cases mark their
     //< fakes spare_edge_secs either side of it, so a drift fails one of them, never silently.
 
@@ -90,7 +86,6 @@ priv fn case_edit_import_rebuilds(work: U8[], arena: Arena$@): run_case.Outcome 
 
 priv fn case_new_settings_file_rebuilds(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< A `ksplc.cfg` added where there was none is read on the next run
-    //<
     //< **Comparing the files read misses it**, as no file of that name was read. A file searched
     //< for and not found is listed as such (`write_deps_file` in `ksplc/tools/run.kspl`), and its
     //< appearance makes the result stale.
@@ -118,7 +113,6 @@ fn main()
 
 priv fn case_edited_embed_rebuilds(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< An embedded file edited in place is read again on the next run
-    //<
     //< **Its bytes are in the output**, so an edit the cache missed would silently run the old
     //< bytes. It is listed among the files read (`note_embedded` in `ksplc/base/locate.kspl`).
     data: = fs.join(work, "data.txt", arena)
@@ -142,7 +136,6 @@ priv fn case_edited_embed_rebuilds(work: U8[], arena: Arena$@): run_case.Outcome
 
 priv fn case_unchanged_objects_are_reused(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< When one line of a body is edited, **the objects of unrelated units are not rebuilt**
-    //<
     //< Neither the count (the sweep keeps it the same) nor "one or more left in place" (a leftover
     //< of a broken sweep counts) will do. The check is **that no more than one is new**.
     s: = fs.join(work, "s.kspl", arena)
@@ -173,7 +166,6 @@ priv fn case_unchanged_objects_are_reused(work: U8[], arena: Arena$@): run_case.
 
 priv fn case_objects_do_not_pile_up(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< However many times it is edited, the object count does not grow (the old ones are swept)
-    //<
     if !run_case.write_script(work, "s.kspl", run_progs.SCRIPT_SRC, 1, arena)
         return run_case.failed("cannot place the material")
     s: = fs.join(work, "s.kspl", arena)
@@ -195,7 +187,6 @@ priv fn case_objects_do_not_pile_up(work: U8[], arena: Arena$@): run_case.Outcom
 
 priv fn sweep_over_fakes(work: U8[], used_at: I64, before: Sz$@, arena: Arena$@): run_case.Outcome //<
     //< It triggers the slot sweep over more fake slots than the cap
-    //<
     //< It runs one script, creates the fake slots, each last used at used_at, and runs a second
     //< script, whose new slot triggers the sweep. before receives the slot count before that.
     //< Caution: **Make more than the cap**, or the sweep does not run and it goes green without
@@ -217,7 +208,6 @@ priv fn sweep_over_fakes(work: U8[], used_at: I64, before: Sz$@, arena: Arena$@)
 
 priv fn case_slots_do_not_pile_up(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< The slots do not grow past the cap
-    //<
     //< ksplc's own identity goes into the key, so each rebuild of ksplc wastes every slot. **If not
     //< swept, they pile up in the OS's cache area** unnoticed. The fakes are last used before the
     //< spare window. So only the first run's slot is spared, and the directory shrinks to the cap.
@@ -236,7 +226,6 @@ priv fn case_slots_do_not_pile_up(work: U8[], arena: Arena$@): run_case.Outcome 
 
 priv fn case_slot_in_use_is_spared(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< A slot used within the spare window is not swept, even past the cap
-    //<
     //< A slot another process is still building looks just like these; swept, that build fails with
     //< `failed to write file`.
     $before: Sz = 0
@@ -258,7 +247,6 @@ priv fn case_slot_in_use_is_spared(work: U8[], arena: Arena$@): run_case.Outcome
 
 priv fn case_cache_dir_is_visible(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< ksplc itself can report the cache directory
-    //<
     //< The default is the OS's cache area (`%LOCALAPPDATA%` on Windows); **without asking, nobody
     //< can tell what grows where.**
     cache: = run_case.cache_dir(work, arena)
@@ -280,7 +268,6 @@ priv fn case_cache_dir_is_visible(work: U8[], arena: Arena$@): run_case.Outcome 
 
 priv fn case_cache_can_be_cleared(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< ksplc itself can erase the cache directory
-    //<
     //< Only hex names are touched: `KSPLC_CACHE_DIR` may point at a directory holding other things.
     if !run_case.write_script(work, "s.kspl", run_progs.SCRIPT_SRC, 1, arena)
         return run_case.failed("cannot place the material")
@@ -312,7 +299,6 @@ priv fn case_cache_can_be_cleared(work: U8[], arena: Arena$@): run_case.Outcome 
 
 priv fn case_same_name_elsewhere_is_another_script(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< The same relative name run from two directories is kept as two scripts
-    //<
     //< **The check is two slots, not one.** Each prints its own value even when they share one (the
     //< second merely rebuilds over the first), so the output cannot tell. Sharing one, two such
     //< runs at once sweep away each other's objects before the link.
@@ -345,7 +331,6 @@ priv const SIDE_BY_SIDE_CAP: Sz = 64 * 1024 //< how much of each one's output is
 
 priv fn case_runs_side_by_side(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< Runs of one script started together on an empty cache each run it, sharing one slot
-    //<
     //< **The slot lock guards the build** (`hold_slot` in `ksplc/tools/run.kspl`). Without it, the
     //< runs remove each other's working files: "cannot update the cache", or a program gone at
     //< start.
@@ -419,7 +404,6 @@ priv fn case_main_return_is_exit_code_c(work: U8[], arena: Arena$@): run_case.Ou
 
 priv fn case_main_return_is_exit_code_llvm(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< The exit code is the same on the LLVM backend too
-    //<
     //< `ksplc run` is C-only, so the IR is linked and run by hand.
     src: = fs.join(work, "r.kspl", arena)
     ll: = fs.join(work, "r.ll", arena)
@@ -459,7 +443,6 @@ priv fn case_shebang_runs(work: U8[], arena: Arena$@): run_case.Outcome //<
 
 priv fn case_shebang_survives_fmt(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< `ksplc fmt --in-place` does not break the shebang line
-    //<
     //< Written back with the first two bytes `//`, the `#!` is gone and **the script quietly cannot
     //< be started**.
     path: = fs.join(work, "f.kspl", arena)
@@ -471,7 +454,7 @@ priv fn case_shebang_survives_fmt(work: U8[], arena: Arena$@): run_case.Outcome 
     w: = harness.ksplc_bare(U8[][]::{ "fmt", "--in-place", path })
     if !w.exited_with(0)
         return run_case.broke("fmt --in-place failed", w.out, arena)
-    body: = io.read_file(path) catch
+    body: = io.read_file(path, null) catch
         return run_case.failed("the formatted result cannot be read")
     lines: = body.lines(arena)
     if lines.len == 0 || !lines.get(0).trim_end().equals(run_progs.SHEBANG_LINE)
@@ -509,7 +492,6 @@ priv fn version_src(n: Sz, arena: Arena$@): U8[] //<
 
 priv fn case_cc_failure_does_not_leave_stale_exe(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< On a run where the C compiler failed, only the cache's validity data must not advance
-    //<
     //< Caution: Do not substitute a fake cc: Windows's CreateProcess cannot start a shebang script,
     //< and cc's path is in the cache's key. Put one file inside; if empty, the failure path's
     //< remove_path succeeds as an rmdir.
@@ -547,7 +529,6 @@ priv fn case_cc_failure_does_not_leave_stale_exe(work: U8[], arena: Arena$@): ru
 
 priv fn run_with_cc_probe(work: U8[], body: U8[], arena: Arena$@, before: U8[] = ""): U8[] //<
     //< It runs once with a stand-in cc and returns the record
-    //<
     //< A non-empty `before` runs first; the record holds only `body`'s run, opened by a `ROUND`
     //< line (so a run starting nothing still returns one).
     //< Caution: **Always restore CC** (or the cases after this are affected).
@@ -581,11 +562,10 @@ priv fn run_with_cc_probe(work: U8[], body: U8[], arena: Arena$@, before: U8[] =
         sys.set_env("CC", saved) catch
             restored = false
     sys.unset_env("KSPL_CC_LOG") catch panic("KSPL_CC_LOG could not be unset")
-    return "" if !restored || !placed else io.read_file(log) catch ""
+    return "" if !restored || !placed else io.read_file(log, null) catch ""
 
 priv fn case_cc_is_asked_once(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< cc is not started many times for the same question
-    //<
     //< **Remove the caching and no gate fails** (it is only slow). Three places ask for the target.
     log: = run_with_cc_probe(work, run_progs.SCRIPT_SRC, arena)
     if log.len == 0
@@ -601,7 +581,6 @@ priv fn case_cc_is_asked_once(work: U8[], arena: Arena$@): run_case.Outcome //<
 
 priv fn case_no_duplicate_objects(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< cc is not started twice for the same object
-    //<
     //< **The core count decides the split count** (`pick_unit_count` in `ksplc/tools/run.kspl`).
     //< Split finer than the code, empty units name **the same object** by content, and cc runs
     //< several times at once for one output.
@@ -619,7 +598,6 @@ priv fn case_no_duplicate_objects(work: U8[], arena: Arena$@): run_case.Outcome 
 
 priv fn case_cc_gets_relative_paths(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< It checks cc gets no absolute path, and does get the arguments checked
-    //<
     //< **Break it and nothing happens on Linux** (cc opens it absolute or relative).
     //< Caution: **Do not check only "there is no absolute path"**; with no argument it passes
     //< vacuously.
@@ -641,7 +619,6 @@ priv fn case_cc_gets_relative_paths(work: U8[], arena: Arena$@): run_case.Outcom
 
 priv fn case_named_library_is_linked(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< It checks a library an `extern` block names goes onto the link line
-    //<
     //< It goes after the objects and before the libraries every program needs.
     //< GNU ld resolves left to right, so a library before its callers leaves their names undefined.
     log: = run_with_cc_probe(work, run_progs.LINK_SRC, arena)
@@ -665,7 +642,6 @@ priv fn case_named_library_is_linked(work: U8[], arena: Arena$@): run_case.Outco
 
 priv fn case_library_change_relinks(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< Change only the library and it links again, though no object is rebuilt
-    //<
     //< A `#link` does not change the generated C, so every object is reused. **Leave the libraries
     //< out of the link record and the link is skipped**, keeping an executable without the library.
     //< Caution: **Check that no compile ran**, or it links anyway and passes having checked
@@ -686,7 +662,6 @@ priv fn case_library_change_relinks(work: U8[], arena: Arena$@): run_case.Outcom
 
 priv fn case_std_dir_reaches_the_child(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< `--std-dir=` must be passed to the child ksplc too
-    //<
     //< ksplc compiles by restarting itself; if not passed, the child searches for "std" from cwd
     //< and fails (or passes only through the environment variable). So cwd is the working directory
     //< and `KSPLC_STD_DIR` is removed.
@@ -714,7 +689,6 @@ priv fn case_missing_script(work: U8[], arena: Arena$@): run_case.Outcome
 
 priv fn case_llvm_target_refused(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< run generates and links C, so it does not work on the LLVM backend
-    //<
     //< Not accepted with no effect (Principle 5 in `docs/DESIGN-principles.md`); the per-subcommand
     //< table rejects it (tests/suite/cli_test.kspl).
     if !run_case.write_script(work, "s2.kspl", run_progs.SCRIPT_SRC, 1, arena)
@@ -727,7 +701,6 @@ priv fn case_llvm_target_refused(work: U8[], arena: Arena$@): run_case.Outcome /
 
 priv fn case_script_path(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< It checks `sys.script_path()` returns the started script's own path
-    //<
     //< The path does not leak to a grandchild process.
     fs.write_tree(work, U8[][]::{ "p.kspl", "c.kspl" },
         U8[][]::{ run_progs.PARENT_SRC, run_progs.CHILD_SRC }, arena) catch
@@ -763,7 +736,6 @@ priv fn case_script_path(work: U8[], arena: Arena$@): run_case.Outcome //<
 
 priv fn strips_sections(flags: List<|U8[]|>$@): Bool //<
     //< Whether the build options include the one that drops unused sections
-    //<
     //< **Whether the options are empty does not tell.** Windows gets the stack size but not the
     //< dropping option. Then a shrink would be demanded of a linker that does not drop.
     //< Caution: Keep the options in step with run_section_flags in `ksplc/tools/run.kspl`.
@@ -774,7 +746,6 @@ priv fn strips_sections(flags: List<|U8[]|>$@): Bool //<
 
 priv fn case_unused_std_is_stripped(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< Unused std code is not left in the executable
-    //<
     //< A generic makes every method on each instantiation. `ksplc/lower/prune.kspl` drops what no
     //< root reaches; what becomes unreachable later is dropped only at link time. **The build
     //< succeeds even when it is not dropped** (the executable only grows), so this checks the

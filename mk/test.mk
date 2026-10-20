@@ -3,13 +3,12 @@
 # Taken in by the root Makefile; the rule for including is in the header of its `include mk/ci.mk`.
 # ==================================================================
 ## Local-cycle|debug|Run the tests `tests/debug/main.kspl` calls, in one executable
-DEBUG_RT := $(if $(filter 1,$(LLVM)),$(GEN_DIR)/test_debug_runtime.c,)
+# It builds through `debug-file`, as `debug-tools` below does, so the two builds cannot differ.
 debug: $(STAGE1_EXE)
 	@echo "# RUNNING DEBUG TESTS ($(BACKEND), BLAS=$(BLAS))"
-	./$(STAGE1_EXE) $(KSPL_FLAGS) $(TARGET_FLAG) $(AI_KSPL_FLAGS) --emit-libs=$(DEBUG_LIBS) tests/debug/main.kspl $(DEBUG_OUT)
-	$(if $(DEBUG_RT),./$(STAGE1_EXE) emit-runtime $(DEBUG_RT))
-	$(CC) $(CFLAGS) $(DEBUG_OUT) $(DEBUG_RT) @$(DEBUG_LIBS) $(LDLIBS) -o $(DEBUG_EXE)
-	./$(DEBUG_EXE)
+	@$(MAKE) --no-print-directory debug-file SRC_KSPL=tests/debug/main.kspl OUT_STEM=test_debug \
+		$(C_FMT_OFF)
+	./$(OUT_DIR)/test_debug.exe
 
 # --- Building a single file for debugging (VS Code's F5) ---
 # Caution: **The output's name agrees with launch.json's `${fileBasenameNoExtension}.exe`**, or F5

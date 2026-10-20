@@ -1,9 +1,7 @@
 //< Resources and side effects: arenas, locks, `defer`, release spelling
-//<
 //< Each case below is compiled alone, as the file its head names.
 // ==== case arena_handout_freed
 //< Passing a pointer that an arena allocated to `mem.dealloc()`
-//<
 //< The type is the same `T$@` a heap allocation returns, so without this it breaks at run time.
 //< Each of the three methods (`alloc` / `alloc_as` / `create`) is one finding.
 //< **Two must stay silent**: a heap allocation, and `free()` of a container placed in an arena.
@@ -36,7 +34,6 @@ pub fn probe(): I32
   return 0
 // ==== case bitwise_compare_grouping
 //< Comparing `&`'s result without brackets
-//<
 //< KSPL puts `&` at the same step as multiplication so it reads `(a & b) == c`, while C reads the
 //< same expression as `a & (b == c)`. It passes yet the answer changes, so [W0108] gives notice.
 // EXPECT: [W0108]
@@ -58,7 +55,6 @@ pub fn probe(a: I32, b: I32, c: I32): I32
   return hits
 // ==== case constant_condition
 //< Conditions whose answer a constant decides
-//<
 //< All of them are often "not what the writer meant". `n / 0` cannot be placed here. A division by
 //< zero is not a lint but a no-code error (docs/SPEC-programming-language.md 4.2).
 //< The case divide_by_zero in tests/negative/numbers.kspl looks at it.
@@ -74,7 +70,6 @@ pub fn after_return(n: I32): I32
 
 pub fn always_true() //<
   //< A `for true` loop in a function that returns no value
-  //<
   //< No analysis reads `for true` as a loop that never leaves. With a return value it becomes a
   //< different error ("there is a road that does not return"), which never reaches this
   //< diagnostic.
@@ -86,17 +81,16 @@ pub fn indexes(): I32
   return a[5] + a[-1]
 // ==== case defer_after_way_out
 //< [W0109] An exit between a `Manual_free` value's binding and the `defer` that frees it
-//<
 //< The `!` in late() and the `continue` in per_round() leave before the `defer` is registered.
 //< A `defer` right after the binding, a value handed back, a hand free and a closure's `!` do not.
 //< **The line numbers name the way out and the two lines the message gives.** Mend them on a move.
-// EXPECT: defer_after_way_out.kspl:25:8: warning: [W0109] 'arena' leaks if this '!' exits
-// EXPECT: registered only on line 26. Register the defer immediately after binding 'arena' on line 24
-// EXPECT: defer_after_way_out.kspl:54:7: warning: [W0109] 'buf' leaks if this 'continue' exits
-// EXPECT-NOT: defer_after_way_out.kspl:32:
-// EXPECT-NOT: defer_after_way_out.kspl:37:
-// EXPECT-NOT: defer_after_way_out.kspl:45:
-// EXPECT-NOT: defer_after_way_out.kspl:61:
+// EXPECT: defer_after_way_out.kspl:24:8: warning: [W0109] 'arena' leaks if this '!' exits
+// EXPECT: registered only on line 25. Register the defer immediately after binding 'arena' on line 23
+// EXPECT: defer_after_way_out.kspl:53:7: warning: [W0109] 'buf' leaks if this 'continue' exits
+// EXPECT-NOT: defer_after_way_out.kspl:31:
+// EXPECT-NOT: defer_after_way_out.kspl:36:
+// EXPECT-NOT: defer_after_way_out.kspl:44:
+// EXPECT-NOT: defer_after_way_out.kspl:60:
 import "std/mem" { Arena }
 
 priv enum E
@@ -158,7 +152,6 @@ fn main(): I32
   return a + b + by_hand(true) + per_round(3) + c - 7
 // ==== case discarded_side_effect
 //< A side effect written to the left of an array's `.len` does not run
-//<
 //< The array's length is settled at translation time.
 // EXPECT: [W0102] Expression has side effects
 import "std/io"
@@ -172,7 +165,6 @@ pub fn probe(): Sz
   return noisy(a).len
 // ==== case lock_borrow_escape
 //< [W0105] Finds uses of a borrow taken from a lock after the lock is released
-//<
 //< After unlock another thread can rewrite that region at the same time. Both (A) a use after
 //< unlock and (B) a return of the borrow must be findings, and a use while holding the lock not.
 // ==========================================
@@ -180,7 +172,7 @@ pub fn probe(): Sz
 // EXPECT: [W0105] Returning a pointer obtained from Mutex.lock()
 // **The line number below names the `mx.lock()` line** of the use while holding the lock.
 // Move a line above it and mend it here.
-// EXPECT-NOT: lock_borrow_escape.kspl:31
+// EXPECT-NOT: lock_borrow_escape.kspl:30
 // ==========================================
 import "std/io"
 import "std/thread"
@@ -211,14 +203,13 @@ fn main()
   uses_while_locked()
 // ==== case lock_not_released
 //< [W0106] Finds places that take a lock and do not release it
-//<
 //< Forget to release and every thread trying to take that lock stops forever (a deadlock).
 //< forgets() alone is a finding. An explicit unlock and a release by defer are not.
 //< **The marks' line numbers name the `mx.lock()` lines**: the finding points at the lock.
 // EXPECT: [W0106] 'mx' is locked here but not unlocked
-// EXPECT: lock_not_released.kspl:16:3: warning: [W0106]
-// EXPECT-NOT: lock_not_released.kspl:22
-// EXPECT-NOT: lock_not_released.kspl:31
+// EXPECT: lock_not_released.kspl:15:3: warning: [W0106]
+// EXPECT-NOT: lock_not_released.kspl:21
+// EXPECT-NOT: lock_not_released.kspl:29
 import "std/io"
 import "std/thread"
 
@@ -236,7 +227,6 @@ priv fn explicit_unlock() //< an explicit unlock (not a finding)
   mx.unlock()
 
 priv fn released_by_defer() //< a release by defer (not a finding)
-  //<
   //< Every road out releases, so forgets()'s problem cannot arise.
   $mx: = thread.Mutex<|I32|>.new(0) catch
     return
@@ -270,44 +260,36 @@ impl H
     return H::{ .id = 1 }
 
   pub fn close(r: Self$@) //< in scope
-    //<
     //< The name is not `free`.
     r.id = 0
 
   pub fn free(r: Self$@) //< in scope
-    //<
     //< The name is `free` but H does not conform to Manual_free.
     r.id = -1
 
   pub fn take(r: Self$@, key: I32): Bool //< out of scope
-    //<
     //< It takes an argument because it erases something else.
     return key == r.id
 
   pub fn clear(r: Self$@) //< out of scope
-    //<
     //< It only throws the content away; the substance lives on.
     r.id = 0
 
   priv fn destroy(r: Self$@) //< in scope
-    //<
     //< The visibility is not asked about (even a priv can conform to `Manual_free`).
     r.id = -2
 
   pub fn shutdown(r: Self$@, _reason: I32) //< in scope
-    //<
     //< The second and later arguments are not asked about (a tool is sometimes handed to a
     //< release).
     r.id = -3
 
   pub fn deinit(r: Self$@) //< out of scope
-    //<
     //< The body releases the first argument itself, so it is tracked regardless of the name and the
     //< conformance.
     dealloc(Void$@::r)
 
 pub fn dispose(h: H$@) //< in scope
-  //<
   //< A release written as a free function is looked at too. It returns the content alone, so it
   //< does not ride road 2.
   h.id = 0
@@ -338,7 +320,6 @@ fn main(): I32
   return h.id
 // ==== case unbounded_accumulation
 //< A loop that accumulates digits with no cap check
-//<
 //< Untrusted input overflowing the digits goes on in silence.
 // EXPECT: [W0103] Accumulating into
 pub fn parse_digits(text: U8[]): I32
@@ -347,3 +328,37 @@ pub fn parse_digits(text: U8[]): I32
     d: I32 = I32::(text[i] - '0')
     acc = acc * 10 + d
   return acc
+// ==== case arena_param_default
+//< A parameter taking an arena carries no default, so each call shows where it allocates
+//< The type is read as resolved, so an arena behind a typedef or a pointer is found. A default on
+//< another type, an arena with no default, and a field of a function type are not reported.
+// EXPECT: arena_param_default.kspl:16:30: information: [I0702]
+// EXPECT: arena_param_default.kspl:19:26: information: [I0702]
+// EXPECT: arena_param_default.kspl:22:21: information: [I0702]
+// EXPECT-NOT: arena_param_default.kspl:25:
+import "std/mem" { Arena }
+
+priv typedef Pool = Arena
+
+priv struct Holder
+  cb: fn(a: Arena$@): Sz
+
+impl Holder
+  fn grow(_r: Self@, _n: Sz, _a: Arena$@ = null): Sz
+    return 0
+
+priv fn via_alias(n: Sz, _p: Pool$@ = null): Sz
+  return n
+
+priv fn seen(n: Sz, _a: Arena@ = null): Sz
+  return n
+
+priv fn plain(_a: Arena$@, n: Sz = 0): Sz
+  return n
+
+priv fn none(_a: Arena$@): Sz
+  return 0
+
+fn main(): I32
+  h: Holder = ::{ .cb = none }
+  return I32::(h.grow(1) + via_alias(1) + seen(1) + plain(null) + h.cb(null))

@@ -1,5 +1,4 @@
 //< Printing a diagnostic: as text or one line of JSON on stderr, or kept for the language server
-//<
 //< **`print_diagnostic` is the one writer for both forms** (`print_unplaced` for an error with no
 //< place in a source). It counts the place once, so the text and the JSON never disagree. Under
 //< the language server the findings are collected in `lsp_diags` instead. An internal compiler
@@ -11,6 +10,7 @@ import "std/chars"
 import "std/ds" { List, Map }
 import "std/io"
 import "std/json" + { Json_builder }
+import "std/math"
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
 
@@ -23,7 +23,6 @@ enum Diagnostic_severity: I32
 impl Diagnostic_severity
     fn to_lsp_severity(r: Self@): I32 //<
         //< The number the LSP uses for this severity
-        //<
         //< Caution: Take the receiver as read-only (`Self@`); a `Self$@` method cannot be called on
         //< a read-only value.
         return I32::r$
@@ -52,7 +51,6 @@ struct Lsp_diag_manager
     list: List<|Lsp_diagnostic|>
     seen: Map<|U8[], Bool|> //<
         //< The diagnostics already collected (file:line:column:severity:message)
-        //<
         //< The keys live on the arena the LSP rewinds, so drop them **together with** list.
         //< Caution: **Do not look for duplicates by walking the list.** That is quadratic and slows
         //< the editor on a document with many findings.
@@ -81,7 +79,6 @@ fn ice_panic(msg: U8$[])
 
 fn io_line(e: io.Io_error, kind: U8[]): U8[] //<
     //< One line naming an I/O failure, `<kind>/<variant>: <details>`, on the arena
-    //<
     //< The parse phase's I/O errors, the top-level ones and the formatter's share it.
     out: = base_core.arena.text()
     switch e
@@ -143,7 +140,6 @@ priv $json_written: Json_written = ::{}
 
 fn print_json_closing(succeeded: Bool) //<
     //< The closing object: the last line of a compile or lint that reached its verdict, under json
-    //<
     //< **It counts the objects written above it**, not the analysis's tally. So a reader that
     //< counts the lines itself always gets the same numbers (an error the parse stopped on is in no
     //< tally).
@@ -188,7 +184,6 @@ priv fn lsp_wide(source: U8[], offset: Sz, length: Sz, info: base_core.Line_info
 
 fn shown_file(file_name: U8[]): U8[] //<
     //< A source's name as a diagnostic shows it, on the arena
-    //<
     //< **The file is named so it can be opened.** A declared package's file is named by the path
     //< it was read from (`disk_name` in `locate.kspl`). Anything else is named by its logical name.
     //< Caution: **Do not copy the extension here.** base/core.kspl holds it (`with_source_ext`).
@@ -202,7 +197,6 @@ fn print_diagnostic(file_name: U8[], source: U8[], offset: Sz, length: Sz, msg: 
 fn print_syntax_error(file_name: U8[], source: U8[], offset: Sz, msg: U8[],
     starts: List<|Sz|>$@) //<
         //< A syntax error, which a program reading the JSON form tells apart by its `kind`
-        //<
         //< **An error has no code** (a code could be switched off). So the kind tells such a reader
         //< that the text could not be read, and that nothing after it was analysed.
     print_placed(file_name, source, offset, 1, msg, .error, starts, true)
@@ -211,7 +205,7 @@ priv fn print_placed(file_name: U8[], source: U8[], offset: Sz, length: Sz, msg:
     severity: Diagnostic_severity, starts: List<|Sz|>$@, is_syntax: Bool)
     out_file: = shown_file(file_name)
 
-    actual_offset: = source.len if offset > source.len else offset
+    actual_offset: = math.min(source.len, offset)
     info: = source.get_line_info(actual_offset, starts)
     line: = info.line
     column: = info.disp_col
@@ -300,7 +294,6 @@ priv const SHOWN_LINE_LEAD: Sz = 40 //< how many characters before the column a 
 
 priv fn byte_at_char(text: U8[], n: Sz): Sz //<
     //< The byte offset where the `n`th character (from 0) starts, or the length past the last
-    //<
     //< It counts characters as `count_codepoints` does (lead bytes only), so the two agree.
     $seen: Sz = 0
     for $i: Sz = 0; i < text.len; i += 1

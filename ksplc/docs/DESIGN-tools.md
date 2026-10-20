@@ -130,7 +130,7 @@ Caution: **Measure with the cache an ordinary session would have.** ksplc's own 
 
 Caution: **Match on the definition, not the spelling**: the same spelling appears in comments, strings and other names.
 
-**A name in a selective import's braces is a place of what it names; an `as` name is a name of its own.** In `import "lib" { helper as h }`, the `helper` is a use of `lib`'s `helper` (the analysis binds it, `bind_import_symbols` in `ksplc/sema/session/imports.kspl`), so it is listed and rewritten with that function's other places. `h` and its uses are `h`'s places alone. Counted with `helper`'s, a rename of `helper` would turn `h()` into a name that file does not bind, and the program would stop compiling. The narrowing also reads only the bodies that spell `helper`, so `h`'s uses would be found in some files and missed in others.
+**A name in a selective import's braces is a place of what it names; an `as` name is a name of its own.** In `import "lib" { helper as h }`, the `helper` is a use of `lib`'s `helper` (the analysis binds it, `check_import_symbols` in `ksplc/sema/decl/access.kspl`), so it is listed and rewritten with that function's other places. `h` and its uses are `h`'s places alone. Counted with `helper`'s, a rename of `helper` would turn `h()` into a name that file does not bind, and the program would stop compiling. The narrowing also reads only the bodies that spell `helper`, so `h`'s uses would be found in some files and missed in others.
 
 **The list is ordered by file name, then line, then column.** It is gathered in a `Map`, whose order follows the hash, and the LSP leaves the order open. A person reads the references, so an order that changes between requests makes the same answer shuffle on screen.
 
@@ -553,9 +553,10 @@ sequenceDiagram
 * **Not a full reflow.** Reflowing every paragraph would rejoin lines the writer broke on purpose, and turn each edit into a diff over the whole comment. The formatters that do it by default draw that complaint.
 * **A line whose layout carries meaning is never cut, and carried words never join it.** Such lines are an aligned sub-line, a table row, a divider, a marker a gate reads a line at a time (`EXPECT:`), and a list item. A line opening with `Caution:` or `Note:` starts a paragraph of its own and takes no carried words. These are where cutting does damage, so they are left whole.
 * **A trailing comment is not cut**, nor a `///` or `//!` line. A `//<` too long behind its declaration moves below the mark instead (`carries_summary_down`).
-* **A summary's first line is not cut either** (`opens_summary` in `fmt/trivia.kspl`). The summary runs to the first `//<` with no text, so a cut makes a one-line summary two lines. `[W0213]` would then report a file formatting just produced.
+* **A summary is not cut either** (`opens_summary` in `fmt/trivia.kspl`). The summary is the run's first line, so a cut would move its end into the detail, and the hover would show half a sentence.
+* **An empty `//<` right below a summary is not written** (`drops_after_summary` in `fmt/trivia.kspl`). The line boundary already ends the summary, so that line separates nothing ("The documentation a declaration carries" in [`../../docs/DESIGN-notation.md`](../../docs/DESIGN-notation.md)). An empty `//<` further down parts two paragraphs of the detail, and stays.
 * **Widths are display columns**: CJK and `✅` take two, so a line is cut where a terminal shows the limit.
-* **What the cut cannot do stays a check**: a comment past Principle 7's line count needs rewording, which is the writer's, and `make test-conventions` counts it.
+* **What the cut cannot do stays a check**: a comment past Principle 7's line count needs rewording, which is the writer's. The linter counts it (`[H0806]`).
 
 ## The design of the tool settings
 

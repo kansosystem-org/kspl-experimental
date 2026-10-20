@@ -1,5 +1,4 @@
 //< Parsing, building and writing out JSON values
-//<
 //< The arena-backed `Json_builder` / `Array_builder` / `Object_builder` build a head-and-tail chain
 //< by value, so nothing is copied twice. Parsing limits the nesting depth. An integer stays an
 //< integer, so one wider than 53 bits does not round on the way through.
@@ -26,7 +25,6 @@ priv struct Node
     next: Node$@
 
 pub struct Array //< an array's elements, reachable only through `arr_list` and `get_at`
-    //<
     //< `Value.array_val`'s payload. It hides the chain as `Object` hides its members: a payload
     //< holding a `Node$@` would hand every `switch` a pointer that is null for `[]`.
     priv head: Node$@
@@ -37,7 +35,6 @@ priv struct Member
     next: Member$@
 
 pub struct Object //< an object's members, reachable only through `get` and `find`
-    //<
     //< `Value.obj_val`'s payload.
     //< Caution: The payload must not hold a `Member$@` directly. Code outside can bind a `pub
     //< enum`'s payload (`switch v case .obj_val(head)`). The priv list would then leak out ("Why a
@@ -78,14 +75,13 @@ pub struct Object_builder //< builds an object; setting a key again replaces it
 
 impl Json_builder
     pub fn new( //< a builder that allocates everything it makes from that arena
-        //<
         //< With `null` it makes an arena of its own, so `defer b.free()` frees every value it made.
         arena: Arena$@, //< where values go; null means an arena of the builder's own and a `free()`
     ): Json_builder
-        work: = mem.scratch(arena)
-        return Json_builder::{ .arena = work.arena, .own = work.own }
+        $work: = mem.scratch(arena)
+        at: = work.arena
+        return Json_builder::{ .arena = at, .own = work.keep() }
     pub fn free(r: Self$@) //< lets go every value it made, when it made its own arena
-        //<
         //< Given an arena, it frees nothing: that arena does. A second `free()` frees nothing.
         r.own.free()
     pub fn null_val(_r: Self$@): Value //< JSON's `null`
@@ -93,7 +89,6 @@ impl Json_builder
     pub fn bool_val(_r: Self$@, b: Bool): Value //< `true` or `false`
         return .bool_val(b)
     pub fn int_val(_r: Self$@, i: I64): Value //< a number with no point; wide enough for an offset
-        //<
         //< Caution: Take an I64, like Value.int_val and as_int64; with an I32 here, values could be
         //< read but not written.
         return .int_val(i)
@@ -122,7 +117,6 @@ impl Array_builder
 
 impl Object_builder
     pub fn set( //< adds a member; an existing key is replaced, not added again
-        //<
         //< Caution: **Replace an existing key.** If appended, `{"a":1,"a":2}` makes `get` return
         //< the first while `dump` writes both, and another parser reads a different value. The scan
         //< costs the same as `get`.
@@ -159,19 +153,16 @@ pub enum Json_error //< why a document could not be read, or cannot be trusted
     trailing_input //< something other than whitespace follows the value
     duplicate_key(at: Sz) //<
         //< an object names the same member twice; `at` is where the second name starts in the text
-        //<
         //< Caution: **A position, not the name.** The name was read into the parse's scratch, which
         //< a failed parse rewinds. The text is the caller's and outlives the error.
         //< **Refused, not read first or last wins.** Readers that pick differently would see two
         //< different documents in one (std/docs/DESIGN-core.md's "Known problems KSPL handles").
     missing_field(missing: U8[]) //< a field in the table is missing from the object.
-        //<
         //< Only `into_struct` returns this one.
         //< Caution: **It and the next keep a default from being filled in silently.** Filled with 0
         //< or "", a sender's misspelt key would show only as "the value was 0" (see
         //< std/docs/DESIGN-core.md's "Known holes").
     field_type(mismatched: U8[]) //< the kinds differ, or the field cannot hold the integer.
-        //<
         //< `"<root>"` when it is not at a field. Only `into_struct` and `from_struct` return it.
 
 priv struct Parse_ctx
@@ -182,13 +173,11 @@ priv struct Parse_ctx
     stack: Stack_limit //< where the parse stops short of the stack's end, beside `depth`'s count
 
 pub const MAX_NESTING_DEPTH: Sz = 500 //< the deepest nesting read; deeper fails with `too_deep`
-    //<
     //< It guards against stack exhaustion, and is deep enough for ordinary JSON. `std/json_struct`
     //< holds a round trip to it too, so a document that parses does not stop part way.
 
 priv const STACK_MARGIN: Sz = 64 * 1024 //<
     //< The stack kept free below where a parse stops
-    //<
     //< **The count alone is sized for the main thread.** A thread's stack can be far smaller (512KB
     //< by default on macOS). So a parse on one also asks where its stack ends ("A deep walk asks
     //< where its stack ends" in `std/docs/DESIGN-system.md`). Below the
@@ -210,7 +199,6 @@ priv fn match_str(ctx: Parse_ctx$@, s: U8$[]): Bool
     return false
 
 priv fn is_json_escape(ec: U8): Bool //< the escapes JSON accepts (RFC 8259 §7)
-    //<
     //< **This list is the canonical source.**
     //< `unescape_to_arena` (std/str), which does the decoding, is a shared decoder. It passes a
     //< symbol escape (`\[` and `\-`, used in a grammar's character class) through **as the
@@ -253,7 +241,6 @@ priv fn parse_string(ctx: Parse_ctx$@): U8[]!Json_error
     throw .unexpected_eof
 
 priv fn parse_number(ctx: Parse_ctx$@): Value!Json_error //< reads one number
-    //<
     //< int_val for integer notation; float_val with a point or an exponent.
     //< Caution: **Do not store an integer as an F64.** An integer over 53 bits (safetensors'
     //< offsets) rounds silently.
@@ -436,7 +423,6 @@ priv fn parse_array(ctx: Parse_ctx$@): Value!Json_error
     return .array_val(Array::{ .head = head })
 
 pub struct Doc //< a parsed document: its value, and the arena `parse` built it in given null
-    //<
     //< **Only the document frees anything.** Its `val`, and every part read out of that (`get`,
     //< `get_at`, `arr_list`), is a `Value`, which has no `free`: freeing a part cannot tear the
     //< whole.
@@ -445,14 +431,12 @@ pub struct Doc //< a parsed document: its value, and the arena `parse` built it 
 
 impl Doc
     pub fn free(r: Self) //< lets go all of the value, when `parse` was given null
-        //<
         //< Parsed into the caller's arena, it frees nothing: that arena does.
         $own: = r.own
         own.free()
 impl Doc: Manual_free {} //< `free()` lets go the arena `parse` made for the document
 
 pub fn parse( //< the whole document; anything left over is refused
-    //<
     //< Read its value as `doc.val`. With `null`, `defer doc.free()` frees all of it.
     //< Caution: **A document ends after one value.** Otherwise `1 2` **succeeds** as `1`, and two
     //< concatenated inputs silently pass as the first.
@@ -463,14 +447,11 @@ pub fn parse( //< the whole document; anything left over is refused
     $work: = mem.scratch(arena)
     $ctx: = Parse_ctx::{ .src = src, .pos = 0, .arena = work.arena, .depth = 0,
         .stack = Stack_limit.later(STACK_MARGIN) }
-    v: = parse_value(ctx@) catch e
-        work.free()
-        throw e
+    v: = parse_value(ctx@)!
     skip_ws(ctx@)
     if ctx.pos < src.len
-        work.free()
         throw .trailing_input
-    return Doc::{ .val = v, .own = work.own }
+    return Doc::{ .val = v, .own = work.keep() }
 
 priv fn write_break(out: Str_builder$@, indent: Sz, depth: Sz) //< a newline with indentation
     if indent <= 0
@@ -481,7 +462,6 @@ priv fn write_break(out: Str_builder$@, indent: Sz, depth: Sz) //< a newline wit
 
 impl Value
     pub fn arr_list( //< an array's elements as a list; the one way to walk an array
-        //<
         //< A `Value` cannot be the subject of `for in` (a chain has no `.len`), so walk this list.
         //< Caution: When arena is null it allocates on the global heap, so the caller frees it with
         //< a `defer` (the same convention as `List.new`).
@@ -498,7 +478,6 @@ impl Value
         default {}
         return out
     pub fn dump( //< writes the value as JSON text
-        //<
         //< **Indentation is only for files a person reads.** For data exchange keep it at 0: the
         //< whitespace is waste to the peer.
         r: Self,
@@ -557,7 +536,6 @@ impl Value
                 write_break(out, indent, depth)
             out.c('}')
     pub fn get( //< an object's member, for reading a path; `null_val` where there is none
-        //<
         //< **Absent reads as `null`**, so a path stays one line (`v.get("a").get("b").as_str()`);
         //< where absent and `null` differ, ask `find`. A key names one member.
         //< **It is a linear scan.** Calling it for a list of names the peer chose makes one request
@@ -568,7 +546,6 @@ impl Value
         return r.find(key).unwrap_or(.null_val)
 
     pub fn find( //< an object's member, or nothing where the object has none
-        //<
         //< **A member holding `null` is found** (`.some(.null_val)`), so this tells an absent key
         //< from a `null` one. On a value that is not an object, nothing.
         r: Self,
@@ -585,7 +562,6 @@ impl Value
         return .none
 
     pub fn get_at( //< an array's element, for reading a path; `null_val` past the end
-        //<
         //< Past the end reads as `null`, as an absent member does for `get`; `arr_list` gives the
         //< count.
         r: Self,
@@ -604,7 +580,6 @@ impl Value
         return .null_val
 
     pub fn as_str(r: Self): U8[]? //< the string it holds, or nothing for another kind
-        //<
         //< An empty string is `.some("")`, apart from a number, `null` or an absent member.
         switch r
         case .str_val(s)
@@ -620,7 +595,6 @@ impl Value
         return .none
 
     pub fn as_int(r: Self): I32? //< the integer it holds, when an `I32` holds it; nothing otherwise
-        //<
         //< Caution: **An integer past `I32` gives nothing, never its low bytes**: narrowed,
         //< 4294967297 would read as 1, and an id that large would match id 1.
         switch r
@@ -631,7 +605,6 @@ impl Value
         return .none
 
     pub fn as_int64(r: Self): I64? //< the integer it holds, at its full width; nothing otherwise
-        //<
         //< For a value that can exceed 2GB, such as safetensors' `data_offsets`. A number written
         //< with a point is no integer, however whole.
         switch r
@@ -641,7 +614,6 @@ impl Value
         return .none
 
     pub fn as_f64(r: Self): F64? //< the number it holds, or nothing when it is not a number
-        //<
         //< It accepts the integer kind too, so `3` and `3.0` need no branch.
         switch r
         case .float_val(f)
@@ -652,7 +624,6 @@ impl Value
         return .none
 
     pub fn equals( //< whether the two hold the same JSON value
-        //<
         //< **A number equals only one of its own kind** (`1` is not `1.0`: the reader keeps them
         //< apart). A decimal equals only the same F64, bit for bit, so `-0.0` is not `0.0`. Objects
         //< are equal when they hold the same members in any order, a repeated key counted each

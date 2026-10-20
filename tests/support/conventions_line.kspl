@@ -1,5 +1,4 @@
 //< The format of the line printed for each verdict (not the suite)
-//<
 //< **This file is the format's canonical source.**
 //< Caution: **A failure's mark must be `FAIL`.** `tools/ci_gates.kspl` names a fallen gate's lines
 //< in this shape as its causes, so where a place writes it another way **the failed line never
@@ -16,7 +15,6 @@ import "tests/support/conventions_scan" as scan
 import "tests/support/harness"
 
 priv const MARK_OK: U8[] = "pass" //< the pass mark
-    //<
     //< The word is `pass` **rather than the pair `OK` / `NG`**: it is the same word as the `RESULT:
     //< ALL PASS` summary, and all three marks are four letters long. **Only the passing mark is
     //< lower case, so the lines that need attention form a block of capitals**; the word holds the
@@ -33,7 +31,6 @@ priv const LINE_FILES: U8[][_] = ::{ "kspage/tests/browser/probe.js", "kspage/te
 
 priv const LINE_READERS: U8[][_] = ::{ "tools/ci_gates.kspl", "tests/suite/pytools_test.kspl" } //<
     //< Where a mark is **read**
-    //<
     //< **Updating only the writers is not enough**: a reader waiting for an old mark fails, the day
     //< the mark changes, with the false reason "not one ran".
 
@@ -45,7 +42,6 @@ priv const LINE_REPORTERS: U8[][_] = ::{ "std/verdict.kspl", "kspage/tests/brows
 
 priv const LINE_SHAPES: U8[][_] = ::{ "\"pass ", "'pass " } //<
     //< The forms that build a pass mark, allowed only in the table above
-    //<
     //< Caution: **Do not write this form inside a comment either**: the check reads the text, so a
     //< quoted example is hit (describe it in words). **Search for the form right after a quote
     //< mark**: the mark alone hits English words in prose and the forms in a per-gate list.
@@ -55,7 +51,6 @@ priv const LINE_MARKS: U8[][_] = ::{ MARK_OK, MARK_BAD, MARK_SKIP } //<
 
 priv const LINE_BANNED: U8[][_] = ::{ "\"NG ", "`NG ", "\"OK ", "'OK ", "`OK " } //<
     //< The rejected marks
-    //<
     //< Caution: **Do not bring back `NG` or `OK`.** `NG` is Japanese-made English that others do
     //< not know, and `OK` does not pair with `FAIL`.
 
@@ -66,7 +61,7 @@ priv fn check_one_place(arena: Arena$@) //<
     specs: = scan.kspl_specs_with(U8[][]::{ "*.py", "*.js", "*.mjs", "*.mk" }, arena)
     for rel in harness.tracked_matching(specs)
         seen += 1
-        if named_in(U8[][]::LINE_FILES, rel) || rel.equals(HERE)
+        if (U8[][]::LINE_FILES).contains(rel) || rel.equals(HERE)
             continue
         src: = harness.read_under_root(rel)
         for shape in LINE_SHAPES
@@ -79,12 +74,6 @@ priv fn check_one_place(arena: Arena$@) //<
 
 priv const HERE: U8[] = "tests/support/conventions_line.kspl"
 
-priv fn named_in(names: U8[][], want: U8[]): Bool
-    for n in names
-        if n.equals(want)
-            return true
-    return false
-
 priv fn check_marks(arena: Arena$@)
     $seen: Sz = 0
     $bad: = List<|U8[]|>.new(arena)
@@ -96,7 +85,7 @@ priv fn check_marks(arena: Arena$@)
             // failure path no `FAIL` (only `LINE_REPORTERS` hold it). Only the passing mark is
             // required of them all.
             if m.equals(MARK_SKIP) ||
-                (m.equals(MARK_BAD) && !named_in(U8[][]::LINE_REPORTERS, rel))
+                (m.equals(MARK_BAD) && !(U8[][]::LINE_REPORTERS).contains(rel))
                 continue
             // Caution: **Search with the quote mark included.** A mention in a comment or in
             // English satisfies the bare word (`pass` is also Python's statement). Then **a place
@@ -115,7 +104,6 @@ priv fn check_marks(arena: Arena$@)
 
 priv fn check_tag_reaches(arena: Arena$@) //<
     //< A per-verdict line in a run's log holds mark, label, contents, in that order
-    //<
     //< **Reading the text without running is not enough**: where the code that passes the label
     //< (`KANSO_SUITE` in `mk/test.mk`) is lost, lines come out with no label. This suite checks its
     //< own line; `make ci` always passes the label.
@@ -168,13 +156,11 @@ priv fn check_line_flush(arena: Arena$@)
 
 priv const VERDICT_SEEN: Sz[_] = ::{ 800, 800, 0, 0 } //<
     //< A walk's verdict stands only where it walked something
-    //<
     //< **The count seen is not only shown on screen; it is judged.** A really empty subject still
     //< walks files, so 0 means the reading broke, never "there was nothing to find".
 priv const VERDICT_BAD: Sz[_] = ::{ 0, 3, 0, 3 }
 priv const VERDICT_WANT: Bool[_] = ::{ true, false, false, false } //<
     //< The expected verdict for each sample
-    //<
     //< In order: walked 800 and found nothing (passes) / found 3 (fails) / walked nothing (fails) /
     //< walked nothing and found 3 (fails)
 

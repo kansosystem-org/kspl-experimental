@@ -53,7 +53,7 @@ fn test_fs_ops()
     fs.rename_path(f1, f2)
         catch panic("rename_path should replace an existing destination, not fail")
     assert(!fs.exists(f1), "the source should be gone after a replacing rename")
-    replaced: = io.read_file(f2) catch panic("the replaced destination should be readable")
+    replaced: = io.read_file(f2, null) catch panic("the replaced destination should be readable")
     assert(replaced.equals("again"), "the destination should hold the new bytes")
     dealloc(Void$@::replaced.ptr)
 
@@ -73,7 +73,6 @@ fn test_fs_ops()
 
 fn test_fs_wide_path() //<
     //< That the file operations work in a folder whose path contains a space and non-ASCII
-    //<
     //< **Only this test covers it.** The folder in the section above is ASCII, so `std/fs`'s
     //< functions never pass through **the code that copies a path for the OS's wide API**. On
     //< Windows every function goes through `kspl_win_to_wide` (`ksplc/gen/runtime/hosted_fs.c`).
@@ -114,7 +113,7 @@ fn test_fs_wide_path() //<
     for name in entries
         assert(name.equals("直した.txt"),
             "the entry name should come back as the bytes that were written")
-        got: = io.read_file(fs.join(deep, name, arena))
+        got: = io.read_file(fs.join(deep, name, arena), null)
             catch panic("the file should be readable through the path rebuilt from the listed name")
         assert(got.equals("かんそ"), "the rebuilt path should reach the same bytes")
         dealloc(Void$@::got.ptr)
@@ -133,7 +132,6 @@ priv const LEVEL_FILLER: U8[] = "abcdefghijklmnopqrstuvwxyz0123456789abcdefghijk
 
 fn test_fs_past_max_path() //<
     //< That every function works on a path longer than Windows's 260 characters
-    //<
     //< **On Linux it works anyway.** The target is a Windows runner, where a path passed unchanged
     //< stops at 260 while a C compiler still accepts it (`kspl_path_to_wide` in
     //< `ksplc/gen/runtime/hosted_fs.c`). The tree is built through a relative path, which is
@@ -176,7 +174,7 @@ fn test_fs_past_max_path() //<
     assert(entries.len == 1, "the long directory should contain exactly one entry")
     for name in entries
         assert(name.equals("moved.txt"), "the entry should come back by the name it was moved to")
-        got: = io.read_file(fs.join(deep, name, arena))
+        got: = io.read_file(fs.join(deep, name, arena), null)
             catch panic("the file should be readable through the long path rebuilt from the listed \
                 name")
         assert(got.equals("past"), "the rebuilt long path should reach the same bytes")
@@ -254,7 +252,6 @@ fn test_fs_walk()
             skip_dir dropped a whole branch.")
 
 priv const RACE_DIRS: Sz = 16 //< how many threads create the same tree at once
-    //<
     //< Caution: **Make it actually hit the check-then-act race.** Called twice in sequence,
     //< `is_dir` short-circuits, so the test passes even without the handling. Suites run by
     //< `make -j` share `ksplc run`'s cache tree and do hit the race; threads reproduce it here.
@@ -264,7 +261,6 @@ priv struct Race_ctx
     fails: thread.Atomic_sz$@
     go: thread.Atomic_sz$@ //<
         //< The flag that holds every thread until all are up.
-        //<
         //< Caution: **Without it there is no race**: a late starter would find the tree already
         //< made.
 
@@ -307,7 +303,6 @@ fn test_fs_mkdir_all_race()
     verdict.pass("when several create it at once, the one that loses the race is not a failure.")
 
 fn clear_tree_best_effort(root: U8[], arena: Arena$@) //< deletes a test's scratch tree
-    //<
     //< It does not report a failed delete (clean-up must not hide the result under test). A link
     //< is removed, never entered.
     entries: = fs.read_dir(root, arena) catch
@@ -386,7 +381,6 @@ fn test_fs_path_guard()
     arena: = Arena.new(1024 * 1024)
     defer arena.free()
     $deep: = build_deep_tree(520)
-    defer deep.free()
     // **Where the OS path-length limit is hit first, the tree cannot be created** (Windows, macOS).
     // There mkdir_all rightly fails, and the test stops after the text checks. Linux verifies
     // depth.
@@ -489,7 +483,6 @@ priv fn build_deep_tree(levels: Sz): Str_builder
 priv fn remove_deep_tree(levels: Sz) //< deletes from the leaves in order
     for $n: Sz = levels; n > 0; n -= 1
         $b: = build_deep_tree(n)
-        defer b.free()
         fs.remove_path(b.slice()) catch {}
     fs.remove_path(DEEP_ROOT) catch {}
 

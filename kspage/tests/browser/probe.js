@@ -112,6 +112,19 @@
     }, lookMs);
   }
 
+  // The wait for an `async` section: it looks every `lookMs` until `ready()` holds, and resolves
+  // to whether it did. It gives up after `untilLooks` looks (1.2 s).
+  // Caution: **Poll, with a cap.** A fixed wait cannot fit a layout growing with the document, and
+  // a wait with no cap never lets the marks out.
+  const untilLooks = 48;
+  async function until(ready) {
+    for (let looked = 0; looked < untilLooks; looked += 1) {
+      if (ready()) return true;
+      await new Promise((go) => setTimeout(go, lookMs));
+    }
+    return false;
+  }
+
   // **Do not cut it by a length**: a net from the chain's steps falls short once a step is added.
   // **While a wait is in flight, it waits again**, and it **says what is left by name**.
   // Caution: **Where nothing is left, say nothing** (a passing round's mark would land behind the
@@ -380,7 +393,7 @@
       // A section carrying asynchronous work holds with this and calls what it returns when done.
       hold: hold,
       // The wait and the safety net; **no milliseconds in a section** (why: `waitFor`'s comment).
-      waitFor: waitFor, netFor: netFor,
+      waitFor: waitFor, netFor: netFor, until: until,
       // A file chosen, as the choosing window would hand it (why: its own comment).
       pickFile: pickFile,
     };

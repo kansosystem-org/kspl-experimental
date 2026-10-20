@@ -5,6 +5,9 @@
 
 function kspageProbePaper(ks) {
   const { check, app, canvas, press, keyIn, ime } = ks;
+  // One page's settings by the saved field names (`app.paper()`); the four margins alike.
+  const pageOf = (width, height, margin) => ({ page_width: width, page_height: height,
+    margin_left: margin, margin_top: margin, margin_right: margin, margin_bottom: margin });
 
   // 23. Copy to paper and it becomes black text on white paper.
   //
@@ -12,7 +15,7 @@ function kspageProbePaper(ks) {
   // dark screen the text is white. Copied to paper as it stands, **nothing is visible on the
   // page**, told only by the canvas's pixels.
   const sheet = document.createElement("canvas");
-  app.setPaper({ width: 300, height: 200, left: 20, top: 20, right: 20, bottom: 20 });
+  app.setPaper(pageOf(300, 200, 20));
   check(app.paper().band === 160,
     "the height of content that fits a page is what is left after the margins");
   app.paintPage(sheet, 0);
@@ -37,21 +40,21 @@ function kspageProbePaper(ks) {
   ks.openMenu("paper-size");
   check(ks.flyPick("paper-size", "A4"), "\"A4\" can be chosen from the paper sizes");
   const a4 = app.paper();
-  check(a4.width === 794 && a4.height === 1123,
+  check(a4.page_width === 794 && a4.page_height === 1123,
     "the size chosen goes into the document's settlement ("
-      + a4.width + "x" + a4.height + ")");
+      + a4.page_width + "x" + a4.page_height + ")");
   check(ks.flyNow("paper-size") === "A4",
     "the size chosen comes out to the shut row's right (" + ks.flyNow("paper-size") + ")");
   check(ks.flyPick("paper-turn", "Landscape"),
     "\"Landscape\" can be chosen from the printing directions");
   const wide = app.paper();
-  check(wide.width === 1123 && wide.height === 794,
-    "landscape swaps the vertical measure (" + wide.width + "x" + wide.height + ")");
+  check(wide.page_width === 1123 && wide.page_height === 794,
+    "landscape swaps the vertical measure (" + wide.page_width + "x" + wide.page_height + ")");
   check(ks.flyPick("paper-size", "Do not split into pages"),
     "it can go back to \"Do not split into pages\"");
   check(app.paper().band === 0, "it goes back to not splitting into pages");
   // Caution: **Put the page back for the checks that follow** (below relies on a 300x200 page).
-  app.setPaper({ width: 300, height: 200, left: 20, top: 20, right: 20, bottom: 20 });
+  app.setPaper(pageOf(300, 200, 20));
 
   // 24. A page's header and footer come out black inside the margin.
   //
@@ -112,14 +115,14 @@ function kspageProbePaper(ks) {
     }
     return far;
   };
-  app.setPaper({ width: 320, height: 600, left: 20, top: 20, right: 20, bottom: 20 });
+  app.setPaper(pageOf(320, 600, 20));
   const bodyAt = app.styleNames().indexOf("body");
   check(bodyAt >= 0, "body is in the style table");
-  const wasSpec = app.stylePara(bodyAt);
+  const wasSpec = app.styleData(bodyAt);
   app.paintPage(sheet, 0);
   const plainEdges = inkEdges();
-  app.setStylePara(bodyAt, { ...wasSpec, align: "justify" });
-  check(app.stylePara(bodyAt).align === "justify",
+  app.setStyleData(bodyAt, { ...wasSpec, align: "justify" });
+  check(app.styleData(bodyAt).align === "justify",
     "the menu's justification goes into the style");
   app.paintPage(sheet, 0);
   const spreadEdges = inkEdges();
@@ -147,15 +150,15 @@ function kspageProbePaper(ks) {
   // once the sample grows, though the settlement acts. It is looked at by how many sheets the whole
   // document comes to.
   const tallWas = Math.round(canvas.getBoundingClientRect().height);
-  app.setStylePara(bodyAt, { ...wasSpec, wrap: false });
-  check(app.stylePara(bodyAt).wrap === false,
+  app.setStyleData(bodyAt, { ...wasSpec, wrap: false });
+  check(app.styleData(bodyAt).wrap === false,
     "the menu's taking the wrapping off goes into the style");
   app.paintPage(sheet, 0);
   const tallNow = Math.round(canvas.getBoundingClientRect().height);
   check(tallNow < tallWas,
     "not wrapping shortens the document (" + tallWas + " -> " + tallNow + "px)");
-  app.setStylePara(bodyAt, wasSpec);
-  check(app.stylePara(bodyAt).wrap === true, "undoing puts the wrapping back too");
+  app.setStyleData(bodyAt, wasSpec);
+  check(app.styleData(bodyAt).wrap === undefined, "undoing puts the wrapping back too");
   app.setPaper({});
 
   // 23'''. Stop it at the body's width and the row narrows inside the window.
@@ -177,7 +180,7 @@ function kspageProbePaper(ks) {
   const half = Math.round(roomWide / 2);
   textWide.value = half;
   textWide.dispatchEvent(new Event("change", { bubbles: true }));
-  check(app.paper().reading === half,
+  check(app.paper().reading_width === half,
     "the width written in the field goes into the document's settlement (" + half + ")");
   // Caution: **It must come in by half the slack.** "It came in" alone passes for a shape
   // landed left too.
@@ -188,11 +191,11 @@ function kspageProbePaper(ks) {
   // **The width recommended must be pressable**, for whoever does not know the numbers. 640 is
   // `port/web/paper.js`'s `READ_WIDTH` (45 to 75 characters at 13px).
   document.getElementById("text-width-read").click();
-  check(app.paper().reading === 640,
+  check(app.paper().reading_width === 640,
     "pressing the width recommended stops it at 640px");
   textWide.value = "";
   textWide.dispatchEvent(new Event("change", { bubbles: true }));
-  check(app.paper().reading === 0, "emptying it stops nothing");
+  check(app.paper().reading_width === undefined, "emptying it stops nothing");
   check(Math.round(headLeft()) === Math.round(wasHead),
     "undoing puts the row's head back too");
 
@@ -220,8 +223,8 @@ function kspageProbePaper(ks) {
     return n;
   };
   const codeAt = app.styleNames().indexOf("code");
-  const codeFill = app.styleEdge(codeAt).fill;
-  check(codeFill !== null,
+  const codeFill = app.styleData(codeAt).fill;
+  check(codeFill !== undefined,
     "the sample's code block has a fill (" + codeFill + ")");
   const painted = fillOf([245, 245, 245]);
   check(painted > 100, "that fill is out on the canvas (" + painted + " pixels)");
@@ -235,7 +238,7 @@ function kspageProbePaper(ks) {
   check(left * 20 < painted,
     "fitting to the screen deletes the document's fill ("
       + painted + " -> " + left + " pixels)");
-  check(app.styleEdge(codeAt).fill === codeFill, "the document's own fill does not move");
+  check(app.styleData(codeAt).fill === codeFill, "the document's own fill does not move");
   // **It does not land on the page** (a page comes out in the document's colours), looked at by the
   // faint fill over the white paper.
   const plainSheet = document.createElement("canvas");
@@ -268,18 +271,18 @@ function kspageProbePaper(ks) {
     { data: "ab", inputType: "insertText", bubbles: true }));
   const typed = app.text().length;
   check(typed > typedWas, "what was typed goes in (" + typedWas + " -> " + typed + ")");
-  app.setPaper({ width: 640, height: 900, left: 30, top: 30, right: 30, bottom: 30 });
-  check(app.paper().width === 640, "the paper changes");
+  app.setPaper(pageOf(640, 900, 30));
+  check(app.paper().page_width === 640, "the paper changes");
   check(app.undo(), "it can be undone");
-  check(app.paper().width === 0,
-    "the undo puts the paper back (" + app.paper().width + ")");
+  check(app.paper().page_width === undefined,
+    "the undo puts the paper back (" + app.paper().page_width + ")");
   check(app.text().length === typed,
     "what was typed does not come back (" + app.text().length + ")");
-  check(app.redo() && app.paper().width === 640, "the redo puts the paper back");
+  check(app.redo() && app.paper().page_width === 640, "the redo puts the paper back");
   // **Do not stack a step for the same setting.** The screen hands all seven fields over whichever
   // is touched, so stacked, steps where "a press puts nothing back" line up.
-  app.setPaper({ width: 640, height: 900, left: 30, top: 30, right: 30, bottom: 30 });
-  check(app.undo() && app.paper().width === 0, "the same setting stacks no step");
+  app.setPaper(pageOf(640, 900, 30));
+  check(app.undo() && app.paper().page_width === undefined, "the same setting stacks no step");
   app.setPaper({});
 
   // 23'''''. A document with no paper settled becomes a page with margins in printing too.
@@ -292,7 +295,8 @@ function kspageProbePaper(ks) {
   // paper settled.
   const wasPaper = app.paper();
   app.setPaper({});
-  check(app.paper().height === 0, "it can be put into the state with no paper settled");
+  check(app.paper().page_height === undefined,
+    "it can be put into the state with no paper settled");
   const bareSheet = document.createElement("canvas");
   app.paintPage(bareSheet, 0);
   check(bareSheet.width === 794 && bareSheet.height === 1123,
@@ -302,12 +306,12 @@ function kspageProbePaper(ks) {
   // looking like a blank page** (with no measures, the browser picks its own paper). So it asks for
   // the page printing actually uses (`api_show.js`'s `printPaper`).
   const willPrint = app.printPaper();
-  check(willPrint.width > 0 && willPrint.height > 0,
+  check(willPrint.page_width > 0 && willPrint.page_height > 0,
     "even for a document with no paper settled, the measures of the page printing uses are "
       + "settled");
-  check(willPrint.width === bareSheet.width && willPrint.height === bareSheet.height,
+  check(willPrint.page_width === bareSheet.width && willPrint.page_height === bareSheet.height,
     "those measures are the same as the canvas drawn ("
-      + willPrint.width + "x" + willPrint.height + ")");
+      + willPrint.page_width + "x" + willPrint.page_height + ")");
   // There must be no ink in the upper and lower bands.
   // Caution: **Look at it per row** (in the overall pixel count one row of a narrow band is
   // buried).
@@ -351,7 +355,7 @@ function kspageProbePaper(ks) {
   // Caution: **Put it back** (a later section runs on top of the document an earlier
   // one laid down).
   app.setPaper(wasPaper);
-  check(app.paper().height === wasPaper.height,
+  check(app.paper().page_height === wasPaper.page_height,
     "the document's settlement goes back as it was");
 }
 
@@ -435,12 +439,12 @@ function kspageProbeLink(ks) {
     "the heading's depth comes out in the field");
   document.getElementById("style-outline").value = "0";
   document.getElementById("style-apply").click();
-  check(app.styleOutline(headAt).level === 0, "changing the field changes the depth too");
+  check(app.styleData(headAt).outline === undefined, "changing the field changes the depth too");
   check(ks.flyTick("style-collect") === "Do not gather",
     "the set for how it gathers gets the mark too (" + ks.flyTick("style-collect") + ")");
   check(items() < itemsWithToc, "taking the heading off takes its entries out too");
   undoKey();
-  check(app.styleOutline(headAt).level === 1, "one undo puts the depth back");
+  check(app.styleData(headAt).outline === 1, "one undo puts the depth back");
 
   // The fields that settle a change of look by value (a conditional style).
   //
@@ -463,10 +467,10 @@ function kspageProbeLink(ks) {
   check(ks.flyPick("style-when-then", "strong"),
     "the emphasis style can be chosen from the styles to lay over");
   document.getElementById("style-apply").click();
-  const setWhen = app.styleWhen(moneyAt);
-  check(setWhen.how === "above" && setWhen.than === 100 && setWhen.then === "strong",
+  const setWhen = app.styleData(moneyAt);
+  check(setWhen.when_above === 100 && setWhen.when_then === "strong",
     "the fields are wired to the settlement ("
-      + setWhen.how + "/" + setWhen.than + "/" + setWhen.then + ")");
+      + setWhen.when_above + "/" + setWhen.when_then + ")");
   // **It must come out in the field on choosing afresh**, or the settlement vanishes on a change.
   check(ks.flyPick("style-pick", "bullet"), "it can move to another style");
   check(ks.flyPick("style-pick", "amount"), "it can go back to the original style");
@@ -476,7 +480,7 @@ function kspageProbeLink(ks) {
     "the name of the style laid over comes out again too (" + ks.flyTick("style-when-then") + ")");
   check(ks.flyPick("style-when", "No condition"), "it can go back to no condition");
   document.getElementById("style-apply").click();
-  check(app.styleWhen(moneyAt).how === "none", "it goes back to no condition");
+  check(app.styleData(moneyAt).when_above === undefined, "it goes back to no condition");
 
   // The field for how a date is shown.
   //
@@ -491,9 +495,9 @@ function kspageProbeLink(ks) {
   check(ks.flyPick("style-dated", "18 August 2026"),
     "the long form can be chosen from the date set");
   document.getElementById("style-apply").click();
-  check(app.styleNumber(moneyAt).dated === "long",
-    "the field is wired to how a date is shown (" + app.styleNumber(moneyAt).dated + ")");
-  check(app.styleNumber(moneyAt).prefix === "$", "the text before does not fall away");
+  check(app.styleData(moneyAt).dated === "long",
+    "the field is wired to how a date is shown (" + app.styleData(moneyAt).dated + ")");
+  check(app.styleData(moneyAt).prefix === "$", "the text before does not fall away");
   // **It must come out in the field on choosing afresh**, or how it is shown vanishes on a change.
   check(ks.flyPick("style-pick", "bullet"), "it can move to another style (dates)");
   check(ks.flyPick("style-pick", "amount"), "it can go back to the original style (dates)");
@@ -505,5 +509,5 @@ function kspageProbeLink(ks) {
   check(/\d{1,2} [A-Z][a-z]+ \d{4}/.test(app.text()), "the screen becomes a long-form date");
   check(ks.flyPick("style-dated", "As a number"), "it can go back to staying a number");
   document.getElementById("style-apply").click();
-  check(app.styleNumber(moneyAt).dated === "none", "it goes back to staying a number");
+  check(app.styleData(moneyAt).dated === undefined, "it goes back to staying a number");
 }

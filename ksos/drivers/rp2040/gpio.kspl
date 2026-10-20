@@ -1,5 +1,4 @@
 //< The GPIO driver for the real Raspberry Pi Pico / Pico W (RP2040) chip
-//<
 //< Its GPIO is split across three blocks — PADS_BANK0 (the electrical settings), IO_BANK0
 //< (FUNCSEL) and SIO (the value and direction). An output needs all three; miss one and nothing
 //< happens, silently.
@@ -33,14 +32,12 @@ const PAD_IE: U32 = 1U32 << 6
 const PAD_OD: U32 = 1U32 << 7
 
 fn init(): Void!mmio.Driver_error //< takes IO_BANK0 and PADS_BANK0 out of reset
-    //<
     //< Call it once before using GPIO (twice is safe). The wait has a timeout (`unreset` in
     //< `resets.kspl`).
     resets.unreset(RESET_IO_BANK0 | RESET_PADS_BANK0)!
 
 fn select_function(pin: U32, funcsel: U32) //<
     //< Switches pin's function to funcsel and clears its output disable
-    //<
     //< It also enables the input. Drivers for other functions (PWM=4 and the like) use it too, so
     //< the register layout stays inside this file.
     pad_addr: = PADS_BANK0_BASE + 0x04 + 4 * pin
@@ -50,7 +47,6 @@ fn select_function(pin: U32, funcsel: U32) //<
     mmio.write32(ctrl_addr, funcsel)
 
 fn init_out(pin: U32) //< makes pin an SIO output (Low to start)
-    //<
     //< Call it after init().
     select_function(pin, FUNCSEL_SIO)
     // Drive Low before enabling the output (so no undefined value appears when it is enabled)
@@ -58,19 +54,16 @@ fn init_out(pin: U32) //< makes pin an SIO output (Low to start)
     mmio.write32(SIO_GPIO_OE_SET, 1U32 << pin)
 
 fn init_in(pin: U32) //< makes pin an SIO input
-    //<
     //< **No pull is set: the other end must drive High/Low itself**, or the value floats. For a
     //< pull, follow it with `set_pull`.
     select_function(pin, FUNCSEL_SIO)
     mmio.write32(SIO_GPIO_OE_CLR, 1U32 << pin)
 
 fn read(pin: U32): Bool //< true if pin's input is High
-    //<
     //< Call it after init_in.
     return (mmio.read32(SIO_GPIO_IN) & (1U32 << pin)) != 0
 
 fn set_pull(pin: U32, up: Bool, down: Bool) //< changes only pin's pull-up/pull-down
-    //<
     //< It does not touch FUNCSEL, so it serves an SIO input (after `init_in`) and **a pin with
     //< another function, such as I2C**, alike.
     pad_addr: = PADS_BANK0_BASE + 0x04 + 4 * pin
@@ -84,7 +77,6 @@ fn set_pull(pin: U32, up: Bool, down: Bool) //< changes only pin's pull-up/pull-
 
 fn init_analog(pin: U32) //<
     //< Connects pin to the ADC input (meaningful only for GPIO 26 to 29)
-    //<
     //< Caution: **Turn off both the digital input buffer and the pulls**, or they load the analog
     //< voltage and the readings drift. FUNCSEL is not touched (the ADC path is separate).
     pad_addr: = PADS_BANK0_BASE + 0x04 + 4 * pin
@@ -101,7 +93,6 @@ fn toggle(pin: U32)
     mmio.write32(SIO_GPIO_OUT_XOR, 1U32 << pin)
 
 fn spin(iters: U32) //< a rough busy wait
-    //<
     //< Its real duration is **not guaranteed**. **Where time matters, use rp2040/timer**; this is
     //< for before clocks.init. It reads SIO volatile each iteration, since an empty loop vanishes
     //< at -Os.

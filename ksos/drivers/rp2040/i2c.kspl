@@ -1,5 +1,4 @@
 //< The I2C master (I2C0) for the real Raspberry Pi Pico / Pico W (RP2040) chip
-//<
 //< Caution: **Call clocks.init() first.** SCL's divisor is worked out from clk_sys.
 
 // ==========================================
@@ -36,7 +35,6 @@ const REG_FS_SPKLEN: U32 = BASE + 0xa0
 const CON_MASTER_MODE: U32 = 1U32 << 0
 const CON_SLAVE_DISABLE: U32 = 1U32 << 6 //<
     //< The bit that disables the slave function
-    //<
     //< **Rewriting all of CON clears it to 0**, and master and slave enabled together do not work.
 const CON_SPEED_FAST: U32 = 2U32 << 1
 const CON_RESTART_EN: U32 = 1U32 << 5
@@ -58,22 +56,18 @@ const FUNCSEL_I2C: U32 = 3
 $last_abort_src: U32 = 0
 
 fn last_abort(): U32 //< the TX_ABRT_SOURCE captured on the latest transfer
-    //<
     //< 0 means no abort. bit0 = no device at the address, bit3 = the data was NACKed (the device is
     //< there but does not accept it).
     return last_abort_src
 
 const TIMEOUT_US: U32 = 10000 //<
     //< The limit on one wait, so it does not hang forever when no device is there
-    //<
     //< One byte is about 90µs at SCL 100kHz, so this leaves plenty of room.
 
 const SCL_HZ: U32 = 100000 //< the SCL's target frequency
-    //<
     //< Standard mode: it tolerates rough wiring better than 400kHz.
 
 fn init(sda: U32, scl: U32): Void!mmio.Driver_error //< starts I2C0 on the sda / scl pins
-    //<
     //< Caution: Call it after gpio.init() and clocks.init().
     resets.reset_then_unreset(RESET_I2C0)!
 
@@ -104,14 +98,12 @@ fn init(sda: U32, scl: U32): Void!mmio.Driver_error //< starts I2C0 on the sda /
     mmio.write32(REG_ENABLE, 1U32)
 
 priv fn set_target(addr7: U32) //< selects a new target device
-    //<
     //< TAR can only be changed while ENABLE is cleared.
     mmio.write32(REG_ENABLE, 0U32)
     mmio.write32(REG_TAR, addr7 & 0x7f)
     mmio.write32(REG_ENABLE, 1U32)
 
 priv fn begin_transfer() //< clears what the previous transfer left before a new one starts
-    //<
     //< Caution: **Clear STOP_DET too.** If the previous transfer gave up partway it is still set,
     //< and the next finish() sees it and wrongly takes the transfer as already over.
     _a: = mmio.read32(REG_CLR_TX_ABRT)
@@ -119,7 +111,6 @@ priv fn begin_transfer() //< clears what the previous transfer left before a new
     last_abort_src = 0
 
 priv fn finish(): Void!mmio.Driver_error //< completes a transfer
-    //<
     //< It waits for STOP to be sent. It fails with `timed_out` if it never is (a device holds the
     //< clock). It fails with `no_answer` on an abort (no device, or a NACK; see `last_abort`).
     start: = timer.now_us()
@@ -134,7 +125,6 @@ priv fn finish(): Void!mmio.Driver_error //< completes a transfer
         throw .no_answer
 
 priv fn wait_status(mask: U32): Bool //< waits until a status bit is set
-    //<
     //< false if it is not set in time.
     start: = timer.now_us()
     for (mmio.read32(REG_STATUS) & mask) == 0
@@ -144,7 +134,6 @@ priv fn wait_status(mask: U32): Bool //< waits until a status bit is set
 
 fn write(addr7: U32, data: U8@, len: U32): Void!mmio.Driver_error //<
     //< Writes len bytes to addr7, sending STOP after the last byte
-    //<
     //< **`no_answer` if the device returns no ACK.** With broken wiring it does not hang; it
     //< reports it here.
     if len == 0
@@ -162,7 +151,6 @@ fn write(addr7: U32, data: U8@, len: U32): Void!mmio.Driver_error //<
 
 fn present(addr7: U32): Bool //<
     //< Whether a device answers at addr7
-    //<
     //< **It checks by reading one byte**: a zero-byte transfer cannot be expressed, and a write
     //< would touch the device's registers.
     set_target(addr7)

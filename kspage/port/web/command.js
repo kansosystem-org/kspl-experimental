@@ -13,6 +13,8 @@ function kspageCommand(ui) {
   const app = ui.app;
   const say = ui.say, tell = ui.tell, deny = ui.deny;
   const putButton = ui.putButton, lineButton = ui.lineButton, whyButton = ui.whyButton;
+  putButton("paragraph-after-table", () => app.paragraphAfterTable(),
+    "Click inside a table in an editable document first");
   // Adding says which thing stopped it (outside a table, read-only, a merge at its widest).
   whyButton("add-row", () => app.addLine("row"));
   lineButton("drop-row", () => app.dropLine("row"));
@@ -30,10 +32,10 @@ function kspageCommand(ui) {
   whyButton("sort-up", () => app.sortRows("up"));
 
   // The items holding the settings for inserting; the chosen text shows right of the item.
-  // Caution: **The text must be a name the core knows** — an unknown name becomes number 0, so a
-  // typo silently inserts something else (`make test-conventions` checks it). **Keep the list in
-  // the core's numbering** (`state.kspl`'s `*_order`). **Do not go back to a `<select>`** — a
-  // closed field hides the choice, so it cannot be read until opened (the header of `fly.js`).
+  // Caution: **The text must be a variant name the core knows** — an unknown name reads as the
+  // kind's default, so a typo silently inserts something else (`make test-conventions` checks it).
+  // **Do not go back to a `<select>`** — a closed field hides the choice, so it cannot be read
+  // until opened (the header of `fly.js`).
   const SKETCH_PICKS = [["whole", "One frame"], ["titled", "A title and a body"],
     ["halved", "A title and two columns"]];
   const SHAPE_PICKS = [["box", "Rectangle"], ["round_box", "Rounded rectangle"],
@@ -43,7 +45,7 @@ function kspageCommand(ui) {
     ["fall_arrow_back", "Arrow, down-right reversed"],
     ["rise_arrow_back", "Arrow, up-right reversed"]];
   const CHART_PICKS = [["bars", "Bar chart"], ["lines", "Line chart"]];
-  // How a filter matches a cell (`KEEP_ORDER` in `state.kspl`).
+  // How a filter matches a cell (`Keep` in `../../model/filter.kspl`).
   const KEEP_PICKS = [["is", "is"], ["is_not", "is not"], ["holds", "contains"],
     ["above", "is above"], ["below", "is below"], ["blank", "is empty"], ["filled", "is not empty"]];
   // Builds an item that holds one setting (`fly.js` holds the value).
@@ -92,28 +94,15 @@ function kspageCommand(ui) {
   const shapeKind = holdFly("shape-picks", "shape-kind", "The shape's kind", SHAPE_PICKS);
   putButton("put-shape", () => app.insertShape(`figure-${shapeKind()}`, shapeKind()),
     "A shape is placed inside a slide. Click a slide and then insert it");
-  // The name of one thing, **separate from a style's name.**
-  // **Write what it attaches to into the refusal.** It depends on where the cursor is (`named_at`
-  // in `../../write/block.kspl`).
-  // Caution: **Do not say only "the text inside a frame"**: someone who wants to name a table
-  // reads that as impossible.
-  // **A table's name that no formula could reach says why** (`kspage_web_set_name`). The rule is
-  // what a formula reads as the end of a name, as a number or as the date type.
+  // The name of one thing, **separate from a style's name.** A refusal says why: where to click,
+  // or **why no formula could reach a table by that name** (`app.setName`).
   const frameNameBox = document.getElementById("frame-name");
-  const NAME_FAULTS = {
-    "-1": "A table's name cannot hold a space, a line break or any of + - * / ( ) , : < > = ! "
-      + "(a formula would end the name there). Join the words with _ (Q1_sales)",
-    "-2": "A table's name cannot start with a digit or # (a formula would read a number or a mark)",
-    "-3": "A table's name cannot start with Day (a formula reads that as the date type)",
-  };
   document.getElementById("frame-name-apply").addEventListener("click", () => {
-    const got = app.setName(frameNameBox.value);
-    if (got < 0) {
-      deny(NAME_FAULTS[String(got)]);
+    const why = app.setName(frameNameBox.value);
+    if (why === "") {
+      say("Set the name");
     } else {
-      tell(got > 0, "Set the name",
-        "Click where the name is to be given and then set it (inside a cell it attaches to the "
-          + "table, inside a slide's frame to the frame, and otherwise to the paragraph you are in)");
+      deny(why);
     }
     app.focus();
   });
@@ -293,6 +282,8 @@ function kspageCommand(ui) {
     noteBox: noteBox,
     remarkBox: remarkBox,
     remarkBy: remarkBy,
+    // The shapes' list; the style panel's shape item shows the same choices (`form.js`).
+    shapePicks: SHAPE_PICKS,
     // Caution: **Count again on every redraw**, or the old count stays. It costs about a tenth of a
     // layout.
     retally: retally,

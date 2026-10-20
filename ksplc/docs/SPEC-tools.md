@@ -48,7 +48,7 @@ A name with no extension, as an `import` writes it, is opened as `.kspl`, and a 
 
 ```
 $ ksplc fmt --define=x a.kspl
-ksplc fmt: '--define' does not take effect on this subcommand (it takes effect on: compile run build lint)
+ksplc fmt: '--define' does not take effect on this subcommand. It takes effect on: compile run build lint
 ```
 
 **It is not silently ignored**: if it were, you could not tell an ignored option from one that took effect. `ksplc --help` lists which options act on which subcommand, generated from the declarations. No copy of that table stands here to drift.
@@ -459,7 +459,7 @@ The columns are separated by tabs, and the lines are sorted by key:
 * **The attributes are part of the key**: `#cfg` is the only way to write one name twice, and without it two entries would share a key.
 * **A `pub` item of an `extern "C"` block is a row like any other**: it reaches every package as a KSPL function does. Its key also carries the block's own attributes, as a method's carries its `impl`'s.
 * **The spelling is the source with its whitespace folded**: each run of whitespace becomes one, and line comments are dropped. **The inside of a string is not folded** (a default argument's literal is part of the spelling).
-* **The documentation, the fourth column, is left off where there is none.** It holds the declaration's `//<` run, its summary and the detail behind the parting mark, joined by spaces. A parameter's `//<`, and the one on the return's line, each get a row of their own. The record holds one entry per line, and a list packed into one column would need a separator that no description can contain.
+* **The documentation, the fourth column, is left off where there is none.** It holds the declaration's `//<` run, its summary and the detail below it, joined by spaces. A parameter's `//<`, and the one on the return's line, each get a row of their own. The record holds one entry per line, and a list packed into one column would need a separator that no description can contain.
   * Note: **The column is here so that drift shows.** Change what a `pub` does and leave its description standing, and `make test-surface` shows the row as changed in the same round as the signature.
 
 **A file's own description is a row too**, keyed by the mark alone (`~`). It is the `//<` run before the file's first line of code, with nothing but blank lines above it. It stands above the imports, since an `import` is code. A file that says nothing gets no row.
@@ -709,7 +709,7 @@ Without `--in-place` the output goes to standard output.
 * a line whose first word alone crosses the limit;
 * the first line of a `//<` summary.
 
-A summary runs to the first `//<` with no text. Cut, a one-line summary would become two, which `[W0213]` reports; so it runs past the width instead. A line opening with `Caution:` or `Note:` takes no carried words. Widths are display columns.
+A summary is its run's first line. Cut, its end would move into the detail, so it runs past the width instead. An empty `//<` right below a summary is removed: the line boundary already ends the summary. An empty `//<` further down, between two paragraphs of the detail, stays. A line opening with `Caution:` or `Note:` takes no carried words. Widths are display columns.
 
 **`fmt` never meets a bare block**: a `{ … }` standing as a statement does not parse. A labelled block (`while_locked: { … }`) keeps its label, and an empty `{}` is written as it stands.
 

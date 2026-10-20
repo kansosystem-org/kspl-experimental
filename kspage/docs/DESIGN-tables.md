@@ -74,6 +74,11 @@ scrolls it horizontally; the tools stay in place, and following the cursor bring
 
 **A double-click on a cell's seam fits it to its content**, the gesture every spreadsheet uses. A row is fitted by removing its set height; a column by measuring its content.
 
+The browser's `dblclick` event decides when to fit. Pointer events handle dragging; their click count is not portable.
+
+**Ctrl+; inserts today's local date; Ctrl+Shift+; inserts the local time.** They insert fixed text, in `YYYY-MM-DD` and `HH:mm` form. Each stamp takes one undo step. The shortcuts also work in prose; they do not change a cell's style.
+
+
 **The two axes are fitted differently, because layout already fits one of them.** A row with no set height is already laid out to its content, so fitting it removes the setting. A column with no set width takes an equal share of the region, so fitting it sets a measured width ([`lay/ask.kspl`](../lay/ask.kspl)'s `Fit`).
 
 That asymmetry also answers the common complaint about this feature, merged cells. Excel's row fitting is its own measurement and cannot see a merged cell. Here layout does the work and takes merges in like anything else.
@@ -132,6 +137,12 @@ Caution: **Put the cursor in the cell that remains.** The selection reached into
 
 **A refused slide insertion names its reason.** "There is no slide style, or you are inside a table's cell" is one wording for two causes. A person in a cell reads the first half and hunts for a style that was there all along. The reasons take the same shape as the sort's (`Sort_end`, below).
 
+### Prose after a table
+
+**The Table menu can insert a paragraph after the current table, even at the document's end.** The cursor moves into it, so typing starts outside the cells. Enter inside a cell keeps its row movement.
+
+The paragraph is a sibling of the table and inherits the parent's style. It does not carry the cell's borders or padding. Insertion and the cursor move share one undo step; undo returns to the cell.
+
 ### A new table takes the pressed size and cell style
 
 **The Insert menu picks a new table's size on a grid of up to 10 × 8.** **The ribbon's button inserts at the size last picked (2 × 2 at first).** This is Word's cap, and a larger table grows with "Insert a row", as there. Every other office suite uses this form. The ribbon's Table button inserts at that size rather than opening the grid. The ribbon is a row of shortcuts that act, and a menu opened there would not stay open. Columns come first ("4 × 3" is four across), as in all three products. The cap is the menu's: the core refuses only a size with no cell (a table in a saved document can be any size).
@@ -162,7 +173,7 @@ Caution: **Put the cursor in the cell that remains.** The selection reached into
 
 **Text sorts alphabetically ignoring case, and texts differing only in case are one key**, as in Excel's and Calc's default; Sheets puts every capital first. The folding is ASCII only (beyond it, code points are compared as they are), so an accented capital is not folded onto its lower case. The spreadsheets use the locale's collation there (the alphabetical order of the reader's language). That costs a collation table in the core, which is not paid here (the comparison names the gap). A date is read by the reader the formulas use (`day.day_of`). So exactly the spellings that count as dates sort as dates, and no second notion of "what is a date" arises.
 
-**Every refused sort says why, and the page words each reason.** One wording for all ("click inside a table's cell") would name the wrong cause when it is a merged cell. It would send the reader after a cursor that is not the problem. So the core has an enumeration of reasons (`Sort_end`), as `Block_style_end` does for applying a style. Each reason is passed across the bridge as a number and worded on the page.
+**Every refused sort says why, and the page words each reason.** One wording for all ("click inside a table's cell") would name the wrong cause when it is a merged cell. It would send the reader after a cursor that is not the problem. So the core has an enumeration of reasons (`Sort_end`), as `Block_style_end` does for applying a style. Each reason crosses the bridge as its name and is worded on the page.
 
 Caution: **Do not merge the reasons back into one, and do not compare them by number in the core.** A newly added reason would then pass silently (`Sort_end` in [`write/cells.kspl`](../write/cells.kspl), read by `switch`).
 
@@ -203,6 +214,8 @@ Caution: **Show the count while a condition is on.** A table with rows missing a
 
 ### Columns filter from their heading; typing only narrows the list
 
+The filter menu stacks sort commands above search and the value list. Conditional filtering is folded away until needed. **Sort, clear, and apply close the menu**, so the rows are visible. **OK applies the ticks; Cancel and Escape discard pending changes.**
+
 Every heading cell carries a small arrow. Pressing it opens a panel under that column. The panel holds sorting, the column's values each with a tick box, a box to search them, the conditions, and the way back. Tick three names and press once, and the table shows those three.
 
 The arrow uses the heading's text color. Thus a light heading stays readable when the screen's surrounding tools are dark.
@@ -216,7 +229,7 @@ The arrow uses the heading's text color. Thus a light heading stays readable whe
 | **The values are listed in the order the column sorts in** | One place decides both orders (`column_values` in [`write/cells.kspl`](../write/cells.kspl) uses the sort's own comparison). Numbers stand as numbers, so 80 comes before 120 |
 | **Values differing only in case are one value** | The narrowing ignores case, so held apart, both would answer to one tick, and the list would promise what the narrowing does not do |
 | **The list is capped, and says so** | A thousand values is more than anyone reads down; past that, the panel says so where the eye already is |
-| **With nothing ticked, no rows show** | That is what unticking everything asks for. The way back is the panel's own "Show every row", which removes this column's narrowing and leaves the other columns'. An empty set meaning "all" could not be told from one whose values have all been typed away |
+| **With nothing ticked, no rows show** | That is what unticking everything asks for. The way back is the panel's own "Clear filter from this column", which removes this column's narrowing and leaves the other columns'. An empty set meaning "all" could not be told from one whose values have all been typed away |
 | **A narrowed column keeps a line under its arrow** | Excel's funnel says some column is narrowed, never which |
 
 Note: Blank cells are one value in the list, worded and placed last. An empty value carries them. How a set is spelled is `VALUE_SEP` in [`model/filter.kspl`](../model/filter.kspl).

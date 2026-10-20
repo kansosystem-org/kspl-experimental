@@ -1,6 +1,5 @@
 #!/usr/bin/env -S ksplc run
 //< The test that pins down `ksplc fmt`'s formatting result
-//<
 //< The formatter **rewrites the whole repository**, so a defect adds a mass of unrelated
 //< differences and review stops working.
 
@@ -20,7 +19,6 @@ import "std/sys"
 import "std/verdict"
 
 priv fn fmt(path: U8[], style: U8[] = ""): verdict.Run_out //< the formatting's result
-    //<
     //< On failure, code is non-zero and out holds that output. A `style` is passed as `--style=`.
     if style.len == 0
         return harness.run(U8[][]::{ harness.ksplc_exe(), "fmt", path })
@@ -36,7 +34,6 @@ priv fn write_src(slot: U8[], name: U8[], body: U8[], arena: Arena$@): U8[] //<
 
 priv fn differs(want: U8[], got: U8[], arena: Arena$@): U8[] //<
     //< Why one formatting result is not the expected one, with both shapes shown
-    //<
     //< **One sentence for every case**, rather than a wrapping call ([H0802]) at each.
     return arena.text()
         .s("the formatting differs from what was expected\n--- expected ---\n\{want\}--- actual \
@@ -86,7 +83,6 @@ priv fn case_idempotent(slot: U8[], name: U8[], src: U8[], arena: Arena$@) //<
 
 priv fn case_carried_string(arena: Arena$@) //<
     //< A string too long for the line is carried onto the next one, at a space
-    //<
     //< **The input is the one-line shape, not the answer**: given the carried shape, a formatter
     //< that copies a literal's spelling unchanged passes.
     name: = "a string too long for the line is carried onto the next one"
@@ -112,7 +108,6 @@ priv fn case_carried_string(arena: Arena$@) //<
 
 priv fn case_unknown_style_key(arena: Arena$@) //<
     //< Checks that an unknown `--style` key is not silently ignored
-    //<
     //< Ignored, a typo formats with the default and reports success, so it must fail naming the
     //< key.
     name: = "an unknown `--style` key is rejected"
@@ -139,7 +134,6 @@ priv fn case_unknown_style_key(arena: Arena$@) //<
 
 priv fn case_syntax_error_as_written(arena: Arena$@) //<
     //< A syntax error `ksplc fmt` meets shows the line as written, as a compile shows it
-    //<
     //< Caution: **The formatter reads the indentation notation through the conversion to braces**,
     //< so a line taken from the converted text shows a `;` nobody typed (`mend_as_read` in
     //< `ksplc/parse/load.kspl`).
@@ -208,9 +202,16 @@ fn main(): I32
     case_becomes("below", "a description too long for its line stands below the mark",
         fmt_material.SRC_SUMMARY_IN, fmt_material.SRC_SUMMARY_OUT, arena)
     // Caution: **Format it twice.** A moved text still too long below the mark must stay whole on
-    // the second formatting too. Else the summary grows a line only then, and `[W0213]` reports it.
+    // the second formatting too. Else the summary is cut only then, and its end moves into the
+    // detail.
     case_idempotent("belowtwice", "a description moved below changes nothing the second time",
         fmt_material.SRC_SUMMARY_IN, arena)
+    // Caution: **Check the detail's empty `//<` stays.** A formatter dropping every empty mark
+    // would pass on the summary alone, and join the detail's paragraphs into one.
+    case_becomes("aftersummary", "an empty `//<` right below a run's summary is dropped",
+        fmt_material.SRC_AFTER_SUMMARY_IN, fmt_material.SRC_AFTER_SUMMARY_OUT, arena)
+    case_stable("aftersummarykept", "a run with no empty `//<` below its summary does not move",
+        fmt_material.SRC_AFTER_SUMMARY_OUT, arena)
     // A narrow width breaks lines the default never does; the output must read as the input did,
     // and stay put.
     case_becomes("narrow", "at a narrow width a line breaks only where the reader joins it back",

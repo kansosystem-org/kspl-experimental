@@ -1,5 +1,4 @@
 //< What the `ksplc run` suite runs a case with: the frame, the cache's reader, the cc arguments
-//<
 //< The frame makes a working directory, points the child's cache at it, writes the files, runs
 //< it, and reports one of three states. **No verdict is here**: the cases in
 //< `tests/suite/run_test.kspl` decide what counts as good. Not a suite.
@@ -17,7 +16,6 @@ import "std/sys"
 import "std/verdict"
 
 const STATE_OK: Sz = 0 //< the verdict's three states
-    //<
     //< Caution: Do not confuse "it cannot be confirmed in this environment" with "it failed".
 const STATE_FAILED: Sz = 1
 const STATE_SKIP: Sz = 2
@@ -52,7 +50,6 @@ priv fn report(name: U8[], r: Outcome)
 priv fn in_sandbox(name: U8[], body: fn(work: U8[], arena: Arena$@): Outcome, arena: Arena$@):
     Outcome //<
         //< It makes one working directory and runs the case with the child's cache pointed at it
-        //<
         //< **Separate them per case**, or "was it rebuilt" passes on the previous case's artifact.
         //< Caution: **Do not forget to point the child's cache here**, or it pollutes the
         //< developer's real cache and passes on the last run's artifact.
@@ -64,7 +61,6 @@ priv fn in_sandbox(name: U8[], body: fn(work: U8[], arena: Arena$@): Outcome, ar
 
 fn run(name: U8[], slot: U8[], body: fn(work: U8[], arena: Arena$@): Outcome, arena: Arena$@) //<
     //< It runs one case and reports
-    //<
     //< Caution: **Do not split these two into separate functions**, or reporting without a working
     //< directory, or a directory without reporting, becomes possible: "green, confirming nothing".
     report(name, in_sandbox(slot, body, arena))
@@ -123,7 +119,6 @@ fn expect_out(r: verdict.Run_out, want: U8[], what: U8[], arena: Arena$@): Outco
 // ==========================================
 struct Objs //<
     //< The count of objects for this script, the newest time, and the count made since `since`
-    //<
     //< It assumes there is only one slot.
     count: Sz
     newest: I64
@@ -153,7 +148,6 @@ const WAIT_LIMIT_US: I64 = 5000000 //< the longest wait_for_mtime_tick waits, in
 
 fn wait_for_mtime_tick(probe: U8[], after: I64): I64 //<
     //< It waits until a file's time passes after and returns the time it reached
-    //<
     //< It returns 0 where the time does not pass it within wait_limit_us.
     //< **`fs.stat`'s mtime is in seconds**, so two builds in a row show **everything rebuilt as
     //< "left alone"**. The file's own clock decides the wait; a monotonic second is not its tick.
@@ -169,7 +163,6 @@ fn wait_for_mtime_tick(probe: U8[], after: I64): I64 //<
 
 fn fake_slot_name(i: Sz, arena: Arena$@): U8[] //<
     //< A fake slot name of the same shape as a real slot (64 hex characters)
-    //<
     //< Anything but that shape is outside what the sweep touches.
     b: = arena.text()
     for _k in Range.asc(62)
@@ -180,7 +173,6 @@ fn fake_slot_name(i: Sz, arena: Arena$@): U8[] //<
 
 fn place_fake_slot(root: U8[], i: Sz, used_at: I64, arena: Arena$@): Bool //<
     //< It creates fake slot i under root, marked as last used at used_at (seconds)
-    //<
     //< It returns false where it cannot.
     //< The mark copies what touch_dir in `ksplc/base/cache.kspl` writes: a file `used` holding the
     //< seconds. A real slot holds an obj/ too, which a one-level sweep leaves behind.
@@ -193,7 +185,6 @@ fn place_fake_slot(root: U8[], i: Sz, used_at: I64, arena: Arena$@): Bool //<
 
 fn same_place(reported: U8[], want: U8[], arena: Arena$@): Bool //<
     //< Whether the path ksplc reported and the path passed to it point at the same directory
-    //<
     //< Caution: **Do not compare the path strings.** MSYS2 rewrites a child's `/tmp/…` into
     //< `D:/a/_temp/msys64/tmp/…`; a mark placed here is searched for from the reported path
     //< instead.
@@ -214,7 +205,6 @@ fn same_place(reported: U8[], want: U8[], arena: Arena$@): Bool //<
 // ==========================================
 fn build_probe(work: U8[], arena: Arena$@): U8[] //<
     //< It builds the C compiler's stand-in and returns it (empty where it cannot build one)
-    //<
     //< Caution: **Build it before replacing CC**, which it uses. **The name must state the
     //< notation.** `cc_probe_src` is in braces, and as `.kspl` it never builds. That looks like
     //< "it cannot be run with the stand-in cc".
@@ -240,16 +230,8 @@ struct Seen //< what the record shows, read one line at a time, counting only th
     // right after a -o, as the link lists the objects as inputs.
     dup_objects: Sz
 
-priv fn seen_before(xs: List<|U8[]|>$@, a: U8[]): Bool //<
-    //< Whether that argument is already in the list
-    for x in xs
-        if x.equals(a)
-            return true
-    return false
-
 fn read_log(log: U8[], arena: Arena$@): Seen //<
     //< It reads the record in log and counts the arguments its `ARG:` lines hold
-    //<
     //< Caution: **Leave splitting into lines to `lines`**, which drops a trailing `'\r'`. Split by
     //< hand, a record written in text mode on Windows counts **not one** `-dumpmachine`, `.c` or
     //< `.o`, which looks like "it was not passed".
@@ -264,7 +246,7 @@ fn read_log(log: U8[], arena: Arena$@): Seen //<
         if want_out
             want_out = false
             if a.ends_with(".o")
-                if seen_before(wrote@, a)
+                if wrote.contains(a)
                     out.dup_objects += 1
                 wrote.push(a)
         want_out = a.equals("-o")
@@ -282,15 +264,14 @@ fn read_log(log: U8[], arena: Arena$@): Seen //<
 
 fn link_call(log: U8[], arena: Arena$@): List<|U8[]|> //<
     //< The arguments of the call that linked, in order; empty where the record holds none
-    //<
     //< The link is the call making `prog.new.exe`. **Split the record at its `CALL` lines**: the
     //< compiles run in parallel, so an argument's position does not say whose it is.
     $found: = List<|U8[]|>.new(arena)
     $call: = List<|U8[]|>.new(arena)
     for line in log.lines(arena)
         if line.equals("CALL")
-            found = call if seen_before(call@, "prog.new.exe") else found
+            found = call if call.contains("prog.new.exe") else found
             call = List<|U8[]|>.new(arena)
         else if line.starts_with("ARG:")
             call.push(line.sub_from(4))
-    return call if seen_before(call@, "prog.new.exe") else found
+    return call if call.contains("prog.new.exe") else found

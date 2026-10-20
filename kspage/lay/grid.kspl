@@ -1,5 +1,4 @@
 //< Laying out a grid
-//<
 //< One of the three layout strategies. **Everything but how the boxes are placed is shared with
 //< the flow layout**, and a cell's contents use the flow layout. A table is a block holding rows
 //< holding cells. **No field in the document says it is a table**: the style does
@@ -11,6 +10,7 @@ import "kspage/model/filter"
 import "kspage/model/font" { Font_source }
 import "kspage/model/style" + { Look, Sheet }
 import "std/ds" { List }
+import "std/math"
 import "std/mem" { Arena }
 
 priv fn only(cell: Block$@, arena: Arena$@): List<|Block$@|>$@
@@ -21,7 +21,6 @@ priv fn only(cell: Block$@, arena: Arena$@): List<|Block$@|>$@
 priv fn natural_width(cell: Block$@, sheet: Sheet$@, src: Font_source, avail: F32, look: Look,
     arena: Arena$@): F32 //<
         //< The width actually used when a cell is laid out at width avail as a trial
-        //<
         //< Caution: **Measure it the same way as the real layout.** Otherwise the indent, the
         //< inheritance and the wrapping could each be computed two ways (the boxes laid out here
         //< are thrown away). **It is never wider than avail**: contents that do not fit wrap
@@ -42,21 +41,18 @@ priv fn natural_width(cell: Block$@, sheet: Sheet$@, src: Font_source, avail: F3
 
 priv fn inner_pad(b: Block$@, sheet: Sheet$@): F32 //<
     //< The inner margin of the fill and the line that the block's style sets
-    //<
     //< **An unknown name gives 0** (as in `flow`, a typo does not stop the layout).
     if s: = sheet.find(b.style)
         return s.pad
     return 0.0F32
 
 priv const BLANK_COLUMN: F32 = 32.0 //< the width given to a column with no contents (pixels)
-    //<
     //< **It must be a size that can be clicked**, so a newly inserted table can be typed into.
     //< Caution: **Do not apply it to a column with contents.** Otherwise a one-character column
     //< widens, and "a column with no set width sizes to its contents" breaks.
 
 priv fn is_auto(table: Block$@, c: Sz): Bool //<
     //< Whether column c sizes to its contents
-    //<
     //< **The table holds the setting** (`Block.size_of`).
     if _v: = table.size_of(.column, c)
         return false
@@ -65,7 +61,6 @@ priv fn is_auto(table: Block$@, c: Sz): Bool //<
 priv fn resolve_columns(table: Block$@, sheet: Sheet$@, src: Font_source, avail: F32, look: Look,
     arena: Arena$@): List<|F32|>$@ //<
         //< The width of each column
-        //<
         //< **A set width does not shrink** (or nobody could tell whether it applied). Only the
         //< columns with no setting adjust. **Where they add up to more than the rest, they shrink
         //< proportionally.** Trimming only the overflow would collapse the narrow ones
@@ -80,7 +75,7 @@ priv fn resolve_columns(table: Block$@, sheet: Sheet$@, src: Font_source, avail:
         switch table.size_of(.column, c)
         case .some(v)
             // **A negative setting becomes 0**, or the cells overlap.
-            w: = v if v > 0.0F32 else 0.0F32
+            w: = math.max(v, 0.0F32)
             widths.set(c, w)
             taken += w
         case .none
@@ -125,7 +120,6 @@ priv fn left_of(widths: List<|F32|>$@, c: Sz): F32 //< column c's left edge (fro
     return x
 
 priv fn width_of(widths: List<|F32|>$@, t: Tile): F32 //< one cell's width
-    //<
     //< **Add the columns the merge covers.**
     $w: F32 = 0.0
     for $i: Sz = t.column; i < t.column + t.cols && i < widths.len; i += 1
@@ -133,14 +127,12 @@ priv fn width_of(widths: List<|F32|>$@, t: Tile): F32 //< one cell's width
     return w
 
 priv struct Tall //< a cell merged downward
-    //<
     //< **Its height is not known until the rows it covers are laid out.**
     spot: Cell$@
     rows: Sz
 
 priv fn fit_panel(dst: Page$@, from: Sz, spot: Cell$@) //<
     //< Stretches a cell's fill and frame to the cell's shape
-    //<
     //< Caution: **Do not leave them at the contents' band**, or they misalign with the next cell.
     for $i: Sz = from; i < dst.panels.len; i += 1
         panel: = dst.panels.get(i)
@@ -195,7 +187,7 @@ impl Grid
         // **A set height does not change with the contents**; tall contents stick out (as in a
         // column).
         if v: = table.size_of(.row, r)
-            row_h = v if v > 0.0F32 else 0.0F32
+            row_h = math.max(v, 0.0F32)
         // **The height is made even across the row**, or neighbouring frames disagree.
         for $i: Sz = 0; i < mine.len; i += 1
             mine.get(i).rect.h = row_h
@@ -205,7 +197,6 @@ impl Grid
 fn place_rows(dst: Page$@, table: Block$@, sheet: Sheet$@, at: Rect, look: Look, page_height: F32,
     arena: Arena$@): F32 //<
         //< Lays out table's rows and cells from `at`'s upper left, adding what it laid out to dst
-        //<
         //< The rows are table's children and the cells its grandchildren. Returns the height used.
         //< **`at.w` is the container's width, not the table's** (narrow contents make a narrow
         //< table). **`at.h` is ignored.**

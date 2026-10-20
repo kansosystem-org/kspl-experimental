@@ -1,5 +1,4 @@
 //< The engine that applies a rule tree to input: backtracking, memoization and whitespace skipping
-//<
 //< The profiler is here too. `kspeg/rule` represents a rule, `kspeg/notation` builds a grammar
 //< from a `.kspeg` string, and `kspeg/expected` records where a parse failed and what could have
 //< been written there. A parse returns a `Node` tree.
@@ -40,7 +39,6 @@ impl Node
         r.children.push(child)
 
 pub struct Rule_keywords //< one rule and the keywords written in its own definition
-    //<
     //< One element of keywords_by_rule(). It does not follow references into other rules (the same
     //< boundary as collect_keywords).
     pub rule_name: U8[] //< the rule they were found in
@@ -53,14 +51,12 @@ priv struct Memo_val //< what a rule answered at a position, as the memo keeps i
 
 const MEMO_TRIAL_WRITES: I64 = 1024 //<
     //< How many writes a rule gets to show the memo pays off before the memo is turned off for it
-    //<
     //< Set high so that one unlucky file does not turn off a rule that answers now and then. The
     //< rules that answer at all do so within the first hundred writes.
     //< **Off is final.** No write means no hit, so a rule turned off cannot earn its way back.
     //< Hence a thousand and not ten.
 
 pub struct Rule_prof //< what one rule cost, counted rather than timed
-    //<
     //< **Count only the calls; do not measure time.** A rule is referenced about a million times in
     //< one parse. A call to `sys.mono_us()` here would inflate the real work. The breakdown would
     //< then disagree with the measured total.
@@ -70,16 +66,13 @@ pub struct Rule_prof //< what one rule cost, counted rather than timed
     pub name: U8[] //< the rule the counts below belong to
     pub calls: I64 //< how many times it was reached, memo hits included
     pub memo_off: Bool //< whether memoization was turned off for this rule
-        //<
         //< It never answered within its allowance of writes (`MEMO_TRIAL_WRITES`). It is reported
         //< beside the counts so that a wrong allowance shows up instead of quietly slowing the
         //< parse.
     pub memo_hits: I64 //< how many of those the memo answered, saving a re-parse.
-        //<
         //< Successes and failures alike. If it stays 0, the rule visits each position once and
         //< packrat saves nothing; that is the evidence that adding lookahead would not pay off.
     pub parsed_ok: I64 //< how many times it actually parsed and matched.
-        //<
         //< Small compared with the failures (the subtraction above), it marks a rule that guesses
         //< and misses. Fixing the grammar pays off only where missing is expensive (a rule that
         //< reads a whole other rule as a preamble).
@@ -90,12 +83,10 @@ pub struct Target //< a parse in progress: the source, how far it has read, and 
     pub source: U8[] //< the text being parsed; a node's `text` is a view into it
     pub pos: Sz //< how far it has read, in bytes from the start of the source
     pub fail: Fail_track$@ //< how far the parse got, and what could have been written there.
-        //<
         //< Caution: **Do not put the fields back here** (the reason is at `Fail_track`).
     is_syntax_mode: Bool //< inside an ordinary rule, where whitespace is skipped between parts
     pub is_suppressed: Bool //< matching only to test: no node is built, no expectation recorded
     pub is_lenient: Bool //< whether the branches that absorb a broken run are enabled.
-        //<
         //< Those branches are `Rule.recover`. **A whole run is either lenient or not.** It never
         //< switches partway. Every run starts with the memo empty (`begin` in `memo.kspl`). So the
         //< memo's key need not include it.
@@ -114,7 +105,6 @@ pub struct Target //< a parse in progress: the source, how far it has read, and 
 
     pub space_skipper: Space_skipper //< the whitespace skipper, if the grammar provides one
     space_cache_pos: Sz //< the position the last skip started from.
-        //<
         //< A one-entry cache. After backtracking, each element of a choice or sequence skips again
         //< from the same start. This cache jumps to the recorded end instead. The source,
         //< space_skipper and rule_space do not change during a scan.
@@ -122,28 +112,23 @@ pub struct Target //< a parse in progress: the source, how far it has read, and 
     space_cache_valid: Bool //< whether the two fields above still match the current position
 
     checks_first_byte: Bool //< whether a rule that cannot begin with the next byte is skipped.
-        //<
         //< On by default; turned off only to compare against a parse that enters every rule. Either
         //< way the tree is the same, and so is a syntax error (parse_rule). The profile counts only
         //< the rules entered, and both runs where a syntax error makes it parse twice.
     ran_twice: Bool //< whether the last parse_rule ran again without skipping.
-        //<
         //< Only a syntax error does. On input that parses, it says a rule was skipped where it
         //< could have matched. The answer is still right, from the second run, at twice the cost.
     priv filters_now: Bool //< whether the run in progress skips by the first byte
 
     pub depth: Sz //< how deep the walk of the rule tree is right now.
-        //<
         //< Rule.parse's recursion depth, counted at the single entry point every sequence, choice,
         //< quantifier and reference recurses through. A safety valve against pathological nesting.
     priv stack: Stack_limit //<
         //< where the walk stops short of the stack's end, beside `depth`'s count
     pub depth_exceeded: Bool //< whether a walk was cut off as too deep, so `pos` is not valid.
-        //<
         //< The reader uses it only to decide **whether the position can be used**; the cut-off
         //< itself is thrown as a `fatal`, with its position in `depth_exceeded_pos`.
     pub depth_exceeded_pos: Sz //< where the input was at the moment the walk became too deep.
-        //<
         //< Caution: **Record it at once.** Backtracking rewinds `pos` at each level, so by the time
         //< the fatal reaches parse_rule, `pos` is back at the start of the input. `max_fail_pos`
         //< cannot replace it: it is the furthest place expected text did not match, and a depth
@@ -165,7 +150,6 @@ impl Target
         }
 
     pub fn free_memo(r: Self$@) //< frees what this target owns; the nodes stay
-        //<
         //< The counts are its own. The memo table and the grammar's name table belong to the
         //< lender. Only the target that loaded the grammar frees them, once every borrower is done.
         if !r.borrows_grammar
@@ -179,7 +163,6 @@ impl Target
             r.prof_list.free()
 
     pub fn share_grammar_from(r: Self$@, src: Self$@) //< borrows another target's grammar as is
-        //<
         //< **The memo table is shared with it**: every parse empties the table as it starts, so one
         //< table serves them all. If callers assigned the fields themselves, `rules`' element type
         //< (kspeg's internal representation) would leak outside the folder, and nothing would say
@@ -194,7 +177,6 @@ impl Target
         r.borrows_grammar = true
 
     fn load_rules( //< loads a grammar and resolves its references in one step
-        //<
         //< Builds the name table, resolves references to indices and looks up `_Space`/`_Boundary`
         //< ahead of time. It also makes the memo table every parse shares, all in one step. Skip
         //< the resolving, and a `reference` fails mid-parse with "an undefined reference". If
@@ -223,7 +205,6 @@ impl Target
                 r.rule_map.set(r.rules.get(i).name, I32::i)
 
     priv fn track_fail(r: Self$@, pos: Sz, expected: U8[]) //< records one text as an expectation
-        //<
         //< Caution: **Do not record while suppressed.** A failure inside lookahead (`!_Keyword`) is
         //< not the user's to fix. One inside a lexical token or a transparent rule is the grammar's
         //< internal wording. Once recorded, it names what cannot be typed ("expected 'if'",
@@ -237,7 +218,6 @@ impl Target
         r.fail.push_expected(pos, Expected::{ .text = expected, .is_rule = false })
 
     priv fn track_keywords_tried( //< records what trying these keywords one at a time records
-        //<
         //< The same as calling track_fail for each of the first `count`, without the loop where it
         //< would change nothing. Suppressed, each keeps only `pos` as how far it got. Behind the
         //< furthest failure, push_expected drops each.
@@ -265,7 +245,6 @@ impl Target
             parent.add_child(Node.create(kind, text, start_pos, r.arena))
 
     pub fn parse_rule( //< parses the source from the start with that rule and returns the tree
-        //<
         //< None where the rule matched but built no node (a rule that reads nothing).
         r: Self$@,
         name: U8[],
@@ -298,7 +277,6 @@ impl Target
 
     priv fn leaves_text(r: Self$@): Bool!Kspeg_signal //<
         //< whether more than whitespace is left unread
-        //<
         //< Caution: **Do not compare the position with the length alone.** A parse ends before the
         //< whitespace after its last part (`!.` reads nothing). So every file that ends in a
         //< newline would count as stopping short and be parsed twice.
@@ -309,7 +287,6 @@ impl Target
 
     priv fn run_rule(r: Self$@, r_id: I32, start: Sz, filtered: Bool): Node$@!Kspeg_signal //<
         //< One run of that rule from `start`, under the Root node it returns
-        //<
         //< Caution: **Start each run afresh**: the position, the failure record, the whitespace
         //< cache and the memo all hold what the run before found.
         r.pos = start
@@ -335,7 +312,6 @@ impl Target
         return r.rules.get(r_id).rule
 
     pub fn keywords_by_rule( //< every rule and the keywords inside it, except the synthesized one
-        //<
         //< In declaration order, without following references (as collect_keywords). A rule with no
         //< keyword is returned too, for a caller that needs every name. The synthesized `_Keyword`,
         //< which bundles what parse_grammar collected, is left out: it would read as one rule
@@ -384,14 +360,13 @@ impl Target
 
 priv fn try_parse(rule: Rule$@, ctx: Target$@, parent: Node$@): Bool!Kspeg_signal //<
     //< Applies it once and returns whether it matched
-    //<
     //< A `mismatch` returns `false`; a `fatal` is passed up.
     //< Caution: **Do not write `catch false`.** That swallows a `fatal` too. A real compile error
     //< then silently turns into "this branch did not match", inside a choice's dropped branch, an
     //< optional or a repetition. It shows up far away as "input that should match does not".
     ok: = rule.parse(ctx, parent) catch e
         switch e
-        case .fatal(_msg)
+        case .fatal
             throw e
         default {}
         fallback false
@@ -399,7 +374,6 @@ priv fn try_parse(rule: Rule$@, ctx: Target$@, parent: Node$@): Bool!Kspeg_signa
 
 priv fn run_suppressed(ctx: Target$@, inner_rule: Rule$@): Bool!Kspeg_signal //<
     //< The helper and_pred and not_pred share: set is_suppressed and try inner_rule once
-    //<
     //< Restoring ctx.pos differs per caller, so it is left to them.
     prev_sup: = ctx.is_suppressed
     // Caution: **Restore it in a `defer`** (the reason is in handle_space_skipping).
@@ -426,7 +400,6 @@ priv fn resolve_rule(ctx: Target$@, rule: Rule$@) //< turns each reference into 
 priv fn parse_keyword_set(ctx: Target$@, parent: Node$@, set: Keyword_set$@, start_pos: Sz):
     Bool!Kspeg_signal //<
         //< It matches one keyword of a folded set, by extracting the word and looking it up once
-        //<
         //< Every keyword consists only of `_Boundary`'s characters (checked when it is folded). So
         //< when no boundary character follows a keyword, the whole extracted run is that
         //< keyword.
@@ -464,7 +437,6 @@ priv fn parse_keyword_literal(ctx: Target$@, parent: Node$@, text: U8[], start_p
 
 priv fn followed_by_boundary(ctx: Target$@, at: Sz): Bool!Kspeg_signal //<
     //< Whether the `_Boundary` rule matches at `at`, so a keyword there would run into a name
-    //<
     //< Only the `_Boundary` rule says what a boundary is, for the reason at handle_space_skipping.
     //< With no rule, no boundary is checked.
     boundary_rule: = ctx.rule_boundary
@@ -487,7 +459,6 @@ priv fn followed_by_boundary(ctx: Target$@, at: Sz): Bool!Kspeg_signal //<
 priv fn parse_recover(ctx: Target$@, parent: Node$@, stops: U8[], start_pos: Sz):
     Bool!Kspeg_signal //<
         //< It absorbs broken input up to a stop character, as a `Broken` node
-        //<
         //< **In a run that is not lenient it matches nothing**, which keeps the branch dead for the
         //< compiler.
     if !ctx.is_lenient
@@ -509,7 +480,6 @@ priv fn parse_recover(ctx: Target$@, parent: Node$@, stops: U8[], start_pos: Sz)
 impl Rule
     priv fn parse_skippable(r: Self$@, ctx: Target$@, parent: Node$@): Bool!Kspeg_signal //<
         //< Tries it once as a skippable attempt (the step `*`, `+` and `?` share)
-        //<
         //< Caution: The parse goes on when the attempt fails. So a failure **before** reading began
         //< is not the writer's to fix: nothing has to be written at that position.
         //< **Save the position and restore it** (repetitions nest).
@@ -580,7 +550,6 @@ impl Rule
     priv fn parse_reference_impl(_r: Self$@, ctx: Target$@, parent: Node$@, r_id: I32,
         start_pos: Sz, prof: Rule_prof$@): Bool!Kspeg_signal //<
             //< Parses the rule r_id names, once parse_reference has counted the call
-            //<
             //< The rule's kind comes from its entry, worked out once when the grammar was loaded,
             //< so the name is not scanned again on every reference.
         rule_entry: = ctx.rules.get(r_id)
@@ -768,6 +737,6 @@ impl Rule
                     !target.first.allows(ctx.source[ctx.pos]))
                     throw .mismatch
             return r.parse_reference(ctx, parent, r_id, start_pos)!
-        case .reference(_name)
+        case .reference
             // `load_rules` resolves every reference that names a rule, so one left names none.
             throw .fatal("Undefined reference")

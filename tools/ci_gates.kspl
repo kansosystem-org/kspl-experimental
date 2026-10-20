@@ -1,5 +1,4 @@
 //< The CI gates in one table: what each asks `make` for, which job runs it, and the summary
-//<
 //< **The table is the one place a gate is named.** `tools/ci.kspl` runs it, `make ci` and its
 //< siblings call that (`mk/ci.mk`), and `.github/workflows/ci.yml`'s matrices name the sets, held
 //< to `Set` by `tests/support/conventions_ci.kspl`. What each platform runs is said for people
@@ -8,14 +7,13 @@ import "std/chars"
 import "std/ds" { List }
 import "std/fs"
 import "std/io"
-import "std/mem" { Arena, dealloc }
+import "std/mem" { Arena }
 import "std/str" + { Str_builder }
 import "std/strnum"
 import "std/subproc"
 import "std/sys"
 
 enum Shard //< which job runs a gate on Linux and Windows
-    //<
     //< **A shard's name is what `make ci-shard-<name>` and the workflow's matrix use.**
     //< Caution: **A shard costs a job's start-up** (checkout, MSYS2, stage1: about a shard's work,
     //< more on Windows). So measure before adding one ("Where CI's time goes" in
@@ -24,7 +22,6 @@ enum Shard //< which job runs a gate on Linux and Windows
     rest //< the second
     linux //<
         //< The Linux job alone (`make ci-shard-linux`)
-        //<
         //< Either only its image holds the tool, or the answer cannot differ by platform, so a
         //< second platform would pay for the same answer.
     none //< neither: macOS alone runs it (`Gate.macos`)
@@ -34,7 +31,6 @@ enum Par //< how `make` is asked to run one gate's targets
     parallel //< `-j<jobs>`, the output as the targets write it
     synced //<
         //< `-j<jobs> --output-sync=target`: each target's output kept together
-        //<
         //< Caution: **Never in `ci-macos`.** Its system make is 3.81, which lacks
         //< `--output-sync`; `run_set` in `tools/ci.kspl` refuses that combination. The complete
         //< local `ci` on macOS selects GNU make for the shared sections.
@@ -45,7 +41,6 @@ struct Gate //< one gate: what `make` is asked for, and where it runs
     par: Par //< whether `make` runs its targets side by side, and how their output is kept
     verdict: Bool //<
         //< It must also print `RESULT: ALL PASS`
-        //<
         //< ("How a run is read" in `docs/SPEC-gates.md`). False for a gate that is several targets'
         //< worth, where one line would speak for the rest; `make` failing still fails it.
     shard: Shard
@@ -172,7 +167,6 @@ const SET_ORDER: Set[_] = ::{ Set.ci, Set.ci_macos, Set.ci_shard_core, Set.ci_sh
     Set.ci_shard_linux } //< every set, so a name can be read back
 
 fn set_from(name: U8[], arena: Arena$@): Set? //< the set a name spells, if any
-    //<
     //< **A name is the variant's with `_` written `-`** (`ci-shard-core`), so `make`, the workflow
     //< and this table spell it one way.
     for s in SET_ORDER
@@ -258,7 +252,6 @@ const EXPECTED_SKIPS: Expected_skip[_] = ::{
 }
 
 fn skip_lines(text: U8[], arena: Arena$@): List<|U8[]|> //< a log's lines that say a check skipped
-    //<
     //< **A line skips when it opens with the mark**, past any `#` and spaces before it: `SKIP …`,
     //< `#   SKIP: …` or `RESULT: SKIPPED …`. A line that only names the word, as a check's label
     //< can (`pass conventions: every SKIP reason …`), is no skip.
@@ -304,7 +297,6 @@ const SWITCH_SKIPS: Switch_skip[_] = ::{
 
 fn is_expected_skip(line: U8[], platform: U8[], relaxed: U8[]): Bool //<
     //< Whether a row holds this SKIP line: one of the platform's, or one of a switch turned off
-    //<
     //< `relaxed` holds the switches turned off, space-separated (`--relaxed` in `tools/ci.kspl`).
     for e in EXPECTED_SKIPS
         if lists(e.on, platform) && line.find_str(e.says).is_some()
@@ -316,7 +308,6 @@ fn is_expected_skip(line: U8[], platform: U8[], relaxed: U8[]): Bool //<
 
 fn unknown_switch(relaxed: U8[], arena: Arena$@): U8[]? //<
     //< A switch named in `relaxed` that no row of `SWITCH_SKIPS` names, if any
-    //<
     //< **Refused rather than ignored**: its gates' skips would fail the round with no row to blame.
     for name in relaxed.split(' ', arena)
         if name.len == 0
@@ -374,19 +365,15 @@ fn end_path(log: U8[], arena: Arena$@): U8[] //< where a gate's exit code and se
 
 fn outcomes(j: Judge@, arena: Arena$@): List<|Outcome|> //<
     //< What the gates left, in the table's order
-    //<
     //< **A gate with no log did not run** and is left out; one with a log and no `.end` was cut
     //< short, and counts as fallen.
     $out: = List<|Outcome|>.new(arena)
     for g in GATES
-        text: = io.read_file(log_path(g.log, arena)) catch
+        log: = log_path(g.log, arena)
+        if !fs.exists(log)
             continue
-        held: = arena.dup_str(text)
-        dealloc(Void$@::text.ptr)
-        ended: = io.read_file(end_path(g.log, arena)) catch ""
-        out.push(outcome_of(g, held, arena.dup_str(ended), j, arena))
-        if ended.len > 0
-            dealloc(Void$@::ended.ptr)
+        ended: = io.read_file(end_path(g.log, arena), arena) catch ""
+        out.push(outcome_of(g, io.read_file(log, arena) catch "", ended, j, arena))
     return out
 
 fn outcome_of(g: Gate, text: U8[], ended: U8[], j: Judge@, arena: Arena$@): Outcome //<
@@ -424,7 +411,6 @@ priv const OVER_CAP_TAIL: U8[] = " s and was stopped"
 
 fn run_capped(argv: U8[][], name: U8[], log: U8[], cap_s: I64, started: I64): I32 //<
     //< Runs one gate's command to its end, naming it while it runs: its exit code, 127 unstarted
-    //<
     //< **Its output reaches the screen as it comes**; the command itself copies it into `log`.
     //< **Past `cap_s`, it is stopped with all it started.** The line saying so goes to the
     //< screen and the end of `log`, where `causes` names it first. The gate then fails with 1.
@@ -449,7 +435,6 @@ fn run_capped(argv: U8[][], name: U8[], log: U8[], cap_s: I64, started: I64): I3
             io.out().s(line.slice()).flush()
             $f: = io.open(log, "ab") catch
                 return 1
-            defer f.free()
             f.s(line.slice())
             return 1
 
@@ -478,7 +463,6 @@ struct Cause //< one line of a fallen gate's log that says why it fell
 const CAUSE_ORDER: Cause_kind[_] = ::{ Cause_kind.over_cap, Cause_kind.panic, Cause_kind.fail,
     Cause_kind.unexpected_skip, Cause_kind.result, Cause_kind.make } //<
         //< The kinds read from the lines, most telling first
-        //<
         //< `no_verdict` and `tail` are added after them, where the gate's own say nothing.
 
 const CAUSES_SHOWN: Sz = 6 //<
@@ -487,7 +471,6 @@ const TAIL_SHOWN: Sz = 8 //< how many of a log's last lines stand in where nothi
 const CAUSE_WIDTH: Sz = 400 //< the bytes of one line the summary keeps; its log holds it whole
 
 priv fn kind_of(line: U8[], log: U8[], j: Judge@): Cause_kind? //< the cause a line names, if any
-    //<
     //< Caution: **The cap's line counts for the gate it names alone.** A gate's own tests print
     //< one for a fake gate, which is no cause of theirs.
     t: = line.trim_spaces()
@@ -513,7 +496,6 @@ impl Cause_kind
 
 fn causes(text: U8[], log: U8[], verdict: Bool, j: Judge@, arena: Arena$@): List<|Cause|> //<
     //< The lines of a fallen gate's log that say why, in `Cause_kind`'s order, each once
-    //<
     //< **The log's last lines stand in where no line of the gate's own names a cause** (a C
     //< compiler's error, a crash). Make's line names only the target that stopped.
     lines: = text.lines(arena)
@@ -552,7 +534,6 @@ priv fn holds(found: List<|Cause|>@, line: U8[]): Bool //< whether a cause alrea
     return false
 
 fn put_cause(c: Cause, b: Str_builder$@) //< one cause as the summary marks it
-    //<
     //< **A line keeps its own mark** (`FAIL`, `panic:`, `RESULT:`, make's `***`). A SKIP line
     //< carries one no expected line does. A line of the tail is set off as quoted.
     if c.kind == Cause_kind.unexpected_skip
@@ -591,7 +572,6 @@ priv fn tally(outs: List<|Outcome|>@): Tally
 
 fn digest_plain(outs: List<|Outcome|>@, jobs: I64, j: Judge@, b: Str_builder$@) //<
     //< For the screen: the gates, then why each fallen one fell, last, where a reader looks first
-    //<
     //< **A SKIP line is counted, not copied**: thirty expected ones would bury the line that failed
     //< the gate. Each is in the gate's log, and one no row holds is listed as a cause.
     t: = tally(outs)
@@ -641,7 +621,6 @@ fn digest_plain(outs: List<|Outcome|>@, jobs: I64, j: Judge@, b: Str_builder$@) 
 
 fn digest_md(outs: List<|Outcome|>@, jobs: I64, title: U8[], b: Str_builder$@) //<
     //< For the job's summary page
-    //<
     //< Caution: **No log body goes in**: near 1 MiB a summary fails without a word; the logs are
     //< the round's artifacts.
     t: = tally(outs)
@@ -662,7 +641,6 @@ fn digest_md(outs: List<|Outcome|>@, jobs: I64, title: U8[], b: Str_builder$@) /
 
 fn reset_logs(arena: Arena$@): Bool //<
     //< Removes what an earlier round left, so it is not counted again; false where one stays
-    //<
     //< Caution: **Remove the suites' times too** (`out/log/suite/*.times`): `make test-suites`
     //< counts every one it finds.
     //< Caution: **Stop the round on a file that stays.** An old log left in place reads as this

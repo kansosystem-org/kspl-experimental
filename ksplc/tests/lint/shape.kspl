@@ -1,5 +1,4 @@
 //< Shape: guard clauses, nesting, wrapped argument lists and length
-//<
 //< Each case below is compiled alone, as the file its head names.
 // ==== case guard_clause
 //< When the `if` branch always leaves, the `else` is unnecessary (a guard clause)
@@ -13,24 +12,23 @@ pub fn probe(n: I32): I32
     return 2
 // ==== case guard_clause_labelled_if
 //< An `if` that a `break` to its own label leaves gets no guard-clause hint
-//<
 //< **`break ui` continues after the `if`**, so without the `else` its body would run after the
 //< `break` as well. A `break ui` inside the `else` would be left with no label. The functions
 //< whose names begin with `kept_` hold such an `if` and are not reported. The others leave the
 //< `if` in a way the code after it does not follow, so their `else` can go. The ways: a `return`,
 //< a `break` or `continue` of the loop, a `break` of an enclosing label or `switch`, a call that
 //< does not return, an inner `if` that leaves on both sides (reported for both).
-// EXPECT: guard_clause_labelled_if.kspl:47:3: hint: [H0801]
-// EXPECT: guard_clause_labelled_if.kspl:56:5: hint: [H0801]
-// EXPECT: guard_clause_labelled_if.kspl:65:5: hint: [H0801]
-// EXPECT: guard_clause_labelled_if.kspl:76:5: hint: [H0801]
-// EXPECT: guard_clause_labelled_if.kspl:87:5: hint: [H0801]
-// EXPECT: guard_clause_labelled_if.kspl:95:3: hint: [H0801]
-// EXPECT: guard_clause_labelled_if.kspl:102:3: hint: [H0801]
-// EXPECT: guard_clause_labelled_if.kspl:103:5: hint: [H0801]
-// EXPECT-NOT: guard_clause_labelled_if.kspl:21:3:
-// EXPECT-NOT: guard_clause_labelled_if.kspl:31:3:
-// EXPECT-NOT: guard_clause_labelled_if.kspl:38:3:
+// EXPECT: guard_clause_labelled_if.kspl:46:3: hint: [H0801]
+// EXPECT: guard_clause_labelled_if.kspl:55:5: hint: [H0801]
+// EXPECT: guard_clause_labelled_if.kspl:64:5: hint: [H0801]
+// EXPECT: guard_clause_labelled_if.kspl:75:5: hint: [H0801]
+// EXPECT: guard_clause_labelled_if.kspl:86:5: hint: [H0801]
+// EXPECT: guard_clause_labelled_if.kspl:94:3: hint: [H0801]
+// EXPECT: guard_clause_labelled_if.kspl:101:3: hint: [H0801]
+// EXPECT: guard_clause_labelled_if.kspl:102:5: hint: [H0801]
+// EXPECT-NOT: guard_clause_labelled_if.kspl:20:3:
+// EXPECT-NOT: guard_clause_labelled_if.kspl:30:3:
+// EXPECT-NOT: guard_clause_labelled_if.kspl:37:3:
 pub fn kept_after_return(c: Bool, d: Bool): I32
   ui: if c
     if d
@@ -122,7 +120,6 @@ pub fn leaves_on_both_sides(c: Bool, d: Bool): I32
     return 3
 // ==== case long_function
 //< A function longer than the 300-line guideline must be reported
-//<
 //< If the guideline is written down and the detection does not work, the guideline is not kept.
 //< This case holds one deliberately long function, which no gate but this one lints.
 // EXPECT: [H0803] This function spans
@@ -443,7 +440,6 @@ pub fn very_long(n: I32): I32
   return total
 // ==== case nesting_past_guideline
 //< One function nesting blocks nine levels deep, past the guideline of 8
-//<
 //< Its neighbour nests eight and is not reported: the guideline is a ceiling, not a target.
 // EXPECT: [H0805] This function nests blocks 9 levels deep
 fn deep(n: I32): I32
@@ -475,7 +471,6 @@ fn main(): I32
     return deep(1) + shallow(1)
 // ==== case nullable_pointer_return
 //< A raw pointer return that may be null gives no hint, even when the receiver forgets to check
-//<
 //< Advice must come out drawing it towards an Option.
 // EXPECT: [H0701] Function
 import "std/mem" { Arena }
@@ -489,7 +484,6 @@ pub fn find(arena: Arena$@, want: Bool): Cell$@
   return arena.create(Cell::{ .v = 1 })
 // ==== case nullable_pointer_return_shapes
 //< A null handed back through a conditional or a local gives the same hint as a written one
-//<
 //< The functions whose names begin with `kept_` cannot hand back null as the walk sees it. They
 //< hold a local filled through its lent address, a `return` after a call that does not return,
 //< and a local never set to null.
@@ -547,7 +541,6 @@ pub fn kept_never_null(arena: Arena$@): Cell$@
   return at
 // ==== case wrapped_arg_list
 //< A call whose own argument list wraps, passed directly as another call's argument
-//<
 //< Put there, or into an `if`'s subject, and where one expression begins and ends cannot be read.
 //< Caution: The arguments must be long enough that the wrap survives formatting. `make fmt` folds a
 //< call that fits the column width onto one line, and then the finding stops coming out.
@@ -574,7 +567,6 @@ pub fn subject(some_incoming_value: I32): I32
   return 0
 // ==== case wrapped_arg_list_inner_one_line
 //< An inner call that fits on one line is no tangle, even when the outer argument list wraps
-//<
 //< Pulling it out would leave the readability unchanged and merely add one line.
 //< Caution: The outer must be long enough that the wrap survives formatting (`make fmt` folds a
 //< call that fits the column width onto one line). Else the silence only says "it did not wrap".
@@ -591,3 +583,110 @@ priv fn record_one_outcome(_label_of_the_case: U8[], passed: Bool, detail_value:
 priv fn report(some_incoming_value: I32): I32
   return record_one_outcome("this spelling holds enough length to wrap", some_incoming_value > 0,
     detail_of(some_incoming_value))
+// ==== case comment_over_cap
+//< A comment holds at most six lines before the next line of code
+//< A blank line ends nothing. A divider ends the comment it stands in. A gate's marker and a
+//< run's summary are not counted, and an empty `//<` starts the count of a detail again.
+// EXPECT: comment_over_cap.kspl:14:1: hint: [H0806] This comment has 7 lines
+// EXPECT: comment_over_cap.kspl:33:3: hint: [H0806] This comment has 7 lines
+// EXPECT-NOT: comment_over_cap.kspl:24:
+// EXPECT-NOT: comment_over_cap.kspl:43:
+// EXPECT-NOT: comment_over_cap.kspl:53:
+// EXPECT-NOT: comment_over_cap.kspl:69:
+import "std/io"
+
+priv const KEPT: I32 = 1
+
+// one
+// two
+// three
+
+// four, after a blank line that ends nothing
+// five
+// six
+// seven
+priv const LONG: I32 = 2
+
+// one
+// two
+// three
+// four
+// five
+// six
+priv const FULL: I32 = 3
+
+priv fn detail(): I32 //< a summary, which is not counted
+  //< one
+  //< two
+  //< three
+  //< four
+  //< five
+  //< six
+  //< seven
+  return KEPT
+
+priv fn parted(): I32 //< an empty mark parts two paragraphs of the detail
+  //< one
+  //< two
+  //< three
+  //<
+  //< four
+  //< five
+  //< six
+  return LONG
+
+priv fn marked(): I32
+  // one
+  // two
+  // three
+  // MARK: a line a gate reads is not prose
+  // four
+  // five
+  // ---- a divider ends the comment it stands in, the sixth line here
+  // seven
+  return FULL
+
+fn main(): I32
+  io.out().s("\{detail() + parted() + marked()\} \{HELD.len\}\n")
+  return 0
+
+// A string's lines are no comment, however they look.
+priv const HELD: U8[] =
+  """// one
+// two
+// three
+// four
+// five
+// six
+// seven
+"""
+// ==== case header_over_cap
+//< A file's opening header holds at most ten lines, more than a body comment
+//< An import before it is no declaration, so it does not end the header.
+// EXPECT: header_over_cap.kspl:7:1: hint: [H0806] This comment has 11 lines
+// EXPECT: header_over_cap.kspl:20:1: hint: [H0806] This comment has 7 lines
+import "std/io"
+
+// 1
+// 2
+// 3
+// 4
+// 5
+// 6
+// 7
+// 8
+// 9
+// 10
+// 11
+priv const HEAD: I32 = 1
+
+// 1
+// 2
+// 3
+// 4
+// 5
+// 6
+// 7
+fn main(): I32
+  io.out().s("\{HEAD\}\n")
+  return 0

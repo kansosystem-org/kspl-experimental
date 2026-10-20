@@ -6,6 +6,7 @@ import "std/jsonrpc"
 import "std/mem" + { Arena, dealloc }
 import "std/net"
 import "std/str" { Str_builder }
+import "std/tests/mem_test" { back_to }
 import "std/thread"
 import "std/url"
 import "std/verdict"
@@ -80,8 +81,7 @@ fn test_url_codec()
         _leak: = url.parse_query("name=%zz", arena) catch
             continue
         panic("parse_query must reject a malformed percent-escape in the value")
-    after: = mem.heap_used_bytes()
-    assert(after == before, "rejecting a malformed query must not leave anything on the heap")
+    back_to(before, "rejecting a malformed query must not leave anything on the heap")
 
     verdict.pass("The percent-encode round trip and parsing a query string are confirmed.")
 
@@ -195,7 +195,6 @@ priv fn reject(label: U8$[], src: U8[])
 
 fn test_http_headers_list() //<
     //< A list of headers is a value even when empty, keeps its order, and finds names ignoring case
-    //<
     //< Caution: **Test the empty list and a message with no header.** That is the case the list
     //< type exists for: nothing is reached through a pointer that can be null.
     verdict.start("[HTTP] the header list test...")
@@ -373,6 +372,38 @@ fn test_http_host_value()
 // ==========================================
 // std/http: the builder writes no length its own reader would cut elsewhere.
 // ==========================================
+priv fn closes(head: U8[], arena: Arena$@): Bool //< whether the request with that head closes
+    req: =
+        http.parse_request(arena.text().s(head).s("Host: h\r\n\r\n").take(),
+        http.DEFAULT_MAX_BODY_BYTES, arena) catch panic("the request head must parse")
+    return req.wants_close()
+
+fn test_http_connection_tokens() //< `Connection` is a list of tokens, possibly in several headers
+    verdict.start("[Http] the tokens a Connection header lists test...")
+    arena: = Arena.new(4096)
+    defer arena.free()
+    assert(http.lists_token("close", "close") &&
+        http.lists_token("keep-alive , CLOSE", "close"),
+        "lists_token: a token is found among others, in any case and with spaces around it")
+    assert(!http.lists_token("closed, x-close", "close") && !http.lists_token("", "close"),
+        "lists_token: a longer word holding the token is not the token")
+    assert(!closes("GET / HTTP/1.1\r\n", arena) && closes("GET / HTTP/1.0\r\n", arena),
+        "wants_close: HTTP/1.1 stays open and HTTP/1.0 closes, when nothing is asked")
+    assert(!closes("GET / HTTP/1.0\r\nConnection: Keep-Alive\r\n", arena),
+        "wants_close: HTTP/1.0 stays open when it asks for keep-alive")
+    assert(closes("GET / HTTP/1.1\r\nConnection: TE\r\nConnection: keep-alive, close\r\n", arena),
+        "wants_close: a close in a later Connection header closes")
+    // **The streamed head finds `close` the way a reader does**, among other tokens.
+    $out: = Str_builder.new()
+    listed: = http.headers(arena).add("Connection", "TE").add("Connection", "upgrade, close")
+        .build()
+    http.format_response_head(out@, 200, listed)
+        catch panic("format_response_head should accept a close among the tokens")
+    open_only: = http.headers(arena).add("Connection", "closed").build()
+    assert(http.format_response_head(out@, 200, open_only).is_err(),
+        "format_response_head: a token that only starts with close is not close")
+    verdict.pass("A Connection header is read as a list, on both the reader and the writer.")
+
 fn test_http_write_length()
     verdict.start("[Http] the length the builder writes test...")
     arena: = Arena.new(4096)
@@ -618,7 +649,6 @@ priv fn taken_or(acc: Str_builder$@, arena: Arena$@): U8[]
 
 priv fn length_or(head: U8[]): Sz //<
     //< The length `head` declares under a limit of 100
-    //<
     //< -1 where it declares none, -2 where it is broken.
     got: = jsonrpc.content_length(head, 100) catch
         return -2

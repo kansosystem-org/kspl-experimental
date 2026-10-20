@@ -1,5 +1,4 @@
 //< The C backend's single entry point
-//<
 //< Like gen_llvm_module.run, it takes "the flattened AST root plus the context" and only emits
 //< C99. Declarations and composite types go to decl.kspl / types.kspl, expressions and
 //< statements to expr.kspl / stmt.kspl. This file only builds the output's skeleton (forward
@@ -47,7 +46,6 @@ fn run(root: Ast_node$@, cg: Genc_ctx$@)
 
 priv fn emit_layout_checks(cg: Genc_ctx$@) //<
     //< A compile-time check of each layout number sema folded, at the line that folded it
-    //<
     //< **A wrong `--machine` fails the C compile here.** The array's size is -1 where C lays the
     //< type out otherwise, and its name says which machine ksplc folded for. It goes at the end,
     //< where every type is complete. Each unit writes those folded since the last one, so a fold
@@ -75,16 +73,13 @@ priv fn emit_layout_checks(cg: Genc_ctx$@) //<
 
 priv fn emit_main_error_return(cg: Genc_ctx$@, plan: gen_entry.Main_plan) //<
     //< The failure path where `main` returns a Result
-    //<
-    //< It prints the message and the propagation trace, and returns the exit code
-    //< (`gen_entry.Main_err` says which).
-    switch plan.err
-    case .number
-        // A local of 64 bits, so comparing a narrow type with 255 draws no "always true" warning.
-        cg.s("  ").s("unsigned long long" if plan.err_is_unsigned else "long long")
-            .s(" _code = _res.payload.err.error;\n")
-        cg.s("  fprintf(get_stderr(), \"").s(plan.failure_line()).s("\\n\", _code);\n")
-    case .variant
+    //< The C runtime prints the message and gives the exit code (`gen_entry.FAIL_FN`); then the
+    //< propagation trace is printed.
+    $code: U8[] = "0"
+    $name: U8[] = "NULL"
+    if plan.err_is_number()
+        code = "(int64_t)_res.payload.err.error"
+    else if plan.err == .variant
         cg.s("  const char *_name = \"\";\n  switch ((long long)_res.payload.err.error")
             .s(".tag" if plan.err_has_payload else "").s(") {\n")
         for v in plan.err_variants
@@ -92,16 +87,12 @@ priv fn emit_main_error_return(cg: Genc_ctx$@, plan: gen_entry.Main_plan) //<
             gen_c_literal.emit_folded_i64(cg, v.tag_value)
             cg.s(": _name = \"").s(v.name).s("\"; break;\n")
         cg.s("  default: break;\n  }\n")
-        cg.s("  fprintf(get_stderr(), \"").s(plan.failure_line()).s("\\n\", _name);\n")
-    default
-        cg.s("  fprintf(get_stderr(), \"").s(plan.failure_line()).s("\\n\");\n")
+        name = "_name"
+    cg.s("  int _status = ").s(gen_entry.FAIL_FN).s("(\{I32::plan.err\}, ").s(code).s(", ").s(name)
+        .s(");\n")
     if plan.trace_fn.len > 0
         cg.s("    ").s(plan.trace_fn).s("();\n")
-    switch plan.err
-    case .number
-        cg.s("  return (_code >= 1 && _code <= \{gen_entry.EXIT_CODE_MAX\}) ? (int)_code : 1;\n}\n")
-    default
-        cg.s("  return 1;\n}\n")
+    cg.s("  return _status;\n}\n")
 
 impl Ast_node
     fn emit(r: Self$@, cg: Genc_ctx$@)
@@ -205,7 +196,6 @@ impl Ast_node
 
     priv fn emit_top_level_vars(r: Ast_node$@, cg: Genc_ctx$@) //<
         //< The **definitions** of globals, constants and embed data
-        //<
         //< emit_fwd_externs_and_embeds writes the shared header's `extern`s; this writes the
         //< definitions into the owning unit.
         //< Caution: **Emit the constants an initializer refers to first**, as C's static
@@ -306,7 +296,6 @@ int main(int _argc, char **_argv) {
 
     priv fn first_waiting_name(r: Ast_node$@, waiting: Map<|U8[], I32|>$@): U8[] //<
         //< A name the initializer refers to that is not emitted yet, or empty
-        //<
         //< Caution: Do not look at the type annotation. Sema has already folded the `n` of an array
         //< length (`U8[n]`), and it is emitted to C as a number.
         init_node: = r.get_var_decl_expr()
@@ -354,7 +343,6 @@ int main(int _argc, char **_argv) {
 
 priv fn c_order_id(cg: Genc_ctx$@, type_id: I32): I32 //<
     //< The type id used in the generated C's reordering
-    //<
     //< Caution: **Pass it through `Env.c_repr_type_id`.** Types that differ only in immutability
     //< fold into one C struct; with the plain type id the dependency is missed and C fails with
     //< `field has incomplete type`.
@@ -376,7 +364,7 @@ priv fn node_block(curr: Ast_node$@, cg: Genc_ctx$@, type_pending: Map<|I32, I32
         // A pointer needs only a forward declaration, so it is no dependency. A slice, array,
         // result and the like embedded by value need the element's complete definition first.
         switch info
-        case .pointer(_base_id)
+        case .pointer
             is_value_dep = false
         case .array(base_id, _size_str)
             is_value_dep = true
@@ -391,7 +379,6 @@ priv fn node_block(curr: Ast_node$@, cg: Genc_ctx$@, type_pending: Map<|I32, I32
         t_str: = extracted.slice()
         if t_str.ends_with("]") || t_str.ends_with("@")
             is_value_dep = false
-        extracted.free()
 
     if is_value_dep
         // Each pending_ast element holds its own type_id. So def_node's goes into the count map
@@ -419,7 +406,6 @@ priv fn node_block(curr: Ast_node$@, cg: Genc_ctx$@, type_pending: Map<|I32, I32
     return no_block()
 
 priv struct Decl_queue //< the declarations not yet emitted, each waiting on one key at most
-    //<
     //< An index below `n_ast` is `pending_ast`'s, the rest `pending_complex`'s. The wait queue
     //< is a singly-linked list threaded through the items, not a List per key.
     //< Caution: Store the indices 1-based. 0 means "not waiting".
@@ -505,7 +491,6 @@ impl Decl_queue
 
     fn release(r: Self$@, cg: Genc_ctx$@, i: Sz) //<
         //< The cleanup after item i is emitted
-        //<
         //< It decrements the count and retries what was waiting on a key whose count reached 0.
         $own_id: I32 = 0
         $own_name: U8[] = ""
@@ -534,7 +519,6 @@ impl Decl_queue
 
     fn wake(r: Self$@, cg: Genc_ctx$@, head: Sz) //<
         //< It walks a wait queue (the 1-based indices linked by wait_next), re-parking each item
-        //<
         //< Caution: Detach the key's queue head before walking. park can put the item back on the
         //< same key.
         $cur: = head
@@ -546,7 +530,6 @@ impl Decl_queue
                 r.park(cg, j)
 
 priv struct Dep_block //< the key an item is blocked on
-    //<
     //< id > 0 is a type ID, a non-empty name an identifier. **Both empty means "not blocked".** The
     //< key is returned so the item waits on it rather than being retried with everything left.
     id: I32
@@ -558,7 +541,6 @@ priv fn no_block(): Dep_block
 priv fn is_real_type_pending(type_pending: Map<|I32, I32|>$@, real_target: I32, self_real_type: I32):
     Bool //<
         //< Whether a body of the real type real_target, other than self's own, is still pending
-        //<
         //< It reads, in O(1), the pending set's counts per real type ID (pending_ast plus
         //< pending_complex, counted once per round). self_real_type is self's own real type.
     if real_target <= 0
@@ -569,7 +551,6 @@ priv fn is_real_type_pending(type_pending: Map<|I32, I32|>$@, real_target: I32, 
 
 priv fn collect_decl_name_counts(decl: Ast_node$@, out: Map<|U8[], I32|>$@) //<
     //< It counts the names one declaration introduces
-    //<
     //< There can be several, as in `const a, b: I32 = ...`.
     if decl == null
         return
@@ -581,7 +562,6 @@ priv fn park_top_level_var(i: Sz, pending: List<|Ast_node$@|>$@,
     waiting: Map<|U8[], I32|>$@, wait_next: List<|Sz|>$@, wait_head: Map<|U8[], Sz|>$@,
     ready: List<|Sz|>$@) //<
         //< It puts item i on ready, or on the wait queue of the name it is blocked on
-        //<
         //< Caution: The indices are 1-based, as in resolve_pending_queues.
     name: = pending.get(i).first_waiting_name(waiting)
     if name.len == 0
@@ -594,7 +574,6 @@ priv fn release_top_level_var(i: Sz, pending: List<|Ast_node$@|>$@,
     waiting: Map<|U8[], I32|>$@, wait_next: List<|Sz|>$@, wait_head: Map<|U8[], Sz|>$@,
     ready: List<|Sz|>$@, emitted: List<|Bool|>$@) //<
         //< The cleanup after top-level variable i is emitted
-        //<
         //< It removes the names it introduced from the waiting list and retries what was waiting on
         //< a name whose count reached 0.
     decl: = pending.get(i)
@@ -626,7 +605,6 @@ priv fn is_name_pending(name_pending: Map<|U8[], I32|>$@, target_name: U8[], sel
 
 priv fn decl_identity_of(cg: Genc_ctx$@, type_id: I32): I32 //<
     //< A component type's identity as a declaration
-    //<
     //< Unstripped, it does not match the pending set (the declarations' type IDs). A `Row[2]`'s
     //< element is a `const_of(Row)`, and the wrapper is emitted first. C then fails with `array
     //< has incomplete element type`, with no KSPL diagnostic ("Genc orders its type definitions
@@ -656,7 +634,6 @@ priv fn complex_block(cg: Genc_ctx$@, type_id: I32, type_pending: Map<|I32, I32|
 
 priv fn fn_typedef_named_by(cg: Genc_ctx$@, type_id: I32): I32 //<
     //< The function type whose typedef the C spelling of type_id names; 0 for none
-    //<
     //< It looks through pointers and immutability marks (`fn_I32*`). A pointer to a struct needs
     //< only the struct's forward declaration. But a pointer to a function type needs its typedef,
     //< which has no forward form.
@@ -665,7 +642,7 @@ priv fn fn_typedef_named_by(cg: Genc_ctx$@, type_id: I32): I32 //<
         switch cg.env.get_info(cur)
         case .pointer(b), .const_of(b)
             cur = b
-        case .fn_type(_sig)
+        case .fn_type
             return cur
         default
             return 0

@@ -1,6 +1,5 @@
 #!/usr/bin/env -S ksplc run
 //< It checks `ksplc emit-runtime` writes the same C runtime the generated C embeds
-//<
 //< When the runtime written alone and the one embedded at the generated C's head disagree, **both
 //< pass on their own**. An LLVM artefact linked with the one would run other code than the C one
 //< ("The runtime written alone, and its version symbol" in `ksplc/docs/DESIGN-backends.md`).
@@ -19,12 +18,10 @@ import "std/verdict"
 
 priv const ABI_DEF: U8[] = "\nvoid kspl_runtime_abi_" //<
     //< The version symbol's body, present only at the end of the distributed runtime
-    //<
     //< It is where it joins the runtime itself.
 
 priv const IMPL_MARK: U8[] = "/* ---- kspl runtime implementation half ---- */\n" //<
     //< The mark for the start of the definition half
-    //<
     //< The source is `IMPL_HALF_MARK` in `ksplc/gen/runtime.kspl`.
 
 // Keep it using the runtime: an empty generated C makes "the head agrees" pass trivially.
@@ -70,7 +67,6 @@ priv fn place(at: Sz?, arena: Arena$@): U8[] //< where a search found its text, 
 
 priv fn check_startup_calls(tag: U8[], gen: Text, arena: Arena$@) //<
     //< The calls the generated `main` must make before `kspl_main`
-    //<
     //< **This is the only gate either one has on this machine.** Both are empty outside Windows, so
     //< nothing here runs what they do. This pins down that the generated `main` still calls them,
     //< in that order, before the program's own code (`STARTUP_CALLS` in `../../gen/entry.kspl`).
@@ -122,7 +118,6 @@ priv fn generated(dir: U8[], tag: U8[], extra: U8[][], arena: Arena$@): Text //<
 
 priv fn target_probe(dir: U8[], arena: Arena$@): verdict.Run_out //<
     //< Whether the C compiler takes `--target` (code 0), building one small file for ELF
-    //<
     //< Caution: On a tool that cannot (a C compiler with no `--target`), print a SKIP. Do not pass
     //< silently: not failing is not the same as having checked.
     probe_c: = fs.join(dir, "target_probe.c", arena)
@@ -138,18 +133,15 @@ priv const ATOMIC_NAMES: U8[][4] = ::{ "kspl_atomic_add(", "kspl_atomic_cas(", "
 priv const LOCK_FREE_TRIPLES: U8[][5] = ::{ "x86_64-pc-windows-msvc", "x86_64-w64-mingw32",
     "x86_64-pc-linux-gnu", "x86_64-apple-darwin", "thumbv7m-none-eabi" } //<
         //< Targets whose pointer atomics are lock-free, so the runtime defines the four itself
-        //<
         //< **MSVC is the one that matters.** Clang there defines only `__CLANG_ATOMIC_*`. A guard
         //< asking `__GCC_ATOMIC_*` alone left the four out, seen only at the link on Windows.
 
 priv const NO_LOCK_FREE_TRIPLE: U8[] = "thumbv6m-none-eabi" //<
     //< Armv6-M, with no LDREX/STREX: the four are left to the port layer
-    //<
     //< Caution: **Always test it**: a guard that lets everything through passes the list above.
 
 priv fn atomics_block(body: U8[], arena: Arena$@): U8[] //<
     //< The `#if` … `#endif` around the atomics' definitions, cut from the runtime, or ""
-    //<
     //< The innermost `#if` opened before the first definition is the guard itself.
     $block: = List<|U8[]|>.new(arena)
     $inside: = false
@@ -280,11 +272,7 @@ fn main(): I32
         mark: = runtime.find_str(IMPL_MARK)
         verdict.check(arena.text().s("\{tag\}'s distributing side has the body half's mark").take(),
             mark.is_some(), arena.text().s("not found: \{IMPL_MARK\}").take())
-        $mark_at: Sz = 0
-        switch mark
-        case .some(at)
-            mark_at = at
-        case .none
+        mark_at: Sz = mark catch
             continue
         decls: = runtime.sub(0, mark_at)
         impl_half: = runtime.sub(mark_at, runtime.len - mark_at)

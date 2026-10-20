@@ -1,5 +1,4 @@
 //< The endpoints under `/api/`
-//<
 //< To add an endpoint, add one row to `ROUTES` and one case to `Api.queue`. How a response is
 //< queued (`conn.queue_response`) lives in `kssrv/conn.kspl`.
 //< **Do not mix the local-use endpoints (`--local`) with the outward-facing ones.** The file
@@ -18,7 +17,6 @@ import "std/sys"
 import "std/url"
 
 const API_PREFIX: U8[] = "/api/" //< the JSON API's prefix
-    //<
     //< Below it a routing table answers, not static serving.
 
 const BEARER: U8[] = "Bearer " //< the prefix before the token in the `Authorization` header
@@ -69,7 +67,6 @@ fn queue_api_status(c: conn.Conn$@, ctx: conn.Ctx$@, keep: Bool) //<
 
 fn rel_or_refuse(c: conn.Conn$@, query: U8[], root: U8[]): U8[]? //<
     //< Takes the relative path under the root from `path=`; empty means none, or the root itself
-    //<
     //< Caution: **Run the value through static serving's check (`rel_checked`), after the decode**
     //< ("The path is checked after the decode" in `kssrv/docs/DESIGN-server.md`). **But keep a
     //< leading `/`.** Only a URL's path opens with one. So here `/etc/passwd` is an absolute path,
@@ -84,7 +81,6 @@ fn rel_or_refuse(c: conn.Conn$@, query: U8[], root: U8[]): U8[]? //<
 
 fn rel_under(root: U8[], path: U8[]): U8[]? //<
     //< A URL's path with its leading `/`s dropped, if it stays under the root (`rel_checked`)
-    //<
     //< Empty means the root itself. Static serving asks this: a URL's path always opens with `/`.
     $rel: = path
     for rel.len > 0 && rel[0] == '/'
@@ -93,7 +89,6 @@ fn rel_under(root: U8[], path: U8[]): U8[]? //<
 
 priv fn rel_checked(root: U8[], rel: U8[]): U8[]? //<
     //< The path itself, if it stays under the root (`fs.stays_under`)
-    //<
     //< **Empty means the root itself.** An absolute path in any OS's spelling (`/x`, `\\x`, `C:x`)
     //< is refused by `fs.stays_under`'s text check, on every OS.
     if rel.len > 0 && !fs.stays_under(root, rel)
@@ -107,11 +102,7 @@ priv fn rel_checked(root: U8[], rel: U8[]): U8[]? //<
 // the body.
 // ==========================================
 fn queue_api_file(c: conn.Conn$@, t: conn.Target, req: http.Request$@, root: U8[], keep: Bool)
-    $rel: U8[] = ""
-    switch rel_or_refuse(c, t.query, root)
-    case .some(r)
-        rel = r
-    case .none
+    rel: U8[] = rel_or_refuse(c, t.query, root) catch
         return
     if rel.len == 0
         // The root itself is not a file; this endpoint needs a name.
@@ -126,7 +117,6 @@ fn queue_api_file(c: conn.Conn$@, t: conn.Target, req: http.Request$@, root: U8[
 
 fn queue_get_file(c: conn.Conn$@, path: U8[], keep: Bool) //<
     //< Queues the file at `path` as the response, typed octet-stream
-    //<
     //< **The type is not guessed from the content**, since a receiver trusts a guessed type.
     //< Reading it as UTF-8 is the caller's job; the server does not guess the encoding.
     $size: Sz = 0
@@ -142,7 +132,6 @@ fn queue_get_file(c: conn.Conn$@, path: U8[], keep: Bool) //<
 
 fn queue_put_file(c: conn.Conn$@, path: U8[], body: U8[], keep: Bool) //<
     //< Writes `body` to the file at `path` and queues a response saying how much was written
-    //<
     //< Caution: **Answer 200 only once the body is on the disk** (`fs.replace_file`). An editor
     //< told "saved" drops its copy. So a save that a power cut then loses is lost for good. The
     //< file keeps its mode. The body's cap is in `kssrv/main.kspl` (a 413 never reaches here).
@@ -156,15 +145,10 @@ fn queue_put_file(c: conn.Conn$@, path: U8[], body: U8[], keep: Bool) //<
 
 fn queue_api_stat(c: conn.Conn$@, query: U8[], root: U8[], keep: Bool) //<
     //< `GET /api/stat?path=<p>`: returns whether something changed
-    //<
     //< Caution: **Do not return the content**, or it arrives by two paths (the file endpoint reads
     //< it). **Nothing is missed**: it returns "how things are now", not "how many times it
     //< changed", so it catches up however many changes happen in between.
-    $rel: U8[] = ""
-    switch rel_or_refuse(c, query, root)
-    case .some(r)
-        rel = r
-    case .none
+    rel: U8[] = rel_or_refuse(c, query, root) catch
         return
     target: = root if rel.len == 0 else fs.join(root, rel, c.arena)
     info: = fs.stat(target) catch _e
@@ -181,7 +165,6 @@ fn queue_api_stat(c: conn.Conn$@, query: U8[], root: U8[], keep: Bool) //<
 
 fn token_matches(given: U8[], want: U8[]): Bool //<
     //< Whether `given` is the token `want`, compared in a time that does not depend on the bytes
-    //<
     //< Caution: **Do not return at the first differing byte**, or the response times reveal the
     //< token one byte at a time. Another site's page in the browser can reach the loopback too.
     if given.len != want.len
@@ -201,7 +184,6 @@ fn authorized(req: http.Request$@, token: U8[]): Bool
 
 fn queue_api_car(c: conn.Conn$@, req: http.Request$@, p: pilot.Pilot$@, keep: Bool) //<
     //< `POST /api/car`: takes the distance and line the car measured and returns one manoeuvre
-    //<
     //< `{"dist_mm":250,"line":2,"seq":17}` goes in, and
     //< `{"seq":17,"cmd":"strafe_right","lon":0,"lat":50,"rot":0,"valid_ms":500}` comes back.
     //< A few hundred weights, read-only after `build()`, so it answers on the accepting thread.
@@ -231,28 +213,23 @@ fn queue_api_car(c: conn.Conn$@, req: http.Request$@, p: pilot.Pilot$@, keep: Bo
 
 fn queue_api_pilot(c: conn.Conn$@, p: pilot.Pilot$@, keep: Bool) //<
     //< `GET /api/pilot`: returns one whole steering policy as safetensors
-    //<
     //< The policy is the weights, the manoeuvre table and the preprocessing constants. A car that
     //< has it decides for itself without asking per observation; the same weights answer
     //< `POST /api/car`. **The type is octet-stream** (no MIME type is registered for safetensors).
     $blob: = pilot.export(p, c.arena)
-    defer blob.free()
     conn.queue_response(c, 200, "application/octet-stream", blob.slice(), keep)
 
 priv enum Reach //< in which mode an endpoint exists
     both
     local //< only for local use
-        //<
         //< **Facing outward it does not**: with no token, anyone could read and write under the
         //< root.
     outward //< only facing outward
-        //<
         //< **For local use it does not**: the car cannot reach the loopback, so no policy is
         //< trained there (`main` in `kssrv/main.kspl`).
 
 priv fn reaches(c: conn.Conn$@, ctx: conn.Ctx$@, r: Reach): Bool //<
     //< Whether the endpoint exists in this mode
-    //<
     //< Where it does not, the 404 is already queued.
     local: = ctx.is_local()
     $here: = true
@@ -267,14 +244,12 @@ priv fn reaches(c: conn.Conn$@, ctx: conn.Ctx$@, r: Reach): Bool //<
     return here
 
 priv fn queue_ok(c: conn.Conn$@, keep: Bool) //< returns only "it took effect"
-    //<
     //< **A response with no content is JSON too**, so the page need not branch on the format.
     $b: = Json_builder.new(c.arena)
     queue_json(c, 200, b.obj().build(), keep)
 
 fn queue_api_here(c: conn.Conn$@) //<
     //< `GET /api/here`: the page holds this connection open for as long as the page is open
-    //<
     //< **Nothing is ever sent on it.** The connection itself is the message, and closing the tab
     //< closes it, so the server learns the moment the page goes, with no timer.
     //< Caution: **Do not answer and close.** Then the server would know only "someone asked a while
@@ -284,7 +259,6 @@ fn queue_api_here(c: conn.Conn$@) //<
 
 fn queue_api_stop(c: conn.Conn$@) //<
     //< `POST /api/stop`: answers, and the server stops once the answer has gone out
-    //<
     //< **The answer comes first**, so the asker tells "it stopped" from "the connection broke". The
     //< accept loop does the stopping (`conn.stop_asked_by`).
     conn.stop_asked_by = c.serial
@@ -312,7 +286,6 @@ priv struct Route //< one entry point under `/api/`
 
 priv const ROUTES: Route[7] = ::{ //<
     //< Every entry point, with who may reach it and by which methods
-    //<
     //< **The guards run once, here, for every row**: decided per endpoint, a new one forgets one.
     //< `/api/file` has no `HEAD`: `/api/stat` gives the size and whether it exists (Principle 6).
     Route::{ .path = "/api/file", .reach = .local, .methods = "GET, PUT", .api = .file },

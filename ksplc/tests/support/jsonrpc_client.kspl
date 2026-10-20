@@ -1,5 +1,4 @@
 //< The JSON-RPC client the suites talk to `ksplc lsp` through, over a child's pipes
-//<
 //< `std/jsonrpc` cuts and builds the frames; this starts the child, sends, and waits for an answer.
 //< **It knows no harness**, so the root's suites use it too.
 //< **Every wait is bound by real time.** Its deadline bounds one request's round trip, however
@@ -20,13 +19,11 @@ priv const CHUNK: Sz = 64 * 1024 //< the most bytes taken in one read
 priv const WORK_CHUNK: Sz = 64 * 1024 //< the chunk of the arena a call's own work goes into
 priv const MAX_DRAIN: Sz = 8 //< the most chunks of standard error drained at a time
 priv const READ_SLICE_MS: I32 = 50 //< the slice of the timeout given to one read
-    //<
     //< Caution: **Do not give the whole timeout to one read.** A server that writes a lot to
     //< standard error stalls on its full pipe **while** this client waits on standard output.
     //< Then neither moves until the timeout. A slice that runs out is not a failure.
 
 priv const AGAIN_STEP: I32 = -1 //< the result of one step
-    //<
     //< A success is positive, so 0 and negative values serve as marks.
 priv const CLOSED_STEP: I32 = 0
 priv const FAIL_STEP: I32 = -2
@@ -34,7 +31,6 @@ priv const ERR_TAIL_BYTES: Sz = 400 //<
     //< How much of the end of standard error is attached to a failure's description
 
 fn id_after(id: I32): I32 //< the id the request after `id` takes
-    //<
     //< Caution: **Go back to 1 past I32's top.** Wrapped to a negative, the id would make `encode`
     //< send the request as a notification, and its answer would never come.
     return 1 if id >= I32_TOP else id + 1
@@ -104,7 +100,6 @@ impl Client
         r.send_raw(jsonrpc.encode(method, params, -1, arena if arena != null else work), timeout_ms)!
 
     pub fn request( //< sends a request and reads until the response with that id arrives
-        //<
         //< Caution: **The clock bounds the wait, not a count of messages.** A server can send any
         //< number of notifications first (a language server sends one per open document). So a cap
         //< on skipped messages turns a valid burst into `broken`. A lost response still ends at the
@@ -131,7 +126,6 @@ impl Client
         throw .timed_out
 
     pub fn read_msg( //< reads one frame and returns it as a JSON document
-        //<
         //< Caution: **Keep draining standard error while waiting too** (the reason is at
         //< `READ_SLICE_MS`). The timeout bounds **this one call**, even when data trickles in.
         r: Self$@,
@@ -161,7 +155,6 @@ impl Client
         throw .timed_out
 
     priv fn read_step(r: Self$@, ms: I32): I32 //< reads one step from standard output
-        //<
         //< The marks tell a slice that ran out apart from a close or a failure.
         n: = r.child.read(r.out_buf, ms) catch e
             switch e
@@ -174,7 +167,6 @@ impl Client
         return I32::n
 
     pub fn err_tail(r: Self$@): U8[] //< the end of what the server wrote to standard error
-        //<
         //< Caution: **Attach it to a failure's description**; if it is discarded, no reason
         //< remains. **It borrows the buffer**, which the next drain reallocates: **copy it at
         //< once** (`arena.text().s(c.err_tail())`).

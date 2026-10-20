@@ -1,7 +1,6 @@
 //< The checks on the program as a whole, and on a function body once its types are known
-//<
 //< On the program, it checks for one `main` with a signature the start-up code can call. It also
-//< checks what `--library` refuses, and the target file's unused names ([W0206], [I0402]).
+//< checks what `--library` refuses, and the unused names ([W0206], [I0402]).
 //< On a body, it checks that control cannot fall off the end of a function returning a value. It
 //< also checks definite initialization (`sema/flow/track.kspl`), and runs the lints on its return
 //< and on the methods that release.
@@ -26,7 +25,6 @@ import "std/str"
 
 impl Sema_ctx
     fn check_one_main(r: Self$@) //< checks that there is only one entry point
-        //<
         //< Caution: **Do not let two or more go unreported.** `find_main_symbol` returns the first
         //< match, so an imported file that holds a `main` **silently builds a program whose own
         //< `main` never runs** (Principle 5). Report every one: if only one is marked, the user
@@ -51,7 +49,6 @@ impl Sema_ctx
 
     fn check_main_signature(r: Self$@) //<
         //< Limits main's shape, visibility and return type to what the entry can call and use
-        //<
         //< The start-up code calls `main` with no arguments and no type arguments. A `priv` main
         //< is `static` in C, out of reach of the start-up code in another file. Only nothing, an
         //< integer (the exit code) or a Result of either converts meaningfully to C's `int main`.
@@ -91,7 +88,6 @@ impl Sema_ctx
 
     priv fn check_main_present(r: Self$@) //<
         //< Refuses a program with no `main`, where one is built (`--program`)
-        //<
         //< `ksplc run` and `ksplc build` pass the option. A plain compile may hold none: its C may
         //< be linked with a `main` written elsewhere.
         if !base_core.config.is_program
@@ -110,7 +106,6 @@ impl Sema_ctx
 
     fn check_library_shape(r: Self$@, root: Ast_node$@) //<
         //< Under `--library`, refuses what a library cannot hold
-        //<
         //<   - A `main`: the program that links the library has its own.
         //<   - An `#export` variable or constant: a DLL's data needs a mark on its user's side that
         //<     no header can choose.
@@ -142,24 +137,22 @@ impl Sema_ctx
                 so callers could access nothing. Mark the functions its callers use '#export'")
 
     fn check_unused_symbols(r: Self$@) //<
-        //< [W0206] checks **the target file alone** for unused names
-        //<
-        //< Caution: Do not use `symtab.current_file`. At the end of the analysis it names the last
-        //< file read. So a file with even one import never has its own declarations checked
-        //< ([W0206] never fires on real sources). Checking every file is wrong too.
+        //< [W0206] checks **every file the compile read** for unused names
+        //< A `priv` can be named only in its own file, and every file is read whole. So a lint of
+        //< one entry point also finds a dead helper in a file it imports.
+        //< Caution: **Mark the names an uninstantiated template writes first**
+        //< (`mark_template_symbols_used`, called in `run` in `infer.kspl`). Unmarked, a helper that
+        //< only a generic calls looks unused wherever the generic is not instantiated.
         if r.suppress_errors || !base_core.config.run_lint_checks
             return
-        target: = r.env.files.get(r.main_file).unwrap_or(null)
-        if target == null
-            return
         old_file: = r.file_name
-        r.set_current_file(r.main_file)
-        r.check_unused_symbols_in(target)
+        for entry in r.env.files.items()
+            r.set_current_file(entry.key)
+            r.check_unused_symbols_in(entry.value)
         r.set_current_file(old_file)
 
     fn check_unit_internal_pubs(r: Self$@) //<
         //< [I0402] A `pub` used only from inside the same package
-        //<
         //< Off by default. **It checks only the entry's package.** Another unit (`std/` and so on)
         //< just has no outside user in this compilation, and in a library an unused `pub` is
         //< correct.
@@ -180,11 +173,10 @@ impl Sema_ctx
                 // list, so only `has_explicit_visibility` decides.
                 if !sym.node.has_explicit_visibility()
                     continue
-                // **Nor can the user drop `pub` from a synthesized symbol**: the per-enum
-                // `variant_name` (`parse/load.kspl`) and a lifted anonymous function
+                // **Nor can the user drop `pub` from a synthesized symbol**: an enum's members
+                // (`made_by_compiler`, from `parse/load.kspl`) and a lifted anonymous function
                 // (`_anon_env_N.call`).
-                if sym.name.ends_with(".variant_name") ||
-                    sym.name.find_str("._anon_").is_some()
+                if sym.node.made_by_compiler() || sym.name.find_str("._anon_").is_some()
                     continue
                 // Nor from a generated instance; and a function called from C has users that the
                 // unit's references do not show.
@@ -202,9 +194,9 @@ impl Sema_ctx
         for entry in file_env.symbols.items()
             sym: = entry.value
             // Caution: **Do not reject a `#export` on a `priv` here** (`sema/decl/attrs.kspl`
-            // does). This runs only under lint and only on the target file, so another file's would
-            // pass silently.
-            if sym.vis != sema_type_scope.Visibility.file_private || sym.flags.is_used
+            // does). This runs only under lint, so a build would let it pass silently.
+            if sym.vis != sema_type_scope.Visibility.file_private || sym.flags.is_used ||
+                sym.flags.is_required
                 continue
 
             if sym.name.starts_with("_") || sym.name.equals("main") ||
@@ -213,7 +205,7 @@ impl Sema_ctx
 
             $kind_str: U8$[] = "symbol"
             switch sym.kind
-            case .function(_v)
+            case .function
                 kind_str = "function"
             case .constant
                 kind_str = "constant"
@@ -271,7 +263,6 @@ impl Ast_node
 
     priv fn keeps_noreturn(r: Self$@, c: Sema_ctx$@, block: Ast_node$@): Bool //<
         //< Whether a `#noreturn` function's body hands control back by no path, reporting each one
-        //<
         //< **C trusts the attribute and only warns** (`-Winvalid-noreturn`): a caller compiled on
         //< the promise runs on past the call into whatever follows it.
         $ok: = block.report_way_back(c)
@@ -286,7 +277,6 @@ impl Ast_node
 
     priv fn report_way_back(r: Self$@, c: Sema_ctx$@): Bool //<
         //< Reports each `return`, `throw` and `!` under r, which return to the caller; false if any
-        //<
         //< A function literal inside is a body of its own, so it is not looked into.
         if r == null || r.kind_id == .k_expr_fn_lit
             return true
@@ -311,7 +301,6 @@ impl Ast_node
 
     priv fn lint_release_method_spelling(r: Self$@, c: Sema_ctx$@) //<
         //< [W0107] Warns at a declaration that releases through an untracked name or contract
-        //<
         //< **Two routes are tracked. Warn only when neither applies.** Visibility and the arguments
         //< after the first are ignored (a `priv` can conform, and `free(r, arena)` releases too). A
         //< free function is checked as well, since a release can be written that way too.
@@ -344,7 +333,6 @@ impl Ast_node
 
     fn lint_nullable_pointer_return(r: Self$@, c: Sema_ctx$@, block: Ast_node$@, base_ret_id: I32) //<
         //< [H0701] Suggests `T?` where a function returns a raw pointer that can be null
-        //<
         //< It is a Hint, not an Information. Existing code often returns null for "not found", and
         //< an Information would break CI's gate that requires zero items.
         //< **Only memory and C hand out a raw null** (`null_is_their_word` below).
@@ -364,7 +352,6 @@ impl Ast_node
 
     fn contains_return_null(r: Self$@, body: Ast_node$@): Bool //<
         //< Whether a `return` anywhere in the subtree can hand back null, nested blocks included
-        //<
         //< What follows a call declared `#noreturn` in the same block is never reached, so the
         //< `return` a function needs after an internal-error stop does not count.
         if r == null
@@ -381,7 +368,6 @@ impl Ast_node
 
     priv fn may_be_null(r: Self$@, body: Ast_node$@): Bool //<
         //< Whether a returned value can be null: `null`, an `if … else` with such a side, or a local
-        //<
         //< **A local counts when the body assigns it null anywhere**, without following the flow. A
         //< list's head kept null until the first push is the case to catch. Shadowing is refused
         //< ([I0501]), so one name is one variable. A local whose address is lent (`p@`) does not
@@ -447,7 +433,6 @@ impl Ast_node
 
     fn is_guaranteed_to_leave(r: Self$@, any_exit: Bool): Bool //<
         //< Whether control cannot fall off the end of `r`
-        //<
         //< **Two questions, two sets of exits.** Without `any_exit` (the missing-return check: does
         //< C get a `return`) only `return`, `throw` and an endless loop count. With it (a catch
         //< block, and [H0801] of an `if` branch: can control reach what follows) `fallback`,
@@ -489,7 +474,6 @@ impl Ast_node
 
     fn ret_stmt_switch(r: Self$@, any_exit: Bool): Bool //<
         //< Whether every case of the switch, its default included, is sure to leave.
-        //<
         //< Note: has_default needs no check. sema/body/switch.kspl requires 'default' on a non-enum
         //< switch, or every variant covered without it (process_switch_exhaustiveness). So a switch
         //< here always enters a case or the default.
@@ -512,7 +496,6 @@ impl Ast_node
 
 priv fn null_is_their_word(file: U8[]): Bool //<
     //< Whether a file's raw `null` return is its contract, so [H0701] does not ask about it
-    //<
     //< **Memory (`std/mem`) and C (`std/libc`) speak in raw pointers**: an allocation that fails is
     //< a null, and so is C's "none". Everywhere else, std included, absence is a `T?`. A function
     //< carrying `#export` is the other C boundary, judged at the check.

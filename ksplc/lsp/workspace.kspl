@@ -1,5 +1,4 @@
 //< LSP: walks the workspace and counts which sources belong to it
-//<
 //< **Every source file is collected** (`has_kspl_ext` in `../base/core.kspl`), or a file would
 //< get no squiggles and no jumps though it is right there.
 //< **It does not ask the client for the file list.** Other language servers find the files too
@@ -13,23 +12,20 @@ import "std/chars"
 import "std/ds" { List }
 import "std/fs"
 import "std/io"
-import "std/mem" { Arena, dealloc }
+import "std/mem" { Arena }
 import "std/str"
 
 const MAX_DEPTH: Sz = 24 //< the limits on the walk's depth and file count
-    //<
     //< **Both are needed**: a count limit alone never returns on a deep tree, a depth limit alone
     //< never on a wide one. They stop the walk before the supervisor's watchdog does.
 const MAX_FILES: Sz = 20000
 
 const IGNORE_FILE: U8[] = ".gitignore" //< the file naming the folders that are not source
-    //<
     //< Caution: **Do not list the names to exclude here.** The build folder's name differs per
     //< project, so a list here would fit only this repository; `.gitignore` already names it.
 
 fn workspace_kspl(arena: Arena$@): List<|U8[]|> //<
     //< It lists the sources under the root, by their paths relative to the root
-    //<
     //< **It does not enter a folder whose name starts with a dot.** `.git` holds no source and is
     //< not in `.gitignore` either.
     $out: = List<|U8[]|>.new(arena)
@@ -39,7 +35,6 @@ fn workspace_kspl(arena: Arena$@): List<|U8[]|> //<
 
 fn holds(path: U8[], arena: Arena$@): Bool //<
     //< Whether the walk lists that file: a source under the root, in no folder the walk skips
-    //<
     //< **It is where a rename can write** (`rename.kspl`). A file it does not list is a library
     //< the editor only reads, such as an installed std or a package read from elsewhere.
     //< Caution: **Ask the walk's own rules** (`enters`, `takes`), or a rename writes into a folder
@@ -66,26 +61,21 @@ priv fn takes(name: U8[]): Bool //< whether the walk lists a file of that name
 
 priv fn enters(name: U8[], dir: U8[], skip: U8[][]): Bool //<
     //< Whether the walk goes into the folder `dir`, named `name`
-    //<
     //< Caution: **Do not descend through a link to a folder.** Two links to `.` make the walk visit
     //< 2^depth folders, and a link out of the workspace reads files nobody opened.
     return name.len > 0 && name[0] != '.' && !name.is_one_of(skip) && !fs.is_link(dir)
 
 priv fn read_ignored_dirs(arena: Arena$@): List<|U8[]|> //<
     //< From `.gitignore`, it takes only the lines naming a folder
-    //<
     //< Caution: **Do not read any other kind of line.** With negation, globs and per-folder
     //< overrides, a second resolver would **differ slightly from git's**. A file line (`*.exe`) is
     //< already dropped by the extension filter.
     $out: = List<|U8[]|>.new(arena)
-    src: = io.read_file(IGNORE_FILE) catch U8$[]::{ .ptr = null, .len = 0 }
-    if src.ptr == null
+    text: = io.read_file(IGNORE_FILE, arena) catch
         return out
-    defer dealloc(Void$@::src.ptr)
-    text: U8[] = src
     for line in text.lines(arena)
         if name: = ignored_dir(line.trim_spaces())
-            out.push(arena.dup_str(name))
+            out.push(name)
     return out
 
 priv fn ignored_dir(line: U8[]): U8[]? //< the folder the line names, if it names one
@@ -104,7 +94,6 @@ priv fn ignored_dir(line: U8[]): U8[]? //< the folder the line names, if it name
 
 priv fn walk(rel: U8[], skip: U8[][], depth: Sz, out: List<|U8[]|>$@, arena: Arena$@) //<
     //< It walks one level under `rel`
-    //<
     //< **Do not stop on a folder that cannot be read** (vanished or forbidden); skip only that one.
     //< Caution: **Report progress for each entry.** One level can be slow on slow storage, and a
     //< silent walk gets killed by the supervisor's watchdog (`report_progress` rate-limits itself).

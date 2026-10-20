@@ -1,5 +1,4 @@
 //< Catches the C runtime and the KSPL side drifting apart (not the suite)
-//<
 //< **Each side builds alone.** A bit, a name or a body the two hold apart compiles either way. It
 //< breaks only on the platform or the path that reads it. Split from `conventions_match.kspl`,
 //< which runs it.
@@ -11,7 +10,6 @@ import "std/strfmt" as _strfmt
 import "std/verdict"
 import "tests/support/conventions_scan" as scan + { Sample }
 import "tests/support/harness"
-import "tests/support/harness_text" as htext
 
 // ==========================================
 // The machine table names the hosts as the runtime spells them `kspl_host_machine` (the runtime)
@@ -35,7 +33,7 @@ priv fn check_host_spellings(arena: Arena$@)
             tail: = arena.text().c('-').s(os).take()
             if name.ends_with(tail) && !os.equals("unknown")
                 seen += 1
-                if !htext.has(archs@, name.sub(0, name.len - tail.len))
+                if !archs.contains(name.sub(0, name.len - tail.len))
                     bad.push(name)
     verdict.check_list("every hosted machine in the table is a name the runtime can build", seen,
         "machines", bad@,
@@ -62,7 +60,6 @@ priv fn is_inline_ok(name: U8[]): Bool
 
 priv fn collect_declared(out: List<|U8[]|>$@, arena: Arena$@) //<
     //< The names of the `kspl_*` that an `extern "C"` in `std/` and the like declares
-    //<
     //< A block is read in either notation: to its `}` after an `extern "C" {`, and to the first
     //< line indented no deeper than a bare `extern "C"` in `.kspl`. A block under a `#cfg(...)` is
     //< read too, since either backend may build it.
@@ -105,7 +102,6 @@ priv fn push_kspl_fn(line: U8[], out: List<|U8[]|>$@) //<
 
 priv fn collect_module_symbols(defined: List<|U8[]|>$@, declared: List<|U8[]|>$@, arena: Arena$@) //<
     //< The names of the symbols a `define` / `declare` at a line's start in `module.kspl` emits
-    //<
     //< Each name is taken from after the `@`, up to the `(`. The `llvm.*` built-ins are not
     //< counted.
     for line in harness.read_under_root(LLVM_MODULE).lines(arena)
@@ -125,12 +121,10 @@ priv fn collect_module_symbols(defined: List<|U8[]|>$@, declared: List<|U8[]|>$@
 
 priv const PREAMBLE_HEAD: U8[] = "const PREAMBLE_FNS:" //<
     //< The line that starts `ctx.kspl`'s table of what the preamble emits itself
-    //<
     //< One entry per line follows it, up to a line holding only `}`.
 
 priv fn collect_preamble(named: List<|U8[]|>$@, by_hand: List<|U8[]|>$@, arena: Arena$@): Bool //<
     //< The names the table holds, and among them those with no `.ret`
-    //<
     //< Those are emitted by hand in `module.kspl`. It returns false where the table is not found.
     $in_table: = false
     $found: = false
@@ -153,10 +147,9 @@ priv fn collect_preamble(named: List<|U8[]|>$@, by_hand: List<|U8[]|>$@, arena: 
 priv fn push_unheld(put_out: List<|U8[]|>@, verb: U8[], std_declared: List<|U8[]|>@,
     by_hand: List<|U8[]|>@, bad: List<|U8[]|>$@, arena: Arena$@) //<
         //< Lists what `module.kspl` emits by hand under a name `std` declares
-        //<
         //< It lists only a name the table does not leave to it.
     for n in put_out
-        if htext.has(std_declared, n) && !htext.has(by_hand, n)
+        if std_declared.contains(n) && !by_hand.contains(n)
             bad
                 .push(arena.text().s(n).s(": ").s(LLVM_MODULE).s(" ").s(verb).s(" it by hand and ")
                 .s(LLVM_CTX).s("'s preamble_fns does not hold it without a .ret").take())
@@ -195,7 +188,7 @@ priv fn check_facade(arena: Arena$@)
     push_unheld(defined@, "defines", std_declared@, by_hand@, bad2@, arena)
     push_unheld(declared@, "declares", std_declared@, by_hand@, bad2@, arena)
     for n in by_hand
-        if !htext.has(defined@, n) && !htext.has(declared@, n)
+        if !defined.contains(n) && !declared.contains(n)
             bad2
                 .push(arena.text().s(n).s(": ").s(LLVM_CTX).s("'s preamble_fns leaves it to ")
                 .s(LLVM_MODULE).s(", which does not put it out (it becomes an unresolved symbol)")
@@ -231,16 +224,16 @@ priv fn check_reactor_bits(arena: Arena$@)
     $theirs: = bits_after(harness.read_under_root(REACTOR_C), REACTOR_C_MARK, arena)
     $bad: = List<|U8[]|>.new(arena)
     for b in ours.slice()
-        if !has_bit(theirs@, b)
+        if !theirs.contains(b)
             bad
                 .push(arena.text().s("0x").s(b).s(" is not in ").s(REACTOR_C).take())
     for b in theirs.slice()
-        if !has_bit(ours@, b)
+        if !ours.contains(b)
             bad
                 .push(arena.text().s("0x").s(b).s(" is not in ").s(REACTOR_KSPL).take())
     $users: = bits_after(harness.read_under_root(REACTOR_USER), REACTOR_KSPL_MARK, arena)
     for b in users.slice()
-        if !has_bit(theirs@, b)
+        if !theirs.contains(b)
             bad
                 .push(arena.text().s("0x").s(b).s(" in ").s(REACTOR_USER).s(" is not in ")
                 .s(REACTOR_C).take())
@@ -273,12 +266,6 @@ priv fn check_stdio_bits(arena: Arena$@)
     verdict.check_list("the child's stdio bits agree between the KSPL side and the C side",
         ours.len, "bits", bad@, "to add a bit, add it on both sides")
 
-priv fn has_bit(bits: List<|U8[]|>$@, want: U8[]): Bool
-    for b in bits.slice()
-        if b.equals(want)
-            return true
-    return false
-
 // ==========================================
 // Windows's exit codes read as POSIX signals: the runtime's table and std's DESIGN-system.md
 // ==========================================
@@ -290,7 +277,6 @@ priv const STATUS_SPLIT: U8[] = "@@@\n" //< parts a sample into its C half and i
 
 priv fn c_status_rows(text: U8[], arena: Arena$@): List<|U8[]|> //<
     //< The `NAME=code` pairs of `kspl_proc_status_code`
-    //<
     //< Each `case` line names an NTSTATUS in a `/* STATUS_... */` comment, and the next `return`
     //< gives the code of every name before it.
     $out: = List<|U8[]|>.new(arena)
@@ -314,7 +300,6 @@ priv fn c_status_rows(text: U8[], arena: Arena$@): List<|U8[]|> //<
 
 priv fn doc_status_rows(text: U8[], arena: Arena$@): List<|U8[]|> //<
     //< The `NAME=code` pairs of the DESIGN-system.md table
-    //<
     //< Every `` `STATUS_...` `` in a row's first cell is paired with the row's last cell.
     $out: = List<|U8[]|>.new(arena)
     if at: = text.find_str(STATUS_DOC_HEAD)
@@ -343,7 +328,7 @@ priv fn status_tables_disagree(text: U8[], arena: Arena$@): Bool //<
         if c.len == 0 || c.len != doc.len
             return true
         for i in Range.asc(c.len)
-            if !htext.has(doc@, c.get(i))
+            if !doc.contains(c.get(i))
                 return true
         return false
 
@@ -401,7 +386,6 @@ priv fn check_status_table(arena: Arena$@)
         doc", c.len, "codes", gaps@, "fix the side that is wrong (a row is `NAME=code`)")
 
 fn run(arena: Arena$@) //< runs every check that the runtime and the KSPL side agree
-    //<
     //< Caution: **Call it from `conventions_match.kspl`'s `run`** (there is one suite).
     check_reactor_bits(arena)
     check_stdio_bits(arena)

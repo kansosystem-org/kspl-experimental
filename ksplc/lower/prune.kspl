@@ -1,5 +1,4 @@
 //< Removes from the tree the functions the root cannot reach
-//<
 //< It also says which remaining declarations a backend emits (`is_emittable`). The whole picture is
 //< "A function or type nothing calls is not emitted" in ksplc/docs/DESIGN-lower.md.
 //< A generic instantiates **every method** of every instance. std's extensions (all that `std/seq`
@@ -28,7 +27,6 @@ priv struct Walk //< the breadth-first search's state
 impl Walk
     priv fn mark(r: Self$@, d: Ast_node$@) //<
         //< It records d as reached and, if d was not looked into yet, pushes it onto the work queue
-        //<
         //< Caution: **Mark it when pushing.** Marked when popped, a function enters the queue once
         //< per reference, millions of times in ksplc. The arena never gets the old List memory
         //< back.
@@ -60,7 +58,6 @@ priv fn mark_referenced_fns(n: Ast_node$@, w: Walk$@, depth: Sz) //<
 
 priv fn mark_export_roots(n: Ast_node$@, w: Walk$@, depth: Sz) //<
     //< it marks the `#export` functions
-    //<
     //< Caution: Walk the tree; do not copy the subtree into a Map. Done per top-level declaration,
     //< that grows the arena thousands of times.
     if n == null || depth >= lower_root.MAX_LOWER_DEPTH
@@ -74,7 +71,6 @@ priv fn mark_export_roots(n: Ast_node$@, w: Walk$@, depth: Sz) //<
 
 priv fn mark_roots(root: Ast_node$@, c: Sema_ctx$@, w: Walk$@) //<
     //< It marks the roots, of which there are four kinds
-    //<
     //< Drop one and everything reached only from it disappears. 1. `main`. 2. `#export`
     //< functions. 3. References from a non-function top-level initializer (a vtable naming a thunk
     //< **as data**). 4. What the backend's entry point calls from a template string
@@ -97,7 +93,6 @@ priv fn mark_roots(root: Ast_node$@, c: Sema_ctx$@, w: Walk$@) //<
         mark_referenced_fns(child, w, 0)
 
 struct Prune_stats //< the count of unmarked `decl_fn`s taken out of their parents' child lists
-    //<
     //< The number of functions dropped is **also Sema's wasted work**: Sema type-checked each one
     //< per instance (`../sema/session/prof.kspl` counts them). **Unreported, a growth in
     //< instantiation shows only as "Sema is slow"** (the breakdown is "Profiling where Sema's time
@@ -124,7 +119,6 @@ priv fn drop_unreached(parent: Ast_node$@, reached: Map<|Sz, Bool|>$@)
 
 priv fn collect_inst_types(c: Sema_ctx$@, out: Map<|Sz, Bool|>$@) //<
     //< The set of instantiated types' declarations (by node identity)
-    //<
     //< Caution: **Do not identify them by name.** The mangling rule belongs to
     //< `sema/decl/mono_name.kspl`; copied here, a change there drops a live type. The identity
     //< comes from `env.instantiated_nodes`.
@@ -138,7 +132,6 @@ priv fn collect_inst_types(c: Sema_ctx$@, out: Map<|Sz, Bool|>$@) //<
 
 priv fn inst_node_of(c: Sema_ctx$@, tid: I32): Ast_node$@? //<
     //< The node that defines the type with this ID
-    //<
     //< It asks the instance's record (a linear walk would be O(N^2)).
     key: = c.env.instance_key(tid)
     if key.len == 0
@@ -149,7 +142,6 @@ priv fn inst_node_of(c: Sema_ctx$@, tid: I32): Ast_node$@? //<
     return .some(n)
 priv fn mark_type(c: Sema_ctx$@, seen: Map<|I32, Bool|>$@, work: List<|I32|>$@, id: I32) //<
     //< It marks a type and, if it was not looked into yet, pushes it onto the work queue
-    //<
     //< Caution: **Pass it through `c_repr_type_id`.** Types that differ only in immutability are
     //< **one struct in C**; with the plain ID, reaching one drops the other and the C fails with
     //< `unknown type name`. The folding lives in `sema/type/env.kspl`.
@@ -173,7 +165,6 @@ priv fn mark_referenced_types(n: Ast_node$@, c: Sema_ctx$@, seen: Map<|I32, Bool
 
 priv fn mark_type_members(c: Sema_ctx$@, seen: Map<|I32, Bool|>$@, work: List<|I32|>$@, tid: I32) //<
     //< It marks the types tid is built from: what it strips to, and its fields' types
-    //<
     //< Caution: **Read `Env`, not the tree.** The C field types come from `Struct_def` /
     //< `Enum_def`, and a field's node in the tree may have no type.
     // A derived type (a pointer, an immutability qualifier, a slice, an array) needs what it strips
@@ -194,7 +185,6 @@ priv fn mark_type_members(c: Sema_ctx$@, seen: Map<|I32, Bool|>$@, work: List<|I
 
 fn prune_unreachable_types(root: Ast_node$@, c: Sema_ctx$@) //<
     //< It removes the **type declarations** the live declarations cannot reach
-    //<
     //< Caution: **Call it after the functions are dropped.** A type named only in a signature
     //< becomes unused only once that function is gone; called first, it drops nothing. Keeping one
     //< too many is harmless; dropping too many stops the C compiler with `unknown type name`.
@@ -242,7 +232,6 @@ fn prune_unreachable_types(root: Ast_node$@, c: Sema_ctx$@) //<
 priv fn names_dropped_inst(c: Sema_ctx$@, tid: I32, insts: Map<|Sz, Bool|>$@,
     reached: Map<|Sz, Bool|>$@, depth: Sz): Bool //<
         //< Whether the type tid names an instance this pass drops, at any depth
-        //<
         //< A pointer counts: C needs the struct's name declared for `S*` too.
     if tid == 0 || depth >= lower_root.MAX_LOWER_DEPTH
         return false
@@ -273,7 +262,6 @@ priv fn names_dropped_inst(c: Sema_ctx$@, tid: I32, insts: Map<|Sz, Bool|>$@,
 priv fn drop_orphan_complex_types(c: Sema_ctx$@, insts: Map<|Sz, Bool|>$@,
     reached: Map<|Sz, Bool|>$@) //<
         //< It removes from the registry the composite types that only dropped code used
-        //<
         //< **`complex_types` stays as sema registered it**: a dropped function's array or function
         //< type is still there. **One naming a dropped instance goes**, at any depth, as it names a
         //< struct C never sees.
@@ -289,7 +277,6 @@ priv fn drop_orphan_complex_types(c: Sema_ctx$@, insts: Map<|Sz, Bool|>$@,
 
 fn prune_unreachable_fns(root: Ast_node$@, c: Sema_ctx$@) //<
     //< It removes from the tree every function root cannot reach
-    //<
     //< Caution: **Call it after all synthesis is done** (in `pipeline.kspl`, right after
     //< `lower_abi.run`); earlier, lower's thunks and ARC retain/release do not exist yet and are
     //< lost.
@@ -317,7 +304,6 @@ priv fn is_inst_type(n: Ast_node$@, sym: Sema_symbol$@): Bool //<
 impl Ast_node
     fn is_alive_for_backend(r: Self$@): Bool //<
         //< Whether the program still needs this declaration: a file-private one unused does not
-        //<
         //< A generic template counts as alive here; `is_emittable` is what a backend asks.
         if r == null
             return false
@@ -354,7 +340,6 @@ impl Ast_node
 
     fn is_emittable(r: Self$@): Bool //<
         //< Whether a backend emits this declaration: alive, and not a generic template
-        //<
         //< A generic template's instances are emitted instead.
         //< **Both backends ask this one question** of a top-level declaration and of an impl's
         //< method, so the two outputs hold the same declarations.

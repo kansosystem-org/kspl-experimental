@@ -1,5 +1,4 @@
 //< A breakdown of the time sema takes
-//<
 //< **It is a tool, not a diagnostic**: nothing passes or fails on it (CI's check watches peak
 //< memory; `tests/tools/perf_guard.kspl`).
 //< **The per-phase total alone is not enough**: it does not name the declaration to fix. So each
@@ -9,13 +8,13 @@ import "ksplc/base/ast" as base_ast
 import "ksplc/base/core" as base_core
 import "std/ds" { List, Map }
 import "std/io"
+import "std/math"
 import "std/seq"
 import "std/str" { Str_builder }
 import "std/strfmt"
 import "std/sys"
 
 struct Body_prof_entry //< the tally for one declaration
-    //<
     //< **It is grouped by the position where it is written** (file plus offset). By name,
     //< **same-named methods of different types** (`new` / `free`) would merge into one line; by
     //< position, a generic's instantiations **share one line** and `calls` counts them.
@@ -37,7 +36,6 @@ struct Sema_prof
 $prof: Sema_prof = ::{}
 
 priv fn timing_on(): Bool //< whether to measure
-    //<
     //< **On a target without a usable clock, per-body timing is off** (`sys.timing_available`
     //< false makes every figure 0); the count is still meaningful and is kept separately.
     return base_core.config.enable_stats && sys.timing_available()
@@ -52,7 +50,6 @@ impl Sema_prof
             .bodies = List<|Body_prof_entry$@|>.new(base_core.arena) }
 
     fn body_begin(r: Self$@): I64 //< starts timing one body
-        //<
         //< Pass what it returns to `body_end` unchanged. Without `--stats` it returns 0.
         // The count is kept separate from the clock (see timing_on).
         if !base_core.config.enable_stats
@@ -81,7 +78,6 @@ impl Sema_prof
         r.bodies.push(e)
 
     fn print_phases(r: Self$@) //< prints the per-phase breakdown
-        //<
         //< Caution: **Print it right after the total (`Sema`)**, so the sum can be checked.
         if !base_core.config.enable_stats
             return
@@ -98,16 +94,13 @@ impl Sema_prof
         io.err().s(sb.slice())
 
     fn print_bodies(r: Self$@) //< lists the heaviest declarations first
-        //<
         //< Caution: **Print `calls` alongside.** A body that is heavy once and a light body
         //< instantiated dozens of times need different fixes.
         if !timing_on() || r.bodies.len == 0
             return
         ranked: = r.bodies
             .order_by(fn(a: Body_prof_entry$@@, b: Body_prof_entry$@@; ): I32 {
-            if a.self_us == b.self_us {
-                return 0;
-            } return -1 if a.self_us > b.self_us else 1;
+            return base_core.by_descending(a.self_us, b.self_us);
         }, base_core.arena)
         $head: = Str_builder.new()
         head.s("\n[Sema Body / by self time] \{Sz::r.body_count:,\} bodies analyzed, ")
@@ -119,20 +112,17 @@ impl Sema_prof
         // instantiated dozens of times** (the document is named in this file's header).
         by_calls: = r.bodies
             .order_by(fn(a: Body_prof_entry$@@, b: Body_prof_entry$@@; ): I32 {
-            if a.calls == b.calls {
-                return 0;
-            } return -1 if a.calls > b.calls else 1;
+            return base_core.by_descending(a.calls, b.calls);
         }, base_core.arena)
         io.err().s("\n[Sema Body / by instantiations] (Top 10)\n")
         r.print_rows(by_calls, "      self us      calls  declaration\n", 10)
 
     priv fn print_rows(_r: Self$@, ranked: List<|Body_prof_entry$@|>, header: U8[], want: Sz) //<
         //< Prints header and then at most want of the ranked rows
-        //<
         //< **The name is that of one instantiation.** Rows are grouped by position, so a line with
         //< `calls` of 2 or more shows one of them. The position is what identifies it.
         io.err().s(header)
-        limit: = want if ranked.len > want else ranked.len
+        limit: = math.min(want, ranked.len)
         for i in Range.asc(limit)
             e: = ranked.get(i)
             $sb: = Str_builder.new()

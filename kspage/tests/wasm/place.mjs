@@ -1,4 +1,4 @@
-import { check, near, material, para, grid } from "./shell.mjs";
+import { check, near, material, para, grid, shared } from "./shell.mjs";
 
 export const subject = "Placing, pressing, typing, choosing, and going back.";
 
@@ -14,10 +14,10 @@ export const subject = "Placing, pressing, typing, choosing, and going back.";
 // `kspage/content`'s sample, so they stay as they are until that side moves.
 export const opens = material({
   styles: [
-    { name: "heading", size_px: 28.0, weight: 700, space_after: 8.0 },
-    { name: "body", space_after: 12.0 },
-    { name: "table", space_before: 12.0, space_after: 12.0, arrange: "grid" },
-    { name: "cell", pad: 4.0, rule_width: 1.0, rule_color: "#cccccc" },
+    shared.heading,
+    shared.body,
+    shared.table,
+    shared.cell,
   ],
   blocks: [
     para("heading", "kspage"),

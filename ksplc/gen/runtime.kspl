@@ -1,5 +1,4 @@
 //< The C runtime that completes both backends' output, as text that ksplc supplies
-//<
 //< **Both backends take the runtime from here**, so neither backend imports the other for it.
 //< The C backend writes it around the generated body. The LLVM backend references its version
 //< symbol. `ksplc emit-runtime` writes it alone.
@@ -32,7 +31,6 @@ embed "ksplc/gen/runtime/hosted_net.c" as rt_hosted_net
 
 fn write_decls($w: Writer): Writer //<
     //< The runtime's declaration half (the system headers plus the `.h` side)
-    //<
     //< Caution: **Every object-like macro the includes `#define` must be removed by the `#undef`
     //< below** (`si_pid`, `L_tmpnam`, `math_errhandling`, ...). Otherwise, where KSPL emits the
     //< same name unprefixed (a local, a parameter, a field), the macro expands.
@@ -186,13 +184,11 @@ __attribute__((unused)) static uintptr_t kspl_fault_addr(const siginfo_t *info) 
 
 const IMPL_HALF_MARK: U8[] = "/* ---- kspl runtime implementation half ---- */\n" //<
     //< The mark at the start of the body half
-    //<
     //< Caution: **Do not change it.** It appears both in `emit-runtime`'s output and in the
     //< generated C, where the program's body sits between the two halves.
     //< `tests/suite/emit_runtime_test.kspl` cuts both there to compare them.
 
 fn write_impl($w: Writer): Writer //< the runtime's body half (the `.c` side)
-    //<
     //< It goes into only one translation unit.
     w = w.s(IMPL_HALF_MARK).s(rt_core_impl)
     if base_core.config.is_freestanding
@@ -203,7 +199,6 @@ fn write_impl($w: Writer): Writer //< the runtime's body half (the `.c` side)
     return w
 
 priv const ABI_HASH_LEN: Sz = 16 //< the length of the version in the version symbol
-    //<
     //< The version is computed from **the runtime's whole source**.
     //< Caution: **Do not compute it from the declaration half only**, or a runtime whose bodies
     //< alone changed would pass. genllvm references the symbol (the IR always links the runtime
@@ -217,7 +212,6 @@ fn append_abi_symbol(out: Str_builder$@)
 
 fn write_unit($w: Writer): Writer //<
     //< It writes only the runtime, as one translation unit (`emit-runtime`)
-    //<
     //< The version symbol's body goes at the end.
     //< Caution: **Use the same function as the preamble.** Built separately, the name embedded in
     //< an artifact and the name in the shipped runtime could disagree, with both passing unnoticed.

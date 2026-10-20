@@ -52,6 +52,33 @@ function kspageProbeShow(ks) {
 function kspageProbeInsert(ks) {
   const { check, app, canvas, ime, press, pressAt, undoKey, openMenu, findBlock, dpr } = ks;
 
+  // A final table must not trap the cursor: make prose after it, type, undo and redo.
+  const original = app.save();
+  app.loadBlank();
+  pressAt(8);
+  check(app.insertTable("table", 2, 2), "a blank document can end with a table");
+  const tableOnly = app.save();
+  app.setReadOnly(true);
+  check(!app.paragraphAfterTable() && app.save() === tableOnly,
+    "read-only documents refuse paragraph insertion without changing the table");
+  app.setReadOnly(false);
+  const countWithTable = ks.savedBlocks().length;
+  openMenu("paragraph-after-table");
+  document.getElementById("paragraph-after-table").click();
+  check(ks.savedBlocks().length === countWithTable + 1, "the command adds one paragraph after the final table");
+  check(app.cellFrame() === null, "the cursor leaves the table");
+  check(document.activeElement === ime, "the new paragraph receives keyboard focus");
+  ks.typeIn("Prose after the table");
+  check(app.text().endsWith("Prose after the table"), "typing goes after the final table");
+  undoKey();
+  undoKey();
+  check(app.save() === tableOnly, "undo removes typing and then the new paragraph");
+  check(app.cellFrame() !== null, "undo returns the cursor to its table cell");
+  app.redo();
+  check(app.cellFrame() === null, "redo returns the cursor to the paragraph");
+  check(!app.paragraphAfterTable(), "the command refuses a cursor outside a table");
+  check(app.load(original) === "", "the original document is restored");
+
   // 16. The buttons that insert a table and a slide.
   //
   // **A button takes the focus**; unreturned, it cannot be typed on straight after the press.
@@ -87,6 +114,13 @@ function kspageProbeInsert(ks) {
     "pointing at the grid says the size, columns first");
   check(document.querySelectorAll("#table-size .grid-cell.on").length === 12,
     "twelve cells light for four by three");
+  document.getElementById("put-table-fly").classList.add("fly-on");
+  const gridStyle = getComputedStyle(four3);
+  const blankStyle = getComputedStyle(gridCell(10, 8));
+  check(blankStyle.borderTopStyle === "solid" && blankStyle.borderTopColor !== "transparent" &&
+    blankStyle.borderTopColor !== "rgba(0, 0, 0, 0)", "unselected picker cells have visible borders");
+  check(gridStyle.backgroundColor !== blankStyle.backgroundColor, "the chosen rectangle has a visible fill");
+  check(four3.getBoundingClientRect().width === 16, "picker squares keep their width inside menus");
   const wasRows = rowsIn();
   const wasCells = cellsIn();
   four3.click();
@@ -100,6 +134,25 @@ function kspageProbeInsert(ks) {
   // A fresh table already fills the text width. Both insertion controls must add a visible
   // column without shrinking the old ones, including after the last column at the page edge.
   const firstCell = app.cellFrame();
+  const beforeFit = app.save();
+  const canvasAt = canvas.getBoundingClientRect();
+  canvas.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true,
+    clientX: canvasAt.left + firstCell[0] + firstCell[2],
+    clientY: canvasAt.top + firstCell[1] + firstCell[3] / 2 }));
+  check(app.cellFrame()[2] < firstCell[2], "double-clicking the column seam fits empty content");
+  undoKey();
+  check(app.save() === beforeFit, "one undo restores the column width");
+  for (const shift of [false, true]) {
+    const beforeStamp = app.save();
+    const stamp = new KeyboardEvent("keydown", { key: shift ? ":" : ";", ctrlKey: true,
+      shiftKey: shift, bubbles: true, cancelable: true });
+    ime.dispatchEvent(stamp);
+    check(stamp.defaultPrevented && app.save() !== beforeStamp, "the date/time shortcut inserts into a cell");
+    check((shift ? /[0-9]{2}:[0-9]{2}/ : /[0-9]{4}-[0-9]{2}-[0-9]{2}/).test(app.text()),
+      "the inserted stamp has the date/time form");
+    undoKey();
+    check(app.save() === beforeStamp, "one undo removes the whole date/time stamp");
+  }
   openMenu("add-col");
   document.getElementById("add-col").click();
   check(cellsIn() === wasCells + 15, "the menu adds a column to every row of a fresh table");
@@ -263,11 +316,10 @@ function kspageProbeInsert(ks) {
   // — the colour can reach the box and still not be drawn unless laid down again at drawing time.
   const h1At = app.styleNames().indexOf("heading");
   check(h1At >= 0, "the sample holds an h1 style");
-  const wasLook = app.styleLook(h1At);
-  check(wasLook.color === null, "the colour starts from unset");
-  app.setStyleLook(h1At, { family: null, sizePx: 28, weight: 700, italic: null,
-    color: "#ff0000", background: "#00ff00" });
-  const inked = app.styleLook(h1At);
+  const wasLook = app.styleData(h1At);
+  check(wasLook.color === undefined, "the colour starts from unset");
+  app.setStyleData(h1At, { ...wasLook, color: "#ff0000", background: "#00ff00" });
+  const inked = app.styleData(h1At);
   check(inked.color === "#ff0000" && inked.background === "#00ff00",
     "the colour settled can be read back (" + inked.color + "/" + inked.background + ")");
   // It peeks at the band the heading is in.
@@ -288,7 +340,7 @@ function kspageProbeInsert(ks) {
   check(greens > 0, "the background's green comes out on the canvas (" + greens + " pixels)");
   check(reds > 0, "the characters' red comes out on the canvas (" + reds + " pixels)");
   undoKey();
-  check(app.styleLook(h1At).color === null, "one undo deletes the colour settled");
+  check(app.styleData(h1At).color === undefined, "one undo deletes the colour settled");
 }
 
 // The table heading kept in view while its table passes under the tools.

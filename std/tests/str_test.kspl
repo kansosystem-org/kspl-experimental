@@ -1,7 +1,6 @@
 //< Tests of std's string operations: `std/str`, `std/strnum` and the writers into memory
-//<
-//< The number helpers beside them are here too: `std/bignat`, and `std/math`'s `round` and checked
-//< conversions from floating point.
+//< The number helpers beside them are here too: `std/bignat`, and `std/math`'s `round`, `abs`,
+//< `min`, `max` and checked conversions from floating point.
 import "std/bignat" + { Bignat }
 import "std/buf" { Buf_writer }
 import "std/chars"
@@ -169,7 +168,6 @@ fn test_str_ops(arena: Arena$@)
 
 fn test_unescape_and_dedent(arena: Arena$@) //<
     //< **Refuse an unknown alphanumeric escape**, or `\x41` silently becomes `x41`
-    //<
     //< An escaped symbol stands for itself (a grammar's `\[` and `\-` rely on that).
     //< **Turn a line of only spaces into an empty line.** Otherwise the dedented document gets
     //< trailing spaces that nobody can see.
@@ -197,27 +195,21 @@ fn test_unescape_and_dedent(arena: Arena$@) //<
     assert(rejected, "unescape: a `\\` with nothing after it is refused, not kept")
 
     $d: = "  a\n   \n  b\n".dedent()
-    defer d.free()
     assert(d.slice().equals("a\n\nb\n"),
         "dedent: a line of nothing but spaces becomes empty and does not decide the smallest indent")
     $d2: = "    x\n  \t\n      y".dedent()
-    defer d2.free()
     assert(d2.slice().equals("x\n\n  y"),
         "dedent: a line of nothing but spaces becomes empty even when longer than the smallest \
             indent")
     $d3: = "  a\n  b  ".dedent()
-    defer d3.free()
     assert(d3.slice().equals("a\nb  "), "dedent: spaces behind a character stay")
     $d4: = "  a\r\n   \r\n  b\r\n".dedent()
-    defer d4.free()
     assert(d4.slice().equals("a\r\n\r\nb\r\n"),
         "dedent: under CRLF, a line of nothing but spaces becomes `\\r\\n`")
     // The indentation is compared byte by byte: a tab and four spaces share none.
     $d5: = "\ta\n    b\n".dedent()
-    defer d5.free()
     assert(d5.slice().equals("\ta\n    b\n"), "dedent: a tab and spaces are not one indentation")
     $d6: = "\t\ta\n\t b\n".dedent()
-    defer d6.free()
     assert(d6.slice().equals("\ta\n b\n"), "dedent: only the bytes every line shares go")
     verdict
         .pass("An unknown escape is refused, a line of nothing but spaces is made empty, and only \
@@ -229,7 +221,6 @@ fn test_unescape_and_dedent(arena: Arena$@) //<
 
 fn test_strnum_roundtrip() //<
     //< That a number survives the round trip through text, and that bad text is refused
-    //<
     //< **Use the boundary values**: if `to_i64` cannot read a value that `write_int` writes, a
     //< saved setting breaks only at the largest value.
     //< Caution: **Include the refusals too**, or a reader that accepts everything passes.
@@ -300,7 +291,6 @@ fn test_strnum_roundtrip() //<
             out of range or not a number is refused.")
 
 fn test_float_bits() //< reading an F32's bits is a copy, not a conversion
-    //<
     //< **Include the patterns arithmetic would change**: -0 and infinity survive only if the bits
     //< are copied.
     verdict.start("[bignat] an F32's bits test...")
@@ -312,7 +302,6 @@ fn test_float_bits() //< reading an F32's bits is a copy, not a conversion
     verdict.pass("Known values read as their bit patterns, -0 and infinity included.")
 
 fn test_math_round() //< rounding goes to the nearest whole number, halves away from 0
-    //<
     //< **Include the largest F64 below one half**: adding 0.5 to it rounds up to 1 in the addition.
     verdict.start("[math] round test...")
     below_half: = 0.49999999999999994
@@ -326,38 +315,33 @@ fn test_math_round() //< rounding goes to the nearest whole number, halves away 
     assert(math.round(1.0e300) == 1.0e300, "a value past I64 comes back as it is")
     verdict.pass("Halves go away from 0, and the largest F64 below one half stays below.")
 
-fn test_float_to_int() //< `to_i32` and its kin say none where the integer type holds no value
-    //<
-    //< **Test both sides of each bound.** The truncation reaches one past the range (`-128.9` is
-    //< `I8`'s -128). A bound off by one lets a value through that a cast would saturate.
-    verdict.start("[math] float to integer test...")
+priv const ABS_MIN_SRC: U8[] = //< a child that asks for the absolute value of `I32`'s minimum
+    """import "std/io"
+import "std/math"
+
+fn main()
+  lowest: I32 = -2147483647 - 1
+  io.out().s("\{math.abs(lowest)\}")
+"""
+
+fn test_math_abs_min_max(ksplc: U8[], arena: Arena$@) //< one name each, for every number type
+    verdict.start("[math] abs, min and max test...")
+    assert(math.abs(-5) == 5 && math.abs(5) == 5 && math.abs(0) == 0, "abs on an I32")
+    assert(math.abs(-2.5) == 2.5 && math.abs(I8::-127) == I8::127, "abs on an F64 and an I8")
+    lowest: I64 = -9223372036854775807I64
+    assert(math.abs(lowest) == 9223372036854775807I64, "abs: one above the minimum has a value")
+    assert(math.min(3, -4) == -4 && math.max(3, -4) == 3, "min and max on an I32")
+    small: Sz = 2
+    assert(math.min(small, 7) == 2 && math.max(small, 7) == 7, "min and max on an Sz")
+    assert(math.min(0.5, 1.5) == 0.5 && math.max(U8::200, U8::100) == U8::200,
+        "min and max on an F64 and a U8")
     zero: = 0.0
     nan: = zero / zero
-    inf: = 1.0 / zero
-    assert(nan.to_i32().is_none() && inf.to_i64().is_none() && (-inf).to_u8().is_none(),
-        "NaN and the infinities have no integer value")
-    assert((-0.0).to_u8().unwrap_or(9) == 0 && (-0.9).to_u32().unwrap_or(9) == 0,
-        "-0 and what truncates to 0 fit an unsigned type")
-    assert((-1.0).to_u16().is_none(), "-1 does not fit an unsigned type")
-    assert((-128.9).to_i8().unwrap_or(0) == -128 && (-129.0).to_i8().is_none(), "I8's bottom")
-    assert(127.9.to_i8().unwrap_or(0) == 127 && 128.0.to_i8().is_none(), "I8's top")
-    assert(32767.9.to_i16().unwrap_or(0) == 32767 && 32768.0.to_i16().is_none(), "I16's top")
-    assert((-2147483648.9).to_i32().unwrap_or(0) == -2147483647 - 1 &&
-        (-2147483649.0).to_i32().is_none(), "I32's bottom")
-    assert(2147483647.9.to_i32().unwrap_or(0) == 2147483647 &&
-        2147483648.0.to_i32().is_none(), "I32's top")
-    assert((-9223372036854775808.0).to_i64().is_some() &&
-        9223372036854775808.0.to_i64().is_none(), "I64's bounds")
-    assert(255.9.to_u8().unwrap_or(0) == 255 && 256.0.to_u8().is_none(), "U8's top")
-    assert(65535.9.to_u16().unwrap_or(0) == 65535U16 && 65536.0.to_u16().is_none(), "U16's top")
-    assert(4294967295.9.to_u32().unwrap_or(0) == 4294967295U32 &&
-        4294967296.0.to_u32().is_none(), "U32's top")
-    assert(18446744073709549568.0.to_u64().unwrap_or(0) == 18446744073709549568U64 &&
-        18446744073709551616.0.to_u64().is_none(), "U64's top")
-    assert((-2.9).to_sz().unwrap_or(0) == -2 && 1.0e300.to_sz().is_none(), "Sz")
-    small: = F32::-3.5
-    assert(small.to_i32().unwrap_or(0) == -3 && small.to_u8().is_none(), "an F32 goes the same way")
-    verdict.pass("Each type's bounds are where its range ends, NaN and the infinities none.")
+    assert(math.min(nan, 1.0) == 1.0 && math.max(nan, 1.0) == 1.0, "a NaN first gives the second")
+    // **The minimum stops the program, naming why**: negated, it would wrap to itself.
+    assert(sys_test.child_stops_with(ksplc, "abs_min", ABS_MIN_SRC, "math.abs: the minimum", arena),
+        "abs of a signed integer's minimum must stop, not return a negative")
+    verdict.pass("abs, min and max answer for each type, and abs refuses the minimum.")
 
 priv fn wide_to_bignat(w: bignat.Wide): Bignat
     $v: = Bignat.from_u64(w.hi)
@@ -373,7 +357,6 @@ priv fn pow5_bignat(n: I32): Bignat
     return v
 
 priv fn pow10_entry_exact(q: I32): Bool //< whether pow10_128(q) is 10^q's top 128 bits, truncated
-    //<
     //< With T the entry and e = 127 - (floor_log2_pow10(q) - q), T <= 5^q x 2^e < T + 1 must hold.
     //< 10^q is 5^q x 2^q, so the two share their bits.
     t: = bignat.pow10_128(q)
@@ -383,7 +366,7 @@ priv fn pow10_entry_exact(q: I32): Bool //< whether pow10_128(q) is 10^q's top 1
     $low: = wide_to_bignat(t) // T, then T + 1, scaled to meet 5^q x 2^e
     $high: = low
     high.add_small(1U32)
-    $value: = pow5_bignat(q if q >= 0 else -q)
+    $value: = pow5_bignat(math.abs(q))
     if q < 0 // 2^e / 5^-q: multiply T and T + 1 by 5^-q instead
         low.mul(value@)
         high.mul(value@)
@@ -396,7 +379,6 @@ priv fn pow10_entry_exact(q: I32): Bool //< whether pow10_128(q) is 10^q's top 1
     return low.cmp(value@) <= 0 && value.cmp(high@) < 0
 
 fn test_pow10_table() //< every power of ten the float conversions read is exact
-    //<
     //< **Check every entry, rebuilt or held.** A wrong correction bit shows in one entry only. It
     //< moves a float's digits only where that power is used.
     //< `floor_log10_pow2` is checked over every exponent an F64 or an F32 has.
@@ -424,7 +406,6 @@ fn test_pow10_table() //< every power of ten the float conversions read is exact
     verdict.pass("Every 10^q from 10^-342 to 10^324 and every floor(log10(2^e)) is exact.")
 
 fn test_arena_text(arena: Arena$@) //< a writer that allocates and returns the result
-    //<
     //< What is written lives as long as the arena, and take() releases the builder.
     //< Caution: **Test that it cannot cross arenas.** A builder that does not remember its arena
     //< copies into the wrong one.
@@ -442,7 +423,6 @@ fn test_arena_text(arena: Arena$@) //< a writer that allocates and returns the r
     verdict.pass("It stays for the arena's lifetime, and two of them do not break each other.")
 
 priv const SELF_APPEND_SRC: U8[] = //< a child that writes builders from views of their own bytes
-    //<
     //< Each source is past 1 KiB: glibc scribbles over a freed block only above that size.
     """import "std/chars"
 import "std/io"
@@ -476,7 +456,6 @@ fn main()
 """
 
 fn test_builder_writes_its_own_bytes(ksplc: U8[], arena: Arena$@) //< ksplc runs the child
-    //<
     //< Caution: **Run it as a child with freed memory scribbled over** (`MALLOC_PERTURB_` on glibc,
     //< `MallocScribble` on macOS). Read after the free, a block's bytes are usually still there,
     //< so a test in this process passes without the fix. Windows has no such switch.
@@ -500,7 +479,6 @@ fn test_builder_writes_its_own_bytes(ksplc: U8[], arena: Arena$@) //< ksplc runs
 
 fn test_buf_writer() //<
     //< That Buf_writer, the writer that allocates nothing, works when full and when reused
-    //<
     //< Caution: **Always test the overflow case**, or a writer that does not count drops passes.
     //< **Test reuse as well**: a clear() keeping the drop record reports "overflowing" from then
     //< on.

@@ -13,7 +13,9 @@ make kssrv                              # -> out/kssrv.exe
 ./out/kssrv.exe 8080 ./docs --page=ui/app.html   # `/` is returned as this file
 ```
 
-The port and the root are **positional**; no environment variable fills either in. The port must be a whole number, and options follow in any order.
+The port and the root are **positional**; no environment variable fills either in. The port must be a whole number from 0 to 65535, and options follow in any order.
+
+**Port 0 lets the system choose a free port.** The line `kssrv: I: listening on <host>:<port>` names the port the server got, and so does the URL that `--local` prints. The tests start every server this way, so two runs on one machine do not ask for the same port.
 
 | Option | What it does |
 | :-- | :-- |

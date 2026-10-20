@@ -1,5 +1,4 @@
 //< Converts between a table and CSV text
-//<
 //< Fields are separated by `,` and lines by a newline. A text holding a `,`, a `"` or a newline is
 //< quoted in `"`, and a `"` inside is doubled as `""` (the rule of RFC 4180).
 //< Caution: **The reader and the writer must share this rule**, or it cannot read what it wrote.
@@ -33,7 +32,6 @@ priv const GUARD: U8 = '\'' //< the mark that keeps a spreadsheet from reading a
 
 priv fn formula_like(text: U8[]): Bool //<
     //< Whether a spreadsheet opening the CSV would run the text, guarded or not
-    //<
     //< **A run of `'` is looked through**, so the guard reads back (`unguarded`) whatever the text:
     //< `'=x` is written `''=x`. The characters are the ones OWASP's CSV-injection guidance names.
     $i: Sz = 0
@@ -45,7 +43,6 @@ priv fn formula_like(text: U8[]): Bool //<
     return c == '=' || c == '+' || c == '-' || c == '@' || c == '\t' || c == '\r'
 
 priv fn field_into(out: Str_builder$@, text: U8[], number: Bool) //< writes one cell to `out`
-    //<
     //< **A text a spreadsheet would run as a formula gets a leading `'`** (Excel's mark for "this
     //< is text"). A cell reading `+HYPERLINK(…)` or `-2+3` must stay words for whoever opens the
     //< file. **A cell whose value is a number never does** (`number`), so `-5` stays `-5`.
@@ -65,14 +62,12 @@ priv fn field_into(out: Str_builder$@, text: U8[], number: Bool) //< writes one 
     out.c(QUOTE)
 
 priv fn unguarded(text: U8[]): U8[] //< a field read with the writer's `'` taken back off
-    //<
     //< The counterpart of `field_into`: the `'` comes off exactly where the writer puts one on.
     if text.len > 0 && text[0] == GUARD && formula_like(text)
         return text.sub(1, text.len - 1)
     return text
 
 fn write_table(t: Block$@, out: Str_builder$@, arena: Arena$@) //< writes one table as CSV text
-    //<
     //< A cell's position is counted with the merges included (`Block.tiles_of`, the one count); a
     //< covered cell is an empty field. A newline follows the last line too.
     if t == null
@@ -91,7 +86,6 @@ fn write_table(t: Block$@, out: Str_builder$@, arena: Arena$@) //< writes one ta
 
 priv fn cell_inline(tiles: List<|Tile|>$@, row: Sz, column: Sz): Inline$@? //<
     //< The text of the cell at row `row`, column `column`; none for a covered or empty cell
-    //<
     //< Its shown text is written, and whether its value is a number decides the guard
     //< (`field_into`).
     for $i: Sz = 0; i < tiles.len; i += 1
@@ -102,14 +96,12 @@ priv fn cell_inline(tiles: List<|Tile|>$@, row: Sz, column: Sz): Inline$@? //<
     return .none
 
 priv struct Reader //< the position reached while reading
-    //<
     //< It is not the text cursor (that one is in `lay/caret.kspl`).
     //< Note: The formula reader has the same shape (`Reader` in `expr/addr.kspl`).
     src: U8[]
     pos: Sz
 
 priv fn plain_field(c: Reader$@, out: Str_builder$@) //< reads an unquoted field
-    //<
     //< Caution: **Stop before the separator and the newline** (those belong to the next field).
     for c.pos < c.src.len
         ch: = c.src[c.pos]
@@ -120,7 +112,6 @@ priv fn plain_field(c: Reader$@, out: Str_builder$@) //< reads an unquoted field
 
 priv fn quoted_field(c: Reader$@, out: Str_builder$@) //<
     //< Reads a field quoted in `"`
-    //<
     //< A `""` inside is one `"`, and a line break (`\r\n` too) one space. Unclosed, what there is
     //< so far is the field (a broken text that still loads is easier to fix).
     c.pos += 1
@@ -144,7 +135,6 @@ priv fn quoted_field(c: Reader$@, out: Str_builder$@) //<
 
 priv fn read_row(c: Reader$@, out: List<|U8[]|>$@, arena: Arena$@): Bool //<
     //< Reads one line and appends the fields' texts to `out`
-    //<
     //< Returns true once read. An empty line is one empty field. A `\r\n` is one line break.
     if c.pos >= c.src.len
         return false
@@ -169,7 +159,6 @@ priv fn read_row(c: Reader$@, out: List<|U8[]|>$@, arena: Arena$@): Bool //<
 
 fn read_table(src: U8[], name: U8[], arena: Arena$@): Block$@? //<
     //< Builds a table block from CSV text
-    //<
     //< If no line reads, no table is made. **The rows are padded to the longest** (otherwise the
     //< column count is undefined). The rows and cells get no style name (the screen offers no way
     //< to choose one).
@@ -198,7 +187,6 @@ fn read_table(src: U8[], name: U8[], arena: Arena$@): Block$@? //<
 impl Editor
     fn insert_csv(r: Self$@, page: Page$@, sheet: Sheet$@, name: U8[], src: U8[]): Bool //<
         //< Inserts one table from CSV text after the paragraph the cursor is in
-        //<
         //< Returns true once inserted. The style decides the layout (as `insert_table`). **Nothing
         //< is inserted inside a table cell** (that row alone would gain a cell).
         if r.shut()
@@ -208,17 +196,9 @@ impl Editor
             return false
         r.break_group()
         st: = r.step()
-        $s: Style$@ = null
-        switch r.styled(st, sheet, name, .grid)
-        case .some(got)
-            s = got
-        case .none
+        s: Style$@ = r.styled(st, sheet, name, .grid) catch
             return false
-        $made: Block$@ = null
-        switch read_table(src, s.name, r.arena)
-        case .some(got)
-            made = got
-        case .none
+        made: Block$@ = read_table(src, s.name, r.arena) catch
             return false
         edit.do_block(r, st, room.block, room.index + 1, true, made)
         head: = made.children.get(0).children.get(0)

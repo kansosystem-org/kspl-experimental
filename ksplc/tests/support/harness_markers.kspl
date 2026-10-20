@@ -1,5 +1,4 @@
 //< Reads the marks in a fixture's opening comment (not a suite)
-//<
 //< It reads the expectation marks from a source's opening comment.
 //< [`harness_expect.kspl`](harness_expect.kspl) runs them; this file only reads them.
 // ==========================================
@@ -12,6 +11,7 @@
 import "ksplc/tests/support/harness"
 import "std/chars" // `trim_spaces`
 import "std/ds" { List }
+import "std/math"
 import "std/mem" as _mem // harness owns the arena (`harness.arena()`)
 import "std/str" { Str_builder }
 import "std/verdict"
@@ -28,7 +28,6 @@ fn check(name: U8[], expect: U8[][], deny: U8[][], out: U8[]): Bool //<
 
 fn match_markers(expect: U8[][], deny: U8[][], out: U8[]): U8[] //<
     //< Matches EXPECT / EXPECT-NOT against the output
-    //<
     //< Empty where they agree, and where they differ a string saying what is missing or extra.
     //< Caution: **Check both directions**: too strict and too loose are each caught by only one.
     arena: = harness.arena()
@@ -42,7 +41,7 @@ fn match_markers(expect: U8[][], deny: U8[][], out: U8[]): U8[] //<
         for j in Range.asc(expect.len)
             if expect[j].equals(want)
                 need += 1
-                first = j if j < first else first
+                first = math.min(j, first)
         if first != i
             continue // the same string was counted where it first appeared
         got: = out.count_str(want)

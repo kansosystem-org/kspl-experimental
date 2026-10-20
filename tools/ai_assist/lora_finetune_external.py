@@ -17,7 +17,7 @@ How to use it (on the GPU side):
 
 What comes out is safetensors the KSPL side reads as it stands: `Qkv_lora.load_set_from` in
 `ksai/lora_set.kspl` (which calls `lora_load_from` inside), `load_qkv_lora_set` in
-`ksai/model_file.kspl` and `Qwen_model.load_lora_set` in `ksai/examples/qwen_infer/main.kspl` all
+`ksai/model_file.kspl` and `Qwen_model.load_lora_set` in `ksai/examples/qwen_infer/model.kspl` all
 share the same naming convention. Each A and B has to fit the base model's layer widths.
 The name convention: "blocks.{i}.attn.{q,v}.lora_{a,b,scale}"
   lora_a: [in, rank]   lora_b: [rank, out] (with alpha/rank's scale already baked in)

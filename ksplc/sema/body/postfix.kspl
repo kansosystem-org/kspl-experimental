@@ -1,5 +1,4 @@
 //< Infers a postfix expression: `.`, a call `(…)`, an index `[…]`, a cast `::`, `@`, `$` and `!`
-//<
 //< It types the receiver, then hands `.` to `dot.kspl` and a call to `call.kspl`, and keeps the
 //< index, the casts and the address and dereference operators here. **`[]` takes only what
 //< carries its own length** (a slice, an array, an `Index` type); a raw pointer cannot be
@@ -166,7 +165,6 @@ priv fn infer_cast_postfix(c: Sema_ctx$@, node: Ast_node$@, target_id: I32, as_t
 
 priv fn check_float_cast(c: Sema_ctx$@, node: Ast_node$@, as_target_id: I32) //<
     //< Refuses a constant cast to an integer type that does not hold the value's whole part
-    //<
     //< A value known only at run time saturates instead (NaN gives 0). A constant is checked now,
     //< as an integer constant's overflow is, at the width every target holds.
     switch node.float_cast_to(c, as_target_id, true)
@@ -188,7 +186,6 @@ priv fn check_float_cast(c: Sema_ctx$@, node: Ast_node$@, as_target_id: I32) //<
 
 priv fn tag_checked_enum(c: Sema_ctx$@, dst_id: I32, src_id: I32): Enum_def$@? //<
     //< The scalar enum a cast makes out of an integer or another enum, whose tag must be checked
-    //<
     //< **An enum value is one of its tags**: an exhaustive `switch` takes no other, and nothing but
     //< this cast makes one from a number. None for any other cast, the same enum's included.
     dst: = c.env.get_clean_real_type(dst_id)
@@ -204,7 +201,6 @@ priv fn tag_checked_enum(c: Sema_ctx$@, dst_id: I32, src_id: I32): Enum_def$@? /
 
 priv fn check_enum_cast(c: Sema_ctx$@, node: Ast_node$@, as_target_id: I32, src_id: I32) //<
     //< Refuses a cast that would make an enum value none of its variants
-    //<
     //< Only an integer or another scalar enum casts to a scalar enum. A constant that is none of
     //< the tags is refused now, as a constant divisor of 0 is. A value known only at run time is
     //< checked there (`enum_cast_needs_check`).
@@ -240,7 +236,6 @@ priv fn check_enum_cast(c: Sema_ctx$@, node: Ast_node$@, as_target_id: I32, src_
 
 fn enum_cast_needs_check(c: Sema_ctx$@, node: Ast_node$@): Enum_def$@? //<
     //< The enum whose tag a cast must check at run time; none where the cast needs no check
-    //<
     //< **Only when this says none can a backend omit the check.** An operand folding to one of the
     //< tags needs none, and then a backend must not insert one. A top-level initializer must stay a
     //< C constant expression.
@@ -258,7 +253,6 @@ fn enum_cast_needs_check(c: Sema_ctx$@, node: Ast_node$@): Enum_def$@? //<
 
 priv fn refuse_aggregate_cast(c: Sema_ctx$@, node: Ast_node$@, as_target_id: I32, target_id: I32) //<
     //< Reports a cast to an aggregate type that no implementation of `std/lang`'s `Cast` provides
-    //<
     //< A struct, a tagged union (`T?` too), a fixed-length array, a Result and a trait value are
     //< aggregates in C, where a cast `(T)value` is invalid. The cast is allowed only where the
     //< value already has that type (a no-op), and rejected here otherwise.
@@ -283,7 +277,7 @@ priv fn refuse_aggregate_cast(c: Sema_ctx$@, node: Ast_node$@, as_target_id: I32
     shown: = c.env.display(as_target_id)
     c.clear_scratch().s("cannot cast to ")
     switch c.env.get_info(as_clean_id)
-    case .enum_type(_def)
+    case .enum_type
         if c.env.instance_base(as_clean_id).equals(base_core.OPTION_FQN)
             c.scratch
                 .s("optional type '\{shown\}'; an optional is built from its variant: '.some(v)' or \
@@ -296,11 +290,11 @@ priv fn refuse_aggregate_cast(c: Sema_ctx$@, node: Ast_node$@, as_target_id: I32
             c.scratch
                 .s("enum type '\{shown\}' with payloads; such a value is built from one of its \
                     variants, not converted")
-    case .array(_b, _n)
+    case .array
         c.scratch
             .s("array type '\{shown\}'. An array is not converted as a whole. Convert it element by \
                 element")
-    case .trait_type(_d)
+    case .trait_type
         c.scratch
             .s("trait type '\{shown\}'. A value becomes a trait value with no '::', where the trait \
                 is the expected type (a declaration's, a parameter's, a field's)")
@@ -378,7 +372,6 @@ priv fn infer_propagate_postfix(c: Sema_ctx$@, node: Ast_node$@, target_id: I32)
 priv fn read_as_path(c: Sema_ctx$@, node: Ast_node$@, operand: Ast_node$@, type_node: Ast_node$@,
     op_node: Ast_node$@): Bool //<
         //< Reads `T::name…` as the path `T.name…` its writer meant, and reports the `::`
-        //<
         //< **A writer from Rust or C++ uses `::` as a path separator** (`Arena::new(1024)`), but in
         //< KSPL it is the cast. Read as a cast, three errors follow and none names the fix. Read as
         //< the member, it gives one error, and the rest is checked as intended.
@@ -427,7 +420,6 @@ priv fn read_as_path(c: Sema_ctx$@, node: Ast_node$@, operand: Ast_node$@, type_
 priv fn path_meant(c: Sema_ctx$@, owner: Ast_node$@, is_module: Bool, operand: Ast_node$@,
     head: Ast_node$@, name: Ast_node$@): Bool //<
         //< Whether `owner::name…` can only have meant the member `name` of `owner`
-        //<
         //< A parenthesized operand is a value written on purpose (`io::(x)`). A local with the
         //< owner's name is what `owner.name` would read. A module is never a cast target. A type is
         //< read as a path only where it has `name` and `name` means nothing in scope, so
@@ -451,14 +443,13 @@ priv fn path_meant(c: Sema_ctx$@, owner: Ast_node$@, is_module: Bool, operand: A
             dotted.s(part.text).c('.')
     dotted.s(name.text)
     switch sema_session_pointer.read_in_scope(c, c.file_name, dotted.slice())
-    case .found(_decl)
+    case .found
         return true
     default
         return false
 
 priv fn check_scalar_cast_source(c: Sema_ctx$@, node: Ast_node$@, as_target_id: I32, src_id: I32) //<
     //< Refuses a cast to `Bool` from anything else, and a cast to a number from an aggregate
-    //<
     //< **There is no cast to `Bool`**: `x != 0` says it, and the backends would read `Bool::2`
     //< differently (C's `_Bool` makes it true, LLVM's truncation false). A struct, a slice or an
     //< array is no number, and C refuses the cast far from the KSPL source.
@@ -482,7 +473,6 @@ priv fn check_scalar_cast_source(c: Sema_ctx$@, node: Ast_node$@, as_target_id: 
 
 priv fn refuse_fn_type_cast(c: Sema_ctx$@, node: Ast_node$@, as_target_id: I32, src_id: I32) //<
     //< Refuses a cast between function types whose signatures differ
-    //<
     //< A call through the result hands the function its arguments, and takes its result, in the
     //< other signature's shape. That is undefined, and C compiles the cast without a word. An
     //< address that arrives as `Void@` (from C) still becomes a function type by a cast.
@@ -503,7 +493,6 @@ priv fn refuse_fn_type_cast(c: Sema_ctx$@, node: Ast_node$@, as_target_id: I32, 
 
 priv fn same_signature(c: Sema_ctx$@, a: Fn_sig$@, b: Fn_sig$@): Bool //<
     //< Whether two function types take and give the same types
-    //<
     //< The parameters' names, an alias and a value's own immutability do not count.
     if a.params.len != b.params.len ||
         c.env.get_clean_real_type(a.ret_id) != c.env.get_clean_real_type(b.ret_id)
@@ -516,14 +505,13 @@ priv fn same_signature(c: Sema_ctx$@, a: Fn_sig$@, b: Fn_sig$@): Bool //<
 
 priv fn is_aggregate_value(c: Sema_ctx$@, id: I32): Bool //<
     //< Whether a value of the type is an aggregate (a struct or slice, an array, a Result...)
-    //<
     //< A tagged union and a trait value count; a scalar enum does not.
     switch c.env.get_info(id)
-    case .struct_type(_d)
+    case .struct_type
         return true
-    case .trait_type(_d)
+    case .trait_type
         return true
-    case .array(_b, _n)
+    case .array
         return true
     case .enum_type(def)
         return !def.is_scalar()
@@ -532,7 +520,6 @@ priv fn is_aggregate_value(c: Sema_ctx$@, id: I32): Bool //<
 
 priv fn check_slice_cast_source(c: Sema_ctx$@, node: Ast_node$@, as_target_id: I32, src_id: I32) //<
     //< Checks whether the **source** of a prefix cast to a slice (a view) has a descriptor
-    //<
     //< Only a source with a descriptor is legitimate. That is slice to slice (making it immutable,
     //< `U8[]::s`), and a fixed-length array turned into a descriptor (`U8$[]::buf`).
     //< Caution: **Reject a cast from a scalar or a pointer here.** genc's emit_as_cast trusts this,
@@ -560,7 +547,6 @@ priv fn check_slice_cast_source(c: Sema_ctx$@, node: Ast_node$@, as_target_id: I
 
 priv fn check_slice_cast_writability(c: Sema_ctx$@, node: Ast_node$@, as_target_id: I32) //<
     //< Checks whether the source of a prefix cast to a mutable slice is writable memory
-    //<
     //< Caution: **Do not allow one from a `const` declaration or a string literal**; a write
     //< through it would modify `.rodata`. But keep the `$`, or the C declaration carries `const`
     //< (cast_makes_mutable_view in sema/flow/track.kspl).
@@ -582,7 +568,6 @@ priv fn check_slice_cast_writability(c: Sema_ctx$@, node: Ast_node$@, as_target_
 
 priv fn check_slice_elem_size(c: Sema_ctx$@, node: Ast_node$@, as_target_id: I32, src_id: I32) //<
     //< Checks whether a cast from a slice or array to a slice changes the element size
-    //<
     //< **The length is carried over unchanged**, so a new element size lets the bounds check pass
     //< the end (`I32[]::small` on `small: U8[8]` keeps len=8 and reads 32 bytes). The same size
     //< (`U8[]` ↔ `I8[]`, `U32[]` ↔ `I32[]`) keeps the check's meaning.
@@ -619,7 +604,6 @@ priv fn const_index(c: Sema_ctx$@, index_node: Ast_node$@): I32? //<
 
 fn index_is_static_in_range(c: Sema_ctx$@, index_node: Ast_node$@, size: I32): Bool //<
     //< Whether the index is known at translation time and within the array
-    //<
     //< Caution: **Keep this test in this one place.** The diagnostic ([W0101]) and the backends'
     //< omission of the run-time check must agree. The reason is the same as at
     //< shift_amount_in_range in sema/body/binary.kspl. **Arrays only**: a slice's length is a
@@ -635,7 +619,6 @@ fn index_is_static_in_range(c: Sema_ctx$@, index_node: Ast_node$@, size: I32): B
 // Index_place type. A raw pointer cannot be bounds-checked, so the user is pointed to `(p + i)$`.
 priv fn lint_index_out_of_bounds(c: Sema_ctx$@, index: Ast_node$@, recv_id: I32) //<
     //< [W0101] A constant index outside a fixed-length array: past its end, or below 0
-    //<
     //< The range is index_is_static_in_range's, so a warned index is never one whose run-time
     //< check the backends leave out.
     switch c.env.get_info(recv_id)

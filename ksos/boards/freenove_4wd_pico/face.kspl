@@ -1,5 +1,4 @@
 //< The car's face (the eyes' expression, shown on an 8×16 LED matrix)
-//<
 //< **The matrix is on the same pins as the ultrasonic (GPIO 4/5).**
 //< **A picture is one pair of left and right eyes.**
 //< **The display is mounted rotated 90 degrees.**
@@ -17,12 +16,10 @@ import "ksos/drivers/rp2040/i2c"
 import "ksos/drivers/rp2040/timer"
 
 priv const BRIGHTNESS: U32 = 4 //< the brightness, 0 to 15.
-    //<
     //< Caution: **Do not raise it too far.** There are 128 LEDs, so it drains the battery by itself
     //< (and the driving decision watches the battery).
 
 enum Look //< the expressions it can show
-    //<
     //< **Refer to them by name, not by number.** Once more are added, numbers say nothing.
     off
     rotate
@@ -32,7 +29,6 @@ enum Look //< the expressions it can show
 
 impl Look
     fn set(l: Self) //< changes the expression
-        //<
         //< **Reset the frame to the first.** Otherwise it starts from a frame partway through the
         //< previous expression.
         look = l
@@ -67,7 +63,6 @@ impl Look
 
     priv fn row_of(l: Self, f: Sz, y: Sz): U16 //<
         //< builds frame f's left and right eyes into one row
-        //<
         //< **The left eye is the low byte and the right the high byte.**
         switch l
         case .rotate
@@ -82,7 +77,6 @@ impl Look
         return 0U16
 
 priv const ROTATE_FRAMES: Sz = 8 //< the number of frames, and one frame's length in ms
-    //<
     //< **They differ per expression.** Make them all the same and the blink is too fast, or the
     //< eyes' rotation looks stopped.
 priv const BLINK_FRAMES: Sz = 5
@@ -139,7 +133,6 @@ priv const CRY_LR: U64[5] = ::{ //< a cry (a tear falling from downcast eyes)
 
 priv const ADDR_FIRST: U32 = 0x70 //<
     //< the HT16K33's address is one of 0x70 to 0x77, set by strapping
-    //<
     //< **Do not hard-code the default** (see `matrix.DEFAULT_ADDR`). The scan is only eight writes,
     //< so once at start-up is enough.
 priv const ADDR_LAST: U32 = 0x77
@@ -151,7 +144,6 @@ priv $frame: Sz = 0
 priv $next_us: U32 = 0
 
 fn init(): Void!mmio.Driver_error //< starts I2C and the matrix
-    //<
     //< `not_found` where no matrix answers on the bus.
     //< Caution: **The caller must keep working on a failure too** (only the face is missing).
     i2c.init(board.I2C_SDA, board.I2C_SCL)!
@@ -169,13 +161,11 @@ fn available(): Bool
     return ready
 
 fn address(): U32 //< the address that was found
-    //<
     //< Caution: **Put it in the report.** 0 means nothing answered (not plugged in, or the wrong
     //< pins).
     return addr
 
 fn next() //< switches to the next expression
-    //<
     //< Caution: **Step through the expressions by name** (stepping by number breaks when one is
     //< added).
     switch look
@@ -191,14 +181,12 @@ fn next() //< switches to the next expression
         Look.off.set()
 
 priv fn raw_row(frame_bits: U64, y: Sz): U16 //< takes row y's raw bits out of one frame (a U64)
-    //<
     //< The top byte is row 0.
     shift: = U64::(56 - y * 8)
     return U16::((frame_bits >> shift) & 0xFFU64)
 
 priv fn turned_row(frame_bits: U64, y: Sz): U16 //<
     //< Row y of the picture turned 90 degrees anticlockwise
-    //<
     //< **Do not store the picture rotated.** The rotation is the board's concern, so the picture is
     //< stored upright and rotated here just before it is shown. Stored rotated, whoever adds a
     //< frame hits the same trap every time. What lands at (row y, column x) after rotating is (row
@@ -210,7 +198,6 @@ priv fn turned_row(frame_bits: U64, y: Sz): U16 //<
     return v
 
 fn show() //< keeps the face updated
-    //<
     //< **It may be called every loop** — before the interval has passed it sends nothing.
     //< Caution: **Also send the blank state once.** Otherwise the previous expression stays in the
     //< display RAM.

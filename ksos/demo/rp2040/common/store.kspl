@@ -1,5 +1,4 @@
 //< Keeps what the car must remember across a power cut
-//<
 //< The policy that was handed out, and the weights it learned itself — into and out of the record
 //< on the board (ksdb).
 //< **The record kinds' numbers are set here and nowhere else.** Assigned in two places, one number
@@ -13,7 +12,6 @@ import "ksos/demo/rp2040/common/console" as con
 import "ksos/demo/rp2040/common/records"
 
 const KIND_POLICY: U16 = 1 //< the record kinds
-    //<
     //< 0 is the marker, so it is not used (`records.KIND_MARKER`).
 const KIND_SAMPLE: U16 = 2
 const KIND_MODEL: U16 = 3
@@ -21,13 +19,11 @@ const KIND_MODEL: U16 = 3
 $saves: U32 = 0
 
 fn models_saved(): U32 //< how many times the learned weights were saved in the record
-    //<
     //< **While it is 0, the next start-up does not resume where this one left off.**
     return saves
 
 fn wipe(marker: U8[], blob: U8[]): Bool //<
     //< Erases the record, and writes back only the marker and the policy
-    //<
     //< **true if they were written back.**
     //< Caution: **Do not erase the policy too.** It is in the same region. A naive erase leaves
     //< the car unable to move at all on the next start-up with no PC there. **The observations and
@@ -47,7 +43,6 @@ fn wipe(marker: U8[], blob: U8[]): Bool //<
     return true
 
 fn save_policy(ln: con.Line$@, blob: U8[]) //< saves the downloaded policy
-    //<
     //< **If it is the same one, it is not rewritten.** The record only appends, so a rewrite uses
     //< up that much room. One file is 2KB, so writing every time fills it in a few dozen
     //< start-ups.
@@ -69,7 +64,6 @@ fn save_policy(ln: con.Line$@, blob: U8[]) //< saves the downloaded policy
 
 fn stored_policy(buf: U8$[]): U8[]!ksdblog.Ksdb_error //<
     //< Reads the policy saved in the record into `buf`, and returns its body
-    //<
     //< `not_found` where none is stored or the record is not open. **`too_small` where the one
     //< stored is larger than `buf`.** That is not "none": it was saved, and cannot be read here.
     //< **The result is a slice pointing into `buf`.** The policy's weights point straight into it
@@ -80,7 +74,6 @@ fn stored_policy(buf: U8$[]): U8[]!ksdblog.Ksdb_error //<
     return U8[]::{ .ptr = buf.ptr, .len = n }
 
 fn save_model(buf: U8$[]) //< saves the learned weights in the record
-    //<
     //< Caution: **It returns silently even when it fails.** It is called again and again inside the
     //< loop, so messages here would flood the lines while it runs.
     if !records.ok() || !cmodel.save(buf)
@@ -90,7 +83,6 @@ fn save_model(buf: U8$[]) //< saves the learned weights in the record
     saves += 1
 
 fn load_model(buf: U8$[]): Bool //< reads the weights the previous start-up saved
-    //<
     //< **true if they were read.**
     //< **They can be rejected** (after the scale or the net's shape changes). Then it runs with the
     //< initial values and learns again.

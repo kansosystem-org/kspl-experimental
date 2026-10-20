@@ -1,5 +1,4 @@
 //< How one run (`Inline`) is stored
-//<
 //< The text, what applies to that text (the style, the link, the note, the annotation, what it
 //< refers to) and a cache of measuring results.
 //< **Walking the tree does not belong here**; it is [`doc.kspl`](doc.kspl)'s job. How one text
@@ -14,7 +13,6 @@ import "std/mem" { Arena }
 import "std/str" // provides `U8[].equals`
 
 struct Fit_at //< one pass's result for where the text wraps
-    //<
     //< **This is not part of the document** (it is rebuilt at every layout, as `Inline.shown` is).
     //< The text laid from `start` runs to `end`, with width `wide`. `whole` is the width from
     //< `start` to the end and **does not depend on the space** (unwrapped text reads it too).
@@ -26,35 +24,29 @@ struct Fit_at //< one pass's result for where the text wraps
 struct Inline
     priv buf: List<|U8|>$@ //<
         //< The text, as a run of UTF-8 bytes
-        //<
         //< Caution: **Do not let a line break in** (splitting lines is the layout's job). **Do not
         //< read it directly** (use `text()`); it moves on editing.
     style: U8[] //<
         //< The style's name. **Empty keeps the parent block's style** (it cancels nothing).
     priv shown: List<|U8|>$@ //<
         //< The text of the computed value
-        //<
         //< Caution: **Do not overwrite the typed text**, or undo gets mixed in when a formula cell
         //< is typed over. The arena is reused. **Two functions set it**: `recalc` in
         //< `expr/calc.kspl` and `number_refs` in `model/number.kspl`.
     priv number: F64? //<
         //< The number of the computed value
-        //<
         //< Caution: **Set it together with the text** (`show_value`); a chart reads this one.
     priv typing: Bool //<
         //< Whether it is the formula being typed in, which the screen lays out as typed (`face`)
-        //<
         //< Caution: **Keep the value beside it** (`shown`): export, sorting and printing read the
         //< value while the formula is being typed. It is set with the value (`show_value`).
     href: U8[] //<
         //< The link
-        //<
         //< **Empty means ordinary text.**
         //< **It holds no look** (that is the style's job; `link_span` in `write/shape.kspl`).
         //< **Typing does not remove it**, unlike a formula.
     note: U8[] //<
         //< The note's text
-        //<
         //< **Empty means no note.** **It holds no number** (numbers are counted at layout time, so
         //< adding a note makes nothing stale). The mark appears after this run's text.
     // The annotation's text, and who wrote it. **An empty text means no annotation.** **It does not
@@ -64,13 +56,11 @@ struct Inline
     remark_by: U8[]
     refers: U8[] //<
         //< The name of what the body refers to (`Block.name`)
-        //<
         //< **Empty means ordinary text.** **It holds no number**: the visible "Figure 1" is
         //< computed at layout time into `shown`. **Like a formula, this run is neither split nor
         //< merged.**
     priv fit_font: Font //<
         //< The cache of measuring results
-        //<
         //< **This is not part of the document** (as with `shown`).
         //< Caution: **Throw it away when the visible text changes**; only the three methods below
         //< change it (`insert` / `remove` / `show_value`). Where one paragraph is one run, every
@@ -80,7 +70,6 @@ struct Inline
 
 impl Inline
     fn text(r: Self@): U8[] //< the current text
-        //<
         //< Caution: **Do not keep it.** It moves on the next edit.
         return U8[]::{ .ptr = r.buf.ptr, .len = r.buf.len }
 
@@ -88,13 +77,11 @@ impl Inline
         return r.shown != null && r.shown.len > 0
 
     fn figure(r: Self@): F64? //< the number of the computed value
-        //<
         //< **Like the text, it is not part of the document** (none where it is not a number). A
         //< chart reads this.
         return r.number
 
     fn showing(r: Self@): U8[] //< the text the document reads as
-        //<
         //< **Where a value was computed, it is that**; otherwise the typed text.
         //< Caution: **Export, sorting and printing must all read this one** (the typed text may be
         //< a formula). **Editing does not**: typing positions and search work on the typed text.
@@ -106,14 +93,12 @@ impl Inline
         return r.shows_value() && !r.typing
 
     fn face(r: Self@): U8[] //< the text the screen lays out
-        //<
         //< `showing`, but **the formula being typed in is laid out as typed** (the user could not
         //< edit it without seeing it).
         return r.showing() if r.faces_value() else r.text()
 
     priv fn same_value(r: Self@, s: U8[], num: F64?, typing: Bool): Bool //<
         //< Whether it is the same value as now
-        //<
         //< Caution: **Compare the text, the number and `typing`** (the same formatting may hide a
         //< changed number). A NaN counts as "different" (the safe side).
         $now: U8[] = ""
@@ -133,7 +118,6 @@ impl Inline
 
     fn show_value(r: Self$@, s: U8[], num: F64?, typing: Bool, arena: Arena$@) //<
         //< Sets the computed value (the text and the number), and whether it is being typed in
-        //<
         //< The arena is reused.
         //< Caution: **Do not set the text and the number separately**, or they end up disagreeing
         //< (the chart alone shows the old value).
@@ -155,21 +139,18 @@ impl Inline
             r.shown.push((s.ptr + i)$)
 
     fn is_formula(r: Self@): Bool //< whether the typed text is a formula
-        //<
         //< **This is the one place that decides it** (a text starting with `=`). A formula run is
         //< neither split nor merged.
         t: = r.text()
         return t.len > 0 && t[0] == '='
 
     fn forget(r: Self$@) //< throws the cache away
-        //<
         //< **Every change to the visible text must come through here** (`fit_font`).
         if r.fits != null
             r.fits.len = 0
 
     priv fn same_ask(r: Self@, font: Font, avail: F32): Bool //<
         //< Whether it is the same question as the cached pair
-        //<
         //< Caution: **Compare the typeface name by its address** (do not read the text, which may
         //< be freed).
         return r.fit_avail == avail && r.fit_font.family.ptr == font.family.ptr &&
@@ -178,7 +159,6 @@ impl Inline
 
     fn known_fit(r: Self@, font: Font, avail: F32, start: Sz): Fit_at? //<
         //< The cached result
-        //<
         //< Caution: **Return it only for the same "typeface and space" pair.**
         if r.fits == null || !r.same_ask(font, avail)
             return .none
@@ -190,7 +170,6 @@ impl Inline
 
     fn known_whole(r: Self@, font: Font, start: Sz): F32? //<
         //< The cached "width from start to the end"
-        //<
         //< **The space is not checked** (that value does not depend on the space).
         if r.fits == null || r.fit_font.family.ptr != font.family.ptr ||
             r.fit_font.family.len != font.family.len || r.fit_font.size_px != font.size_px ||
@@ -204,7 +183,6 @@ impl Inline
 
     fn remember_fit(r: Self$@, font: Font, avail: F32, got: Fit_at) //<
         //< remembers a measured result
-        //<
         //< Caution: **Clear it first when the pair changes.** **The arena is the run's own**, so
         //< none is taken as an argument. Given the layout arena, the next layout would point at
         //< freed memory, **and in wasm loop forever**.
@@ -217,7 +195,6 @@ impl Inline
         r.fits.push(got)
 
     fn insert(r: Self$@, at: Sz, s: U8[]) //< inserts s at byte at
-        //<
         //< Caution: **at must be a character boundary.**
         if s.len <= 0 || at < 0 || at > r.buf.len
             return
@@ -234,7 +211,6 @@ impl Inline
             r.buf.set(at + k, (s.ptr + k)$)
 
     fn remove(r: Self$@, at: Sz, len: Sz) //< deletes len bytes from byte at
-        //<
         //< Caution: **Both must be character boundaries.**
         if len <= 0 || at < 0 || at + len > r.buf.len
             return
@@ -252,7 +228,6 @@ fn new_inline(style: U8[], arena: Arena$@): Inline$@ //<
     return arena.create(n)
 
 fn safe_href(href: U8[]): Bool //< whether it is a link that may be opened
-    //<
     //< Caution: **A link is text the document supplies; check its scheme before opening it.** A
     //< `javascript:` (or `data:`) link runs in the clicker's page. **Drop leading spaces and
     //< control characters first** (a browser reads ` javascript:`). **Ignore case**
@@ -278,7 +253,6 @@ fn safe_href(href: U8[]): Bool //< whether it is a link that may be opened
 priv const ALLOWED_SCHEMES: U8[][3] = ::{ "http", "https", "mailto" } //< the schemes allowed
 
 priv fn scheme_end(s: U8[]): Sz //< where the scheme's name ends (the `:`'s position)
-    //<
     //< **-1 where there is none.**
     //< **Where a `/`, a `!` or a `#` comes first, it is not a scheme** (`a/b:c` is a path).
     //< **Whatever stands before the `:` counts, whatever characters it holds**, so the list of

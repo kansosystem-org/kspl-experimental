@@ -1,5 +1,4 @@
 //< Filtering and transforming a `List<|T|>` without building intermediate lists
-//<
 //< **`where` and `select` are lazy.** They touch no element until `for x in` (it declares `Iter`),
 //< `to_list` or `count` drives the chain. **A chain can be driven any number of times**, and must
 //< be built and consumed in the same frame. `std/docs/DESIGN-core.md` explains four choices: why
@@ -18,7 +17,6 @@ import "std/mem" { Arena }
 priv const SORT_RUN: Sz = 16 //< the run length `order_by` sorts by insertion before merging
 
 pub struct List_seq<|T|> //< the start of a chain; reads a `List` and advances a position
-    //<
     //< **A copy copies the position too**, and `for` and `to_list` take the receiver by value: that
     //< is what makes a chain drivable any number of times.
     priv xs: List<|T|>@
@@ -107,7 +105,6 @@ impl<|S: Iter<|T|>, T, U|> Conversion<|S, T, U|>
 // force a `$` on the caller's binding, which would be a lie in the source.
 impl<|T|> List<|T|>
     pub fn where( //< a chain of the elements that meet the condition
-        //<
         //< **It touches no element here.**
         r: Self@,
         pred: Callable1<|T@, Bool|>, //< the condition an element must meet to pass
@@ -116,7 +113,6 @@ impl<|T|> List<|T|>
             .pred = pred }
 
     pub fn select<|U|>( //< a chain of each element passed through a function (`map` elsewhere)
-        //<
         //< Caution: **Do not turn it into a free function.** `U` is decided at the call site, not
         //< by the receiver ("A name on the impl that the receiver leaves open" in
         //< `../docs/DESIGN-programming-language.md`).
@@ -128,7 +124,6 @@ impl<|T|> List<|T|>
 
     priv fn copy_range(r: Self@, from: Sz, to: Sz, arena: Arena$@): List<|T|> //<
         //< A new list copying [from, to), with room for every element before copying
-        //<
         //< Caution: The caller clamps from/to to len before passing them.
         $out: =
             (List<|T|>.new_with_cap(to - from, arena) if to > from else List<|T|>.new(arena))
@@ -160,7 +155,6 @@ impl<|T|> List<|T|>
         return false
 
     pub fn all(r: Self@, pred: Callable1<|T@, Bool|>): Bool //< whether every element meets it
-        //<
         //< An empty list gives true.
         for i in Range.asc(r.len)
             if !pred.call(r.ptr + i)
@@ -173,7 +167,6 @@ impl<|T|> List<|T|>
         return .some((r.ptr + 0)$)
 
     pub fn distinct( //< a new list keeping the first of each group of equal elements, in order
-        //<
         //< O(n^2); for large data with a hashable type, use a `Map`.
         r: Self@,
         eq: Callable2<|T@, T@, Bool|>, //< what counts as the same element
@@ -191,7 +184,6 @@ impl<|T|> List<|T|>
         return out
 
     pub fn order_by( //< a new list in ascending order; equal elements keep their order
-        //<
         //< A merge sort: stable, with O(n log n) comparisons. Short runs (16) are first sorted by
         //< insertion, as Timsort does with its short runs.
         r: Self@,

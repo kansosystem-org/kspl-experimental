@@ -43,7 +43,6 @@ fn to_blob(data: U8[], arena: Arena$@): pilot.Blob?
     return .some(b)
 
 priv struct Car_link //< a stand-in that talks to the server the way the car does
-    //<
     //< It reuses one connection and keeps sending observations. **The car also reuses one with
     //< keep-alive** (a 3-way handshake per observation does not fit the control period). Without
     //< the same pattern here, that path is never tested.
@@ -68,16 +67,13 @@ impl Car_link
         return r.conn.next(false, client.DEFAULT_TIMEOUT_MS, arena)
 
 const DIST_STEPS: Sz = 121 //< how many distance steps
-    //<
     //< From 0mm to 3000mm in 25mm steps.
 const DIST_STEP_MM: I64 = 25I64
 const LINE_COUNT: Sz = 8
 priv const NEAR_MM: I64 = 150I64 //< the point-blank distance (mm)
-    //<
     //< Nearer than this it must not move forward.
 const TIGHT_MARGIN: F64 = 0.0001 //< the logit gap counted as a close call
 priv const MAX_TIGHT: Sz = 5 //< how many points may be dropped from the verdict as a close call
-    //<
     //< More than this is itself a fault.
 priv const MIN_AGREE_PCT: Sz = 95 //< the share of manoeuvres that should match the rule (per cent)
 
@@ -132,8 +128,7 @@ fn car_cases(port: I32, blob: pilot.Blob?, arena: Arena$@): Void!client.Http_end
     for bad in BAD_CAR
         r: = client.post_json(port, "/api/car", "", bad, client.DEFAULT_TIMEOUT_MS, arena)!
         nm52: = arena.text().s("a broken observation is 400: ").s(client.short(bad)).take()
-        d53: = arena.text().s("\{r.status\}").take()
-        verdict.check(nm52, r.status == 400, d53)
+        client.expect_status(nm52, r, 400, arena)
     client.check_405("GET /api/car is 405", client.get(port, "/api/car", "", arena)!, "POST", arena)
 
     status: = client.doc_of(client.get(port, "/api/status", "", arena)!, arena)
@@ -164,7 +159,6 @@ priv fn blob_params(blob: pilot.Blob?): Sz
 
 priv fn sweep(link: Car_link$@, blob: pilot.Blob?, arena: Arena$@): Sweep!client.Http_end //<
     //< Sweeps every distance and line, checking the rule match and the **safety properties**
-    //<
     //< **The match rate alone is not enough.** "Never move towards something too near" must
     //< hold even after a change that lowers the match rate (`bad` is the real target). The same
     //< sweep checks that **the downloaded policy gives the same answer** (with no extra

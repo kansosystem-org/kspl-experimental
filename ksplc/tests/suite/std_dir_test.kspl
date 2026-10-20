@@ -1,6 +1,5 @@
 #!/usr/bin/env -S ksplc run
 //< The test of where packages are found (`import`'s resolution)
-//<
 //< The feature's purpose is that std/ need not sit in the current directory. So the test runs from
 //< **a directory where std/ is not visible** (at the repository root the default "std" hits).
 import "ksplc/tests/support/harness"
@@ -24,14 +23,12 @@ fn main(): I32
 
 priv const ENV_MARK: U8[] = "env_std_marker" //<
     //< The value used in the precedence check is **a relative path**
-    //<
     //< MSYS2 converts a POSIX-looking absolute path (`/env/std`) into a Windows path for a native
     //< binary; a relative mark escapes that.
 priv const CLI_MARK: U8[] = "cli_std_marker"
 
 priv fn ksplc_in(args: U8[][], cwd: U8[], env_std: U8[], arena: Arena$@): verdict.Run_out //<
     //< It runs ksplc once in cwd
-    //<
     //< **No `--std-dir=` in front** (so not `harness.ksplc`): this tests the resolution itself.
     //< Caution: **Set KSPLC_STD_DIR again every time.** Left in the caller's environment, the
     //< default case "happens to resolve and passes".
@@ -39,7 +36,6 @@ priv fn ksplc_in(args: U8[][], cwd: U8[], env_std: U8[], arena: Arena$@): verdic
 
 priv fn case_default(arena: Arena$@) //<
     //< It checks that where std/ is not visible, the build fails and shows the path it tried
-    //<
     //< It fails unless the location is given. **The diagnostic shows the path it really tried to
     //< open**: a logical name does not say where it looked.
     name: = "the default: in a place with no std/ it fails and shows the path it hunted"
@@ -86,7 +82,6 @@ priv fn case_flag_and_env(arena: Arena$@)
     verdict.check("it can be resolved by KSPLC_STD_DIR", e.exited_with(0), e.out)
 
 priv fn case_runs(arena: Arena$@) //< whether only the path is right and the content is broken
-    //<
     //< It links the generated C and runs it.
     name: = "the artefact made with --std-dir= really works"
     std: = harness.std_dir()
@@ -147,7 +142,6 @@ fn main(): I32
 
 priv fn lib_case_dir(name: U8[], slot: U8[]): U8[] //<
     //< It makes the user and the given package directory side by side in one working directory
-    //<
     //< Empty on failure, as with `case_dir`.
     //< Caution: **Put the user in a folder below.** At the working directory's root it resolves
     //< without the given directory (the same gap as the default `std`).
@@ -176,7 +170,6 @@ priv fn case_pkg_src_dir(arena: Arena$@)
     verdict.check("it can be found through KSPLC_PKG_SRC_DIR too", e.exited_with(0), e.out)
 
 priv fn case_lib_here_wins(arena: Arena$@) //< a local copy wins
-    //<
     //< Caution: It checks that **it switches over even with the old record left**. **Matching the
     //< content alone would let it pass**: the configured file the record names stays, with the same
     //< content (`shadowed_now` in `ksplc/tools/run.kspl`).
@@ -205,7 +198,6 @@ priv fn case_lib_here_wins(arena: Arena$@) //< a local copy wins
 
 priv fn case_space_in_path(arena: Arena$@) //<
     //< It checks the resolution works with a path containing a space
-    //<
     //< This shape breaks under a real Windows configuration ("...\OneDrive - かんそシステム\...").
     //< The compiler handles it while argv arrives as one element (the argument check below covers
     //< missing quotes).
@@ -247,7 +239,6 @@ fn main(): I32
 
 priv fn case_dot_folder_in_path(arena: Arena$@) //<
     //< It checks a program under a folder whose name starts with a dot compiles and links
-    //<
     //< A type's C name is built where it is declared and again where it is used. A folder with
     //< a leading dot (`~/.local/...`, a worktree under a dot folder) must come out the same on both
     //< sides. Otherwise the C declares one name and uses another (the reason is at
@@ -266,7 +257,6 @@ priv fn case_dot_folder_in_path(arena: Arena$@) //<
 
 priv fn case_drive_named_folder(arena: Arena$@) //<
     //< It checks that on POSIX a folder named like a drive is a folder, not a root
-    //<
     //< Taken for a root, `C:/../a.kspl` keeps its `C:/` and is read as `C:/a.kspl`, a file that
     //< does not exist (`fold_dots` in `ksplc/base/locate.kspl` takes the root from std/sys).
     name: = "on POSIX a folder named C: is a folder: C:/../a.kspl is a.kspl"
@@ -283,9 +273,9 @@ priv fn case_drive_named_folder(arena: Arena$@) //<
     flag: = arena.text().s("--std-dir=\{harness.std_dir()\}").take()
     plain: = ksplc_in(U8[][]::{ flag, "a.kspl", "plain.c" }, dir, "", arena)
     drive: = ksplc_in(U8[][]::{ flag, "C:/../a.kspl", "drive.c" }, dir, "", arena)
-    a: = io.read_file(fs.join(dir, "plain.c", arena)) catch
+    a: = io.read_file(fs.join(dir, "plain.c", arena), null) catch
         fallback ""
-    b: = io.read_file(fs.join(dir, "drive.c", arena)) catch
+    b: = io.read_file(fs.join(dir, "drive.c", arena), null) catch
         fallback ""
     verdict.check(name,
         plain.exited_with(0) && drive.exited_with(0) && a.len > 0 && a.equals(b),
@@ -338,14 +328,12 @@ priv const CLOSED_REACHED: U8[] = """pub fn f(): I32
 """
 
 priv fn closed_user(imported: U8[], arena: Arena$@): U8[] //< a program importing `imported`
-    //<
     //< The alias is spelt out, so any path ending reads the same.
     return arena.text().s("import \"\{imported\}\" as m\n\nfn main(): I32\n")
         .s("    return m.f() - 1\n\n").take()
 
 priv fn case_std_closed(arena: Arena$@) //<
     //< It checks each import out of the standard library is rejected at the line that writes it
-    //<
     //< A file of the standard library still reaches its neighbour by a bare name.
     name: = "a file of the standard library importing a package is refused at the import"
     dir: =
@@ -399,12 +387,11 @@ priv fn case_std_closed(arena: Arena$@) //<
 
 priv fn placed_compiler(dir: U8[], rel: U8[], arena: Arena$@): U8[] //<
     //< A copy of the compiler under inspection in the folder `rel` under `dir`; empty on failure
-    //<
     //< Caution: **Copy it rather than link it**, or the case tests only how a link is followed.
     exe: = fs.join(fs.join(dir, rel, arena), sys.get_file_name(harness.ksplc_exe()), arena)
     fs.mkdir_all(sys.get_dir_name(exe)) catch
         return ""
-    body: = io.read_file(harness.ksplc_exe()) catch
+    body: = io.read_file(harness.ksplc_exe(), null) catch
         return ""
     defer dealloc(Void$@::body.ptr)
     io.write_file(exe, body) catch
@@ -417,7 +404,6 @@ priv fn placed_compiler(dir: U8[], rel: U8[], arena: Arena$@): U8[] //<
 
 priv fn names_folder(r: verdict.Run_out, dir: U8[], rel: U8[], arena: Arena$@): Bool //<
     //< Whether `info std-dir` answered the folder `rel` under the case's folder `dir`
-    //<
     //< Caution: **Match the end, from the case's own folder down.** The executable's path comes
     //< with its links resolved, so a scratch place reached through one (macOS's `/tmp`) reads
     //< otherwise.
@@ -426,7 +412,6 @@ priv fn names_folder(r: verdict.Run_out, dir: U8[], rel: U8[], arena: Arena$@): 
 
 priv fn case_std_beside(arena: Arena$@) //<
     //< A compiler with `std/` beside it, as the release zip unpacks, takes that one
-    //<
     //< Reached through a link it still does, and the variable and the option still beat it.
     name: = "a compiler with std/ beside it finds it from another folder, with nothing set"
     dir: = case_dir(name, "beside", U8[][]::{ "elsewhere/a.kspl" }, U8[][]::{ SRC })
@@ -467,7 +452,6 @@ priv fn case_std_beside(arena: Arena$@) //<
 
 priv fn case_std_under_prefix(arena: Arena$@) //<
     //< A compiler in `<prefix>/bin` takes `<prefix>/lib/kspl/std`, as `make install` lays them out
-    //<
     //< A `std/` beside it comes first.
     name: = "a compiler in <prefix>/bin finds <prefix>/lib/kspl/std, with nothing set"
     dir: = case_dir(name, "prefix", U8[][]::{ "elsewhere/a.kspl" }, U8[][]::{ SRC })
@@ -496,7 +480,6 @@ priv fn case_std_under_prefix(arena: Arena$@) //<
 
 priv fn case_std_beside_none(arena: Arena$@) //<
     //< Where no standard library stands beside it, the current folder's `std` is the answer
-    //<
     //< **A folder named `std` that holds no standard library does not count** (`std_landmark` in
     //< `ksplc/base/locate.kspl`), in either place.
     name: = "with no standard library beside the compiler, the current folder's std is taken"
@@ -517,7 +500,6 @@ priv fn case_std_beside_none(arena: Arena$@) //<
 priv fn cli_case(name: U8[], args: U8[][], want_ok: Bool, expect: U8[], equals: U8[],
     env_std: U8[], arena: Arena$@) //<
         //< It runs one argument-reading case in the suite's scratch directory
-        //<
         //< An argument mix-up must not pass silently: a path broken by word splitting becomes file
         //< names, failing without naming the cause. want_ok demands exit code 0, expect is what the
         //< output must contain, and equals is the whole output, trimmed (each skipped if empty).

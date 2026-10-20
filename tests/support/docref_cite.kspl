@@ -1,5 +1,4 @@
 //< Reads **what a citation carries** besides its path (not a suite)
-//<
 //< It carries one of two things: a section number (`§8.1.1`) or a heading's name (`"…"`); with
 //< either, **move the target and only the reference goes stale**.
 //< Caution: **Do not forget that there are two word orders.** A name comes before the citation
@@ -23,7 +22,6 @@ import "tests/support/harness_text" as htext
 
 priv const SECTION_WINDOW: Sz = 40 //<
     //< How far after the citation the number may be, in **characters**
-    //<
     //< Not bytes: a character outside ASCII takes several, shrinking a byte window. **The ASCII `.`
     //< is not a stop**; a few references are read across one.
     //< Caution: **Do not simply add the stop.** `e.g. 8.2` also has a `.` and a space. So a rule
@@ -31,7 +29,6 @@ priv const SECTION_WINDOW: Sz = 40 //<
 
 fn read_section_number(text: U8[], i: Sz, arena: Arena$@): U8[] //<
     //< Reads `§?\s*(\d+(\.\d+)*)` from i in text
-    //<
     //< The number read (empty where there is none).
     $j: = i
     if j + 2 <= text.len && text.sub(j, 2).equals("§")
@@ -64,7 +61,6 @@ fn read_section_number(text: U8[], i: Sz, arena: Arena$@): U8[] //<
 
 priv const SEC_JOINERS: U8[][_] = ::{ " in ", " of " } //<
     //< The joiners that tie a section number before a path
-    //<
     //< English often reverses the order: the number first, the path after (`3.2.5 in
     //< `docs/DESIGN-principles.md``). Without reading before the path, an English reference **goes
     //< green on a smaller count** (as with symbols; the caution on `sym_joiners` in
@@ -72,14 +68,12 @@ priv const SEC_JOINERS: U8[][_] = ::{ " in ", " of " } //<
 
 priv const SEC_NOT_PREFIX: U8[][_] = ::{ "Principle", "stage", "Stage" } //<
     //< The words that mark a number before a joiner as not a section number
-    //<
     //< **`Principle N` is not a section number**: another check watches it, and picked here
     //< `Principle 8 in [`DESIGN-principles.md`]` becomes "there is no §8 in DESIGN-principles.md".
     //< **Nor is `stage N`**: it names a plan's or a guide's step, whose heading says `Stage N`.
 
 priv fn read_section_before(text: U8[], at: Sz, arena: Arena$@): U8[] //<
     //< Returns the section number an English joiner ties before `at`, or empty
-    //<
     //< **Pick up only the form where the joiner comes right after the number.** A wide window reads
     //< a digit that merely comes before the path (`RP2040`, `IPv4`, `13 times`) as a section
     //< number.
@@ -115,7 +109,6 @@ priv fn read_section_before(text: U8[], at: Sz, arena: Arena$@): U8[] //<
     return ""
 
 priv fn skip_link_target(text: U8[], at: Sz): Sz //< the position past a whole `](…)` run
-    //<
     //< It stays at `at` where there is nothing to skip.
     //< Caution: **Skip the form holding one path twice**: `[`X.md`](X.md)` holds it as text and
     //< target, so **one reference looks like two**. The backtick before it is included in what is
@@ -132,7 +125,6 @@ priv fn skip_link_target(text: U8[], at: Sz): Sz //< the position past a whole `
 
 fn is_marked(text: U8[], h: Hit, arena: Arena$@): Bool //<
     //< Whether the citation's number is written as one: `§N` after it, or `N in` before it
-    //<
     //< A plain number read after the name may be prose (`its stages count from 1`), so only these
     //< two forms say a document's sections are numbered.
     if read_section_before(text, h.at, arena).len > 0
@@ -196,7 +188,6 @@ fn find_sections(text: U8[], dirs: U8[][], bares: U8[][], arena: Arena$@): List<
 // ==========================================
 
 priv fn quote_body_ok(body: U8[]): Bool //< whether a quotation's body passes as a name
-    //<
     //< Caution: **Do not accept a body starting with punctuation.** A source string's closing `"`
     //< read as an opening makes **everything up to the next argument look like a name**. A backtick
     //< or `[` can start one. **Do not accept an over-long body either**: that is a quoted sentence.
@@ -212,7 +203,6 @@ priv fn quote_body_ok(body: U8[]): Bool //< whether a quotation's body passes as
 
 priv fn skip_wrap(text: U8[], at: Sz): Sz //<
     //< The position past `at`'s newline and the following line's indent and comment marker
-    //<
     //< **Cross the whole comment marker**, or it lands inside the folded name. **It is not always
     //< two characters**: `///` and `//<` are comments too.
     $j: = at + 1
@@ -231,7 +221,6 @@ priv fn skip_wrap(text: U8[], at: Sz): Sz //<
 
 priv fn skip_wrap_back(text: U8[], at: Sz): Sz //<
     //< Where a wrap is in front of `at`, the position of the previous line's newline
-    //<
     //< Where it is not a wrap, `at` as it is. **The backward reader needs it too**: English's
     //< "name in `path`" often wraps **between the two**, or it passes unread.
     $j: = at
@@ -250,7 +239,6 @@ priv fn skip_wrap_back(text: U8[], at: Sz): Sz //<
     return j - 1 if j > 0 && text[j - 1] == '\n' else at
 
 priv fn crossed_lines(seen: U8[]): Sz //< how many lines were crossed
-    //<
     //< Caution: **Use it in the backward reader.** A search back for an opening has **nothing to
     //< stop it**. It would run to the start of the file.
     $n: Sz = 0
@@ -261,7 +249,6 @@ priv fn crossed_lines(seen: U8[]): Sz //< how many lines were crossed
 
 priv fn fold_one_wrap(body: U8[], arena: Arena$@): U8[] //<
     //< Folds a body running across lines into one line
-    //<
     //< Caution: **If the newline rejection is dropped from `quote_body_ok`, restore it here.**
     //< **Drop the comment marker at the start of the continuation line too**, or it lands inside
     //< the name as **a name in no document**.
@@ -295,7 +282,6 @@ priv fn fold_one_wrap(body: U8[], arena: Arena$@): U8[] //<
 
 priv fn opens_at_wrap(body: U8[]): Bool //<
     //< Whether the body starts at the line break — only blanks come before the wrap
-    //<
     //< **Then the quote found closes something else.** A wrapped name starts on the citation's
     //< line. So a body that starts at the wrap means that a literal's **closing** quote was taken.
     //< The code was then read as the name.
@@ -307,7 +293,6 @@ priv fn opens_at_wrap(body: U8[]): Bool //<
     return false
 
 priv fn read_quoted(text: U8[], at: Sz, arena: Arena$@): U8[] //< reads a `"…"` from `at`
-    //<
     //< The name read (empty where there is none).
     if at >= text.len || text[at] != '"'
         return ""
@@ -337,7 +322,6 @@ priv fn read_quoted(text: U8[], at: Sz, arena: Arena$@): U8[] //< reads a `"…"
 
 priv fn joiner_before(text: U8[], k: Sz, j: U8[]): Sz //<
     //< Whether the joiner `j` comes before the citation
-    //<
     //< Where it does, the position the name ends at; -1 where it does not. **A wrap stands in for
     //< the joiner's trailing space** (`… in` at a line's end), so a crossed wrap matches one space
     //< shorter.
@@ -353,7 +337,6 @@ priv fn joiner_before(text: U8[], k: Sz, j: U8[]): Sz //<
 
 priv fn read_quoted_before(text: U8[], at: Sz, arena: Arena$@): U8[] //<
     //< Reads the name placed before the citation (the `"name" in `path`` order)
-    //<
     //< The name read (empty where there is none).
     //< Caution: **Do not read only after the citation**: this order is common, and a smaller count
     //< cannot be told from green (the caution on `SEC_JOINERS` above).
@@ -384,7 +367,6 @@ priv const QUOTE_JOINERS: U8[][_] = ::{ " ", "`", "'", "s", ",", ")", "]" }
 
 priv fn skip_quote_joiners(text: U8[], at: Sz): Sz //<
     //< Whether the name is reached from `at` crossing only joining characters
-    //<
     //< The position reached (0 where it is not).
     $j: = at
     $steps: Sz = 0
@@ -413,7 +395,6 @@ priv fn skip_quote_joiners(text: U8[], at: Sz): Sz //<
 
 fn step_dir(text: U8[], at: Sz, arena: Arena$@): U8[] //<
     //< The `working-directory:` of the workflow step holding the place; empty where it names none
-    //<
     //< **A step's command runs from there**, so its paths are read from there. The step is the `- `
     //< item found by climbing out of the keys that hold the position. **Climb only through keys**:
     //< a line under a job's own key belongs to no step.
@@ -478,7 +459,6 @@ priv fn unquoted(value: U8[]): U8[] //< a YAML scalar with the quotes around it 
 
 fn find_doc_quotes(text: U8[], dirs: U8[][], bares: U8[][], arena: Arena$@): List<|Hit|> //<
     //< Finds each quoted name cited together with the path of a document or a source
-    //<
     //< Caution: **A source file must be a target too, not only documents.** A check is cited by its
     //< own verdict line (`` `run_test.kspl`'s "That cc is not started many times…" ``); keyed on
     //< `.md` alone **none is read**, and a rename leaves it silently dangling. The narrow joiners

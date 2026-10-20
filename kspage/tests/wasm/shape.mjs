@@ -1,4 +1,4 @@
-import { check, near, material, para, group, grid } from "./shell.mjs";
+import { check, near, material, para, group, grid, shared } from "./shell.mjs";
 
 export const subject = "Shapes, columns and charts.";
 
@@ -14,17 +14,15 @@ export const subject = "Shapes, columns and charts.";
 // `chart-` names are shaped as the page shapes them (`port/web/command.js`).
 export const opens = material({
   styles: [
-    { name: "body", space_after: 12.0 },
-    { name: "strong", weight: 700 },
+    shared.body,
+    shared.strong,
     { name: "columns", space_before: 12.0, space_after: 12.0, columns: 2, column_gap: 24.0 },
     { name: "column-body", space_after: 8.0 },
-    { name: "table", space_before: 12.0, space_after: 12.0, arrange: "grid" },
-    { name: "cell", pad: 4.0, rule_width: 1.0, rule_color: "#cccccc" },
-    { name: "heading-cell", pad: 4.0, rule_width: 1.0, rule_color: "#cccccc", fill: "#f0f0f0" },
-    { name: "amount", places: 0, grouped: true, prefix: "$", pad: 4.0, rule_width: 1.0,
-      rule_color: "#cccccc" },
-    { name: "slide", space_before: 12.0, space_after: 12.0, width: 620.0, height: 120.0,
-      arrange: "absolute" },
+    shared.table,
+    shared.cell,
+    shared.headingCell,
+    shared.amount,
+    shared.slide,
   ],
   blocks: [
     para("body", "Shapes, columns and charts alike are placed on the same tree."),
@@ -45,7 +43,7 @@ export const opens = material({
 
 export function run(ks) {
   const { w, scratch, read, out, stage, geom, textOf, find, save, load, typed, setTyped,
-    leaveCell, styleNames, paraOf, panelAt, surfaceAt } = ks;
+    leaveCell, styleNames, styleData, setStyleData, panelAt, surfaceAt } = ks;
 
   // Caution: **Take the material's likeness here** (the sections onward put it back from this).
   const wasImage = save();
@@ -63,7 +61,7 @@ export function run(ks) {
   w.kspage_web_layout(300);
   w.kspage_web_click(0, 10, 0);
   // **It can be added over a body too** (as in Word and Excel); it is put back after.
-  check(w.kspage_web_insert_shape(stage("figure-arrow"), 4) === 1,
+  check(w.kspage_web_insert_shape(stage("fall_arrow\tfigure-arrow")) === 1,
     "it can be added over a body too");
   check(w.kspage_web_object_count() === 1, "it is counted as that paragraph's content");
   w.kspage_web_undo();
@@ -71,11 +69,11 @@ export function run(ks) {
   w.kspage_web_click(fx + 8, fy + 8, 0);
   w.kspage_web_layout(300);
   const panelsWere = w.kspage_web_panel_count();
-  check(w.kspage_web_insert_shape(stage("figure-arrow"), 4) === 1,
+  check(w.kspage_web_insert_shape(stage("fall_arrow\tfigure-arrow")) === 1,
     "inside a slide it can be added");
   w.kspage_web_layout(300);
   check(w.kspage_web_panel_count() === panelsWere + 1, "the bands grow by one");
-  const arrow = figureOf(4);
+  const arrow = figureOf("fall_arrow");
   check(arrow !== null, "a band of that shape comes out");
   check(arrow[3] > 0, `the band carries the frame's height (${arrow === null ? "" : arrow[3]})`);
   check(arrow[4] > 0, "one line goes in so that it can be seen");
@@ -85,7 +83,7 @@ export function run(ks) {
   check(styleNames().indexOf("figure-arrow") >= 0,
     "one style of the name handed over is made");
   check(save().indexOf("figure-arrow") >= 0, "that name goes into the text saved");
-  check(w.kspage_web_insert_shape(stage("figure-ellipse"), 1) === 1,
+  check(w.kspage_web_insert_shape(stage("ellipse\tfigure-ellipse")) === 1,
     "an ellipse can be added too");
   w.kspage_web_undo();
   w.kspage_web_undo();
@@ -98,17 +96,17 @@ export function run(ks) {
   // template goes unnoticed.
   w.kspage_web_layout(620);
   w.kspage_web_click(0, 10, 0);
-  check(w.kspage_web_insert_surface(stage("slide"), 0) === 1,
+  check(out(w.kspage_web_insert_surface(stage("whole\tslide"))) === "done",
     "one slide to look at can be inserted");
   w.kspage_web_layout(620);
   const [faceX, faceY, faceW, faceH] = surfaceAt(0);
   check(faceW > 0 && faceH > 0,
     `there is one slide (${Math.round(faceW)}x${Math.round(faceH)})`);
   // **It cannot be drawn outside the document**; over a body, a paragraph holds it.
-  check(w.kspage_web_draw_shape(stage("figure-drawn"), 1, 5000, 5000, 40, 20) === 0,
+  check(w.kspage_web_draw_shape(stage("ellipse\tfigure-drawn"), 5000, 5000, 40, 20) === 0,
     "outside the document it cannot be drawn");
   const drawnOk =
-    w.kspage_web_draw_shape(stage("figure-drawn"), 1, faceX + 20, faceY + 20, 70, 40);
+    w.kspage_web_draw_shape(stage("ellipse\tfigure-drawn"), faceX + 20, faceY + 20, 70, 40);
   check(drawnOk === 1, "over a slide it can be drawn");
   w.kspage_web_layout(620);
   // The list. **A slide's children line up as they stand** (the order of overlapping).
@@ -156,13 +154,13 @@ export function run(ks) {
   check(w.kspage_web_drop_picked() === 1, "a shape holding no text goes on the key");
   w.kspage_web_layout(620);
   check(w.kspage_web_object_count() === many - 1, "the list drops by what went");
-  // Adding a shape does not move the row of numbers (**else an older text reads as another**).
-  check(w.kspage_web_insert_shape(stage("figure-diamond"), 10) === 1,
+  // Each shape crosses by its name.
+  check(w.kspage_web_insert_shape(stage("diamond\tfigure-diamond")) === 1,
     "a diamond can be added too");
   check(save().indexOf("diamond") >= 0, "the diamond's name goes into the text saved");
-  check(w.kspage_web_insert_shape(stage("figure-round"), 8) === 1,
+  check(w.kspage_web_insert_shape(stage("round_box\tfigure-round")) === 1,
     "a rounded square can be added too");
-  check(w.kspage_web_insert_shape(stage("figure-triangle"), 9) === 1,
+  check(w.kspage_web_insert_shape(stage("triangle\tfigure-triangle")) === 1,
     "a triangle can be added too");
 
   // --- The frame's eight handles ---
@@ -261,30 +259,24 @@ export function run(ks) {
 
   // --- Columns ---
   // **What carries the count of columns is the style** (no invisible section mark).
-  const paraAt = (i) => {
-    w.kspage_web_style_para(i, scratch);
-    return read(8);
-  };
   const twoAt = styleNames().indexOf("columns");
   check(twoAt >= 0, "the material has a style for columns");
   if (twoAt >= 0) {
-    const was = paraOf(twoAt);
-    check(was[6] === 2, `the count of columns crosses the boundary (${was[6]})`);
-    check(was[7] > 0, `the gap between columns crosses too (${was[7]})`);
+    const was = styleData(twoAt);
+    check(was.columns === 2, `the count of columns crosses the boundary (${was.columns})`);
+    check(was.column_gap > 0, `the gap between columns crosses too (${was.column_gap})`);
     // Swapped, it bites on the placing afresh too. **One column is not laying columns at all.**
-    check(w.kspage_web_set_style_para(twoAt, 0, was[1], was[2], was[3], was[4], 1, 3, 8) === 1,
+    check(setStyleData(twoAt, { ...was, columns: 3, column_gap: 8 }) === 1,
       "the count of columns can be swapped");
-    check(paraOf(twoAt)[6] === 3, "the count swapped in comes back");
+    check(styleData(twoAt).columns === 3, "the count swapped in comes back");
     // **Outside the range it is not taken** (`kspage/model/limit`; rounded, the count would be at
     // odds with the screen). Refused, the count stays.
-    check(w.kspage_web_set_style_para(twoAt, 0, was[1], was[2], was[3], was[4], 1, -2, 8) === 0,
+    check(setStyleData(twoAt, { ...was, columns: -2 }) === 0,
       "a negative count of columns is not taken");
-    check(
-      w.kspage_web_set_style_para(twoAt, 0, was[1], was[2], was[3], was[4], 1, 900000, 8) === 0,
+    check(setStyleData(twoAt, { ...was, columns: 900000 }) === 0,
       "too many columns is not taken either");
-    check(paraOf(twoAt)[6] === 3, "after refusing it is still the count swapped in");
-    check(w.kspage_web_set_style_para(twoAt, 0, was[1], was[2], was[3], was[4], 1, 2, 24) === 1,
-      "it can be put back");
+    check(styleData(twoAt).columns === 3, "after refusing it is still the count swapped in");
+    check(setStyleData(twoAt, was) === 1, "it can be put back");
   }
 
   // Caution: **Put it back to the material's likeness** (the checks behind this count on it).
@@ -303,15 +295,15 @@ export function run(ks) {
     return hits;
   };
   const chartIn = (name, range, kind) =>
-    w.kspage_web_insert_chart(stage(`${name}\t${range}`), kind);
+    w.kspage_web_insert_chart(stage(`${kind}\t${name}\t${range}`));
   w.kspage_web_layout(300);
   w.kspage_web_click(0, 10, 0);
   const chartPanels = w.kspage_web_panel_count();
   const chartLabels = countText("$360");
-  check(chartIn("chart-bar", "", 3) === 0, "with the range empty it does not go in");
-  check(chartIn("chart-bar", "detail!C2:C3", 1) === 0,
+  check(chartIn("chart-bar", "", "bars") === 0, "with the range empty it does not go in");
+  check(chartIn("chart-bar", "detail!C2:C3", "contents") === 0,
     "with a style that does not gather it does not go in");
-  check(chartIn("chart-bar", "detail!C2:C3", 3) === 1, "a bar chart can be put in");
+  check(chartIn("chart-bar", "detail!C2:C3", "bars") === 1, "a bar chart can be put in");
   w.kspage_web_layout(300);
   // Two bars, and one axis drawn where 0 is.
   const barPanels = w.kspage_web_panel_count();
@@ -353,7 +345,7 @@ export function run(ks) {
   w.kspage_web_undo();
   leaveCell();
   // A line joins point to point. Between two points there is one.
-  check(chartIn("chart-line", "detail!C2:C3", 4) === 1, "a line chart can be put in too");
+  check(chartIn("chart-line", "detail!C2:C3", "lines") === 1, "a line chart can be put in too");
   w.kspage_web_layout(300);
   const linePanels = w.kspage_web_panel_count();
   check(linePanels === barPanels + 2,
@@ -380,7 +372,8 @@ export function run(ks) {
   // **Adding is done from outside a slide** (inside a frame it would nest, and only the outermost
   // can be carried), so it moves over the heading first.
   w.kspage_web_click(0, 10, 0);
-  check(w.kspage_web_insert_surface(stage("slide"), 0) === 1, "a second sheet can be added");
+  check(out(w.kspage_web_insert_surface(stage("whole\tslide"))) === "done",
+    "a second sheet can be added");
   w.kspage_web_layout(300);
   check(w.kspage_web_surface_count() === 2, "the slides become two sheets");
   // Caution: **Look at which is the first sheet by the note** (the measures are the same).

@@ -24,7 +24,7 @@
    program
    ```
 
-   **The description holds at most four lines of text**, a bare `//<` parting aside. The cases are a few lines each, so a longer description outgrows what it describes. A trap that one case guards goes beside that case, as a `//` above it.
+   **The description holds at most four lines of text.** The cases are a few lines each, so a longer description outgrows what it describes. A trap that one case guards goes beside that case, as a `//` above it.
 4. **Run the folder's suite** (the last column of the table in step 1), here or from the repository's root. A case whose marks do not hold fails it.
 
 ## How a case is compiled

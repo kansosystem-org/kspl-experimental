@@ -1,9 +1,7 @@
 //< Structs, enums, fields and globals
-//<
 //< Each case below is compiled alone, as the file its head names.
 // ==== case assign_through_alias_immutable
 //< Another file's immutable global, written through its import alias, refuses the write
-//<
 //< `fs.MAX_PATH_LEN` names that file's constant, not a field of a value `fs`. Read as a field, the
 //< binding checked is `fs`, which names no value, and the write reaches the generated C.
 // EXPECT: cannot assign to an immutable variable 'fs.MAX_PATH_LEN'
@@ -14,7 +12,6 @@ fn main(): I32
   return 0
 // ==== case assign_to_non_place
 //< The diagnostic that rejects an assignment to an expression that is not a place
-//<
 //< **Let it through and not one diagnostic comes out**: genc emits C like `&x = …` / `f() = …`,
 //< and the C compiler's `expression is not assignable` reaches the user (Principle 2).
 //< Caution: **Keep the stopping side last**: a passing side wrongly refused hides the `@` hint.
@@ -43,7 +40,6 @@ fn main(): I32
   return 0
 // ==== case enum_payload_less_visible
 //< A `priv` type in a `pub enum`'s payload is rejected as less visible than the variant
-//<
 //< Allowed, code that cannot name that type could still bind and read it with `switch v case
 //< .some(x) { x.v }`. It is the leak of a struct's `pub` field, under the same check
 //< (docs/DESIGN-programming-language.md "Why a typedef cannot be published wider than its target"). A payload
@@ -61,7 +57,6 @@ fn main()
   _e: = E.some(Hidden::{ .v = 1 })
 // ==== case enum_tag_duplicate
 //< Two variants of one enum may not share a tag
-//<
 //< **Let it through and each backend picks its own answer**: C refuses the `switch` on it
 //< ("duplicate case value"), and LLVM sends both cases to the first.
 // EXPECT: variant 'b' has the tag 1. Variant 'a' already has that tag
@@ -74,7 +69,6 @@ fn main(): I32
   return I32::D.b
 // ==== case enum_tag_not_constant
 //< A tag is folded at translation time, so a run-time value cannot be one
-//<
 //< **It is refused rather than replaced by the counter's value**, which a C enumerator would
 //< silently become.
 // EXPECT: is not a compile-time constant (only a `const`, an enum variant or a literal is)
@@ -87,7 +81,6 @@ fn main(): I32
   return I32::C.a
 // ==== case enum_tag_bare_sibling
 //< A tag names an earlier variant through its enum, as every other place names a variant
-//<
 //< **The bare name is no constant in scope**, so the general refusal would deny that a variant
 //< folds; the report names the spelling that does.
 // EXPECT: 'a' is a variant of 'E'. Name the variant through its enum here too ('E.a')
@@ -100,7 +93,6 @@ fn main(): I32
   return I32::E.b
 // ==== case enum_tag_out_of_base
 //< A tag must fit the enum's base type, the written one and the one counted after it alike
-//<
 //< **Let it through and the value changes silently**: `300` in a `U8` reads back as 44.
 // EXPECT: enum tag 300 does not fit the enum's base type 'U8' (0 to 255)
 // EXPECT: enum tag 256 does not fit the enum's base type 'U8' (0 to 255)
@@ -116,7 +108,6 @@ fn main(): I32
   return I32::Y.b + I32::Z.b
 // ==== case enum_tagged_equality
 //< `==` on an enum whose variants carry data is refused unless the enum implements `Eq`
-//<
 //< A tagged union is a struct in C; let `==` through and the C compiler's `invalid operands to
 //< binary expression` reaches the user (Principle 2).
 //< Caution: Keep the non-firing side: a simple enum's `==` and a tagged union's `switch` pass.
@@ -148,7 +139,6 @@ fn main()
     return
 // ==== case field_called_as_method
 //< A field written with `()` as though it were a method (`sys.args().len()`)
-//<
 //< **A writer from Rust or C++ reaches for a method.** In KSPL, a slice's or a struct's `len` is a
 //< field. The report names the field and its owner and removes the `()`. Joined, the callee's
 //< pieces would spell a name that no function has. So they must not reach the message.
@@ -162,11 +152,10 @@ fn main(): I32
   return I32::n
 // ==== case field_name_misspelt
 //< A field that does not exist names the nearest field, never the import of an extension method
-//<
 //< **Without a call only a field can stand there**, and no other file can add one. So the import
 //< note would send the writer the wrong way. A name with no field near it gets no guess. The
 //< member of a type with no fields (`I32`) gets neither note.
-// EXPECT: field_name_misspelt.kspl:19:5: error: type 'field_name_misspelt.P' has no field or method named 'y'
+// EXPECT: field_name_misspelt.kspl:18:5: error: type 'field_name_misspelt.P' has no field or method named 'y'
 // EXPECT: Note: the field with the nearest name is 'x'.
 // EXPECT: has no field or method named 'totla'
 // EXPECT: Note: the field with the nearest name is 'total'.
@@ -186,7 +175,6 @@ fn main(): I32
   return p.x
 // ==== case field_type_less_visible
 //< A `priv` type in a `pub struct`'s `pub` field is rejected as less visible than the field
-//<
 //< Allowed, even code that cannot name that type could read the value itself with `s.slot`. It is
 //< the same kind of leak as at the return-value position. So the same check covers it
 //< (docs/DESIGN-programming-language.md "Why a narrow type cannot stand where visibility is wide").
@@ -202,7 +190,6 @@ fn main()
   _h: = Holder::{ .slot = Hidden::{ .v = 1 } }
 // ==== case field_type_visibility_ok
 //< A field whose visibility is in balance with its type draws no visibility diagnostic
-//<
 //< A `priv` field is stopped from outside by the visibility check, and a `priv struct`'s `pub`
 //< field is held down to the struct's visibility, so neither leaks. The case fails on purpose
 //< through the same check, at a return value rather than a field.
@@ -235,7 +222,6 @@ fn main()
   _s: = h.sum() + i.slot.v
 // ==== case global_type_less_visible
 //< A `priv` type in a `pub` global's type annotation is rejected as less visible than the global
-//<
 //< Allowed, even code that cannot name that type could read the value itself with `lib.g`. It is
 //< the same kind of leak as at the return-value and field positions. So the same check covers it
 //< (docs/DESIGN-programming-language.md "Why a narrow type cannot stand where visibility is wide").
@@ -250,7 +236,6 @@ fn main()
   g.v = 1
 // ==== case global_type_visibility_ok
 //< A global whose visibility is in balance with its type draws no visibility diagnostic
-//<
 //< A global with its type annotation omitted is always an I32 (no user-defined type is reached), so
 //< it is no hole in this check. The case fails on purpose through the same check, at a return value.
 // EXPECT: return type 'Leaked' is less visible than the function exposing it
@@ -273,7 +258,6 @@ fn main()
   hidden_g.v = I32::PUBLIC_N
 // ==== case packed_managed_field
 //< An ARC-managed field `#packed` leaves under-aligned is refused where the struct declares it
-//<
 //< Its count is kept through the field's address, which a pointer could not give aligned. A struct
 //< holding one counts too; a raw pointer to one is not managed and passes.
 // EXPECT: field 'r' holds the ARC-managed 'std.refcount.Rc<|I32|>'. Its count is kept through
@@ -296,7 +280,6 @@ fn main(): I32
   return I32::w.tag
 // ==== case recursive_generic_instantiation
 //< A generic function that calls itself with **a deeper type argument**
-//<
 //< Monomorphisation makes a substance per type argument, so the run-time stop (`d <= 0`) does not
 //< end the growth. **Do not put the per-step type disagreements out:** the outermost immutability
 //< has no notation (`ksplc/sema/type/display.kspl`), so 50 alike lines would hide the cause.
@@ -311,22 +294,28 @@ fn main(): I32
   return h<|I32|>(0, 1)
 // ==== case struct_cast
 //< Sema clearly rejects a direct `::` value cast to a struct type
-//<
 //< Let through, a cast from a scalar or another struct becomes the invalid C `(StructType)value`
-//< (see ksplc/sema/body/postfix.kspl). A source type implementing `Cast` (`ci.Ci32::10`)
-//< resolves to a cast() call and passes, so Ci32 to Ci64, with no Cast, is used here.
+//< (see ksplc/sema/body/postfix.kspl). A source type implementing `Cast` (`Small::10`)
+//< resolves to a cast() call and passes, so Small to Large, with no Cast, is used here.
 //< The message names the trait as it is written, `std/lang`'s `Cast`, with the `impl` to add.
 // EXPECT: cannot cast to struct type
-// EXPECT: implements 'Cast<|std.checked_int.Ci64|>' (std/lang's trait: 'impl std.checked_int.Ci32: Cast<|std.checked_int.Ci64|>')
+// EXPECT: implements 'Cast<|struct_cast.Large|>' (std/lang's trait: 'impl struct_cast.Small: Cast<|struct_cast.Large|>')
 // EXPECT-NOT: operator.Cast
-import "std/checked_int" as ci
+struct Small
+  val: I32
+
+struct Large
+  val: I64
+
+impl I32: Cast<|Small|>
+  fn cast(r: Self$@): Small
+    return Small::{ .val = r$ }
 
 fn main()
-  a: = ci.Ci32::10
-  b: = ci.Ci64::a
+  a: = Small::10
+  b: = Large::a
 // ==== case struct_cast_names_the_type
 //< A rejected cast to a struct names the type as its writer wrote it
-//<
 //< **The instance's registered name must not reach the message** (`std_ds_List_I32`); it
 //< names nothing the writer wrote.
 // EXPECT: cannot cast to struct type 'std.ds.List<|I32|>'
@@ -338,7 +327,6 @@ fn main(): I32
   return 0
 // ==== case struct_literal_hidden_field
 //< A type with a field hidden from the caller cannot be built from outside with `::{}`
-//<
 //< A field not written is filled with zero. Without the refusal, code outside can make a "value
 //< whose content it must not settle". For a type that holds an owning handle, a fake then points
 //< at no substance.
@@ -351,12 +339,11 @@ fn main(): I32
   return I32::sizeof(Arena) - I32::sizeof(a)
 // ==== case struct_literal_written_twice
 //< A field or an array index written twice in one literal is refused, naming the first write
-//<
 //< C takes the later value and only warns, so the earlier one would vanish while the program
 //< builds. Each shape is a way to reach one place again: by name, by name after position, by index.
-// EXPECT: struct_literal_written_twice.kspl:14:24: error: field 'x' is written twice in this literal: first by name on line 14, then here
-// EXPECT: field 'x' is written twice in this literal: first by position on line 16, then here
-// EXPECT: index 0 is written twice in this literal: first by position on line 18, then here
+// EXPECT: struct_literal_written_twice.kspl:13:24: error: field 'x' is written twice in this literal: first by name on line 13, then here
+// EXPECT: field 'x' is written twice in this literal: first by position on line 15, then here
+// EXPECT: index 0 is written twice in this literal: first by position on line 17, then here
 // EXPECT: Finished with 3 error(s)
 struct P
     x: I32
@@ -370,7 +357,6 @@ fn case_index_after_position(): I32[3]
     return ::{ 1, 2, [0] = 9 }
 // ==== case struct_too_many_initializers
 //< A struct literal with more initializers than fields names the struct and its field count
-//<
 //< The bare "too many initializers for struct" named neither, though the literal's type may come
 //< from far off (an expected type, a parameter).
 // EXPECT: P'. The type has 2 field(s)
@@ -384,7 +370,6 @@ fn main()
     _u: = p.x
 // ==== case struct_without_fields
 //< A `struct` with `;` in place of its fields is refused outside an `extern` block
-//<
 //< Nothing would say what it holds or how much space it takes. A type defined in C is declared in
 //< an `extern "C"` block and held by pointer.
 // EXPECT: 'Handle' has no fields

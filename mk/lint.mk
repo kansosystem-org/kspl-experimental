@@ -78,13 +78,15 @@ LINT_TALLY_CLEAN := Finished with 0 error(s), 0 warning(s), 0 information(s), an
 lint_clean = if [ $(3) -eq 0 ] && grep -qxF "$(LINT_TALLY_CLEAN)" $(1); then :; \
 	else cat $(1); echo "LINT FAILED: $(2)"; exit 1; fi
 
-# Caution: **Zero down to Hint**, one file = one target and log (a shared log is overwritten).
+# $(call lint_run,<file>,<options>,<log name>): one lint of one file, judged by `lint_clean`.
+# Caution: **Zero down to Hint**, one run = one log (a shared log is overwritten).
+lint_run = echo "  -> $(1) $(2)"; log=$(LINT_LOG_DIR)/$(3).log; \
+	./$(STAGE1_EXE) lint $(2) $(1) > $$log 2>&1; status=$$?; \
+	$(call lint_clean,$$log,$(strip $(1) $(2)),$$status)
+
 define lint_one_rule
 lint-one-$(subst /,_,$(1)): $$(STAGE1_EXE)
-	@echo "  -> $(1) $(2)"
-	@log=$$(LINT_LOG_DIR)/$(subst /,_,$(1)).log; \
-	./$$(STAGE1_EXE) lint $(2) $(1) > $$$$log 2>&1; status=$$$$?; \
-	$$(call lint_clean,$$$$log,$(1),$$$$status)
+	@$$(call lint_run,$(1),$(2),$(subst /,_,$(1)))
 endef
 $(foreach f,$(LINT_TARGETS),$(eval $(call lint_one_rule,$(f),)))
 $(foreach f,$(LINT_TARGETS_FREE),$(eval $(call lint_one_rule,$(f),--freestanding)))
@@ -103,10 +105,7 @@ lint: $(LINT_ONE_TARGETS)
 # are the program read with the branch on.
 ## Local-cycle|lint-cfg|The semantic analysis inside the `#cfg(blas)` branch
 lint-cfg: $(STAGE1_EXE)
-	@echo "  -> ksai/tests/main.kspl [blas]"
-	@log=$(LINT_LOG_DIR)/cfg_blas.log; \
-	./$(STAGE1_EXE) lint --define=blas ksai/tests/main.kspl > $$log 2>&1; status=$$?; \
-	$(call lint_clean,$$log,ksai/tests/main.kspl [blas],$$status)
+	@$(call lint_run,ksai/tests/main.kspl,--define=blas,cfg_blas)
 	@echo "RESULT: ALL PASS (the #cfg(blas) branch is clean)"
 
 .PHONY: lint-cfg

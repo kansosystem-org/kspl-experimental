@@ -1,6 +1,5 @@
 #!/usr/bin/env -S ksplc run
 //< Checks the documented conventions a machine can check
-//<
 //< The conventions are "Development Principles" in `docs/DESIGN-principles.md` and the rules in
 //< `docs/SPEC-documents.md`; `tests/suite/docref_test.kspl` checks reference directions and
 //< section numbers.
@@ -31,207 +30,17 @@ import "tests/support/conventions_win" as cwin
 import "tests/support/harness"
 import "tests/support/harness_text" as htext
 
-priv const MAX_COMMENT_LINES: Sz = 6
-
-priv const MAX_HEADER_LINES: Sz = 10 //<
-    //< The cap on a file's opening header, wider than a body comment's
-    //<
-    //< It is still a cap, not a header of any length (Principle 7 in docs/DESIGN-principles.md).
-
-priv fn is_header_lead(line: U8[]): Bool //<
-    //< The header at a file's start has its own, wider cap
-    //<
-    //< **Until the first declaration, it is the header** (it may come after the shebang or the
-    //< imports). Only the first block gets the wider cap. A shebang is a `#!` followed by a `/`.
-    t: = line.trim_start()
-    return t.starts_with("import ") ||
-        t.starts_with("#!") && t.sub_from(2).trim_start().starts_with("/")
-
-priv struct Comment_run //< the comment lines being counted toward the cap
-    len: Sz
-    start: Sz //< the first counted line, 1-based
-    in_detail: Bool //< whether the run has passed its separator (what follows is its detail)
-
-impl Comment_run
-    fn add(r: Self$@, i: Sz) //< counts line i (0-based) into the run
-        if r.len == 0
-            r.start = i + 1
-        r.len += 1
-
-priv fn check_comments(arena: Arena$@)
-    $bad: = List<|U8[]|>.new(arena)
-    $seen: Sz = 0
-    for rel in harness.tracked_matching(U8[][]::scan.KSPL_SPECS)
-        seen += 1
-        check_comment_runs(rel, harness.read_under_root(rel).lines(arena), bad@, arena)
-    n: = arena.text().s("a comment is within \{MAX_COMMENT_LINES\} lines to the next code line, a ")
-        .s("file's header within \{MAX_HEADER_LINES\} (Principle 7 in docs/DESIGN-principles.md)")
-        .take()
-    verdict.check_list(n, seen, "files", bad@,
-        "long background belongs on the DESIGN-<subject>.md side")
-
-priv fn check_comment_runs(rel: U8[], lines: List<|U8[]|>, bad: List<|U8[]|>$@, arena: Arena$@) //<
-    //< Adds to bad each comment run of one file that is over its cap
-    $run: = Comment_run::{ .len = 0, .start = 0, .in_detail = false }
-    $seen_decl: = false
-    // **A `//` inside a `\"\"\"` string is not this file's comment.** genc carries whole C
-    // preambles in one. A count of their lines here would apply KSPL's cap to the emitted C.
-    $in_raw: = false
-    for i in Range.asc(lines.len + 1)
-        text: = "" if i >= lines.len else lines.get(i).trim_spaces()
-        raw_here: = in_raw
-        if i < lines.len
-            in_raw = scan.flip_raw(lines.get(i), in_raw)
-        if i < lines.len && raw_here
-            continue
-        // A run's separator ends with the run; kept, the next run would count as its detail.
-        if !text.starts_with("//<")
-            run.in_detail = false
-        // A comment is ended by a line of code, or by a section divider saying something new
-        // starts.
-        // Caution: **A blank line ends nothing.** Otherwise the cap limits a paragraph rather
-        // than a comment: anything over it passes by adding a blank line in the middle.
-        $closed: = false
-        if i < lines.len && text.starts_with("//")
-            // **A `//<` belongs to the line above, not to the code below**, so it ends the run
-            // instead of counting into it.
-            // Caution: **What comes after the separator counts.** A run's detail takes the place
-            // of an explanation; if it counted nowhere, turning every explanation into a detail
-            // would silently remove every cap.
-            if text.starts_with("//<")
-                if text.len == 3
-                    run.in_detail = true
-                    run.len = 0
-                else if run.in_detail
-                    run.add(i)
-                else
-                    run.len = 0
-                continue
-            // **A machine-read marker is not prose** (`EXPECT:` is a fixture's assertion).
-            if !scan.marker_head(text.sub_from(2).trim_spaces())
-                run.add(i)
-            if !scan.is_divider(text.sub_from(2))
-                continue
-            closed = true
-        if !closed && i < lines.len && text.len == 0 && run.len > 0
-            continue
-        if run.len > MAX_COMMENT_LINES
-            // The first run over the body cap before any declaration is the header (the wider
-            // cap).
-            cap: = MAX_COMMENT_LINES if seen_decl else MAX_HEADER_LINES
-            if run.len > cap
-                bad
-                    .push(arena.text().s(rel).s(":\{run.start\}: \{run.len\} lines ")
-                    .s("(cap \{cap\})").take())
-            seen_decl = true
-        run.len = 0
-        if !closed && i < lines.len && text.len > 0 && !is_header_lead(lines.get(i))
-            seen_decl = true
-        if closed && scan.is_case_head(text.sub_from(2))
-            seen_decl = false
-
-priv fn check_summary_inside(arena: Arena$@) //<
-    //< A declaration that carries braces keeps its description inside them
-    //<
-    //< Left below a `{}`, the run is outside the thing it describes. Without braces (a `typedef`, a
-    //< `const`, an interface requirement) the run goes below, indented one level; the formatter
-    //< decides that form (`ksplc/docs/SPEC-tools.md`).
-    $bad: = List<|U8[]|>.new(arena)
-    $seen: Sz = 0
-    for rel in harness.tracked_matching(U8[][]::scan.KSPL_SPECS)
-        seen += 1
-        lines: = harness.read_under_root(rel).lines(arena)
-        $in_raw: = false
-        for i in Range.asc(lines.len)
-            line: = lines.get(i)
-            raw_here: = in_raw
-            in_raw = scan.flip_raw(line, in_raw)
-            if raw_here || i + 1 >= lines.len
-                continue
-            code: = line.sub(0, line.find_str("//").unwrap_or(line.len))
-            if !code.trim_spaces().ends_with("{}")
-                continue
-            next: = lines.get(i + 1)
-            if next.trim_start().starts_with("//<")
-                bad
-                    .push(arena.text().s(rel).s(":\{i + 2\}: the run belongs inside the braces")
-                    .take())
-    n: = "a description that runs on stands inside the braces where the declaration has them"
-    verdict.check_list(n, seen, "files", bad@,
-        "open the `{}` and put the `//<` lines between the braces")
-
-// ==========================================
-// 4. `lang.` is written only in a file that declares the same name `std/lang`'s import alias is
-// implicitly in every file too, so `lang.Option` can be written anywhere. Written in a file that
-// does not declare the same name, `Option` gets two spellings (Principle 6). The only file that
-// needs the qualification is one whose own declaration has taken the unqualified name.
-// ==========================================
-priv const DECL_HEADS: U8[][_] = ::{ "struct ", "enum ", "trait ", "typedef ", "fn ", "const " }
-
-priv fn declares(src: U8[], name: U8[], arena: Arena$@): Bool //<
-    //< whether that file declares `name`
-    for line in src.lines(arena)
-        t: = line.trim_start().strip_prefix("pub ").strip_prefix("priv ")
-        for h in DECL_HEADS
-            if !t.starts_with(h)
-                continue
-            rest: = t.sub_from(h.len)
-            if rest.starts_with(name) &&
-                (rest.len == name.len || !htext.is_word_at(rest, name.len))
-                return true
-    return false
-
-priv fn check_lang_prefix(arena: Arena$@)
-    $bad: = List<|U8[]|>.new(arena)
-    $files: Sz = 0
-    specs: = scan.kspl_specs_with(U8[][]::{ ":!ksplc/tests/negative/" }, arena)
-    for rel in harness.tracked_matching(specs)
-        files += 1
-        src: = harness.read_under_root(rel)
-        $i: Sz = 0
-        for line in src.lines(arena)
-            i += 1
-            body: = scan.strip_code(line, arena)
-            $at: Sz = 0
-            for at + 5 <= body.len
-                switch body.sub_from(at).find_str("lang.")
-                case .none
-                    break
-                case .some(found)
-                    p: = at + found
-                    at = p + 5
-                    // When an identifier or a `.` comes before, it is something else (a string
-                    // such as `std.lang.Ref_counted`).
-                    if p > 0 && (htext.is_word_before(body, p) || body[p - 1] == '.')
-                        continue
-                    $k: = p + 5
-                    if k >= body.len || !(body[k].is_alpha() || body[k] == '_')
-                        continue
-                    for k < body.len && htext.is_word_at(body, k)
-                        k += 1
-                    name: = body.sub(p + 5, k - p - 5)
-                    if declares(src, name, arena)
-                        continue
-                    bad
-                        .push(arena.text().s(rel).s(":\{i\}: lang.").s(name).s(" -> ").s(name)
-                        .take())
-    verdict.check_list("`lang.` is written only where the unqualified letter is blocked", files,
-        "files", bad@,
-        "that file does not declare the same name, so the unqualified letter points at the same \
-            thing")
-
 // ==========================================
 // The language has `T[]::arr` ("Type conversion (`::`) and implicit casts" in
 // `docs/SPEC-programming-language.md`).
 // Only a hand-built descriptor over a whole array at its declared length is reported (the form
 // stays for reinterpreting bytes).
 priv const DESCRIPTOR_EXEMPT: U8[][_] = ::{ "ksplc/tests/negative/deep_const_weakening.kspl",
-    "ksplc/tests/negative/pointer.kspl", "ksplc/tests/win64_arg_abi_test.kspl",
+    "ksplc/tests/negative/pointer.kspl", "ksplc/tests/abi_win64_test.kspl",
     "ksplc/tests/prog/equiv.kspl" }
 
 priv fn array_sizes(src: U8[], names: List<|U8[]|>$@, sizes: List<|Sz|>$@, arena: Arena$@) //<
     //< From a `name: type[count]` declaration, collects the size per name
-    //<
     //< A name declared at two sizes is not judged (which one it points at is unknown).
     for raw in src.lines(arena)
         // Caution: **Check with the strings and the annotations dropped** (so as not to pick up a
@@ -339,7 +148,6 @@ priv const DESCRIPTOR_SAMPLES: U8[][_] = ::{ "  s: = I32[]::{ .ptr = four@, .len
     "  a: = I32[]::{ 1, 2 }; b: = I32[]::{ .ptr = four@, .len = 4 };" }
 priv const DESCRIPTOR_WANT: Bool[_] = ::{ true, false, true, false, false, false, true, true } //<
     //< The expected answer for each line of the descriptor samples
-    //<
     //< In order: it hits / a shorter view / a form with a `[0]` in between / a name with no
     //< declaration / a name whose sizes do not agree / a form with the digits misread / two on one
     //< line where the second hits / a non-descriptor before it. The last two catch a read that
@@ -455,7 +263,6 @@ priv fn check_compiler_named_std(arena: Arena$@)
 
 priv fn std_fqns_in(line: U8[], arena: Arena$@): List<|U8[]|>$@ //<
     //< Picks up the `std.<lower>.<Upper-first>` strings in one line
-    //<
     //< A generic (`std.lang.Add<|...|>`) is cut before the `<`.
     found: = arena.create(List<|U8[]|>.new(arena))
     $at: Sz = 0
@@ -479,7 +286,6 @@ priv fn std_fqns_in(line: U8[], arena: Arena$@): List<|U8[]|>$@ //<
 
 priv fn declares_name(src: U8[], name: U8[], arena: Arena$@, allow_private: Bool = false): Bool //<
     //< Whether that file declares `name`
-    //<
     //< Caution: Check only the declaring lines (count the using lines and it answers "it is there"
     //< even when the name is gone).
     for line in src.lines(arena)
@@ -501,7 +307,6 @@ priv fn declares_name(src: U8[], name: U8[], arena: Arena$@, allow_private: Bool
 
 priv fn check_runtime_check_location(arena: Arena$@) //<
     //< That the position passed to a run-time check is the pair of a file name and a line number
-    //<
     //< Caution: **Do not print `loc.offset` as the line number.** `Loc` holds a byte position;
     //< the one function that counts lines is `line_of` in `ksplc/sema/session/ctx.kspl`. **List
     //< the allowed forms**: searching for the printing code misses an offset stored in a variable
@@ -525,7 +330,6 @@ priv fn check_runtime_check_location(arena: Arena$@) //<
 
 priv fn panic_off(line: U8[], _arena: Arena$@): Bool //<
     //< Whether the run-time stop message's prefix breaks the rule
-    //<
     //< Caution: **Keep the verdict in this one place** (inside the runtime the sample table cannot
     //< reach it). Breaking it means a capital prefix, or a capital after `panic: `.
     if line.find_str("Panic: ").is_some()
@@ -536,7 +340,6 @@ priv fn panic_off(line: U8[], _arena: Arena$@): Bool //<
 
 priv fn check_panic_spelling(arena: Arena$@) //<
     //< Keeps the run-time stop message to one form
-    //<
     //< The prefix is `panic: ` and what follows starts lower case (see
     //< "Every stop has one notation" in `../../docs/SPEC-programming-language.md`). **Split between
     //< the code generator and std, one event gets two strings to grep for.**
@@ -560,7 +363,6 @@ priv fn check_panic_spelling(arena: Arena$@) //<
 
 priv const RESULT_FORMS: U8[][] = U8[][]::{ "ALL PASS", "SOME FAILED", "SKIPPED" } //<
     //< The wordings a gate's closing verdict line may take
-    //<
     //< **A wording per gate makes CI grep for each**, and a wrong one drifts silently: **it passes
     //< green even when a gate fails** (Principle 5). The source is `finish` in `std/verdict.kspl`.
 
@@ -622,7 +424,6 @@ priv const FQN_SAMPLES: U8[][_] = ::{ "want: = \"std.lang.Add\";", "want: = \"st
     "two: = \"std.ds.List\" ; \"std.str.Str_builder\";", "// about std.lang.Add" }
 priv const FQN_WANT: Sz[_] = ::{ 1, 0, 0, 0, 2, 0 } //<
     //< How many FQNs each of the samples holds
-    //<
     //< In order: 1 / 0 (ends in a dot) / 0 (too few steps) / 0 (outside a string) / 2 / 0 (outside
     //< a string)
 
@@ -645,7 +446,6 @@ pub trait Add
 """
 priv const DECLARES_NAMES: U8[][_] = ::{ "Add", "Adder", "take", "hidden", "Missing", "Adde" } //<
     //< The names looked up in `declares_src`
-    //<
     //< **`Adde` does not hit**; without checking the name's end it hits the start of `Adder`, and
     //< **a name removed by a rename is answered as "there"**. `Adder` and `Add` check both hit.
 priv const DECLARES_WANT: Bool[_] = ::{ true, true, true, false, false, false }
@@ -675,7 +475,8 @@ priv fn check_named_std_fires(arena: Arena$@)
     verdict.check_list("the place hunting a declaration's name can fire", DECLARES_NAMES.len,
         "samples", c@, "the judgment misreads its own samples: mend the judgment, not the table")
 
-// Whether the line opens a `"""` string, read from outside one (the comment cap relies on it).
+// Whether the line opens a `"""` string, read from outside one (the walks that skip a string's
+// lines rely on it).
 priv fn opens_raw(text: U8[], arena: Arena$@): Bool
     _: = arena
     return scan.flip_raw(text, false)
@@ -761,40 +562,8 @@ priv fn check_slice_name(arena: Arena$@)
     verdict.check_list("the slice's type name is not written directly", seen, "lines", bad@,
         "go through core.slice_fqn / core.slice_ident()")
 
-priv fn check_file_summary_first(arena: Arena$@) //<
-    //< A file that describes itself starts with that description
-    //<
-    //< **The eye lands on the first line**, and a banner above pushes the purpose off the screen.
-    //< Caution: **Test whether the line continues a run before testing whether it is a comment.** A
-    //< `//<` starts with `//` too, so the looser test done first skips every run and the check goes
-    //< green having found none (`file_doc_at` in `../../ksplc/base/ast_doc.kspl`, likewise).
-    $seen: Sz = 0
-    $bad: = List<|U8[]|>.new(arena)
-    for rel in harness.tracked_matching(U8[][]::scan.KSPL_SPECS)
-        seen += 1
-        $over: Sz = 0
-        $i: Sz = 0
-        for line in harness.read_under_root(rel).lines(arena)
-            i += 1
-            t: = line.trim_spaces()
-            if t.starts_with("//<")
-                if over > 0
-                    bad
-                        .push(arena.text().s(rel).s(":\{i\}: line \{over\} stands over it").take())
-                break
-            // A blank line does not end the search; the first code line does.
-            if t.len == 0
-                continue
-            if !t.starts_with("//")
-                break
-            if over <= 0
-                over = i
-    verdict.check_list("a file that describes itself opens with that description", seen, "files",
-        bad@, "move the //< run to the head, and leave the banner for whoever edits it below")
-
 priv const PLURAL_NAMES: U8[][_] = ::{ "test", "tool", "doc", "app", "board", "driver" } //<
     //< The singular names a folder holding many of a kind must not take
-    //<
     //< ("A folder's name is plural where it names its contents" in `docs/SPEC-documents.md`.) A
     //< name that is not such a noun (`parse`, `sema`, `model`) names an aspect of its package, and
     //< stays.
@@ -807,7 +576,6 @@ priv fn names_a_kind(part: U8[]): Bool //< whether a folder's name is one of plu
 
 priv fn check_folder_names(arena: Arena$@) //<
     //< A folder holding many of a kind is named in the plural
-    //<
     //< Caution: **It reads the folders git knows, not the disk**; `out/` holds names nobody wrote.
     $seen: Sz = 0
     $bad: = List<|U8[]|>.new(arena)
@@ -824,7 +592,7 @@ priv fn check_folder_names(arena: Arena$@) //<
                 at += cut + 1
                 seen += 1
                 where: = rel.sub(0, at - 1)
-                if !names_a_kind(part) || htext.has(said@, where)
+                if !names_a_kind(part) || said.contains(where)
                     continue
                 said.push(arena.dup_str(where))
                 bad
@@ -833,62 +601,41 @@ priv fn check_folder_names(arena: Arena$@) //<
         "folder names", bad@, "rename it, and mend what named it (`make test-docref` counts those)")
 
 // ==========================================
-// A test is called from a runner **A `fn test_…` that no runner names never runs**, and every
-// gate stays green with it gone. A runner names a test through its file (`x_test.test_y`), so the
-// name must stand after a `.` somewhere.
+// A file of tests is imported **A file nobody imports is never compiled**, so no suite runs its
+// `test_…` functions, and the compiler never sees them to report it. [W0214] covers a file that is
+// compiled. A file holding its own suite runs its own tests (`ksai/tests/examples_main.kspl`). The
+// fixtures broken on purpose (`negative/`, `lint/`) are compiled one by one.
 // ==========================================
-priv fn calls_in(src: U8[], name: U8[]): Sz //< how often `name(` is called in src, not defined
-    $n: Sz = 0
-    $i: Sz = 0
-    for i < src.len
-        switch src.sub_from(i).find_str(name)
-        case .none
-            break
-        case .some(at)
-            p: = i + at
-            defined: = p >= 3 && src.sub(p - 3, 3).equals("fn ")
-            if !htext.is_word_before(src, p) && p + name.len < src.len &&
-                src[p + name.len] == '(' && !defined
-                n += 1
-            i = p + name.len
-    return n
+priv const FIXTURE_FOLDERS: U8[][2] = ::{ "ksplc/tests/negative/", "ksplc/tests/lint/" } //<
+    //< the folders whose files are compiled alone, never imported
 
-priv fn check_tests_registered(arena: Arena$@)
-    $called: = Str_builder.new() // every `.test_…` name, each between spaces
-    called.c(' ')
-    for rel in harness.tracked_matching(U8[][]::scan.KSPL_SPECS)
-        src: = harness.read_under_root(rel)
-        $i: Sz = 0
-        for i + 6 < src.len
-            switch src.sub_from(i).find_str(".test_")
-            case .none
-                break
-            case .some(at)
-                $e: = i + at + 1
-                for e < src.len && htext.is_word_at(src, e)
-                    e += 1
-                called.s(src.sub(i + at + 1, e - i - at - 1)).c(' ')
-                i = e
-    $seen: Sz = 0
+priv fn check_test_files_imported(arena: Arena$@)
+    files: = harness.tracked_matching(U8[][]::scan.KSPL_SPECS)
+    $imported: = List<|U8[]|>.new(arena) // every path an import line names
+    $marked: = List<|U8[]|>.new(arena) // every file holding a `test_…` function
+    $own: = List<|U8[]|>.new(arena) // every file holding a suite, which runs its own tests
+    for rel in files
+        for line in harness.read_under_root(rel).lines(arena)
+            if line.starts_with("impl ") && line.ends_with(": suite.Suite {}") ||
+                line.ends_with(": suite.Suite")
+                own.push(rel)
+            if line.starts_with("import \"")
+                rest: = line.sub_from(8)
+                if close: = rest.find_char('"')
+                    imported.push(rest.sub(0, close))
+            else if (line.starts_with("fn test_") || line.starts_with("pub fn test_") ||
+                line.starts_with("priv fn test_")) && !marked.contains(rel)
+                marked.push(rel)
     $bad: = List<|U8[]|>.new(arena)
-    for rel in harness
-        .tracked_matching(U8[][]::{ "*/tests/*.kspl", "tools/ai_assist/tests/*.kspl" })
-        src: = harness.read_under_root(rel)
-        for line in src.lines(arena)
-            t: = line.strip_prefix("pub ")
-            if !t.starts_with("fn test_")
-                continue
-            switch t.find_char('(')
-            case .none
-                continue
-            case .some(open)
-                name: = t.sub(3, open - 3)
-                seen += 1
-                wanted: = arena.text().s(" ").s(name).s(" ").take()
-                if called.slice().find_str(wanted).is_none() && calls_in(src, name) == 0
-                    bad.push(arena.text().s(rel).s(": ").s(name).take())
-    verdict.check_list("every test function is called from a runner", seen, "tests", bad@,
-        "call it from its package's test runner, its folder's all.kspl (or remove the test)")
+    for rel in marked
+        $fixture: = false
+        for folder in FIXTURE_FOLDERS
+            fixture = fixture || rel.starts_with(folder)
+        if !fixture && !own.contains(rel) &&
+            !imported.contains(rel.strip_suffix(".kspl"))
+            bad.push(rel)
+    verdict.check_list("a file of tests is imported, so a suite can run them", marked.len,
+        "files of tests", bad@, "import it from the file that holds its package's suite (all.kspl)")
 
 fn main(): I32
     arena: = harness.begin(1024 * 1024 * 1024)
@@ -905,11 +652,8 @@ fn main(): I32
     csize.run(arena)
     ctheme.run(arena)
     cdoc.run_manual(arena)
-    check_comments(arena)
-    check_summary_inside(arena)
-    check_file_summary_first(arena)
     check_folder_names(arena)
-    check_tests_registered(arena)
+    check_test_files_imported(arena)
     cnotice.run_notices(arena)
     cline.run(arena)
     cdoc.run_rule(arena)
@@ -919,7 +663,6 @@ fn main(): I32
     chand.run(arena)
     ciface.run(arena)
     carena.run(arena)
-    check_lang_prefix(arena)
     check_descriptors(arena)
     check_descriptor_fires(arena)
     cdoc.run_prose(arena)

@@ -1,5 +1,4 @@
 //< A TLS client: an encrypted connection on top of a `std/net` socket, through OpenSSL
-//<
 //< **It covers client connections only** (`TLS_client_method`), and needs OpenSSL 1.1.0 or later.
 //< **Every byte crosses through `std/net`**, so a write to a peer that is gone fails as a value
 //< and raises no SIGPIPE, in a library too.
@@ -10,6 +9,7 @@
 // OpenSSL's own C API, called directly; `#link` names its libraries, so no build file does. No
 // OpenSSL header is in any translation unit, so these declarations are the only ones C sees.
 // ==========================================
+import "std/math"
 import "std/mem" + { dealloc }
 import "std/net"
 import "std/str" // `to_cstr`
@@ -71,10 +71,9 @@ priv const SSL_ERROR_ZERO_RETURN: I32 = 6 //< SSL_ERROR_ZERO_RETURN: the peer's 
 priv const MAX_TLS_IO_LEN: Sz = 2147483647 // I32::MAX
 
 priv fn clamp_tls_io_len(len: Sz): Sz
-    return len if len <= MAX_TLS_IO_LEN else MAX_TLS_IO_LEN
+    return math.min(len, MAX_TLS_IO_LEN)
 
 priv const IO_CHUNK: Sz = 16 * 1024 //< the most one move between the socket and OpenSSL carries
-    //<
     //< One TLS record's plaintext at most, so one `write` encrypts no more than it sends.
 
 pub enum Tls_error //< why a secure connection could not be opened or used
@@ -92,7 +91,6 @@ pub struct Tls_stream //< a TCP connection with TLS on top, which owns its resou
 
 priv fn client_ctx(): SSL_CTX$@!Tls_error //<
     //< A client context that verifies the peer against the default CA store, at TLS 1.2 or above
-    //<
     //< Caution: **State the lower bound outright.** `TLS_client_method` allows 1.0 up, so otherwise
     //< openssl.cnf's MinProtocol decides, and a loose environment connects at 1.0 or 1.1.
     ctx: = SSL_CTX_new(TLS_client_method())
@@ -107,14 +105,9 @@ priv fn client_ctx(): SSL_CTX$@!Tls_error //<
 
 priv fn client_ssl(ctx: SSL_CTX$@, host: U8[]): SSL$@!Tls_error //<
     //< One connection's SSL, sending `host` as SNI and verifying against it
-    //<
     //< Caution: **A host name holding a NUL, or longer than OpenSSL takes, fails rather than being
     //< cut**: cut, verification would pass for another host.
-    $c_host: U8$@ = null
-    switch host.to_cstr()
-    case .some(p)
-        c_host = p
-    case .none
+    c_host: U8$@ = host.to_cstr() catch
         throw .ctx_failed
     defer dealloc(Void$@::c_host)
     ssl: = SSL_new(ctx)
@@ -160,7 +153,6 @@ priv fn take_more(tcp: net.Tcp_stream$@, ssl: SSL$@): Bool //<
 
 priv fn go_on(tcp: net.Tcp_stream$@, ssl: SSL$@, rc: I32): Bool //<
     //< After an OpenSSL call that returned `rc` without finishing: whether to call it again
-    //<
     //< It sends what the call queued (an alert included), and reads more where the call waits for
     //< the peer. Any other answer is an end: OpenSSL writes into memory, so it never waits to send.
     err: = SSL_get_error(ssl, rc)
@@ -215,7 +207,7 @@ impl Tls_stream
         buf: U8[], //< the bytes to send
     ): Sz!Tls_error
         // Caution: **Call it again with the same bytes** while it does not finish, as OpenSSL asks.
-        want: = buf.len if buf.len <= IO_CHUNK else IO_CHUNK
+        want: = math.min(buf.len, IO_CHUNK)
         for
             ERR_clear_error()
             n: = SSL_write(r.ssl, Void@::buf.ptr, I32::want)

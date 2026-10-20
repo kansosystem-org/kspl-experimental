@@ -1,5 +1,4 @@
 //< The checks on "may this operation be done here"
-//<
 //< **Import this file to use it**: `sema/session` alone does not add these methods to Ctx.
 
 // ==========================================
@@ -29,7 +28,6 @@ import "std/str" { Str_builder }
 
 fn vis_rank(v: sema_type_scope.Visibility): I32 //<
     //< A visibility's breadth (narrowest first, file_private < internal < public)
-    //<
     //< The enum's numbers follow declaration order, not breadth.
     if v == sema_type_scope.Visibility.file_private
         return 0
@@ -38,7 +36,6 @@ fn vis_rank(v: sema_type_scope.Visibility): I32 //<
 fn narrower_vis(outer: sema_type_scope.Visibility, inner: sema_type_scope.Visibility):
     sema_type_scope.Visibility //<
         //< The narrower of two visibilities
-        //<
         //< An outer declaration (an impl's target type, a struct) caps its members' reach.
     return outer if vis_rank(outer) < vis_rank(inner) else inner
 
@@ -49,14 +46,12 @@ fn contains_node(list: List<|Ast_node$@|>$@, node: Ast_node$@): Bool
     return false
 
 enum Index_route //< what a subscript (`a[i]`) resolves to
-    //<
     //< **Only `index_route` decides which** (see there); the names live here so that the read path
     //< and the assignment path share them.
     place //< `Index_place.at` — it returns a **writable** place
     ref_place //< `Index_ref.at_ref` — it returns a **read-only** place
     by_value //<
         //< `Index.get` / `Index_mut.set`, passing values
-        //<
         //< A fixed-length array also uses it: it implements none of the traits, so it takes the
         //< built-in path.
 
@@ -72,7 +67,6 @@ impl Index_route
             return "Index"
 
     fn index_route_method(route: Self): U8[] //< that route's method name
-        //<
         //< **`Index_place`'s and `Index_ref`'s differ on purpose.** The resolution looks up the
         //< name (resolve_operator_method in sema/decl/resolve.kspl). So one name would leave a type
         //< implementing both undecided.
@@ -87,7 +81,6 @@ impl Index_route
 impl Sema_ctx
     fn compute_effective_vis(r: Self$@, fn_node: Ast_node$@): sema_type_scope.Visibility //<
         //< The "effective visibility" of the function being analysed
-        //<
         //< A method reaches no wider than its impl's target type, so the narrower of the two is
         //< taken. A `pub fn f` on a `priv struct S` cannot be called from where S cannot be named.
         $v: = sema_type_scope.Visibility.internal
@@ -106,7 +99,6 @@ impl Sema_ctx
 
     fn place_denies_write(r: Self$@, node: Ast_node$@): Bool //<
         //< Whether that place's write permission **cannot be confirmed**
-        //<
         //< It is true where a read-only pointer is crossed or the type cannot be followed
         //< (fail-closed).
         //< Both the check on writes (sema/body/stmt.kspl) and whether `x@` becomes read-only
@@ -140,7 +132,6 @@ impl Sema_ctx
 
     fn place_crosses_const_elem(r: Self$@, node: Ast_node$@): Bool //<
         //< Whether an **array/slice of immutable elements** is crossed anywhere on the path
-        //<
         //< Not only the outermost postfix counts.
         //<
         //< Caution: **Apply it to all three operations.** Blocking only the assignment leaves two
@@ -150,7 +141,6 @@ impl Sema_ctx
 
     fn const_elem_receiver(r: Self$@, node: Ast_node$@): Ast_node$@? //<
         //< The array or slice of immutable elements that place_crosses_const_elem finds
-        //<
         //< Its type decides the fix a report names (report_read_only_element in
         //< `../body/write_perm.kspl`).
         if node == null || node.kind_id != .k_expr_postfix
@@ -165,7 +155,6 @@ impl Sema_ctx
 
     fn binding_value_type(r: Self$@, type_id: I32, is_mut: Bool): I32 //<
         //< The type a mutable binding (`$a: …`) holds
-        //<
         //< It holds a **copy**, so its type is what the copy can write (details: copy_value_type in
         //< `sema/type/query.kspl`). A fixed-length array's elements follow the `$` before the name
         //< ("The two axes of mutability" in docs/SPEC-programming-language.md). A slice's or a
@@ -177,7 +166,6 @@ impl Sema_ctx
 
     fn index_route(r: Self$@, recv_node: Ast_node$@, recv_id: I32): Index_route //<
         //< Decides which route an `a[i]` resolves to
-        //<
         //< Caution: **Keep the decision in this one function.** The read path (infer_postfix_array
         //< in sema/body/postfix.kspl) and the assignment path (sema/body/stmt.kspl) must not decide
         //< separately. Otherwise one could take `at` and the other `get`/`set`. `xs[0] = 5` would
@@ -196,7 +184,6 @@ impl Sema_ctx
 
     fn index_only_reads(r: Self$@, route: Index_route, recv_id: I32): Bool //<
         //< Whether the subscript returns only a read-only place (`Index_ref` without `Index_mut`)
-        //<
         //< Only the assignment's diagnostics use it; with `Index_mut` the error is "assigned into a
         //< read-only receiver".
         $is_ref: = false
@@ -210,7 +197,6 @@ impl Sema_ctx
 
     fn reject_const_index_place(r: Self$@, target_id: I32, err_node: Ast_node$@) //<
         //< Rejects an `Index_place` whose `at` returns **an unwritable place**
-        //<
         //< **A container with immutable elements can implement only `Index_ref`** ("Indexing" in
         //< `../../../docs/SPEC-programming-language.md`). Where the immutability comes from a type
         //< argument (`Slice<|T|>`) the declaration cannot show it, so each instance is checked. If
@@ -233,7 +219,6 @@ impl Sema_ctx
 
     priv fn index_place_wants_writable(r: Self$@, base_id: I32): Bool //<
         //< Whether an `Index_place` implementation wants **a writable receiver**
-        //<
         //< Only `at(r: Self@, …)` does not: it merely reads the descriptor and returns the pointer
         //< inside (a borrowed view). `at(r: Self$@, …)` modifies it (a container it owns).
         if sym: = r.resolve_operator_method(base_id, "at")
@@ -248,7 +233,6 @@ impl Sema_ctx
 
     fn index_stops_permission_walk(r: Self$@, recv_id: I32): Bool //<
         //< Whether the subscript **ends the permission walk there**
-        //<
         //< Caution: **Both places that walk the path must call this** (place_denies_write below,
         //< and enforce_mutability in `../body/write_perm.kspl`).
         base_id: = r.env.strip_ptr(recv_id)
@@ -258,7 +242,6 @@ impl Sema_ctx
 
     fn place_is_readonly(r: Self$@, node: Ast_node$@): Bool //<
         //< True where that place cannot be written to
-        //<
         //< 1. the path crosses a read-only pointer or cannot be followed (place_denies_write);
         //< 2. the place's own type is immutable (a `const RO: U8[4]`'s `ro[0]` is `U8 immut`);
         //< 3. the root binding reached across no pointer or slice is immutable (`v: S`, `const`).
@@ -293,7 +276,6 @@ impl Sema_ctx
 
     fn root_binding_is_immutable(r: Self$@, node: Ast_node$@, const_only: Bool): Bool //<
         //< Whether the root binding reached without crossing a pointer or slice is immutable
-        //<
         //< **This level's own type is not checked**, or an immutable `s: U8[]`'s `s@` would become
         //< a `U8[]$@` writable through an output parameter. The recursion stops where a receiver is
         //< a pointer; stopping on the outermost type is place_is_readonly's job.
@@ -331,7 +313,6 @@ impl Sema_ctx
 
     fn check_const_decl_storage(r: Self$@, type_id: I32, name: U8[], loc: Ast_node$@) //<
         //< Checks that a `const` declaration holds no "writable element"
-        //<
         //< A `const`'s value is immutable and at top level sits in `.rodata` (ROM), so a `$` on its
         //< elements can write nothing (Principle 5). If allowed, C fails to compile the generated
         //< code and LLVM fails at run time. It descends into neither **a struct's fields** nor a
@@ -349,7 +330,6 @@ impl Sema_ctx
 
     priv fn find_mut_in_const_storage(r: Self$@, type_id: I32, seen: List<|I32|>$@): Bool //<
         //< Walks inside the value and returns true once it finds a mutable element
-        //<
         //< Array and slice levels only (as above). seen stops it on a self-reference by value (a
         //< `struct S { pub f: S; }` passes at present).
         id: = r.env.get_clean_real_type(type_id)
@@ -377,7 +357,6 @@ impl Sema_ctx
     fn check_type_vis_leak(r: Self$@, node: Ast_node$@, owner_vis: sema_type_scope.Visibility,
         position: U8[], owner: U8[]) //<
             //< Checks that a type exposed outside is no less visible than its position.
-            //<
             //< Such a type is a return value or a struct's field. owner_vis is the position's
             //< **effective visibility**, from the caller. It is min(impl target, function) for a
             //< method, and min(struct, field) for a field. Without it, a closed type's `pub`
@@ -394,7 +373,6 @@ impl Sema_ctx
 
     fn is_bound_generic_type(r: Self$@, sym: Sema_symbol$@): Bool //<
         //< Whether sym is itself the generic type argument currently bound
-        //<
         //< check_visibility_and_mark_used and check_type_node_vis both stop here, for one reason.
         //< Fix only one, and a generic trait such as `std.lang.Index<|Idx, Output|>` reads as a
         //< leak in the implementing type's file (`Output` bound to `Jump_label` and the like).
@@ -408,7 +386,6 @@ impl Sema_ctx
     priv fn check_type_node_vis(r: Self$@, node: Ast_node$@, owner_rank: I32, position: U8[],
         owner: U8[], seen: List<|Ast_node$@|>$@) //<
             //< Walks a type expression's subtree, checking the visibility of each declaration named
-            //<
             //< seen merges the type_expr / type_path / type_atom levels, which name the same
             //< declaration, into one. **The AST is walked, not the type id.** A monomorphized type
             //< id holds only an internal name, while resolve_type's def_node reaches the
@@ -440,7 +417,6 @@ impl Sema_ctx
 
     priv fn is_exempt_generic_reference(r: Self$@, sym: Sema_symbol$@, defined_in: U8[]): Bool //<
         //< Whether the reference only looks like "a name from an outside file" because of a generic
-        //<
         //< A monomorphized template's type variable holds a type from the instantiating file.
         //<
         //< Caution: **Stop every visibility-based diagnostic here** (the reason is at
@@ -463,7 +439,6 @@ impl Sema_ctx
 
     priv fn vis_allows_here(r: Self$@, vis: sema_type_scope.Visibility, defined_in: U8[]): Bool //<
         //< Whether the visibility level makes that declaration visible in the file being analysed
-        //<
         //< **This is the one place that defines the three levels' meaning** (see "Structs
         //< (`struct`)" in docs/SPEC-programming-language.md). A stale copy would let an invisible
         //< name pass on one path.
@@ -476,7 +451,6 @@ impl Sema_ctx
 
     fn is_symbol_visible_here(r: Self$@, sym: Sema_symbol$@): Bool //<
         //< Whether sym can be named from this position
-        //<
         //< **It neither reports nor marks anything**, for asking without a diagnostic
         //< (sema/body/struct_literal.kspl, on the fields a `::{ … }` omitted).
         defined_in: = sym.get_defined_in()
@@ -486,14 +460,39 @@ impl Sema_ctx
             return true
         return r.vis_allows_here(sym.vis, defined_in)
 
-    fn check_import_symbols_visible(r: Self$@) //<
-        //< Reports a selective import naming what its file cannot see (`import "p" { Hidden }`)
+    fn check_import_symbols(r: Self$@) //<
+        //< Binds each name in an import's braces, and reports one naming nothing or a hidden one
+        //< **The name in the braces is a use of that declaration** (its `def_node`), so references
+        //< and renaming reach the import line. **A missing one is an error, not a lint**, or a slip
+        //< (`{ twise }`) surfaces as `undefined path or identifier` at the use.
         //<
         //< **Selecting a name changes no visibility** ("Which names an import brings in" in
         //< docs/SPEC-programming-language.md), and the line that selects it is where that shows.
         //< Left to each use, every road to a name had to ask again, and a type's, a constant's and
         //< a struct literal's did not. A `priv` struct selected from another file was then used
         //< without a word.
+        //<
+        //< Every missing name is reported before every hidden one. The binding happens even when
+        //< errors are suppressed.
+        for entry in r.import_symbols.files.items()
+            info: = entry.value
+            if info.decl_node == null
+                continue
+            file_env: = r.env.files.get(info.target_path).unwrap_or(null)
+            if file_env == null
+                continue // the loading itself failed (another diagnostic has been reported)
+            sym: = file_env.symbols.get(info.original_name).unwrap_or(null)
+            if sym != null
+                name: = info.decl_node.get_selector_name()
+                if name != null
+                    name.def_node = sym.node
+                continue
+            if r.suppress_errors
+                continue
+            // The diagnostic takes its file from the declaration node, so no current file is set.
+            r.clear_scratch()
+                .s("file '\{info.target_path\}' has no symbol named '\{info.original_name\}'")
+            r.err(info.decl_node, r.scratch.slice())
         if r.suppress_errors
             return
         old_file: = r.file_name
@@ -507,7 +506,7 @@ impl Sema_ctx
                 continue
             sym: = file_env.symbols.get(info.original_name).unwrap_or(null)
             if sym == null
-                continue // bind_import_symbols reports it
+                continue // the loop above reports it
             r.set_current_file(info.decl_node.loc.file())
             if r.is_symbol_visible_here(sym)
                 continue
@@ -526,14 +525,12 @@ impl Sema_ctx
 
     priv fn write_shown_name(r: Self$@, sym: Sema_symbol$@, loc: Ast_node$@, out: Str_builder$@) //<
         //< The name a visibility diagnostic shows for sym, as the source spells it
-        //<
         //< Only where sym's own is internal. An instance's name is mangled
         //< (`app_lib_kspl_Box_I64`), and its methods' are named after it. See "A diagnostic points
         //< at 'the position the user wrote'" in ksplc/docs/DESIGN-diagnostics.md.
         if sym.flags.is_generated_instance && sym.kind.is_type() && sym.type_id != 0
             $d: = r.env.display_str(sym.type_id)
             out.s(d.slice())
-            d.free()
             return
         if !sym.flags.is_generated_instance && !sym.flags.is_method
             out.s(sym.name)
@@ -557,10 +554,6 @@ impl Sema_ctx
                         "a destructor cannot be called or taken as a function value; let its owner \
                             leave scope")
                     return
-        if sym.flags.is_deprecated
-            r.clear_scratch().s("[W0702] Symbol '\{sym.name\}' is deprecated.")
-            r.warn(loc, r.scratch.slice())
-
         defined_in: = sym.get_defined_in()
         if defined_in.len == 0 || defined_in.equals(r.file_name)
             return
@@ -606,7 +599,6 @@ priv fn check_one_member(c: Sema_ctx$@, member: Ast_node$@, limit: I32, kind: U8
 
 fn impl_target_symbol(c: Sema_ctx$@, impl_node: Ast_node$@): Sema_symbol$@? //<
     //< An `impl`'s target type's declaration (none for a built-in or extern target)
-    //<
     //< Caution: **Look it up by name.** The target's type node gets its type id only in body
     //< analysis. So while declarations are collected it is still 0 (collect_impl_decl looks it up
     //< the same way).
@@ -618,7 +610,6 @@ fn impl_target_symbol(c: Sema_ctx$@, impl_node: Ast_node$@): Sema_symbol$@? //<
     return .some(sym)
 
 fn check_member_visibility_width(root: Ast_node$@, c: Sema_ctx$@) //< checks every member's width
-    //<
     //< Caution: **Call it after all types are registered** (an `impl`'s target is looked up by
     //< name).
     for top_node in root.children

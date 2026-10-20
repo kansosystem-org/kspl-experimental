@@ -1,5 +1,4 @@
 //< The main walk over the bodies: every function and initializer, then the generics' instances
-//<
 //< `run` types the top-level declarations in the files' order. Then it checks the body of each
 //< queued instance and evaluates the assertion directives. Last, it runs the checks that need the
 //< whole analysis (the imports, the unused names). `Sema_ctx.bodies` chooses which bodies are
@@ -14,6 +13,7 @@ import "ksplc/sema/body/coerce" as _sema_body_coerce
 import "ksplc/sema/body/expr" as sema_body_expr
 import "ksplc/sema/body/for_in" as sema_body_for_in
 import "ksplc/sema/body/lint_stmt" as sema_body_lint_stmt
+import "ksplc/sema/body/lint_written" as sema_body_lint_written
 import "ksplc/sema/body/stmt" as sema_body_stmt
 import "ksplc/sema/decl/access" as sema_decl_access
 import "ksplc/sema/decl/attrs" as sema_decl_attrs
@@ -21,6 +21,7 @@ import "ksplc/sema/decl/collect" as sema_decl_collect
 import "ksplc/sema/decl/eval" as sema_decl_eval
 import "ksplc/sema/decl/mono_queue" as sema_decl_mono_queue
 import "ksplc/sema/decl/resolve" as sema_decl_resolve
+import "ksplc/sema/decl/suite" as sema_decl_suite
 import "ksplc/sema/decl/trait_check" as sema_decl_trait_check
 import "ksplc/sema/decl/type_check" as sema_decl_type_check
 import "ksplc/sema/session/c_boundary" as sema_session_c_boundary
@@ -28,6 +29,7 @@ import "ksplc/sema/session/ctx" as sema_session_ctx + { Sema_ctx, Sema_error }
 import "ksplc/sema/session/import_table" as sema_session_import_table
 import "ksplc/sema/session/imports" as sema_session_imports
 import "ksplc/sema/session/prof" as sema_session_prof
+import "ksplc/sema/session/state" { Pending_inst }
 import "ksplc/sema/type/arc" as sema_type_arc
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
@@ -95,11 +97,10 @@ priv fn wanted_names(r: Ast_node$@, name: U8[]): Map<|U8[], Bool|>$@ //<
 
 priv fn wants_names(c: Sema_ctx$@, decl: Ast_node$@): Bool //<
     //< Whether the editor's final pass resolves the names in this declaration
-    //<
     //< **Only `Bodies.mentioning` narrows it**: a declaration naming none of the names holds no
     //< site to find. The document view keeps every file's, which its hover reads.
     switch c.bodies
-    case .mentioning(_name)
+    case .mentioning
         return names_any(decl, c.body_names, null, 0)
     default
         return true
@@ -112,7 +113,7 @@ priv fn wants_body(c: Sema_ctx$@, decl: Ast_node$@): Bool //< whether `c.bodies`
         return false
     case .everywhere
         return true
-    case .mentioning(_name)
+    case .mentioning
         return names_any(decl, c.body_names, null, 0)
 
 priv fn implicit_cleanup_method(c: Sema_ctx$@, node: Ast_node$@): Bool //<
@@ -125,6 +126,70 @@ priv fn implicit_cleanup_method(c: Sema_ctx$@, node: Ast_node$@): Bool //<
             (name.equals("retain") || name.equals("release"))) ||
             (c.env.is_drop_type(owner) && name.equals("drop"))
     return false
+
+priv fn infer_pending_bodies(c: Sema_ctx$@, checked: Map<|Sz, Bool|>$@): Bool //<
+    //< It checks each queued instantiation's body, and returns whether one failed
+    //< `checked` gets every body it checked. pending.len is re-read on every iteration: infer_fn
+    //< appends new instantiations to c.generics.pending, and a fixed length would drop them.
+    $has_err: = false
+    $more: = true
+    for more
+        more = false
+        $pending_at: Sz = 0
+        for pending_at < c.generics.pending.len
+            pending: = c.generics.pending.get(pending_at)
+            pending_at += 1
+            if checked.get(Sz::pending.node).unwrap_or(false)
+                continue
+            sym: = Sema_symbol$@::pending.node.sym_ptr
+            if sym.flags.is_method && !sym.flags.is_used &&
+                !implicit_cleanup_method(c, pending.node)
+                continue
+            checked.set(Sz::pending.node, true)
+            more = true
+            // Caution: **Drain the constraints before each body is checked.** Drained once outside
+            // the loop, a violation by an instantiation made inside some body would be known only
+            // after its method body is checked.
+            // **Drain the instantiations first**: they fill the conformance table the check reads.
+            c.drain_pending_instances() catch
+                has_err = true
+            c.drain_pending_constraints()
+            // A constraint-violating instantiation's body is not checked (for the same reason).
+            if c.has_failed_constraint(pending.impl_name)
+                continue
+            if !infer_instance_body(c, pending, sym, pending_at - 1)
+                has_err = true
+    return has_err
+
+priv fn infer_instance_body(c: Sema_ctx$@, pending: Pending_inst, sym: Sema_symbol$@, at: Sz): Bool //<
+    //< It checks one queued instantiation's body (`at` in the queue); false where it failed
+    c.set_current_file(pending.node.loc.file())
+    c.symtab.scope_stack.len = 0
+    c.fn_ctx = sema_session_ctx.Fn_ctx::{ .name = "", .ret_id = 0, .impl_name = pending.impl_name,
+        .fallback_type = 0, .catch_depth = 0, .in_fallback_value = false, .in_defer = false,
+        .defer_boundary = 0 }
+
+    base_diag.ice_assert(pending.node.sym_ptr != null,
+        "infer: pending instantiation node missing sym_ptr")
+    c.fn_ctx.name = sym.name
+
+    // Restores the type-argument bindings as queued, then analyzes the body. Always restore the
+    // previous ones afterwards (instantiations nest; see Pending_inst in sema/session/state.kspl).
+    saved_args_len: = c.generics.args.len
+    for j in Range.asc(pending.bound_args.len)
+        c.generics.args.push(pending.bound_args.get(j))
+    // This body's depth in the chain; an instantiation made inside it is one deeper
+    // (inst_chain_depth in sema/session/state.kspl).
+    c.generics.inst_chain_depth = pending.depth
+    // What this body instantiates, and an error in it, name it (`Generic_state.analysing`).
+    c.generics.analysing = at
+    $ok: = true
+    pending.node.infer_fn(c) catch
+        ok = false
+    c.generics.analysing = -1
+    c.generics.inst_chain_depth = 0
+    c.generics.args.len = saved_args_len
+    return ok
 
 fn run(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error
     base_diag.ice_assert(r != null, "infer: file_node is null")
@@ -153,81 +218,14 @@ fn run(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error
                 child.infer_impl_decl(c) catch
                     has_err = true
         else if child.kind_id == .k_decl_var || child.kind_id == .k_decl_const
-            if c.env.type_has_drop(child.type_id)
-                c.err(child,
-                    "an automatic owner cannot be a global; keep its lifetime inside a function")
-            expr_node: = child.get_var_decl_expr()
-            if expr_node != null && expr_node.kind_id != .k_empty
-                expected_id: = child.type_id
-                expr_id: = expr_node.infer_expr(c, expected_id)!
-                // A top-level declaration writes its type, so the initializer's is the one to go.
-                sema_body_lint_stmt.lint_type_given(c, expr_node, expected_id,
-                    "The declared type already gives it.")
+            child.infer_global(c)!
 
-                type_node: = child.get_var_decl_type_node()
-                child.type_id = child.resolve_inferred_array(c, expected_id, expr_id, type_node,
-                    child)
-                // Caution: **Include `const` too.** Like `var`, it becomes a file-scope initializer
-                // in C, which requires a constant expression.
-                expr_node.check_static_initializer(c)
-
-    // pending.len is re-read on every iteration: infer_fn appends new instantiations to
-    // c.generics.pending, and a fixed length would drop them. From here on the bodies are
-    // monomorphized templates.
+    // From here on the bodies are monomorphized templates.
     c.set_in_generic_instance(true)
     defer c.set_in_generic_instance(false)
     $checked: = Map<|Sz, Bool|>.new(base_core.arena)
-    $more: = true
-    for more
-        more = false
-        $pending_at: Sz = 0
-        for pending_at < c.generics.pending.len
-            pending: = c.generics.pending.get(pending_at)
-            pending_at += 1
-            if checked.get(Sz::pending.node).unwrap_or(false)
-                continue
-            sym: = Sema_symbol$@::pending.node.sym_ptr
-            if sym.flags.is_method && !sym.flags.is_used &&
-                !implicit_cleanup_method(c, pending.node)
-                continue
-            checked.set(Sz::pending.node, true)
-            more = true
-            // Caution: **Drain the constraints before each body is checked.** Drained once outside
-            // the loop, a violation by an instantiation made inside some body would be known only
-            // after its method body is checked.
-            // **Drain the instantiations first**: they fill the conformance table the check reads.
-            c.drain_pending_instances() catch
-                has_err = true
-            c.drain_pending_constraints()
-            // A constraint-violating instantiation's body is not checked (for the same reason).
-            if c.has_failed_constraint(pending.impl_name)
-                continue
-            c.set_current_file(pending.node.loc.file())
-            c.symtab.scope_stack.len = 0
-            c.fn_ctx = sema_session_ctx.Fn_ctx::{ .name = "", .ret_id = 0,
-                .impl_name = pending.impl_name, .fallback_type = 0, .catch_depth = 0,
-                .in_fallback_value = false, .in_defer = false, .defer_boundary = 0 }
-
-            base_diag.ice_assert(pending.node.sym_ptr != null,
-                "infer: pending instantiation node missing sym_ptr")
-            c.fn_ctx.name = sym.name
-
-            // Restores the type-argument bindings as queued, then analyzes the body. Always restore
-            // the previous ones afterwards (instantiations nest; see Pending_inst in
-            // sema/session/state.kspl).
-            saved_args_len: = c.generics.args.len
-            for j in Range.asc(pending.bound_args.len)
-                c.generics.args.push(pending.bound_args.get(j))
-            // This body's depth in the chain; an instantiation made inside it is one deeper
-            // (inst_chain_depth in sema/session/state.kspl).
-            c.generics.inst_chain_depth = pending.depth
-            // What this body instantiates, and an error in it, name it (`Generic_state.analysing`).
-            c.generics.analysing = pending_at - 1
-            pending.node.infer_fn(c) catch
-                has_err = true
-            c.generics.analysing = -1
-            c.generics.inst_chain_depth = 0
-            c.generics.args.len = saved_args_len
+    if infer_pending_bodies(c, checked@)
+        has_err = true
 
     for child_node in r.children
         child: = child_node.unwrap_top_level()
@@ -237,26 +235,19 @@ fn run(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error
         if sema_decl_attrs.is_assertion_directive(child)
             child.infer_compile_directive(c)
 
-    // Caution: **Mark the written imports before discarding the template bodies.** An
-    // uninstantiated body is never analyzed, so resolving never marks its imports.
+    // Caution: **Mark the written imports and names before discarding the template bodies.** An
+    // uninstantiated body is never analyzed, so resolving never marks its imports, nor the `priv`
+    // helpers it calls ([W0206]).
     if base_core.config.run_lint_checks
-        for child in r.children
-            child.mark_written_imports(c)
+        for child_node in r.children
+            child_node.mark_written_imports(c)
+            child: = child_node.unwrap_top_level()
+            if child.is_generic_template()
+                c.set_current_file(child.loc.file())
+                child.mark_template_symbols_used(c)
+        sema_body_lint_written.lint_written(r, c)
 
-    clean_children: = base_ast.new_ast_node_list()
-    for child in r.children
-        u_child: = child.unwrap_top_level()
-        if u_child.is_generic_template() && !base_core.config.is_lsp
-            continue
-        clean_children.push(child)
-
-    for inst_node in c.env.instantiated_nodes_list
-        if inst_node.kind_id == .k_decl_fn && inst_node.find_child(.k_stmt_block) != null &&
-            !checked.get(Sz::inst_node).unwrap_or(false)
-            continue
-        clean_children.push(inst_node)
-    c.env.instantiated_nodes_list.len = 0
-    r.children = clean_children
+    r.keep_checked_children(c, checked@)
     // --- Final Pass: Post-Resolution for LSP and Linter ---
     for child_node in r.children
         child: = child_node.unwrap_top_level()
@@ -270,17 +261,53 @@ fn run(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error
             c.generics.resolving_template_types = false
         child.mark_template_symbols_used(c)
 
-    c.bind_import_symbols()
-    c.check_import_symbols_visible()
+    c.check_import_symbols()
     c.check_redundant_import_alias()
     c.check_unused_imports()
     c.check_unused_symbols()
+    c.check_uncalled_in_suite_files()
     c.check_unit_internal_pubs()
 
     if c.has_error() || has_err
         throw .analysis_failed
 
 impl Ast_node
+    priv fn infer_global(r: Self$@, c: Sema_ctx$@): Void!Sema_error //<
+        //< It checks a file-scope `var` or `const` and its initializer
+        if c.env.type_has_drop(r.type_id)
+            c.err(r, "an automatic owner cannot be a global; keep its lifetime inside a function")
+        expr_node: = r.get_var_decl_expr()
+        if expr_node == null || expr_node.kind_id == .k_empty
+            return
+        expected_id: = r.type_id
+        expr_id: = expr_node.infer_expr(c, expected_id)!
+        // A top-level declaration writes its type, so the initializer's is the one to go.
+        sema_body_lint_stmt.lint_type_given(c, expr_node, expected_id,
+            "The declared type already gives it.")
+
+        type_node: = r.get_var_decl_type_node()
+        r.type_id = r.resolve_inferred_array(c, expected_id, expr_id, type_node, r)
+        // Caution: **Include `const` too.** Like `var`, it becomes a file-scope initializer in C,
+        // which requires a constant expression.
+        expr_node.check_static_initializer(c)
+
+    priv fn keep_checked_children(r: Self$@, c: Sema_ctx$@, checked: Map<|Sz, Bool|>$@) //<
+        //< It drops each template (except in the editor) and each instance whose body was unchecked
+        clean_children: = base_ast.new_ast_node_list()
+        for child in r.children
+            u_child: = child.unwrap_top_level()
+            if u_child.is_generic_template() && !base_core.config.is_lsp
+                continue
+            clean_children.push(child)
+
+        for inst_node in c.env.instantiated_nodes_list
+            if inst_node.kind_id == .k_decl_fn && inst_node.find_child(.k_stmt_block) != null &&
+                !checked.get(Sz::inst_node).unwrap_or(false)
+                continue
+            clean_children.push(inst_node)
+        c.env.instantiated_nodes_list.len = 0
+        r.children = clean_children
+
     priv fn infer_fn(r: Self$@, c: Sema_ctx$@): Void!Sema_error
         // Restarts the temporary variables' numbering per body. **It nests, so restore it** (the
         // reason is at enter_fn_serial in sema/body/for_in.kspl).
@@ -379,7 +406,6 @@ impl Ast_node
 
     priv fn check_param_default(r: Self$@, c: Sema_ctx$@, t_id: I32) //<
         //< Checks a parameter's default against its type here, at the declaration
-        //<
         //< **A call that leaves the argument out checks a copy of it the same way**
         //< (`call_defaults.kspl`); without this, `v: U8 = 300` passes until some call uses it. The
         //< two reports are one at the same position, and merged.
@@ -393,7 +419,6 @@ impl Ast_node
 
     priv fn infer_body(r: Self$@, c: Sema_ctx$@, block: Ast_node$@): Bool //<
         //< It analyzes a function's body; false where it found an error
-        //<
         //< A body whose function returns nothing gets the `return` its writer left out.
         block.infer_stmts(c) catch
             return false
@@ -401,6 +426,8 @@ impl Ast_node
         sema_body_lint_stmt.lint_lock_escape(c, block)
         // [W0109] A way out between a `Manual_free` value's binding and the `defer` freeing it.
         sema_body_lint_stmt.lint_defer_gap(c, block)
+        // [I0311] An explicit free of a local that frees itself, just before its own cleanup.
+        sema_body_lint_stmt.lint_self_free(c, block)
         if r.has_attribute("naked") && !block.holds_only_asm(c)
             return false
         if c.has_error_in_fn()
@@ -412,7 +439,6 @@ impl Ast_node
 
     priv fn add_implicit_return(r: Self$@, c: Sema_ctx$@, block: Ast_node$@) //<
         //< It ends the body of a function returning nothing with `return`, where it does not end so
-        //<
         //< Caution: **Do not add it to a function that declares `#noreturn`.** A `return;` under
         //< C's `__attribute__((noreturn))` triggers `-Winvalid-noreturn` (Principle 2). Nor to a
         //< `#naked` one: its assembly returns, and clang refuses any other statement.
@@ -432,7 +458,6 @@ impl Ast_node
 
     priv fn holds_only_asm(r: Self$@, c: Sema_ctx$@): Bool //<
         //< Whether a `#naked` function's body is `__kspl_asm_volatile(...)` statements alone
-        //<
         //< It reports the first other statement.
         //< With no prologue there is no frame, so any other statement would use stack the function
         //< never set up. clang refuses it ("non-ASM statement in naked function").
@@ -454,7 +479,6 @@ impl Ast_node
 
     priv fn find_subtree_end_offset(r: Self$@): Sz //<
         //< The rightmost offset in the subtree, in place of the end offset Ast_node does not store
-        //<
         //< A dropped punctuation token can make it a few lines short, which is close enough for the
         //< line guideline.
         $max_end: Sz = r.loc.offset + r.text.len
@@ -466,7 +490,6 @@ impl Ast_node
 
     priv fn lint_fn_length(r: Self$@, c: Sema_ctx$@) //<
         //< [H0803] Reports a function over the guideline of 300 lines
-        //<
         //< The guideline is Principle 3 of docs/DESIGN-principles.md; as a guideline, it is a Hint,
         //< not an error.
         src: = base_core.source_of(c.source_map, r.loc.file())
@@ -496,7 +519,6 @@ impl Ast_node
 
     priv fn lint_nesting(r: Self$@, body: Ast_node$@, c: Sema_ctx$@) //<
         //< [H0805] Reports a function whose blocks nest past the guideline of 8 levels
-        //<
         //< The body's own block is level 0, so an `if` in it opens level 1. The guideline is
         //< Principle 3 of docs/DESIGN-principles.md; as a guideline, it is a Hint, as [H0803] is.
         if c.is_code_off(r, "H0805")

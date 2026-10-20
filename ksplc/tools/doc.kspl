@@ -1,5 +1,4 @@
 //< `ksplc doc`: what a file, one entry or a folder publishes, rendered from the source when asked
-//<
 //< It reads the lines `--emit-surface` reads (`surface_lines` in `tools/surface.kspl`), so the
 //< reference and the record cannot disagree. **Nothing is written to disk**: a declaration's own
 //< `//<` is the one copy of what it says, and this renders it on request, as Markdown.
@@ -42,7 +41,6 @@ priv fn file_path_of(logical: U8[]): U8[] //< the path a logical name's file is 
     return base_core.arena.dup_str(out.slice())
 
 priv fn folder_path_of(name: U8[]): U8[] //< the folder a name such as `std` or `ksai` stands for
-    //<
     //< **`std` alone is std's folder.** The logical names under it start `std/`, so the bare name
     //< is asked here rather than through `embed_disk_path`. That would look for it locally.
     if name.equals("std")
@@ -51,10 +49,9 @@ priv fn folder_path_of(name: U8[]): U8[] //< the folder a name such as `std` or 
 
 priv fn read_lines(path: U8[], logical: U8[], parser: kspeg.Target$@): List<|Line|>? //<
     //< One file's entries, or none where it cannot be read or parsed (the reason is printed)
-    //<
     //< **The bytes are mended as the loader mends them** (`parse_load.mend_as_read`), so a
     //< `.kspl` file gives the record the same text a compile gives it.
-    raw: = io.read_file(path) catch e
+    raw: = io.read_file(path, null) catch e
         io.err().s("ksplc doc: cannot read \{path\}: \{e\}\n")
         return .none
     defer dealloc(Void$@::raw.ptr)
@@ -71,7 +68,6 @@ priv fn read_lines(path: U8[], logical: U8[], parser: kspeg.Target$@): List<|Lin
 // ==========================================
 
 priv fn summary_of(doc: U8[]): U8[] //< the first sentence of a description
-    //<
     //< **Only one sentence is kept**: a line in a list holding the whole description would be as
     //< long as the entry.
     //< Caution: **Cut at a period followed by a space**; one with none after it is inside a name
@@ -84,7 +80,6 @@ priv fn summary_of(doc: U8[]): U8[] //< the first sentence of a description
     return doc
 
 priv fn anchor_of(head: U8[], out: Str_builder$@) //< the anchor the renderer gives that heading
-    //<
     //< Lower case; a space becomes `-`; word characters and `-` stay, the rest goes. **An `_` and a
     //< byte of a multi-byte character stay too**, as the renderer keeps them.
     for ch in head
@@ -97,7 +92,6 @@ priv fn anchor_of(head: U8[], out: Str_builder$@) //< the anchor the renderer gi
 
 priv fn anchor_taken(seen: List<|U8[]|>$@, key: U8[]): U8[] //<
     //< The anchor a heading over `key` gets, counting the ones given out before it
-    //<
     //< **A repeat is numbered**: the second heading reducing to the same text gets `-1`, the third
     //< `-2` (`#cfg(!freestanding)` and `#cfg(freestanding)` do collide).
     $base: = Str_builder.new()
@@ -113,7 +107,6 @@ priv fn anchor_taken(seen: List<|U8[]|>$@, key: U8[]): U8[] //<
 
 priv fn anchors(rows: List<|Line|>@): List<|U8[]|> //<
     //< The anchor each row's heading gets, one per row (**empty where it gets none**)
-    //<
     //< Caution: **Count in the order the headings are written**; the contents, written before the
     //< entries, and a link inside a description both read this list.
     $seen: = List<|U8[]|>.new(base_core.arena)
@@ -126,7 +119,6 @@ priv fn anchors(rows: List<|Line|>@): List<|U8[]|> //<
     return out
 
 priv fn names_entry(entry: U8[], name: U8[]): Bool //< whether `name` is that entry's key
-    //<
     //< **A declaration written per configuration has its `#cfg` in the key** (`dealloc
     //< #cfg(!freestanding)`), so the name is compared up to that mark; the first one gets the link.
     return entry.equals(name) ||
@@ -134,7 +126,6 @@ priv fn names_entry(entry: U8[], name: U8[]): Bool //< whether `name` is that en
 
 priv fn target_of(rows: List<|Line|>@, links: List<|U8[]|>@, tail: U8[], name: U8[]): U8[] //<
     //< The anchor a dotted name in a description links to, or empty
-    //<
     //< **An entry keyed by the whole name comes first** (`Parser.parse`), then the file's own last
     //< part with the entry the rest names (`mem.dealloc` inside `std/mem`). **Only this file's
     //< entries link**: another file's name stays text, and `ksplc doc` on it shows it.
@@ -155,7 +146,6 @@ priv fn link_for(rows: List<|Line|>@, links: List<|U8[]|>@, name: U8[]): U8[] //
 
 priv fn linked(doc: U8[], rows: List<|Line|>@, links: List<|U8[]|>@, tail: U8[]): U8[] //<
     //< `doc` with each backquoted dotted name of this file's entries turned into a link to it
-    //<
     //< Caution: **Leave a span already inside a link alone** (`[`name`](…)`); wrapped again, one
     //< link would nest in another.
     return sema_session_pointer.link_names(doc, sema_session_pointer.next_dotted, "#",
@@ -164,7 +154,6 @@ priv fn linked(doc: U8[], rows: List<|Line|>@, links: List<|U8[]|>@, tail: U8[])
     })
 
 priv fn next_label(doc: U8[], from: Sz): Sz //< where the next label after `from` starts
-    //<
     //< **A label counts only after a space.** Inside a word, or at the start of the description, it
     //< splits nothing (cut there, the paragraph would start empty).
     labels: U8[][2] = ::{ "Caution: ", "Note: " }
@@ -186,7 +175,6 @@ priv fn next_label(doc: U8[], from: Sz): Sz //< where the next label after `from
     return best
 
 priv fn say(doc: U8[], out: Str_builder$@) //< one description, written out as paragraphs
-    //<
     //< **A label starts a paragraph of its own.** The comment is joined into one line, so a
     //< `Caution:` would otherwise land mid-paragraph.
     $at: Sz = 0
@@ -203,7 +191,6 @@ priv fn say(doc: U8[], out: Str_builder$@) //< one description, written out as p
 priv fn write_parts(rows: List<|Line|>@, links: List<|U8[]|>@, tail: U8[], key: U8[],
     out: Str_builder$@) //<
         //< The list of one declaration's parameters and its return value
-        //<
         //< Caution: **Match the owner; do not trust the order.** A part's key ends in a mark that
         //< sorts after letters, so `sub`'s parts land after `sub_from` and would be read as its
         //< parts.
@@ -266,7 +253,6 @@ priv fn scope_says(): U8[] //< the line saying what the reference holds
 
 priv fn write_file(file: U8[], rows: List<|Line|>@, out: Str_builder$@) //<
     //< One file's reference: what it is for, what it holds, and every entry in it
-    //<
     //< **The order is the record's** (by key), so a type's members follow it.
     links: = anchors(rows)
     tail: = tail_of(file)
@@ -292,7 +278,6 @@ priv fn write_file(file: U8[], rows: List<|Line|>@, out: Str_builder$@) //<
 
 priv fn write_one(file: U8[], rows: List<|Line|>@, name: U8[], out: Str_builder$@): Sz //<
     //< The entries `name` names: the entry itself and, for a type, its members; how many
-    //<
     //< **A member is an entry whose key starts with the name and a `.`** (`Arena.alloc` under
     //< `Arena`). So asking for a type shows what can be called on it.
     links: = anchors(rows)
@@ -314,13 +299,11 @@ priv fn write_one(file: U8[], rows: List<|Line|>@, name: U8[], out: Str_builder$
 // ==========================================
 
 priv fn skip_dir(name: U8[]): Bool //< `tests/`, build output, and git's own folder
-    //<
     //< **`tests/` is skipped**: what a package's tests declare is nobody's to call.
     return name.equals("tests") || fs.skip_build_output(name)
 
 priv fn write_folder(name: U8[], dir: U8[], parser: kspeg.Target$@, out: Str_builder$@): Bool //<
     //< Every source under the folder that publishes something, with its summary
-    //<
     //< False where the folder cannot be walked.
     //< **A file that cannot be read is named, not dropped**: a listing missing a file reads exactly
     //< like a folder that holds no such file.
@@ -361,7 +344,6 @@ priv fn write_folder(name: U8[], dir: U8[], parser: kspeg.Target$@, out: Str_bui
 
 fn print_doc(target: U8[], parser: kspeg.Target$@): Bool //<
     //< Prints the reference `target` names; false (with the reason printed) where it names nothing
-    //<
     //< **The entry follows the first `.` after the last `/`** (`std/mem.Arena.alloc` is the file
     //< `std/mem` and the entry `Arena.alloc`), since a logical name holds no `.`.
     $after_slash: Sz = 0

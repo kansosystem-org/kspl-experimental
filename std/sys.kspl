@@ -1,5 +1,4 @@
 //< The process itself: its arguments, its environment, the clock and signals
-//<
 //< The path helpers are here too (`get_dir_name`, `last_ext`, `is_absolute` and the rest). They
 //< read a path as text and never touch the filesystem. Operations on the tree are in `std/fs`.
 //< **`panic`, `assert` and the error trace are not here** but in `std/lang`. Here, `mem` and `ds`
@@ -85,14 +84,12 @@ pub enum Cwd_error //< why the working directory could not be given
 // For "how many to run in parallel": more than this is no faster, only more overhead.
 #cfg(!freestanding)
 pub fn cpu_count(): Sz //< how many CPUs this process can run on; 1 if unknown, never 0
-    //<
     //< It follows the affinity (`taskset`, a job object) where the OS has one; a container's CPU
     //< quota is not read.
     n: = kspl_cpu_count()
     return 1 if n < 1 else n
 
 pub const SCRIPT_ENV_NAME: U8[] = "KSPL_SCRIPT" //< how a launcher passes a script its own path.
-    //<
     //< The value is "<the launched executable's path>\n<the script's path>" (see script_path).
     //< Caution: Changing the name on only one side makes script_path silently return .none.
 
@@ -140,7 +137,6 @@ pub fn unset_env(name: U8[]): Void!Env_error //<
 
 #cfg(!freestanding)
 priv fn env_name_cstr(name: U8[]): U8$@!Env_error //< the name as C takes it; the caller frees it
-    //<
     //< **Refused here, the same on every OS.** POSIX's `setenv` refuses `=`, but Windows's
     //< `_wputenv_s` reads it as the end of the name. So the two would store different variables.
     if name.len == 0 || name.find_char('=').is_some()
@@ -156,11 +152,7 @@ priv fn env_name_cstr(name: U8[]): U8$@!Env_error //< the name as C takes it; th
 // grandchildren too, so the value also carries the path of the executable the launcher started.
 #cfg(!freestanding)
 pub fn script_path(): U8[]? //< the script being run, if a launcher started this
-    $raw: U8[] = ""
-    switch get_env(SCRIPT_ENV_NAME)
-    case .some(v)
-        raw = v
-    case .none
+    raw: U8[] = get_env(SCRIPT_ENV_NAME) catch
         return .none
     if sep: = raw.find_char('\n')
         a: = args()
@@ -188,7 +180,6 @@ pub fn program_name(): U8[] //< this program's name for messages, without folder
 // Raising a signal
 // ==========================================
 pub fn raise_signal(sig: I32) //< sends a signal to this process itself
-    //<
     //< For a test, or to resend a signal for its default behaviour after your own clean-up.
     libc.raise(sig)
 
@@ -203,7 +194,6 @@ priv fn last_path_sep(path: U8[]): Sz? //< the position of the last separator in
     return .none
 
 pub fn is_absolute(path: U8[]): Bool //< whether it starts from the root; on Windows `C:\` counts
-    //<
     //< Caution: **Check up to the separator after the drive.** On Windows `C:name` is relative to
     //< **that drive's current working directory**, not the root. A copy that skips the separator
     //< answers differently in just that case. On POSIX `C:\x` is a relative name.
@@ -212,13 +202,11 @@ pub fn is_absolute(path: U8[]): Bool //< whether it starts from the root; on Win
     return n > 0 && (is_path_sep(path[0]) || is_path_sep(path[n - 1]))
 
 pub fn is_path_sep(c: U8): Bool //< a path separator, `/` or `\`, on every OS; std/fs splits by it
-    //<
     //< Caution: Check both `/` and `\`. A path from Windows can be mixed (MSYS2 rewrites a
     //< `/tmp/...` it passes to a child process as `D:/a/_temp/...`).
     return c == '/' || c == '\\'
 
 pub fn root_len(path: U8[]): Sz //< the length of the root a path starts from; 0 if it has none
-    //<
     //< A separator is one byte. **A drive is part of the root on Windows only**: `C:` is two and
     //< `C:\` three there. On POSIX `C:\x` is a relative name whose first folder is `C:`.
     //< On Windows a share is a root too, `\\server\share\`, and so is what follows `\\?\` or
@@ -240,7 +228,6 @@ priv fn drive_root_len(path: U8[]): Sz //< `C:` is two and `C:\` three; 0 for no
     return 3 if path.len >= 3 && is_path_sep(path[2]) else 2
 
 priv fn windows_long_root_len(path: U8[]): Sz //< the root of a path opening with two separators
-    //<
     //< Caution: **A share's root is its server and its share.** Cut at the first separator, every
     //< path on `\\server\share` would read as directly under `\\`, and its parent as the server.
     //< After `\\?\` the next name is the root's (`C:`, `Volume{...}`), save `UNC`, which a share
@@ -264,7 +251,6 @@ priv fn name_len(rest: U8[]): Sz //< the first name's length in rest, with the s
 
 pub fn get_dir_name(path: U8[]): U8[] //<
     //< the folder part; empty for a bare name, the root for the root
-    //<
     //< **A file directly under the root is in the root** (`/x` in `/`, on Windows `C:\x` in `C:\`
     //< and `\\srv\sh\x` in `\\srv\sh\`). **The root is its own folder**: `/`, `C:\` and
     //< `\\srv\sh\` give themselves. So a walk up ends where the answer stops changing.
@@ -284,7 +270,6 @@ pub fn get_file_name(path: U8[]): U8[] //< the last segment, without the folder 
 
 priv fn ext_dot(path: U8[]): Sz? //<
     //< The position of the extension's leading `.`, or none
-    //<
     //< **A filename's leading `.` is not an extension** (`.bashrc` has none).
     $name_at: Sz = 0
     if last_slash: = last_path_sep(path)
@@ -295,7 +280,6 @@ priv fn ext_dot(path: U8[]): Sz? //<
     return .none
 
 pub fn strip_last_ext(path: U8[]): U8[] //< the path without its last extension
-    //<
     //< **Joined with `last_ext`, it restores the original path** (`strip_last_ext(p) + last_ext(p)
     //< == p`), so there is no "which side gets the dot" to remember.
     //< Caution: Do not change only one of them.
@@ -304,7 +288,6 @@ pub fn strip_last_ext(path: U8[]): U8[] //< the path without its last extension
     return path
 
 pub fn last_ext(path: U8[]): U8[] //< the last extension with its dot, or empty if none
-    //<
     //< **The leading `.` is included.** For a double extension, call it again yourself
     //< (`last_ext(strip_last_ext("a.tar.gz"))` gives `".tar"`). **Do not add a plural such as
     //< `suffixes` in advance** (Principle 1 in `docs/DESIGN-principles.md`); adding one later only
@@ -319,7 +302,6 @@ extern "C"
     fn kspl_sleep_ms(ms: I32)
 
 pub fn mono_us(): I64 //< a clock that only goes forward, in microseconds
-    //<
     //< **Only a difference has meaning**; the origin is not defined.
     //< Caution: **Do not measure elapsed time with the wall clock (`wall_seconds`).** NTP or the
     //< user can rewind it, so a difference can go negative. **It is not CPU time**: it advances
@@ -327,24 +309,20 @@ pub fn mono_us(): I64 //< a clock that only goes forward, in microseconds
     return kspl_mono_us()
 
 pub fn deadline_after_ms(ms: I64): I64 //< the `mono_us` reading `ms` milliseconds from now
-    //<
     //< **Each caller rounds what is left its own way** (a wait that must not end early rounds up).
     return mono_us() + ms * 1000I64
 
 pub fn wall_seconds(): I64 //< the wall clock: the seconds elapsed since 1970-01-01T00:00:00Z
-    //<
     //< **It is the date and time, not a stopwatch.** NTP or the user can set it back. So a
     //< difference between two readings can be negative. To measure how long something takes, use
     //< `mono_us`.
     return libc.time(null)
 
 pub fn timing_available(): Bool //< whether this environment has a clock at all
-    //<
     //< A working clock never returns 0, whatever its origin, so that is what is checked.
     return mono_us() != 0
 
 pub fn is_windows(): Bool //< whether the OS running this is Windows
-    //<
     //< Lets a test or tool that relies on a POSIX-only path such as `/bin/echo` skip itself.
     return kspl_is_windows()
 

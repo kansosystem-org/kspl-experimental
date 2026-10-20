@@ -1,5 +1,4 @@
 //< `Sema_ctx`, the context one whole analysis carries, and the diagnostics it reports
-//<
 //< It holds what every part of Sema reads: the current file and its source, the symbol table, the
 //< environment. It also holds the analysis's switches, a body walk's flags (`Fn_ctx`) and each
 //< concern's state (`sema/session/state.kspl`). Every diagnostic goes through `report_diagnostic`,
@@ -21,11 +20,11 @@ import "ksplc/sema/type/query" as sema_type_query
 import "ksplc/sema/type/scope" as sema_type_scope + { Sema_symbol }
 import "std/chars"
 import "std/ds" { List, Map }
+import "std/math"
 import "std/str" { Str_builder }
 
 priv const MAX_ERRORS: I32 = 50 //< the errors a run reports, the cap's own line counted
 priv const MAX_INSTANCE_NOTES: Sz = 8 //< the instantiations an error in a generic's body names
-    //<
     //< "Compilation stops at 50 errors" in ksplc/docs/SPEC-tools.md fixes it; change both together.
 
 struct Jump_label
@@ -33,7 +32,6 @@ struct Jump_label
     is_loop: Bool
     name_node: Ast_node$@ //<
         //< The identifier naming the label where one is written, null elsewhere
-        //<
         //< A `break` / `continue` that names it points here (the editor's jump uses it).
     stmt: Ast_node$@ //< the statement a `break` to this level leaves (`mark_left_by_break`)
 
@@ -43,15 +41,17 @@ struct Fn_ctx
     impl_name: U8[]
     fallback_type: I32
     catch_depth: Sz
+    catch_on_option: Bool //<
+        //< True while the innermost `catch` block is one on an Option
+        //< That block must leave, so a `fallback` in it is refused (infer_option_catch in
+        //< `../body/expr.kspl`).
     in_fallback_value: Bool //<
         //< True only while a `fallback`'s alternative value is analysed.
-        //<
         //< **It limits to here the rule that lets a non-returning call (`#noreturn`) stand in a
         //< value position** (sema/body/coerce.kspl). Widened, `return panic(…);` would pass too,
         //< and genc would emit the C `return <Void>`.
     catch_value_unread: Bool //<
         //< True only while an expression whose value nobody can read is analysed
-        //<
         //< That is a bare expression statement, or a binding whose name starts with `_`. **A catch
         //< block there needs no `fallback`**, because the zero it would produce reaches no reader.
         //< Caution: **The catch that reads the flag clears it.** Left set, a `catch` nested in that
@@ -60,24 +60,20 @@ struct Fn_ctx
     defer_boundary: Sz
     literal_negated: Bool //<
         //< Whether the literal being inferred is directly under a unary minus.
-        //<
         //< `-1` is a unary minus on the literal `1`, so without this the range check rejects a
         //< correct minimum such as `I8 = -128`. Only the unary minus sets it, and only over a
         //< literal (saved and restored).
     callee: Ast_node$@ //<
         //< The expression a call is about to call, while it is inferred; null otherwise
-        //<
         //< **A function's name anywhere else is a value**, which a generic one can be only as a
         //< specialization (sema/body/resolve_path.kspl). The call's own route infers its type
         //< arguments from the arguments (sema/body/call.kspl).
     errors_before: I32 //<
         //< The error mark (`error_mark`) when this function's body began; 0 outside a body
-        //<
         //< `has_error_in_fn` compares against it, so an error in one function does not silence
         //< the diagnostics of the next.
     effective_vis: sema_type_scope.Visibility //<
         //< The effective visibility of the function being analysed
-        //<
         //< For a method it is min(the impl's target type, the method itself). check_type_vis_leak
         //< compares the return type's visibility with it.
 
@@ -88,20 +84,17 @@ enum Sema_error
     invalid_argument
     nesting_too_deep //<
         //< The constant fold was stopped at the depth limit
-        //<
         //< The limit is max_constexpr_depth in sema/decl/eval.kspl.
         //< Caution: **Keep it apart from not_constant**, a normal result in a speculative fold.
         //< Merged into it, the cutoff reaches the user as an unrelated diagnostic, such as a wrong
         //< array size ("Implementation limits" in docs/SPEC-programming-language.md).
 
 enum Bodies //< which function bodies an analysis checks
-    //<
     //< Every file's declarations are collected whatever this says; only bodies are left out.
     main_file //< only `main_file`'s: the editor's view of one document (hover, diagnostics)
     everywhere //< every file's: compiling and linting
     mentioning(name: U8[]) //<
         //< `main_file`'s, and every other body that mentions `name` or a generic that does
-        //<
         //< The workspace view (references, renaming, the call hierarchy) uses it. A site naming
         //< `name` lives in a body that mentions it, or in an instance of a generic that does
         //< (`wanted_names` in `../body/infer.kspl`).
@@ -113,7 +106,6 @@ struct Sema_ctx
     file_name: U8[]
     main_file: U8[] //<
         //< The file the lint or the compilation targets
-        //<
         //< It is kept separately because set_current_file changes file_name.
     env: sema_type_env.Env$@
     generics: Generic_state
@@ -122,11 +114,13 @@ struct Sema_ctx
     import_symbols: Import_symbol_state
     import_reach: Map<|U8[], Import_hit|>$@ //<
         //< "importing file::imported file" -> the line that imports it (build_import_reach)
-        //<
         //< Null until is_file_imported first asks, and again whenever an import line is added.
     diags: Diag_state
     suppress_errors: Bool
     bodies: Bodies //< which files' function bodies are checked
+    suite_files: Map<|U8[], Bool|>$@ //<
+        //< The files a suite reaches, in a program; null otherwise
+        //< `synthesize_suite_runs` fills it and [W0503] reads it (`../decl/suite.kspl`).
     body_names: Map<|U8[], Bool|>$@ //<
         //< The names a body must mention to be checked under `Bodies.mentioning`; null otherwise
     source_map: Map<|U8[], U8$[]|>$@ //<
@@ -135,14 +129,12 @@ struct Sema_ctx
     scratch: Str_builder //< the one builder in which a diagnostic's message is assembled
     priv in_generic_instance: Bool //<
         //< Whether a monomorphized template body is being analysed
-        //<
         //< That is while sema/body/infer.kspl's pending queue is drained. Read it only through
         //< is_instantiating().
     layout: Layout_state
     resolving: Resolving_state
     infer_expr_fn: fn(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32!Sema_error //<
         //< Hands an expression's type inference to the layer above (ksplc/sema/body)
-        //<
         //< **This is the only way decl can call body.** If decl imported body, parse would reject
         //< it as a circular import across directories (ksplc/parse/load.kspl). Only
         //< `sizeof(<expr>)` needs it, since decl's constant folding (an array length, an enum tag,
@@ -152,7 +144,6 @@ struct Sema_ctx
 impl Sema_ctx
     fn find_generic_arg(r: Self$@, param_name: U8[]): Generic_arg? //<
         //< Looks up the current binding of a type variable by name
-        //<
         //< **This is the only function that looks up a binding by name.** **Search from the end:**
         //< instantiations nest, and the same name (`T`) is pushed once per level
         //< (`Keep<|Keep<|List_seq<|T|>, T|>, T|>`).
@@ -265,7 +256,6 @@ impl Sema_ctx
 
     fn line_starts_for(r: Self$@, file: U8[], src: U8[]): List<|Sz|>$@ //<
         //< Returns the table of line-start offsets for file
-        //<
         //< Built on the first call and reused afterwards. This only holds the cache; how the table
         //< is built and read is in base/core.kspl.
         if existing: = r.diags.line_starts.get(file)
@@ -275,7 +265,6 @@ impl Sema_ctx
         return starts
 
     fn line_of(r: Self$@, loc: Loc): Sz //< that position's line number (from 1)
-        //<
         //< Returns 0 where it cannot be determined.
         //< Caution: **Do not use an offset as a line number.** `Loc` holds a byte position, with no
         //< column or line. `#line`, the boundary checks and the default argument `caller_line` all
@@ -298,12 +287,10 @@ impl Sema_ctx
         return r.diags.counts.errors > 0
     fn error_mark(r: Self$@): I32 //<
         //< A mark to compare against later, to tell whether an error was met in between
-        //<
         //< A repeat kept from printing counts as met (Diag_state.errors_met).
         return r.diags.errors_met
     fn has_error_in_fn(r: Self$@): Bool //<
         //< Whether an error was reported since the current function's body began
-        //<
         //< Caution: **Use it, not `has_error`, to hold back a diagnostic that would only repeat an
         //< earlier one.** The cascade it guards against stays inside one body; counted over the
         //< whole compilation, one mistake would silence every function after it.
@@ -313,7 +300,6 @@ impl Sema_ctx
         r.report_diagnostic(node, .error, msg)
     fn check_param_type(r: Self$@, param: Ast_node$@, t_id: I32) //<
         //< Refuses a parameter whose type is missing or Void, naming it
-        //<
         //< **One wording for a function and a trait's prototype** (`infer_fn`, `trait_check`). An
         //< omitted type resolves as "Unknown": normalisation writes the empty type in.
         name: = param.find_text(.k_identifier)
@@ -337,7 +323,6 @@ impl Sema_ctx
 
     fn make_fqn(r: Self$@, name: U8[]): U8[] //<
         //< The fully qualified name, qualified by the current file
-        //<
         //< The built-in `Unknown` / `Void` are not qualified. It lives here, not in `resolve`.
         //< There, ctx would have to import resolve and be pulled into the declarations' mutual
         //< recursion. That is a large tangle, since many files use ctx.
@@ -348,7 +333,6 @@ impl Sema_ctx
 
     fn build_mod_fqn(_r: Self$@, file_path: U8[], name: U8[]): U8[] //<
         //< The FQN of name in the file at file_path (`std.io.Writer`), kept as long as the pools
-        //<
         //< **The caller keeps it as it is**, with no copy: it is the one copy name_text in
         //< ksplc/base/core.kspl holds. It is built in a builder of its own, so a name held in
         //< the context's scratch is read intact.
@@ -358,7 +342,6 @@ impl Sema_ctx
 
     fn is_instantiating(r: Self$@): Bool //<
         //< Whether a generic's instantiation (the analysis of a template body) is in progress
-        //<
         //< Caution: Emit no diagnostic whose result depends on the type arguments during this. The
         //< same source position is analysed once per type argument. So one instantiation's result
         //< becomes advice that breaks the build if followed. check_unnecessary_cast in coerce.kspl
@@ -370,7 +353,6 @@ impl Sema_ctx
 
     priv fn lint_level_for_file(r: Self$@, file: U8[], code: U8[]): base_lint_codes.Lint_level //<
         //< A code's level in `file`: its `##lint(...)` setting, else base_lint_codes.base_level_for
-        //<
         //< **`##lint(...)` is keyed by the source's name**: the file the diagnostic's node belongs
         //< to, which during monomorphization is not the current file.
         for entry in r.diags.lint_settings
@@ -380,7 +362,6 @@ impl Sema_ctx
 
     fn is_code_off(r: Self$@, node: Ast_node$@, code: U8[]): Bool //<
         //< Whether a diagnostic with that code at node would be dropped as switched off
-        //<
         //< **Ask it before work done only for that diagnostic.** Otherwise a check off by default
         //< (W0601) would pay its whole cost on every declaration and print nothing.
         //< lint_level_for_file alone decides the level, as in report_core.
@@ -392,7 +373,6 @@ impl Sema_ctx
 
     priv fn source_for_node(r: Self$@, node: Ast_node$@): U8$[] //<
         //< Gets the source text for a diagnostic **from the file that node belongs to**
-        //<
         //< During monomorphization the current file is the template's. So a diagnostic on a node of
         //< the user's code (a generic's bound violation) would take its line and caret from the
         //< template's text.
@@ -410,7 +390,6 @@ impl Sema_ctx
     fn report_diagnostic_at(r: Self$@, file: U8[], src: U8[], offset: Sz, span: Sz,
         sev: base_diag.Diagnostic_severity, msg: U8[]) //<
             //< Reports a diagnostic at a file's position
-            //<
             //< **A diagnostic without a node comes here** (a misaligned indent column and the like,
             //< found before the analysis).
             //< Caution: **Counting and de-duplication happen in one place, the core below.**
@@ -427,7 +406,6 @@ impl Sema_ctx
     priv fn report_core(r: Self$@, file: U8[], src: U8[], offset: Sz, span: Sz, has_pos: Bool,
         sev: base_diag.Diagnostic_severity, msg: U8[]) //<
             //< The diagnostic's core, **where reports from a node and from a file's position meet**
-            //<
             //< Caution: **Do not copy the level resolution, de-duplication, counting or printing
             //< anywhere else** (Principle 6). `has_pos` adds the position to the de-duplication
             //< key; without it a diagnostic is identified by its text alone.
@@ -501,7 +479,6 @@ impl Sema_ctx
 
     priv fn instance_notes(r: Self$@, msg: U8[]): U8[] //<
         //< msg followed by a Note per instantiation the analysed body stands in, innermost first
-        //<
         //< **Each names what asked for it** (`in 'f<|P|>', instantiated at a.kspl:12:5`), up to
         //< max_instance_notes; the outermost is the caller's own line. An entry with no name is a
         //< closure's body, which its function's entry stands for. A note that would repeat the one
@@ -540,13 +517,11 @@ impl Sema_ctx
         file: = r.file_for_node(node)
         src: = r.source_for_node(node)
         offset: = node.get_span_offset().offset
-        info: = src.get_line_info(offset if offset <= src.len else src.len,
-            r.line_starts_for(file, src))
+        info: = src.get_line_info(math.min(offset, src.len), r.line_starts_for(file, src))
         return base_core.arena.text().s(base_diag.shown_file(file))
             .s(":\{info.line\}:\{info.disp_col\}").take()
 
     priv fn note_code(r: Self$@, code: U8[]) //< records an emitted code, once, for the summary
-        //<
         //< Only a code the registry knows reaches here. The summary tells the reader to run
         //< `ksplc explain` on each, and a bracketed word that is not a code has no section to
         //< print.
@@ -588,7 +563,6 @@ impl Sema_ctx
 
     priv fn append_closure_capture_note(r: Self$@, actual_id: I32) //<
         //< Explains in scratch a closure's environment struct appearing in a type mismatch
-        //<
         //< **Without this note the user sees a type name they never wrote, `_anon_env_1`.** Two
         //< cases reach here: a captured closure (the field is `Callable1<|…|>`, but the environment
         //< struct itself is passed) and a receiving `Callable` whose type arguments differ.
@@ -603,7 +577,6 @@ impl Sema_ctx
 
     fn note_undefined_at(r: Self$@, node: Ast_node$@) //<
         //< records where an undefined name was reported
-        //<
         //< A call's callee is resolved as a name before the call is. So its undefined head is
         //< reported there first, and the call's own report is skipped (`undefined_reported_at`).
         $key: = Str_builder.new()
@@ -629,7 +602,6 @@ impl Sema_ctx
 
     fn append_withheld_alias_note(r: Self$@, name: U8[]): Bool //<
         //< Writes to scratch how to import a name that a selective import left out; true if written
-        //<
         //< The name not found is a file's name that a selective import does not bind.
         //< `import "p" { A }` binds only `A`, so `p.` stands for nothing (`add_withheld_alias`).
         //< Caution: Keep the wording in this one place. Name resolution has two failure points, an
@@ -648,7 +620,6 @@ impl Sema_ctx
 
     fn append_anon_fn_capture_note(r: Self$@, name: U8[]): Bool //<
         //< Writes to scratch that an anonymous function cannot capture the name; true if written
-        //<
         //< It applies where a name is not found in an anonymous function's body. The body is lifted
         //< to the top level, out of reach of the enclosing function's locals, type arguments and
         //< receiver.
@@ -663,7 +634,6 @@ impl Sema_ctx
         return true
 
     fn append_closure_note(r: Self$@) //< writes to scratch that adding `;` makes it a closure
-        //<
         //< Even with zero captures, a `;` makes it a `Callable` ("Why capture is made explicit and
         //< escape is forbidden" in docs/DESIGN-programming-language.md). That **the presence of `;`
         //< decides the type** is not visible in the text. Unexplained, the user sees only "the
@@ -686,7 +656,6 @@ impl Sema_ctx
         r.err(node, r.scratch.slice())
 
     fn set_current_file(r: Self$@, file_name: U8[]) //< changes the current file
-        //<
         //< **Setting the same file does nothing** (the table lookup below is not needed).
         //< Caution: **Report progress on each change** (`report_progress` in `base/core.kspl`).
         //< Every pass goes through here, so no pass adds its own, and `report_progress` throttles
@@ -780,7 +749,6 @@ impl Sema_ctx
 
     priv fn lint_declared_name(r: Self$@, name: U8[], sym: Sema_symbol$@, target_node: Ast_node$@) //<
         //< [I0502] Reports a name off its kind's convention
-        //<
         //< A type uses Initial_upper_snake_case, an explicit constant UPPER_SNAKE_CASE, and an
         //< ordinary value snake_case.
         if sym.kind.is_type()
@@ -818,7 +786,6 @@ fn join_dotted_name(base_name: U8[], sub_name: U8[]): U8[] //<
 impl Ast_node
     fn collect_lint_decl(r: Ast_node$@, c: Sema_ctx$@) //<
         //< `##lint(CODE = level, ...)`: sets the level of the codes listed, for this whole file
-        //<
         //< Caution: The code and the level are both matched against their source in
         //< ksplc/base/lint_codes.kspl, and an unknown one is an error. Unmatched, a typo like
         //< `##lint(I004 = off)` quietly does nothing, and the diagnostic meant to be suppressed is
@@ -848,7 +815,7 @@ impl Ast_node
             if !base_lint_codes.is_known(code_node.text)
                 c.err(code_node, base_lint_codes.unknown_code_msg(code_node.text))
                 continue
-            switch base_lint_codes.Lint_level.parse(level_node.text)
+            switch base_lint_codes.Lint_level.from_variant_name(level_node.text)
             case .some(level)
                 c.diags.lint_settings
                     .push(Lint_setting_entry::{ .file = r.loc.file(), .code = code_node.text,

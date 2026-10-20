@@ -1,5 +1,4 @@
 //< A small FIM (fill-in-the-middle) coding model, trained from scratch, and its completion
-//<
 //< `train` fits `Mini_llama` (`../llama_engine/model.kspl`) to a FIM corpus; `complete` answers a
 //< file of holes with candidates, the greedy one first. Whether a candidate is right is for its
 //< caller to judge (a compiler, for code), not this program.
@@ -22,6 +21,7 @@ import "std/chars"
 import "std/ds" { List }
 import "std/io"
 import "std/json" + { Json_builder }
+import "std/math"
 import "std/mem" { Arena }
 import "std/prng"
 import "std/str" { Str_builder }
@@ -58,7 +58,6 @@ fn fim_ids(base: Sz): Fim_ids //< the markers for a vocabulary of `base` words
 
 fn fim_prompt(pre: List<|I32|>$@, suf: List<|I32|>$@, ids: Fim_ids, arena: Arena$@): List<|I32|> //<
     //< `[PRE] prefix [SUF] suffix [MID]`, keeping the prefix's end and the suffix's start
-    //<
     //< **The prefix is cut from its front and the suffix from its back**: what lies nearest the
     //< hole matters most.
     $out: = List<|I32|>.new(arena)
@@ -75,7 +74,6 @@ fn fim_prompt(pre: List<|I32|>$@, suf: List<|I32|>$@, ids: Fim_ids, arena: Arena
 fn fim_sequence(pre: List<|I32|>$@, mid: List<|I32|>$@, suf: List<|I32|>$@, ids: Fim_ids,
     arena: Arena$@): List<|I32|> //<
         //< The prompt followed by the middle; `[EOT]` closes it only when the whole middle fits
-        //<
         //< Caution: **No `[EOT]` after a cut middle**, or the model learns to stop where it was
         //< cut.
     $out: = fim_prompt(pre, suf, ids, arena)
@@ -92,7 +90,6 @@ priv fn head(text: U8[]): U8[] //< the suffix's start, where the hole ends
     return text.sub(0, CONTEXT_BYTES) if text.len > CONTEXT_BYTES else text
 
 priv fn base_vocab(at: Paths): Sz //< how many words the tokenizer has: its highest id, plus one
-    //<
     //< Read through `Tokenizer.load`, which refuses a broken line rather than reading it as 0.
     scratch: = Arena.new(1024 * 1024)
     defer scratch.free()
@@ -115,10 +112,9 @@ priv fn load_tokenizer(at: Paths, arena: Arena$@): ai_tokenizer.Tokenizer
     return tok
 
 priv fn read_jsonl(path: U8[], arena: Arena$@): List<|json.Value|> //< one JSON value per line
-    //<
     //< A blank line is skipped; **a broken one stops the run**, naming it, so a bad file is not
     //< silently half-read.
-    data: = io.read_file(path) catch
+    data: = io.read_file(path, null) catch
         io.err().s("[error] cannot read \{path\}\n")
         sys.exit(1)
     $out: = List<|json.Value|>.new(arena)
@@ -142,7 +138,6 @@ priv struct Encoded //< the corpus as token sequences, laid end to end
 
 priv fn encode_corpus(corpus: U8[], at: Paths, ids: Fim_ids, keep: Arena$@): Encoded //<
     //< Every training example made a sequence, once
-    //<
     //< **The tokenizer and every list it encodes live on `scratch`**, freed here: only `out`, on
     //< `keep`, outlives the call.
     scratch: = Arena.new(64 * 1024 * 1024)
@@ -187,7 +182,6 @@ fn fim_worker(w: Worker$@): Void$@ //< a worker's sequences of the batch, on the
 priv fn train(corpus: U8[], at: Paths, plan: Schedule, u: ai_optim.Updater<|F32|>$@, seed: U64,
     out_path: U8[]) //<
         //< Fits a fresh model to the corpus, a batch of sequences per step, and writes its weights
-        //<
         //< **The thread count changes only the time.** The sequences are drawn on this thread.
         //< Their gradients are summed in the order drawn, whichever thread computed each.
     began: = sys.mono_us()
@@ -210,7 +204,7 @@ priv fn train(corpus: U8[], at: Paths, plan: Schedule, u: ai_optim.Updater<|F32|
     work: = Arena.new(64 * 1024 * 1024)
     defer work.free()
     $batch: = Batch::{ .model = model@ }
-    threads: = plan.threads if plan.threads < plan.batch else plan.batch
+    threads: = math.min(plan.threads, plan.batch)
     $workers: = List<|Worker|>.new(model_arena)
     for t in Range.asc(threads)
         workers
@@ -271,7 +265,6 @@ priv fn train(corpus: U8[], at: Paths, plan: Schedule, u: ai_optim.Updater<|F32|
 
 priv fn held_out_loss(corpus: U8[], at: Paths, weights: U8[], most: Sz) //<
     //< The mean loss over the first `most` examples of `corpus`; the weights are only read
-    //<
     //< **The loss `train` prints is on its own training data.** This one shows whether it learned
     //< the language or just the examples. **Only the middle's loss measures the task.** The whole
     //< is mostly the prefix and the suffix, which a hole filler is given, not asked to write.
@@ -322,7 +315,6 @@ priv fn candidates(model: ai_model.Mini_llama<|F32|>$@, tok: ai_tokenizer.Tokeni
     prompt: List<|I32|>$@, ids: Fim_ids, samples: Sz, rng: prng.Prng$@, work: Arena$@):
     List<|U8[]|> //<
         //< `samples` completions of one hole, each one line: the first greedy, the rest drawn
-        //<
         //< The prompt is read once. **Each draw restarts at the prompt's end.** Attention at a
         //< position reads the cache only up to it. So what a draw left past the prompt is written
         //< over first.

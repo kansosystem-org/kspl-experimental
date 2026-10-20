@@ -1,5 +1,4 @@
 //< Navigation: which declaration a name stands for, the jump to it, and what it says of itself
-//<
 //< `get_definition_node` answers "which declaration does this name stand for" for the hover,
 //< references and renaming alike. **Only the jump (`handle_definition`) goes on from a declared
 //< name to its type**. `declared_doc` and `linked_doc` read a declaration's description for every
@@ -36,7 +35,6 @@ priv struct Enum_resolve_result
 
 fn write_full_name(name: U8[], file: U8[], out: Str_builder$@) //<
     //< A declaration's name as the whole program knows it (its key in `symtab.by_fqn`)
-    //<
     //< A bare name gets the module of `file`, the declaring file (an empty `file` leaves it bare).
     //< Caution: **Prefix only a bare name.** A method is named by its owner's path
     //< (`collect_impl_decl` in `../sema/decl/collect.kspl`), and the owner need not be in the
@@ -128,7 +126,6 @@ priv fn resolve_decl_type_def(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, target_
     return .none
 
 struct Dot_receiver //< the receiver of a `<receiver>.<name>`, and that type's name
-    //<
     //< **The type's name is sometimes empty.** Where a module alias (the `io` of `import "std/io"
     //< as io`) is the receiver there is no type, so the caller looks up by the receiver's name.
     node: Ast_node$@
@@ -137,7 +134,6 @@ struct Dot_receiver //< the receiver of a `<receiver>.<name>`, and that type's n
 fn dot_receiver_of(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, target_node: Ast_node$@):
     Dot_receiver //<
         //< The receiver of a `<receiver>.<target_node>` on the path, and its type's name
-        //<
         //< Caution: **Do not write it twice, once to look up and once to list.** Jump-to-definition
         //< looks up one member by name and completion lists every member, but **both start from the
         //< same "receiver's type"** (Principle 4).
@@ -167,7 +163,6 @@ fn dot_receiver_of(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, target_node: Ast_n
 
 priv fn type_name_of(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, node: Ast_node$@, depth: Sz): U8[] //<
     //< The registered type name of a receiver, or "" where it cannot be determined
-    //<
     //< In a body sema analysed, the node carries its type. **In a generic's body nothing
     //< instantiated it carries none.** So the type is read from the declarations: a local's, then
     //< each field's along a chain (`r.wo.weights`). A field's type comes from the generic's own
@@ -200,7 +195,6 @@ priv fn type_name_of(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, node: Ast_node$@
 priv fn call_type_name(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, callee: Ast_node$@, depth: Sz):
     U8[] //<
         //< The registered type name of what a call returns, or "" where it cannot be determined
-        //<
         //< **The name decides which function.** There is no overloading and no inheritance. So a
         //< method's name on a known type and a function's bare name each name one declaration. Its
         //< return type is used where it is `Self` (the receiver's) or one sema resolved. Written
@@ -264,7 +258,6 @@ priv fn path_type_name(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, node: Ast_node
 
 fn folded_receiver_type(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, mark: Ast_node$@): U8[] //<
     //< The type of the names before `mark` in a path kept whole (`cc` of `cc.<mark>`), or ""
-    //<
     //< **A body nothing analysed keeps `cc.x` as one path**, never the postfix `dot_receiver_of`
     //< finds, so completion asks here. Only a value's name is typed: a module alias and a type's
     //< name (`io.`, `P.`) take their own path.
@@ -298,14 +291,9 @@ priv fn local_decl_of(path: List<|Ast_node$@|>$@, name: Ast_node$@): Ast_node$@?
 priv fn local_type_name(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, name: Ast_node$@, depth: Sz):
     U8[] //<
         //< The type a local's declaration names, or with none written, its initializer's
-        //<
         //< Caution: **`Self` is the enclosing impl's type**, not a type of that name; so is an `r`
         //< written with no type at all.
-    $local: Ast_node$@ = null
-    switch local_decl_of(path, name)
-    case .some(d)
-        local = d
-    case .none
+    local: Ast_node$@ = local_decl_of(path, name) catch
         return ""
     if local.kind_id == .k_decl_import
         return name.text
@@ -328,7 +316,6 @@ priv fn local_type_name(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, name: Ast_nod
 
 priv fn declared_type_name(c: Sema_ctx$@, t_node: Ast_node$@): U8[] //<
     //< The registered name of the type a declaration's type node names, or its spelling
-    //<
     //< Caution: **Prefer the resolved type over the spelling.** The spelling is the file's own
     //< (`lora.Lora<|T|>` through the import's alias), and no member is registered under it. An
     //< instance is identified by its registration key (`std.ds.List<|T|>`), not its internal name
@@ -353,7 +340,6 @@ priv fn field_type_name(c: Sema_ctx$@, owner: U8[], field: Ast_node$@): U8[] //<
 
 fn struct_decl_of(c: Sema_ctx$@, owner: U8[]): Ast_node$@? //<
     //< The declaration of the struct a type's name stands for, a generic's own where it is one
-    //<
     //< **A generic nothing instantiated has no struct entry**, so its fields are read here, by the
     //< hover (`field_of`) and by completion alike.
     base: = c.env.original_generic_name(owner).get_generic_base_name()
@@ -393,7 +379,6 @@ priv fn declared_field(c: Sema_ctx$@, struct_name: U8[], name: U8[]): Ast_node$@
 
 priv fn member_of(c: Sema_ctx$@, raw_type: U8[], name: U8[]): Ast_node$@? //<
     //< What a `.name` names on a type: a method on its table, a field, or a `<type>.<name>` method
-    //<
     //< **The hover and a call's type both ask here**, so the two cannot disagree on which
     //< declaration a name on a type means.
     orig_type: = c.env.original_generic_name(raw_type)
@@ -469,7 +454,6 @@ priv fn resolve_fallback_parent_def(path: List<|Ast_node$@|>$@, target_node: Ast
 
 priv fn binding_in(p: Ast_node$@, target_node: Ast_node$@, name: U8[]): Ast_node$@? //<
     //< What p binds as name, seen from target_node
-    //<
     //< A declaration binds its type parameters (a function its parameters too). A block binds the
     //< locals declared before target_node. A case pattern binds its bound names.
     switch p.kind_id
@@ -518,7 +502,6 @@ priv fn fn_param_named(decl: Ast_node$@, name: U8[]): Ast_node$@? //<
 
 fn get_definition_node(c: Sema_ctx$@, path: List<|Ast_node$@|>$@): Ast_node$@? //<
     //< The declaration the path's last node stands for; on a declared name, that declaration
-    //<
     //< Caution: **Not the declared type's.** The hover, references and renaming all start here, so
     //< on `$words: = List<|U8[]|>.new(arena)` they showed, listed and renamed `List`.
     if c == null || path.len == 0
@@ -613,7 +596,6 @@ fn find_parent_enum(node: Ast_node$@, target: Ast_node$@, depth: Sz = 0): Ast_no
 
 fn declared_doc(c: Sema_ctx$@, def_node: Ast_node$@): U8[] //<
     //< The documentation a declaration carries, read from the source it was declared in
-    //<
     //< **One place answers this for every editor feature.** The hover and the completion list read
     //< the same comment run that the record and the declaration file read
     //< (`../base/ast_doc.kspl`). So no two of them can say different things about one declaration
@@ -629,7 +611,6 @@ fn declared_doc(c: Sema_ctx$@, def_node: Ast_node$@): U8[] //<
 
 priv fn place_of(c: Sema_ctx$@, node: Ast_node$@): U8[] //<
     //< Where a declaration is, as a link an editor opens (`file:///…#L12`), or empty
-    //<
     //< **An absolute `file://` URI, whatever URI style the client used.** The editor's Markdown
     //< renderer opens it, and a relative name resolves against nothing there.
     file: = node.loc.file()
@@ -650,7 +631,6 @@ priv fn place_of(c: Sema_ctx$@, node: Ast_node$@): U8[] //<
 
 fn linked_doc(c: Sema_ctx$@, root: Ast_node$@, def_node: Ast_node$@): U8[] //<
     //< The documentation a declaration carries, each name in it linked to where it is declared
-    //<
     //< **What is linked is what `[W0211]` checks.** The same reader resolves it
     //< (`../sema/session/pointer.kspl`) through the scope of the file the description is written
     //< in. So a link and a warning never disagree about one name. The position given is the

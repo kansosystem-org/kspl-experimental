@@ -1,6 +1,4 @@
-#!/usr/bin/env -S ksplc run
 //< Compiles a document's KSPL fragments, and holds each `// error` mark to what the compiler says
-//<
 //< The rule is "A code block compiles, or says why not" in `docs/SPEC-documents.md`. **A fragment
 //< is compiled inside a copy of the package whose documents hold it** (`place_of`). So a name the
 //< package keeps to itself resolves as it does for the package's own files. **It compiles**, since
@@ -20,7 +18,6 @@ import "tests/support/docsnippet_shape" as shape
 import "tests/support/harness"
 
 priv const TUTORIAL_NAME: U8[] = "TUTORIAL.md" //< the blocks are steps of one program
-    //<
     //< `make test-docs` joins them, compiles and runs the result, so its steps are not compiled
     //< one by one.
 priv const PACKAGE_MARK: U8[] = "ksplc.cfg" //< a top folder holding it is copied for its fragments
@@ -59,22 +56,6 @@ priv fn place_of(doc: U8[], marked: List<|U8[]|>@): U8[] //<
         if m.equals(top)
             return top
     return ""
-
-priv fn copy_package(top: U8[], tracked: List<|U8[]|>@, sandbox: U8[], arena: Arena$@): Bool //<
-    //< Copies every file git knows under `top` into the sandbox, keeping its path
-    root: = harness.root()
-    prefix: = arena.text().s(top).c('/').take()
-    for rel in tracked
-        if !rel.starts_with(prefix)
-            continue
-        body: = io.read_file(fs.join(root, rel, arena)) catch
-            continue
-        to: = fs.join(sandbox, rel, arena)
-        fs.mkdir_all(sys.get_dir_name(to)) catch
-            return false
-        io.write_file(to, body) catch
-            return false
-    return true
 
 priv fn new_case(s: shape.Snippet, dir: U8[], arena: Arena$@): Case
     lines: = List<|U8[]|>.create(arena)
@@ -129,18 +110,11 @@ priv fn job_for(c: Case@, case_at: Sz, shape_at: Sz, mark_at: Sz, sandbox: U8[],
 
 priv fn argv_of(j: Job_at@, arena: Arena$@): U8[][] //<
     //< the compile of one file, run in the sandbox
-    exe: = fs.absolute(ksplc_harness.ksplc_exe(), arena) catch
-        fallback ksplc_harness.ksplc_exe()
-    $argv: = List<|U8[]|>.new(arena)
-    argv.push(exe)
     if j.lint
-        argv.push("lint")
-    argv.push(arena.text().s("--std-dir=").s(ksplc_harness.std_dir()).take())
-    argv.push(arena.text().s("--pkg-src-dir=").s(harness.root()).take())
-    argv.push(j.rel)
-    if !j.lint
-        argv.push(arena.text().s(j.rel).s(".c").take())
-    return argv.slice()
+        return harness.ksplc_argv_anywhere(U8[][]::{ "lint", j.rel })
+    return harness
+        .ksplc_argv_anywhere(U8[][]::{ j.rel,
+        arena.text().s(j.rel).s(".c").take() })
 
 priv fn run_jobs(at: List<|Job_at|>@, sandbox: U8[], arena: Arena$@): List<|verdict.Run_out|>
     $jobs: = List<|subproc.Job|>.new(arena)
@@ -227,7 +201,7 @@ fn run(snippets: List<|shape.Snippet|>@, sandbox: U8[], arena: Arena$@) //<
         for d in copied
             have = have || d.equals(dir)
         if !have
-            if !copy_package(dir, tracked@, sandbox, arena)
+            if !harness.copy_tracked(dir, sandbox, true)
                 bad
                     .push(arena.text().s("cannot copy ").s(dir).s(" into the sandbox").take())
             copied.push(dir)
@@ -320,7 +294,6 @@ fn run(snippets: List<|shape.Snippet|>@, sandbox: U8[], arena: Arena$@) //<
         "the marks are \"A code block compiles, or says why not\" in docs/SPEC-documents.md")
 
 priv fn base_index(base: List<|Job_at|>@, case_at: Sz): Sz //< the case's last run in the round
-    //<
     //< The last shape is the wrapped one where there are two, whose error is the fragment's own.
     $at: Sz = 0
     for i in Range.asc(base.len)

@@ -155,9 +155,6 @@ STAGE2_EXE := $(OUT_DIR)/ksplc_stage2.exe
 # One per backend: shared, the other backend's newer file looked up to date and its verdict
 # was read for this one.
 DIFF_TXT   := $(OUT_DIR)/stage_diff_$(BACKEND).txt
-DEBUG_OUT  := $(GEN_DIR)/test_debug.$(TARGET_EXT)
-DEBUG_LIBS := $(GEN_DIR)/test_debug.libs
-DEBUG_EXE  := $(OUT_DIR)/test_debug.exe
 
 # --- Deciding the platform --- **Ask `uname` nowhere else**, or the branches hold two answers.
 ifeq ($(OS),Windows_NT)
@@ -258,19 +255,19 @@ self-host: $(DIFF_TXT)
 # Caution: **Measure two runs of the same executable**, in a cache of its own: a rebuilt ksplc
 # misses on its first, and one run alone hides the other's regression. `--stats` reports on
 # standard error, with the diagnostics: each log keeps that stream, shown whether or not it failed.
+# $(call perf_run,<cold|warm>): one measured translation, its log `$(LOG_DIR)/perf_<name>.log`.
+perf_run = KSPLC_CACHE_DIR=$(TMP_DIR)/perf_cache ./$(STAGE1_EXE) $(KSPL_FLAGS) --stats \
+	ksplc/main.kspl $(TMP_DIR)/perf_$(1).c 2> $(LOG_DIR)/perf_$(1).log; \
+	rc=$$?; cat $(LOG_DIR)/perf_$(1).log; exit $$rc
 ## Measure-and-inspect|perf-log|Measure and record translation's elapsed time and peak memory
 perf-log: $(STAGE1_EXE) $(SEED_EXE) | $(OUT_DIR)
 	@rm -rf $(TMP_DIR)/perf_cache
 	@echo "# MEASURING cold (empty cache)"
-	@KSPLC_CACHE_DIR=$(TMP_DIR)/perf_cache ./$(STAGE1_EXE) $(KSPL_FLAGS) --stats ksplc/main.kspl \
-		$(TMP_DIR)/perf_cold.c 2> $(LOG_DIR)/perf_cold.log; \
-		rc=$$?; cat $(LOG_DIR)/perf_cold.log; exit $$rc
+	@$(call perf_run,cold)
 	@echo "# MEASURING warm (same cache, 2nd run)"
-	@KSPLC_CACHE_DIR=$(TMP_DIR)/perf_cache ./$(STAGE1_EXE) $(KSPL_FLAGS) --stats ksplc/main.kspl \
-		$(TMP_DIR)/perf_measure.c 2> $(LOG_DIR)/perf.log; \
-		rc=$$?; cat $(LOG_DIR)/perf.log; exit $$rc
+	@$(call perf_run,warm)
 	./$(SEED_EXE) run tests/tools/perf_guard.kspl --cold=$(LOG_DIR)/perf_cold.log \
-	  --warm=$(LOG_DIR)/perf.log
+	  --warm=$(LOG_DIR)/perf_warm.log
 
 $(SEED_EXE): $(SEED_C) | $(OUT_DIR)
 	@echo "# COMPILING SEED COMPILER FROM C"

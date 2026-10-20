@@ -1,5 +1,4 @@
 //< The state one lowering walk carries, and the helpers that collect what a node hoists
-//<
 //< `Lowering_ctx` belongs to the walk. It holds the statements hoisted before the one being lowered
 //< (`pre_stmts`) and the numbering of temporaries and labels. It also holds the stacks of cleanups
 //< (`defer` and ARC's releases) and jump targets that each way out reads. The walk itself is in
@@ -49,7 +48,6 @@ struct Lowering_ctx
     jump_stack: List<|Jump_ctx|>$@
     arc_scope_pending: List<|Ast_node$@|>$@ //<
         //< The releases waiting for the next block's cleanup scope
-        //<
         //< They are those of a function's managed arguments and of a switch arm's managed bindings.
         //< lower_decl_fn and lower_stmt_switch push them, and the next lower_block flushes them.
         //< There they are released like the local variables, both at the normal exit and on an
@@ -57,26 +55,22 @@ struct Lowering_ctx
     lower_depth: Sz
     in_fn_body: Bool //<
         //< Whether the walk is inside a function's body, where statements run in order
-        //<
         //< A top-level initializer runs nothing at run time, and a temporary hoisted out of one
         //< would land at file scope.
     arc_helpers: Map<|U8[], Ast_node$@|>$@ //<
         //< The per-type helper functions for the ARC chain's retain/release
-        //<
         //< They are the drop glue in ksplc/lower/arc.kspl. arc_helpers maps
         //< "<method>:<mangled type name>" to the generated decl_fn, and arc_helper_decls lists them
         //< for adding to root afterwards.
     arc_helper_decls: List<|Ast_node$@|>$@
     relocating: I32 //<
         //< How many lowerings under way move the statements they hoist into a block of their own
-        //<
         //< A ternary's branch, a short-circuit operand, a catch's substitute, a loop's condition
         //< and step, an `else if`'s condition and a cleanup's body. A temporary declared there is
         //< out of scope where the enclosing block's cleanups run, so it is declared in `stmt_decls`
         //< instead (arc_hoist_owned). lower_block starts each block at 0.
     stmt_decls: List<|Ast_node$@|>$@ //<
         //< Declarations that go before the statement being lowered, in its own block
-        //<
         //< lower_block puts them ahead of that statement's pre_stmts.
     drop_flags: Map<|U8[], U8[]|>$@ //< the live flags of automatic owners in this function
     entry_stmts: List<|Ast_node$@|>$@ //< parameter live flags waiting for the function body
@@ -112,13 +106,11 @@ impl Lowering_ctx
 
     fn push_jump_ctx(r: Self$@, cont_label: U8[], brk_label: U8[], user_label: U8[], is_loop: Bool) //<
         //< The jump-target registration shared by if / for / switch / labeled_block
-        //<
         //< cleanup_depth is always the current cleanup_stack depth.
         jc: = Jump_ctx.new(r.cleanup_stack.len, cont_label, brk_label, user_label, is_loop)
         r.jump_stack.push(jc)
 
     fn pop_jump_ctx(r: Self$@): Jump_ctx //< the pop matching push_jump_ctx
-        //<
         //< Its break/continue flags tell the caller whether wrapping is needed.
         last_idx: = r.jump_stack.len - 1
         jc: = r.jump_stack.get(last_idx)
@@ -137,7 +129,6 @@ impl Lowering_ctx
 
     fn gen_indexed_name(r: Self$@, prefix: U8[]): U8$[] //<
         //< A new temporary name: prefix followed by a serial number
-        //<
         //< prefix is only read, so it is a `U8[]`; as `U8$[]` a `.rodata` string could not be
         //< passed.
         r.tmp_counter += 1
@@ -146,7 +137,6 @@ impl Lowering_ctx
         pad: = "00" if c < 10 else ("0" if c < 100 else "")
         s.s(prefix).s(pad).s("\{c\}")
         name: = base_core.arena.dup_str(s.slice())
-        s.free()
         return name
 
     fn gen_tmp_name(r: Self$@): U8$[] //< a temporary's name, in the made names' space
@@ -166,7 +156,6 @@ impl Lowering_ctx
 
 fn register_synth_symbol(decl: Ast_node$@, kind: Sym_kind, name: U8[], type_id: I32) //<
     //< It gives a declaration Lower synthesizes (a helper, a thunk, a vtable) its symbol
-    //<
     //< The name is already the C one. is_premangled says so, and keeps genc and genllvm from
     //< putting a second prefix on. It is not is_export, since only KSPL calls these, under the
     //< internal ABI (see is_premangled in sema/decl/scope.kspl).
@@ -178,7 +167,6 @@ fn register_synth_symbol(decl: Ast_node$@, kind: Sym_kind, name: U8[], type_id: 
 impl Ast_node
     fn hoist_to_tmp(r: Ast_node$@, lctx: Lowering_ctx$@, loc: base_ast.Loc): Ast_node$@ //<
         //< It copies expression r into a temporary and returns an identifier node for it
-        //<
         //< The statement that copies it is pushed onto pre_stmts.
         //< It does not lower r; the caller does.
         tmp_name: = lctx.gen_tmp_name()

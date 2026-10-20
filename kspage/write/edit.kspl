@@ -1,5 +1,4 @@
 //< The editing core (`Editor`)
-//<
 //< Only `Editor` changes the document's text.
 //< Only [`shape.kspl`](shape.kspl) may call the `do_*` functions.
 //< `Editor`'s methods are split across two files, so a user imports both (with only one, the
@@ -25,20 +24,17 @@ import "std/mem" { Arena }
 import "std/str"
 
 struct Editor //< the editing state
-    //<
     //< The document, the cursor and the undo record together.
     //< Caution: **Changes must go through here**, or nothing is left in the record to undo.
     doc: Doc$@
     caret: Caret
     pick: Block$@ //<
         //< The selected frame (a container's child), or null.
-        //<
         //< The cursor cannot point at a shape (it holds no text), so the handles, the numbers and
         //< deletion act on this (`frame_at` in `block.kspl`). One at a time
         //< (`../docs/DESIGN-slides.md`, "One frame is selected at a time").
     read_only: Bool //<
         //< Whether it was opened read-only.
-        //<
         //< It is not stored in the document (it is "how it was opened"; stored, a copy would still
         //< call itself "read-only"). `shut()` checks it (in the `impl` below).
     // The steps that can be undone, and the steps that can be redone.
@@ -49,7 +45,6 @@ struct Editor //< the editing state
 
 fn new_editor(d: Doc$@): Editor$@ //<
     //< Makes an editor for the document `d`.
-    //<
     //< The editor lives in the document's arena (it lives exactly as long; the same reason as
     //< `add_text` in `model/doc.kspl`).
     arena: = d.arena
@@ -67,7 +62,6 @@ fn new_editor(d: Doc$@): Editor$@ //<
 
 impl Editor
     fn picked(r: Self$@): Block$@ //< the selected frame
-        //<
         //< null where there is none. Read it through `frame_at` in `block.kspl`, which checks the
         //< frame is still in the tree.
         return r.pick
@@ -76,20 +70,17 @@ impl Editor
         return b != null && r.pick == b
 
     fn pick_only(r: Self$@, b: Block$@) //< selects that frame
-        //<
         //< Caution: **Remove the handles from the previous one** (only what was clicked is
         //< selected). null selects nothing.
         r.pick = b
 
 fn keep(e: Editor$@, into: Step$@, op: Op) //< adds one operation to the undo record
-    //<
     //< This is the only place that adds them (a second place would miss a newly added operation).
     _unused: = e
     into.ops.push(op)
 
 fn do_insert(e: Editor$@, into: Step$@, n: Inline$@, at: Sz, s: U8[]) //<
     //< Inserts and deletes while recording
-    //<
     //< These two are the only functions that change a text.
     //< Caution: **Do not call them from typing.** `Editor.insert` in `typing.kspl` finishes off
     //< the selected range and the composition mark.
@@ -101,7 +92,6 @@ fn do_insert(e: Editor$@, into: Step$@, n: Inline$@, at: Sz, s: U8[]) //<
 
 fn keep_insert(e: Editor$@, into: Step$@, n: Inline$@, at: Sz, s: U8[]) //<
     //< Records a text that is already inserted, afterwards
-    //<
     //< It does not insert the text.
     //< Note: Committing a composition goes through here (`commit_preedit` in
     //< [`typing.kspl`](typing.kspl)). The text being composed entered the document without going
@@ -120,7 +110,6 @@ fn do_remove(e: Editor$@, into: Step$@, n: Inline$@, at: Sz, len: Sz)
 
 fn do_set_size(e: Editor$@, into: Step$@, table: Block$@, axis: Axis, index: Sz, v: F32?) //<
     //< Sets a column's width (or a row's height) while recording.
-    //<
     //< Caution: **Do not change the table directly, just as with text.** **The size is brought
     //< inside the lengths a document holds** (`limit.length_in`). A column fitted to a very long
     //< text, kept as measured, would leave a saved file that does not load.
@@ -141,7 +130,6 @@ fn do_set_size(e: Editor$@, into: Step$@, table: Block$@, axis: Axis, index: Sz,
 fn do_line(e: Editor$@, into: Step$@, table: Block$@, axis: Axis, at: Sz, put_back: Bool,
     blocks: List<|Block$@|>$@, spans: List<|Sz|>$@, size: F32?) //<
         //< Removes a row (or column), or restores it, while recording.
-        //<
         //< Caution: **Do not touch the table directly.**
         //< `spans` is empty for a new column, and filled when a removal is being restored
         //< (`Line_op` says why the table cannot be read for it).
@@ -166,7 +154,6 @@ fn do_line(e: Editor$@, into: Step$@, table: Block$@, axis: Axis, at: Sz, put_ba
 
 fn do_run(e: Editor$@, into: Step$@, b: Block$@, at: Sz, put_back: Bool, n: Inline$@) //<
     //< Removes one inline or restores it, while recording
-    //<
     //< Caution: **Do not touch the list directly.** A restored inline comes with its text (so it is
     //< not always empty). An inline holding a formula does not go through here.
     if put_back
@@ -188,7 +175,6 @@ fn do_run(e: Editor$@, into: Step$@, b: Block$@, at: Sz, put_back: Bool, n: Inli
 
 fn do_block(e: Editor$@, into: Step$@, parent: Block$@, at: Sz, put_back: Bool, b: Block$@) //<
     //< Removes one block or restores it, while recording
-    //<
     //< Caution: **Do not touch the list directly.**
     //< Where `parent` is null it is at the top level of the document. Otherwise as `do_run`.
     kin: = e.doc.kin_of(parent)
@@ -209,7 +195,6 @@ fn do_block(e: Editor$@, into: Step$@, parent: Block$@, at: Sz, put_back: Bool, 
     kin.remove_at(at)
 
 fn replace_source(e: Editor$@, into: Step$@, n: Inline$@, s: U8[]) //< replaces the text with `s`
-    //<
     //< Formulas are replaced here too: a text starting with `=` becomes a formula at the next
     //< recalculation, and undo restores the old one (`apply_inverse`).
     do_remove(e, into, n, 0, n.text().len)
@@ -217,7 +202,6 @@ fn replace_source(e: Editor$@, into: Step$@, n: Inline$@, s: U8[]) //< replaces 
 
 fn shift_formulas(e: Editor$@, into: Step$@, table: Block$@, axis: Axis, at: Sz, delta: Sz) //<
     //< Rewrites all formulas in the document to follow rows (or columns) being added or removed
-    //<
     //< Caution: **Record it in the same step as the row or column that moved.** Otherwise the first
     //< undo restores only the row and leaves the formulas stranded. Call it after the removal, so
     //< a removed row keeps its formulas as they are for restoring.
@@ -232,7 +216,6 @@ fn shift_formulas(e: Editor$@, into: Step$@, table: Block$@, axis: Axis, at: Sz,
 
 fn split_run(e: Editor$@, into: Step$@, n: Inline$@, offset: Sz): Inline$@? //<
     //< Splits `n` in two at `offset` and returns the second half
-    //<
     //< Where the split is at an end, it does nothing and returns null.
     //< An inline holding a formula is not split. Its text is the result, rewritten whole at the
     //< next recalculation, and a second half would keep the old value.
@@ -259,7 +242,6 @@ fn split_run(e: Editor$@, into: Step$@, n: Inline$@, offset: Sz): Inline$@? //<
 
 fn merge_runs(e: Editor$@, into: Step$@, b: Block$@) //<
     //< Joins neighbouring inlines with the same style and the same link into one
-    //<
     //< Caution: **Call it every time a style is applied**, or applying and removing keeps adding
     //< inlines. An inline holding a formula is not joined (out of step at the next
     //< recalculation). Nor are inlines with different links, nor an inline with a note (its mark
@@ -282,7 +264,6 @@ fn merge_runs(e: Editor$@, into: Step$@, b: Block$@) //<
 
 priv fn apply_inverse(e: Editor$@, st: Step$@, into: Step$@) //<
     //< Applies a step's inverse, and records the inverse of that into `into`
-    //<
     //< The inverse of the inverse is the original change.
     //< Caution: **Apply them from the back**, or the position a later change looked at shifts. Undo
     //< and redo both go through here (two places would diverge when a kind is added).
@@ -333,7 +314,6 @@ priv fn apply_inverse(e: Editor$@, st: Step$@, into: Step$@) //<
 
 impl Editor
     fn shut(r: Self$@): Bool //< whether a change is refused
-        //<
         //< Every function in this folder that opens a step must check this before doing anything.
         //< So read-only is enforced in one place (`../tests/edit_test.kspl` tries the paths
         //< and expects the saved text unchanged).
@@ -342,7 +322,6 @@ impl Editor
         return r != null && r.read_only
 
     fn step(r: Self$@): Step$@ //< the step to write to
-        //<
         //< Opens one where there is none.
         if r.open == null
             r.open = new_step(r.caret, r.arena)
@@ -352,7 +331,6 @@ impl Editor
         return r.open
 
     fn break_group(r: Self$@) //< closes the open step
-        //<
         //< This is where one undo ends. Moving and committing a composition close it by themselves;
         //< a pause in typing is for the caller to close (the core has no clock).
         if r.open == null
@@ -365,13 +343,11 @@ impl Editor
 
     fn undo(r: Self$@): Bool //<
         //< Goes back one step, and returns true if it did.
-        //<
         //< Caution: **Do not undo while read-only.** The `do_*` below stop, but the record alone
         //< would move a step and report "undone" when nothing has changed.
         return r.step_over(r.undone, r.redone)
 
     fn redo(r: Self$@): Bool //< redoes one undone step
-        //<
         //< True if redone.
         return r.step_over(r.redone, r.undone)
 

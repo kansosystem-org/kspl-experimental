@@ -1,5 +1,4 @@
 //< Helpers for opening one TCP connection from this end, over USB Ethernet (CDC-NCM)
-//<
 //< **One connection at a time**: the memory (one NTB, one `conn`) holds only one.
 //< Caution: **Keep calling `usb.poll_once()` while waiting too**, or the host detaches the device.
 //< **The addresses are fixed** (no DHCP): Windows' internet sharing puts the PC at
@@ -28,7 +27,6 @@ $last_ethertype: U16 = 0
 $last_arp_sender: U32 = 0
 
 struct Addrs //< this device's and the peer's addresses
-    //<
     //< The MAC is the driver's; a second one would disagree with the descriptor, and the host would
     //< ignore the answer.
     our_ip: U32
@@ -47,7 +45,6 @@ fn link(): netlink.Link
         .recv_frame = usb.recv_frame }
 
 fn init_addrs() //< fills in this device's addresses
-    //<
     //< Caution: Call it once USB's initialization is done (the MAC comes from the driver).
     addrs.our_ip = net.ip4(192, 168, 137, 50)
     addrs.peer_ip = net.ip4(192, 168, 137, 1)
@@ -55,7 +52,6 @@ fn init_addrs() //< fills in this device's addresses
     addrs.peer_mac = net.Mac::{ .hi = 0, .lo = 0 }
 
 fn drain_tx() //< runs USB until the send buffer is empty
-    //<
     //< Caution: **Always call it before sending two frames in a row.** NCM has one NTB buffer, so
     //< the second is silently dropped (tx_dropped grows; send_frame returns false) and retried.
     for $i: U32 = 0; i < 200 && usb.ncm_tx_busy(); i += 1
@@ -63,7 +59,6 @@ fn drain_tx() //< runs USB until the send buffer is empty
         timer.delay_us(1000)
 
 fn send_now(len: Sz): Bool //< sends the first len bytes of tx_buf
-    //<
     //< It waits for room before sending, and **returns whether it sent**.
     //< Caution: Do not call the raw send_frame directly; a drop would go unnoticed.
     // 0 is mini_ipv4's "could not be built" (it did not fit), so it counts as not sent.
@@ -76,7 +71,6 @@ fn send_now(len: Sz): Bool //< sends the first len bytes of tx_buf
     return false
 
 fn send_all(buf: U8@, len: Sz): Bool //< sends all len bytes through tcp_conn
-    //<
     //< tcp_stream_send may send part, so **pass the rest again** (0 means "not now").
     $off: Sz = 0
     for $i: U32 = 0; off < len && i < 50; i += 1
@@ -88,7 +82,6 @@ fn send_all(buf: U8@, len: Sz): Bool //< sends all len bytes through tcp_conn
 
 fn next_frame(budget_ms: U32$@): Sz //<
     //< Reads one received frame into rx_buf and returns its length, waiting at most budget_ms
-    //<
     //< It runs USB while it waits. 0 means the remaining budget ran out.
     //< Caution: **The caller must repeat this until the budget runs out.** On real hardware mDNS,
     //< LLMNR and IPv6 frames arrive constantly and bury the answer, which QEMU's `-nic socket`
@@ -130,7 +123,6 @@ fn resolve_peer(ln: con.Line$@): Bool //<
 
 fn open(ln: con.Line$@, our_port: U16, peer_port: U16, isn: U32): Bool //<
     //< Opens a connection with SYN → SYN-ACK → ACK, and sets up `conn` once it succeeds
-    //<
     //< Caution: resolve_peer must be done first (the peer's MAC is needed).
     for $attempt: U32 = 0; attempt < 10; attempt += 1
         syn_len: = net.build_tcp_segment(U8$[]::tx_buf, ends(our_port, peer_port), isn, 0,
@@ -161,7 +153,6 @@ fn open(ln: con.Line$@, our_port: U16, peer_port: U16, isn: U32): Bool //<
 
 fn read_stream(out: U8$[], ms: U32): Sz //<
     //< Repeats tcp_conn's recv while running USB, and packs the received bytes into out
-    //<
     //< An answer can span segments, so it reads until ms pass with nothing, or the peer closes.
     $total: Sz = 0
     $idle: U32 = 0
@@ -180,7 +171,6 @@ fn read_stream(out: U8$[], ms: U32): Sz //<
 
 fn drain_stream(ms: U32): Sz //<
     //< reads the rest, discards it, and returns how many bytes were discarded
-    //<
     //< Caution: **Do not stop reading partway and send a FIN**, or the peer's connection is closed
     //< with unsent data left.
     $total: Sz = 0

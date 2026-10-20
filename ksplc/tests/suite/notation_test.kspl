@@ -1,10 +1,10 @@
 //< Checks that ksplc reads the indentation notation (`.kspl`) the same however it is saved
-//<
 //< **1. A file saved with CRLF is the same program as with LF.** The indentation notation **counts
 //< lines**. Once a `\r` is read as a character, a blank line is not blank. Then the inserted
 //< terminator and brace land after the `\r`.
 //< **It reads only this package's own folder**: the samples in `../notation/`, the grammar and the
 //< code that rewrites the indentation.
+import "ksplc/parse/layout" as parse_layout
 import "ksplc/tests/support/harness"
 import "ksplc/tests/support/jsonrpc_client"
 import "ksplc/tests/support/lsp_client"
@@ -26,7 +26,6 @@ import "std/verdict"
 // ---------------------------------------------------------
 
 priv fn sample_stems(arena: Arena$@): List<|U8[]|> //< it collects the samples' names
-    //<
     //< Caution: **Do not keep a list of names** — a sample added later would be missed. The folder
     //< is the list.
     $out: = List<|U8[]|>.new(arena)
@@ -43,7 +42,6 @@ priv fn sample_stems(arena: Arena$@): List<|U8[]|> //< it collects the samples' 
 
 priv const PROBE_URI: U8[] = "file:///laid_probe.kspl" //<
     //< The URI of the probe document
-    //<
     //< Caution: **Make it a source whose lines and columns can be counted.** The test checks that
     //< positions do not drift, so a reader must see which line and column holds what.
 priv const PROBE_SRC: U8[] =
@@ -60,22 +58,18 @@ fn main(): I32
 """
 
 priv const BAD_LINE: I64 = 8I64 //< the line and column `nowhere` is at (0-based)
-    //<
     //< **It is a value counted from the source** (the `bad:` line of `PROBE_SRC`).
 priv const BAD_COL: I64 = 13I64
 priv const BIND_LINE_AT: Sz = 6 //<
     //< The line and column of `v`'s binding and `twice`'s call (0-based; the `v: =` line)
-    //<
     //< **Passing a position takes `Sz`**; the two above are compared with the response (JSON's
     //< I64).
 priv const BIND_COL_AT: Sz = 2
 priv const CALL_COL_AT: Sz = 7
 priv const DECL_LINE: I64 = 2I64 //< the line `twice`'s declaration is on (0-based)
-    //<
     //< It is the `priv fn twice` line of `PROBE_SRC`.
 
 priv fn check_diagnostics(c: jsonrpc_client.Client$@, arena: Arena$@) //< the squiggles
-    //<
     //< **The returned URI must be `.kspl`**, or the editor puts squiggles on a different file.
     c.notify("textDocument/didOpen", lsp_client.did_open(PROBE_URI, PROBE_SRC, arena),
         lsp_client.SEND_MS, arena) catch {}
@@ -104,7 +98,6 @@ priv fn check_diagnostics(c: jsonrpc_client.Client$@, arena: Arena$@) //< the sq
         found && count == 1 && line == BAD_LINE && col == BAD_COL, seen)
 
 priv fn check_hover(c: jsonrpc_client.Client$@, arena: Arena$@) //< the hovers
-    //<
     //< Caution: **Check the content**; with the position drifted, something still comes back.
     got: = lsp_client.answer(c, "textDocument/hover",
         lsp_client.at_pos(PROBE_URI, BIND_LINE_AT, BIND_COL_AT, arena), lsp_client.READ_MS, arena)
@@ -116,7 +109,6 @@ priv fn check_hover(c: jsonrpc_client.Client$@, arena: Arena$@) //< the hovers
         arena.text().s("returned=").s(lsp_client.dump(got, arena)).take())
 
 priv fn check_definition(c: jsonrpc_client.Client$@, arena: Arena$@) //< jumping to a definition
-    //<
     //< **The destination's line must be the indentation notation's line.**
     got: = lsp_client.answer(c, "textDocument/definition",
         lsp_client.at_pos(PROBE_URI, BIND_LINE_AT, CALL_COL_AT, arena), lsp_client.READ_MS, arena)
@@ -186,7 +178,6 @@ fn main(): I32
 
 priv fn check_import_spelt(work: U8[], arena: Arena$@) //<
     //< It checks an import spelling the extension out is called by its stem
-    //<
     //< Caution: **With the extension left in the alias**, the call fails with "undefined path or
     //< identifier 'helper'".
     name: = "an import spelling the extension is called by the stem"
@@ -215,7 +206,6 @@ fn main(): I32
 
 priv fn check_labelled_block_kept(work: U8[], arena: Arena$@) //<
     //< A block carrying a label is formatted with the label kept
-    //<
     //< **A bare one never reaches here.** It does not parse (pinned by the case
     //< `bare_block_without_label` in `ksplc/tests/parse/syntax.ksplb`). This checks that the valid
     //< shape is not rejected along with it.
@@ -239,26 +229,22 @@ priv fn check_labelled_block_kept(work: U8[], arena: Arena$@) //<
 priv const DOC_SRC: U8[] =
     """// A struct, a trait, an impl and a function each carrying a doc comment.
 priv struct Row //< one row of the table
-    //<
     //< What a row stands for, written out in a sentence.
     text: U8[] //< the text as the writer typed it
         //< It is the writer\'s bytes as they came in, with neither end trimmed.
     hits: Bool //< whether this row matched
 
 priv enum Verdict //< how a row came out
-    //<
     //< The two answers a row can give.
     kept //< it stays in the table
     dropped //< it falls out of the table
         //< Nothing is written back to the row; it is only how the count came out.
 
 priv trait Sayable //< anything that can name itself
-    //<
     //< One name per row, for the report.
     fn say(r: Self): U8[] //< the name to print
 
 impl Row: Sayable //< Row names itself by its text
-    //<
     //< The text is the name, so nothing is built here.
     fn say(r: Self$@): U8[] //< the text as it stands
         return r.text
@@ -290,7 +276,6 @@ fn main(): I32
 
 priv fn check_doc_comments(work: U8[], arena: Arena$@) //<
     //< Formatting leaves every doc comment where it stands
-    //<
     //< It checks the placement (`../support/notation_doc.kspl` checks reading them as
     //< documentation), with a run below a `//<` on a field, on a parameter and at a block's end.
     name: = "a doc comment stands in the same place after formatting"
@@ -314,7 +299,6 @@ priv fn check_doc_comments(work: U8[], arena: Arena$@) //<
 
 priv fn end_of_quoted(src: U8[], at: Sz, quote: U8): Sz //<
     //< The end of a string starting with `"` or `'`
-    //<
     //< **If it is not skipped, a `=` or `"` inside reads as a heading or a separator.**
     $j: = at + 1
     for j < src.len
@@ -345,7 +329,6 @@ priv fn rule_head(line: U8[]): U8[] //<
     return line.sub(0, e)
 
 priv fn without_line_comment(line: U8[]): U8[] //< it drops a line comment from a line
-    //<
     //< **A `//` inside a quote is not a comment** (`_Line_comment = "//" ...`).
     $i: Sz = 0
     for i < line.len
@@ -359,7 +342,6 @@ priv fn without_line_comment(line: U8[]): U8[] //< it drops a line comment from 
 
 priv fn split_rules(src: U8[], arena: Arena$@): List<|Rule|> //<
     //< It splits the grammar into "name -> body"
-    //<
     //< Caution: **Do not split by line** — a body runs to the next heading or a blank line
     //< (`decl_trait` spans two lines).
     $out: = List<|Rule|>.new(arena)
@@ -416,79 +398,34 @@ priv fn quoted_words(body: U8[], arena: Arena$@): List<|U8[]|> //<
         i += 1
     return out
 
-priv fn layout_heads(src: U8[], arena: Arena$@): List<|U8[]|> //<
-    //< It reads the words listed in `BLOCK_HEADS` in `ksplc/parse/layout.kspl`
-    //<
-    //< Caution: **Stop at the literal's closing `}`, not at a `;`.** `block_heads` is declared in
-    //< the indentation notation, with no terminator, so a scan for `;` takes in the words declared
-    //< next (`head_skips`' `pub` and `priv`). A value's `::{ … }` keeps its braces in either
-    //< notation.
-    $out: = List<|U8[]|>.new(arena)
-    $at: Sz = 0
-    switch src.find_str("BLOCK_HEADS:")
-    case .some(found)
-        at = found
-    case .none
-        return out
-    $i: Sz = 0
-    switch src.sub_from(at).find_str("{")
-    case .some(opens)
-        i = at + opens
-    case .none
-        return out
-    for i < src.len && src[i] != '}'
-        if src[i] == '"'
-            e: = end_of_quoted(src, i, '"')
-            out.push(src.sub(i + 1, e - i - 2))
-            i = e
-            continue
-        i += 1
-    return out
-
 priv const NOT_HEAD_WORDS: U8[][2] = ::{ "catch", "in" } //<
     //< Words appearing in a rule that opens a block but that do not start a line
-    //<
     //< **`catch` alone opens a level at a line's end** (`ends_in_catch` in
     //< `ksplc/parse/line_cont.kspl`); **`in` is part of `for`'s heading** (`for x in xs`).
 
 priv const LABEL_MARK: U8[] = "label:" //< the mark for a word that is not a heading word
-    //<
     //< A `:` goes into no name, so it collides with no real word.
-
-priv fn has_word(xs: List<|U8[]|>@, want: U8[]): Bool
-    for one in xs
-        if one.equals(want)
-            return true
-    return false
-
-priv fn named_in(xs: U8[][], want: U8[]): Bool
-    for one in xs
-        if one.equals(want)
-            return true
-    return false
 
 priv fn same_set(tag: U8[], want: List<|U8[]|>@, got: List<|U8[]|>@, bad: List<|U8[]|>$@,
     arena: Arena$@) //<
         //< Whether the lists agree as sets, adding the names that differ to `bad`
     for one in want
-        if !has_word(got, one)
+        if !got.contains(one)
             bad
                 .push(arena.text().s("[").s(tag).s("] not in the grammar: ").s(one).take())
     for one in got
-        if !has_word(want, one)
+        if !want.contains(one)
             bad
                 .push(arena.text().s("[").s(tag).s("] not in the opening header: ").s(one).take())
 
 priv const GRAMMAR_FILE: U8[] = "kspl.kspeg" //< the grammar, from the package's top
-priv const LAYOUT_FILE: U8[] = "parse/layout.kspl" //< the code that rewrites the indentation
 
 priv const ROLE_RULES: U8[][3] = ::{ "Block_open", "Block_close", "Stmt_end" } //<
     //< The three rules that define the role itself
-    //<
     //< Caution: **Leave them out of the count**, or the definition enters its own list.
 
 priv fn check_grammar_link(arena: Arena$@)
-    grammar: = io.read_file(GRAMMAR_FILE) catch
+    grammar: = io.read_file(GRAMMAR_FILE, null) catch
         verdict.check("the grammar can be read", false, GRAMMAR_FILE)
         return
     rules: = split_rules(grammar, arena)
@@ -498,7 +435,7 @@ priv fn check_grammar_link(arena: Arena$@)
     $terms: = List<|U8[]|>.new(arena)
     $keeps: = List<|U8[]|>.new(arena)
     for one in rules
-        if named_in(U8[][]::ROLE_RULES, one.name)
+        if (U8[][]::ROLE_RULES).contains(one.name)
             continue
         if one.body.find_str("Block_open").is_some()
             opens.push(one.name)
@@ -526,7 +463,7 @@ priv fn check_grammar_link(arena: Arena$@)
         rules.len, "rules", bad@, "mend the five lists in `ksplc/kspl.kspeg`'s opening header")
 
 priv fn check_head_words(arena: Arena$@)
-    grammar: = io.read_file(GRAMMAR_FILE) catch
+    grammar: = io.read_file(GRAMMAR_FILE, null) catch
         verdict.check("the grammar can be read", false, GRAMMAR_FILE)
         return
     rules: = split_rules(grammar, arena)
@@ -536,24 +473,21 @@ priv fn check_head_words(arena: Arena$@)
         named.push(one)
     $from_grammar: = List<|U8[]|>.new(arena)
     for one in rules
-        if !has_word(named@, one.name)
+        if !named.contains(one.name)
             continue
         for word in quoted_words(one.body, arena)
             from_grammar.push(word)
-    layout: = io.read_file(LAYOUT_FILE) catch
-        verdict.check("the indentation-mending side can be read", false, LAYOUT_FILE)
-        return
-    heads: = layout_heads(layout, arena)
+    heads: = U8[][]::parse_layout.BLOCK_HEADS
 
     $bad: = List<|U8[]|>.new(arena)
     for word in heads
         if word.equals(LABEL_MARK)
             continue
-        if !has_word(from_grammar@, word)
+        if !from_grammar.contains(word)
             bad
                 .push(arena.text().s("a heading the grammar no longer opens: ").s(word).take())
     for word in from_grammar
-        if has_word(heads@, word) || named_in(U8[][]::NOT_HEAD_WORDS, word)
+        if heads.contains(word) || (U8[][]::NOT_HEAD_WORDS).contains(word)
             continue
         bad
             .push(arena.text().s("a heading the mending side does not know: ").s(word).take())

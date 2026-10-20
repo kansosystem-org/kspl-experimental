@@ -1,5 +1,4 @@
 //< Checks the attributes (`#name` / `#name(...)`) and the directives (`##name(...)`)
-//<
 //< An attribute passes when its name is known, it takes effect at that position, and the backend
 //< can emit it. Only what passes is read later (sema/decl/registry.kspl, gen/c and gen/llvm).
 //< **An attribute that can be written but does nothing is an error** (Principle 5 of
@@ -14,14 +13,13 @@ import "std/str"
 
 priv fn is_known_attribute(name: U8[]): Bool //<
     //< The complete list of the attributes the compiler interprets
-    //<
     //< Caution: Add an attribute to docs/SPEC-programming-language.md's table and .vscode's
     //< colouring too (`make test-conventions` compares them). The directives have their own list
     //< (`directive_shape` below).
-    return name.equals("align") || name.equals("cfg") || name.equals("deprecated") ||
-        name.equals("export") || name.equals("inline") || name.equals("interrupt") ||
-        name.equals("link") || name.equals("naked") || name.equals("noinline") ||
-        name.equals("noreturn") || name.equals("packed") || name.equals("section")
+    return name.equals("align") || name.equals("cfg") || name.equals("export") ||
+        name.equals("inline") || name.equals("interrupt") || name.equals("link") ||
+        name.equals("naked") || name.equals("noinline") || name.equals("noreturn") ||
+        name.equals("packed") || name.equals("section")
 
 // ==========================================
 // The check on directives (`##name(...)`)
@@ -34,7 +32,6 @@ enum Directive_shape //< the shape of the arguments a directive takes
 
 fn directive_shape(name: U8[]): Directive_shape //<
     //< The complete list of the directives the compiler interprets
-    //<
     //< **It is the canonical source of which names exist.** The grammar accepts any name, so a name
     //< not rejected here can be written and does nothing (Principle 5 of
     //< docs/DESIGN-principles.md).
@@ -47,11 +44,9 @@ fn directive_shape(name: U8[]): Directive_shape //<
     return .unknown
 
 priv const DIRECTIVE_NAMES: U8[] = "##error ##warning ##lint" //< the list shown in a diagnostic
-    //<
     //< Caution: **Keep it in line with `directive_shape` above.**
 
 fn directive_name(r: Ast_node$@): U8[] //< a directive's name with the `##` stripped
-    //<
     //< **Empty if absent.** The name is part of the one `Directive_prefix` token; there is no
     //< name-only child.
     if r == null
@@ -93,7 +88,6 @@ priv fn scan_directive_args(r: Ast_node$@): Directive_args //<
 
 fn check_directive(r: Ast_node$@, c: Sema_ctx$@): Directive_shape //<
     //< Checks a directive's name and the shape of its arguments, and returns the shape
-    //<
     //< On rejection it returns `.unknown`.
     //< Caution: **Do not silently accept a shape that does not fit.** The grammar lets
     //< `##error(I0305 = off)` and `##lint(sizeof(Sz) == 8)` reach here; if accepted, the first
@@ -136,26 +130,20 @@ priv enum Attr_owner //< the kind of declaration an attribute is on, by where it
     struct_decl //< a `struct`, where the layout attributes go
     extern_struct_decl //<
         //< A `struct` inside an `extern` block, where no attribute takes effect
-        //<
-        //< The generated C emits only `typedef struct X X;` (gen/c/decl.kspl), so neither a layout
-        //< attribute nor a mark on the name has anywhere to go. Classified with `struct_decl`, it
-        //< would let through an attribute that does nothing.
+        //< The generated C emits only `typedef struct X X;` (gen/c/decl.kspl), so a layout
+        //< attribute has nowhere to go. Classified with `struct_decl`, it would let through an
+        //< attribute that does nothing.
     value_decl //<
         //< A declaration making one value: `const` / `var` / `let` / `embed`, a local variable too.
-    enum_decl //<
-        //< An `enum`. Its name appears inside an expression (`E.a`), so `#deprecated` takes effect.
-    type_decl //<
-        //< Something that gets a name but does not appear in an expression. `trait` / `typedef`.
+    type_decl //< an `enum`, a `trait` or a `typedef`, where only `#cfg` takes effect
     extern_block //<
         //< An `extern` block, the one place `#link` takes effect
-        //<
         //< The library `#link` names is where the block's declarations are defined, and a block is
         //< what `#cfg` keeps or drops whole.
     group_decl //<
         //< Syntax that groups declarations: `import` / an `impl` block.
     stmt //<
         //< A statement, where any attribute is a violation
-        //<
         //< Only `#cfg` takes effect, and normalization has consumed it (elide_attributed_stmt in
         //< parse/normalize.kspl).
     other //< none of the above (a position that cannot hold an attribute)
@@ -170,9 +158,7 @@ priv fn classify_owner(r: Ast_node$@): Attr_owner
         return .extern_struct_decl
     case .k_decl_var, .k_decl_const, .k_decl_embed
         return .value_decl
-    case .k_decl_enum
-        return .enum_decl
-    case .k_decl_trait, .k_decl_typedef
+    case .k_decl_enum, .k_decl_trait, .k_decl_typedef
         return .type_decl
     case .k_decl_extern_block
         return .extern_block
@@ -200,7 +186,6 @@ priv fn is_allowed_on(name: U8[], owner: Attr_owner): Bool //<
 
 priv fn attr_rule(name: U8[]): Attr_rule //<
     //< The positions, the diagnostic's text and the backends of a known attribute, in one place
-    //<
     //< Caution: **Allow a position only where it takes effect.** Widened, it lets through an
     //< attribute that does nothing there; first confirm it reaches its reader (registry.kspl /
     //< genc / genllvm / apply_attributes in scope.kspl). Mark C-only what LLVM cannot emit: it
@@ -208,7 +193,6 @@ priv fn attr_rule(name: U8[]): Attr_rule //<
     fn_b: = Attr_owner.fn_decl.bit()
     value_b: = Attr_owner.value_decl.bit()
     struct_b: = Attr_owner.struct_decl.bit()
-    enum_b: = Attr_owner.enum_decl.bit()
     // `#cfg` drops the declaration itself, so it takes effect at every position (should_drop_by_cfg
     // in parse/normalize.kspl ignores the kind).
     if name.equals("cfg")
@@ -233,17 +217,10 @@ priv fn attr_rule(name: U8[]): Attr_rule //<
     if name.equals("link")
         return Attr_rule::{ .owners = Attr_owner.extern_block.bit(), .c_only = 0,
             .targets = "'extern' blocks" }
-    // `#deprecated` warns at "the place that name was written inside an expression"
-    // (check_visibility_and_mark_used in sema/decl/access.kspl). An `enum` appears there as `E.a`;
-    // `typedef` / `trait` never do.
-    if name.equals("deprecated")
-        return Attr_rule::{ .owners = fn_b | value_b | struct_b | enum_b, .c_only = 0,
-            .targets = "functions, variables, constants, structs, and enums" }
     return Attr_rule::{ .owners = 0, .c_only = 0, .targets = "" }
 
 priv fn check_cfg_attribute(r: Ast_node$@, c: Sema_ctx$@) //<
     //< Checks the shape of `#cfg(...)`'s argument
-    //<
     //< **There is no logical combination (`all(a, b)` / `a && b`) and no comparison.** Silently
     //< accepted, `cfg(all(a, b))` would read as a flag named `all`, and the declaration would
     //< vanish.
@@ -259,7 +236,6 @@ priv fn check_cfg_attribute(r: Ast_node$@, c: Sema_ctx$@) //<
     c.err(r, c.scratch.slice())
 
 priv fn check_align_attribute(r: Ast_node$@, c: Sema_ctx$@) //< checks the N of `#align(N)`
-    //<
     //< Neither C nor LLVM accepts a non-power of two. The upper limit is the target C compiler's,
     //< so it is not checked. `sema/decl/registry.kspl` receives the value; **only here is it
     //< checked**.
@@ -275,7 +251,6 @@ priv fn check_align_attribute(r: Ast_node$@, c: Sema_ctx$@) //< checks the N of 
     c.err(r, c.scratch.slice())
 
 priv fn check_link_attribute(r: Ast_node$@, c: Sema_ctx$@) //< checks the name of `#link("name")`
-    //<
     //< **One name, as `-l` takes it** (the rule is `is_library_name` in ksplc/base/ast_ext.kspl).
     //< A flag or a path would make the source carry one machine's link line.
     if r.link_name().len > 0
@@ -288,7 +263,6 @@ priv fn check_link_attribute(r: Ast_node$@, c: Sema_ctx$@) //< checks the name o
     c.err(r, c.scratch.slice())
 
 priv fn check_section_attribute(r: Ast_node$@, c: Sema_ctx$@) //< checks `#section("name")`
-    //<
     //< **One name, of letters, digits, `_` and `.`** (the rule is `is_section_name` in
     //< ksplc/base/ast_ext.kspl). It reaches the C and the assembler as written.
     if r.section_name().len > 0
@@ -302,7 +276,6 @@ priv fn check_section_attribute(r: Ast_node$@, c: Sema_ctx$@) //< checks `#secti
 
 priv fn report_attribute_on_extern_struct(name: U8[], id_node: Ast_node$@, c: Sema_ctx$@) //<
     //< Reports an attribute written on a `struct` inside an `extern` block
-    //<
     //< Caution: **Do not use the general "it does nothing here".** That message lists "structs",
     //< which reads as a contradiction; the real reason is that the C gets only a forward
     //< declaration.
@@ -349,7 +322,6 @@ priv fn check_one_attribute(attr: Ast_node$@, owner: Attr_owner, c: Sema_ctx$@)
 
 priv fn privately_declared(r: Ast_node$@): Bool //<
     //< Whether `priv` is written, for checking how one declaration's attributes fit together
-    //<
     //< Caution: **Do not silently resolve a conflicting pair one way** (Principle 5). For `priv`,
     //< **look at both places**, as `get_visibility` in `sema/type/scope.kspl` does, or the check
     //< passes or not depending on the spelling.
@@ -403,7 +375,6 @@ priv fn check_attribute_combination(r: Ast_node$@, owner: Attr_owner, in_impl: B
         c.err(r, c.scratch.slice())
 
 fn check_attributes(r: Ast_node$@, c: Sema_ctx$@) //< walks the tree and checks the attributes
-    //<
     //< One walk picks up every position (declaration, formal parameter, field).
     //< Caution: **Always check an attribute from the node it is attached to.** Checking the name
     //< alone cannot check the position.
@@ -411,7 +382,6 @@ fn check_attributes(r: Ast_node$@, c: Sema_ctx$@) //< walks the tree and checks 
 
 priv fn check_attributes_under(r: Ast_node$@, in_impl: Bool, c: Sema_ctx$@) //<
     //< Checks the attributes of r and of every declaration under it
-    //<
     //< Caution: **Pass down whether it is inside an `impl` / `trait`.** A method and a free
     //< function are both `decl_fn`, and `classify_owner` does not see the position in the tree.
     if r == null

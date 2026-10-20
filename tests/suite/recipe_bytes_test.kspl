@@ -1,6 +1,5 @@
 #!/usr/bin/env -S ksplc run
 //< Checks the rules for the recipes in the files make reads
-//<
 //< It checks seven rules: **a recipe line is ASCII only**, **it does not break on a path containing
 //< a space**, **it does not swallow a failure in a pipe's earlier stage**, **what `$<` points at
 //< does not move**, **a name in `.PHONY` has a rule**, **a `$(call)` asks for nothing that
@@ -37,7 +36,6 @@ priv const FILTERS: U8[][_] = ::{ "tee", "head", "tail", "grep", "sort", "wc", "
     "sed", "cut", "python3" }
 
 priv const SAFE_PRODUCERS: U8[][_] = ::{ "echo", "printf" } //< commands that do not fail
-    //<
     //< Adding pipefail where only these are the earlier stage changes nothing.
 
 priv const SHELL_WORDS: U8[][_] = ::{ "if", "while", "until", "elif", "then", "else" } //<
@@ -45,7 +43,6 @@ priv const SHELL_WORDS: U8[][_] = ::{ "if", "while", "until", "elif", "then", "e
 
 priv fn make_files(arena: Arena$@): List<|U8[]|> //<
     //< The make files the check reads
-    //<
     //< Caution: **Take the files to check from the root Makefile's `include`s.** A hand-written
     //< list misses a file split off, and the check's range shrinks without failing. An `include` is
     //< followed, and a `-include` where its file exists; one naming `$(VAR)` takes the files the
@@ -76,7 +73,6 @@ priv fn make_files(arena: Arena$@): List<|U8[]|> //<
 
 priv fn recipe_files(arena: Arena$@): List<|U8[]|> //<
     //< The files whose recipes are checked against the rules: the root's, and every package's own
-    //<
     //< **A package's `Makefile` runs wherever the root's does** (`make test-extract`, MSYS2 among
     //< the platforms). `make help` does not list its targets, so `scan_names` leaves it out.
     $out: = make_files(arena)
@@ -86,7 +82,6 @@ priv fn recipe_files(arena: Arena$@): List<|U8[]|> //<
     return out
 
 priv fn is_recipe(line: U8[]): Bool //< whether it is a recipe line (starting with a tab)
-    //<
     //< A variable definition or make's conditional is out of scope.
     return line.starts_with("\t")
 
@@ -106,7 +101,6 @@ priv fn has_non_ascii(line: U8[]): Bool
     return false
 
 priv fn has_bare_curdir(line: U8[]): Bool //< whether there is an unquoted `$(CURDIR)`
-    //<
     //< Caution: **Check the run of `$` as a whole.** Inside a `define`, `$$(CURDIR)` expands to
     //< `$(CURDIR)`, which checking only the one character before misses.
     want: = "(CURDIR)"
@@ -192,7 +186,6 @@ priv struct Logical //< one logical line, and the line after it
 
 priv fn join_continued(lines: List<|U8[]|>@, at: Sz, arena: Arena$@): Logical //<
     //< Joins a continued line (ending in `\`) into one
-    //<
     //< Caution: **Join the rule lines too**, or dependencies wrapped over lines are undercounted.
     b: = arena.text()
     $i: = at
@@ -206,7 +199,6 @@ priv fn join_continued(lines: List<|U8[]|>@, at: Sz, arena: Arena$@): Logical //
 
 priv fn rule_deps(line: U8[]): U8[]? //<
     //< If it is a rule line (`target: dependencies`), returns the dependency string
-    //<
     //< **A `:=`, and a target-specific variable (`install: export V := x`), are not rules** (told
     //< by what follows the `:`, and by an `=` on the dependency side). Mixed in, the next recipe's
     //< dependencies go wrong.
@@ -226,7 +218,6 @@ priv fn rule_deps(line: U8[]): U8[]? //<
     return .some(rest)
 
 priv fn dep_count(deps: U8[]): Sz //< the dependency count
-    //<
     //< Caution: **Do not count order-only dependencies (after the `|`)**; `$<` never points there.
     s: = deps.sub(0, deps.find_char('|').unwrap_or(deps.len))
     $n: Sz = 0
@@ -242,7 +233,6 @@ priv fn dep_count(deps: U8[]): Sz //< the dependency count
 
 priv fn scan_first_dep(path: U8[], arena: Arena$@): List<|Hit|> //<
     //< Of the recipes holding a `$<`, collects those that do not have exactly one dependency
-    //<
     //< Inside a `define` the rule is unknown, so it counts as 0 (write the file by name instead).
     $out: = List<|Hit|>.new(arena)
     text: = harness.read_under_root(path)
@@ -267,7 +257,6 @@ priv fn scan_first_dep(path: U8[], arena: Arena$@): List<|Hit|> //<
 
 priv fn scan(path: U8[], kind: Sz, arena: Arena$@): List<|Hit|> //<
     //< collects one file's findings
-    //<
     //< kind is 0=non-ASCII / 1=a bare `$(CURDIR)` / 2=a pipe that swallows a failure.
     //< A pipe is checked with continued lines joined, so a `set -o pipefail;` two lines above its
     //< pipe is not a false finding.
@@ -333,7 +322,6 @@ priv struct Said //< one name listed in `.PHONY`, and where it is
 
 priv fn rule_targets(line: U8[]): U8[]? //<
     //< If it is a rule line (`target: dependencies`), returns the target string
-    //<
     //< **Leave out a `:=` and a target-specific variable** (the same reason as `rule_deps`).
     //< Caution: **Do not count `.PHONY` itself as a target**, or everything "has a rule".
     colon: = line.find_char(':').unwrap_or(0)
@@ -348,7 +336,6 @@ priv fn rule_targets(line: U8[]): U8[]? //<
 
 priv struct Doc //<
     //< The explanation taken from one line of `make help`, and where that line is
-    //<
     //< The line has the form `## <group>|<target>|<explanation>`.
     where: U8[]
     group: U8[]
@@ -415,7 +402,7 @@ priv fn check_phony_rules(names: Names@, arena: Arena$@) //<
     //< That a name listed in `.PHONY` has a rule
     $bad: = List<|U8[]|>.new(arena)
     for one in names.said
-        if !harness_text.has(names.have@, one.name)
+        if !names.have.contains(one.name)
             bad
                 .push(arena.text().s(one.where).s(": ").s(one.name).take())
     verdict.check_list("a name in `.PHONY` has a rule", names.said.len, "names", bad@,
@@ -423,7 +410,6 @@ priv fn check_phony_rules(names: Names@, arena: Arena$@) //<
 
 priv fn check_help_docs(names: Names@, arena: Arena$@) //<
     //< That every target that can be run appears in `make help`
-    //<
     //< **The list's canonical source is the make files themselves** (the format is in
     //< `mk/help.mk`'s header).
     //< **A family (`debug-*`) is not checked for its format.** Its names come from make variables
@@ -448,7 +434,7 @@ priv fn check_help_docs(names: Names@, arena: Arena$@) //<
     for d in names.docs
         if d.spec.ends_with("*")
             continue
-        if !harness_text.has(names.have@, d.spec)
+        if !names.have.contains(d.spec)
             stale.push(arena.text().s(d.where).s(": ").s(d.spec).take())
     verdict.check_list("`make help`'s explanations point at targets that really exist",
         names.docs.len, "lines", stale@,
@@ -471,7 +457,6 @@ priv fn said_by_name(names: Names@, name: U8[]): Bool //< whether a `.PHONY` lin
     return false
 
 priv fn help_groups(arena: Arena$@): List<|U8[]|> //< the groups `mk/help.mk` lists
-    //<
     //< **The canonical source is that one line** (no copy is kept). Unreadable, it returns empty
     //< and the caller fails with "not one could be read".
     $out: = List<|U8[]|>.new(arena)
@@ -491,7 +476,6 @@ priv const GROUPS_HEAD: U8[] = "export HELP_GROUPS := "
 
 priv fn check_help_groups(names: Names@, arena: Arena$@) //<
     //< The groups agree with `mk/help.mk`'s row
-    //<
     //< Caution: **Do not move this check back into make.** There it runs at load time, so in an
     //< environment that let something slip **make stops whatever target was run**. Here the
     //< `include` lines are walked, so the answer does not change with the environment.
@@ -501,7 +485,7 @@ priv fn check_help_groups(names: Names@, arena: Arena$@) //<
         return
     $unknown: = List<|U8[]|>.new(arena)
     for d in names.docs
-        if !harness_text.has(known@, d.group)
+        if !known.contains(d.group)
             unknown
                 .push(arena.text().s(d.where).s(": ").s(d.group).take())
     verdict.check_list("`make help`'s groups are in `mk/help.mk`'s row", names.docs.len, "lines",
@@ -534,7 +518,6 @@ priv struct Fn_read //< one function a run defines, and the highest argument its
 
 priv fn highest_read(body: U8[]): Sz //<
     //< The highest argument a body reads (`$(2)`, `${2}` or `$2`), 0 for none
-    //<
     //< **An even run of `$` is make's escape**: `$$(1)` is text for `$(eval)` or the shell.
     $top: Sz = 0
     $i: Sz = 0
@@ -564,7 +547,6 @@ priv fn highest_read(body: U8[]): Sz //<
 
 priv fn args_passed(call: U8[]): I64 //<
     //< How many arguments a call passes, `call` starting at its `$(`; -1 where it never closes
-    //<
     //< **Only a comma at the call's own depth separates two**: `$(call f,$(subst a,b,c))` passes
     //< one.
     $depth: Sz = 0
@@ -589,7 +571,6 @@ priv fn call_name(call: U8[]): U8[] //< the function a call names, `call` openin
 
 priv fn assigned_name(line: U8[]): U8[] //<
     //< The variable a line sets (`=`, `:=`, `::=`, `?=`, `+=`), empty where it sets none
-    //<
     //< **A rule's line sets none**, including a target's own variable (`install: export V := x`):
     //< left of its operator it holds more than one name.
     eq: = line.find_char('=').unwrap_or(0)
@@ -658,7 +639,6 @@ priv struct Call_finds //< the calls one pass found wrong, by the way they vanis
 
 priv fn check_run(paths: List<|U8[]|>@, finds: Call_finds$@, arena: Arena$@): Sz //<
     //< Checks the calls in one run of make against the functions that run defines
-    //<
     //< A run is the root's files, or one package's `Makefile`. It returns how many calls it
     //< checked.
     fns: = scan_fns(paths, arena)
@@ -702,7 +682,6 @@ priv fn check_run(paths: List<|U8[]|>@, finds: Call_finds$@, arena: Arena$@): Sz
 
 priv fn check_calls(arena: Arena$@) //<
     //< That a `$(call)` names a function its run defines, and passes it nothing it leaves unread
-    //<
     //< **A package's `Makefile` is a run of its own**: make reads it alone, so it cannot call the
     //< root's functions.
     $finds: = Call_finds::{ .nowhere = List<|U8[]|>.new(arena),
@@ -763,7 +742,6 @@ priv fn stages_agree(one: U8[], other: U8[], dir: U8[], arena: Arena$@): Bool //
 
 priv fn check_stage_compare(arena: Arena$@) //<
     //< That the self-host check compares byte for byte
-    //<
     //< One space added inside a string literal, and a side that cannot be read, both fail it.
     dir: = harness.sandbox("recipe_bytes")
     plain: = fs.join(dir, "plain.c", arena)

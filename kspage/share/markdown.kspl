@@ -1,5 +1,4 @@
 //< Writes Markdown
-//<
 //< **It is an export only**: kspage does not read Markdown back. So a comment in the text
 //< (`notice`) says what Markdown cannot hold, rather than keeping it.
 import "kspage/model/doc" as _doc + { Doc, Block, Tile }
@@ -11,12 +10,12 @@ import "kspage/model/run" { Inline, safe_href }
 import "kspage/model/style" + { Sheet, Style }
 import "std/chars"
 import "std/ds" { List }
+import "std/math"
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
 
 priv struct Sink //<
     //< Where the output goes, and everything that is counted anew at layout time
-    //<
     //< The numbers do not come from the document: chapter, running and note numbers are counted at
     //< layout time, so they come from the layout's list.
     out: Str_builder$@
@@ -27,7 +26,6 @@ priv struct Sink //<
     arena: Arena$@
     in_list: Sz //<
         //< The marker of the item written just before (`list_kind`).
-        //<
         //< No empty line goes in while the same marker continues.
 
 priv fn at_line_head(s: Sink$@): Bool //< whether it is at the start of a line
@@ -35,13 +33,11 @@ priv fn at_line_head(s: Sink$@): Bool //< whether it is at the start of a line
     return got.len <= 0 || got[got.len - 1] == '\n'
 
 priv fn end_line(s: Sink$@) //< closes the line
-    //<
     //< It adds no empty line.
     if !at_line_head(s)
         s.out.c('\n')
 
 priv fn end_block(s: Sink$@) //< ends a block with an empty line
-    //<
     //< Markdown separates blocks by an empty line (without one, the paragraph before continues).
     //< Nothing is written at the start of the text.
     end_line(s)
@@ -51,7 +47,6 @@ priv fn end_block(s: Sink$@) //< ends a block with an empty line
     s.out.c('\n')
 
 priv fn start_block(s: Sink$@, listing: Sz) //< written at the start of a block
-    //<
     //< No empty line goes in while items with the same marker continue (each item would read as a
     //< paragraph).
     //< Caution: **Put an empty line where the marker changes** (without it the items read as one
@@ -63,14 +58,12 @@ priv fn start_block(s: Sink$@, listing: Sz) //< written at the start of a block
     s.in_list = listing
 
 priv fn lead_in(s: Sink$@, depth: Sz) //< turns a list's level into spaces
-    //<
     //< One level is two spaces (it indents by the width of the marker's text).
     for $i: Sz = 0; i < depth; i += 1
         s.out.s("  ")
 
 priv fn always_escaped(c: U8): Bool //<
     //< The characters that read as markup wherever they stand
-    //<
     //< `~` is GFM's strikethrough, and three open a fence.
     return c == '\\' || c == '`' || c == '*' || c == '[' || c == ']' || c == '<' || c == '~'
 
@@ -80,7 +73,6 @@ priv fn head_escaped(c: U8): Bool //<
 
 priv fn word_edge(text: U8[], at: Sz): Bool //<
     //< whether the `_` at `at` could start or end emphasis
-    //<
     //< **Only between two letters or digits is it plain** (`snake_case`), so only there is it not
     //< escaped. A bracket or a mark beside it lets it open emphasis (`(_x_)`), and so may a
     //< character outside ASCII (CommonMark counts Unicode punctuation such as `「`).
@@ -93,7 +85,6 @@ priv fn letter_or_digit(c: U8): Bool //< an ASCII letter or digit (`is_alnum` ta
 
 priv fn entity_at(text: U8[], at: Sz): Bool //<
     //< whether the `&` at `at` starts a character reference
-    //<
     //< `&amp;`, `&#38;` and `&#x26;` are read as the character they name, so the `&` is escaped
     //< there and nowhere else (everywhere, `Fish & chips` would carry a stray `\`). **It errs to
     //< the safe side**: any run of letters and digits up to a `;` counts, named or not.
@@ -106,7 +97,6 @@ priv fn entity_at(text: U8[], at: Sz): Bool //<
     return i > start && i < text.len && text[i] == ';'
 
 priv fn only_digits(text: U8[], at: Sz): Bool //< whether what is before `at` is only digits
-    //<
     //< That shape reads as a numbered list (`1.` or `1)`).
     if at <= 0
         return false
@@ -117,7 +107,6 @@ priv fn only_digits(text: U8[], at: Sz): Bool //< whether what is before `at` is
 
 priv fn escape_into(out: Str_builder$@, text: U8[], head: Bool, cell: Bool) //<
     //< Writes a text, escaping it as Markdown
-    //<
     //< Only what would read as markup is escaped (escaping a `_` inside a word makes `snake_case`
     //< unreadable). A `|` is escaped only inside a cell. `head` means "this text starts a block's
     //< contents": the start of a line, or right after a list's `- ` (an item holds blocks too).
@@ -143,7 +132,6 @@ priv fn escape_into(out: Str_builder$@, text: U8[], head: Bool, cell: Bool) //<
 
 priv fn comment_into(out: Str_builder$@, text: U8[]) //<
     //< Writes a text as the contents of an HTML comment
-    //<
     //< Caution: **Never let two `-` stand together** (a `-->` closes the comment there). No line
     //< break goes in either (the text would leak outside the comment).
     for $i: Sz = 0; i < text.len; i += 1
@@ -157,7 +145,6 @@ priv fn comment_into(out: Str_builder$@, text: U8[]) //<
 
 priv fn notice(s: Sink$@, what: U8[], detail: U8[]) //<
     //< Reports, in a comment, contents that Markdown cannot write
-    //<
     //< Caution: **Do not drop them silently** — someone who sees only the text cannot see what is
     //< missing. Markdown passes an HTML comment through without showing it.
     start_block(s, 0)
@@ -170,7 +157,6 @@ priv fn notice(s: Sink$@, what: U8[], detail: U8[]) //<
     s.out.s(" has no way of being written in Markdown -->\n")
 
 priv fn accent_of(s: Sink$@, name: U8[]): paint.Accent //< the emphasis a run's style sets
-    //<
     //< It is looked at only where a style is named (a run that keeps the parent's style writes
     //< nothing).
     $got: paint.Accent = paint.inherit_accent()
@@ -185,7 +171,6 @@ priv fn accent_of(s: Sink$@, name: U8[]): paint.Accent //< the emphasis a run's 
     return got
 
 priv fn coded_of(s: Sink$@, name: U8[]): Bool //< whether that run's style is code
-    //<
     //< Caution: **Do not look at the name** (it silently breaks the day the name changes). The part
     //< is "a style that does not wrap", as for a fence (`../docs/DESIGN-architecture.md`'s table of
     //< parts).
@@ -197,7 +182,6 @@ priv fn coded_of(s: Sink$@, name: U8[]): Bool //< whether that run's style is co
 
 priv fn fence_for(text: U8[]): Sz //<
     //< How many `` ` `` are needed to fence the text inside.
-    //<
     //< One more than the longest run inside (the same number would read as the closing fence).
     $most: Sz = 0
     $i: Sz = 0
@@ -214,7 +198,6 @@ priv fn fence_for(text: U8[]): Sz //<
     return most + 1
 
 priv fn code_into(out: Str_builder$@, text: U8[]) //< writes inline code
-    //<
     //< The inside is not escaped.
     //< Caution: **Where an end is a `` ` ``, add one space** (without it, it joins the fence).
     //< CommonMark drops one space where both ends have one, so the shown text does not grow.
@@ -238,7 +221,6 @@ priv fn tricky_dest(url: U8[]): Bool //< whether the link needs a fence
     return false
 
 priv fn dest_into(out: Str_builder$@, url: U8[]) //< writes the link's target
-    //<
     //< Caution: **Where it holds a space or a bracket, fence it in `<>`** (unfenced, it ends
     //< there).
     if !tricky_dest(url)
@@ -253,7 +235,6 @@ priv fn dest_into(out: Str_builder$@, url: U8[]) //< writes the link's target
     out.c('>')
 
 priv fn linkable(url: U8[]): Bool //< whether a target may be written as a link
-    //<
     //< Caution: **Keep to what the screen opens** (`safe_href` in `../model/run.kspl`), or the
     //< Markdown hands on a `javascript:` or `data:` link it refuses.
     //< **A control character is refused too**: a line break ends the target, and what follows lands
@@ -265,7 +246,6 @@ priv fn linkable(url: U8[]): Bool //< whether a target may be written as a link
 
 priv fn accent_into(s: Sink$@, b: Block$@, from: Sz, end: Sz, head: Bool, cell: Bool) //<
     //< Writes a run of inlines with the same emphasis
-    //<
     //< The fence goes once, around the whole run (`same_accent` below).
     ac: = accent_of(s, b.inlines.get(from).style)
     bold: = paint.drawn(ac.bold)
@@ -289,7 +269,6 @@ priv fn accent_into(s: Sink$@, b: Block$@, from: Sz, end: Sz, head: Bool, cell: 
 
 priv fn group_into(s: Sink$@, b: Block$@, from: Sz, end: Sz, head: Bool, cell: Bool) //<
     //< Writes one link's worth
-    //<
     //< Caution: **Split the inside by emphasis**, not the link. The inlines split where the
     //< emphasis changes, so writing a link per piece makes one link grow into two or three.
     first: = b.inlines.get(from)
@@ -317,7 +296,6 @@ priv fn group_into(s: Sink$@, b: Block$@, from: Sz, end: Sz, head: Bool, cell: B
 
 priv fn same_accent(s: Sink$@, a: Inline$@, b: Inline$@): Bool //<
     //< Whether two inlines have the same emphasis
-    //<
     //< Caution: **Do not fence consecutive inlines one at a time.** Code inside bold splits the
     //< text into three, and fencing each in `**` gives `**…****`x`****…**`, which reads as
     //< something else. The fence is written once, around the whole run.
@@ -327,13 +305,11 @@ priv fn same_accent(s: Sink$@, a: Inline$@, b: Inline$@): Bool //<
         paint.drawn(x.italic) == paint.drawn(y.italic)
 
 priv fn same_link(a: Inline$@, b: Inline$@): Bool //< whether two inlines have the same link
-    //<
     //< Caution: **Do not look at the emphasis** (it is one link even where the emphasis changes).
     return a.href.equals(b.href)
 
 priv fn runs_into(s: Sink$@, b: Block$@, head: Bool, cell: Bool) //<
     //< Writes the texts a block holds
-    //<
     //< `head` applies to the first inline only.
     $i: Sz = 0
     for i < b.inlines.len
@@ -344,32 +320,29 @@ priv fn runs_into(s: Sink$@, b: Block$@, head: Bool, cell: Bool) //<
         i = end
 
 priv fn list_kind(st: Style$@): Sz //< the kind of a list's marker
-    //<
     //< 0 means not a list (1 is bullets, 2 is numbers); an empty line is needed where it changes.
     if st == null
         return 0
     switch st.marker
-    case .bullet(_g)
+    case .bullet
         return 1
-    case .number(_a)
+    case .number
         return 2
     case .none, .serial, .outline {}
     return 0
 
 priv fn lead_into(s: Sink$@, st: Style$@, ord: Sz) //<
     //< Writes a list's marker as Markdown text
-    //<
     //< The style's bullet is not written (Markdown's bullet is `-`). The number written is the one
     //< on screen, so it also matches when read as text.
     switch st.marker
-    case .bullet(_g)
+    case .bullet
         s.out.s("- ")
-    case .number(_a)
+    case .number
         s.out.s("\{ord if ord > 0 else 1\}. ")
     case .none, .serial, .outline {}
 
 priv fn keep_closing(s: Sink$@, from: Sz) //< keeps the `#`s ending a heading's line as its text
-    //<
     //< A reader drops a closing sequence (CommonMark). That is a run of `#` that ends the line
     //< after a space, or the whole of what follows the opening `# `. So `Item #` would lose its
     //< `#`. A `\` before the run keeps it.
@@ -391,7 +364,6 @@ priv fn keep_closing(s: Sink$@, from: Sz) //< keeps the `#`s ending a heading's 
 
 priv fn write_mark(s: Sink$@, st: Style$@, b: Block$@, ord: Sz, head: Bool): Bool //<
     //< Writes the marker at the start of a line as text
-    //<
     //< True if anything was written. `head` is as in `escape_into` (a heading's mark follows its
     //< `# `, so it is not).
     //< A marker Markdown has a syntax for (`-`, `#`) does not come here; what comes is "Figure 1. "
@@ -410,7 +382,6 @@ priv fn write_mark(s: Sink$@, st: Style$@, b: Block$@, ord: Sz, head: Bool): Boo
     return true
 
 priv fn write_image(s: Sink$@, b: Block$@): Bool //< writes a picture
-    //<
     //< True if anything was written.
     //< The size is not written (Markdown has no syntax for it). The caption comes after the
     //< picture, as on the screen.
@@ -423,7 +394,6 @@ priv fn write_image(s: Sink$@, b: Block$@): Bool //< writes a picture
     return true
 
 priv fn write_contents(s: Sink$@, depth: Sz) //< writes the table of contents
-    //<
     //< It is not in the document, so here too it is built from the headings. A list level shows the
     //< depth.
     start_block(s, 0)
@@ -435,7 +405,6 @@ priv fn write_contents(s: Sink$@, depth: Sz) //< writes the table of contents
         s.out.c('\n')
 
 priv fn write_note_list(s: Sink$@, depth: Sz) //< writes the list of notes
-    //<
     //< The number is the row's position, as where the mark is written. **No list is added
     //< unasked**: with no block of the collecting style, only the marks are written.
     start_block(s, 0)
@@ -446,11 +415,9 @@ priv fn write_note_list(s: Sink$@, depth: Sz) //< writes the list of notes
         s.out.c('\n')
 
 priv const PLAIN_CODE_NAME: U8[] = "code" //< the style name of a fence that declares no language
-    //<
     //< Any other fence style's name is the language it declares (` ```kspl `).
 
 priv fn fence_lang(name: U8[]): U8[] //< the language a fence declares
-    //<
     //< Empty for a style that declares none, **and for a name a language cannot have**. A backtick
     //< there makes the line no fence at all (CommonMark). The code after it is then read as
     //< Markdown, raw HTML included. A space or another mark changes what the reader takes.
@@ -462,7 +429,6 @@ priv fn fence_lang(name: U8[]): U8[] //< the language a fence declares
     return name
 
 priv fn fence_len(blocks: List<|Block$@|>$@, from: Sz, end: Sz): Sz //< the fence's backtick count
-    //<
     //< Caution: **One longer than the longest run of backticks inside.** A line inside with a run
     //< at least as long closes the fence there, and what follows is read as Markdown, raw HTML
     //< included. A fixed longer mark only moves the run that closes it.
@@ -483,7 +449,6 @@ priv fn fence_into(s: Sink$@, n: Sz) //< writes a fence of n backticks
 
 priv fn write_fence(s: Sink$@, blocks: List<|Block$@|>$@, from: Sz, depth: Sz): Sz //<
     //< Turns consecutive blocks that "do not wrap" into one fence
-    //<
     //< Returns the index of the block to write next.
     //< Caution: **Do not fence each paragraph on its own**, or a code block is cut line by line.
     //< The text inside is not escaped.
@@ -507,17 +472,8 @@ priv fn write_fence(s: Sink$@, blocks: List<|Block$@|>$@, from: Sz, depth: Sz): 
         write_blocks(s, last.children, depth)
     return end
 
-priv fn has_text(b: Block$@): Bool //< whether any of the block's inlines holds a character
-    //<
-    //< An empty frame writes no line.
-    for $i: Sz = 0; i < b.inlines.len; i += 1
-        if b.inlines.get(i).showing().len > 0
-            return true
-    return false
-
 priv fn cell_into(s: Sink$@, tiles: List<|Tile|>$@, row: Sz, column: Sz) //<
     //< Writes the cell at row `row`, column `column`
-    //<
     //< A covered cell is empty (only the top-left cell of a merge holds a text).
     for $i: Sz = 0; i < tiles.len; i += 1
         one: = tiles.get(i)
@@ -527,7 +483,6 @@ priv fn cell_into(s: Sink$@, tiles: List<|Tile|>$@, row: Sz, column: Sz) //<
 
 priv fn table_notices(s: Sink$@, b: Block$@, tiles: List<|Tile|>$@) //<
     //< Reports where the table holds a shape Markdown cannot write
-    //<
     //< A GFM table carries one heading row and one field per cell, and nothing else. A merge, a
     //< block in a cell and the table's name (`detail!C2`) are all dropped.
     //< Caution: **Report the name too.** Dropped silently, a formula points at a table that is
@@ -549,7 +504,6 @@ priv fn table_notices(s: Sink$@, b: Block$@, tiles: List<|Tile|>$@) //<
 
 priv fn align_of(s: Sink$@, tiles: List<|Tile|>$@, column: Sz): style.Align //<
     //< That column's alignment
-    //<
     //< There is one per column, set by the first row's cell ("any row holding one" would let one
     //< added row change the whole column). Left is the default, written `---`.
     for $i: Sz = 0; i < tiles.len; i += 1
@@ -571,7 +525,6 @@ priv fn rule_into(s: Sink$@, align: style.Align) //< writes one cell of the sepa
     s.out.s(" --- |")
 
 priv fn write_table(s: Sink$@, b: Block$@, depth: Sz) //< writes one table
-    //<
     //< The first row is the heading (a GFM table has no form without one). The shown text is
     //< written, not the formula (as in CSV). The caption comes before the table.
     if b.inlines.len > 0
@@ -602,7 +555,6 @@ priv fn write_table(s: Sink$@, b: Block$@, depth: Sz) //< writes one table
         s.out.c('\n')
 
 priv fn write_block(s: Sink$@, b: Block$@, depth: Sz, ord: Sz) //< writes one block
-    //<
     //< `depth` is the list level.
     //< Indent only inside a list, or a nested paragraph reads as a fence.
     $st: Style$@ = null
@@ -659,7 +611,7 @@ priv fn write_block(s: Sink$@, b: Block$@, depth: Sz, ord: Sz) //< writes one bl
     $titled: Sz = -1
     if level > 0
         // The depth stops at six (Markdown has nothing deeper).
-        hashes: = level if level <= 6 else 6
+        hashes: = math.min(level, 6)
         for $i: Sz = 0; i < hashes; i += 1
             s.out.c('#')
         s.out.c(' ')
@@ -684,7 +636,6 @@ priv fn write_block(s: Sink$@, b: Block$@, depth: Sz, ord: Sz) //< writes one bl
 
 priv fn write_blocks(s: Sink$@, blocks: List<|Block$@|>$@, depth: Sz) //<
     //< Writes the siblings in order
-    //<
     //< Caution: **Count the numbers without skipping** — a block that went into a fence counts too,
     //< or two lists far apart continue one numbering.
     $i: Sz = 0
@@ -702,7 +653,6 @@ priv fn write_blocks(s: Sink$@, blocks: List<|Block$@|>$@, depth: Sz) //<
         i = next
 
 fn write(d: Doc$@, sheet: Sheet$@, out: Str_builder$@) //< writes a document as Markdown text
-    //<
     //< Caution: **Assign the numbers before writing starts** (the headings after the table of
     //< contents are needed too). **What the writing gathers goes in an arena of its own, thrown
     //< away at the end.** In the document's arena, every export would grow it for good. Only a

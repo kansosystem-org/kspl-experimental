@@ -1,0 +1,107 @@
+//< Suites: what a test may take and return, and what a suite may be
+//< Each case below is compiled alone, as the file its head names.
+// ==== case suite_param_without_field
+//< A test's parameter the suite has no field for is refused at the test
+//< Let through, the call the compiler writes would fail at the suite, far from the test.
+// EXPECT: test 'test_wants' takes 'missing', but the suite 'Tests' has no field 'missing'
+import "std/suite"
+
+priv struct Tests
+  n: I32
+
+impl Tests: suite.Suite {}
+
+fn test_wants(missing: I32)
+  assert(missing == 0, "missing")
+
+fn main()
+  $t: = Tests::{ .n = 1 }
+  t.run()
+// ==== case suite_param_of_another_type
+//< A field of the parameter's name but of another type is refused, naming both types
+// EXPECT: test 'test_wants' takes 'n: U8', but the field 'n' of the suite 'Tests' is 'I32'
+import "std/suite"
+
+priv struct Tests
+  n: I32
+
+impl Tests: suite.Suite {}
+
+fn test_wants(n: U8)
+  assert(n == 0, "n")
+
+fn main()
+  $t: = Tests::{ .n = 1 }
+  t.run()
+// ==== case suite_test_returns_a_value
+//< A test that returns a value is refused: the suite would drop it unread
+// EXPECT: test 'test_gives' returns 'I32', which no suite reads
+import "std/suite"
+
+priv struct Tests
+  n: I32
+
+impl Tests: suite.Suite {}
+
+fn test_gives(): I32
+  return 1
+
+fn main()
+  $t: = Tests::{ .n = 1 }
+  t.run()
+// ==== case suite_run_written_by_hand
+//< A suite whose `impl` writes `run` is refused: a second list of calls is what the suite replaces
+// EXPECT: a suite's 'run' is written by the compiler
+import "std/suite"
+
+priv struct Tests
+  n: I32
+
+impl Tests: suite.Suite
+  fn run(_r: Self$@)
+    return
+
+fn main()
+  $t: = Tests::{ .n = 1 }
+  t.run()
+// ==== case suite_not_a_struct
+//< A suite is a struct or an enum: a type with no declaration of its own has no fields to name
+// EXPECT: a suite is a struct, whose fields are the values its tests take, or an enum
+import "std/suite"
+
+priv typedef Tests = I32
+
+impl Tests: suite.Suite {}
+
+fn main()
+  $t: Tests = 1
+  t.run()
+// ==== case suite_generic
+//< A generic suite is refused: `run` is written once, for one struct
+// EXPECT: a suite cannot be generic
+import "std/suite"
+
+priv struct Tests<|T|>
+  v: T
+
+impl<|T|> Tests<|T|>: suite.Suite {}
+
+fn main()
+  $t: = Tests<|I32|>::{ .v = 1 }
+  t.run()
+// ==== case suite_generic_test
+//< A generic test is refused: the suite has no type argument to give it
+// EXPECT: test 'test_any' is generic, but the suite 'Tests' has no type argument to give it
+import "std/suite"
+
+priv struct Tests
+  n: I32
+
+impl Tests: suite.Suite {}
+
+fn test_any<|T|>(_x: T)
+  return
+
+fn main()
+  $t: = Tests::{ .n = 1 }
+  t.run()

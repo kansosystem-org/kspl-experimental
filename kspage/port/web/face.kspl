@@ -1,17 +1,16 @@
 //< The entry points that touch a style
-//<
 //< Note: **In kspage, `face` means a style** (as in `Block_face_op` in `write/record.kspl`).
 //< It is not a typeface — a typeface is `Font` and `Style.family`, and the screen's CSS calls it
 //< `--font`.
 //< Applying a style, changing its contents, number formats, a paragraph's alignment. Split from
 //< [`bridge.kspl`](bridge.kspl) for the 1000-line-per-file cap, and follows its boundary rules.
 import "kspage/lay/caret"
-import "kspage/model/collect" { Collect }
+import "kspage/model/collect" + { Collect }
 import "kspage/model/doc" { Rect }
 import "kspage/model/paint"
 import "kspage/model/run"
 import "kspage/model/style"
-import "kspage/port/web/state" + { ed, ensure, in_ptr, input, INPUT_CAP, page, sheet }
+import "kspage/port/web/state" + { ed, ensure, in_ptr, page, sheet }
 import "kspage/write/block"
 import "kspage/write/insert"
 import "kspage/write/shape"
@@ -29,9 +28,9 @@ fn kspage_web_style(): Sz
 // empty name reverts to the parent's; **with nothing selected it applies to the whole inline.**
 #export
 fn kspage_web_set_style(len: Sz): I32
-    if len < 0 || len > INPUT_CAP
-        return 0
-    return 1 if ed.set_style(U8[]::{ .ptr = input@, .len = len }) else 0
+    if name: = state.typed(len)
+        return 1 if ed.set_style(name) else 0
+    return 0
 
 // The number of names in the style table (for the screen's "Style" list).
 #export
@@ -107,31 +106,33 @@ fn kspage_web_span_ink(out: F32$@)
 
 // ---- Shapes ----
 
-// Adds one shape to the cursor's container, in the style named in the typing arena; 1 if added.
-// **Inside a slide it goes to the slide itself**, even when clicked on a frame's text: a shape is
-// the frame's sibling. Otherwise it goes to the paragraph or cell, not to a grid or a collecting
-// block. A missing style is made; for an existing one only the shape is changed.
+// Adds one shape to the cursor's container from `shape\tname` in the typing arena; 1 if added. The
+// shape is `style.Shape`'s variant name, and the name the style it is drawn in. **Inside a slide it
+// goes to the slide itself**, even when clicked on a frame's text: a shape is the frame's sibling.
+// Otherwise it goes to the paragraph or cell, not to a grid or a collecting block. A missing style
+// is made; for an existing one only the shape is changed.
 #export
-fn kspage_web_insert_shape(len: Sz, kind: I32): I32
+fn kspage_web_insert_shape(len: Sz): I32
     ensure()
-    if len <= 0 || len > INPUT_CAP
-        return 0
-    // Caution: **Take the name from the typing arena** (the loading arena is for an image's
+    // Caution: **Take the text from the typing arena** (the loading arena is for an image's
     // source).
-    name: = U8[]::{ .ptr = input@, .len = len }
-    return 1 if ed.insert_shape(page, sheet, name, state.shape_at(kind)) else 0
-
-// Draws one shape of w × h from screen position (x, y) onto the clicked slide; 1 if drawn. **The
-// cursor is ignored** (this is picking a tool and dragging). **0 where the press was not on a
-// slide** (flow and grid layouts read no position). The core turns screen coordinates into the
-// frame's position.
-#export
-fn kspage_web_draw_shape(len: Sz, kind: I32, x: F32, y: F32, w: F32, h: F32): I32
-    ensure()
-    if len <= 0 || len > INPUT_CAP
+    two: = state.split_input(len)
+    if !two.found || two.tail.len <= 0
         return 0
-    name: = U8[]::{ .ptr = input@, .len = len }
-    return 1 if ed.draw_shape(page, sheet, name, state.shape_at(kind), x, y, w, h) else 0
+    return 1 if ed.insert_shape(page, sheet, two.tail, style.shape_from(two.head)) else 0
+
+// Draws one shape of w × h from screen position (x, y) onto the clicked slide, from
+// `shape\tname` in the typing arena (as `kspage_web_insert_shape`); 1 if drawn. **The cursor is
+// ignored** (this is picking a tool and dragging). **0 where the press was not on a slide** (flow
+// and grid layouts read no position). The core turns screen coordinates into the frame's position.
+#export
+fn kspage_web_draw_shape(len: Sz, x: F32, y: F32, w: F32, h: F32): I32
+    ensure()
+    two: = state.split_input(len)
+    if !two.found || two.tail.len <= 0
+        return 0
+    return (1
+        if ed.draw_shape(page, sheet, two.tail, style.shape_from(two.head), x, y, w, h) else 0)
 
 // Removes the selected frame if it holds no text; 1 if removed. **On a frame with text it is 0**,
 // and the key handler then deletes one character (otherwise Delete would stop working mid-typing).
@@ -150,27 +151,19 @@ fn kspage_web_block_style(): Sz
     ensure()
     return state.say(ed.block_style_at())
 
-// Makes the `len` bytes in the typing arena the style of the selected paragraphs; 1 if applied.
-// **Only paragraphs** (cells and containers in the range are untouched). **A style with a
-// different arrangement is not applied** (a table's style on a paragraph leaves the text nowhere
-// to go). Empty removes it, a list's marker included.
+// Makes the `len` bytes in the typing arena the style of the selected paragraphs. **Only
+// paragraphs** (cells and containers in the range are untouched). **A style with a different
+// arrangement is not applied** (a table's style on a paragraph leaves the text nowhere to go).
+// Empty removes it, a list's marker included. Writes the result's variant name
+// (`block.Block_style_end`) and returns its length.
+// Caution: **Pass the reason out** — a single false leaves the page no fitting message.
 #export
-fn kspage_web_set_block_style(len: Sz): I32
+fn kspage_web_set_block_style(len: Sz): Sz
     ensure()
-    if page == null || len < 0 || len > INPUT_CAP
-        return 0
-    name: = U8[]::{ .ptr = input@, .len = len }
-    // Caution: **Return the reason as a number** — a single false leaves the page no fitting
-    // message.
-    switch ed.set_block_style(page, sheet, name)
-    case .done
-        return 1
-    case .no_paragraph
-        return 0
-    case .no_such_style
-        return -1
-    case .wrong_kind
-        return -2
+    if page != null
+        if name: = state.typed(len)
+            return state.say(ed.set_block_style(page, sheet, name).variant_name())
+    return state.say(block.Block_style_end.no_paragraph.variant_name())
 
 // Whether style `i` can be applied to a paragraph. **Only the core's `style.fits_block` decides**
 // (a separate check in the page could refuse a listed style).
@@ -190,27 +183,23 @@ fn kspage_web_name(): Sz
     ensure()
     return state.say(ed.name_at(page))
 
-// Makes the `len` bytes in the typing arena the name of the current place; 1 if set, 0 if there
-// is no place. Empty removes it. It is separate from a style's name. **A table's name that no
-// formula could reach comes back as its reason** (`calc.Name_fault`): -1 a separator, -2 a leading
-// digit or `#`, -3 the leading `Day`.
+// Makes the `len` bytes in the typing arena the name of the current place. Empty removes it. It
+// is separate from a style's name. Writes what happened and returns its length: `done`, `nowhere`
+// where there is no place to name, or **the reason a formula could not reach a table by that name**
+// (`calc.Name_fault`'s variant name).
 // Caution: **Refuse before layout.** Layout decides whether it is a cell. Before it, **a name
 // meant for the table attaches to the cell** while the screen says "set".
 #export
-fn kspage_web_set_name(len: Sz): I32
+fn kspage_web_set_name(len: Sz): Sz
     ensure()
-    if page == null || len < 0 || len > INPUT_CAP
-        return 0
-    name: = U8[]::{ .ptr = input@, .len = len }
-    switch ed.name_fault_at(page, name)
-    case .none {}
-    case .separator
-        return -1
-    case .leading
-        return -2
-    case .type_name
-        return -3
-    return 1 if ed.set_name(page, name) else 0
+    if page != null
+        if name: = state.typed(len)
+            fault: = ed.name_fault_at(page, name)
+            if !fault.reachable()
+                return state.say(fault.variant_name())
+            if ed.set_name(page, name)
+                return state.say("done")
+    return state.say("nowhere")
 
 // Inserts the `len`-byte name in the typing arena as an inline that refers from the body; 1 if
 // inserted. Only a block with a running number can be referred to. The number is recounted at
@@ -218,10 +207,11 @@ fn kspage_web_set_name(len: Sz): I32
 #export
 fn kspage_web_insert_refer(len: Sz): I32
     ensure()
-    if page == null || len < 0 || len > INPUT_CAP
+    if page == null
         return 0
-    name: = U8[]::{ .ptr = input@, .len = len }
-    return 1 if ed.insert_refer(page, sheet, name) else 0
+    if name: = state.typed(len)
+        return 1 if ed.insert_refer(page, sheet, name) else 0
+    return 0
 
 // ---- Links ----
 
@@ -236,14 +226,14 @@ fn kspage_web_href(): Sz
 #export
 fn kspage_web_set_href(len: Sz): I32
     ensure()
-    if len < 0 || len > INPUT_CAP
-        return 0
-    // Caution: **Do not accept a scheme that cannot be opened** (`safe_href` in `model/run.kspl`)
-    // — accepted but never opened, it is a field that does nothing (Principle 5). Empty means
-    // "remove the link".
-    if len > 0 && !run.safe_href(U8[]::{ .ptr = input@, .len = len })
-        return 0
-    return 1 if ed.link_span(sheet, U8[]::{ .ptr = input@, .len = len }) else 0
+    if href: = state.typed(len)
+        // Caution: **Do not accept a scheme that cannot be opened** (`safe_href` in
+        // `model/run.kspl`) — accepted but never opened, it is a field that does nothing
+        // (Principle 5). Empty means "remove the link".
+        if href.len > 0 && !run.safe_href(href)
+            return 0
+        return 1 if ed.link_span(sheet, href) else 0
+    return 0
 
 // Writes the link target of the text exactly at (x, y) and returns the length. **It is not moved
 // to what is nearby**, or a click in the margin would follow the link. Empty outside.
@@ -295,32 +285,42 @@ fn kspage_web_insert_image(len: Sz, w: F32, h: F32): I32
     if page == null || in_ptr == null || len <= 0
         return 0
     return 1 if ed.insert_image(page, U8[]::{ .ptr = in_ptr, .len = len }, w, h) else 0
-// Inserts a collecting block after the cursor's paragraph, named by the `len` bytes in the typing
-// arena: `kind` 1 a table of contents, 2 a list of notes. **The contents are not inserted** (they
-// are built at every layout); a missing style is made.
+// Inserts a collecting block after the cursor's paragraph from `kind\tname` in the typing arena;
+// 1 if inserted. The kind is `Collect`'s variant name: `notes` a list of notes, anything else a
+// table of contents. **The contents are not inserted** (they are built at every layout); a missing
+// style is made.
 #export
-fn kspage_web_insert_gathered(len: Sz, kind: I32): I32
+fn kspage_web_insert_gathered(len: Sz): I32
     ensure()
-    if page == null || len <= 0 || len > INPUT_CAP
+    two: = state.split_input(len)
+    if page == null || !two.found || two.tail.len <= 0
         return 0
-    what: = Collect.notes if kind == 2 else Collect.contents
-    name: = U8[]::{ .ptr = input@, .len = len }
-    return 1 if ed.insert_gathered(page, sheet, name, what) else 0
+    $what: Collect = .contents
+    switch collect.collect_from(two.head)
+    case .notes
+        what = .notes
+    default {}
+    return 1 if ed.insert_gathered(page, sheet, two.tail, what) else 0
 
 // ---- Charts ----
 
-// Inserts a chart after the cursor's paragraph from `name\trange` in the typing arena; 1 if
-// inserted. `kind` 3 is bars, 4 lines (`Collect`'s list). **The range needs the table's name**
-// (`Details!C2:C4`), as a chart in the flow has none of its own. The contents are not inserted
-// (they are built from the range at layout time).
+// Inserts a chart after the cursor's paragraph from `kind\tname\trange` in the typing arena; 1 if
+// inserted. The kind is `Collect`'s variant name (`bars`, `lines`). **The range needs the table's
+// name** (`Details!C2:C4`), as a chart in the flow has none of its own. The contents are not
+// inserted (they are built from the range at layout time).
 #export
-fn kspage_web_insert_chart(len: Sz, kind: I32): I32
+fn kspage_web_insert_chart(len: Sz): I32
     ensure()
     two: = state.split_input(len)
     if page == null || !two.found
         return 0
+    cut: = state.split_at_tab(two.tail)
+    if cut >= two.tail.len
+        return 0
+    name: = two.tail.sub(0, cut)
+    range: = two.tail.sub_from(cut + 1)
     return (1
-        if ed.insert_chart(page, sheet, two.head, two.tail, state.collect_at(kind)) else 0)
+        if ed.insert_chart(page, sheet, name, range, collect.collect_from(two.head)) else 0)
 
 // ---- Notes ----
 
@@ -335,9 +335,9 @@ fn kspage_web_note(): Sz
 #export
 fn kspage_web_set_note(len: Sz): I32
     ensure()
-    if len < 0 || len > INPUT_CAP
-        return 0
-    return 1 if ed.set_note(U8[]::{ .ptr = input@, .len = len }) else 0
+    if note: = state.typed(len)
+        return 1 if ed.set_note(note) else 0
+    return 0
 
 // ---- Comments ----
 

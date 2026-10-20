@@ -1,5 +1,4 @@
 //< The CLI's emitted-file checks and the command assertions they share with the suite
-//<
 //< The interfaces, API record and link-library list are read back from a sample directory.
 //< The suite keeps command selection, help and diagnostics; both use the same status/text check.
 import "ksplc/tests/support/harness"
@@ -12,7 +11,6 @@ import "std/str"
 import "std/verdict"
 
 fn cli(args: U8[][]): verdict.Run_out //< it runs ksplc once
-    //<
     //< Not `harness.ksplc`: a subcommand that does not accept `--std-dir=` rejects its call.
     return harness.ksplc_bare(args)
 
@@ -39,7 +37,6 @@ fn ng_case(name: U8[], args: U8[][], expect: U8[]) //<
     check_case(name, args, expect, false)
 
 fn std_flag(): U8[] //< the option passing the standard library's directory
-    //<
     //< **The working directory changes before the run, so a relative path would not resolve.**
     return harness.arena().text().s("--std-dir=\{harness.std_dir()\}").take()
 
@@ -48,7 +45,6 @@ priv fn lib_opt(path: U8[], arena: Arena$@): U8[] //< `--library=<path>`
 
 fn case_library(arena: Arena$@) //<
     //< `--library=` builds a library and writes each interface it names, from one compile
-    //<
     //< A value that names no form, or one path twice, is refused rather than written.
     dir: = harness.sandbox("cli_library")
     src: = fs.join(dir, "lib.kspl", arena)
@@ -74,12 +70,12 @@ fn case_library(arena: Arena$@) //<
 
 fn case_surface_doc(arena: Arena$@) //<
     //< The record of the published API carries the documentation as a fourth column
-    //<
-    //< Caution: **Check both sides of the parting**, the opening paragraph and the detail. One
-    //< alone lets the other be lost unnoticed. **Check the full stop between them too.** Without it
-    //< two fragments run into one broken sentence. None is wanted where the summary ends in its
-    //< own (`described` in `../../base/ast_doc.kspl`). **A `pub` C function is a row too**, keyed
-    //< with its block's attributes. Without it, what reaches every package goes unrecorded.
+    //< Caution: **Check both sides**, the summary line and the detail below it. One alone lets the
+    //< other be lost unnoticed. **Check the full stop between them too.** Without it two fragments
+    //< run into one broken sentence. None is wanted where the summary ends in its own (`described`
+    //< in `../../base/ast_doc.kspl`). `closed` keeps an empty `//<` below its summary, the shape
+    //< before the formatter dropped it, and reads the same. **A `pub` C function is a row too**,
+    //< keyed with its block's attributes. Without it, what reaches every package goes unrecorded.
     dir: = fs.join(harness.tmp_dir(), "cli_surface", arena)
     fs.mkdir_all(dir) catch {}
     src: = fs.join(dir, "api.kspl", arena)
@@ -87,19 +83,16 @@ fn case_surface_doc(arena: Arena$@) //<
     obj: = fs.join(dir, "api.c", arena)
     body: U8[] =
         """pub struct Row //< one row of the table
-  //<
   //< What a row stands for, in a sentence.
   pub text: U8[] //< the text as the writer typed it
 
 
 pub fn count(rows: Row[1]): Sz //< how many rows carry text
-  //<
   //< Walks the table once and counts.
   return rows[0].text.len
 
 
 pub fn named(rows: Row[1]): Sz //< it names the column as `text`
-  //<
   //< A summary closing on a code span takes its stop behind the span.
   return rows[0].text.len
 
@@ -128,7 +121,7 @@ fn main(): I32
     if !r.exited_with(0)
         verdict.check("the record's documentation: it is put out", false, r.out)
         return
-    got: = io.read_file(tsv) catch ""
+    got: = io.read_file(tsv, null) catch ""
     wants: U8[][6] = ::{ "Row\tpub struct Row\tone row of the table. What a row stands for, in a \
         sentence.", "Row.text\tpub text: U8[]\tthe text as the writer typed it",
         "count\tpub fn count(rows: Row[1]): Sz\thow many rows carry text. Walks the table once and \
@@ -163,7 +156,6 @@ priv fn emitted_libs(dir: U8[], entry: U8[], flags: U8[][], arena: Arena$@): U8[
 
 fn case_emit_libs(arena: Arena$@) //<
     //< `--emit-libs` writes the libraries the kept `extern` blocks name (`#link`)
-    //<
     //< **A file's names come before those of the files it imports** (a one-pass linker wants a
     //< library before the ones it uses). Each comes once, at its first place. A block that `#cfg`
     //< dropped names nothing.

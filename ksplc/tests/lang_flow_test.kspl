@@ -1,5 +1,5 @@
 //< Checks what a function's paths leave set, moved or released, by running code that passes
-//<
+//< It also checks each way a `catch` on an Option leaves.
 //< The shapes the compiler refuses are the cases `loop_*` in `negative/control.kspl` and
 //< `move_only_field_moved_out` in `negative/closure.kspl`; the syntax and basic types are in
 //< `lang_test.kspl`.
@@ -71,3 +71,72 @@ fn test_loop_exits_carry_their_state()
     assert(declared_in_the_body(3) == 0 + 1 + 2, "a value declared in the body, moved on every pass")
     assert(fields_apart() == 1 + 2 + 4, "two fields moved apart, one given back")
     verdict.pass("a loop's exits, `break` included, carry what each path set, moved or released.")
+
+// ==========================================
+// `catch` on an Option takes its value or leaves ("Catching an optional" in
+// `../../docs/SPEC-programming-language.md`). Each way out is tried on both sides: with a value
+// the block is skipped, and without one the block leaves. The shapes refused are the cases
+// `option_catch_*` in `tests/negative/errors.kspl`.
+// ==========================================
+priv fn doubled_if_positive(n: I32): I32? //< `n * 2` where n is positive, none otherwise
+    return .some(n * 2) if n > 0 else .none
+
+priv fn tenfold_if(n: I32, want: I32): I32? //< `n * 10` where n is `want`, none otherwise
+    return .some(n * 10) if n == want else .none
+
+priv enum Catch_probe_error
+    missing
+
+priv fn catch_or_return(n: I32): I32
+    v: = tenfold_if(n, 1) catch
+        return -1
+    return v + 1
+
+priv fn catch_or_throw(n: I32): I32!Catch_probe_error
+    v: = tenfold_if(n, 2) catch
+        throw .missing
+    return v
+
+priv fn catch_or_break(): I32 //< the sum of the values up to the first none
+    $total: I32 = 0
+    for $i: I32 = 0; i < 5; i += 1
+        v: = doubled_if_positive(3 - i) catch
+            break
+        total += v
+    return total
+
+priv fn catch_or_continue(): I32 //< the sum of the values, skipping each none
+    $total: I32 = 0
+    for $i: I32 = -2; i < 3; i += 1
+        v: = doubled_if_positive(i) catch
+            continue
+        total += v
+    return total
+
+priv fn catch_as_statement(n: I32): I32 //< a statement's `catch` leaves, and its value is unread
+    doubled_if_positive(n) catch
+        return 0
+    return 1
+
+priv fn catch_nested_result(n: I32): I32 //< a Result's `catch` inside the Option's block
+    v: = doubled_if_positive(n) catch
+        w: = catch_or_throw(2) catch
+            fallback 7
+        return w
+    return v
+
+fn test_catch_on_option()
+    verdict.start("[Lang] catch takes an Option's value or leaves test...")
+    assert(catch_or_return(1) == 11 && catch_or_return(2) == -1, "return leaves on none")
+    $thrown: = false
+    _t: = catch_or_throw(3) catch
+        thrown = true
+    held: = catch_or_throw(2) catch -1
+    assert(thrown && held == 20, "throw leaves on none")
+    assert(catch_or_break() == 12, "break leaves the loop at the first none")
+    assert(catch_or_continue() == 6, "continue skips each none")
+    assert(catch_as_statement(1) == 1 && catch_as_statement(-1) == 0,
+        "a statement's catch runs its block on none alone")
+    assert(catch_nested_result(4) == 8 && catch_nested_result(-1) == 20,
+        "a Result's catch in the block keeps its own fallback")
+    verdict.pass("`x: = opt catch { … }` binds the value, or leaves by every way out.")

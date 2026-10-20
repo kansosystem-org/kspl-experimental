@@ -1,5 +1,4 @@
 //< One connection's state, and how a response is queued
-//<
 //< **Every socket is non-blocking**, so a send may be partial and `Conn` records how far it got.
 //< **The code here only builds responses**; the accept loop in `kssrv/main.kspl` sends them.
 //< **`Rc<|Conn|>` manages only the memory's lifetime.** `conn_close` frees the socket, the arena
@@ -17,16 +16,13 @@ import "std/str" { Str_builder }
 import "std/sys"
 
 const MAX_CONNS: Sz = 128 //< the cap on connections open at once
-    //<
     //< The table is fixed-length; a free slot is an ARC handle's zero value (`Rc.empty()`).
 
 const MAX_CONNS_PER_PEER: Sz = 16 //< the cap on connections from one address, facing outward
-    //<
     //< Without it one machine takes every slot and shuts everyone else out. A browser opens six
     //< per host, so the rest leaves room for several behind one address (a NAT).
 
 const CONN_ARENA_CHUNK: Sz = 16 * 1024 //< how far each connection's working arena grows
-    //<
     //< It is rewound per request, so the size of the largest single request is enough.
 
 // ==========================================
@@ -44,7 +40,6 @@ struct Stats
 $stats: Stats = ::{}
 
 $stop_asked_by: I64 = 0I64 //< the serial of the connection that asked the server to stop
-    //<
     //< **0 while nobody has asked** (`POST /api/stop`). The accept loop stops once that connection
     //< is gone (`open_serial`), so the answer has gone out first.
 
@@ -63,7 +58,6 @@ struct Ctx
     // either (one decision; `--local` in `kssrv/main.kspl`).
     token: U8[]
     p: pilot.Pilot$@ //< the policy that chooses the manoeuvre returned to the car
-        //<
         //< **Null for local use**, which trains none (`main` in `kssrv/main.kspl`); the car's
         //< endpoints are then a 404 (`Reach` in `kssrv/api.kspl`).
     // The file returned for `/` and `/index.html`. **Empty means the `index.html` under the root.**
@@ -138,7 +132,6 @@ struct Conn
     file_left: Sz //< how many of the file's bytes, of the length the head named, are still to go
 
 struct Conn_table //< the connection table
-    //<
     //< Caution: **Put the array in a struct's field.** `@` on an array makes a pointer to the first
     //< element, which cannot be subscripted. Through the struct, `t.slots[i]` stays a place
     //< expression and overwriting a slot releases the old value.
@@ -150,7 +143,6 @@ impl Ctx
 
 fn regular_file_size(path: U8[]): Sz? //<
     //< a regular file's size; none where it is absent or not one
-    //<
     //< Caution: **Check this before opening.** On some OSes `fopen` opens a folder, which reads as
     //< "a broken file". A FIFO's read waits for a writer that can never come, and holds the server.
     //< A device's read never ends.
@@ -172,7 +164,6 @@ fn conn_new(stream: net.Tcp_stream$@, serial: I64): Rc<|Conn|>
     return Rc<|Conn|>.new(fresh)
 
 fn conn_close(c: Conn$@) //< frees a connection's resources
-    //<
     //< Caution: Call it before emptying the slot, or the socket and the buffers leak.
     c.stream.free()
     c.arena.free()
@@ -181,7 +172,6 @@ fn conn_close(c: Conn$@) //< frees a connection's resources
     c.file.free()
 
 fn any_holding(t: Conn_table$@): Bool //< whether a page is holding the server open
-    //<
     //< **This is what "someone is using me" means.** Stopping when nobody is depends on it alone
     //< ("Keeping the server alive while a page is open" in `../docs/SPEC-local-server.md`).
     for i in Range.asc(MAX_CONNS)
@@ -190,7 +180,6 @@ fn any_holding(t: Conn_table$@): Bool //< whether a page is holding the server o
     return false
 
 fn open_serial(t: Conn_table$@, serial: I64): Bool //< whether that connection is still open
-    //<
     //< **A connection is dropped only once its answer is sent or it broke** (`conn_send` in
     //< `kssrv/main.kspl`), so false means nothing is left to send on it. **One lingering after its
     //< last answer counts as closed**: everything has been sent on it.
@@ -200,7 +189,6 @@ fn open_serial(t: Conn_table$@, serial: I64): Bool //< whether that connection i
     return false
 
 fn table_find_free(t: Conn_table$@): Sz //< looks for a free slot
-    //<
     //< -1 if there is none.
     for i in Range.asc(MAX_CONNS)
         if t.slots[i].is_empty()
@@ -220,7 +208,6 @@ fn table_drop(t: Conn_table$@, slot: Sz, lg: Log$@) //< closes a slot's connecti
         ln.s("conn #\{serial\} closed (open \{stats.connections_open\})")
 
 fn queue_response( //< queues one answer with `body` as its body; to a HEAD, it names the length
-    //<
     //< **The socket must not be written here** (the reason is in this file's header). The length
     //< goes in from the body (`http.format_response`).
     c: Conn$@,
@@ -241,15 +228,12 @@ fn queue_response( //< queues one answer with `body` as its body; to a HEAD, it 
 
 fn queue_file(c: Conn$@, ctype: U8[], file: io.File_stream, length: Sz, keep: Bool) //<
     //< Queues a 200 whose body is `length` bytes of `file`, sent as the connection drains
-    //<
     //< The head names `length` (the size `stat` gave). **The connection then holds one chunk at a
     //< time, not the file** (`conn_send` in `kssrv/main.kspl`). It owns `file` from here on.
     before: = c.outbuf.len
     queue_to_head(c, 200, ctype, length, keep)
     // A HEAD names the length and takes no body; a head the builder refused added nothing.
     if c.answers_head || c.outbuf.len == before
-        $f: = file
-        f.free()
         return
     c.file = file
     c.file_left = length
@@ -266,7 +250,6 @@ fn peer_count(t: Conn_table$@, peer: U8[]): Sz //<
     return n
 
 fn queue_to_head( //< queues the answer to a HEAD: the head a GET would get, and no body
-    //<
     //< **A body is never sent after it**: the client reads the next answer where the head ends.
     c: Conn$@,
     status: I32,
@@ -284,7 +267,6 @@ fn queue_to_head( //< queues the answer to a HEAD: the head a GET would get, and
 
 priv fn answer_head(c: Conn$@, ctype: U8[], keep: Bool, allow: U8[]): http.Headers //<
     //< The headers every answer carries; the length is the builder's to add
-    //<
     //< `allow` non-empty adds `Allow`, which a 405 must carry (RFC 9110 §15.5.6): without it the
     //< client cannot tell which method would have been taken.
     $b: = http.headers(c.arena).add("Content-Type", ctype)
@@ -294,14 +276,12 @@ priv fn answer_head(c: Conn$@, ctype: U8[], keep: Bool, allow: U8[]): http.Heade
     return b.build()
 
 priv fn unbuilt(c: Conn$@) //< gives up an answer the builder refused, closing without sending
-    //<
     //< A CRLF in a header or similar is this server's mistake, not the client's. The builder left
     //< `outbuf` as it was, so what was queued before still goes out.
     c.close_after_send = true
 
 fn queue_stream_head(c: Conn$@) //<
     //< The head of a response that keeps the connection open without a stated length
-    //<
     //< **Closing the connection marks the end** (the only way when the length is not known).
     //< `GET /api/here` sends this and nothing more.
     //< Caution: **Do not make it `keep-alive`.** With no length, only the close tells the client
@@ -323,7 +303,6 @@ fn queue_error(c: Conn$@, status: I32, allow: U8[] = "") //<
     queue_response(c, status, "text/plain; charset=utf-8", b.slice(), false, allow)
 
 struct Target //< splits the request target (`/a/b?x=1#f`) into the path part and the query part
-    //<
     //< Both are still raw, not yet percent-decoded.
     path: U8[] //< with the leading `/` (`/a/b`)
     query: U8[] //< without the `?` (`x=1`); empty if there is none

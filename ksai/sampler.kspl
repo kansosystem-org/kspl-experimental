@@ -1,5 +1,4 @@
 //< Picks one token ID from a model's logits during generation
-//<
 //< There are two ways. `argmax` is deterministic and gives the same token every time. The
 //< probabilistic `sample` is nucleus sampling by temperature, top-k and top-p. They are
 //< free functions rather than methods on `Tensor<|T|>`, to keep type inference from getting
@@ -10,7 +9,6 @@ import "std/mem" { Arena }
 import "std/prng"
 
 pub fn argmax<|T|>( //< the highest-scoring token, the same one every time
-    //<
     //< Caution: **Also reject a shape whose last dimension is 0.** A size of 0 is legitimate for an
     //< empty tensor (`Tensor.new` in `ksai/tensor.kspl`), and checking only the number of
     //< dimensions lets `(logits.data + offset)$` read a region with no elements. No range check
@@ -40,14 +38,12 @@ impl Sample_config
     pub fn greedy(): Sample_config //< the settings under which `sample` behaves like `argmax`
         return Sample_config::{ .temperature = 0.0, .top_k = 0, .top_p = 1.0 }
 priv fn ahead(probs: F64$@, a: Sz, b: Sz): Bool //< whether candidate `a` ranks before `b`
-    //<
     //< Caution: **Break a tie by the lower ID.** The order has to be total. Otherwise which of two
     //< equal candidates survives a top-k cut depends on the algorithm. A seed then stops giving
     //< the same run.
     return (probs + a)$ > (probs + b)$ || ((probs + a)$ == (probs + b)$ && a < b)
 
 priv fn sift_down(idx: Sz$@, probs: F64$@, from: Sz, len: Sz) //< restores the heap below `from`
-    //<
     //< The heap keeps its last-ranked candidate at the root, so a better one can replace it.
     $at: = from
     for
@@ -66,7 +62,6 @@ priv fn sift_down(idx: Sz$@, probs: F64$@, from: Sz, len: Sz) //< restores the h
 
 priv fn rank_top(idx: Sz$@, probs: F64$@, n: Sz, k: Sz) //<
     //< Puts the `k` best of `n` candidates first in `idx`, in rank order; the rest is left unsorted
-    //<
     //< A heap of `k` keeps the best seen so far, so it takes O(n log k). A vocabulary of over
     //< 100,000 with a top-k of 40 is one pass. With `k == n` it is a heapsort, O(n log n).
     for $i: = k / 2 - 1; i >= 0; i -= 1

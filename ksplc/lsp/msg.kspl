@@ -1,5 +1,4 @@
 //< Reading and writing the language server's JSON-RPC messages, and the positions they carry
-//<
 //< Every message comes in through `read_message` and goes out through `send_response` and its
 //< siblings, in the worker and the supervisor alike. **A position is a 0-based line and a
 //< character counted in UTF-16 units**, as the LSP counts; `get_line_char` and
@@ -13,6 +12,7 @@ import "std/ds" { List }
 import "std/io"
 import "std/json" + { Json_builder }
 import "std/jsonrpc"
+import "std/math"
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
 
@@ -38,7 +38,7 @@ impl Json_builder
 
     fn range_in(r: Self$@, src: U8[], off: Sz, len: Sz, starts: List<|Sz|>$@): json.Value //<
         //< The LSP range of `len` bytes at `off` in `src`, cut short at its end
-        at: = off if off <= src.len else src.len
+        at: = math.min(off, src.len)
         end: = at + len if at + len <= src.len else src.len
         s: = src.get_line_char(at, starts)
         e: = src.get_line_char(end, starts)
@@ -46,7 +46,6 @@ impl Json_builder
 
     fn location(r: Self$@, uri: U8[], sl: Sz, sc: Sz, el: Sz, ec: Sz): json.Value
         $safe_uri: = uri.with_forward_slashes()
-        defer safe_uri.free()
 
         return r.obj().set("uri", r.str_val(safe_uri.slice()))
             .set("range", r.range(sl, sc, el, ec)).build()
@@ -61,7 +60,6 @@ impl U8[]
 
     fn get_line_char(r: Self, target_offset: Sz, starts: List<|Sz|>$@): Position //<
         //< The LSP position of an offset: a 0-based line and a character in UTF-16 code units
-        //<
         //< The internal line is 1-based. The character is already in UTF-16 units (get_line_info).
         //< **Where the same source is used many times, build the line-start table once.** Pass it
         //< in (the reason is at get_line_info in base/core.kspl).
@@ -69,36 +67,11 @@ impl U8[]
         return Position::{ .line = info.line - 1, .character = info.char_idx }
     fn get_offset_from_pos(r: U8[], target_line: Sz, target_col: Sz): Sz //<
         //< The byte offset of a 0-based line and a character in UTF-16 code units
-        //<
         //< It is `get_line_char`'s inverse.
         //<
-        //< A position past a line's end lands on that line's end, one past the text on the text's
-        //< end.
-        $current_line: Sz = 0
-        $current_col: Sz = 0
-        $i: Sz = 0
-        for i < r.len
-            if current_line == target_line && current_col >= target_col
-                return i
-            if current_line > target_line
-                return i
-            c: = (r.ptr + i)$
-            if c == '\n'
-                if current_line == target_line
-                    return i
-                current_line += 1
-                current_col = 0
-                i += 1
-            else if c == '\r'
-                i += 1
-            else
-                step: = r.next_codepoint(i)
-                utf16_len: = 2 if step == 4 else 1
-                if current_line == target_line && current_col + utf16_len > target_col
-                    return i
-                current_col += utf16_len
-                i += step
-        return r.len
+        //< A position past a line's end lands on that line's end (`offset_of_utf16` in
+        //< base/core.kspl).
+        return r.offset_of_utf16(target_line, target_col, r.line_starts(base_core.arena))
 
     fn clamp_offset(r: U8[], offset: Sz): Sz //<
         //< It clamps the offset to the source length's range [0, len-1] (shared across the LSP)
@@ -109,7 +82,6 @@ impl U8[]
 impl Str_builder
     fn ensure_kspl_ext(r: Self$@) //<
         //< It adds the default extension to a URI or path string lacking one (shared by the LSP)
-        //<
         //< `SOURCE_EXT` in `base/core.kspl` is the one.
         if !r.slice().has_kspl_ext()
             r.s(base_core.SOURCE_EXT)
@@ -132,7 +104,6 @@ const S_TYPE: I32 = 26I32
 
 // The LSP's diagnostic tags (`DiagnosticTag`), and the document sync it asks for (`Full`).
 const TAG_UNNECESSARY: I32 = 1I32
-const TAG_DEPRECATED: I32 = 2I32
 const SYNC_FULL: I32 = 1I32
 
 // The error codes a refusal is answered with. `InvalidParams`: a parameter is missing or of the
@@ -142,10 +113,8 @@ const REQUEST_FAILED: I32 = -32803I32
 
 const MAX_CONTENT_LENGTH: I32 = 128 * 1024 * 1024 //<
     //< The limit on a Content-Length, which prevents memory exhaustion and digit overflow
-    //<
     //< It leaves ample room for an ordinary LSP message.
 priv const MAX_HEADER_LINE_LEN: Sz = 8192 //< the limit on one header line
-    //<
     //< A real header fits in a few dozen bytes; this stops line_buf growing without limit when a
     //< peer never sends a newline.
 
@@ -157,7 +126,6 @@ fn offset_at(src: U8[], params: json.Value): Sz //<
 
 fn read_message(out: Str_builder$@): Void!Lsp_error //<
     //< It reads one message from stdin, its header and then its body, into `out`
-    //<
     //< **The worker and the supervisor both read through here.** A body the peer cut short is
     //< passed on as far as it arrived, and the JSON reader rejects it.
     len: = read_content_length()!
@@ -270,19 +238,14 @@ fn send_diagnostics_list(uri: U8[], diags: List<|base_diag.Lsp_diagnostic|>$@)
                 (d.msg.starts_with("[H") || d.msg.starts_with("Unused "))) ||
                 (d.severity == .warning &&
                 (d.msg.starts_with("[W0207]") || d.msg.starts_with("[W0208]")))
-            is_deprecated: = d.severity == .warning && d.msg.starts_with("[W0702]")
 
             if is_unnecessary
                 d_obj = d_obj.set("tags",
                     b.arr().push(b.int_val(TAG_UNNECESSARY)).build())
-            else if is_deprecated
-                d_obj = d_obj.set("tags",
-                    b.arr().push(b.int_val(TAG_DEPRECATED)).build())
 
             arr = arr.push(d_obj.build())
 
     $safe_uri: = final_uri.slice().with_forward_slashes()
-    defer safe_uri.free()
 
     params: = b.obj().set("uri", b.str_val(safe_uri.slice())).set("diagnostics", arr.build())
         .build()
@@ -304,13 +267,11 @@ const WORKER_ALIVE_TAG: U8[] = "__KSPL_WORKER_ALIVE__" //< the tag of the livene
 const WORKER_DONE_TAG: U8[] = "__KSPL_WORKER_DONE__" //< the tag of the completion marker
 const RESTORE_METHOD: U8[] = "$/ksplRestore" //<
     //< The notification a restarted worker gets each open document's text by, to hold unanalysed
-    //<
     //< It passes between the supervisor and the worker only; no editor sends it. **Named here
     //< alone**, so the sender and the receiver cannot spell it apart.
 
 fn send_worker_alive() //<
     //< It tells the supervisor the worker is alive, so long handling is not taken for a hang
-    //<
     //< The supervisor's timeout is **per read** (worker_timeout_ms in server.kspl). Silent past
     //< it, even a live worker is killed, and the client gets a null. A real hang stops this output
     //< too.
@@ -333,7 +294,6 @@ fn marker_at(src: U8[], start: Sz, tag: U8[]): I32 //<
     return -1
 
 priv fn send_marker(tag: U8[]) //< it writes the marker for `tag`
-    //<
     //< NUL-separated, it never collides with the JSON output.
     $m: = Str_builder.new()
     m.c(0U8).s(tag).c(0U8)

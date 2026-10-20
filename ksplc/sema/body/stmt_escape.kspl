@@ -1,5 +1,4 @@
 //< The check that stops a frame's memory escaping outward
-//<
 //< It rejects a pointer the compiler synthesizes into the frame. The forms are a slice cast from a
 //< frame's array and a trait upcast of a frame's value (a closure among them). Such a pointer must
 //< not leave by `return` or `throw`, or by a store into a global or behind a pointer. It also
@@ -24,7 +23,6 @@ import "std/str"
 
 priv fn is_frame_binding(c: Sema_ctx$@, node: Ast_node$@): Bool //<
     //< Whether the name refers to **the current frame's memory**
-    //<
     //< A global is in the static area, so false.
     //< Caution: **Do not copy this test.** Taking an address and returning an array both
     //< need the same answer; fix one copy and the two disagree on which names pass.
@@ -35,7 +33,6 @@ priv fn is_frame_binding(c: Sema_ctx$@, node: Ast_node$@): Bool //<
 
 fn is_frame_storage(c: Sema_ctx$@, node: Ast_node$@): Bool //<
     //< Whether node's storage lies in **the current frame**, so an address taken of it dies there
-    //<
     //< A name uses is_frame_binding, and a struct literal is a frame temporary. A field or an
     //< array's element follows its receiver. Behind a pointer or a slice is not the frame: `r.buf`
     //< (`r: Self$@`) lives where `r` points. See "Which pointers into a frame are stopped from
@@ -80,7 +77,6 @@ priv fn find_in_each(c: Sema_ctx$@, nodes: Ast_node$@, with_address: Bool): Fram
 
 priv fn find_frame_escape(c: Sema_ctx$@, expr_node: Ast_node$@, with_address: Bool): Frame_escape //<
     //< What in expr_node points into the frame: a pointer the compiler synthesizes, or a `@`
-    //<
     //< Two forms synthesize one, with no `@` in the source. One is a slice cast from a frame's
     //< array (`U8[]::a`, `U8[]::{ … }`). The other is a trait upcast of a frame's value (the pair
     //< {obj, vtable}, emit_upcast_expr in gen/c/expr.kspl). A local set from a form carries it on.
@@ -163,7 +159,6 @@ priv fn find_frame_escape(c: Sema_ctx$@, expr_node: Ast_node$@, with_address: Bo
 
 fn note_frame_pointer(c: Sema_ctx$@, id_node: Ast_node$@, expr_node: Ast_node$@) //<
     //< Marks a local binding set from a value carrying a pointer into the frame
-    //<
     //< A declaration's initializer and a plain `x = …` both set it, so `s: = I32[]::a; t: = s;
     //< return t` is refused. **The mark is never cleared**: `s = heap_slice` after it still refuses
     //< `return s`, the safe side of a check that follows names, not control flow.
@@ -181,7 +176,6 @@ fn note_frame_pointer(c: Sema_ctx$@, id_node: Ast_node$@, expr_node: Ast_node$@)
 
 fn check_frame_escape(c: Sema_ctx$@, expr_node: Ast_node$@, verb: U8[]) //<
     //< Rejects a pointer into the frame leaving by return / throw, a written `@` among them
-    //<
     //< **A store of a written `@` is not refused** (check_frame_store). Real code keeps a local's
     //< address in a longer-lived place and takes it back before the function returns.
     report_frame_escape(c, find_frame_escape(c, expr_node, true), verb,
@@ -196,7 +190,6 @@ priv enum Store_place //< where an assignment's target lies, seen from the frame
 
 priv fn store_place(c: Sema_ctx$@, left: Ast_node$@): Store_place //<
     //< Whether an assignment's target can outlive the frame, following its fields and elements
-    //<
     //< A field of a value, or an element of a fixed-length array, lies where its receiver lies. A
     //< step through a pointer or a slice leaves the frame's own storage. Where it points is not
     //< known, so it is taken as outliving (a pointer to a local of this frame is refused too).
@@ -228,7 +221,6 @@ priv fn store_place(c: Sema_ctx$@, left: Ast_node$@): Store_place //<
 
 fn check_frame_store(c: Sema_ctx$@, left: Ast_node$@, right: Ast_node$@) //<
     //< Rejects a synthesized pointer into the frame stored where it outlives the frame
-    //<
     //< The forms are find_frame_escape's synthesized ones, anywhere inside the stored value. A
     //< written `@` is the writer's (check_frame_escape says why). The places are a global and what
     //< lies behind a pointer or a slice (store_place). A store dangles there as a `return` does.
@@ -302,7 +294,6 @@ priv fn report_frame_escape(c: Sema_ctx$@, found: Frame_escape, verb: U8[], fate
 
 fn check_fn_value_binding(c: Sema_ctx$@, id_node: Ast_node$@, expr_node: Ast_node$@): Bool //<
     //< Rejects binding a variadic function's name with no type annotation (`f: = log_all;`)
-    //<
     //< **A declaration with no type takes the function type of the function a name names**
     //< (own_type_of_name in sema/decl/name.kspl). A variadic one has none, since no function type
     //< holds its `...`. It keeps the mark generic_fn_value_type_id, which no C type spells.

@@ -1,5 +1,4 @@
 //< Fits an expression's type to the expected one, and reports a cast the language would do itself
-//<
 //< `apply_type_coercion` inserts the conversions the language makes on its own: a numeric widening,
 //< an upcast to a trait value, a `Result` wrap, dropping a `$`. It reports anything else as a type
 //< mismatch. [I0301] reports a written `::` that does no more than that.
@@ -56,7 +55,6 @@ impl Ast_node
     priv fn check_widening_cast(r: Ast_node$@, c: Sema_ctx$@, real_src: I32, real_dst: I32,
         original_id: I32, expected_id: I32) //<
             //< Reports type-changing casts the language does implicitly ([I0301]'s other kinds).
-            //<
             //< **Called only where the expected type is known** (from check_unnecessary_cast).
         switch implicit_cast_kind(c, real_src, real_dst, original_id, expected_id)
         case .numeric
@@ -98,7 +96,6 @@ impl Ast_node
 
     fn is_noreturn_call(r: Ast_node$@): Bool //<
         //< Whether it is a call to a function that declares `#noreturn`
-        //<
         //< **The declaration is trusted**, as with C's `__attribute__((noreturn))`: if such a
         //< function does return, control continues with no value stored.
         if r.kind_id != .k_expr_postfix
@@ -130,93 +127,15 @@ impl Ast_node
         if real_type_id == real_expected_id
             return expected_id
 
-        // **An immutable trait value is a trait value too** (an element of `Shape[2]`), so the
-        // immutability is seen through as well as the alias. The upcast makes the trait value
-        // itself, which the place then holds as it holds any value; a trait value is not upcast.
-        clean_expected_id: = c.env.get_clean_real_type(expected_id)
-        switch c.env.get_info(clean_expected_id)
-        case .trait_type(_d)
-            if c.env.get_clean_real_type(type_id) == clean_expected_id
-                return expected_id
-            // **Finish building the instance's methods before making a trait value.** Otherwise the
-            // vtable names a thunk with no instance (register_generic_trait_impls in mono.kspl; the
-            // test is ksplc/tests/trait_test.kspl).
-            c.ensure_instance_methods(type_id) catch {}
-            if c.check_trait_implementation(type_id, clean_expected_id, r)
-                if !c.env.is_pointer(type_id) && !c.env.is_slice(type_id) && !r.is_place_expr()
-                    // Advising a binding is right only where it outlives the call. At a return it
-                    // dies with the frame (check_frame_escape in sema/body/stmt_escape.kspl rejects
-                    // that).
-                    c.err(r,
-                        "cannot cast an rvalue (temporary object) to an interface. The interface \
-                            value keeps a pointer to the object. Bind the object to storage that \
-                            outlives the interface value (`x: = ...;`). If the object must outlive \
-                            the call, a heap allocation is an alternative.")
-                    return expected_id
-
-                c.mark_trait_methods_used(type_id, clean_expected_id)
-                clone: = r.snapshot_for_morph(type_id)
-                r.children = base_ast.new_ast_node_list()
-                r.morph(.k_expr_upcast, "upcast")
-                r.add_child(clone)
-                r.type_id = clean_expected_id
-                return clean_expected_id
-        default {}
+        if upcast: = r.upcast_to_trait(c, type_id, expected_id)
+            return upcast
 
         if sema_type_env.is_void(expected_id)
             c.err(r, "cannot return a value from a Void function")
             return expected_id
 
-        if c.env.is_numeric(expected_id) || c.env.is_numeric(type_id)
-            $is_enum_cast: = false
-            $base_type_id: = I32::sema_type_env.Builtin_type_id.i32_type
-
-            exp_def: = c.env.get_enum_def(c.env.get_str(real_expected_id)).unwrap_or(null)
-            act_def: = c.env.get_enum_def(c.env.get_str(real_type_id)).unwrap_or(null)
-
-            if exp_def != null && exp_def.is_scalar()
-                is_enum_cast = true
-                base_type_id = exp_def.base_type_id
-            else if act_def != null && act_def.is_scalar()
-                is_enum_cast = true
-                base_type_id = act_def.base_type_id
-            else if r.def_node != null && r.def_node.sym_ptr != null
-                sym: = Sema_symbol$@::r.def_node.sym_ptr
-                switch sym.kind
-                case .enum_variant(_tag)
-                    is_enum_cast = true
-                default {}
-
-            if is_enum_cast
-                base_clean: = c.env.get_clean_real_type(base_type_id)
-                exp_clean: = c.env.get_clean_real_type(expected_id)
-                res_clean: = c.env.get_clean_real_type(type_id)
-
-                if base_type_id == expected_id || base_type_id == type_id ||
-                    c.env.is_lossless_numeric(res_clean, exp_clean) ||
-                    c.env.is_lossless_numeric(base_clean, exp_clean) ||
-                    c.env.is_lossless_numeric(res_clean, base_clean)
-                    r.build_implicit_cast(c, type_id, expected_id)
-                    return expected_id
-
-        if c.env.is_numeric(expected_id) && c.env.is_numeric(type_id)
-            exp_clean: = c.env.get_clean_real_type(expected_id)
-            act_clean: = c.env.get_clean_real_type(type_id)
-
-            if c.env.is_lossless_numeric(act_clean, exp_clean)
-                if act_clean != exp_clean
-                    r.wrap_implicit_cast(c, type_id, expected_id)
-                return expected_id
-
-            c.clear_scratch()
-                .s("implicit conversion between '\{c.env.display(type_id)\}' and \
-                    '\{c.env.display(expected_id)\}' is forbidden to prevent data loss. Use an \
-                    explicit '::' cast")
-            if c.env.is_float(expected_id) && sema_body_literal.is_untyped_int_literal(r)
-                c.scratch.s(", or write the integer literal as a float ('2.0', not '2')")
-            c.scratch.s(".")
-            c.err(r, c.scratch.slice())
-            return expected_id
+        if converted: = r.convert_numeric(c, type_id, expected_id)
+            return converted
 
         void_ptr: = I32::sema_type_env.Builtin_type_id.void_ptr
         if expected_id == void_ptr &&
@@ -226,26 +145,8 @@ impl Ast_node
             (c.env.is_pointer(expected_id) || c.env.is_fn_ptr(expected_id))
             return r.wrap_implicit_cast(c, type_id, expected_id)
 
-        // An expected Result: coerce to the ok type first, then wrap.
-        // Caution: Do not wrap only on an exact `strip_result(expected_id) == type_id`. Then no
-        // value **requiring a conversion** would pass, and `fn f(): Trait!Err` or `fn f():
-        // Void$@!Err` could only throw.
-        // A value that is itself a result is wrapped only where the ok type is that result
-        // (`(A!B)!E`); any other result passes as it is.
-        ok_id: = c.env.strip_result(expected_id)
-        is_ok_value: =
-            !c.env.is_result(type_id) ||
-            c.env.get_clean_real_type(type_id) == c.env.get_clean_real_type(ok_id)
-        if c.env.is_result(expected_id) && ok_id != expected_id && is_ok_value
-            if ok_id != type_id
-                inner_id: = r.apply_type_coercion(c, type_id, ok_id)
-                if inner_id != ok_id
-                    return expected_id // already diagnosed inside
-            clone: = r.snapshot_for_morph(ok_id)
-            r.children = base_ast.new_ast_node_list()
-            r.morph(.k_result_wrap, "result_wrap")
-            r.add_child(clone)
-            return expected_id
+        if wrapped: = r.wrap_in_result(c, type_id, expected_id)
+            return wrapped
 
         // **`[_]` takes the initializer's length alone.** Its elements are then checked as against
         // a written length. So an immutable array's row or a field (`m[1]`, `s.a`) copies in as it
@@ -276,6 +177,122 @@ impl Ast_node
         c.report_type_mismatch(r, expected_id, type_id)
         return expected_id
 
+    priv fn upcast_to_trait(r: Ast_node$@, c: Sema_ctx$@, type_id: I32, expected_id: I32): I32? //<
+        //< The upcast to a trait value; none where expected_id is no trait the value implements
+        //< **An immutable trait value is a trait value too** (an element of `Shape[2]`), so the
+        //< immutability is seen through as well as the alias. The upcast makes the trait value
+        //< itself, which the place then holds as it holds any value; a trait value is not upcast.
+        clean_expected_id: = c.env.get_clean_real_type(expected_id)
+        switch c.env.get_info(clean_expected_id)
+        case .trait_type
+            if c.env.get_clean_real_type(type_id) == clean_expected_id
+                return .some(expected_id)
+            // **Finish building the instance's methods before making a trait value.** Otherwise the
+            // vtable names a thunk with no instance (register_generic_trait_impls in mono.kspl; the
+            // test is ksplc/tests/trait_test.kspl).
+            c.ensure_instance_methods(type_id) catch {}
+            if c.check_trait_implementation(type_id, clean_expected_id, r)
+                if !c.env.is_pointer(type_id) && !c.env.is_slice(type_id) && !r.is_place_expr()
+                    // Advising a binding is right only where it outlives the call. At a return it
+                    // dies with the frame (check_frame_escape in sema/body/stmt_escape.kspl rejects
+                    // that).
+                    c.err(r,
+                        "cannot cast an rvalue (temporary object) to an interface. The interface \
+                            value keeps a pointer to the object. Bind the object to storage that \
+                            outlives the interface value (`x: = ...;`). If the object must outlive \
+                            the call, a heap allocation is an alternative.")
+                    return .some(expected_id)
+
+                c.mark_trait_methods_used(type_id, clean_expected_id)
+                clone: = r.snapshot_for_morph(type_id)
+                r.children = base_ast.new_ast_node_list()
+                r.morph(.k_expr_upcast, "upcast")
+                r.add_child(clone)
+                r.type_id = clean_expected_id
+                return .some(clean_expected_id)
+        default {}
+        return .none
+
+    priv fn convert_numeric(r: Ast_node$@, c: Sema_ctx$@, type_id: I32, expected_id: I32): I32? //<
+        //< The implicit numeric or scalar enum conversion; none where it does not apply
+        //< A lossy conversion between two numeric types is reported, and its result is some too.
+        real_type_id: = c.env.get_real_type(type_id)
+        real_expected_id: = c.env.get_real_type(expected_id)
+        if c.env.is_numeric(expected_id) || c.env.is_numeric(type_id)
+            $is_enum_cast: = false
+            $base_type_id: = I32::sema_type_env.Builtin_type_id.i32_type
+
+            exp_def: = c.env.get_enum_def(c.env.get_str(real_expected_id)).unwrap_or(null)
+            act_def: = c.env.get_enum_def(c.env.get_str(real_type_id)).unwrap_or(null)
+
+            if exp_def != null && exp_def.is_scalar()
+                is_enum_cast = true
+                base_type_id = exp_def.base_type_id
+            else if act_def != null && act_def.is_scalar()
+                is_enum_cast = true
+                base_type_id = act_def.base_type_id
+            else if r.def_node != null && r.def_node.sym_ptr != null
+                sym: = Sema_symbol$@::r.def_node.sym_ptr
+                switch sym.kind
+                case .enum_variant
+                    is_enum_cast = true
+                default {}
+
+            if is_enum_cast
+                base_clean: = c.env.get_clean_real_type(base_type_id)
+                exp_clean: = c.env.get_clean_real_type(expected_id)
+                res_clean: = c.env.get_clean_real_type(type_id)
+
+                if base_type_id == expected_id || base_type_id == type_id ||
+                    c.env.is_lossless_numeric(res_clean, exp_clean) ||
+                    c.env.is_lossless_numeric(base_clean, exp_clean) ||
+                    c.env.is_lossless_numeric(res_clean, base_clean)
+                    r.build_implicit_cast(c, type_id, expected_id)
+                    return .some(expected_id)
+
+        if c.env.is_numeric(expected_id) && c.env.is_numeric(type_id)
+            exp_clean: = c.env.get_clean_real_type(expected_id)
+            act_clean: = c.env.get_clean_real_type(type_id)
+
+            if c.env.is_lossless_numeric(act_clean, exp_clean)
+                if act_clean != exp_clean
+                    r.wrap_implicit_cast(c, type_id, expected_id)
+                return .some(expected_id)
+
+            c.clear_scratch()
+                .s("implicit conversion between '\{c.env.display(type_id)\}' and \
+                    '\{c.env.display(expected_id)\}' is forbidden to prevent data loss. Use an \
+                    explicit '::' cast")
+            if c.env.is_float(expected_id) && sema_body_literal.is_untyped_int_literal(r)
+                c.scratch.s(", or write the integer literal as a float ('2.0', not '2')")
+            c.scratch.s(".")
+            c.err(r, c.scratch.slice())
+            return .some(expected_id)
+        return .none
+
+    priv fn wrap_in_result(r: Ast_node$@, c: Sema_ctx$@, type_id: I32, expected_id: I32): I32? //<
+        //< The wrap into an expected Result; none where it does not apply
+        //< It coerces to the ok type first, then wraps. A value that is itself a result is wrapped
+        //< only where the ok type is that result (`(A!B)!E`); any other result passes as it is.
+        //< Caution: Do not wrap only on an exact `strip_result(expected_id) == type_id`. Then no
+        //< value **requiring a conversion** would pass, and `fn f(): Trait!Err` or `fn f():
+        //< Void$@!Err` could only throw.
+        ok_id: = c.env.strip_result(expected_id)
+        is_ok_value: =
+            !c.env.is_result(type_id) ||
+            c.env.get_clean_real_type(type_id) == c.env.get_clean_real_type(ok_id)
+        if c.env.is_result(expected_id) && ok_id != expected_id && is_ok_value
+            if ok_id != type_id
+                inner_id: = r.apply_type_coercion(c, type_id, ok_id)
+                if inner_id != ok_id
+                    return .some(expected_id) // already diagnosed inside
+            clone: = r.snapshot_for_morph(ok_id)
+            r.children = base_ast.new_ast_node_list()
+            r.morph(.k_result_wrap, "result_wrap")
+            r.add_child(clone)
+            return .some(expected_id)
+        return .none
+
 enum Implicit_cast //< what a type-changing `::` does that the language would do by itself
     none //< a real conversion: the cast is wanted
     numeric //< a safe numeric widening
@@ -284,7 +301,6 @@ enum Implicit_cast //< what a type-changing `::` does that the language would do
 fn implicit_cast_kind(c: Sema_ctx$@, real_src: I32, real_dst: I32, original_id: I32,
     expected_id: I32): Implicit_cast //<
         //< Whether a type-changing cast, where `expected_id` is expected, only converts implicitly
-        //<
         //< **The one decision that [I0301] reports on and [H0302] backs off on**
         //< (`lint_repeated_type` in `lint_stmt.kspl`). Following both would drop both the cast and
         //< the type that drives it.

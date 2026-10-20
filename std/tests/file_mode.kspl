@@ -1,0 +1,22 @@
+//< The permissions the system shows for a file, for the tests that check what a write left
+//< **It holds no test**, so a test of another package can import it (`tools/tests/page_test.kspl`)
+//< without taking std's tests into a program whose suite does not run them ([W0214]).
+import "std/chars"
+import "std/mem" { Arena }
+import "std/subproc"
+import "std/sys"
+
+pub fn mode_shown(path: U8[], arena: Arena$@): U8[] //< the permissions `ls -l` shows for a file
+    //< Such as `-rw-------`, for a file written without an execute bit. `std/fs` reads no mode, so
+    //< the test asks the system's own tool. **Empty where the system shows no mode**: Windows,
+    //< where `ls` cannot answer, and a filesystem that marks every file executable (the reason is
+    //< at `test_can_run` in `std/tests/sys_test.kspl`).
+    if sys.is_windows()
+        return ""
+    r: =
+        subproc.run_capture(U8[][]::{ "/bin/ls", "-l", path }, "", 10000, 4096, arena) catch
+        return ""
+    if !r.exited_with(0) || r.stdout_data.len < 10
+        return ""
+    shown: = r.stdout_data.sub(0, 10)
+    return "" if shown.find_char('x').is_some() else shown

@@ -1,11 +1,11 @@
 //< Checks that the USB descriptors the RP2040 identifies itself with are consistent
-//<
-//< It reads them as text, so a descriptor that would fail enumeration is caught without a device,
-//< from this package's folder (`make test` in `ksos/Makefile` runs them there).
+//< It imports the arrays, so a descriptor that would fail enumeration is caught without a device.
+//< It reads the driver as text only to find the endpoints init() enables, so it runs from this
+//< package's folder (`make test` in `ksos/Makefile` runs it there).
 
 // ==========================================
 // What it checks:
-//   * the declared length, the element count and wTotalLength all agree
+//   * each length byte, wLength and wTotalLength agree with the array's length
 //   * following bLength ends exactly at the end (no length 0 or mismatch partway)
 //   * bNumInterfaces equals the count of actual interface numbers
 //   * every endpoint in a descriptor is enabled by an enable_ep in init(), and the reverse
@@ -13,6 +13,7 @@
 //   * the range an IAD covers is within the existing interfaces
 //   * CDC-NCM's data interface has alt 0 (no endpoints) and alt 1 (endpoints)
 // ==========================================
+import "ksos/drivers/rp2040/usb_desc"
 import "std/chars"
 import "std/ds" { List }
 import "std/io"
@@ -23,12 +24,8 @@ import "std/strfmt" as _strfmt
 import "std/strnum"
 import "std/verdict"
 
-// Both the descriptors and the driver are read: `DESC_NTB_PARAMS` is in the driver, so reading
-// only one gives a silent "not found".
-priv const SOURCES: U8[][2] = ::{ "drivers/rp2040/usb_desc.kspl", "drivers/rp2040/usb_cdc.kspl" }
-
-priv const ARRAYS: U8[][7] = ::{ "DESC_DEVICE", "DESC_CONFIG", "DESC_LANG", "DESC_MANUFACTURER",
-    "DESC_PRODUCT", "DESC_MAC", "DESC_NTB_PARAMS" }
+priv const DRIVER: U8[] = "drivers/rp2040/usb_cdc.kspl" //<
+    //< the driver whose enable_ep calls are read
 
 priv const T_IFACE: Sz = 0x04 //< the descriptor types
 priv const T_ENDPOINT: Sz = 0x05
@@ -42,9 +39,8 @@ priv const NCM_SUBCLASS: Sz = 0x0D
 priv const CDC_DATA_CLASS: Sz = 0x0A
 priv const NCM_PROTO_NTB: Sz = 0x01
 
-priv struct Arr
-    found: Bool
-    declared: Sz
+priv struct Desc //< one descriptor array, with its name for the messages
+    name: U8[]
     vals: List<|Sz|>
 
 priv struct Item //< one descriptor's offset, length and type
@@ -52,18 +48,20 @@ priv struct Item //< one descriptor's offset, length and type
     len: Sz
     kind: Sz
 
-priv fn read_sources(arena: Arena$@): U8[]
-    $b: = Str_builder.new()
-    for rel in SOURCES
-        body: = io.read_file(rel) catch
-            panic(U8$[]::arena.text().s("cannot read \{rel\}; run the tests from ksos's folder")
-                .take())
-        b.s(body).c('\n')
-        dealloc(body.ptr)
-    return arena.dup_str(b.slice())
+priv fn read_driver(arena: Arena$@): U8[]
+    body: = io.read_file(DRIVER, null) catch
+        panic(U8$[]::arena.text().s("cannot read \{DRIVER\}; run the tests from ksos's folder")
+            .take())
+    defer dealloc(body.ptr)
+    return arena.dup_str(body)
+
+priv fn desc(name: U8[], bytes: U8[], arena: Arena$@): Desc //< one array, its bytes widened
+    $vals: = List<|Sz|>.new(arena)
+    for b in bytes
+        vals.push(b)
+    return Desc::{ .name = name, .vals = vals }
 
 priv fn check( //< one check: a line if it holds, and the run stopped if it does not
-    //<
     //< A package's tests fail by a panic (`std/verdict`), and the panic names where the check is.
     name: U8[], //< what holds, in the reader's words
     ok: Bool,
@@ -80,161 +78,37 @@ priv fn check( //< one check: a line if it holds, and the run stopped if it does
         panic(why.slice(), file, line)
     verdict.pass("")
 
-priv fn parse_u8_array(src: U8[], name: U8[], arena: Arena$@): Arr //<
-    //< Finds `<name>: U8[N] = ::{ … }`
-    //<
-    //< The same form for a const global array and a local array.
-    //< Caution: **Check that what precedes the name is not part of a word**, or `DESC_MAC` matches
-    //< `xDESC_MAC` and another array is checked.
-    head: = arena.text().s("\{name\}: U8[").take()
-    $i: Sz = 0
-    for i + head.len <= src.len
-        $at: Sz = 0
-        switch src.sub_from(i).find_str(head)
-        case .some(found)
-            at = found
-        case .none
-            break
-        p: = i + at
-        i = p + head.len
-        if p > 0 && (src[p - 1].is_alnum() || src[p - 1] == '_' || src[p - 1] == '.')
-            continue
-        got: = parse_body(src, p + head.len, arena)
-        if got.found
-            return got
-    return Arr::{ .found = false, .declared = 0, .vals = List<|Sz|>.new(arena) }
-
-priv fn parse_body(src: U8[], from: Sz, arena: Arena$@): Arr //<
-    //< Reads the rest of `N] = ::{ … }`
-    //<
-    //< Caution: **Check that the closing `}` is the last thing on its line** (a `;` or a trailing
-    //< `//` comment can follow). Otherwise a `}` inside the body ends the list early.
-    $j: = from
-    for j < src.len && src[j].is_digit()
-        j += 1
-    none: = Arr::{ .found = false, .declared = 0, .vals = List<|Sz|>.new(arena) }
-    if j == from
-        return none
-    declared: = Sz::(src.sub(from, j - from).to_i64() catch 0I64)
-    tail: = "] = ::{"
-    if j + tail.len > src.len || !src.sub(j, tail.len).equals(tail)
-        return none
-    body_at: = j + tail.len
-    $end: Sz = 0
-    switch src.sub_from(body_at).find_char('}')
-    case .some(found)
-        end = found
-    case .none
-        return none
-    after: = body_at + end + 1
-    $k: = after
-    for k < src.len && (src[k] == ' ' || src[k] == '\t')
-        k += 1
-    if k < src.len && src[k] != ';' && src[k] != '\n' &&
-        !src.sub_from(k).starts_with("//")
-        return none
-    $vals: = List<|Sz|>.new(arena)
-    parse_vals(src.sub(body_at, end), vals@, arena)
-    return Arr::{ .found = true, .declared = declared, .vals = vals }
-
-priv fn parse_vals(body: U8[], out: List<|Sz|>$@, arena: Arena$@) //<
-    //< Reads the list separated by `,`
-    //<
-    //< Line comments are dropped. Character literals and plain integers may be mixed.
-    clean: = arena.text()
-    $i: Sz = 0
-    for i < body.len
-        if i + 1 < body.len && body[i] == '/' && body[i + 1] == '/'
-            for i < body.len && body[i] != '\n'
-                i += 1
-            continue
-        clean.c(body[i])
-        i += 1
-    for tok in clean.take().split(',', arena)
-        t: = tok.trim_spaces()
-        if t.len == 0
-            continue
-        if t.len == 3 && t[0] == '\'' && t[2] == '\''
-            out.push(t[1])
-            continue
-        out.push(parse_int(t))
-
-priv fn parse_int(t: U8[]): Sz //< decimal, and `0x` hex
-    //<
-    //< Caution: **Do not read an unreadable string as 0**: 0 is a valid value, and the mismatch
-    //< would vanish.
-    if t.len > 2 && t[0] == '0' && (t[1] == 'x' || t[1] == 'X')
-        $n: Sz = 0
-        for c in t.sub_from(2)
-            if d: = c.hex_val()
-                n = n * 16 + Sz::d
-            else
-                return BAD_VALUE
-        return n
-    for c in t
-        if !c.is_digit()
-            return BAD_VALUE
-    return Sz::(t.to_i64() catch BAD_VALUE)
-
-priv const BAD_VALUE: Sz = 0xFFFF //< the value for what could not be read
-    //<
+priv const BAD_VALUE: Sz = 0xFFFF //< the value for what is not found
     //< It is a size that no byte of any descriptor can hold.
-
-priv fn find_arr(names: List<|U8[]|>@, name: U8[]): Sz
-    for i in Range.asc(names.len)
-        if names.get(i).equals(name)
-            return i + 1
-    return 0
 
 priv fn u16_at(vals: List<|Sz|>@, at: Sz): Sz
     return vals.get(at) | (vals.get(at + 1) << 8)
 
-// ==========================================
-// The declared length and the element count agree (guarding against silent zero-filling)
-// ==========================================
-priv fn check_lengths(names: List<|U8[]|>@, got: List<|Arr|>@, arena: Arena$@)
-    for i in Range.asc(names.len)
-        a: = got.get(i)
-        check(arena.text().s(names.get(i)).s(": the declared length and the element count agree")
-            .take(), a.found && a.declared == a.vals.len,
-            arena.text().s("declared=\{a.declared\} actual=\{a.vals.len\}").take())
-
-priv fn check_blength(names: List<|U8[]|>@, got: List<|Arr|>@, arena: Arena$@) //<
+priv fn check_blength(descs: Desc[], arena: Arena$@) //<
     //< A descriptor's first byte is its own length
-    //<
-    //< Only DESC_NTB_PARAMS is handled separately, since it starts with a wLength.
+    //< DESC_NTB_PARAMS is not passed here, since it starts with a wLength.
     //< The configuration descriptor declares its own 9 bytes; wTotalLength covers the whole.
-    for i in Range.asc(names.len)
-        nm: = names.get(i)
-        a: = got.get(i)
-        if nm.equals("DESC_NTB_PARAMS") || a.vals.len == 0
+    for a in descs
+        if a.vals.len == 0
             continue
-        want: = a.vals.len if !nm.equals("DESC_CONFIG") else a.vals.get(0)
-        check(arena.text().s(nm).s(": bLength agrees with the array's length").take(),
+        want: = a.vals.len if !a.name.equals("DESC_CONFIG") else a.vals.get(0)
+        check(arena.text().s(a.name).s(": bLength agrees with the array's length").take(),
             a.vals.get(0) == want,
             arena.text().s("bLength=\{a.vals.get(0)\} len=\{a.vals.len\}").take())
 
-priv const STRING_DESCS: U8[][3] = ::{ "DESC_MANUFACTURER", "DESC_PRODUCT", "DESC_MAC" } //<
-    //< The string descriptors, checked for a NUL at their end
-    //<
+priv fn check_no_trailing_nul(strings: Desc[], arena: Arena$@) //<
+    //< Checks the string descriptors for a NUL at their end
     //< Caution: Leave no NUL at a string descriptor's end: bLength sets the length, and a 0 reaches
     //< the host as a character ("ksos CDC\0").
-
-priv fn check_no_trailing_nul(names: List<|U8[]|>@, got: List<|Arr|>@, arena: Arena$@)
-    for nm in STRING_DESCS
-        at: = find_arr(names, nm)
-        if at == 0
-            continue
-        a: = got.get(at - 1)
+    for a in strings
         if a.vals.len < 4
             continue
-        check(arena.text().s(nm).s(": no NUL character is left at the end").take(),
+        check(arena.text().s(a.name).s(": no NUL character is left at the end").take(),
             !(a.vals.get(a.vals.len - 2) == 0 && a.vals.get(a.vals.len - 1) == 0),
             utf16_text(a.vals@, arena))
 
 priv fn utf16_text(vals: List<|Sz|>@, arena: Arena$@): U8[] //<
     //< Reads ASCII stored as UTF-16LE
-    //<
     //< **A character whose high byte is not 0 cannot be read**; these descriptors hold only ASCII.
     b: = arena.text()
     $i: Sz = 2
@@ -245,65 +119,6 @@ priv fn utf16_text(vals: List<|Sz|>@, arena: Arena$@): U8[] //<
             b.c(U8::vals.get(i))
         i += 2
     return b.take()
-
-priv fn check_reply_len(src: U8[], arena: Arena$@) //<
-    //< Checks each reply_ep0 call in src against its array's length
-    //<
-    //< Caution: **The array's length and the length passed to reply_ep0 must agree.** **Also check
-    //< the calls qualified with the prefix `usb_desc.`.** Every descriptor from the other file is
-    //< named that way. Without them, **the large descriptors drop out of the check entirely**.
-    $bad: = List<|U8[]|>.new(arena)
-    $i: Sz = 0
-    for i < src.len
-        $at: Sz = 0
-        switch src.sub_from(i).find_str("reply_ep0(")
-        case .some(found)
-            at = found
-        case .none
-            break
-        p: = i + at + 10
-        i = p
-        call: = src.sub_from(p)
-        $stop: Sz = 0
-        switch call.find_str("[0]@, ")
-        case .some(found)
-            stop = found
-        case .none
-            continue
-        name: = last_segment(call.sub(0, stop))
-        if name.len == 0
-            continue
-        rest: = call.sub_from(stop + 6)
-        $k: Sz = 0
-        for k < rest.len && rest[k].is_digit()
-            k += 1
-        if k == 0 || k >= rest.len || rest[k] != ','
-            continue
-        passed: = Sz::(rest.sub(0, k).to_i64() catch 0I64)
-        a: = parse_u8_array(src, name, arena)
-        if !a.found
-            bad
-                .push(arena.text().s(name).s(": reply_ep0 says \{passed\}, the array is not found")
-                .take())
-        else if a.vals.len != passed
-            bad
-                .push(arena.text().s(name)
-                .s(": reply_ep0 says \{passed\}, the array holds \{a.vals.len\}").take())
-    check("the length passed to reply_ep0 agrees with the descriptor's array", bad.len == 0,
-        "; ".join(bad.slice(), arena))
-
-priv fn last_segment(expr: U8[]): U8[] //< takes `DESC_DEVICE` out of `usb_desc.DESC_DEVICE`
-    //<
-    //< Empty if the string cannot be read as an identifier.
-    $at: Sz = 0
-    for i in Range.asc(expr.len)
-        if expr[i] == '.'
-            at = i + 1
-    name: = expr.sub_from(at)
-    for c in name
-        if !(c.is_alnum() || c == '_')
-            return ""
-    return name
 
 // ==========================================
 // Walking the configuration descriptor, bLength at a time from the start.
@@ -428,7 +243,6 @@ priv fn check_iad(cfg: List<|Sz|>@, items: List<|Item|>@, nums: List<|Sz|>@, are
 // ==========================================
 
 priv fn ep_key(num: Sz, is_in: Bool): Sz //< an endpoint is one "number × direction"
-    //<
     //< Compared by number alone, a swap of IN and OUT would pass.
     return num * 2 + (1 if is_in else 0)
 
@@ -455,11 +269,7 @@ priv fn enabled_eps(src: U8[], arena: Arena$@): List<|Sz|> //<
     $out: = List<|Sz|>.new(arena)
     $i: Sz = 0
     for i < src.len
-        $at: Sz = 0
-        switch src.sub_from(i).find_str("enable_ep(")
-        case .some(found)
-            at = found
-        case .none
+        at: Sz = src.sub_from(i).find_str("enable_ep(") catch
             break
         p: = i + at + 10
         i = p
@@ -561,7 +371,6 @@ priv fn check_ethernet(cfg: List<|Sz|>@, items: List<|Item|>@, arena: Arena$@) /
         arena.text().s("seg=\{seg\}").take())
 
 priv fn check_mac(mac: List<|Sz|>@, arena: Arena$@) //< the MAC's string descriptor
-    //<
     //< 12 hex characters in UTF-16LE.
     text: = utf16_text(mac, arena)
     $hex: = text.len == 12
@@ -580,29 +389,24 @@ priv fn check_mac(mac: List<|Sz|>@, arena: Arena$@) //< the MAC's string descrip
 
 fn test_usb_descriptors(arena: Arena$@) //<
     //< runs every check on the descriptors, in the order they build on each other
-    src: = read_sources(arena)
-    $names: = List<|U8[]|>.new(arena)
-    $got: = List<|Arr|>.new(arena)
-    for nm in ARRAYS
-        names.push(nm)
-        got.push(parse_u8_array(src, nm, arena))
-    check_lengths(names@, got@, arena)
-    check_blength(names@, got@, arena)
-    check_no_trailing_nul(names@, got@, arena)
-    ntb: = got.get(find_arr(names@, "DESC_NTB_PARAMS") - 1)
+    dev: = desc("DESC_DEVICE", U8[]::usb_desc.DESC_DEVICE, arena)
+    cfg: = desc("DESC_CONFIG", U8[]::usb_desc.DESC_CONFIG, arena)
+    lang: = desc("DESC_LANG", U8[]::usb_desc.DESC_LANG, arena)
+    maker: = desc("DESC_MANUFACTURER", U8[]::usb_desc.DESC_MANUFACTURER, arena)
+    product: = desc("DESC_PRODUCT", U8[]::usb_desc.DESC_PRODUCT, arena)
+    mac: = desc("DESC_MAC", U8[]::usb_desc.DESC_MAC, arena)
+    ntb: = desc("DESC_NTB_PARAMS", U8[]::usb_desc.DESC_NTB_PARAMS, arena)
+    check_blength(Desc[]::{ dev, cfg, lang, maker, product, mac }, arena)
+    check_no_trailing_nul(Desc[]::{ maker, product, mac }, arena)
     if ntb.vals.len > 0
         check("DESC_NTB_PARAMS: wLength agrees with the array's length",
             u16_at(ntb.vals@, 0) == ntb.vals.len,
             arena.text().s("wLength=\{u16_at(ntb.vals@, 0)\} len=\{ntb.vals.len\}").take())
-    check_reply_len(src, arena)
-    cfg: = got.get(find_arr(names@, "DESC_CONFIG") - 1)
     if cfg.vals.len > 0
-        check_config(cfg.vals@, src, arena)
-    mac: = got.get(find_arr(names@, "DESC_MAC") - 1)
+        check_config(cfg.vals@, read_driver(arena), arena)
     if mac.vals.len > 0
         check_mac(mac.vals@, arena)
     // The device descriptor declares a composite device (IAD).
-    dev: = got.get(find_arr(names@, "DESC_DEVICE") - 1)
     if dev.vals.len > 6
         check("the device descriptor declares Miscellaneous/Common/IAD",
             dev.vals.get(4) == 0xEF && dev.vals.get(5) == 0x02 && dev.vals.get(6) == 0x01,

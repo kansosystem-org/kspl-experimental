@@ -7,6 +7,7 @@ import "ksai/nn_grad" as ai_nn_grad
 import "ksai/optim" as ai_optim
 import "ksai/sampler" as ai_sampler
 import "ksai/tensor" { Tensor }
+import "std/math"
 import "std/mem" { Arena }
 import "std/prng"
 import "std/str"
@@ -20,6 +21,28 @@ fn tsum_f64(t: Tensor<|F64|>): F64
     for i in Range.asc(t.size)
         s += (t.data + i)$
     return s
+
+fn max_gap<|T|>( //< the largest gap between an analytic gradient and a central finite difference
+    //< Moves each element of `w` by ±eps, calls `loss` on each side, then restores the element.
+    //< A NaN gap is kept as the largest, so a check `gap < tol` fails on it.
+    w: Tensor<|T|>,
+    g: Tensor<|T|>, //< the analytic gradient, the same shape as `w`
+    eps: F64,
+    loss: Callable1<|Sz, F64|>, //< the loss at the current `w`; its argument is not used
+): F64
+    $worst: = 0.0
+    for k in Range.asc(w.size)
+        saved: = (w.data + k)$
+        (w.data + k)$ = saved + T::eps
+        l_plus: = loss.call(0)
+        (w.data + k)$ = saved - T::eps
+        l_minus: = loss.call(0)
+        (w.data + k)$ = saved
+        d: = (l_plus - l_minus) / (2.0 * eps) - F64::(g.data + k)$
+        ad: = math.abs(d)
+        if ad > worst || ad != ad
+            worst = ad
+    return worst
 
 priv fn make_logits(a: F32, b: F32, c: F32, d: F32, arena: Arena$@): Tensor<|F32|>
     shape: Sz[1] = ::{ 4 }
@@ -39,19 +62,13 @@ fn test_grad_numeric(arena: Arena$@)
     // the analytic gradient = softmax(logits) - onehot(target)
     g: = base.grad_softmax_cross_entropy(target)
 
-    eps: = 1.0e-3
-    for i in Range.asc(4)
-        saved: = (base.data + i)$
-        (base.data + i)$ = saved + F32::eps
-        l_plus: = base.cross_entropy_loss(target)
-        (base.data + i)$ = saved - F32::eps
-        l_minus: = base.cross_entropy_loss(target)
-        (base.data + i)$ = saved // restores it
-        numeric: = (l_plus - l_minus) / (2.0 * eps)
-        analytic: = (g.data + i)$
-        diff: = numeric - analytic
-        abs_diff: = -diff if diff < 0.0 else diff
-        assert(abs_diff < 1.0e-2, "Grad: analytic gradient must match finite difference")
+    bp: = base@
+    gap: =
+        max_gap(base, g, 1.0e-3,
+        fn(_i: Sz; bp: Tensor<|F32|>$@, target: I32): F64 {
+        return bp.cross_entropy_loss(target);
+    })
+    assert(gap < 1.0e-2, "Grad: analytic gradient must match finite difference")
     verdict.pass("")
 // ==========================================
 // The numerical check of the sequence version's gradient.
@@ -72,17 +89,13 @@ fn test_grad_numeric_seq(arena: Arena$@)
     tv: = I32$[]::targets
     g: = logits.grad_softmax_cross_entropy_seq(tv)
 
-    eps: = 1.0e-6
-    for k in Range.asc(logits.size)
-        saved: = (logits.data + k)$
-        (logits.data + k)$ = saved + eps
-        l_plus: = logits.cross_entropy_loss_seq(tv)
-        (logits.data + k)$ = saved - eps
-        l_minus: = logits.cross_entropy_loss_seq(tv)
-        (logits.data + k)$ = saved
-        d: = (l_plus - l_minus) / (2.0 * eps) - (g.data + k)$
-        ad: = -d if d < 0.0 else d
-        assert(ad < 1.0e-6, "Grad: the sequence version's gradient has to match a finite difference")
+    lp: = logits@
+    gap: =
+        max_gap(logits, g, 1.0e-6,
+        fn(_i: Sz; lp: Tensor<|F64|>$@, tv: I32$[]): F64 {
+        return lp.cross_entropy_loss_seq(tv);
+    })
+    assert(gap < 1.0e-6, "Grad: the sequence version's gradient has to match a finite difference")
     verdict.pass("")
 // ==========================================
 // End-to-end training: trains a one-layer linear classifier by SGD and checks the loss decreases
@@ -187,19 +200,13 @@ fn test_rmsnorm_grad(arena: Arena$@)
     // lr=0 leaves the weights frozen and gives dX
     dx: = rn.backward(x, dy, 0.0)
 
-    eps: = 1.0e-3
-    for k in Range.asc(n)
-        saved: = (x.data + k)$
-        (x.data + k)$ = saved + F32::eps
-        l_plus: = rmsnorm_sum(rn@, x)
-        (x.data + k)$ = saved - F32::eps
-        l_minus: = rmsnorm_sum(rn@, x)
-        (x.data + k)$ = saved
-        numeric: = (l_plus - l_minus) / (2.0 * eps)
-        analytic: = (dx.data + k)$
-        d: = numeric - analytic
-        ad: = -d if d < 0.0 else d
-        assert(ad < 1.0e-2, "NN: RMSNorm dX must match finite difference")
+    rp: = rn@
+    gap: =
+        max_gap(x, dx, 1.0e-3,
+        fn(_i: Sz; rp: ai_nn.Rms_norm<|F32|>$@, x: Tensor<|F32|>): F64 {
+        return rmsnorm_sum(rp, x);
+    })
+    assert(gap < 1.0e-2, "NN: RMSNorm dX must match finite difference")
     verdict.pass("")
 // ==========================================
 // The Adam optimizer: trains a linear classifier by Adam and checks that it converges
@@ -255,21 +262,13 @@ fn test_attention_grad(arena: Arena$@)
     dout.fill(1.0)
     dx: = att.backward(c@, dout, 0.0)
 
-    eps: = 1.0e-5
-    for k in Range.asc(x.size)
-        saved: = (x.data + k)$
-        (x.data + k)$ = saved + eps
-        cp: = att.train_forward(x)
-        l_plus: = tsum_f64(cp.out)
-        (x.data + k)$ = saved - eps
-        cm: = att.train_forward(x)
-        l_minus: = tsum_f64(cm.out)
-        (x.data + k)$ = saved
-        numeric: = (l_plus - l_minus) / (2.0 * eps)
-        analytic: = (dx.data + k)$
-        diff: = numeric - analytic
-        ad: = -diff if diff < 0.0 else diff
-        assert(ad < 1.0e-4, "Attn: dX must match finite difference")
+    ap: = att@
+    gap: =
+        max_gap(x, dx, 1.0e-5,
+        fn(_i: Sz; ap: ai_nn.Self_attention<|F64|>$@, x: Tensor<|F64|>): F64 {
+        return tsum_f64(ap.train_forward(x).out);
+    })
+    assert(gap < 1.0e-4, "Attn: dX must match finite difference")
     // L=Σout decreases under gradient descent (backward pass and update together)
     before: = tsum_f64(att.train_forward(x).out)
     for _step in Range.asc(20)
@@ -303,19 +302,13 @@ fn test_block_grad(arena: Arena$@)
     dout.fill(1.0)
     dx: = blk.backward(c@, dout, 0.0)
 
-    eps: = 1.0e-5
-    for k in Range.asc(x.size)
-        saved: = (x.data + k)$
-        (x.data + k)$ = saved + eps
-        l_plus: = tsum_f64(blk.train_forward(x).out)
-        (x.data + k)$ = saved - eps
-        l_minus: = tsum_f64(blk.train_forward(x).out)
-        (x.data + k)$ = saved
-        numeric: = (l_plus - l_minus) / (2.0 * eps)
-        analytic: = (dx.data + k)$
-        diff: = numeric - analytic
-        ad: = -diff if diff < 0.0 else diff
-        assert(ad < 1.0e-3, "Block: dX must match finite difference")
+    bp: = blk@
+    gap: =
+        max_gap(x, dx, 1.0e-5,
+        fn(_i: Sz; bp: ai_nn.Transformer_block<|F64|>$@, x: Tensor<|F64|>): F64 {
+        return tsum_f64(bp.train_forward(x).out);
+    })
+    assert(gap < 1.0e-3, "Block: dX must match finite difference")
     // Σout decreases under gradient descent (the whole block's training)
     before: = tsum_f64(blk.train_forward(x).out)
     for _step in Range.asc(20)
@@ -400,7 +393,6 @@ priv fn same(a: Tensor<|F32|>, b: Tensor<|F32|>): Bool //< element for element, 
 
 fn test_updater_pairs_states(arena: Arena$@) //<
     //< Two weights of different sizes, three steps, gradients differing by step and weight
-    //<
     //< Caution: **Keep the gradients differing**: with one gradient for all, a weight moved by
     //< another's state still comes out right.
     verdict.start("[Optim] the Updater keeps each weight's own Adam state across steps")

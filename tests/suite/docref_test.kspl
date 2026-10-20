@@ -1,6 +1,5 @@
 #!/usr/bin/env -S ksplc run
 //< Checks that what a document reference points at exists, in the direction the convention allows
-//<
 //< A reference is an asset; the problem is **silent drift** (add one section and `§12` points
 //< elsewhere with nobody noticing). So the drift is made detectable, rather than the count cut.
 import "ksplc/tests/support/harness" as ksplc_harness
@@ -23,7 +22,6 @@ import "tests/support/harness"
 import "tests/support/harness_text" as htext
 
 priv const MAX_SHOWN: Sz = 20 //< the cap on how many are listed in the report
-    //<
     //< List all of them and CI's log becomes unreadable.
 
 // ==========================================
@@ -96,7 +94,6 @@ priv fn check_spec_refs() //< both allowed references and forbidden ones exercis
 
 priv const REF_HEADS: U8[][_] = ::{ "import \"", "embed \"" } //<
     //< The line starts that name another file
-    //<
     //< Caution: **Check both the form that imports a name and the form that embeds a file** (both
     //< cross packages). **`find_doc_paths` does not catch it**: it picks up only `.md` names, so an
     //< `embed`'s target is invisible. **Existence is not checked.**
@@ -115,7 +112,6 @@ priv fn group_of(rel: U8[]): U8[]
 
 priv fn unlisted_packages(arena: Arena$@): Finding //<
     //< The package folders (a `ksplc.cfg` at the top of one) with no row in layer_from
-    //<
     //< **A folder with no row is read as `root`**, which may point anywhere, so a new package's
     //< references would pass every direction check in silence.
     $f: = new_finding(arena)
@@ -140,7 +136,6 @@ priv fn may_refer(from: U8[], to: U8[], arena: Arena$@): Bool //< whether from m
 
 priv fn unit_ref_defects(rel: U8[], text: U8[], out: List<|U8[]|>$@, arena: Arena$@): Sz //<
     //< Checks the directions one file crosses, returning the number of references seen
-    //<
     //< Caution: **Match at a line's start**, so a line inside a raw string (`"""`) does not match.
     //< **A relative one from the same folder (`./`) is not checked** (it crosses no package).
     from: = group_of(rel)
@@ -167,7 +162,6 @@ priv fn unit_ref_defects(rel: U8[], text: U8[], out: List<|U8[]|>$@, arena: Aren
 
 priv fn doc_dirs(arena: Arena$@): U8[][] //<
     //< the names of the folders whose references are picked up
-    //<
     //< Caution: **Build it from layer_from.** A copied list misses an added folder, and references
     //< naming it pass without being picked up.
     $out: = List<|U8[]|>.new(arena)
@@ -178,7 +172,6 @@ priv fn doc_dirs(arena: Arena$@): U8[][] //<
 
 priv fn doc_bares(arena: Arena$@): U8[][] //<
     //< The names a document is cited by without a folder: every tracked `.md`'s file name, once
-    //<
     //< Caution: **Build it from what git tracks.** A copied list misses a document added later, and
     //< its section numbers and quoted names pass without being read.
     $out: = List<|U8[]|>.new(arena)
@@ -186,12 +179,11 @@ priv fn doc_bares(arena: Arena$@): U8[][] //<
         if !f.ends_with(".md")
             continue
         name: = sys.get_file_name(f)
-        if !htext.has(out@, name)
+        if !out.contains(name)
             out.push(name)
     return out.slice()
 
 priv fn scanned_files(arena: Arena$@): List<|U8[]|> //< what is scanned
-    //<
     //< Caution: **Check only what git knows**, or the count depends on whether it was built. The
     //< base layer decides which names are read (`is_scanned`).
     $out: = List<|U8[]|>.new(arena)
@@ -205,7 +197,6 @@ priv fn exists_at(rel: U8[], arena: Arena$@): Bool
     return fs.exists(fs.join(harness.root(), rel, arena))
 
 priv fn is_file_at(rel: U8[], arena: Arena$@): Bool //< whether a file is there
-    //<
     //< Caution: **Keep it separate from `exists_at`.** A Markdown link **can point at a folder**,
     //< but a symbol's home is a file. Folded into one, a symbol named by a folder (`ksos/net`)
     //< reads a folder and runs the arena out.
@@ -228,7 +219,6 @@ priv fn heading_numbers(rel: U8[], arena: Arena$@): List<|U8[]|>
 
 priv fn resolve_src(here: U8[], raw: U8[], arena: Arena$@): U8[] //<
     //< Resolves a named implementation/test file to a path that really exists
-    //<
     //< The base layer (`src_places`) sets the locations and their order.
     places: = refs.src_places(here, raw, arena)
     $k: Sz = 0
@@ -248,7 +238,6 @@ priv fn src_here(rel: U8[], here: U8[], text: U8[], at: Sz, arena: Arena$@): U8[
     return here if dir.len == 0 else dir
 
 priv fn generated_dirs(arena: Arena$@): List<|U8[]|> //< the build output folders
-    //<
     //< Caution: **Build it from `.gitignore`'s directory entries**, or after `.gitignore` grows,
     //< artefacts are reported as "a reference that does not exist".
     $out: = List<|U8[]|>.new(arena)
@@ -268,7 +257,6 @@ priv fn generated_dirs(arena: Arena$@): List<|U8[]|> //< the build output folder
 
 priv const BARE_EXEMPT: U8[][_] = ::{ "docs/SPEC-documents.md" } //<
     //< The documents exempt from the check for a bare section number
-    //<
     //< Note: This suite itself is not exempt (write a sample number as `§N` and it is not a bare
     //< number).
 
@@ -303,7 +291,6 @@ priv fn names_a_doc(block: U8[]): Bool //<
 
 priv const BARE_LEADERS: U8[][_] = ::{ "section ", "sections ", "chapter ", "chapters " } //<
     //< The word that comes before a bare section number
-    //<
     //< **The word comes first and the number after** (`section 1.2`). So a scan that looks only
     //< after the number picks up **none of them**, and stays green on the smaller count.
 
@@ -345,7 +332,6 @@ priv fn find_bare_sections(line: U8[], arena: Arena$@): List<|U8[]|> //<
 // ==========================================
 
 priv struct Finding //< where the findings are collected
-    //<
     //< Every finding is counted, and the names are listed up to the cap.
     seen: Sz
     bad: List<|U8[]|>
@@ -368,7 +354,6 @@ priv fn report(name: U8[], count: Sz, f: Finding@, tail: U8[], arena: Arena$@)
 
 priv fn quote_needle(name: U8[], arena: Arena$@): U8[] //<
     //< Turns the name carried with a naming into the text to search for in that document
-    //<
     //< Caution: **Fold both forms** (the repository uses both), or **a correct reference fails**. A
     //< check that fails wrongly gets removed, and the real stale references go unseen with it.
     $t: = name
@@ -385,7 +370,6 @@ priv fn quote_needle(name: U8[], arena: Arena$@): U8[] //<
 priv fn symbol_ref_defects(rel: U8[], here: U8[], text: U8[], dirs: U8[][],
     generated: List<|U8[]|>@, missing: Finding$@, stray: Finding$@, arena: Arena$@) //<
         //< Checks one file's symbol namings
-        //<
         //< **A path that does not resolve is sent to the existence check (`missing`).**
         //< Caution: **Do not move this back into `main`.** With it, `main` goes over 300 lines
         //< (Principle 3).
@@ -520,7 +504,6 @@ impl Doc_check
 
     fn check_links(d: Self$@, rel: U8[], here: U8[], text: U8[]) //<
         //< That each link's destination exists, and a heading it names too
-        //<
         //< Caution: A link to a heading is not caught by the number check. Rename the heading and
         //< the anchor alone goes stale, jumping to the document's start.
         arena: = d.arena
@@ -544,15 +527,14 @@ impl Doc_check
             if !target.ends_with(".md") || !exists_at(target, arena)
                 continue // anything but `.md`, and absence, are looked at by other checks
             d.bad_anchor.seen += 1
-            $anchors: = heading_anchors(target, arena)
-            if !htext.has(anchors@, l.extra)
+            anchors: = heading_anchors(target, arena)
+            if !anchors.contains(l.extra)
                 d.bad_anchor.bad
                     .push(arena.text().s(rel).s(": there is no heading #").s(l.extra).s(" in ")
                     .s(target).take())
 
     fn check_link_names(d: Self$@, rel: U8[], text: U8[]) //<
         //< That a `` [`X`](Y) `` link's text names the file it points at
-        //<
         //< In every file read, since a comment's link misleads as a document's does.
         arena: = d.arena
         for m in refs.find_misnamed_links(text, arena)
@@ -566,7 +548,6 @@ impl Doc_check
 
     fn check_heading_quotes(d: Self$@, rel: U8[], text: U8[]) //<
         //< That a heading holds no double quote outside a code span
-        //<
         //< **A fence's `# ...` is a shell comment, not a heading.**
         $n: Sz = 0
         $fenced: = false
@@ -684,14 +665,13 @@ impl Doc_check
                 d.stale.bad
                     .push(arena.text().s(rel).s(": §").s(s.extra).s(" cites ").s(target)
                     .s(", whose headings carry no number: cite the heading by name").take())
-            else if !htext.has(nums@, s.extra)
+            else if !nums.contains(s.extra)
                 d.stale.bad
                     .push(arena.text().s(rel).s(": there is no §").s(s.extra).s(" in ").s(target)
                     .take())
 
     fn check_bare_sections(d: Self$@, rel: U8[], text: U8[], is_md: Bool) //<
         //< That a section number naming no document is a heading of its own document
-        //<
         //< Per paragraph: a paragraph naming a document anywhere refers to that document.
         $exempt: = false
         for e in BARE_EXEMPT
@@ -722,13 +702,12 @@ impl Doc_check
 
     fn check_bare_line(d: Self$@, rel: U8[], line: U8[], k: Sz, own: List<|U8[]|>@) //<
         //< The bare section numbers of one line, against its own document's headings
-        //<
         //< A number the convention quotes as a sample, in a code span, is not counted.
         arena: = d.arena
         masked: = refs.masked_code(line, arena)
         for num in find_bare_sections(masked, arena)
             d.bare_sec.seen += 1
-            if !htext.has(own, num)
+            if !own.contains(num)
                 d.bare_sec.bad
                     .push(arena.text().s(rel).s(":\{k + 1\}: ").s(num)
                     .s(" is not in its own document  ").s(line.trim_spaces()).take())

@@ -56,7 +56,6 @@ fn net_count_then_answer(listener: net.Tcp_listener$@): Void$@
 
 fn test_net_names() //<
     //< That connecting by name works, and that a name that cannot resolve is refused by name
-    //<
     //< Caution: **Do not test with an address string alone**: that passes even when name resolution
     //< is missing. **Do not assume which address `localhost` resolves to**; the listener binds by
     //< the name too (the details are beside the bind below).
@@ -132,7 +131,6 @@ fn test_net_names() //<
 // `no_ipv6_loopback` tells apart. Only one of them is a setting the machine's start can change.
 // ==========================================
 priv fn no_ipv6_loopback(): U8[] //< why `::1` cannot be bound here, as a SKIP line's reason
-    //<
     //< **IPv6's every address still binds where only the loopback lacks `::1`.** A socket of the
     //< family opens, and nothing checks an address the interfaces hold. So a failing `"::"` means
     //< the OS has no IPv6 at all (a Linux kernel started with `ipv6.disable=1`). Neither an image
@@ -176,7 +174,6 @@ fn connect_peer(candidates: U8[][], port: I32, peer_host: U8$[]): U8[] //<
 
 priv fn expect_winner(got: U8[], want: U8[]) //<
     //< names the candidate that won when it is not `want`
-    //<
     //< The assert after it stops the run; this line says which one won, which the assert cannot.
     if !got.equals(want)
         io.err().s("[Net] the overlapped attempts: ").s(got).s(" won where ").s(want).s(" should\n")
@@ -223,7 +220,6 @@ fn test_tcp_overlapped()
             candidates that all refuse fail as connect_failed.")
 
 fn test_tcp_connect_wait() //< a candidate that never answers ends the connect at its wait
-    //<
     //< **A full backlog makes the silence.** Past its accept queue, Linux and BSD drop a SYN
     //< without a word. So the next connect hears nothing, as from an address whose packets are
     //< dropped. Without the wait it would hang for the OS's minutes.
@@ -341,7 +337,6 @@ fn test_port_range()
 // ==========================================
 fn test_child_holds_no_socket(ksplc: U8[]) //<
     //< That closing a listener and a connection takes effect while a child started meanwhile runs
-    //<
     //< ksplc is the child (`run_std` passes it): `ksplc lsp` waits on its standard input, so it
     //< lives until that closes.
     verdict
@@ -369,7 +364,6 @@ fn test_child_holds_no_socket(ksplc: U8[]) //<
     // return.
     client.set_nonblocking() catch panic("set_nonblocking should succeed on a connected socket")
     $r: = reactor.Reactor.new()
-    defer r.free()
     r.register(client.raw_handle(), reactor.READABLE, 0)
     $ready: = r.wait(5000) catch panic("wait should succeed")
     seen: = ready.len == 1
@@ -436,7 +430,6 @@ priv const FOUR_GIB: I64 = 1I64 << 32 //< a length whose low 32 bits are all 0
 
 fn test_tcp_past_int() //<
     //< A read and a write handed more than an `int` holds each move a piece and say how much
-    //<
     //< Windows takes the length as an `int`. Cut to one, 4 GiB asks for nothing. So the read ends
     //< as if the peer had closed, and `write_all` fails as `io_failed`. **The memory is never
     //< touched here.** The read fills five bytes of it. The write runs non-blocking, so it
@@ -494,7 +487,6 @@ fn test_reactor_multi_connection()
         catch panic("thread spawn failed")
 
     $r: = reactor.Reactor.new()
-    defer r.free()
     c0: = net.Tcp_stream.connect("127.0.0.1", port)
         catch panic("connect should succeed once the listener is bound")
     c1: = net.Tcp_stream.connect("127.0.0.1", port)
@@ -592,7 +584,6 @@ fn test_reactor_writable()
     client.set_nonblocking() catch panic("set_nonblocking should succeed on a connected socket")
 
     $r: = reactor.Reactor.new()
-    defer r.free()
     r.register(client.raw_handle(), reactor.WRITABLE, 7)
     $ready: = r.wait(5000) catch panic("wait should succeed on a connected stream")
     ready_token: = ready.get(0).token
@@ -624,7 +615,6 @@ fn test_accept_returns_blocking()
     client: = net.Tcp_stream.connect("127.0.0.1", port)
         catch panic("connect should succeed once the listener is bound")
     $r: = reactor.Reactor.new()
-    defer r.free()
     r.register(listener.raw_handle(), reactor.READABLE, 0)
     $ready: = r.wait(5000) catch panic("wait should succeed")
     ready.free()

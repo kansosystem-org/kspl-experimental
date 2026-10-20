@@ -1,5 +1,4 @@
 //< Checks that the record in the device survives a power cut
-//<
 //< Stage 8 in `ksos/docs/HOWTO-bring-up.md`.
 //< It makes the last 64KB of the RP2040's QSPI Flash an append-only record, and **adds one entry
 //< every time the power comes back on**. If the `boot #N` shown on the line keeps growing, the
@@ -21,18 +20,15 @@ import "ksos/drivers/rp2040/flash"
 import "std/bytes"
 
 const KIND_BOOT: U16 = 1 //< the record kinds
-    //<
     //< The caller defines their meaning (ksdb only matches them). 0 is the marker, so it is not
     //< used (`ksos/demo/rp2040/common/records`).
 const KIND_SPAN: U16 = 2
 
 const MARKER: U8[] = "ksdb1" //< the marker that identifies this writer
-    //<
     //< Caution: **Give it a different name from the car's firmware.** They use the same region, so
     //< with the same name each reads the other's record as its own.
 
 const SPAN_LEN: Sz = 300 //< a length that crosses a page (256B)
-    //<
     //< **Make it cross.** Without crossing, the path that programs it page by page is never
     //< exercised.
 
@@ -53,13 +49,11 @@ priv fn say(ln: con.Line$@, detail: U8[])
     boot.pump(20)
 
 priv fn span_byte(i: Sz): U8 //< the page-crossing record's content, derived from the position
-    //<
     //< Caution: Do not fill it with a constant. A copy from the wrong offset would go unnoticed.
     return U8::(U32::i * 7 + 11)
 
 priv fn bump_boot_count(ln: con.Line$@, lg: ksdblog.Log$@): U32 //<
     //< Advances the start-up count by one
-    //<
     //< It returns the new count (0 means it failed).
     prev: U8[4] = ::{}
     n: = lg.last(KIND_BOOT, U8$[]::prev) catch 0
@@ -117,7 +111,6 @@ priv fn report(ln: con.Line$@, lg: ksdblog.Log$@)
     boot.pump(20)
 
 priv fn open_once(ln: con.Line$@) //< writes on the first round only
-    //<
     //< It scans the region on every open (it remembers no position, so even after a failed run it
     //< matches the device).
     say(ln, "claiming the flash region")

@@ -1,5 +1,4 @@
 //< Queries on a type ID
-//<
 //< An extension on `Env` in `sema/type/env.kspl`, holding no type table: stripping and testing
 //< immutability, pointers, slices, arrays and Results, and the numeric checks and promotion.
 //< The table registers types; this file only asks about registered ones.
@@ -9,13 +8,12 @@ import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_place" as base_ast_place
 import "ksplc/base/core" as base_core
 import "ksplc/base/target" as base_target
-import "ksplc/sema/type/def" { Fn_sig, Trait_def }
+import "ksplc/sema/type/def" { Enum_variant, Fn_sig, Trait_def }
 import "ksplc/sema/type/env" as sema_type_env
 import "std/str"
 
 priv const MAX_CONST_ADD_DEPTH: I32 = 1 //<
     //< The deepest level at which an implicit conversion may add a `const` (is_const_compatible)
-    //<
     //< 1 = the outermost level of the pointee or element: `U8$[]` → `U8[]` is allowed, `U8$[]$[]`
     //< → `U8[]$[]` is not.
 priv const UNLIMITED_CONST_ADD_DEPTH: I32 = 1000 //<
@@ -23,13 +21,11 @@ priv const UNLIMITED_CONST_ADD_DEPTH: I32 = 1000 //<
 
 priv const MAX_TYPE_UNWRAP_DEPTH: Sz = 1000 //<
     //< The bound on how often get_clean_real_type strips an alias and an immutability qualifier
-    //<
     //< It strips them alternately.
     //< A safety limit against a broken type table whose shape loops back to itself.
 
 const MAX_ALIAS_CHAIN_DEPTH: Sz = 1000 //<
     //< The bound on how many levels of a type-alias chain (`typedef A = B; ...`) are followed
-    //<
     //< Both the stripping code (get_real_type) and the resolver (sema/decl/resolve.kspl) use it.
 
 struct Receiver_permission //<
@@ -44,14 +40,12 @@ struct Int_bounds //< the values an integer type holds, at its portable width
 impl sema_type_env.Env
     fn is_const(r: Self$@, id: I32): Bool //<
         //< Whether this type itself is immutability-qualified (its outermost node is const_of)
-        //<
         //< The element's or pointee's immutability is on the base type, so strip first
         //< (`is_const(slice_elem(id))`).
         return r.get_info(id).is_const_of()
 
     fn strip_const(r: Self$@, id: I32): I32 //<
         //< Strips one level of the immutability qualifier on this type itself
-        //<
         //< The element's or pointee's is kept.
         switch r.get_info(id)
         case .const_of(b)
@@ -61,7 +55,6 @@ impl sema_type_env.Env
 
     fn copy_value_type(r: Self$@, id: I32): I32 //<
         //< The type of a place that holds a value by **copying** it
-        //<
         //< Caution: **Drop the outermost immutability qualifier.** The place a read-only value was
         //< copied to can be written. What a slice or a pointer points at is untouched — it is still
         //< the original value, whose immutability stays.
@@ -74,7 +67,6 @@ impl sema_type_env.Env
 
     fn same_shape_ignoring_const(r: Self$@, a: I32, b: I32): Bool //<
         //< Whether they are the same shape ignoring the immutability qualifier
-        //<
         //< **Ask "same type if immutability is ignored" through this** (the ternary's unification,
         //< the implicit conversion to immutable).
         //< Caution: **An inner alias must not be resolved.** An alias is transparent only at the
@@ -86,7 +78,6 @@ impl sema_type_env.Env
 
     fn strip_const_deep(r: Self$@, id: I32): I32 //<
         //< It returns the type with the immutability qualifiers stripped at every nested level
-        //<
         //< Aliases are not resolved (the reason is in same_shape_ignoring_const).
         switch r.get_info(id)
         case .const_of(b)
@@ -102,21 +93,18 @@ impl sema_type_env.Env
 
     fn is_const_compatible(r: Self$@, act: I32, exp: I32): Bool //<
         //< Whether the implicit conversion from act to exp keeps the immutability, level by level
-        //<
         //< It walks the structure: has_const_deep and is_const cannot tell `U8[]` from "the
         //< descriptor immutable too", a safe downgrade.
         return r.is_const_compatible_at(act, exp, 0, MAX_CONST_ADD_DEPTH)
 
     fn needs_deep_const_add(r: Self$@, act: I32, exp: I32): Bool //<
         //< Whether it was rejected for the sole reason that the level is too deep
-        //<
         //< For the diagnostic's hint: the shape agrees, so "the type differs" alone says nothing.
         return !r.is_const_compatible_at(act, exp, 0, MAX_CONST_ADD_DEPTH) &&
             r.is_const_compatible_at(act, exp, 0, UNLIMITED_CONST_ADD_DEPTH)
 
     priv fn is_const_compatible_at(r: Self$@, act: I32, exp: I32, depth: I32, limit: I32): Bool //<
         //< depth is the level counted from the outermost
-        //<
         //< Adding a `const` is allowed only at depth <= limit, even where a deeper add is sound. A
         //< nested view type is a different C struct, and codegen emits no conversion. So it would
         //< be broken C (not rejected on LLVM). To relax it, prepare codegen first.
@@ -172,7 +160,6 @@ impl sema_type_env.Env
 
     priv fn same_signature(r: Self$@, a: Fn_sig$@, b: Fn_sig$@): Bool //<
         //< Whether two function types are one, an alias seen through as at a pointer's level
-        //<
         //< **Each part is matched both ways.** A function value is called with what either type
         //< says. So a parameter or the result must not weaken or strengthen immutability either
         //< way.
@@ -191,7 +178,6 @@ impl sema_type_env.Env
 
     priv fn generic_arg_weakens(r: Self$@, act: I32, exp: I32, depth: I32, limit: I32): Bool //<
         //< Whether `act` and `exp` differ **only where the declaration named mutability**, weaker
-        //<
         //< They are instances of one generic base, and the difference weakens the immutability.
         //< **Only the positions the declaration named may differ.** An unnamed position can really
         //< differ between `T` and `T immut` (substitution carries an outer immutability in), so
@@ -222,10 +208,9 @@ impl sema_type_env.Env
 
     fn has_const_deep(r: Self$@, id: I32): Bool //<
         //< Whether there is an immutability qualifier at any nested level
-        //<
         //< It is the check for whether a view is read-only.
         switch r.get_info(id)
-        case .const_of(_b)
+        case .const_of
             return true
         case .pointer(b)
             return r.has_const_deep(b)
@@ -236,7 +221,6 @@ impl sema_type_env.Env
 
     fn get_clean_real_type(r: Self$@, id: I32): I32 //<
         //< Resolves aliases (get_real_type), strips immutability (strip_const) till neither applies
-        //<
         //< The two steps run **alternately**.
         //< The numeric-kind checks (is_float / is_unsigned / get_primitive_bit_size ...) need it;
         //< one pass of each does not suffice.
@@ -250,7 +234,6 @@ impl sema_type_env.Env
 
     fn strip_ptr(r: Self$@, id: I32): I32 //<
         //< Strips one pointer level, seeing through an immutability qualifier on the outside
-        //<
         //< The view types' checks and strips below all see through it this way.
         //< "An immutable slice is a slice too": is_slice / strip_slice hold for
         //< `const_of(slice(U8))`.
@@ -265,7 +248,6 @@ impl sema_type_env.Env
             return r_id
     fn trait_cmp_base(r: Self$@, tid: I32, self_ref: I32, target: I32): I32 //<
         //< It returns the base real-type id for comparing a trait's and an impl's method types
-        //<
         //< It maps self_ref (that side's Self: the trait type, or the impl's target type) onto
         //< `target`. So both Selfs and a generic Output bound to target compare equal. Pointers are
         //< stripped (a thunk bridges value and pointer); ask is_pointer separately.
@@ -275,7 +257,6 @@ impl sema_type_env.Env
         return target if base == self_ref else base
     fn ptr_depth(r: Self$@, id: I32): I32 //<
         //< it returns the number of stacked pointers (the depth)
-        //<
         //< Foo=0, Foo@=1, Foo@@=2, … lower and both backends share it for the automatic
         //< dereference.
         $depth: I32 = 0
@@ -286,7 +267,6 @@ impl sema_type_env.Env
         return depth
     fn strip_ptr_full(r: Self$@, id: I32): I32 //<
         //< Returns the base type id with every pointer level stripped
-        //<
         //< Foo@@ becomes Foo; strip_ptr strips one level.
         $cur: = id
         for r.is_pointer(cur)
@@ -298,7 +278,6 @@ impl sema_type_env.Env
 
     fn receiver_base_id(r: Self$@, id: I32): I32 //<
         //< The base type a value is looked up on, with aliases, pointers and immutability stripped
-        //<
         //< They are stripped alternately until none is left.
         //< It is **the one and only implementation point** of the convention that `.`/`[]`
         //< dereference a pointer automatically. See "Member access and indexing through a pointer"
@@ -314,7 +293,6 @@ impl sema_type_env.Env
         return cur
     fn is_place_index_node(r: Self$@, node: Ast_node$@): Bool //<
         //< Whether a subscript node (`a[i]`) resolved to "a subscript returning a place"
-        //<
         //< Such a subscript is `Index_place.at` or `Index_ref.at_ref`.
         //< **Strip the immutability qualifier from both sides.** `at_ref` returns an `Output@`, so
         //< the node's type turns immutable and is stripped later where used as a value (`return
@@ -331,7 +309,6 @@ impl sema_type_env.Env
 
     fn method_receiver_permission(r: Self$@, def_node: Ast_node$@): Receiver_permission? //<
         //< The permission the method declared at `def_node` demands of its receiver
-        //<
         //< None where `def_node` has no signature with a first parameter. The call's check (`v.m()`
         //< on a read-only `v` is rejected) and [I0601] (`v.m()` needs `$v` only for a `Self$@` `m`)
         //< both read it here, so the two cannot disagree.
@@ -346,7 +323,6 @@ impl sema_type_env.Env
 
     priv fn receiver_permission(r: Self$@, p_type: Ast_node$@): Receiver_permission //<
         //< Reads the permission a method demands of its receiver from the type annotation `p_type`
-        //<
         //< `p_type` is the first parameter's type annotation.
         //<
         //< Caution: **When the type is unresolved (type_id <= 0, as for `Self` in `impl U8`), read
@@ -371,7 +347,6 @@ impl sema_type_env.Env
 
     fn field_type_of(r: Self$@, base_tid: I32, name: U8[]): I32 //<
         //< A struct type's field's declared type id, found from the type alone (unknown if none)
-        //<
         //< Note: It does not touch the AST at all. The write check in sema/body/stmt.kspl needs a
         //< mid-path pointer's immutability in `a.b.c = v`. infer_expr there would change the node
         //< (see reject_write_through_const_ptr).
@@ -388,7 +363,6 @@ impl sema_type_env.Env
         default
             return I32::sema_type_env.Builtin_type_id.unknown
     fn slice_elem(r: Self$@, id: I32): I32 //< the element type of a borrowed contiguous region
-        //<
         //< Caution: **Do not name it like the `strip_*` family.** Those strip one level of
         //< structure; a slice is a struct in `std/lang`, recognized by name (`slice_struct_elem`).
         r_id: = r.get_clean_real_type(id)
@@ -396,7 +370,6 @@ impl sema_type_env.Env
         return elem if elem != 0 else r_id
     fn strip_result(r: Self$@, id: I32): I32 //<
         //< The value type of a Result type, or the cleaned type itself where it is no Result
-        //<
         //< Caution: As with the family, strip the outer immutability qualifier first. See
         //< "Immutability marks in a type, and the API that asks" in ksplc/docs/DESIGN-sema.md.
         //< Otherwise `is_result` is true (via get_clean_real_type), while `strip_result` strips
@@ -427,6 +400,39 @@ impl sema_type_env.Env
         return r.get_info(r.get_clean_real_type(id)).is_array()
     fn is_result(r: Self$@, id: I32): Bool //< whether it is an instance of `std/lang`'s `Result`
         return r.instance_base(r.get_clean_real_type(id)).equals(base_core.RESULT_FQN)
+    fn is_option(r: Self$@, id: I32): Bool //< whether it is an instance of `std/lang`'s `Option`
+        return r.instance_base(r.get_clean_real_type(id)).equals(base_core.OPTION_FQN)
+    fn caught_value(r: Self$@, id: I32): I32 //<
+        //< The value a `catch` takes out: a Result's `ok`, an Option's `some`
+        //< The cleaned type itself where it is neither, as strip_result answers.
+        r_id: = r.get_clean_real_type(id)
+        return r.instance_arg(r_id, 0) if r.is_option(r_id) else r.strip_result(r_id)
+    fn caught_variant(r: Self$@, id: I32, holds_value: Bool): U8[] //<
+        //< The variant name a `catch` reads: the one holding the value, or the one it handles
+        //< **Both backends ask this**, so a Result's `ok` / `err` and an Option's `some` / `none`
+        //< are spelled in one place (build_result_access in `../../base/ast.kspl`).
+        if r.is_option(id)
+            return "some" if holds_value else "none"
+        return "ok" if holds_value else "err"
+    fn variant_index(r: Self$@, id: I32, name: U8[]): I32 //<
+        //< The index of the variant `name` in the declaration order of the enum `id`, or -1
+        switch r.get_info(r.get_clean_real_type(id))
+        case .enum_type(def)
+            for i in Range.asc(def.variants_list.len)
+                if def.variants_list.get(i).name.equals(name)
+                    return I32::i
+        default {}
+        return -1
+    fn variant_at(r: Self$@, id: I32, idx: I32): Enum_variant$@? //<
+        //< The variant at `idx` in the declaration order of the enum `id`
+        //< Lower records a `switch` label's and a payload read's variant by index
+        //< (variant_index); **both backends read it back here**, and an absent one is an ICE.
+        switch r.get_info(r.get_clean_real_type(id))
+        case .enum_type(def)
+            if idx >= 0 && idx < def.variants_list.len
+                return .some(def.variants_list.get(idx))
+        default {}
+        return .none
     fn array_len(r: Self$@, id: I32): I32 //< a fixed-length array's element count (else 0)
         switch r.get_info(r.get_clean_real_type(id))
         case .array(_b, size)
@@ -434,7 +440,6 @@ impl sema_type_env.Env
         default
             return 0
     fn is_scalar_enum(r: Self$@, id: I32): Bool //< whether it is an enum with no payload anywhere
-        //<
         //< Both backends carry one as an integer, not as a `{ tag, payload }`.
         switch r.get_info(r.get_clean_real_type(id))
         case .enum_type(def)
@@ -442,7 +447,6 @@ impl sema_type_env.Env
         default
             return false
     fn scalar_repr_id(r: Self$@, id: I32): I32 //< the type a value is carried as
-        //<
         //< The real type, where a scalar enum stands for its base type.
         real_id: = r.get_clean_real_type(id)
         switch r.get_info(real_id)
@@ -453,7 +457,6 @@ impl sema_type_env.Env
         return real_id
     fn trait_def_of_receiver(r: Self$@, id: I32): Trait_def$@? //<
         //< The trait a method call's receiver of type id is, through any pointer levels
-        //<
         //< None where it is not a trait: then the call is a direct one, not through a vtable.
         //< Caution: **See through immutability too**: an immutable array's element (`Shape[2]`) is
         //< a trait value, and read as none its call names a function no type defines.
@@ -465,7 +468,6 @@ impl sema_type_env.Env
 
     fn const_elem_of(r: Self$@, id: I32): Bool //<
         //< Whether the element descended to by a subscript (`[i]`) is immutable
-        //<
         //< The one check at the element's level (for place_crosses_const_elem in
         //< `ksplc/sema/decl/access.kspl`).
         //< Caution: **Strip the pointer levels first.** `[` dereferences any number of them, so
@@ -480,7 +482,6 @@ impl sema_type_env.Env
         return elem_id != base_id && r.is_const(elem_id)
     fn is_fn_ptr(r: Self$@, id: I32): Bool //<
         //< Whether a value of this type is called directly
-        //<
         //< That is a function type, or the mark a bare function name gets in a generic call
         //< (generic_fn_value_type_id).
         real_id: = r.get_clean_real_type(id)
@@ -513,7 +514,6 @@ impl sema_type_env.Env
 
     fn get_portable_bit_size(r: Self$@, id: I32): I32 //<
         //< The bit count of a value that holds on any target
-        //<
         //< **codegen must not use this**: it uses get_primitive_bit_size, or `Sz`'s conversions
         //< come out at the wrong width.
         //< Caution: Checking with the host's 64 bits lets through an expression undefined only on a
@@ -558,14 +558,12 @@ impl sema_type_env.Env
             return 32
 
     fn is_bool(r: Self$@, id: I32): Bool //< whether it is a `Bool`
-        //<
         //< Caution: **Go through `get_clean_real_type`.** A bare type-ID comparison misses a
         //< `Bool[4]`'s element (`Bool const`) and a `type Flag = Bool`.
         return r.get_clean_real_type(id) == I32::sema_type_env.Builtin_type_id.bool_type
 
     fn is_integer(r: Self$@, id: I32): Bool //<
         //< Whether it is an integer type (`is_numeric` without F32/F64)
-        //<
         //< Caution: Use this one for a check that "means nothing unless it is an integer", such as
         //< a process's exit code. Checking it with is_numeric lets code returning an F64 as an exit
         //< code go unreported.
@@ -591,7 +589,6 @@ impl sema_type_env.Env
 
     fn get_promoted_numeric_type(r: Self$@, type1: I32, type2: I32): I32 //<
         //< The type two numeric operands are computed in, or unknown where neither holds the other
-        //<
         //< It is always one of the two: the one the other widens into without loss
         //< (is_lossless_numeric). So `U8 + I16` is `I16`, while `I32 + U32`, `I8 + U8`, `Sz + U32`
         //< and any integer with a float have none ("Type conversion (`::`) and implicit casts" in
@@ -616,7 +613,6 @@ impl sema_type_env.Env
 
     fn is_lossless_numeric(_r: Self$@, act: I32, exp: I32): Bool //<
         //< Whether every value of the numeric type `act` is a value of `exp`
-        //<
         //< The one relation behind both an implicit conversion (apply_type_coercion in
         //< sema/body/coerce.kspl) and a binary operation's promotion. `Sz` counts at its 32-bit
         //< lower bound and holds at most 64 bits, so `I32` fits it and it fits `I64`, but `U32`
@@ -662,7 +658,6 @@ impl sema_type_env.Env
 
     fn alias_chain_len(r: Self$@, id: I32): Sz //<
         //< How many levels of aliases must be followed to reach the real type
-        //<
         //< It stops at the bound (so even on a cycle), and returning the bound means "at or above".
         $current: = id
         $n: Sz = 0
@@ -675,7 +670,6 @@ impl sema_type_env.Env
         return n
 
     fn get_real_type(r: Self$@, id: I32): I32 //< it strips the aliases and returns the real type
-        //<
         //< Caution: **The bound has to be the same value as the resolver's in
         //< sema/decl/resolve.kspl.** Cutting off a chain the resolver accepted returns a
         //< half-stripped type, and the user sees "a type mismatch" with no word of the depth.

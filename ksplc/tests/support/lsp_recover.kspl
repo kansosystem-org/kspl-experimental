@@ -1,5 +1,4 @@
 //< The language server keeps answering where something about the input is off
-//<
 //< Past a broken line, after its worker is remade, on a package opened alone, and on a template
 //< that is never instantiated.
 //<
@@ -142,7 +141,6 @@ priv fn check_answers_beside_the_break(c: jsonrpc_client.Client$@, arena: Arena$
 
 priv fn check_one_account_only(c: jsonrpc_client.Client$@, arena: Arena$@) //<
     //< It checks a missing bracket is reported once, by the parse
-    //<
     //< **Only the parse reports it**. In a recovered tree the later stages find only the chain of
     //< unrelated errors one missing bracket sets off.
     c.notify("textDocument/didOpen", lsp_client.did_open(BROKEN_URI, BROKEN_SRC, arena),
@@ -209,17 +207,14 @@ fn run_recover(c: jsonrpc_client.Client$@, arena: Arena$@)
 // ==========================================
 priv const WATCHDOG_MS: I64 = 10000 //<
     //< The supervisor's hang timeout (`WORKER_TIMEOUT_MS` in `../../lsp/server.kspl`)
-    //<
     //< Written again here: importing the server would build the language server into this suite.
 priv const COPIES: Sz = 20 //< how many documents are open when the worker is remade
 priv const BEFORE_ANSWER_MAX: Sz = 2 //<
     //< The most documents whose diagnostics may precede the queued hover's answer
-    //<
     //< Its own document, plus one idle analysis already under way. Restoring and analysing all
     //< `COPIES` before answering fails regardless of process startup or pipe speed.
 priv const COPY_FNS: Sz = 250 //<
     //< How many functions each copy holds, so analysing one takes measurable work
-    //<
     //< **Made here, not read from a file of the package.** The work stays the same whatever the
     //< package's files become. None is imported, so each analysis is the copy alone.
 priv const HOVER_DECL: U8[] = "fn first(" //< the declaration the hover asks about
@@ -250,7 +245,6 @@ priv fn copy_of(uri: U8[], open: Sz, arena: Arena$@): I32 //< which open copy `u
 priv fn recover(c: jsonrpc_client.Client$@, hook: U8[], open: Sz, id: I32, text: U8[],
     arena: Arena$@): Recovery //<
         //< It sends `hook` and at once a hover on the first copy, and reads all that comes back
-        //<
         //< It reads until the answer and every open copy's diagnostics have come.
         //< **Read the messages here, not through `request`**, which skips the diagnostics that
         //< come before its answer.
@@ -283,7 +277,6 @@ priv fn recover(c: jsonrpc_client.Client$@, hook: U8[], open: Sz, id: I32, text:
 
 priv fn open_copies(c: jsonrpc_client.Client$@, from: Sz, to: Sz, text: U8[], arena: Arena$@): Bool //<
     //< It opens copies `from` to `to` (excluded) and waits for each one's diagnostics
-    //<
     //< **Settle before the hook**: diagnostics still on the way would be counted as the recovery's.
     for k in Range.asc(to - from)
         c.notify("textDocument/didOpen",
@@ -303,7 +296,6 @@ priv fn told(c: jsonrpc_client.Client$@, line: U8[], arena: Arena$@): Bool //<
 
 fn check_first_answer(exe: U8[], arena: Arena$@) //<
     //< That a queued request after recovery precedes unrelated documents' analyses
-    //<
     //< After a crash and after a hang alike; every other document's diagnostics still come.
     name: = "a queued request after recovery precedes unrelated documents' analyses"
     text: = copy_text(arena)
@@ -359,7 +351,6 @@ priv fn probe_hover(c: jsonrpc_client.Client$@, uri: U8[], arena: Arena$@): json
 
 fn check_quarantine(exe: U8[], arena: Arena$@) //<
     //< That a document crashing its analysis is quarantined while the others go on answering
-    //<
     //< **The document is found when it is analysed**, which after a restart comes later than the
     //< restart itself; the worker is not remade without end.
     name: = "a document that crashes its analysis is quarantined"

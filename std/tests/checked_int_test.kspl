@@ -1,8 +1,6 @@
-//< Boundary and exhaustive checks of native and wrapped integer arithmetic
-import "std/checked_int" + { Checked_error, Ci8, Ci16, Ci32, Ci64, Cu8, Cu16, Cu32, Cu64, Csz,
-    Checked_arithmetic, Checked_negation }
-import "std/mem" { Arena }
-import "std/tests/sys_test"
+//< Boundary and exhaustive checks of checked arithmetic on native integers
+import "std/checked_int" { Checked_error, Checked_arithmetic, Checked_negation }
+import "std/mem" { SZ_MAX }
 import "std/verdict"
 
 priv fn expect<|T|>(result: T!Checked_error, wanted: T)
@@ -65,9 +63,8 @@ fn test_checked_native()
     unsigned_edges<|U16|>(65535, 0, 1, 2)
     unsigned_edges<|U32|>(4294967295U32, 0, 1, 2)
     unsigned_edges<|U64|>(18446744073709551615U64, 0, 1, 2)
-    hi: = Sz::((~0U64) >> U64::(65 - sizeof(Sz) * 8))
-    lo: = -hi - 1
-    signed_edges<|Sz|>(lo, hi, 0, 1, 2, -1)
+    lo: = -SZ_MAX - 1
+    signed_edges<|Sz|>(lo, SZ_MAX, 0, 1, 2, -1)
     negation_edges<|Sz|>(lo, 0, 1, -1)
     expect<|I64|>(3037000499I64.checked_mul(3037000499I64), 9223372030926249001I64)
     expect_error<|I64|>(3037000500I64.checked_mul(3037000500I64), .overflow)
@@ -121,56 +118,3 @@ fn test_checked_eight_bits()
             else
                 expect<|U8|>(u.checked_div(v), U8::(a / b))
     verdict.pass("signed and unsigned 8-bit arithmetic agrees with widened results.")
-
-fn test_checked_values()
-    verdict.start("[checked_int] the short type names share checked formulas...")
-    assert(((Ci8::I8::2 + Ci8::I8::3) * Ci8::I8::4).val == I8::20, "Ci8: a checked formula")
-    assert(sizeof(Ci8) == sizeof(I8), "Ci8: the wrapper adds no storage")
-    assert(((Ci16::I16::2 + Ci16::I16::3) * Ci16::I16::4).val == I16::20, "Ci16: a checked formula")
-    assert(sizeof(Ci16) == sizeof(I16), "Ci16: the wrapper adds no storage")
-    assert(((Ci32::2 + Ci32::3) * Ci32::4).val == 20, "Ci32: a checked formula")
-    assert(sizeof(Ci32) == sizeof(I32), "Ci32: the wrapper adds no storage")
-    assert(((Ci64::I64::2 + Ci64::I64::3) * Ci64::I64::4).val == I64::20, "Ci64: a checked formula")
-    assert(sizeof(Ci64) == sizeof(I64), "Ci64: the wrapper adds no storage")
-    assert(((Cu8::U8::2 + Cu8::U8::3) * Cu8::U8::4).val == U8::20, "Cu8: a checked formula")
-    assert(sizeof(Cu8) == sizeof(U8), "Cu8: the wrapper adds no storage")
-    assert(((Cu16::U16::2 + Cu16::U16::3) * Cu16::U16::4).val == U16::20, "Cu16: a checked formula")
-    assert(sizeof(Cu16) == sizeof(U16), "Cu16: the wrapper adds no storage")
-    assert(((Cu32::U32::2 + Cu32::U32::3) * Cu32::U32::4).val == U32::20, "Cu32: a checked formula")
-    assert(sizeof(Cu32) == sizeof(U32), "Cu32: the wrapper adds no storage")
-    assert(((Cu64::U64::2 + Cu64::U64::3) * Cu64::U64::4).val == U64::20, "Cu64: a checked formula")
-    assert(sizeof(Cu64) == sizeof(U64), "Cu64: the wrapper adds no storage")
-    assert(((Csz::Sz::2 + Csz::Sz::3) * Csz::Sz::4).val == Sz::20, "Csz: a checked formula")
-    assert(sizeof(Csz) == sizeof(Sz), "Csz: the wrapper adds no storage")
-    assert((-Ci32::7).val == -7, "a signed checked value supports negation")
-    expect_error<|Ci32|>((Ci32::2147483647).checked_add(Ci32::1), .overflow)
-    expect_error<|Csz|>((Csz::Sz::1).checked_div(Csz::Sz::0), .div_by_zero)
-    verdict.pass("the aliases preserve casts, operators, values and scalar-sized storage.")
-
-priv const DIV_OVERFLOW_SRC: U8[] = //< a child dividing the least I32 by -1, checked
-    """import "std/checked_int" { Ci32 }
-
-fn main()
-  least: = Ci32::(-2147483647 - 1)
-  _q: = least / Ci32::(-1)
-"""
-
-priv const DIV_ZERO_SRC: U8[] = //< a child dividing by 0, checked
-    """import "std/checked_int" { Cu8 }
-
-fn main()
-  _q: = Cu8::7U8 / Cu8::0U8
-"""
-
-fn test_checked_div(ksplc: U8[], arena: Arena$@) //< ksplc runs the children
-    verdict.start("[checked_int] `/` on checked integers...")
-    assert((Ci32::7 / Ci32::2).val == 3 && (Ci32::(-7) / Ci32::2).val == -3,
-        "Ci32: the quotient rounds toward 0")
-    assert((Cu8::255U8 / Cu8::16U8).val == 15U8, "Cu8: the quotient of the largest value")
-    overflow_stops: = sys_test.child_stops_with(ksplc, "div_overflow", DIV_OVERFLOW_SRC,
-        "checked integer overflow or division by zero (div)", arena)
-    assert(overflow_stops, "the least I32 divided by -1 must stop the program, not wrap")
-    zero_stops: = sys_test.child_stops_with(ksplc, "div_zero", DIV_ZERO_SRC,
-        "checked integer overflow or division by zero (div)", arena)
-    assert(zero_stops, "a checked division by 0 must stop the program")
-    verdict.pass("`/` gives the quotient, and stops on overflow and on 0.")

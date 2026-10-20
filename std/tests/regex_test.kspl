@@ -1,9 +1,9 @@
 //< Tests of `std/regex`: matching, groups, `find_all`, escapes, repetition, bad counts and ranges
-//<
 //< Encoding itself is tested in `encoding_test.kspl`.
 import "std/mem" + { Arena }
 import "std/regex"
 import "std/str" { Str_builder }
+import "std/tests/mem_test" { back_to }
 import "std/tests/sys_test"
 import "std/verdict"
 
@@ -16,7 +16,6 @@ priv fn compile_is_rejected(pattern: U8[]): Bool //<
 
 priv fn rejected_with(pattern: U8[], want: regex.Regex_error): Bool //<
     //< Compiles one pattern and returns whether it was refused **for that reason**
-    //<
     //< Caution: Check the reason, or a refusal with a different error passes too.
     r: = regex.Regex.compile(pattern) catch e
         return e == want
@@ -99,8 +98,7 @@ fn test_regex_match()
     assert(compile_is_rejected("[a-\\d]"), "a shorthand class cannot be a range endpoint")
 
     // free() frees the nested node tree and the lists, leaving no leak.
-    heap_after: = mem.heap_used_bytes()
-    assert(heap_after == heap_before, "Regex.free() must recursively free the node tree (no leak)")
+    back_to(heap_before, "Regex.free() must recursively free the node tree (no leak)")
 
     // Deep nesting `(((...` must be refused as an error, not exhaust the stack at compile time.
     $deep_pattern: = Str_builder.new()
@@ -122,9 +120,7 @@ fn test_regex_match()
     for _round in Range.asc(4)
         for p in bad_patterns
             assert(compile_is_rejected(p), "a malformed pattern must be rejected")
-    err_heap_after: = mem.heap_used_bytes()
-    assert(err_heap_after == err_heap_before,
-        "a failed Regex.compile must free the nodes it built before throwing")
+    back_to(err_heap_before, "a failed Regex.compile must free the nodes it built before throwing")
 
     verdict.pass("compile/is_match/find behave correctly against real input.")
 
@@ -139,7 +135,6 @@ priv fn group_of(pattern: U8[], text: U8[], n: Sz): U8[] //<
 
 priv fn group_count_of(pattern: U8[], text: U8[]): Sz //<
     //< How many groups, from number 1 on, took part in one match
-    //<
     //< Where every group takes part, that is the pattern's group count.
     r: = regex.Regex.compile(pattern) catch
         return -1
@@ -209,14 +204,12 @@ fn test_regex_groups()
     assert(n_full == 9, "exactly the upper bound goes through")
 
     // **Do not leak on a pattern with groups either** (the end-marker node included).
-    heap_after: = mem.heap_used_bytes()
-    assert(heap_after == heap_before, "Regex.free() with groups does not leak the tree")
+    back_to(heap_before, "Regex.free() with groups does not leak the tree")
     verdict
         .pass("Capture groups come out in number order, and a dropped alternative's value is gone.")
 
 priv fn spans_of(pattern: U8[], text: U8[], arena: Arena$@): U8[] //<
     //< Joins every match into a list of "start,end " (`!` if the pattern is an error)
-    //<
     //< Caution: **Compare by position, not by content.** Length-0 matches in between change no
     //< string, so a mistake in how it advances never shows.
     r: = regex.Regex.compile(pattern) catch
@@ -244,7 +237,6 @@ priv fn nth_group(pattern: U8[], text: U8[], n: Sz, g: Sz, arena: Arena$@): U8[]
 
 fn test_regex_find_all() //<
     //< That collecting every match finds them all, at the right positions
-    //<
     //< Caution: **Always check that a length-0 match advances by one byte**, or it hangs rather
     //< than fails. **Also check that a returned position counts from the start of text.** Code that
     //< adds the slice offset back but forgets the groups' positions is caught only through
@@ -287,9 +279,7 @@ fn test_regex_find_all() //<
     assert(tail_only.len == 0, "`^` does not match anywhere but the head")
 
     arena.free()
-    heap_after: = mem.heap_used_bytes()
-    assert(heap_after == heap_before,
-        "find_all leaks neither the Regex nor anything outside the arena")
+    back_to(heap_before, "find_all leaks neither the Regex nor anything outside the arena")
     verdict.pass("Every position agrees with other implementations, and a length-0 match advances.")
 
 priv fn matches(pattern: U8[], text: U8[]): Bool
@@ -327,12 +317,10 @@ fn test_regex_escapes()
     assert(matches("a\\.b", "a.b"), "`\\.` is the dot itself")
     assert(!matches("a\\.b", "axb"), "`\\.` is not any one character")
 
-    heap_after: = mem.heap_used_bytes()
-    assert(heap_after == heap_before, "Regex.free() with escapes does not leak the tree")
+    back_to(heap_before, "Regex.free() with escapes does not leak the tree")
     verdict.pass("Control characters are undone, and a word boundary works without holding width.")
 
 priv fn late_match_start(): Sz //< whether a match further back can be found
-    //<
     //< **The test checks the answer, not the speed.** A repetition that matches empty, not cut off,
     //< loops at each start, and the real match further back is never reached. The regex is freed
     //< inside, since the caller compares the heap.
@@ -389,8 +377,7 @@ fn test_regex_group_repeat()
     lazy: = group_of("(?:[\\w]+\\s+)*?@(\\w+)", "call void @abort", 1)
     assert(lazy.equals("abort"), "a lazily repeated group")
 
-    heap_after: = mem.heap_used_bytes()
-    assert(heap_after == heap_before, "Regex.free() does not leak, the copy per round included")
+    back_to(heap_before, "Regex.free() does not leak, the copy per round included")
     verdict
         .pass("A repeated group returns the same answer as Python, and it stops even going on \
             empty.")
@@ -462,14 +449,12 @@ fn test_regex_bounds()
     assert(matches("^[\\d\\-z]+$", "1-z"), "`\\-` is the literal `-`")
     assert(matches("^[a-a]$", "a"), "a range with the same ends is 1 character")
 
-    heap_after: = mem.heap_used_bytes()
-    assert(heap_after == heap_before, "Regex.free() does not leak, counted repetition included")
+    back_to(heap_before, "Regex.free() does not leak, counted repetition included")
     verdict
         .pass("Counted repetition stops at its upper bound, a malformed `{` and a reversed range \
             are refused, and `.` does not fit a newline.")
 
 fn test_regex_long_text() //< a search through a long text is no ReDoS, and is answered
-    //<
     //< **Each start fails at once**, but there are 1.5 million of them. A search whose work is
     //< capped by a fixed amount, rather than by the text, refuses it.
     verdict.start("[Regex] a plain search through a long text test...")
@@ -499,7 +484,6 @@ priv fn answered_no(r: regex.Regex$@, n: Sz): Bool //< whether n `a`s, then `!`,
 
 fn test_regex_linear() //<
     //< the patterns that hang a backtracking matcher are answered in linear time
-    //<
     //< **The work is counted, not timed**: a clock flakes on a loaded machine, while the states a
     //< search visits are the same on every run. Each 5000 more bytes must add no more work than
     //< the 5000 before them, within `states` a byte; stepping back multiplies it per byte instead.
@@ -515,12 +499,10 @@ fn test_regex_linear() //<
         assert(w3 <= r.states * 15002, "regex: a search visits at most `states` a byte")
         assert(answered_no(r, 15000), "regex: the pattern is answered, with no match")
         r.free()
-    heap_after: = mem.heap_used_bytes()
-    assert(heap_after == heap_before, "regex: a search frees what it made")
+    back_to(heap_before, "regex: a search frees what it made")
     verdict.pass("Each pattern is answered over 15000 bytes, its work linear in the text.")
 
 fn test_regex_many_rounds() //< a repeated group over a long text is matched, not refused
-    //<
     //< Caution: **Test a text that only is long.** A matcher spending a native call or a kept
     //< entry per round of `(ab)*` refuses, or exhausts its stack on, a text that plainly matches.
     verdict.start("[Regex] a repeated group over many rounds test...")
@@ -554,7 +536,6 @@ priv fn nested_groups(depth: Sz, arena: Arena$@): U8[] //< `a` inside `depth` ne
 
 fn test_regex_nesting(arena: Arena$@) //<
     //< deep group nesting compiles, and past the limit is too_deep
-    //<
     //< **On every build, a sanitized one too**: the stack check beside the count must not refuse
     //< what the main thread's stack holds.
     verdict.start("[Regex] deep group nesting compiles, and too deep is refused...")

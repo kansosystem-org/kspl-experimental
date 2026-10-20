@@ -1,10 +1,8 @@
 //< Generates LLVM IR for statements
-//<
 //< `emit_llvm_stmt` is a thin dispatcher that calls a dedicated method per statement kind. The
 //< switch statement is split further into collecting the cases and binding the payloads.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
-import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/core" as base_core
 import "ksplc/base/locate" as base_locate
 import "ksplc/gen/llvm/ctx" { Genllvm_ctx }
@@ -13,7 +11,6 @@ import "ksplc/gen/llvm/expr_agg" as gen_llvm_expr_agg
 import "ksplc/gen/llvm/types" as gen_llvm_types
 import "ksplc/sema/body/binary" as sema_body_binary
 import "ksplc/sema/decl/eval" as sema_decl_eval
-import "ksplc/sema/type/def" as sema_type_def
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
 import "std/chars"
@@ -23,33 +20,11 @@ import "std/str" { Str_builder }
 struct Case_info
     val: I64
     lbl: I32
-    ast_node: Ast_node$@
     block_node: Ast_node$@
 
 struct Switch_default
     lbl: I32
     block: Ast_node$@
-
-priv struct Case_variant_ref //<
-    //< The result of resolving an enum variant definition from a pattern node
-    //<
-    //< emit_llvm_case_payload and collect_switch_cases share it; it is null where unresolved.
-    p_start: I32
-    def: sema_type_def.Enum_variant$@
-
-priv fn resolve_case_pattern_variant(pn: Ast_node$@, e_def: sema_type_def.Enum_def$@):
-    Case_variant_ref$@? //<
-        //< It resolves, from e_def, the variant that the pattern node pn names.
-        //<
-        //< It is null where the name is unknown or the variant undefined.
-    switch pn.extract_case_variant()
-    case .variant(v_name_node, p_start)
-        if v_name_node != null && e_def != null
-            if v_def: = e_def.get_variant(v_name_node.text)
-                mvr: = Case_variant_ref::{ .p_start = I32::p_start, .def = v_def }
-                return .some(base_core.arena.create(mvr))
-    default {}
-    return .none
 
 impl Ast_node
     fn emit_llvm_stmt(r: Ast_node$@, cg: Genllvm_ctx$@) //<
@@ -128,7 +103,6 @@ impl Ast_node
 
     priv fn emit_llvm_trace_frame(r: Ast_node$@, cg: Genllvm_ctx$@) //<
         //< Records the frame a failure leaves through, as genc's KSPL_START_TRACE / RECORD_TRACE do
-        //<
         //< A new error starts the route again; a `!`'s propagation extends it.
         //< The file is the one a `#line` names and the function its C symbol, so the route the
         //< program prints is the same from either backend.
@@ -265,11 +239,9 @@ impl Ast_node
 
         $switch_cond_reg: = cond_reg
         $switch_cond_type: = cond_node.type_id
-        $tmp_cond_ptr_str: U8[] = ""
 
         if !is_scalar
             tmp_cond_ptr: = cg.get_or_alloc_tmp_slot(Void$@::r, cond_node.type_id)
-            tmp_cond_ptr_str = tmp_cond_ptr
             cg.s("    store ").t(cond_node.type_id).s(" ").s(cond_reg).s(", ptr ").s(tmp_cond_ptr)
                 .s("\n")
 
@@ -284,7 +256,7 @@ impl Ast_node
             switch_cond_reg = cg.reg_str(tag_reg)
 
         cases: = List<|Case_info|>.create(base_core.arena)
-        dflt: = collect_switch_cases(r, cg, e_def, cases, merge_lbl)
+        dflt: = collect_switch_cases(r, cg, cases, merge_lbl)
         default_lbl: = dflt.lbl
         default_block: = dflt.block
 
@@ -309,11 +281,6 @@ impl Ast_node
             if !already_emitted
                 emitted_lbls.set(ci.lbl, true)
                 cg.emit_b_label(ci.lbl)
-
-                if !is_scalar && tmp_cond_ptr_str.len > 0
-                    ci.ast_node
-                        .emit_llvm_case_payload(cg, e_def, cond_node.type_id, tmp_cond_ptr_str)
-
                 if ci.block_node != null
                     ci.block_node.emit_llvm_stmt(cg)
                 if !cg.is_terminated
@@ -332,46 +299,6 @@ impl Ast_node
             cg.terminate()
 
         cg.emit_b_label(merge_lbl)
-    fn emit_llvm_case_payload(r: Ast_node$@, cg: Genllvm_ctx$@, e_def: sema_type_def.Enum_def$@,
-        cond_type_id: I32, tmp_cond_ptr_str: U8[]) //<
-            //< At the start of a switch's case block, it extracts the enum payload into the binding
-            //<
-            //< r is the pattern node.
-        $p_start_idx: = 0
-        $has_payload: = false
-        $v_def: sema_type_def.Enum_variant$@ = null
-        vr: = resolve_case_pattern_variant(r, e_def)
-        if v_ref: = vr
-            if !e_def.is_scalar() && v_ref.p_start < r.children.len
-                has_payload = true
-                p_start_idx = v_ref.p_start
-                v_def = v_ref.def
-
-        if !has_payload
-            return
-
-        $field_idx: = 0
-        for $m: = p_start_idx; m < r.children.len; m += 1
-            bind_var: = r.get_child(m)
-            if bind_var.kind_id == .k_identifier && field_idx < v_def.payload_fields.len
-                field_def: = v_def.payload_fields.get(field_idx)
-                b_name: = bind_var.text
-                is_existing: = cg.has_local_slot(b_name, bind_var)
-                b_slot: = cg.local_slot_name(b_name, bind_var)
-
-                if !is_existing
-                    cg.emit_alloca(b_slot, field_def.type_id)
-
-                field_ptr: = cg.payload_field_ptr(tmp_cond_ptr_str, cond_type_id, v_def, field_idx)
-
-                field_val: = cg.next_reg()
-                cg.s("    %\{field_val\} = load ").t(field_def.type_id).s(", ptr ").s(field_ptr)
-                    .s("\n")
-
-                cg.s("    store ").t(field_def.type_id).s(" %\{field_val\}, ptr ").s(b_slot).s("\n")
-
-                field_idx += 1
-
     fn emit_llvm_assign(r: Ast_node$@, cg: Genllvm_ctx$@)
         left: = r.get_assign_left()
         right: = r.get_assign_right()
@@ -432,41 +359,19 @@ impl Ast_node
                     cg.clear_scratch().s("%\{res_reg\}")
                     cg.op_store_place(store_type_id2, cg.scratch.slice(), ptr_reg, left)
 
-priv fn arm_block(r: Ast_node$@, from: Sz): Ast_node$@? //<
-    //< The block of the `switch` arm whose patterns start at `from`
-    for $j: = from; j < r.children.len; j += 1
-        n: = r.get_child(j)
-        if n.kind_id == .k_stmt_block
-            return .some(n)
-        if n.is_keyword("case") || n.is_keyword("default")
-            break
-    return .none
+priv fn case_value(label: Ast_node$@, subject_id: I32, cg: Genllvm_ctx$@): I64 //<
+    //< The value a `case` label stands for: the tag of the variant Lower resolved, else its constant
+    if label.kind_id == .k_case_pattern
+        variant: = cg.env.variant_at(subject_id, label.ival) catch
+            label.ice_panic("genllvm: a switch label names no variant")
+            return 0
+        return variant.tag_value
+    return cg.sema.try_eval_constexpr_wide(label).unwrap_or(0)
 
-priv fn after_arm(r: Ast_node$@, from: Sz, block_node: Ast_node$@): Sz //<
-    //< Where the next arm starts: past `block_node`, or at the next `case` / `default`
-    $i: = from
-    for i < r.children.len
-        n: = r.get_child(i)
-        if n == block_node
-            return i + 1
-        if n.is_keyword("case") || n.is_keyword("default")
-            return i
-        i += 1
-    return i
-
-priv fn case_value(pn: Ast_node$@, e_def: sema_type_def.Enum_def$@, cg: Genllvm_ctx$@): I64 //<
-    //< The value a case pattern stands for: a variant's tag, else its constant
-    if v_ref: = resolve_case_pattern_variant(pn, e_def)
-        return v_ref.def.tag_value
-    $target: = pn
-    if pn.kind_id == .k_case_pattern
-        target = pn.first_expr()
-            .unwrap_or(pn.get_child(0) if pn.children.len > 0 else null)
-    return cg.sema.try_eval_constexpr_wide(target).unwrap_or(0)
-
-priv fn collect_switch_cases(r: Ast_node$@, cg: Genllvm_ctx$@, e_def: sema_type_def.Enum_def$@,
-    cases: List<|Case_info|>$@, merge_lbl: I32): Switch_default //<
-        //< It collects the Case_infos of a switch's cases and returns default's label and block.
+priv fn collect_switch_cases(r: Ast_node$@, cg: Genllvm_ctx$@, cases: List<|Case_info|>$@,
+    merge_lbl: I32): Switch_default //<
+        //< It collects the Case_infos of a switch's arms and returns default's label and block
+        //< Lower grouped the arms and resolved each label (group_switch_arms in lower/root.kspl).
     $default_lbl: = merge_lbl
     $default_block: Ast_node$@ = null
     // A check for a duplicate case value could walk all of cases (those collected so far) each
@@ -474,36 +379,24 @@ priv fn collect_switch_cases(r: Ast_node$@, cg: Genllvm_ctx$@, e_def: sema_type_
     // values in one case clause, say, or N case clauses). The compile could then effectively
     // hang. A Map of the values already seen makes the check O(1).
     seen_vals: = base_core.arena.create(Map<|I64, Bool|>.new(base_core.arena))
+    subject_id: = r.get_switch_cond().type_id
 
-    $i: Sz = 2
-    for i < r.children.len
-        child: = r.get_child(i)
-        if child.is_keyword("default")
+    for $i: Sz = 2; i < r.children.len; i += 1
+        arm: = r.get_child(i)
+        arm.ice_assert(arm.kind_id == .k_switch_arm,
+            "genllvm: a switch reached the backend without its arms grouped")
+        if arm.is_default_arm()
             default_lbl = cg.next_label()
-            for $j: = i + 1; j < r.children.len; j += 1
-                if r.get_child(j).kind_id == .k_stmt_block
-                    default_block = r.get_child(j)
-                    break
+            default_block = arm.get_arm_block()
             break
-        if !child.is_keyword("case")
-            i += 1
-            continue
         block_lbl: = cg.next_label()
-        block_node: = arm_block(r, i + 1).unwrap_or(null)
-        for $j: = i + 1; j < r.children.len; j += 1
-            pn: = r.get_child(j)
-            if pn == block_node || pn.is_keyword("case") || pn.is_keyword("default")
-                break
-            if pn.kind_id != .k_case_pattern &&
-                (pn.kind_id == .k_stmt_block || pn.is_literal(","))
-                continue
-            pat_val: = case_value(pn, e_def, cg)
+        block_node: = arm.get_arm_block()
+        for $k: Sz = 0; k + 1 < arm.children.len; k += 1
+            pat_val: = case_value(arm.get_child(k), subject_id, cg)
             // LLVM switch requires unique case values
             if !seen_vals.get(pat_val).unwrap_or(false)
                 seen_vals.set(pat_val, true)
                 cases
-                    .push(Case_info::{ .val = pat_val, .lbl = block_lbl, .ast_node = pn,
-                    .block_node = block_node })
-        i = after_arm(r, i + 1, block_node)
+                    .push(Case_info::{ .val = pat_val, .lbl = block_lbl, .block_node = block_node })
 
     return Switch_default::{ .lbl = default_lbl, .block = default_block }

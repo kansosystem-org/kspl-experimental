@@ -1,5 +1,4 @@
 //< Rejects, during sema, what would break in the generated C
-//<
 //< It rejects two things, both **valid KSPL yet impossible to emit as C**.
 //< Caution: **Keep this check in sema.** In genc, the same source would be rejected for C yet pass
 //< for LLVM (the accepted names would depend on the backend).
@@ -23,13 +22,11 @@ import "std/str" { Str_builder }
 
 priv const MAX_FFI_NESTING_DEPTH: Sz = 32 //<
     //< The maximum depth to which check_ffi_safety_at walks a struct
-    //<
     //< A second safety limit besides the cycle detection through seen.
 
 impl Sema_ctx
     fn check_ffi_safety(r: Self$@, type_id: I32, err_node: Ast_node$@) //<
         //< Checks whether a type in an `#export` function's signature can cross the C boundary
-        //<
         //< The layouts listed in this file's header cannot; a plain struct, scalars and raw
         //< pointers can.
         //< Caution: Walk **inside** a struct too. Checking only the outermost level lets a wrapper
@@ -63,11 +60,11 @@ impl Sema_ctx
                 "result types (T!E) cannot cross C-FFI boundaries. Their layout is Kanso-specific.")
             return
         switch r.env.get_info(real_id)
-        case .array(_b, _s)
+        case .array
             r.err(err_node,
                 "arrays (T[N]) cannot directly cross C-FFI boundaries. Use raw pointers (T@) \
                     instead.")
-        case .trait_type(_d)
+        case .trait_type
             r.err(err_node,
                 "interface values cannot cross C-FFI boundaries. An interface value is a \
                     Kanso-specific {object, vtable} pair. Pass a raw pointer (T@) to the concrete \
@@ -95,12 +92,10 @@ impl Sema_ctx
         default {}
     fn check_c_keyword_collision(r: Self$@, name: U8[], node: Ast_node$@): Bool //<
         //< Whether a name C or the target's headers reserve clashes with its suffixed form in scope
-        //<
         //< Such a name **can be used**: the generated C attaches a suffix (needs_c_escape in
         //< base/c_name.kspl). So only a clash with the suffixed name is rejected.
         //< Caution: **Keep this check in sema** (the reason is at this file's header).
         $partner: = c_name_partner(name)
-        defer partner.free()
         if partner.slice().len == 0 || !r.symtab.has_in_current_scope(partner.slice())
             return false
         return r.report_c_name_pair(node, name, partner.slice())
@@ -108,11 +103,9 @@ impl Sema_ctx
     fn check_c_keyword_collision_field(r: Self$@, name: U8[], node: Ast_node$@,
         seen: Map<|U8[], Bool|>$@): Bool //<
             //< Whether a C reserved word and its suffixed form are both fields of the same struct.
-            //<
             //< **Fields are not in the symbol table's scopes**, so check_c_keyword_collision does
             //< not reach them; the same pair is looked up in `seen`.
         $partner: = c_name_partner(name)
-        defer partner.free()
         if partner.slice().len == 0 || !seen.get(partner.slice()).unwrap_or(false)
             return false
         return r.report_c_name_pair(node, name, partner.slice())
@@ -125,7 +118,6 @@ impl Sema_ctx
 
     fn report_c_name_clash(r: Self$@, node: Ast_node$@, kw: U8[], safe: U8[]): Bool //<
         //< Reports that a C reserved word and its suffixed form clash
-        //<
         //< Caution: **Keep this diagnostic in this one place**, or one failure reads as two for a
         //< local (declare_symbol) and a field.
         r.clear_scratch()
@@ -135,7 +127,6 @@ impl Sema_ctx
         return true
 
 priv fn c_name_partner(name: U8[]): Str_builder //< the other name of `name`'s C pair, or empty
-    //<
     //< A reserved word's partner is its suffixed form; a suffixed name's is the word it renames.
     //< Caution: **Check both declaration orders**, or a suffixed name written first passes. Only
     //< c_safe_name decides the renamed-to name, so do not rebuild it here. **Do not build it in

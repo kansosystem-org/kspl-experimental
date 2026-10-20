@@ -1,5 +1,4 @@
 //< Tests of `std/argparse` through `parse_list`
-//<
 //< `sys.Args` reads libc's argv and cannot be faked. The list holds no executable name (`parse`
 //< drops it).
 import "std/argparse"
@@ -26,16 +25,20 @@ fn test_argparse(arena: Arena$@)
     check_required_and_help(arena)
     check_usage_layout(arena)
 
-    test_no_short_names(arena)
-    test_repeatable(arena)
-    test_commands(arena)
-    test_trailing(arena)
-    test_operands_marker(arena)
+    check_no_short_names(arena)
+    check_repeatable(arena)
+    check_commands(arena)
+    check_trailing(arena)
+    check_operands_marker(arena)
+    check_default_command(arena)
+    check_only_for(arena)
+    check_forms_layout(arena)
 
     verdict
         .pass("Defaults, the `=` shape and refusing the spaced one, rest, refusing a single dash, \
             each error, what is required, --help, refusing short forms, repetition, commands, the \
-            uninterpreted remainder and `--` are all confirmed.")
+            uninterpreted remainder, `--`, the default command, options limited to commands and \
+            each command's usage line are all confirmed.")
 
 priv fn check_usage_layout(arena: Arena$@) //<
     //< padding includes suffixes, with a space for long names
@@ -226,7 +229,7 @@ priv fn check_errors(arena: Arena$@) //< an error is never ignored: the item at 
     $saw_missing_value: = false
     ep.parse_list(argv_of(U8[][]::{ "--known" }, arena)) catch e
         switch e
-        case .missing_value(_n)
+        case .missing_value
             saw_missing_value = true
         default {}
     assert(saw_missing_value, "argparse: an item that takes a value with no value is refused")
@@ -237,7 +240,7 @@ priv fn check_errors(arena: Arena$@) //< an error is never ignored: the item at 
     $saw_bad: = false
     np.parse_list(argv_of(U8[][]::{ "--n=12abc" }, arena)) catch e
         switch e
-        case .bad_value(_n)
+        case .bad_value
             saw_bad = true
         default {}
     // "12abc" must not be silently taken as 12.
@@ -249,7 +252,7 @@ priv fn check_errors(arena: Arena$@) //< an error is never ignored: the item at 
     $saw_unexpected: = false
     fp.parse_list(argv_of(U8[][]::{ "--f=1" }, arena)) catch e
         switch e
-        case .unexpected_value(_n)
+        case .unexpected_value
             saw_unexpected = true
         default {}
     assert(saw_unexpected, "argparse: a value put on a flag is refused")
@@ -281,7 +284,7 @@ priv fn check_required_and_help(arena: Arena$@) //< what is required, and --help
 // ==========================================
 // There are no short forms: a letter nobody declared is refused, joined to a value or not.
 // ==========================================
-priv fn test_no_short_names(arena: Arena$@)
+priv fn check_no_short_names(arena: Arena$@)
     for arg in U8[][]::{ "-i", "-D", "-Dflag" }
         $in_place: = false
         defs: = List<|U8[]|>.create(arena)
@@ -325,7 +328,7 @@ priv fn test_no_short_names(arena: Arena$@)
 // ==========================================
 // An option that can be given repeatedly. It accumulates rather than overwrites.
 // ==========================================
-priv fn test_repeatable(arena: Arena$@)
+priv fn check_repeatable(arena: Arena$@)
     items: = List<|U8[]|>.create(arena)
     p: = argparse.Parser.create("t", "", arena)
     p.str_list_opt("--lint", items, "")
@@ -363,7 +366,7 @@ priv fn test_repeatable(arena: Arena$@)
 // Commands. A positional's name (`fmt`) and an option's name (`--version`) both go into command
 // once chosen, and a second one is refused.
 // ==========================================
-priv fn test_commands(arena: Arena$@)
+priv fn check_commands(arena: Arena$@)
     p: = argparse.Parser.create("t", "", arena)
     p.positional("<file>...")
     p.subcommand("fmt", "")
@@ -418,7 +421,7 @@ priv fn test_commands(arena: Arena$@)
 // ==========================================
 // A command that takes "one subject + an uninterpreted remainder".
 // ==========================================
-priv fn test_trailing(arena: Arena$@)
+priv fn check_trailing(arena: Arena$@)
     $stats: = false
     rest_args: = List<|U8[]|>.create(arena)
     p: = argparse.Parser.create("t", "", arena)
@@ -442,7 +445,7 @@ priv fn test_trailing(arena: Arena$@)
 // ==========================================
 // `--`: what follows is positional, a name starting with `-`, `--help` and a command's name alike.
 // ==========================================
-priv fn test_operands_marker(arena: Arena$@)
+priv fn check_operands_marker(arena: Arena$@)
     $verbose: = false
     p: = argparse.Parser.create("t", "", arena)
     p.positional("<file>...")
@@ -465,6 +468,167 @@ priv fn test_operands_marker(arena: Arena$@)
         default {}
     assert(refused, "argparse: `--` does not make a positional welcome where none is declared")
 
+// ==========================================
+// The default command, options limited to commands, and each command's usage line.
+// ==========================================
+priv fn check_default_command(arena: Arena$@)
+    p: = argparse.Parser.create("t", "", arena)
+    p.positional("<file>...")
+    p.default_command("compile")
+    p.subcommand("fmt", "")
+    p.parse_list(argv_of(U8[][]::{ "a.kspl" }, arena))
+        catch panic("argparse: it failed with no command named")
+    assert(p.command.unwrap_or("").equals("compile"),
+        "argparse: with no command named, the default is chosen")
+    // Its name is never typed, so a word spelling it is a positional, as any input.
+    tp: = argparse.Parser.create("t", "", arena)
+    tp.positional("<file>...")
+    tp.default_command("compile")
+    tp.parse_list(argv_of(U8[][]::{ "compile" }, arena))
+        catch panic("argparse: the default's name as a word failed")
+    assert(tp.rest.len == 1 && tp.rest.get(0).equals("compile"),
+        "argparse: the default command's name is no command when typed")
+    // A named command is not combined with the default: it replaces it.
+    np: = argparse.Parser.create("t", "", arena)
+    np.positional("<file>...")
+    np.default_command("compile")
+    np.subcommand("fmt", "")
+    np.parse_list(argv_of(U8[][]::{ "fmt", "a.kspl" }, arena))
+        catch panic("argparse: a named command beside a default failed")
+    assert(np.command.unwrap_or("").equals("fmt"), "argparse: a named command replaces the default")
+
+priv fn refused_for(p: argparse.Parser$@, items: U8[][], arena: Arena$@): U8[] //<
+    //< The reason a `not_for_command` refusal names, as `fmt` writes it; empty where none came
+    $why: U8[] = ""
+    p.parse_list(argv_of(items, arena)) catch e
+        switch e
+        case .not_for_command
+            why = arena.text().s("\{e\}").take()
+        default {}
+    return why
+
+priv fn scoped_parser(arena: Arena$@): argparse.Parser$@ //<
+    //< A parser like ksplc's: a default command, three named ones, and options limited to some
+    // The destinations live in the arena: the parser outlives this call.
+    to: U8[] = ""
+    style: U8[] = ""
+    dir: U8[] = ""
+    quiet: = false
+    runtime: = false
+    p: = argparse.Parser.create("t", "", arena)
+    p.positional("<file>...")
+    p.default_command("compile")
+    p.subcommand("fmt", "")
+    p.subcommand("run", "")
+    p.subcommand("emit-runtime", "")
+    p.str_opt("--to", arena.create(to), "")
+    p.only_for("--to", "compile")
+    p.str_opt("--style", arena.create(style), "")
+    p.only_for("--style", "fmt")
+    p.str_opt("--std-dir", arena.create(dir), "")
+    p.only_for("--std-dir", "compile fmt")
+    p.flag("--freestanding", arena.create(runtime), "")
+    p.only_for("--freestanding", "emit-runtime")
+    p.flag("--quiet", arena.create(quiet), "")
+    return p
+
+priv fn check_only_for(arena: Arena$@)
+    // Taken where it takes effect, the default command included.
+    for ok in U8[][]::{ "--to=llvm", "--std-dir=d", "--quiet" }
+        p: = scoped_parser(arena)
+        p.parse_list(argv_of(U8[][]::{ ok, "a.kspl" }, arena))
+            catch panic("argparse: an option was refused where it takes effect")
+    fp: = scoped_parser(arena)
+    fp
+        .parse_list(argv_of(U8[][]::{ "fmt", "--style=x", "--std-dir=d", "--quiet", "a" }, arena))
+        catch panic("argparse: an option was refused on a command it takes effect on")
+    // Refused elsewhere, naming the option, the command and where it does take effect.
+    named: = refused_for(scoped_parser(arena), U8[][]::{ "fmt", "--to=c" }, arena)
+        .equals("option '--to' does not take effect on the subcommand 'fmt'. It takes effect on: \
+            compile")
+    assert(named, "argparse: an option given with a command it does not take effect on is refused")
+    // Before the command's name too: the scope is checked once the whole line is read.
+    assert(refused_for(scoped_parser(arena), U8[][]::{ "--to=c", "fmt" }, arena).len > 0,
+        "argparse: an option standing before the command's name is refused as well")
+    assert(refused_for(scoped_parser(arena), U8[][]::{ "--style=x", "a.kspl" }, arena).len > 0,
+        "argparse: the default command refuses an option limited to another")
+    // A whole word only: `run` is not a part of `emit-runtime`.
+    assert(refused_for(scoped_parser(arena), U8[][]::{ "run", "--freestanding" }, arena).len > 0,
+        "argparse: a command whose name is a part of another's does not take its options")
+    // With no command chosen at all, a limited option takes effect nowhere.
+    $flag: = false
+    np: = argparse.Parser.create("t", "", arena)
+    np.subcommand("fmt", "")
+    np.flag("--in-place", flag@, "")
+    np.only_for("--in-place", "fmt")
+    assert(refused_for(np, U8[][]::{ "--in-place" }, arena)
+        .equals("option '--in-place' takes effect only with a subcommand: fmt"),
+        "argparse: a limited option is refused where no command is chosen")
+    // A required option is required only where it takes effect.
+    required_parser(arena).parse_list(argv_of(U8[][]::{ "a.kspl" }, arena))
+        catch panic("argparse: an option required elsewhere was asked for")
+    $missing: = false
+    required_parser(arena).parse_list(argv_of(U8[][]::{ "fmt" }, arena)) catch e
+        switch e
+        case .missing_required(n)
+            missing = n.equals("--name")
+        default {}
+    assert(missing, "argparse: a required option is asked for where it takes effect")
+
+priv fn required_parser(arena: Arena$@): argparse.Parser$@ //< one option, required on fmt alone
+    name: U8[] = ""
+    p: = argparse.Parser.create("t", "", arena)
+    p.positional("<file>...")
+    p.default_command("compile")
+    p.subcommand("fmt", "")
+    p.str_required("--name", arena.create(name), "")
+    p.only_for("--name", "fmt")
+    return p
+
+priv fn check_forms_layout(arena: Arena$@) //<
+    //< One usage line per command, then the options each command takes, then the lists
+    $style: U8[] = ""
+    $quiet: = false
+    rest: = List<|U8[]|>.create(arena)
+    p: = argparse.Parser.create("t", "about", arena)
+    p.positional("<file>...")
+    p.default_command("compile")
+    p.subcommand("fmt", "format")
+    p.subcommand_trailing("run", "run a script", rest)
+    p.subcommand_hidden("worker")
+    p.subcommand("clean", "empty the cache")
+    p.command_form("compile", "[options...] <in> <out>")
+    p.command_form("fmt", "[options...] <in>...")
+    p.command_form("run", "[options...] <script> [args...]")
+    p.str_opt("--style", style@, "the settings")
+    p.only_for("--style", "fmt")
+    p.flag("--quiet", quiet@, "say less")
+    $out: = str.Str_builder.new()
+    p.print_usage(out@)
+    expected: U8[] =
+        "usage: t [options...] <in> <out>          compile (the default subcommand)\n\u0020      t \
+            fmt [options...] <in>...\n\u0020      t run [options...] <script> \
+            [args...]\n\u0020      t clean\n\nabout\n\nThe options that take effect per subcommand \
+            (an option not here is an error on that \
+            subcommand):\n\u0020\u0020compile:\n\u0020\u0020fmt: \
+            --style\n\u0020\u0020run:\n\u0020\u0020clean:\n\u0020\u0020on every subcommand: --help \
+            --quiet\n\nCommands:\n\u0020\u0020fmt                      format\n\u0020\u0020run \
+            <target> [args...]   run a script\n\u0020\u0020clean                    empty the \
+            cache\n\nOptions:\n\u0020\u0020--style=<str>            the \
+            settings\n\u0020\u0020--quiet                  say \
+            less\n\u0020\u0020--help                   show this usage\n"
+    assert(out.slice().equals(expected),
+        "argparse: with forms, the usage lists a line per command and the options each takes")
+    // One command's line alone, for refusing its arguments; the default's has no name.
+    $line: = str.Str_builder.new()
+    p.print_command_usage("fmt", line@)
+    p.print_command_usage("compile", line@)
+    p.print_command_usage("clean", line@)
+    lines: = line.slice()
+        .equals("usage: t fmt [options...] <in>...\nusage: t [options...] <in> <out>\nusage: t \
+            clean\n")
+    assert(lines, "argparse: print_command_usage writes that command's line")
+
 priv const USAGE_SRC: U8[] = //< a child that declares a little and prints its usage
     """import "std/argparse"
 import "std/io"
@@ -484,7 +648,6 @@ fn main()
 """
 
 fn test_argparse_prints_usage(ksplc: U8[], arena: Arena$@) //< ksplc runs the child
-    //<
     //< **What a person reads first**: the program's name, what it takes, and one line per option
     //< with the value it wants.
     verdict.start("[argparse] the usage printed from the declarations test...")
@@ -516,7 +679,6 @@ fn main()
 """
 
 fn test_argparse_refusal_goes_to_stderr(ksplc: U8[], arena: Arena$@) //< ksplc runs the child
-    //<
     //< Caution: **A refusal and its usage go to standard error, `--help` to standard output.** A
     //< caller that reads the output (`$(prog)`, a pipe) would otherwise take the usage for it.
     verdict.start("[argparse] where a refusal and --help are written test...")
@@ -553,11 +715,30 @@ fn main()
 
 fn test_argparse_saw_refuses_an_undeclared_name(ksplc: U8[], arena: Arena$@) //<
     //< ksplc runs the child
-    //<
     //< Answered false, a misspelt name reads as an item never given, and the check it guards
     //< passes for good.
     verdict.start("[argparse] asking whether an item declared nowhere was given test...")
     why: = "Parser.saw: '--outt' is declared nowhere"
     assert(sys_test.child_stops_with(ksplc, "saw_probe", SAW_MISSPELT_SRC, why, arena),
         "saw with a name declared nowhere must stop the program, naming it")
-    verdict.pass("saw stops on a name declared nowhere, and names it.")
+    // The same for a command `only_for` names: limited to it, the option would take effect nowhere.
+    scope_why: = "Parser.only_for: 'fmtt' is no declared command"
+    stopped: = sys_test.child_stops_with(ksplc, "only_for_probe", ONLY_FOR_MISSPELT_SRC, scope_why,
+        arena)
+    assert(stopped, "only_for with a command declared nowhere must stop the program, naming it")
+    verdict.pass("saw and only_for stop on a name declared nowhere, and name it.")
+
+priv const ONLY_FOR_MISSPELT_SRC: U8[] = //<
+    //< a child that limits an option to a command declared nowhere
+    """import "std/argparse"
+import "std/mem" { Arena }
+
+fn main()
+  a: = Arena.new(1 << 16)
+  $in_place: = false
+  p: = argparse.Parser.create("only_for_probe", "", a)
+  p.subcommand("fmt", "")
+  p.flag("--in-place", in_place@, "write back")
+  p.only_for("--in-place", "fmtt")
+  a.free()
+"""

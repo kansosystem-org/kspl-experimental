@@ -1,4 +1,4 @@
-import { check, near, material, para, grid } from "./shell.mjs";
+import { check, near, material, para, grid, shared } from "./shell.mjs";
 
 export const subject = "Taking a document in and out, and writing it out as Markdown.";
 
@@ -13,11 +13,11 @@ export const subject = "Taking a document in and out, and writing it out as Mark
 // they are until that side moves.
 export const opens = material({
   styles: [
-    { name: "heading", size_px: 28.0, weight: 700, space_after: 8.0 },
-    { name: "body", space_after: 12.0 },
-    { name: "strong", weight: 700 },
-    { name: "table", space_before: 12.0, space_after: 12.0, arrange: "grid" },
-    { name: "cell", pad: 4.0, rule_width: 1.0, rule_color: "#cccccc" },
+    shared.heading,
+    shared.body,
+    shared.strong,
+    shared.table,
+    shared.cell,
     { name: "amount", places: 0, grouped: true, prefix: "$", pad: 4.0 },
   ],
   blocks: [

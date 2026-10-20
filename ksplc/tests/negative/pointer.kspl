@@ -1,9 +1,7 @@
 //< Pointers and permissions: `@`, read-only places and writes
-//<
 //< Each case below is compiled alone, as the file its head names.
 // ==== case addr_of_const_element
 //< `@` on a read-only element must not pass it where a mutable pointer is expected
-//<
 //< **The notation is right and only the permission drops.** Handed straight to a `U8$@`, the
 //< expected type descends into `RO[0]`. The `const_of(U8)` -> `U8` conversion fits a copy. It
 //< must not retype the place. `x` alone settles the type of `x@`, or a ROM write is lost.
@@ -25,7 +23,6 @@ fn main(): I32
   return 0
 // ==== case addr_of_immutable_binding
 //< Taking an immutable binding's address must not let an out parameter rewrite it
-//<
 //< Whether `x@` becomes a **mutable** pointer is settled by the binding, or the callee rewrites an
 //< immutable `x`. **A slice and a pointer are no exception**, though their type settles whether an
 //< element is writable through them. `p@` points at the variable `p` **itself**, not at its target.
@@ -52,7 +49,6 @@ fn main(): I32
   return I32::n
 // ==== case addr_of_packed_field
 //< A field `#packed` leaves under-aligned must not have its address taken, in any of the ways
-//<
 //< A pointer carries no alignment of its own. So an access through it assumes its type's. A word
 //< access at an odd address faults on a Cortex-M0. `@`, a receiver taken by pointer (a
 //< method, an operator, a slice field's subscript) and a slice cast all take one. A one-byte field,
@@ -109,7 +105,6 @@ fn main(): I32
   return take(k.n@)
 // ==== case arc_assign_through_call
 //< An assignment into an ARC-managed place must release the value it overwrites
-//<
 //< With a call in the left-hand side's subexpression, the release's receiver cannot be made (the
 //< expression being a clone, the call would run twice). Omitting the release in silence leaks the
 //< original value, so the spelling is refused instead.
@@ -126,7 +121,6 @@ fn main(): I32
   return 0
 // ==== case arc_protocol_not_callable
 //< ARC's retain/release are an internal protocol only the compiler calls; a user cannot
-//<
 //< Called by hand they double up with the inserted ones, and the automatic release writes into
 //< memory an explicit one freed (use-after-free). The conforming impl's methods are priv, so a
 //< direct call is refused (`case_trait_method_priv_upcast` in the case `trait_shape` in
@@ -139,7 +133,6 @@ fn main()
   a.retain()
 // ==== case frame_pointer_stored_outside
 //< A slice or an interface value pointing into the frame is refused where a store outlives it
-//<
 //< A global, a parameter's pointee, `p$` and a slice's element all outlive the frame, as `return`
 //< does. `kept_inside` stores into the frame or stores a global's view, and passes.
 // EXPECT: cannot store a slice built from local storage. The compiler makes the descriptor's pointer, so no '@' appears in the source. It would be stored into the global 'g', which
@@ -218,7 +211,6 @@ fn main()
   io.out().s("\{kept_inside()\}\n")
 // ==== case frame_address_leaves
 //< The address of the frame's own storage is refused where it leaves by `return` or `throw`
-//<
 //< Each of these reads a dead frame: a local's or a by-value parameter's `@`, of a field or an
 //< element too. It can be stepped or cast, anywhere inside, or reached through a local set from one. **A store passes**
 //< (`stored_then_cleared`). A local's address kept in a global is taken back before the return.
@@ -314,7 +306,6 @@ fn main(): I32
   return stored_then_cleared() + ok_call()$ + ok_global()$
 // ==== case mut_method_on_immut_array_elem
 //< A `Self$@` method is rejected on an element of an immutable fixed-length array
-//<
 //< Caution: **Test the element-receiver road (`a[i].m()`) separately.** Even with a scalar (`x.m()`)
 //< and a field (`s.f.m()`) rejected, the decision can still slip at the `[` step. A reading of
 //< `strip_ptr(x) != x` as "x is a pointer" skips the whole check for a `U8 immut` element.
@@ -336,7 +327,6 @@ fn main(): I32
   return I32::arr[0]
 // ==== case mut_method_on_struct_rvalue
 //< A `Self$@` method cannot be called directly on a call's result
-//<
 //< It rewrites its own memory, and a receiver's address is taken implicitly. Out of scope: `Self@`
 //< methods, which write no memory of their own (also with `Self` a `U8$[]`, as `make test-place`
 //< holds). A chain returning a pointer (`b.s("x").c('!')`) is out of scope too: it is handed over.
@@ -356,7 +346,6 @@ fn main(): I32
   return 0
 // ==== case mutable_slice_from_readonly
 //< A mutable slice must not be made from read-only memory
-//<
 //< The descriptor holds a mutable pointer, so a write makes the C rewrite `.rodata`. KSPL is
 //< silent. The program fails at run time on a host and writes to ROM on freestanding. Only read-only
 //< memory is in scope: a cast to an immutable slice, or from a `$` binding's own memory, must pass.
@@ -377,7 +366,6 @@ pub fn main(): I32
   return 0
 // ==== case pointer_forms
 //< One subject, with one function for each of its shapes
-//<
 //< The marks are every function's marks gathered at the head. The same mark written N times
 //< must match N places.
 // EXPECT: operator '+' cannot be applied to 'Sz' and 'I32@'
@@ -453,7 +441,6 @@ fn main()
   case_pointer_to_fixed_array()
 // ==== case readonly_write
 //< One subject, with one function for each of its shapes
-//<
 //< The marks are every function's marks gathered at the head. The same mark written N times
 //< must match N places.
 // EXPECT: cannot write through a read-only pointer
@@ -514,7 +501,6 @@ fn main()
   case_const_slice_write()
 // ==== case write_elem_through_const_ptr
 //< Elements must not be rewritable through a pointer to a read-only slice
-//<
 //< `p[0] = v` on a `p: U8[]@` auto-dereferences (`docs/SPEC-programming-language.md` §6.2.1), so the elements'
 //< check must peel the pointer step off. A `U8$[]@` (an immutable pointer to a **mutable** slice)
 //< has writable elements: the descriptor's (ptr+len) mutability is a different step.
@@ -529,7 +515,6 @@ fn main(): I32
   return I32::buf[0]
 // ==== case write_elem_through_const_recv
 //< A method with a read-only receiver cannot write an element of an array field
-//<
 //< `U8[4]`'s step holds the elements' mutability, but **the road reaching it** crosses `r: Self@`,
 //< so the index goes through enforce_mutability. Without it the C backend rejects it only by the
 //< generated C's const (the diagnostic points at the artifact) and the LLVM backend writes 99.
@@ -548,7 +533,6 @@ fn main(): I32
   return I32::h.ro_write()
 // ==== case write_through_ptr_arith
 //< A write through pointer arithmetic on a read-only pointer is rejected
-//<
 //< `p + 1` keeps `p`'s pointer type, but a road check (write_target_type) walking only `.` / `$` /
 //< `[` returns unknown on a binary operation and gives up (fail-open). The gap hides because
 //< **handing it as an argument** (`wants_mut(p + 1)`) is refused while a direct write slips by.

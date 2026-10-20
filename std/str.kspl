@@ -1,5 +1,4 @@
 //< Strings that are built and grown: `Str_builder`, and the string functions that allocate
-//<
 //< Reading and slicing a `U8[]` without allocating is in `std/chars`. A `Str_builder` receives
 //< automatic cleanup. Where growth is not acceptable use `std/buf`'s `Buf_writer`; for text that
 //< lives as long as an arena, use `Arena_text`.
@@ -18,9 +17,8 @@ pub enum Str_error //< why a string could not be parsed
 
 pub fn from_cstr(c_str: U8$@): U8$[] //<
     //< a C string as a slice of its bytes before the NUL, which it views and does not copy
-    //<
     //< A null pointer gives an empty slice, so what a C function returns can be passed as it is.
-    return U8$[]::{ .ptr = null, .len = 0 } if c_str == null else c_str.to_slice()
+    return c_str.to_slice()
 
 pub struct Str_builder //< a growing buffer whose owner releases it automatically
     pub ptr: U8$@ //< the memory holding the written bytes
@@ -32,7 +30,6 @@ impl Str_builder: Writer //< so it can be used anywhere a `Writer` is expected
         return Str_builder::{ .ptr = null, .len = 0, .cap = 0 }
 
     pub fn escape_and_append( //< writes a JSON string's contents; the caller writes the quotes
-        //<
         //< Caution: **Escape everything below 0x20.** JSON allows no raw control character (RFC
         //< 8259); escaping only `\n`, `\r` and `\t` makes **JSON that no other parser accepts** for
         //< a string with `0x01`. U8[]'s unescape_to_arena decodes it; changing only one breaks the
@@ -90,7 +87,6 @@ impl Str_builder: Writer //< so it can be used anywhere a `Writer` is expected
         return r
 
     pub fn drop_prefix( //< drops the leading bytes and moves the rest to the start
-        //<
         //< For removing a message already read from a receive buffer, which can hold the start of
         //< the next one. It frees no memory: a long-lived buffer stays at the size of the longest
         //< message.
@@ -109,7 +105,6 @@ impl Str_builder: Writer //< so it can be used anywhere a `Writer` is expected
 
     #inline
     pub fn s(r: Self$@, s: U8[]): Self$@ //< writes a string, growing if needed
-        //<
         //< `s` can be a view of this builder's own bytes (`b.s(b.slice())`).
         if s.len > 0
             // Caution: **Read `s` before the old buffer is freed, and with `move`.** It can be a
@@ -142,7 +137,6 @@ impl Str_builder: Writer //< so it can be used anywhere a `Writer` is expected
 
     priv fn grow(r: Self$@, new_cap: Sz): U8$@? //<
         //< Makes room for new_cap bytes, and returns the old buffer for the caller to free
-        //<
         //< None when nothing was replaced. The caller frees it only after reading what it needs
         //< from it.
         if r.cap >= new_cap
@@ -186,7 +180,6 @@ impl Str_builder: Formattable //< so it can be used inside an interpolation
         return w.s(r.slice())
 
 impl U8[]: ds.Hashable<|U8[]|> //< so a string can be a `Map`'s key
-    //<
     //< `Eq` (what `==` desugars to) is deliberately not implemented. `equals` is an O(N) comparison
     //< of contents. Written as `==`, it would look the same as a pointer comparison.
     pub fn hash(r: U8[]): U32 //< a hash of the contents that spreads keys over the buckets
@@ -207,7 +200,6 @@ impl U8[]: ds.Hashable<|U8[]|> //< so a string can be a `Map`'s key
 
 priv fn write_utf8(dst: U8$@, cp: I32): Sz //<
     //< Writes a code point in UTF-8 and returns the bytes written
-    //<
     //< Caution: There must be room for 4 bytes.
     //< **std/chars holds the character tables**; a copy here could drift from `next_codepoint`.
     n: = chars.codepoint_len(cp)
@@ -218,7 +210,6 @@ priv fn write_utf8(dst: U8$@, cp: I32): Sz //<
 impl U8[]
     pub fn to_cstr(r: U8[]): U8$@? //<
         //< a new NUL-terminated copy, or none if r holds a NUL
-        //<
         //< Caution: The caller must `dealloc()` it. A KSPL string has a length, so it can hold a
         //< NUL, but C treats the first NUL as the end.
         if r.contains_nul()
@@ -229,7 +220,6 @@ impl U8[]
         return .some(buf)
 
     pub fn split( //< the pieces between the separators, as views into the original
-        //<
         //< Not a lazy iterator: the only form of iteration is `for x in <something with .len and an
         //< index>` ("Loops" in docs/SPEC-programming-language.md).
         //< Caution: When arena is null it allocates on the global heap, so the caller frees it with
@@ -248,7 +238,6 @@ impl U8[]
         return out
 
     pub fn replace( //< a new string with every occurrence replaced
-        //<
         //< Unlike `trim_*`, it returns a copy: the result does not exist anywhere in the original.
         r: U8[],
         old: U8[], //< the text to find; empty does nothing
@@ -302,7 +291,6 @@ impl U8[]
         return b.take()
 
     pub fn unescape_to_arena( //< turns the text of a string literal back into the bytes it means
-        //<
         //< **An unknown alphanumeric escape fails** (`\x` and `\q` are `invalid_format`). Only
         //< `\n`, `\r`, `\t`, `\b`, `\f` and `\uXXXX` are decoded, and an escaped symbol is the
         //< symbol itself; the caller lists which symbols are allowed (std/json's is_json_escape).
@@ -457,7 +445,6 @@ impl Arena_text: Writer //< so it can be used anywhere a `Writer` is expected
 
 impl Arena_text
     pub fn take(r: Self$@): U8[] //< copies the text into the arena and frees the builder
-        //<
         //< On the heap, the text is the caller's to free with `dealloc(Void$@::t.ptr)`.
         out: = U8[]::r.arena.dup_str(r.b.slice())
         r.b.free()
@@ -468,7 +455,6 @@ impl Arena_text
 
 impl Arena
     pub fn text(r: Self$@): Arena_text$@ //< a builder for one string in this arena
-        //<
         //< The builder is in the arena too, so `.s(…)` can chain (a method's receiver must be a
         //< place). With a null arena both are on the heap, and `take` frees the builder.
         return r.create(Arena_text::{ .b = Str_builder.new(), .arena = r })

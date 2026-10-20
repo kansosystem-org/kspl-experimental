@@ -1,9 +1,9 @@
 //< Checks that what a recipient is owed is written down: every notice, and each binary's origin
-//<
 //< Note: The rules are the header of `THIRD-PARTY-NOTICES.md`, the notices' canonical source; this
 //< file **only turns them into a check**, run by `make test-conventions`.
 import "std/chars" // `to_lower`
 import "std/ds" { List }
+import "std/math"
 import "std/mem" { Arena }
 import "std/str" + { Str_builder }
 import "std/strfmt" as _strfmt
@@ -15,7 +15,6 @@ priv const NOTICES: U8[] = "THIRD-PARTY-NOTICES.md"
 
 priv const NO_NOTICE_HEADS: U8[][_] = ::{ "## Public-domain origins", "## Binary files" } //<
     //< The sections whose files owe no notice: a public-domain origin, and a binary's origin
-    //<
     //< A borrowed binary also states its origin under its license's own section.
 
 priv const BINARY_HEAD: U8[] = "## Binary files" //< the section every binary file is listed in
@@ -24,7 +23,6 @@ priv const LICENSE_WORDS: U8[][_] = ::{ "spdx-license-identifier:", "copyright (
     "licensed under", "all rights reserved", "permission is hereby granted",
     "redistribution and use" } //<
         //< A license's own words, folded to lower case: what code copied with its header carries
-        //<
         //< Caution: **List only words a license itself uses**, not ones a sentence about licenses
         //< uses ("the licence travels with the files"), or every document about licenses fires.
 
@@ -34,7 +32,6 @@ priv const OWN_WORDS: U8[][_] = ::{ "LICENSE.md", "THIRD-PARTY-NOTICES.md",
 priv const RELEASED: U8[][_] = ::{ "ksplc/", "std/", "tools/release-assets/", "tools/kspl_lldb.py",
     ".vscode/" } //<
         //< What the release carries
-        //<
         //< That is the compiler built from `ksplc/`, and what "Collect the bundled files" and the
         //< extensions step pack in `.github/workflows/release.yml`.
         //< Caution: **Add a path here together with the step that bundles it** (they are two halves
@@ -47,7 +44,6 @@ priv struct Listed //< one file `THIRD-PARTY-NOTICES.md` names in a table's firs
 
 priv fn listed_in(text: U8[], arena: Arena$@): List<|Listed|>$@ //<
     //< The files a notices text names, each with its section's status
-    //<
     //< **Only a row starting with a backticked name counts**: "What is not bundled" names a project
     //< by its plain name, and owes nothing checked here.
     out: = List<|Listed|>.create(arena)
@@ -79,9 +75,8 @@ fn carries_license_words(text: U8[], arena: Arena$@): Bool //< whether it holds 
     return false
 
 fn is_binary(body: U8[], _arena: Arena$@): Bool //< whether it holds a NUL in its first 8000 bytes
-    //<
     //< **git's own test**, so the check calls binary what `git diff` does.
-    for i in Range.asc(body.len if body.len < 8000 else 8000)
+    for i in Range.asc(math.min(body.len, 8000))
         if body[i] == 0
             return true
     return false
@@ -208,7 +203,6 @@ priv fn check_notices(arena: Arena$@)
         "add a row with its origin and license to THIRD-PARTY-NOTICES.md (its header says where)")
 
 fn run_notices(arena: Arena$@) //< this section's entry point
-    //<
     //< Caution: **Call it from `suite/conventions_test.kspl`'s `main`** (there is one suite).
     check_notice_fires(arena)
     check_notices(arena)
@@ -224,7 +218,6 @@ priv const COPY_REL: U8[] = "tools/release-assets/README.md" //< the README the 
 
 priv const SOURCE_RELS: U8[][_] = ::{ "docs/HOWTO-set-up-a-project.md", "README.md" } //<
     //< The documents it copies: the set-up how-to first, then the root README's quick start
-    //<
     //< The program `hello.kspl` stands only in the root README, so the how-to alone cannot hold
     //< it.
 
@@ -232,7 +225,6 @@ priv const FENCE: U8[] = "```" //< what opens and closes a fenced block
 
 priv fn fenced_blocks(text: U8[], arena: Arena$@): List<|U8[]|> //<
     //< Every fenced block of a Markdown text: its opening line's language, a newline, and its body
-    //<
     //< **The opening fence's indentation is taken off every body line**, so a block inside a list
     //< item reads the same as one at the margin. The language is part of the block: the same lines
     //< under another language are another block.

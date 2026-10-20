@@ -1,5 +1,4 @@
 //< Checks whether an `impl T: Trait` meets the trait's requirements
-//<
 //< Name resolution is elsewhere (`sema/decl/resolve.kspl`); this only matches one declaration
 //< against another, method by method, by argument count and types and the return type.
 //< Caution: **A mismatch must say where**: which argument, or the return value
@@ -26,7 +25,6 @@ enum Op_trait_status
     error
 
 enum Op_method //< an operator trait's resolution result
-    //<
     //< Caution: The caller must handle all three: without `builtin` the built-in operations vanish;
     //< without `failed`, follow-on errors appear. Only `resolve_operator_call` below creates it.
     user(sym: Sema_symbol$@) //< the user's implementation was found
@@ -49,7 +47,6 @@ impl Sema_ctx
         trait_def: sema_type_def.Trait_def$@, trait_vis: sema_type_scope.Visibility):
         Sema_symbol$@!Sema_error //<
             //< Builds the symbol for a trait method's prototype and registers it in trait_def
-            //<
             //< It also resolves the prototype's types. registry and mono read the result.
         m_kind: = sema_type_scope.Sym_kind.function(false)
         m_sym: = Sema_symbol.new(m_kind, m_name, m_node)
@@ -85,7 +82,6 @@ impl Sema_ctx
                 // in docs/DESIGN-programming-language.md.
                 if param_ordinal == 0 && p_type != null && p_type.mentions_self_type()
                     $extracted: = p_type.extract_type_name()
-                    defer extracted.free()
                     if !extracted.slice().equals("Self")
                         r.err(p_type,
                             "interface method receivers must be written as plain 'Self'. The '@' / \
@@ -114,7 +110,6 @@ impl Sema_ctx
     priv fn report_sig_mismatch(r: Self$@, m_name: U8[], kind: U8[], trait_tid: I32, impl_tid: I32,
         err_node: Ast_node$@) //<
             //< Reports a type mismatch between a trait's and an impl's method
-            //<
             //< kind is "argument N" or "return".
         trait_type_str: = r.env.display(r.env.get_real_type(trait_tid))
         impl_type_str: = r.env.display(r.env.get_real_type(impl_tid))
@@ -126,7 +121,6 @@ impl Sema_ctx
     priv fn check_trait_method_sig(r: Self$@, req_m: Sema_symbol$@, impl_m: Sema_symbol$@,
         real_trait: I32, real_target: I32, err_node: Ast_node$@): Bool //<
             //< Compares a trait method's signature with an impl method's
-            //<
             //< Arguments are compared strictly by position, skipping the receiver (value/pointer
             //< can differ). Generics bound to Self map to the target, and other types must match at
             //< the base.
@@ -184,7 +178,6 @@ impl Sema_ctx
         if req_ret_node != null && req_ret_node.mentions_self_type() &&
             !req_ret_node.names_self_type()
             $spelled: = req_ret_node.extract_type_name()
-            defer spelled.free()
             r.clear_scratch()
                 .s("method '\{req_m.name\}' of interface '\{r.env.display(real_trait)\}' has 'Self' \
                     inside its return type ('\{spelled.slice()\}'), not as the whole of it. That \
@@ -230,7 +223,6 @@ impl Sema_ctx
             $sb: = Str_builder.new()
             sb.s("'\{r.env.display(trait_id)\}' is not an interface")
             r.err(err_node, sb.slice())
-            sb.free()
             return false
 
         r.warn_shadowed_known_trait(r.env.get_str(real_trait), err_node)
@@ -260,6 +252,7 @@ impl Sema_ctx
                 r.err(err_node, err_sb.slice())
                 success = false
             else
+                impl_m.flags.is_required = true
                 if r.env.get_str(real_trait).equals("std.lang.Drop") ||
                     r.env.get_str(real_trait).equals("std.lang.Ref_counted")
                     impl_m.flags.is_used = true
@@ -311,7 +304,6 @@ impl Sema_ctx
 
     priv fn warn_shadowed_known_trait(r: Self$@, trait_fqn: U8[], err_node: Ast_node$@) //<
         //< [W0501] Warns where the trait conformed to only shares a known trait's name
-        //<
         //< **ARC, the move check and release tracking silently stop working.** Known traits are
         //< matched by FQN, so the fix is a `lang.` prefix. See "Automatic reference counting via
         //< `Ref_counted` conformance" in docs/SPEC-programming-language.md.
@@ -330,7 +322,6 @@ impl Sema_ctx
     fn check_trait_implementation(r: Self$@, target_id: I32, trait_id: I32, err_node: Ast_node$@):
         Bool //<
             //< Whether target_id implements trait_id, reporting at err_node where it does not
-            //<
             //< A trait itself satisfies that trait's constraint (`io.out()`'s Writer into
             //< `f<|W: Writer|>(w: W)`).
             //< Caution: Do not move this into `implements_trait`: ARC and the move check use it,
@@ -357,7 +348,6 @@ impl Sema_ctx
     fn resolve_operator_call(r: Self$@, type_id: I32, trait_name: U8[], method_name: U8[],
         err_prefix: U8[], op: U8[], err_node: Ast_node$@): Op_method //<
             //< Resolves an operator trait: **"is it implemented" and "which method" in one answer**
-            //<
             //< Caution: Split, each caller must handle "`user_defined` but not found", and easily
             //< reverts silently to the built-in meaning (Principle 5). The contradiction is
             //< reported here.
@@ -385,7 +375,6 @@ impl Sema_ctx
 
     fn index_param_id_for(r: Self$@, recv_type_id: I32, method_name: U8[]): I32 //<
         //< Looks up the index operator's method from the receiver's type and returns its index type
-        //<
         //< `Sz` if it cannot be found.
         switch r.resolve_operator_method(recv_type_id, method_name)
         case .some(sym)
@@ -395,7 +384,6 @@ impl Sema_ctx
 
     fn operator_index_param_id(r: Self$@, method_sym: Sema_symbol$@): I32 //<
         //< The index type of an index operator (`Index_place.at` / `Index.get` / `Index_mut.set`)
-        //<
         //< Caution: **Do not hard-code the index type as `Sz`**, or `Map<|U8[], I32|>`'s `m["k"]`
         //< fails with "expected 'Sz', but got 'U8[]'". The declaration is authoritative; `Sz` is a
         //< fallback.
@@ -414,7 +402,6 @@ impl Sema_ctx
 
     priv fn index_param_type_of(r: Self$@, param_node: Ast_node$@, fallback_id: I32): I32 //<
         //< Gets the type from a formal-parameter node
-        //<
         //< Caution: **Do not rely on the `type_id` copy.** An instance's parameter can have it
         //< empty, making a `Map<|U8[], I32|>`'s key `Sz`; it is resolved again in the declaring
         //< file.

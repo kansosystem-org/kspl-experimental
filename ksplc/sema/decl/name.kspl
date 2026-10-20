@@ -1,5 +1,4 @@
 //< What a name as written names: the one reader of a written type's, value's or function's name
-//<
 //< **Every route to a type the source names reads the name here** (read_written_type). **Every
 //< route to a value or a function** does too (read_written_name): a call's callee, a value's path,
 //< a member reached through its type (`m.Box<|I64|>.get`). The head is read through this file's
@@ -62,7 +61,6 @@ struct Written_type //< what a written path's leading type is called, read from 
     member: Ast_node$@ //< the first name after the type's own, or null
 
 priv struct Path_parts //< a path's segments and `<|…|>`, in order, as the tree holds them
-    //<
     //< A lone name is its own one segment. **A view of the tree, not a copy**: a type's name is
     //< read on every use of it. A list per read would be garbage on the arena.
     path: Ast_node$@ //< the path, or a lone name; null is no segment
@@ -94,7 +92,6 @@ priv fn spelled_before_args(parts: Path_parts): U8[] //<
 
 fn written_name_of(type_node: Ast_node$@): Ast_node$@? //<
     //< The name a type expression is written as, where it is no more than a name
-    //<
     //< A postfix (`U8[4]`, `Foo@`) or a function type makes it more.
     if type_node != null && type_node.kind_id == .k_type_expr &&
         type_node.find_child(.k_type_postfix) != null
@@ -103,7 +100,6 @@ fn written_name_of(type_node: Ast_node$@): Ast_node$@? //<
 
 fn written_clause_of(type_node: Ast_node$@): Ast_node$@? //<
     //< The name a type expression is built on (`ds.List<|I64|>` of `ds.List<|I64|>@`)
-    //<
     //< A bare path, an identifier and an atom holding either are a name; a function type or a
     //< parenthesized type is none.
     if type_node == null
@@ -135,19 +131,16 @@ struct Named_fn //<
     //< The expression naming a function, split by what each `<|…|>` on it belongs to
     owner: Ast_node$@ //<
         //< What the function is reached through, or null for a lone name
-        //<
         //< On a path, the name before the last (`Holder` of `Holder<|I32|>.gm`); on a method call,
         //< the receiver.
     on_type: Ast_node$@ //<
         //< The `<|…|>` on the type a path goes through (`Holder<|I32|>.gm`, `ds.List<|I32|>.new`)
-        //<
         //< null where there is none. They name the type's instance, not the function's.
     name: Ast_node$@ //< the function's own name (`gm`)
     own: Ast_node$@ //< the `<|…|>` after the function's name, its own type arguments, or null
 
 fn named_fn(left: Ast_node$@): Named_fn //<
     //< Splits the expression naming a function by what each `<|…|>` on it belongs to
-    //<
     //< A path can carry two groups (`Holder<|I32|>.gm<|U8|>`), so each is told by where it stands:
     //< after the last name, or after the name before it.
     //< Caution: **Read a callee's or a function value's type arguments through here, not by
@@ -219,7 +212,6 @@ priv fn spelled_name(path: Ast_node$@): U8[] //< a path's segments joined by `.`
 
 fn name_path_of(node: Ast_node$@): Ast_node$@? //<
     //< The path a value's name is written as, or none where node writes no name
-    //<
     //< A `.` chain of names not yet inferred (`m.N` in an array's size, the target of an
     //< assignment) is that path, its segments in order.
     //< Caution: **Make one node for the whole chain**, not one per `.`. It is made on every read of
@@ -260,7 +252,6 @@ priv fn add_chain(path: Ast_node$@, node: Ast_node$@) //<
 
 priv fn lookup_bare_name(c: Sema_ctx$@, name: U8[]): Sema_symbol$@ //<
     //< What one name stands for here, or null
-    //<
     //< A local or argument first, then a top-level declaration, then a selective import's.
     //< Caution: Look up values here too, not only types, or `import "p" { twice };` passes and the
     //< use fails with `undefined path or identifier` (Principle 5 of docs/DESIGN-principles.md).
@@ -283,7 +274,6 @@ fn gen_param_named(gen_params: List<|Ast_node$@|>$@, name: U8[]): Ast_node$@? //
 
 priv fn template_named(c: Sema_ctx$@, name: U8[]): U8[] //<
     //< The FQN of the generic function a bare name names in this file, or "" for none
-    //<
     //< This file's own declaration first, then a selective import's (std/lang's implicit ones too).
     //< Caution: **Do not look the bare name up in the template table.** A function's short name
     //< names it only inside its file, so it is not registered there (collect_fn_def in
@@ -298,7 +288,6 @@ priv fn template_named(c: Sema_ctx$@, name: U8[]): U8[] //<
 
 priv fn value_at(c: Sema_ctx$@, name: U8[]): Named_value? //<
     //< What a name, short or an FQN, names if it is a function's or a variable's
-    //<
     //< **A value's name is not a type** (`x: twice`, `sizeof(twice)`). Let through, it reaches C as
     //< a type of that name, which nothing declares.
     //< Caution: **A constant passes.** It stands where a type argument does (`Buf<|n|>`), and
@@ -317,7 +306,6 @@ priv fn value_at(c: Sema_ctx$@, name: U8[]): Named_value? //<
 impl Sema_ctx
     fn read_written_type(r: Self$@, path: Ast_node$@): Written_type //<
         //< What a written path's leading type is called, and what follows it
-        //<
         //< It reports nothing and instantiates nothing; what the type is, type_kind_of answers.
         parts: = Path_parts::{ .path = path }
         $w: = Written_type::{ .spelled = spelled_before_args(parts), .fqn = "", .alias_file = "",
@@ -345,7 +333,6 @@ impl Sema_ctx
 
     fn type_kind_of(r: Self$@, w: Written_type, gen_params: List<|Ast_node$@|>$@): Written_kind //<
         //< What the type w reads is: a type this file reaches, or why not
-        //<
         //< gen_params lists the type parameters in scope that nothing binds yet (a template's own
         //< while its declaration is checked); null where there are none.
         if w.name.len == 0
@@ -371,7 +358,7 @@ impl Sema_ctx
         switch kind
         case .found
             return .names_value(.type_member)
-        case .names_value(_w)
+        case .names_value
             return .names_value(.value_member)
         case .elsewhere
             return kind
@@ -380,7 +367,6 @@ impl Sema_ctx
 
     priv fn file_type_kind(r: Self$@, target_file: U8[], name: U8[], fqn: U8[]): Written_kind //<
         //< What the name `name` of the file `target_file` (an import alias's) is, written as a type
-        //<
         //< **What `m.gf` names is asked of its declaration**, as for this file's own names:
         //< file_has_type answers for a value's name too.
         if !r.file_has_type(target_file, name)
@@ -391,7 +377,6 @@ impl Sema_ctx
 
     priv fn bare_type_kind(r: Self$@, name: U8[], gen_params: List<|Ast_node$@|>$@): Written_kind //<
         //< What a name written alone where a type goes is, from this file
-        //<
         //< The order is "Name resolution with no namespace goes through one function" in
         //< ksplc/docs/DESIGN-diagnostics.md.
         if name.equals("Self")
@@ -429,7 +414,6 @@ impl Sema_ctx
 
     fn alias_reaching(r: Self$@, name: U8[]): Alias_reach? //<
         //< The import alias of this file whose file declares name where this file can see it
-        //<
         //< It answers for a name written without the alias that reaches it (`twice` after `import
         //< "p" as _m`). An import nobody wrote (std/lang's) is not asked: its names come in bare.
         return r.alias_where(name, "")
@@ -457,7 +441,6 @@ impl Sema_ctx
 
     fn report_without_alias(r: Self$@, at: Ast_node$@, name: U8[], path: U8[]) //<
         //< Reports a name of the file at path written without the import alias that reaches it
-        //<
         //< **One wording for a function, a value and a type alike**, saying what to write. That is
         //< the alias this file imports the file under, or, where it has none, the import to add.
         //< Caution: Keep it in this one place. A type position, a value and a call each meet the
@@ -475,7 +458,6 @@ impl Sema_ctx
 
     fn report_name_by_fqn(r: Self$@, at: Ast_node$@, named: Written_name) //<
         //< Reports a name found under another file's FQN written out (`by_fqn`)
-        //<
         //< The FQN is the file's path, which no import of this file names as an alias.
         file: =
             named.sym.get_defined_in() if named.sym != null else named.template.loc.file()
@@ -488,7 +470,6 @@ impl Sema_ctx
 
     fn impl_target_fqn(r: Self$@, impl_node: Ast_node$@): U8[] //<
         //< The FQN of the type an impl's target names, read in the current file
-        //<
         //< A target written as more than a name (`impl U8[4]`, the refused `impl Foo@`) is read
         //< from its spelling. It instantiates nothing: an impl is registered before any type is
         //< resolved (Pass 2a in ksplc/docs/DESIGN-compiler.md).
@@ -496,12 +477,10 @@ impl Sema_ctx
         if written: = written_name_of(target_node)
             return r.read_written_type(written).fqn
         $spelled: = target_node.extract_type_name()
-        defer spelled.free()
         return r.resolve_fqn_for_type(spelled.slice().get_generic_base_name())
 
     fn written_type_symbol(r: Self$@, w: Written_type): Sema_symbol$@? //<
         //< The declaration of the type w names, or none
-        //<
         //< **Within the file an import alias names, every declaration answers**, `priv` ones too.
         //< So the use is refused as one the file cannot see, rather than passed as unknown.
         $sym: Sema_symbol$@ = null
@@ -522,7 +501,6 @@ impl Sema_ctx
 
     fn template_of_args(r: Self$@, path: Ast_node$@, args: Ast_node$@): Ast_node$@? //<
         //< The generic type or function whose parameters the `<|…|>` args written in path fill
-        //<
         //< none where the declarations alone do not tell: a method's own (`Box<|I32|>.keep<|U|>`,
         //< `x.m<|U|>`) belong to whatever the type before them has, known only once it is.
         w: = r.read_written_type(path)
@@ -538,7 +516,6 @@ impl Sema_ctx
     fn instance_written(r: Self$@, w: Written_type, args: I32[], site: Ast_node$@):
         Str_builder!Sema_error //<
             //< The instance of the generic type w names, binding args, made where site writes it
-            //<
             //< A violated constraint is reported at site, the user's line, not the template's
             //< (check_type_constraint in resolve.kspl reads inst_site).
         prev_inst_site: = r.generics.inst_site
@@ -548,7 +525,6 @@ impl Sema_ctx
 
     fn read_written_name(r: Self$@, path: Ast_node$@): Written_name //<
         //< What a written value's or function's name names, and what each `<|…|>` on it belongs to
-        //<
         //< A member the `.` already found a type for is that type's. A bare name is read through
         //< this file's scopes and imports. A path's head is read through this file's import aliases
         //< and selective imports, and the rest within the file the head names. It reports nothing.
@@ -572,7 +548,6 @@ impl Sema_ctx
 
     priv fn read_member_of_type(r: Self$@, w: Written_name$@): Bool //<
         //< Reads a member of the type the `.` recorded on the name before it; false if it has none
-        //<
         //< **A generic method reached through its type** is that type's template, and its own type
         //< arguments instantiate it at the call. **Any other method of an instance** is the
         //< instance's own (instance_method).
@@ -595,7 +570,6 @@ impl Sema_ctx
 
     priv fn read_bare_name(r: Self$@, w: Written_name$@) //<
         //< Reads a name written alone, or with its own `<|…|>`
-        //<
         //< A generic function's template is looked up only where the name names a function, so a
         //< local hides one of the same name.
         name: = w.parts.name.text
@@ -615,7 +589,6 @@ impl Sema_ctx
 
     priv fn read_path_name(r: Self$@, path: Ast_node$@, w: Written_name$@) //<
         //< Reads a path of more than one name: its head through this file's imports, or here
-        //<
         //< A head brought in by a selective import (`Plain.gen` after `import "p" { Plain }`) is
         //< read **the same way** as an access to that file, from its original name.
         //< Caution: Do not read it another way: the other path instantiates `Map<|U8[], I32|>`'s
@@ -655,7 +628,6 @@ impl Sema_ctx
     priv fn read_name_in_file(r: Self$@, path: Ast_node$@, file: U8[], first: U8[], seg_start: Sz,
         w: Written_name$@) //<
             //< Reads the segments from seg_start within file, the first spelled first
-            //<
             //< Caution: **Check the head segment alone** for whether the file holds the name. The
             //< `new` of `ds.List<|I32|>.new` is not in the table until monomorphization, so
             //< checking the whole path would reject a legitimate name; the head is known now.
@@ -692,7 +664,6 @@ impl Sema_ctx
 
     priv fn member_through_type(r: Self$@, path: Ast_node$@): Sema_symbol$@? //<
         //< The member a path names through the type it begins with
-        //<
         //< `Box<|I32|>.keep`, `Self.get`, `Ints.get` after `typedef Ints = Box<|I32|>`. The type is
         //< read from the tree, and its instance is made from the written type arguments. A path is
         //< read again where it is inferred twice (an operand of `==`), after the `.` flattened it.
@@ -713,13 +684,11 @@ impl Sema_ctx
             r.suppress_errors = saved_sup
             $inst: = r.instance_written(written, args, path) catch
                 return .none
-            defer inst.free()
             owner = r.env.get_str(r.env.get_or_add(inst.slice()))
         return r.resolve_type_method_fqn(join_dotted_name(owner, written.member.text))
 
     priv fn read_instance_type(r: Self$@, path: Ast_node$@, w: Written_name$@) //<
         //< Reads a generic type's instance written whole (`Box<|I32|>`, `m.Box<|I32|>`)
-        //<
         //< Its type arguments end the path: after them it would name a member.
         if path.children.len == 0 || path.last_child().kind_id != .k_type_args
             return
@@ -734,7 +703,6 @@ impl Sema_ctx
 
     fn own_type_of_name(r: Self$@, node: Ast_node$@): I32 //<
         //< The type a value's expression gives where nothing expects one: its own, or a function's
-        //<
         //< **A name that stands for one function gives the function type of that function**, to a
         //< declaration with no type as to a generic parameter. Examples are `twice`, `gf<|U16|>`,
         //< `Holder<|I32|>.keep` with its receiver first, and an anonymous function. Nothing being
@@ -749,7 +717,6 @@ impl Sema_ctx
 
     fn instance_method(r: Self$@, owner_id: I32, name: U8[]): Sema_symbol$@? //<
         //< The method an instance of a generic type holds under name, from its own table
-        //<
         //< **A method reached through an instance** is the instance's, as one reached through a
         //< value is the receiver's. Examples are `Box<|I64|>.mk`, `Ints.get` after
         //< `typedef Ints = Box<|I64|>`, and `Self.get` in `impl Box<|I64|>`. Looked up as the

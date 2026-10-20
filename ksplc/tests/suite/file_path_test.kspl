@@ -1,6 +1,5 @@
 #!/usr/bin/env -S ksplc run
 //< It pins down that spelling the entry file's path differently does not change a logical name
-//<
 //< The logical name is used in name mangling, diagnostics and the generated C's `#line`. The test
 //< program is two files, as one file does not exercise declarations without a visibility marker.
 
@@ -16,6 +15,7 @@ import "ksplc/tests/support/harness"
 import "std/chars"
 import "std/fs"
 import "std/io"
+import "std/math"
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
 import "std/strfmt" as _strfmt
@@ -27,7 +27,6 @@ priv const DOTTED_ENTRY: U8[] = "tests/filepath/../filepath/main.kspl" //<
 
 priv fn diff_detail(a: U8[], b: U8[], arena: Arena$@): U8[] //<
     //< It returns the bytes around the first position where the generated C in a and b disagree
-    //<
     //< It returns empty where they are the same.
     //< Caution: **Compare the bytes rather than a line count or a count of marks.** A spelling that
     //< leaks in neither grows nor shrinks anything, so counts cannot notice a changed name.
@@ -35,7 +34,7 @@ priv fn diff_detail(a: U8[], b: U8[], arena: Arena$@): U8[] //<
         return ""
     d: = arena.text()
     d.s("relative \{a.len\} bytes / the other \{b.len\} bytes")
-    shorter: = a.len if a.len < b.len else b.len
+    shorter: = math.min(a.len, b.len)
     for $i: Sz = 0; i < shorter; i += 1
         if a[i] != b[i]
             from: = i - 60 if i > 60 else 0
@@ -51,7 +50,7 @@ priv fn same_c(name: U8[], entry: U8[], rel: U8[], dir: U8[], arena: Arena$@) //
     if !verdict.check(arena.text().s("it compiles with the \{name\} entry path too").take(),
         r.exited_with(0), r.out)
         return
-    b: = io.read_file(gen) catch
+    b: = io.read_file(gen, null) catch
         fallback ""
     verdict.check(arena.text().s("the \{name\} entry path gives the same C").take(),
         rel.len > 0 && rel.equals(b), diff_detail(rel, b, arena))
@@ -66,7 +65,7 @@ fn main(): I32
     r1: = harness.ksplc(U8[][]::{ REL_ENTRY, rel_c })
     if !verdict.check("it compiles with a relative entry path", r1.exited_with(0), r1.out)
         return harness.finish()
-    a: = io.read_file(rel_c) catch
+    a: = io.read_file(rel_c, null) catch
         fallback ""
     same_c("absolute-path", abs_entry, a, dir, arena)
     same_c("dotted", DOTTED_ENTRY, a, dir, arena)

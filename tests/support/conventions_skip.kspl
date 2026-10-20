@@ -1,5 +1,4 @@
 //< Every reason a test can skip for is held by a row of `tools/ci_gates.kspl` (not the suite)
-//<
 //< **A SKIP no row holds fails its gate on the platform that prints it** (`expected_skips`). A
 //< reason printed only on Windows or macOS is first seen by that platform's round. This check
 //< reads each reason where it is written, so a new one gets its row in the same change.
@@ -7,6 +6,7 @@
 //< still printed, and goes unread (Principle 8 in `docs/DESIGN-principles.md`).
 import "std/chars"
 import "std/ds" { List }
+import "std/math"
 import "std/mem" { Arena }
 import "std/str"
 import "std/verdict"
@@ -76,7 +76,6 @@ priv fn blank(b: str.Arena_text$@, src: U8[], from: Sz, to: Sz) //<
 
 priv fn literal_at(src: U8[], at: Sz, arena: Arena$@): Lit //<
     //< the ordinary literal opening at `at`
-    //<
     //< `\{…\}` and `\n` cut a part; a `\` before a line's end joins the next line past its indent.
     $parts: = List<|U8[]|>.new(arena)
     $holes: = List<|U8[]|>.new(arena)
@@ -127,7 +126,7 @@ priv fn blanked_to(src: U8[], i: Sz): Sz //<
         to = i + 6 + src.sub_from(i + 3).find_str("\"\"\"").unwrap_or(src.len)
     else if src[i] == '\'' && i + 2 < src.len
         to = i + (4 if src[i + 1] == '\\' else 3)
-    return src.len if to > src.len else to
+    return math.min(src.len, to)
 
 fn read_source(src: U8[], arena: Arena$@): Source //< the source's code, literals and constants
     b: = arena.text()
@@ -138,7 +137,7 @@ fn read_source(src: U8[], arena: Arena$@): Source //< the source's code, literal
         if to == i && src[i] == '"'
             lit: = literal_at(src, i, arena)
             lits.push(lit)
-            to = src.len if lit.end > src.len else lit.end
+            to = math.min(src.len, lit.end)
             b.c('"')
             blank(b, src, i + 1, to)
         else if to == i
@@ -176,7 +175,6 @@ priv fn const_text(s: Source@, name: U8[]): U8[]? //< the text a file's constant
 
 priv fn pieces_of(s: Source@, l: Lit@, arena: Arena$@): List<|U8[]|> //<
     //< A literal's text as the pieces a row may stand whole in
-    //<
     //< **A constant of the file interpolated is its text** (`\{cross_cc\}`); any other
     //< interpolation could be anything, so it cuts the text there.
     $out: = List<|U8[]|>.new(arena)
@@ -291,7 +289,6 @@ priv fn enclosing_fn(code: U8[], at: Sz): Sz //<
 
 priv fn binding_in(code: U8[], top: Sz, to: Sz, name: U8[], arena: Arena$@): Sz? //<
     //< The last line of the function opening at `top`, before `to`, binding `name` (`name: = …`)
-    //<
     //< **The search starts past the parameters**, which look like a binding and are the caller's.
     $found: Sz? = .none
     args: =
@@ -389,7 +386,6 @@ priv const MAKE_MARKS: U8[][_] = ::{ "SKIP ", "SKIP:", "SKIPPED (" } //<
 
 fn make_reasons(src: U8[], arena: Arena$@): List<|Reason|> //<
     //< The SKIP lines a make file's recipes print: each from its mark to the line's end
-    //<
     //< A comment line (`#` first) prints nothing.
     $out: = List<|Reason|>.new(arena)
     lines: = src.lines(arena)
@@ -414,7 +410,6 @@ fn make_reasons(src: U8[], arena: Arena$@): List<|Reason|> //<
 
 fn holder(r: Reason@, rows: U8[][]): U8[] //<
     //< The row or `HELD_BY_NONE` piece holding a reason, empty where none does
-    //<
     //< **A row is held whole inside one piece**: an interpolation can stand for anything, so a row
     //< matched across one holds nothing.
     for p in r.pieces
@@ -547,13 +542,13 @@ priv fn check_reasons_held(arena: Arena$@) //<
             bad.push(f)
     // An entry no reason needs any more holds nothing up: it goes, as a row would stay unread.
     for h in HELD_BY_NONE
-        if !scan_has(used@, h.says)
+        if !used.contains(h.says)
             bad
                 .push(arena.text().s("`held_by_none`'s \"").s(h.says).s("\" holds no reason (")
                 .s(h.why).s("): remove it").take())
     for r in RELAYS
-        if !scan_has(used@,
-            arena.text().s(r.file).c(' ').s(r.fn_name).take())
+        if !used
+            .contains(arena.text().s(r.file).c(' ').s(r.fn_name).take())
             bad
                 .push(arena.text().s("`relays`' ").s(r.file).c(' ').s(r.fn_name)
                 .s(" hands on no reason, where it said it hands on ").s(r.why).s(": remove it")
@@ -565,12 +560,6 @@ priv fn check_reasons_held(arena: Arena$@) //<
         bad@,
         "add its row to `EXPECTED_SKIPS` (or `SWITCH_SKIPS`) in tools/ci_gates.kspl, for each \
             platform that prints it")
-
-priv fn scan_has(list: List<|U8[]|>@, want: U8[]): Bool
-    for i in Range.asc(list.len)
-        if list.get(i).equals(want)
-            return true
-    return false
 
 fn run(arena: Arena$@) //< this section's entry point
     scan.check_samples("the reading of a test's SKIP reasons fires on its samples",

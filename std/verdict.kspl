@@ -1,5 +1,4 @@
 //< The lines a test run emits, and the `RESULT:` line closing it, built in one place
-//<
 //< **The line format comes from the table in `make test-conventions`**, so a test writing its
 //< own lines would drift from what the gates read. There are two ways to run tests:
 //< - one test at a time (`start` / `pass` / `skip`), where a failure is `std/lang`'s panic, and
@@ -26,7 +25,6 @@ import "std/subproc"
 import "std/sys"
 
 priv const MARK_PASS: U8[] = "pass" //< the marks at the start of a line
-    //<
     //< A single test fails with `std/lang`'s panic; a run of checks prints `FAIL`, which a gate's
     //< summary picks up.
 priv const MARK_FAIL: U8[] = "FAIL"
@@ -41,7 +39,6 @@ priv $reported: Sz = 0 //< how many `pass`, `FAIL` and `SKIP` lines the run has 
 
 priv fn line(mark: U8[], text: U8[], tail: U8[]) //<
     //< Builds one line in the order mark, label, text, and ends it
-    //<
     //< **This is the only place that builds a line.** A heading that does not start with `[` gets
     //< no separator either. A non-empty `tail` adds one "why" at the end.
     reported += 1
@@ -67,7 +64,6 @@ priv fn remember(name: U8[]) //<
 
 priv fn without_tail_dots(name: U8[]): U8[] //<
     //< Returns **a view** of name without trailing whitespace and the `.`s before it
-    //<
     //< Headings are sometimes written as `…test...`.
     trimmed: = name.trim_end()
     $e: = trimmed.len
@@ -76,7 +72,6 @@ priv fn without_tail_dots(name: U8[]): U8[] //<
     return trimmed.sub(0, e)
 
 pub fn start( //< starts a test, so a run that hangs shows where it stopped
-    //<
     //< A run that hangs stopped at **the test after the last line printed**.
     //< Caution: **Do not write the same thing in the heading and in `pass`.** The line prints the
     //< text given to `pass`; the heading's text appears only when `pass` gets an empty text.
@@ -85,7 +80,6 @@ pub fn start( //< starts a test, so a run that hangs shows where it stopped
     remember(name)
 
 pub fn pass( //< reports that the test passed
-    //<
     //< **One line says one thing.** Trailing whitespace is dropped; a `desc` that contains a
     //< newline prints a blank line.
     desc: U8[], //< what was confirmed; if empty, the heading's text is used
@@ -94,7 +88,6 @@ pub fn pass( //< reports that the test passed
     line(MARK_PASS, text if text.len > 0 else cur_body, "")
 
 pub fn skip( //< reports that the test does not apply on this target, and why
-    //<
     //< Caution: **Do not skip it silently.** Printing nothing looks like a pass, and a degraded
     //< environment looks like "everything passed". This prints the heading's text and the reason.
     why: U8[], //< what this environment lacks, so the reader can tell it from a failure
@@ -117,7 +110,6 @@ pub fn skip( //< reports that the test does not apply on this target, and why
 //   }
 
 priv struct Names //< the names a `RESULT:` line lists, copied into a buffer of its own
-    //<
     //< **When the names do not all fit, it prints `…` after the ones it kept**, rather than
     //< failing. The count on the line is still the full count.
     buf: U8[4000]
@@ -158,11 +150,9 @@ priv $failed: Names = ::{ .buf = ::{}, .len = 0, .count = 0, .kept = 0 }
 priv $skipped: Names = ::{ .buf = ::{}, .len = 0, .count = 0, .kept = 0 }
 
 pub const MAX_FINDINGS_SHOWN: Sz = 20 //< how many of a walk's findings one check lists
-    //<
     //< Beyond this many, a longer list tells the reader nothing more.
 
 pub fn begin( //< starts a run of checks, and makes the output line-buffered
-    //<
     //< Line buffering means a run that hangs shows how far it got, and a pipe shared by several
     //< runs never splits a line.
     tag: U8[], //< the label on every line; if empty, no label is printed
@@ -176,7 +166,6 @@ pub fn begin( //< starts a run of checks, and makes the output line-buffered
     run_tag.len = n
 
 pub fn check( //< one check: prints a `pass` line if it holds, a `FAIL` line if it does not
-    //<
     //< A failure does not stop the run; it is counted, and named on the `RESULT:` line.
     name: U8[], //< what was checked, in plain words for the reader
     ok: Bool, //< whether it held
@@ -191,7 +180,6 @@ pub fn check( //< one check: prints a `pass` line if it holds, a `FAIL` line if 
     return false
 
 pub fn list_verdict( //< whether a walk passes: it found nothing wrong, and it looked at something
-    //<
     //< **It is separate from the printing so tests can check it against sample inputs.**
     seen: Sz, //< how many things the walk looked at
     bad_len: Sz, //< how many of them had a problem
@@ -199,7 +187,6 @@ pub fn list_verdict( //< whether a walk passes: it found nothing wrong, and it l
     return bad_len == 0 && seen > 0
 
 pub fn check_list( //< reports a walk's findings as one check, with how many things it looked at
-    //<
     //< Caution: **Looking at nothing fails.** Either the code that reads broke, or what it reads
     //< has moved. A subject that is really empty still walks the files it looked in. Hence the
     //< count argument.
@@ -232,7 +219,6 @@ pub fn check_list( //< reports a walk's findings as one check, with how many thi
     return false
 
 pub fn skip_check( //< reports a check this environment cannot run, with the reason
-    //<
     //< Caution: **Do not pass it with `check(…, true, …)`.** It would read as confirmed, and the
     //< `RESULT:` line would not name it.
     name: U8[], //< the check that is skipped
@@ -244,7 +230,6 @@ pub fn skip_check( //< reports a check this environment cannot run, with the rea
 
 pub fn finish(): I32 //<
     //< ends the run with its `RESULT:` line, and returns the verdict as the exit code
-    //<
     //< Caution: **Start no line but the verdict with `RESULT:`**: the gates read that word.
     //< **A run that reported no check fails**: its checks were never reached, or the program holds
     //< none, and `ALL PASS` would say that something held.
@@ -280,17 +265,14 @@ pub fn fatal( //< ends a run that cannot continue (for example, its input files 
 // ==========================================
 
 pub const DEFAULT_TIMEOUT_MS: I32 = 600000 //< the usual limit on waiting for a child (`run_child`)
-    //<
     //< Long, as insurance against a run that hangs. **Only a check whose failure is not stopping
     //< passes a shorter one.**
 
 priv const RUN_OUTPUT_CAP: Sz = 4 * 1024 * 1024 //< how much of each of a child's outputs is kept
-    //<
     //< Caution: What is beyond it is cut without a word: enough for matching diagnostics, not for
     //< receiving an artifact itself.
 
 pub struct Run_out //< one child's run as a check reads it: how it ended, and what it wrote
-    //<
     //< **A diagnostic appears on either stdout or stderr** (by version and route), so the two are
     //< joined, and the matcher misses neither.
     pub code: I32? //< the exit code; none where it could not start or was killed on a timeout
@@ -298,15 +280,11 @@ pub struct Run_out //< one child's run as a check reads it: how it ended, and wh
 
 impl Run_out
     pub fn exited_with(r: Self@, code: I32): Bool //< whether it ended by itself with this code
-        //<
         //< False where it did not end by itself: a check expecting any code fails on such a run.
-        if got: = r.code
-            return got == code
-        return false
+        return subproc.ended_with(r.code, code)
 
 priv fn folded(got: subproc.Run_result!subproc.Spawn_error, arena: Arena$@): Run_out //<
     //< One run, as a code and a text
-    //<
     //< **Where it did not end by itself, the text says why**: the code alone is none either way.
     r: = got catch
         return Run_out::{ .code = .none,
@@ -326,8 +304,7 @@ pub fn run_child( //< runs one child to its end, and returns how it ended and wh
 ): Run_out
     // The outputs and the folding are work, kept apart from `arena` (`mem.scratch`); only the
     // folded text is copied to the caller.
-    $work: = mem.scratch(null)
-    defer work.free()
+    work: = mem.scratch(null)
     t0: = sys.mono_us()
     r: = subproc.run_capture(argv, cwd, timeout_ms, RUN_OUTPUT_CAP, work.arena)
     o: = folded(r, work.arena)
@@ -336,7 +313,6 @@ pub fn run_child( //< runs one child to its end, and returns how it ended and wh
 
 priv fn note_near_cap(argv: U8[][], took_ms: I64, cap_ms: I32, timed_out: Bool) //<
     //< Says so where a child that ended took three quarters of its cap or more
-    //<
     //< **Before the kill, not at it.** A run that grows towards its cap passes until the round it
     //< is killed. The slow machine it is killed on is seldom the one where someone looks.
     if timed_out || cap_ms <= 0 || took_ms * 4I64 < I64::cap_ms * 3I64 || argv.len == 0
@@ -347,7 +323,6 @@ priv fn note_near_cap(argv: U8[][], took_ms: I64, cap_ms: I32, timed_out: Bool) 
     io.out().s(" took \{took_ms / 1000I64\} s of its \{cap_ms / 1000\} s cap\n")
 
 pub fn jobs(): Sz //< how many children `run_children` runs side by side
-    //<
     //< The core count, capped at 8; `KANSO_TEST_JOBS=1` runs them one at a time (to read a failed
     //< case's output).
     if v: = sys.get_env("KANSO_TEST_JOBS")
@@ -360,7 +335,6 @@ pub fn jobs(): Sz //< how many children `run_children` runs side by side
 
 #cfg(!freestanding)
 pub fn run_children( //< runs children side by side (`jobs`), and returns their runs in order
-    //<
     //< **The results come in the input's order**, so the code that judges has one form, sequential
     //< or parallel. **Each waits at most `DEFAULT_TIMEOUT_MS`**, as `run_child` does unless told
     //< otherwise.
@@ -370,7 +344,6 @@ pub fn run_children( //< runs children side by side (`jobs`), and returns their 
     work_dir: U8[], //< where the outputs are collected; made where missing
     arena: Arena$@, //< where the list and the texts go; null means the heap, freed as below
 ): List<|Run_out|> //< one run per item, in the input's order
-    //<
     //< With `null`, free each `out` with `dealloc`, then the list with `free()`.
     $outs: = List<|Run_out|>.new(arena)
     // Caution: **Say a work folder that cannot be made.** Its runs would fail to start, and each
@@ -381,8 +354,7 @@ pub fn run_children( //< runs children side by side (`jobs`), and returns their 
             outs.push(Run_out::{ .code = .none, .out = lost })
         return outs
     // The outputs and the folding are work, as in `run_child`.
-    $work: = mem.scratch(null)
-    defer work.free()
+    work: = mem.scratch(null)
     rs: = subproc.run_many(items, jobs(), DEFAULT_TIMEOUT_MS, RUN_OUTPUT_CAP, work_dir, work.arena)
     for i in Range.asc(rs.len)
         o: = folded(rs.get(i), work.arena)

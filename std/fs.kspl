@@ -1,5 +1,4 @@
 //< The file tree itself: listing a directory, metadata, deleting, renaming, creating
-//<
 //< `std/io` handles a file's contents; this module handles the tree around them. `read_dir` returns
 //< one level in the filesystem's order, while `walk_files` descends and sorts, so two walks over
 //< the same tree give the same result.
@@ -24,12 +23,9 @@ extern "C"
     fn kspl_dir_open(path_ptr: U8@, path_len: Sz): I64
     fn kspl_dir_read(handle: I64, buf: U8$@, cap: Sz): I32
     fn kspl_dir_close(handle: I64)
-    fn kspl_path_info(path_ptr: U8@, path_len: Sz, size_out: I64$@, kind_out: I32$@,
-        mtime_out: I64$@): Bool //< `kind_out` in `File_kind`'s order, from 0
     fn kspl_is_exec(path_ptr: U8@, path_len: Sz): Bool
     fn kspl_is_link(path_ptr: U8@, path_len: Sz): I32 //<
         //< 1=a link, 0=not a link, -1=cannot tell
-        //<
         //< Caution: **Do not make it a Bool.** Turning "cannot tell" into false lets an unreadable
         //< segment pass as "not a link" (has_link_on_path below).
     fn kspl_mkdir(path_ptr: U8@, path_len: Sz): I32
@@ -46,13 +42,11 @@ extern "C"
     fn kspl_lock_close(handle: I64)
     fn kspl_rename_cstr(old_cstr: U8@, new_cstr: U8@): I32 //<
         //< Renames the NUL-terminated path old_cstr to new_cstr
-        //<
         //< Caution: **Do not use `libc.rename`.** It is the narrow (ANSI) API, so on Windows a
         //< non-ASCII path is read in the current code page (see the top of `kspl_win_to_wide` in
         //< `ksplc/gen/runtime/hosted.c`).
 
 pub enum Fs_error //< why a filesystem operation failed
-    //<
     //< Every failure in this file is returned as this type (the same convention as `!Io_error` in
     //< `std/io.kspl`). Only the predicates (`exists` / `is_dir`) do not fail, so they return
     //< `Bool`. Splitting `operation_failed` further would need errno passed up from the C code
@@ -64,7 +58,6 @@ pub enum Fs_error //< why a filesystem operation failed
     held_elsewhere //< another holder has the lock (only `File_lock.try_take`, which does not wait)
     io(err: io.Io_error) //< reading or writing a file's contents failed; it names the file
     mkdir_failed(at: U8[]) //< the segment that could not be created, as a view into the path.
-        //<
         //< **Which segment it stopped at** tells a path problem from a permission problem. It is
         //< not a copy; to keep it longer than the caller's path, the caller copies it.
 
@@ -72,7 +65,6 @@ pub enum File_kind //< what stands at a path
     file //< a regular file, read through to its end
     dir //< a directory
     other //< anything else: a FIFO or a socket, whose read can wait for good, or a device
-        //<
         //< Caution: **Do not serve or copy one as a file.** A FIFO's read waits for a writer that
         //< can never come, and a device's never ends.
 
@@ -82,13 +74,11 @@ pub struct File_info //< what the OS reports about one path
     pub mtime: I64 //< the last modification time, in Unix epoch seconds, UTC
 
 pub const MAX_PATH_LEN: Sz = 4095 //< the longest path passed to the OS; a longer one fails
-    //<
     //< The runtime copies a path into a fixed-length buffer.
     //< Caution: **Never truncate a longer path and pass it on.** The caller would get **the result
     //< of an operation on a different path** (a remove that deletes something else).
 
 priv fn check_path(path: U8[]): Void!Fs_error //< refuses what the OS cannot take as a path
-    //<
     //< It checks only the length and an inner NUL, which C reads as the end (each operation checks
     //< whether the path exists). The runtime refuses both as well; this names the cause.
     if path.len > MAX_PATH_LEN || path.contains_nul()
@@ -99,7 +89,7 @@ pub fn stat(path: U8[]): File_info!Fs_error //< what the OS reports about a path
     $size: I64 = 0
     $kind: I32 = 0
     $mtime: I64 = 0
-    ok: = kspl_path_info(path.ptr, path.len, size@, kind@, mtime@)
+    ok: = io.kspl_path_info(path.ptr, path.len, size@, kind@, mtime@)
     if !ok
         throw .not_found
     return File_info::{ .size = size, .kind = file_kind(kind), .mtime = mtime }
@@ -114,7 +104,6 @@ priv fn file_kind(code: I32): File_kind //< `kspl_path_info`'s kind as the enum
         return .other
 
 pub fn is_executable(path: U8[]): Bool //< whether the owner's execute bit is set; Windows: false
-    //<
     //< Close to Python's `os.access(p, os.X_OK)`. **Always false on Windows**, which has no execute
     //< bit.
     //< Caution: **Do not use this to decide "can it be started"**: `can_run` below answers that.
@@ -122,12 +111,10 @@ pub fn is_executable(path: U8[]): Bool //< whether the owner's execute bit is se
 
 priv const RUN_EXTS: U8[][4] = ::{ ".exe", ".com", ".bat", ".cmd" } //<
     //< The extensions that can be started on Windows
-    //<
     //< Caution: **Do not read `PATHEXT`**: whoever can change it can get something else started
     //< (**do not trust a path the environment points to**, as with `PATH`).
 
 pub fn can_run(path: U8[]): Bool //< whether it can actually be started on this system
-    //<
     //< On Windows the extension decides (the trap is at `is_executable`). A folder cannot be
     //< started on either.
     info: = stat(path) catch
@@ -153,7 +140,6 @@ pub fn is_dir(path: U8[]): Bool //< whether it is a directory; a link to one cou
     return info.kind == .dir
 
 pub fn is_link(path: U8[]): Bool //< whether it is a link, without following it
-    //<
     //< **`is_dir` cannot tell**: it follows the link. A tree walk must **first decide whether it
     //< can follow the link**. A path that does not exist gives false (the functions that create
     //< paths call this).
@@ -169,7 +155,6 @@ pub enum Dir_trust //< who besides the current user could change what a director
     unchecked //< this OS's permissions are not read here (Windows, where an ACL decides)
 
 pub fn dir_trust( //< whether what a directory holds could have been put there by someone else
-    //<
     //< For a folder whose contents are run or built in. A file planted there by another user would
     //< run as the current one ("A cache folder that others can write is refused" in
     //< `std/docs/DESIGN-system.md`). A link is followed, so the folder it reaches is judged.
@@ -220,7 +205,6 @@ pub fn rename_path( //< renames or moves a file or a directory
 priv const MAX_ENTRY_NAME_LEN: Sz = 1024
 
 pub fn read_dir( //< one directory's entries, without descending
-    //<
     //< `.` and `..` are skipped, so the list holds only the entries. A name that cannot be read,
     //< or a directory the OS stops reading part way, fails the call (`operation_failed`), never
     //< hands back a listing cut short.
@@ -257,7 +241,6 @@ pub fn read_dir( //< one directory's entries, without descending
 // ==========================================
 
 pub fn join( //< a path with a segment appended (Python's `os.path.join`)
-    //<
     //< It writes `/` at the join, which Windows also accepts. Separators at the join are not
     //< doubled. **After a bare root, `b` follows it directly**: `/` and `etc` give `/etc`. On
     //< Windows `C:` and `x` give `C:x`, which stays relative to that drive's working folder, as
@@ -283,7 +266,6 @@ pub fn join( //< a path with a segment appended (Python's `os.path.join`)
     return arena.text().s(left).c('/').s(right).take()
 
 priv fn without_trailing_seps(path: U8[]): U8[] //< the path with its trailing separators cut
-    //<
     //< Caution: **Cut no further than the root**, or `C:\` loses the separator that makes it
     //< rooted. `join` trims the left side by this, so a path it built starts with this answer.
     top: = sys.root_len(path)
@@ -293,7 +275,6 @@ priv fn without_trailing_seps(path: U8[]): U8[] //< the path with its trailing s
     return left
 
 priv fn is_dos_device(seg: U8[]): Bool //< whether it is a name Windows opens as a device
-    //<
     //< It is a device even with an extension, and case does not matter.
     //< **It is a device at any level**: `www/CON` opens the console, and a read or write on an
     //< unconnected `COM1` never returns, stalling a single-loop server.
@@ -318,7 +299,6 @@ priv fn is_dos_device(seg: U8[]): Bool //< whether it is a name Windows opens as
 
 priv fn is_safe_segment(seg: U8[]): Bool //<
     //< Whether one segment of a path is safe as a name under the root
-    //<
     //< Caution: **Do not let through a path the OS reinterprets.** Windows drops a trailing `.` and
     //< space (`secret.key.` is `secret.key`), and a `:` starts an NTFS stream name
     //< (`secret.key::$DATA` gives the contents). A lone `.` is also caught by this rule, as `..`
@@ -335,7 +315,6 @@ priv fn is_safe_segment(seg: U8[]): Bool //<
     return !is_dos_device(seg)
 
 pub fn absolute( //< the full path from the root: a relative path joined to the working directory
-    //<
     //< **Only the text is joined.** `..` and links stay. Folding `a/link/..` into `a` names a
     //< different place when `link` points elsewhere (Rust's `std::path::absolute` keeps them
     //< too).
@@ -354,7 +333,6 @@ pub fn absolute( //< the full path from the root: a relative path joined to the 
     return join(here, path, arena)
 
 pub fn is_safe_relative(path: U8[]): Bool //< whether the path's text alone cannot climb out
-    //<
     //< Caution: **This alone does not keep a path under the root.** It checks only the text, so
     //< **it cannot stop a way out through a link inside the root**. It checks segment by segment
     //< (matching `..` as a substring would also refuse `..foo`).
@@ -373,7 +351,6 @@ pub fn is_safe_relative(path: U8[]): Bool //< whether the path's text alone cann
     return true
 
 priv fn segment_end(path: U8[], from: Sz): Sz //< where the segment starting at `from` ends
-    //<
     //< The next separator at or after `from`, or the path's length; every walk over a path's
     //< segments steps by this, so all of them split alike.
     $i: = from
@@ -383,7 +360,6 @@ priv fn segment_end(path: U8[], from: Sz): Sz //< where the segment starting at 
 
 priv fn has_link_on_path(root: U8[], rel: U8[]): Bool //<
     //< Whether any segment along `root/rel` is a link
-    //<
     //< A segment it cannot check counts as a link. **The root itself is not checked**: a root that
     //< is a link is normal (macOS's `/tmp`).
     //< Caution: **Check every segment.** Checking only the last lets a link in the middle through.
@@ -404,7 +380,6 @@ priv fn has_link_on_path(root: U8[], rel: U8[]): Bool //<
     return false
 
 pub fn stays_under( //< whether a relative path really stays inside the root, links included
-    //<
     //< **Pass untrusted input through this.** It does both the text check (`is_safe_relative`)
     //< and the check that no segment along the way is a link.
     //< Caution: **Do not make callers call the two checks separately.** If each caller decides
@@ -415,7 +390,6 @@ pub fn stays_under( //< whether a relative path really stays inside the root, li
     return is_safe_relative(rel) && !has_link_on_path(root, rel)
 
 pub fn mkdir_all(path: U8[]): Void!Fs_error //< creates every missing level (`mkdir -p`)
-    //<
     //< A level that already exists counts as success. On a failure part way, it **stops there and
     //< throws** `mkdir_failed` with the segment it could not create.
     if path.len == 0
@@ -442,7 +416,6 @@ priv fn made(path: U8[]): Bool
     return true
 
 pub fn walk_files( //< every file under a path, in one flat list (a narrower Python `os.walk`)
-    //<
     //< Each element starts with `path` (`walk_files(".")` gives `./std/io.kspl`).
     //< **A link to a directory is not entered** (Python's `os.walk` default); a link to a file is
     //< listed as a file.
@@ -455,8 +428,7 @@ pub fn walk_files( //< every file under a path, in one flat list (a narrower Pyt
     // The walk works apart from the result, so a walk that fails leaves the caller nothing to free.
     // It also works apart from `arena`, which takes the result while the work stands
     // (`mem.scratch`).
-    $work: = mem.scratch(null)
-    defer work.free()
+    work: = mem.scratch(null)
     $found: = List<|U8[]|>.new(work.arena)
     walk_into(path, skip_dir, work.arena, found@, 0)!
     sorted: = found.order_by(fn(a: U8[]@, b: U8[]@; ): I32 {
@@ -471,12 +443,10 @@ pub fn skip_none(_name: U8[]): Bool //< a `skip_dir` that enters every directory
     return false
 
 pub fn skip_build_output(name: U8[]): Bool //< a `skip_dir` that leaves out `out` and `.git`
-    //<
     //< A repository's build output and git's own folder: neither holds a file anyone wrote there.
     return name.equals("out") || name.equals(".git")
 
 priv const MAX_WALK_DEPTH: Sz = 512 //< the maximum number of levels a walk descends
-    //<
     //< Each level is one native stack frame, so a deep tree (or a link cycle) would exhaust the
     //< stack; `too_deep` lets the caller report the cause.
 
@@ -507,8 +477,18 @@ priv fn walk_into(dir: U8[], skip_dir: fn(name: U8[]): Bool, arena: Arena$@,
 
 priv const MAX_UNIQUE_TRIES: Sz = 16 //< how many names `mkdir_unique` tries before giving up
 
+priv fn random_name( //< a path under `dir` whose name holds 16 random hex digits
+    dir: U8[],
+    before: U8[], //< the start of the name
+    after: U8[], //< the end of the name
+    arena: Arena$@, //< where the path goes
+): U8[]!Fs_error //< fails where no random number can be read
+    tail: = rand.u64() catch
+        throw .operation_failed
+    return join(dir,
+        arena.text().s(before).s("\{tail:016x\}").s(after).take(), arena)
+
 pub fn mkdir_unique( //< creates a directory with a name nobody has used, and returns its path
-    //<
     //< **Creating it decides that it is new, not checking first**: `mkdir` fails on a path that
     //< exists, a link included. A used name is retried with another random suffix (Python's
     //< `mkdtemp`). **Nothing removes it.** Its creator removes it, or the directory that holds it.
@@ -518,13 +498,9 @@ pub fn mkdir_unique( //< creates a directory with a name nobody has used, and re
 ): U8[]!Fs_error //< the new directory's path; fails if it cannot be created
     mkdir_all(base)!
     // Apart from `arena`, which takes the path while the work stands (`mem.scratch`).
-    $work: = mem.scratch(null)
-    defer work.free()
+    work: = mem.scratch(null)
     for _try in Range.asc(MAX_UNIQUE_TRIES)
-        tail: = rand.u64() catch
-            throw .operation_failed
-        path: =
-            join(base, work.arena.text().s(prefix).s("\{tail:016x\}").take(), work.arena)
+        path: = random_name(base, prefix, "", work.arena)!
         if made(path)
             return arena.dup_str(path)
         // Caution: **Retry only if the name was taken.** If it failed for any other reason (no
@@ -534,7 +510,6 @@ pub fn mkdir_unique( //< creates a directory with a name nobody has used, and re
     throw .operation_failed
 
 pub fn write_unique( //< writes a new file under a name nobody has used, readable by its owner
-    //<
     //< **Creating it decides that it is new**, as at `mkdir_unique`, so a link planted at the name
     //< is not followed. The name is the prefix, 16 hex digits and the suffix.
     //< **On POSIX its mode is 0600 from its first byte**, so it can hold what others on the machine
@@ -548,14 +523,9 @@ pub fn write_unique( //< writes a new file under a name nobody has used, readabl
 ): U8[]!Fs_error //< the new file's path; fails if it cannot be created or written
     mkdir_all(base)!
     // Apart from `arena`, which takes the path while the work stands (`mem.scratch`).
-    $work: = mem.scratch(null)
-    defer work.free()
+    work: = mem.scratch(null)
     for _try in Range.asc(MAX_UNIQUE_TRIES)
-        tail: = rand.u64() catch
-            throw .operation_failed
-        path: =
-            join(base,
-            work.arena.text().s(prefix).s("\{tail:016x\}").s(suffix).take(), work.arena)
+        path: = random_name(base, prefix, suffix, work.arena)!
         check_path(path)!
         switch kspl_create_owned(path.ptr, path.len, data.ptr, data.len)
         case 0
@@ -567,14 +537,12 @@ pub fn write_unique( //< writes a new file under a name nobody has used, readabl
     throw .operation_failed
 
 pub enum Replace_access //< who can read the file `replace_file` leaves
-    //<
     //< On Windows the ACL the file takes from its folder decides under either, as at
     //< `write_unique`; `kept` carries the read-only mark instead.
     kept //< as the replaced file allowed: its permission bits; a new file gets a plain write's
     owner_only //< its owner alone (0600), whatever the replaced file allowed, as for a secret
 
 pub fn replace_file( //< replaces a file's whole content, so that a power cut cannot lose it
-    //<
     //< **A crash at any moment leaves the old content or the new**, never an empty or partial file.
     //< Once it returns, the new content is on the disk. The price is a wait for the disk ("A
     //< file is replaced durably, or not at all" in std/docs/DESIGN-system.md).
@@ -587,13 +555,10 @@ pub fn replace_file( //< replaces a file's whole content, so that a power cut ca
     check_path(path)!
     dir: = sys.get_dir_name(path)
     name: = sys.get_file_name(path)
-    $work: = mem.scratch(null)
-    defer work.free()
+    work: = mem.scratch(null)
+    stem: = work.arena.text().s(name).s(".").take()
     for _try in Range.asc(MAX_UNIQUE_TRIES)
-        tail: = rand.u64() catch
-            throw .operation_failed
-        part: = work.arena.text().s(name).s(".\{tail:016x\}.part").take()
-        part_path: = join(dir, part, work.arena) if dir.len > 0 else part
+        part_path: = random_name(dir, stem, ".part", work.arena)!
         check_path(part_path)!
         owner_only: = 1 if access == .owner_only else 0
         got: =
@@ -609,7 +574,6 @@ pub fn replace_file( //< replaces a file's whole content, so that a power cut ca
     throw .operation_failed
 
 pub fn write_tree( //< writes files under a directory, creating missing levels
-    //<
     //< `rels[i]` gets the contents `bodies[i]`; an existing file at that name is overwritten.
     //< Caution: **A name that climbs out fails before anything is written**
     //< (`is_safe_relative`). A link inside the tree is still followed.
@@ -623,8 +587,7 @@ pub fn write_tree( //< writes files under a directory, creating missing levels
     for rel in rels
         if !is_safe_relative(rel)
             throw .invalid_path
-    $work: = mem.scratch(arena)
-    defer work.free()
+    work: = mem.scratch(arena)
     for i in Range.asc(rels.len)
         path: = join(dir, rels[i], work.arena)
         parent: = sys.get_dir_name(path)
@@ -634,7 +597,6 @@ pub fn write_tree( //< writes files under a directory, creating missing levels
             throw .io(e)
 
 pub fn copy_tree( //< copies every file under one directory to a path that does not exist yet
-    //<
     //< The relative layout and each file's permission bits are kept, **the bits from the copy's
     //< first byte**. So a private file is never readable by others on the way. A file is copied a
     //< piece at a time. **A link is not copied**, to a file or a directory alike. Followed, it
@@ -646,8 +608,7 @@ pub fn copy_tree( //< copies every file under one directory to a path that does 
     skip_dir: fn(name: U8[]): Bool, //< true for a directory not to copy; it gets only the name
     arena: Arena$@, //< where the paths go while it works; null works on the heap
 ): Void!Fs_error
-    $work: = mem.scratch(arena)
-    defer work.free()
+    work: = mem.scratch(arena)
     parent: = sys.get_dir_name(to)
     if parent.len > 0
         mkdir_all(parent)!
@@ -667,7 +628,6 @@ pub fn copy_tree( //< copies every file under one directory to a path that does 
         copy_file(path, dest)!
 
 pub fn copy_file( //< copies one file's contents and its permission bits to a new name
-    //<
     //< **The mode goes too, from the first byte.** Written fresh, a script would lose its execute
     //< bit. A file only its owner could read would stand readable by others while it is
     //< written. On Windows the read-only mark goes instead. Only a regular file is copied.
@@ -691,11 +651,12 @@ pub fn copy_file( //< copies one file's contents and its permission bits to a ne
 // ==========================================
 
 pub struct File_lock //< a lock on a file; another process that asks for it waits
-    //<
     //< **The OS releases it when the process ends**, however it ends (flock / LockFileEx). So no
     //< lock outlives its holder, as a hand-made lock file does after a crash. The file serves only
-    //< as a name: nothing is written to it, and it stays where it was created.
-    priv handle: I64
+    //< as a name: nothing is written to it, and it stays where it was created. **Within the
+    //< process it releases itself when its owner leaves scope** (`Drop`); `free()` releases it
+    //< sooner.
+    priv handle: I64 //< the runtime's handle; 0 once `free()` has released it
 
 impl File_lock
     priv fn open(path: U8[]): I64!Fs_error //< opens the file for locking, creating it if missing
@@ -718,13 +679,15 @@ impl File_lock
         return File_lock.held(File_lock.open(path)!, 1)
 
     pub fn try_take(path: U8[]): File_lock!Fs_error //< takes the lock if free, without waiting
-        //<
         //< If someone else holds it, it throws `held_elsewhere`, so a caller can report the wait
         //< first.
         return File_lock.held(File_lock.open(path)!, 0)
 
-    pub fn free(r: Self$@) //< releases the lock and closes the file
-        kspl_lock_close(r.handle)
+    pub fn free(r: Self$@) //< releases the lock before its scope ends, and closes the file
+        if r.handle != 0
+            kspl_lock_close(r.handle)
+            r.handle = 0
 
-impl File_lock: Move_only {} //< copying it would release one lock twice
-impl File_lock: Manual_free {} //< it owns its lock and releases it with `free()`
+impl File_lock: Drop //< releases the lock when its owner leaves scope
+    priv fn drop(r: Self$@)
+        r.free()

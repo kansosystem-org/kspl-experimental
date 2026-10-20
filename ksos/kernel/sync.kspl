@@ -1,5 +1,4 @@
 //< All the blocking synchronization primitives
-//<
 //< Every one is built on the kernel core's block_and_rearm / wake and is safe under preemption.
 //< Each uses a critical section plus wake-and-recheck (it checks the condition again on waking).
 
@@ -23,12 +22,10 @@ impl Sem
     fn init(r: Self$@, initial: I32)
         r.count = initial
     fn take(r: Self$@) //< takes one from the count if there is one, and blocks if not
-        //<
         //< Once woken it checks the condition again (wake-and-recheck).
         r.take_until(.none)
     fn give(r: Self$@) //<
         //< Raises the count and wakes one waiting task if there is one
-        //<
         //< The woken task sees count>0 and takes it. It does not block, so it is safe from an ISR
         //< (irq_save/irq_restore nest). An ISR always uses this, never take.
         st: = task.irq_save()
@@ -36,7 +33,6 @@ impl Sem
         r.count += 1
         task.wake(Void$@::r, false)
     fn try_take(r: Self$@): Bool //< take's non-waiting version
-        //<
         //< true if it took one. It can be called from an ISR too.
         st: = task.irq_save()
         defer task.irq_restore(st)
@@ -45,7 +41,6 @@ impl Sem
             return true
         return false
     fn take_for(r: Self$@, ticks: U64): Bool //< take with a timeout
-        //<
         //< true if it took one within ticks ticks, false on the timeout (the deadline is an
         //< absolute time, so waiting again does not restart it).
         assert(ticks > 0, "Sem.take_for: ticks must be greater than 0 (try_take waits for nothing)")
@@ -66,7 +61,6 @@ impl Sem
 // ============================ The bounded message queue ============================
 struct Queue<|T|> //<
     //< A bounded queue of T that, unlike Sem, can also block when full
-    //<
     //< A field's address tells the waiters apart. Waiting for room waits on &cap, waiting for
     //< data on &count (different addresses, so they do not collide). T is anything. A struct or a
     //< pointer is copied as it is.
@@ -89,14 +83,12 @@ impl<|T|> Queue<|T|>
         r.head = 0
         r.count = 0
     priv fn push_locked(r: Self$@, v: T) //< writes v after the last element, waking a receiver
-        //<
         //< Caution: **Call it with interrupts off and room checked** (each `send` does both).
         tail: = (r.head + r.count) % r.cap
         (r.buf + tail)$ = v
         r.count += 1
         task.wake(Void$@::r.count@, false) // wake a receiver waiting for data
     priv fn pop_locked(r: Self$@): T //< takes the first element, waking a sender waiting for room
-        //<
         //< Caution: **Call it with interrupts off and an element there** (each `recv` does both).
         v: = (r.buf + r.head)$
         r.head = (r.head + 1) % r.cap
@@ -104,23 +96,19 @@ impl<|T|> Queue<|T|>
         task.wake(Void$@::r.cap@, false) // wake a sender waiting for room
         return v
     fn send(r: Self$@, v: T) //< blocks while it is full, until there is room
-        //<
         //< Writes into the free slot and wakes a receiver waiting for data.
         r.send_until(v, .none)
     fn recv(r: Self$@): T //< blocks while it is empty, until data arrives
-        //<
         //< Takes the first element and wakes a sender waiting for room.
         for // with no deadline recv_until never comes back empty; this only takes the value out
             if v: = r.recv_until(.none)
                 return v
     fn send_for(r: Self$@, v: T, ticks: U64): Bool //< send with a timeout
-        //<
         //< true if room appeared and it wrote, false if it stayed full until the timeout.
         assert(ticks > 0,
             "Queue.send_for: ticks must be greater than 0 (try_send waits for nothing)")
         return r.send_until(v, .some(task.deadline_after(ticks)))
     fn recv_for(r: Self$@, ticks: U64): T? //< recv with a timeout
-        //<
         //< some if something arrived, none if it stayed empty until the timeout.
         assert(ticks > 0,
             "Queue.recv_for: ticks must be greater than 0 (try_recv waits for nothing)")
@@ -147,7 +135,6 @@ impl<|T|> Queue<|T|>
             st = task.block_and_rearm(Void$@::r.count@, deadline, st) // empty -> waiting for data
         return .some(r.pop_locked())
     fn try_send(r: Self$@, v: T): Bool //< send's non-blocking version
-        //<
         //< If it is full it returns false at once. An ISR cannot block, so an ISR always sends with
         //< this.
         st: = task.irq_save()
@@ -157,7 +144,6 @@ impl<|T|> Queue<|T|>
         r.push_locked(v)
         return true
     fn try_recv(r: Self$@): T? //< recv's non-blocking version
-        //<
         //< If it is empty it returns none at once (safe from an ISR too).
         st: = task.irq_save()
         defer task.irq_restore(st)
@@ -169,7 +155,6 @@ impl<|T|> Queue<|T|>
 
 struct Mutex //<
     //< A mutex with single-stage priority inheritance
-    //<
     //< A holder runs at the highest of its own priority and the priorities waiting on any mutex it
     //< holds. Every release computes this again, so the holder can release them in any order. A
     //< nested inheritance chain (the holder itself waiting on a mutex held by a third task) is not
@@ -180,12 +165,10 @@ impl Mutex
     fn init(r: Self$@)
         r.own.init()
     fn lock(r: Self$@) //< if it is free, takes it and adds it to the holder's held mutexes
-        //<
         //< On contention it raises the holder to the requester's priority (priority inheritance),
         //< blocks, and tries again once woken.
         r.lock_until(.none)
     fn try_lock(r: Self$@): Bool //< lock's non-waiting version
-        //<
         //< true if it was free and is now taken; false if anyone holds it, the caller included.
         //< From an ISR it panics like the other task-only calls.
         st: = task.irq_save()
@@ -196,13 +179,11 @@ impl Mutex
         r.own.take(me)
         return true
     fn lock_for(r: Self$@, ticks: U64): Bool //< lock with a timeout
-        //<
         //< true if it was taken, false if the holder did not release it before the timeout.
         assert(ticks > 0,
             "Mutex.lock_for: ticks must be greater than 0 (try_lock waits for nothing)")
         return r.lock_until(.some(task.deadline_after(ticks)))
     priv fn lock_until(r: Self$@, deadline: U64?): Bool //< false once deadline passes
-        //<
         //< Caution: **When giving up, return the lent priority**, or the holder keeps running at
         //< the high priority with nobody left waiting.
         $st: = task.irq_save()
@@ -229,7 +210,6 @@ impl Mutex
             st = task.block_and_rearm(Void$@::r.own@, deadline, st)
     fn unlock(r: Self$@) //<
         //< Wakes one waiter, and lowers the holder to what the mutexes it still holds lend it
-        //<
         //< That is its own priority once it holds none. A woken waiter, or any ready task, that
         //< now outranks it runs at once. From an ISR it panics like lock (an ISR holds nothing).
         //< Caution: **An unlock by a non-holder, or of a free mutex, is stopped.** If it were
@@ -269,14 +249,12 @@ impl Event
         r.bits = 0
     fn wait(r: Self$@, wanted: U32, mode: Event_mode, clear_on_exit: Bool): U32 //<
         //< Blocks until wanted's bits meet mode's condition
-        //<
         //< Returns the flags when it held; clear_on_exit clears wanted's bits in the same step.
         for // with no deadline wait_until never comes back empty; this only takes the value out
             if bits: = r.wait_until(wanted, mode, clear_on_exit, .none)
                 return bits
     fn wait_for(r: Self$@, wanted: U32, mode: Event_mode, clear_on_exit: Bool, ticks: U64): U32? //<
         //< wait with a timeout: some (the flags when it held), or none on the timeout
-        //<
         //< To check without waiting, use `get` (there is no `wait_for(…, 0)`).
         assert(ticks > 0, "Event.wait_for: ticks must be greater than 0 (read get() to poll)")
         return r.wait_until(wanted, mode, clear_on_exit, .some(task.deadline_after(ticks)))
@@ -306,7 +284,6 @@ impl Event
             me.wait_note = null
     fn set(r: Self$@, set: U32) //<
         //< Sets the named bits, and hands them to every blocked waiter whose condition they meet
-        //<
         //< **Every waiter is judged on the flags as set, before any is cleared**, then the bits of
         //< those that asked for clear-on-exit are cleared together. Judged one by one as each ran,
         //< the first would clear the bits the others wait on. A suspended waiter is passed by: it

@@ -1,5 +1,4 @@
 //< The car **downloads a policy once, closes the link and decides for itself**
-//<
 //< The car is the Freenove 4WD mecanum one (Pico W); the steps are stage 7 in
 //< `ksos/docs/HOWTO-bring-up.md`.
 
@@ -47,13 +46,11 @@ $stack_car: U8[2560]
 $arena_buf: U8[24576]
 
 const RECORD_MARKER: U8[] = "car1" //< the marker that identifies this writer
-    //<
     //< Caution: **Give it a different name from the other firmwares.** They share the region, and
     //< with the same name each reads another's record as its own (a different marker erases it
     //< once).
 const SAMPLE_EVERY: U32 = 50 //<
     //< How many rounds between saving one observation
-    //<
     //< A round where the manoeuvre changed is always saved as well. **Not every round**: at 16
     //< bytes per 100ms round, 64KB lasts minutes; changes plus a heartbeat last hours.
 // How many rounds between saving the learned weights (188 bytes). **The record only appends, so
@@ -65,21 +62,17 @@ const MODEL_SAVE_EVERY: U32 = 600 // 60 seconds at a 100ms period
 // --- the safety timeouts for stopping remotely / not running too long ---
 const IR_REARM_ROUNDS: U32 = 8 //<
     //< How long a press must be held to re-arm the car [rounds]
-    //<
     //< **These three are outside the policy**: like the battery and point-blank range, the car
     //< decides them alone, with no link.
     //< Caution: **Only a held press may re-arm it**; a brief press would set it off in the hand
     //< picking it up. A repeat comes about every 108ms, one per round (8 rounds ≈ 0.8s held).
 const IR_RELEASE_ROUNDS: U32 = 3 //< how many rounds with no frame count as released
-    //<
     //< Longer than the repeat interval (108ms), or a gap in a held press restarts the count.
 
 const IR_DUMP_ROUNDS: U32 = 25 //< how long a press must be held to dump the record [rounds]
-    //<
     //< **Make it longer than re-arming**, the everyday action (about three times). **Do not read it
     //< as seconds** — a round stretches by up to 70ms while it receives an IR frame.
 const IR_WIPE_ROUNDS: U32 = 60 //< how long a press must be held to erase the record [rounds]
-    //<
     //< **Make it longer than dumping**, since erasing cannot be undone. **It is decided by the
     //< press's length at release**, so it cannot trigger dumping partway (`watch_remote`).
 // The limit on driving [rounds]; 0 is unlimited. **The only stop that works while nobody is
@@ -87,16 +80,13 @@ const IR_WIPE_ROUNDS: U32 = 60 //< how long a press must be held to erase the re
 const MAX_DRIVING_ROUNDS: U32 = 600 // 60 seconds at a 100ms period
 
 const CONSOLE_TIMEOUT_MS: U32 = 8000 //< the limit on waiting for the console to become usable
-    //<
     //< Caution: **Wait before the very first line.** A `write` before USB is configured drops the
     //< line uncounted (not in `tx_dropped`). Keep it finite — with no USB it never gets configured.
 
 const LOOP_INTERVAL_MS: U32 = 100 //< the control period [ms]
-    //<
     //< The ultrasonic measurement takes up to 36ms, so keep this well above that.
 const LINE_INTERVAL_MS: U32 = 10 //<
     //< The interval for reading only the line partway through a round and steering again [ms]
-    //<
     //< **Two or more reads while turning across the line**, or the crossing goes unnoticed.
     //< **Make it divide loop_interval_ms** — otherwise the remainder goes unsteered. The net's step
     //< (`car_model.step`) must fit in it too.
@@ -170,7 +160,6 @@ $last_by: csample.Author = .safety
 
 priv fn apply(lon: I32, lat: I32, rot: I32, by: csample.Author) //<
     //< The only function that sends a command to the wheels
-    //<
     //< It records the capped value, the command actually sent, and its source together, so they
     //< never come from different rounds.
     d: = motor.divisor(lon, lat, rot)
@@ -181,7 +170,6 @@ priv fn apply(lon: I32, lat: I32, rot: I32, by: csample.Author) //<
     motor.drive(last_lon, last_lat, last_rot)
 
 priv fn halt(why: status.State) //< stops from then on
-    //<
     //< **It does not resume by itself**; setting off unasked is worse than staying stopped. Only
     //< the battery's minimum (halt_battery / watch_battery) and the remote have a way back.
     halted = true
@@ -190,14 +178,12 @@ priv fn halt(why: status.State) //< stops from then on
     apply(0, 0, 0, .safety)
 
 priv fn halt_battery() //< stops at the battery's minimum
-    //<
     //< **This one resumes when a person turns the switch off and on** (watch_battery;
     //< `common/battery.kspl` records the voltage and the flag).
     halt(.battery)
 
 priv fn watch_battery(ln: con.Line$@): Bool //<
     //< Checks the battery for one round and returns whether a decision may be made this round
-    //<
     //< **The rules are `common/battery.kspl`'s**; only how this car stops and resets the budget is
     //< here.
     //< Caution: **Call it while stopped too** (the reason is at `battery.Watch.look`).
@@ -216,7 +202,6 @@ priv fn watch_battery(ln: con.Line$@): Bool //<
     return may
 
 priv fn halt_remote(why: status.State) //< stops from the remote
-    //<
     //< Caution: **Restart the held-press count**, or the finger that stopped it re-arms it without
     //< a release being seen.
     halt_needs_remote = true
@@ -227,7 +212,6 @@ priv fn halt_remote(why: status.State) //< stops from the remote
 
 priv fn watch_remote(ln: con.Line$@): Bool //<
     //< Checks the remote's stop and returns whether a decision may be made this round
-    //<
     //< Caution: **Call it while stopped too**, or it misses the held press, the only way back.
     //< **While it runs any button stops it** (a repeat carries no cmd to tell them apart).
     seen: = ir_seen_in_round
@@ -275,7 +259,6 @@ priv fn watch_remote(ln: con.Line$@): Bool //<
 
 priv fn watch_run_time(): Bool //<
     //< Checks the driving-time limit and returns whether a decision may be made this round
-    //<
     //< **The only stop that works while nobody is watching**; a held press re-arms it.
     if halted
         return false
@@ -286,7 +269,6 @@ priv fn watch_run_time(): Bool //<
     return true
 
 priv fn pump_watch(ms: U32) //< waits while running USB, checking IR as well
-    //<
     //< Caution: **Check IR on a 1ms tick**; once per 100ms period misses a NEC frame's start
     //< (67.5ms). While receiving, the driver holds the CPU for up to 70ms and USB waits; only
     //< output is delayed.
@@ -300,7 +282,6 @@ priv fn pump_watch(ms: U32) //< waits while running USB, checking IR as well
                 last_ir_cmd = f.cmd
 
 priv fn one_round(p: policy.Policy$@, arena: Arena$@) //< runs one round
-    //<
     //< Caution: **Whichever path it takes, set the wheels' state at the end**, or the last command
     //< keeps running when nothing was decided.
     raw: = range.read_mm()
@@ -326,7 +307,6 @@ priv fn one_round(p: policy.Policy$@, arena: Arena$@) //< runs one round
 
 priv fn track_while_pumping(p: policy.Policy$@, arena: Arena$@, driving: Bool): Bool //<
     //< Spends one round's waiting time running USB and IR
-    //<
     //< **The ultrasonic is not read again** (too slow for `LINE_INTERVAL_MS`). **A round it may not
     //< drive on is left alone**, or steering would overwrite the command that stopped it.
     mark: = arena.save()
@@ -359,7 +339,6 @@ priv fn track_while_pumping(p: policy.Policy$@, arena: Arena$@, driving: Bool): 
 
 priv fn pct_field(ln: con.Line$@, label: U8[], permille: U32) //<
     //< Prints one field of a fraction [‰], to one decimal place
-    //<
     //< Caution: **Do not make it an integer percentage** — near 60‰ the net and its baseline vanish
     //< in the rounding. **Print no number at 0 steps**, where 0% would read as "perfect".
     ln.str(label)
@@ -372,7 +351,6 @@ priv fn pct_field(ln: con.Line$@, label: U8[], permille: U32) //<
         ln.str("%")
 
 priv fn report(ln: con.Line$@) //< prints one line
-    //<
     //< Not every round, or USB's send queue drops lines. One line describes **one moment**: the
     //< values the latest decision used.
     dist: = last_dist

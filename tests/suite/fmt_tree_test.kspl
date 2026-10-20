@@ -1,5 +1,4 @@
 //< Checks that every tracked source is already formatted, and still reads formatted narrow
-//<
 //< Every tracked source goes through `ksplc fmt` and must come out byte for byte: it is the tree's
 //< formatting gate. At a narrow width its output must read back and come out of a second pass
 //< unchanged. **It reads the whole tree**, so it lives here; ksplc's own `fmt` and `notation`
@@ -10,6 +9,7 @@ import "ksplc/tests/support/harness" as ksplc_harness
 import "std/ds" { List }
 import "std/fs"
 import "std/io"
+import "std/math"
 import "std/mem" { Arena }
 import "std/str"
 import "std/subproc"
@@ -29,7 +29,7 @@ priv fn fmt_job(rel: U8[], style: U8[], arena: Arena$@): subproc.Job //<
 priv fn first_difference(a: U8[], b: U8[]): Sz //<
     //< The first line (1-based) where two texts differ, or 0 where they are the same
     $line: Sz = 1
-    for i in Range.asc(a.len if a.len < b.len else b.len)
+    for i in Range.asc(math.min(a.len, b.len))
         if a[i] != b[i]
             return line
         if a[i] == '\n'
@@ -75,7 +75,6 @@ priv fn check_parting(arena: Arena$@)
 
 priv const FMT_SPECS: U8[][_] = ::{ "*.kspl", ":!ksplc/tests/negative/", ":!ksplc/tests/lint/" } //<
     //< The sources formatted
-    //<
     //< Caution: **Leave out the deliberately broken files** (`ksplc/tests/negative/` unreadable,
     //< `ksplc/tests/lint/` misaligned on purpose, which formatting **realigns**), as `make fmt`
     //< does in `mk/lint.mk`.
@@ -111,7 +110,6 @@ priv fn check_formatted(rels: List<|U8[]|>@, arena: Arena$@)
 
 priv const NARROW_LIMITS: Sz[_] = ::{ 40, 50, 60 } //<
     //< The column limits the tree is also formatted at
-    //<
     //< **A narrow width breaks lines where the default never does**: a declaration's head, an
     //< `import`'s list, a `for` heading. **Each source takes one of them in turn** (the `k`th the
     //< `k % 3`th), so the tree is formatted narrow once, not three times.

@@ -244,7 +244,7 @@ Read their reasons at `desugar_node` in `parse/desugar.kspl` before adding a Des
 | :-- | :-- | :-- |
 | **Parse / normalizing** | removing wrappers, moving modifiers, folding the type postfixes (`@` `$@` `[]`), dropping by `#cfg` | `normalize_ast` in `parse/normalize.kspl` |
 | | splitting `$a: T, b: T` into one node per name | `flatten_var_decl_lists` in `parse/normalize_decl.kspl` (called by `normalize_by_kind` in `parse/normalize.kspl`) |
-| **Parse / loading** | synthesizing an `enum`'s `variant_name()` | `append_enum_variant_names` in `parse/load.kspl` (["Synthesizing an `enum`'s `variant_name`"](#synthesizing-an-enums-variant_name)) |
+| **Parse / loading** | synthesizing an `enum`'s `variant_name()`, `variants()` and `from_variant_name()` | `append_enum_members` in `parse/load.kspl` (["Synthesizing an `enum`'s members"](#synthesizing-an-enums-members)) |
 | **Desugar** | string interpolation → a method chain | `desugar_string_call` in `parse/desugar.kspl` |
 | | a format specifier's SPEC `\{v:SPEC\}` → the arguments of `fmt_spec` / `fmt_prec` / `fmt_hex` | `build_call` in `parse/format_spec.kspl` |
 | | `for x in`'s **collection expression** moved aside into a temporary variable | `desugar_for_in_loop` in `parse/desugar.kspl` |
@@ -306,7 +306,7 @@ Caution: **When adding a seam, put its name in `base/`, in exactly one place** (
    * On Sema's side the count restarts at each body's entry, and the replaced count comes back at the exit (`enter_fn_serial` / `leave_fn_serial`). Bodies are inferred one after another ("Profiling where Sema's time goes" in [`DESIGN-sema.md`](DESIGN-sema.md)), so no body restarts the count of another still in progress.
 
    **The closures' serial numbers run per file** (the reason is at `next_anon_serial` in `parse/desugar.kspl`). A change to how the names are made needs the seed updated first ("The bootstrap, and keeping the seed in step" in [`DESIGN-compiler.md`](DESIGN-compiler.md)).
-2. **Every synthesis goes through one entry point, `parse_synth_decls` in `parse/load.kspl`.** Synthesizing a closure (desugar, "A closure is synthesized as source for the same parser") strips a sugar. Synthesizing `variant_name` (load, ["Synthesizing an `enum`'s `variant_name`"](#synthesizing-an-enums-variant_name)) adds a method the source does not show. Both turn an assembled source string into top-level declarations by one path: parse → normalize → `set_kind(.k_file)` → `validate_layout` → `unwrap_top_level`. A hand-built AST would hide its mistakes until the generated C, and would have to follow every change to a declaration's shape.
+2. **Every synthesis goes through one entry point, `parse_synth_decls` in `parse/load.kspl`.** Synthesizing a closure (desugar, "A closure is synthesized as source for the same parser") strips a sugar. Synthesizing an `enum`'s members (load, ["Synthesizing an `enum`'s members"](#synthesizing-an-enums-members)) adds methods the source does not show. Both turn an assembled source string into top-level declarations by one path: parse → normalize → `set_kind(.k_file)` → `validate_layout` → `unwrap_top_level`. A hand-built AST would hide its mistakes until the generated C, and would have to follow every change to a declaration's shape.
    * **They still run at different stages** (`variant_name` inside the cache, the closures outside). Lining them up waits on the caution under "Why it is called at a separate timing rather than from `parse_file`" above.
 3. **Only `build_call` in `parse/format_spec.kspl` maps a format to a method name.** The desugaring code places the returned name and arguments as they are. The names are `FMT_METHOD_CHAR` and others in `base/core.kspl`, in the base layer like `SLICE_FQN`. Two pieces of code match on one spelling. The parse code assembles the call. The sema code words "there is no such method" in the format specifier's terms.
    * Adding an argument to `fmt_spec` and folding them into one method does not work (the reason is in `parse/format_spec.kspl`).
@@ -323,9 +323,9 @@ Caution: **When adding a seam, put its name in `base/`, in exactly one place** (
 
 **Where the other compilers put it.** rustc gathers desugaring into one AST→HIR stage, and javac into `Lower` after typing. rustc's shape works because its name resolution stands alone before lowering, while KSPL's Sema holds resolution. Gathering it costs in the diagnostics. Even with a dedicated `DesugaringKind` tracking each expansion's source, rustc shows synthesized names to the user (`async fn`'s `__arg`). KSPL closes that hole in advance with `is_anon_fn_name` and `append_anon_fn_capture_note` (`sema/session/ctx.kspl`) and "do not put a synthesized name out" in `sema/body/stmt_escape.kspl`. That is another reason to leave it split.
 
-### Synthesizing an `enum`'s `variant_name`
+### Synthesizing an `enum`'s members
 
-**The compiler adds a method `variant_name()` to every `enum`, returning the variant's name as a string, since only the compiler knows that name as a string.** Without the synthesis, whoever needs the name printed writes a `switch` over every variant, every time. ksplc's own diagnostics (`report_and_exit` in `main.kspl`) are the main user. Once a file has been read to the end, `append_enum_variant_names` in `parse/load.kspl` adds this shape for each `enum` in it:
+**The compiler adds a method `variant_name()` to every `enum`, returning the variant's name as a string, since only the compiler knows that name as a string.** Without the synthesis, whoever needs the name printed writes a `switch` over every variant, every time. ksplc's own diagnostics (`report_and_exit` in `main.kspl`) are the main user. Once a file has been read to the end, `append_enum_members` in `parse/load.kspl` adds this shape for each `enum` in it:
 
 ```kspl
 impl E
@@ -337,19 +337,36 @@ impl E
             return "beta"
 ```
 
-**Like a closure's declarations, it is made as a KSPL source string.** It goes through the one entry point every synthesis uses (`parse_synth_decls`, "Measuring where the desugaring goes"); skip it and a layout fault reaches downstream.
+**An `enum` with no type parameters whose variants carry no payload also gets `variants()` and `from_variant_name(name)`.** The reasons are "An enum lists its variants and reads one back" in [`docs/DESIGN-programming-language.md`](../../docs/DESIGN-programming-language.md). They go into the same `impl`, after a constant array that lists the variants:
 
-**It is not synthesized** in two cases:
+```kspl
+priv const _variants_of_E: E[2] = ::{ .alpha, .beta }
+
+impl E
+    pub fn variants(): E[]
+        return E[]::_variants_of_E
+    pub fn from_variant_name(name: U8[]): E?
+        for _v in _variants_of_E
+            ... // compare _v.variant_name() with name, byte for byte
+```
+
+* **The array is a top-level `const`**, so it sits in memory that cannot be written and outlives every call. A `const` inside the function would sit on the stack, and the slice returned would point at a frame already gone.
+* **Its name and the lookup's locals open with `_`.** Three checks pass over such a name: the unused-name check, the naming check, and the check for a local that hides an imported module. So nothing the user did not write is reported.
+* **The lookup compares bytes itself.** `equals` lives in `std/str`, which the `enum`'s file need not import.
+
+**It is not synthesized** in these cases:
 
 | case | why |
 | :-- | :-- |
-| the user has written `variant_name` | it would be defined twice |
+| the user has written a method of that name | it would be defined twice |
+| a variant has that name (`variants()` and `from_variant_name()` only) | `E.x` reads the variant first, so the method could not be called |
 | an `enum` carrying a const generic | the type arguments' names are not restored |
+| `variants()` and `from_variant_name()` on an `enum` with a type parameter or a payload variant | a top-level constant cannot hold a generic type, and a variant with a payload is no value without its data. Sema reports a use of either by name (`refuse_variant_list` in `sema/body/dot.kspl`) |
 
-**It is placed at the `enum`'s name, and is marked as made by the compiler.** Parsed from a string, its positions are the string's. Read in the file, they land on whatever the file's first lines hold. Unplaced, the editor would colour the `Mode` of `impl Mode` over the path in an `import` line, and a hover or a jump there would answer the `enum`.
+**What it makes is placed at the `enum`'s name, and is marked as made by the compiler.** Parsed from a string, its positions are the string's. Read in the file, they land on whatever the file's first lines hold. Unplaced, the editor would colour the `Mode` of `impl Mode` over the path in an `import` line, and a hover or a jump there would answer the `enum`.
 
 * `place_as_made` in `base/ast_ext.kspl` places every node at the name, so a diagnostic, and the jump from a written `e.variant_name()`, land on what it was made for.
-* It also marks the `impl` and its method. The language server's walks by position skip what `made_by_compiler` answers (`lsp/semtok.kspl`, `lsp/outline.kspl`, `lsp/position.kspl`, `lsp/uses.kspl`).
+* It also marks the `impl`, its methods and the constant. The language server's walks by position skip what `made_by_compiler` answers (`lsp/semtok.kspl`, `lsp/outline.kspl`, `lsp/position.kspl`, `lsp/uses.kspl`).
 * The mark lives in `ival`, which the AST cache keeps.
 
 Swift's synthesized conformances take the same two steps (an implicit declaration, placed at the type), as rustc marks what a derive expands (`Span::from_expansion`).
@@ -360,7 +377,7 @@ Caution: **`try_rewrite_enum_fmt` must not infer the value.** Inferring to decid
 
 **It must not decide on the name `put` alone either.** A user's own `put` passed an `enum` would have its body ignored, and be replaced by writing the name out. It matches only a `put` whose body is `std/lang`'s.
 
-**The price**: the generated C grows slightly. `--gc-sections` drops an unused synthesized method, so a freestanding artifact's size does not change.
+**The price**: the generated C grows slightly. `--gc-sections` drops an unused synthesized method and an unused array, so a freestanding artifact's size does not change.
 
 ### The normalized AST's disk cache (`ksplc/parse/ast_cache.kspl`)
 
@@ -377,7 +394,7 @@ flowchart TD
     M --> W["write the entry"]
 ```
 
-**The unit is one file.** The top-level declarations a file adds to `root_file`, including the `variant_name`s `append_enum_variant_names` synthesizes, depend only on that file's source and on ksplc. They do not depend on which program imported it, so an entry is shared across programs.
+**The unit is one file.** The top-level declarations a file adds to `root_file`, including the members `append_enum_members` synthesizes for each `enum`, depend only on that file's source and on ksplc. They do not depend on which program imported it, so an entry is shared across programs.
 
 **An entry carries everything normalizing produced that a later stage reads**: the declarations, and the ranges a `#cfg()` dropped. Those ranges are the editor's only clue that nothing stands there because the flag is not raised (`base/cfg_inactive.record_cfg_inactive`). Leave something out, and whether a hit reports it depends on whether the file was compiled before; nothing in the source shows that difference. `make test-ast-cache` compares the cold and warm answers to catch it. Desugar's single whole-file run avoids the same trap ("Desugar: expanding the syntactic sugar that needs no types").
 

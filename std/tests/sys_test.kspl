@@ -93,7 +93,6 @@ fn main(): I32
 
 fn test_cpu_count_affinity(ksplc: U8[], arena: Arena$@) //<
     //< That cpu_count follows the CPUs a process can run on, not the machine's count
-    //<
     //< ksplc runs the probe (`run_std` passes it), pinned to one CPU by `taskset` where it is
     //< there.
     verdict.start("[Sys] cpu_count follows the CPUs the process may run on...")
@@ -102,10 +101,7 @@ fn test_cpu_count_affinity(ksplc: U8[], arena: Arena$@) //<
         verdict
             .skip("pinning a child to one CPU is checked with taskset, which Windows does not have")
         return
-    dir: = "out/tmp/kspl_test_cpu_count"
-    fs.mkdir_all(dir) catch panic("mkdir_all should succeed under out/tmp")
-    src: = "out/tmp/kspl_test_cpu_count/probe.kspl"
-    io.write_file(src, CPU_PROBE_SRC) catch panic("the probe must be writable")
+    src: = child_path("cpu_probe", CPU_PROBE_SRC, arena)
     r: =
         subproc.run_capture(U8[][]::{ "taskset", "-c", "0", ksplc, "run", src }, "", 120000, 4096,
         arena) catch
@@ -132,7 +128,6 @@ fn test_mono_clock()
     verdict.pass("confirmed that it does not go back and that it advances once work is done.")
 
 fn test_absolute_paths() //< telling an absolute path from a relative one
-    //<
     //< Caution: **Test the round trip too**, including **the separator after the drive**
     //< (`C:name` is relative to that drive's current directory). **A drive is a root on Windows
     //< only**: on POSIX `C:\x` and `a:/b` are relative names.
@@ -152,7 +147,6 @@ fn test_absolute_paths() //< telling an absolute path from a relative one
             without one is relative.")
 
 fn test_dir_name() //< the folder that contains a path
-    //<
     //< Caution: **Test a file directly under the root, and the root itself.** The folder of
     //< either is the root; an empty result would name the working directory instead, which a bare
     //< name alone is in.
@@ -173,7 +167,6 @@ fn test_dir_name() //< the folder that contains a path
             in none.")
 
 fn test_share_roots() //< a Windows share, and a path past `\\?\`, as a root
-    //<
     //< Caution: **Test a file directly in a share.** Its folder is the share; a root cut at the
     //< first separator would make it the server, and a share's parent `\\`.
     verdict.start("[Sys] measuring the root of a share and of a path past `\\\\?\\`...")
@@ -259,7 +252,6 @@ fn test_wall_clock()
 
 priv fn mark_read_only(dir: U8[], name: U8[], arena: Arena$@): Bool //<
     //< marks a file in dir read-only with the OS's own tool; false where it cannot
-    //<
     //< Run inside dir with the bare name: Windows's `attrib` reads a `/` as a switch.
     argv: =
         (U8[][]::{ "attrib", "+r", name } if sys.is_windows()
@@ -270,7 +262,6 @@ priv fn mark_read_only(dir: U8[], name: U8[], arena: Arena$@): Bool //<
 
 fn test_fs_read_only(arena: Arena$@) //<
     //< That a read-only file is removed, and replaced by a rename, as on POSIX
-    //<
     //< POSIX looks at the folder's permission, not the file's; Windows refuses both while the file
     //< carries its read-only mark.
     verdict.start("[Fs] removing a read-only file, and renaming over one...")
@@ -309,7 +300,6 @@ fn main()
 """
 
 fn child_stops_with( //< whether a program run as a child stopped and said why
-    //<
     //< Caution: **Test a refusal that ends the process this way.** Run here, it would end the
     //< tests; and a crash ends a child too, so the reason must be in what it wrote.
     ksplc: U8[], //< the compiler that runs the child
@@ -321,15 +311,34 @@ fn child_stops_with( //< whether a program run as a child stopped and said why
     return stops_with(child_argv(ksplc, name, src, arena), why, arena)
 
 fn stops_with( //< whether a child stopped and said why, its argv given whole
-    //<
     //< A run under Wine passes a child built beforehand, as `ksplc run` needs a C compiler there.
     argv: U8[][], //< the child and its arguments
     why: U8[], //< what its standard error must hold
     arena: Arena$@,
 ): Bool
+    r: = run_to_end(argv, arena)
+    return !r.exited_with(0) && r.stderr_data.find_str(why).is_some()
+
+fn run_to_end(argv: U8[][], arena: Arena$@): subproc.Run_result //<
+    //< Runs a child and stops the test unless it started and came to an end
     r: = subproc.run_capture(argv, "", 300000, 1 << 20, arena) catch panic("the child must start")
     assert(r.exit_code.is_some(), "the child must start and come to an end")
-    return !r.exited_with(0) && r.stderr_data.find_str(why).is_some()
+    return r
+
+fn expect_output( //< stops the test unless a child put out `want` and ended on `want_code`
+    r: subproc.Run_result,
+    what: U8[], //< names the child in the message
+    want: U8[], //< all it should put out on standard output
+    want_code: I32,
+    arena: Arena$@,
+)
+    // A child's standard output is text mode on Windows, so its lines arrive as CRLF.
+    got: = r.stdout_data.replace("\r\n", "\n", arena)
+    if got.equals(want) && r.exited_with(want_code)
+        return
+    panic(U8$[]::arena.text().s(what).s(" put out\n").s(got)
+        .s("and ended on \{r.exit_code.unwrap_or(-1)\}, where it should put out\n").s(want)
+        .s("and end on \{want_code\}\n").s(r.stderr_data).take())
 
 fn test_args_index_refused(ksplc: U8[], arena: Arena$@) //< ksplc runs the child
     verdict.start("[Sys] an argument read below index 0...")
@@ -340,7 +349,6 @@ fn test_args_index_refused(ksplc: U8[], arena: Arena$@) //< ksplc runs the child
     verdict.pass("an index below 0 is refused as out of bounds, as one past the end is.")
 
 fn test_can_run() //< that the answer to "can it be started" is correct per environment
-    //<
     //< **Using `is_executable` for "can it be started" is always false on Windows.** Windows has no
     //< execute bit, so code that uses it unchanged can start nothing, on Windows only (a language
     //< server would never start there). This test pins that "decided by the extension" and "decided
@@ -388,15 +396,7 @@ fn test_can_run() //< that the answer to "can it be started" is correct per envi
 // a kill on timeout, and an absent executable.
 // ==========================================
 priv const FINISH_CAP_MS: I32 = 60000 //< the cap on a child that must finish of itself
-    //<
     //< Generous, as only a stalled child reaches it; one that ends returns at once.
-
-priv fn refused(argv: U8[][], cwd: U8[]): Bool //< whether `run_capture` fails to start it
-    arena: = Arena.new(16 * 1024)
-    defer arena.free()
-    _r: = subproc.run_capture(argv, cwd, 5000, 4096, arena) catch
-        return true
-    return false
 
 fn test_run_capture(arena: Arena$@)
     verdict.start("[Sys] running a subprocess (run_capture)...")
@@ -447,7 +447,7 @@ fn test_run_capture(arena: Arena$@)
     // Caution: **Do not start a process when an argument contains a NUL.** The C side splits there,
     // adding an argument nobody wrote (`--INJECTED`) and losing the last (`should-be-last`).
     inject_argv: = U8[][]::{ "/bin/echo", "a\0--INJECTED", "should-be-last" }
-    assert(refused(inject_argv, ""),
+    assert(subproc.run_capture(inject_argv, "", FINISH_CAP_MS, 4096, arena).is_err(),
         "an argument containing NUL must be refused, not silently split")
     // An empty argument is legitimate and goes through.
     empty_arg_argv: = U8[][]::{ "/bin/echo", "", "x" }
@@ -602,12 +602,15 @@ fn test_start_failures(ksplc: U8[], arena: Arena$@) //< ksplc is a program that 
     verdict.start("[Sys] a child that cannot start is a failed start...")
     dir: = "out/tmp/kspl_test_start_failures"
     fs.mkdir_all(dir) catch panic("mkdir_all should succeed under out/tmp")
-    assert(refused(U8[][]::{ "kspl_no_such_program" }, ""),
+    unnamed: = U8[][]::{ "kspl_no_such_program" }
+    assert(subproc.run_capture(unnamed, "", FINISH_CAP_MS, 4096, arena).is_err(),
         "a name PATH does not hold must be a failed start")
     absent: = fs.join(dir, "absent", arena)
-    assert(refused(U8[][]::{ absent }, ""), "a path naming no file must be a failed start")
+    assert(subproc.run_capture(U8[][]::{ absent }, "", FINISH_CAP_MS, 4096, arena).is_err(),
+        "a path naming no file must be a failed start")
     no_dir: = fs.join(dir, "no_such_dir", arena)
-    assert(refused(U8[][]::{ ksplc, "info", "keywords" }, no_dir),
+    in_no_dir: = U8[][]::{ ksplc, "info", "keywords" }
+    assert(subproc.run_capture(in_no_dir, no_dir, FINISH_CAP_MS, 4096, arena).is_err(),
         "a working directory that does not exist must be a failed start")
     $thrown: = false
     _code: = subproc.spawn_wait(U8[][]::{ absent }, "") catch
@@ -663,20 +666,28 @@ fn main()
   sys.exit(-1)
 """
 
+fn ran_to_zero(argv: U8[][], arena: Arena$@): Bool //< whether the tool started and ended with 0
+    r: = subproc.run_capture(argv, "", 60000, 4096, arena) catch
+        return false
+    return r.exited_with(0)
+
 fn child_argv(ksplc: U8[], name: U8[], src: U8[], arena: Arena$@): U8[][] //<
     //< Writes a child's program and returns the argv that runs it with `ksplc run`
+    argv: = List<|U8[]|>.create(arena)
+    argv.push(ksplc)
+    argv.push("run")
+    argv.push(child_path(name, src, arena))
+    return argv.slice()
+
+fn child_path(name: U8[], src: U8[], arena: Arena$@): U8[] //<
+    //< Writes a child's program and returns its path; `name` is unique per child
     dir: = "out/tmp/kspl_test_child"
     fs.mkdir_all(dir) catch panic("mkdir_all should succeed under out/tmp")
     path: = fs.join(dir, arena.text().s(name).s(".kspl").take(), arena)
     io.write_file(path, src) catch panic("the child must be writable")
-    argv: = List<|U8[]|>.create(arena)
-    argv.push(ksplc)
-    argv.push("run")
-    argv.push(path)
-    return argv.slice()
+    return path
 
 fn expect_endings( //< runs the four children and checks how each one ended
-    //<
     //< The argvs are given whole, so a run under Wine can pass children built beforehand.
     crash: U8[][],
     abort: U8[][],
@@ -761,7 +772,6 @@ fn test_child_holds_no_file(ksplc: U8[], arena: Arena$@) //<
 // ==========================================
 fn test_fs_stat_fifo() //<
     //< A FIFO's metadata reports neither a file nor a directory
-    //<
     //< **Served or copied as a file, its read waits for a writer that can never come.**
     verdict.start("[Fs] stat tells a FIFO from a regular file...")
     if sys.is_windows()

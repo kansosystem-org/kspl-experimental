@@ -1,5 +1,4 @@
 //< A node's shape and width as the printer measures them
-//<
 //< Its span and length in the source, a chain's segment and the next element's length. Whether
 //< it holds a block or ends its list with a `,`. `printer.kspl` decides the line breaks
 //< from these.
@@ -59,7 +58,6 @@ impl Ast_node
 
     fn printed_width(r: Ast_node$@, src: U8[]): Sz //<
         //< How wide the node is written on one line
-        //<
         //< Its tokens are counted, with a space only where the printer puts one.
         //< Caution: **Use it where a decision sits at the limit.** `calc_text_len` counts a space
         //< between every two children: safe for "plainly too wide", but it moves a line that fits.
@@ -96,7 +94,6 @@ impl Ast_node
 
     fn get_string_span(r: Ast_node$@, src: U8[]): Sz //<
         //< How far the string or character literal the node opens runs in src
-        //<
         //< The scan is `literal_end` in `../base/literal.kspl`.
         c_start: = r.loc.offset
         if c_start >= src.len
@@ -105,7 +102,6 @@ impl Ast_node
 
     fn get_string_width(r: Ast_node$@, src: U8[]): Sz //<
         //< How wide the string the node opens is written: its joined spelling's length
-        //<
         //< Caution: **Measure what the printer writes, not the source.** A literal continued with
         //< `\` spans the line break and the next line's indent there. So a chain holding one looks
         //< too wide to stay on its line. The next run reads the joined literal and puts it back
@@ -127,13 +123,11 @@ impl Ast_node
 
     fn is_choice(r: Ast_node$@): Bool //<
         //< Whether it is a conditional value with its choices written (`a if c else b`)
-        //<
         //< The grammar's `expr_ternary` also leaves a one-child wrapper around every other
         //< expression, and that wrapper does not count.
         return r.kind_id == .k_expr_ternary && r.children.len == 5
 
     fn source_end(r: Ast_node$@, src: U8[]): Sz //< where the node's last token ends in the source
-        //<
         //< Caution: **A string is one token though it holds children** (its pieces). If the walk
         //< goes into it, the end lands on the last piece, before the closing quote.
         $n: = r
@@ -187,48 +181,41 @@ impl Ast_node
         return total
     fn src_starts_with_dot(r: Ast_node$@, src: U8[]): Bool //<
         //< Whether this node begins with a '.' in the source
-        //<
         //< It finds the separators of a method/field access chain. A '::' static path, a call's '('
         //< and a subscript's '[' do not count.
         off: = skip_space_from(src, r.loc.offset)
         return off < src.len && (src.ptr + off)$ == '.'
     fn calc_chain_segment_len(r: Ast_node$@, start_idx: Sz, src: U8[]): Sz //<
         //< A k_expr_postfix's children are a flat op run (".name" / "(args)" / "[idx]" ...)
-        //<
-        //< One segment runs from the dot access at start_idx up to the next one. Its width is
-        //< approximate (so .m(args) wraps as a unit).
+        //< One segment runs from the dot access at start_idx up to the next one (segment_end). Its
+        //< width is approximate (so .m(args) wraps as a unit).
         $total: = r.get_child(start_idx).calc_text_len(src)
-        for $k: = start_idx + 1; k < r.children.len; k += 1
-            ch: = r.get_child(k)
-            if ch.src_starts_with_dot(src)
-                break
-            total += ch.calc_text_len(src)
+        for k in Range.new(start_idx + 1, r.segment_end(start_idx, src), 1)
+            total += r.get_child(k).calc_text_len(src)
         return total
+
+    fn segment_end(r: Ast_node$@, start_idx: Sz, src: U8[]): Sz //<
+        //< The index of the first child after start_idx that begins with a dot, or the child count
+        for $k: = start_idx + 1; k < r.children.len; k += 1
+            if r.get_child(k).src_starts_with_dot(src)
+                return k
+        return r.children.len
 
     fn has_multi_dot_chain(r: Ast_node$@, src: U8[]): Bool //<
         //< Whether r (a k_expr_postfix) holds two or more dot segments
-        //<
         //< A dot segment is "a child beginning with a dot", as calc_chain_segment_len defines it.
         //<
         //< As in clang-format, a single `recv.method(args)` is not a chain like `a.b().c().d()`:
         //< only a chain prefers the `.` as a wrapping candidate.
-        $count: Sz = 0
-        for $i: = 1; i < r.children.len; i += 1
-            if r.get_child(i).src_starts_with_dot(src)
-                count += 1
-                if count >= 2
-                    return true
-        return false
+        first: = r.segment_end(0, src)
+        return first < r.children.len && r.segment_end(first, src) < r.children.len
 
     fn chain_segment_has_comma(r: Ast_node$@, start_idx: Sz, src: U8[]): Bool //<
         //< Whether start_idx's dot segment holds a top-level `,` that is a wrapping candidate
-        //<
         //< The segment is the same range as calc_chain_segment_len's. Such a `,` appears in a call
         //< with two or more arguments.
-        for $k: = start_idx + 1; k < r.children.len; k += 1
+        for k in Range.new(start_idx + 1, r.segment_end(start_idx, src), 1)
             ch: = r.get_child(k)
-            if ch.src_starts_with_dot(src)
-                break
             if ch.kind_id == .k_expr_args
                 for arg_ch in ch.children
                     if arg_ch.is_literal(",")
@@ -237,7 +224,6 @@ impl Ast_node
 
     fn has_dot_chain(r: Ast_node$@, src: U8[]): Bool //<
         //< Whether an assignment's right-hand side (a k_expr_postfix) holds a method/field chain
-        //<
         //< A chain is made of `.method(...)` segments, and one segment starting with a dot is
         //< enough. A chain wraps by calc_chain_segment_len. So a newline forced after the `=` would
         //< leave the receiver alone on its line (`x =\n r\n .method(...)`; details in the caller's
@@ -257,12 +243,7 @@ impl Ast_node
             if count != 1
                 return false
             node = inner
-        if node == null
-            return false
-        for $i: = 1; i < node.children.len; i += 1
-            if node.get_child(i).src_starts_with_dot(src)
-                return true
-        return false
+        return node != null && node.segment_end(0, src) < node.children.len
 
     fn calc_next_element_len(r: Ast_node$@, start_idx: Sz, src: U8[]): Sz
         $total: Sz = 0

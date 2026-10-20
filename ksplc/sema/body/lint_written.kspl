@@ -1,0 +1,167 @@
+//< The lints on how a file writes its declarations, read from the written tree
+//< They find a `lang.` that changes no name ([I0312]), a function of one enum outside the
+//< enum's `impl` ([I0503]) and an arena parameter with a default ([I0702]). **They read the tree
+//< before a template's body is dropped**, so a generic nobody instantiates is read too.
+//< `run` in `infer.kspl` calls `lint_written`, under lint only.
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_spell" as _base_ast_spell // `get_decl_id_text`
+import "ksplc/base/core" as base_core
+import "ksplc/sema/session/ctx" { Sema_ctx }
+import "ksplc/sema/session/import_table" as _sema_session_import_table // `peek_file_alias`
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as _sema_type_query // `strip_ptr_full`, `get_clean_real_type`
+import "std/ds" { List, Map }
+import "std/str"
+
+priv const LANG_ALIAS: U8[] = "lang" //< the alias `std/lang` enters every file under
+priv const ARENA_FQN: U8[] = "std.mem.Arena" //< the arena's type, as the analysis names it
+
+fn lint_written(root: Ast_node$@, c: Sema_ctx$@) //<
+    //< Runs the three lints over every file's written declarations
+    $enums: = Map<|U8[], Bool|>.new(base_core.arena)
+    for child_node in root.children
+        child: = child_node.unwrap_top_level()
+        if child.kind_id == .k_decl_enum && !child.is_generic_template()
+            enums.set(enum_key(child.loc.file(), child.get_decl_id_text()), true)
+    none: = List<|U8[]|>.create(base_core.arena)
+    for child_node in root.children
+        child: = child_node.unwrap_top_level()
+        c.set_current_file(child.loc.file())
+        if child.kind_id == .k_decl_fn
+            lint_enum_function(c, child, enums@)
+        child.lint_written_under(c, none)
+
+priv fn enum_key(file: U8[], name: U8[]): U8[] //< the key of an enum in `enums`: its file and name
+    return base_core.arena.text().s(file).s("::").s(name).take()
+
+priv fn lint_enum_function(c: Sema_ctx$@, f: Ast_node$@, enums: Map<|U8[], Bool|>$@) //<
+    //< [I0503] A top-level function whose first parameter is an enum of its own file, by value
+    //< The rule is "A function of one enum is its method" in `docs/DESIGN-notation.md`. **An enum
+    //< of another file is left out**: its `impl` would hold another package's reading of it. A
+    //< generic function, one C calls (`#export`) and one the compiler made are left out too.
+    if f.is_generic_template() || f.has_attribute("export") || f.made_by_compiler()
+        return
+    for p in base_ast_ext.Param_cursor.new(f.get_fn_params(), false)
+        // **The name written alone is the enum by value**: `State@`, `State[]` and `m.State` name
+        // other types, and give no bare name.
+        name: = p.get_decl_type_node().bare_written_name()
+        if name.len > 0 &&
+            enums.get(enum_key(f.loc.file(), name)).unwrap_or(false)
+            c.clear_scratch()
+                .s("[I0503] This function takes the enum '\{name\}' first, and this file declares \
+                    that enum. Make it a method in 'impl \{name\}' that takes 'Self'. Then a call \
+                    reads 'x.\{f.get_decl_id_text()\}(…)', and the enum's functions stand in one \
+                    place.")
+            c.information(f, c.scratch.slice())
+        return
+
+impl Ast_node
+    priv fn lint_written_under(r: Self$@, c: Sema_ctx$@, shadows: List<|U8[]|>$@) //<
+        //< One node of the walk; `shadows` names the locals of the functions around it
+        if r == null || r.kind_id == .k_decl_import
+            return
+        $inner: = shadows
+        if r.kind_id == .k_decl_fn || r.kind_id == .k_decl_fn_proto ||
+            r.kind_id == .k_expr_fn_lit
+            lint_arena_defaults(c, r)
+            inner = List<|U8[]|>.create(base_core.arena)
+            for s in shadows
+                inner.push(s)
+            r.collect_local_names(inner)
+        if member: = r.lang_member()
+            lint_lang_prefix(c, r, member, inner)
+        for ch in r.children
+            ch.lint_written_under(c, inner)
+
+    priv fn collect_local_names(r: Self$@, out: List<|U8[]|>$@) //<
+        //< The names a function declares inside it: its parameters and its local bindings
+        //< A nested function's are taken too. That can only leave a `lang.` unreported.
+        if r == null
+            return
+        if r.kind_id == .k_fn_param
+            id: = r.find_child(.k_identifier)
+            if id != null
+                out.push(id.text)
+        else if r.kind_id == .k_decl_var
+            id: = r.get_var_decl_id()
+            if id != null && id.kind_id == .k_identifier
+                out.push(id.text)
+        for ch in r.children
+            ch.collect_local_names(out)
+
+    priv fn lang_member(r: Self$@): Ast_node$@? //<
+        //< The name after a written `lang.`, as in `lang.Option`: in a path, or a member taken by `.`
+        k: = r.kind_id
+        if k == .k_expr_path || k == .k_type_path || k == .k_generic_path
+            $names: Sz = 0
+            $head: Ast_node$@ = null
+            for ch in r.children
+                if ch.kind_id != .k_identifier
+                    continue
+                names += 1
+                if names == 1
+                    head = ch
+                else if names == 2 && head.text.equals(LANG_ALIAS)
+                    return .some(ch)
+            return .none
+        if k == .k_method_access ||
+            k == .k_expr_postfix && r.postfix_op_text().equals(".")
+            receiver: = r.get_postfix_receiver()
+            member: = r.get_postfix_member()
+            if receiver != null && member != null && member.kind_id == .k_identifier &&
+                receiver.bare_written_name().equals(LANG_ALIAS)
+                return .some(member)
+        return .none
+
+priv fn lint_lang_prefix(c: Sema_ctx$@, at: Ast_node$@, member: Ast_node$@,
+    shadows: List<|U8[]|>@) //<
+        //< [I0312] A name after `lang.` that, written alone, names the same declaration
+        //< The rule is "Write `lang.` only when the unqualified name is blocked" in
+        //< `docs/SPEC-programming-language.md`. **The name enters a file only as std/lang publishes
+        //< it**: a declaration without `pub` stays reachable inside `std/` with `lang.` alone, and
+        //< is not reported. A file's own declaration of `X`, a written import of it, a local named
+        //< `X`, and a file's own `lang` all block the bare name.
+    file: = at.loc.file()
+    alias: = c.peek_file_alias(file, LANG_ALIAS)
+    if alias == null || alias.decl_node != null
+        return
+    entered: = c.peek_import_symbol(file, member.text)
+    if entered == null || entered.decl_node != null || shadows.contains(member.text)
+        return
+    c.clear_scratch()
+        .s("[I0312] 'lang.\{member.text\}' names what '\{member.text\}' alone names in this file. \
+            Write '\{member.text\}'. Keep 'lang.' only where this file's own declaration, an import \
+            or a local takes the name.")
+    c.information(at, c.scratch.slice())
+
+priv fn lint_arena_defaults(c: Sema_ctx$@, f: Ast_node$@) //<
+    //< [I0702] A parameter that takes an arena and carries a default
+    //< The rule is "A default argument is allowed only for a foldable constant" in
+    //< `docs/DESIGN-principles.md`. **The type is read as the analysis resolved it**, so an arena
+    //< behind a typedef or a pointer is found. A template's parameter has no resolved type, so its
+    //< written name is read instead.
+    for p in base_ast_ext.Param_cursor.new(f.get_fn_params(), false)
+        if p.get_param_default() == null || !takes_arena(c, p)
+            continue
+        c.information(p,
+            "[I0702] This parameter takes an arena and has a default, so a call that leaves it out \
+                does not show where it allocates. Remove the default. A caller that wants the heap \
+                passes 'null'.")
+
+priv fn takes_arena(c: Sema_ctx$@, p: Ast_node$@): Bool //< whether a parameter's type is an arena
+    id: = p.param_type_id()
+    if id != 0 && !sema_type_env.is_unknown(id)
+        return c.env.get_str(c.env.get_clean_real_type(c.env.strip_ptr_full(id))).equals(ARENA_FQN)
+    return p.get_decl_type_node().names_arena()
+
+impl Ast_node
+    priv fn names_arena(r: Self$@): Bool //< whether a written type names `Arena` anywhere in it
+        if r == null
+            return false
+        if r.kind_id == .k_identifier && r.text.equals("Arena")
+            return true
+        for ch in r.children
+            if ch.names_arena()
+                return true
+        return false

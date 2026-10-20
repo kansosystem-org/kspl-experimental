@@ -1,12 +1,10 @@
 //< Generics: type arguments, constraints and inference
-//<
 //< Each case below is compiled alone, as the file its head names.
 // ==== case generic_body_error_once
 //< A mistake in a generic's body is reported once, however many instances meet it
-//<
 //< Each instance found it again with its own type in the text. So three calls gave three errors at
 //< one place. The follow-on "cannot infer" of the later instances came on top.
-// EXPECT: generic_body_error_once.kspl:12:11: error: type 'generic_body_error_once.P' has no field
+// EXPECT: generic_body_error_once.kspl:11:11: error: type 'generic_body_error_once.P' has no field
 // EXPECT-NOT: type 'I32' has no field
 // EXPECT-NOT: cannot infer type for 'q'
 struct P
@@ -23,13 +21,12 @@ fn main(): I32
   return 0
 // ==== case generic_body_error_names_instance
 //< An error in a generic's body names the instantiation it met, and the line that asked for it
-//<
 //< The line alone is the template's, and the mistake may be the caller's type argument. The chain
 //< reaches the caller's own line, innermost first; a second instance meeting the same error adds
 //< nothing, the error being reported once (`instance_notes` in `sema/session/ctx.kspl`).
-// EXPECT: generic_body_error_names_instance.kspl:17:12: error: Operator '<' requires
-// EXPECT: Note: in 'generic_body_error_names_instance.smaller<|generic_body_error_names_instance.Pt|>', instantiated at generic_body_error_names_instance.kspl:20:12.
-// EXPECT: Note: in 'generic_body_error_names_instance.wrap<|generic_body_error_names_instance.Pt|>', instantiated at generic_body_error_names_instance.kspl:24:11.
+// EXPECT: generic_body_error_names_instance.kspl:16:12: error: Operator '<' requires
+// EXPECT: Note: in 'generic_body_error_names_instance.smaller<|generic_body_error_names_instance.Pt|>', instantiated at generic_body_error_names_instance.kspl:19:12.
+// EXPECT: Note: in 'generic_body_error_names_instance.wrap<|generic_body_error_names_instance.Pt|>', instantiated at generic_body_error_names_instance.kspl:23:11.
 // EXPECT: Finished with 1 error(s)
 // EXPECT-NOT: Qt|>'
 priv struct Pt
@@ -50,7 +47,6 @@ fn main(): I32
     return 0
 // ==== case generic_call_arg_types
 //< A generic call's arguments are checked against the parameter types after instantiation too
-//<
 //< **At the call they cannot be checked**: `T`/`U` are bound to nothing, so the expected type is
 //< `unknown`. Right after the instantiation is the one chance (check_args_against_instance in
 //< sema/body/call.kspl). If it is skipped, the generated C fails with a raw C error (Principle 2).
@@ -101,7 +97,6 @@ fn main(): I32
   return 0
 // ==== case generic_constraint_in_template_body
 //< A type-argument constraint broken **inside a template's body** reports the real error first
-//<
 //< Bodies come off a pending queue, so a violation by an instantiation inside a body is known only
 //< after that instantiation's method bodies are checked. An `if`'s condition tries constant folding
 //< under suppression, so the constraint check goes to the queue there: hence this path.
@@ -127,7 +122,6 @@ fn main(): I32
   return w.go()
 // ==== case generic_constraint_via_static_call
 //< A generic's type-argument constraint applies however the type is referred to
-//<
 //< This fixture covers "an inferred declaration + a static generic call"
 //< (`m: = Map<|Point, I32|>.new(null);`). The type-annotation form (`m: Map<|Point, I32|> = …;`) is
 //< not the only one checked.
@@ -150,7 +144,6 @@ fn main(): I32
   return I32::m.len
 // ==== case generic_decl_checked_as_plain
 //< A generic struct's or enum's instance is refused where the same non-generic declaration is
-//<
 //< An instance fills its fields and variants through the same functions as a plain declaration
 //< (fill_struct_fields and fill_enum_variants in ksplc/sema/decl/registry.kspl).
 // EXPECT: field 'a' is already defined in this struct
@@ -191,7 +184,6 @@ fn main()
   case_duplicate_variant()
 // ==== case generic_enum_variant_first_use
 //< An error inside a generic enum's instance is reported when its first use is `E<|T|>.v`
-//<
 //< That shape instantiates the enum on the way to the variant, and the instance is cached. If the
 //< instantiation's errors are suppressed there, a later use finds the cached instance. The error is
 //< then never reported, and the program goes on to the C compiler with a broken payload type.
@@ -209,7 +201,6 @@ fn main()
   switch e case .v {} default {}
 // ==== case generic_field_less_visible
 //< A generic's struct fields and enum payloads are checked the same way as a non-generic one's
-//<
 //< Without the check on an instance, a wrapper `pub struct W<|T|>` alone would leak a
 //< `priv` type into other files (ksplc/docs/DESIGN-diagnostics.md "A check of one kind lives
 //< in one place").
@@ -235,7 +226,6 @@ fn main()
   default {}
 // ==== case generic_fn_infinite_instantiation
 //< A generic function calling itself with a different type argument is stopped at a depth cap
-//<
 //< Without the cap the compilation does not finish. Call depth cannot measure it: each body goes
 //< to the pending queue, so the depth returns to 0 per item. Each new mangled name misses the
 //< instantiation cache (inst_chain_depth in ksplc/sema/session/ctx.kspl).
@@ -249,7 +239,6 @@ fn main()
   recur(1)
 // ==== case generic_fn_nests_its_type_once
 //< A recursion whose type argument wraps a struct one level deeper is one error, readably named
-//<
 //< The struct's method table rose with the same depth and was reported as well. Each note spelled
 //< the deepest instance by its internal name, over a thousand characters long.
 // EXPECT: generic function instantiation chain too deep
@@ -268,7 +257,6 @@ fn main(): I32
   return f<|I32|>(1, 3)
 // ==== case generic_fn_value_needs_type_args
 //< A generic function is a value only as a specialization its type arguments name
-//<
 //< A value has no arguments to infer them from. So the bare name is refused at its line, with what
 //< to write. Let through, it reaches C as a name that no function has. Type arguments after a
 //< function that declares none would bind nothing. So they are refused too, called or not.
@@ -309,7 +297,6 @@ fn main(): I32
   return ok(0) + bare() + wrong_type() + stray_on_value() + stray_on_call()
 // ==== case generic_method_chain_too_deep
 //< A method that builds its own type one level deeper each time is stopped at the chain's limit
-//<
 //< **One error, at the cut.** The instance left unbuilt has no methods. The call that reached it
 //< used to add "has no field or method", which named a type 32 levels deep and suggested an import.
 // EXPECT: generic method table chain too deep. 'generic_method_chain_too_deep.Chain' is nested
@@ -335,7 +322,6 @@ fn main(): I32
   return c.walk(3)
 // ==== case generic_spelling_in_diagnostic
 //< A type in a diagnostic is shown as the user wrote it
-//<
 //< **Do not show an internal name.** Whoever wrote `List<|U8[]|>` cannot match a mangled name to
 //< it ("A diagnostic points at 'the position the user wrote'" in `ksplc/docs/DESIGN-diagnostics.md`).
 //< Caution: **Keep the `EXPECT-NOT`**: with two functions printing it, one still mangled passes.
@@ -352,7 +338,6 @@ fn main(): I32
   return n
 // ==== case types_spelled_as_written
 //< A diagnostic spells each type as it is written, never by its internal name
-//<
 //< An optional was `std_lang_Option_I32`, an array literal's element `U8 immut`, and a
 //< polymorphic recursion's note over a thousand characters of mangled names.
 // EXPECT: switch on enum 'I32?' does not cover all variants
@@ -371,7 +356,6 @@ fn main(): I32
   return pick(.none) + I32::pair(1)[0]
 // ==== case generic_trait_arg_is_not_a_leak
 //< A type variable that monomorphisation merely substitutes is no visibility leak
-//<
 //< The `Output` of `std.lang.Index<|Idx, Output|>` is replaced by the implementing type's own
 //< type; `Output`, not a concrete type, is what was written, so no visibility diagnostic stands.
 //< The case fails on purpose through the same check, at a field rather than a return value.
@@ -397,7 +381,6 @@ fn main()
   _x: = row[0]
 // ==== case generic_type_args_missing
 //< A generic type written with no type arguments is rejected
-//<
 //< A template holds a substance only once instantiated, so letting it through puts a type name with
 //< no substance into the generated C.
 // EXPECT: generic type 'W' is used without type arguments
@@ -407,7 +390,6 @@ fn main()
   _x: W
 // ==== case generic_type_args_not_inferred
 //< A type parameter no argument fixes is refused at the call, which is told what to write
-//<
 //< Bound from the first argument instead, `zero(5)` would take `I32` and `f(2)` leave `U` raw in C.
 //< The expected type does not fix it. A `const` parameter is read where it stands as an array's
 //< length or a generic's value argument. A slice has no length fixed at translation time. An `I32`
@@ -457,7 +439,6 @@ fn main(): I32
   return sum(I32[]::s)
 // ==== case generic_const_length_conflict
 //< Two arguments fixing one `const` parameter to different values refuse the call, naming both
-//<
 //< Either value chosen alone would make the instance refuse the other argument, as if only that
 //< one were wrong. Written at the call, the value still decides, and the other array is refused.
 //< An array's length and a generic's value argument (`Buf<|4|>`) are values alike.
@@ -483,7 +464,6 @@ fn main(): I32
   return both(s, t) + both<|3|>(s, t) + mixed(b@, s)
 // ==== case generic_arg_kind
 //< An argument of the other kind than its parameter is refused where it is written, naming both
-//<
 //< In a generic's declaration, the check refuses two shapes, called or not. One is its own `const`
 //< parameter where a type goes (`Hold<|N|>`). The other is its type parameter where a value goes
 //< (`Buf<|T|>`, an array's length). Left to a call, it failed there as a mismatch blaming the
@@ -549,7 +529,6 @@ fn main(): I32
   return 0
 // ==== case generic_const_in_arithmetic
 //< A `const` parameter standing only inside arithmetic is said to be why nothing fixes it
-//<
 //< Arithmetic on it (`I32[N * 2]`) is not solved for it, so the call writes the value. Without
 //< the reason the refusal read as if no parameter mentioned it. In a generic's argument
 //< (`Buf<|(N + 1)|>`) arithmetic is refused besides, at the declaration and once.
@@ -578,7 +557,6 @@ fn main(): I32
   return longer(s) + longer<|2|>(s) + plain(s)
 // ==== case generic_type_args_too_few
 //< Fewer type arguments than the declaration has are rejected
-//<
 //< A type variable left unsubstituted goes straight into the generated C. The C compiler then says
 //< `unknown type name 'U'` ("Failing fast through an exception or an ICE" in ksplc/docs/DESIGN-compiler.md).
 // EXPECT: too few type arguments for generic 'W'. Expected 2, but got 1
@@ -589,7 +567,6 @@ fn main()
   _x: W<|I32|>
 // ==== case generic_type_args_too_many
 //< More type arguments than the declaration has are rejected
-//<
 //< What is left over is bound to no type variable. So nothing happens, but whoever wrote it
 //< believes it is "in effect" (docs/DESIGN-principles.md Principle 5).
 // EXPECT: too many type arguments for generic 'W'. Expected 1, but got 2
@@ -599,7 +576,6 @@ fn main()
   _x: W<|I32, I32|>
 // ==== case generic_type_call_needs_type_args
 //< A call through a generic type writes the type's type arguments on it; nothing else binds them
-//<
 //< Each instance has its own copy of each method. The call's arguments do not choose one, so the
 //< refusal says what to write. Let through, the name reached the lookup without any instance. It
 //< was reported as an undefined path. A method's own type arguments after a type that declares
@@ -647,7 +623,6 @@ fn main(): I32
     return I32::Box<|I32|>.pair(1, w) + I32::Plain.same(w)
 // ==== case generic_undefined_type_arg_in_signature
 //< A method signature using, as a type argument, a name that is not a type
-//<
 //< The name `t` is a typo for `S` (names_unknown_type in ksplc/sema/decl/resolve.kspl).
 //< Caution: **Do not make a substance out of a typo.** A `Box2<|t|>` disagrees with the body's
 //< `Chain<|Box2<|S|>|>`, lining up derived errors, and polymorphic recursion never stops compiling.
@@ -672,7 +647,6 @@ fn main(): I32
   return c.deeper().deeper().tag()
 // ==== case uninferable_var
 //< A variable with neither a type annotation nor an initialiser is an error
-//<
 //< Its type cannot be settled.
 // EXPECT: cannot infer type for 'x'
 fn main(): I32

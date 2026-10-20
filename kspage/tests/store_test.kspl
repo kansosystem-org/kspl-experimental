@@ -37,7 +37,6 @@ embed "kspage/share/store.kspl" as store_source //<
 
 priv fn sample_sheet(arena: Arena$@): Sheet$@ //<
     //< A sheet setting every field of a style and of the paper away from its default
-    //<
     //< A field that holds one choice (a marker, a way of collecting) gets a style per choice.
     sheet: = Sheet.new(base.root_font(), arena)
 
@@ -186,7 +185,6 @@ fn test_a_document_survives_the_round_trip(arena: Arena$@)
 
 priv fn field_names(src: U8[], arena: Arena$@): List<|U8[]|> //<
     //< Every field name the store writes or reads by its spelling (`set("…"` and `get("…"`)
-    //<
     //< A name made at run time (a way of comparing) is not among them; the names test pins those.
     $out: = List<|U8[]|>.new(arena)
     for mark in U8[][2]::{ "set(\"", "get(\"" }
@@ -199,18 +197,12 @@ priv fn field_names(src: U8[], arena: Arena$@): List<|U8[]|> //<
                     end += 1
                 if end < src.len && src[end] == '"' && end > from
                     name: = src.sub(from, end - from)
-                    if !held(out@, name)
+                    if !out.contains(name)
                         out.push(name)
                 i = end
             else
                 break
     return out
-
-priv fn held(names: List<|U8[]|>@, name: U8[]): Bool //< whether `names` holds that name already
-    for i in Range.asc(names.len)
-        if names.get(i).equals(name)
-            return true
-    return false
 
 priv fn unwritten(names: List<|U8[]|>@, saved: U8[], arena: Arena$@): List<|U8[]|> //<
     //< The names among `names` the saved text holds no field of
@@ -223,7 +215,6 @@ priv fn unwritten(names: List<|U8[]|>@, saved: U8[], arena: Arena$@): List<|U8[]
 
 fn test_the_sample_sets_every_field(arena: Arena$@) //<
     //< The round trip's sample writes every field the store knows
-    //<
     //< **A field left at its default is not written**, so the round trip could not see it lost.
     verdict.start("[kspage/store] the round trip's sample setting every field test...")
     // It can fire: a name in the source the text lacks is reported, and only that one.
@@ -271,13 +262,12 @@ priv fn family_is_unset(sheet: Sheet$@, name: U8[]): Bool //<
         switch s.font.family
         case .none
             return true
-        case .some(_v)
+        case .some
             return false
     return false
 
 fn test_unset_fields_stay_unset(arena: Arena$@) //<
     //< What was not written comes back not written, not filled with the current value
-    //<
     //< **Filled in, the inheritance from the parent would be cut.**
     verdict.start("[kspage/store] what was unwritten coming back unwritten test...")
     sheet: = sample_sheet(arena)
@@ -311,7 +301,6 @@ fn test_an_empty_band_comes_back_ready_to_type_into(arena: Arena$@) //<
 
 fn test_a_formula_survives_the_round_trip(arena: Arena$@) //<
     //< Only the typed text is stored, nothing else
-    //<
     //< With the value written in, an old value would be left behind after the formula changes.
     verdict.start("[kspage/store] a formula being left over the round trip test...")
     before: = sample_doc(arena)
@@ -360,7 +349,6 @@ fn test_an_unknown_version_is_rejected(arena: Arena$@)
     panic("a version it does not know must not be readable")
 
 fn test_only_the_one_name_opens(arena: Arena$@) //< only the one version field opens a text
-    //<
     //< The version field's name is the product's own, so a document saved under an earlier name
     //< does not open. **A different version number is a separate test** (above).
     verdict.start("[kspage/store] only the one version field opening a text test...")
@@ -385,7 +373,6 @@ fn test_only_the_one_name_opens(arena: Arena$@) //< only the one version field o
 
 fn test_a_number_out_of_range_is_rejected(arena: Arena$@) //<
     //< A text with a number outside the range is refused
-    //<
     //< **It is about how many times loops run.** A merge's column count, a column count and a
     //< heading's depth each decide how much work there is. So a ten-byte text with 2 billion loops
     //< until the layout exhausts memory (`Block.tiles_of` creates that many covering columns).
@@ -460,7 +447,6 @@ priv fn refused(arena: Arena$@, text: U8[], what: U8[]) //<
 
 fn test_the_saved_text_reads_as_a_diff(arena: Arena$@) //<
     //< The saved text is split into lines, so two versions one word apart differ by one line too
-    //<
     //< **Not packed onto one line**: there, one changed word is the whole document to git's diff,
     //< its merge and `grep`. **The indent width is not copied** — only whether it splits into lines
     //< and how many differ.
@@ -519,7 +505,6 @@ priv fn line_end(text: U8[], at: Sz): Sz //<
 
 fn test_a_note_number_is_not_saved(arena: Arena$@) //<
     //< A note's text is saved, and its number is not
-    //<
     //< **The number is counted where notes are listed**; written, one added note would leave every
     //< number after it stale.
     verdict.start("[kspage/store] a note's number staying out of the text test...")
@@ -561,12 +546,8 @@ priv fn align_back(name: U8[]): U8[]
 priv fn collect_back(name: U8[]): U8[]
     return collect.collect_from(name).variant_name()
 
-priv fn compare_back(name: U8[]): U8[] //<
-    //< The way of comparing `read_when` finds by that name (`none` where it finds none)
-    for how in style_when.COMPARISONS
-        if how.variant_name().equals(name)
-            return how.variant_name()
-    return "none"
+priv fn compare_back(name: U8[]): U8[]
+    return style_when.Compare.from_variant_name(name).unwrap_or(.none).variant_name()
 
 priv fn dating_back(name: U8[]): U8[]
     return day.dating_from(name).variant_name()
@@ -589,7 +570,6 @@ priv fn read_back(what: U8[], names: U8[][], back: fn(name: U8[]): U8[]): Bool /
 
 fn test_every_saved_name_reads_back_as_its_variant() //<
     //< Each name a saved text or the page holds reads back as the variant spelled the same
-    //<
     //< **Both sides are checked at once**: the reader (`*_from`) and the writer (`variant_name`).
     verdict.start("[kspage/names] every saved name reading back as its own variant test...")
     assert(read_back("Arrange", U8[][]::ARRANGES, arrange_back), "a way of laying out reads back")
@@ -622,7 +602,6 @@ fn test_the_manual_opens_and_lays_out(arena: Arena$@) //<
 
 fn test_the_manual_is_in_the_saved_form(arena: Arena$@) //<
     //< saving the manual again changes not one byte
-    //<
     //< **Edited in kspage, it stays the same file.** A hand edit in another shape would turn every
     //< later save into a diff over the whole file.
     verdict.start("[kspage/manual] the manual being in the form kspage writes test...")
@@ -642,7 +621,6 @@ priv fn reloads(d: Doc$@, sheet: Sheet$@, arena: Arena$@): Bool //< whether d, s
 
 fn test_what_the_editor_makes_always_reloads(arena: Arena$@) //<
     //< A length the editor makes itself stays inside what the loader takes
-    //<
     //< **An image's size, a fitted column and a frame placed by number each enter by their own
     //< path.** One left at what it was given saves a file that never opens again.
     verdict.start("[kspage/store] what the editor makes reloading test...")
@@ -681,7 +659,6 @@ fn test_what_the_editor_makes_always_reloads(arena: Arena$@) //<
 
 fn test_what_the_editor_merges_and_nests_always_reloads(arena: Arena$@) //<
     //< A merge or a nesting the editor would take past what the loader takes is refused
-    //<
     //< **Refused, not brought inside**: a smaller merge or a shallower slide would change the
     //< document's shape. Each path that widens a merge or nests a block is tried up to its limit.
     verdict.start("[kspage/store] a merge and a nesting past the loader's limits refused test...")

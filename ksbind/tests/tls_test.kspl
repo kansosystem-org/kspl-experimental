@@ -1,5 +1,4 @@
 //< Tests of the TLS client, against a peer on the loopback (no internet)
-//<
 //< **The peer is made here.** Its keys and certificates are built through OpenSSL in memory. So no
 //< key stands in the repository and no tool is started. Only a test CA's certificate (no key) is
 //< written to a scratch file for the length of a test. OpenSSL's default store reads a file.
@@ -151,7 +150,6 @@ priv fn server_ctx(cert: X509$@, key: EVP_PKEY$@): tls.SSL_CTX$@ //<
 
 priv fn self_signed_ctx(): tls.SSL_CTX$@ //<
     //< A server context holding a fresh key and a certificate it signed itself, for "127.0.0.1"
-    //<
     //< **No client trusts it**, since no CA in the default store signed it.
     key: = new_key()
     x: = new_cert(key, "127.0.0.1", 1, null, key)
@@ -171,7 +169,6 @@ priv struct Test_ca //< a CA made for one test, which the client trusts while it
 impl Test_ca
     fn trusted(arena: Arena$@): Test_ca //<
         //< Makes a CA and points OpenSSL's default store at it alone (`SSL_CERT_FILE`)
-        //<
         //< **The client is left as it is.** It loads the default store, where OpenSSL reads the
         //< variable. So the test runs the code a program runs.
         key: = new_key()
@@ -179,11 +176,7 @@ impl Test_ca
         dir: = fs.mkdir_unique(CA_BASE, "ca_", arena)
             catch panic("the scratch folder should be made")
         file: = fs.join(dir, "ca.pem", arena)
-        $c_file: U8$@ = null
-        switch file.to_cstr()
-        case .some(p)
-            c_file = p
-        case .none
+        c_file: U8$@ = file.to_cstr() catch
             panic("the scratch path holds no NUL")
         bio: = BIO_new_file(Void@::c_file, "w")
         dealloc(Void$@::c_file)

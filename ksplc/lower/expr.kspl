@@ -1,5 +1,4 @@
 //< Lowers an expression: what a C expression cannot hold is hoisted before its statement
-//<
 //< A short-circuit `&&` / `||`, a `!`, a `catch` chain with its `fallback`, a user operator or
 //< cast, and a conditional value each become temporaries and plain statements in `pre_stmts`.
 import "ksplc/base/ast" as base_ast + { Ast_node }
@@ -60,7 +59,6 @@ fn build_linked_method_call(recv: Ast_node$@, method_node: Ast_node$@, args: Ast
 fn gen_result_placeholder(lctx: Lowering_ctx$@, type_id: I32, is_void: Bool, loc: base_ast.Loc):
     U8$[] //<
         //< It declares the temporary that holds the expression's result
-        //<
         //< Where the expression is void, it declares nothing and returns an unused empty string.
     if is_void
         return ""
@@ -73,10 +71,23 @@ fn gen_result_placeholder(lctx: Lowering_ctx$@, type_id: I32, is_void: Bool, loc
     let_decl: = lctx.build_let_decl(name, decl_type_id, empty_node, loc)
     lctx.pre_stmts.push(let_decl)
     return name
+priv fn lower_substitute(expr_node: Ast_node$@, lctx: Lowering_ctx$@, gives_value: Bool): Bool //<
+    //< It lowers a catch's substitute (`catch <expr>`, or a `fallback`), and says if it was dropped
+    //< Where the catch gives a value, the substitute hands over a count of its own, as a ternary's
+    //< branch does. Where it gives none, a fresh managed one is released at once (lower_stmt_expr).
+    discard: = !gives_value && expr_node != null && expr_node.is_arc_fresh(lctx)
+    if expr_node == null
+        return false
+    take: = lower_arc.Arc_take.decide(expr_node if gives_value else null, lctx)
+    expr_node.lower(lctx)
+    take.retain(expr_node, lctx)
+    if discard
+        lower_arc.arc_release_now(expr_node, lctx)
+    return discard
+
 fn append_result_or_expr(block: Ast_node$@, name: U8$[], type_id: I32, value_node: Ast_node$@,
     is_void: Bool, loc: base_ast.Loc) //<
         //< It evaluates a void expression as a stmt_expr and assigns any other into the temporary
-        //<
         //< Caution: **Never turn a call that does not return into an assignment.** The fallback of
         //< `x: = f() catch panic(…)` stays Void (is_noreturn_call in sema/body/coerce.kspl), and
         //< as an assignment it gives C that reads `T x = <Void>`.
@@ -88,7 +99,6 @@ fn append_result_or_expr(block: Ast_node$@, name: U8$[], type_id: I32, value_nod
 
 priv fn lower_into_block(lctx: Lowering_ctx$@, node: Ast_node$@, loc: base_ast.Loc): Ast_node$@ //<
     //< It lowers a branch's value and returns a new block holding the statements lowering hoisted
-    //<
     //< A managed value leaves the branch with a count of its own: a place it reads is retained
     //< there. So a ternary is a fresh value whichever way it went.
     start: = lctx.pre_stmts.len
@@ -105,7 +115,6 @@ impl Ast_node
     fn finish_call_as_tmp(r: Self$@, lctx: Lowering_ctx$@, tmp_name: U8$[], recv: Ast_node$@,
         method_node: Ast_node$@, args: Ast_node$@, res_type_id: I32, loc: base_ast.Loc) //<
             //< It synthesizes a method call, binds it to a temporary and becomes a reference to it
-            //<
             //< lower_postfix_index_operator, lower_user_operator and lower_user_cast share it.
             //< The caller passes tmp_name in: the order of temporary numbering shows in the C
             //< output, so the caller decides it.
@@ -206,7 +215,8 @@ impl Ast_node
                 else if c_node.kind_id != .k_keyword && c_node.kind_id != .k_literal
                     target_expr = c_node
 
-        if target_block != null
+        // An Option's `none` holds nothing to name (infer_option_catch in sema/body/expr.kspl).
+        if target_block != null && !lctx.sema.env.is_option(u.res_type_id)
             get_err_code: = Ast_node.build_result_access(u.res_name, u.res_type_id, .err,
                 u.err_type_id, loc)
             err_decl: = lctx.build_let_decl(err_id_text, u.err_type_id, get_err_code, loc)
@@ -231,15 +241,7 @@ impl Ast_node
         lctx.relocating += 1
         if target_block != null
             target_block.lower(lctx)
-        // The substitute hands over a count of its own, as a ternary's branch does. Where the catch
-        // gives no value, a fresh one is released at once, as `fallback` does.
-        discard: = u.is_void && target_expr != null && target_expr.is_arc_fresh(lctx)
-        if target_expr != null
-            take: = lower_arc.Arc_take.decide(target_expr if !u.is_void else null, lctx)
-            target_expr.lower(lctx)
-            take.retain(target_expr, lctx)
-            if discard
-                lower_arc.arc_release_now(target_expr, lctx)
+        discard: = lower_substitute(target_expr, lctx, !u.is_void)
         lctx.relocating -= 1
 
         is_label_used: = lctx.fb.label_used
@@ -261,7 +263,7 @@ impl Ast_node
             else_block = Ast_node.build_block(loc)
             // A substitute that is a result makes the whole one (infer_catch_chain in
             // sema/body/expr.kspl), and the success is then that result's `ok`.
-            ok_id: = lctx.sema.env.strip_result(u.res_type_id)
+            ok_id: = lctx.sema.env.caught_value(u.res_type_id)
             $right_val: = Ast_node.build_result_access(u.res_name, u.res_type_id, .val, ok_id, loc)
             if lctx.sema.env.is_result(u.val_type_id) &&
                 lctx.sema.env.get_clean_real_type(u.val_type_id) != lctx.sema.env
@@ -288,7 +290,6 @@ impl Ast_node
 
     fn lower_result_wrap(r: Ast_node$@, lctx: Lowering_ctx$@) //<
         //< A value sema wrapped into a Result becomes the Result's `.ok(value)`
-        //<
         //< **The value is lowered first, as it was written**, so what ARC decided for it stands: it
         //< is not taken again as a payload. A Void value (`return plain_void(x)` in a `Void!E`
         //< function) runs as a statement before the result, which holds nothing. The operand order
@@ -305,19 +306,10 @@ impl Ast_node
 
     fn lower_fallback_stmt(r: Ast_node$@, lctx: Lowering_ctx$@) //<
         //< A `fallback` in a catch's body: it stores the value and jumps to the catch chain's label
-        //<
         //< The value goes into the temporary the catch chain set up (`lctx.fb`). The cleanups down
         //< to the chain's depth run before the jump.
         expr_node: = r.get_fallback_expr()
-        // Where the catch gives no value, a fresh managed substitute is released (lower_stmt_expr).
-        // Where the catch gives one, the substitute hands over a count of its own.
-        discard: =
-            lctx.fb.target.len == 0 && expr_node != null && expr_node.is_arc_fresh(lctx)
-        take: = lower_arc.Arc_take
-            .decide(expr_node if lctx.fb.target.len > 0 else null, lctx)
-        if expr_node != null
-            expr_node.lower(lctx)
-            take.retain(expr_node, lctx)
+        discard: = lower_substitute(expr_node, lctx, lctx.fb.target.len > 0)
 
         r.morph(.k_empty, "")
         r.type_id = I32::sema_type_env.Builtin_type_id.void_type
@@ -329,9 +321,7 @@ impl Ast_node
             fb_ident: = Ast_node.build_ident(lctx.fb.target, expr_node.type_id, r.loc)
             assign_stmt: = Ast_node.build_assign_stmt(fb_ident, expr_node, r.loc)
             lctx.pre_stmts.push(assign_stmt)
-        else if discard
-            lower_arc.arc_release_now(expr_node, lctx)
-        else if expr_node != null
+        else if expr_node != null && !discard
             lctx.pre_stmts
                 .push(Ast_node.new(.k_stmt_expr, "expr", r.loc).add_child(expr_node))
 
@@ -480,7 +470,6 @@ impl Ast_node
 
     priv fn hoist_index_receiver(r: Self$@, lctx: Lowering_ctx$@) //<
         //< It copies a subscript's slice receiver with a side effect into a temporary
-        //<
         //< Caution: **Copy a slice receiver of a subscript to a temporary.** `at(r: Self@, …)`
         //< needs the receiver's address, and genc would emit `&f()` (see `receiver_needs_hoist`;
         //< Principle 2). An array has no descriptor and needs none.
@@ -494,7 +483,6 @@ impl Ast_node
 
     priv fn hoist_method_receiver(r: Self$@, lctx: Lowering_ctx$@) //<
         //< It copies a method call's receiver into a temporary where the C would misuse it
-        //<
         //< A trait's receiver with a side effect is written twice; one whose address the method
         //< takes cannot be a call's result.
         recv_node: = r.get_child(0)
@@ -536,7 +524,6 @@ impl Ast_node
 
     priv fn order_call_operands(r: Self$@, lctx: Lowering_ctx$@, ops: Operand_order$@) //<
         //< A call's operands in order: the receiver (or a callee that is a value), then arguments
-        //<
         //< The caller lowers the call, then calls `ops.finish`.
         callee: = r.get_child(0)
         if callee.kind_id == .k_method_access || callee.kind_id == .k_generic_method
@@ -593,7 +580,6 @@ impl Ast_node
         r.finish_call_as_tmp(lctx, tmp_name, recv_node, method_node, args_node, res_type_id, loc)
     fn lower_user_cast(r: Ast_node$@, lctx: Lowering_ctx$@) //<
         //< It turns a cast resolved through `Cast` (`Dest::src_expr`) into a cast() call
-        //<
         //< The cast is the prefix form, with the children [receiver, "::", type].
         loc: = r.loc
         res_type_id: = r.type_id

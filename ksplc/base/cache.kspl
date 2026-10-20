@@ -1,11 +1,11 @@
 //< Where the on-disk cache lives, and the "identity of ksplc itself" that caches share
-//<
 //< Note: It lives in base, below its users (`ksplc/parse/ast_cache.kspl`, `ksplc/tools/run.kspl`
 //< and `ksplc/fmt/file.kspl`), since the parse layer must not import a tool.
 import "std/chars"
 import "std/ds" { List }
 import "std/fs"
 import "std/io"
+import "std/math"
 import "std/mem" { Arena, dealloc }
 import "std/sha256"
 import "std/str" { Str_builder }
@@ -13,18 +13,15 @@ import "std/strnum"
 import "std/sys"
 
 const CACHE_ENV_NAME: U8[] = "KSPLC_CACHE_DIR" //< the variable that sets the cache folder
-    //<
     //< It is also the fallback where neither HOME nor LOCALAPPDATA gives a folder.
 
 const AST_KIND: U8[] = "ast" //< the kinds of cache, one subfolder each
-    //<
     //< The path is `<cache folder>/<kind>/…`.
     //< Caution: Add each new kind to clear_all too, or `ksplc clean` silently leaves it behind.
 const RUN_KIND: U8[] = "run"
 const FMT_KIND: U8[] = "fmt"
 
 fn exit_unlocated(tool: U8[]) //< it ends a command that finds no folder for its cache
-    //<
     //< `tool` names the command in the message (`ksplc`, `ksplc run`).
     //< Caution: **Always name the fix** (the environment variable). In an environment with neither
     //< HOME nor LOCALAPPDATA it is the only way to set the folder.
@@ -33,7 +30,6 @@ fn exit_unlocated(tool: U8[]) //< it ends a command that finds no folder for its
 
 fn refused_root(root: U8[], arena: Arena$@): U8[] //<
     //< Why the cache folder cannot be used; empty where it can
-    //<
     //< **What it holds is built into the user's programs.** A normalized AST can carry inline C,
     //< and `ksplc run` runs what it finds there. So a folder that another user could write is
     //< refused, as git refuses a repository another user owns ("A cache folder that others can
@@ -61,7 +57,6 @@ priv $root_warned: Bool = false //<
     //< whether the AST cache's refusal has been reported in this process
 
 fn append_cache_root(out: Str_builder$@): Bool //< it writes the cache folder into out
-    //<
     //< True where a folder was found. It follows XDG's convention; Windows uses %LOCALAPPDATA%.
     explicit: = sys.get_env(CACHE_ENV_NAME).unwrap_or("")
     if explicit.len > 0
@@ -83,7 +78,6 @@ fn append_cache_root(out: Str_builder$@): Bool //< it writes the cache folder in
 
 fn append_self_identity(out: Str_builder$@): Bool //<
     //< It writes into out the name that tells this build of ksplc apart
-    //<
     //< **It must be part of the cache's key.** The grammar (`ksplc/kspl.kspeg`) and the
     //< normalization live inside ksplc. So a rebuilt ksplc can answer the same source differently.
     //< Caution: On false, do not use the cache at all, rather than use it without the key.
@@ -96,7 +90,6 @@ fn append_self_identity(out: Str_builder$@): Bool //<
     return true
 
 const HASH_HEX_LEN: Sz = sha256.HEX_LEN //< a sha256 as 64 hexadecimal characters
-    //<
     //< It is the cache's file name, and the key written inside it.
 
 typedef Hash_hex = U8[HASH_HEX_LEN]
@@ -114,7 +107,6 @@ fn hash_hex(data: U8[]): Hash_hex //< the digest as fixed-size text, without all
 priv const GEN_NAME_LEN: Sz = 16
 
 priv const MAX_GENERATIONS: Sz = 8 //< how many generations are kept
-    //<
     //< Caution: **Do not make it too small.** The self-hosting check runs seed / stage1 / stage2
     //< and the LLVM backend's build: **different ksplcs in turn**. The maximum size is the count ×
     //< one generation's size, tens of MB once `--define` variants add up in one.
@@ -124,7 +116,6 @@ priv fn is_hex_digit(c: U8): Bool
 
 priv fn is_hex_name(name: U8[], name_len: Sz): Bool //<
     //< Whether a name is one the cleaning can remove (name_len hexadecimal digits)
-    //<
     //< Caution: **Check this before removing**, so anything unrelated in the folder stays.
     if name.len != name_len
         return false
@@ -134,75 +125,57 @@ priv fn is_hex_name(name: U8[], name_len: Sz): Bool //<
     return true
 
 priv fn is_own_dir(path: U8[]): Bool //< whether it is a folder itself, not a link to one
-    //<
     //< Caution: **Do not descend through a link.** The cleaning removes what it lists. So a link
     //< planted in a shared cache (`run/<hex>` pointing at a home folder) would make it empty the
     //< target. Inside a folder, the link itself is removed (`fs.remove_path` does not follow it).
     //< At the top it is left alone, like anything else the cleaning does not recognise.
     return !fs.is_link(path) && fs.is_dir(path)
 
-priv fn remove_flat_dir(dir: U8[], arena: Arena$@): Bool //<
-    //< It removes the files in a folder, then the folder itself
-    //<
-    //< True on success. It gives up at a subfolder, so it removes nothing unexpected.
+priv fn remove_cache_dir(dir: U8[], levels: Sz, arena: Arena$@): Bool //<
+    //< It removes the files in a folder the cleaning chose, then the folder itself
+    //< True on success. **It goes at most `levels` folders deep**, counting `dir` as one: two for
+    //< a `ksplc run` slot, whose `obj/` is one level below. It gives up at a subfolder below that,
+    //< so it removes nothing unexpected.
     names: = fs.read_dir(dir, arena) catch
         return false
     for name in names
         child: = fs.join(dir, name, arena)
         if is_own_dir(child)
-            return false // an unexpected layout; leave it alone
+            if levels <= 1 || !remove_cache_dir(child, levels - 1, arena)
+                return false // an unexpected layout; leave it alone
+            continue
         fs.remove_path(child) catch
             return false
     fs.remove_path(dir) catch
         return false
     return true
 
-priv fn remove_cache_dir(dir: U8[], arena: Arena$@) //< it removes one folder the cleaning chose
-    //<
-    //< **Two levels deep**, for a `ksplc run` slot's `obj/`. It does not recurse, so it never goes
-    //< deeper.
-    names: = fs.read_dir(dir, arena) catch
-        return
-    for name in names
-        child: = fs.join(dir, name, arena)
-        if is_own_dir(child)
-            if !remove_flat_dir(child, arena)
-                return
-            continue
-        fs.remove_path(child) catch
-            return
-    fs.remove_path(dir) catch {}
-
 priv const USED_MARKER: U8[] = "used" //< the "last used" mark, holding that time in seconds
-    //<
     //< **The folder's own time is not enough.** A hit writes nothing, so the time stays old and
     //< **the most used slot would be the first removed**.
     //< The time is written in the file rather than read from its metadata. So prune_dirs compares
     //< against the clock that wrote it, and a test can create a slot last used an hour ago.
 
 fn touch_dir(dir: U8[], arena: Arena$@) //< it marks dir as "used just now"
-    //<
     //< Caution: **Call it every time**, or a slot removed mid-run makes that process fail for no
     //< visible reason.
     path: = fs.join(dir, USED_MARKER, arena)
     io.write_file(path, arena.text().s("\{sys.wall_seconds()\}").take()) catch {}
 
 priv fn used_time(dir: U8[], dir_time: I64, arena: Arena$@): I64 //< the time dir was last used
-    //<
     //< The time the mark holds; where it holds none (empty, or no mark), the newer of the mark
     //< file's own time and the folder's.
     path: = fs.join(dir, USED_MARKER, arena)
     info: = fs.stat(path) catch
         return dir_time
-    file_time: = info.mtime if info.mtime > dir_time else dir_time
-    text: = io.read_file(path) catch
+    file_time: = math.max(info.mtime, dir_time)
+    text: = io.read_file(path, null) catch
         return file_time
     defer dealloc(Void$@::text.ptr)
     return text.to_i64() catch file_time
 
 fn prune_dirs(base_dir: U8[], name_len: Sz, keep: Sz, spare_secs: I64, live: U8[], arena: Arena$@) //<
     //< It removes the least recently used folders under `base_dir`, keeping keep of them
-    //<
     //< It looks only at folders named by name_len hexadecimal digits. Beyond keep, it also spares
     //< any used within the last spare_secs seconds.
     //< `live` (in use now) is never removed but counts towards keep. A spare_secs of 0 spares none.
@@ -238,7 +211,7 @@ fn prune_dirs(base_dir: U8[], name_len: Sz, keep: Sz, spare_secs: I64, live: U8[
         // still being written, and every one left is newer still.
         if spare_secs > 0 && times.get(oldest) >= cutoff
             return
-        remove_cache_dir(kept.get(oldest), arena)
+        remove_cache_dir(kept.get(oldest), 2, arena)
         kept.set(oldest, kept.get(kept.len - 1))
         times.set(oldest, times.get(kept.len - 1))
         kept.len -= 1
@@ -246,7 +219,6 @@ fn prune_dirs(base_dir: U8[], name_len: Sz, keep: Sz, spare_secs: I64, live: U8[
 
 fn append_generation_dir(kind: U8[], out: Str_builder$@, arena: Arena$@): Bool //<
     //< It writes `<cache folder>/<kind>/<generation>` into out and creates that folder
-    //<
     //< False where no folder is found (then no cache). Old generations go only when one is created.
     $self_id: = Str_builder.new()
     if !append_self_identity(self_id@)
@@ -277,7 +249,6 @@ fn append_generation_dir(kind: U8[], out: Str_builder$@, arena: Arena$@): Bool /
 
 fn clear_all(out: Str_builder$@, arena: Arena$@): Bool //<
     //< It removes everything in the cache folder and writes that folder's path into out
-    //<
     //< False where no folder is found. Only folders with hexadecimal names go, so a
     //< `KSPLC_CACHE_DIR` that holds other things loses nothing else.
     if !append_cache_root(out)

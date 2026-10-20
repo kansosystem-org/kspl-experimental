@@ -1,4 +1,4 @@
-import { check, near, material, para, group, grid } from "./shell.mjs";
+import { check, near, material, para, group, grid, shared } from "./shell.mjs";
 
 export const subject = "Parting into pages, the bands above and below, the regions, the slides.";
 
@@ -20,11 +20,10 @@ const inside = "As one sheet";
 export const opens = material({
   styles: [
     { name: "body", space_after: 12.0, line_spacing: 1.4 },
-    { name: "heading", size_px: 28.0, weight: 700, space_after: 8.0 },
-    { name: "table", space_before: 12.0, space_after: 12.0, arrange: "grid" },
-    { name: "cell", pad: 4.0, rule_width: 1.0, rule_color: "#cccccc" },
-    { name: "slide", space_before: 12.0, space_after: 12.0, width: 620.0, height: 120.0,
-      arrange: "absolute" },
+    shared.heading,
+    shared.table,
+    shared.cell,
+    shared.slide,
   ],
   blocks: [
     para("body", "Prose, tables and slides alike, it is an editing system for writing them all "
@@ -45,7 +44,7 @@ export const opens = material({
 });
 
 export async function run(ks, open) {
-  const { w, mem, scratch, read, out, stage, geom, boxOf, find, save, md, load,
+  const { w, mem, scratch, read, out, stage, feed, geom, boxOf, find, save, md, load,
     surfaceAt } = ks;
 
   // --- A slide inside the flow (absolute coordinates) ---
@@ -70,11 +69,14 @@ export async function run(ks, open) {
 
   // --- Parting into single pages, and the margins ---
   // **The paper's settings are the document's.** Width 0 is the vessel's width; height 0 parts not.
-  const paperOf = () => {
-    w.kspage_web_paper(scratch);
-    return read(8);
-  };
-  check(paperOf()[1] === 0 && paperOf()[6] === 0, "by default it does not part");
+  // They cross as their saved text, **a field left out being 0** (`kspage/share/store.kspl`).
+  const paperOf = () => JSON.parse(out(w.kspage_web_paper()));
+  const band = () => w.kspage_web_paper_band();
+  const setPaper = (width, height, left, top, right, bottom, reading) =>
+    w.kspage_web_set_paper(feed(JSON.stringify({ page_width: width, page_height: height,
+      margin_left: left, margin_top: top, margin_right: right, margin_bottom: bottom,
+      reading_width: reading })));
+  check(paperOf().page_height === undefined && band() === 0, "by default it does not part");
   w.kspage_web_layout(300);
   const flat = w.kspage_web_height();
   check(w.kspage_web_paper_count() === 1, "a document that does not part is one sheet");
@@ -82,11 +84,10 @@ export async function run(ks, open) {
   // printing.** The numbers are the core's (`../../model/paper.kspl`'s `a4_portrait`); a JS copy
   // would give **two documents from the same screen different margins**. Pinned by value (A4
   // upright in px at 96dpi, margins 15mm all round).
-  w.kspage_web_default_paper(scratch);
-  const borrow = read(6);
-  check(borrow[0] === 794 && borrow[1] === 1123, "the page borrowed is A4 upright");
-  check(borrow[2] === 57 && borrow[3] === 57 && borrow[4] === 57 && borrow[5] === 57,
-    "the margins borrowed are 15mm (57px) all round");
+  const borrow = JSON.parse(out(w.kspage_web_default_paper()));
+  check(borrow.page_width === 794 && borrow.page_height === 1123, "the page borrowed is A4 upright");
+  check(borrow.margin_left === 57 && borrow.margin_top === 57 && borrow.margin_right === 57 &&
+    borrow.margin_bottom === 57, "the margins borrowed are 15mm (57px) all round");
   check(near(w.kspage_web_column(300), 300),
     "with no paper width the column is the vessel's width");
   check(w.kspage_web_column_left(300) === 0,
@@ -95,8 +96,8 @@ export async function run(ks, open) {
   // --- Stopping at the body's width ---
   // **What is left over by the stopping is parted equally left and right.** **It does not bite
   // where the paper's width is settled** (two hands would settle the width to print).
-  w.kspage_web_set_paper(0, 0, 0, 0, 0, 0, 400);
-  check(paperOf()[7] === 400, "the body's width can be read back");
+  setPaper(0, 0, 0, 0, 0, 0, 400);
+  check(paperOf().reading_width === 400, "the body's width can be read back");
   check(near(w.kspage_web_column(1000), 400), "in a wide window it is the width stopped at");
   check(near(w.kspage_web_column_left(1000), 300),
     "what is left over is parted equally left and right");
@@ -107,7 +108,7 @@ export async function run(ks, open) {
   check(midLaid > 0 && near(geom(0)[0], 300),
     "the coordinates laid come inward by what it was drawn over");
   // Caution: **Stop after the margins are taken off** (the field's number is the body's width).
-  w.kspage_web_set_paper(0, 0, 50, 0, 50, 0, 400);
+  setPaper(0, 0, 50, 0, 50, 0, 400);
   check(near(w.kspage_web_column(1000), 400),
     "with margins too, the body's width is the number written");
   check(near(w.kspage_web_column_left(1000), 250),
@@ -116,9 +117,9 @@ export async function run(ks, open) {
   const capped = save();
   check(capped.includes("\"reading_width\": 400"),
     "the body's width goes into the text written out");
-  check(load(capped) !== 0 && paperOf()[7] === 400,
+  check(load(capped) !== 0 && paperOf().reading_width === 400,
     "read back, the body's width is still there");
-  w.kspage_web_set_paper(0, 0, 0, 0, 0, 0, 0);
+  setPaper(0, 0, 0, 0, 0, 0, 0);
   check(save().includes("reading_width") === false,
     "where nothing stops it, nothing is written into the text");
   check(near(w.kspage_web_column(1000), 1000),
@@ -131,7 +132,7 @@ export async function run(ks, open) {
     "the module holds no override of the body's width or type size");
 
   // A page height that is not a multiple of the line's height, so a line has to cross a page.
-  w.kspage_web_set_paper(0, 137, 0, 0, 0, 0, 0);
+  setPaper(0, 137, 0, 0, 0, 0, 0);
   w.kspage_web_layout(300);
   const sheets = w.kspage_web_paper_count();
   check(sheets > 1, `parted, it becomes several sheets (${sheets})`);
@@ -143,40 +144,43 @@ export async function run(ks, open) {
     "the last odd remainder is counted as one sheet too");
 
   // The margins. **The column narrows, and the height that fits one page drops too.**
-  w.kspage_web_set_paper(400, 300, 40, 30, 40, 30, 0);
+  setPaper(400, 300, 40, 30, 40, 30, 0);
   const spec = paperOf();
-  check(spec[0] === 400 && spec[1] === 300, "the paper's size can be read back");
-  check(spec[2] === 40 && spec[3] === 30, "the margins can be read back too");
+  check(spec.page_width === 400 && spec.page_height === 300, "the paper's size can be read back");
+  check(spec.margin_left === 40 && spec.margin_top === 30, "the margins can be read back too");
   // **The core takes the margins off** (300 - 30 - 30 = 240), not the caller.
-  check(spec[6] === 240, `the content's height that fits a page (${spec[6]})`);
+  check(band() === 240, `the content's height that fits a page (${band()})`);
   // **The vessel's width is disregarded** (400 - 40 - 40 = 320).
   check(near(w.kspage_web_column(1000), 320),
     `the column is the width with the margins off (${w.kspage_web_column(1000)})`);
   // **Settle the paper's width and the body's width does not bite.**
-  w.kspage_web_set_paper(400, 300, 40, 30, 40, 30, 100);
+  setPaper(400, 300, 40, 30, 40, 30, 100);
   check(near(w.kspage_web_column(1000), 320),
     "settle the paper's width and the body's width does not bite");
   check(w.kspage_web_column_left(1000) === 0,
     "and then it is not drawn over (the copying side takes the margins off)");
-  w.kspage_web_set_paper(400, 300, 40, 30, 40, 30, 0);
+  setPaper(400, 300, 40, 30, 40, 30, 0);
   const laidWide = w.kspage_web_layout(1000);
   check(laidWide > 0 && near(geom(0)[0], 0),
     "the coordinates laid are from the column's left edge");
-  // A negative value becomes 0 (a negative margin makes the column wider than the page).
-  w.kspage_web_set_paper(400, 300, -50, 0, 0, 0, 0);
-  check(paperOf()[2] === 0, "a negative margin becomes 0");
+  // **Out of range it is refused, as a document read from a file is** (`kspage/model/limit`);
+  // the settings stay as they were.
+  check(setPaper(400, 300, 200000, 30, 40, 30, 0) === 0, "a margin past the range is refused");
+  check(setPaper(400, 50, 40, 30, 40, 30, 0) === 0, "a page shorter than an inch is refused");
+  check(paperOf().margin_left === 40 && paperOf().page_height === 300,
+    "refused, the settings stay as they were");
   // Where the margins alone fill the page, it does not part.
-  w.kspage_web_set_paper(0, 100, 0, 60, 0, 60, 0);
-  check(paperOf()[6] === 0, "on a page the margins fill, it does not part");
+  setPaper(0, 100, 0, 60, 0, 60, 0);
+  check(band() === 0, "on a page the margins fill, it does not part");
   check(w.kspage_web_paper_count() === 1, "and then it is one sheet");
   // It goes into the text written out and stays after being read back.
-  w.kspage_web_set_paper(794, 1123, 76, 76, 76, 76, 0);
+  setPaper(794, 1123, 76, 76, 76, 76, 0);
   const withPaper = save();
   check(withPaper.includes("\"page_width\": 794"),
     "the paper's width goes into the text written out");
   check(withPaper.includes("\"margin_top\": 76"), "the margins go in too");
   const paperBack = load(withPaper) !== 0;
-  check(paperBack && paperOf()[0] === 794 && paperOf()[2] === 76,
+  check(paperBack && paperOf().page_width === 794 && paperOf().margin_left === 76,
     "read back, the paper's settings are still there");
 
   // --- A page's header and footer ---
@@ -194,7 +198,7 @@ export async function run(ks, open) {
   };
   const setChrome = (which, s) => w.kspage_web_set_chrome(which, stage(s));
   // By default the bands have no text, so they do not come out.
-  w.kspage_web_set_paper(400, 300, 40, 30, 40, 30, 0);
+  setPaper(400, 300, 40, 30, 40, 30, 0);
   check(w.kspage_web_chrome(0, 1, 3) === 0, "a band with no text does not come out");
   check(setChrome(1, "{page}/{pages}") !== 0, "the footer's text can be put in");
   check(out(w.kspage_web_chrome_source(1)) === "{page}/{pages}",
@@ -228,7 +232,7 @@ export async function run(ks, open) {
   setChrome(0, "");
   setChrome(1, "");
 
-  w.kspage_web_set_paper(0, 0, 0, 0, 0, 0, 0);
+  setPaper(0, 0, 0, 0, 0, 0, 0);
   w.kspage_web_layout(300);
   check(w.kspage_web_chrome(1, 1, 1) === 0, "with no pages the bands do not come out either");
   check(w.kspage_web_height() === flat && w.kspage_web_paper_count() === 1,
@@ -236,23 +240,25 @@ export async function run(ks, open) {
 
   // --- The regions (prose, table, a slide for presenting) ---
   // **Which band is which region is settled by the style.**
-  // The kinds are 0 for prose, 1 for table, 2 for slide (the row of `Arrange`).
+  // The kind is `Arrange`'s name: `flow` for prose, `grid` for table, `absolute` for slide.
   const regionOf = (i) => {
     w.kspage_web_region(i, scratch);
-    return read(5);
+    return read(4);
   };
+  const regionKind = (i) => out(w.kspage_web_region_kind(i));
   w.kspage_web_layout(300);
   const regionCount = w.kspage_web_region_count();
   check(regionCount > 1, `the regions are two or more (${regionCount})`);
   const kinds = [];
-  for (let i = 0; i < regionCount; i++) kinds.push(regionOf(i)[4]);
-  check(kinds.includes(0) && kinds.includes(1) && kinds.includes(2),
+  for (let i = 0; i < regionCount; i++) kinds.push(regionKind(i));
+  check(kinds.includes("flow") && kinds.includes("grid") && kinds.includes("absolute"),
     `prose, table and slide are each there (${kinds.join(",")})`);
   // Prose in a row is one region, not one per paragraph.
-  check(!kinds.join("").includes("00"), "prose in a row gathers into one region");
+  check(!kinds.join(",").includes("flow,flow"), "prose in a row gathers into one region");
   // A region with no height is not remembered (else its frame is left as a line).
   check(regionOf(0)[3] > 0, "a region has a height");
-  check(regionOf(99)[2] === 0, "asking for a number that is not there does not fall");
+  check(regionOf(99)[2] === 0 && regionKind(99) === "",
+    "asking for a number that is not there does not fall");
 
   // --- Showing it one sheet at a time ---
   // **Which block is a slide is settled by the style.**

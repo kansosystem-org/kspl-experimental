@@ -1,5 +1,4 @@
 //< Tests of writing, copying and walking a tree in a scratch folder (`std/fs`)
-//<
 //< **Each check works in a folder that `mkdir_unique` creates for it**, so a run never sees what
 //< an earlier run left. The check removes the folder best-effort at the end. The walk past links
 //< makes them with `ln -s`, and skips where there is none.
@@ -10,14 +9,16 @@ import "std/mem" + { Arena, dealloc }
 import "std/str" // `arena.text()`
 import "std/subproc"
 import "std/sys"
+import "std/tests/file_mode"
 import "std/tests/fs_test"
+import "std/tests/sys_test"
 import "std/thread"
 import "std/verdict"
 
 priv const BASE: U8[] = "out/tmp/kspl_test_tree"
 
 priv fn holds(path: U8[], want: U8[]): Bool //< whether the file at path contains exactly want
-    got: = io.read_file(path) catch
+    got: = io.read_file(path, null) catch
         return false
     defer dealloc(Void$@::got.ptr)
     return got.equals(want)
@@ -43,22 +44,6 @@ fn test_fs_mkdir_unique()
         return
     panic("a base that is a file must be refused")
 
-pub fn mode_shown(path: U8[], arena: Arena$@): U8[] //< the permissions `ls -l` shows for a file
-    //<
-    //< Such as `-rw-------`, for a file written without an execute bit. `std/fs` reads no mode, so
-    //< the test asks the system's own tool. **Empty where the system shows no mode**: Windows,
-    //< where `ls` cannot answer, and a filesystem that marks every file executable (the reason is
-    //< at `test_can_run` in `std/tests/sys_test.kspl`).
-    if sys.is_windows()
-        return ""
-    r: =
-        subproc.run_capture(U8[][]::{ "/bin/ls", "-l", path }, "", 10000, 4096, arena) catch
-        return ""
-    if !r.exited_with(0) || r.stdout_data.len < 10
-        return ""
-    shown: = r.stdout_data.sub(0, 10)
-    return "" if shown.find_char('x').is_some() else shown
-
 fn test_fs_write_unique()
     verdict.start("[Fs] writing a file nobody took, for its owner alone test...")
     arena: = Arena.new(64 * 1024)
@@ -79,7 +64,7 @@ fn test_fs_write_unique()
     fs.write_unique(a, "page_", ".html", "x", arena) catch
         refused = true
     assert(refused, "a base that is a file must be refused")
-    shown: = mode_shown(a, arena)
+    shown: = file_mode.mode_shown(a, arena)
     if shown.len > 0
         assert(shown.equals("-rw-------"), "only its owner may read or write it")
     fs_test.clear_tree_best_effort(dir, arena)
@@ -91,10 +76,7 @@ fn test_fs_write_unique()
 priv fn set_mode(path: U8[], mode: U8[], arena: Arena$@): Bool //< `chmod`, true where it ran
     if sys.is_windows()
         return false
-    r: =
-        subproc.run_capture(U8[][]::{ "/bin/chmod", mode, path }, "", 10000, 4096, arena) catch
-        return false
-    return r.exited_with(0)
+    return sys_test.ran_to_zero(U8[][]::{ "/bin/chmod", mode, path }, arena)
 
 fn test_fs_replace_file()
     verdict.start("[Fs] replacing a file whole, with its mode kept or narrowed test...")
@@ -111,18 +93,19 @@ fn test_fs_replace_file()
     $shown: U8[] = ""
     if set_mode(doc, "640", arena)
         fs.replace_file(doc, "three", .kept) catch panic("the file should be replaced again")
-        shown = mode_shown(doc, arena)
+        shown = file_mode.mode_shown(doc, arena)
         if shown.len > 0
             assert(shown.equals("-rw-r-----"), "kept: the replaced file's bits stay")
         fs.replace_file(doc, "four", .owner_only) catch panic("the file should be narrowed")
         if shown.len > 0
-            assert(mode_shown(doc, arena).equals("-rw-------"), "owner_only: its owner alone")
+            assert(file_mode.mode_shown(doc, arena).equals("-rw-------"),
+                "owner_only: its owner alone")
         last = "four"
     // A read-only file is replaced, as a rename over it is, and stays read-only.
     if set_mode(doc, "444", arena)
         fs.replace_file(doc, "five", .kept) catch panic("a read-only file should be replaced")
         if shown.len > 0
-            assert(mode_shown(doc, arena).equals("-r--r--r--"), "kept: read-only stays")
+            assert(file_mode.mode_shown(doc, arena).equals("-r--r--r--"), "kept: read-only stays")
         last = "five"
     assert(holds(doc, last), "each replacement holds its own content")
     // A folder at the name is refused, and its part goes with the refusal.
@@ -174,10 +157,7 @@ fn test_fs_write_tree()
     verdict.pass("A tree is written with its levels made, and a name climbing out writes nothing.")
 
 priv fn runnable(path: U8[], arena: Arena$@): Bool //< whether `test -x` says it can be started
-    r: =
-        subproc.run_capture(U8[][]::{ "test", "-x", path }, "", 10000, 1024, arena) catch
-        return false
-    return r.exited_with(0)
+    return sys_test.ran_to_zero(U8[][]::{ "test", "-x", path }, arena)
 
 fn test_fs_copy_tree()
     verdict.start("[Fs] copying a tree to a place where nothing stands test...")
@@ -236,7 +216,6 @@ fn tree_test_watch_mode(w: Mode_watch$@): Void$@ //< looks at the copy until tol
 
 priv fn check_mode_from_first_byte(dir: U8[], arena: Arena$@) //<
     //< A copy has its source's bits from its first byte, never the default mode while written
-    //<
     //< The source is its owner's alone and executable (0700). A copy created with the default
     //< mode would stand without the execute bit until narrowed, for as long as its contents take.
     from: = fs.join(dir, "private", arena)
@@ -296,14 +275,10 @@ fn test_fs_dir_trust() //< dir_trust tells a folder others can write from one th
 // ==========================================
 priv fn made_link(target: U8[], at: U8[], arena: Arena$@): Bool //<
     //< `ln -s`; false where none is made
-    r: =
-        subproc.run_capture(U8[][]::{ "ln", "-s", target, at }, "", 10000, 4096, arena) catch
-        return false
-    return r.exited_with(0) && fs.is_link(at)
+    return sys_test.ran_to_zero(U8[][]::{ "ln", "-s", target, at }, arena) && fs.is_link(at)
 
 fn test_fs_walk_links() //<
     //< A walk does not enter a link to a directory, and a copy takes no link at all
-    //<
     //< Two links to `.` would make it visit 2^depth directories, and a link out of the tree would
     //< hand `copy_tree` files from elsewhere.
     verdict.start("[Fs] a walk past links to directories...")

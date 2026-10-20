@@ -1,5 +1,4 @@
 //< Fuzzes std's readers with mutated input (`make test-fuzz`)
-//<
 //< **Each kind of bytes that comes into std from outside is scattered** (`KINDS` below). The
 //< target program ([`read_prog.kspl`](read_prog.kspl)) goes as far as using what it read, and
 //< checks that it reads back what a writer wrote. **std's own writers produce the seeds**, so
@@ -23,29 +22,24 @@ import "std/verdict"
 
 priv const DEFAULT_SEED: I64 = 20260903
 priv const DEFAULT_TRIALS: I64 = 400 //< how many rounds CI scatters, some 40 a kind
-    //<
     //< **CI's depth**: the seed is fixed, so CI replays the same inputs and shows a regression.
     //< `make fuzz-long` runs deeper, with a fresh seed, to find what this seed never reaches.
 
 priv const REACH_FLOOR_DIV: Sz = 10 //<
     //< At least one round in this many must get deep into the reader
-    //<
     //< It is the minimum share of mutated inputs that the reader reads rather than refuses.
     //< Caution: **Do not change it to tighten the check.** It is a lower bound for "is it working".
     //< The share that gets through means nothing by itself.
 
 priv const TRIAL_TIMEOUT_MS: I32 = 10000 //<
     //< How long a round runs before it counts as never ending
-    //<
     //< Shorter than for ksplc: a sane input is read in under a second.
 
 priv const MAX_SEED_BYTES: I64 = 64I64 * 1024I64 //< the size cap on a file used as a seed
-    //<
     //< Caution: **Do not drop the small files.** A file of a few bytes can break a reader too.
 
 priv const KINDS: fuzz.Input_kind[10] = ::{ //<
     //< The kinds of input that the fuzzer mutates and feeds to a reader, and their files' endings
-    //<
     //< **This is the canonical source**: the reader's names ([`read_prog.kspl`](read_prog.kspl))
     //< and the seeds below follow it.
     fuzz.Input_kind::{ .name = "json", .ext = ".json" },
@@ -63,7 +57,6 @@ priv const KINDS: fuzz.Input_kind[10] = ::{ //<
 // --- Assembling the seeds ---------------------------------
 priv fn built_json(arena: Arena$@): U8[] //<
     //< The JSON that std's writer produces
-    //<
     //< Caution: **Include one of each form.** Mutation cannot reach a form missing from the seeds.
     //< An escape, a decimal, an integer over 53 bits and a nesting each take a separate path.
     $b: = Json_builder.new(arena)
@@ -80,7 +73,6 @@ priv fn built_json(arena: Arena$@): U8[] //<
     return arena.dup_str(out.slice())
 
 priv fn built_query(arena: Arena$@): U8[] //< the query that std's writer produces
-    //<
     //< Caution: **Keep the `%` and the `+`**: decoding branches on those two.
     $out: = Str_builder.new()
     for one in U8[][]::{ "name", "value with spaces", "a+b", "%" }
@@ -92,7 +84,6 @@ priv fn built_query(arena: Arena$@): U8[] //< the query that std's writer produc
     return arena.dup_str(out.slice())
 
 priv fn built_base64(arena: Arena$@): U8[] //< the Base64 that std's writer produces
-    //<
     //< All 256 bytes, so a mutation both leaves the table and hits the padding.
     $raw: = List<|U8|>.new_with_cap(256, arena)
     for i in Range.asc(256)
@@ -111,7 +102,6 @@ priv fn built_response(arena: Arena$@): U8[] //< the HTTP response that std's wr
 priv const BUILT_FLOATS: F64[_] = ::{ -0.0, 5.0e-324, 2.2250738585072014e-308,
     1.7976931348623157e308, 1.0e21, 1.0e20, 1.0e-6, 1.0e-7, 0.1, -1.5e-7, 9007199254740993.0 } //<
         //< Decimals at the edges of the shortest form, which the writer's text must read back as
-        //<
         //< The sign of zero, the smallest and largest F64, and both sides of each switch to the
         //< exponent form.
 
@@ -126,7 +116,6 @@ priv fn built_numbers(arena: Arena$@): U8[] //< `BUILT_FLOATS`, and I64's ends, 
     return arena.dup_str(out.slice())
 
 priv fn built_frames(arena: Arena$@): U8[] //< two JSON-RPC frames that std's writer produces
-    //<
     //< A request and a notification, so a mutation reaches the second frame's head too.
     $b: = Json_builder.new(arena)
     $out: = Str_builder.new()
@@ -137,7 +126,6 @@ priv fn built_frames(arena: Arena$@): U8[] //< two JSON-RPC frames that std's wr
 
 priv fn head_at_limit(arena: Arena$@): U8[] //<
     //< A frame whose head, with its blank line, is `max_head_bytes` long, and a frame after it
-    //<
     //< **One byte more and the head is over its limit**, so a mutation that lengthens it reaches
     //< the limit wherever a read ends.
     tail: U8[] = "\r\nContent-Length: 2\r\n\r\n"
@@ -148,7 +136,6 @@ priv fn head_at_limit(arena: Arena$@): U8[] //<
 
 priv fn built_shape(arena: Arena$@): U8[] //<
     //< A `Shape` of [`read_prog.kspl`](read_prog.kspl), as std's JSON writer writes it
-    //<
     //< **The keys are its field names**: a key that drifts from them is refused at reading, and
     //< `check_seeds` fails on it. Every option is present, so mutation can drop one.
     $b: = Json_builder.new(arena)

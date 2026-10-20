@@ -1,8 +1,7 @@
 //< Builds a program through ksplc with a sanitizer, for the suites that run one
-//<
 //< **The one place such a build is composed.** `race_test` (ThreadSanitizer) and `sanitize_test`
-//< (the address and undefined-behaviour sanitizers) both build through it. So a link word or a
-//< backend added here reaches both.
+//< (the address and undefined-behaviour sanitizers) both build through it. So a backend added here
+//< reaches both. The link is `harness_build`'s, as every suite's is.
 import "ksplc/tests/support/harness" as ksplc_harness
 import "ksplc/tests/support/harness_build"
 import "std/chars"
@@ -12,6 +11,7 @@ import "std/io"
 import "std/mem" { Arena }
 import "std/str" // `arena.text()` and `trim_spaces`
 import "std/sys"
+import "std/verdict"
 import "tests/support/harness"
 
 struct Built //< an executable, or why it was not built
@@ -20,7 +20,6 @@ struct Built //< an executable, or why it was not built
     deps: U8[] //< the sources it was compiled from, one whole path a line
 
 fn build( //< Compiles entry (from the folder dir) through ksplc, and links it with cflags into exe
-    //<
     //< **Both backends**: the C one, or `--to=llvm` where llvm is set, with the runtime `ksplc
     //< emit-runtime` writes linked beside the IR. The libraries the program names (`#link`) are
     //< linked too.
@@ -31,7 +30,6 @@ fn build( //< Compiles entry (from the folder dir) through ksplc, and links it w
     llvm: Bool, //< through the LLVM backend
     marks: U8[], //<
         //< What `--sanitize=` names to the LLVM backend (`address`); empty names nothing
-        //<
         //< **The IR is instrumented only where it is marked**: clang's `-fsanitize=` passes over
         //< an unmarked function. The C backend takes none, as its C compiler marks the C itself.
     arena: Arena$@,
@@ -40,47 +38,28 @@ fn build( //< Compiles entry (from the folder dir) through ksplc, and links it w
     libs: = arena.text().s(exe).s(".libs").take()
     deps: = arena.text().s(exe).s(".deps").take()
     $args: = List<|U8[]|>.new(arena)
-    for w in U8[][]::{ ksplc_harness.ksplc_exe(),
-        arena.text().s("--std-dir=").s(ksplc_harness.std_dir()).take(),
-        arena.text().s("--pkg-src-dir=").s(harness.root()).take(),
-        arena.text().s("--emit-libs=").s(libs).take(),
-        arena.text().s("--emit-deps=").s(deps).take() }
-        args.push(w)
+    args.push(arena.text().s("--emit-libs=").s(libs).take())
+    args.push(arena.text().s("--emit-deps=").s(deps).take())
     if llvm
         args.push("--to=llvm")
         if marks.len > 0
             args.push(arena.text().s("--sanitize=").s(marks).take())
     args.push(entry)
     args.push(gen)
-    made: = ksplc_harness.run_in(args.slice(), dir)
+    made: = ksplc_harness.run_in(harness.ksplc_argv_anywhere(args.slice()), dir)
     if !made.exited_with(0)
         return Built::{ .why = arena.text().s("ksplc cannot compile it:\n").s(made.out).take() }
-    $argv: = List<|U8[]|>.new(arena)
-    argv.push(ksplc_harness.cc())
+    $flags: = List<|U8[]|>.new(arena)
     for f in cflags
-        argv.push(f)
-    argv.push("-std=c99")
-    argv.push(gen)
+        flags.push(f)
+    flags.push("-std=c99")
     if llvm
         for f in harness_build.LLVM_CFLAGS
-            argv.push(f)
-        // Caution: **The same ksplc that wrote the IR must emit it** (the version symbol matches
-        // them).
-        rt: = arena.text().s(exe).s(".runtime.c").take()
-        emitted: = ksplc_harness.ksplc_bare(U8[][]::{ "emit-runtime", rt })
-        if !emitted.exited_with(0)
-            return Built::{ .why = arena.text().s("emit-runtime failed:\n").s(emitted.out).take() }
-        argv.push(rt)
-    argv.push(arena.text().c('@').s(libs).take())
-    if !harness_build.query_words("exe-flags", argv@, arena) ||
-        !harness_build.query_words("link-libs", argv@, arena)
-        return Built::{ .why = "the link words cannot be asked of ksplc" }
-    argv.push("-o")
-    argv.push(exe)
-    linked: = ksplc_harness.run(argv.slice())
+            flags.push(f)
+    linked: = harness_build.build_listed_exe(gen, exe, flags.slice(), llvm, libs)
     if !linked.exited_with(0)
         return Built::{ .why = arena.text().s("it does not link:\n").s(linked.out).take() }
-    listed: = io.read_file(deps) catch
+    listed: = io.read_file(deps, null) catch
         fallback ""
     // A package's own files are listed from its folder; each path is made whole here.
     whole: = arena.text()
@@ -93,7 +72,6 @@ fn build( //< Compiles entry (from the folder dir) through ksplc, and links it w
 
 fn runs_with( //<
     //< Empty where the C compiler builds and runs a program with cflags; else what it said
-    //<
     //< **This is how a suite tells a missing sanitizer from a fault.** A C compiler or a platform
     //< without its runtime fails here, before any program is built.
     work: U8[], //< a folder of the suite's own
@@ -124,7 +102,6 @@ fn runs_with( //<
         else arena.text().s("it builds but does not run:\n").s(ran.out).take())
 
 fn kept(words: U8[][], arena: Arena$@): U8[][] //< the words, copied onto the arena
-    //<
     //< Caution: **A run keeps its words past the call that names them**, so a literal list (on that
     //< call's frame) is copied here first.
     $out: = List<|U8[]|>.new(arena)
@@ -136,3 +113,42 @@ fn pkg_env(arena: Arena$@): U8[][] //<
     //< What a package's tests that start a child compiler, or name another package, find them by
     return kept(U8[][]::{ arena.text().s("KSPLC_STD_DIR=").s(ksplc_harness.std_dir()).take(),
         arena.text().s("KSPLC_PKG_SRC_DIR=").s(harness.root()).take() }, arena)
+
+// ==========================================
+// Reading a sanitizer's logs
+// ==========================================
+
+struct Sample //< a sanitizer's log, and how many reports a reading must find in it
+    text: U8[]
+    reports: Sz
+
+fn check_reading_fires( //< checks that a reading finds each sample's reports, as one check
+    name: U8[], //< the check
+    samples: Sample[],
+    read: fn(text: U8[], arena: Arena$@): List<|U8[]|>, //< one line per report of one log
+    arena: Arena$@,
+)
+    $bad: = List<|U8[]|>.new(arena)
+    for s in samples
+        if read(s.text, arena).len != s.reports
+            bad.push(arena.text().s("misread: ").s(s.text).take())
+    verdict.check_list(name, samples.len, "samples", bad@, "the table is `report_samples`")
+
+fn reports_in( //< every report logged under log_dir, the root's prefix cut off its paths
+    log_dir: U8[],
+    prefix: U8[], //< the start of a log's file name (`tsan.`); empty reads every file
+    read: fn(text: U8[], arena: Arena$@): List<|U8[]|>, //< one line per report of one log
+    arena: Arena$@,
+): List<|U8[]|>
+    $out: = List<|U8[]|>.new(arena)
+    names: = fs.read_dir(log_dir, arena) catch
+        return out
+    root: = arena.text().s(harness.root()).c('/').take()
+    for name in names
+        if !name.starts_with(prefix)
+            continue
+        text: = io.read_file(fs.join(log_dir, name, arena), null) catch
+            fallback ""
+        for r in read(text, arena)
+            out.push(r.replace(root, "", arena))
+    return out

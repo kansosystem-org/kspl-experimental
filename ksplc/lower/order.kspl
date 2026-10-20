@@ -1,5 +1,4 @@
 //< Fixes the order in which an expression's operands run, where C would leave it open
-//<
 //< C evaluates a call's arguments, an operator's two sides and a compound literal's fields in an
 //< order of its own choosing. gcc takes a call's arguments from the right, clang from the left.
 //< KSPL evaluates them left to right ("Evaluation order" in docs/SPEC-programming-language.md). So
@@ -24,7 +23,6 @@ import "std/str"
 
 priv const MAX_ORDER_DEPTH: Sz = 200 //<
     //< How deep the classifying walk goes before it gives the cautious answer (`acts`)
-    //<
     //< Past it an operand is only moved into a temporary when it need not be, which changes nothing
     //< but the generated code's length.
 
@@ -72,7 +70,6 @@ impl Operand_order
 
     fn add_value(r: Self$@, parent: Ast_node$@, idx: Sz, takes: Bool, lctx: Lowering_ctx$@) //<
         //< An operand passed by value; `takes` where the consumer takes it with a count of its own
-        //<
         //< What that count owes is decided now, before any operand is lowered (Arc_take).
         before: = r.slots.len
         r.add(parent, idx, false)
@@ -87,7 +84,6 @@ impl Operand_order
 
     fn apply(r: Self$@, lctx: Lowering_ctx$@) //<
         //< It moves into a temporary each operand that C could run on the wrong side of another
-        //<
         //< That is an operand that is not `fixed` with a later one that acts, or an acting one with
         //< a later one not `fixed`. It is lowered as it moves, so the statements it hoists keep
         //< their place in the order. The caller lowers the rest later, where they stand.
@@ -133,7 +129,6 @@ impl Operand_order
 
     fn finish(r: Self$@, lctx: Lowering_ctx$@) //<
         //< Once the consumer's operands are lowered: the retains still owed, and the held counts
-        //<
         //< A retain of an operand not moved goes here, after every operand that could leave. Such
         //< an operand is `fixed` or nothing after it acts, so nothing between disturbs it. A held
         //< count is now the consumer's, so no exit releases it any more.
@@ -150,7 +145,6 @@ impl Operand_order
 impl Operand_slot
     fn reads_address(r: Self, lctx: Lowering_ctx$@): Bool //<
         //< Whether the operand is a place its consumer reaches through its address
-        //<
         //< Then only the address is fixed early; what lies there is read when the consumer runs.
         node: = r.parent.get_child(r.idx)
         return r.by_address && node.is_place_expr() &&
@@ -165,7 +159,6 @@ impl Operand_slot
 impl Ast_node
     fn order_class(r: Self$@, lctx: Lowering_ctx$@, depth: Sz): Order_class //<
         //< What running this expression at another point of its statement could change
-        //<
         //< Caution: **Count everything Lower moves into statements as `acts`** (`&&`, a
         //< conditional, `catch`, `!`, a user operator): it already runs ahead of the expression
         //< around it.
@@ -227,7 +220,6 @@ impl Ast_node
 
     priv fn is_translation_constant(r: Self$@, depth: Sz): Bool //<
         //< Whether translation knows the value (and has refused a zero divisor or a wide shift)
-        //<
         if r == null || depth >= MAX_ORDER_DEPTH
             return false
         switch r.kind_id
@@ -271,7 +263,6 @@ impl Ast_node
 
     fn has_fixed_address(r: Self$@, lctx: Lowering_ctx$@, depth: Sz): Bool //<
         //< Whether the place's address is the same wherever in the statement it is taken
-        //<
         //< A name, and a field of a place with a fixed address reached without a pointer.
         if r == null || depth >= MAX_ORDER_DEPTH
             return false
@@ -289,7 +280,6 @@ impl Ast_node
 
     priv fn hoist_address(r: Self$@, lctx: Lowering_ctx$@): Ast_node$@ //<
         //< It takes the place's address into a temporary and returns `<temporary>$` in its stead
-        //<
         //< The place is still read or written where it stands; only the address is fixed earlier.
         if lctx.sema.packed_place_align(r) > 0
             return r.hoist_packed_holder(lctx)
@@ -303,7 +293,6 @@ impl Ast_node
 
     priv fn hoist_packed_holder(r: Self$@, lctx: Lowering_ctx$@): Ast_node$@ //<
         //< hoist_address for a field `#packed` leaves under-aligned: the holder is fixed instead
-        //<
         //< A pointer to the field would claim its type's alignment. So the struct holding it is
         //< fixed (its address, or the pointer reaching it). The steps from there are `.` and an
         //< array's `[]`. An index among them moves by value, so it runs in order too, and its

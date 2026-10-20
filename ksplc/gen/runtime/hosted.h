@@ -25,43 +25,32 @@ KSPL_LINK __attribute__((noreturn)) void kspl_div_fail(const char* file, int lin
 KSPL_LINK __attribute__((noreturn)) void kspl_shift_fail(int64_t amount, int64_t width, int amount_unsigned, const char* file, int line);
 KSPL_LINK __attribute__((noreturn)) void kspl_tag_fail(int64_t value, const char* enum_name, const char* file, int line);
 
-static inline KSPL_UNUSED ptrdiff_t kspl_bounds_check(ptrdiff_t idx, ptrdiff_t len, const char* file, int line)
-{
-    if (idx < 0 || idx >= len) {
-        kspl_bounds_fail(idx, len, file, line);
-    }
-    return idx;
-}
+/* The generated main calls it when `main` returns an error: it prints the line and gives the exit
+ * status (the reason for each is in hosted.c). */
+KSPL_LINK int kspl_main_fail(int err_kind, int64_t code, const char* variant);
 
-static inline KSPL_UNUSED int64_t kspl_div_check(int64_t divisor, const char* file, int line)
-{
-    if (divisor == 0) {
-        kspl_div_fail(file, line);
-    }
-    return divisor;
-}
-
-/* `amount_unsigned` says the amount's own type is unsigned, so its 64 bits are printed as a `U64`:
- * read as `int64_t`, 2^64-1 would be reported as -1. Either way such an amount is out of range. */
-static inline KSPL_UNUSED int64_t kspl_shift_check(int64_t amount, int64_t width, int amount_unsigned,
+/* What a breach of `kspl_bounds_check` and the other checks in core.h does: the `kspl_*_fail` above
+ * report it and end the program. The LLVM artifact calls those four directly. */
+static inline KSPL_UNUSED KSPL_NORETURN void kspl_bounds_breach(int64_t idx, int64_t len,
     const char* file, int line)
 {
-    if (amount < 0 || amount >= width) {
-        kspl_shift_fail(amount, width, amount_unsigned, file, line);
-    }
-    return amount;
+    kspl_bounds_fail(idx, len, file, line);
 }
 
-/* A cast to an enum from a number: the value must be one of the enum's `count` tags. The tags come
- * as an array, so the cast's operand is evaluated once. */
-static inline KSPL_UNUSED int64_t kspl_tag_check(int64_t value, const int64_t* tags, int64_t count,
-    const char* enum_name, const char* file, int line)
+static inline KSPL_UNUSED KSPL_NORETURN void kspl_div_breach(const char* file, int line)
 {
-    for (int64_t i = 0; i < count; i++) {
-        if (tags[i] == value) {
-            return value;
-        }
-    }
+    kspl_div_fail(file, line);
+}
+
+static inline KSPL_UNUSED KSPL_NORETURN void kspl_shift_breach(int64_t amount, int64_t width,
+    int amount_unsigned, const char* file, int line)
+{
+    kspl_shift_fail(amount, width, amount_unsigned, file, line);
+}
+
+static inline KSPL_UNUSED KSPL_NORETURN void kspl_tag_breach(int64_t value, const char* enum_name,
+    const char* file, int line)
+{
     kspl_tag_fail(value, enum_name, file, line);
 }
 

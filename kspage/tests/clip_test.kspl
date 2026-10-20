@@ -10,6 +10,7 @@ import "kspage/model/fixed_font" as fixed
 import "kspage/model/run"
 import "kspage/model/style" as _style + { Sheet }
 import "kspage/tests/base"
+import "kspage/tests/calc_test" as book
 import "kspage/write/block"
 import "kspage/write/cells"
 import "kspage/write/csv"
@@ -34,13 +35,11 @@ priv fn three_paragraphs(d: Doc$@) //< a document with three paragraphs
     d.add_block("body").add_text("def")
 
 priv fn plain_page(d: Doc$@, arena: Arena$@): Page$@ //< a page of plain flowing text
-    //<
     //< A paste checks whether it is inside a cell, so it needs a page.
     return flow.layout(d, Sheet.new(base.root_font(), arena), fixed.make(), 200.0, arena)
 
 priv fn picked(d: Doc$@, c: caret.Caret, sb: Str_builder$@): U8[] //<
     //< The text of the selection
-    //<
     //< The returned text lives in `sb` (usable only until the next write into `sb`).
     sb.clear()
     caret.selection_into(d, c, sb)
@@ -88,7 +87,6 @@ fn test_paragraph_breaks_come_out_as_one_newline(arena: Arena$@) //<
 
 fn test_styled_runs_in_one_paragraph_stay_on_one_line(arena: Arena$@) //<
     //< **No newline is added where inlines split within a paragraph**
-    //<
     //< Applying a style splits the inlines, and a mere bold would multiply the paragraphs.
     verdict.start("[kspage/clip] a style within a paragraph not growing the newlines test...")
     $sb: = Str_builder.new()
@@ -128,7 +126,6 @@ fn test_pasting_puts_the_text_at_the_caret(arena: Arena$@)
 
 fn test_pasting_lines_makes_paragraphs(arena: Arena$@) //<
     //< **The paragraph count grows by the number of newlines**
-    //<
     //< Folded into one paragraph, the newlines would be lost (an `Inline` cannot hold them as
     //< text).
     verdict.start("[kspage/clip] a newline becoming a paragraph's break test...")
@@ -164,7 +161,6 @@ fn test_pasting_lines_inside_a_paragraph_keeps_the_tail(arena: Arena$@) //<
 
 fn test_pasting_replaces_the_selection_in_one_undo_step(arena: Arena$@) //<
     //< **Where something is selected, pasting replaces it**
-    //<
     //< Inserted without deleting, typing over would become adding.
     //< **One paste is one undo**, not one per line.
     verdict.start("[kspage/clip] a paste replacing in one step test...")
@@ -189,7 +185,6 @@ fn test_pasting_replaces_the_selection_in_one_undo_step(arena: Arena$@) //<
 
 fn test_pasting_inside_a_cell_folds_the_newlines(arena: Arena$@) //<
     //< **Inside a cell no paragraph is split** (the cell would grow and the table would break)
-    //<
     //< A newline becomes one space.
     verdict.start("[kspage/clip] a newline becoming a space inside a cell test...")
     d: = Doc.new(arena)
@@ -303,7 +298,6 @@ fn test_replacing_undoes_in_one_step(arena: Arena$@) //<
 
 fn test_a_formula_cell_is_not_replaced(arena: Arena$@) //<
     //< A formula's text is not replaced (changed, what it points at and means would change too)
-    //<
     //< **The typed text is searched** (a position in the value is no position in the document).
     verdict.start("[kspage/find] not typing over a cell holding a formula test...")
     d: = Doc.new(arena)
@@ -327,12 +321,8 @@ fn test_a_formula_cell_is_not_replaced(arena: Arena$@) //<
 // rule for reading and writing, rows of equal length, and an insertion undone in one step.
 // ==========================================
 
-priv fn cell_text(t: Block$@, r: Sz, c: Sz): U8[]
-    return t.children.get(r).children.get(c).inlines.get(0).text()
-
 fn test_a_field_with_commas_and_quotes_survives_the_round_trip(arena: Arena$@) //<
     //< The quoting rule is shared by the reader and the writer
-    //<
     //< With two rules, it could not read what it wrote itself.
     verdict.start("[kspage/csv] a fenced field going round test...")
     src: = "a,\"b,c\",\"d\"\"e\"\n1,2,3\n"
@@ -341,8 +331,8 @@ fn test_a_field_with_commas_and_quotes_survives_the_round_trip(arena: Arena$@) /
         made = got
     assert(made != null, "the table builds")
     assert(made.children.len == 2, "there are two rows")
-    assert(cell_text(made, 0, 1).equals("b,c"), "the parting mark inside a fence is text")
-    assert(cell_text(made, 0, 2).equals("d\"e"), "doubled quotes become one")
+    assert(book.cell_source(made, 0, 1).equals("b,c"), "the parting mark inside a fence is text")
+    assert(book.cell_source(made, 0, 2).equals("d\"e"), "doubled quotes become one")
 
     $out: = Str_builder.new()
     csv.write_table(made, out@, arena)
@@ -351,7 +341,6 @@ fn test_a_field_with_commas_and_quotes_survives_the_round_trip(arena: Arena$@) /
 
 fn test_short_rows_are_padded_to_the_widest(arena: Arena$@) //<
     //< the rows come out as long as the longest row
-    //<
     //< Not padded, the cell count differs row by row and the column count is undefined.
     verdict.start("[kspage/csv] short rows coming out even test...")
     $made: Block$@ = null
@@ -360,13 +349,12 @@ fn test_short_rows_are_padded_to_the_widest(arena: Arena$@) //<
     assert(made != null, "the table builds")
     assert(made.children.get(0).children.len == 3,
         "a short row too comes out the length of the longest")
-    assert(cell_text(made, 0, 2).len == 0, "the cells wanting are empty")
-    assert(cell_text(made, 2, 1).equals("f"), "the text of the row behind stays as it was")
+    assert(book.cell_source(made, 0, 2).len == 0, "the cells wanting are empty")
+    assert(book.cell_source(made, 2, 1).equals("f"), "the text of the row behind stays as it was")
     verdict.pass("the rows come out the length of the longest row.")
 
 fn test_a_fenced_field_keeps_to_its_row(arena: Arena$@) //<
     //< A line break inside quotes becomes one space, and text after a closing quote stays in it
-    //<
     //< A cell's text holds no line break. Read as a row of its own, the text behind a quote would
     //< shift every row after it.
     verdict.start("[kspage/csv] a fenced field keeping to its row test...")
@@ -376,15 +364,15 @@ fn test_a_fenced_field_keeps_to_its_row(arena: Arena$@) //<
         made = got
     assert(made != null, "the table builds")
     assert(made.children.len == 3, "a line break inside quotes starts no row, nor a closing quote")
-    assert(cell_text(made, 0, 0).equals("one two"), "a line break inside quotes is one space")
-    assert(cell_text(made, 0, 1).equals("three four"), "so is a CR LF")
-    assert(cell_text(made, 1, 0).equals("qjunk"), "the text after a closing quote stays in it")
-    assert(cell_text(made, 1, 1).equals("c"), "the field after it is the next column")
-    assert(cell_text(made, 2, 0).equals("last"), "the rows behind stay as they were")
+    assert(book.cell_source(made, 0, 0).equals("one two"), "a line break inside quotes is one space")
+    assert(book.cell_source(made, 0, 1).equals("three four"), "so is a CR LF")
+    assert(book.cell_source(made, 1, 0).equals("qjunk"),
+        "the text after a closing quote stays in it")
+    assert(book.cell_source(made, 1, 1).equals("c"), "the field after it is the next column")
+    assert(book.cell_source(made, 2, 0).equals("last"), "the rows behind stay as they were")
     verdict.pass("a fenced field keeps to its row and its cell holds no line break.")
 
 fn test_an_empty_source_makes_no_table(arena: Arena$@) //< an empty text makes no table
-    //<
     //< A table with no rows has no column count.
     verdict.start("[kspage/csv] an empty text making no table test...")
     if _got: = csv.read_table("", "table", arena)
@@ -393,7 +381,6 @@ fn test_an_empty_source_makes_no_table(arena: Arena$@) //< an empty text makes n
 
 fn test_a_text_a_spreadsheet_would_run_is_guarded(arena: Arena$@) //<
     //< A text starting as a formula does goes out behind a `'`, and comes back in without it
-    //<
     //< Unguarded, a spreadsheet opening the file runs `+HYPERLINK(…)` or `@SUM(…)` typed as words.
     //< **A number is never guarded** (`-5` stays `-5`). The reader takes off just the `'` the
     //< writer put on, so a text already starting with one goes round too.
@@ -414,7 +401,8 @@ fn test_a_text_a_spreadsheet_would_run_is_guarded(arena: Arena$@) //<
         back = got
     assert(back != null, "what was written reads back")
     for $i: Sz = 2; i < texts.len; i += 1
-        assert(cell_text(back, 0, i).equals(texts[i]), "a guarded text reads back as it was typed")
+        assert(book.cell_source(back, 0, i).equals(texts[i]),
+            "a guarded text reads back as it was typed")
     verdict.pass("a text a spreadsheet would run goes out guarded and comes back as it was.")
 
 fn test_inserting_a_csv_table_undoes_as_one_step(arena: Arena$@) //<
@@ -431,7 +419,7 @@ fn test_inserting_a_csv_table_undoes_as_one_step(arena: Arena$@) //<
     assert(d.blocks.len == 2, "the table goes in behind the paragraph")
     made: = d.blocks.get(1)
     assert(made.style.equals("table"), "the grid style is laid on")
-    assert(cell_text(made, 1, 1).equals("2"), "the cells' text goes in")
+    assert(book.cell_source(made, 1, 1).equals("2"), "the cells' text goes in")
     // The cursor is in the first cell (typing can continue right away).
     head: = made.children.get(0).children.get(0).inlines.get(0)
     assert(ed.caret.inline == head, "the cursor stands in the first cell")
@@ -449,7 +437,6 @@ fn test_inserting_a_csv_table_undoes_as_one_step(arena: Arena$@) //<
 
 priv fn one_column(d: Doc$@): doc.Block$@ //<
     //< A table whose one column holds a number, a text, the same text in another case, and a blank
-    //<
     //< **The heading is not a value**; its word would sort first if counted.
     table: = d.add_block("table")
     h: = table.add_child("row")
@@ -461,7 +448,6 @@ priv fn one_column(d: Doc$@): doc.Block$@ //<
 
 fn test_a_columns_values_come_in_the_order_it_sorts_in(arena: Arena$@) //<
     //< The values offered are the distinct ones, in the column's sort order, without the heading
-    //<
     //< **A number compares as a number** (10 before "twenty"). **Spellings that differ only by case
     //< are one value**: the filter ignores case, so two entries would answer to one checkbox.
     verdict.start("[kspage/narrow] the values one column offers test...")
@@ -512,7 +498,6 @@ priv fn shown_rows(d: Doc$@, sheet: Sheet$@, arena: Arena$@): Sz //<
 
 fn test_the_heading_cells_come_out_with_their_column_numbers(arena: Arena$@) //<
     //< The heading row's cells come out in layout order, each with its column index
-    //<
     //< **The filter arrow attaches to these**, so the page needs no notion of where columns are.
     verdict.start("[kspage/narrow] the heading cells a narrowing hangs off test...")
     d: = Doc.new(arena)

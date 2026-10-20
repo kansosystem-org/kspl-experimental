@@ -203,17 +203,19 @@ function kspageProbeNote(ks) {
   const beforeRefer = app.text().length;
   document.getElementById("put-refer").click();
   check(app.text().length === beforeRefer, "with no such name it cannot be called");
-  // Caution: A chapter number must round-trip too. Dropped from the row of numbers, the kind reads
-  // as "no mark". Then opening and shutting the style's fields deletes it (two texts, as for a
-  // serial number).
-  app.setStyleMark(h1At, { kind: "outline", before: ".", text: " " });
-  const chapter = app.styleMark(h1At);
-  check(chapter.kind === "outline",
-    "a chapter number reads back as a chapter number (" + chapter.kind + ")");
-  check(chapter.before === "." && chapter.text === " ",
-    "the separator and what follows come back apart");
+  // Caution: A chapter number must round-trip too (two texts, as for a serial number).
+  const marked = (fields) => {
+    const data = app.styleData(h1At);
+    for (const key of ["bullet", "number_after", "serial_after", "serial_before",
+      "outline_after", "outline_sep"]) delete data[key];
+    app.setStyleData(h1At, { ...data, ...fields });
+  };
+  marked({ outline_sep: ".", outline_after: " " });
+  const chapter = app.styleData(h1At);
+  check(chapter.outline_sep === "." && chapter.outline_after === " ",
+    "a chapter number reads back, the separator and what follows apart");
   // It lands a serial number on the heading, then names it and calls it.
-  app.setStyleMark(h1At, { kind: "serial", before: "Fig. ", text: ". " });
+  marked({ serial_before: "Fig. ", serial_after: ". " });
   // Caution: **Hunt for where it presses** (a place settled up front names another paragraph once
   // the sample changes, and calling it puts no number out).
   check(ks.findBlock("heading") >= 0, "the heading with a serial number landed is there");
@@ -236,7 +238,7 @@ function kspageProbeNote(ks) {
   // body's left edge moves right by the mark (the settlement in
   // [`../../lay/flow.kspl`](../../lay/flow.kspl)). The next section, pressing the heading's head,
   // lands on the mark and fails as "press it and the style does not land".
-  app.setStyleMark(h1At, { kind: "none" });
+  marked({});
 
   // The field for the presenter's note attached to a slide.
   //
@@ -282,9 +284,9 @@ function kspageProbeNote(ks) {
   // A shape added lines up in the style table by name. **The shape is held by that style.**
   const figureAt = app.styleNames().indexOf("figure-fall_arrow");
   check(figureAt >= 0, "one style is made under the menu's shape name");
-  check(figureAt < 0 ? false : app.styleEdge(figureAt).shape === "fall_arrow",
+  check(figureAt < 0 ? false : app.styleData(figureAt).shape === "fall_arrow",
     "the shape chosen in the menu goes into that style");
-  check(figureAt < 0 ? false : app.styleEdge(figureAt).width > 0,
+  check(figureAt < 0 ? false : app.styleData(figureAt).rule_width > 0,
     "one line goes in so that it is visible");
   undoKey();
 
@@ -322,7 +324,7 @@ function kspageProbeNote(ks) {
   check(document.activeElement === ime, "after the press the focus goes back to the input field");
   const chartAt = app.styleNames().indexOf("chart-bars");
   check(chartAt >= 0, "one style is made under the menu's gathering name");
-  check(chartAt < 0 ? false : app.styleOutline(chartAt).collect === "bars",
+  check(chartAt < 0 ? false : app.styleData(chartAt).bars === true,
     "the gathering chosen in the menu goes into that style");
   const inkNow = barInk();
   check(inkNow > inkWas,

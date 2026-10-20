@@ -1,9 +1,7 @@
 //< Functions: signatures, parameters, returns and calls
-//<
 //< Each case below is compiled alone, as the file its head names.
 // ==== case call_pointer_to_fn_ptr
 //< A call on a **pointer to** a function pointer
-//<
 //< Peeled, it can be called, so the message advises that. is_fn_ptr must not look only at the
 //< leading `fn(` of the canonical string. Since `ptr(X)` = `str(X) + "@"`, `fn(x: I32): I32@` looks
 //< like one too. As an indirect call, it yields an invalid Void node and a different diagnostic far away.
@@ -17,7 +15,6 @@ fn main()
   _v: = g(3)
 // ==== case call_shape
 //< One subject, with one function for each of its shapes
-//<
 //< The marks are every function's marks gathered at the head. The same mark written N times
 //< must match N places.
 // EXPECT: cannot call 'x'. It is a value of type 'I32', not a function
@@ -44,7 +41,6 @@ fn main()
   case_arg_count()
 // ==== case callable_field_called
 //< A field holding a `Callable1`, called as though it were a method
-//<
 //< What it holds is called through its `call`. Telling the writer to drop the `()`, as for a field
 //< holding a value, would send them the wrong way.
 // EXPECT: cannot call 'pred'. It is a field of
@@ -60,7 +56,6 @@ fn main(): I32
   return 0
 // ==== case fn_name_to_generic_parameter
 //< A function's name passed to a generic parameter gives it a type only where it names one function
-//<
 //< A non-generic function, a written specialization and a method named through its type each give
 //< the function type of the function they name. A bare generic name names none. So it is refused at
 //< its line with what to write. So is a variadic function, which no function type holds. Bound to
@@ -120,7 +115,6 @@ fn main(): I32
   return ok + I32::spec(2U16) + I32::method(h@)
 // ==== case fn_param_void
 //< A parameter written as Void is refused as Void, not as a missing type
-//<
 //< Both read the same "missing type annotation", which sent the writer looking for a type they had
 //< written.
 // EXPECT: parameter 'x' must not be Void. Void holds no value
@@ -131,7 +125,6 @@ fn main()
     return
 // ==== case fn_param_without_type
 //< A declared function's parameter with no type is named, once
-//<
 //< A function's own signature was also read as a function-pointer type. So one omission gave two
 //< errors. The first one named a function pointer that the file does not hold.
 // EXPECT: parameter 'x' has no type. Write 'x: <type>'
@@ -143,7 +136,6 @@ fn main()
     return
 // ==== case fn_ptr_alias_chain_args
 //< A call's arguments are checked even when a `typedef` names the function pointer type
-//<
 //< The call reads the parameters off the function type at the end of an alias chain (fn_sig_of in
 //< sema/type/env.kspl). So **the count and the types are checked, however long the chain is**.
 //< Caution: Always place the non-firing side alongside: a correct call passes at one step and four.
@@ -173,7 +165,6 @@ fn main(): I32
   return 0
 // ==== case fn_ptr_param_without_type
 //< A function-pointer type's parameter needs a type
-//<
 //< `fn(T): T` is "a typeless parameter named `T`", not "a parameter of type `T`". Inside a generic
 //< only the return value's `T` resolves, so without refusing it the spelling mistake appears
 //< nowhere and the generated C's argument list breaks.
@@ -189,7 +180,6 @@ fn main(): I32
   return inc(1)
 // ==== case fn_ptr_signature_mismatch
 //< Sema catches a signature mismatch when a function is passed as a value
-//<
 //< A function pointer is a plain address in C, so a mismatch let through reaches the generated code
 //< and is caught only by clang's -Wincompatible-function-pointer-types. A return value differing
 //< alone is the worst: the caller reads a value that was never returned.
@@ -225,7 +215,6 @@ fn main(): I32
   return 1 if h.cb(0) || ok.cb(0) || good.cb(0) else 0
 // ==== case fn_ptr_to_non_fn_type
 //< A function used as a value is matched against the expected type, whatever that type is
-//<
 //< Caution: Exempt only "there is nothing to match against" (fn_value_type_id in
 //< ksplc/sema/body/resolve_path.kspl). An exemption for "not a function pointer" lets this and
 //< `Callable` through, and only the C side finds them. Keep the non-firing side alongside.
@@ -251,7 +240,6 @@ pub fn main(): I32
   return 0
 // ==== case fn_ptr_where_callable_expected
 //< A function pointer cannot be passed where a `Callable` is expected
-//<
 //< **ksplc must stop it.** Let through, it reaches generation (in C a function pointer is a plain
 //< address). clang then reports a synthesised name and lines of std ("Failing fast through an
 //< exception or an ICE" in ksplc/docs/DESIGN-compiler.md). No synthesised name goes in a diagnostic
@@ -278,7 +266,6 @@ pub fn main(): I32
   return 0
 // ==== case fn_type_arg_keeps_its_commas
 //< A function type written as a type argument is one argument, commas and all
-//<
 //< Its name holds commas of its own (`fn(I32,I32):I32`). If the row cuts at every comma, it reads
 //< two arguments. The messages then name a type that is not there.
 //< Caution: Always place the non-firing side alongside: a function of the right shape goes in.
@@ -303,7 +290,6 @@ fn main(): I32
   return I32::ops.len
 // ==== case fn_value_call_checked_by_type
 //< A call through a function value is checked against the value's own type, whatever holds it
-//<
 //< The signature is read off the type (infer_value_call_args in `sema/body/call_args.kspl`). So a
 //< value from a generic's field, a list or a call's result is checked as a local is, never as Void.
 //< Caution: Always place the passing side alongside; a check refusing every call must not pass.
@@ -339,7 +325,6 @@ fn main(): I32
   return ok
 // ==== case fn_value_operators
 //< A function value takes `==` and `!=` alone, and two names give it no type
-//<
 //< A function's name takes its type from where it is written. Compared with a typed value, it
 //< takes that value's type in either order. Two names have no type between them. An address has
 //< no order or arithmetic that means anything. Let through, these reached C as arithmetic on an
@@ -409,7 +394,6 @@ fn main(): I32
     return 0 if ok else 1
 // ==== case fn_value_variadic_binding
 //< A variadic function's name bound with no type annotation is refused: no function type holds it
-//<
 //< A declaration with no type takes the function type of the function a name names (`f: = big`).
 //< A variadic function has none to give, since a function type holds no `...`. Let through, the
 //< binding would carry the mark of a name with no type, which no C type spells.
@@ -437,7 +421,6 @@ fn main(): I32
   return 0
 // ==== case fn_without_body
 //< A function written with `;` in place of its body is refused, free or inside an `impl`
-//<
 //< Nothing in the program would define it. A function defined in C, or in a library built from
 //< KSPL, is declared in an `extern "C"` block instead.
 // EXPECT: 'twice' has no body
@@ -455,7 +438,6 @@ fn main(): I32
   return twice(Box::{ .w = 1 }.area())
 // ==== case noreturn_outside_fallback
 //< A `#noreturn` call is accepted as a value only as a `catch`'s fallback
-//<
 //< Caution: **Do not widen it to the return-value position.** Even past sema, genc emits C of the
 //< form `return <Void>`, and only the C compiler falls, with zero diagnostics from KSPL. It stays
 //< where the value is known to be discarded (`#noreturn` in `../../../docs/SPEC-programming-language.md`).
@@ -475,10 +457,9 @@ fn main(): I32
   return panic("this one is refused")
 // ==== case param_default_out_of_range
 //< A default that does not fit its parameter is refused at the declaration, with no call using it
-//<
 //< Checked only where a call fills it in, a library's default could be wrong until some caller
 //< leaves the argument out.
-// EXPECT: param_default_out_of_range.kspl:6:21: error: literal '300' is out of range for type 'U8'
+// EXPECT: param_default_out_of_range.kspl:5:21: error: literal '300' is out of range for type 'U8'
 pub fn dflt(v: U8 = 300): U8
   return v
 
@@ -486,7 +467,6 @@ fn main(): I32
   return 0
 // ==== case param_default_generic_type
 //< A parameter whose type holds a type argument cannot have a default
-//<
 //< A literal of `T` cannot be written.
 // EXPECT: a parameter whose type mentions a type parameter cannot have a default value
 
@@ -498,7 +478,6 @@ fn main(): I32
   return 0
 // ==== case param_default_in_closure
 //< A closure is never called by name, so a default written on it would never take effect
-//<
 //< Written and silently ignored is the shape Principle 5 refuses.
 // EXPECT: a closure parameter or capture must not have a default value
 
@@ -517,7 +496,6 @@ fn main(): I32
   return 0
 // ==== case param_default_in_trait
 //< The rules on how a default is written apply unchanged to a trait's declaration
-//<
 //< **The declaration side alone came to be writable, so that it has not loosened there is pinned
 //< down.** The shape writing it on the implementation side is the case
 //< `param_default_in_trait_impl`.
@@ -534,7 +512,6 @@ fn main(): I32
   return 0
 // ==== case param_default_in_trait_impl
 //< A default cannot be written on the implementation either
-//<
 //< A call through a trait resolves to the trait's declaration. So it does not look at the
 //< default on the implementation side (the same way C++'s inherited defaults break).
 // EXPECT: a trait implementation cannot give a parameter a default value
@@ -554,7 +531,6 @@ fn main(): I32
   return a.greet(1)
 // ==== case param_default_not_literal
 //< A default is a single literal
-//<
 //< Allow an expression and an allocation or a side effect happens without appearing in the call's
 //< characters.
 // EXPECT: a parameter default must be a literal
@@ -566,7 +542,6 @@ fn main(): I32
   return f()
 // ==== case param_default_not_trailing
 //< Defaults must be a run at the end of the parameter list
-//<
 //< "A default argument is allowed only for a foldable constant" in docs/DESIGN-principles.md.
 //< Have just one in the middle hold a default and the correspondence between a call's positions and
 //< the parameters is not settled uniquely.
@@ -586,7 +561,6 @@ fn main()
   a: = f()
 // ==== case return_type_less_visible
 //< A `priv` type in a `pub` function's return value reaches a side that cannot name it
-//<
 //< It binds with `x: = make();`, and method calls and field reads work, so the `priv` its author
 //< wrote is not in effect (docs/DESIGN-principles.md Principle 5). For the reason only the return-value
 //< position is checked, see docs/DESIGN-programming-language.md "Why a narrow type cannot stand where visibility is
@@ -603,7 +577,6 @@ fn main()
   _h: = make()
 // ==== case return_type_visibility_ok
 //< The counterpart of the case above
-//<
 //< Balanced visibility leaks nothing. The cases are a `priv` fn returning a `priv` type, a `priv
 //< struct`'s `pub` method (held to the impl target) and a narrow argument type.
 //< The case fails on purpose through the same check, at a field rather than a return value.

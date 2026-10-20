@@ -1,6 +1,5 @@
 #!/usr/bin/env -S ksplc run
 //< Checks stage1's rebuild trigger (`KSPL_SRCS` in `Makefile`)
-//<
 //< It must list every file ksplc reads. A missing one makes **nothing happen**. Edit it and make
 //< answers "up to date". So **an executable without your edit** passes every gate with no sign of
 //< it. It is compared with the compiler itself: `--emit-deps` writes **the sources that
@@ -26,11 +25,9 @@ import "tests/support/harness"
 import "tests/support/harness_text"
 
 priv const SRCS_VAR: U8[] = "KSPL_SRCS := " //< the mark to look for when asking make
-    //<
     //< It is `:=`, so this line shows **the expanded value**.
 
 priv fn kspl_srcs(arena: Arena$@): List<|U8[]|> //< asks make itself for `KSPL_SRCS`'s value
-    //<
     //< Caution: **Do not parse the Makefile yourself**; then an imitation of `$(shell find ...)`
     //< decides the answer, not the Makefile. `-p` lists the variables, `-Rr` drops the built-ins,
     //< `-q` runs nothing.
@@ -46,7 +43,6 @@ priv fn kspl_srcs(arena: Arena$@): List<|U8[]|> //< asks make itself for `KSPL_S
 
 priv fn to_rel(path: U8[], arena: Arena$@): U8[] //<
     //< Rewrites a deps path to be relative to the root, as the Makefile's paths are
-    //<
     //< Caution: **Do not match absolute paths as they are.** `std/` comes out absolute (via
     //< `--std-dir=`); left so, every std file reads as missing and buries a real omission.
     p: = path.replace("\\", "/", arena)
@@ -78,7 +74,6 @@ priv fn deps_of_ksplc(work: U8[], arena: Arena$@): List<|U8[]|> //<
 
 priv fn embedded_paths(srcs: List<|U8[]|>@, arena: Arena$@): List<|U8[]|> //<
     //< Collects what the `embed`s in the given sources point at
-    //<
     //< Caution: **Read only the sources in deps.** Scanning all of `ksplc/` reports the test tree's
     //< `embed`s, which are rightly absent from `KSPL_SRCS`.
     $out: = List<|U8[]|>.new(arena)
@@ -98,7 +93,7 @@ priv fn all_listed(name: U8[], want: List<|U8[]|>@, srcs: List<|U8[]|>@, missed:
         //< Every item of `want` is in `srcs`; `missed` says what a missing one costs
     $bad: = List<|U8[]|>.new(arena)
     for i in Range.asc(want.len)
-        if !harness_text.has(srcs, want.get(i)) && !harness_text.has(bad@, want.get(i))
+        if !srcs.contains(want.get(i)) && !bad.contains(want.get(i))
             bad.push(want.get(i))
     verdict.check_list(name, want.len, "paths", bad@, missed)
 

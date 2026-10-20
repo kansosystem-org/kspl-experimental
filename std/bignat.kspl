@@ -1,16 +1,13 @@
 //< Natural numbers of a fixed, generous width, the powers of ten at 128 bits, and a float's bits
-//<
 //< **It holds only what an exact decimal/binary round trip needs.** That is multiplying by a
 //< 32-bit integer or by a power of 10 or 2, adding, subtracting and comparing. It also holds the
 //< powers of ten at 128 bits. Both `std/strnum`'s `to_f64` and `std/strfmt`'s floating-point output
 //< use it.
 pub const BIGNAT_LIMBS: Sz = 120 //< how many 32-bit limbs one holds (3840 bits).
-    //<
     //< `to_f64`'s correct rounding sets this size: with up to 768 decimal digits against the power
     //< of 2, the largest value is `2^56 x 10^1098 ~= 2^3704` (std/strnum's `cmp_scaled`).
 
 pub struct Bignat //< a natural number of a fixed, generous width, held by value
-    //<
     //< Caution: **The unused limbs must be 0.** `add` and `cmp` read limbs past the other value's
     //< `len`; only `sub` and `trim` shrink `len`, and only over limbs that became 0.
     priv limbs: U32[BIGNAT_LIMBS] //< ordered from the lowest limb up
@@ -53,7 +50,6 @@ impl Bignat
             r.push_limb(U32::carry)
 
     pub fn mul(r: Self$@, o: Self@) //< multiplies in place by another value of the same width
-        //<
         //< Long multiplication, from o's top limb down. The other value is `10^n`, which
         //< `std/strnum` keeps so it need not rebuild it on each call.
         $acc: = Bignat.zero()
@@ -76,7 +72,6 @@ impl Bignat
             r.push_limb(U32::carry)
 
     pub fn mul_pow10(r: Self$@, n: Sz) //< multiplies in place by 10 to the power of `n`
-        //<
         //< It multiplies by 10^9 at a time, the largest power of 10 that fits in a U32.
         $rest: = n
         for rest >= 9
@@ -120,7 +115,6 @@ impl Bignat
             r.push_limb(U32::carry)
 
     pub fn sub(r: Self$@, o: Self@) //< subtracts another value in place
-        //<
         //< Caution: r >= o must hold, because a natural number never goes negative.
         $borrow: I64 = 0
         for i in Range.asc(r.len)
@@ -156,13 +150,10 @@ struct Wide //< a 128-bit unsigned number, as two halves
     lo: U64 //< the lower 64 bits
 
 const POW10_Q_MIN: I32 = -342 //< the smallest power `pow10_128` gives
-    //<
     //< Below it, even 19 digits of significand stay under half the smallest subnormal.
 const POW10_Q_MAX: I32 = 324 //< the largest power `pow10_128` gives
-    //<
     //< The shortest digits of the smallest subnormal need 10^324.
 priv const POW10_STEP: I32 = 27 //< one entry in this many is held
-    //<
     //< Caution: **Keep it at 27 or below**: an entry is rebuilt by 5^r with r below it, which must
     //< fit a U64 (5^27 does not).
 // 10^q for q = pow10_q_min and then every pow10_step, each as its upper half and its lower.
@@ -209,7 +200,6 @@ priv fn floor_log2_pow5(q: I32): I32 //< floor(log2(5^q)), exact for q within ±
     return I32::((I64::q * 1217359I64) >> 19)
 
 fn pow10_128(q: I32): Wide //< the top 128 bits of 10^q, truncated, so the top bit is set
-    //<
     //< 10^q is that value times 2^(floor_log2_pow10(q) - 127). q runs from pow10_q_min to
     //< pow10_q_max. The held entry below q is multiplied by 5^r (10^q / 10^(q - r), less the
     //< power of 2). It is then shifted back to 128 bits and corrected by the bits `POW10_FIXES`
@@ -249,14 +239,12 @@ pub const F64_MANTISSA_MASK: U64 = 0x000FFFFFFFFFFFFFU64 //< an F64's stored sig
 pub const F64_HIDDEN_BIT: U64 = 0x0010000000000000U64 //< the 1 a normal F64 does not store
 
 pub struct Binary_float //< a floating-point value split into f × 2^e, without the sign
-    //<
     //< std/strfmt writes a number's digits from it, and std/strnum steps a parsed value by an ulp.
     pub f: U64 //< the significand, the hidden 1 included where there is one
     pub e: I32 //< the power of two f is scaled by
     pub unequal: Bool //< an exact power of two, where the gap below is half the gap above
 
 pub fn decompose_f64(mag: U64): Binary_float //< an F64's bits, without the sign, as f × 2^e
-    //<
     //< A subnormal has no hidden 1, and its exponent is fixed at the minimum.
     exp_field: = mag >> 52U64
     mant: = mag & F64_MANTISSA_MASK

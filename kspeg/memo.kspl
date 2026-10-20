@@ -1,5 +1,4 @@
 //< The memo table: what each rule returned at each position, for one parse at a time
-//<
 //< **One table serves every parse of one grammar** and is shared with it (`share_grammar_from` in
 //< `engine.kspl`). **A parse empties it by starting a new generation**, not by writing zeros. A
 //< slot stamped by another generation reads as empty, so starting costs nothing. It is sized by
@@ -9,7 +8,6 @@
 import "std/mem"
 
 struct Memo_key //< what a rule was asked, and where
-    //<
     //< (rule_id, pos) alone is not enough. is_syntax_mode / is_suppressed change the whitespace
     //< skipping and the nodes built, so they are part of the key
     pos: Sz //< where it was asked, in bytes from the start of the source
@@ -19,7 +17,6 @@ struct Memo_key //< what a rule was asked, and where
 
 impl Memo_key
     fn hash(r: Self@): U32 //< where the search for the key in the table starts
-        //<
         //< Caution: **Do not pass it through `ds.fmix32`.** It runs on every memo lookup, where one
         //< more mixing round visibly slows the whole parse. `pos`, a byte position, already varies
         //< enough in its low bits.
@@ -38,7 +35,6 @@ struct Memo_slot<|V|> //< one slot: the generation that wrote it, the question, 
     gen: U32 //< the parse that wrote it; 0 is never a parse's, so a fresh slot reads as empty
     key: Memo_key //< the question
     value: V //< the answer.
-        //<
         //< Caution: **Read it only when it carries this parse's stamp.** Another parse's answer can
         //< point at nodes whose arena has been rewound.
 
@@ -46,11 +42,9 @@ priv const MIN_REACH: Sz = 32 //< the fewest slots a parse uses
 
 priv const MAX_FIRST_REACH: Sz = 131072 //<
     //< The most slots a parse uses before anything is written
-    //<
     //< A huge input does not get its length in slots up front; doubling covers the rest.
 
 fn first_reach(source_len: Sz): Sz //< the smallest power of two at or above one slot per byte
-    //<
     //< Kept between the two bounds above. **One slot per byte covers what a parse writes**: only
     //< the few rules the memo helps keep writing (`MEMO_TRIAL_WRITES` in `engine.kspl`).
     $reach: Sz = MIN_REACH
@@ -61,7 +55,6 @@ fn first_reach(source_len: Sz): Sz //< the smallest power of two at or above one
     return reach
 
 struct Memo_table<|V|> //< the answers of one parse at a time, in slots stamped with their parse
-    //<
     //< Caution: **Call `begin` first**, for every parse.
     slots: Memo_slot<|V|>$@ //< the slots, `cap` of them, on the global heap
     cap: Sz //< how many slots are allocated, always a power of two
@@ -74,7 +67,6 @@ impl<|V|> Memo_table<|V|>
         return Memo_table<|V|>::{ .slots = null, .cap = 0, .mask = 0, .gen = 0, .len = 0 }
 
     fn begin(r: Self$@, source_len: Sz) //< empties the table for a parse of `source_len` bytes
-        //<
         //< Caution: **Every parse starts here.** Otherwise it reads another input's answers or, on
         //< a lenient rereading, those of a reading whose recovering branches were dead.
         reach: = first_reach(source_len)
@@ -105,7 +97,6 @@ impl<|V|> Memo_table<|V|>
 
     priv fn find(r: Self$@, key: Memo_key): Memo_slot<|V|>$@ //<
         //< The slot holding `key`, or the empty one where it would go
-        //<
         //< It probes forward from the key's hash through this parse's slots. **It always stops**:
         //< `set` doubles the table at half full, so an unwritten slot lies ahead.
         $i: = Sz::key.hash() & r.mask
@@ -122,7 +113,6 @@ impl<|V|> Memo_table<|V|>
         r.len += 1
 
     priv fn next_generation(r: Self$@) //< moves to a generation no slot carries
-        //<
         //< Caution: **When the counter wraps, really zero the slots**, or old stamps read as live.
         r.gen += 1
         if r.gen == 0
@@ -131,7 +121,6 @@ impl<|V|> Memo_table<|V|>
 
     priv fn take_slots(r: Self$@, cap: Sz) //<
         //< points the table at `cap` new slots, all reading empty
-        //<
         //< The caller frees the slots it pointed at before.
         bytes: = cap * sizeof(Memo_slot<|V|>)
         fresh: = mem.alloc(bytes)
@@ -140,7 +129,6 @@ impl<|V|> Memo_table<|V|>
         r.cap = cap
 
     priv fn grow(r: Self$@) //< doubles the slots this parse uses, carrying its answers across
-        //<
         //< Past `cap`, it allocates new slots. Within `cap`, the slots past the old range hold
         //< other parses' stamps, so the answers are copied out and put back under a new generation.
         reach: = (r.mask + 1) * 2

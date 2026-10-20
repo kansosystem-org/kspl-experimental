@@ -1,4 +1,4 @@
-import { check, near, material, para, grid } from "./shell.mjs";
+import { check, near, material, para, grid, shared } from "./shell.mjs";
 
 export const subject =
   "The ways of typing (CSV, sorting, paragraphs, copying, hunting, inserting, contents, notes, "
@@ -24,18 +24,16 @@ const lead = "Prose, tables and slides ";
 // so they stay as they are until that side moves.
 export const opens = material({
   styles: [
-    { name: "heading", size_px: 28.0, weight: 700, space_after: 8.0, outline: 1 },
-    { name: "body", space_after: 12.0 },
-    { name: "strong", weight: 700 },
+    { ...shared.heading, outline: 1 },
+    shared.body,
+    shared.strong,
     { name: "contents", space_after: 12.0, indent: 16.0, contents: true },
     { name: "footnote", space_before: 12.0, notes: true },
-    { name: "table", space_before: 12.0, space_after: 12.0, arrange: "grid" },
-    { name: "cell", pad: 4.0, rule_width: 1.0, rule_color: "#cccccc" },
-    { name: "heading-cell", pad: 4.0, rule_width: 1.0, rule_color: "#cccccc", fill: "#f0f0f0" },
-    { name: "amount", places: 0, grouped: true, prefix: "$", pad: 4.0, rule_width: 1.0,
-      rule_color: "#cccccc" },
-    { name: "slide", space_before: 12.0, space_after: 12.0, width: 620.0, height: 120.0,
-      arrange: "absolute" },
+    shared.table,
+    shared.cell,
+    shared.headingCell,
+    shared.amount,
+    shared.slide,
   ],
   blocks: [
     para("heading", "kspage, a document"),
@@ -51,7 +49,7 @@ export const opens = material({
 
 export function run(ks) {
   const { w, scratch, str, read, out, stage, feed, geom, boxOf, textOf, find, type, save,
-    csv, load, typed, setTyped, styleNames, surfaceAt } = ks;
+    csv, load, typed, setTyped, styleNames, styleData, surfaceAt } = ks;
 
   // --- Taking CSV in and out ---
   // **What is written out is the text that is seen**, not the formula the reader cannot
@@ -87,15 +85,17 @@ export function run(ks) {
   w.kspage_web_click(sortAt[0] + 1, sortAt[1] + sortAt[3] / 2, 0);
   check(geom(find("$360"))[1] < geom(find("$400"))[1],
     "before sorting, $360 is the upper one");
-  check(w.kspage_web_sort_rows(0) === 1, "it can be sorted smallest first by this column");
+  check(out(w.kspage_web_sort_rows(0)) === "done",
+    "it can be sorted smallest first by this column");
   check(geom(find("$400"))[1] < geom(find("$360"))[1],
     "the row with the smaller price comes up");
   check(find("$400") >= 0 && find("$360") >= 0,
     "every row's amount is still its own row's");
   check(find("$760") >= 0, "the total does not move (that row is empty, so it is left last)");
-  // Sorted again the same way, the answer says so (-3) rather than pretending it sorted or
-  // blaming the cursor's place.
-  check(w.kspage_web_sort_rows(0) === -3, "sorted again the same way, it says the rows are in order");
+  // Sorted again the same way, the answer says so (`in_order`) rather than pretending it sorted
+  // or blaming the cursor's place.
+  check(out(w.kspage_web_sort_rows(0)) === "in_order",
+    "sorted again the same way, it says the rows are in order");
   w.kspage_web_undo();
   check(geom(find("$360"))[1] < geom(find("$400"))[1],
     "one step returns the row it was in");
@@ -103,7 +103,8 @@ export function run(ks) {
   // heading itself.
   const headAt = geom(find("Price"));
   w.kspage_web_click(headAt[0] + 1, headAt[1] + headAt[3] / 2, 0);
-  check(w.kspage_web_sort_rows(0) === 1, "with the cursor in the heading it sorts the rows under it");
+  check(out(w.kspage_web_sort_rows(0)) === "done",
+    "with the cursor in the heading it sorts the rows under it");
   check(geom(find("Price"))[1] < geom(find("$400"))[1], "the heading stays at the head");
   check(geom(find("$400"))[1] < geom(find("$360"))[1], "and the smaller price comes up");
   w.kspage_web_undo();
@@ -262,11 +263,12 @@ export function run(ks) {
   // between the cell and a missing style.
   const cellAt = geom(find("120"));
   w.kspage_web_click(cellAt[0] + 1, cellAt[1] + cellAt[3] / 2, 0);
-  check(w.kspage_web_insert_surface(stage("slide"), 0) === -1,
+  check(out(w.kspage_web_insert_surface(stage("whole\tslide"))) === "in_cell",
     "inside a table's cell the slide is refused, and the cell is named as why");
   check(w.kspage_web_surface_count() === wasSurfaces, "and nothing goes in");
   w.kspage_web_click(0, 10, 0);
-  check(w.kspage_web_insert_surface(stage("slide"), 0) === 1, "a slide can be inserted");
+  check(out(w.kspage_web_insert_surface(stage("whole\tslide"))) === "done",
+    "a slide can be inserted");
   w.kspage_web_layout(300);
   check(w.kspage_web_surface_count() === wasSurfaces + 1, "it is counted as one sheet");
   w.kspage_web_undo();
@@ -278,7 +280,7 @@ export function run(ks) {
   // The name settles only which of two of the same role to choose.
   w.kspage_web_click(0, 10, 0);
   const beforeUnknown = w.kspage_web_surface_count();
-  check(w.kspage_web_insert_surface(stage("a name that is not there"), 0) === 1,
+  check(out(w.kspage_web_insert_surface(stage("whole\ta name that is not there"))) === "done",
     "even under a name it does not know, the slide's style is found by role");
   w.kspage_web_layout(300);
   check(w.kspage_web_surface_count() === beforeUnknown + 1,
@@ -305,7 +307,7 @@ export function run(ks) {
   w.kspage_web_click(0, 10, 0);
   const plainBoxes = w.kspage_web_layout(300);
   const beforeSketch = save();
-  check(w.kspage_web_insert_surface(stage("slide"), 0) === 1,
+  check(out(w.kspage_web_insert_surface(stage("whole\tslide"))) === "done",
     "it can be inserted with one frame");
   const oneFrame = w.kspage_web_layout(300);
   check(oneFrame === plainBoxes + 1,
@@ -313,7 +315,7 @@ export function run(ks) {
   w.kspage_web_undo();
   w.kspage_web_layout(300);
   w.kspage_web_click(0, 10, 0);
-  check(w.kspage_web_insert_surface(stage("slide"), 2) === 1,
+  check(out(w.kspage_web_insert_surface(stage("halved\tslide"))) === "done",
     "it can be inserted with a title and two columns");
   const threeFrames = w.kspage_web_layout(300);
   check(threeFrames === plainBoxes + 3,
@@ -339,7 +341,7 @@ export function run(ks) {
   // frame cannot be got into by pressing).
   w.kspage_web_click(0, 10, 0);
   check(w.kspage_web_drop_frame() === 0, "outside a slide nothing comes off");
-  check(w.kspage_web_insert_surface(stage("slide"), 2) === 1,
+  check(out(w.kspage_web_insert_surface(stage("halved\tslide"))) === "done",
     "it can be inserted with a title and two columns");
   w.kspage_web_layout(300);
   check(boxesIn(surfaceAt(0)).length === 3, "the frames are three");
@@ -443,24 +445,20 @@ export function run(ks) {
   // **The contents' content does not go into the document** (it is assembled from the headings on
   // every placing). Write it in and it goes stale the moment a heading is changed — and that it is
   // stale is visible to nobody.
-  const outlineOf = (i) => {
-    w.kspage_web_style_outline(i, scratch);
-    return read(2);
-  };
   const head1 = styleNames().indexOf("heading");
-  check(outlineOf(head1)[0] === 1, "the material's heading is of depth 1");
+  check(styleData(head1).outline === 1, "the material's heading is of depth 1");
   const tocAt = styleNames().indexOf("contents");
-  // The way of gathering is 0 for none, 1 for the contents, 2 for the notes' list.
-  check(tocAt >= 0 && outlineOf(tocAt)[1] === 1,
+  // The way of gathering is the field named after it, set to true.
+  check(tocAt >= 0 && styleData(tocAt).contents === true,
     "the material has a style for the contents");
-  check(outlineOf(styleNames().indexOf("footnote"))[1] === 2,
+  check(styleData(styleNames().indexOf("footnote")).notes === true,
     "the material has a style for the notes' list too");
   // **Do not settle the text by hand** (a heading can be typed over): it reads the heading's box
   // and looks for the same text in the item.
   const wasLines = w.kspage_web_layout(300);
   const headLine = textOf(0);
   w.kspage_web_click(0, 10, 0);
-  check(w.kspage_web_insert_gathered(stage("contents"), 1) === 1,
+  check(w.kspage_web_insert_gathered(stage("contents\tcontents")) === 1,
     "the contents can be inserted");
   const withToc = w.kspage_web_layout(300);
   check(withToc > wasLines,
@@ -490,7 +488,7 @@ export function run(ks) {
   check(setNote("the note's text") === 1, "a note can be put where the cursor is");
   check(out(w.kspage_web_note()) === "the note's text", "the note put on can be read back");
   w.kspage_web_click(0, 10, 0);
-  check(w.kspage_web_insert_gathered(stage("footnote"), 2) === 1,
+  check(w.kspage_web_insert_gathered(stage("notes\tfootnote")) === 1,
     "the notes' list can be inserted");
   const listed = w.kspage_web_layout(300);
   let noteLine = -1;

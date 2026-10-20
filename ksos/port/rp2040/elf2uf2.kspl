@@ -1,6 +1,5 @@
 #!/usr/bin/env -S ksplc run
 //< The ELF to UF2 conversion tool (RP2040 / Raspberry Pi Pico and Pico W)
-//<
 //< To write a UF2, copy it to the drive that appears when USB is plugged in with BOOTSEL held.
 
 // ==========================================
@@ -28,15 +27,12 @@ priv const BLOCK_SIZE: Sz = 512
 priv const DATA_AREA: Sz = 476
 priv const PT_LOAD: U32 = 1
 priv const PHENTSIZE32: Sz = 32 //< the size of one ELF32 program header
-    //<
     //< Nothing else is handled: the reads below **use fixed offsets** (p_offset=+4 / p_paddr=+12),
     //< so a different entry size would read a different field.
 priv const MAX_LOAD_ADDR: U32 = 0xffffffff //< the largest load address
-    //<
     //< UF2's targetAddr is 32-bit, so the limit has that type.
 
 enum Uf2_error //< why the conversion fails
-    //<
     //< The variant's name is the diagnostic (`\{e\}`), so make it mean something to the reader.
     not_an_elf
     not_32bit
@@ -55,14 +51,12 @@ enum Uf2_error //< why the conversion fails
     blocks_not_ascending
 
 priv struct Page //< one page written to the flash
-    //<
     //< Caution: addr must be a multiple of payload_size.
     addr: U32
     data: U8[256]
 
 priv fn load_pages(data: U8[], arena: Arena$@): List<|Page|>!Uf2_error //<
     //< Spreads the ELF's loadable segments over 256-byte-aligned pages, in ascending address order
-    //<
     //< Caution: **Do not cut each segment into 256-byte pieces.** targetAddr must be a multiple of
     //< 256, and payloadSize must be 256. Segments meet off a page boundary (`.isr_vector` and
     //< `.text`). So cutting makes short, unaligned blocks, and the boot ROM **ignores them with no
@@ -128,10 +122,9 @@ priv fn load_pages(data: U8[], arena: Arena$@): List<|Page|>!Uf2_error //<
 
 priv fn verify(path: U8[], blocks: Sz): Void!Uf2_error //<
     //< Reads back the UF2 just written and checks the format's invariants
-    //<
     //< Caution: If the format is wrong, the boot ROM **ignores it silently, with no error**. So
     //< this reads it back, and it fails here rather than on the device.
-    data: = io.read_file(path) catch
+    data: = io.read_file(path, null) catch
         throw .read_back_failed
     if data.len != blocks * BLOCK_SIZE
         throw .inconsistent_block_numbering
@@ -157,7 +150,7 @@ priv fn verify(path: U8[], blocks: Sz): Void!Uf2_error //<
         prev_end = addr + U32::PAYLOAD_SIZE
 
 priv fn convert(in_path: U8[], out_path: U8[], arena: Arena$@): Void!Uf2_error
-    elf: = io.read_file(in_path) catch
+    elf: = io.read_file(in_path, null) catch
         throw .not_an_elf
     $pages: = load_pages(elf, arena)!
 

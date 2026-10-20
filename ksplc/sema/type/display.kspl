@@ -1,5 +1,4 @@
 //< Turns a type into text to show a person
-//<
 //< Caution: **Keep the knowledge of the surface notation in this file alone.** Mutability's marking
 //< is reversed between the internal form (a postfix immut) and the surface (a `$` before the
 //< sigil). So a stale copy shows a wrong type.
@@ -12,7 +11,6 @@ import "std/chars"
 import "std/str" { Str_builder }
 
 priv const MAX_GENERIC_KEY_DEPTH: Sz = 8 //< the type-argument nesting written out in full
-    //<
     //< A deeper argument is written `…`: a polymorphic recursion's instance nests far deeper, and
     //< its internal name would show past the limit. It also stops a key that reads back as
     //< containing itself.
@@ -21,7 +19,6 @@ priv const ELIDED_ARG: U8[] = "…" //< a type argument past max_generic_key_dep
 impl sema_type_env.Env
     fn original_generic_name(r: Self$@, type_str: U8[]): U8[] //<
         //< Reads an internal type name from monomorphization back to its registration key
-        //<
         //< For example `ds_List_I32` reads back as `List<|I32|>`.
         //< A full walk of the intern table, O(cap). **A caller that has the type id must not use
         //< it** — display_type_to reads the instance's record at O(1). This is for
@@ -35,7 +32,6 @@ impl sema_type_env.Env
 
     priv fn expand_generic_key_to(r: Self$@, key: U8[], depth: Sz, w: Writer): Writer //<
         //< Writes an instance's registration key (`base<|actual arguments|>`) in source notation
-        //<
         //< Caution: **The type arguments must not be copied as characters.** The key holds the
         //< internal form, and copying shows `List<|U8 immut[]|>` or
         //< `List<|std_ds_List_U8_Const_Slice|>`.
@@ -76,7 +72,6 @@ impl sema_type_env.Env
     priv fn display_generic_arg_to(r: Self$@, arg: U8[], names_mut_pos: Bool, depth: Sz, w: Writer):
         Writer //<
             //< Writes one type argument in the surface notation.
-            //<
             //< A registered type is sent to display_type_to.
             //< **At a position where the declaration declared mutability (`struct Box<|$T|>`),
             //< restore the mark here** (the surface reverses the internal marking).
@@ -94,17 +89,15 @@ impl sema_type_env.Env
 
     priv fn display_suffix_base_to(r: Self$@, id: I32, depth: Sz, w: Writer): Writer //<
         //< Writes the type a postfix applies to, a function type in brackets as it is written
-        //<
         //< That is `(fn(I32):I32)@`, not a function returning `I32@`.
         switch r.get_info(id)
-        case .fn_type(_sig)
+        case .fn_type
             return r.display_type_to(id, depth, w.c('(')).c(')')
         default
             return r.display_type_to(id, depth, w)
 
     priv fn display_type_to(r: Self$@, id: I32, depth: Sz, w: Writer): Writer //<
         //< Writes a type out in KSPL's surface notation
-        //<
         //< Unmarked is immutable, a `$` before the sigil mutable (`U8[]` / `U8$[]` / `U8$@`). depth
         //< counts round trips through a generic key, not structural recursion.
         if id < 0 || id >= r.id_to_type.len
@@ -169,7 +162,6 @@ impl sema_type_env.Env
     priv fn display_instance_to(r: Self$@, inst: sema_type_env.Instance, depth: Sz, w: Writer):
         Writer //<
             //< Writes an instance as its template and type arguments, in source notation
-            //<
             //< Caution: **Write each type argument as a type**, not its internal name, or it shows
             //< `List<|U8 immut[]|>` or `List<|std_ds_List_U8_Const_Slice|>`.
         $res: = w.s(inst.template).s("<|")
@@ -192,7 +184,6 @@ impl sema_type_env.Env
         return b
 
     fn display(r: Self$@, id: I32): U8[] //< a type's display text, on the compilation's arena
-        //<
         //< For a diagnostic, which needs nothing freed; `display_str` when the text is built on.
         b: = base_core.arena.text()
         r.display_type_to(id, 0, b)
@@ -200,7 +191,6 @@ impl sema_type_env.Env
 
     fn display_key(r: Self$@, key: U8[]): U8[] //<
         //< A registration key in source notation, on the compilation's arena
-        //<
         //< For a function instance's key (`app.f<|app.P|>`), which no type id stands for.
         b: = base_core.arena.text()
         r.expand_generic_key_to(key, 0, b)
@@ -208,7 +198,6 @@ impl sema_type_env.Env
 
     fn display_str_named(r: Self$@, name: U8[]): Str_builder //<
         //< The display text from a name rather than a type id
-        //<
         //< For callers holding no type id (a struct field's parent type name).
         //< Caution: Do not duplicate the notation logic here. Pass a found id to display_type_to.
         b: = Str_builder.new()

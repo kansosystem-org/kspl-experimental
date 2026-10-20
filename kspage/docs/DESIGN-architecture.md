@@ -273,14 +273,33 @@ Caution: **Both directions break silently.** JS calling an entry point the sourc
 
 **Some entry points ask which cell, holder or line edge the cursor is in. Each of them is called after layout**, since none of that is known before. Outside a table or holder it returns 0 and leaves the key to the caller.
 
+**A value crosses in the shape it is saved in, and a kind crosses as its name.** A style and the page setup cross as their saved text. A kind (an enum's value) and a refusal cross as the variant's name, never as a number.
+
 **How text and numbers are passed:**
 
 | What crosses | How |
 | :-- | :-- |
 | Text passed in (a `len` argument) | It is first written into the typing arena (`kspage_web_input_buffer()`), unless the entry point's comment names the loading arena |
+| Several texts passed in | They share the typing arena, separated by tabs, in the order the entry point's comment lists |
 | Text passed out (an entry point that "writes out") | It goes into the one out arena (`kspage_web_out_ptr()`), which the next write clears; the entry point returns its length |
+| A style or the page setup | **Its saved text**: the JSON object a saved document holds it in ([`share/store.kspl`](../share/store.kspl)). One entry point writes it out. Another reads it back in its place, with the checks a document read from a file gets. It comes in through the loading arena, since a style's text is longer than the typing arena |
+| A kind (an enum's value) | **Its variant name.** Out, it is written into the out arena (`variant_name()`). In, it is the first text in the typing arena, before a tab, and the core reads it with the enum's `from_variant_name` |
+| A refusal | **An entry point that can refuse for more than one reason writes the result's variant name out** (`Sort_end`, `Merge_end` and the like). `done` means it acted. The page words each name in one table (`REFUSALS` in [`port/web/draw.js`](../port/web/draw.js)) |
 | Several numbers (`out`) | Each `out` receives the numbers listed in that entry point's comment under `port/web/` |
-| A refusal | **An entry point can refuse for more than one reason. Then it returns the reason as a number its comment lists** (per `Sort_end`, `Merge_end` and the like). The page words it |
+
+**Why a value crosses in its saved shape.** A style has about 40 fields. Passed one by one, each field needs its own way in and out on both sides. The core would also check each field's range a second time, beside the reader that checks a saved document. With the saved text, a value has one shape whether it is saved or edited:
+
+* a field added to the saved text reaches the page without a new entry point;
+* what the page sets gets the same checks as a document read from a file;
+* the page changes only the fields its form shows. It passes the rest back as it read them, so a field with no box on the form is kept.
+
+**A field left out is unset or holds its default**, as in a saved document. So the page passes back the whole text it read. **The change is one undo step**, whatever number of fields it touches.
+
+**A style's text is read into the document's arena.** Its texts point into what is parsed, and the undo record keeps them as long as the document. Each change adds the parsed text to the arena, which is small beside a document.
+
+**Why names, not numbers.** A number means something only through a list that both sides keep in the same order. A reordered list or a new variant then shifts the meanings, and nothing reports it. Two entry points can also give one number two meanings. A name means one thing wherever it appears. The core reads it with the enum itself, so no list is kept in step. **An unknown name reads as the kind's default**, as in a saved document.
+
+**The page still lists some names: its choices and its words.** `make test-conventions` checks each list against the core's enum. A choice the core does not know would come out as something else. A reason with no words would show its bare name.
 
 ### Values that cross the boundary
 

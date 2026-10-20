@@ -1,0 +1,60 @@
+//< Tests: a test no suite runs, and a function in a file of tests that nothing calls
+//< Each case below is compiled alone, as the file its head names.
+// ==== case test_no_suite_runs
+//< A `test_` function in a program with no suite to run it is reported, since it would never run
+//< The program has a `main`, so nothing else could run it either.
+// EXPECT: [W0214] 'test_left_out' is named like a test, but no suite in this program runs it
+fn test_left_out()
+  assert(1 + 1 == 2, "sum")
+
+fn main()
+  return
+// ==== case test_run_by_its_suite
+//< A `test_` function the suite of its own file runs is not reported
+// EXPECT-NOT: [W0214]
+// EXPECT-NOT: [W0503]
+import "std/suite"
+
+priv struct Tests
+  n: I32
+
+impl Tests: suite.Suite {}
+
+fn test_kept(n: I32)
+  assert(n == 2, "n")
+
+fn main()
+  $t: = Tests::{ .n = 2 }
+  t.run()
+// ==== case test_without_main_is_quiet
+//< A file with no `main` is not a program: the suite that runs its tests is elsewhere
+// EXPECT-NOT: [W0214]
+fn test_elsewhere()
+  assert(1 + 1 == 2, "sum")
+// ==== case test_misspelt_name
+//< A misspelt test in a file a suite reaches is reported: nothing calls it, so nothing runs it
+//< A helper a test calls, the suite's `main` and the hooks are not reported.
+// EXPECT: [W0503] 'tset_forgotten' stands in a file of tests, but nothing calls it
+// EXPECT-NOT: 'helper' stands in a file of tests
+// EXPECT-NOT: 'test_counted' stands in a file of tests
+// EXPECT-NOT: 'before_each' stands in a file of tests
+import "std/suite"
+
+priv enum Tests
+  all
+
+impl Tests: suite.Suite
+  fn before_each(_r: Self$@, _name: U8[]) {}
+
+fn helper(): I32
+  return 2
+
+fn tset_forgotten()
+  assert(1 + 1 == 2, "sum")
+
+fn test_counted()
+  assert(helper() == 2, "helper")
+
+fn main()
+  $t: = Tests.all
+  t.run()

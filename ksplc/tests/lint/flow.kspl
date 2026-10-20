@@ -1,9 +1,7 @@
 //< Flow and values: endless loops, unused results, comparisons
-//<
 //< Each case below is compiled alone, as the file its head names.
 // ==== case endless_for
 //< What follows a `for` that never ends is unreachable
-//<
 //< A `for` with no condition that no `break` leaves never hands control on ("Loops" in
 //< `../../../docs/SPEC-programming-language.md`). So the statement after it gets [W0201], and the function
 //< needs no `return` there. An inner loop's `break` leaves only the inner loop.
@@ -21,7 +19,6 @@ pub fn spin(): I32
   return i
 // ==== case labelled_branch_left_by_break
 //< What follows a labelled `switch` or `if` that a `break` leaves is reachable
-//<
 //< **A `break` to the label carries control past the statement**, so the code after it runs
 //< though every branch ends in a `return`. The missing-return check already reads it so. Read as
 //< unreachable, the `return` after each would be reported, and the variable it reads as unused.
@@ -51,7 +48,6 @@ pub fn branch_of(e: I32): I32
   return n
 // ==== case len_of_an_array_field
 //< A struct read only through its array field's `.len` gets the same note as an array does
-//<
 //< **The note named only a variable that is itself an array.** So `b.v.len` on a struct whose `v`
 //< is a fixed (or const-generic) array said "nothing reads" with no reason (`holds_fixed_array` in
 //< `ksplc/sema/flow/report.kspl`).
@@ -66,7 +62,6 @@ fn main()
   io.out().s("\{b.v.len\}\n")
 // ==== case meaningless_compare_float
 //< [W0204] does not cover floating point
-//<
 //< Under IEEE 754 a NaN is equal to no value at all. So `f != f` is the one spelling that asks "is
 //< f a NaN", and it is not always false. On the integer side it must come out as before (these two
 //< items are pinned down in one file).
@@ -80,7 +75,6 @@ fn main(): I32
   return 1 if is_nan && same else 0
 // ==== case redundant_parens_and_self_assign
 //< Unnecessary brackets around a condition, and an assignment to itself
-//<
 //< Both are spellings that carry no meaning.
 // EXPECT: [H0301] Unnecessary parentheses around 'if' condition
 // EXPECT: [H0301] Unnecessary parentheses around 'switch' condition
@@ -105,7 +99,6 @@ pub fn self_assign($n: I32): I32
   return n
 // ==== case unused_and_ignored
 //< Checks that the diagnostics for "written but never read" can fire
-//<
 //< Caution: Keep one fixed-length array around. [W0207] looks at the reading, not at the name
 //< appearing, so it comes out on an array used only through `.len`.
 //< Keep one import around: the private-declaration check draws the file by name.
@@ -127,3 +120,40 @@ pub fn probe(used: I32, unread_param: I32): I32
   len_only: Sz[3] = ::{ 1, 2, 3 }
   io.out().s("probe \{len_only.len\}\n")
   return used
+// ==== case unused_priv_lib
+//< A file another file imports, holding one dead helper and two that only look unused
+//< Only a generic nobody instantiates calls `helper`, and a conformance needs `head`.
+// EXPECT: unused_priv_lib.kspl:9:1: warning: [W0206] Unused private function 'dead'
+// EXPECT-NOT: 'helper'
+// EXPECT-NOT: .head'
+priv fn helper(): I32
+  return 1
+
+priv fn dead(): I32
+  return 2
+
+pub fn twice<|T|>(_x: T): I32
+  return helper()
+
+pub trait Headed
+  fn head(r: Self): I32
+
+pub struct Box
+  n: I32
+
+impl Box: Headed
+  priv fn head(r: Self): I32
+    return r.n
+
+pub fn plain(): I32
+  return 3
+// ==== case unused_priv_imported
+//< A dead `priv` helper is reported in a file the linted file imports, not only in that file
+//< The imported file is the case above, which the suite writes beside this one.
+// EXPECT: unused_priv_lib.kspl:9:1: warning: [W0206] Unused private function 'dead'
+// EXPECT-NOT: 'helper'
+// EXPECT-NOT: .head'
+import "unused_priv_lib"
+
+fn main(): I32
+  return unused_priv_lib.plain()

@@ -16,6 +16,7 @@ import "kspage/write/edit"
 import "kspage/write/insert"
 import "kspage/write/shape" as _shape
 import "std/ds" { List }
+import "std/math"
 import "std/mem" { Arena }
 import "std/str"
 import "std/verdict"
@@ -72,7 +73,6 @@ fn test_a_merged_cell_spans_its_rows(arena: Arena$@) //<
 
 fn test_a_merged_cell_does_not_widen_its_columns(arena: Arena$@) //<
     //< A merged cell does not decide a column's width
-    //<
     //< **Otherwise the narrow columns would all widen at once.**
     verdict.start("[kspage/tile] a merged cell not widening a column test...")
     d: = Doc.new(arena)
@@ -193,7 +193,6 @@ fn test_the_frame_is_the_innermost_cell(arena: Arena$@) //<
     verdict.pass("in a nesting the innermost cell becomes the frame.")
 fn test_a_cell_does_not_split_into_paragraphs(arena: Arena$@) //<
     //< inside a cell no paragraph is split
-    //<
     //< Split, that row alone would gain a cell and the table's shape would break.
     verdict.start("[kspage/tile] not splitting a paragraph inside a cell test...")
     d: = Doc.new(arena)
@@ -211,7 +210,6 @@ fn test_a_cell_does_not_split_into_paragraphs(arena: Arena$@) //<
         .pass("pressed inside a cell no paragraph splits, and the table's shape does not change.")
 fn test_a_table_is_inserted_after_the_caret(arena: Arena$@) //<
     //< An empty table can be inserted after the paragraph the cursor is in
-    //<
     //< **Where there is no grid style it makes one**, or the table would be laid out as paragraphs.
     verdict.start("[kspage/tile] a table being insertable test...")
     d: = Doc.new(arena)
@@ -255,7 +253,6 @@ fn test_a_table_is_inserted_after_the_caret(arena: Arena$@) //<
 
 fn test_a_table_takes_the_size_pressed(arena: Arena$@) //<
     //< The size is the click's: three rows and four columns give three rows of four cells
-    //<
     //< Below one row or one column nothing is inserted (there is no table without cells).
     verdict.start("[kspage/tile] the size pressed test...")
     d: = Doc.new(arena)
@@ -278,7 +275,6 @@ fn test_a_table_takes_the_size_pressed(arena: Arena$@) //<
 
 fn test_a_fresh_table_spans_the_text(arena: Arena$@) //<
     //< A new table's columns get equal shares of the width it is laid out to
-    //<
     //< So it spans the text and keeps that width when the page is laid out wider. The table's
     //< indent and padding narrow what the columns share, as the flow narrows any block.
     verdict.start("[kspage/tile] a fresh table's width test...")
@@ -314,7 +310,6 @@ fn test_a_fresh_table_spans_the_text(arena: Arena$@) //<
 
 fn test_the_heading_band_is_the_first_row(arena: Arena$@) //<
     //< Every top-level table gives a band: its rectangle and its first row's
-    //<
     //< A table inside a cell gives none.
     //<
     //< It is what the window keeps in view while the table scrolls under the tools.
@@ -354,7 +349,6 @@ fn test_the_heading_band_is_the_first_row(arena: Arena$@) //<
 
 priv fn merged_head(d: Doc$@): Block$@ //<
     //< A table whose first row is one cell covering two columns, and whose second row is two cells
-    //<
     //< **It separates "which column" from "which child"**: the first row has one child and two
     //< columns.
     table: = d.add_block("table")
@@ -440,9 +434,9 @@ fn test_dropping_a_column_narrows_a_merge_and_comes_home(arena: Arena$@) //<
 // kspage: checks charts (a golden test).
 // ==========================================
 
-priv fn near(a: F32, b: F32): Bool
+priv fn near_px(a: F32, b: F32): Bool //< whether two chart lengths agree within half a pixel
     d: = a - b
-    return (d if d >= 0.0 else -d) < 0.5F32
+    return math.abs(d) < 0.5F32
 
 priv fn chart_sheet(arena: Arena$@, kind: Collect, height: F32): Sheet$@ //<
     //< A table's style, and a chart's style
@@ -457,7 +451,6 @@ priv fn chart_sheet(arena: Arena$@, kind: Collect, height: F32): Sheet$@ //<
 
 priv fn bare_chart_sheet(arena: Arena$@, kind: Collect): Sheet$@ //<
     //< A chart style that sets only the height, and neither a line nor a fill
-    //<
     //< **This shape hits "nothing is drawn"**; a document not made by inserting (loaded, from
     //< Markdown, built by hand) can have it.
     sheet: = Sheet.new(base.root_font(), arena)
@@ -493,7 +486,6 @@ priv fn laid(d: Doc$@, sheet: Sheet$@, arena: Arena$@): Page$@
 
 fn test_a_bar_stands_for_each_value_in_the_range(arena: Arena$@) //<
     //< As many bars as values in the range, each as tall in proportion to its value
-    //<
     //< **Start them from 0**; showing only the differences makes a short bar look long.
     verdict.start("[kspage/chart] a bar standing per value test...")
     d: = doc_with_chart(arena, "detail!A1:A3", "10", "20", "30")
@@ -506,17 +498,16 @@ fn test_a_bar_stands_for_each_value_in_the_range(arena: Arena$@) //<
     low: = bands.get(0)
     high: = bands.get(2)
     assert(high.rect.h > low.rect.h, "the bar of the larger value is taller")
-    assert(near(high.rect.h, low.rect.h * 3.0F32), "the height is in proportion to the value")
+    assert(near_px(high.rect.h, low.rect.h * 3.0F32), "the height is in proportion to the value")
     assert(low.rect.x < high.rect.x, "the bars line up in the range's order")
     // Every value is positive, so the axis at 0 is at the bars' bottom edge.
     axis: = bands.get(3)
-    assert(near(axis.rect.h, 0.0), "the axis is a line holding no height")
-    assert(near(axis.rect.y, low.rect.y + low.rect.h), "the axis comes at the bars' bottom edge")
+    assert(near_px(axis.rect.h, 0.0), "the axis is a line holding no height")
+    assert(near_px(axis.rect.y, low.rect.y + low.rect.h), "the axis comes at the bars' bottom edge")
     verdict.pass("a bar stands per value in the range, from 0 to the value's height.")
 
 fn test_each_value_gets_a_label_that_is_not_in_the_document(arena: Arena$@) //<
     //< A value's text appears as a box
-    //<
     //< **It points at no text in the document** (a click cannot get inside it).
     verdict.start("[kspage/chart] the values' texts coming out test...")
     d: = doc_with_chart(arena, "detail!A1:A3", "10", "20", "30")
@@ -534,7 +525,6 @@ fn test_each_value_gets_a_label_that_is_not_in_the_document(arena: Arena$@) //<
     verdict.pass("a value's text comes out as a box, but becomes no place in the document.")
 
 fn test_a_line_chart_joins_the_points(arena: Arena$@) //< a line joins point to point
-    //<
     //< **With one point no line is drawn.**
     verdict.start("[kspage/chart] a line joining the points test...")
     d: = doc_with_chart(arena, "detail!A1:A3", "10", "30", "20")
@@ -561,7 +551,6 @@ fn test_a_chart_without_a_height_is_not_placed(arena: Arena$@) //<
 
 fn test_an_unreadable_range_places_nothing(arena: Arena$@) //<
     //< Even with a range that does not read, relayout does not stop
-    //<
     //< A cell that is not a number is skipped too.
     //< With no value only the axis appears (so fixing the range visibly brings the bars back).
     verdict.start("[kspage/chart] a range that does not read test...")
@@ -586,7 +575,6 @@ fn test_an_unreadable_range_places_nothing(arena: Arena$@) //<
     verdict.pass("even on a range that does not read, laying out again does not stop.")
 
 fn test_a_formula_cell_becomes_a_bar(arena: Arena$@) //< a formula's result becomes a bar too
-    //<
     //< **The computed number is read** (a formatted text cannot be turned back into a number).
     verdict.start("[kspage/chart] a formula's answer becoming a bar test...")
     d: = doc_with_chart(arena, "detail!A1:A3", "10", "=A1*2", "30")
@@ -600,13 +588,12 @@ fn test_a_formula_cell_becomes_a_bar(arena: Arena$@) //< a formula's result beco
 
     bands: = bands_of(page, d.blocks.get(1), arena)
     assert(bands.len == 4, "a cell holding a formula becomes a bar too")
-    assert(near(bands.get(1).rect.h, bands.get(0).rect.h * 2.0F32),
+    assert(near_px(bands.get(1).rect.h, bands.get(0).rect.h * 2.0F32),
         "the height is the answer's value")
     verdict.pass("a formula's answer, and a cell with dressing on it, become a bar at the value.")
 
 fn test_inserting_a_chart_puts_no_content_in_the_document(arena: Arena$@) //<
     //< Insert a chart and the contents still do not go into the document
-    //<
     //< **One undo takes it back.**
     verdict.start("[kspage/chart] inserting a graph test...")
     d: = Doc.new(arena)
@@ -633,7 +620,6 @@ fn test_inserting_a_chart_puts_no_content_in_the_document(arena: Arena$@) //<
 
 fn test_a_chart_draws_even_when_the_style_says_no_ink(arena: Arena$@) //<
     //< It draws even with a style that sets neither a line nor a fill
-    //<
     //< **Do not lay it out invisible**: with nothing shown the user can only think "I got the range
     //< wrong" (Principle 5). A shape differs: its bare frame holds children, a chart none.
     verdict.start("[kspage/chart] a style saying neither a line nor a fill test...")
@@ -657,7 +643,6 @@ fn test_a_chart_draws_even_when_the_style_says_no_ink(arena: Arena$@) //<
 
 fn test_inserting_a_chart_fills_in_what_the_style_lacks(arena: Arena$@) //<
     //< Inserting one adds the missing settings to the style
-    //<
     //< Caution: **Test the case where the height and the thickness are already set too.**
     //< Otherwise the change that adds a fill looks "unchanged" and is silently lost.
     verdict.start("[kspage/chart] the inserting putting the settings that are wanting in test...")

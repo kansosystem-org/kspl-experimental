@@ -1,17 +1,18 @@
 //< The descriptors the RP2040's USB device identifies itself with
-//<
 //< Kept apart from the driver (`usb_cdc.kspl`): **bytes only**, with no procedures at all.
 //<
 //< Caution: **Count the length byte yourself and write it.** If a descriptor's length byte does
 //< not match its length, the host gives up partway through enumeration and the device sees no
 //< error. A string descriptor is UTF-16LE, so its length is `2 + 2 × the character count`.
+//< Each array is `U8[_]`, so its length is its element count. A count written out pads what is
+//< short with 0, and that mismatch compiles without complaint.
 
 // ==========================================
 // The descriptors
 // ==========================================
 
 // The VID/PID is **0x1209/0x0002** (a pid.codes test pair). For a product, obtain your own.
-const DESC_DEVICE: U8[18] = ::{
+const DESC_DEVICE: U8[_] = ::{
     18,
     1, // bLength, DEVICE
     0x00,
@@ -41,7 +42,7 @@ const DESC_DEVICE: U8[18] = ::{
 // host reads the four interfaces as one function and neither driver attaches.
 //   function 1 = CDC-ACM (IF 0,1) ... the debug console on real hardware
 //   function 2 = CDC-NCM (IF 2,3) ... what the PC sees as a USB LAN adapter
-const DESC_CONFIG: U8[160] = ::{
+const DESC_CONFIG: U8[_] = ::{
     // CONFIGURATION (9): 160 in all, 4 interfaces, value 1, bus powered, 100mA
     9,
     2,
@@ -209,17 +210,25 @@ const DESC_CONFIG: U8[160] = ::{
     0, // EP4 IN  (7): bulk, 64 bytes
 }
 
-const DESC_LANG: U8[4] = ::{ 4, 3, 0x09, 0x04 } // English (United States)
-const DESC_MANUFACTURER: U8[12] = ::{ 12, 3, 'K', 0, 'a', 0, 'n', 0, 's', 0, 'o', 0 }
-const DESC_PRODUCT: U8[18] = ::{ 18, 3, 'k', 0, 's', 0, 'o', 0, 's', 0, ' ', 0, 'C', 0, 'D', 0, 'C',
+const DESC_LANG: U8[_] = ::{ 4, 3, 0x09, 0x04 } // English (United States)
+const DESC_MANUFACTURER: U8[_] = ::{ 12, 3, 'K', 0, 'a', 0, 'n', 0, 's', 0, 'o', 0 }
+const DESC_PRODUCT: U8[_] = ::{ 18, 3, 'k', 0, 's', 0, 'o', 0, 's', 0, ' ', 0, 'C', 0, 'D', 0, 'C',
     0 } //<
         //< The product name, "ksos CDC"
-        //<
         //< 8 characters, so the length is 18; a longer bLength makes the host read the spare bytes
         //< as a NUL (ksos/tests/usb_descriptors.kspl).
 // The MAC address the Ethernet Networking descriptor points at. **It is the MAC the host uses for
 // its own end, not this device's MAC.** It is 12 hex characters in UTF-16LE (26 bytes).
 // Caution: Make the first octet 0x02 (locally administered, unicast); a real vendor's range
 // collides when that vendor's device is on the same LAN.
-const DESC_MAC: U8[26] = ::{ 26, 3, '0', 0, '2', 0, '0', 0, '0', 0, '0', 0, '0', 0, '0', 0, '0', 0,
+const DESC_MAC: U8[_] = ::{ 26, 3, '0', 0, '2', 0, '0', 0, '0', 0, '0', 0, '0', 0, '0', 0, '0', 0,
     '0', 0, '0', 0, '0', 0, '2', 0 }
+
+// The answer to NCM's only mandatory class request, GET_NTB_PARAMETERS (CDC NCM 1.0): **left
+// unanswered, the host does not bring the link up.** The fields, little-endian: wLength 28;
+// bmNtbFormatsSupported 1 (16-bit only); dwNtbInMaxSize 2048; wNdpInDivisor 4;
+// wNdpInPayloadRemainder 0; wNdpInAlignment 4; wPadding1 0; dwNtbOutMaxSize 2048; wNdpOutDivisor 4;
+// wNdpOutPayloadRemainder 0; wNdpOutAlignment 4; wNtbOutMaxDatagrams 1. The last makes the host
+// put one frame in each NTB, which keeps parsing simple.
+const DESC_NTB_PARAMS: U8[_] = ::{ 28, 0, 1, 0, 0x00, 0x08, 0x00, 0x00, 4, 0, 0, 0, 4, 0, 0, 0,
+    0x00, 0x08, 0x00, 0x00, 4, 0, 0, 0, 4, 0, 1, 0 }

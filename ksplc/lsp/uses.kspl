@@ -1,5 +1,4 @@
 //< LSP: finds where a name is used, the one list references and rename both answer from
-//<
 //< **One function collects the places** (`collect_spots`); references turn the list into
 //< `Location`s here, renaming into `changes` (`rename.kspl`). **Matching is by definition, not by
 //< name.**
@@ -27,7 +26,6 @@ import "std/seq"
 import "std/str" { Str_builder }
 
 struct Spot //< one place of use
-    //<
     //< `is_decl` marks the declaration itself: **a references request says whether to count it**
     //< (`context.includeDeclaration`). `node` and `path` are what a rename checks a new name
     //< against (`rename.kspl`).
@@ -72,7 +70,6 @@ fn target_at(state: Doc_state$@, params: json.Value): Target? //<
 
 priv fn as_selector(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, name: Ast_node$@): Ast_node$@? //<
     //< The `a as b` selector whose `b` the name is, on the import line or at a use; none otherwise
-    //<
     //< Caution: **A use must stand for what `a` names**, or a local `b` shadowing the import in
     //< one function would be taken for it.
     $selector: Ast_node$@ = null
@@ -103,7 +100,6 @@ priv fn name_node(at: Ast_node$@): Ast_node$@? //< the identifier a picked node 
 fn handle_references(ws_state: Doc_state$@, params: json.Value, id_val: json.Value,
     arena: Arena$@) //<
         //< `textDocument/references`: it returns the uses as a list of `Location`
-        //<
         //< **Count the declaration only as asked** (`context.includeDeclaration`), or "only the
         //< uses" cannot be had (a common complaint).
     switch target_at(ws_state, params)
@@ -127,7 +123,6 @@ fn handle_references(ws_state: Doc_state$@, params: json.Value, id_val: json.Val
         lsp_msg.send_null_response(id_val, arena)
 
 priv fn wants_decl(params: json.Value): Bool //< whether the references count the declaration itself
-    //<
     //< Caution: **Where the option is absent, count it**, or a client that sends none loses the
     //< definition from the list. False only when exclusion is asked for.
     switch params.get("context").get("includeDeclaration")
@@ -139,7 +134,6 @@ priv fn wants_decl(params: json.Value): Bool //< whether the references count th
 fn collect_spots(ws_state: Doc_state$@, t: Target, style: base_locate.Uri_style, arena: Arena$@):
     List<|Spot|> //<
         //< It collects the places of the target's definition, across the whole workspace.
-        //<
         //< Caution: **Walk the generics' templates too.** An instantiated tree cannot be reached
         //< from `root_file`, so skipping them silently misses the calls found only inside a
         //< generic.
@@ -182,7 +176,6 @@ priv fn is_same_loc(a: Ast_node$@, b: Ast_node$@): Bool
 
 priv fn is_def_match(n_def: Ast_node$@, t_def: Ast_node$@): Bool //<
     //< Whether the two definitions are the same one
-    //<
     //< One definition can be several node instances (a template's re-instantiation, an identifier
     //< standing for its declaration). So besides sym_ptr several fallbacks are tried. One is
     //< enough.
@@ -201,7 +194,6 @@ priv fn is_def_match(n_def: Ast_node$@, t_def: Ast_node$@): Bool //<
 
 priv fn is_the_decl(n: Ast_node$@, target_def: Ast_node$@): Bool //<
     //< Whether that identifier is the declaration itself
-    //<
     //< Caution: **Compare strictly**, or a real use passes for the declaration and is dropped where
     //< `includeDeclaration` is false.
     return n == target_def || n == target_def.find_child(.k_identifier)
@@ -242,7 +234,6 @@ impl Walk
 
     priv fn refers(w: Self$@, n: Ast_node$@): Bool //<
         //< whether an identifier is a place of the target
-        //<
         //< An `as` name's uses resolve to the declaration it stands for, as that declaration's own
         //< places do. So the spelling and the file tell the two apart (the head of this file).
         if w.stands_for != null
@@ -262,7 +253,6 @@ impl Walk
 
     priv fn add_spot(w: Self$@, hit: Ast_node$@) //<
         //< It adds one place, dropping a duplicate by `<file>:<offset>`
-        //<
         //< The duplicates come from root_file's walk and a template's.
         src: = base_core.source_of(w.c.source_map, hit.loc.file())
         if src.len == 0
@@ -276,7 +266,6 @@ impl Walk
 
         pos: = position_of(w.c, hit)
         $safe: = hit.loc.file().with_forward_slashes()
-        defer safe.free()
         uri: = w.style.spell(safe.slice())
         w.out
             .push(Spot::{ .uri = w.arena.dup_str(uri), .line = pos.line,
@@ -286,7 +275,6 @@ impl Walk
 
     priv fn path_in_file(w: Self$@): List<|Ast_node$@|>$@ //<
         //< The nodes above the one visited, from the top of its own file down
-        //<
         //< **An imported file hangs under the file importing it**, so the walk's own path starts in
         //< another file. The part above the nearest file's top is cut off.
         $from: Sz = 0
@@ -300,7 +288,6 @@ impl Walk
 
 fn position_of(c: Sema_ctx$@, node: Ast_node$@): lsp_msg.Position //<
     //< Where a node stands in its file, as the LSP counts
-    //<
     //< Caution: **Get the line-start table from `line_starts_for`**, which builds it once per file.
     //< Built per place, a name used a thousand times in one file walks that file a thousand times.
     src: = base_core.source_of(c.source_map, node.loc.file())

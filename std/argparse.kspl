@@ -1,5 +1,4 @@
 //< Reading a command line as the program declared it: flags, values, and `--help`
-//<
 //< **Each declared item takes a pointer to the caller's own variable as its destination**, written
 //< with `$`. So the default is that variable's initial value, and there is no table to look a value
 //< up in by name.
@@ -8,7 +7,7 @@
 //< and the failure shows up far from them. **After a lone `--`, every argument is positional**,
 //< so a file named `-x` can still be named (`rm -- -x`).
 //< The design and its costs are in "An argument's destination is declared, and unknown ones
-//< are errors" in `std/docs/DESIGN-system.md`.
+//< are errors" and the section after it, in `std/docs/DESIGN-system.md`.
 import "std/chars"
 import "std/ds" { List }
 import "std/io"
@@ -27,9 +26,12 @@ pub enum Argument_error //< why the arguments could not be read as declared
     multiple_commands(name: U8[]) //< two commands were named at once
     unexpected_arg(name: U8[]) //< a positional argument was given to a CLI that takes none
     repeated(name: U8[]) //< an item taking one value was given twice; the second would replace it
+    not_for_command(name: U8[], command: U8[], commands: U8[]) //<
+        //< An option was given with a command it does not take effect on
+        //< `command` is the one chosen (empty where none is). `commands` are those the option takes
+        //< effect on, separated by spaces, as `only_for` declared them.
 
 priv enum Kind //< an item's kind and its destination
-    //<
     //< The destination is **held in the payload**, so the switch, not a `Void$@` cast per kind,
     //< guarantees that kind and destination agree.
     str_val(out: U8[]$@)
@@ -47,6 +49,7 @@ priv struct Opt
     required: Bool
     seen: Bool
     seen_empty: Bool //< it was given at least once with nothing after its `=`
+    scope: U8[] //< the commands it takes effect on, separated by spaces; empty: every command
 
 priv struct Opt_hit //< the option an argument names, and the value it carries
     opt: Opt$@
@@ -59,15 +62,15 @@ priv struct Cmd //< a command selected by a positional argument's name (`fmt` / 
     help: U8[]
     trailing: List<|U8[]|>$@ //<
         //< Where the rest after this command's target goes, or null
-        //<
         //< When this is not null, **nothing after this command's first positional argument is
         //< interpreted** (in `ksplc run script.kspl --verbose`, the `--verbose` belongs to the
         //< script).
     hidden: Bool //< left out of the usage: a command another program calls, never a person
+    is_default: Bool //< chosen when no command is named; its name is never typed
+    form: U8[] //< what follows its name in its usage line (`<input.kspl>...`); empty: nothing
 
 priv fn store_value(o: Opt$@, val: U8[], again: Bool): Void!Argument_error //<
     //< Interprets the value by o's kind and stores it in the destination
-    //<
     //< Caution: **Refuse an item of one value given `again`.** Kept, the later value silently wins,
     //< so a word added to the end of a command line undoes one before it (`--out=a --out=b`).
     switch o.kind
@@ -87,8 +90,31 @@ priv fn store_value(o: Opt$@, val: U8[], again: Bool): Void!Argument_error //<
         // ignored.
         throw .unexpected_value(o.name)
 
+priv fn stop(asked: U8$[], name: U8[], why: U8$[], file: U8[], line: Sz) //<
+    //< Stops the program over a declaration the program itself got wrong
+    $m: = Panic_msg.new()
+    m.s("Parser.").s(asked).s(": '").s(name).s("' ").s(why)
+    panic(m.slice(), file, line)
+
+priv fn word_end(words: U8[], start: Sz): Sz //< where the word at start ends: a space or the end
+    $end: = start
+    for end < words.len && words[end] != ' '
+        end += 1
+    return end
+
+priv fn has_word(words: U8[], word: U8[]): Bool //< whether word is one whole word of words
+    //< Caution: **Never match a part of a word**: `run` would match `emit-runtime`.
+    if word.len == 0
+        return false
+    $start: Sz = 0
+    for start < words.len
+        end: = word_end(words, start)
+        if words.sub(start, end - start).equals(word)
+            return true
+        start = end + 1
+    return false
+
 priv const HELP_COLUMN: Sz = 26 //< the column where the description starts
-    //<
     //< Each byte counts as one display column (ASCII).
 
 priv fn help_name(out: Writer, name: U8[], suffix: U8[])
@@ -103,42 +129,39 @@ pub struct Parser //< the declarations, and where the parsed values go
     priv opts: List<|Opt|>$@
     priv cmds: List<|Cmd|>$@
     pub rest: List<|U8[]|>$@ //< the positional arguments, in the order they appeared.
-        //<
         //< Neither an option nor a command name. Unless `positional` declared them, each is an
         //< error.
     priv positional_help: U8[] //<
         //< The usage name declared by `positional`. Empty: the CLI takes no positional argument.
     priv takes_positional: Bool
-    pub command: U8[]? //< the chosen command, or none; the caller decides the default.
-        //<
-        //< A default kept in argparse would drift from the declaration.
+    pub command: U8[]? //< the chosen command, or none
+        //< Where no command is named, it is the one `default_command` declared, or none.
     priv own: Own_arena //< the arena it lives in, when `create` was given null
 
 impl Parser
     pub fn create( //< a parser with nothing declared yet
-        //<
         //< With `null`, `defer p.free()` frees it and all it holds.
         prog: U8[], //< the program's name, used in the usage and in every error
         about: U8[], //< one line saying what the program is
         arena: Arena$@, //< where the declarations go; null means an arena of its own and a `free()`
     ): Parser$@
-        work: = mem.scratch(arena)
-        opts: = List<|Opt|>.create(work.arena)
-        cmds: = List<|Cmd|>.create(work.arena)
-        rest: = List<|U8[]|>.create(work.arena)
+        $work: = mem.scratch(arena)
+        at: = work.arena
+        opts: = List<|Opt|>.create(at)
+        cmds: = List<|Cmd|>.create(at)
+        rest: = List<|U8[]|>.create(at)
         p: = Parser::{ .prog = prog, .about = about, .opts = opts, .cmds = cmds, .rest = rest,
-            .positional_help = "", .takes_positional = false, .command = .none, .own = work.own }
-        return work.arena.create(p)
+            .positional_help = "", .takes_positional = false, .command = .none,
+            .own = work.keep() }
+        return at.create(p)
 
     pub fn free(r: Self$@) //< lets go the parser and all it holds, when `create` was given null
-        //<
         //< Made in the caller's arena, it frees nothing: that arena does. The values it stored stay
         //< where the caller's variables hold them.
         $own: = r.own
         own.free()
 
     pub fn positional( //< declares that this CLI takes positional arguments
-        //<
         //< **A positional argument given to a CLI that declares none is an error**, for the same
         //< reason as an unknown `--name`. A path's word-split fragments arrive **as positional
         //< arguments**, and dropping them silently hides the cause.
@@ -157,6 +180,7 @@ impl Parser
             .required = required,
             .seen = false,
             .seen_empty = false,
+            .scope = "",
         })
 
     pub fn subcommand( //< a command chosen by name (`ksplc fmt`); the choice is stored in `command`
@@ -164,30 +188,87 @@ impl Parser
         name: U8[], //< the command's name as typed
         help: U8[], //< the one line shown beside it in the usage
     )
-        r.cmds.push(Cmd::{ .name = name, .help = help, .trailing = null, .hidden = false })
+        r.add_cmd(name, help, null, false, false)
 
     pub fn subcommand_hidden( //< a command chosen by name that the usage does not list
-        //<
         //< For a mode only another program starts (a language server's worker). Listed, it reads
         //< as something a person can type; left undeclared, its name would be read as an input.
         r: Self$@,
         name: U8[], //< the command's name as typed
     )
-        r.cmds.push(Cmd::{ .name = name, .help = "", .trailing = null, .hidden = true })
+        r.add_cmd(name, "", null, true, false)
 
     pub fn subcommand_trailing( //< a command taking one target and an uninterpreted rest
-        //<
         //< Its own options go before the target, as with `python x.py --foo`.
         r: Self$@,
         name: U8[], //< the command's name as typed
         help: U8[], //< the one line shown beside it in the usage
         trailing: List<|U8[]|>$@, //< the rest; never read as options, even if it looks like them
     )
+        r.add_cmd(name, help, trailing, false, false)
+
+    pub fn default_command( //< the command chosen when no command is named (`ksplc a.kspl a.c`)
+        //< **Its name is never typed**: one way to ask for it, not two. The name stands in the
+        //< usage, in `command` after parsing, and in `only_for`.
+        //< Caution: **A second default stops the program**; one of the two would never be chosen.
+        r: Self$@,
+        name: U8[], //< the command's name, as `command` holds it
+        file: U8[] = caller_file, //< where it was called, for the stop
+        line: Sz = caller_line, //< where it was called, for the stop
+    )
+        if _d: = r.find_default()
+            stop("default_command", name, "is a second default command", file, line)
+        r.add_cmd(name, "", null, false, true)
+
+    priv fn add_cmd(r: Self$@, name: U8[], help: U8[], trailing: List<|U8[]|>$@, hidden: Bool,
+        is_default: Bool)
         r.cmds
-            .push(Cmd::{ .name = name, .help = help, .trailing = trailing, .hidden = false })
+            .push(Cmd::{
+            .name = name,
+            .help = help,
+            .trailing = trailing,
+            .hidden = hidden,
+            .is_default = is_default,
+            .form = "",
+        })
+
+    pub fn command_form( //< what follows a command's name in its usage line
+        //< Once any command has a form, or a default is declared, the usage opens with one line per
+        //< command. `print_command_usage` writes one of them. A name declared nowhere stops the
+        //< program, as at `saw`.
+        r: Self$@,
+        name: U8[], //< the command's declared name
+        form: U8[], //< its arguments as the line writes them (`[options...] <input.kspl>...`)
+        file: U8[] = caller_file, //< where it was called, for the stop
+        line: Sz = caller_line, //< where it was called, for the stop
+    )
+        c: = r.declared_cmd(name, "command_form", file, line)
+        c.form = form
+
+    pub fn only_for( //< limits an option to the commands it takes effect on
+        //< **Given with any other command, parsing refuses it** (`not_for_command`). Accepted, it
+        //< would do nothing. Without this call, an option takes effect on every command.
+        //< Caution: **Declare the commands first.** A name that is no declared option or command
+        //< stops the program, as at `saw`. So does a second call for one option.
+        r: Self$@,
+        name: U8[], //< the option's declared name
+        commands: U8[], //< the commands' names, separated by spaces (`"compile lint"`)
+        file: U8[] = caller_file, //< where it was called, for the stop
+        line: Sz = caller_line, //< where it was called, for the stop
+    )
+        o: = r.declared(name, "only_for", file, line)
+        if o.scope.len > 0
+            stop("only_for", name, "is limited twice", file, line)
+        if commands.len == 0
+            stop("only_for", name, "is limited to no command", file, line)
+        $start: Sz = 0
+        for start < commands.len
+            end: = word_end(commands, start)
+            r.declared_cmd(commands.sub(start, end - start), "only_for", file, line)
+            start = end + 1
+        o.scope = commands
 
     pub fn command_flag( //< a command chosen by an option's name (`--version`); takes no value
-        //<
         //< Not a flag, so the commands stay **mutually exclusive** (`prog fmt --version` is
         //< refused).
         //< Caution: **Add a mode as an option only where one is enough.** As they multiply, the
@@ -231,7 +312,6 @@ impl Parser
         r.add(name, help, .flag(out), false)
 
     pub fn str_list_opt( //< a string that can be given any number of times
-        //<
         //< Each value is kept, in order. `str_opt` refuses a second `--define=b` as `repeated`.
         r: Self$@,
         name: U8[], //< the name as typed
@@ -241,7 +321,6 @@ impl Parser
         r.add(name, help, .str_list(out), false)
 
     pub fn append_names( //< pushes every declared name, in declaration order
-        //<
         //< For a caller that walks the items (with `saw`).
         //< Caution: **Do not let the caller copy the list of names.** A copy silently drifts when a
         //< declaration is added.
@@ -252,7 +331,6 @@ impl Parser
             out.push(o.name)
 
     pub fn saw( //< whether that item was given at all, whatever its value
-        //<
         //< It tells "not given" from "given empty" (`--out=`), which the value alone cannot.
         //< Caution: **A name declared nowhere stops the program**: answered false, a misspelt name
         //< reads as an item never given.
@@ -264,7 +342,6 @@ impl Parser
         return r.declared(name, "saw", file, line).seen
 
     pub fn saw_empty( //< whether that item was given with nothing after its `=` (`--out=`)
-        //<
         //< An empty value is a value, so parsing takes it; a caller none of whose items means
         //< anything by one refuses it through here. A name declared nowhere stops the program, as
         //< at `saw`.
@@ -279,10 +356,15 @@ impl Parser
         //< The item declared under name; stops the program where none is
         o: = r.find(name).unwrap_or(null)
         if o == null
-            $m: = Panic_msg.new()
-            m.s("Parser.").s(asked).s(": '").s(name).s("' is declared nowhere")
-            panic(m.slice(), file, line)
+            stop(asked, name, "is declared nowhere", file, line)
         return o
+
+    priv fn declared_cmd(r: Self$@, name: U8[], asked: U8$[], file: U8[], line: Sz): Cmd$@ //<
+        //< The command declared under name, the default included; stops the program where none is
+        c: = r.find_any_cmd(name).unwrap_or(null)
+        if c == null
+            stop(asked, name, "is no declared command", file, line)
+        return c
 
     priv fn find(r: Self$@, name: U8[]): Opt$@? //< looks an item up by its declared name
         for i in Range.asc(r.opts.len)
@@ -291,16 +373,30 @@ impl Parser
                 return .some(o)
         return .none
 
-    priv fn find_cmd(r: Self$@, name: U8[]): Cmd$@? //< looks a command up by its name
+    priv fn find_any_cmd(r: Self$@, name: U8[]): Cmd$@? //< a command by its name, the default too
         for i in Range.asc(r.cmds.len)
             c: = r.cmds.at(i)
             if c.name.equals(name)
                 return .some(c)
         return .none
 
+    priv fn find_cmd(r: Self$@, name: U8[]): Cmd$@? //< looks a typed command up by its name
+        //< The default command is never typed, so a word spelling its name is no command.
+        for i in Range.asc(r.cmds.len)
+            c: = r.cmds.at(i)
+            if !c.is_default && c.name.equals(name)
+                return .some(c)
+        return .none
+
+    priv fn find_default(r: Self$@): Cmd$@? //< the command `default_command` declared, if any
+        for i in Range.asc(r.cmds.len)
+            c: = r.cmds.at(i)
+            if c.is_default
+                return .some(c)
+        return .none
+
     priv fn option_named(r: Self$@, arg: U8[]): Opt_hit!Argument_error //<
         //< The option an argument names, matched in two steps
-        //<
         //< 1. the whole argument (`--in-place`); 2. split at the first `=` (`--lint=CODE=level`).
         if o: = r.find(arg)
             return Opt_hit::{ .opt = o, .name = arg, .val = "", .has_val = false }
@@ -312,7 +408,6 @@ impl Parser
         throw .unknown_option(arg)
 
     priv fn set_command(r: Self$@, name: U8[]): Void!Argument_error //< selects a command
-        //<
         //< A second one throws multiple_commands.
         if r.command.is_some()
             throw .multiple_commands(name)
@@ -330,7 +425,6 @@ impl Parser
         return r.parse_list(argv@)
 
     pub fn parse_list( //< reads an argument list into the declared destinations
-        //<
         //< Also for arguments from elsewhere, such as a configuration file or a test.
         r: Self$@,
         argv: List<|U8[]|>$@, //< the arguments, **without** the program's own name
@@ -389,37 +483,123 @@ impl Parser
                     throw .missing_value(name)
                 o.seen_empty = o.seen_empty || val.len == 0
                 store_value(o, val, again)!
+        if r.command.is_none()
+            if d: = r.find_default()
+                r.command = .some(d.name)
+        // Caution: **Check the scope only once the whole line is read.** An option may stand
+        // before the command's name (`ksplc --std-dir=x info std-dir`).
+        chosen: = r.command.unwrap_or("")
         for i in Range.asc(r.opts.len)
             o: = r.opts.at(i)
-            if o.required && !o.seen
+            applies: = o.scope.len == 0 || has_word(o.scope, chosen)
+            if o.seen && !applies
+                throw .not_for_command(o.name, chosen, o.scope)
+            // Required only where it takes effect: elsewhere it is refused, so it cannot be given.
+            if o.required && !o.seen && applies
                 throw .missing_required(o.name)
 
     pub fn print_usage( //< writes the whole usage
         r: Self$@,
         out: Writer, //< `io.out()` when asked for (`--help`), `io.err()` after a refusal
     )
-        out.s("Usage: ").s(r.prog)
-        if r.cmds.len > 0
-            out.s(" [command]")
-        out.s(" [options]")
-        if r.positional_help.len > 0
-            out.s(" ").s(r.positional_help)
-        out.s("\n")
+        if r.lists_forms()
+            r.print_forms(out)
+        else
+            out.s("Usage: ").s(r.prog)
+            if r.cmds.len > 0
+                out.s(" [command]")
+            out.s(" [options]")
+            if r.positional_help.len > 0
+                out.s(" ").s(r.positional_help)
+            out.s("\n")
         if r.about.len > 0
             out.s("\n").s(r.about).s("\n")
         r.print_options(out)
 
-    pub fn print_options( //< writes only the commands and options, with no heading
-        //<
-        //< For a CLI that appends **the list built from the declarations** after its own text; a
-        //< copied list goes stale.
-        r: Self$@,
-        out: Writer, //< where its usage goes, as `print_usage` takes it
-    )
-        $heading: = false
+    priv fn lists_forms(r: Self$@): Bool //< whether the usage opens with one line per command
+        for i in Range.asc(r.cmds.len)
+            c: = r.cmds.at(i)
+            if c.is_default || c.form.len > 0
+                return true
+        return false
+
+    priv fn print_forms(r: Self$@, out: Writer) //< one usage line per command the usage lists
+        $first: = true
         for i in Range.asc(r.cmds.len)
             c: = r.cmds.at(i)
             if c.hidden
+                continue
+            out.s("usage: " if first else "       ")
+            first = false
+            r.print_form(c, out)
+            if c.is_default
+                out.s("          ").s(c.name).s(" (the default subcommand)")
+            out.c('\n')
+
+    priv fn print_form(r: Self$@, c: Cmd$@, out: Writer) //< a command's line after `usage: `
+        out.s(r.prog)
+        if !c.is_default
+            out.c(' ').s(c.name)
+        if c.form.len > 0
+            out.c(' ').s(c.form)
+
+    pub fn print_command_usage( //< writes one command's usage line, for refusing its arguments
+        //< The line is `usage: prog name form`, with the form `command_form` gave. A name declared
+        //< nowhere stops the program, as at `saw`.
+        r: Self$@,
+        name: U8[], //< the command's declared name, the default's included
+        out: Writer, //< `io.err()` after a refusal
+        file: U8[] = caller_file, //< where it was called, for the stop
+        line: Sz = caller_line, //< where it was called, for the stop
+    )
+        c: = r.declared_cmd(name, "print_command_usage", file, line)
+        out.s("usage: ")
+        r.print_form(c, out)
+        out.c('\n')
+
+    priv fn print_scopes(r: Self$@, out: Writer) //< the options each command takes, a line each
+        //< Written only where some option is limited (`only_for`). Otherwise every option takes
+        //< effect everywhere, and the list would say nothing.
+        $limited: = false
+        for i in Range.asc(r.opts.len)
+            limited = limited || r.opts.at(i).scope.len > 0
+        if !limited
+            return
+        out
+            .s("\nThe options that take effect per subcommand (an option not here is an error on \
+                that subcommand):\n")
+        for i in Range.asc(r.cmds.len)
+            c: = r.cmds.at(i)
+            if c.hidden
+                continue
+            out.s("  ").s(c.name).c(':')
+            for j in Range.asc(r.opts.len)
+                o: = r.opts.at(j)
+                if o.scope.len > 0 && has_word(o.scope, c.name)
+                    out.c(' ').s(o.name)
+            out.c('\n')
+        out.s("  on every subcommand: --help")
+        for i in Range.asc(r.opts.len)
+            o: = r.opts.at(i)
+            switch o.kind
+            case .command {} // a command of its own, which goes with no subcommand
+            default
+                if o.scope.len == 0
+                    out.c(' ').s(o.name)
+        out.c('\n')
+
+    pub fn print_options( //< writes only the commands and options, with no heading
+        //< For a CLI that appends **the list built from the declarations** after its own text; a
+        //< copied list goes stale. Where an option is limited (`only_for`), the options each
+        //< command takes come first.
+        r: Self$@,
+        out: Writer, //< where its usage goes, as `print_usage` takes it
+    )
+        r.print_scopes(out)
+        $heading: = false
+        for i in Range.asc(r.cmds.len)
+            c: = r.cmds.at(i)
+            if c.hidden || c.is_default
                 continue
             if !heading
                 out.s("\nCommands:\n")
@@ -432,11 +612,11 @@ impl Parser
             $suffix: U8[] = ""
             // Only ASCII before the column (see `HELP_COLUMN`).
             switch o.kind
-            case .int_val(_o)
+            case .int_val
                 suffix = "=<int>"
-            case .str_val(_o)
+            case .str_val
                 suffix = "=<str>"
-            case .str_list(_o)
+            case .str_list
                 suffix = "=<str>" // the description says that it repeats
             default {} // a flag and a command take no value
             help_name(out, o.name, suffix)
@@ -448,7 +628,6 @@ impl Parser
         out.s("show this usage\n")
 
     pub fn parse_or_exit( //< reads the arguments, or prints why and ends the process
-        //<
         //< **It returns only on success.** `--help` prints the usage on standard output and exits
         //< 0. An error prints the reason and the usage on standard error and exits 2. So a caller
         //< reading the output never takes a refusal for it.
@@ -470,7 +649,6 @@ impl Parser: Manual_free {} //< `free()` lets go the arena a parser made with nu
 
 impl Argument_error: Formattable //< so a failure can be written straight into a message
     pub fn fmt(r: Self, w: Writer): Writer //< writes the reason for a person to read
-        //<
         //< Interpolation expands into a chain of calls on a Writer ("The expansion specification
         //< for string interpolation" in docs/SPEC-programming-language.md). Returning a `U8[]`
         //< would leave the caller managing a temporary buffer's lifetime.
@@ -493,3 +671,8 @@ impl Argument_error: Formattable //< so a failure can be written straight into a
             return w.s("unexpected argument '").s(n).s("'")
         case .repeated(n)
             return w.s("option '").s(n).s("' takes one value and is given more than once")
+        case .not_for_command(n, c, cs)
+            if c.len == 0
+                return w.s("option '").s(n).s("' takes effect only with a subcommand: ").s(cs)
+            return w.s("option '").s(n).s("' does not take effect on the subcommand '").s(c)
+                .s("'. It takes effect on: ").s(cs)

@@ -1,6 +1,5 @@
 #!/usr/bin/env -S ksplc run
 //< Compiler, library and editor tests are clean under the memory and undefined-behaviour sanitizers
-//<
 //< **This sees what counting bytes cannot.** ksplc's ARC tests judge a balance by the bytes in use
 //< (`heap_used_bytes`). Some faults leave that count unchanged: a use after free, a binding left
 //< pointing at freed memory, an undefined operation in the generated C. These packages' tests are
@@ -19,7 +18,7 @@ import "std/str" // `arena.text()`
 import "std/subproc"
 import "std/verdict"
 import "tests/support/harness"
-import "tests/support/harness_sanitizer"
+import "tests/support/harness_sanitizer" + { Sample }
 
 // `-g` and the frame pointer keep a report's stack readable down to the `.kspl` line. A report
 // stops the program (`-fno-sanitize-recover`), so its exit code says so too. **`-O0`, as the build
@@ -45,7 +44,6 @@ priv const SUMMARY_HEAD: U8[] = "SUMMARY: " //<
     //< the line that closes one report, of either sanitizer
 
 priv fn opens_report(line: U8[]): Bool //< whether the line opens one report
-    //<
     //< The address and leak sanitizers open with `==<pid>==ERROR: `, the undefined-behaviour one
     //< with `<file>:<line>:<col>: runtime error: `.
     return line.find_str("==ERROR: ").is_some() ||
@@ -53,7 +51,6 @@ priv fn opens_report(line: U8[]): Bool //< whether the line opens one report
 
 priv fn reports_of(text: U8[], arena: Arena$@): List<|U8[]|> //<
     //< One line per report in a sanitizer's log: its summary, or its first line where none came
-    //<
     //< **A report cut short still counts** (a process killed part way). **A pure function of one
     //< text** (`REPORT_SAMPLES`).
     $out: = List<|U8[]|>.new(arena)
@@ -69,10 +66,6 @@ priv fn reports_of(text: U8[], arena: Arena$@): List<|U8[]|> //<
     if open.len > 0
         out.push(open)
     return out
-
-struct Sample
-    text: U8[]
-    reports: Sz
 
 priv const REPORT_SAMPLES: Sample[_] = ::{
     Sample::{ .text =
@@ -95,26 +88,9 @@ priv const REPORT_SAMPLES: Sample[_] = ::{
     Sample::{ .text = "", .reports = 0 },
 }
 
-priv fn check_reading_fires(arena: Arena$@)
-    $bad: = List<|U8[]|>.new(arena)
-    for s in REPORT_SAMPLES
-        if reports_of(s.text, arena).len != s.reports
-            bad.push(arena.text().s("misread: ").s(s.text).take())
-    verdict.check_list("a sanitizer's log is read as one finding a report", REPORT_SAMPLES.len,
-        "samples", bad@, "the table is `report_samples`")
-
 priv fn reports_in(log_dir: U8[], arena: Arena$@): List<|U8[]|> //<
     //< Every report the sanitizers logged under log_dir, each process's log a file of its own
-    $out: = List<|U8[]|>.new(arena)
-    names: = fs.read_dir(log_dir, arena) catch
-        return out
-    prefix: = arena.text().s(harness.root()).c('/').take()
-    for name in names
-        text: = io.read_file(fs.join(log_dir, name, arena)) catch
-            fallback ""
-        for r in reports_of(text, arena)
-            out.push(r.replace(prefix, "", arena))
-    return out
+    return harness_sanitizer.reports_in(log_dir, "", reports_of, arena)
 
 // ==========================================
 // Running a sanitized program
@@ -129,7 +105,6 @@ struct Sanitized //< one sanitized run: the check it reports to, where it runs, 
 
 priv fn sanitized_argv(run: Sanitized, arena: Arena$@): U8[][] //<
     //< argv as a sanitized run starts it: its logs in its own folder, `env` set
-    //<
     //< **Each process writes its own log** (`asan.<pid>`, `ubsan.<pid>`), so a child the program
     //< starts is heard too.
     $out: = List<|U8[]|>.new(arena)
@@ -163,11 +138,9 @@ struct Planted //< a program with one fault written on purpose, and what the rep
     source: U8[]
     says: U8[] //< a piece of the report's summary that names the fault
     llvm: Bool //< also through the LLVM backend, where its sanitizer sees this fault
-        //<
         //< **The address and leak sanitizers' faults are seen there** (`SAN_MARKS`); the
         //< undefined-behaviour ones are not, as their checks are clang's front end's.
     unmarked: Bool //< also through LLVM without `SAN_MARKS`, where it must go unseen
-        //<
         //< **This shows the marks are what watch the IR**: the fault is in KSPL code alone.
 
 // A second way to the memory, through a global. The compiler's own use-after-free check does not
@@ -299,7 +272,6 @@ struct Pkg_tests //< a package's own tests, as its own `make test` runs them
     entry: U8[] //< the program, from the root
     takes_ksplc: Bool //< whether they are handed the compiler, to start as a child
     own_folder: Bool //< whether each run takes a fresh folder of its own rather than the package's
-        //<
         //< **For tests that write fixed names under the `out/tmp` they run beside.** Two builds
         //< run side by side in one folder would write over each other's files.
 
@@ -356,7 +328,8 @@ priv fn sanitize_pkg_tests(work: U8[], arena: Arena$@) //<
 
 fn main(): I32
     arena: = harness.begin(16 * 1024 * 1024)
-    check_reading_fires(arena)
+    harness_sanitizer.check_reading_fires("a sanitizer's log is read as one finding a report",
+        Sample[]::REPORT_SAMPLES, reports_of, arena)
     work: = harness.sandbox("sanitize")
     said: = harness_sanitizer.runs_with(work, U8[][]::{ "-fsanitize=address,undefined" },
         U8[][]::{ ASAN_OPTIONS }, arena)

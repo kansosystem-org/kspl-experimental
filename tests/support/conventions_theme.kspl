@@ -1,5 +1,4 @@
 //< Kspage's look: colours kept as roles, and style names that hold no whitespace (not the suite)
-//<
 //< Caution: **Do not write a colour directly into a rule.** Each one escapes the roles, and only
 //< that place keeps the old colour when the screen turns light or dark.
 import "std/chars"
@@ -62,7 +61,6 @@ priv fn check_theme_roles(arena: Arena$@)
         "add one more role and point at it with `var(--…)` (kspage/port/web/page.css)")
 
 priv const LUM_WEIGHT: F64[_] = ::{ 0.2126, 0.7152, 0.0722 } //< the contrast's luminance weights
-    //<
     //< **A pair is measured only where both roles hold a written colour.** A role set from the
     //< environment (`CanvasText` and the like) follows the screen's light or dark. The
     //< browser keeps that readable.
@@ -73,7 +71,6 @@ priv fn srgb_part(v: F64): F64
     return v / 12.92 if v <= 0.03928 else math.pow((v + 0.055) / 1.055, 2.4)
 
 priv fn luminance(hex: U8[]): F64 //< the relative luminance of a `#rrggbb`
-    //<
     //< Caution: **Pass it six hex digits and nothing else**; the caller filters out
     //< `color-mix(…)` and system colours.
     $out: F64 = 0.0
@@ -85,13 +82,12 @@ priv fn luminance(hex: U8[]): F64 //< the relative luminance of a `#rrggbb`
 
 priv fn contrast_x100(fg: U8[], bg: U8[]): I64 //<
     //< Returns the contrast times 100, as an integer
-    //<
     //< Caution: **Do not pass it around as a fraction**: dropping digits when printing rounds a
     //< shortfall up to "enough".
     a: = luminance(fg)
     b: = luminance(bg)
-    hi: = a if a > b else b
-    lo: = a if a < b else b
+    hi: = math.max(a, b)
+    lo: = math.min(a, b)
     return I64::((hi + 0.05) / (lo + 0.05) * 100.0)
 
 priv fn is_hex6(v: U8[]): Bool
@@ -140,7 +136,6 @@ priv fn theme_defects(rel: U8[], names: List<|U8[]|>@, vals: List<|U8[]|>@,
 
 priv fn check_theme_contrast(arena: Arena$@) //<
     //< The pairs in the roles' block (`:root {`) that hold written colours reach 4.5:1
-    //<
     //< Caution: **Fail where not one pair is measured**, or roles all moved to the environment's
     //< colours leave a check that passes with nothing measured.
     $seen: Sz = 0
@@ -206,7 +201,6 @@ priv const CONTRAST_PAIR: U8[][_] = ::{ "#000000", "#ffffff", "#ffffff", "#00000
     "#ffffff", "#767676", "#ffffff" }
 priv const CONTRAST_WANT: I64[_] = ::{ 2100, 2100, 100, 454 } //<
     //< The expected contrast for each sample, times 100
-    //<
     //< In order: black on white (21.00:1) / the same swapped / one colour against itself (1.00:1) /
     //< just above the threshold
 
@@ -264,13 +258,11 @@ priv const STYLE_MARKS: U8[][_] = ::{ "sheet.add(\"", "_NAME: U8[] = \"" }
 
 priv const STYLE_WHERE: U8[][_] = ::{ "kspage/*.kspl", ":!kspage/tests/" } //<
     //< Where the product's names are written
-    //<
     //< **`kspage/tests/` is left out**: a check there makes a name holding a space on purpose
     //< (`style_test.kspl`'s refusal), and others hold one as a fixture.
 
 priv fn name_at(line: U8[], from: Sz): Sz? //<
     //< The position of the first byte of a style's name written at or after from, or none.
-    //<
     //< **All marks are searched and the nearest one wins**, so a line writing two names is read to
     //< the end.
     $best: Sz? = .none
@@ -283,7 +275,6 @@ priv fn name_at(line: U8[], from: Sz): Sz? //<
 
 priv fn spaced_style_name(line: U8[], _arena: Arena$@): Bool //<
     //< Whether that line writes a style's name that holds whitespace
-    //<
     //< **The screen refuses such a name** (`name_plain` in `kspage/model/style.kspl` says why), so
     //< the product writing one would make a style nobody could type. **A name in prose is not read
     //< here.**
@@ -313,7 +304,6 @@ priv fn names_on(line: U8[]): Sz //< how many style names that line writes
 
 priv const STYLE_NAMES_FLOOR: Sz = 20 //<
     //< The fewest style names the reader may find
-    //<
     //< **It is a floor, not a count.** Adding a name never changes it, and a reader that finds
     //< nothing (a mark changed on one side only) fails. The manual's names are not among them: it
     //< is a saved document (`kspage/content/manual.kspage`), whose names are data as a user's are.

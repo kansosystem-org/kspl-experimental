@@ -2,10 +2,9 @@
  * **Only macros, typedefs, extern declarations and static inline functions.** This enters every
  * generated unit, so a definition with external linkage would be doubled (it goes in core.c).
  * **The five run-time checks** (`kspl_bounds_check`, `kspl_div_check`, `kspl_sdiv` / `kspl_smod`,
- * `kspl_shift_check`, `kspl_tag_check`) differ per target only in what a breach does. The meaning
- * is settled here.
- * The signed pair is below, the rest in hosted.h and freestanding.h. **Signed `/` `%` never go
- * out bare**: a minimum by -1 is undefined in C, so `a / -1` wraps to -a and `a % -1` is 0.
+ * `kspl_shift_check`, `kspl_tag_check`) are all below. Each target's header gives only what a
+ * breach does. **Signed `/` `%` never go out bare**: a minimum by -1 is undefined in C, so
+ * `a / -1` wraps to -a and `a % -1` is 0.
  * **Widths are `int64_t`, not `ptrdiff_t`**: a 32-bit target truncates an `I64`, and a non-zero
  * divisor would read as 0. A shift's `width` is counted at the portable lower bound. The signed
  * pair has a 32-bit twin for types of 32 bits and fewer. Genc picks it by the operand's type.
@@ -13,8 +12,10 @@
 
 #if defined(__GNUC__) || defined(__clang__)
 #define KSPL_UNUSED __attribute__((unused))
+#define KSPL_NORETURN __attribute__((noreturn))
 #else
 #define KSPL_UNUSED
+#define KSPL_NORETURN
 #endif
 
 /* The linkage of the runtime's own functions and data. Under `--library` the generated C defines
@@ -73,10 +74,60 @@ KSPL_LINK void kspl_trace_record(const char* file, const char* func, int line);
 #define KSPL_RECORD_TRACE() kspl_trace_record(__FILE__, __func__, __LINE__)
 #define KSPL_START_TRACE() kspl_trace_start(__FILE__, __func__, __LINE__)
 
+/* What a breach does is each target's, defined after this file: hosted.h reports it and ends the
+ * program, freestanding.h stops in a loop. */
+static inline KSPL_UNUSED KSPL_NORETURN void kspl_bounds_breach(int64_t idx, int64_t len,
+    const char* file, int line);
+static inline KSPL_UNUSED KSPL_NORETURN void kspl_div_breach(const char* file, int line);
+static inline KSPL_UNUSED KSPL_NORETURN void kspl_shift_breach(int64_t amount, int64_t width,
+    int amount_unsigned, const char* file, int line);
+static inline KSPL_UNUSED KSPL_NORETURN void kspl_tag_breach(int64_t value, const char* enum_name,
+    const char* file, int line);
+
+static inline KSPL_UNUSED ptrdiff_t kspl_bounds_check(ptrdiff_t idx, ptrdiff_t len, const char* file, int line)
+{
+    if (idx < 0 || idx >= len) {
+        kspl_bounds_breach(idx, len, file, line);
+    }
+    return idx;
+}
+
+static inline KSPL_UNUSED int64_t kspl_div_check(int64_t divisor, const char* file, int line)
+{
+    if (divisor == 0) {
+        kspl_div_breach(file, line);
+    }
+    return divisor;
+}
+
+/* `amount_unsigned` says the amount's own type is unsigned, so its 64 bits are printed as a `U64`:
+ * read as `int64_t`, 2^64-1 would be reported as -1. Either way such an amount is out of range. */
+static inline KSPL_UNUSED int64_t kspl_shift_check(int64_t amount, int64_t width, int amount_unsigned,
+    const char* file, int line)
+{
+    if (amount < 0 || amount >= width) {
+        kspl_shift_breach(amount, width, amount_unsigned, file, line);
+    }
+    return amount;
+}
+
+/* A cast to an enum from a number: the value must be one of the enum's `count` tags. The tags come
+ * as an array, so the cast's operand is evaluated once. */
+static inline KSPL_UNUSED int64_t kspl_tag_check(int64_t value, const int64_t* tags, int64_t count,
+    const char* enum_name, const char* file, int line)
+{
+    int64_t i = 0;
+    while (i < count && tags[i] != value) {
+        i++;
+    }
+    if (i == count) {
+        kspl_tag_breach(value, enum_name, file, line);
+    }
+    return value;
+}
+
 /* Signed division and remainder go through these (the meaning is settled at the head).
- * Caution: Put out bare, x86 stops with SIGFPE and ARM does not. kspl_div_check is each target's,
- * defined after this file. */
-static inline KSPL_UNUSED int64_t kspl_div_check(int64_t divisor, const char* file, int line);
+ * Caution: Put out bare, x86 stops with SIGFPE and ARM does not. */
 
 static inline KSPL_UNUSED int64_t kspl_sdiv(int64_t a, int64_t b, const char* file, int line)
 {

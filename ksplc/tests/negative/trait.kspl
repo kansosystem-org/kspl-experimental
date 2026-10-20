@@ -1,9 +1,7 @@
 //< Traits, impls and methods
-//<
 //< Each case below is compiled alone, as the file its head names.
 // ==== case impl_blanket_over_type_param
 //< Implementing a trait at once for every type that meets a constraint is not supported
-//<
 //< Monomorphisation makes a substance per concrete type, and with the target a type argument
 //< (`impl<|T: Trait|> T`) there is nowhere settled to make it. Unrefused, the impl block is thrown
 //< away in silence: no method grows, while whoever wrote it believes they implemented it.
@@ -30,7 +28,6 @@ fn main(): I32
   return 0
 // ==== case impl_gen_param_mut_mark
 //< A mutability mark cannot be written on an impl's **own** type argument
-//<
 //< **It must not be ignored in silence.** Only the target's type expression settles which substance
 //< it attaches to, so the mark changes nothing while its writer believes otherwise (Principle 5).
 //< Write it on the target (`impl<|T|> Box<|$T|>`), as `ksplc/tests/variance_test.kspl` holds.
@@ -49,7 +46,6 @@ fn main(): I32
   return 0
 // ==== case impl_inst_duplicate_method
 //< Two impls that define the same method name are rejected
-//<
 //< The template's table overwrites by name. **Let through, only the later one stays. The earlier
 //< implementation is written but has no effect** (Principle 5).
 // EXPECT: method 'doubled' is already defined for this type
@@ -71,7 +67,6 @@ fn main(): I32
   return 0
 // ==== case impl_inst_not_generic
 //< An impl that writes type arguments on a non-generic type is rejected
-//<
 //< Caution: **Do not throw it away in silence.** Piling it into the template's column like the
 //< one-instantiation shape (`impl Boxed<|I8|>`) lets a spelling mistake pass, and with no matching
 //< substance no method grows anywhere (Principle 5).
@@ -90,7 +85,6 @@ fn main(): I32
   return 0
 // ==== case impl_on_trait
 //< A trait itself cannot be an impl's target
-//<
 //< A method absent from the declaration has no slot in the vtable, and the call becomes C in which
 //< genc draws `vtable->hex`, which does not compile. Without refusing here, the user gets a raw C
 //< compiler error rather than KSPL's diagnostic.
@@ -107,7 +101,6 @@ fn main(): I32
   return 0
 // ==== case method_type_args_from_impl
 //< A call to a generic type's method cannot write type arguments
-//<
 //< **There is nothing to bind them to:** they are the enclosing `impl`'s, settled by the receiver.
 //< Dropped in silence, a contradiction (`get<|U8|>()` on a `Plain<|I32|>`) or a wrong count passes
 //< (Principle 5). A method's **own** (`fn m<|T|>(…)`) is matched: the case `type_arg_mut_not_named`
@@ -128,7 +121,6 @@ fn main(): I32
   return q.get<|U8|>()
 // ==== case method_value_needs_type_args
 //< A method is a value only through its type, with every type argument written
-//<
 //< Through its type, it is the function that takes the receiver first. The generic type's arguments
 //< go on the type, and the method's own go after the method. Each refusal says what to write. Let
 //< through, the method reached C as a bare name no function has. Through a value (`p.read`), there
@@ -204,7 +196,6 @@ fn main(): I32
     return ok(0) + ok2(0) + through_value()
 // ==== case operator_lookalike_trait
 //< Operator overloading covers only the traits of `std/lang` themselves
-//<
 //< A same-named trait in one's own file does not desugar `a + b` / `T::v` / `a[i]`. A match on the
 //< name suffix (`.Add`) misreads it as the operator trait. KSPL gives no diagnostic. The **invalid
 //< C** takes the receiver for a fat pointer and fails as a clang error that no user can map.
@@ -226,7 +217,6 @@ fn main()
   _c: = a + b
 // ==== case receiver_mut
 //< One subject, with one function for each of its shapes
-//<
 //< The marks are every function's marks gathered at the head. The same mark written N times
 //< must match N places.
 // EXPECT: cannot call a method that takes a writable receiver
@@ -289,7 +279,6 @@ fn main()
   case_immut_value_receiver_field_write()
 // ==== case trait_index_address_of
 //< `@` on an index access through `Index`, the trait that returns a value, is rejected
-//<
 //< `get` returns a copy, so the `@` is a temporary's address and a `p$ = v` write quietly misses
 //< the container. The built-in slice and array and an `Index_place` type give a true
 //< element address with `a[i]@`; this case covers a type implementing `Index` alone.
@@ -309,7 +298,6 @@ fn main(): I32
   return q$
 // ==== case trait_index_compound_assign
 //< A compound assignment to an index through `Index_mut`, the trait that passes values in and out
-//<
 //< `get`/`set` exchange values and return no element place, so a read-and-write-back cannot be
 //< assembled; let through, genc emits an invalid three-argument getter call and C fails.
 //< Implement "an index returning a place" (`Index_place`) and `a[i] += v` can be used.
@@ -339,7 +327,6 @@ fn main(): I32
   return p.a
 // ==== case trait_proto_missing_param_type
 //< A trait method prototype that omits a parameter's type annotation
-//<
 //< A prototype holds no body and skips infer_fn, which rejects this in an ordinary function, so
 //< unchecked here it passes in silence. The omitted annotation still gets type_expr "Unknown" from
 //< normalisation, so the check reads the resolved type ID, not the node (see add_trait_method).
@@ -360,7 +347,6 @@ fn main()
   d.draw()
 // ==== case trait_self_in_parameter
 //< `Self` cannot be written on a trait method's parameters other than the receiver
-//<
 //< A thunk hands the fat pointer to the implementation's concrete type, so C falls on a mismatch
 //< (write `trait Eq<|Other|>` instead). A `Self$@` receiver draws another diagnostic, so it stays
 //< out (`case_trait_receiver_must_be_plain_self` in the case trait_shape in tests/negative/trait.kspl).
@@ -384,7 +370,6 @@ fn main(): I32
   return k.dup().a - 1
 // ==== case trait_self_inside_return
 //< A trait method cannot hold `Self` **at a type argument's position** in its return type
-//<
 //< The type of the vtable's slot changes per implementation, so nothing settles what fills it.
 //< Caution: **Do not mix it with returning `Self` itself**, which passes as a pointer, and whose
 //< wording and mend differ (check_trait_method_ret in `ksplc/sema/decl/trait_check.kspl`).
@@ -414,7 +399,6 @@ fn main()
   _w: = Src::{ .i = 0 }.wrapped()
 // ==== case trait_shape
 //< One subject, with one function for each of its shapes
-//<
 //< The marks are every function's marks gathered at the head. The same mark written N times
 //< must match N places.
 // EXPECT: return type 'Hidden' is less visible than the interface method exposing it
@@ -503,7 +487,6 @@ fn main()
   case_trait_method_priv_upcast()
 // ==== case trait_upcast_returns_local
 //< Returning or throwing a trait value upcast from local storage is rejected
-//<
 //< The upcast synthesises `&the value` with no `@` in the source, so it dangles once the frame goes
 //< (docs/DESIGN-programming-language.md "Which pointers into a frame are stopped from leaving it"). A
 //< value parameter and a throw are the same. Into a `Trait!Err`, the upcast sits inside
@@ -541,7 +524,6 @@ fn main()
   _x: = a.area() + b.area() + c
 // ==== case trait_value_default_body_call
 //< A method with a default body has no vtable slot, so it cannot be called from a trait value
-//<
 //< Let it through and the call names a field absent from the C. It fails at the C compiler with no
 //< KSPL diagnostic (has_vtable_slot in `ksplc/base/ast_ext.kspl`). From a concrete type it stays
 //< callable: that reaches the body copied per implementation.
@@ -564,7 +546,6 @@ fn main()
   _n: = it.count()
 // ==== case trait_value_wrapped_in_struct_escapes
 //< A trait value built from local storage is rejected when carried out on a struct
-//<
 //< Returning it bare is the case `trait_upcast_returns_local`. Without this, a struct holding a
 //< closure escapes and is called with its environment dead. The passing side is held by
 //< **running correctly** (test_closure_wrapped_in_struct in `ksplc/tests/lang_limits_test.kspl`).

@@ -1,5 +1,4 @@
 //< What a document holds as its own names, and the symbols a text cites (not a suite)
-//<
 //< A heading's id and number, a name a document holds, and a symbol cited "in" a file. Picking up
 //< a naming and resolving where it lands belong to `docref_refs.kspl`.
 //< **This part copies the Python version's regular expressions.** Loosen the matching and an error
@@ -18,7 +17,6 @@ import "tests/support/harness_text" as htext
 
 fn slugify(heading: U8[], arena: Arena$@): U8[] //<
     //< Builds the id that the Markdown renderer gives a heading's name
-    //<
     //< It drops the punctuation and writes one `-` for each space.
     //< Caution: Do not fold runs of `-` together: `A / B` becomes `a--b`, and folding them reports
     //< a correct anchor as broken. **Do not drop multi-byte characters**: a Japanese heading keeps
@@ -46,7 +44,6 @@ fn heading_text(line: U8[], max_level: Sz): U8[] //<
     return line.sub_from(n + 1).trim_spaces()
 
 fn quotes_in_heading(line: U8[]): Bool //< whether a heading line holds a double quote
-    //<
     //< A citation quotes a heading's text in double quotes, so one inside the heading ends the
     //< citation early and it is never checked. A quote inside a code span is left alone; write any
     //< other inner quote as `'`.
@@ -61,7 +58,6 @@ fn quotes_in_heading(line: U8[]): Bool //< whether a heading line holds a double
 
 fn heading_anchors_of(text: U8[], arena: Arena$@): List<|U8[]|> //<
     //< The set of ids the headings of that document hold
-    //<
     //< **A repeated id is numbered, not refused.** The renderer gives the second heading with the
     //< same id a `-1` and the third a `-2` (`#cfg` and `#cfg(!…)` reduce to one). Without the count
     //< here, a correct link is reported broken.
@@ -82,7 +78,6 @@ fn heading_anchors_of(text: U8[], arena: Arena$@): List<|U8[]|> //<
 
 fn heading_number(line: U8[], arena: Arena$@): U8[] //<
     //< Takes the number (`8.2` and so on) out of a heading line
-    //<
     //< Empty where it holds no number. A part's heading has the form `Part II:` with no number, so
     //< no workaround for `Part IV 8.2` is needed.
     //< Caution: **If a part's heading ever carries a number, add that workaround here.**
@@ -108,7 +103,6 @@ fn heading_number(line: U8[], arena: Arena$@): U8[] //<
 
 fn heading_numbers_of(text: U8[], arena: Arena$@): List<|U8[]|> //<
     //< The set of heading numbers that exist in that document
-    //<
     //< `### 8.2 …` allows both 8 and 8.2.
     $out: = List<|U8[]|>.new(arena)
     for line in text.lines(arena)
@@ -125,7 +119,6 @@ fn heading_numbers_of(text: U8[], arena: Arena$@): List<|U8[]|> //<
 
 fn holds_name(text: U8[], name: U8[], arena: Arena$@): Bool //<
     //< Whether a document holds `name` as a name of its own
-    //<
     //< **Where it names things.** These are inside a heading (any part, so a short form counts),
     //< inside a bold span, and at the start of a table cell or a list item.
     //< Caution: **Not anywhere in the text.** A document quotes its partner's names back. That
@@ -157,7 +150,6 @@ priv fn bold_holds(t: U8[], name: U8[]): Bool //< whether a bold span in the lin
 
 priv fn opens_with(t: U8[], name: U8[]): Bool //<
     //< Whether a table cell or a list item of the line starts with the name
-    //<
     //< The bold around a cell (`**kspage**`) and a list item's mark (`*`, `-`, `1.`) are skipped.
     if t.starts_with("|")
         $rest: = t.sub_from(1)
@@ -185,14 +177,12 @@ priv fn opens_with(t: U8[], name: U8[]): Bool //<
 
 priv const SYM_JOINERS: U8[][_] = ::{ " in ", " of ", " inside " } //<
     //< The words that join a citation of "what is in which file"
-    //<
     //< Caution: **The symbol comes first and the path after.** These joiners tie them. Nothing here
     //< picks up a citation joined another way. **The check then goes green on a smaller count**,
     //< which looks like a real green.
 
 fn sym_base(sym: U8[]): U8[] //<
     //< The word to look for in the file, taken from the cited name
-    //<
     //< Empty where there is none. A method (`Str_builder.s/c`) or type arguments (`List<|T|>`) give
     //< the leading identifier (`sym_member` handles the member), so a spelling difference alone
     //< does not fail it.
@@ -215,7 +205,6 @@ fn sym_base(sym: U8[]): U8[] //<
 
 fn sym_member(sym: U8[]): U8[] //<
     //< The member's word from a cited `Owner.member`, looked for next to the owner's
-    //<
     //< Empty where the name carries no member. The arguments are cut off first (`Foo.bar(x.y)`).
     //< Only a dot right after a name, a `|>` or a `]` opens a member. An ellipsis's dots do
     //< not.
@@ -241,7 +230,6 @@ fn sym_member(sym: U8[]): U8[] //<
 
 priv fn looks_like_place(s: U8[], dirs: U8[][]): Bool //<
     //< Whether a name in backticks looks like it **cites a place**
-    //<
     //< A path carrying an extension and an import's extensionless spelling (`std/lang`) are both
     //< places.
     //< Caution: **Do not drop the extensionless form.** It is this repository's usual way to cite a
@@ -279,7 +267,6 @@ priv fn looks_like_path(s: U8[]): Bool //<
     return false
 
 fn read_ticks(text: U8[], i: Sz): Hit //< reads one `` `…` `` body
-    //<
     //< Given the opening position i, it returns the position after the close and the body.
     if i >= text.len || text[i] != '`'
         return Hit::{ .at = i, .end = i, .text = "", .extra = "" }
@@ -299,7 +286,6 @@ priv fn skip_spaces(text: U8[], i: Sz): Sz
 priv fn read_in_form(text: U8[], i: Sz, first: Hit, dirs: U8[][], out: List<|Hit|>$@,
     arena: Arena$@): Sz //<
         //< The `` `symbol` in `path` `` form at i: a Hit per name, and where it ends (else i + 1)
-        //<
         //< **A name that looks like a path is not treated as a symbol** (`` `a/x.md` in `b/y.md`
         //< `` is for the check above). Caution: **Read a run (`A` / `B` / `C` in `path`) to the
         //< end.** The run comes **before** the joiner, so looking only at the last one silently
@@ -349,7 +335,6 @@ priv fn read_paren_form(text: U8[], i: Sz, first: Hit, dirs: U8[][], out: List<|
 
 fn find_symbol_refs(text: U8[], dirs: U8[][], arena: Arena$@): List<|Hit|> //<
     //< Picks up the citations of symbols
-    //<
     //< In `text`, Hit.text is the path and `extra` is the symbol. **Advance only by what was picked
     //< up**: skip a backtick that could not be picked up and the next opening is taken for a close.
     //< Caution: **Do not copy the folder list**; the caller passes it (the canonical list is the
@@ -382,7 +367,6 @@ fn find_symbol_refs(text: U8[], dirs: U8[][], arena: Arena$@): List<|Hit|> //<
 
 fn is_reset_heading(line: U8[]): Bool //<
     //< Whether the line is a heading that starts the numbering again (an Appendix or a Part)
-    //<
     //< **heading_numbers is a set, so it cannot find this.** **Only a number containing a dot is
     //< checked.**
     //<

@@ -1,5 +1,4 @@
 //< Shared ownership of one value by reference counting: `Rc<|T|>`, `Arc<|T|>` and their weak forms
-//<
 //< **Do not write `retain` and `release` by hand.** Both types conform to `Ref_counted`, so the
 //< compiler inserts them on a copy and on leaving a scope. `Rc<|T|>` is for a single thread, and
 //< `Arc<|T|>` counts atomically, so threads can share it.
@@ -30,7 +29,6 @@ priv fn new_control<|T|>(value: T): Control<|T|>$@
     return c
 
 pub struct Rc<|T|> //< a shared owner counted by the compiler, for one thread
-    //<
     //< **The last release takes the value apart.** ARC and `Drop` values inside `T` are released
     //< too, to any depth, as when `T` leaves a scope on the stack.
     //< Caution: **That release runs at the line where the last owner goes.** A long chain
@@ -40,7 +38,6 @@ pub struct Rc<|T|> //< a shared owner counted by the compiler, for one thread
     priv ctrl: Control<|T|>$@
 
 pub struct Weak_rc<|T|> //< a handle that does not own the value, so a cycle does not leak
-    //<
     //< downgrade() returns it. Two `Rc<|T|>` pointing at each other never reach 0 (there is no
     //< cycle-detecting GC); making one side a `Weak_rc` avoids the leak. The compiler counts it as
     //< it counts `Rc<|T|>`, but changes the weak count.
@@ -55,7 +52,6 @@ impl<|T|> Rc<|T|>
     ): Rc<|T|>
         return ::{ .ctrl = new_control<|T|>(value) }
     pub fn empty(): Rc<|T|> //< a handle that owns nothing
-        //<
         //< Caution: `get()` / `clone()` / `downgrade()` on an empty handle are undefined, like a
         //< null dereference. It equals `::{}`, an empty slot.
         return ::{ .ctrl = null }
@@ -71,7 +67,6 @@ impl<|T|> Rc<|T|>
         return ::{ .ctrl = r.ctrl }
 
 impl<|T|> Rc<|T|>: Ref_counted //< the compiler counts it, so no call is written by hand
-    //<
     //< priv, because only the compiler calls it.
     //< **The zero value (ctrl == null) is an empty handle that owns nothing, and retain/release do
     //< nothing on it.** A chained release walks zeroed memory (an array's empty slots), which would
@@ -82,7 +77,6 @@ impl<|T|> Rc<|T|>: Ref_counted //< the compiler counts it, so no call is written
         r.ctrl.strong += 1
     priv fn release(r: Self@) //<
         //< Decrements strong; at 0 releases the value, and frees `Control` if weak is 0 too
-        //<
         //< The implicit weak keeps the block alive while the value releases its own weak handles.
         if r.ctrl == null
             return
@@ -128,7 +122,6 @@ extern "C"
     fn kspl_atomic_cas(ptr: Sz$@, expected: Sz, new_val: Sz): Sz
 
 pub struct Arc<|T|> //< a shared owner counted atomically, so threads can share it
-    //<
     //< The compiler counts it as it counts `Rc<|T|>`, but atomically. As with `Rc<|T|>`, the last
     //< release takes the value apart, at the line and **on the thread** where the last owner goes.
     //< Caution: **An `Rc` inside `T` is then released from that thread**; hold only `Arc` in a
@@ -136,14 +129,12 @@ pub struct Arc<|T|> //< a shared owner counted atomically, so threads can share 
     priv ctrl: Control<|T|>$@
 
 pub struct Weak_arc<|T|> //< the `Arc` version of `Weak_rc`, which threads can share
-    //<
     //< As with `Weak_rc<|T|>`, making one side of a cycle a `Weak_arc` avoids the leak; the weak
     //< count changes atomically.
     priv ctrl: Control<|T|>$@
 
 priv fn _drop_implicit_weak<|T|>(ctrl: Control<|T|>$@) //<
     //< Decrements weak atomically by one; only the thread that brings it to 0 frees `Control`
-    //<
     //< Arc.release() and Weak_arc.release() both call it. So one atomic variable decides which
     //< decrement is the last, and the memory cannot be freed twice.
     prev_weak: = kspl_atomic_add(ctrl.weak@, -1)
@@ -156,7 +147,6 @@ impl<|T|> Arc<|T|>
     ): Arc<|T|>
         return ::{ .ctrl = new_control<|T|>(value) }
     pub fn empty(): Arc<|T|> //< a handle owning nothing
-        //<
         //< Caution: As with `Rc<|T|>`, `get()` / `clone()` / `downgrade()` on an empty handle are
         //< undefined.
         return ::{ .ctrl = null }
@@ -178,7 +168,6 @@ impl<|T|> Arc<|T|>: Ref_counted //< the compiler counts it, so no call is writte
             return
         kspl_atomic_add(r.ctrl.strong@, 1)
     priv fn release(r: Self@) //< decrements strong atomically by one
-        //<
         //< kspl_atomic_add returns the old value, so 1 means this thread brought it to 0 and drops
         //< the implicit weak reference.
         if r.ctrl == null
@@ -194,7 +183,6 @@ impl<|T|> Weak_arc<|T|>
         kspl_atomic_add(r.ctrl.weak@, 1)
         return ::{ .ctrl = r.ctrl }
     pub fn upgrade(r: Self$@): Arc<|T|>!Weak_error //< an owner again, if the value is still alive
-        //<
         //< A plain fetch-add could raise strong from 0 to 1. So a CAS increments only a non-zero
         //< value it read, and retries when another thread changed it first.
         for

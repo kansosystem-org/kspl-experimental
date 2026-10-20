@@ -1,5 +1,4 @@
 //< `textDocument/hover`: what the name, literal or label under the caret stands for, as Markdown
-//<
 //< **A declaration is shown as written, not as its last instantiation**: `Self` stays `Self`, and a
 //< member is named by its owner's path, never by its file. At a call, the type arguments shown are
 //< the ones called. A literal shows the type it took. In a range a `#cfg()` dropped, the answer is
@@ -30,7 +29,6 @@ import "std/str" { Str_builder }
 
 fn handle(state: Doc_state$@, params: json.Value, id_val: json.Value, arena: Arena$@) //<
     //< It answers a hover request
-    //<
     //< Caution: **Check the ranges dropped by `#cfg()` first**, or the file looks as though the
     //< editor's features are dead (the reason is at `send_cfg_inactive_hover`).
     if send_cfg_inactive_hover(state, params, id_val, arena)
@@ -45,7 +43,6 @@ fn handle(state: Doc_state$@, params: json.Value, id_val: json.Value, arena: Are
 priv fn send_cfg_inactive_hover(state: Doc_state$@, params: json.Value, id_val: json.Value,
     arena: Arena$@): Bool //<
         //< It sends, as the hover, the reason a `#cfg()` left the range unanalysed
-        //<
         //< It returns true where it sent the reason; elsewhere it sends nothing and returns false.
         //< Caution: **Do not silently return null.** A dropped declaration leaves nothing in the
         //< AST. Without the reason, the editor's features look dead on that file alone ("How code
@@ -105,7 +102,6 @@ priv fn find_owner_of_fn(state: Doc_state$@, def_node: Ast_node$@, keep_args: Bo
 
 priv fn find_owner_in_tree(c: Sema_ctx$@, root: Ast_node$@, def_node: Ast_node$@): U8[] //<
     //< The owner's full name read from the tree, for a generic trait or impl nothing instantiated
-    //<
     //< Such a declaration has no entry among the types.
     //<
     //< A member is a direct child of its declaration (`build_trait_registry` in
@@ -123,7 +119,6 @@ priv fn find_owner_in_tree(c: Sema_ctx$@, root: Ast_node$@, def_node: Ast_node$@
 
 priv fn owner_name_of(c: Sema_ctx$@, decl: Ast_node$@): U8[] //<
     //< The full name of the type that declaration is about, or "" where none resolved
-    //<
     //< It is "" where the analysis resolved no type from its header.
     //<
     //< A generic's arguments, the declaration's own parameters, are left off.
@@ -162,7 +157,6 @@ priv fn shown_type(c: Sema_ctx$@, type_node: Ast_node$@): U8[] //<
 
 priv fn owns_fn(entry: sema_type_def.Entry$@, def_node: Ast_node$@): Bool //<
     //< Whether that entry's table (`Entry.methods` in `../sema/type/def`) holds the declaration
-    //<
     //< **A trait's requirements are not here.** They belong to the trait's own definition
     //< (`add_trait_method` in `../sema/decl/trait_check.kspl`), so this answers false for them.
     //< Then find_owner_of_fn falls through to the tree, which covers a generic trait as well.
@@ -220,19 +214,12 @@ priv fn append_enum_variant_hover(hover_text: Str_builder$@, ctx: Hover_ctx$@, s
     id_n: = ctx.def_node.find_child(.k_identifier)
     if id_n == null || ctx.type_id == 0 || state.sema == null
         return
-    $enum_def: sema_type_def.Enum_def$@ = null
     // A variant built through an alias is typed by the alias; the definition is the enum's.
     real_id: = state.sema.env.get_real_type(ctx.type_id)
-    switch state.sema.env.get_enum_def(state.sema.env.get_str(real_id))
-    case .some(d)
-        enum_def = d
-    case .none
+    enum_def: sema_type_def.Enum_def$@ =
+        state.sema.env.get_enum_def(state.sema.env.get_str(real_id)) catch
         return
-    $variant_def: sema_type_def.Enum_variant$@ = null
-    switch enum_def.get_variant(id_n.text)
-    case .some(d)
-        variant_def = d
-    case .none
+    variant_def: sema_type_def.Enum_variant$@ = enum_def.get_variant(id_n.text) catch
         return
     if variant_def.payload_fields.len > 0
         hover_text.s("(")
@@ -248,7 +235,6 @@ priv fn append_enum_variant_hover(hover_text: Str_builder$@, ctx: Hover_ctx$@, s
 
 priv fn is_label_name(path: List<|Ast_node$@|>$@, target_node: Ast_node$@): Bool //<
     //< Whether the hovered name is a label
-    //<
     //< It is where one is written, or where a `break` / `continue` names it.
     if path.len < 2 || target_node.kind_id != .k_identifier
         return false
@@ -378,7 +364,6 @@ priv fn write_fn_head(state: Doc_state$@, ctx: Hover_ctx$@, def_code: U8[], fqn:
             (base_core.source_of(state.sema.source_map, ctx.def_node.loc.file())
             if state.sema != null else "")
         $sig_str: = lsp_spell.format_fn_sig(state.sema, ctx.def_node, sig_src)
-        defer sig_str.free()
         out.s(sig_str.slice())
         return
     if def_code.len == 0
@@ -403,7 +388,6 @@ priv fn write_fn_head(state: Doc_state$@, ctx: Hover_ctx$@, def_code: U8[], fqn:
 priv fn send_literal_type(state: Doc_state$@, literal: Ast_node$@, id_val: json.Value,
     arena: Arena$@) //<
         //< It answers a hover on a literal with the type the analysis gave it, and nothing else
-        //<
         //< **The type is the one that literal took in its place** (`4` in `x: Sz = 4` is `Sz`),
         //< not one guessed from its spelling. Where nothing was analysed there, it answers nothing.
         //< **No name goes with it**: a literal declares nothing, and `type 4` read as one.
@@ -470,7 +454,6 @@ priv fn classify_def_node(state: Doc_state$@, d: Ast_node$@, parent_enum_in: Ast
             ctx.type_id = d.type_id
 priv fn classify_decl(d: Ast_node$@, ctx: Hover_ctx$@): Bool //<
     //< The type and prefix of a declaration whose kind alone decides them; false for another kind
-    //<
     //< **A method is in the symbol table only as `Foo.bar`.** So its declaration's own name reaches
     //< here through the path walk too (`walk_path_for_type`), not through the symbol table.
     switch d.kind_id
@@ -661,7 +644,6 @@ priv fn build_hover_def_code(state: Doc_state$@, ctx: Hover_ctx$@, def_code: Str
 priv fn write_owner_prefix(state: Doc_state$@, def_node: Ast_node$@, keep_args: Bool,
     out: Str_builder$@): Bool //<
         //< It writes `Owner.` for a member, the owner as the source spells it; false where none is
-        //<
         //< **The owner's name is already complete**, with its own module. The member's file is not
         //< the owner's where an `impl` is in a different file from its type.
     parent_name: = find_parent_type_name(state, def_node, keep_args)
@@ -669,7 +651,6 @@ priv fn write_owner_prefix(state: Doc_state$@, def_node: Ast_node$@, keep_args: 
         return false
     // The parent can be an instantiated type too, so it goes through the display as well.
     $shown: = state.sema.env.display_str_named(parent_name)
-    defer shown.free()
     out.s(shown.slice())
     out.c('.')
     return true

@@ -1,5 +1,4 @@
 //< A literal's type, and whether a numeric literal's value fits in it
-//<
 //< An unannotated integer literal takes the expected type where one is passed down. Its range is
 //< checked only where its type is known, and not while a generic is being instantiated.
 import "ksplc/base/ast" { Ast_node }
@@ -37,7 +36,6 @@ fn infer_literal_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32
 
 priv fn check_float_literal_range(c: Sema_ctx$@, node: Ast_node$@, type_id: I32) //<
     //< Refuses a floating-point literal that its type holds only as infinity, or as zero
-    //<
     //< **An error, as for an integer** (check_literal_bounds): the value would change silently, and
     //< C only warns, for a `double` alone. Rounding to a nearby value and a subnormal pass: every
     //< decimal fraction rounds (`0.1`), and a subnormal is still the number, with fewer digits.
@@ -69,7 +67,6 @@ priv fn has_nonzero_digit(number: U8[]): Bool //< whether a decimal's significan
 
 fn is_untyped_int_literal(node: Ast_node$@): Bool //<
     //< Whether it is an integer literal with no type suffix
-    //<
     //< **Such a literal takes the expected type when one is passed down.**
     //< Caution: Decide the suffix through int_suffix_type_id (sema/decl/eval.kspl) alone. A copied
     //< suffix table goes stale when an integer type is added.
@@ -79,7 +76,6 @@ fn is_untyped_int_literal(node: Ast_node$@): Bool //<
 
 fn is_untyped_numeric_expr(node: Ast_node$@): Bool //<
     //< Whether it is built from numeric literals with no type suffix alone
-    //<
     //< A literal, a unary `-` / `~` on one, or an arithmetic, bitwise or shift operation between
     //< two (`4294967296 + 1`, `1 << 40`). **Only such an expression has no width of its own**, so
     //< only it takes the outer expected type (`infer_binary_expr` in `binary.kspl`).
@@ -134,7 +130,6 @@ priv fn literal_type_id(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32
 
 priv fn check_integer_literal_width(c: Sema_ctx$@, node: Ast_node$@) //<
     //< Reports an integer literal too long to fit any integer type
-    //<
     //< **This is an error, not a lint.** The text goes to C / LLVM IR as written, and the C
     //< compiler's `integer literal is too large` is far from the KSPL source. See "Failing fast
     //< through an exception or an ICE" in ksplc/docs/DESIGN-compiler.md. It does not depend on the
@@ -148,7 +143,6 @@ priv fn check_integer_literal_width(c: Sema_ctx$@, node: Ast_node$@) //<
 
 fn check_operand_literal_bounds(c: Sema_ctx$@, node: Ast_node$@, other_id: I32) //<
     //< Checks the range of an untyped integer literal on one side against the other side's type
-    //<
     //< It applies to a binary operation.
     //< A suffixed literal is left to the ordinary type check (report_type_mismatch).
     lit: = literal_under_minus(node)
@@ -159,7 +153,6 @@ fn check_operand_literal_bounds(c: Sema_ctx$@, node: Ast_node$@, other_id: I32) 
 
 fn settle_untyped_literal(c: Sema_ctx$@, node: Ast_node$@, operand_id: I32): Bool //<
     //< Gives an untyped integer literal in a binary operation the type after promotion
-    //<
     //< Caution: **Do not leave it at I32 under a cast.** `x + 4294967295` on a `U64` would then be
     //< a widening of an I32 whose bits read -1. A backend that extends the constant by its type
     //< then gets -1. Its range against that type is check_operand_literal_bounds's.
@@ -171,7 +164,6 @@ fn settle_untyped_literal(c: Sema_ctx$@, node: Ast_node$@, operand_id: I32): Boo
 
 fn settle_negated_literal(c: Sema_ctx$@, node: Ast_node$@, operand_id: I32): Bool //<
     //< Gives a negated, untyped literal in a binary operation the type after promotion
-    //<
     //< The literal is directly under a unary minus, on one side of the operation.
     //< Caution: **The width to negate at must be the promoted type.** Sometimes no expected type is
     //< passed down: both sides of a comparison, or arithmetic whose outer expected type differs
@@ -187,7 +179,6 @@ fn settle_negated_literal(c: Sema_ctx$@, node: Ast_node$@, operand_id: I32): Boo
 
 priv struct Signed_literal //<
     //< An integer literal, or an integer literal directly under a unary minus
-    //<
     //< node is null where it is neither.
     node: Ast_node$@
     is_neg: Bool
@@ -204,7 +195,6 @@ priv fn literal_under_minus(node: Ast_node$@): Signed_literal
 
 fn check_inferred_decl_literal(c: Sema_ctx$@, expr_node: Ast_node$@, final_id: I32) //<
     //< Checks the range of an integer literal initializing an unannotated declaration
-    //<
     //< For example `x: = 2147483648;`. The range is checked against the final type.
     //< **Not at the literal itself**, where the default I32 might still widen (type_is_known in
     //< infer_literal_expr). An expression initializer (`x: = 2147483648 + 1;`) is not checked.
@@ -217,7 +207,6 @@ fn check_inferred_decl_literal(c: Sema_ctx$@, expr_node: Ast_node$@, final_id: I
 
 priv fn check_literal_bounds(c: Sema_ctx$@, node: Ast_node$@, type_id: I32, is_neg: Bool) //<
     //< Checks that the literal fits the range of that type
-    //<
     //< **This is an error, not a lint.** An out-of-range literal's value changes silently (`I32 =
     //< 2147483648` becomes -2147483648).
     //< Caution: **Take bit width and sign from Env's single source (get_primitive_bit_size /

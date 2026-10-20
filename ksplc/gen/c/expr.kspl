@@ -1,5 +1,4 @@
 //< Generates C99 for expressions
-//<
 //< It dispatches expressions by kind_id and adds the parentheses C's operator precedence needs.
 //< Declarations are in decl.kspl, statements in stmt.kspl.
 import "ksplc/base/ast" { Ast_node }
@@ -57,6 +56,8 @@ impl Ast_node
             r.emit_expr_primary(c, as_init)
         case .k_expr_upcast
             r.emit_upcast_expr(c, as_init)
+        case .k_payload_access
+            r.emit_payload_access(c)
         case .k_empty, .k_underscore
             r.emit_noop(c)
         default
@@ -109,7 +110,6 @@ impl Ast_node
     priv fn emit_init_designator(r: Ast_node$@, c: Genc_ctx$@, child_node: Ast_node$@,
         is_array: Bool): Bool //<
             //< It writes an initializer's `.name = ` or `[i] = `; true for a const slice's `.ptr`
-            //<
             //< Only a slice of const elements needs its `.ptr` cast; on a mutable slice the cast
             //< would only clutter the generated C.
         if is_array
@@ -174,13 +174,11 @@ impl Ast_node
     priv fn emit_generic_path(r: Ast_node$@, c: Genc_ctx$@)
         inst_name: = c.env.get_str(r.type_id)
         $mangled_name: = inst_name.mangle_c_identifier()
-        defer mangled_name.free()
 
         mangled_name.slice().kspl_symbol_to(c$)
 
     priv fn emit_const_ref_inline(r: Ast_node$@, c: Genc_ctx$@, as_init: Bool): Bool //<
         //< It emits another constant's initializer instead of a reference to it; true if it did
-        //<
         //< It does so only inside a top-level `const`'s initializer.
         //<
         //< Caution: **C's initializers must be constant expressions**, and in C99 the name of an
@@ -240,7 +238,6 @@ impl Ast_node
 
     priv fn emit_sizeof(r: Ast_node$@, c: Genc_ctx$@) //<
         //< It emits C's `sizeof` of the target type
-        //<
         //< Caution: **Cast it to `Sz`.** KSPL's `sizeof` is signed and C's is `size_t`, so without
         //< the cast `neg > sizeof(I32)` is false in C while genllvm's `icmp sgt` says true.
         target: = r.get_sizeof_target()
@@ -277,7 +274,6 @@ impl Ast_node
 
     priv fn emit_offsetof(r: Ast_node$@, c: Genc_ctx$@) //<
         //< It emits C's `offsetof`, cast to `Sz` for the same reason as `emit_sizeof`
-        //<
         //< Caution: **Leave it to C's `offsetof`** (do not emit the folded value). Where ksplc's
         //< layout and C's disagree, no diagnostic is reported (the head of
         //< `sema/decl/layout.kspl`). So the C backend asks C itself, which keeps them in agreement
@@ -289,7 +285,6 @@ impl Ast_node
 
     priv fn emit_unary_expr(r: Ast_node$@, c: Genc_ctx$@) //<
         //< It emits a unary expression
-        //<
         //< Caution: **Require precedence above unary (14) for the operand.** At 13, `-(-x)` becomes
         //< `--x`, a prefix decrement: **x itself is changed**, with no warning even under -Wall.
         r.ice_assert(r.children.len >= 2, "emit_unary_expr: missing operator or operand")
@@ -320,7 +315,6 @@ impl Ast_node
 
     fn emit_shift_amount(r: Ast_node$@, c: Genc_ctx$@, left_type_id: I32) //<
         //< The only place that emits a shift amount
-        //<
         //< Caution: **Do not emit a shift amount unchecked.** An amount at or beyond the width, or
         //< negative, is undefined behaviour in C and changes with the optimization level. Sema
         //< checks a constant amount; only this check can stop one at run time.
@@ -343,7 +337,6 @@ impl Ast_node
 
     fn emit_divisor(r: Ast_node$@, c: Genc_ctx$@, value_type_id: I32) //<
         //< The only place that emits a divisor: the receiver is the divisor's expression
-        //<
         //< `/` `%` `/=` `%=` all come through here.
         //<
         //< Caution: **Do not emit a divisor unchecked.** Dividing by 0 is undefined behaviour in C
@@ -368,7 +361,6 @@ impl Ast_node
         c.s("), \"\{r.loc.file()\}\", \{c.last_line\})")
 
     priv fn emit_binary_expr(r: Ast_node$@, c: Genc_ctx$@) //< the only place that emits wrapping
-        //<
         //< Only for can_exceed_width's operations: the operands are computed in wrap_twin's
         //< unsigned type, and the result is converted back to the declared type.
         r.ice_assert(r.children.len == 3, "Binary expression node must have exactly 3 children")
@@ -409,7 +401,6 @@ impl Ast_node
 
     priv fn emit_binary_wrapped(r: Ast_node$@, c: Genc_ctx$@, twin: U8[]) //<
         //< It converts the operands to unsigned and emits them
-        //<
         //< **Parenthesize the operands**: C's cast binds only to the next unary (`(U32)x * y`).
         //< Caution: **Do not convert the shift amount.** It has its own type and its own width
         //< check (emit_shift_amount).
@@ -503,7 +494,6 @@ priv fn get_c_precedence(op: U8[]): I32
 
 fn open_signed_div(c: Genc_ctx$@, op: U8[], type_id: I32) //<
     //< The only place that emits signed division and remainder: the dividend follows it
-    //<
     //< The caller emits the dividend, then close_signed_div with the divisor.
     helper: = "kspl_sdiv" if op.equals("/") else "kspl_smod"
     c.s("(").t(c.env.strip_const_deep(type_id)).s(")\{helper\}")
@@ -511,18 +501,15 @@ fn open_signed_div(c: Genc_ctx$@, op: U8[], type_id: I32) //<
 
 fn signed_div_is_narrow(c: Genc_ctx$@, type_id: I32): Bool //<
     //< Whether a signed `/` `%` on the type goes to the 32-bit helper (`kspl_sdiv32`)
-    //<
     //< Asked at the machine's width: a 32-bit target's `Sz` divides there too.
     return c.env.get_primitive_bit_size(type_id) <= 32
 
 priv fn can_exceed_width(op: U8[]): Bool //< whether an operation's result can exceed the width
-    //<
     //< For `& | ^ / % >>`, if the operands fit the width, the result fits too.
     return op.is_additive_op() || op.equals("*") || op.equals("<<")
 
 priv fn narrow_unsigned(c: Genc_ctx$@, type_id: I32): Bool //<
     //< Whether `~`'s result on this type must be converted back to the declared type
-    //<
     //< **C's integer promotions widen `U8` / `U16` to `int`**, so `~` sets the bits above the
     //< width. `U32` and up need none (`Sz` counts as 32, the portable minimum).
     return c.env.is_integer(type_id) && c.env.is_unsigned(type_id) &&
@@ -536,7 +523,6 @@ fn compound_wrap_twin(c: Genc_ctx$@, op: U8[], type_id: I32): U8[] //<
 
 priv fn wrap_twin(c: Genc_ctx$@, type_id: I32): U8[] //<
     //< The C name of the unsigned type `+` `-` `*` `<<` compute in; empty where C's own wraps
-    //<
     //< Caution: **Do not leave an operation to C's own arithmetic.** KSPL says `mod 2^N`, but C
     //< makes signed overflow undefined, and promotes `U8` … `I16` to the signed `int`, where
     //< `U16::65535 * U16::65535` overflows. A type narrower than 32 bits computes in `unsigned`,
@@ -557,7 +543,6 @@ priv fn wrap_twin(c: Genc_ctx$@, type_id: I32): U8[] //<
 
 priv fn needs_warning_silencing_parens(child_op: U8[], parent_op: U8[]): Bool //<
     //< Whether to keep parentheses that get_c_precedence omits but the C compiler warns about
-    //<
     //< The warnings call them "visually confusing" (clang's -Wbitwise-op-parentheses, gcc's
     //< -Wparentheses).
     //< Caution: **Do not check with clang only.** gcc warns even about pairs clang accepts
@@ -590,12 +575,13 @@ priv fn get_c_expr_precedence(c: Genc_ctx$@, node: Ast_node$@): I32
         op: = node.get_postfix_op()
         if op != null && op.text.equals("::")
             return 13
-        // A Result's tag test is written as a comparison (emit_postfix_dot in expr_postfix.kspl).
+        // A Result's or an Option's tag test is written as a comparison (emit_postfix_dot in
+        // expr_postfix.kspl).
         if op != null && op.text.equals(".") &&
-            node.get_postfix_member().text.equals("is_err") &&
-            c.env
-            .is_result(c.env.receiver_base_id(node.get_postfix_receiver().type_id))
-            return get_c_precedence("==")
+            node.get_postfix_member().text.equals("is_err")
+            recv_id: = c.env.receiver_base_id(node.get_postfix_receiver().type_id)
+            if c.env.is_result(recv_id) || c.env.is_option(recv_id)
+                return get_c_precedence("==")
         return 14
     if k == .k_expr
         op: = node.get_binary_op()
@@ -613,7 +599,7 @@ priv fn get_c_expr_precedence(c: Genc_ctx$@, node: Ast_node$@): I32
     case .k_literal, .k_identifier, .k_expr_path, .k_type_path, .k_generic_path, .k_expr_primary,
         .k_string, .k_char, .k_integer, .k_float, .k_bool, .k_null
         return 15
-    case .k_method_access, .k_generic_method, .k_enum_init_call
+    case .k_method_access, .k_generic_method, .k_enum_init_call, .k_payload_access
         return 14
     default
         return 0

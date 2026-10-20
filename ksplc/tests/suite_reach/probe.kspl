@@ -1,0 +1,32 @@
+//< A fixture: a suite and the tests it runs, for `../suite_run_test.kspl`
+//< **The suite stands here, not in the test**: a suite runs its own file's tests, so in the test's
+//< file it would run the test that runs it.
+import "ksplc/tests/suite_reach/imported"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/suite"
+
+priv struct Probe //< what the tests here take, each by its own name
+    field: Str_builder$@
+    n: I32
+
+impl Probe: suite.Suite
+    fn before_each(r: Self$@, name: U8[])
+        r.field.c('<').s(name).c(' ')
+
+    fn after_each(r: Self$@, name: U8[])
+        r.field.s(name).s("> ")
+
+fn run_probe(arena: Arena$@): U8[] //< runs the probe's suite, and returns what it recorded
+    $said: = Str_builder.new()
+    $p: = Probe::{ .field = said@, .n = 7 }
+    p.run()
+    return arena.dup_str(said.slice())
+
+fn test_takes_nothing() {} //< takes no field
+
+fn test_takes_a_field(field: Str_builder$@) //< takes one field
+    field.s("field ")
+
+fn test_takes_two(n: I32, field: Str_builder$@) //< takes two, in an order of its own
+    field.s("n=\{n\} ")

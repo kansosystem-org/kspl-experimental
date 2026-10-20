@@ -1,5 +1,4 @@
 //< The portable RTOS kernel core
-//<
 //< Besides tasks (the `Task` struct), the priority scheduler and the cooperative yield and delay,
 //< it offers preemptive round-robin on a periodic timer (`ksos_tick` / `enable_preemption`). The
 //< port layer supplies the context switch at link time (the `ksos_port_*` C ABI). It depends on
@@ -41,7 +40,6 @@ impl Task_state
 
 priv const STACK_GUARD_BYTES: Sz = 16 //<
     //< The known bytes Task.create writes at the stack's lowest address (a canary)
-    //<
     //< Every schedule() checks them; if they are damaged, it is an overflow and it panics at once.
 priv const STACK_GUARD_BYTE: U8 = 0xa5
 
@@ -62,11 +60,9 @@ struct Task
     priv wait_seq: U64 //< when it began its wait, as a count of waits (wake takes the lowest)
     priv woken_from: Void$@ //<
         //< what a single wake made it ready from, until it runs its recheck (null otherwise)
-        //<
         //< Suspending or deleting it before then passes that wake on (`pass_on_wake`).
     wait_note: Void$@ //<
         //< the waiter's own record of its wait, for a primitive that decides at the wake (Event)
-        //<
         //< It points into the waiter's frame, so read it only while `waits_on` says it is blocked.
     priv name: U8[]
     priv stack_guard: U8$@ //< its stack's lowest address (holding stack_guard_bytes of canary)
@@ -91,7 +87,6 @@ extern "C"
         //< returns a deleted task's context; it may be the running one, which a switch then leaves
     fn ksos_port_switch(from_ctx: Void$@, to_ctx: Void$@) //<
         //< saves the running task and runs to; a null from (a deleted task) saves none
-        //<
         //< A port that records the running context itself (Cortex-M) does not read from.
     fn ksos_port_tick_start(reload: U32) //<
         //< starts the periodic timer (preemption); the port implements it
@@ -101,13 +96,11 @@ extern "C"
     fn ksos_port_in_isr(): U32 //< non-zero inside an interrupt handler (0 with no handler mode)
     fn ksos_port_wait_irq() //<
         //< [Call it inside a critical section] sleeps until an interrupt, and lets its handler run
-        //<
         //< It returns inside the critical section again. Opening the section and sleeping are one
         //< step, so an interrupt arriving after the caller's last look still wakes it.
 
 priv fn find_task_slot(): Sz //<
     //< Reuses a free slot (a null slot released by Task.delete), or else adds one at the end
-    //<
     //< It returns the g_tasks index to use, or max_tasks when the capacity is exceeded.
     $slot: Sz = g_task_count
     $found: = false
@@ -172,7 +165,6 @@ priv fn slot_of(t: Task$@): Sz //< t's index in g_tasks, or max_tasks if it is n
     return slot
 
 priv fn end_task(t: Task$@) //< [Call it inside a critical section] makes t done
-    //<
     //< Its entry returned, or Task.delete ended it.
     //< Caution: **A task ending with a mutex held is stopped.** Nobody could unlock that mutex, so
     //< every later lock would wait forever, and after delete_dyn it would name freed memory.
@@ -181,14 +173,16 @@ priv fn end_task(t: Task$@) //< [Call it inside a critical section] makes t done
     t.state = .done
 
 priv fn check_stack_guard(t: Task$@) //< checks that t's stack guard is still as written
-    //<
     //< If it is damaged, that is an overflow and it panics at once.
     for i in Range.asc(STACK_GUARD_BYTES)
         if (t.stack_guard + i)$ != STACK_GUARD_BYTE
             panic("ksos: stack overflow detected")
 // The trampoline each port's initial context (from ksos_port_ctx_create) calls. It runs the
-// current task's entry, then marks it done and yields (this context is never picked again). The
-// task keeps its slot and context until Task.delete returns them.
+// current task's entry, marks it done and switches away for good. The task keeps its slot and
+// context until Task.delete returns them.
+// Caution: **Switch away inside the section that marks it done**, as Task.delete does. Outside it,
+// a tick can run schedule() after an outer one chose the next task but before it switched. That
+// saves this stack as the next task's context, so two tasks run on one stack.
 #export
 fn ksos_trampoline()
     t: = g_current
@@ -197,14 +191,15 @@ fn ksos_trampoline()
         e(t.arg)
         s: = ksos_port_irq_save()
         end_task(t)
+        schedule() // POSIX switches here; Cortex-M switches as the section ends
         ksos_port_irq_restore(s)
-    // Unreachable (pick_next never picks a done task); a guard that keeps calling schedule(), with
-    // no critical section, for a path that is never taken.
+    // Unreachable (pick_next never picks a done task): a guard for a path that is never taken.
     for
+        s: = ksos_port_irq_save()
         schedule()
+        ksos_port_irq_restore(s)
 
 priv fn wake_delayed_to(now: U64) //< makes ready every task that should wake by time now
-    //<
     //< That covers both an expired delay and **the timeout of a task waiting with one**. A task
     //< woken by its timeout loses what it waited on. Its wake-and-recheck tells which it was.
     for i in Range.asc(g_task_count)
@@ -221,11 +216,9 @@ priv fn wake_delayed_to(now: U64) //< makes ready every task that should wake by
 
 priv fn wakes_by_clock(t: Task$@): Bool //<
     //< Whether it is in a wait that ends by time (a delay, or blocked with a timeout)
-    //<
     //< tickless idle uses it to find the next time to move the clock to.
     return t.state == .delayed || (t.state == .blocked && t.deadline_set)
 priv fn pick_next(): Task$@? //< picks the runnable task with the highest priority
-    //<
     //< **With none runnable it moves the clock forward without waiting in real time**, decoupling
     //< g_tick from real time, even with preemption enabled. That buys determinism, and under
     //< cooperative scheduling it is the only path that advances g_tick (without it no delay ends).
@@ -258,7 +251,6 @@ priv fn pick_next(): Task$@? //< picks the runnable task with the highest priori
         g_tick = earliest
         wake_delayed_to(g_tick)
 priv fn schedule() //< switches from the current task to the next
-    //<
     //< When no task is runnable it switches to start_scheduler, which sleeps until an interrupt
     //< or returns (see there).
     prev: = g_current
@@ -287,14 +279,12 @@ priv fn schedule() //< switches from the current task to the next
     ksos_port_switch(from_ctx, next.ctx)
 
 priv fn switch_to_main(from_ctx: Void$@) //< [Call it inside a critical section]
-    //<
     //< Hands the CPU back to start_scheduler's loop, with no task current.
     g_current = null
     ksos_port_switch(from_ctx, g_main_ctx)
 
 impl Task
     fn yield() //< the current task gives up the CPU voluntarily (a cooperative yield)
-        //<
         //< It acts on the running task and takes no Task@ (like Java's `Thread.yield()`). From an
         //< ISR it panics: there it would switch the interrupted task out behind its back.
         refuse_in_isr()
@@ -304,7 +294,6 @@ impl Task
 
     fn delay(ticks: U64) //<
         //< the current task sleeps for the given number of ticks (a relative time)
-        //<
         //< **ticks are logical ticks, not real time.** It never wakes before the expiry, but when
         //< no other task is runnable it returns in zero real time. For a real-time period on
         //< hardware, use a hardware timer (`ksos/drivers/rp2040/timer.kspl` and the like).
@@ -318,7 +307,6 @@ impl Task
 
     fn delay_until(wake_tick: U64) //<
         //< Unlike delay (a relative time), it sleeps until the absolute tick wake_tick
-        //<
         //< A periodic task sleeping a relative time drifts by the length of its work; this does not
         //< (next += period; Task.delay_until(next);).
         refuse_in_isr()
@@ -335,7 +323,6 @@ fn current_tick(): U64
 priv const LAST_TICK: U64 = 0xFFFFFFFFFFFFFFFFU64
 
 fn deadline_after(ticks: U64): U64 //< the absolute tick ticks from now, for a delay or a timeout
-    //<
     //< Caution: **It saturates at the last tick.** A plain `current_tick() + ticks` wraps for a
     //< huge ticks to a deadline already passed, and the wait meant to be long ends at once.
     d: = g_tick + ticks
@@ -352,7 +339,6 @@ fn deadline_passed(deadline: U64?): Bool //<
 impl Task
     fn suspend(r: Self$@) //<
         //< Takes r out of scheduling; it can be paused from any state (ready, delayed or blocked)
-        //<
         //< Paused while blocked, it keeps what it waits on. But it lends a mutex's holder nothing
         //< while paused. Paused in a delay, it keeps the delay's expiry. A wake it had not yet
         //< acted on goes to the next waiter. If done or already paused, it does nothing. Pausing
@@ -373,7 +359,6 @@ impl Task
             preempt_if_outranked()
 
     fn resume(r: Self$@) //< lets a paused r run again
-        //<
         //< **A delay not yet expired goes on to its expiry**, since `delay` never returns early;
         //< one that expired while paused wakes at once. It does not recheck a wait's condition; the
         //< wake-and-recheck loop in Sem.take and the like does that when it next runs. From any
@@ -390,7 +375,6 @@ impl Task
 
     fn delete(r: Self$@) //<
         //< Makes r done and returns its g_tasks slot and its port context for a later create
-        //<
         //< The Task's and the stack's memory stay the caller's (static, or from create_dyn in
         //< ksos/kernel/dynamic.kspl). This method does not free them. A task whose entry
         //< returned is done but keeps both until deleted. Deleting again does nothing. A deleted
@@ -420,7 +404,6 @@ impl Task
 
     fn get_name(r: Self$@): U8[] //<
         //< The getters for the name, the priority, the state and the CPU use (ticks accumulated)
-        //<
         //< The fields are visible only inside ksos/kernel/; these methods expose them to other
         //< files.
         return r.name
@@ -429,16 +412,13 @@ impl Task
     fn get_state(r: Self$@): Task_state
         return r.state
     fn waits_on(r: Self$@, obj: Void$@): Bool //< whether r is blocked waiting on obj
-        //<
         //< [Call it inside a critical section] Only then is r's `wait_note` its live record.
         return r.state == .blocked && r.wait_obj == obj
     fn get_cpu_ticks(r: Self$@): U64 //<
         //< How many of ksos_tick()'s firings found r as g_current (accumulated)
-        //<
         //< Its ratio to current_tick() gives a rough CPU use (`cpu_percent`).
         return r.cpu_ticks
     fn cpu_percent(r: Self$@): I32 //< CPU use (%, an approximate integer from 0 to 100)
-        //<
         //< ksos_tick() samples it per tick. Without enable_preemption() (cooperative only)
         //< current_tick() does not advance, and it always returns 0. **Heap use is not offered
         //< here**: call `heap_used_bytes` / `heap_peak_used_bytes` in `std/mem.kspl` directly, as
@@ -451,7 +431,6 @@ impl Task
     // --- Reading the task listing and the states (a task manager and the rest use it) ---
     fn current(): Task$@ //<
         //< Returns the running task's own Task@ (like Java's `Thread.currentThread()`)
-        //<
         //< g_tasks is priv, so files that walk every task use count and at, a read-only snapshot.
         //< at can return null for a deleted slot, so always check for null.
         return g_current
@@ -461,13 +440,11 @@ impl Task
         return g_tasks[i]
 // --- The critical section (the synchronization primitives and the drivers use it) ---
 fn irq_save(): U32 //< the port's interrupt disable, offered as a kernel API
-    //<
     //< Caution: **Do not copy the port's names around**: an `extern "C"` declaration in each file
     //< multiplies the places that know the ABI. task.kspl itself calls ksos_port_irq_save/restore
     //< directly.
     return ksos_port_irq_save()
 fn irq_restore(state: U32) //< ends the critical section the matching irq_save began
-    //<
     //< Caution: **Between a give and this restore, do not act on the running task.** Do not call
     //< Task.current, a delay, a yield, a lock or a take. A give that woke a higher-priority task
     //< has already made it current, and on Cortex-M the switch to it waits for this restore.
@@ -475,7 +452,6 @@ fn irq_restore(state: U32) //< ends the critical section the matching irq_save b
 // --- The blocking helpers shared by the synchronization primitives (sem and msgq use them) ---
 priv fn block_current(obj: Void$@) //<
     //< Blocks the current task on obj and pends the switch to the next task
-    //<
     //< Call it inside a critical section. The switch happens when the caller's irq_restore ends the
     //< critical section, so "check the condition, then block" is indivisible and no wakeup is
     //< lost. Each wait carries the time it began, so wake can take the longest waiter. A task
@@ -489,7 +465,6 @@ priv fn block_current(obj: Void$@) //<
         schedule()
 fn refuse_in_isr() //<
     //< Precondition (1) for a task-only operation: it is not inside an interrupt handler
-    //<
     //< What an ISR may call is what does not wait (give / set / try_send / try_recv / try_take).
     //< Caution: **Call it before anything that depends on the resource's state**, or the misuse
     //< passes whenever the call would not have had to wait. Keep the message a fixed string
@@ -498,7 +473,6 @@ fn refuse_in_isr() //<
         panic("ksos: task-only call inside an ISR (an ISR cannot wait; use give / set / try_ there)")
 fn require_current(): Task$@ //<
     //< Precondition (2) for a task-only operation: a task is running
-    //<
     //< Caution: **Do not start a wait without going through here.** block_current silently ignores
     //< null, and the wake-and-recheck loop spins forever (a hang with no diagnostic). Keep the
     //< message a fixed string (see refuse_in_isr).
@@ -510,7 +484,6 @@ fn require_current(): Task$@ //<
     return cur
 fn wake(obj: Void$@, all: Bool) //<
     //< [Call it inside a critical section] Makes the tasks waiting on obj ready
-    //<
     //< One is the highest-priority waiter, the longest waiting among equals. A woken task that
     //< outranks the running one runs before this returns (preempt_if_outranked), so call it last.
     make_ready_waiters(obj, all)
@@ -518,7 +491,6 @@ fn wake(obj: Void$@, all: Bool) //<
 
 priv fn make_ready_waiters(obj: Void$@, all: Bool) //<
     //< [Call it inside a critical section] wake without the switch
-    //<
     //< The one waiter that a single wake picks keeps obj in woken_from until it runs its recheck.
     //< It takes the resource only then. So a waiter stopped before that must hand the wake on
     //< (pass_on_wake). Waking all needs no record, as every waiter checks again.
@@ -545,7 +517,6 @@ priv fn make_ready_waiters(obj: Void$@, all: Bool) //<
 
 priv fn pass_on_wake(t: Task$@) //<
     //< [Call it inside a critical section] Hands a wake t has not acted on to the next waiter
-    //<
     //< For a task leaving the run (suspended or deleted) between its wake and its recheck. Without
     //< it the resource stays free while the next waiter waits for ever. If the resource is gone by
     //< then, the waiter woken here checks again and waits again. It does not switch; the caller
@@ -557,7 +528,6 @@ priv fn pass_on_wake(t: Task$@) //<
 
 priv fn preempt_if_outranked() //<
     //< [Call it in a critical section] Switches to a ready task that outranks the running one
-    //<
     //< It compares every ready task. One can have just become ready. Or the running task can
     //< have just dropped below one (a lent priority returned). Equal priority does not cut in.
     //< The switch runs before the interrupted code goes on, timer or not ("Which task runs" in
@@ -573,7 +543,6 @@ priv fn preempt_if_outranked() //<
 
 priv fn highest_waiter_prio(obj: Void$@): I32 //<
     //< [Call it inside a critical section] The highest priority among the tasks waiting on obj
-    //<
     //< 0 if nobody waits (an application's tasks have 1 or more). lent_prio is built on it.
     $top: I32 = 0
     for i in Range.asc(g_task_count)
@@ -602,7 +571,6 @@ impl Holding
         me.held = r
     fn release(r: Self$@) //<
         //< [Call it inside a critical section] Frees r and takes it out of its holder's list
-        //<
         //< It then sets the holder's priority to what the mutexes it still holds lend it.
         h: = r.holder
         $prev: Holding$@ = null
@@ -620,7 +588,6 @@ impl Holding
 
 fn lent_prio(h: Task$@): I32 //<
     //< [Call it inside a critical section] The priority h runs at for the mutexes it holds
-    //<
     //< The highest of its own priority and of every task waiting on one of them. A single
     //< per-mutex saved priority cannot give this: releasing one mutex would drop a priority still
     //< lent through another.
@@ -635,7 +602,6 @@ fn lent_prio(h: Task$@): I32 //<
 
 priv fn relend_all() //<
     //< [Call it inside a critical section] sets each holder's priority to lent_prio
-    //<
     //< For a waiter that left without its lock loop (a deleted one), whose holder is not kept.
     for i in Range.asc(g_task_count)
         t: = g_tasks[i]
@@ -644,7 +610,6 @@ priv fn relend_all() //<
 
 fn block_and_rearm(obj: Void$@, deadline: U64?, state: U32): U32 //<
     //< [Call it inside a critical section] Blocks on obj and returns the new state once woken
-    //<
     //< It is the shared part of the wake-and-recheck loop of sem, msgq, mutex and event. If no one
     //< wakes it by deadline, the clock (ksos_tick / tickless idle) does; none waits until woken.
     //< Caution: Take an absolute time (deadline_after), not a relative tick; a relative one
@@ -662,7 +627,6 @@ fn block_and_rearm(obj: Void$@, deadline: U64?, state: U32): U32 //<
         cur.woken_from = null // its recheck runs next, in this critical section: the wake is used
     return s
 fn enable_preemption(reload: U32) //< turns preemption on
-    //<
     //< It starts the port's periodic timer (SysTick on Cortex-M, SIGALRM/setitimer on POSIX), which
     //< calls ksos_tick() and forces task switches on the time slice. Not on a port with no timer.
     ksos_port_tick_start(reload)
@@ -677,7 +641,6 @@ fn declare_tick_hz(hz: U32)
     g_tick_hz = hz
 
 fn ms_to_ticks(ms: U32): U64 //< converts ms to ticks
-    //<
     //< **It rounds up**: rounding down would make a short ms 0 ticks, which gives up without
     //< waiting.
     if g_tick_hz == 0
@@ -688,7 +651,6 @@ fn ms_to_ticks(ms: U32): U64 //< converts ms to ticks
 // ============================ The idle task ============================
 typedef Idle_hook = fn(): Void //<
     //< The function the idle task calls on every round
-    //<
     //< The idle task is the lowest-priority task (prio=0), which runs only while no other task is
     //< runnable. The hook is mainly reap_pending in ksos/kernel/dynamic.kspl.
 
@@ -703,7 +665,6 @@ fn idle_entry(_arg: Void$@): Void
         idle_rest()
 
 priv fn idle_rest() //< the idle task's pause between two calls of its hook
-    //<
     //< **With no other task ready and none waiting on the clock, it sleeps until an interrupt.**
     //< Going round again would spin the CPU at full use for as long as the rest stay blocked.
     //< Otherwise it sleeps one tick, so tickless idle moves the clock to the next expiry.
@@ -721,7 +682,6 @@ priv fn idle_rest() //< the idle task's pause between two calls of its hook
 
 fn enable_idle_task(stack: U8$[], hook: Idle_hook) //<
     //< The caller allocates stack statically (as with the other create APIs)
-    //<
     //< Call it once only. The idle task never ends, so start_scheduler then returns only on
     //< stop_scheduler.
     g_idle_hook = hook
@@ -744,7 +704,6 @@ fn ksos_tick()
     wake_delayed_to(g_tick)
     schedule()
 fn start_scheduler() //< runs the registered tasks until none remains or stop_scheduler is called
-    //<
     //< **While the tasks left are all blocked with no deadline, it sleeps until an interrupt**
     //< and looks again. Once it returned, no handler's give could start it again. A task remains
     //< until it is done or deleted. A later call carries on the tasks a stop_scheduler left.
@@ -780,7 +739,6 @@ priv fn any_task_left(): Bool //< whether any task has not ended (a blocked or p
     return false
 
 fn stop_scheduler() //< makes start_scheduler return, leaving every task where it is
-    //<
     //< From a task, it switches to start_scheduler's caller at once. The task stays ready, and a
     //< later start_scheduler carries it on from here. From an interrupt handler, it switches as
     //< the handler returns. It panics while no scheduler runs, where it would have nothing to stop.
@@ -798,7 +756,6 @@ fn stop_scheduler() //< makes start_scheduler return, leaving every task where i
 
 fn run_single_task(tcb: Task$@, stack: U8$[], entry: Task_fn, name: U8[], on_idle: fn(): Void) //<
     //< Runs a single task at priority 1, then calls on_idle and loops forever
-    //<
     //< It registers the task and starts the scheduler; on_idle is called once the task is done.
     //< It serves as a single-task demo's ksos_main. on_idle, not this file, knows how to end the
     //< run, so this file depends on no layer above.

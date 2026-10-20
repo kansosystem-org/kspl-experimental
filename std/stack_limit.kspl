@@ -1,5 +1,4 @@
 //< How close the calling thread's stack is to its end, for a walk that recurses on its input
-//<
 //< **A depth count guards a recursion only on the build where it was measured.** The cost of one
 //< level changes with the backend, the toolchain and the optimization level. This module asks the
 //< OS for the thread's own stack bounds. So a walk stops before its stack runs out on every build.
@@ -19,21 +18,18 @@ priv fn stack_floor(): Sz //< where the calling thread's stack ends; 0 where not
     return kspl_stack_floor()
 
 priv fn stack_here(): Sz //< where the calling thread's stack is now
-    //<
     //< Caution: **Not a local's address** (`Sz::here@`). The address sanitizer moves an
     //< address-taken local onto a stack of its own on the heap. So it reads as past any floor.
     return kspl_stack_here()
 
 priv const UNASKED_ROOM: Sz = 32 * 1024 //<
     //< How far below where a `later` limit was made its walk goes before it asks the OS
-    //<
     //< **Counted in bytes, not levels**, as what a level costs moves with the build (the address
     //< sanitizer's frames are several times the plain ones). Any thread's stack holds this much,
     //< and a shallow walk never reaches it.
 
 pub struct Stack_limit //<
     //< where a walk on the calling thread stops, a margin before the end of its stack
-    //<
     //< Caution: **Create it on the thread that walks.** It holds that thread's bounds, and another
     //< thread's stack is somewhere else.
     floor: Sz //< the lowest address the walk can reach; 0 where the OS does not tell
@@ -42,7 +38,6 @@ pub struct Stack_limit //<
 
 impl Stack_limit
     pub fn new( //< the limit for the calling thread
-        //<
         //< **It asks the OS, and that is not cheap** (on Linux the main thread's bounds are
         //< read from a file). Create it once per walk and keep it.
         margin: Sz, //< how many bytes to keep free below the point where the walk stops
@@ -52,7 +47,6 @@ impl Stack_limit
             .start = 0 }
 
     pub fn later( //< a limit that asks the OS only once a walk gets deep
-        //<
         //< **For a walk run many times over mostly shallow input** (a regex per line of a file).
         //< Asking costs far more than a shallow walk, which never needs the answer. It asks once
         //< the walk has gone a few tens of KB of stack below where it was made.
@@ -61,7 +55,6 @@ impl Stack_limit
         return Stack_limit::{ .floor = 0, .margin = margin, .start = stack_here() }
 
     pub fn near( //< whether the caller is within the margin of the stack's end
-        //<
         //< **Always false where the OS does not tell** (bare metal), so a walk also keeps
         //< its own depth count. A limit made by `later` asks the OS here, once its walk is deep.
         limit: Self$@,

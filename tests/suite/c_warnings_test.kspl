@@ -1,6 +1,5 @@
 #!/usr/bin/env -S ksplc run
 //< Checks that the generated C is warning-free under a C compiler's `-Wall` and strict ISO C99
-//<
 //< Nobody reads the generated C, so warnings pile up unnoticed. Held at zero, the check fails the
 //< moment one is added. `-pedantic` holds it to ISO C99, so a compiler that folds no GNU extension
 //< takes it too.
@@ -23,7 +22,6 @@ import "tests/support/harness"
 
 priv const CANDIDATES: U8[][_] = ::{ "clang", "gcc", "cc" } //<
     //< The compilers the generated C is put through
-    //<
     //< Caution: **Do not check with one alone.** Each warns about code the other is silent on
     //< (gcc: an arithmetic or comparison operand of a bit operation); one installed alone decides.
 
@@ -40,7 +38,6 @@ priv const CFLAGS: U8[][_] = ::{ "-std=c99", "-pedantic", "-Wall", "-Wextra",
     "-fsyntax-only" }
 
 priv struct Target //< the inputs that produce the generated C
-    //<
     //< Caution: **Compile freestanding with `-ffreestanding`.** Without it the compiler treats
     //< libc's functions as built-ins and reports what the real build does not (a redeclaration of
     //< malloc/memcpy).
@@ -51,7 +48,6 @@ priv struct Target //< the inputs that produce the generated C
 
 priv const FREESTANDING_KSPLC: U8[][_] = ::{ "--freestanding" } //<
     //< The ksplc options for the freestanding target
-    //<
     //< Caution: **Keep the list of options in a const.** A `U8[][]::{ ... }` built in a function
     //< and put in a struct points at the stack frame. That frame is gone after the return, with no
     //< diagnostic ("Which pointers into a frame are stopped from leaving it" in
@@ -60,7 +56,6 @@ priv const FREESTANDING_CC: U8[][_] = ::{ "-ffreestanding" }
 
 priv fn targets(arena: Arena$@): List<|Target|> //<
     //< The sources whose generated C is checked, each with its own flags
-    //<
     //< Caution: **Do not remove any of these rows**; each alone shows one class of warning.
     //< `ksbind` holds the bindings `make debug` leaves out, `freestanding` genc's own extern
     //< declarations, `equiv` the code both backends accept.
@@ -91,7 +86,6 @@ priv struct Cc //< one usable C compiler
     id: U8[] //< its identity: target, version and family
 
 priv fn identify(name: U8[], arena: Arena$@): Cc? //< that compiler, where it starts
-    //<
     //< The same compiler gives the same identity. **Not by the name it reports** (`--version`'s
     //< first line): gcc prints the name it was called by, and macOS's `gcc` is clang.
     triple: = ksplc_harness.run(U8[][]::{ name, "-dumpmachine" })
@@ -106,7 +100,6 @@ priv fn identify(name: U8[], arena: Arena$@): Cc? //< that compiler, where it st
 
 priv fn compilers(arena: Arena$@): List<|Cc|> //<
     //< Returns the usable compilers, keeping one of each identity
-    //<
     //< Caution: **Drop the duplicates.** `cc` is usually a symlink to clang/gcc, and running it
     //< twice only doubles the failing lines. Whether it starts is tested by starting it (PATH is
     //< not read).
@@ -124,7 +117,6 @@ priv fn compilers(arena: Arena$@): List<|Cc|> //<
 
 priv fn check_families(ccs: List<|Cc|>@, arena: Arena$@) //<
     //< Says which family no compiler found belongs to: a failure where both are required
-    //<
     //< The `SKIP` reason is the one `tools/ci_gates.kspl` expects on a platform holding one alone.
     for fam in FAMILIES
         if ccs.any(fn(c: Cc@; fam: U8[]): Bool {
@@ -145,7 +137,6 @@ priv fn warning_lines(out: U8[], arena: Arena$@): List<|U8[]|> //<
 
 priv fn builtin_slice(gen: U8[]): U8[] //<
     //< The first name of the built-in slice type in the generated C (`kspl_I32_Slice`), or empty
-    //<
     //< **A slice is `std/lang`'s `Slice<|$T|>`** (`std_lang_Slice_I32`). Only the runtime's own
     //< byte slice keeps a built-in name (`U8_Slice`). **One built-in constructor added back to the
     //< type table brings the second form back**, and nothing else fails. So the check looks for the
@@ -190,7 +181,7 @@ fn main(): I32
         if !r.exited_with(0)
             verdict.check(arena.text().s("\{t.slot\}: it can be generated").take(), false, r.out)
             continue
-        stray: = builtin_slice(io.read_file(gen) catch "")
+        stray: = builtin_slice(io.read_file(gen, null) catch "")
         verdict.check(arena.text().s("\{t.slot\}: no built-in slice type but the bytes'").take(),
             stray.len == 0, stray)
         for cc in ccs

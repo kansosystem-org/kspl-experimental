@@ -1,5 +1,4 @@
 //< Completion (listing the ways a half-typed name can continue)
-//<
 //< **Completion is needed while the text is half-typed.** Then the syntax does not parse and the
 //< whole analysis stops (the PEG grammar has no recovery mechanism).
 //< A completion request says "one name goes here", so the text with one name put in is analysed.
@@ -26,7 +25,6 @@ import "std/seq"
 import "std/str" { Str_builder }
 
 const PICK_MARK: U8[] = "Ksplc_pick_here" //< the synthesized name replacing the half-typed word
-    //<
     //< Caution: **Make it a name a person would not write**, or a real name is mistaken for it.
 
 struct Swapped //< the text after the replacement, and the half-typed word
@@ -35,7 +33,6 @@ struct Swapped //< the text after the replacement, and the half-typed word
     offset: Sz
 
 const KIND_FIELD: I32 = 5 //< the LSP's kind (`CompletionItemKind`)
-    //<
     //< **The numbers are the LSP's**, so they are written as numbers.
 const KIND_FUNCTION: I32 = 3
 const KIND_METHOD: I32 = 2
@@ -51,19 +48,16 @@ struct Pick
     kind: I32
     node: Ast_node$@ //<
         //< The declaration this candidate stands for
-        //<
         //< **The description is read from it.** It is set on every path a candidate comes from, so
         //< none shows without one; null where the path names none.
     type_id: I32 //<
         //< The candidate's **own** type, where the path finding it knows one; 0 where it does not.
-        //<
         //< Caution: **Do not take a function's from its symbol.** A symbol's `type_id` is the
         //< return type, so a `fn f(): Sz` would read as an `Sz`; `detail_of` reads it from the
         //< declaration.
 
 fn swap_in_mark(src: U8[], at: Sz, arena: Arena$@): Swapped //<
     //< It replaces the half-typed word around the cursor (`at`) with the synthesized name
-    //<
     //< Caution: **Replace from the start of the word**, or `p.fo` becomes `p.foKsplc_pick_here`.
     //< What was typed is used for filtering.
     $start: = at
@@ -89,7 +83,6 @@ priv fn find_mark(node: Ast_node$@): Ast_node$@? //<
     return .none
 
 priv fn named_by(node: Ast_node$@): Pick //< the name and kind of that declaration
-    //<
     //< Empty for one without a name.
     id_node: = node.find_child(.k_identifier)
     if id_node == null
@@ -122,7 +115,6 @@ priv fn named_by(node: Ast_node$@): Pick //< the name and kind of that declarati
 priv fn add_pick(out: List<|Pick|>$@, name: U8[], kind: I32, prefix: U8[], node: Ast_node$@,
     type_id: I32) //<
         //< It adds the name as a candidate where it starts with `prefix`
-        //<
         //< Caution: **Do not add the same name twice** (the enclosing scope and the file may both
         //< hold it).
     if name.len == 0 || name.equals(PICK_MARK) || !name.starts_with(prefix)
@@ -155,7 +147,6 @@ priv fn picks_in_scope(state: Doc_state$@, path: List<|Ast_node$@|>$@, mark: Ast
 
 priv fn detail_of(c: Sema_ctx$@, p: Pick, out: Str_builder$@) //<
     //< The text shown beside the name in the list
-    //<
     //< **A function's is its signature**, a field's, a constant's and a variable's its type, as
     //< rust-analyzer, gopls and clangd show it.
     //< **A struct, an enum, an interface and a module get none**: the icon for `kind` shows it.
@@ -163,7 +154,6 @@ priv fn detail_of(c: Sema_ctx$@, p: Pick, out: Str_builder$@) //<
         return
     if p.node.is_fn_decl()
         $sig: = lsp_spell.format_fn_sig_flat(c, p.node)
-        defer sig.free()
         out.s(sig.slice())
         return
     if p.type_id != 0
@@ -172,7 +162,6 @@ priv fn detail_of(c: Sema_ctx$@, p: Pick, out: Str_builder$@) //<
 
 priv fn send_picks(state: Doc_state$@, out: List<|Pick|>$@, id_val: json.Value, arena: Arena$@) //<
     //< It sends the candidates as the answer, **an empty array where there is none** (not `null`)
-    //<
     //< **Each carries its declaration's description** (`documentation`), read as the hover reads
     //< it: the list is where the user looks first, before choosing.
     $b: = Json_builder.new(arena)
@@ -198,7 +187,6 @@ priv fn send_picks(state: Doc_state$@, out: List<|Pick|>$@, id_val: json.Value, 
 
 priv fn qualifier_of(path: List<|Ast_node$@|>$@, mark: Ast_node$@): U8[] //<
     //< The head name of a `<head>.<name>`, or empty
-    //<
     //< **A module alias and a type's name do not become a postfix node.** Normalization folds
     //< `io.out` or `P.new` into one path node, which `dot_receiver_of` in `nav.kspl` does not
     //< find; the symbol is `"io.out"`, so a prefix match on the head name works.
@@ -214,7 +202,6 @@ priv fn qualifier_of(path: List<|Ast_node$@|>$@, mark: Ast_node$@): U8[] //<
 
 priv fn alias_module_of(state: Doc_state$@, head: U8[], arena: Arena$@): U8[] //<
     //< From an import's alias, it works out the module name its symbols are registered under
-    //<
     //< For `import "std/io" as io;` that name is `std.io`.
     //<
     //< **Without an `as`, the path's last part is the alias** (`import "std/io";` is `io`).
@@ -245,7 +232,6 @@ priv fn alias_module_of(state: Doc_state$@, head: U8[], arena: Arena$@): U8[] //
     return ""
 
 fn send_none(id_val: json.Value, arena: Arena$@) //< it answers that there is no candidate
-    //<
     //< Caution: **Return an empty array rather than `null`.** `null` means "no answer" and an empty
     //< array means "it looked and found none". **Whether to show it is the client's decision.**
     $b: = Json_builder.new(arena)
@@ -254,7 +240,6 @@ fn send_none(id_val: json.Value, arena: Arena$@) //< it answers that there is no
 
 fn handle_completion(state: Doc_state$@, swapped: Swapped, id_val: json.Value, arena: Arena$@) //<
     //< It answers a completion request
-    //<
     //< Caution: **Where the synthesized name is not in the tree, return nothing.** The syntax
     //< failed even after the replacement (a missing closing bracket, say), so it answers empty.
     if state.root_file == null || state.sema == null
@@ -300,7 +285,6 @@ fn handle_completion(state: Doc_state$@, swapped: Swapped, id_val: json.Value, a
 priv fn picks_of_receiver(c: Sema_ctx$@, recv: lsp_nav.Dot_receiver, prefix: U8[],
     out: List<|Pick|>$@) //<
         //< The members (fields and methods) of the receiver's type
-        //<
         //< They come from the same `dot_receiver_of` (`nav.kspl`) that jump-to-definition uses.
         //< **A module alias does not come here** (`qualifier_of` handles it).
     if recv.type_name.len > 0
@@ -308,7 +292,6 @@ priv fn picks_of_receiver(c: Sema_ctx$@, recv: lsp_nav.Dot_receiver, prefix: U8[
 
 priv fn picks_of_type(c: Sema_ctx$@, raw: U8[], prefix: U8[], out: List<|Pick|>$@) //<
     //< That type's fields and methods
-    //<
     //< Caution: **Both the path from a receiver and the path qualified by a type's name must go
     //< through here** (Principle 6). Otherwise a member shows for `p.` and not for `P.`.
     base_only: = c.env.original_generic_name(raw).get_generic_base_name()
@@ -337,7 +320,6 @@ priv fn add_fields(sd: sema_type_def.Struct_def$@, prefix: U8[], out: List<|Pick
 
 priv fn add_declared_fields(c: Sema_ctx$@, raw: U8[], prefix: U8[], out: List<|Pick|>$@) //<
     //< The fields declared by a generic nothing instantiated, which has no struct entry to list
-    //<
     //< Caution: **Only for a generic.** Any other struct has its entry. One not found by that
     //< name is a name that did not resolve (a bare `P.`), not one to work around.
     switch lsp_nav.struct_decl_of(c, raw)
@@ -400,13 +382,13 @@ priv fn add_by_dot_prefix_syms(map: Map<|U8[], sema_type_scope.Sema_symbol$@|>$@
 
 priv fn kind_of_sym(sym: sema_type_scope.Sema_symbol$@): I32
     switch sym.kind
-    case .function(_v)
+    case .function
         return KIND_FUNCTION
     case .struct_def, .generic_struct
         return KIND_STRUCT
     case .enum_def, .generic_enum
         return KIND_ENUM
-    case .enum_variant(_t)
+    case .enum_variant
         return KIND_ENUM
     case .trait_def, .generic_trait
         return KIND_INTERFACE

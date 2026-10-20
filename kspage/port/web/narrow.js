@@ -239,14 +239,16 @@ function kspageNarrow(ks) {
       wrap.appendChild(document.createTextNode(label));
       list.appendChild(wrap);
     };
-    // **"Every value" checks and unchecks what is shown**, not what the search box hides.
-    // Otherwise a search followed by "every value" would quietly include what was never read.
+    // **"Select All" checks and unchecks what is shown**, not what the search box hides.
+    // Otherwise a search followed by "Select All" would quietly include what was never read.
     const all = document.createElement("label");
     const allBox = document.createElement("input");
     allBox.type = "checkbox";
-    const holdsBlank = blank && (look === "" || "(the blank cells)".indexOf(look) >= 0);
+    const holdsBlank = blank && (look === "" || "(blanks)".indexOf(look) >= 0);
     const every = shown.every((v) => ticked.has(v)) && (!holdsBlank || ticked.has(""));
     allBox.checked = every && (shown.length > 0 || holdsBlank);
+    allBox.indeterminate = !every && (shown.some((v) => ticked.has(v)) ||
+      (holdsBlank && ticked.has("")));
     allBox.addEventListener("change", () => {
       const on = allBox.checked;
       shown.forEach((v) => { if (on) ticked.add(v); else ticked.delete(v); });
@@ -254,10 +256,10 @@ function kspageNarrow(ks) {
       fill();
     });
     all.appendChild(allBox);
-    all.appendChild(document.createTextNode("(every value)"));
+    all.appendChild(document.createTextNode("(Select All)"));
     list.appendChild(all);
     shown.forEach((v) => row(v, v, ticked.has(v)));
-    if (holdsBlank) row("(the blank cells)", "", ticked.has(""));
+    if (holdsBlank) row("(Blanks)", "", ticked.has(""));
   };
 
   // Reads the column anew and shows the panel under that heading cell.
@@ -272,6 +274,7 @@ function kspageNarrow(ks) {
       ? values.concat(blank ? [""] : [])
       : said.chosen);
     find.value = "";
+    document.getElementById("narrow-condition").open = false;
     note.textContent = said.cut
       ? "This column shows more values than the list holds, so what is below is not all of them"
       : "";
@@ -319,9 +322,22 @@ function kspageNarrow(ks) {
     return [e.clientX - r.left, e.clientY - r.top];
   };
 
-  // **Closing it is not choosing.** What was checked takes effect only when "Narrow to the ticked"
-  // is clicked, so a panel closed by mistake changes nothing.
-  document.getElementById("narrow-shut").addEventListener("click", shut);
+  // Commands finish the choice; hiding the panel exposes the result and any status message.
+  panel.addEventListener("click", (e) => {
+    const button = e.target.closest("button");
+    if (!button || !["sort-down", "sort-up", "filter-apply", "narrow-clear",
+      "narrow-ticked", "narrow-shut"].includes(button.id)) return;
+    shut();
+    ks.ime.focus();
+  });
+  // Cancel and Escape discard the pending checkboxes; only OK applies them.
+  panel.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    e.preventDefault();
+    e.stopPropagation();
+    shut();
+    ks.ime.focus();
+  });
   find.addEventListener("input", fill);
   // A click outside closes it (as with every other panel on this page).
   document.addEventListener("pointerdown", (e) => {

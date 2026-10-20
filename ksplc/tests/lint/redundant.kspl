@@ -1,9 +1,7 @@
 //< Redundancy: casts, booleans, control flow and aliases with no effect
-//<
 //< Each case below is compiled alone, as the file its head names.
 // ==== case const_weakening_cast
 //< A cast that only drops the write permission (`$`) is a finding
-//<
 //< The weakening from `U8$[]` to `U8[]` is done implicitly by the language ("6.4 Type conversion
 //< (`::`) and implicit casts" in `docs/SPEC-programming-language.md`), so writing it does nothing.
 // EXPECT: [I0301]
@@ -21,7 +19,6 @@ fn main(): I32
   return 0
 // ==== case const_weakening_cast_binding
 //< On a binding with no type annotation it is not a finding
-//<
 //< The cast here settles the binding's own type, and taking it away makes `b` a `U8$[]` — the
 //< declaration that said "it is not rewritten" vanishes.
 // EXPECT-NOT: [I0301]
@@ -36,7 +33,6 @@ fn main(): I32
   return 0
 // ==== case directive_warning
 //< `##warning(cond, msg)` reports a warning where cond is false, and the analysis goes on
-//<
 //< The wording is the user's own, so it is given no diagnostic code — if `##lint` could silence it,
 //< the assertion would have no point.
 // EXPECT: warning: Sz must be 2 bytes
@@ -48,7 +44,6 @@ fn main(): I32
   return 0
 // ==== case generic_cast_instantiation
 //< Two forms that look like findings under a generic instantiation, but are not
-//<
 //< Following either would stop the build (ksplc/docs/DESIGN-diagnostics.md "No diagnostic that
 //< depends on a generic's type argument" / is_instantiating in
 //< ksplc/sema/session/ctx.kspl). `F32$@::a` is an identity cast at T=F32 but a real pointer
@@ -76,7 +71,6 @@ fn main(): I32
   return 0
 // ==== case lint_levels
 //< A per-file `##lint(CODE = level)` takes effect
-//<
 //< off suppresses a code, and on enables a code that is off by default ([W0601] of the old
 //< deterministic profile is one such).
 // EXPECT-NOT: [I0305]
@@ -93,7 +87,6 @@ fn main()
   ends_with_return()
 // ==== case plain_cast_still_reported
 //< A "really redundant cast" outside a generic is still a finding
-//<
 //< It pins down that only being inside a generic instantiation was taken out of scope, and that
 //< [I0301] itself was not weakened.
 // EXPECT: [I0301]
@@ -106,7 +99,6 @@ fn main(): I32
   return 0
 // ==== case redundant_boolean
 //< Redundant spellings around booleans
-//<
 //< The meaning does not change so they pass in silence, but the reader is left hunting for "was
 //< something meant by this".
 // EXPECT: [I0302] Unnecessary boolean comparison
@@ -173,7 +165,6 @@ pub fn probe(arena: Arena$@): I32
   return c$.v
 // ==== case redundant_import_alias
 //< An `as` naming the path's own tail adds nothing, since an unmarked import derives that alias
-//<
 //< It lets the same thing be written two ways, so [I0310] reports it.
 //< Caution: **Do not make a derived alias a finding.** An unmarked import goes onto the ledger
 //< under the same name too, so the name alone says "remove the `as`" where there is no `as`.
@@ -192,3 +183,121 @@ pub fn probe(): Sz
   // allocates nor frees.
   io.out().s("n=\{n\} h=\{base_fmt.hex(255, 2)\}").c('\n')
   return n + "abc".len
+// ==== case self_freeing_free
+//< An explicit free of a local that frees itself (`Drop`), just before its own cleanup runs
+//< Three shapes are findings: a `defer` in the declaring block, a free that ends that block, and
+//< one right before a `return` or `throw` that calls nothing. **A free with more work after it
+//< stays silent**: it releases early. So does one before a `return` that still calls something.
+// EXPECT: [I0311] 'a' frees itself when this block ends
+// EXPECT: self_freeing_free.kspl:18:3: information: [I0311]
+// EXPECT: self_freeing_free.kspl:26:3: information: [I0311]
+// EXPECT: self_freeing_free.kspl:33:5: information: [I0311]
+// EXPECT-NOT: self_freeing_free.kspl:40:
+// EXPECT-NOT: self_freeing_free.kspl:47:
+// EXPECT: 0 error(s), 0 warning(s), 3 information(s)
+import "std/fs"
+import "std/io"
+import "std/str" { Str_builder }
+
+priv fn deferred(): Sz
+  $a: = Str_builder.new()
+  defer a.free()
+  a.s("x")
+  return a.len
+
+priv fn at_end()
+  $b: = Str_builder.new()
+  b.s("x")
+  io.out().s(b.slice())
+  b.free()
+
+priv fn before_exit(bad: Bool): Sz!fs.Fs_error
+  _lock: = fs.File_lock.take("out/tmp/self_freeing.lock")!
+  $c: = Str_builder.new()
+  c.s("x")
+  if bad
+    c.free()
+    throw .operation_failed
+  return c.len
+
+priv fn early(): Sz
+  $d: = Str_builder.new()
+  d.s("x")
+  d.free()
+  io.out().s("after\n")
+  return 0
+
+priv fn before_a_call(): Sz
+  $e: = Str_builder.new()
+  e.s("x")
+  e.free()
+  return early()
+
+fn main()
+  _a: = deferred()
+  at_end()
+  _c: = before_exit(false) catch 0
+  _e: = before_a_call()
+// ==== case lang_prefix_changes_nothing
+//< `lang.` before a name the file can write alone changes nothing
+//< It stays where the bare name is blocked: by the file's own declaration, or by a local.
+// EXPECT: lang_prefix_changes_nothing.kspl:10:19: information: [I0312] 'lang.Panic_msg'
+// EXPECT: lang_prefix_changes_nothing.kspl:23:5: information: [I0312] 'lang.panic'
+// EXPECT-NOT: 'lang.Range'
+// EXPECT-NOT: 'lang.assert'
+priv struct Range //< this file's own `Range`, which blocks the bare name
+  n: I32
+
+priv fn length(m: lang.Panic_msg$@): Sz
+  return m.slice().len
+
+priv fn steps(_r: lang.Range, own: Range): I32
+  return own.n
+
+priv fn shadowed(assert: I32): I32 //< the parameter blocks the bare `assert`
+  lang.assert(assert > 0, "positive")
+  return assert
+
+fn main(): I32
+  $m: = Panic_msg.new()
+  if length(m@) > 0
+    lang.panic("not empty")
+  return steps(lang.Range.asc(1), Range::{ .n = 2 }) + shadowed(1)
+// ==== case payload_nothing_reads
+//< A case that reads nothing its payload binds needs no brackets
+//< A discarding name (`_a`) is a binding nobody reads. A payload with one name read stays. So
+//< does the binding the compiler writes for `if v: = …`.
+// EXPECT: payload_nothing_reads.kspl:17:10: information: [I0313]
+// EXPECT: payload_nothing_reads.kspl:26:10: information: [I0313]
+// EXPECT-NOT: [W0207]
+// EXPECT-NOT: payload_nothing_reads.kspl:19:
+// EXPECT-NOT: payload_nothing_reads.kspl:32:
+priv enum Op
+  add(a: I32, b: I32)
+  neg(x: I32)
+  stop
+
+impl Op
+  fn discards(r: Self): I32
+    switch r
+    case .add(_a, _b)
+      return 1
+    case .neg(x)
+      return -x
+    case .stop
+      return 0
+
+  fn unread(r: Self): I32
+    switch r
+    case .add(a, b)
+      return 2
+    default
+      return 0
+
+priv fn bound_by_if(o: I32?): I32
+  if _v: = o
+    return 1
+  return 0
+
+fn main(): I32
+  return Op.stop.discards() + Op.neg(1).unread() + bound_by_if(.none)

@@ -1,5 +1,4 @@
 //< Where the compiler inserts retain and release under ARC (automatic reference counting)
-//<
 //< **This file checks only the insertion positions.** Std's own tests check the balance of
 //< `std/refcount`'s Rc/Arc/Weak_*.
 // ==========================================
@@ -114,14 +113,12 @@ fn test_arc_auto_local()
         .pass("the retain on copy and the release on leaving a scope balanced exactly, both \
             compiler-inserted.")
 priv fn arc_consume($c: Arc_counter) //< another function taking an ARC target's value by value
-    //<
     //< It pairs with the caller's retain and is released at this function's end (count 2 until
     //< then).
     assert(c.get()$ == 99, "the callee must see the shared ARC value")
     assert(c.refcount() == 2, "during the call both caller and callee owners are counted")
 
 priv fn arc_make(v: I32): Arc_counter //< a factory allocating an ARC target and returning it
-    //<
     //< A retain at the return offsets the local's release, so the caller owns it at count 1.
     x: = Arc_counter.new(v)
     return x
@@ -300,7 +297,6 @@ priv fn arc_aggregate_nest_body()
     // Leaving the scope: two array elements and a struct field inside the enum's payload.
 
 priv fn arc_place_expr_copy_body() //< a copy from a place expression (`g.arr[0]` and the like)
-    //<
     //< Without a retain here, the destination's release **frees memory that should still be alive**
     //< (a use after free).
     $g: = Arc_aggregate::{ .arr = ::{ Rc<|I32|>.new(1), Rc<|I32|>.new(2) },
@@ -314,7 +310,6 @@ priv fn arc_place_expr_copy_body() //< a copy from a place expression (`g.arr[0]
 
 priv fn arc_multi_exit_body(n: I32): I32 //<
     //< the three routes of a return, a break and a normal exit
-    //<
     //< The cleanup is duplicated per exit, and the synthesized switch (payload binding included)
     //< must still resolve after duplication.
     e: = Arc_multi.two(1, Rc<|I32|>.new(n))
@@ -477,7 +472,6 @@ priv fn arc_zero_aggregate_body() //< the zero value of an enum's payload and of
     _s2: = slots
 
 priv fn arc_empty_slot_table_body() //< a table holding empty slots
-    //<
     //< `empty()` puts a slot back to empty, and `is_empty()` tells it.
     $slots: Rc<|I32|>[3] = ::{}
     assert(slots[0].is_empty() && slots[2].is_empty(), "a zero-initialized slot must read empty")
@@ -522,7 +516,6 @@ fn test_arc_zero_value_is_empty()
 
 priv fn arc_dirty_small_bins() //<
     //< It fills freshly allocated small blocks (16 to 128 bytes) with 0xFF and frees them again
-    //<
     //< Caution: **Fill freshly allocated memory with garbage first.** A fresh page from the OS is
     //< zeros, so an implementation that does not zero silently passes. The control block's frame
     //< size depends on the layout, so all the smaller frames are dirtied.

@@ -10,7 +10,7 @@ import "std/verdict"
 // only says "not recognized", so this test catches byte-layout mistakes.
 // ==========================================
 
-fn test_ncm_build() //<
+fn check_ncm_build() //<
     //< Checks the built NTB byte by byte against the layout the specification gives
     verdict.start("[NCM] assembling an NTB16 test...")
     frame: U8[6] = ::{ 0xde, 0xad, 0xbe, 0xef, 0x01, 0x02 }
@@ -43,7 +43,7 @@ fn test_ncm_build() //<
 
     verdict.pass("it can assemble the byte run the specification says.")
 
-fn test_ncm_build_rejects_overflow() //<
+fn check_ncm_build_rejects_overflow() //<
     //< If it does not fit, it returns 0 without writing a single byte
     verdict.start("[NCM] turning a request that does not fit away test...")
     frame: U8[8] = ::{ 1, 2, 3, 4, 5, 6, 7, 8 }
@@ -71,7 +71,7 @@ fn test_ncm_build_rejects_overflow() //<
         .pass("a request that does not fit, a length of 0 and a len longer than frame are turned \
             away.")
 
-fn test_ncm_roundtrip() //< it can parse what it built itself (the round trip)
+fn check_ncm_roundtrip() //< it can parse what it built itself (the round trip)
     verdict.start("[NCM] the assemble-then-parse round trip test...")
     frame: U8[14] = ::{ 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x02, 0, 0, 0, 0, 1, 0x08, 0x06 }
     buf: U8[64] = ::{}
@@ -87,8 +87,7 @@ fn test_ncm_roundtrip() //< it can parse what it built itself (the round trip)
     assert(!ncm.datagram_at(U8[]::buf, n, 1).ok, "there is no second entry")
     verdict.pass("what was assembled can be parsed again.")
 
-fn test_ncm_parse_multiple() //< the host packs several frames into one NTB
-    //<
+fn check_ncm_parse_multiple() //< the host packs several frames into one NTB
     //< Read only the first entry and the rest are lost ("packets sometimes disappear").
     verdict.start("[NCM] the case of several in one NTB test...")
     // The NTH (12), the NDP (20: two entries plus the terminator) and two datagrams, written by
@@ -148,9 +147,8 @@ fn test_ncm_parse_multiple() //< the host packs several frames into one NTB
     assert(b[d1.offset] == 0xb0, "the second entry's content is right")
     verdict.pass("several datagrams are not dropped.")
 
-fn test_ncm_rejects_broken() //<
+fn check_ncm_rejects_broken() //<
     //< A broken NTB is rejected
-    //<
     //< Caution: Do not read outside the buffer on a broken NTB. Bytes the peer (the host) built
     //< must not be trusted as they are.
     verdict.start("[NCM] turning a broken NTB away test...")
@@ -239,7 +237,6 @@ priv fn our_mac(): ip4.Mac //< the MAC the answers go out under
 
 priv fn arp_reject(work: U8$[], orig: U8[], off: Sz, v: U8, our_ip: U32, msg: U8$[]) //<
     //< Checks that it does not answer a frame with one byte of the original changed
-    //<
     //< It restores the bytes each time, so the checks do not inherit each other's changes.
     out: U8[64] = ::{}
     for i in Range.asc(orig.len)
@@ -248,9 +245,8 @@ priv fn arp_reject(work: U8$[], orig: U8[], off: Sz, v: U8, our_ip: U32, msg: U8
     n: = ip4.build_arp_reply(U8$[]::out, work, 60, our_ip, our_mac())
     assert(n == 0, msg)
 
-fn test_arp_reply() //<
+fn check_arp_reply() //<
     //< It answers an ARP request addressed to it
-    //<
     //< Caution: Answer only an ARP request addressed to it, or traffic on the segment breaks.
     verdict.start("[NET] the ARP answer test...")
     our_ip: = ip4.ip4(192, 168, 137, 50)
@@ -304,9 +300,8 @@ priv fn icmp_reject(work: U8$[], orig: U8[], off: Sz, v: U8, our_ip: U32, msg: U
     n: = ip4.build_icmp_echo_reply(U8$[]::out, work, 60, our_ip, our_mac())
     assert(n == 0, msg)
 
-fn test_icmp_echo_reply() //<
+fn check_icmp_echo_reply() //<
     //< It answers an ICMP echo request (a ping)
-    //<
     //< Caution: The identifier, the sequence and the payload must come back unchanged (the reason
     //< is at `ip4.build_icmp_echo_reply`).
     verdict.start("[NET] the ICMP echo answer test...")
@@ -410,10 +405,10 @@ fn test_icmp_echo_reply() //<
             fragment and a wrong version.")
 
 fn test_ncm()
-    test_ncm_build()
-    test_ncm_build_rejects_overflow()
-    test_ncm_roundtrip()
-    test_ncm_parse_multiple()
-    test_ncm_rejects_broken()
-    test_arp_reply()
-    test_icmp_echo_reply()
+    check_ncm_build()
+    check_ncm_build_rejects_overflow()
+    check_ncm_roundtrip()
+    check_ncm_parse_multiple()
+    check_ncm_rejects_broken()
+    check_arp_reply()
+    check_icmp_echo_reply()

@@ -202,11 +202,13 @@ $(KSPAGE_PROBE_PAGE): web $(KSPAGE_PROBE_JS) $(KSPAGE_PROBE_LATE)
 # Caution: **Take the token in as a fragment (`#t=`)**: on the query (`?`) it rides the request's
 # line (docs/SPEC-local-server.md). The URL is taken whole from the line `kssrv: I: open `, and
 # `kssrv/main.kspl` names this waiter where it puts that line out.
-# **Do not let the number fall on another check's** (they run alongside each other).
-KSPAGE_SERVED_PORT := 18393
+# **The port is 0, so the system chooses a free one**: a fixed number clashes with another run on
+# the same machine, and that line names the port the server got.
 # **Lay a file inside a folder too**: path folding shows nowhere else, and writing makes no folder.
 KSPAGE_SERVED_ROOT := $(OUT)/kspage_served
 
+# **kssrv's first error goes on the `FAIL` line**: a run's summary keeps only the line that names
+# the failure, so a reason on a later line is lost there.
 # **Run on the real clock** and **settle the end by the
 # markers written back** (`handBack` in `tests/browser/probe.js`), never by the DOM: none comes out.
 # **The outer `timeout` outlasts this side's wait** (equal, a round that hit the cap goes unnamed);
@@ -221,16 +223,18 @@ test-served: $(KSPAGE_PROBE_PAGE)
 	"$(KSPLC)" run content/example.kspl "$$root/sample.kspage" || exit 1; \
 	cp "$(KSPAGE_PROBE_PAGE)" "$$root/index.html"; \
 	log="$(OUT)/kspage_served.log"; : > "$$log"; \
-	"$(KSSRV)" $(KSPAGE_SERVED_PORT) "$$root" --local > "$$log" 2>&1 & \
+	"$(KSSRV)" 0 "$$root" --local > "$$log" 2>&1 & \
 	pid=$$!; \
 	trap 'kill $$pid 2>/dev/null || true' EXIT; \
 	waited=0; \
 	while ! grep -q 'kssrv: I: open ' "$$log"; do \
 		if ! kill -0 $$pid 2>/dev/null; then \
+			echo "FAIL kspage served: kssrv ended before it became ready: $$(grep -m1 ': E: ' "$$log")"; \
 			echo "RESULT: SOME FAILED (1) -> kssrv ended before it became ready"; \
 			sed 's/^/  kssrv: /' "$$log"; exit 1; fi; \
 		waited=$$((waited + 1)); \
 		if [ $$waited -gt 300 ]; then \
+			echo "FAIL kspage served: kssrv did not become ready in 30s: $$(grep -m1 ': E: ' "$$log")"; \
 			echo "RESULT: SOME FAILED (1) -> kssrv did not become ready in 30s"; \
 			sed 's/^/  kssrv: /' "$$log"; exit 1; fi; \
 		sleep 0.1; \

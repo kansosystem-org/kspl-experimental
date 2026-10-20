@@ -1,5 +1,4 @@
 //< The file-walking helpers the convention checks use
-//<
 //< It is not a suite of its own; it is a part of conventions.
 //<
 //< Caution: **Do not put a judgment in here.** Mix "what is checked" into the tools, and fixing one
@@ -10,11 +9,9 @@ import "std/ds" { List }
 import "std/mem" { Arena }
 import "std/str"
 import "std/verdict"
-import "tests/support/harness_text"
 
 fn find_all(text: U8[], head: U8[], tail: U8[], arena: Arena$@): List<|U8[]|> //<
     //< Picks up every text between head and tail, one at a time
-    //<
     //< **Ignore whether the brackets pair**: only "is that text there" matters; parsing the syntax
     //< is ksplc's job.
     $out: = List<|U8[]|>.new(arena)
@@ -36,14 +33,14 @@ fn find_all(text: U8[], head: U8[], tail: U8[], arena: Arena$@): List<|U8[]|> //
     return out
 
 fn push_unique(out: List<|U8[]|>$@, want: U8[])
-    if !harness_text.has(out, want)
+    if !out.contains(want)
         out.push(want)
 
 fn diff_into(a: List<|U8[]|>@, b: List<|U8[]|>@, a_name: U8[], b_name: U8[],
     out: List<|U8[]|>$@, arena: Arena$@) //<
         //< Lists what is in a and not in b.
     for i in Range.asc(a.len)
-        if !harness_text.has(b, a.get(i))
+        if !b.contains(a.get(i))
             out
                 .push(arena.text().s(a.get(i)).s(": in ").s(a_name).s(" and not in ").s(b_name)
                 .take())
@@ -88,12 +85,10 @@ const BUILD_EXT: U8[][_] = ::{ "*.kspl", "*.ksplb", "*.mk", "Makefile", "*.yml",
 
 const KSPL_SPECS: U8[][_] = ::{ "*.kspl", "*.ksplb" } //<
     //< The path specs matching every KSPL source
-    //<
     //< **Both are needed** (the reason is in this section's header).
 
 fn kspl_specs_with(extra: U8[][], arena: Arena$@): U8[][] //<
     //< `KSPL_SPECS` followed by further path specs (an exclusion and so on)
-    //<
     //< The list lives in the arena, so the returned slice stays valid for the caller.
     $out: = List<|U8[]|>.new(arena)
     for one in KSPL_SPECS
@@ -104,7 +99,6 @@ fn kspl_specs_with(extra: U8[][], arena: Arena$@): U8[][] //<
 
 fn strip_code(line: U8[], arena: Arena$@): U8[] //<
     //< Drops the string literals and the line comment from a line
-    //<
     //< This keeps the brackets from being miscounted.
     b: = arena.text()
     $i: Sz = 0
@@ -128,33 +122,6 @@ fn count_char(line: U8[], c: U8): Sz
         if b == c
             n += 1
     return n
-
-fn marker_head(t: U8[]): Bool //<
-    //< Whether the line is one a gate reads rather than prose
-    //<
-    //< That is `EXPECT:` / `ARGS:` and the like: an upper-case name of three letters or more
-    //< followed by a colon.
-    $i: Sz = 0
-    for i < t.len &&
-        (t[i].is_upper() || t[i].is_digit() || t[i] == '_' || t[i] == '-')
-        i += 1
-    return i >= 3 && i < t.len && t[i] == ':' && t[0].is_upper()
-
-fn is_divider(body: U8[]): Bool //<
-    //< A section divider: a comment whose text starts with three or more `-` or `=`
-    //<
-    //< It marks the start of something new, so it ends the comment it stands in.
-    t: = body.trim_spaces()
-    return t.len >= 3 &&
-        (t[0] == '-' && t[1] == '-' && t[2] == '-' ||
-        t[0] == '=' && t[1] == '=' && t[2] == '=')
-
-fn is_case_head(body: U8[]): Bool //<
-    //< A divider that opens one case of a fixture file holding several (`==== case <name>`)
-    //<
-    //< **What follows it is a file of its own**, compiled alone, so its opening comment is a
-    //< file's header (`CASE_HEAD` in `ksplc/tests/support/harness_expect.kspl`).
-    return body.trim_spaces().starts_with("==== case ")
 
 // Whether the line after this one is inside a `"""` string. **Two on one line cancel out.**
 // Caution: **A `"""` inside a comment opens nothing**; if counted, a comment naming the fence

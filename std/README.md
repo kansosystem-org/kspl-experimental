@@ -42,7 +42,7 @@ Caution: **Do not add line counts to this table**: every edit changes them, and 
 | What is used | How many come along |
 | --- | ---: |
 | `lang` + `libc` alone | 2 |
-| `bytes` `math` `checked_int` `mem` `reflect` `ring` `prng` `bignat` `log` `stack_limit` | 3 |
+| `bytes` `math` `checked_int` `mem` `reflect` `ring` `prng` `bignat` `log` `stack_limit` `suite` | 3 |
 | `chars` | 3 (4 on a freestanding build, one with no operating system under it, where `mem` supplies `memcmp`) |
 | `thread` `buf` | 4 |
 | `strfmt` `strnum` `sha256` | 5 (6 on a freestanding build, through `chars`) |

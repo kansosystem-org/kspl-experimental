@@ -1,6 +1,5 @@
 #!/usr/bin/env -S ksplc run
 //< Checks that what the editor integration (`.vscode/tasks.json` / `launch.json`) points at exists
-//<
 //< **`tasks.json` / `launch.json` go through neither the build nor the tests.** So a missing make
 //< target fails only for whoever presses it (Principle 5 in `docs/DESIGN-principles.md`). Two
 //< drifts show nothing at all. A name out of step with `${fileBasenameNoExtension}.exe` makes F5
@@ -22,7 +21,6 @@ import "tests/support/harness"
 import "tests/support/harness_text" as htext
 
 priv const PROBE_STEM: U8[] = "probe file" //< the name used for `make debug-file`'s check
-    //<
     //< Caution: **Include a space.** make's `$(notdir)` / `$(basename)` split on whitespace, so a
     //< naive recipe turns `probe file.kspl` into another name and F5 starts the last executable.
 priv const PROBE_DIR: U8[] = "out/vscode_test src"
@@ -38,7 +36,6 @@ fn main(): I32
 
 priv fn strip_line_comments(text: U8[], arena: Arena$@): U8$[] //<
     //< VS Code's configuration allows JSON with line comments, so they are dropped before reading
-    //<
     //< Caution: **Do not drop a `//` inside a string literal** (`problemMatcher`'s regex has one).
     $b: = Str_builder.new()
     for raw in text.lines(arena)
@@ -63,7 +60,6 @@ priv fn strip_line_comments(text: U8[], arena: Arena$@): U8$[] //<
     return arena.dup_str(b.slice())
 
 priv fn is_obj(v: json.Value): Bool //< whether it is an object
-    //<
     //< `get` returns `null_val` for a missing key too, so this tells "could not be read" apart.
     switch v
     case .obj_val
@@ -72,7 +68,7 @@ priv fn is_obj(v: json.Value): Bool //< whether it is an object
     return false
 
 priv fn load_jsonc(path: U8[], arena: Arena$@): json.Value
-    text: = io.read_file(path) catch
+    text: = io.read_file(path, null) catch
         return .null_val
     defer dealloc(Void$@::text.ptr)
     doc: = json.parse(strip_line_comments(text, arena), arena) catch
@@ -134,7 +130,6 @@ priv const SUITE_LISTS: U8[][_] = ::{ "mk/test.mk", "ksplc/Makefile" } //<
 
 priv fn typable(arena: Arena$@): List<|U8[]|> //<
     //< What can be typed after `make`: `make help`'s listing, and one suite's `test-<name>`
-    //<
     //< **Not `make -n <target>`**: the catch-all rules (`%:`, `test-%`) answer 0 for any name.
     $out: = List<|U8[]|>.new(arena)
     help: = harness.make(U8[][]::{ "LOGGING=1", "--no-print-directory", "help" })
@@ -154,14 +149,14 @@ priv fn typable(arena: Arena$@): List<|U8[]|> //<
 
 priv fn check_make_targets(tasks: json.Value, arena: Arena$@) //<
     //< Checks that each `make <target>` in `tasks.json` names a target that really exists
-    $names: = typable(arena)
+    names: = typable(arena)
     for t in tasks.get("tasks").arr_list(arena)
         label: = t.get("label").as_str().unwrap_or("")
         cmd: = parse_make_cmd(t.get("command").as_str().unwrap_or(""), arena)
         if !cmd.found
             continue
         name: = arena.text().s("tasks.json[\{label\}]: 'make \{cmd.target\}' really exists").take()
-        verdict.check(name, htext.has(names@, cmd.target),
+        verdict.check(name, names.contains(cmd.target),
             "neither `make help` lists it nor is it a suite's `test-<name>`")
 
 priv fn check_launch(launch: json.Value, labels: List<|U8[]|>$@, root: U8[], arena: Arena$@) //<
@@ -172,7 +167,7 @@ priv fn check_launch(launch: json.Value, labels: List<|U8[]|>$@, root: U8[], are
         if pre.len > 0
             title: = arena.text()
                 .s("launch.json[\{name\}]: preLaunchTask '\{pre\}' is in tasks.json").take()
-            verdict.check(title, htext.has(labels, pre), "")
+            verdict.check(title, labels.contains(pre), "")
         for cmd in c.get("initCommands").arr_list(arena)
             rel: = workspace_rel(cmd.as_str().unwrap_or(""), 0)
             if rel.len == 0
@@ -185,7 +180,6 @@ priv const ABSENT_FMT: U8[] = "C_FMT=kanso-absent-clang-format -i" //<
 
 priv fn check_debug_file(root: U8[], fmt: U8[], arena: Arena$@) //<
     //< That `make debug-file` makes `out/<name>.exe` and that it works, given `fmt` (or none)
-    //<
     //< **Clang-Format is optional** ("Requirements" in `docs/HOWTO-build.md`): without it, F5 still
     //< builds, and one line says the C is left as generated.
     $name: U8[] =
@@ -235,21 +229,20 @@ priv fn check_debug_file(root: U8[], fmt: U8[], arena: Arena$@) //<
 
 priv fn check_release_assets(root: U8[], arena: Arena$@) //<
     //< The simplified version shipped in the release zip
-    //<
     //< The unpacked layout differs from this repository's (`.github/workflows/release.yml`), so
     //< only the labels agreeing and the executable built are checked.
     tasks: =
         load_jsonc(fs.join(root, "tools/release-assets/vscode/tasks.json", arena), arena)
     launch: =
         load_jsonc(fs.join(root, "tools/release-assets/vscode/launch.json", arena), arena)
-    $labels: = labels_of(tasks, arena)
+    labels: = labels_of(tasks, arena)
     for t in tasks.get("tasks").arr_list(arena)
         label: = t.get("label").as_str().unwrap_or("")
         for dep in t.get("dependsOn").arr_list(arena)
             d: = dep.as_str().unwrap_or("")
             title: = ksplc_harness.arena().text()
                 .s("release-assets tasks.json[\{label\}]: dependsOn '\{d\}' is there").take()
-            verdict.check(title, htext.has(labels@, d), "")
+            verdict.check(title, labels.contains(d), "")
     for c in launch.get("configurations").arr_list(arena)
         pre: = c.get("preLaunchTask").as_str().unwrap_or("")
         if pre.len == 0
@@ -257,14 +250,13 @@ priv fn check_release_assets(root: U8[], arena: Arena$@) //<
         cfg_name: = c.get("name").as_str().unwrap_or("")
         title: = ksplc_harness.arena().text()
             .s("release-assets launch.json[\{cfg_name\}]: preLaunchTask '\{pre\}' is there").take()
-        verdict.check(title, htext.has(labels@, pre), "")
+        verdict.check(title, labels.contains(pre), "")
     check_build_task(tasks, launch, arena)
 
 priv const BUILD_LABEL: U8[] = "kanso-build-current-file" //< the task F5 builds with
 
 priv fn side_of(v: json.Value, key: U8[]): json.Value //<
     //< a platform's branch (`windows`), or v itself
-    //<
     //< Empty is the default; a key with no branch of its own falls back to the default, as VS Code
     //< reads it.
     if key.len == 0 || !is_obj(v.get(key))
@@ -273,7 +265,6 @@ priv fn side_of(v: json.Value, key: U8[]): json.Value //<
 
 priv fn check_build_task(tasks: json.Value, launch: json.Value, arena: Arena$@) //<
     //< The build task is `ksplc build`, writing what launch.json starts, on each platform
-    //<
     //< **The link words are ksplc's**, so none is written in the task to drift. What can drift is
     //< the executable's name. A name out of step makes F5 start the last one built.
     $build: = json.Value.null_val

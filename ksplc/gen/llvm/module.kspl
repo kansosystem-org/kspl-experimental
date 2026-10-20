@@ -1,5 +1,4 @@
 //< The entry point of LLVM IR generation
-//<
 //< `run`, the counterpart of genc's gen/c/root.kspl, builds the whole LLVM module in output order.
 //< **The IR holds only the language's core.** Only the C runtime has the bodies of the `kspl_*`
 //< functions that touch the OS. The IR `declare`s them and links against `ksplc emit-runtime`'s
@@ -20,10 +19,8 @@ import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
 import "ksplc/sema/type/scope" { Sema_symbol }
 import "std/chars"
-import "std/ds" { Map }
 import "std/str" { Str_builder }
 fn run(root: Ast_node$@, cg: Genllvm_ctx$@, file_name: U8[]) //< runs the LLVM backend's phases
-    //<
     //< The counterpart of genc's emit_file_node; it reads in output order (types -> globals ->
     //< functions -> runtime -> strings).
     if root == null
@@ -40,7 +37,6 @@ fn run(root: Ast_node$@, cg: Genllvm_ctx$@, file_name: U8[]) //< runs the LLVM b
     emit_type_decls(root, cg)
     emit_globals(root, cg)
     emit_fn_defs(root, cg)
-    emit_instantiated_fns(cg)
     // The failure route lives in the C runtime's common half (`runtime/core.c`), on bare metal too.
     cg.s("declare void @kspl_trace_start(ptr, ptr, i32)\n")
     cg.s("declare void @kspl_trace_record(ptr, ptr, i32)\n")
@@ -82,7 +78,6 @@ priv fn emit_globals(root: Ast_node$@, cg: Genllvm_ctx$@)
 
 priv fn mark_defined_c_names(root: Ast_node$@, cg: Genllvm_ctx$@) //<
     //< Enters every function this module defines under its own C name (an `#export`) as declared
-    //<
     //< An `extern "C"` block can name a function the program itself defines, as a host stand-in
     //< for a port's C does. Its `define` serves as the declaration; a `declare` beside it is a
     //< redefinition to LLVM, though C allows a prototype next to the body.
@@ -100,43 +95,14 @@ priv fn emit_fn_defs(root: Ast_node$@, cg: Genllvm_ctx$@)
         if !child.is_emittable()
             continue
         if child.kind_id == .k_decl_fn
-            child.emit_llvm_fn_def(cg, 0)
+            child.emit_llvm_fn_def(cg)
         else if child.kind_id == .k_decl_impl
-            $owner_type_id: I32 = 0
-            target_node: = child.get_decl_type_node()
-            if target_node != null
-                owner_type_id = target_node.type_id
             for m in child.children
                 if m.kind_id == .k_decl_fn && m.is_emittable()
-                    m.emit_llvm_fn_def(cg, owner_type_id)
-
-priv fn build_inst_owner_index(cg: Genllvm_ctx$@): Map<|Sz, I32|>$@ //<
-    //< It builds the index that finds an instantiated method's receiver type id
-    //<
-    //< It walks all of id_to_type (M types) once, reading the type table's methods.
-    //< A walk per instantiated node would be O(N*M); the index makes each lookup O(1).
-    idx: = base_core.arena.create(Map<|Sz, I32|>.new(base_core.arena))
-    for $j: = 0; j < I32::cg.env.id_to_type.len; j += 1
-        entry: = cg.env.id_to_type.get(j)
-        if entry != null && entry.methods != null
-            // A walk is fine: a type has few methods and the index is built once (not an
-            // innermost loop).
-            for m_entry in entry.methods.items()
-                if m_entry.value != null && m_entry.value.node != null
-                    idx.set(Sz::m_entry.value.node, j)
-    return idx
-
-priv fn emit_instantiated_fns(cg: Genllvm_ctx$@) //<
-    //< It emits the bodies of the generic functions and methods instantiated from a template
-    owner_idx: = build_inst_owner_index(cg)
-    for inst_node in cg.env.instantiated_nodes_list
-        if inst_node.kind_id == .k_decl_fn && inst_node.is_alive_for_backend()
-            owner_type_id: = owner_idx.get(Sz::inst_node).unwrap_or(0)
-            inst_node.emit_llvm_fn_def(cg, owner_type_id)
+                    m.emit_llvm_fn_def(cg)
 
 priv fn emit_runtime_decls(cg: Genllvm_ctx$@, abi_sym: U8[]) //<
     //< The declarations the IR itself holds in hosted's preamble
-    //<
     //< **No `kspl_*` bodies go here.** Everything that touches the OS is in the C runtime
     //< (`ksplc emit-runtime`'s output). The `declare`s come from `std/`'s `extern "C"`
     //< (gen/llvm/decl.kspl), which skips what is emitted here (`is_preamble_fn` in `ctx.kspl`).
@@ -149,12 +115,7 @@ priv fn emit_runtime_decls(cg: Genllvm_ctx$@, abi_sym: U8[]) //<
     // The version symbol, whose definition is write_unit's in gen/runtime.kspl (`main` calls it).
     cg.s("declare void @").s(abi_sym).s("()\n\n")
 
-priv fn emit_private_fmt(cg: Genllvm_ctx$@, name: U8[], body: U8[])
-    cg.s("@.").s(name).s(" = private unnamed_addr constant [\{body.len + 2\} x i8] c\"").s(body)
-        .s("\\0A\\00\"\n")
-
 priv fn emit_runtime_check_fns(cg: Genllvm_ctx$@) //< the run-time checks
-    //<
     //< Checks stay in IR so LLVM can optimize them; hosted.c owns failure reporting for both
     //< backends, including flushing output before aborting.
     emit_by_hand(cg,
@@ -283,7 +244,6 @@ ok:
 
 priv fn emit_by_hand(cg: Genllvm_ctx$@, ir: U8[]) //<
     //< It writes IR written by hand, each `define` marked as genllvm marks its own
-    //<
     //< A `define` line ends in `{`, and the marks (`emit_sanitize_attrs`) go before it.
     for line in ir.lines(base_core.arena)
         if line.starts_with("define ") && line.ends_with("{")
@@ -294,7 +254,6 @@ priv fn emit_by_hand(cg: Genllvm_ctx$@, ir: U8[]) //<
             cg.s(line).c('\n')
 
 priv fn emit_runtime_and_main(cg: Genllvm_ctx$@) //< hosted's preamble and `main`
-    //<
     //< Under freestanding nothing is emitted (the bare-metal side provides the runtime).
     if !base_core.config.is_freestanding
         $abi_sym: = Str_builder.new()
@@ -305,19 +264,13 @@ priv fn emit_runtime_and_main(cg: Genllvm_ctx$@) //< hosted's preamble and `main
 
 priv fn emit_main_wrapper(cg: Genllvm_ctx$@, abi_sym: U8[]) //<
     //< it emits the wrapper equivalent to C's int main
-    //<
     //< A Result from kspl_main is checked, traced and turned into an exit code.
-    $main_sym: Sema_symbol$@ = null
-    switch cg.env.find_main_symbol()
-    case .some(ms)
-        main_sym = ms
-    case .none
+    main_sym: Sema_symbol$@ = cg.env.find_main_symbol() catch
         return
     // The plan, the startup calls and the messages are shared with the C backend
     // (`gen/entry.kspl`).
     plan: = gen_entry.plan_of(cg.env, main_sym.type_id)
     if plan.returns_result()
-        emit_private_fmt(cg, "main_err_fmt", plan.failure_line())
         if plan.err_variants != null
             emit_private_name(cg, "main_err_name_none", "")
             for i in Range.asc(plan.err_variants.len)
@@ -358,7 +311,7 @@ priv fn emit_main_wrapper(cg: Genllvm_ctx$@, abi_sym: U8[]) //<
     cg.t(main_sym.type_id).s("\n")
     cg.s("    call void @kspl_main(")
     cg.emit_agg_param_type().s(" %retslot)\n")
-    err_flag: = cg.result_is_err(main_sym.type_id, "%retslot")
+    err_flag: = cg.holds_variant(main_sym.type_id, "%retslot", "err")
     cond_i1: = cg.next_reg()
     cg.s("    %\{cond_i1\} = icmp ne i8 ").s(err_flag).s(", 0\n")
     then_lbl: = cg.next_label()
@@ -389,72 +342,48 @@ priv fn emit_private_name(cg: Genllvm_ctx$@, name: U8[], body: U8[]) //< a NUL-e
 priv fn emit_main_failure(cg: Genllvm_ctx$@, plan: gen_entry.Main_plan, main_type_id: I32,
     res_ptr: U8[]) //<
         //< The failure path where `main` returns a Result, from the Result at `res_ptr`
-        //<
-        //< It prints the line and the propagation trace, and returns the exit code
-        //< (`gen_entry.Main_err` says which).
+        //< The C runtime prints the line and gives the exit code (`gen_entry.FAIL_FN`); then the
+        //< propagation trace is printed.
     err_id: = cg.env.get_result_err_id(main_type_id)
-    err_out: = cg.next_reg()
-    cg.s("    %\{err_out\} = call ptr @get_stderr()\n")
-    err_ptr: = cg.payload_field_ptr(res_ptr, main_type_id,
-        cg.result_variant(main_type_id, "err"), 0)
-    err_val: = cg.next_reg()
-    cg.op_load(err_val, err_id, err_ptr)
-    $arg: U8[] = ""
-    $code: U8[] = ""
-    switch plan.err
-    case .number
-        wide_id: =
-            I32::(sema_type_env.Builtin_type_id.u64_type if plan.err_is_unsigned
-            else sema_type_env.Builtin_type_id.i64_type)
-        code = cg.emit_numeric_coerce(cg.reg_str(err_val), err_id, wide_id)
-        arg = base_core.arena.text().s("i64 ").s(code).take()
-    case .variant
-        $tag: U8[] = cg.reg_str(err_val)
-        tag_id: = cg.enum_tag_type(err_id)
-        if plan.err_has_payload
-            tag_reg: = cg.next_reg()
-            cg.s("    %\{tag_reg\} = extractvalue ").t(err_id).s(" ").s(tag).s(", 0\n")
-            tag = cg.reg_str(tag_reg)
-        tag64: = cg.emit_numeric_coerce(tag, tag_id,
-            I32::sema_type_env.Builtin_type_id.i64_type)
-        $name: U8[] = "@.main_err_name_none"
-        for i in Range.asc(plan.err_variants.len)
-            eq: = cg.next_reg()
-            cg.s("    %\{eq\} = icmp eq i64 ").s(tag64)
-                .s(", \{plan.err_variants.get(i).tag_value\}\n")
-            pick: = cg.next_reg()
-            cg.s("    %\{pick\} = select i1 %\{eq\}, ptr @.main_err_name_\{i\}, ptr ").s(name)
-                .s("\n")
-            name = cg.reg_str(pick)
-        arg = base_core.arena.text().s("ptr ").s(name).take()
-    default {}
-    // Caution: **Allocate a number even for a call whose return value is discarded**, or LLVM uses
-    // an implicit one and the later `%N`s disagree.
-    printed: = cg.next_reg()
-    cg
-        .s("    %\{printed\} = call i32 (ptr, ptr, ...) @fprintf(ptr %\{err_out\}, ptr \
-            @.main_err_fmt")
-    if arg.len > 0
-        cg.s(", ").s(arg)
-    cg.s(")\n")
+    $code: U8[] = "0"
+    $name: U8[] = "null"
+    if plan.err_is_number() || plan.err == .variant
+        err_ptr: = cg.payload_field_ptr(res_ptr, main_type_id,
+            cg.result_variant(main_type_id, "err"), 0)
+        err_val: = cg.next_reg()
+        cg.op_load(err_val, err_id, err_ptr)
+        if plan.err_is_number()
+            wide_id: =
+                I32::(sema_type_env.Builtin_type_id.u64_type if plan.err == .unsigned_number
+                else sema_type_env.Builtin_type_id.i64_type)
+            code = cg.emit_numeric_coerce(cg.reg_str(err_val), err_id, wide_id)
+        else
+            name = emit_variant_name(cg, plan, err_id, cg.reg_str(err_val))
+    status: = cg.next_reg()
+    cg.s("    %\{status\} = call i32 @").s(gen_entry.FAIL_FN).s("(i32 \{I32::plan.err\}, i64 ")
+        .s(code).s(", ptr ").s(name).s(")\n")
     if plan.trace_fn.len > 0
         cg.s("    call void @").s(plan.trace_fn).s("()\n")
-    if code.len == 0
-        cg.s("    ret i32 1\n")
-        return
-    // The number where it is 1..`exit_code_max`, else 1 (`gen_entry.EXIT_CODE_MAX`).
-    sign: = "u" if plan.err_is_unsigned else "s"
-    lo: = cg.next_reg()
-    cg.s("    %\{lo\} = icmp \{sign\}ge i64 ").s(code).s(", 1\n")
-    hi: = cg.next_reg()
-    cg.s("    %\{hi\} = icmp \{sign\}le i64 ").s(code).s(", \{gen_entry.EXIT_CODE_MAX\}\n")
-    both: = cg.next_reg()
-    cg.s("    %\{both\} = and i1 %\{lo\}, %\{hi\}\n")
-    narrow: = cg.next_reg()
-    cg.s("    %\{narrow\} = trunc i64 ").s(code).s(" to i32\n")
-    status: = cg.next_reg()
-    cg.s("    %\{status\} = select i1 %\{both\}, i32 %\{narrow\}, i32 1\n")
     cg.s("    ret i32 %\{status\}\n")
+
+priv fn emit_variant_name(cg: Genllvm_ctx$@, plan: gen_entry.Main_plan, err_id: I32,
+    err_val: U8[]): U8[] //<
+        //< A register holding the name of the variant `err_val` holds (empty for an unknown tag)
+    $tag: = err_val
+    tag_id: = cg.enum_tag_type(err_id)
+    if plan.err_has_payload
+        tag_reg: = cg.next_reg()
+        cg.s("    %\{tag_reg\} = extractvalue ").t(err_id).s(" ").s(tag).s(", 0\n")
+        tag = cg.reg_str(tag_reg)
+    tag64: = cg.emit_numeric_coerce(tag, tag_id, I32::sema_type_env.Builtin_type_id.i64_type)
+    $name: U8[] = "@.main_err_name_none"
+    for i in Range.asc(plan.err_variants.len)
+        eq: = cg.next_reg()
+        cg.s("    %\{eq\} = icmp eq i64 ").s(tag64).s(", \{plan.err_variants.get(i).tag_value\}\n")
+        pick: = cg.next_reg()
+        cg.s("    %\{pick\} = select i1 %\{eq\}, ptr @.main_err_name_\{i\}, ptr ").s(name).s("\n")
+        name = cg.reg_str(pick)
+    return name
 
 priv fn emit_string_pool(cg: Genllvm_ctx$@)
     for str_i in Range.asc(cg.str_pool.list.len)

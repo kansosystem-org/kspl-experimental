@@ -1,5 +1,4 @@
 //< Whether a place may be written to
-//<
 //< Note: The statement's inference itself is in `sema/body/stmt.kspl`.
 
 // ==========================================
@@ -25,7 +24,6 @@ import "std/str"
 impl Ast_node
     fn write_target_type(r: Self$@, c: Sema_ctx$@): I32!Sema_error //<
         //< Computes the receiver type along the path to the written place without rewriting the AST
-        //<
         //< infer_expr is destructive: it morphs nodes ("The nodes Sema creates: its contract with
         //< Lower and Genc" in ksplc/docs/DESIGN-sema.md). This runs before the main inference.
         //< Applied early to a method-call receiver (`node.get_child(0).def_node = v`), infer_expr
@@ -86,7 +84,6 @@ impl Ast_node
     fn reject_write_through_const_ptr(recv: Self$@, c: Sema_ctx$@, err_node: Self$@):
         Bool!Sema_error //<
             //< Checks that the assigned place is not the pointee of a read-only pointer (`T@`).
-            //<
             //< It checks only whether the pointee itself is immutable (`U8[]$@` and `U8$[]@`
             //< differ: the element's level versus the descriptor's level).
         if recv == null
@@ -105,7 +102,6 @@ impl Ast_node
 
     fn check_write_path(r: Self$@, c: Sema_ctx$@): Void!Sema_error //<
         //< Checks whether the path to the destination crosses a read-only pointer
-        //<
         //< **A form that cannot be followed counts as "cannot write" (fail-closed).** An explicit
         //< cast (`U8$@::(p)`) is **the deliberate way out**, for registers or an external API. See
         //< "Places, and the rules for when they may be written" in
@@ -121,7 +117,6 @@ impl Ast_node
 
     priv fn reject_write_to_const_element(r: Self$@, c: Sema_ctx$@): Void!Sema_error //<
         //< Checks the element's mutability (step 3, the type)
-        //<
         //< place_crosses_const_elem in `sema/decl/access.kspl` decides; this only reports it.
         if recv: = c.const_elem_receiver(r)
             report_read_only_element(c, r, recv.type_id)
@@ -129,7 +124,6 @@ impl Ast_node
 
     fn enforce_assignable_place(r: Self$@, c: Sema_ctx$@): Void!Sema_error //<
         //< Checks that the assignment destination is a place
-        //<
         //< **genc emits the left-hand side as written**, so a non-place gives C `&x = …` / `f() =
         //< …` and the C compiler's `expression is not assignable` (Principle 2).
         //< Caution: **Point out a mix-up of `@` and `$`.** The writer of `p@ = v` believes it
@@ -149,7 +143,6 @@ impl Ast_node
 
     fn enforce_mutability(r: Self$@, c: Sema_ctx$@): Void!Sema_error //<
         //< Checks whether a write to the assignment destination (the left-hand side) is allowed
-        //<
         //< If no pointer is crossed (a variable, a field of a value), the binding must be mutable
         //< (sym.flags.is_mut). If one is (`p.f = v` / `p$ = v`), the pointee must be (`T$@`), not
         //< `p`.
@@ -195,7 +188,6 @@ impl Ast_node
 
 fn report_read_only_element(c: Sema_ctx$@, at: Ast_node$@, recv_type_id: I32) //<
     //< Reports a write to an element of a built-in array or slice whose elements are read-only
-    //<
     //< **The fix differs by container** ("4.2.2 Where `$` goes for a fixed-length array and a
     //< slice" in docs/SPEC-programming-language.md). A slice's permission travels in its type
     //< (`U8$[]`). An array's elements follow the name or receiver holding it. `U8$[4]` is itself an

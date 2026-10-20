@@ -1,5 +1,4 @@
 //< The canonical source of the diagnostic codes
-//<
 //< It alone says which codes exist. A `##lint(CODE = level)` and a profile both reject a code
 //< not listed here, or a typo such as `##lint(I004 = off)` would silently do nothing
 //< (docs/DESIGN-principles.md Principle 5). **An error-severity diagnostic gets no code**: only a
@@ -13,7 +12,6 @@ import "std/str"
 
 priv struct Global_setting //<
     //< The level setting for every file, given on the command line (`--lint=CODE=level`)
-    //<
     //< A per-file `##lint(...)` overrides it.
     //< A global like base_core.config: argument parsing (main.kspl) writes it before any Ctx
     //< exists.
@@ -24,7 +22,6 @@ priv $global_settings: List<|Global_setting|>$@ = null
 
 fn set_global_level(code: U8[], level: Lint_level) //<
     //< It registers one level setting from the command line
-    //<
     //< The caller (main.kspl) rejects an unknown code or level, since the command line words that
     //< error differently from `##lint`.
     if global_settings == null
@@ -35,7 +32,6 @@ fn set_global_level(code: U8[], level: Lint_level) //<
 
 fn base_level_for(file_path: U8[], code: U8[]): Lint_level //<
     //< The level where there is no `##lint(...)` in the source
-    //<
     //< Strongest first: the command line (`--lint=`) > the nearest `ksplc.cfg` > the default here.
     //< The command line wins so CI can override. It runs only when a diagnostic is reported;
     //< validate_config_for_file checks the file itself.
@@ -52,7 +48,6 @@ fn base_level_for(file_path: U8[], code: U8[]): Lint_level //<
 
 priv fn cfg_level_for(file_path: U8[], code: U8[]): Lint_level? //<
     //< It reads the level that applies to this file from the `[lint]` section of `ksplc.cfg`
-    //<
     //< A file names a code once: reading it refuses a second line (`load_one` in
     //< `config_file.kspl`).
     $found: Lint_level? = .none
@@ -64,7 +59,6 @@ priv fn cfg_level_for(file_path: U8[], code: U8[]): Lint_level? //<
 
 fn unknown_code_msg(code: U8[]): U8[] //<
     //< The refusal of a code that is not one, the same wherever a level is set
-    //<
     //< **It points at what the writer can read**: the lists in the diagnostics specification and
     //< `ksplc explain`. It does not point at this file, which only the compiler's own source holds.
     return base_core.arena.text()
@@ -74,7 +68,6 @@ fn unknown_code_msg(code: U8[]): U8[] //<
 
 priv fn lint_setting_level(setting: base_config_file.Setting): Lint_level? //<
     //< If one setting is a code's level in the `[lint]` section, it returns that level
-    //<
     //< It always checks the setting (unknown section, code or level), whatever code is asked for.
     //< Otherwise `I0305 = maybe` passes silently where I0305 does not fire
     //< (docs/DESIGN-principles.md Principle 5).
@@ -82,14 +75,13 @@ priv fn lint_setting_level(setting: base_config_file.Setting): Lint_level? //<
         return .none
     if !is_known(setting.key)
         base_config_file.reject(setting, unknown_code_msg(setting.key))
-    level: = Lint_level.parse(setting.value)
+    level: = Lint_level.from_variant_name(setting.value)
     if level.is_none()
         base_config_file.reject(setting, "unknown lint level (expected 'off', 'on', or 'error')")
     return level
 
 fn validate_config_for_file(file_path: U8[]) //<
     //< It reads the `ksplc.cfg` that applies to this file and checks every setting
-    //<
     //< A file with no diagnostic never calls cfg_level_for, so call this for every loaded source
     //< before the checks run (ksplc/pipeline.kspl). **An `error` level turns the checks on**, as
     //< the other two ways of setting a level do, or a plain build rejects nothing.
@@ -105,18 +97,7 @@ enum Lint_level //< the levels a user can write into a `##lint(...)`
     on //< reported at the default severity
     error //< raised to an error (a setting can only add rejections, never remove them)
 
-impl Lint_level
-    fn parse(name: U8[]): Lint_level?
-        if name.equals("off")
-            return .some(.off)
-        if name.equals("on")
-            return .some(.on)
-        if name.equals("error")
-            return .some(.error)
-        return .none
-
 fn lookup(code: U8[]): Bool? //< the list of every code: whether it is on by default
-    //<
     //< None for a code that does not exist.
     //< Caution: **Do not return a description.** Nothing reads one, and it would bloat the
     //< executable.
@@ -128,14 +109,14 @@ fn lookup(code: U8[]): Bool? //< the list of every code: whether it is on by def
             return .some(true)
     return .none
 
-priv const CODES: U8[][51] = ::{ "H0301", "H0302", "H0801", "H0802", "H0701", "H0803", "H0804",
-    "H0805", "I0501", "I0502", "I0601", "I0301", "I0302", "I0303", "I0304", "I0701", "I0305",
-    "I0306", "I0307", "I0308", "I0309", "W0105", "I0602", "I0401", "W0106", "W0107", "W0109",
-    "I0310", "I0402", "W0108", "W0201", "W0202", "W0203", "W0204", "W0205", "W0101", "W0102",
-    "W0702", "W0206", "W0207", "W0208", "W0209", "W0210", "W0211", "W0212", "W0213", "W0103",
-    "W0601", "W0501", "W0502", "W0104" } //<
+priv const CODES: U8[][60] = ::{ "H0301", "H0302", "H0801", "H0802", "H0701", "H0803", "H0804",
+    "H0805", "H0806", "H0807", "H0808", "I0312", "I0313", "I0503", "I0702", "I0501", "I0502",
+    "I0601", "I0301", "I0302", "I0303", "I0304", "I0701", "I0305", "I0306", "I0307", "I0308",
+    "I0309", "W0105", "I0602", "I0401", "W0106", "W0107", "W0109", "I0310", "I0311", "I0402",
+    "W0108", "W0201", "W0202", "W0203", "W0204", "W0205", "W0101", "W0102", "W0206", "W0207",
+    "W0208", "W0209", "W0210", "W0211", "W0212", "W0213", "W0214", "W0103", "W0601", "W0501",
+    "W0502", "W0503", "W0104" } //<
         //< Every diagnostic code
-        //<
         //< Add each new diagnostic here. The checks read this file's quoted codes as the registry
         //< (`make test-conventions`, `make test-cli`).
 
@@ -146,6 +127,5 @@ fn is_known(code: U8[]): Bool
     return lookup(code).is_some()
 
 fn is_default_on(code: U8[]): Bool //< whether it is a code checked by default
-    //<
     //< A code not in the table counts as on (the caller has already rejected it).
     return lookup(code).unwrap_or(true)

@@ -1,5 +1,4 @@
 //< Watches many sockets for readiness in one OS call, so one thread can serve them all
-//<
 //< Register a non-blocking socket's raw handle, and `wait` returns a `Ready` for each one that
 //< became ready, carrying the token you chose. **You pick the token**, and the caller maps it
 //< back to the socket: the reactor owns no socket.
@@ -16,13 +15,11 @@ pub enum Reactor_error //< why a wait failed
     poll_failed //< the OS refused the wait itself, not any one handle
 
 pub const READABLE: U8 = 0x1 //< there is data to read, or the peer closed.
-    //<
     //< Caution: **The values must match `kspl_net_poll` in `ksplc/gen/runtime/hosted_net.c`**
     //< (`make test-conventions` checks this).
 pub const WRITABLE: U8 = 0x2 //< a send would not block
 pub const ERR_OR_CLOSED: U8 = 0x4 //< the handle is unusable; only reported, never requested
 pub const HANGUP: U8 = 0x8 //< the peer closed its sending side; only reported, never requested.
-    //<
     //< Caution: **Do not confuse it with `ERR_OR_CLOSED`.** `WSAPoll` returns it on the peer's FIN,
     //< where POSIX's `poll` returns only `READABLE`, so decide by **what `read` returns** (0, or an
     //< error).
@@ -57,7 +54,6 @@ impl Reactor
         r.tokens.push(token)
 
     pub fn clear(r: Self$@) //< drops every registration but keeps the memory already allocated
-        //<
         //< Use it to rebuild the set before each `wait()`, so no registration for a closed peer and
         //< no stale interest remains.
         r.handles.len = 0
@@ -88,10 +84,9 @@ impl Reactor
             i += 1
         return results
 
-    pub fn free(r: Self$@) //< frees the registration lists; it owns no socket
+impl Reactor: Drop //< frees the registration lists when its owner leaves scope; it owns no socket
+    priv fn drop(r: Self$@)
         r.handles.free()
         r.interests.free()
         r.tokens.free()
         r.revents_scratch.free()
-
-impl Reactor: Manual_free {} //< it owns its resources and releases them with `free()`.

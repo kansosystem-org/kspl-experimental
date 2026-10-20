@@ -1,5 +1,4 @@
 //< The actions that move a table's cells themselves
-//<
 //< Adding and removing rows and columns, merging and splitting cells, copying from the current
 //< cell (autofill), sorting rows. Each single change is in the `do_*` functions in
 //< [`edit.kspl`](edit.kspl); here they are combined so one action is one undo.
@@ -25,7 +24,6 @@ import "std/strfmt" as _strfmt
 import "std/strnum"
 
 priv struct Key //< the sort key
-    //<
     //< **A number compares as a number, a date as the day it names, and everything else as text**
     //< (as text, "10" comes before "9"). A date is read as formulas read it (`day.day_of`).
     //< In `rank`, 0 is a number, 1 a text and 2 empty. Empty is always last, even in reverse order.
@@ -48,7 +46,6 @@ priv fn key_of(tiles: List<|Tile|>$@, row: Sz, column: Sz, arena: Arena$@): Key
     return Key::{ .rank = 0, .num = v, .text = text }
 
 priv fn folded_compare(a: U8[], b: U8[]): I32 //< compares texts letter by letter, ignoring case
-    //<
     //< "apple" comes before "Zebra", as in Excel and Calc (Sheets puts every capital first). With
     //< the same start, the shorter comes first. Texts that differ only by case are the same key and
     //< keep their order. Beyond ASCII the bytes compare as they are (code point order; an accented
@@ -61,7 +58,6 @@ priv fn folded_compare(a: U8[], b: U8[]): I32 //< compares texts letter by lette
     return 0 if a.len == b.len else (-1 if a.len < b.len else 1)
 
 priv fn key_order(a: Key, b: Key, down: Bool): I32 //< < 0, 0 or > 0 as `a` sorts ahead or not
-    //<
     //< Caution: **Return 0 for equal keys**, so the stable sort keeps their order.
     //< Empty is always last, even in reverse; the rest reverses (a text before a number).
     if a.rank == 2 || b.rank == 2
@@ -77,7 +73,6 @@ priv fn key_order(a: Key, b: Key, down: Bool): I32 //< < 0, 0 or > 0 as `a` sort
 
 priv fn sorted_order(keys: List<|Key|>$@, down: Bool, arena: Arena$@): List<|Sz|> //<
     //< Makes the sorted order from the list of keys
-    //<
     //< Counting from the start, each entry names which original entry goes there.
     //< Caution: **Keep equal keys in their original order** (`order_by` is stable), or sorting on
     //< another column destroys the earlier order.
@@ -89,11 +84,9 @@ priv fn sorted_order(keys: List<|Key|>$@, down: Bool, arena: Arena$@): List<|Sz|
     }, arena)
 
 priv const VALUES_CAP: Sz = 1000 //< the most distinct values one column's list holds
-    //<
     //< Values beyond it are reported, not silently dropped.
 
 struct Column_values //< what one column shows, collected so a set of values can be chosen from it
-    //<
     //< The values go into the list passed in. Empty cells are not among them — they are `blank`,
     //< which the picker shows as "(the blanks)".
     blank: Bool //< some cell under the heading shows nothing
@@ -101,7 +94,6 @@ struct Column_values //< what one column shows, collected so a set of values can
 
 fn column_values(table: Block$@, column: Sz, arena: Arena$@, out: List<|U8[]|>$@): Column_values //<
     //< Collects the distinct texts one column shows, in the order that column sorts in
-    //<
     //< The order is the sort's own (`key_order`). **Two texts that differ only by case are one
     //< value**, spelled as first seen. The filter ignores case, so two rows would answer to one
     //< checkbox. The heading (row 0) is not a value.
@@ -136,7 +128,6 @@ priv fn held(out: List<|U8[]|>$@, text: U8[]): Bool //< whether that value is al
     return false
 
 enum Sort_end //< the result of sorting a table's rows
-    //<
     //< Caution: **Do not merge the refusals into one.** One message would name the wrong cause
     //< ("click inside a cell" for a merge; the same rule as `Block_style_end`).
     done
@@ -147,7 +138,6 @@ enum Sort_end //< the result of sorting a table's rows
     in_order //< the rows are already in that order
 
 enum Merge_end //< the result of merging the selected cells
-    //<
     //< Caution: **Do not merge the refusals into one** (the same rule as `Sort_end`); each is fixed
     //< differently.
     done
@@ -158,7 +148,6 @@ enum Merge_end //< the result of merging the selected cells
     too_wide //< the selection covers more rows or columns than one merge may (`limit.MOST_SPAN`)
 
 enum Line_end //< the result of adding a row or a column
-    //<
     //< Caution: **Do not merge the refusals into one** (the same rule as `Sort_end`).
     done
     outside //< the cursor is not inside a table cell
@@ -166,7 +155,6 @@ enum Line_end //< the result of adding a row or a column
     too_wide //< the column would widen a merge past what one may cover (`limit.MOST_SPAN`)
 
 priv fn same_order(order: List<|Sz|>$@): Bool //< whether a sort would leave the order unchanged
-    //<
     //< Where it is unchanged, do nothing (or an undo would restore nothing).
     for $i: Sz = 0; i < order.len; i += 1
         if order.get(i) != i
@@ -175,7 +163,6 @@ priv fn same_order(order: List<|Sz|>$@): Bool //< whether a sort would leave the
 
 priv fn tile_at(tiles: List<|Tile|>$@, row: Sz, column: Sz): Tile //<
     //< The cell at (`row`, `column`) in the table
-    //<
     //< Only a merge's top-left cell is found. Where `block` is null, no cell is there.
     for $i: Sz = 0; i < tiles.len; i += 1
         t: = tiles.get(i)
@@ -184,7 +171,6 @@ priv fn tile_at(tiles: List<|Tile|>$@, row: Sz, column: Sz): Tile //<
     return Tile::{ .row = row, .column = column, .rows = 0, .cols = 0, .block = null }
 
 priv fn index_in(row: Block$@, cell: Block$@): Sz //< which child of the row that cell is
-    //<
     //< -1 where it is not one.
     for $i: Sz = 0; i < row.children.len; i += 1
         if row.children.get(i) == cell
@@ -193,7 +179,6 @@ priv fn index_in(row: Block$@, cell: Block$@): Sz //< which child of the row tha
 
 priv fn cells_before(tiles: List<|Tile|>$@, row: Sz, column: Sz): Sz //<
     //< The number of cells in that row before `column`
-    //<
     //< It is the index a restored cell is inserted at.
     $n: Sz = 0
     for $i: Sz = 0; i < tiles.len; i += 1
@@ -204,7 +189,6 @@ priv fn cells_before(tiles: List<|Tile|>$@, row: Sz, column: Sz): Sz //<
 
 priv fn after_along(spot: Cell_at, t: Tile, axis: Axis): Bool //<
     //< Whether that cell is further along `axis` than the current cell
-    //<
     //< Only within the same column (or row).
     switch axis
     case .row
@@ -214,7 +198,6 @@ priv fn after_along(spot: Cell_at, t: Tile, axis: Axis): Bool //<
 
 priv fn line_total(table: Block$@, axis: Axis, arena: Arena$@): Sz //<
     //< How many rows (or columns) a table has
-    //<
     //< For columns it counts the grid's, merges included. `line_count` counts a row's children,
     //< which is too few when every row has a merge, and would refuse a column that is not the last.
     switch axis
@@ -233,7 +216,6 @@ priv fn index_on(spot: Cell_at, axis: Axis): Sz
 impl Editor
     fn add_line(r: Self$@, page: Page$@, axis: Axis): Line_end //<
         //< Adds one row (or column) at the cell the cursor is in
-        //<
         //< It is added after the cursor's row (or column). **A column landing on a merge widens it.
         //< So one that would take it past `limit.MOST_SPAN` is refused.** Saved, the file would not
         //< load, and adding a cell instead would change the table's shape.
@@ -252,7 +234,6 @@ impl Editor
 
     priv fn add_line_at(r: Self$@, table: Block$@, axis: Axis, at: Sz): Bool //<
         //< Adds one empty row (or column) to `table` at `at`, in one step
-        //<
         //< It makes an empty row or column and inserts it. The formulas after it shift
         //< (`shift_formulas`). The button and a move past the table's end both go through here (one
         //< undo either way).
@@ -273,7 +254,6 @@ impl Editor
 
     fn set_line_size(r: Self$@, page: Page$@, axis: Axis, v: F32?): Bool //<
         //< Sets the width of the cursor's column (or the height of its row) to a number
-        //<
         //< Call it after layout (the same reason as `add_line`). `none` removes the setting,
         //< fitting that column (row) to its contents.
         //< Caution: **Do not use 0 for "not set"** — width 0 is a valid setting, and it is written
@@ -290,7 +270,6 @@ impl Editor
 
     fn fill_along(r: Self$@, page: Page$@, axis: Axis): Bool //<
         //< Copies the current cell's text to the cells further along (autofill)
-        //<
         //< The references inside a formula shift (the `$` part does not move); a text is copied as
         //< is.
         //< Caution: **Call it after layout** (the same reason as `add_line`). A covered cell is
@@ -350,7 +329,6 @@ impl Editor
 
     fn sort_rows(r: Self$@, page: Page$@, down: Bool): Sort_end //<
         //< Sorts the rows under the heading by the column the cursor is in
-        //<
         //< The first row is the heading and never moves (GFM treats it so by position); the cursor
         //< only chooses the column. **A formula's references shift by as much as its row moved**
         //< (as in a copy).
@@ -382,7 +360,6 @@ impl Editor
 
     priv fn reorder_rows(r: Self$@, st: Step$@, table: Block$@, first: Sz, order: List<|Sz|>$@) //<
         //< Rearranges the rows from `first` downwards into `order`'s order
-        //<
         //< Caution: **The caller opens the step** (one sort is one undo).
         // Saved before moving (once removed, which row was which cannot be read).
         rows: = List<|Block$@|>.create(r.arena)
@@ -411,7 +388,6 @@ impl Editor
 
     fn merge_range(r: Self$@, page: Page$@): Merge_end //<
         //< Merges every cell the selection covers into its top-left cell
-        //<
         //< This is Excel's merge: select a rectangle and click once; one undo restores it all.
         //< Caution: **Keep only the top-left cell's text** (undo restores the rest).
         //< Call it after layout (the layout tells which cells are selected).
@@ -467,7 +443,6 @@ impl Editor
         return .done
 
     fn split_cell(r: Self$@, page: Page$@): Bool //< splits the merge of the current cell
-        //<
         //< True if split.
         //< Caution: **Put empty cells back where it was covering**, or that row is short and the
         //< cells to its right shift one column left.
@@ -503,7 +478,6 @@ impl Editor
 
     fn move_cell(r: Self$@, page: Page$@, forward: Bool): Bool //<
         //< moves the cursor to the next cell
-        //<
         //< It goes right, and at a row's end to the start of the next row. **Past the table's end
         //< it adds a row** and moves into its first cell, as Word, Docs and Writer do
         //< (`grown_row`). Backwards, before the first cell, it stops.
@@ -536,7 +510,6 @@ impl Editor
 
     fn move_row(r: Self$@, page: Page$@, down: Bool): Bool //<
         //< Moves the cursor one row down (or up), staying in its column
-        //<
         //< It is Excel's Enter, and Shift+Enter goes to the cell above. **Past the last row it adds
         //< one**, as Tab does; above the first it does nothing. A merged cell is stepped over
         //< whole, and so is a row a filter hides (`ask.row_laid`).
@@ -564,7 +537,6 @@ impl Editor
 
     priv fn stand_in(r: Self$@, tiles: List<|Tile|>$@, row: Sz, column: Sz): Bool //<
         //< Puts the cursor in the cell covering (`row`, `column`)
-        //<
         //< A covered position puts it in the merge's own cell.
         for $i: Sz = 0; i < tiles.len; i += 1
             t: = tiles.get(i)
@@ -579,7 +551,6 @@ impl Editor
 
     priv fn grown_row(r: Self$@, spot: ask.Cell_at, column: Sz): Bool //<
         //< Adds a row at the table's end and puts the cursor in that row's cell at `column`
-        //<
         //< It goes through `add_line_at` (one undo; the cells take the first row's style). **It
         //< goes at the end, not after the cursor's row** — after it, a new row could land inside a
         //< cell merged downward.
@@ -597,7 +568,6 @@ impl Editor
 
     fn drop_line(r: Self$@, page: Page$@, axis: Axis): Bool //<
         //< Deletes one row (or column) at the cell the cursor is in
-        //<
         //< True if deleted. The last one is not deleted (nothing would be left to click to add
         //< one).
         if r.shut()

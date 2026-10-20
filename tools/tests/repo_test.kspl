@@ -3,7 +3,7 @@ import "std/chars"
 import "std/ds" { List }
 import "std/fs"
 import "std/io"
-import "std/mem" { Arena, dealloc }
+import "std/mem" { Arena }
 import "std/str" + { Str_builder }
 import "std/sys"
 import "std/verdict"
@@ -111,6 +111,24 @@ fn test_the_extension_and_the_top_folder() //< the extension, and the top tier's
     assert(path_kind.top_of("Makefile").len == 0, "a file directly under the root is empty")
     verdict
         .pass("the extension is the dot after the last separator; the top tier runs to the first.")
+
+fn test_the_role_of_a_file() //< functional, test, tooling or prose, from the path alone
+    verdict.start("[tools/repo_stat] the role of a file test...")
+    assert(path_kind.role_of("ksplc/sema/body/stmt.kspl") == .functional, "a compiler file ships")
+    assert(path_kind.role_of("kspage/port/web/page.css") == .functional,
+        "a stylesheet with only a block mark ships")
+    assert(path_kind.role_of("std/tests/io_test.kspl") == .test, "a file under tests/ is a test")
+    assert(path_kind.role_of("tests/support/harness.kspl") == .test, "the top tests/ is a test")
+    assert(path_kind.role_of("ksai/tests/tensor_test.kspl") == .test, "a *_test file is a test")
+    // **Tests come before the folder**: `tools/tests/` checks the tools.
+    assert(path_kind.role_of("tools/tests/repo_test.kspl") == .test, "tools/tests/ is a test")
+    assert(path_kind.role_of("tools/ci.kspl") == .tooling, "tools/ is tooling")
+    assert(path_kind.role_of("mk/test.mk") == .tooling, "a make file is tooling")
+    assert(path_kind.role_of("ksos/Makefile") == .tooling, "a package's Makefile is tooling")
+    assert(path_kind.role_of(".gitignore") == .tooling, "a file at the root is tooling")
+    assert(path_kind.role_of("docs/SPEC-gates.md") == .prose, "a document is prose")
+    assert(path_kind.role_of("kspage/content/manual.kspage") == .prose, "data with no mark is prose")
+    verdict.pass("each file's role is read from its path: tests first, then the folder.")
 
 // ==========================================
 // Tests how the CI's sets are named and dealt out, and the summary read back from a round
@@ -348,7 +366,6 @@ fn test_a_log_saying_nothing_shows_its_tail(arena: Arena$@) //<
 
 fn test_a_gate_past_its_cap_is_stopped_and_named(arena: Arena$@) //<
     //< A gate past its cap is stopped with what it started, and the cap is its first cause
-    //<
     //< The fake gate's own child leaves a mark three seconds in: stopped with the gate at one, it
     //< leaves none. The stop may take the half second of grace a group is given to end.
     verdict.start("[tools/ci_gates] a gate that runs past its cap test...")
@@ -371,9 +388,7 @@ fn test_a_gate_past_its_cap_is_stopped_and_named(arena: Arena$@) //<
     assert(took_ms < 2800I64,
         m.s("it is stopped at its cap, before its child's end (took ").n(took_ms).s(" ms)").slice())
     assert(!fs.exists(mark), "the gate's own child is stopped with it")
-    text: = io.read_file(log) catch panic("the log must be readable")
-    held: = arena.dup_str(text)
-    dealloc(Void$@::text.ptr)
+    held: = io.read_file(log, arena) catch ""
     line: = "# gate fake ran over 1 s and was stopped"
     assert(held
         .equals(arena.text().s("the gate's own line\n").s(line).c('\n').take()),

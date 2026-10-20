@@ -1,16 +1,14 @@
 //< Doc comments: what a `//<` must say and where it may stand
-//<
 //< Each case below is compiled alone, as the file its head names.
 // ==== case comment_points_at_nothing
 //< A name in a comment is resolved as the code beside it would resolve it
-//<
 //< Where the file's scope reaches the owner and the member is gone, it is reported under the name.
 //< That holds behind code too. Quiet: a name that is there, another product's name, a name tied to
 //< its file, a head the file does not know, and a parameter hiding a module's name.
-// EXPECT: comment_points_at_nothing.kspl:21:5: warning: [W0211]
-// EXPECT: comment_points_at_nothing.kspl:22:27: warning: [W0211]
-// EXPECT: comment_points_at_nothing.kspl:24:49: warning: [W0211]
-// EXPECT: comment_points_at_nothing.kspl:32:61: warning: [W0211]
+// EXPECT: comment_points_at_nothing.kspl:20:5: warning: [W0211]
+// EXPECT: comment_points_at_nothing.kspl:21:27: warning: [W0211]
+// EXPECT: comment_points_at_nothing.kspl:23:49: warning: [W0211]
+// EXPECT: comment_points_at_nothing.kspl:31:61: warning: [W0211]
 // EXPECT-NOT: Map.set`, and
 // EXPECT-NOT: io.out`, and
 // EXPECT-NOT: json.dumps`, and
@@ -44,7 +42,6 @@ pub fn main(): I32
   return keep(p.a + p.b)
 // ==== case doc_anchor_says_nothing
 //< A `//<` carrying no text opens a run the lines below it fill
-//<
 //< Where no such line follows, the entry is published saying nothing — writable, and with no
 //< effect (Principle 5 in `../../../docs/DESIGN-principles.md`). The anchor on `kept` is correct; a blank line
 //< or a plain comment ends a run, so the anchors on `dropped` and `seen` are left empty.
@@ -66,7 +63,6 @@ pub fn sum(r: Row@): I64
   return r.kept + r.dropped + r.seen + r.total
 // ==== case doc_continues_nothing
 //< A `//<` holding a line to itself continues the `//<` above it
-//<
 //< With no `//<` above it there is nothing to continue. Its text reaches neither the editor's hover
 //< nor the record: writable, and with no effect (Principle 5 in `../../../docs/DESIGN-principles.md`).
 //< The run on `kept` is correct. The lines after a blank line and after a plain comment are found.
@@ -88,7 +84,6 @@ pub fn sum(r: Row@): I64
   return r.kept + r.dropped + r.total
 // ==== case doc_continues_nothing_laid
 //< The same finding in the notation written by indentation
-//<
 //< A comment carries no column of its own to the parser. So a run is read the same way in both
 //< notations, and the rule needs no second spelling for this one.
 // EXPECT: [W0209]
@@ -103,29 +98,26 @@ pub struct Row
 pub fn sum(r: Row@): I64
   return r.kept + r.dropped
 // ==== case doc_summary_one_line
-//< A `//<` summary is one line that says what the thing is
-//<
-//< The first paragraph of a run, up to the first `//<` carrying no text, is what the hover and
-//< `ksplc doc` show. A summary running onto a second line, and one opening with a label, are
-//< each reported. One line followed by a parting is not, however long the detail below it.
-// EXPECT: [W0213] This //< summary spans 2 lines
+//< A `//<` summary is the run's first line, and it says what the thing is
+//< The hover and `ksplc doc` show that line first, and the detail starts on the line below it. A
+//< summary opening with a label is reported. A run of several lines is not, however long the
+//< detail below its first line.
 // EXPECT: [W0213] This //< summary starts with a Caution
-// EXPECT-NOT: runs 3 lines
+// EXPECT-NOT: pub kept: I64
+// EXPECT-NOT: pub seen: I64
 pub struct Row
   pub kept: I64 //< how many were kept
-    //< counted as they came in, which carries the summary onto a second line
+    //< counted as they came in, which is the detail below the summary
   pub dropped: I64 //<
     //< Caution: **Do not count it by hand**; `sum` reads it as it stands.
   pub seen: I64 //< how many were looked at
-    //<
-    //< The detail may run on past the parting for several lines,
+    //< The detail may run on for several lines,
     //< and nothing here is reported.
 
 pub fn sum(r: Row@): I64 //< the three counts added up
   return r.kept + r.dropped + r.seen
 // ==== case laid_levels
 //< A per-file `##lint(CODE = level)` takes effect in the indentation notation too
-//<
 //< It takes effect on a diagnostic raised from the pipeline too: the orphan `//<` below draws one.
 //< [I0307] still comes out, so a file silent for another reason cannot pass for this suppression.
 //< Note: **The ragged column has no code to switch off**: the case `laid_ragged_sibling` in `../negative/laid.kspl`.
@@ -147,17 +139,16 @@ fn main(): I32
   return 0
 // ==== case other_doc_marks_are_not_read
 //< A `///` or a `//!` is not read as documentation, and the compiler warns at that spot
-//<
 //< At a file's head, in front of a function, in front of a field and behind code alike, the
 //< sentence would reach neither the hover nor `ksplc doc`. Four slashes or more are a
 //< banner and are left alone, and so is a mark inside a string.
-// EXPECT: other_doc_marks_are_not_read.kspl:14:1: warning: [W0212] This //! is not read
-// EXPECT: other_doc_marks_are_not_read.kspl:16:1: warning: [W0212] This /// is not read
-// EXPECT: other_doc_marks_are_not_read.kspl:21:3: warning: [W0212] This /// is not read
-// EXPECT: other_doc_marks_are_not_read.kspl:23:13: warning: [W0212] This //! is not read
-// EXPECT: other_doc_marks_are_not_read.kspl:25:29: warning: [W0212] This /// is not read
-// EXPECT-NOT: other_doc_marks_are_not_read.kspl:28:
-// EXPECT-NOT: other_doc_marks_are_not_read.kspl:30:
+// EXPECT: other_doc_marks_are_not_read.kspl:13:1: warning: [W0212] This //! is not read
+// EXPECT: other_doc_marks_are_not_read.kspl:15:1: warning: [W0212] This /// is not read
+// EXPECT: other_doc_marks_are_not_read.kspl:20:3: warning: [W0212] This /// is not read
+// EXPECT: other_doc_marks_are_not_read.kspl:22:13: warning: [W0212] This //! is not read
+// EXPECT: other_doc_marks_are_not_read.kspl:24:29: warning: [W0212] This /// is not read
+// EXPECT-NOT: other_doc_marks_are_not_read.kspl:27:
+// EXPECT-NOT: other_doc_marks_are_not_read.kspl:29:
 import "std/io"
 //! what this file is for, written the Rust way
 
@@ -178,3 +169,34 @@ pub fn main(): I32
   r: Row = ::{ .text = "a /// b //! c", .width = 1 }
   io.out().s(r.text)
   return add(1, 2) + sub(3, 4) + I32::r.width
+// ==== case doc_run_below_braces
+//< A run that goes on below a declaration's `{}` stands outside what it describes
+//< A declaration without braces, such as a field or a constant, keeps its run below it, indented.
+// EXPECT: doc_run_below_braces.kspl:13:3: hint: [H0807]
+// EXPECT-NOT: doc_run_below_braces.kspl:8:
+// EXPECT-NOT: doc_run_below_braces.kspl:10:
+pub struct Row
+  pub width: Sz //< how wide it stands
+    //< a field has no braces, so its run goes on below it
+priv const NARROW: Sz = 1 //< the narrowest width
+  //< a constant has no braces either
+
+impl Row: Move_only {} //< a row has one owner
+  //< this line goes on below the braces, outside the impl
+
+pub fn main(): I32
+  r: Row = ::{ .width = NARROW }
+  return I32::r.width
+// ==== case file_doc_below_banner
+// EXPECT: file_doc_below_banner.kspl:4:1: hint: [H0808] This file's //< description stands below a comment on line 1
+// A banner for whoever edits the file stands above what the file is for.
+
+//< A file's description opens the file, where a reader's eye lands
+pub fn main(): I32
+  return 0
+// ==== case file_doc_under_shebang
+#!/usr/bin/env -S ksplc run
+//< A `#!` above a file's description is no banner
+// EXPECT-NOT: [H0808]
+pub fn main(): I32
+  return 0

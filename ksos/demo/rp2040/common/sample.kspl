@@ -1,5 +1,4 @@
 //< The layout of one observation the car keeps, and the function that reads it back
-//<
 //< Only **how one is laid out** and **how it is read back**; the loop and the safety timeouts are
 //< the caller's (`ksos/demo/rp2040/rp2040_car_pilot_probe.kspl`).
 //< **Only this file knows the layout.** Change `append` and `decode` together, or the value
@@ -20,21 +19,17 @@ import "ksos/demo/rp2040/common/records"
 import "std/bytes"
 
 const SAMPLE_BYTES: Sz = 8 //< the size of one observation
-    //<
     //< Caution: **Do not exceed 8 bytes**, or a record grows from 16 to 20 bytes (the header plus
     //< content rounded to four). The source is kept in the line byte's spare bits.
 priv const LINE_BITS_MASK: U8 = 0x07
 priv const BY_SAFETY_BIT: U8 = 0x80
 priv const DRIVE_BIAS: I32 = 128 //< the offset for storing lon/lat/rot in one byte each
-    //<
     //< Caution: **Do not store them signed** (-45 as 0xd3 reads back as 211).
 
 priv const DUMP_WAIT_MS: U32 = 50 //< the limit on waiting for one line to be queued [ms]
-    //<
     //< **Keep it finite**: with the Serial Monitor closed the queue never empties.
 
 enum Author //< who issued the command
-    //<
     //< **This is kept in the record**: at the speed cap the point-blank backing off and the
     //< policy's own command give the same triple.
     // The manoeuvre the in-car forward pass (the policy) returned.
@@ -44,7 +39,6 @@ enum Author //< who issued the command
     safety
 
 struct Sample //< one observation
-    //<
     //< Caution: **Keep the value the decision used and its command as one moment**, or the
     //< condition cannot be matched against the result.
     dist_mm: U32
@@ -67,7 +61,6 @@ fn count(): U32 //< how many were saved
     return saved
 
 fn stopped(): U8[] //< why it stopped saving records
-    //<
     //< Empty while it continues.
     return stop_reason
 
@@ -97,7 +90,6 @@ priv fn decode(b: U8[]): Sample //< reads one back
     }
 
 fn append(kind: U16, s: Sample) //< appends one
-    //<
     //< **Call it after driving the wheels**: interrupts stop for the write's several ms.
     //< Caution: **It must be callable even when the record is unusable** (not opened, full, a
     //< failed write): it returns silently, and driving is unaffected.
@@ -112,7 +104,6 @@ fn append(kind: U16, s: Sample) //< appends one
     saved += 1
 
 fn say_last(ln: con.Line$@, kind: U16) //< prints the newest one as one line
-    //<
     //< **This is the evidence that "the time series survived a power cut".**
     buf: U8[SAMPLE_BYTES] = ::{}
     n: = records.read_last(kind, U8$[]::buf)
@@ -140,7 +131,6 @@ fn say_last(ln: con.Line$@, kind: U16) //< prints the newest one as one line
     _sent: = ln.flush()
 
 priv fn emit_line(ln: con.Line$@): Bool //< prints one line
-    //<
     //< Caution: **Wait for room before printing**; a line that does not fit is discarded (flush in
     //< ksos/demo/rp2040/common/console.kspl). true if it was printed.
     for $waited: U32 = 0; !con.can_flush() && waited < DUMP_WAIT_MS; waited += 1
@@ -148,7 +138,6 @@ priv fn emit_line(ln: con.Line$@): Bool //< prints one line
     return ln.flush()
 
 priv fn say_row(ln: con.Line$@, n: U32, v: Sample): Bool //< prints one as one line of CSV
-    //<
     //< Caution: **Keep the order in step with `dump`'s header line.** Always print the source.
     ln.reset()
     ln.str("[dump] ")
@@ -169,7 +158,6 @@ priv fn say_row(ln: con.Line$@, n: U32, v: Sample): Bool //< prints one as one l
     return emit_line(ln)
 
 fn dump(ln: con.Line$@, kind: U16) //< prints the whole record to the console
-    //<
     //< **Call it from the driving loop, with the wheels stopped** — it takes seconds and watches
     //< neither sensors nor the remote.
     //< Caution: **Give up as soon as one line could not be printed**, or with no reader it waits

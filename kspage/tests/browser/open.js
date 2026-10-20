@@ -74,7 +74,7 @@ function kspageProbeFresh(ks) {
 // to `file.js`'s `takeChosen`, so this holds "it does not move" and "which entry point gets it".
 
 function kspageProbeDrag(ks) {
-  const { check, app } = ks;
+  const { check, app, until } = ks;
   const canvas = ks.canvas;
   const here = location.href;
   const free = ks.hold();
@@ -101,13 +101,6 @@ function kspageProbeDrag(ks) {
       { dataTransfer: box, bubbles: true, cancelable: true, clientX: 30, clientY: 60 });
     (onto || window).dispatchEvent(ev);
     return ev;
-  };
-  const until = async (ok) => {
-    for (let waited = 0; waited < 1200; waited += 25) {
-      if (ok()) return true;
-      await new Promise((go) => setTimeout(go, 25));
-    }
-    return false;
   };
 
   // **The mark must come out while it is being dragged** (else where to drop is unclear).

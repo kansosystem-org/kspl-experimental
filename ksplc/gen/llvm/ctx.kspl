@@ -1,5 +1,4 @@
 //< The `Ctx` at the centre of LLVM IR generation
-//<
 //< It owns the output buffer, the register / label numbering, the scratch string and the local
 //< variable slots.
 //< It is the LLVM version of gen/c/ctx.kspl; the other gen/llvm/*.kspl files write the IR
@@ -8,13 +7,11 @@ import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/c_name" // `is_made_name`
 import "ksplc/base/core" as base_core
 import "ksplc/base/literal" as base_literal
-import "ksplc/base/mangle" as _base_mangle // `has_kspl_prefix`
 import "ksplc/gen/entry" as gen_entry
 import "ksplc/sema/session/ctx" { Sema_ctx }
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/naming" as sema_type_naming
 import "std/buf" { Buf_writer }
-import "std/chars"
 import "std/ds" { List, Map }
 import "std/libc"
 import "std/mem"
@@ -22,7 +19,6 @@ import "std/str" { Str_builder }
 import "std/strfmt"
 struct Str_pool //<
     //< The interned string literals
-    //<
     //< It keeps a list in order of appearance plus a string-to-ID map for deduplication.
     list: List<|U8[]|>$@ //< the string literals in order of appearance
     map: Map<|U8[], I32|>$@ //< string -> ID
@@ -38,24 +34,20 @@ struct Emit_state //< where a function body's output goes
 
 struct Param_list_opts //<
     //< The output shape of Ast_node.emit_llvm_param_list (in gen/llvm/types.kspl)
-    //<
     //< A function definition, a `declare` and a variadic call share it, so the options are passed
     //< by name rather than as a row of booleans.
     with_names: Bool //<
         //< True for the `<type> %<name>` form (a function definition's parameters)
-        //<
         //< False emits only the types (a type list).
     emit_variadic: Bool //< whether the variadic marker (...) is emitted too
     kspl_abi: Bool //<
         //< Whether to use the internal ABI
-        //<
         //< True passes aggregates as a plain `ptr` (a pointer to the copy the caller made; see
         //< emit_agg_param_type in gen/llvm/types.kspl).
         //< At the C boundary of an `#ext` / `#export` it is false and the plain type is emitted, to
         //< agree with the C compiler's classification.
     emitted_before: Bool //<
         //< Whether something was already emitted before (an sret argument and the like)
-        //<
         //< True puts a ", " in front.
 
 struct Genllvm_ctx
@@ -73,7 +65,6 @@ struct Genllvm_ctx
     current_fn_name: U8[] //< the symbol of the function being emitted, as a trace frame names it
     current_ret_is_sret: Bool //<
         //< Whether the function being emitted returns its value through a hidden `sret` pointer
-        //<
         //< ret_needs_sret in gen/llvm/types.kspl decides it. Every place that emits a `ret`
         //< (stmt.kspl's return/throw, decl.kspl's implicit return) must read this flag. Calling
         //< ret_needs_sret again in each place makes the definition and the `ret` disagree on an
@@ -83,13 +74,11 @@ struct Genllvm_ctx
     had_error: Bool //< whether code generation hit a fatal error, such as an unreadable embed
     trait_method_idx_cache: Map<|Sz, Map<|U8[], I32|>$@|>$@ //<
         //< The cached "method name -> vtable index" table per trait implementation
-        //<
         //< It is keyed by a Trait_def@'s pointer value. get_or_build_trait_method_idx in
         //< gen/llvm/expr_call.kspl uses it. A linear walk of methods_list per method call would be
         //< O(calls × methods).
     extern_declared: Map<|U8[], I32|>$@ //<
         //< The names already emitted as a `declare` from an `extern "C"`, or defined by the module
-        //<
         //< Even where two files declare the same function (`kspl_path_info` is in both std/io and
         //< std/fs), it can appear in the IR only once. C allows repeated prototypes. But LLVM
         //< rejects a second `declare` of the same name, or one beside a `define`, as a
@@ -121,7 +110,6 @@ impl Genllvm_ctx
 
     fn get_or_add_raw_literal(r: Self$@, text: U8[]): I32 //<
         //< It adds a raw name (a file name and the like) to the string pool
-        //<
         //< Caution: **Wrap it in `"""`.** The pool holds a literal's spelling, and emit_string_pool
         //< in `module.kspl` strips the outer quotes with literal_span in base/literal.kspl.
         //< Without them, one character is lost at each end.
@@ -155,7 +143,6 @@ impl Genllvm_ctx
         return r.env.mangled_into(type_id, r.scratch@)
     fn take_scratch(r: Self$@): U8$[] //<
         //< It copies scratch into the AST arena and returns the copy
-        //<
         //< scratch is a reused temporary buffer, so a value to keep must be copied out of it.
         return base_core.arena.dup_str(r.scratch.slice())
 
@@ -190,7 +177,6 @@ impl Genllvm_ctx
         return new_id
 
     fn param_reg(r: Self$@, name: U8[]): U8$[] //< the register a parameter arrives in: `%<name>`
-        //<
         //< **The signature and the copy into the parameter's slot both name it through here.** A
         //< made name's stem follows a `.`, as in local_slot_name, since `%` cannot stand in a name.
         r.clear_scratch().c('%')
@@ -208,7 +194,6 @@ impl Genllvm_ctx
 
     fn local_slot_name(r: Self$@, name: U8[], decl: Ast_node$@): U8$[] //<
         //< The slot of the local named name that decl declares: `%v_<name>_<id>`
-        //<
         //< **Every declaration and every reference names a slot through here**, or the two disagree
         //< and the IR reads an undefined register. An MIR temporary is already unique:
         //< `%v_.<stem>`. A made name's stem follows a `.`, which no name of the source holds.
@@ -250,10 +235,9 @@ impl Genllvm_ctx
 
     fn emit_sanitize_attrs(r: Self$@) //<
         //< It writes a function's mark for each sanitizer `--sanitize=` names (`sanitize_address `)
-        //<
         //< **Every `define` carries it**: clang's `-fsanitize=` instruments only a function marked
         //< so, which its front end does for C and nothing does for IR. `check_sanitize` in
-        //< `../../main.kspl` let through only names that are LLVM attributes.
+        //< `../../cli.kspl` let through only names that are LLVM attributes.
         if base_core.config.sanitize.len == 0
             return
         for name in base_core.config.sanitize.split(',', base_core.arena)
@@ -261,7 +245,6 @@ impl Genllvm_ctx
 
     fn emit_llvm_str_body(r: Self$@, s: U8[]) //<
         //< It emits the body of a string literal s in LLVM's c"..." escape form
-        //<
         //< The quotes and the trailing \00 are not included. String constants and inline asm
         //< templates share it, so the escape rules exist once. The bytes are the ones the literal
         //< stands for (append_literal_bytes in base/literal.kspl, which genc uses too).
@@ -269,7 +252,6 @@ impl Genllvm_ctx
 
     priv fn emit_buf(r: Self$@): Str_builder$@? //<
         //< The current output buffer (alloca / body)
-        //<
         //< Direct mode is none. The routing of the output lives here only.
         switch r.emit.target
         case .alloca
@@ -312,7 +294,6 @@ priv fn emit_llvm_str_byte(out: Writer, b: U8) //< a byte inside LLVM's c"...", 
 
 priv fn local_slot_key(decl: Ast_node$@): Void$@ //<
     //< What a local's slot ID is keyed on: its symbol, which survives a node's address changing
-    //<
     //< Without one, decl's own def_node's symbol, and last decl itself.
     if decl.sym_ptr != null
         return decl.sym_ptr
@@ -322,7 +303,6 @@ priv fn local_slot_key(decl: Ast_node$@): Void$@ //<
 
 fn format_f32_hex_literal(text: U8[]): U8$[] //<
     //< It writes an F32 literal as the hex bit pattern that LLVM's float constants accept
-    //<
     //< In decimal, LLVM can reject it as "floating point constant invalid for type". LLVM requires
     //< the decimal form to round-trip exactly, and many ordinary values such as 0.1 do not.
     //<
@@ -338,7 +318,6 @@ fn format_f32_hex_literal(text: U8[]): U8$[] //<
 
 fn format_f64_hex(v: F64): U8$[] //<
     //< It writes a value as the hex bit pattern of a double, the form LLVM takes for any float
-    //<
     //< An `F32` passes widened: LLVM writes a float constant as the double holding the same value.
     // Caution: **Do not reinterpret a type through a pointer.** A `(U64$@::widened@)$` breaks
     // strict aliasing: at higher optimization the store into widened is removed and the bits change
@@ -358,9 +337,8 @@ struct Preamble_fn //< a function that hosted's preamble emits itself
     ret: U8[] //< the return type of its `declare`; empty where the preamble defines it
     params: U8[] //< the parameter types of its `declare`
 
-const PREAMBLE_FNS: Preamble_fn[10] = ::{ //<
+const PREAMBLE_FNS: Preamble_fn[_] = ::{ //<
     //< What hosted's preamble declares or defines besides the entry point's startup calls
-    //<
     //< **The `declare`s and the skipping of `std`'s own declare both come from this table**
     //< (`is_preamble_fn`): two `declare`s of one name make LLVM fail with `invalid redefinition`.
     //< An entry with no `ret` is defined by hand in `module.kspl`; `make test-conventions` keeps
@@ -369,11 +347,7 @@ const PREAMBLE_FNS: Preamble_fn[10] = ::{ //<
     Preamble_fn::{ .name = "kspl_div_fail", .ret = "void", .params = "ptr, i32" },
     Preamble_fn::{ .name = "kspl_tag_fail", .ret = "void", .params = "i64, ptr, ptr, i32" },
     Preamble_fn::{ .name = "kspl_shift_fail", .ret = "void", .params = "i64, i64, i32, ptr, i32" },
-    Preamble_fn::{ .name = "abort", .ret = "void" },
-    Preamble_fn::{ .name = "fprintf", .ret = "i32", .params = "ptr, ptr, ..." },
-    Preamble_fn::{ .name = "fflush", .ret = "i32", .params = "ptr" },
-    Preamble_fn::{ .name = "get_stdout", .ret = "ptr" },
-    Preamble_fn::{ .name = "get_stderr", .ret = "ptr" },
+    Preamble_fn::{ .name = "kspl_main_fail", .ret = "i32", .params = "i32, i64, ptr" },
     Preamble_fn::{ .name = "kspl_os_argv", .ret = "ptr", .params = "i32, ptr" },
 }
 
@@ -388,18 +362,9 @@ fn is_preamble_fn(name: U8[]): Bool //< whether hosted's preamble emits this nam
 
 const SRET_PARAM_NAME: U8[] = "%kspl.sret" //<
     //< The register name of the hidden return-value pointer of a function returning an aggregate
-    //<
     //< See ret_needs_sret in gen/llvm/types.kspl.
     //< It contains a `.` so no KSPL identifier can spell it. A parameter is emitted as
     //< `%<argument name>`. So a name such as `_sret` would silently collide as soon as a user
     //< declared an argument with that name.
-
-fn is_kspl_prefixed_or_ext(name: U8[], is_ext: Bool): Bool //<
-    //< Whether a global symbol name is emitted as `@name` unchanged
-    //<
-    //< A symbol marked extern/export, or a name that already has a kspl_ / priv_ prefix, is used
-    //< unchanged. Otherwise the caller builds @kspl_<name>; this avoids a double prefix. Several
-    //< places in decl.kspl / expr.kspl / expr_call.kspl share this answer.
-    return is_ext || name.has_kspl_prefix() || name.starts_with("priv_")
 
 impl Genllvm_ctx: Manual_free {}

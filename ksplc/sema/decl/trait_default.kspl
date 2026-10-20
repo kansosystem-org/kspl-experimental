@@ -1,5 +1,4 @@
 //< Copies what a trait's declaration provides into the impls of that trait
-//<
 //< **A default value has one source, the trait's declaration** (an impl's own is rejected by
 //< check_trait_method_sig in `trait_check.kspl`).
 //< **It runs in collect's Pass 1b, before generic instantiation** (the reason is at Pass 1b in
@@ -17,7 +16,6 @@ import "ksplc/sema/type/scope" as sema_type_scope
 import "std/str"
 
 const INHERITED_DEFAULT: I32 = 1 //< the flag for a copied default value
-    //<
     //< Caution: **Store it in `ival`.** Non-zero means the impl did not write it, so the rejecting
     //< check (`trait_check.kspl`) skips it.
 
@@ -34,14 +32,12 @@ impl Sema_ctx
 
     priv fn copy_defaults_from_trait(r: Self$@, impl_node: Ast_node$@, trait_node: Ast_node$@) //<
         //< Copies the default values, method by method, from the trait that impl names
-        //<
         //< It looks up the trait's **declaration node** first.
         //<
         //< Caution: **Do not resolve it as a type.** `resolve_type` and `resolve_type_method_fqn`
         //< **create an instance at once**, an unneeded one in the output; look up the symbol by
         //< FQN.
         $spelled: = trait_node.extract_type_name()
-        defer spelled.free()
         full: = spelled.slice()
         // A generic's actual arguments are dropped: the template holds the default values.
         // **A generic trait is in the template table, not the symbol table**; if it is missed,
@@ -100,7 +96,6 @@ impl Sema_ctx
 
     priv fn bind_trait_decl_params(r: Self$@, decl: Ast_node$@, spelled: U8[]) //<
         //< Binds the declaration's type parameters to the names of the arguments the impl wrote
-        //<
         //< Caution: **Do not resolve it as a type** (the reason is at copy_defaults_from_trait).
         args_str: = spelled.generic_args_str()
         if args_str.len == 0
@@ -110,7 +105,6 @@ impl Sema_ctx
 priv fn adopt_as_impl_method(fresh: Ast_node$@, impl_node: Ast_node$@,
     target_vis: sema_type_scope.Visibility) //<
         //< Makes the copied body into that impl's method
-        //<
         //< **Replace the position too, with the impl's**: that is where a mistake gets fixed, and
         //< visibility follows the `loc`'s file (get_defined_in in `../type/scope.kspl`).
         //< Caution: **Do not make it more visible than the implementing type** (check_one_member in
@@ -121,7 +115,6 @@ priv fn adopt_as_impl_method(fresh: Ast_node$@, impl_node: Ast_node$@,
 
 priv fn set_visibility_keyword(decl: Ast_node$@, vis: sema_type_scope.Visibility) //<
     //< Sets the declaration's visibility keyword to exactly one
-    //<
     //< **`internal` has no keyword**, so none is left.
     strip_visibility_keywords(decl)
     strip_visibility_keywords(decl.find_child(.k_attribute_list))
@@ -132,7 +125,6 @@ priv fn set_visibility_keyword(decl: Ast_node$@, vis: sema_type_scope.Visibility
 
 priv fn strip_visibility_keywords(node: Ast_node$@) //<
     //< Removes the pub and priv keywords from a declaration
-    //<
     //< Caution: **Remove it from both places**, directly under the declaration and in the
     //< attributes (get_visibility in `sema/type/scope.kspl`); one left behind stays in effect.
     if node == null
@@ -171,7 +163,6 @@ priv fn find_trait_method(trait_decl: Ast_node$@, name: U8[]): Ast_node$@? //<
 
 priv fn copy_param_defaults(req_m: Ast_node$@, impl_m: Ast_node$@) //<
     //< Copies the parameter default values that only the trait's declaration has
-    //<
     //< **A parameter the impl gives its own default is not touched**: overwritten, the rejection
     //< would vanish. It matches **by position**, since the names may differ (`index` / `_index`);
     //< the count is checked in `trait_check.kspl`.

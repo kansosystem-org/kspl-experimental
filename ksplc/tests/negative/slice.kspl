@@ -1,9 +1,7 @@
 //< Slices, arrays and indexing
-//<
 //< Each case below is compiled alone, as the file its head names.
 // ==== case agg_literal_fieldless
 //< A `::{ ... }` for a type that has no fields
-//<
 //< A number, a boolean and an enum are such. **Let it through and the diagnostic
 //< comes from the C compiler** (Principle 2 in `../../../docs/DESIGN-principles.md`), or, for `::{ 1, 2 }`,
 //< only a warning while the second value vanishes. An empty `::{}` means zero-filling and passes.
@@ -22,7 +20,6 @@ fn main(): I32
   return n + (I32)::e
 // ==== case array_elem_mut_marker
 //< A fixed-length array's element mutability is set by the **`$` in front of the name**
-//<
 //< The same as a struct's: `$[N]` on the type side cannot be written, and a binding without `$`
 //< has read-only elements. A slice is the reverse: `T$[]` holds it, the descriptor and the elements
 //< being separate substances (`docs/SPEC-programming-language.md` §4.2).
@@ -40,7 +37,6 @@ fn main(): I32
   return I32::imm[0] + I32::ok[0] + I32::buf_bad[0]
 // ==== case array_param_elem_write
 //< A read-only array parameter's element names the binding as the fix, never the type
-//<
 //< `I32$[3]` is itself an error, so advice to write `$[]` could not be followed; `$a` can.
 // EXPECT: cannot write to an element of the read-only array 'I32[3]'. An array's elements follow the binding that holds it. Declare the binding mutable ('$a')
 // EXPECT-NOT: use '$[]'
@@ -52,7 +48,6 @@ fn main(): I32
   return fill(::{ 1, 2, 3 })
 // ==== case index_place_by_value_receiver
 //< An `Index_place` implementation with a by-value receiver is rejected through a read-only slot
-//<
 //< **Let it through and the pointer returned points at a copy.** Only an `at(r: Self@, …)`, which
 //< merely reads the descriptor, may cut the permission path short (index_stops_permission_walk in
 //< `ksplc/sema/decl/access.kspl`); the passing side is `ksplc/tests/slice_test.kspl`.
@@ -83,7 +78,6 @@ fn main(): I32
   return 0
 // ==== case index_place_const_output
 //< A container whose elements are immutable cannot implement `Index_place`
-//<
 //< Immutability carried by a type argument (6.1 of `docs/SPEC-programming-language.md`) is invisible in the
 //< declaration. Unchecked per substance, it passes, and the C **holds a write** with a "discards
 //< const" warning (Principle 2). Put `$` on the target (`ksplc/tests/slice_test.kspl`).
@@ -108,7 +102,6 @@ fn main(): I32
   return 0
 // ==== case index_raw_pointer
 //< An index on a pointer that carries no length
-//<
 //< The range cannot be checked. So `[]` is allowed only where the target holds its own length (as
 //< Go allows an index on `*[N]T` alone). A pointer to a slice passes. The diagnostic must not give
 //< the forbidden and the recommended form the same characters, or the advice cannot be followed.
@@ -120,7 +113,6 @@ fn main()
   _v: = raw[0]
 // ==== case index_readonly_receiver
 //< An index on a read-only receiver "can be read but not written"
-//<
 //< Caution: Keep the non-firing side alongside: the **reads** of `for x in xs` and `xs[i]` pass,
 //< and so does `xs[i]@` (the read-only place `at_ref` returns). What stops is taking that as an
 //< `I32$@`, refused for its mutability rather than as "the address of a copy".
@@ -157,7 +149,6 @@ fn main(): I32
   return 0
 // ==== case index_ref_addr_write
 //< A mutable pointer cannot be taken from a read-only place
-//<
 //< Let this through and the assignment's check can be dodged by `xs[0]@` to write into an immutable
 //< element (Principle 2).
 // EXPECT: expected 'I32$@'
@@ -179,7 +170,6 @@ fn main(): I32
   return 0
 // ==== case index_ref_write
 //< An index returning a read-only place (`Index_ref`) cannot be written to
-//<
 //< Let through, the C writes across the `Output@` `at_ref` returns, discarding const (Principle 2).
 //< Caution: **Do not talk about `Index_mut`.** Its elements immutable (`ptr: T@`), this type cannot
 //< implement it; a type that does (`List<|T|>@`) is the case `index_readonly_receiver`.
@@ -201,7 +191,6 @@ fn main(): I32
   return 0
 // ==== case slice_binary_op
 //< Checks that ksplc rejects a binary operation on a slice with a diagnostic
-//<
 //< Unstopped (infer_binary in ksplc/sema/body/expr.kspl), the C compiler's error on two
 //< descriptors reaches the user instead (the same shape as "Failing fast through an exception or an ICE" in ksplc/docs/DESIGN-compiler.md), and `ksplc`
 //< alone lets it through. A slice has no arithmetic or order; content comparison is `equals`.
@@ -214,7 +203,6 @@ pub fn main(): I32
   return I32::c.len
 // ==== case slice_cast_elem_size
 //< A cast to a slice that changes the element size is rejected
-//<
 //< Caution: **Place the shapes that should pass too.** A same-size reread (`U8[]` ↔ `I8[]`,
 //< `U32[]` ↔ `I32[]`, equal-size structs) keeps the element count, so it is allowed. For a byte
 //< run, assemble the descriptor yourself (docs/SPEC-programming-language.md 6.2.1).
@@ -248,7 +236,6 @@ fn main(): I32
   return 0
 // ==== case slice_descriptor_field_type
 //< Type checking applies to a slice descriptor literal's fields too
-//<
 //< **The check is easy to miss here.** The literal's shape comes from a type peeled one step. For
 //< a single-step slice (`U8$[]`), that is a scalar (`U8`). If missed, `.ptr`/`.len` get no
 //< expected type (infer_struct_literal_expr in sema/body/expr.kspl).
@@ -258,7 +245,6 @@ fn main()
   bad: U8[] = U8[]::{ .ptr = s.ptr, .len = s.ptr }
 // ==== case slice_over_frame_escapes
 //< A slice descriptor built from a stack frame's memory must not escape it
-//<
 //< A cast from a fixed-length array or a run of elements synthesises a pointer into the frame. The
 //< source holds no `@`, but it dangles after return. A descriptor over a written `@` is
 //< refused as that address is (`frame_address_leaves` in `tests/negative/pointer.kspl`); a call's
@@ -301,7 +287,6 @@ pub fn main(): I32
   return 0
 // ==== case slice_struct_readonly_write
 //< Assigning to an element of an immutable slice (`T[]`, `Slice<|T|>` in `std/lang`) is rejected
-//<
 //< **Talk about the elements:** "implement `Index_mut`" cannot be followed, since the elements'
 //< immutability rides on a type argument. **Use the sugar's words:** the fix is `$[]`.
 //< `List<|T|>@` is the case `index_readonly_receiver`.

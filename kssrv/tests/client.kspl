@@ -1,5 +1,4 @@
 //< A thin client that speaks HTTP directly to kssrv
-//<
 //< Not a suite; part of `kssrv/tests/main.kspl`.
 //< **An external command (curl) cannot do this.** Several keep-alive requests on one connection,
 //< and connecting everything before sending at once, need this file to own the connection.
@@ -17,19 +16,15 @@ import "std/sys"
 import "std/verdict"
 
 const HOST: U8[] = "127.0.0.1" //< the address to connect to
-    //<
     //< The loopback skips the firewall check, so Windows does not ask for permission.
 
 priv const CHUNK: Sz = 64 * 1024 //< the most one read takes
-    //<
     //< It reads again when that is not enough.
 
 priv const SEND_TIMEOUT_MS: I32 = 30000 //< the cap on waiting to finish sending (milliseconds)
-    //<
     //< Separate from the receive timeout: a stalled send means the server is not reading.
 
 priv const SPIN_READS: Sz = 512 //< how many times to spin on a re-read before sleeping
-    //<
     //< One read is about a microsecond, so this waits one millisecond's worth without sleeping.
     //< Caution: **Do not remove it** (the reason is inside `next`).
 
@@ -56,7 +51,6 @@ impl Http_end
             return "it did not return by the timeout"
 
 struct Resp //< one response
-    //<
     //< `head` runs from after the status line to before the blank line (`header` looks one up).
     status: I32
     head: U8[]
@@ -65,7 +59,6 @@ struct Resp //< one response
 impl Conn: Manual_free {}
 
 struct Conn //< one connection
-    //<
     //< **A response's boundary is not a read's**, so reads are collected and responses cut out.
     sock: net.Tcp_stream$@
     acc: Str_builder
@@ -85,7 +78,6 @@ impl Conn
 
     fn open_in(port: I32, arena: Arena$@): Conn$@!Http_end //<
         //< Returns a connection allocated in the arena
-        //<
         //< It is the same split as `std/ds`'s `List.new` and `List.create`. **Use this one to hold
         //< several at once**: a value in a `List` cannot be passed as the `Self$@` that `send`
         //< needs. **It ends in `_in`** ("A constructor's name says where the returned thing goes"
@@ -116,7 +108,6 @@ impl Conn
 
     fn next(r: Self$@, no_body: Bool, timeout_ms: I32, arena: Arena$@): Resp!Http_end //<
         //< Reads one response
-        //<
         //< `no_body` is for HEAD (it declares a `Content-Length` but no body comes).
         deadline: = sys.mono_us() + I64::timeout_ms * 1000I64
         $spins: Sz = 0
@@ -144,7 +135,6 @@ impl Conn
         throw .timed_out
 
 priv const FAIL_STEP: I32 = -2 //< a result of one transport step
-    //<
     //< Caution: **Keep "not yet possible" apart from "it failed"**, or a routine would_block fails.
 priv const AGAIN_STEP: I32 = -1
 
@@ -169,11 +159,7 @@ priv fn recv_step(sock: net.Tcp_stream$@, buf: U8$[]): I32
 priv fn take_resp(r: Conn$@, no_body: Bool, arena: Arena$@): Resp? //<
     //< Cuts one response out of the collected bytes (none if it is incomplete)
     text: = U8[]::r.acc.slice()
-    $head_end: Sz = 0
-    switch text.find_str("\r\n\r\n")
-    case .some(i)
-        head_end = i
-    case .none
+    head_end: Sz = text.find_str("\r\n\r\n") catch
         return .none
     all_head: = text.sub(0, head_end)
     $status_line: = all_head
@@ -193,14 +179,12 @@ priv fn take_resp(r: Conn$@, no_body: Bool, arena: Arena$@): Resp? //<
     return .some(resp)
 
 priv fn status_of(line: U8[]): I32 //< the 200 of `HTTP/1.1 200 OK`
-    //<
     //< 0 where it cannot be read.
     if sp: = line.find_char(' ')
         return I32::digits_of(line.sub_from(sp + 1).trim_start())
     return 0
 
 priv fn digits_of(text: U8[]): Sz //< reads the decimal digits at the start
-    //<
     //< 0 where there is no digit.
     $n: Sz = 0
     for n < text.len && text[n].is_digit()
@@ -211,7 +195,6 @@ priv fn digits_of(text: U8[]): Sz //< reads the decimal digits at the start
 
 fn header(head: U8[], name: U8[]): U8[] //<
     //< looks up a header's value by name in `head` (case-insensitive)
-    //<
     //< Empty where there is none.
     $at: Sz = 0
     for at < head.len
@@ -232,7 +215,6 @@ const DEFAULT_TIMEOUT_MS: I32 = 10000 //< the default receiving timeout (millise
 fn request(port: I32, raw: U8[], expect: Sz, timeout_ms: I32, no_body: Bool, arena: Arena$@):
     List<|Resp|>!Http_end //<
         //< Sends raw request bytes on one connection and reads `expect` responses.
-        //<
         //< Several keep-alive responses are read in order too.
     $conn: = Conn.open(port)!
     defer conn.free()
@@ -244,13 +226,11 @@ fn request(port: I32, raw: U8[], expect: Sz, timeout_ms: I32, no_body: Bool, are
 
 struct Stream //<
     //< Reads a response with no declared length until the server closes
-    //<
     //< Caution: **Do not rely on `Content-Length`**: the length is unknown, and only the close ends
     //< it. The connection stays open, so a request can be sent in the middle.
     conn: Conn
 
 fn raw( //< the bytes of one request
-    //<
     //< **`Content-Length` goes with every method but GET, HEAD and DELETE**, which carry no body
     //< here. Without it, the server waits for a body (a POST with none still says 0).
     method: U8[], //< `GET`, `POST` and so on
@@ -283,7 +263,6 @@ fn head_stream(port: I32, target: U8[], arena: Arena$@): Stream!Http_end //<
 impl Stream
     fn shut_write(r: Self$@): Bool //<
         //< Closes only the sending half, keeping the receiving half open for the response
-        //<
         //< **This is not a disconnect** (see `peer_done` in `kssrv/conn.kspl`).
         //< Caution: **Do not declare `shutdown` here** (`std/net`'s `shut_write` is used instead).
         r.conn.sock.shut_write() catch
@@ -292,7 +271,6 @@ impl Stream
 
     fn drain(r: Self$@, timeout_ms: I32, arena: Arena$@): U8[] //<
         //< Reads until the close and returns the content after the head
-        //<
         //< Caution: **Have a timeout** (if the server never closes, it waits forever).
         deadline: = sys.mono_us() + I64::timeout_ms * 1000I64
         for sys.mono_us() <= deadline
@@ -311,7 +289,6 @@ impl Stream
         return arena.dup_str("")
 
     fn read_head(r: Self$@, timeout_ms: I32) //< reads until the head is in, or the time runs out
-        //<
         //< For a connection the server holds open: reading to the close would take the whole wait.
         deadline: = sys.mono_us() + I64::timeout_ms * 1000I64
         for sys.mono_us() <= deadline &&
@@ -325,7 +302,6 @@ impl Stream
             r.conn.acc.s(U8[]::{ .ptr = r.conn.buf.ptr, .len = n })
 
     fn head(r: Self$@, arena: Arena$@): U8[] //< only the head, after reading is done
-        //<
         //< Caution: **Check this too.** The content alone passes with a head saying
         //< `Content-Length: 0` (this file reads to the close), where **a client that follows the
         //< protocol reads no body**.
@@ -343,7 +319,6 @@ impl Stream: Manual_free {}
 
 fn get(port: I32, target: U8[], extra: U8[], arena: Arena$@): Resp!Http_end //<
     //< Sends one GET and returns the response
-    //<
     //< `extra` holds extra header lines (`"Connection: close\r\n"` and the like).
     got: =
         request(port, raw("GET", target, extra, "", arena), 1, DEFAULT_TIMEOUT_MS, false, arena)!
@@ -358,7 +333,6 @@ fn post_bytes(target: U8[], body: U8[], arena: Arena$@): U8[] //<
 fn post_json(port: I32, target: U8[], extra: U8[], body: U8[], timeout_ms: I32, arena: Arena$@):
     Resp!Http_end //<
         //< POSTs one JSON body with the header lines in `extra`, and returns the response
-        //<
         //< `extra` may be empty (to test having no token). **The local endpoints need a token**
         //< (`bearer_head`).
     bytes: =
@@ -406,6 +380,10 @@ fn check_405(name: U8[], r: Resp, allow: U8[], arena: Arena$@) //<
     verdict.check(name, r.status == 405 && said.equals(allow),
         arena.text().s("\{r.status\} Allow: ").s(said).take())
 
+fn expect_status(name: U8[], r: Resp, want: I32, arena: Arena$@): Bool //<
+    //< Checks that the status is `want`, showing the response where it is not
+    return verdict.check(name, r.status == want, shown(r, arena))
+
 fn short(text: U8[]): U8[]
     return text if text.len <= NAME_BODY_MAX else text.sub(0, NAME_BODY_MAX)
 
@@ -423,7 +401,6 @@ fn put_file(port: I32, target: U8[], auth: U8[], body: U8[], arena: Arena$@): Re
 
 fn bearer_head(token: U8[], arena: Arena$@): U8[] //<
     //< Builds the one header line that carries the token
-    //<
     //< Caution: **Build it in one place only**: a bare token sent as the header just gets a 401,
     //< and the response cannot say what was sent.
     return arena.text().s("Authorization: Bearer ").s(token).s("\r\n").take()

@@ -1,5 +1,4 @@
 //< The compiler oracle (shared)
-//<
 //< The smallest checker behind the main measure, "how often ksplc accepts the source with the
 //< completion inserted". ksplc runs under `--diagnostic-format=json`: each diagnostic is one JSON
 //< object on a line of stderr, and the closing object, the last line, gives the counts.
@@ -21,7 +20,6 @@ const KSPLC_PATH: U8[] = "out/ksplc_stage1.exe" //< the compiler every measure h
 const CORPUS_DIR: U8[] = "tools/ai_assist/corpus" //< where the temporary source is written
 
 fn close_or_die(f: io.File_stream$@, path: U8[]) //< closes a file, or stops the run if it cannot
-    //<
     //< Caution: **Do not swallow a close failure.** Writer's `s()` ignores fwrite's return value
     //< (so that writes can chain), so **a write failure shows only at the close**. For a tool run
     //< once, stopping and running it again is cheaper.
@@ -37,15 +35,13 @@ priv const OUTPUT_CAP: Sz = 1024 * 1024
 pub struct Compile_result //< what one run of the compiler said
     pub error_count: I32 //< the closing object's `errors`, or `UNCOMPILABLE` where there is none
     stderr_data: U8$[] //< what the compiler wrote, a JSON object a line; empty if it never started
-        //<
         //< Not `stderr`, which is a macro in the Windows (MSVC UCRT) headers (see
         //< std/sys.Run_result).
 
 fn load_jsonl(path: U8[], arena: Arena$@): json.Value$[]!io.Io_error //< one JSON record per line
-    //<
     //< Shared by the corpus tools. A blank line is skipped, but broken JSON panics, so a broken
     //< corpus is noticed at once.
-    data: = io.read_file(path)!
+    data: = io.read_file(path, null)!
     defer dealloc(Void$@::data.ptr)
 
     $list: = List<|json.Value|>.new(arena)
@@ -59,7 +55,6 @@ fn load_jsonl(path: U8[], arena: Arena$@): json.Value$[]!io.Io_error //< one JSO
 
 fn closing_errors(stderr_data: U8[], arena: Arena$@): I32? //<
     //< The `errors` of the closing object that ends the stream; `.none` where it does not end so
-    //<
     //< **No closing object means the run ended before its verdict** (a crash, a cut-off, a line of
     //< text saying why). So the diagnostics above it are not all there were, and give no count
     //< ("--diagnostic-format" in ksplc/docs/SPEC-tools.md). Nor does a verdict that disagrees with
@@ -77,7 +72,6 @@ fn closing_errors(stderr_data: U8[], arena: Arena$@): I32? //<
     return .some(n)
 
 pub fn compile_errors( //< runs one source through ksplc and counts the errors it reports
-    //<
     //< The temporary source is `CORPUS_DIR/{stem}.kspl`, and it is deleted before this returns.
     source: U8[], //< the program to compile; it is written to a file unchanged
     stem: U8[], //< names the temporary file, so two callers running at once do not collide
@@ -115,7 +109,6 @@ pub fn compiles(source: U8[], stem: U8[], arena: Arena$@): Bool //< whether it c
 
 fn first_error(stderr_data: U8[], arena: Arena$@): U8[] //<
     //< the first error as `file:line:column: message`, empty where there is none
-    //<
     //< A line that is no JSON object (the text a run that ended early leaves) is passed over.
     for line in stderr_data.lines(arena)
         doc: = json.parse(line, arena) catch

@@ -1,9 +1,7 @@
 //< Imports, `use`, visibility and cycles
-//<
 //< Each case below is compiled alone, as the file its head names.
 // ==== case circular_enum_payload
 //< A cycle through an enum's payload is of infinite size too
-//<
 //< Only one variant is live at run time, but the size is settled by the largest payload among all
 //< variants.
 // EXPECT: recursive data structure with infinite size detected
@@ -14,7 +12,6 @@ fn main()
   _x: E = E.b
 // ==== case circular_struct_by_value
 //< A struct embedding itself as a value field is a compile error, not a crash
-//<
 //< Such a struct has an infinite size. The compiler refuses it rather than crashing on native stack
 //< exhaustion (a segfault). This fixture reaches it through a position that needs the size (a
 //< global); the case `circular_struct_unused` covers a type that is never used.
@@ -26,7 +23,6 @@ fn main()
   _x: = g.f
 // ==== case circular_struct_mutual
 //< A cycle where two structs hold each other by value
-//<
 //< Measured from either declaration, it goes round the same ring. So the report stays at one item
 //< (the same cause is not listed once per type).
 // EXPECT: recursive data structure with infinite size detected
@@ -38,7 +34,6 @@ fn main()
   _x: A
 // ==== case circular_struct_unused
 //< A struct of infinite size is rejected even where nothing needs its size
-//<
 //< With a local's declaration alone (no global and no sizeof), the layout computation did not run.
 //< The type passed into the generated C, and the C compiler reported an incomplete type.
 // EXPECT: recursive data structure with infinite size detected
@@ -48,7 +43,6 @@ fn main()
   _x: S
 // ==== case circular_struct_via_array
 //< A cycle through a fixed-length array field is of infinite size too
-//<
 //< Whatever the element count, an array embeds its elements by value, so `S[2]` holds two `S`.
 // EXPECT: recursive data structure with infinite size detected
 struct S
@@ -57,7 +51,6 @@ fn main()
   _x: S
 // ==== case circular_struct_via_generic
 //< A cycle through one generic wrapper is of infinite size too
-//<
 //< The field of a monomorphised `W<|A|>` is an `A` by value, so `A` holds itself.
 // EXPECT: recursive data structure with infinite size detected
 struct W<|T|>
@@ -68,7 +61,6 @@ fn main()
   _x: A
 // ==== case export_on_method
 //< `#export` cannot be written on a method
-//<
 //< **Unrefused, C that does not build comes out with zero diagnostics** (the caller alone gets
 //< `type.method`, not a C identifier). A method's name is unique only with its type. So it cannot
 //< be the symbol as written. To call it from C, wrap it in a free function (as in `tests/prog/`).
@@ -89,7 +81,6 @@ fn main(): I32
   return 0
 // ==== case import_absolute_path
 //< An absolute `import` path is refused before anything is opened
-//<
 //< It fits none of the three rules (its first segment is empty, not a package). On Windows,
 //< opening `//host/share/x` offers that host the user's credentials, so the refusal comes before
 //< the file is looked for (`refused_written` in `ksplc/base/package.kspl`).
@@ -101,7 +92,6 @@ fn main(): I32
   return 0
 // ==== case import_lang_is_rejected
 //< `std/lang` is in every file without an import line, so writing one for it is an error
-//<
 //< **An error, not a lint.** If writable, it gives two ways to the same name: "implicitly" and "by
 //< an import line" (docs/DESIGN-principles.md "One notation per purpose"). Fix one alone and the
 //< other passes silently. The analysis goes on as though the line were absent, so the `Option`
@@ -117,7 +107,6 @@ fn main(): I32
   return find().unwrap_or(0)
 // ==== case import_not_found
 //< Checks that an unreadable `import` is reported where it was written
-//<
 //< **The paths searched alone are not enough.** Which file asked for it is not known, and finding
 //< out wants a full-text search. Every other diagnostic holds `file:line:column`, a body and an
 //< underline.
@@ -129,7 +118,6 @@ fn main(): I32
   return 0
 // ==== case import_path_interpolated
 //< An import's path cannot hold an interpolation
-//<
 //< The grammar allows a general `String` in an import's path, so this passes as syntax. Without
 //< refusing it, it proceeds with `k_string`'s child absent and becomes an ICE.
 // EXPECT: an import path must be a plain string literal
@@ -139,7 +127,6 @@ fn main(): I32
   return 0
 // ==== case import_path_raw_string
 //< An import's path cannot be written as a raw string (`"""`)
-//<
 //< Caution: Without the refusal, the
 //< handling that strips the quotes one character at a time makes a different path, `""std/io""`.
 //< It then silently looks for that file.
@@ -150,7 +137,6 @@ fn main(): I32
   return 0
 // ==== case import_selectors_need_plus
 //< An import that gives a name with `as` but has no `+`
-//<
 //< **The spelling disagrees with itself:** `as` asks for a name while braces with no `+` say "bare
 //< only". Unrefused, "a name is given yet `m.` cannot be written" passes in silence. **Only the
 //< writer knows which to remove**, so the diagnostic offers both adding `+` and dropping `as`.
@@ -162,18 +148,16 @@ fn main(): I32
   return 0
 // ==== case import_symbol_missing
 //< A selective import naming something the target lacks is rejected at the import line
-//<
 //< Unchecked, a misspelling in `import "p" { A };` silently passes the import line. It shows up
 //< at the use as `undefined path or identifier`, or nowhere at all if it is never used
 //< ("Name resolution with no namespace goes through one function" in `ksplc/docs/DESIGN-diagnostics.md`).
-// EXPECT: has no symbol named 'Ci33'
-import "std/checked_int" { Ci33 }
+// EXPECT: has no symbol named 'Checked_eror'
+import "std/checked_int" { Checked_eror }
 
 fn main(): I32
   return 0
 // ==== case lang_prefix_unknown_member
 //< `std/lang`'s import alias is present in every file implicitly
-//<
 //< So a wrong name gets "lang is there, but does not export that name". **"The prefix is not known"
 //< would remove the alias.** Then `impl My_type: lang.Ref_counted` is unwritable. A file that
 //< declares the same name cannot conform to a trait the compiler knows ("Why compiler-known traits are confined to `std/lang`" in docs/DESIGN-programming-language.md).
@@ -187,7 +171,6 @@ pub fn main(): I32
   return 0
 // ==== case qualified_generic_variant_not_in_file
 //< A generic enum's enumerators have their alias prefix checked too, just as types do
-//<
 //< If every path with type arguments passes silently, the qualification is ignored. A spelling then
 //< passes whatever alias is prefixed. The generated C is identical to the unqualified case, so
 //< nothing anywhere shows the mistake.
@@ -198,7 +181,6 @@ fn main()
   _x: I32? = str.Option<|I32|>.none
 // ==== case qualified_type_not_in_file
 //< Once a name has an alias prefix, it is looked up only behind that alias
-//<
 //< A generic template is registered under its short name too. A lookup by the short name as well
 //< finds even a name absent from that file. Nothing comes out at the declaration's position. The
 //< error falls far away, at the place of use, as "another type has no such method".
@@ -211,7 +193,6 @@ fn main()
   io.out().s("unreachable\n")
 // ==== case selective_import_file_name
 //< The file name a selective import leaves out is suggested, with the `+` that brings it in
-//<
 //< `import "p" { A }` binds `A` alone, so `p.x` is undefined. The interpolation after it calls the
 //< generic `put`. An instance on a stand-in type would report errors inside `std/lang` that the
 //< user never wrote. The mistake is one error.
@@ -230,7 +211,6 @@ fn main(): I32
   return 0
 // ==== case use_after_free
 //< Use after free: a local that has been .free()d is passed as a value
-//<
 //< A use of the whole thing rather than a field access.
 // EXPECT: may already be freed here
 struct Foo
@@ -248,7 +228,6 @@ fn main()
 impl Foo: Manual_free {}
 // ==== case use_after_free_before_block_dealloc
 //< A use between a pointer's `free()` and its block's `dealloc` is still a use after free
-//<
 //< Only the `dealloc` that gives the block back is let through, not a read of what `free()` released.
 // EXPECT: variable 'xs' may already be freed here
 // EXPECT: Finished with 1 error(s)
@@ -263,7 +242,6 @@ fn main()
   mem.dealloc(Void$@::xs)
 // ==== case use_after_free_block_dealloc_ok
 //< A pointer's `free()` leaves its block, which `dealloc` may still give back
-//<
 //< A list `create(null)` placed on the heap is freed so on the straight path. It is freed so where
 //< one branch freed the contents, and from two `defer`s. The case fails on purpose on another
 //< variable, by the same check. A type error elsewhere in the body would skip the check, and the
@@ -309,7 +287,6 @@ fn main()
   _n: = xs.len
 // ==== case use_after_free_block_dealloc_twice
 //< A second `dealloc` of the block is a double free
-//<
 //< Also where one branch gave the block back and the other only freed the contents.
 // EXPECT: variable 'xs' may already be freed here
 // EXPECT: variable 'ys' may already be freed here
@@ -332,7 +309,6 @@ fn main()
   mem.dealloc(Void$@::ys)
 // ==== case use_after_free_block_dealloc_when_free_gave_it
 //< A `free()` whose body gives back its receiver leaves no block for `dealloc`
-//<
 //< Its body is followed one level, as for a wrapper, so the `dealloc` after it is a double free.
 // EXPECT: variable 'p' may already be freed here
 import "std/mem"
@@ -354,7 +330,6 @@ fn main()
 impl S: Manual_free {}
 // ==== case use_after_free_receiver_ok
 //< The counterpart of the two cases above
-//<
 //< Where the release happens once, or where it is reassigned after the release, no diagnostic comes
 //< out. The case fails on purpose through the same check, on another variable after the rest.
 // EXPECT: variable 'w' may already be freed here
@@ -391,7 +366,6 @@ fn main()
   _z: = w.v
 // ==== case use_after_free_via_dealloc_fn
 //< A release is not only the method form (`x.free()`)
-//<
 //< A `dealloc(x)` is a release too. Its argument usually carries a cast to `Void$@`. So the
 //< check removes the wrappings (`@` / `::`) and walks back to the original local
 //< (ksplc/docs/DESIGN-diagnostics.md "Measuring what suppression costs").
@@ -408,7 +382,6 @@ fn main()
   _x: = p.v
 // ==== case use_after_free_via_dealloc_wrapper
 //< A release wrapper whose body uses the `dealloc(x)` form is followed one level
-//<
 //< `free()`'s last line is mostly this, not the method form. Without this look, no release wrapped
 //< under another name can be followed (ksos's heap_free is exactly this shape).
 // EXPECT: variable 'q' may already be freed here
@@ -429,7 +402,6 @@ fn main()
   _x: = q.v
 // ==== case use_after_free_via_method_wrapper
 //< Use after free (across a function boundary, method form)
-//<
 //< A method call's receiver heads the parameters but is absent from the argument list. Without a
 //< fix for that offset, a release wrapped in a method not named `free` passes unchecked.
 // EXPECT: may already be freed here
@@ -457,7 +429,6 @@ fn main()
 impl S: Manual_free {}
 // ==== case use_after_free_via_receiver
 //< A use in the receiver position after a release is a use after free too
-//<
 //< The access can be a field read, a field write or a method call. If the check is off at the
 //< receiver position, it detects only the most harmless whole copy
 //< (ksplc/docs/DESIGN-diagnostics.md "Measuring what suppression costs").
@@ -481,7 +452,6 @@ fn main()
 impl S: Manual_free {}
 // ==== case use_after_free_via_wrapper
 //< Use after free (across a function boundary)
-//<
 //< It is detected where a wrapper function under another name .free()s internally.
 // EXPECT: may already be freed here
 struct Foo
@@ -515,7 +485,6 @@ fn main(): I32
   return u.get()
 // ==== case vis_wider_than_struct
 //< A field visibility wider than its type's widens nothing, and is reported
-//<
 //< Code that cannot name the type cannot reach the fields either (Principle 5). Let it pass in
 //< silence and whoever wrote it is left believing they published it.
 // EXPECT: widens nothing
@@ -528,7 +497,6 @@ fn main(): I32
   return h.x
 // ==== case vis_wider_than_trait
 //< The same holds for a trait's methods
-//<
 //< The other direction (a `priv fn` inside a `pub trait`) narrows, so it passes.
 // EXPECT: widens nothing
 // EXPECT-NOT: [

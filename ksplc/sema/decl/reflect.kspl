@@ -1,5 +1,4 @@
 //< For `impl X: reflect.Reflectable {}` with **an empty body**, synthesizes the field table
-//<
 //< It builds `std/reflect`'s table and `fields()`'s body; an impl with a body is left alone. **It
 //< runs in collect's Pass 2a', after 2a and before 2b.**
 //< Caution: **Do not move it later**: the const it creates would become "an undeclared name".
@@ -24,29 +23,24 @@ import "std/str" { Str_builder }
 
 priv const TRAIT_FQN: U8[] = "std.reflect.Reflectable" //<
     //< The `std/reflect` names the compiler refers to
-    //<
     //< **If they are renamed there, change these too** (the top of `../../../std/reflect.kspl`;
     //< `make test-conventions` checks them).
 priv const INFO_NAME: U8[] = "Field_info"
 priv const METHOD_NAME: U8[] = "fields"
 
 priv const TABLE_PREFIX: U8[] = "_reflect_fields_" //< the prefix of a synthesized table's name
-    //<
     //< The leading `_` keeps it apart from user names.
 
 priv const LIST_FQN: U8[] = "std.ds.List" //< the container's name
-    //<
     //< **If `std/ds`'s `List` is renamed, change this too** (`make test-conventions` checks it).
 
 priv const MAX_NEST_DEPTH: Sz = 32 //< the maximum nesting depth walked
-    //<
     //< Value nesting is finite (`sema/decl/layout.kspl` rejects an infinite size); this keeps a
     //< deep chain from overflowing the native stack.
 
 impl Sema_ctx
     fn synthesize_reflect_impls(r: Self$@, root: Ast_node$@): List<|Ast_node$@|>$@ //<
         //< Fills in every empty `impl X: Reflectable {}`
-        //<
         //< Caution: **Add the children after the walk**, or the added ones are visited again.
         //< **Return the list of consts it created**: 2a's `declare_var_syms` has already run.
         made: = base_core.arena.create(List<|Ast_node$@|>.new(null))
@@ -122,7 +116,6 @@ impl Sema_ctx
         impl_node: Ast_node$@, emitted: Map<|U8[], U8[]|>$@, extra: List<|Ast_node$@|>$@, depth: Sz):
         Bool //<
             //< Collects each field's row, one per field in `def_fields`' order
-            //<
             //< **If any field fails, do not build the table** (false): a table one field short
             //< would slip in behind the diagnostic.
         $ok: = true
@@ -171,7 +164,6 @@ impl Sema_ctx
         impl_node: Ast_node$@, emitted: Map<|U8[], U8[]|>$@, extra: List<|Ast_node$@|>$@, depth: Sz):
         Bool //<
             //< Adds the row of a `List<|T|>` (is_list) or `T?` field; false if it cannot
-            //<
             //< Caution: **Recognize a wrapper of wrappers by name**, not by kind (a
             //< `struct_field`), for the same reason as the container check in collect_field_kinds.
         inner_id: =
@@ -226,7 +218,6 @@ impl Sema_ctx
         site: Ast_node$@, outer: Ast_node$@, emitted: Map<|U8[], U8[]|>$@,
         extra: List<|Ast_node$@|>$@, depth: Sz): U8[] //<
             //< Builds the nested type's table (if not built yet) and returns that const's name
-            //<
             //< Empty if it cannot. **The table goes into the file that has the `impl`**: another
             //< file's is `priv`. `emitted` keeps one per type.
         if f_type_node == null
@@ -246,7 +237,6 @@ impl Sema_ctx
 
     priv fn clause_names(r: Self$@, f_type: Ast_node$@, generic_fqn: U8[]): Bool //<
         //< Whether that type's clause is an instance of the generic `generic_fqn` (`List<|T|>`)
-        //<
         //< Caution: **Resolve the written name's generic base to an FQN and check that.** The
         //< internal name's shape silently changes when the mangling rule changes. The clause, not
         //< the type, is read, since the element's clause is taken from it (list_elem_node).
@@ -257,7 +247,6 @@ impl Sema_ctx
         return false
 
     priv fn list_elem_type(r: Self$@, list_id: I32): I32 //< `List<|T|>`'s element type
-        //<
         //< Caution: **Take it from the instantiated struct's `ptr`**; the name's type argument
         //< misleads on an alias or a nested generic. **Strip one pointer level only**, or
         //< `List<|I64$@|>` looks like `I64`'s and **a pointer container silently round-trips as
@@ -281,7 +270,6 @@ impl Sema_ctx
         return .none
 
     priv fn option_inner_type(r: Self$@, opt_id: I32): I32 //< `T?`'s contents' type
-        //<
         //< **Taken from the only field of the variant that has a payload** (as in
         //< `list_elem_type`).
         real_id: = r.env.get_clean_real_type(opt_id)
@@ -292,7 +280,6 @@ impl Sema_ctx
         return 0
 
     priv fn option_tag(r: Self$@, opt_id: I32, want_payload: Bool): I32 //< the two tags
-        //<
         //< Caution: **Take them from the declaration**; a fixed order silently reverses if
         //< `std/lang` reorders them. `want_payload` true selects the "there is a value" tag.
         real_id: = r.env.get_clean_real_type(opt_id)
@@ -304,14 +291,12 @@ impl Sema_ctx
 
     priv fn is_numeric_kind(_r: Self$@, kind: U8[]): Bool //<
         //< whether it is a kind that needs a width
-        //<
         //< **Only these three rows write `Field_extra.width`**.
         return kind.equals("int_field") || kind.equals("uint_field") ||
             kind.equals("float_field")
 
     priv fn field_kind_name(r: Self$@, type_id: I32): U8[] //<
         //< The `Field_kind` variant name corresponding to the field's type
-        //<
         //< A type that cannot be covered returns empty.
         //< Caution: **Keep them one-to-one with `std/reflect`'s `Field_kind`**, or a kind can be
         //< written but not synthesized, or synthesized but not walked (Principle 5).
@@ -351,7 +336,6 @@ impl Sema_ctx
 
     priv fn reflect_prefix(_r: Self$@, impl_node: Ast_node$@): U8[] //<
         //< The prefix that plays the role of the `reflect.` in `impl X: reflect.Reflectable`
-        //<
         //< It is empty for a selective import.
         //<
         //< Caution: **Take it from the name written on the impl.** A fixed `reflect` is "an
@@ -363,7 +347,6 @@ impl Sema_ctx
 
     priv fn is_empty_reflect_impl(r: Self$@, impl_node: Ast_node$@): Bool //<
         //< Whether it is an `impl X: reflect.Reflectable` with no body
-        //<
         //< Caution: **Match by FQN.** By the last segment alone, a file's own `trait Reflectable`
         //< gets the synthesis and a baffling diagnostic ("Why compiler-known traits are confined to
         //< `std/lang`" in `../../../docs/DESIGN-programming-language.md`).
@@ -402,7 +385,6 @@ priv fn make_table_decl(impl_node: Ast_node$@, target: Ast_node$@, rows_in: List
 
 priv struct Row_spec //<
     //< One row of the table (`::{ .name = "f", .offset = offsetof(X, f), .kind = .int_field }`)
-    //<
     //< Caution: Pass them as one value rather than adding arguments (a row is built in one place).
     field: U8[]
     kind: U8[]
@@ -410,13 +392,11 @@ priv struct Row_spec //<
     elem: U8[]
     elem_type: Ast_node$@ //<
         //< The element's or contents' type clause, for `elem_size`'s `sizeof`
-        //<
         //< It is null except on a container's and an option's row.
     self_type: Ast_node$@ //<
         //< The field's own type clause (for `width`'s `sizeof`); null except on a number's row
     payload_offset: Sz //<
         //< `.opt_field` only: the payload's position
-        //<
         //< The position comes from the enumeration's layout, the tags from the declaration.
     some_tag: I32
     none_tag: I32
@@ -447,7 +427,6 @@ priv fn make_row(spec: Row_spec, target: Ast_node$@, info_spelling: U8[], loc: L
     return row
 
 priv fn make_extra(spec: Row_spec, loc: Loc): Ast_node$@ //< `Field_extra`'s value
-    //<
     //< Builds `sizeof` nodes for the width and the stride, so they agree with C's own (`Sz` too).
     //< The position and the tags come only from the enumeration's layout (`Field_extra` in
     //< `../../../std/reflect.kspl`).
@@ -491,7 +470,6 @@ priv fn make_slice_of(name: U8[], info_spelling: U8[], loc: Loc): Ast_node$@ //<
 priv fn make_nested_holder(site: Ast_node$@, f_type_node: Ast_node$@, outer: Ast_node$@):
     Ast_node$@ //<
         //< The scaffolding, shaped as `impl <type>`, for building a nested type's table
-        //<
         //< **It lets `build_field_table` be reached one way only**, so the rejection rules exist
         //< once.
     loc: = site.loc
@@ -507,7 +485,6 @@ priv fn make_nested_holder(site: Ast_node$@, f_type_node: Ast_node$@, outer: Ast
     return holder
 
 priv fn make_sizeof(type_node: Ast_node$@, loc: Loc): Ast_node$@ //< `sizeof(<type>)`
-    //<
     //< The children's order follows "The expressions and the types" in
     //< `../../docs/DESIGN-parse.md`.
     node: = Ast_node.new(.k_expr_sizeof, "sizeof", loc)
@@ -516,7 +493,6 @@ priv fn make_sizeof(type_node: Ast_node$@, loc: Loc): Ast_node$@ //< `sizeof(<ty
     return node
 
 priv fn make_field_init(key: U8[], value: Ast_node$@, loc: Loc): Ast_node$@ //< one `.key = value`
-    //<
     //< The children's order is `expr_field_init`'s (the document is named at make_sizeof).
     init: = Ast_node.new(.k_expr_field_init, "expr_field_init", loc)
     init.add_child(Ast_node.new(.k_literal, ".", loc))
@@ -557,7 +533,6 @@ priv fn make_fields_method(impl_node: Ast_node$@, table_name: U8[], prefix: U8[]
 
 priv fn make_type_expr(spelling: U8[], loc: Loc): Ast_node$@ //<
     //< Builds a `type_expr` from the name `a.b[n]`
-    //<
     //< Caution: **Build the children too.** The resolution walks the children rather than the name
     //< (resolve_type in `resolve.kspl`), so text alone ends up as "an unknown type".
     $bracket: Sz = spelling.len

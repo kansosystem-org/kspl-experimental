@@ -1,9 +1,7 @@
 //< Names: aliases, imports, shadowing, `pub` and `$`
-//<
 //< Each case below is compiled alone, as the file its head names.
 // ==== case alias_is_only_a_name
 //< A typedef and its type, or two typedefs of one type, mix without a warning
-//<
 //< A typedef is only another name for its type ("3.5 Typedefs (`typedef`)" in
 //< `docs/SPEC-programming-language.md`), as in C, Rust and Swift. A type the compiler keeps apart from another
 //< is a struct with one field.
@@ -33,7 +31,6 @@ pub fn probe(): Meters
   return 0
 // ==== case alias_to_option_binds
 //< `if name: = expression` unwraps an alias of `Option` just as it unwraps `Option` itself
-//<
 //< The check reads the resolved name (`ksplc/sema/body/switch.kspl`), as a `switch` on the same
 //< value does.
 // EXPECT-NOT: binds an 'Option'
@@ -48,31 +45,8 @@ pub fn probe(): I32
   if v: = pick(true)
     return v
   return 0
-// ==== case deprecated_symbol
-//< Using a declaration marked `#deprecated` must be reported
-//<
-//< If nothing happens although it is attached, there is no point in writing the mark.
-//< **An `enum` is in scope too.** Its name appears in an expression as `E.a`, so the warning
-//< reaches it (is_allowed_on in ksplc/sema/decl/attrs.kspl). `trait` / `typedef` do not.
-// EXPECT: [W0702] Symbol 'old_way'
-// EXPECT: [W0702] Symbol 'Old_kind'
-import "std/io"
-
-#deprecated
-priv fn old_way(): I32
-  return 1
-
-#deprecated
-pub enum Old_kind
-  a
-  b
-
-pub fn probe(): I32
-  k: = Old_kind.a
-  return old_way() + I32::k
 // ==== case hand_rolled_ownership
 //< A struct holding a raw pointer and managing its lifetime with a `free` of its own
-//<
 //< Under the managed way of thinking, advice comes out drawing it towards a reference-counted
 //< holder.
 // ARGS: --lint=I0602=on
@@ -96,12 +70,11 @@ pub fn probe(): Sz
   return b.len
 // ==== case local_hides_module
 //< A local or a parameter with an imported module's name hides it for the rest of its scope
-//<
 //< KSPL reaches a module's member and a value's with the same `.`. So below the local an `io.out()`
 //< reads the local and fails as a missing member, far from the cause. Quiet: a name no import binds
 //< (`std/mem` as `{ Arena }` binds `Arena` alone), the prelude's `lang`, and a name led by `_`.
-// EXPECT: local_hides_module.kspl:15:15: warning: [W0502] 'json' hides the imported module
-// EXPECT: local_hides_module.kspl:25:3: warning: [W0502] 'io' hides the imported module
+// EXPECT: local_hides_module.kspl:14:15: warning: [W0502] 'json' hides the imported module
+// EXPECT: local_hides_module.kspl:24:3: warning: [W0502] 'io' hides the imported module
 // EXPECT-NOT: 'mem' hides
 // EXPECT-NOT: 'lang' hides
 // EXPECT-NOT: '_io' hides
@@ -123,7 +96,6 @@ pub fn main(): I32
   return io
 // ==== case naming_and_shadowing
 //< The naming conventions, and an inner declaration that hides an outer one
-//<
 //< With both, a reader mistakes "which declaration am I looking at".
 // EXPECT: [I0501] Declaration of
 // EXPECT: [I0502] Type name
@@ -141,7 +113,6 @@ pub fn probe($never_reassigned: I32): I32
   return b.v
 // ==== case shadowed_known_trait
 //< Declaring, in one's own file, a trait named like one the compiler knows, and conforming to it
-//<
 //< A known trait is matched by FQN, so ARC's retain/release are not inserted, and that fact appears
 //< nowhere but in this diagnostic.
 // EXPECT: [W0501]
@@ -168,16 +139,15 @@ pub fn probe(): I32
   return b.n
 // ==== case spare_mut_marker
 //< A `$` before the name is spare where the name's own value is never rewritten
-//<
 //< A write through a pointer or into a slice's elements is allowed by the type's `$` (`T$@`,
 //< `T$[]`). A read or a `Self@` call needs no `$` at all. Kept: a fixed-length array's element
 //< and a struct's field are part of the value. `x@`, `U8$[]::buf` and a `Self$@` call hand that
 //< value out writable.
-// EXPECT: spare_mut_marker.kspl:26:4: information: [I0601] Binding 'target'
-// EXPECT: spare_mut_marker.kspl:30:4: information: [I0601] Binding 'view'
-// EXPECT: spare_mut_marker.kspl:34:4: information: [I0601] Binding 'peek'
-// EXPECT: spare_mut_marker.kspl:38:4: information: [I0601] Binding 'rows'
-// EXPECT: spare_mut_marker.kspl:42:4: information: [I0601] Binding 'probe'
+// EXPECT: spare_mut_marker.kspl:25:4: information: [I0601] Binding 'target'
+// EXPECT: spare_mut_marker.kspl:29:4: information: [I0601] Binding 'view'
+// EXPECT: spare_mut_marker.kspl:33:4: information: [I0601] Binding 'peek'
+// EXPECT: spare_mut_marker.kspl:37:4: information: [I0601] Binding 'rows'
+// EXPECT: spare_mut_marker.kspl:41:4: information: [I0601] Binding 'probe'
 // EXPECT-NOT: Binding 'cells'
 // EXPECT-NOT: Binding 'backing'
 // EXPECT-NOT: Binding 'spot'
@@ -233,7 +203,6 @@ pub fn value_method(): I32
   return tally.n
 // ==== case unit_internal_pub
 //< The case where [I0402] finds a `pub` used only from inside the package
-//<
 //< It is off by default, so it is enabled with ARGS. `main` and names opening with `_` are out of
 //< scope, so that they stay quiet is looked at too.
 // ARGS: --lint=I0402=on
@@ -248,7 +217,6 @@ fn main(): I32
   return 0
 // ==== case unused_import_alias
 //< Whether an import alias is unused is decided within **that one file**
-//<
 //< Whether another file uses the same target has nothing to do with it. `std/math` is never written
 //< in this file (another file of this compilation unit does use it). `strfmt` is written, so it
 //< must not sound (pinning down the suppressing side).
@@ -265,7 +233,6 @@ fn main(): I32
   return 0
 // ==== case unused_import_alias_named_like
 //< An import alias counts as used only where it heads a qualified name
-//<
 //< A field or a function spelled like the alias is not the alias. Counted, a dead import goes
 //< unreported for as long as the file keeps a member of that name. `strfmt` is written as a head,
 //< beside a field of the same name, so it must not sound (pinning down the suppressing side).
@@ -290,7 +257,6 @@ fn main(): I32
   return 0
 // ==== case unused_import_in_template
 //< Whether an import is unused is decided only by whether that file **writes** the name
-//<
 //< An uninstantiated generic body is not analysed. So marking use as a by-product of resolution
 //< swings the same import between used and unused by what is compiled alongside. `hex` is used only
 //< in Box.get, never instantiated here. `Hex_fmt` is written nowhere, so it must sound.
@@ -361,3 +327,48 @@ impl<|T|> Box<|T|>
   fn unused(r: Self@): T
     return r.value.checked_mul(r.value) catch r.value
 fn main() {}
+// ==== case enum_function_outside_impl
+//< A function whose first parameter is an enum of its own file belongs in that enum's `impl`
+//< Left out: a pointer to the enum, a slice of it, an enum of another file, a generic function,
+//< the enum taken second, and a method already in the `impl`.
+// EXPECT: enum_function_outside_impl.kspl:17:1: information: [I0503] This function takes the enum 'Light'
+// EXPECT-NOT: 'x.at(
+// EXPECT-NOT: 'x.many(
+// EXPECT-NOT: 'x.other(
+// EXPECT-NOT: 'x.pair(
+// EXPECT-NOT: 'x.second(
+// EXPECT-NOT: 'x.name(
+import "std/reflect"
+
+priv enum Light
+  red
+  green
+
+priv fn label(l: Light): U8[]
+  return "red" if l == Light.red else "green"
+
+priv fn at(l: Light@): Bool
+  return l$ == Light.red
+
+priv fn many(ls: Light[]): Sz
+  return ls.len
+
+priv fn other(k: reflect.Field_kind): Bool
+  return k == reflect.Field_kind.bool_field
+
+priv fn pair<|T|>(_l: Light, v: T): T
+  return v
+
+priv fn second(n: Sz, l: Light): Sz
+  return n if l == Light.red else 0
+
+impl Light
+  fn name(r: Self): U8[]
+    return label(r)
+
+fn main(): I32
+  l: = Light.green
+  lights: Light[2] = ::{ .red, .green }
+  b: = at(l@) && other(.bool_field)
+  return I32::(many(Light[]::lights) + second(1, l) + pair<|Sz|>(l, 2) + l.name().len) +
+    (1 if b else 0)

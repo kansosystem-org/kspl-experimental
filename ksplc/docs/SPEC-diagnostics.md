@@ -97,7 +97,11 @@ An `if` or `for` condition is a boolean literal, as in `if true` / `if false` or
 ### [W0206] An unused private symbol
 A `priv` function, struct or the like is never referred to within its file.
 * **Fix**: delete it, or, where it is kept on purpose for later, start its name with `_`.
-* **The scope is per file compiled or linted**: a `priv` in an imported file is not reported. An uninstantiated generic's helper can look unused in the library, though a caller elsewhere uses it. To check every file, lint each one as the entry point.
+* **Every file the compile reads is checked**, an imported one too. A `priv` can be named only in its own file, and every file is read whole. So a lint of one entry point finds a dead helper in any file it imports.
+* **Not reported**:
+  * a helper that only a generic's body names, although no caller instantiates the generic;
+  * a method that a conformance (`impl T: Trait`) requires, called or not. Removed, the `impl` no longer conforms.
+* **A `#cfg` leaves out what one build does not hold.** A helper that only a hosted function calls is unused in a freestanding build. Put the same `#cfg` on the helper.
 
 ### [W0207] A local variable or parameter nobody reads
 A local variable or a parameter is **never read**. Reading counts, not the name appearing. A fixed-length array's `.len` folds to a constant at translation time. So an `a: Sz[3] = ::{ 1, 2, 3 };` used only through `a.len` fires it: nobody reads the elements, only the folded value remains, and the array is dead.
@@ -138,10 +142,15 @@ A documentation comment written in another language's style is ignored by KSPL. 
   * a mark inside a string;
   * a shebang. The analysis reads its `#!` rewritten to `//`, so followed by its path it would read `///`.
 
-### [W0213] A long `//<` summary, or one opening with a label
-The summary is the first paragraph of a `//<` run: everything before the first `//<` carrying no text. It is what the editor's hover, the completion list and `ksplc doc` show, so it is **one line that says what the thing is**. A summary running over several lines crowds those places. One opening with `Caution:` or `Note:` tells the reader what to beware of before it says what the thing is.
-* **Fix**: keep the first line and end the summary there with an empty `//<`. The rest runs on below it as the detail, which the six-line cap counts. Where the first line is a label, write a line above it saying what the thing is, then the empty `//<`.
-* **Not reported**: a run whose summary is one line, however long the detail below the parting mark.
+### [W0213] A `//<` summary opening with a label
+The summary is the first line of a `//<` run, and the detail starts on the line below it. It is what the editor's hover, the completion list and `ksplc doc` show, so it is **one line that says what the thing is**. One opening with `Caution:` or `Note:` tells the reader what to beware of before it says what the thing is.
+* **Fix**: write a line above the label saying what the thing is. The label then opens the detail.
+* **Not reported**: a label further down the run, in the detail.
+
+### [W0214] A test that no suite runs
+A top-level function's name starts with `test_`, but no suite in the program runs it, so it never runs and every check stays green. A suite (`impl S: suite.Suite`) runs the tests of its own file and of the files that file imports ("8.5 Tests: functions named `test_`, run by a suite" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md)). The test's file is part of the program, then, but it is imported only by files that hold no suite.
+* **Fix**: import the test's file from the file that holds the suite, or move the test into a file that file imports.
+* **Not reported**: a compile with no `main`. A file compiled alone (a library, an editor's view of one file) is not the program that runs its tests.
 
 ### [W0501] Conformance to a look-alike of a known trait
 A type claims a trait that only looks like one the compiler treats specially, so the special treatment never happens. The `X` of `impl <type>: X` names a different declaration with the same name as a trait the compiler knows (`Ref_counted` / `Move_only` / `Manual_free` / `Drop`). The known traits are matched by FQN, the name with its full module path (`std.lang.Ref_counted` and so on). So conforming to the look-alike turns on none of ARC's `retain`/`release`, automatic cleanup, move checks or free tracking. **Nothing else reports this for these four.**
@@ -155,12 +164,14 @@ A local variable or parameter has the name an import line binds to a module (`im
   * the prelude's `lang`, which no line imports;
   * a name starting with `_`.
 
+### [W0503] An uncalled function in a file of tests
+A top-level function stands in a file of tests, nothing calls it, and its name does not start with `test_`. A suite finds a test by its name ("8.5 Tests: functions named `test_`, run by a suite" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md)). So a test with a misspelt name (`tset_sum`) never runs, and this is the one sign of it. A file of tests is the suite's own file, or a file the suite's file imports that holds a test.
+* **Fix**: if it is a test, give it a name that starts with `test_`. Otherwise call it, or remove it.
+* **Not reported**: a method, `main`, a name that starts with `_`, a function the compiler made, and a compile with no `main`.
+
 ### [W0601] The use of an ARC-managed type
 Off by default ("5.3" in [`SPEC-tools.md`](SPEC-tools.md#53-enabling-disabling-or-promoting-a-diagnostic-to-an-error-lint----lint--ksplccfg)). ARC (automatic reference counting) has the compiler insert `retain()`/`release()` calls that count a value's owners. They run invisibly, a risk where execution timing must stay visible. It is reported where a local variable's or parameter's type is ARC-managed (conforms to `Ref_counted`). It is also reported where that type is a struct holding one as a value field at any depth.
 * **Fix**: consider explicit ownership through an arena or `defer`. It is not there to forbid ARC: a deliberate exception can stay. To exclude one file while it is enabled, write `##lint(W0601 = off);`.
-
-### [W0702] The use of a deprecated symbol
-A function or type marked `#deprecated` is used.
 
 ## 3. The list of information diagnostics (I)
 
@@ -209,6 +220,34 @@ A branch that could return a boolean directly, as in `if cond { return true; } e
 The `as io` of `import "std/io" as io` adds nothing: the bare `import "std/io"` derives the same alias from the path's last part. The two are entirely synonymous: two ways to write one thing.
 * **Fix**: drop the `as`: `import "std/io"`. The `as` itself is kept for imports that change the name (`import "ksplc/base/ast" as base_ast`, or `import "std/strfmt" as _strfmt`, whose leading `_` lets it go unused). Confined to them, it leaves one spelling per import.
 
+### [I0311] A free of a value that frees itself
+A local whose type frees itself (`Drop`) is freed by hand just where its own cleanup would run. Deleting the line changes nothing: the cleanup runs at the same point, on every way out, a propagated failure's included. Three shapes are reported:
+* `defer x.free()` in the block that declares `x`;
+* `x.free()` as the last statement of the block that declares `x`;
+* `x.free()` right before a `return` or `throw` whose value calls nothing.
+
+A parameter taken by value counts as declared in the function's body.
+* **Not reported**: a free with more work after it in the scope. It releases early, where that work needs the resource gone. Examples are a lock let go before another process takes it, and a file closed before it is read back. A free before a `return` that still calls something is such a release too.
+* **Fix**: delete the line. Where the resource must go sooner, keep the free and put the work that needs it gone after it.
+
+### [I0312] A `lang.` that changes no name
+A name is written after `lang.`, but the file can write it alone and mean the same declaration. `std/lang` enters every file: its alias `lang`, and each name it publishes with `pub` ("9.2 Which names an import brings in" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md)). So `lang.Option` and `Option` would be two spellings of one name.
+* **Fix**: drop the `lang.`.
+* **Not reported**, since there the bare name is blocked:
+  * a name the file declares itself, or a written import brings in (`lang.Ref_counted` beside a `Ref_counted` of your own);
+  * a name a parameter or a local of the enclosing function takes;
+  * a declaration of `std/lang` without `pub`. Inside `std/` it is visible, but only `lang.` reaches it: the implicit import brings in what `std/lang` publishes, and nothing else.
+
+### [I0313] A payload that nothing reads
+A `case` binds a variant's payload, but the case reads none of the names it binds (`case .add(_a, _b)`). A name that starts with `_` is a binding nobody reads, so it is reported too: to a reader it looks like an extraction. The rule is "Write the payload only when it is needed" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md).
+* **Fix**: write the variant alone (`case .add`). The switch still checks that every variant is handled. Variants with payloads of different shapes fold into one `case` with commas.
+* **Not reported**:
+  * a payload one of whose names is read (`case .size(axis, _n)`);
+  * a payload holding a value it matches;
+  * the binding the compiler writes for `if v: = …` and for a `for` loop. [W0207] reports such a name where nothing reads it.
+
+  [W0207] does not report a name of a payload this reports.
+
 ### [I0401] An unused import
 Something an `import` brought in is never used in that file. It comes in two shapes with one fix: a whole file's alias (`import "path" as name`) or one symbol of a selective import (`import "path" { A, B }`, the selective import of `docs/SPEC-programming-language.md` §9).
 * **The verdict covers that one file alone.** It rests only on whether the file writes the name, so a use inside a generic template never instantiated counts.
@@ -242,6 +281,14 @@ An identifier breaks KSPL's standard naming conventions.
   | a type, a struct, an enum, a typedef | `Initial_upper_snake_case`: only the first letter is uppercase; all later letters are lowercase |
   | an explicit constant (`const`) | `UPPER_SNAKE_CASE`: all letters are uppercase |
   | an ordinary binding, a function, a method, a field, an enum variant | `snake_case`: all letters are lowercase |
+
+### [I0503] A function of one enum outside its `impl`
+A top-level function takes, as its first parameter, an enum declared in the same file, by value. Written as the enum's method, what the enum does stands where the enum is. The call then reads in the order the value flows (`state.text()`, not `state_text(state)`).
+* **Fix**: move it into the enum's `impl` as a method that takes `Self` (`fn text(r: Self): U8[]`), and call it as `x.text()`.
+* **Not reported**:
+  * an enum of another file or package. Its `impl` would hold another package's reading of it;
+  * a pointer to the enum (`State@`), a slice of it, or the enum taken second;
+  * a generic function, a function C calls (`#export`), and a method already in an `impl`.
 
 ### [I0601] An unnecessary mutability marker
 A variable or parameter declared with the mutability marker `$` is never reassigned within its scope (Rust's `unused_mut`). A declaration that cannot take a `$`, such as a for-in loop's variable (`for x in collection { ... }`), is out of scope.
@@ -278,6 +325,11 @@ Off by default ("5.3" in [`SPEC-tools.md`](SPEC-tools.md#53-enabling-disabling-o
 ### [I0701] Error propagation using '!' is recommended
 A `catch` that only rethrows the caught error, as in `catch e { throw e; }`.
 * **Fix**: replace the whole `catch` block with the `!` operator, which propagates the error (hands it to the caller) more safely and concisely.
+
+### [I0702] An arena parameter with a default
+A parameter that takes an arena has a default (`a: Arena$@ = null`). A call that leaves the argument out does not show where it allocates, nor whether the caller owes a `free()`.
+* **Fix**: remove the default. A caller that wants the global heap passes `null` (`List<|I32|>.new(null)`).
+* The type is read as the analysis resolved it. So an arena behind a typedef, or behind a pointer of either kind (`Arena@`, `Arena$@`), is found.
 
 ## 4. The list of hints (H)
 
@@ -366,3 +418,22 @@ The subject of a `switch` or `if` directly wraps a call whose argument list span
 ### [H0805] A function nests blocks past 8 levels
 A function's blocks nest deeper than 8 levels. The limit is defined in "Principle 3 - what is counted, and how" in [`../../docs/SPEC-gates.md`](../../docs/SPEC-gates.md). The function body is level 0, so each `if`, `for`, `switch` case or bare block inside it opens one more. It is reported once per function, at the function, with the depth it reached.
 * **Fix**: move the innermost part into a helper, or reject first and leave ([H0801]) so the rest needs no `else`.
+
+### [H0806] A comment past its cap
+A comment holds more lines before the next line of code than its cap: 6 lines, or 10 for the header at a file's start. The caps are "Comment notation and limits" in [`../../docs/SPEC-plain-language.md`](../../docs/SPEC-plain-language.md). A long comment holds background that a design document is the place for.
+* **What counts**: every comment line up to the next line of code. **A blank line ends nothing**, or one in the middle would let a comment of any length pass.
+* **What does not count**:
+  * the summary of a `//<` run, its first line with text;
+  * a line a gate reads, such as `// EXPECT:` (an upper-case name of three letters or more, then a colon);
+  * a line inside a string.
+* **What ends a comment early**: a section divider (a comment whose text opens with `---` or `===`) ends the comment it stands in. An empty `//<` parts two paragraphs of a run's detail, and the count starts again after it.
+* **The header**: the first comment past 6 lines before any declaration takes the cap of 10. An `import` line and a `#!` line are no declaration.
+* **Fix**: shorten the comment, or move the background to the design document of its subject and point at it.
+
+### [H0807] A `//<` run below a `{}`
+A `//<` run goes on below a line whose code ends in `{}` (`impl Row: Move_only {} //< …`). The run then stands outside the declaration it describes. A declaration without braces (a field, a constant, a `typedef`) keeps its run below it, indented, and is not reported.
+* **Fix**: open the braces, and put the `//<` lines between them.
+
+### [H0808] A file's description below a banner
+A file describes itself in a `//<` run before its first line of code, but another comment stands above that run. A reader's eye lands on the first line, and a banner there pushes what the file is for off the screen. A `#!` line is not counted as a banner.
+* **Fix**: move the `//<` run to the top of the file, and put the other comment below it.

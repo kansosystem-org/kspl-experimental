@@ -1,5 +1,4 @@
 //< A regression test for an argument passed at its expression's type
-//<
 //< The defect is in "Stores and arguments are emitted at 'the receiver's type'" in
 //< ksplc/docs/DESIGN-backends.md. A KSPL integer literal is inferred as I32 by default.
 //< This test **fails only on Win64**.
@@ -21,7 +20,6 @@ priv const MAX_PROBE_ELEMS: Sz = 1024 //<
     //< The largest dimension count that can be expected, so a broken value stops it
 
 priv fn product_of(shape: Sz$[]): Sz //< the callee
-    //<
     //< Shaped as Tensor.new: parameters on a slice, the product from the trailing dimension with
     //< the limit checked each time.
     $size: Sz = 1
@@ -42,7 +40,6 @@ priv fn build_with_f64(a: Sz, b: Sz, c: Sz, alpha: F64, x: Void$@, y: Void$@): T
         .b = product_of(Sz$[]::{ .ptr = shape_cb@, .len = 2 }) }
 
 struct Sized_pair<|T|> //< the shape where c (Sz) takes "the same slot alpha took"
-    //<
     //< The caller passes an integer literal; if it is not passed at the parameter's type, 4.0's
     //< upper four bytes stay.
     //< Caution: **It must be a generic**: infer_call_args leaves the expected type unknown there,
@@ -54,7 +51,6 @@ struct Sized_pair<|T|> //< the shape where c (Sz) takes "the same slot alpha too
 impl<|T|> Sized_pair<|T|>
     fn probe(p0: Void$@, a: Sz, b: Sz, c: Sz, seed: T$@): Sized_pair<|T|> //<
         //< The same run as Lora<|T|>.load_raw (a leading pointer + three Sz + a pointer)
-        //<
         //< The hidden return pointer goes first, so `c` takes Win64's first stack slot.
         $shape_ac: Sz[2] = ::{ a, c }
         $shape_cb: Sz[2] = ::{ c, b }
@@ -72,6 +68,8 @@ priv fn check(label: U8[], got: Two_sizes, want_a: Sz, want_b: Sz)
             .s(": a=\{got.a\} b=\{got.b\} (want a=\{want_a\} b=\{want_b\})\n")
     assert(ok, "win64 arg abi: an argument passed in a stack slot came back corrupted")
 
+// Caution: **It runs first** because its file's name sorts its import first in `all.kspl` (the
+// reason is there). Keep it the only test in this file.
 fn test_win64_arg_abi()
     verdict.start("[Win64] a stack-passed actual argument arrives at the parameter's type test...")
 

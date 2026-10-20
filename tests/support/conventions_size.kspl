@@ -1,5 +1,4 @@
 //< The size caps, and how a file near a cap is split (not the suite)
-//<
 //< **Where a file splits is decided when it comes near the cap** (Principle 3).
 //< Caution: **Do not stop at printing a notice.** Shown only on screen, the README keeps saying
 //< "no file exceeds it" while out of date, and **nobody sees that it is** (Principle 7). A
@@ -17,7 +16,6 @@ import "tests/support/harness"
 priv const MAX_FILE_LINES: Sz = 1000
 
 priv const WARN_FILE_LINES: Sz = 900 //< the line count that marks a file as near the cap
-    //<
     //< **It names them without failing**: the cap is a cliff crossed mid-work, where a split cuts
     //< by line count rather than by reason (Principle 3).
 
@@ -48,7 +46,7 @@ priv fn check_sizes(arena: Arena$@)
     n1: = arena.text().s("one file within \{MAX_FILE_LINES\} lines (Principle 3)").take()
     verdict.check_list(n1, files, "files", over_file@,
         "split the file where its README's plan says (Principle 3)")
-    check_plans(near_file@, arena)
+    check_plans(near_file@, files, arena)
 
 // ==========================================
 // How a file near the cap splits
@@ -56,26 +54,22 @@ priv fn check_sizes(arena: Arena$@)
 
 priv const PLAN_HEAD: U8[] = "Files near the limit and how they split" //<
     //< The heading of the section that says how a file splits
-    //<
     //< Below is the sentence that says explicitly that the section is empty. **Both are text from
     //< the README**: change these two and the README in the same commit.
 priv fn plan_readme_of(rel: U8[], arena: Arena$@): U8[] //<
     //< The README that says how a file splits: the one in the file's top-level folder
-    //<
     //< For example, `ksplc/lsp/nav.kspl` is planned in `ksplc/README.md`.
     if cut: = rel.find_char('/')
         return arena.text().s(rel.sub(0, cut)).s("/README.md").take()
     return "README.md"
 priv const NONE_LEAD: U8[] = "No file" //<
     //< The two texts of the sentence that says the section is empty
-    //<
     //< Caution: **Make both texts distinctive.** Matching `lines` alone hits text about the cap
     //< itself, such as "1000 lines per file".
 priv const NONE_TAIL: U8[] = "exceeds 900 lines"
 
 priv fn claims_none(line: U8[], _arena: Arena$@): Bool //<
     //< Whether that line says explicitly "there is no file over it here"
-    //<
     //< **The line count itself is not checked here** (`check_plans` below does); built into the
     //< judgment, it would make the sample table impossible to write.
     return line.find_str(NONE_LEAD).is_some() && line.find_str(NONE_TAIL).is_some()
@@ -98,7 +92,6 @@ priv fn heading_depth(line: U8[]): Sz //<
 
 priv fn plan_body(readme: U8[], arena: Arena$@): U8[] //<
     //< The inside of the README's splitting section
-    //<
     //< Caution: **Do not decide it by the heading's depth.** Limited to `## `, a README that puts
     //< the section one level deeper comes out empty, and a written split is called "not named".
     out: = arena.text()
@@ -118,7 +111,6 @@ priv fn plan_body(readme: U8[], arena: Arena$@): U8[] //<
 
 priv fn planned(readme: U8[], rel: U8[], arena: Arena$@): Bool //<
     //< Whether that README's splitting section names that path
-    //<
     //< It accepts a path relative to the repository or to the README's own folder.
     body: = plan_body(readme, arena)
     if body.len == 0
@@ -130,7 +122,6 @@ priv fn planned(readme: U8[], rel: U8[], arena: Arena$@): Bool //<
     return false
 
 priv struct Plan_sample //< the texts that hit `planned` and the texts that do not
-    //<
     //< **A name outside the section is not a hit on its own**: that section is where the split is
     //< written.
     readme: U8[]
@@ -167,7 +158,6 @@ priv fn covered_by(readme_rel: U8[]): U8[] //<
 
 priv fn claim_under(line: U8[], readme_rel: U8[], arena: Arena$@): U8[] //<
     //< The prefix one "there is no file over it" line speaks for
-    //<
     //< Caution: **The root README's claim carries its own scope.** It covers every package. Read by
     //< its folder, the line matches no file and passes next to one over the cap (Principle 8).
     //< The scope comes from the claim's words ("No file in kspeg exceeds 900 lines" is `kspeg/`'s).
@@ -201,9 +191,9 @@ priv const SCOPE_SAMPLES: Scope_sample[_] = ::{
         .under = "std/" },
 }
 
-priv fn check_plans(near: List<|U8[]|>@, arena: Arena$@) //<
+priv fn check_plans(near: List<|U8[]|>@, files: Sz, arena: Arena$@) //<
     //< Whether a file near the cap is named in the README with how it splits
-    //<
+    //< `files` is how many files were measured: with none near the cap, the walk still saw them.
     //< **Two things are checked together**: (1) the section names the file that went over; (2)
     //< under a README saying "there is no file over it", none has. With only one, a name next to a
     //< stale "there is none" passes green.
@@ -217,7 +207,7 @@ priv fn check_plans(near: List<|U8[]|>@, arena: Arena$@) //<
                 .s(PLAN_HEAD).s("\" in ").s(readme_rel).s(" does not name it").take())
     n1: = arena.text().s("a file over \{WARN_FILE_LINES\} lines has how it splits in the README")
         .take()
-    verdict.check_list(n1, near.len, "files", bad@,
+    verdict.check_list(n1, files, "files", bad@,
         "where it splits is decided when it comes near the cap (Principle 3)")
 
     $stale: = List<|U8[]|>.new(arena)
@@ -273,14 +263,12 @@ priv fn check_fires(arena: Arena$@)
 
 priv const WIDTH_FILE: U8[] = "ksplc/fmt/style.kspl" //<
     //< The formatter's source, where the width is read from
-    //<
     //< **The number is the formatter's, read from its source.** `column_limit` in
     //< `ksplc/fmt/style.kspl` is the source file's width, code and prose alike, so this check
     //< takes it from there rather than holding a second copy (Principle 4).
 priv const WIDTH_MARK: U8[] = ".column_limit = "
 
 priv fn source_width(arena: Arena$@): Sz //< the width the formatter keeps
-    //<
     //< Where it cannot be read, 0 — and the check below fails rather than passing on a number of
     //< its own.
     for got in scan.find_all(harness.read_under_root(WIDTH_FILE), WIDTH_MARK, ",", arena)
@@ -289,7 +277,6 @@ priv fn source_width(arena: Arena$@): Sz //< the width the formatter keeps
 
 priv const HOVER_WIDTH_FILE: U8[] = "ksplc/lsp/spell.kspl" //<
     //< Where the hover's one-line signature holds its own copy of the width
-    //<
     //< The copy must agree with the formatter's width. If they differ, the hover breaks a signature
     //< the source keeps on one line, or keeps one it broke. Neither shows as a failure, only as
     //< a hover unlike the file.
@@ -300,7 +287,6 @@ priv const HOVER_INDENT_MARK: U8[] = "priv const SIG_PARAM_INDENT: U8[] = \"" //
 priv const INDENT_MARK: U8[] = ".indent_width = " //< the formatter's level, in `WIDTH_FILE`
 
 priv fn source_level(arena: Arena$@): Sz //< the formatter's default level, 0 where unread
-    //<
     //< **The first is the default** (`Config.default_fmt`); a later one is the `--style` reader's.
     for got in scan.find_all(harness.read_under_root(WIDTH_FILE), INDENT_MARK, ",", arena)
         return got.trim_spaces().parse_size(0) catch 0

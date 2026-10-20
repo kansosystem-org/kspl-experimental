@@ -1,5 +1,4 @@
 //< Resolves a written type to its type id, making a generic's instance on the way
-//<
 //< `resolve_type` reads a type expression (its name, its type arguments, its postfixes).
 //< `resolve_all_types` walks a tree doing so. The name itself is read through
 //< `sema/decl/name.kspl`. This file turns what it names into a type, checks a type argument's
@@ -37,7 +36,6 @@ import "std/strnum" // `to_i64` / `to_f64` / `parse_size`
 // ==========================================
 fn arg_names_mut(arg: Ast_node$@): Bool //<
     //< Whether the actual argument holds the mutability mark (the `$` of a `Slice<|$U8|>`)
-    //<
     //< The parser wraps a marked argument in a `k_type_arg` with a Literal at the head.
     return arg != null && arg.kind_id == .k_type_arg && arg.has_literal_child("$")
 
@@ -50,7 +48,6 @@ fn strip_arg_mut_mark(arg: Ast_node$@): Ast_node$@ //< the argument with the mar
 impl Sema_ctx
     fn file_has_type(r: Self$@, file_path: U8[], name: U8[]): Bool //<
         //< Whether the file at `file_path` has a type named `name`
-        //<
         //< A struct, an enum, an alias and a generic's template count.
         //<
         //< Caution: **Do not look up the name with its qualifier stripped.** A short name answers
@@ -61,7 +58,6 @@ impl Sema_ctx
             r.env.type_to_id.get(fqn).unwrap_or(0) != 0
 
     fn is_type_name(r: Self$@, name: U8[]): Bool //< whether that name names a type
-        //<
         //< It answers for a short name, for `Self`, and for an alias prefix alike.
         //< Caution: Do not replace this with "starts with a capital": a mistyped type name would
         //< pass unreported, even in a value position.
@@ -70,7 +66,6 @@ impl Sema_ctx
 
     fn names_module_only(r: Self$@, name: U8[]): Bool //<
         //< Whether `name` names an imported module in this file and no type
-        //<
         //< It checks without marking the import used.
         //<
         //< Caution: **Answer from the file alone, not from the open scopes.** The type walk asks
@@ -213,7 +208,6 @@ impl Sema_ctx
 
     fn apply_arg_mut_mark(r: Self$@, decl: Ast_node$@, pos: Sz, arg: Ast_node$@, arg_id: I32): I32 //<
         //< Decides the argument type at that position from the declaration and the argument's mark
-        //<
         //< Whether the declaration names the position is matched against the argument's mark.
         //< **A mark at a position the declaration does not name is rejected**, or `List<|$U8|>`
         //< would silently equal `List<|U8|>` while the writer believes the elements are mutable.
@@ -231,7 +225,6 @@ impl Sema_ctx
     priv fn resolve_written_type(r: Self$@, type_node: Ast_node$@, written_at: Ast_node$@,
         path_node: Ast_node$@, atom: Ast_node$@): I32!Sema_error //<
             //< The type id a type position's name stands for, its instance made where it is generic
-            //<
             //< written_at is the name as written (read_written_type in name.kspl reads it);
             //< type_node is the position, which a diagnostic points at. A member's name is no type,
             //< and is the unknown type: validate_all_type_exprs in type_check.kspl reports it.
@@ -281,7 +274,6 @@ impl Sema_ctx
             sema_decl_mono.check_written_generic_arity(r, tmpl, args.len, type_node)
             $inst_name: = r.instance_written(w, args, type_node)
                 catch sema_decl_mono_name.unknown_type_str()
-            defer inst_name.free()
             final_name.s(inst_name.slice())
         else
             r.env.type_args_to(args, final_name.s(w.fqn).s("<|"))
@@ -290,7 +282,6 @@ impl Sema_ctx
 
 priv fn lookup_def_node(c: Sema_ctx$@, path: Ast_node$@): Ast_node$@? //<
     //< Looks up the definition node for a written name, none if none
-    //<
     //< Caution: **Look in this order:** the symbol table → a template by FQN → this file's aliases.
     //< In another order, a different thing with the same name is found.
     written: = c.read_written_type(path)
@@ -340,7 +331,6 @@ impl Ast_node
 
     fn check_type_constraint(r: Ast_node$@, c: Sema_ctx$@, target_id: I32): Void!Sema_error //<
         //< Checks a type argument's constraint
-        //<
         //< While suppressed (inside a speculative inference) it records the constraint node and the
         //< type-argument bindings and returns without checking.
         //<
@@ -378,7 +368,6 @@ impl Ast_node
 
     fn resolve_fn_signature_types(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error //<
         //< Resolves only the types of a function declaration's **signature** (not the body)
-        //<
         //< **Call it at instantiation** (`instantiate_fn`, `mono.kspl`), or the parameters resolve
         //< **only while the body is inferred**.
         //< Caution: **Do not emit diagnostics here**: there would be one per instance.
@@ -397,7 +386,6 @@ impl Ast_node
 
     fn resolve_type_in_own_file(r: Ast_node$@, c: Sema_ctx$@): I32!Sema_error //<
         //< r's type, resolved in the file r is written in, whose import aliases its names use
-        //<
         //< A template's or a declaration's parameter is read where it is declared, not at the call.
         old_file: = c.file_name
         if r.loc.file().len > 0
@@ -466,7 +454,6 @@ impl Ast_node
     fn build_resolved_type_args(r: Ast_node$@, c: Sema_ctx$@, decl: Ast_node$@):
         I32[]!Sema_error //<
             //< Resolves a generic's list of actual arguments, one type id per argument
-            //<
             //< An argument that does not resolve is the unknown type's id.
             //< Caution: **Pass `decl`.** Where it declares a `$` (`struct Slice<|$T|>`), **an
             //< unmarked actual argument is wrapped as immutable** (`Slice<|U8|>` vs
@@ -518,7 +505,6 @@ fn unknown_args(): I32[] //< the arguments of a list that could not be read: one
 
 priv fn names_unknown_type(c: Sema_ctx$@, arg: Ast_node$@): Bool //<
     //< Whether the head name of a type argument names no type at all
-    //<
     //< Only the head name (`mod.Box2` of `mod.Box2<|t|>$@`). `Self` (unbound in a trait) and a
     //< leading `_` pass, as in report_type_existence_error in type_check.kspl.
     switch type_arg_head(arg)
@@ -535,7 +521,6 @@ priv fn names_unknown_type(c: Sema_ctx$@, arg: Ast_node$@): Bool //<
 fn refuses_arg_kind(c: Sema_ctx$@, arg: Ast_node$@, decl: Ast_node$@, param: Ast_node$@,
     own: Ast_node$@): Bool //<
         //< Reports a written argument of the other kind than its parameter, and says whether it did
-        //<
         //< own is the enclosing generic's parameter the argument names, or null: its kind is the
         //< argument's. A name that names nothing is left to the type check, which says so.
     if param == null
@@ -549,7 +534,6 @@ fn refuses_arg_kind(c: Sema_ctx$@, arg: Ast_node$@, decl: Ast_node$@, param: Ast
 
 fn written_arg_is_value(arg: Ast_node$@, c: Sema_ctx$@): Bool //<
     //< Whether a written type argument is a value: a literal, a constant's name, or arithmetic
-    //<
     //< Anything else stands for a type. A generic's own `const` parameter folds to nothing in its
     //< declaration, so the declaration's check asks the names in scope before this.
     return is_literal_arg(arg) || holds_value_expr(arg) ||
@@ -571,7 +555,6 @@ priv fn refuse_computed_arg(c: Sema_ctx$@, arg: Ast_node$@) //<
 fn refuse_arg_kind(c: Sema_ctx$@, arg: Ast_node$@, generic: Ast_node$@, param: Ast_node$@,
     own: Ast_node$@) //<
         //< Reports a type argument of the other kind than its parameter's: value or type
-        //<
         //< own is the enclosing generic's parameter the argument names, or null; the hint then
         //< says how to declare it instead. Any other argument is not quoted: sugar has rewritten
         //< its text (`U8[]` reads `Slice<|U8|>`), and the caret shows it.
@@ -615,7 +598,6 @@ priv fn is_literal_arg(node: Ast_node$@): Bool //<
 
 priv fn type_arg_head(node: Ast_node$@): Ast_node$@? //<
     //< The node holding a type argument's head name (a path or an identifier)
-    //<
     //< none for a literal or `fn(…)`; the postfix and inner arguments are not entered.
     if node == null
         return .none
@@ -636,7 +618,6 @@ priv fn type_arg_head(node: Ast_node$@): Ast_node$@? //<
 
 priv fn holds_value_expr(node: Ast_node$@): Bool //<
     //< Whether a type argument computes a value (`2 + 1`, `a ? b : c`, `-n`) instead of naming one
-    //<
     //< Only what const_type_arg_value folds, or a plain literal, can stand there. Let through, the
     //< argument is read as a type, the instance takes the node's text for a name, and the C holds
     //< `return expr;` (Principle 2).
@@ -657,7 +638,6 @@ priv fn holds_value_expr(node: Ast_node$@): Bool //<
 
 priv fn const_type_arg_value(node: Ast_node$@, c: Sema_ctx$@): I32? //<
     //< If the type argument is **a name** or **a negated literal** that folds, returns its value
-    //<
     //< A plain literal (`Foo<|8|>` / `Foo<|true|>`) has no type path, so it gives none. A negated
     //< one (`Foo<|-3|>`) is a unary node whose text is the `-` alone, so it is folded here.
     //< Caution: Do not descend into a nested type argument (the `n` of `Foo<|Bar<|n|>|>`) or a
@@ -695,7 +675,6 @@ priv fn set_resolved_def_node(path_node: Ast_node$@, atom: Ast_node$@, target_de
 
 fn fn_signature_type_id(node: Ast_node$@, c: Sema_ctx$@): I32!Sema_error //<
     //< Builds the type ID of a function pointer's canonical type "fn(T1,T2):Ret"
-    //<
     //< node is a k_type_fn_sig or a k_decl_fn. **Build both through this one function**, or the
     //< names drift and the comparison always fails (or always succeeds).
     $tname: = Str_builder.new()
@@ -725,7 +704,6 @@ fn fn_signature_type_id(node: Ast_node$@, c: Sema_ctx$@): I32!Sema_error //<
 
 fn own_fn_type_id(decl: Ast_node$@, c: Sema_ctx$@): I32!Sema_error //<
     //< The function type of the function decl declares, its types read in decl's own file
-    //<
     //< The parameters' types use the declaring file's import aliases, so they resolve there, or
     //< they read as undefined. A method's receiver is its first parameter, as written.
     old_file: = c.file_name
@@ -746,7 +724,6 @@ priv fn apply_type_postfixes(c: Sema_ctx$@, base_tid: I32, r: Ast_node$@): I32!S
 
 priv fn apply_type_postfix(c: Sema_ctx$@, current_tid: I32, p: Ast_node$@): I32!Sema_error //<
     //< The type one postfix level (`@` or `[…]`) makes of `current_tid`
-    //<
     //< `!E` is no level: the parse folds it into `Result` (fold_sugar_postfixes in
     //< `../../parse/desugar_slice.kspl`).
     // A `$` on the postfix makes that level's subject mutable, no mark immutable, per level, so

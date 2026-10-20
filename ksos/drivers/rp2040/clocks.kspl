@@ -1,5 +1,4 @@
 //< Initializing the clock tree for the real Raspberry Pi Pico / Pico W (RP2040) chip
-//<
 //< Out of reset the RP2040 runs on the built-in ROSC (about 6.5MHz, drifting), but **USB needs
 //< exactly 48MHz on clk_usb**. This starts the crystal (XOSC at 12MHz) and moves each clock to a
 //< fixed value through the two PLLs.
@@ -22,7 +21,6 @@ const SYS_HZ: U32 = 125000000 // clk_sys (= the source of the CPU / SysTick / PW
 const USB_HZ: U32 = 48000000 // clk_usb (USB is fixed at 48MHz; it must not change)
 const ADC_HZ: U32 = 48000000 // clk_adc (the ADC expects 48MHz, at 96 cycles per conversion)
 const RTC_HZ: U32 = 46875 //< clk_rtc
-    //<
     //< The RTC divides this by CLKDIV_M1 + 1 to get 1Hz, so `RTC_HZ - 1` is passed to rtc.init
     //< (48MHz / 1024, as in pico-sdk).
 const RTC_DIV: U32 = USB_HZ / RTC_HZ
@@ -38,7 +36,6 @@ const XOSC_ENABLE: U32 = 0xfabU32 << 12
 const XOSC_STABLE: U32 = 1U32 << 31
 
 const XOSC_STARTUP_DELAY: U32 = 47 //< how long to wait for XOSC to start and settle
-    //<
     //< One count of STARTUP.DELAY is 256 cycles. It is pico-sdk's formula ((XOSC_HZ / 1000) + 128)
     //< / 256 with 12MHz (= 47).
 
@@ -65,7 +62,6 @@ const CLK_RTC_DIV: U32 = 0x40008070
 const CLK_SYS_RESUS_CTRL: U32 = 0x40008078
 
 const CTRL_SRC_BITS: U32 = 0x3U32 //< the CTRL register's shared bits
-    //<
     //< SRC is the glitchless mux (clk_ref/clk_sys only), and AUXSRC is common to every clock.
 const CTRL_AUXSRC_BITS: U32 = 0x7U32 << 5
 const CTRL_ENABLE: U32 = 1U32 << 11
@@ -79,7 +75,6 @@ const CLK_RTC_AUXSRC_PLL_USB: U32 = 0
 const CLK_PERI_AUXSRC_CLK_SYS: U32 = 0
 
 const DIV_BY_ONE: U32 = 1U32 << 8 //< DIV is 24.8 fixed point (the integer part is bit[31:8])
-    //<
     //< No division = 1.0.
 
 const WATCHDOG_TICK: U32 = 0x4005802c
@@ -113,7 +108,6 @@ priv fn pll_start(base: U32, refdiv: U32, fbdiv: U32, postdiv1: U32, postdiv2: U
 priv fn switch_glitchless(ctrl: U32, selected: U32, div: U32, src: U32, auxsrc: U32):
     Void!mmio.Driver_error //<
         //< Switches a clock that has a glitchless mux (clk_ref / clk_sys)
-        //<
         //< Caution: When moving to the aux source, **set SRC to 0 first** and then write AUXSRC, so
         //< the aux mux's switching glitch does not reach downstream. SELECTED (one-hot) shows it
         //< finished.
@@ -131,7 +125,6 @@ priv fn switch_glitchless(ctrl: U32, selected: U32, div: U32, src: U32, auxsrc: 
 
 priv fn switch_aux_only(ctrl: U32, div: U32, divisor: U32, auxsrc: U32) //<
     //< Switches a clock that has no glitchless mux (clk_peri / clk_usb / clk_adc / clk_rtc)
-    //<
     //< This one **clears ENABLE to stop it** before changing AUXSRC (while running, it glitches).
     //< Caution: **When div is 0, do not write to it.** clk_peri has no DIV register, and that
     //< address is the read-only SELECTED. The divisor is written while the clock is stopped.

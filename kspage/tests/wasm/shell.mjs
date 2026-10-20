@@ -199,13 +199,20 @@ function entryPoints(host) {
     styleNames: styleNames,
     styleOf: () => out(w.kspage_web_style()),
     setStyle: (name) => w.kspage_web_set_style(stage(name)) !== 0,
-    paraOf: (i) => {
-      w.kspage_web_style_para(i, scratch);
-      return read(8);
+    // Style `i` as its saved text holds it (null where there is none), and putting one back.
+    // **The field names are the saved text's** (`kspage/share/store.kspl`); a field left out is
+    // unset or its default.
+    styleData: (i) => {
+      const len = w.kspage_web_style_text(i);
+      return len > 0 ? JSON.parse(out(len)) : null;
     },
+    setStyleData: (i, data) => w.kspage_web_set_style_text(i, feed(JSON.stringify(data))),
+    // The eight numbers of a fill and line, and then its shape's name.
     panelAt: (i) => {
       w.kspage_web_panel(i, scratch);
-      return read(9);
+      const got = read(8);
+      got.push(out(w.kspage_web_panel_shape(i)));
+      return got;
     },
     surfaceAt: (i) => {
       w.kspage_web_surface(i, scratch);
@@ -234,6 +241,23 @@ function entryPoints(host) {
 //
 // The style names the sections reach for are the document's (`kspage/content`'s sample), so they
 // stay as they are until that side moves.
+
+// The styles that several sections declare the same way. Each section lists them in its own order.
+// Caution: **Do not change one for a single section.** Give that section its own style instead
+// (as `paper.mjs`'s `body` is), or the other sections' measures move with it.
+export const shared = {
+  heading: { name: "heading", size_px: 28.0, weight: 700, space_after: 8.0 },
+  body: { name: "body", space_after: 12.0 },
+  strong: { name: "strong", weight: 700 },
+  table: { name: "table", space_before: 12.0, space_after: 12.0, arrange: "grid" },
+  cell: { name: "cell", pad: 4.0, rule_width: 1.0, rule_color: "#cccccc" },
+  headingCell: { name: "heading-cell", pad: 4.0, rule_width: 1.0, rule_color: "#cccccc",
+    fill: "#f0f0f0" },
+  amount: { name: "amount", places: 0, grouped: true, prefix: "$", pad: 4.0,
+    rule_width: 1.0, rule_color: "#cccccc" },
+  slide: { name: "slide", space_before: 12.0, space_after: 12.0, width: 620.0,
+    height: 120.0, arrange: "absolute" },
+};
 
 // A head is a style's name alone, or the fields (a block holding `name` / `columns` / `frame`
 // takes the fields).

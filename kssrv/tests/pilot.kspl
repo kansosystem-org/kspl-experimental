@@ -1,5 +1,4 @@
 //< Reads the policy `GET /api/pilot` serves, by the same steps the car takes
-//<
 //< It is not a suite; `kssrv/tests/main.kspl` and `kssrv/tests/copy.kspl` use it.
 //< Caution: **Do not copy kssrv/pilot.kspl's formulas; build only from what came back.** By design
 //< the blob holds both how the features are made and what the manoeuvres mean. "The shipped policy
@@ -57,7 +56,6 @@ struct Drive //< the answer to one observation
 priv const FEATURE_COUNT: Sz = 5 //< the count of features (valid, distance, left, centre, right)
 
 priv const SILU_FLOOR: F64 = -60.0 //< the input below which SiLU is taken as 0
-    //<
     //< For large negative z, exp(-z) overflows, so the result is set to 0 there.
 
 priv fn silu(z: F64): F64
@@ -67,11 +65,10 @@ priv fn silu(z: F64): F64
 
 priv fn features(b: Blob, dist_mm: I64, line: I64, out: List<|F64|>$@) //<
     //< Makes the features from an observation
-    //<
     //< The only constant is `far_mm`, and the blob holds that.
     valid: = dist_mm > 0I64
     raw: = F64::dist_mm
-    clamped: = raw if raw < b.far_mm else b.far_mm
+    clamped: = math.min(raw, b.far_mm)
     out.push(1.0 if valid else 0.0)
     out.push((clamped / b.far_mm) if valid else 0.0)
     out.push(1.0 if (line & 4I64) != 0I64 else 0.0)
@@ -90,7 +87,6 @@ priv fn affine(x: List<|F64|>@, w: Tensor<|F32|>, bias: Tensor<|F32|>, out: List
 
 fn drive(b: Blob, dist_mm: I64, line: I64, scratch: Arena$@): Drive //<
     //< Gives the manoeuvre for an observation from the blob alone
-    //<
     //< `scratch` is a working arena that is rewound.
     mark: = scratch.save()
     $x: = List<|F64|>.new(scratch)
@@ -118,7 +114,6 @@ priv fn argmax(logits: List<|F64|>@): Sz
     return best
 
 priv fn top_margin(logits: List<|F64|>@, best: Sz): F64 //< the gap between first and second
-    //<
     //< Where there is only one, the gap is the best logit itself.
     $second: F64 = 0.0
     $seen: = false

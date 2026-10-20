@@ -1,5 +1,4 @@
 //< Catches two things written in separate places that drift apart unnoticed (not the suite)
-//<
 //< **Each of these builds either way.** A diagnostic's code missing from the specification, or an
 //< implementation deleted while the specification still names it: nothing fails (Principle 5
 //< turned round).
@@ -30,7 +29,6 @@ priv const SPEC_DIAGNOSTICS: U8[] = "ksplc/docs/SPEC-diagnostics.md" //<
     //< the document holding each code's section
 
 priv fn is_code(s: U8[], _arena: Arena$@): Bool //< whether it is one of `EWIH` plus four digits
-    //<
     //< Caution: **Keep it a function of one text.** Otherwise the samples below cannot be passed to
     //< it, and a broken judgment fails for nobody ("Showing that a check can fire" in
     //< `../docs/HOWTO-write-a-suite.md`).
@@ -89,7 +87,6 @@ priv fn check_codes(arena: Arena$@): List<|U8[]|>
 
 priv fn check_emitted_codes(codes: List<|U8[]|>@, arena: Arena$@) //<
     //< Checks that every `[CODE]` the compiler's own source writes is in the registry
-    //<
     //< **An unregistered code still prints**, but `##lint` and `ksplc.cfg` cannot set its level,
     //< and the summary leaves it out of the codes it tells the reader to `ksplc explain`.
     $bad: = List<|U8[]|>.new(arena)
@@ -99,7 +96,7 @@ priv fn check_emitted_codes(codes: List<|U8[]|>@, arena: Arena$@) //<
             if !is_code(word, arena)
                 continue
             seen += 1
-            if !htext.has(codes, word)
+            if !codes.contains(word)
                 scan.push_unique(bad@,
                     arena.text().s(rel).s(": ").s(word).take())
     verdict.check_list("every code the compiler writes is registered", seen, "codes written", bad@,
@@ -215,7 +212,6 @@ priv fn check_kssrv_promises(arena: Arena$@)
 
 priv fn check_fixtures(codes: List<|U8[]|>@, arena: Arena$@) //<
     //< Checks that each code has test input that shows it is reported
-    //<
     //< The list and the specification alone cannot notice it stopped firing (Principle 5).
     //<
     //< The input is in `ksplc/tests/lint/` (it is reported) or `ksplc/tests/negative/` (it fails).
@@ -304,7 +300,7 @@ priv fn check_ast_kinds(arena: Arena$@)
             continue
         at: = find_sig_name(kinds@, k)
         spelled: = k.sub_from(2) if at == 0 else names.get(at - 1)
-        if spelled.len > 0 && htext.has(rules@, spelled)
+        if spelled.len > 0 && rules.contains(spelled)
             continue
         if mentions_kind(all, k)
             continue
@@ -352,7 +348,6 @@ priv const SPEC_LANG: U8[] = "docs/SPEC-programming-language.md"
 
 priv fn names_in(src: U8[], head: U8[], arena: Arena$@): List<|U8[]|> //<
     //< The names the function that `head` opens in src compares against, each once
-    //<
     //< Caution: **Search only inside the function**: `attrs.kspl` holds the directives' list too,
     //< and mixing the two passes neither check.
     $out: = List<|U8[]|>.new(arena)
@@ -368,7 +363,6 @@ priv fn names_in(src: U8[], head: U8[], arena: Arena$@): List<|U8[]|> //<
 
 priv fn body_end(rest: U8[]): Sz //<
     //< Where the declaration at the start of `rest` ends
-    //<
     //< That is the first line after it starting at column 0 (a `}` closing a brace-written body is
     //< such a line too), or the end.
     //<
@@ -427,7 +421,6 @@ priv fn check_attrs(arena: Arena$@)
 
 priv const DIR_LIST_HEAD: U8[] = "DIRECTIVE_NAMES: U8[] = \"" //<
     //< A directive (`##name`) is compared across the same three
-    //<
     //< **The grammar holds no name**, so a forgotten update shows only in the code, the
     //< specification, the colouring and the list carried with a diagnostic.
 
@@ -478,7 +471,6 @@ priv const SAID_FLAG: U8[] = "--enable-logging=stderr" //<
 
 priv fn word_after(text: U8[], mark: U8[], arena: Arena$@): U8[] //<
     //< The text from `mark` to the end of its line, the spaces cut
-    //<
     //< Empty where there is none.
     for line in text.lines(arena)
         if at: = line.find_str(mark)

@@ -1,5 +1,4 @@
 //< The checks against import lines, run once at the end of the analysis
-//<
 //< Each selector names something that exists, no `as` repeats the alias the path gives, and no
 //< import goes unused. The table itself is in ksplc/sema/session/import_table.kspl.
 // ==========================================
@@ -16,34 +15,7 @@ import "std/chars" // testing and slicing single characters
 import "std/str"
 
 impl Sema_ctx
-    fn bind_import_symbols(r: Self$@) //<
-        //< Binds each name in an import's braces to its declaration, and reports one naming nothing
-        //<
-        //< **The name in the braces is a use of that declaration** (its `def_node`), so references
-        //< and renaming reach the import line. **A missing one is an error, not a lint**, or a slip
-        //< (`{ twise }`) surfaces as `undefined path or identifier` at the use. Visibility is asked
-        //< at the same line (check_import_symbols_visible in sema/decl/access.kspl). A diagnostic
-        //< here takes its file from the declaration node, so no current file is set for it.
-        for entry in r.import_symbols.files.items()
-            info: = entry.value
-            if info.decl_node == null
-                continue
-            file_env: = r.env.files.get(info.target_path).unwrap_or(null)
-            if file_env == null
-                continue // the loading itself failed (another diagnostic has been reported)
-            sym: = file_env.symbols.get(info.original_name).unwrap_or(null)
-            if sym != null
-                name: = info.decl_node.get_selector_name()
-                if name != null
-                    name.def_node = sym.node
-                continue
-            if r.suppress_errors
-                continue
-            r.clear_scratch()
-                .s("file '\{info.target_path\}' has no symbol named '\{info.original_name\}'")
-            r.err(info.decl_node, r.scratch.slice())
     fn check_redundant_import_alias(r: Self$@) //< reports an `as` that adds nothing
-        //<
         //< A plain `import "a/b";` derives the same alias from the path's last part: two ways to
         //< write one thing ("One notation per purpose" in docs/DESIGN-principles.md). `as` is for a
         //< different name (`import "ksplc/base/ast" as base_ast;`).

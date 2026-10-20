@@ -1,5 +1,4 @@
 //< ksai's foundation: the multi-dimensional `Tensor<|T|>`, and the operations over it
-//<
 //< matmul, rmsnorm, softmax, RoPE, the activation functions and the arithmetic operators. **The
 //< matrix-product kernel is pure KSPL by default.** It has no dependencies and is written so that
 //< Clang's auto-vectorization works. It hands off to BLAS only in a `--define=blas` build. Read
@@ -12,14 +11,12 @@ import "std/str" { Str_builder }
 import "std/strfmt"
 
 pub enum Tensor_error //< why an operation could not run on the shapes it was given
-    //<
     //< A shape mismatch can come from run-time data (a bad shape in weights read from a
     //< safetensors file). So it propagates as an error union (?E) for the caller to handle.
     rank_mismatch //< the number of dimensions is not what the operation expects
     shape_mismatch //< a dimension's size does not match, such as the inner-product dimension
     out_of_bounds //< a row number outside the tensor; a bad element index stops the program
 pub const MAX_TENSOR_ELEMS: Sz = 100000000 //< the most elements one tensor can hold.
-    //<
     //< The cap `new` enforces, which fits cfg(freestanding)'s 32-bit Sz (800MB even at F64). It is
     //< pub so safetensors.get_tensor, which bypasses `new`, applies the same cap.
 
@@ -37,7 +34,6 @@ impl<|T|> Tensor<|T|>
     fn from_raw_parts(data_ptr: T$@, shape_ptr: Sz$@, ndim: Sz, size: Sz, arena: Arena$@):
         Tensor<|T|> //<
             //< Builds a tensor from raw parts whose shape_ptr, ndim and size the caller computed
-            //<
             //< Both an ordinary allocation and a zero-copy read use it.
         return Tensor<|T|>::{
             .data = data_ptr,
@@ -92,7 +88,6 @@ impl<|T|> Tensor<|T|>
         data_ptr: = T$@::arena.alloc(data_bytes)
         return Tensor<|T|>.from_raw_parts(data_ptr, shape_ptr, ndim, size, arena)
     pub fn dup( //< a copy in another arena, flattened to one dimension
-        //<
         //< It is for keeping a value alive after the caller's arena is gone.
         r: Self$@,
         arena: Arena$@, //< the arena the copy is allocated from
@@ -107,7 +102,6 @@ impl<|T|> Tensor<|T|>
         for i in Range.asc(r.size)
             (r.data + i)$ = val
     pub fn fill_uniform( //< writes uniform random values into every element
-        //<
         //< **A constant start makes every unit symmetric and training impossible** (every token
         //< would get the same embedding), so training from scratch begins here.
         r: Self$@,
@@ -135,14 +129,12 @@ impl<|T|> Tensor<|T|>
         if k != rhs.shape[0] || k <= 0 || r.shape[0] < 0 || rhs.shape[1] < 0
             throw .shape_mismatch
     fn holds_matrix(r: Self@, m: Sz, n: Sz): Bool //< whether it has exactly `m * n` elements
-        //<
         //< Caution: **Divide rather than multiply.** Where `Sz` is 32 bits, `m * n` can wrap to a
         //< smaller size, and a kernel writing `[m, n]` would write past the end.
         if m < 0 || n < 0
             return false
         return r.size == 0 if n == 0 else r.size % n == 0 && r.size / n == m
     pub fn matmul_into( //< the matrix product, written into a tensor the caller owns
-        //<
         //< It is for a hot loop that would otherwise allocate once per step.
         r: Self$@,
         rhs: Tensor<|T|>, //< the right-hand matrix; its rows must match this one's columns
@@ -226,7 +218,6 @@ impl<|T|> Tensor<|T|>
         return out
     pub fn softmax(r: Self$@): Tensor<|T|>!Tensor_error //<
         //< each row turned into weights that sum to 1
-        //<
         //< The row's maximum is subtracted first, so a large value does not overflow.
         if r.shape.len < 2
             throw .rank_mismatch
@@ -262,7 +253,6 @@ impl<|T|> Tensor<|T|>
         return r.rope_rotate(start_pos, false)
     fn rope_rotate(r: Self$@, start_pos: Sz, invert: Bool): Tensor<|T|> //<
         //< Rotates each adjacent pair (2j, 2j+1) by the angle θ
-        //<
         //< Caution: **Get the reverse rotation from here, with `invert`.** RoPE is orthogonal, so
         //< the backward pass is a rotation by -θ (`apply_rope_grad` in `ksai/grad.kspl`). **Do not
         //< copy the body with only the sign changed.** A fix to the frequency base or the indexing
@@ -296,7 +286,6 @@ impl<|T|> Tensor<|T|>
     fn apply_rope_neox(r: Self$@, start_pos: Sz, head_dim: Sz, theta: F64):
         Tensor<|T|>!Tensor_error //<
             //< The RoPE of the NeoX/Llama/Qwen family, pairing each head's first half with its last
-            //<
             //< apply_rope is the interleaved style (pair 2j, 2j+1). HF Llama/Qwen pair the first
             //< half's j with the second half's j+hd/2 (rotate_half), per head of head_dim. Each has
             //< its own base theta (1e6 for Qwen2.5). r's shape is [seq, n_heads*head_dim].
@@ -327,7 +316,6 @@ impl<|T|> Tensor<|T|>
         return out
     fn update_row(r: Self$@, row_idx: Sz, src: Tensor<|T|>): Void!Tensor_error //<
         //< Overwrites row `row_idx` with `src`, which is one row (for saving into the KV cache)
-        //<
         //< Caution: **Refuse a `src` of several rows**: only its first would be copied, silently.
         if r.shape.len < 2 || src.shape.len < 2
             throw .rank_mismatch
@@ -347,7 +335,6 @@ impl<|T|> Tensor<|T|>
             (r.data + offset + i)$ = (src.data + i)$
     fn view_rows(r: Self$@, first: Sz, num_rows: Sz, arena: Arena$@): Tensor<|T|>!Tensor_error //<
         //< Builds a zero-copy view of `num_rows` rows from `first`
-        //<
         //< It serves reading the KV cache so far, or a sequence's tail.
         if r.shape.len != 2
             throw .rank_mismatch
@@ -373,7 +360,6 @@ impl<|T|> Tensor<|T|>
         return Tensor<|T|>.new(r.shape, r.arena)
 
     pub fn checked_add( //< element-wise sum; rejects shapes that do not match
-        //<
         //< **Do not merge the three loops below into one.** Passing the operation as a function
         //< pointer makes an indirect call per element. Then -O3's auto-vectorization stops working
         //< (the property the SIMD gate in `tests` checks).
@@ -417,7 +403,6 @@ impl<|T|> Tensor<|T|>
         return out
 
 impl<|T|> Tensor<|T|>: Index_place<|Sz, T|> //< so `t[i]` reads and writes one element
-    //<
     //< Note: An index out of range panics, for the same reason as `std/ds.kspl`'s List. The caller
     //< can compute the range from `size`, so going outside it is a bug. Only a shape mismatch is a
     //< recoverable `Tensor_error` (the reason is at `Tensor_error`).
@@ -464,7 +449,6 @@ fn matmul_kernel<|T|>(c: T$@, a: T$@, b: T$@, m: Sz, k: Sz, n: Sz)
 #cfg(!blas)
 fn transb_kernel<|T|>(c: T$@, a: T$@, b: T$@, m: Sz, k: Sz, n: Sz) //<
     //< Four outputs at once, **each summed separately in ascending order**
-    //<
     //< One running sum waits on its last addition at every step. Four independent ones overlap.
     //< Each still adds its terms in the same order, so the result is identical bit for bit. This
     //< is the third technique beside the two in "The kernels are spelt for the auto-vectorizer, not
@@ -533,7 +517,6 @@ extern "C"
 fn blas_gemm<|T|>(ta: I32, tb: I32, m: Sz, n: Sz, k: Sz, a: T$@, lda: Sz, b: T$@, ldb: Sz, c: T$@,
     ldc: Sz) //<
         //< cfg(blas): the shared dispatch to BLAS gemm, C = op(A)@op(B) with alpha=1 and beta=0
-        //<
         //< It is RowMajor and transposes by ta/tb (`CBLAS_NO_TRANS` / `CBLAS_TRANS`); it picks
         //< sgemm or dgemm by the element size (F32 or F64 only). matmul and grad.kspl's backward
         //< gemm share it.

@@ -1,5 +1,4 @@
 //< Constant folding: the value of an integer expression known at translation time
-//<
 //< It folds literals, the operators, `sizeof` / `offsetof`, casts and references to a `const`, at
 //< the operands' width. **A signed result that does not fit is an error**, as is a division by
 //< zero. The quiet forms (`try_eval_constexpr`) tell whether an expression folds, reporting
@@ -24,7 +23,6 @@ impl U8[]
     priv fn parse_int_literal(r: U8[], node: Ast_node$@, c: Sema_ctx$@, negated: Bool):
         I64!Sema_error //<
             //< Reads an integer literal, negated where `negated`, as I64; outside I64 is an error
-            //<
             //< Wrapped silently, an array size or a generic bound reaches Lower/Gen as a smaller,
             //< wrong value. A per-type range (300 into a `U8`) is check_literal_bounds's job in
             //< sema/body/literal.kspl. A leading `-` comes from a substituted const generic.
@@ -58,7 +56,6 @@ impl Sema_ctx
 
     fn fold_quietly(r: Self$@, node: Ast_node$@, narrow: Bool): I64!Sema_error //<
         //< Folds a constant expression, discarding its diagnostics, narrowed to I32 where `narrow`
-        //<
         //< **Every quiet fold goes through here.** The suppression flag and the error count are put
         //< back on every way out, so a fold that fails leaves no trace.
         old_err: = r.diags.counts.errors
@@ -77,7 +74,6 @@ impl Sema_ctx
 
     fn eval_attribute_arg(r: Self$@, n: Ast_node$@, name: U8[]): I32 //<
         //< Folds and returns the N of `#name(N)`
-        //<
         //< Returns 0 where the attribute is absent. The value's shape is checked only in
         //< `sema/decl/attrs.kspl`.
         if attr: = n.get_attribute(name)
@@ -87,7 +83,6 @@ impl Sema_ctx
 
     fn try_eval_constexpr(r: Self$@, node: Ast_node$@): I32? //<
         //< The same quiet evaluation, but **it tells whether it folded**
-        //<
         //< Caution: Use this where the value becomes a name (a type argument's canonical name).
         //< eval_constexpr_quiet's default cannot be told apart from a fold that yields the same
         //< value.
@@ -97,7 +92,6 @@ impl Sema_ctx
 
     fn try_eval_constexpr_wide(r: Self$@, node: Ast_node$@): I64? //<
         //< The same quiet fold, not narrowed to I32
-        //<
         //< **Code that needs a value at its full width uses it.** Examples are a reference to a
         //< `const` in a global's initializer, on either backend, and a constant compared against a
         //< type's range. So `1U32 << 31` survives.
@@ -106,7 +100,6 @@ impl Sema_ctx
         return .some(v)
 
 priv const I64_MAX_VAL: I64 = 9223372036854775807I64 //< i64's boundaries
-    //<
     //< The lower one is built as `-(2^63 - 1) - 1`: the literal 2^63 does not fit in I64. The `I64`
     //< suffix keeps it clear of the rule for a `-`'s left-hand literal in sema/body/binary.kspl.
 priv const I64_MIN_VAL: I64 = -9223372036854775807I64 - 1
@@ -126,7 +119,6 @@ priv fn fit_or_report(r: Ast_node$@, c: Sema_ctx$@, v: I64, bits: I32, is_uns: B
     return v
 
 priv fn fit_result(v: I64, bits: I32, is_uns: Bool): I64 //< fits a result into the operands' type
-    //<
     //< Unsigned wraps mod 2^bits, as in the generated C; signed is returned unchanged (the caller
     //< rejects overflow); 64-bit is I64's bit pattern unchanged.
     if !is_uns || bits >= 64
@@ -135,33 +127,18 @@ priv fn fit_result(v: I64, bits: I32, is_uns: Bool): I64 //< fits a result into 
 
 fn int_suffix_type_id(txt: U8[]): I32 //<
     //< The type a numeric literal's suffix (the `U8` of `300U8`) names, or unknown
-    //<
     //< It is unknown where there is no suffix.
     //<
     //< Caution: Keep this test in this one place, or the type check and the range check disagree
     //< on the suffix.
-    if txt.ends_with("Sz")
-        return I32::sema_type_env.Builtin_type_id.size_type
-    if txt.ends_with("U8")
-        return I32::sema_type_env.Builtin_type_id.u8_type
-    if txt.ends_with("I8")
-        return I32::sema_type_env.Builtin_type_id.i8_type
-    if txt.ends_with("U16")
-        return I32::sema_type_env.Builtin_type_id.u16_type
-    if txt.ends_with("I16")
-        return I32::sema_type_env.Builtin_type_id.i16_type
-    if txt.ends_with("U32")
-        return I32::sema_type_env.Builtin_type_id.u32_type
-    if txt.ends_with("I32")
-        return I32::sema_type_env.Builtin_type_id.i32_type
-    if txt.ends_with("U64")
-        return I32::sema_type_env.Builtin_type_id.u64_type
-    if txt.ends_with("I64")
-        return I32::sema_type_env.Builtin_type_id.i64_type
+    // The integer types are the ids from `I8` to `Sz`. No suffix ends another, so order is free.
+    first: = Sz::sema_type_env.Builtin_type_id.i8_type
+    for id in Range.new(first, Sz::sema_type_env.Builtin_type_id.size_type + 1, 1)
+        if txt.ends_with(sema_type_env.BUILTIN_TYPES[id].name)
+            return I32::id
     return I32::sema_type_env.Builtin_type_id.unknown
 
 fn wrap_to(v: I64, bits: I32, is_uns: Bool): I64 //< the value a cast to the width gives
-    //<
     //< It keeps the low `bits` bits, as C's conversion does: zero-extended for an unsigned type,
     //< sign-extended for a signed one.
     if bits >= 64
@@ -173,13 +150,11 @@ fn wrap_to(v: I64, bits: I32, is_uns: Bool): I64 //< the value a cast to the wid
 
 priv const GUARANTEED_CONST_CHAIN: I32 = 256 //<
     //< The constant-reference chain length the specification promises, named by the diagnostic
-    //<
     //< The promise is in "Implementation limits" in docs/SPEC-programming-language.md.
     //< Caution: **Do not show max_constexpr_depth below**: it counts nodes, a larger number than
     //< the chain that can be written.
 
 priv const MAX_CONSTEXPR_DEPTH: I32 = GUARANTEED_CONST_CHAIN * 4 //< the fold's recursion limit
-    //<
     //< **The higher it is, the more a pathological input costs.** max_parse_tree_depth in
     //< ksplc/parse/normalize.kspl stops one expression's nesting. Only a chain across declarations
     //< (eval_ident_or_path) reaches here.
@@ -196,13 +171,11 @@ priv struct Bad_init //< where a form that cannot be a static initializer was fo
 impl Ast_node
     fn eval_constexpr(r: Self$@, c: Sema_ctx$@): I32!Sema_error //<
         //< Folds a constant expression as I32
-        //<
         //< **Narrowing happens only here**; out of range is always an error.
         return r.check_i32_overflow(c, r.eval_constexpr_internal(c, 0)!)!
 
     fn eval_constexpr_wide(r: Self$@, c: Sema_ctx$@): I64!Sema_error //<
         //< Folds a constant expression, keeping I64
-        //<
         //< **Only code that writes a value out uses it** (try_eval_constexpr_wide). It emits a
         //< value that is correct for its type but does not fit I32, like `1U32 << 31`, without the
         //< narrowing rejecting it.
@@ -220,7 +193,6 @@ impl Ast_node
 
     priv fn report_cut_chain(r: Self$@, c: Sema_ctx$@) //<
         //< Reports, at the fold's head, a chain the depth limit cut, once per chain
-        //<
         //< **At the head, not where the walk stopped**: the cut lands at whatever constant lies
         //< max_constexpr_depth below the head. That line says nothing of where the chain starts.
         if !c.resolving.cut_waiting
@@ -314,7 +286,6 @@ impl Ast_node
 
     fn check_i32_overflow(r: Self$@, c: Sema_ctx$@, wide: I64): I32!Sema_error //<
         //< A value outside I32's range is an error, like division_by_zero
-        //<
         //< The reason is at parse_int_literal.
         if wide > I64::2147483647 || wide < I64::(-2147483647 - 1)
             return I32::r.report_overflow(c)!
@@ -473,7 +444,6 @@ impl Ast_node
 
     fn sizeof_path_names(r: Self$@, out: List<|Ast_node$@|>$@) //<
         //< The names of a `sizeof` target that could read as a value: `x`, `x.a`, `x[i]`, `x@`
-        //<
         //< The grammar tries a type first (`ksplc/kspl.kspeg`), so these arrive as type paths (an
         //< index as an array's length). Type arguments or another postfix make a type alone. out
         //< stays empty where the target is not such a path.
@@ -501,7 +471,6 @@ impl Ast_node
 
     fn sizeof_named_value(r: Self$@, c: Sema_ctx$@): Ast_node$@? //<
         //< The value a `sizeof` target parsed as a type names, as an expression to infer
-        //<
         //< Where the first name is a variable or a constant in scope, the path reads as that value.
         //< C reads a name the same way when a local variable hides a typedef with it
         //< (sizeof_path_names has the shapes).
@@ -560,7 +529,6 @@ impl Ast_node
 
     fn eval_offsetof(r: Self$@, c: Sema_ctx$@, _depth: I32): I64!Sema_error //<
         //< folds `offsetof(T, f)`
-        //<
         //< Caution: **Resolve the type the same way as `sizeof`** (`eval_sizeof`). The layout
         //< itself comes from `field_offset_of` in `sema/decl/layout.kspl`.
         target: = r.get_offsetof_type()
@@ -622,7 +590,6 @@ impl Ast_node
 
     priv fn fold_cast(r: Self$@, c: Sema_ctx$@, v: I64, depth: I32): I64 //<
         //< The value `T::x` gives for x's folded value v, as the generated code converts it
-        //<
         //< An integer keeps T's low bits (`U8::300` is 44, `I8::200` is -56). A pointer's or a
         //< float's cast is left to what reads it, and nothing but a `Bool` casts to `Bool`.
         //< Caution: **Wrap at the machine's width, not the portable one.** The LLVM backend emits
@@ -634,7 +601,6 @@ impl Ast_node
 
     fn fold_type(r: Self$@, c: Sema_ctx$@, depth: I32): I32 //<
         //< The type a constant subexpression folds at, unknown where nothing says (a bare literal)
-        //<
         //< Once the bodies are typed, it is the node's own type. **The declaration walk folds
         //< before anything is typed** (an array length, an enum tag). So there it is read from the
         //< spelling: a literal's suffix, a cast's target, a constant's declared type, a variant's
@@ -685,7 +651,7 @@ impl Ast_node
         named: = r.resolve_ref_symbol(c)
         if sym_ptr: = named
             switch sym_ptr.kind
-            case .enum_variant(_t)
+            case .enum_variant
                 return sym_ptr.type_id
             default {}
         if decl_node: = r.const_decl_of(named)
@@ -697,7 +663,6 @@ impl Ast_node
 
     priv fn resolve_ref_symbol(r: Self$@, c: Sema_ctx$@): Sema_symbol$@? //<
         //< The symbol this reference names, or none
-        //<
         //< It is read as any value's name is (read_written_name in name.kspl). A copy of the
         //< reading drifts until one folds and another does not.
         if path: = sema_decl_name.name_path_of(r)
@@ -708,7 +673,6 @@ impl Ast_node
 
     priv fn const_decl_of(r: Self$@, named: Sema_symbol$@?): Ast_node$@? //<
         //< The referenced constant's declaration node
-        //<
         //< Found by name where the lookup succeeds; otherwise the `def_node` Sema linked. null
         //< where it does not point at a constant.
         //< Caution: **Do not rely on the name alone.** The ABI pass (lower/abi.kspl) rewrites a
@@ -734,7 +698,6 @@ impl Ast_node
 
     fn const_init_expr(r: Self$@, c: Sema_ctx$@): Ast_node$@? //<
         //< The initializing expression of the `const` this reference points at
-        //<
         //< null where it points at no constant, or there is no initializer.
         //< Note: Used when the generated C writes a top-level `const`'s initializer
         //< (`gen/c/expr.kspl`). C requires a constant expression there, and in C99 the name of an
@@ -749,7 +712,6 @@ impl Ast_node
     priv fn find_bad_init_expr(r: Self$@, c: Sema_ctx$@, seen: Map<|Sz, Bool|>$@,
         clean: Map<|Sz, Bool|>$@): Bad_init? //<
             //< The first form in a top-level initializer that a static initializer cannot contain
-            //<
             //< It searches the initializer depth-first.
             //< Caution: eval_constexpr folds integers only, not `::{...}`, a string, null or a
             //< cast. **Follow a constant reference**, or `const A = B; const B = A;` slips through.
@@ -800,7 +762,6 @@ impl Ast_node
 
     priv fn reads_member(r: Self$@, c: Sema_ctx$@): Bool //<
         //< Whether it reads a struct's field or a slice's `.len` or `.ptr`
-        //<
         //< An array's `.len` is no read: sema has made it its integer already. A name through a
         //< module, an enum variant and a method are other kinds of node.
         if r.kind_id != .k_expr_postfix || !r.get_postfix_op().text.equals(".")
@@ -813,7 +774,6 @@ impl Ast_node
 
     fn check_static_initializer(r: Self$@, c: Sema_ctx$@) //<
         //< Checks a top-level variable's or constant's initializer
-        //<
         //< C requires a constant expression there. So a run-time computation is rejected here,
         //< rather than failing in C with `initializer element is not constant`.
         // Caution: **Track the path (seen) and the finished declarations (clean) with a Map**
@@ -842,7 +802,6 @@ impl Ast_node
 
     priv fn report_init_overflow(r: Self$@, c: Sema_ctx$@) //<
         //< Folds an initializer whose form passed, reporting overflow and division by zero
-        //<
         //< **`eval_constexpr` cannot be relied on.** The width and sign come from the operands'
         //< types.
         // **Fold quietly first**, or a string, `::{}`, `x@` or a function name gets a needless "not

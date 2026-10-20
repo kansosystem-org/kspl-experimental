@@ -1,5 +1,4 @@
 //< How values are written as text, and every format specifier an interpolation can use
-//<
 //< **All number writing is here.** It holds the `Formattable` implementations an interpolation
 //< desugars to, and `write_int` / `write_uint` / `write_float` / `write_ptr`. It also holds the
 //< wrapper types that a specifier such as a zero-padded width or hex desugars to. Parsing a
@@ -40,7 +39,6 @@ impl Int_fmt: Formattable //< so it can be used inside an interpolation
         return write_int(w, r.val, r.width, r.fill, r.comma)
 
 pub struct Uint_fmt //< a `U64` with its width, fill and comma setting, kept apart from `I64`
-    //<
     //< Caution: **Do not build it on Int_fmt.** A value of 2^63 or more becomes a negative I64 as
     //< soon as it is copied and prints as `-1`. Every other unsigned integer widens to I64
     //< correctly, so only U64 needs its own wrapper.
@@ -54,7 +52,6 @@ impl Uint_fmt: Formattable //< so it can be used inside an interpolation
         return write_uint(w, r.val, r.width, r.fill, r.comma)
 
 pub struct Hex_fmt //< a value written in hex, with a minimum width
-    //<
     //< Not `impl Writer { fn hex(...) }`: an extension on a trait passes sema, but genc uses the
     //< vtable, so a method missing from the declaration cannot be linked.
     //< io.out().s("addr=\{strfmt.hex(addr, 8)\}\n"); // addr=0x10000144
@@ -67,7 +64,6 @@ pub struct Hex_fmt //< a value written in hex, with a minimum width
 
 impl Hex_fmt: Formattable //< so it can be used inside an interpolation
     pub fn fmt(r: Self, w: Writer): Writer //< writes the value to w
-        //<
         //< **The digits are not truncated.** `digits` is a minimum width, as in C's `%x`. Cutting a
         //< value to its low digits would **change the value silently** when someone mistakes the
         //< digit count for the type's size. The lost high digits would appear nowhere.
@@ -116,7 +112,6 @@ priv const SHORTEST_PRECISION: I32 = -1 //<
     //< The precision that sets no digit count: negative means the shortest round-trip form
 
 pub struct Char_fmt //< one byte written as a character rather than a number
-    //<
     //< What `\{b:c\}` desugars to; a plain `\{b\}` is a decimal number.
     //< **One byte has two readings: "as a number" and "as a character".** The format string chooses
     //< which one prints. A choice by type would make the output change just because a value passed
@@ -134,7 +129,6 @@ priv fn uint_fmt_spec(val: U64, width: Sz, zero: Bool, comma: Bool): Uint_fmt
     return Uint_fmt::{ .val = val, .width = width, .fill = '0' if zero else ' ', .comma = comma }
 priv fn hex_fmt_spec(val: U64, width: Sz, zero: Bool, upper: Bool): Hex_fmt //<
     //< The function behind the hex format specifier (`\{v:x\}` / `\{v:08X\}`)
-    //<
     //< Caution: **Pass a signed value through the unsigned type of the same width.** Widening
     //< straight to `U64::` sign-extends, and `I32`'s -1 becomes 16 digits (C's `%x` gives 8).
     return Hex_fmt::{ .val = val, .digits = width, .prefix = false, .upper = upper,
@@ -180,7 +174,6 @@ impl U8
         //< what `:x` and `:X` in an interpolation desugar to
         return hex_fmt_spec(r, width, zero, upper)
     pub fn fmt_char(r: Self): Char_fmt //< what `:c` desugars to; only `U8` has it
-        //<
         //< **`U8` is the only type with `fmt_char`.** Nothing else is "a byte as a character", so
         //< `:c` on another type fails at compile time with "no such method".
         return Char_fmt::{ .val = r }
@@ -229,21 +222,17 @@ impl F64
 
 priv const MAX_PAD_LEN: Sz = 1000000 //<
     //< The most padding write_digits() writes, whatever width it is given
-    //<
     //< The width comes from the caller unchecked; the comment where write_digits uses it says why
     //< it is capped.
 
 pub const FLOAT_MAX_PRECISION: Sz = 19 //< the most digits `.N` writes after the point.
-    //<
     //< An F64 holds about 17 significant decimal digits, so later digits carry no information about
     //< the value, though they are still exact.
 priv const FLOAT_DIGITS_CAP: Sz = 340 //< the size of the buffer that holds the digits
-    //<
     //< The integer part is at most 309 digits (F64's maximum), the fractional part is at most the
     //< limit above, and a carry adds one digit.
 priv const SHORTEST_EXP_LOW: I32 = -6 //<
     //< The magnitudes where the shortest form switches to exponent form
-    //<
     //< Values below 10^-6 or at 10^21 and above are written `1.5e-7` / `1e+21`. **It is the same
     //< boundary as JSON (ECMAScript's Number::toString)**, so `\{x\}` and `std/json` print the
     //< same.
@@ -268,7 +257,6 @@ impl Sz: Formattable //< so it can be used inside an interpolation
     pub fn fmt(r: Self, w: Writer): Writer //< writes the value to w
         return write_int(w, r)
 impl U8: Formattable //< so it can be used inside an interpolation
-    //<
     //< Caution: **Do not copy an unsigned value into a narrower signed type**: `U32` to `I32`, or
     //< `U64` to `Sz`, turns a set high bit into `-1`. Types up to U32 widen implicitly into an I64
     //< for write_int; `U64` does not fit and goes through write_uint. Do not pass `I64` through
@@ -315,7 +303,6 @@ pub fn write_int( //< writes a signed integer as decimal
     return write_magnitude(w, mag, is_neg, width, fill, comma)
 
 priv fn write_uint( //< writes an unsigned integer as decimal; its top bit is not a sign
-    //<
     //< Caution: **Do not pass an unsigned value to write_int.** A value with its high bit set
     //< (`U32`'s 4294967295, `U64` at 2^63 or more) is a negative bit pattern in I64 and prints as
     //< `-1`.
@@ -330,7 +317,6 @@ priv fn write_uint( //< writes an unsigned integer as decimal; its top bit is no
 priv fn write_magnitude(w: Writer, mag: U64, is_neg: Bool, width: Sz, fill: U8, comma: Bool):
     Writer //<
         //< Builds the digits and aligns them, for both signed and unsigned values
-        //<
         //< The two differ only in how they get `mag` and `is_neg`. The digits go into a U8[32] on
         //< the stack, so nothing is allocated.
     $buf: U8[32] = ::{}
@@ -348,7 +334,6 @@ priv fn write_magnitude(w: Writer, mag: U64, is_neg: Bool, width: Sz, fill: U8, 
 priv fn write_digits(w: Writer, digits: U8[], is_neg: Bool, width: Sz, fill: U8, comma: Bool):
     Writer //<
         //< Writes a finished string of digits with the alignment and the three-digit grouping
-        //<
         //< Only when fill is `'0'` does it pad between the sign and the digits ("-0042"). With
         //< grouping those zeros are grouped too ("0,001,234"). Any other fill pads before the sign
         //< (" -42"). It takes a string because an F64's integer part can have 309 digits.
@@ -395,7 +380,6 @@ priv fn write_digits(w: Writer, digits: U8[], is_neg: Bool, width: Sz, fill: U8,
     return w
 
 priv fn write_float_special(w: Writer, v: F64, width: Sz): Bool //< writes NaN and infinity
-    //<
     //< Returns true if it wrote; a finite value writes nothing and returns false. **The text does
     //< not come from libc**: glibc writes a NaN with its sign bit set as `-nan`, MSVC's UCRT
     //< `-nan(ind)`.
@@ -434,7 +418,6 @@ priv fn bit_length(v: U64): I32
 
 priv fn next_digit(r: Bignat$@, s: Bignat@): U8 //<
     //< Extracts one digit: d = floor(r / s), and r becomes r mod s
-    //<
     //< d is 0..9, so it is found by repeated subtraction (the big-number type has no division).
     $d: U8 = 0
     for r.cmp(s) >= 0
@@ -443,14 +426,12 @@ priv fn next_digit(r: Bignat$@, s: Bignat@): U8 //<
     return d
 
 priv struct Float_digits //< a run of decimal digits
-    //<
     //< value ~= 0.d1 d2 … dn x 10^k (d1 is the 10^(k-1) digit). The digits are stored as ASCII.
     digits: U8[FLOAT_DIGITS_CAP]
     n: Sz
     k: I32
 
 priv fn increment_digits(d: Float_digits$@) //< adds 1 to the last digit
-    //<
     //< Trailing 9s carry, and if every digit is 9 the result is "1" followed by 0s, one digit
     //< longer.
     $i: Sz = d.n
@@ -471,7 +452,6 @@ fn floor_log10_pow2(e: I32, three_quarters: Bool): I32 //<
 
 priv fn round_to_odd(g: Wide, cp: U64): U64 //<
     //< floor(g x cp / 2^127), its lowest bit set unless the 63 bits below the point are all 0
-    //<
     //< It is Schubfach's r_o, with g split at bit 63 as the paper splits it.
     //< Caution: **Do not let the bits further down set it.** g is 10^-k rounded up, and that
     //< excess shows only there: counted, it turns a value exactly between two decimals into one
@@ -502,7 +482,6 @@ priv fn digits_of(out: Float_digits$@, f: U64, e: I32) //<
 
 priv fn shortest_digits(out: Float_digits$@, bf: Binary_float) //<
     //< Puts in out the fewest digits that read back as f x 2^e (f > 0), the nearest, ties to even
-    //<
     //< It is Raffaello Giulietti's Schubfach. Every decimal inside the rounding interval reads back
     //< as the value. The interval is narrower than 10^(k+1) and at least 10^k wide. So at most one
     //< multiple of 10^(k+1) is inside, and at least one multiple of 10^k: s and t, either side of
@@ -547,7 +526,6 @@ priv fn shortest_digits(out: Float_digits$@, bf: Binary_float) //<
 #noinline
 priv fn fixed_digits(out: Float_digits$@, bf: Binary_float, cutoff: I32) //<
     //< Puts in out, which holds none yet, the digits of f x 2^e (f > 0) down to 10^cutoff
-    //<
     //< r / s is the value in multiple precision. Scaled by a power of 10 to 0.1 <= r / s < 1, it
     //< is multiplied by 10 one digit at a time, and the remainder rounds the last digit.
     $r: = Bignat.from_u64(bf.f)
@@ -611,7 +589,6 @@ priv fn exponent_len(e: I32): Sz //< the number of exponent digits (the `21` of 
 priv fn write_shortest(w: Writer, d: Float_digits$@, is_neg: Bool, width: Sz, fill: U8, comma: Bool):
     Writer //<
         //< Writes the shortest form
-        //<
         //< Exponent form past the bounds at `SHORTEST_EXP_LOW`; otherwise decimal, with a `.0` even
         //< on a whole number so it reads back as a floating-point number.
         //< Caution: **Align only the integer part, after subtracting the length of the rest.** The
@@ -653,7 +630,6 @@ priv fn write_shortest(w: Writer, d: Float_digits$@, is_neg: Bool, width: Sz, fi
 priv fn write_fixed(w: Writer, d: Float_digits@, precision: Sz, is_neg: Bool, width: Sz, fill: U8,
     comma: Bool): Writer //<
         //< Writes the form with `precision` digits after the decimal point, like `%.Nf`
-        //<
         //< The integer part runs from the 10^(k-1) digit down to the units, and the fractional part
         //< fills positions that have no digit with 0.
     rest_len: Sz = precision + 1 if precision > 0 else 0
@@ -673,7 +649,6 @@ priv fn write_fixed(w: Writer, d: Float_digits@, precision: Sz, is_neg: Bool, wi
 priv fn write_decomposed(w: Writer, bf: Binary_float, is_zero: Bool, is_neg: Bool, precision: I32,
     width: Sz, fill: U8, comma: Bool): Writer //<
         //< Writes a decomposed value
-        //<
         //< If precision is negative, the shortest round-trip form; if 0 or more, that many digits
         //< after the decimal point (at most float_max_precision). If is_zero, it generates no
         //< digits and writes 0.
@@ -707,7 +682,6 @@ pub fn write_float( //< writes a floating-point number
         fill, comma)
 
 priv fn write_float32( //< writes an `F32`, whose shortest digits differ from an `F64`'s
-    //<
     //< The width of `F32` decides the shortest digits, so `0.1F32` is `"0.1"`.
     w: Writer, //< where it goes
     v: F32, //< the value to write

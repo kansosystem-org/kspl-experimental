@@ -1,5 +1,4 @@
 //< Starts kssrv, waits until it can answer, and keeps its output
-//<
 //< **This file knows no HTTP.** It handles only the child process, its logs and the check that it
 //< came up. So both entry points (`kssrv/tests/main.kspl` and
 //< `kssrv/tests/copy.kspl`) start the server the same way.
@@ -10,39 +9,42 @@ import "std/io"
 import "std/mem" { Arena }
 import "std/str"
 import "std/strfmt" as _strfmt
+import "std/strnum" // `to_i64`, for the port in the ready line
 import "std/subproc"
 import "std/sys"
 import "std/verdict"
 
 struct Started //< the result of waiting for the startup
     child: subproc.Child?
+    port: I32 //< the port its ready line names, once it is up
     why: U8[]
+
+priv const FREE_PORT: U8[] = "0" //< the port asked for: the system chooses a free one
+    //< **No run names a port of its own.** A fixed port clashes with any other run on the same
+    //< machine, such as a second worktree, and that run fails with `bind_failed`.
 
 priv const READY_LINE: U8[] = "kssrv: I: listening on" //<
     //< The line kssrv prints once it is listening
-    //<
     //< **The `I:` is the logger's level column**: `std/log`'s separator splits the tag, the level
     //< and the text (`log_new` in `kssrv/main.kspl`). With it in here, the wait fails if the line
-    //< format ever changes, instead of the line silently going unseen.
+    //< format ever changes, instead of the line silently going unseen. The line goes on with
+    //< `<host>:<port>, root=<root>`, and the port in it is the one the system chose.
 priv const READY_TIMEOUT_US: I64 = 300000000I64 //<
     //< The cap on waiting until it is ready (microseconds)
-    //<
     //< Training time varies widely between environments.
 priv const READY_POLL_MS: I32 = 50
 
-fn start_server(exe: U8[], root: U8[], out_log: U8[], err_log: U8[], pt: I32, flags: U8[][],
+fn start_server(exe: U8[], root: U8[], out_log: U8[], err_log: U8[], flags: U8[][],
     arena: Arena$@): Started //<
-        //< Starts kssrv and waits **until it can answer**.
-        //<
+        //< Starts kssrv on a free port and waits **until it can answer**; the result names the port.
         //< Caution: **Do not take a successful connection as ready.** kssrv binds first and then
         //< trains the model and the manoeuvring policy (`kssrv/main.kspl`; this order reports a
         //< port clash before training).
         //< **Keep the output**: without it, a failed startup leaves no reason.
-    pt_text: = arena.text().s("\{pt\}").take()
     // Caution: **Take the options as a list** (some are two words, such as `--page <file>`).
     $argv: = List<|U8[]|>.new(arena)
     argv.push(exe)
-    argv.push(pt_text)
+    argv.push(FREE_PORT)
     argv.push(root)
     for f in flags
         argv.push(f)
@@ -57,10 +59,18 @@ fn start_server(exe: U8[], root: U8[], out_log: U8[], err_log: U8[], pt: I32, fl
             why: = arena.text().s("it ended before starting")
             if code: = child.wait()
                 why.s(" (exit code \{code\})")
+            // **The server's own error goes on this first line**: a run's summary keeps only the
+            // line that names the failure, so a reason on a later line is lost there.
+            said: = read_log(out_log, err_log, arena)
+            if error: = first_error(said, arena)
+                why.s(": ").s(error)
+            return Started::{ .child = .none, .why = why.s("\n").s(said).take() }
+        if line: = ready_line(read_log(out_log, err_log, scratch))
+            if pt: = port_of(line)
+                return Started::{ .child = .some(child), .port = pt, .why = "ok" }
+            child.kill()
             return Started::{ .child = .none,
-                .why = why.s("\n").s(read_log(out_log, err_log, arena)).take() }
-        if read_log(out_log, err_log, scratch).find_str(READY_LINE).is_some()
-            return Started::{ .child = .some(child), .why = "ok" }
+                .why = arena.text().s("its ready line names no port: ").s(line).take() }
         scratch.restore(mark)
         sys.sleep_ms(READY_POLL_MS)
     child.kill()
@@ -70,6 +80,7 @@ fn start_server(exe: U8[], root: U8[], out_log: U8[], err_log: U8[], pt: I32, fl
 
 struct Running //< a kssrv that came up, and the two logs that say why a check on it failed
     child: subproc.Child //< the server; `stop` ends it
+    port: I32 //< the port it listens on, which the system chose
     out_log: U8[] //< its standard output
     err_log: U8[] //< its standard error
 
@@ -78,18 +89,18 @@ fn bring_up( //< starts kssrv with its logs under `dir`, and checks that it came
     root: U8[], //< the folder it serves
     dir: U8[], //< where the logs go, as `<name>.out` and `<name>.err`
     name: U8[], //< the logs' name, one per run
-    pt: I32, //< the port
     flags: U8[][], //< the options after the root
     what: U8[], //< the check that it came up, as the line names it
     arena: Arena$@, //< where the paths and the text go
 ): Running? //< the server, or none once the check has failed
     out_log: = fs.join(dir, arena.text().s(name).s(".out").take(), arena)
     err_log: = fs.join(dir, arena.text().s(name).s(".err").take(), arena)
-    started: = start_server(exe, root, out_log, err_log, pt, flags, arena)
+    started: = start_server(exe, root, out_log, err_log, flags, arena)
     if !verdict.check(what, started.child.is_some(), started.why)
         return .none
     if c: = started.child
-        return .some(Running::{ .child = c, .out_log = out_log, .err_log = err_log })
+        return .some(Running::{ .child = c, .port = started.port, .out_log = out_log,
+            .err_log = err_log })
     return .none
 
 impl Running
@@ -98,7 +109,6 @@ impl Running
 
     fn failed(r: Self@, what: U8[], why: U8[], arena: Arena$@) //<
         //< Fails the check `what` with the reason and the ends of the logs
-        //<
         //< Caution: **Do not let a failure end with its reason alone**: where it stopped and what
         //< the server said would be lost.
         verdict.check(what, false,
@@ -107,17 +117,44 @@ impl Running
     fn stop(r: Self$@) //< kills the server
         r.child.kill()
 
+priv fn ready_line(said: U8[]): U8[]? //<
+    //< the rest of the ready line after `READY_LINE`, once the whole line is out
+    //< **Wait for the line's end**: the port read from a line still being written could be cut.
+    if at: = said.find_str(READY_LINE)
+        rest: = said.sub_from(at + READY_LINE.len)
+        if end: = rest.find_char('\n')
+            return .some(rest.sub(0, end).trim_spaces())
+    return .none
+
+priv fn port_of(line: U8[]): I32? //< the port in `<host>:<port>, root=<root>`, or none
+    if comma: = line.find_char(',')
+        addr: = line.sub(0, comma)
+        if colon: = addr.rfind_char(':')
+            n: = addr.sub_from(colon + 1).to_i64() catch
+                return .none
+            if n > 0I64 && n <= 65535I64
+                return .some(I32::n)
+    return .none
+
 priv const LOG_TAIL: Sz = 2000 //< how much of the log's end goes into the error message
 
 fn read_log(out_log: U8[], err_log: U8[], arena: Arena$@): U8[] //<
     //< Returns the end of the standard output log, then the end of the standard error log
-    //<
     //< **The two go to separate files.** Sent to the same file, each writes from its own position
     //< and overwrites the other.
     return arena.text().s(tail_of(out_log, arena)).s(tail_of(err_log, arena)).take()
 
+priv const ERROR_MARK: U8[] = ": E: " //< what opens the text of a line kssrv logs as an error
+
+fn first_error(said: U8[], arena: Arena$@): U8[]? //<
+    //< the first line of the server's output that is an error
+    //< The mark is the logger's level column, as in `READY_LINE`.
+    for ln in said.lines(arena)
+        if ln.find_str(ERROR_MARK).is_some()
+            return .some(ln.trim_spaces())
+    return .none
+
 priv fn tail_of(path: U8[], arena: Arena$@): U8[]
-    body: = io.read_file(path) catch
+    text: = io.read_file(path, arena) catch
         return ""
-    text: = U8[]::arena.dup_str(body)
     return text if text.len <= LOG_TAIL else text.sub_from(text.len - LOG_TAIL)

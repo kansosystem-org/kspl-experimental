@@ -1,5 +1,4 @@
 //< Drives the language server over the whole repository, as an editor open on it does
-//<
 //< It sends the workspace queries such an editor sends, at the same size.
 //< **Only what the whole tree can show is here.** These are a common word across every package, a
 //< driver's callers in other packages, files built not to compile, a rename reaching closed files.
@@ -9,7 +8,7 @@ import "ksplc/tests/support/harness" as ksplc_harness
 import "ksplc/tests/support/jsonrpc_client"
 import "ksplc/tests/support/lsp_client"
 import "ksplc/tests/support/lsp_outline" { Prepared, incoming, prepare_fn }
-import "ksplc/tests/support/lsp_read" { end_text, from_names, has_name, is_missing }
+import "ksplc/tests/support/lsp_read" { end_text, from_names, is_missing }
 import "std/chars"
 import "std/ds" { List }
 import "std/json" + { Json_builder }
@@ -29,7 +28,6 @@ priv fn prepare_in_tree(c: jsonrpc_client.Client$@, rel: U8[], decl: U8[], arena
 
 priv const BROKEN_WS_FILE: U8[] = "std/log.kspl" //<
     //< The starting point of a workspace walk that **reaches the files built not to compile**
-    //<
     //< The common last segment `at` pulls in nearly all of `ksplc/tests/negative`, including the
     //< one nested too deep to check.
     //< Caution: **Do not swap in a rarer name** (`init` below reaches few); this check would go
@@ -38,7 +36,6 @@ priv const BROKEN_WS_DECL: U8[] = "    pub fn at"
 
 priv fn check_workspace_survives_unbuildable(c: jsonrpc_client.Client$@, arena: Arena$@) //<
     //< A workspace query over a tree that holds files built not to compile
-    //<
     //< Caution: **The point is that it answers at all.** A worker killed by a too-deep tree answers
     //< "no callers", which reads exactly like a true empty answer.
     prep: = prepare_in_tree(c, BROKEN_WS_FILE, BROKEN_WS_DECL, arena)
@@ -58,7 +55,7 @@ priv fn check_workspace_survives_unbuildable(c: jsonrpc_client.Client$@, arena: 
     // workspace's wrong callers.
     // `table_drop` in kssrv/conn.kspl writes its line through `log.at`, in another package than
     // the declaration, so naming it also shows the walk left std.
-    verdict.check("and the callers named are the real ones", has_name(names@, "table_drop"),
+    verdict.check("and the callers named are the real ones", names.contains("table_drop"),
         lsp_client.why(c, how, arena))
 
 priv fn check_ht16k33_callers(c: jsonrpc_client.Client$@, item: json.Value, arena: Arena$@) //<
@@ -92,7 +89,6 @@ priv fn check_ht16k33_callers(c: jsonrpc_client.Client$@, item: json.Value, aren
 
 priv fn check_caller_order(calls: List<|json.Value|>@, arena: Arena$@) //<
     //< The callers are sorted by file and position
-    //<
     //< Caution: **Do not return them in `Map`'s order.** Otherwise **the same question is answered
     //< in a different order every run**, and a reader loses track of how far they read. With over a
     //< hundred callers here, a broken order always shows.
@@ -115,7 +111,6 @@ priv fn check_caller_order(calls: List<|json.Value|>@, arena: Arena$@) //<
 
 priv fn check_fn_pointer(c: jsonrpc_client.Client$@, arena: Arena$@) //<
     //< callers via a function pointer
-    //<
     //< ksos's task entry points and `Link`'s implementations are **passed as function pointers with
     //< no call**.
     p: =
@@ -128,7 +123,7 @@ priv fn check_fn_pointer(c: jsonrpc_client.Client$@, arena: Arena$@) //<
     calls: = incoming(c, p.item, arena).calls
     $names: = from_names(calls@, arena)
     d9: = lsp_client.join(names@, arena)
-    ok9: = has_name(names@, "ksos_main")
+    ok9: = names.contains("ksos_main")
     verdict.check("ksos_main comes out among probe_task's callers", ok9, d9)
     // **`fromRanges` is on the call item** (not inside `from`); one level deeper it is always 0,
     // and "it does not double-count" is always green.
@@ -152,7 +147,7 @@ priv fn check_fn_pointer(c: jsonrpc_client.Client$@, arena: Arena$@) //<
     verdict.check("the same hand-over is not double-counted", ok7, d11)
     // Unless the declaration's own name is left out, every function is listed as its own caller.
     d12: = lsp_client.join(names@, arena)
-    ok6: = !has_name(names@, "matrix_task")
+    ok6: = !names.contains("matrix_task")
     verdict.check("it does not line up as its own caller", ok6, d12)
 
 // ==========================================
@@ -164,7 +159,6 @@ priv fn check_fn_pointer(c: jsonrpc_client.Client$@, arena: Arena$@) //<
 
 priv const WORST_GAP_MAX_MS: Sz = 5000 //<
     //< The longest a workspace query may leave the worker silent
-    //<
     //< Caution: **Do not make the supervisor's window (`worker_timeout_ms` in
     //< `ksplc/lsp/server.kspl`) itself the threshold.** The worker is killed the moment the window
     //< is reached, so that would call "just before failing" green; half leaves room. **Do not raise
@@ -174,7 +168,6 @@ priv const QUERY_ID: I32 = 2 //< the id the workspace query is sent with
 
 priv fn answers(out: U8[], id: I32, arena: Arena$@): Bool //<
     //< Whether the worker's output holds the response to request `id`, its markers taken out
-    //<
     //< A marker is its tag between two NULs (`ksplc/lsp/msg.kspl`), which no JSON text holds.
     $acc: = Str_builder.new()
     $inside: = false

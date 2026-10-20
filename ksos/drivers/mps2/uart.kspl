@@ -25,20 +25,17 @@ fn init() //< initializes UART0 (enabling both TX and RX)
     mmio.write32(UART0_CTRL, CTRL_TX_ENABLE | CTRL_RX_ENABLE)
 
 fn putc(c: U8): Void!mmio.Driver_error //< sends one byte, busy-waiting for room in TX
-    //<
     //< On a timeout the byte is not sent.
     mmio.wait(UART0_STATE, STATE_TX_FULL, false)!
     mmio.write32(UART0_DATA, c)
 
 fn puts(s: U8[]): Void!mmio.Driver_error //< sends a string a byte at a time
-    //<
     //< A timeout partway stops it there.
     for c in s
         putc(c)!
 
 fn getc(): U8? //<
     //< Receives one byte (busy-waits until data arrives in the RX buffer)
-    //<
     //< On a timeout it returns none.
     mmio.wait(UART0_STATE, STATE_RX_FULL, true) catch
         return .none

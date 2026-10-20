@@ -1,6 +1,5 @@
 #!/usr/bin/env -S ksplc run
 //< Reads one byte sequence from outside through a ksai reader, then uses what it read
-//<
 //< **ksai receives two things from outside**: the weights file (safetensors) and the tokenizer's
 //< vocabulary.
 //< Caution: **Do not stop after reading.** Failures happen where the data is **used**
@@ -23,7 +22,6 @@ import "std/sys"
 
 priv const TENSOR_NAMES: U8[][3] = ::{ "w", "b", "big" } //<
     //< The names the fuzzer puts into a seed
-    //<
     //< Caution: **Keep them in step with the fuzzer**: otherwise every attempt is rejected with "no
     //< such name" and the range check is never reached.
 
@@ -38,10 +36,9 @@ priv fn use_tensor<|T|>(t: Tensor<|T|>)
         used += F64::t.shape[i]
 
 priv fn read_safetensors(path: U8[], arena: Arena$@): I32 //< reads the weights file
-    //<
     //< **Each name is looked up as both F32 and F64.** So the path that rejects a width mismatch
     //< (`dtype_mismatch`) is exercised, and so is the path that reads an element.
-    raw: = io.read_file(path) catch
+    raw: = io.read_file(path, null) catch
         return 1
     defer dealloc(Void$@::raw.ptr)
     $s: = st.Safetensors.load_from_bytes(raw, arena) catch
@@ -60,10 +57,9 @@ priv fn read_safetensors(path: U8[], arena: Arena$@): I32 //< reads the weights 
     return 0 if ok > 0 else 1
 
 priv fn read_vocab(path: U8[], arena: Arena$@): I32 //< reads the vocabulary
-    //<
     //< **One file holds both texts**: the vocabulary up to its first empty line, and the merges
     //< after it. So one mutation can damage either or both.
-    text: = io.read_file(path) catch
+    text: = io.read_file(path, null) catch
         return 1
     defer dealloc(Void$@::text.ptr)
     $vocab: U8[] = text

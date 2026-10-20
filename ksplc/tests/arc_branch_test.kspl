@@ -1,5 +1,4 @@
 //< ARC (automatic reference counting) where a count travels through a branch or an expression
-//<
 //< A ternary's branch, a catch's substitute, a `switch` arm's binding, an operand a later `!`
 //< leaves behind, and a part read off a value nothing owns yet. Each case reads back an exact
 //< count, so a leak shows as a count left over and an early release as one missing.
@@ -182,6 +181,47 @@ fn test_arc_arm_binding_holds_a_count()
     assert(bind_outlives_option(ab@) == 1, "an 'if' binding stays counted once its Option is reset")
     assert(ab.count == 0 && bb.count == 0, "every binding gives its count back when the arm ends")
     verdict.pass("each binding held one count through its arm, and gave it back at the arm's end.")
+
+// ==========================================
+// `catch` on an Option counts as on a Result. A new Option hands its value to the binding. One a
+// binding still owns lends it, so the value takes a count of its own. A statement's `catch`
+// releases the value it throws away.
+// ==========================================
+priv fn tally_maybe(b: Tally_block$@, there: Bool): Tally? //< a new Tally where `there`, else none
+    return .some(Tally.on(b)) if there else .none
+
+priv fn option_catch_new(b: Tally_block$@): Sz //< the count while bound
+    x: = tally_maybe(b, true) catch
+        return 0
+    return x.peek()
+
+priv fn option_catch_on_place(o: Tally?): Sz //< `o` still owns its value
+    x: = o catch
+        return 0
+    return x.peek()
+
+priv fn option_catch_dropped(b: Tally_block$@) //< the value goes unused
+    tally_maybe(b, true) catch
+        return
+
+priv fn option_catch_leaves(b: Tally_block$@): Sz //< none: the block leaves before any binding
+    x: = tally_maybe(b, false) catch
+        return 7
+    return x.peek()
+
+fn test_arc_option_catch_counts()
+    verdict.start("[ARC] catch on an Option counts the value it takes test...")
+    $b: = Tally_block::{}
+    assert(option_catch_new(b@) == 1, "a new Option hands its one count to the binding")
+    assert(b.count == 0, "the binding gives its count back at its scope's end")
+    release_on_exit:
+        o: Tally? = .some(Tally.on(b@))
+        assert(option_catch_on_place(o) == 3, "a value read off an Option binding is counted")
+        assert(b.count == 1, "the Option binding keeps its own count")
+    option_catch_dropped(b@)
+    assert(b.count == 0, "a new value a statement's catch throws away is released")
+    assert(option_catch_leaves(b@) == 7 && b.count == 0, "a none takes no count")
+    verdict.pass("each catch on an Option took exactly one count, or none where it left.")
 
 // ==========================================
 // An operand can already hold a count (a new value, or a binding's copy). It is released when a

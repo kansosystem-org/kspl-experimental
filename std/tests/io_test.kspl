@@ -1,5 +1,4 @@
 //< Tests of `std/io`
-//<
 //< Reading files at their edges (a directory, a size reported as 0, past 2 GiB). Also what a
 //< stream's writes put down, the failures a device reports only at the flush, and a write after
 //< `free()`.
@@ -10,7 +9,6 @@ import "std/mem" { Arena }
 import "std/mem" { dealloc }
 import "std/str" { Str_builder }
 import "std/strfmt" as _strfmt // the width and separator items of `test_io_stream_writes`
-import "std/subproc"
 import "std/sys"
 import "std/tests/sys_test"
 import "std/verdict"
@@ -22,9 +20,9 @@ fn test_io_read_edges() //< a directory is refused; a file under-reporting its s
     // Caution: **Test both functions.** `read_file` asks for a size a directory does not have, and
     // `open` returns a stream that reads as nothing, so each needs its own refusal.
     $read_refused: = false
-    io.read_file(dir) catch e
+    io.read_file(dir, null) catch e
         switch e
-        case .read_failed(_p)
+        case .read_failed
             read_refused = true
         default
             panic("reading a directory should fail as read_failed")
@@ -37,7 +35,7 @@ fn test_io_read_edges() //< a directory is refused; a file under-reporting its s
     // A file under `/proc` reports 0 bytes; where one exists, it must still be read whole.
     status: = "/proc/self/status"
     if fs.exists(status)
-        text: = io.read_file(status) catch panic("/proc/self/status should be readable")
+        text: = io.read_file(status, null) catch panic("/proc/self/status should be readable")
         assert(text.len > 0 && text.find_str("Name:").is_some(),
             "a /proc file must be read to its end")
         dealloc(Void$@::text.ptr)
@@ -45,15 +43,8 @@ fn test_io_read_edges() //< a directory is refused; a file under-reporting its s
 
 priv const BIG_SIZE: U8[] = "3221225472" //< 3 GiB: past what a 32-bit `long` can hold as a size
 
-priv fn ran_to_zero(argv: U8[][], arena: Arena$@): Bool //<
-    //< whether the tool started and ended with 0
-    r: = subproc.run_capture(argv, "", 60000, 4096, arena) catch
-        return false
-    return r.exited_with(0)
-
 fn test_io_read_past_2gib(arena: Arena$@) //<
     //< That a file past 2 GiB reads from its head, not as empty
-    //<
     //< Asked with a 32-bit `long`, as Windows's ftell does, its size fails and the read finds the
     //< position still at the end. The file is sparse where the OS makes one, and only its head is
     //< read.
@@ -72,7 +63,7 @@ fn test_io_read_past_2gib(arena: Arena$@) //<
         else U8[][]::{ "/bin/sh", "-c",
         arena.text().s("dd if=/dev/null of='\{path\}' bs=1 seek=\{BIG_SIZE\} 2>/dev/null").take() })
     // A tool that answers 0 without growing it would let the read below pass on a 4-byte file.
-    grown: = ran_to_zero(grow, arena)
+    grown: = sys_test.ran_to_zero(grow, arena)
     info: = fs.stat(path) catch
         fallback fs.File_info::{ .size = 0, .kind = .other, .mtime = 0 }
     if !grown || info.size != 3221225472I64
@@ -114,7 +105,7 @@ fn test_io_write_refused_at_close() //< a write the device refuses only at the f
     $refused: = false
     io.write_file(full, "hello") catch e
         switch e
-        case .write_failed(_p)
+        case .write_failed
             refused = true
         default
             panic("a refused write should fail as write_failed")
@@ -156,18 +147,21 @@ fn test_io_stream_errors() //< an open stream's read and write failures are repo
 priv const WRITE_AFTER_FREE_SRC: U8[] = //< a child that writes to a file stream it has freed
     """import "std/io"
 
-$kept: io.File_stream = io.File_stream::{ .stream = null }
+fn write_late(f: io.File_stream$@)
+  f.s("late").flush()
 
 fn main()
-  kept = io.open("out/tmp/kspl_test_child/freed.txt", "wb") catch panic("the file must open")
+  $kept: = io.open("out/tmp/kspl_test_child/freed.txt", "wb") catch panic("the file must open")
+  through: = kept@
   kept.free()
-  kept.s("late").flush()
+  write_late(through)
 """
 
 fn test_io_write_after_free(ksplc: U8[], arena: Arena$@) //< ksplc runs the child
     verdict.start("[Io] a write to a file stream after free()...")
     // Unchecked, the freed stream's null reads as standard output, and the write lands there. The
-    // stream is a global, which the compile-time check on a local's free does not follow.
+    // stream is reached through a pointer, which the compile-time check on a local's free does not
+    // follow.
     named: = sys_test.child_stops_with(ksplc, "write_after_free", WRITE_AFTER_FREE_SRC,
         "io: a File_stream was written after free()", arena)
     assert(named, "a write after free() must stop the program with the reason")

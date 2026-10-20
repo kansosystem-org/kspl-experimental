@@ -1,5 +1,4 @@
 //< Folding a constant floating-point expression, and the casts to an integer it decides
-//<
 //< **Both backends and sema read the same fold.** Sema refuses a constant cast whose value an
 //< integer type does not hold. genc and genllvm write a constant cast as its value, and a float
 //< global's initializer under `--to=llvm`. Integers are folded in `eval.kspl`.
@@ -23,14 +22,12 @@ enum Float_cast //< what a cast from a floating-point value to an integer type g
 impl Ast_node
     fn fold_float(r: Self$@, c: Sema_ctx$@): F64? //<
         //< The value of a constant floating-point expression, or none where it is not one
-        //<
         //< A literal, a constant's name, `-`, `+ - * /`, parentheses and a cast from a number. An
         //< `F32` node rounds to `F32` at each step, as its operation would.
         return r.fold_float_at(c, 0)
 
     fn float_cast_of(r: Self$@, c: Sema_ctx$@, portable: Bool): Float_cast //<
         //< What the cast r, from a floating-point value to an integer type, gives at translation time
-        //<
         //< `portable` judges `Sz` at 32 bits, the width every target holds, as sema's integer
         //< checks do; a backend asks at the machine's width.
         return r.float_cast_to(c, r.type_id, portable)
@@ -43,11 +40,7 @@ impl Ast_node
         src: = r.get_postfix_receiver()
         if src == null || !c.env.is_integer(dst) || !c.env.is_float(src.type_id)
             return .not_constant
-        $f: F64 = 0.0
-        switch src.fold_float(c)
-        case .some(v)
-            f = v
-        case .none
+        f: F64 = src.fold_float(c) catch
             return .not_constant
         bits: =
             (c.env.get_portable_bit_size(dst) if portable
@@ -105,17 +98,9 @@ impl Ast_node
 
     priv fn fold_float_binary(r: Self$@, c: Sema_ctx$@, depth: Sz): F64? //<
         //< fold_float's `+ - * /`
-        $a: F64 = 0.0
-        $b: F64 = 0.0
-        switch r.get_binary_left().fold_float_at(c, depth + 1)
-        case .some(x)
-            a = x
-        case .none
+        a: F64 = r.get_binary_left().fold_float_at(c, depth + 1) catch
             return .none
-        switch r.get_binary_right().fold_float_at(c, depth + 1)
-        case .some(y)
-            b = y
-        case .none
+        b: F64 = r.get_binary_right().fold_float_at(c, depth + 1) catch
             return .none
         op: = r.get_binary_op().text
         $v: F64 = 0.0
@@ -150,7 +135,6 @@ priv fn two_to(n: I32): F64 //< 2 to the n, exact in `F64` for every n used here
 
 priv fn whole_part_fits(f: F64, bits: I32, is_uns: Bool): Bool //<
     //< Whether an integer type of the width holds f truncated toward zero; false for a NaN
-    //<
     //< The bounds are open by one past the type's range, as the truncation reaches it: `-2.5`
     //< fits `I8` and `-128.9` does too. `I64`'s lower bound, -2^63 - 1, is no `F64`, so it is
     //< checked closed at -2^63.

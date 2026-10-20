@@ -1,5 +1,4 @@
 //< Lifts an anonymous function, or a closure with its captures, into its own declarations
-//<
 //< A closure's captures become the fields of a synthesized environment struct. The place it was
 //< written becomes a value of that struct. The declarations are written as KSPL source and
 //< parsed with the file's grammar. `desugar_node` in `desugar.kspl` calls it.
@@ -19,7 +18,6 @@ import "std/str" { Str_builder }
 impl Ast_node
     fn desugar_fn_lit(r: Ast_node$@, ctx: Desugar_ctx$@) //<
         //< It lifts an anonymous function to a top-level `priv fn _anon_fn_N`, referred to by name
-        //<
         //< Lifted, the body sees only its own parameters and the file's top level. An outer local,
         //< the enclosing function's type arguments and an `impl`'s receiver are not visible.
         // Caution: Give the lifted declaration the written position's loc unchanged. The
@@ -79,7 +77,6 @@ impl Ast_node
 
     fn push_gen_params(r: Ast_node$@, ctx: Desugar_ctx$@) //<
         //< It pushes the names of the type arguments this declaration introduces onto ctx
-        //<
         //< Both an `impl<|T|>` and an `fn f<|U|>` count; when nested, both are pushed.
         if r.kind_id != .k_decl_impl && r.kind_id != .k_decl_fn
             return
@@ -99,7 +96,6 @@ impl Ast_node
     fn desugar_closure(r: Ast_node$@, ctx: Desugar_ctx$@, sig: Ast_node$@, body: Ast_node$@,
         captures: Ast_node$@) //<
             //< It expands a capturing closure to a struct and an impl of `Callable1` / `Callable2`
-            //<
             //< The closure is written `fn(x: I32; n: I32): Bool { … }`, and the struct points at
             //< the captured values. **The declarations are written as KSPL source and parsed** (the
             //< reason is at parse_synth_decls in parse/load.kspl).
@@ -165,7 +161,6 @@ impl Ast_node
 
     fn reject_param_defaults(r: Ast_node$@, ctx: Desugar_ctx$@) //<
         //< It rejects a default value in a closure's signature
-        //<
         //< Parameters and captures are both `fn_param`, so both lists are checked.
         for list in r.children
             if list.kind_id != .k_param_list && list.kind_id != .k_capture_list
@@ -182,7 +177,6 @@ impl Ast_node
     fn build_closure_src(r: Ast_node$@, ctx: Desugar_ctx$@, sig: Ast_node$@, captures: Ast_node$@,
         serial: Sz, gen_args: U8[], src: Str_builder$@): Bool //<
             //< Writes the closure's struct, constructor and impl as KSPL source into src
-            //<
             //< False when it refused the closure (the diagnostic is already reported).
         params: = sig.find_child(.k_param_list)
         arity: = base_ast_ext.Param_cursor.count(params)
@@ -278,7 +272,6 @@ impl Ast_node
 
     fn name_closure_receiver(r: Ast_node$@) //<
         //< It gives the synthesized `call`'s receiver a made name, before the body is grafted
-        //<
         //< **A name the source can spell would be seen by the body.** It would hide a top-level
         //< declaration of that name and refuse a parameter of it. Made, it is out of every
         //< source's reach, and an unread one draws no [W0207]. The source can only spell `r`. So
@@ -321,7 +314,6 @@ impl Ast_node
 
 fn written_type_text(r: Ast_node$@): U8[] //<
     //< It returns the type node's spelling as written
-    //<
     //< Caution: **Do not use `extract_type_name()`.** It drops the mutability marker `$` (`U8$[]`
     //< -> `U8[]`, `P$@` -> `P@`). The impl then implements a `Callable` with another type argument,
     //< and the caller gets "does not explicitly implement interface". **Nor the folded text**
@@ -331,7 +323,6 @@ fn written_type_text(r: Ast_node$@): U8[] //<
     return spell_as_written(r)
 
 fn build_anon_env_ctor_name(serial: Sz): U8[] //< the names to synthesize
-    //<
     //< Caution: Start every one with `_`, or [W0206] fires where one goes unused.
     return build_temp_name("_anon_env_new_", serial_str(serial))
 
@@ -341,7 +332,6 @@ fn build_anon_env_val_name(serial: Sz): U8[]
 fn forwarded_gen_params(ctx: Desugar_ctx$@, sig: Ast_node$@, params: Ast_node$@,
     captures: Ast_node$@): List<|U8[]|>$@ //<
         //< It returns the enclosing type arguments that the closure's signature uses, in order
-        //<
         //< The order is the order they were declared in.
         //< Caution: Keep only the ones it uses. A synthesized type differs per instantiation. So an
         //< unused one duplicates the closure for every instantiation of the enclosing declaration.
@@ -358,7 +348,6 @@ fn forwarded_gen_params(ctx: Desugar_ctx$@, sig: Ast_node$@, params: Ast_node$@,
 
 fn gen_args_text(names: List<|U8[]|>$@): U8[] //<
     //< The `<|T, U|>` names of the type arguments copied over
-    //<
     //< Empty where there are none, leaving the synthesized declarations non-generic.
     if names.len == 0
         return ""
@@ -371,7 +360,6 @@ fn gen_args_text(names: List<|U8[]|>$@): U8[] //<
 
 fn build_generic_path_ref(name: U8[], names: List<|U8[]|>$@, loc: base_ast.Loc): Ast_node$@ //<
     //< The node of the type arguments written on the reference to the lifted declaration
-    //<
     //< Caution: Place the type arguments as `type_args`' **children**. The substitution at
     //< instantiation (replace_type_vars in sema/decl/subst.kspl) does not reach a `<|T|>` in the
     //< path's text alone. It rebuilds the text from the children.
@@ -401,7 +389,6 @@ fn build_capture_args(captures: Ast_node$@, loc: base_ast.Loc): Ast_node$@ //<
 fn signature_type_text(sig: Ast_node$@, params: Ast_node$@, captures: Ast_node$@,
     out: Str_builder$@) //<
         //< It joins the closure signature's type spellings: parameters, return value, captures
-        //<
         //< The choice of which type arguments to copy over reads this text.
     ret_node: = sig.find_child(.k_type_expr)
     if ret_node != null

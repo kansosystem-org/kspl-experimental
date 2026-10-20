@@ -1,5 +1,4 @@
 //< Where a source comes from, and the logical name it is known by
-//<
 //< It covers std's folder, the folder given for packages, and the packages that named themselves.
 //< It also holds the path helpers, and maps a logical name back to the file it is read from.
 //< **The dependency goes one way**: this file imports `core.kspl`, never the reverse.
@@ -18,18 +17,15 @@ priv const DEFAULT_STD_DIR: U8[] = "std"
 
 const PKG_SRC_DIR_ENV_NAME: U8[] = "KSPLC_PKG_SRC_DIR" //<
     //< Where a package other than `std` (of the shape `ksdb/…`) is looked for
-    //<
     //< Caution: **Do not merge it with `std`'s.** The standard library ships with the compiler, so
     //< it can live apart from the other packages (`/usr/local/lib/kspl/std` versus the repository).
 
 priv const STD_PREFIX: U8[] = "std/" //< the logical prefix `import "std/..."` reserves
-    //<
     //< Only this prefix is resolved by std_dir() instead of a search order. In a search order, the
     //< project's `std/` folder would silently hide the real standard library (or the reverse).
     //< Rust, Go and Zig treat `std` specially too.
 
 fn is_std_file(file_path: U8[]): Bool //< whether that definition comes from std
-    //<
     //< It reads the import's string (`std/mem.kspl`), not where `--std-dir` points.
     return file_path.starts_with(STD_PREFIX)
 
@@ -39,7 +35,6 @@ fn std_name(rest: U8[]): U8[] //< the logical name of the file at `rest` under s
     return out.take()
 
 fn package_of(file_path: U8[]): U8[] //< the name of the package that file belongs to
-    //<
     //< The logical name up to its first separator; empty if there is none (the project's top files
     //< are one package). **Default visibility covers this unit** (`sema/decl/access.kspl`), not a
     //< folder: `ksai/tensor` is in `ksai`, `std/str` in `std`. **An absolute name is in none.**
@@ -76,7 +71,6 @@ fn std_found(): Bool //< whether the standard library's folder taken holds `lang
     return fs.exists(fs.join(std_dir(), STD_LANDMARK, base_core.arena))
 
 fn std_missing_note(): U8[] //< where std was looked for and which folder was taken
-    //<
     //< For a std holding no `lang.kspl`. **Name every place, with the path each stands for
     //< here.** With the bare "std/lang.kspl not found", a reader outside the repository has to
     //< guess which folder was meant.
@@ -102,12 +96,10 @@ extern "C"
 
 priv const STD_BESIDE: U8[][2] = ::{ "std", "../lib/kspl/std" } //<
     //< Where std is looked for from the executable's folder, in order
-    //<
     //< An unpacked release zip holds it beside the executable; `make install` puts it under the
     //< prefix (`<prefix>/bin/ksplc`, `<prefix>/lib/kspl/std`).
 
 priv const STD_LANDMARK: U8[] = "lang.kspl" //< the file that says a folder holds std
-    //<
     //< Every program reads `std/lang` (`lang_file_path`), so every std holds it.
     //< Caution: **Do not take a folder named `std` for one**: a project's own `std/` beside a
     //< copied executable would then hide the real library.
@@ -125,7 +117,6 @@ priv fn std_beside_exe(): U8[] //< the std standing beside this executable; empt
     return ""
 
 priv fn exe_folder(): U8[] //< this executable's folder, links resolved; empty where unknown
-    //<
     //< Caution: **Do not take the executable from argv[0]** (the reason is at `kspl_exe_path` in
     //< `gen/runtime/hosted_spawn.c`).
     $buf: U8[OS_PATH_BYTES] = ::{}
@@ -139,7 +130,6 @@ priv fn exe_folder(): U8[] //< this executable's folder, links resolved; empty w
     return base_core.arena.dup_str(sys.get_dir_name(exe.slice()))
 
 fn pkg_src_dir(): U8[] //< the folder where a package other than `std` is looked for
-    //<
     //< **Empty is a valid answer** (the current folder only); `pkg_src_dir_known` says whether it
     //< is resolved.
     if base_core.config.pkg_src_dir_known
@@ -166,7 +156,6 @@ priv $package_bases: Package_folder$@ = null
 
 priv fn package_root(unit: U8[]): U8[] //<
     //< The path to put before that package's files; empty for the current folder
-    //<
     //< It says whether that package comes from the current folder or from `pkg_src_dir`.
     //< **It is decided once per package.** The not-found diagnostic names the path really opened.
     //< An empty `pkg_src_dir` costs no stat.
@@ -188,7 +177,6 @@ priv $declared_roots: Package_folder$@ = null
 
 fn declare_package(name: U8[], root: U8[]) //<
     //< Records that the package `name` is read from `root` (empty: the current folder)
-    //<
     //< **The first call wins**, as `package_root` decides once: no package is half from each place.
     if recorded_root(declared_roots, name).is_some()
         return
@@ -206,7 +194,6 @@ priv fn recorded_root($p: Package_folder$@, name: U8[]): U8[]? //<
 
 fn recorded_name_to(logical: U8[], out: Str_builder$@) //<
     //< Writes the file name the generated code records for a source: a `#line`'s, a trace frame's
-    //<
     //< disk_name with `/` between folders, and the extension where the name has none.
     //< **Both backends take it from here**, so a `!`'s trace names one file on either.
     named: = disk_name(logical).with_source_ext()
@@ -216,7 +203,6 @@ fn recorded_name_to(logical: U8[], out: Str_builder$@) //<
 
 fn disk_name(logical: U8[]): U8[] //<
     //< The path a declared package's file is read from; any other logical name as it is
-    //<
     //< **A diagnostic and a `#line` use this name**, so a package worked on from its own folder
     //< names the path that opens there.
     unit: = package_of(logical)
@@ -234,7 +220,6 @@ fn disk_name(logical: U8[]): U8[] //<
 
 fn package_dir(unit: U8[]): U8[] //<
     //< The folder a package's files are read from
-    //<
     //< Its own folder if declared, else the current folder or one under `--pkg-src-dir`
     //< (`package_root` above).
     if root: = recorded_root(declared_roots, unit)
@@ -248,13 +233,11 @@ fn package_dir(unit: U8[]): U8[] //<
 
 priv const OS_PATH_BYTES: Sz = 4096 //<
     //< The size of the temporary buffer a path the OS reports is copied into
-    //<
     //< That is the working directory and the executable. **Where it does not fit, the path is not
     //< made relative** (see cwd below), **and no std is looked for beside the executable**.
 
 priv fn one_name(path: U8[]): U8[] //<
     //< It normalizes a relative path into one logical name
-    //<
     //< Caution: **One file must not have two logical names.** Named `./hw` and `hw`, or
     //< `sub/../lib/n` and `lib/n`, one file becomes two modules in two units, each with its own
     //< globals. So separators become `/` (a command line's keep the OS's), and `.` levels are
@@ -265,7 +248,6 @@ priv fn one_name(path: U8[]): U8[] //<
 
 fn fold_dots(path: U8[], keep_first: Bool = false): U8[] //<
     //< The path with `.` dropped, each `x/..` folded by spelling only, and `/` as separators
-    //<
     //< **It does not consult the filesystem.** So `a/link/..` reads as `a` wherever `link` points,
     //< the same trade-off Go's `filepath.Clean` makes. A leading `..` of a relative path stays (it
     //< names the folder above). One at the root is dropped (the root's parent is itself).
@@ -316,7 +298,6 @@ priv fn first_part(path: U8[]): U8[] //< the first part of a relative path, skip
 
 priv fn placed_elsewhere(unit: U8[]): Bool //<
     //< Whether a name's first part is a package read from a folder of its own
-    //<
     //< That is std's folder, a package that named itself, or one under `--pkg-src-dir`, rather than
     //< a local folder with that name.
     //<
@@ -329,7 +310,6 @@ priv fn placed_elsewhere(unit: U8[]): Bool //<
         !package_dir(unit).equals(unit)
 
 fn cwd(): U8[] //< the working directory with `/` separators; empty where it cannot be read
-    //<
     //< Caution: **Do not mix the separators.** The OS spells it with its own, so a plain join gives
     //< `C:\a\b/c/d.kspl`; every one becomes `/`. **Do not use `one_name`**: dropping the `.`
     //< levels also drops a rooted path's leading empty level, which makes it relative.
@@ -343,7 +323,6 @@ fn cwd(): U8[] //< the working directory with `/` separators; empty where it can
 
 fn to_absolute(path: U8[]): U8[] //<
     //< The absolute path as seen from the working directory, for a diagnostic
-    //<
     //< **Not for a logical name** (see `to_project_relative` below). **Without a working directory,
     //< it returns the path unchanged.**
     if sys.is_absolute(path)
@@ -360,7 +339,6 @@ fn canonical_path(path: U8[]): U8[] //<
 
 fn to_project_relative(path: U8[]): U8[] //<
     //< It turns a path into one relative to the project root (= the working directory)
-    //<
     //< A path outside the root is returned unchanged.
     //< Caution: **An absolute path must not enter a file's logical name.** That name feeds the
     //< mangling, the diagnostics and `#line`. With one in it, the mangled names differ from machine
@@ -377,7 +355,6 @@ fn to_project_relative(path: U8[]): U8[] //<
 
 fn rest_under(path: U8[], dir: U8[]): U8[] //<
     //< What follows `dir` and a separator in `path`; empty where `path` is not under it
-    //<
     //< `/` and `\` match each other (Windows mixes them); nothing else is normalized, so write both
     //< from the same root.
     if dir.len == 0 || path.len <= dir.len + 1 ||
@@ -392,7 +369,6 @@ fn rest_under(path: U8[], dir: U8[]): U8[] //<
 
 priv fn ends_with_at_boundary(full: U8[], suffix: U8[]): Bool //<
     //< Whether a path ends with suffix at a separator boundary
-    //<
     //< A plain ends_with would match `myfoo.kspl` to `foo.kspl`.
     if !full.ends_with(suffix)
         return false
@@ -401,7 +377,6 @@ priv fn ends_with_at_boundary(full: U8[], suffix: U8[]): Bool //<
     return sys.is_path_sep((full.ptr + (full.len - suffix.len - 1))$)
 
 fn is_same_file(a: U8[], b: U8[]): Bool //< whether they point at the same file
-    //<
     //< **Equal names are not required**: a diagnostic says `std/tests/net_test`, the LSP
     //< `file:///c:/…/net_test.kspl`. With the scheme and extension dropped, one must end the other
     //< at a boundary.
@@ -410,7 +385,6 @@ fn is_same_file(a: U8[], b: U8[]): Bool //< whether they point at the same file
     return a2.equals(b2) || ends_with_at_boundary(a2, b2) || ends_with_at_boundary(b2, a2)
 
 struct Uri_style //< how one client writes a document URI, read from one it sent
-    //<
     //< Caution: **Answer in the form the request used.** A logical name is project-relative
     //< (`to_project_relative` above). Any one fixed form breaks every client that writes it the
     //< other way. An editor sends `file:///home/me/proj/std/lang.kspl`; the extension and kspage's
@@ -426,7 +400,6 @@ fn uri_style_of(uri: U8[]): Uri_style //<
 impl Uri_style
     fn spell(r: Self, name: U8[]): U8[] //<
         //< A file's logical name written as a document URI in this form
-        //<
         //< **It names the file where it is read from** (`append_file_path` below): from ksdb's own
         //< folder, `ksdb/log` is the `log.kspl` there, and `std/lang` is the one in std's folder.
         $named: = Str_builder.new()
@@ -439,7 +412,6 @@ impl Uri_style
 
 fn append_file_path(import_path: U8[], out: Str_builder$@) //<
     //< It writes into out the file path to read for an import path (a file's logical name)
-    //<
     //< Caution: Do not mix a logical name (`std/io`) with the file's path. An absolute path in the
     //< logical name makes mangled names differ per machine. That breaks seed.c's byte-for-byte
     //< match ("The bootstrap, and keeping the seed in step" in ksplc/docs/DESIGN-compiler.md).
@@ -448,7 +420,6 @@ fn append_file_path(import_path: U8[], out: Str_builder$@) //<
         out.s(base_core.SOURCE_EXT)
 
 fn embed_disk_path(logical: U8[]): U8[] //< the path an embedded file is read from
-    //<
     //< **The same path as a source's** (`append_disk_path` below), with nothing added: an embedded
     //< file's name includes its own extension.
     $out: = Str_builder.new()

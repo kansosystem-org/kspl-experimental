@@ -1,6 +1,5 @@
 #!/usr/bin/env -S ksplc run
 //< The test that pins down that `--split=N` makes "the same program as one unit does"
-//<
 //< Neither way of breaking shows before linking, so it **always links and runs**. The expected
 //< output is the single-TU build's, not a copy here, which would miss both breaking the same way.
 
@@ -24,7 +23,6 @@ import "std/verdict"
 priv const FIXTURE: U8[] = "tests/prog/split.kspl"
 
 priv const UNIT_COUNTS: Sz[4] = ::{ 1, 2, 3, 16 } //< the number of splits
-    //<
     //< It lists 1 (do not split), about the core count, and a number larger than the file count.
     //< Caution: Include "larger than the file count". It makes empty units and puts **the caller
     //< and the callee in different units**. Without that, a symbol with too narrow a linkage
@@ -32,11 +30,9 @@ priv const UNIT_COUNTS: Sz[4] = ::{ 1, 2, 3, 16 } //< the number of splits
 
 priv const RUNTIME_MARKER: U8[] = "KSPL_LINK I64 kspl_mono_us(void)" //<
     //< The mark for the runtime's definition half (hosted.c)
-    //<
     //< Caution: Count by the text of a definition that is not `static` and is only in hosted.c.
 
 priv struct Built //< the result of building and running
-    //<
     //< If ok is false, out is the explanation of the failure.
     ok: Bool
     out: U8[]
@@ -46,7 +42,6 @@ priv fn unit_path(stem: U8[], i: Sz, arena: Arena$@): U8[]
 
 priv fn has_definition(text: U8[], marker: U8[]): Bool //<
     //< Whether the marker is at the start of a line
-    //<
     //< Caution: Check the line's start; a forward declaration contains the same text.
     if text.starts_with(marker)
         return true
@@ -96,7 +91,6 @@ priv fn build_split(dir: U8[], n: Sz, arena: Arena$@): Built //<
 
 priv fn check_assignment_is_stable(dir: U8[], arena: Arena$@) //<
     //< Only the file path decides which unit a file goes to
-    //<
     //< Size or order mixed into the assignment would let an unrelated edit move a definition and
     //< make every cached object stale. Only the output directory changes: the `#include` line comes
     //< from the output's name, which would always differ by one line.
@@ -117,10 +111,10 @@ priv fn check_assignment_is_stable(dir: U8[], arena: Arena$@) //<
             return
         stems.push(stem)
     for i in Range.asc(3)
-        a: = io.read_file(unit_path(stems.get(0), i, arena)) catch
+        a: = io.read_file(unit_path(stems.get(0), i, arena), null) catch
             verdict.check(name, false, "one of the units cannot be read")
             return
-        b: = io.read_file(unit_path(stems.get(1), i, arena)) catch
+        b: = io.read_file(unit_path(stems.get(1), i, arena), null) catch
             verdict.check(name, false, "one of the units cannot be read")
             return
         if !a.equals(b)
@@ -137,7 +131,7 @@ priv fn check_unit_shape(dir: U8[], arena: Arena$@) //<
     $includes_ok: = true
     $carriers: Sz = 0
     for i in Range.asc(3)
-        text: = io.read_file(unit_path(stem, i, arena)) catch
+        text: = io.read_file(unit_path(stem, i, arena), null) catch
             verdict.check("each unit takes in the shared header at its head", false,
                 "a unit cannot be read")
             return
@@ -150,7 +144,7 @@ priv fn check_unit_shape(dir: U8[], arena: Arena$@) //<
     // turns into a less readable duplicate definition at link time.
     verdict.check("only one unit holds the runtime's body", carriers == 1,
         arena.text().s("\{carriers\} units hold it").take())
-    hdr: = io.read_file(header) catch
+    hdr: = io.read_file(header, null) catch
         verdict.check("the shared header does not hold the runtime's body", false,
             "the header cannot be read")
         return

@@ -1,5 +1,4 @@
 //< The one reader of the documentation a declaration, or a whole file, carries (`//<`)
-//<
 //< **Everything that shows it reads it here**: the record (`tools/surface.kspl`), a library's
 //< interface (`tools/interface.kspl`) and the editor's hover (`lsp/hover.kspl`) (Principle 6).
 //< A following line that starts with the mark continues a `//<` and is joined into the record's
@@ -19,7 +18,6 @@ fn end_of(n: Ast_node$@): Sz //< the section's end (the next character's positio
     return sp.offset + sp.span
 
 fn brace_at(n: Ast_node$@): Sz //< the position of the `{` where the contents begin
-    //<
     //< Where there is none (only a heading), the section's end.
     for c in n.children
         if c.is_literal("{")
@@ -27,13 +25,11 @@ fn brace_at(n: Ast_node$@): Sz //< the position of the `{` where the contents be
     return end_of(n)
 
 priv fn is_sentence_closer(c: U8): Bool //< the marks that can follow a sentence's last word
-    //<
     //< A backtick, a bracket, a quote and a bold mark come after the full stop and are skipped.
     return c == '`' || c == ')' || c == ']' || c == '}' || c == '"' || c == '\'' || c == '*'
 
 priv fn wants_a_stop(text: U8[]): Bool //<
     //< Whether `text` needs a full stop before another description is joined to it
-    //<
     //< **A comma or a dash at the end needs none**: the writer left the line open.
     $e: = text.len
     for e > 0 && is_sentence_closer(text[e - 1])
@@ -43,9 +39,8 @@ priv fn wants_a_stop(text: U8[]): Bool //<
     c: = text[e - 1]
     return c != '.' && c != '!' && c != '?' && c != ':' && c != ';' && c != ',' && c != '-'
 
-priv fn described(summary: U8[], account: U8[]): U8[] //<
-    //< It joins a summary and the detail below it into one description
-    //<
+priv fn described(summary: U8[], account: U8[], gap: U8[]): U8[] //<
+    //< It joins a summary and the detail below it into one description, with `gap` between them
     //< It adds a full stop where the summary has none. By house style a `//<` is a fragment, so the
     //< two joined as they are read as a broken sentence. **This is not `joined`**, which also
     //< builds the record's signature column, where a stop would land inside the code (`pub. fn
@@ -56,7 +51,7 @@ priv fn described(summary: U8[], account: U8[]): U8[] //<
     s.s(summary)
     if wants_a_stop(summary)
         s.c('.')
-    s.c(' ')
+    s.s(gap)
     s.s(account)
     return s.take()
 
@@ -69,7 +64,6 @@ fn joined(a: U8[], b: U8[]): U8[] //< it joins two words with a space (an empty 
 
 fn is_continuation_line(src: U8[], at: Sz): Bool //<
     //< Whether the line starting at `at` holds nothing but a `//<` and its text
-    //<
     //< The only place that decides what a continuation looks like: the reader below and `[W0209]`
     //< both ask here (Principle 6).
     j: = skip_blanks(src, at)
@@ -77,7 +71,6 @@ fn is_continuation_line(src: U8[], at: Sz): Bool //<
 
 priv fn has_trailing_summary(src: U8[], at: Sz): Bool //<
     //< Whether the line starting at `at` has a `//<` after something else
-    //<
     //< That is what a continuation below continues; a line with only the mark is a continuation.
     line: = line_from(src, at)
     if mark: = line.find_str("//<")
@@ -86,14 +79,12 @@ priv fn has_trailing_summary(src: U8[], at: Sz): Bool //<
 
 fn opens_a_summary_run(src: U8[], at: Sz): Bool //<
     //< Whether a continuation directly below the line at `at` would continue something
-    //<
     //< Only a line with a `//<` after something else, or a continuation, starts a run. That is the
     //< whole rule; `[W0209]` asks here rather than writing it again (Principle 4).
     return has_trailing_summary(src, at) || is_continuation_line(src, at)
 
 fn is_bare_summary(src: U8[], at: Sz): Bool //<
     //< Whether the line at `at` has a `//<` with no text of its own
-    //<
     //< The anchor shape: the whole description is in the continuations below. It asks
     //< `has_trailing_summary`, and `[W0210]` asks here, so the shape is written once (Principle 4).
     if !has_trailing_summary(src, at)
@@ -103,37 +94,28 @@ fn is_bare_summary(src: U8[], at: Sz): Bool //<
         return line.sub_from(mark + 3).trim_spaces().len == 0
     return false
 
-struct Doc_run //< one `//<` run, split where a mark with no text appears inside it
-    summary: U8[] //< the run's first paragraph, which is what goes into a declaration file
-    detail: U8[] //< the text after the first splitting mark, joined into one line
-    lines: Sz //< how many lines the summary spans
+struct Doc_run //< one `//<` run, split into its first line and the rest
+    summary: U8[] //< the run's first line with text, which is what goes into a declaration file
+    detail: U8[] //< the lines after it, joined into one line
 
 priv fn run_at(src: U8[], at: Sz, limit: Sz): Doc_run //<
     //< The run that the line at `at` starts, with the continuations below it
+    //< It reads only before `limit`, and joins the detail into one line, as one record entry is
+    //< one line.
     //<
-    //< It reads only before `limit`, and joins each part into one line, as one record entry is one
-    //< line
-    //<
-    //< **A mark with no text splits the run; it does not end it.** The rule is PEP 257's (a
-    //< summary line, a blank line, the rest). A first sentence cut at a `.` breaks on `e.g.` and
-    //< on version numbers. **Such marks at the start of the run split nothing**: under an anchor,
-    //< such a mark is part of the anchor's shape.
+    //< **The first line with text is the summary, and the line boundary ends it.** So no
+    //< sentence end is guessed (a `.` breaks on `e.g.` and on version numbers), and no line is
+    //< spent on a separator. **A mark with no text splits nothing**: under an anchor it is the
+    //< anchor's shape, and in the detail it parts two paragraphs.
     e: = line_end(src, at)
     line: = src.sub(at, e - at)
-    empty: = Doc_run::{ .summary = "", .detail = "", .lines = 0 }
-    $mark: Sz = 0
-    switch line.find_str("//<")
-    case .some(found)
-        mark = found
-    case .none
+    empty: = Doc_run::{ .summary = "", .detail = "" }
+    mark: Sz = line.find_str("//<") catch
         return empty
     if at + mark >= limit
         return empty
-    $head: = Str_builder.new()
+    $summary: U8[] = line.sub_from(mark + 3).trim_spaces()
     $tail: = Str_builder.new()
-    head.s(line.sub_from(mark + 3).trim_spaces())
-    $lines: Sz = 1 if head.slice().len > 0 else 0
-    $parted: = false
     // A blank line and a plain `//` are not continuations, so they end the run without a case of
     // their own.
     $i: = e
@@ -146,27 +128,24 @@ priv fn run_at(src: U8[], at: Sz, limit: Sz): Doc_run //<
         piece: = src.sub(k + 3, stop - k - 3).trim_spaces()
         i = stop
         if piece.len == 0
-            parted = parted || head.slice().len > 0
             continue
-        into: = tail@ if parted else head@
-        if !parted
-            lines += 1
-        if into.slice().len > 0
-            into.c(' ')
-        into.s(piece)
-    return Doc_run::{ .summary = base_core.arena.dup_str(head.slice()),
-        .detail = base_core.arena.dup_str(tail.slice()), .lines = lines }
+        if summary.len == 0
+            summary = piece
+            continue
+        if tail.slice().len > 0
+            tail.c(' ')
+        tail.s(piece)
+    return Doc_run::{ .summary = base_core.arena.dup_str(summary),
+        .detail = base_core.arena.dup_str(tail.slice()) }
 
-enum Summary_fault //< what keeps a run's summary from being one line saying what the thing is
-    none //< nothing: it is one line, and a description
-    too_long(lines: Sz) //< it spans more than one line
+enum Summary_fault //< what keeps a run's summary from saying what the thing is
+    none //< nothing: it is a description
     label //< it starts with `Caution:` or `Note:`, which say what to watch for, not what it is
 
 fn summary_fault_at(src: U8[], at: Sz): Summary_fault //<
     //< What is wrong with the summary of the run behind the code on the line at `at`
-    //<
-    //< **`[W0213]` asks the same reader the hover uses**, so the two cannot disagree on where a
-    //< summary ends (Principle 4). A line with no `//<` after code has no run of its own.
+    //< **`[W0213]` asks the same reader the hover uses**, so the two cannot disagree on which line
+    //< is the summary (Principle 4). A line with no `//<` after code has no run of its own.
     if !has_trailing_summary(src, at)
         return .none
     return fault_of(run_at(src, at, src.len))
@@ -176,19 +155,19 @@ fn file_summary_fault(src: U8[], at: Sz): Summary_fault //<
     return fault_of(run_at(src, at, src.len))
 
 priv fn fault_of(run: Doc_run): Summary_fault
-    if run.lines > 1
-        return .too_long(run.lines)
     if run.summary.starts_with("Caution:") || run.summary.starts_with("Note:")
         return .label
     return .none
 
-priv fn summary_run(src: U8[], at: Sz, limit: Sz): U8[] //<
-    //< Only the run's first paragraph, for a thing that has no room for a second
-    return run_at(src, at, limit).summary
+priv fn line_doc(src: U8[], at: Sz, limit: Sz): U8[] //<
+    //< A parameter's or the return type's run, its summary and detail joined into one line
+    //< **The signature's own line is the one place that shows it**, so the detail has nowhere else
+    //< to go.
+    run: = run_at(src, at, limit)
+    return described(run.summary, run.detail, " ")
 
 fn file_doc_at(src: U8[]): Sz //<
     //< Where the run that describes the file begins (**`src.len` where there is none**)
-    //<
     //< **It comes before the first line of code**, maybe after an ordinary banner for whoever edits
     //< the file. This run is for its callers (as with Rust's `//!` and Go's package comment).
     //< Caution: **Check for a continuation before checking for a comment.** A `//<` starts with
@@ -206,7 +185,6 @@ fn file_doc_at(src: U8[]): Sz //<
 
 fn file_doc_end(src: U8[], from: Sz): Sz //<
     //< Where the run beginning at `from` ends (the first line past it)
-    //<
     //< **`[W0209]` asks this**, so the file's run is not mistaken for lines that continue nothing.
     $i: = from
     for i < src.len
@@ -216,17 +194,15 @@ fn file_doc_end(src: U8[], from: Sz): Sz //<
     return src.len
 
 fn file_doc(src: U8[]): U8[] //< what a file says about itself (**empty where it says nothing**)
-    //<
     //< The same two parts as a declaration's, joined the same way for the record's one line.
     at: = file_doc_at(src)
     if at >= src.len
         return ""
     run: = run_at(src, at, src.len)
-    return described(run.summary, run.detail)
+    return described(run.summary, run.detail, " ")
 
 fn is_unread_mark(comment: U8[]): Bool //<
     //< whether a line comment starts with a documentation mark that is not read, `///` or `//!`
-    //<
     //< **Wherever they exist, they point elsewhere than a KSPL description does**: `///` at the
     //< thing after it, `//!` at the thing around it. Four or more slashes are a banner, as in Rust.
     return comment.starts_with("//!") ||
@@ -234,7 +210,6 @@ fn is_unread_mark(comment: U8[]): Bool //<
 
 priv fn mark_offset(src: U8[], at: Sz, brace: Sz): Sz //<
     //< Which line holds the declaration's own run
-    //<
     //< It is the head's first line or its last; a one-line head is both. On a wrapped head the
     //< first line is taken, as a run there would read as the last parameter's.
     //< **Only a mark with no text is taken from the last line.** A mark with text there describes
@@ -249,38 +224,25 @@ priv fn mark_offset(src: U8[], at: Sz, brace: Sz): Sz //<
 
 fn decl_summary(src: U8[], n: Ast_node$@): U8[] //<
     //< A declaration's own summary, on whichever line its run is
-    //<
-    //< Only the first paragraph, as a declaration file holds; the detail stays with the body.
+    //< Only the first line, as a declaration file holds; the detail stays with the body.
     return run_at(src, mark_offset(src, n.loc.offset, body_brace(src, n)), src.len).summary
 
 fn doc_of(src: U8[], at: Sz, brace: Sz): U8[] //< the documentation one declaration carries
-    //<
     //< **The summary and the detail are joined into one column**, as the record has one entry per
     //< line.
     run: = run_at(src, mark_offset(src, at, brace), src.len)
-    return described(run.summary, run.detail)
+    return described(run.summary, run.detail, " ")
 
 fn doc_parted(src: U8[], at: Sz, brace: Sz): U8[] //<
     //< The same description, with the summary and the detail kept apart
-    //<
     //< **The editor has room the record lacks.** A hover is Markdown. So a blank line separates
     //< what goes into a declaration file (the summary) from what stays with the body. Both read the
     //< same run.
     run: = run_at(src, mark_offset(src, at, brace), src.len)
-    summary: = run.summary
-    account: = run.detail
-    if summary.len == 0 || account.len == 0
-        return joined(summary, account)
-    s: = base_core.arena.text()
-    s.s(summary)
-    if wants_a_stop(summary)
-        s.c('.')
-    s.s("\n\n").s(account)
-    return s.take()
+    return described(run.summary, run.detail, "\n\n")
 
 priv fn has_contents(n: Ast_node$@): Bool //<
     //< Whether this kind of declaration has contents where a run can go
-    //<
     //< One with none (an interface method's requirement, a `const`, a `typedef`, a field, a
     //< variant) has only a trailing `//<` (see the file head).
     switch n.kind_id
@@ -291,7 +253,6 @@ priv fn has_contents(n: Ast_node$@): Bool //<
 
 fn body_brace(src: U8[], n: Ast_node$@): Sz //<
     //< Where a declaration's contents begin, found **in the source**; its end where there are none
-    //<
     //< Caution: **Do not look for a `{` among the children.** `normalize` drops a declaration's
     //< braces (`is_trivia_node` in `../parse/normalize.kspl`), so the editor's tree has none.
     //< **Count the round and square brackets**, or a default argument's `::{ … }` looks like a
@@ -337,13 +298,11 @@ priv fn past_literal(src: U8[], at: Sz, end: Sz): Sz //<
 
 struct Param_doc //< one parameter, as it is written and as it is described
     name: U8[] //< the parameter\'s name, as the signature writes it
-        //<
         //< Read from the identifier, so the description follows a rename.
     doc: U8[] //< what its `//<` said, with the run below it joined on
 
 fn param_docs(src: U8[], n: Ast_node$@, out: List<|Param_doc|>$@) //<
     //< Every parameter a declaration takes, in the order written, each with its own `//<`
-    //<
     //< That is the `//<` on the parameter's own line, empty where there is none.
     //< The editor shows it below a signature, on hover and while the call is typed.
     params: = n.get_fn_params()
@@ -362,7 +321,6 @@ fn param_docs(src: U8[], n: Ast_node$@, out: List<|Param_doc|>$@) //<
 
 fn return_doc(src: U8[], n: Ast_node$@): U8[] //<
     //< The `//<` on the line of the return type, empty where there is none
-    //<
     //< The editor shows it after the return type, as a parameter's after the parameter.
     //< Caution: **Read it only where the return type is not on the declaration's first line.**
     //< On a one-line signature the mark describes the declaration (`decl_summary`); read here,
@@ -376,7 +334,7 @@ fn return_doc(src: U8[], n: Ast_node$@): U8[] //<
     // wrapped head's anchor (`mark_offset` above).
     if is_bare_summary(src, line_start(src, t.loc.offset))
         return ""
-    return summary_run(src, t.loc.offset, src.len)
+    return line_doc(src, t.loc.offset, src.len)
 
 priv fn next_param_at(params: Ast_node$@, i: Sz, end: Sz): Sz //<
     //< Where the parameter after the one at `i` starts, or `end` where it is the last
@@ -388,7 +346,6 @@ priv fn next_param_at(params: Ast_node$@, i: Sz, end: Sz): Sz //<
 
 priv fn summary_within(src: U8[], at: Sz, limit: Sz): U8[] //<
     //< The `//<` a parameter carries, with its continuations
-    //<
     //< `limit` is where the next parameter starts. **A mark found only past it is not this
-    //< one\'s**; the guard is in `summary_run`, shared with the declaration\'s own summary.
-    return summary_run(src, at, limit)
+    //< one\'s**; the guard is in `run_at`, shared with the declaration\'s own summary.
+    return line_doc(src, at, limit)

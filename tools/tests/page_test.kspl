@@ -6,7 +6,7 @@ import "std/io"
 import "std/mem" { Arena, dealloc }
 import "std/str" + { Str_builder }
 import "std/sys"
-import "std/tests/tree_test"
+import "std/tests/file_mode"
 import "std/verdict"
 import "tools/kspage_aim" as aim
 import "tools/surface_rows" as surface
@@ -28,16 +28,15 @@ priv const SECRET_URL: U8[] = "http://127.0.0.1:8080/?doc=a.kspage#t=secret0123"
     //< a URL whose token a check looks for
 
 priv fn holding(path: U8[], want: U8[]): Bool //< whether the file at path holds want
-    got: = io.read_file(path) catch
+    got: = io.read_file(path, null) catch
         return false
     defer dealloc(Void$@::got.ptr)
     return got.find_str(want).is_some()
 
 priv fn owner_only(path: U8[], arena: Arena$@): Bool //< whether only its owner may read it
-    //<
     //< **True where the system shows no mode** (Windows, or a filesystem without one): there the
     //< folder decides, and this cannot tell.
-    shown: = tree_test.mode_shown(path, arena)
+    shown: = file_mode.mode_shown(path, arena)
     return shown.len == 0 || shown.equals("-rw-------")
 
 fn test_the_url_keeps_the_token_last() //< the query goes before the fragment, the token last
@@ -143,7 +142,6 @@ fn test_the_note_lists_the_running_servers() //< the note is a run of records, n
             drops.")
 
 fn test_a_note_that_was_cut_short() //< a note cut off partway is read as far as it goes
-    //<
     //< Caution: **Do not abort on it.**
     verdict.start("[tools/kspage_aim] reading a note that was cut short test...")
     assert(aim.state_count("") == 0, "an empty note has no record")
@@ -172,7 +170,6 @@ fn test_a_note_that_was_cut_short() //< a note cut off partway is read as far as
     verdict.pass("a cut-short note does not stop it, and records are cut off at the cap of 8.")
 
 fn test_a_note_rebuilt_from_its_records() //< records put back one by one read back the same
-    //<
     //< **Listing and stopping rebuild the note this way**, keeping only the servers still
     //< answering.
     verdict.start("[tools/kspage_aim] rebuilding the note record by record test...")
@@ -260,7 +257,6 @@ fn test_where_the_file_lives() //< a path splits into its folder and its name
     verdict.pass("a path splits at both separators, and with no container it becomes where we are.")
 
 fn test_the_browser_is_handed_a_page_not_the_url() //< the token stays off the command line
-    //<
     //< **A command line is open to every user on the machine** (`ps`). So the browser is started on
     //< a page that moves on to the URL. Only its owner can read that page.
     verdict.start("[tools/kspage_aim] handing the browser a page, not the URL test...")
@@ -337,7 +333,6 @@ fn test_the_note_is_written_for_its_owner() //< the note and the log hold the to
 // ==========================================
 
 fn test_reading_the_record(arena: Arena$@) //< the record's text becomes a list of rows
-    //<
     //< The header and a broken row are dropped, and the columns are split on tabs.
     verdict.start("[tools/surface] turning the record into a list of rows test...")
     // Caution: **Test both the rows kept and the rows dropped**; with only one side, "keeps
@@ -364,7 +359,6 @@ fn test_reading_the_record(arena: Arena$@) //< the record's text becomes a list 
         .pass("the header and short rows are dropped; complete rows split into a key and a text.")
 
 fn test_telling_the_difference(arena: Arena$@) //< it counts the removed, changed and added
-    //<
     //< It compares the record with the package as it is now.
     verdict.start("[tools/surface] counting the API's differences test...")
     // Caution: **Keep the three marks out of the rows' text**, or `find_str` matches the sample and
@@ -423,7 +417,6 @@ fn test_an_entry_that_says_nothing(arena: Arena$@) //< the rows carrying no summ
     verdict.pass("the rows with no summary are counted and named, and a finished record gives 0.")
 
 fn test_taking_a_row_apart(arena: Arena$@) //< a row becomes its four fields
-    //<
     //< **A row with no fourth column is valid**: its documentation is empty, not the declaration
     //< run on.
     verdict.start("[tools/surface] taking a row apart into its fields test...")
@@ -443,7 +436,6 @@ fn test_taking_a_row_apart(arena: Arena$@) //< a row becomes its four fields
     verdict.pass("a row comes apart into its file, key, spelling and what it says.")
 
 fn test_a_drifted_twin_is_named(arena: Arena$@) //< twins per `#cfg` differing by more than a mark
-    //<
     //< **Twins that differ only by a parameter's unused mark agree** (an argument is passed by
     //< place); any other difference is named, once.
     verdict.start("[tools/surface] a drifted #cfg twin is named test...")
@@ -463,7 +455,6 @@ fn test_a_drifted_twin_is_named(arena: Arena$@) //< twins per `#cfg` differing b
 
 fn test_a_part_row_is_told_from_an_entry(arena: Arena$@) //<
     //< A parameter's row and the return value's are told apart from the declaration's
-    //<
     //< Caution: **The record and the reference read the same rows and keep different ones.** Told
     //< apart wrongly, the record fills with prose or the reference loses what a reader needs, and
     //< nothing fails.
@@ -491,7 +482,6 @@ fn test_a_part_row_is_told_from_an_entry(arena: Arena$@) //<
 
 fn test_what_a_file_says_of_itself(arena: Arena$@) //<
     //< A file's own row is told apart from a declaration's, and is not a declaration
-    //<
     //< **The mark alone is the file's row.** Read as a declaration, it would become an entry named
     //< `~` and put the file's purpose into the record that versions are compared by.
     verdict.start("[tools/surface] what a file says of itself test...")
@@ -513,9 +503,9 @@ fn test_what_a_file_says_of_itself(arena: Arena$@) //<
 // cut short). `make test-docs` stays green, since the page matches the same broken writer.
 // ==========================================
 priv const LAID_SAMPLE: U8[] =
-    "import \"std/io\"\n\npriv const LIMIT: Sz = 4 //< a name for a value\n  //<\n  //< it cannot \
-        be assigned to.\n\npriv fn twice_of<|T|>(v: T): T //< generics\n  //<\n  //< a type the \
-        caller picks.\n  return v\n\npriv fn helper(): I32\n  return 0\n\npriv $seen: Sz = 0 //< a \
+    "import \"std/io\"\n\npriv const LIMIT: Sz = 4 //< a name for a value\n  //< it cannot be \
+        assigned to.\n\npriv fn twice_of<|T|>(v: T): T //< generics\n  //<\n  //< a type the caller \
+        picks.\n  return v\n\npriv fn helper(): I32\n  return 0\n\npriv $seen: Sz = 0 //< a \
         global\n\nfn main(): I32\n  return 0\n"
 
 fn test_a_step_per_described_declaration(arena: Arena$@) //<
@@ -529,7 +519,7 @@ fn test_a_step_per_described_declaration(arena: Arena$@) //<
     assert(steps.get(1).name.equals("LIMIT"), "a `const` names the word after the keyword")
     assert(steps.get(1).title.equals("a name for a value"), "the title is the words after the mark")
     assert(steps.get(1).prose.equals("it cannot be assigned to."),
-        "the prose is the run below the parting, joined into one paragraph")
+        "the prose is the run below the title, joined into one paragraph")
     assert(steps.get(1).code.equals("priv const LIMIT: Sz = 4"), "the code carries no `//<`")
     // **A declaration with no `//<` joins the step before it**: dropped, the joined blocks would
     // not compile.

@@ -1,5 +1,4 @@
 //< A probe showing that ksai runs on Cortex-M bare metal
-//<
 //< It avoids malloc with Arena.from_buffer. For panic, it uses the cfg(freestanding) version
 //< that --freestanding enables automatically (no libc; console output through panic_hook). F32's
 //< arithmetic compiles to software floating point (__aeabi_*), so arm-none-eabi's libgcc.a (the
@@ -7,6 +6,7 @@
 import "ksai/nn"
 import "ksai/tensor" { Tensor }
 import "ksos/demo/common/semihost_console" as con
+import "std/math"
 import "std/mem" { Arena }
 
 $storage: Sz[8192] = ::{}
@@ -80,7 +80,7 @@ fn ksos_main()
     logit0: = (logits.data + 0)$
     ref_logit0: = 0.14163680374622345
     ldiff: = logit0 - ref_logit0
-    ldiff_abs: = -ldiff if ldiff < 0.0 else ldiff
+    ldiff_abs: = math.abs(ldiff)
     con.check("transformer_block", ldiff_abs < 1.0e-4)
 
     con.print_summary("AI probe done")

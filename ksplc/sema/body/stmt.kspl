@@ -1,5 +1,4 @@
 //< Types the statements: declarations, assignments, blocks, branches, loops, jumps and `defer`
-//<
 //< `infer_stmts` dispatches on the statement's kind. A `switch` goes to `switch.kspl` and
 //< `for x in` to `for_in.kspl`; whether a place may be written to is asked of `write_perm.kspl`,
 //< and whether the frame's memory escapes of `stmt_escape.kspl`.
@@ -35,13 +34,11 @@ import "std/chars"
 import "std/str"
 
 priv const MAX_BLOCK_NESTING: Sz = 128 //< the limit on a block's nesting
-    //<
     //< **It exists for the C backend, not ksplc.** Each KSPL block becomes one brace level in C,
     //< and C's depth counts expression parentheses too, so it stays below 256.
 
 priv const GUARANTEED_BLOCK_NESTING: Sz = 64 //<
     //< The number of levels the specification promises to accept, which the diagnostic states
-    //<
     //< The promise is in the implementation limits of docs/SPEC-programming-language.md.
     //< Caution: **Do not show max_block_nesting above in a diagnostic.** It counts scope levels,
     //< including the function's and the file's, so it promises more than is actually accepted.
@@ -57,7 +54,6 @@ priv fn report_bad_ptr_compound_op(c: Sema_ctx$@, node: Ast_node$@, type_id: I32
 priv fn report_bad_ptr_step(c: Sema_ctx$@, node: Ast_node$@, type_id: I32, right_id: I32,
     op_text: U8[]) //<
         //< Rejects a pointer step that is not an integer.
-        //<
         //< Caution: **Do not merge it with the operator message.** In `p += q` the `+=` is fine, so
         //< "`+=` cannot be used" does not say how to fix it.
     l_shown: = c.env.display(type_id)
@@ -67,12 +63,10 @@ priv fn report_bad_ptr_step(c: Sema_ctx$@, node: Ast_node$@, type_id: I32, right
     c.err(node, c.scratch.slice())
 
 priv const NO_NAME_LABEL: U8[] = "_" //< the label for a level with no name
-    //<
     //< **The name is defined only here** (`infer_stmt_break_continue` uses it).
 
 priv fn reject_receiverless_cleanup(c: Sema_ctx$@, block: Ast_node$@): Void!Sema_error //<
     //< Rejects a `defer` whose statement calls a method on nothing (`defer .free()`)
-    //<
     //< **A `defer` names what it cleans up.** The leading `.` reads as an enum's value there, and
     //< "no type to infer it from" would send the writer looking at enums.
     stmt: = block.safe_get_child(0)
@@ -91,7 +85,6 @@ priv fn reject_receiverless_cleanup(c: Sema_ctx$@, block: Ast_node$@): Void!Sema
 
 fn push_optional_label(c: Sema_ctx$@, name_node: Ast_node$@, stmt: Ast_node$@) //<
     //< Registers a jump target only where a label is written
-    //<
     //< if and labeled_block call it; for and switch always register one.
     if name_node != null && name_node.text.len > 0
         c.jump_stack
@@ -103,7 +96,6 @@ fn pop_optional_label(c: Sema_ctx$@, name_node: Ast_node$@)
         c.jump_stack.len -= 1
 priv fn refuse_dropped_result(c: Sema_ctx$@, node: Ast_node$@, result_id: I32) //<
     //< Refuses a Result nobody takes apart: a statement's value, or one bound to a `_` name
-    //<
     //< **A failure is dropped only where it is written down**: `catch {}` says so; a value left
     //< standing does not.
     shown: = c.env.display(result_id)
@@ -160,7 +152,6 @@ impl Ast_node
     fn resolve_inferred_array(r: Self$@, c: Sema_ctx$@, expected_id: I32, expr_id: I32,
         type_node: Ast_node$@, err_node: Ast_node$@): I32 //<
             //< Decides the element count of an inferred array `T[_]` from the initializer's type.
-            //<
             //< Once decided, it returns the resolved id and writes it into type_node and sym;
             //< otherwise it returns expected_id, diagnosing if needed. The caller uses the result
             //< as the type.
@@ -412,7 +403,6 @@ impl Ast_node
     priv fn infer_index_write(r: Self$@, c: Sema_ctx$@, left: Ast_node$@, right: Ast_node$@,
         is_simple_assign: Bool): Bool!Sema_error //<
             //< It checks a write through a subscript (`xs[i] = v`); true where that was all of it
-            //<
             //< That is a write through `Index_mut`'s `set`, which the statement becomes. Elsewhere
             //< the index is inferred, and the statement goes on as an ordinary assignment.
         if left == null || left.kind_id != .k_expr_postfix
@@ -702,6 +692,12 @@ impl Ast_node
         if c.fn_ctx.catch_depth == 0
             c.err(r, "cannot use 'fallback' outside of a catch block")
             throw .analysis_failed
+        if c.fn_ctx.catch_on_option
+            c.err(r,
+                "'fallback' cannot be written in a 'catch' block on an optional. Leave the block \
+                    with 'return', 'throw', 'break' or 'continue'\n  Note: write 'opt.unwrap_or(v)' \
+                    to use 'v' where 'opt' is '.none'.")
+            throw .analysis_failed
         if c.fn_ctx.in_defer
             c.err(r, "cannot fallback from inside a defer block")
             throw .analysis_failed
@@ -742,17 +738,27 @@ impl Ast_node
 
     priv fn infer_unknown_stmt(_r: Ast_node$@, _c: Sema_ctx$@): Void!Sema_error {}
 
+priv fn refuse_read_only_receiver(c: Sema_ctx$@, at: Ast_node$@) //<
+    //< Reports a write to an element through a receiver the function may only read
+    c.err(at,
+        "cannot assign through a read-only location. Take the receiver as 'T$@' (writable), or make \
+            the binding mutable ('$x')")
+
 priv fn refuse_read_only_element_write(c: Sema_ctx$@, left: Ast_node$@, recv_type_id: I32) //<
     //< Reports a write to an element of a container whose elements are read-only
-    //<
     //< Caution: **When assigning into a container with immutable elements, report it in terms of
     //< the elements.** The `set` path says "implement `Index_mut`", which a type carrying the
-    //< immutability in a type argument (`Slice<|T|>`) cannot do. `List<|T|>@` implements it, and
-    //< the "read-only location" error covers it.
+    //< immutability in a type argument (`Slice<|T|>`) cannot do. A type with writable places
+    //< (`List<|T|>@`) reached through a read-only receiver gets the "read-only location" error.
     // **Describe a slice in the sugar's terms:** the user wrote `[]`, so the fix is `$[]`, not a
     // type argument they never wrote (as in `../type/display.kspl`).
     if c.env.is_slice(c.env.receiver_base_id(recv_type_id))
         sema_body_write_perm.report_read_only_element(c, left, recv_type_id)
+        return
+    // A type with writable places (`Index_place`) reached through a read-only receiver: the fix is
+    // the receiver, not the type.
+    if c.env.has_implemented_operator_trait(c.env.strip_ptr(recv_type_id), "Index_place")
+        refuse_read_only_receiver(c, left)
         return
     c.err(left,
         "cannot write to an element here. This type provides only read-only places ('Index_ref'). \
@@ -773,9 +779,7 @@ priv fn infer_index_set(c: Sema_ctx$@, left: Ast_node$@, right: Ast_node$@, recv
     // that an ordinary call goes through (infer_call_args in sema/body/call.kspl). So `xs[i] = v`
     // on `xs: List<|T|>@` would pass with zero diagnostics, and the C discards const (Principle 2).
     if c.place_is_readonly(recv_node)
-        c.err(recv_node,
-            "cannot assign through a read-only location. Take the receiver as 'T$@' (writable), or \
-                make the binding mutable ('$x')")
+        refuse_read_only_receiver(c, recv_node)
     left.def_node = method_sym.node
     c.refuse_packed_receiver(recv_node, method_sym.node, "[]")
     left.type_id = method_sym.type_id

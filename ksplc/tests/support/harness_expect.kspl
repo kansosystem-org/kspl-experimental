@@ -1,5 +1,4 @@
 //< The shared way to run the fixtures that carry expectation marks (not a suite)
-//<
 //< The fixtures in [`../negative`](../negative) and [`../lint`](../lint) are one mechanism: a
 //< source whose opening comment holds `// EXPECT:` / `// EXPECT-NOT:` / `// ARGS:`, compiled once
 //< and its output matched. A file may hold several such sources, each opened by a line
@@ -23,7 +22,6 @@ import "std/sys"
 import "std/verdict"
 
 priv const FIXTURE_EXTS: U8[][_] = ::{ ".kspl", ".ksplb" } //< the fixtures' extensions
-    //<
     //< `.ksplb` is the parser's input in braces (`tests/parse/`), handed to the parser alone.
 
 priv fn fixture_ext(name: U8[]): U8[] //< a fixture's extension, empty for any other name
@@ -36,7 +34,6 @@ priv fn strip_fixture_ext(name: U8[]): U8[] //< drops a fixture's extension from
     return name.strip_suffix(fixture_ext(name))
 
 priv const CASE_HEAD: U8[] = "// ==== case " //< opens one case, at the start of its line
-    //<
     //< **A case is the text from the line after its head to the next head.** So it reads as the
     //< file it would be alone: a line number in a mark counts from its head. Its name names the
     //< file it is compiled as, in the suite's working directory.
@@ -67,7 +64,6 @@ priv fn is_case_name(name: U8[]): Bool //< lower case letters, digits and `_`, a
     return name.len > 0
 
 priv fn take_name(stem: U8[], taken: List<|U8[]|>$@): Bool //< claims a name; false if taken
-    //<
     //< **A name is one file in `work`**, the source and its generated C. A second case under it
     //< would overwrite the first, and one case's result would be read as the other's.
     if taken.any(fn(t: U8[]@; stem: U8[]): Bool {
@@ -80,7 +76,6 @@ priv fn take_name(stem: U8[], taken: List<|U8[]|>$@): Bool //< claims a name; fa
 priv fn gather(name: U8[], path: U8[], body: U8[], work: U8[], into: List<|Fixture|>$@,
     taken: List<|U8[]|>$@, arena: Arena$@): U8[] //<
         //< Adds a file's cases, and returns why it cannot where it cannot
-        //<
         //< **A file with no case head is one case, compiled where it stands.** Each case of the
         //< others is written into `work` under its own name and compiled there.
         //< Caution: **Refuse a mark before the first head**: it belongs to no case, so it would
@@ -131,7 +126,6 @@ priv fn fixtures(subdir: U8[], arena: Arena$@): List<|U8[]|> //<
 
 priv fn self_contradictory(out: U8[], arena: Arena$@): U8[] //<
     //< Searches for a diagnostic whose "expected" and "got" strings are the same
-    //<
     //< **Such a diagnostic tells the reader nothing.** It appears where the types differ at a level
     //< with no written notation (a type's outermost immutability and the like). A case's
     //< EXPECT cannot catch it, so every case is checked.
@@ -139,19 +133,11 @@ priv fn self_contradictory(out: U8[], arena: Arena$@): U8[] //<
     mid: = "', but got '"
     $rest: = out
     for
-        $at: Sz = 0
-        switch rest.find_str(head)
-        case .some(found)
-            at = found
-        case .none
+        at: Sz = rest.find_str(head) catch
             break
         tail: = rest.sub_from(at + head.len)
         rest = tail
-        $end: Sz = 0
-        switch tail.find_char('\'')
-        case .some(found)
-            end = found
-        case .none
+        end: Sz = tail.find_char('\'') catch
             break
         want: = tail.sub(0, end)
         after: = tail.sub_from(end)
@@ -167,7 +153,6 @@ priv fn self_contradictory(out: U8[], arena: Arena$@): U8[] //<
 
 priv fn unforeseen_errors(out: U8[], expect: U8[][], arena: Arena$@): U8[] //<
     //< The error lines that no EXPECT names, or empty where every one is named
-    //<
     //< **An error the case does not foresee can stop the check an EXPECT-NOT is about.** Sema
     //< skips the rest of a body's analysis after an error in it. The EXPECT-NOT then holds
     //< whatever the compiler does. So a case with an EXPECT-NOT names every error it reports.
@@ -206,14 +191,13 @@ priv fn fixture_argv(path: U8[], out_c: U8[], args: U8[][], lint_mode: Bool, are
 
 fn gather_files(name: U8[], files: U8[][], work: U8[], arena: Arena$@): List<|Fixture|> //<
     //< Every case of the files, each where it is compiled
-    //<
     //< A file that cannot be read or split is reported as a failure under its own name. It is left
     //< out, so its cases are never counted as passing.
     $all: = List<|Fixture|>.new(arena)
     $taken: = List<|U8[]|>.new(arena)
     for path in files
         label: = arena.text().s("\{name\}/\{sys.get_file_name(path)\}").take()
-        body: = io.read_file(path) catch
+        body: = io.read_file(path, null) catch
             verdict.check(label, false, "the fixture cannot be read")
             continue
         why: = gather(name, path, body, work, all@, taken@, arena)
@@ -224,7 +208,6 @@ fn gather_files(name: U8[], files: U8[][], work: U8[], arena: Arena$@): List<|Fi
 fn run_suite(name: U8[], subdir: U8[], want_failure: Bool, lint_mode: Bool, grow: Bool,
     arena: Arena$@, parser_exe: U8[] = "") //<
         //< Runs one suite, the generated C kept apart per fixture
-        //<
         //< The fixtures run side by side. `grow` adds the fixtures built just before the run.
         //< Caution: **Fail where a fixture could not be built.** Skipped quietly, it goes green
         //< without testing one of the limits' safety valves.

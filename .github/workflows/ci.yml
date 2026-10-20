@@ -87,28 +87,14 @@ jobs:
             workflow_dispatch
           # The matrix gives the target's name as it stands; do not assemble it here.
           runCmd: make ${{ matrix.target }}
-      # Each gate's outcome goes to the job summary (`digest_md` in `tools/ci_gates.kspl`):
-      # `always()`, since the round that fell is the point, and `LOGGING=1`, since
-      # out/log/make.log may be unwritable outside the container.
-      - name: Emit each gate's outcome to the summary
+      # Each gate's outcome on the job summary, and a log per gate; `always()` for the round that
+      # fell.
+      - name: Report each gate
+        uses: ./.github/actions/gate-report
         if: always()
-        run: make ci-summary LOGGING=1
-        env:
-          TITLE: linux ${{ matrix.target }}
-      # A log per gate (`tools/ci.kspl` keeps `out/log/ci/<name>.log`); `always()` for the round
-      # that fell. `warn` marks a round that left no log, which fell before its first gate
-      - name: Keep a log per gate
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          title: linux ${{ matrix.target }}
           name: log-linux-${{ matrix.target }}
-          path: |
-            out/log/ci/*.log
-            out/log/ci/*.end
-            out/log/suite/*.times
-            out/log/extract/*.log
-          if-no-files-found: warn
-          retention-days: 14
 
   # --- macOS: every gate runnable on real hardware (Xcode's clang/make) ---
   # What runs and what is excluded has its one origin in `tools/ci_gates.kspl`'s table. Its
@@ -128,22 +114,12 @@ jobs:
           persist-credentials: false
       - name: make ci-macos
         run: make ci-macos
-      - name: Emit each gate's outcome to the summary
+      - name: Report each gate
+        uses: ./.github/actions/gate-report
         if: always()
-        run: make ci-summary LOGGING=1
-        env:
-          TITLE: macos
-      - name: Keep a log per gate
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          title: macos
           name: log-macos
-          path: |
-            out/log/ci/*.log
-            out/log/ci/*.end
-            out/log/suite/*.times
-          if-no-files-found: warn
-          retention-days: 14
 
   # --- Windows (MSYS2 UCRT64 / mingw): both native shared sections ---
   windows-ucrt64:
@@ -176,20 +152,9 @@ jobs:
       - uses: ./.github/actions/msys2-ucrt64
       - name: make ${{ matrix.target }}
         run: make ${{ matrix.target }}
-      - name: Emit each gate's outcome to the summary
+      - name: Report each gate
+        uses: ./.github/actions/gate-report
         if: always()
-        run: make ci-summary LOGGING=1
-        env:
-          TITLE: windows-ucrt64 ${{ matrix.target }}
-      - name: Keep a log per gate
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          title: windows-ucrt64 ${{ matrix.target }}
           name: log-windows-ucrt64-${{ matrix.target }}
-          path: |
-            out/log/ci/*.log
-            out/log/ci/*.end
-            out/log/suite/*.times
-            out/log/extract/*.log
-          if-no-files-found: warn
-          retention-days: 14

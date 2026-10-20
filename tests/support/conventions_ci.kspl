@@ -1,5 +1,4 @@
 //< The workflow's jobs, and how the conditions that run them are written (not the suite)
-//<
 //< **One `if:` line decides whether a job runs.** GitHub is silent on a condition that does not
 //< take effect. So a job run by mistake and one never run both go unseen. Only this file
 //< stops them.
@@ -35,6 +34,17 @@ priv fn missing_exec(mode: U8[], body: U8[]): Bool //<
     //< Git's regular-file mode lacks execute permission
     return mode.equals("100644") && body.starts_with("#!")
 
+priv fn lone_shebang(src: U8[], arena: Arena$@): Bool //<
+    //< Whether a source opens with a shebang and defines no `main` (`is_entry`)
+    //< `ksplc run` starts a program at its `main`, so a library module's shebang starts nothing.
+    return src.starts_with("#!") && !is_entry(src, arena)
+
+priv const SHEBANG_SAMPLES: Sample[_] = ::{
+    Sample::{ .text = "#!/usr/bin/env -S ksplc run\nfn helper()\n", .hits = true },
+    Sample::{ .text = "#!/usr/bin/env -S ksplc run\nfn main(): I32\n  return 0\n", .hits = false },
+    Sample::{ .text = "fn helper()\n", .hits = false },
+}
+
 priv fn check_shebang_modes(arena: Arena$@) //< checks Git's index, including on Windows
     modes: U8[][_] = ::{ "100644", "100755", "100644", "120000", "100644" }
     bodies: U8[][_] = ::{ "#!/bin/sh\n", "#!/bin/sh\n", "# comment\n", "#!/bin/sh", "\n#!/bin/sh" }
@@ -52,6 +62,8 @@ priv fn check_shebang_modes(arena: Arena$@) //< checks Git's index, including on
         return
     $bad: = List<|U8[]|>.new(arena)
     $seen: Sz = 0
+    $lone: = scan.misjudged(Sample[]::SHEBANG_SAMPLES, lone_shebang, arena)
+    $sources: Sz = 0
     for record in result.out.split(0, arena)
         if record.len == 0
             continue
@@ -72,8 +84,14 @@ priv fn check_shebang_modes(arena: Arena$@) //< checks Git's index, including on
         seen += 1
         if missing_exec(record.sub(0, 6), body)
             bad.push(rel)
+        if rel.ends_with(".kspl") && body.starts_with("#!")
+            sources += 1
+            if lone_shebang(harness.read_under_root(rel), arena)
+                lone.push(rel)
     verdict.check_list("every tracked shebang file has Git's executable bit", seen, "files", bad@,
         "run git update-index --chmod=+x -- <path>; also chmod +x <path> on Unix")
+    verdict.check_list("every `.kspl` with a shebang defines `main`", sources, "sources", lone@,
+        "remove the shebang and run git update-index --chmod=-x -- <path>, or add `fn main`")
 
 priv const CI_YML: U8[] = ".github/workflows/ci.yml"
 priv const JOBS_HEAD: U8[] = "jobs:"
@@ -84,7 +102,6 @@ priv const INPUT_PAD: U8[] = "      "
 priv const GUARD_HEAD: U8[] = "    if:"
 
 priv fn key_at(line: U8[], pad: U8[]): U8[] //< takes the name out of a `<indent><name>:` line
-    //<
     //< It returns empty for a line with a different indent and for a comment.
     if !line.starts_with(pad) || line.starts_with(" ", pad.len)
         return ""
@@ -97,7 +114,6 @@ priv fn key_at(line: U8[], pad: U8[]): U8[] //< takes the name out of a `<indent
 
 priv fn job_blocks(yml: U8[], names: List<|U8[]|>$@, bodies: List<|U8[]|>$@, arena: Arena$@) //<
     //< Lists the jobs under `jobs:`, by name and body
-    //<
     //< Caution: **Cut the body at that job's range**: a `workflow_dispatch` input may share a job's
     //< name (`check_dispatch_switches` below), so an unanchored search reads another job's inside.
     $off: Sz = 0
@@ -151,7 +167,6 @@ priv fn crons_of(yml: U8[], arena: Arena$@): List<|U8[]|> //<
 
 priv fn quoted_crons(guard: U8[], arena: Arena$@): List<|U8[]|> //<
     //< Of the `'...'` inside an `if:`, lists the ones holding a space
-    //<
     //< **A quoted text holding a space is a cron**; the condition's other quoted texts
     //< (`'schedule'`, `'workflow_dispatch'`) hold none.
     $out: = List<|U8[]|>.new(arena)
@@ -178,7 +193,6 @@ priv fn guard_of(body: U8[], arena: Arena$@): U8[] //<
 
 priv const GATES_SRC: U8[] = "tools/ci_gates.kspl" //<
     //< The CI's sets and the targets the workflow's matrices run agree
-    //<
     //< Caution: **A set missing from the `.yml` silently stops running.** The runner refuses a set
     //< holding no gate but cannot see the CI's matrix; this is the second link.
 priv const SET_HEAD: U8[] = "enum Set "
@@ -213,7 +227,6 @@ priv fn body_of(names: List<|U8[]|>@, bodies: List<|U8[]|>@, job: U8[]): U8[] //
 
 priv fn matrix_of(body: U8[], arena: Arena$@): List<|U8[]|> //<
     //< Returns the elements of a `target: [...]` in a job's body
-    //<
     //< Caution: **Search only within the body** (what `job_blocks` cut). Searching the whole file,
     //< it reads another job's matrix as its own.
     $out: = List<|U8[]|>.new(arena)
@@ -275,7 +288,6 @@ priv fn check_ci_shards(arena: Arena$@)
 
 priv fn check_dispatch_switches(arena: Arena$@) //<
     //< A job's `if:` matches the input of the manual start and the cron `schedule:` declares
-    //<
     //< Caution: **Add only one side and either direction breaks silently**: an input alone "can be
     //< pressed and does nothing" (Principle 5); a job alone runs whatever is chosen. The names
     //< match so nobody has to remember the pairing; a cron that is not declared matches no run.
@@ -301,7 +313,7 @@ priv fn check_dispatch_switches(arena: Arena$@) //<
         // Caution: If a cron that is not declared is allowed, the condition silently has no effect.
         // (A condition meant to leave out the weekdays matches no run.)
         for c in quoted_crons(guard, arena)
-            if !htext.has(crons@, c)
+            if !crons.contains(c)
                 bad
                     .push(arena.text().s(names.get(i)).s("'s if: holds the cron '").s(c)
                     .s("', which schedule: does not declare").take())
@@ -311,7 +323,6 @@ priv fn check_dispatch_switches(arena: Arena$@) //<
 
 priv const LINT_MK: U8[] = "mk/lint.mk" //<
     //< The static analysis' list of entry points agrees with the tree
-    //<
     //< Caution: **A source holding `fn main` that is missing from the list is never linted.** The
     //< analysis walks imports, so **an entry point nobody imports is not covered**.
 
@@ -319,13 +330,11 @@ priv const LINT_SOURCES: U8[][_] = ::{ "*.kspl", ":!ksplc/tests/negative/*",
     ":!ksplc/tests/parse/*", ":!ksplc/tests/lint/*", ":!ksplc/tests/runtime/*",
     ":!ksplc/tests/ship/*" } //<
         //< Sources searched for an entry point, and the fixtures left out, each linted by its suite
-        //<
         //< The suites' material diagnoses by design (`negative/`, `lint/`), stops on purpose
         //< (`runtime/`), or imports what the suite writes beside it (`ship/`).
 
 priv fn is_entry(src: U8[], arena: Arena$@): Bool //<
     //< Whether a source defines `main`: a line opening with it, outside a `"""` string
-    //<
     //< A suite writes the programs it runs into such strings, and they are not this file's entry.
     //< A `pub fn main` is an entry too: read as `fn main` alone, it slipped out of the gate.
     $raw: = false
@@ -370,7 +379,7 @@ priv fn check_lint_entries(arena: Arena$@)
         if !is_entry(harness.read_under_root(rel), arena)
             continue
         seen += 1
-        if !htext.has(listed@, rel)
+        if !listed.contains(rel)
             bad.push(rel)
     verdict.check_list("no entry point of the static analysis has leaked out", seen, "entry points",
         bad@,
@@ -410,7 +419,6 @@ priv fn is_check(word: U8[], name: U8[]): Bool //< whether a word is the check, 
 
 priv fn cell_names(text: U8[], arena: Arena$@): Bool //<
     //< Whether a cell names a check: the text is `<cell>\t<name>`
-    //<
     //< **The cell's first word, or an item of the list in its brackets** (`(cli / config)`). Any
     //< word would do, but a suite named by an English word (`conventions`) is then found in prose.
     if tab: = text.find_char('\t')
@@ -446,7 +454,6 @@ priv const CELL_SAMPLES: Sample[_] = ::{
 
 priv fn ci_checks(arena: Arena$@): List<|U8[]|> //<
     //< The make targets the gates ask for and the suites the lists hold
-    //<
     //< A half of the suites (`test-suites-a`) stands for what its list holds, and `NAME=1` is a
     //< setting, not a target.
     $out: = List<|U8[]|>.new(arena)
@@ -484,7 +491,6 @@ priv fn check_platform_table(arena: Arena$@)
 
 priv fn check_linux_suites_gated(arena: Arena$@) //<
     //< Each suite out of `test-suites` (`LINUX_SUITES`) has a gate of its own
-    //<
     //< **No half of the suites runs it.** So a name added to the list, but not to the gates' table,
     //< runs on no platform, and every round stays green.
     $gated: = List<|U8[]|>.new(arena)
@@ -494,20 +500,18 @@ priv fn check_linux_suites_gated(arena: Arena$@) //<
     $bad: = List<|U8[]|>.new(arena)
     names: = htext.make_list(harness.read_under_root(SUITE_LISTS[0]), LIST_HEADS[1], arena)
     for name in names
-        if !htext.has(gated@, arena.text().s("test-").s(name).take())
+        if !gated.contains(arena.text().s("test-").s(name).take())
             bad.push(name)
     verdict.check_list("each suite out of `test-suites` has a gate of its own", names.len, "suites",
         bad@, arena.text().s("give it a `Gate` in ").s(GATES_SRC).take())
 
 priv const BLAS_HOME: U8[] = "ksai/" //<
     //< The one package `make test-blas` builds with `BLAS=1`
-    //<
     //< **A `#cfg(blas)` elsewhere is never built**: `lint-cfg` analyses it, but no gate links or
     //< runs it ("note 15" in `docs/SPEC-gates.md`).
 
 priv fn holds_blas(src: U8[], arena: Arena$@): Bool //<
     //< Whether a source puts a declaration under the `blas` flag, outside a `"""` string
-    //<
     //< A suite's material writes the attribute into such strings as data, not as its own.
     $raw: = false
     for line in src.lines(arena)
@@ -599,7 +603,6 @@ priv fn check_msys2_list(arena: Arena$@)
         .s(MSYS2_LIST).take())
 
 priv fn check_job_timeouts(arena: Arena$@) //< every workflow job states its own time limit
-    //<
     //< **A job with no `timeout-minutes:` falls back to GitHub's 360 minutes**, and one hung test
     //< then bills six hours, ten times over on macOS ("How CI runs" in `docs/SPEC-gates.md`).
     $bad: = List<|U8[]|>.new(arena)
@@ -665,7 +668,6 @@ priv fn check_runner_pins(arena: Arena$@)
         "name the image the label stands for today (`ubuntu-24.04`, not `ubuntu-latest`)")
 
 fn run(arena: Arena$@) //< this section's entry point
-    //<
     //< Caution: **Call it from `conventions_match.kspl`'s `run`** (there is one suite).
     check_shebang_modes(arena)
     check_extracted_suite_shares(arena)

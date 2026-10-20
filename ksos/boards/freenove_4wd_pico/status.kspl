@@ -1,5 +1,4 @@
 //< The names of the car's states, and how they are shown (the report line, and WS2812)
-//<
 //< **The state strings are kept in one place.** Only the first two LEDs are sent:
 //<   the first  ... the state's colour. **It blinks** (showing that the loop is running)
 //<   the second ... red just after a safety timeout issued a command. Dark otherwise.
@@ -9,7 +8,6 @@ import "ksos/drivers/mmio"
 import "ksos/drivers/rp2040/ws2812"
 
 enum State //< the car's states
-    //<
     //< **Every state except `driving` means "stopped".**
     // Starting up. **This takes long** (seconds on the battery), and unlit it would look dead.
     starting
@@ -30,7 +28,6 @@ enum State //< the car's states
 
 impl State
     fn text(s: Self): U8[] //< the string shown on the report line
-        //<
         //< **For `driving` nothing goes on the line.** Not `variant_name()`: `stopped by remote`
         //< reads better in a log.
         if s == State.battery
@@ -50,23 +47,21 @@ impl State
         return "driving"
 
     priv fn color(s: Self): U32 //< the state's colour
-        //<
         //< Caution: **Scale the brightness by `level`**, never 0xff: eight bright LEDs drain the
         //< battery and trip the low-voltage check.
         if s == State.starting
-            return (level << 8) | level // cyan
+            return ws2812.rgb(false, true, true, level) // cyan
         if s == State.driving
-            return level << 8 // green
+            return ws2812.rgb(false, true, false, level) // green
         if s == State.battery
-            return level << 16 // red
+            return ws2812.rgb(true, false, false, level) // red
         if s == State.remote
-            return level // blue
+            return ws2812.rgb(false, false, true, level) // blue
         if s == State.time_limit
-            return (level << 16) | (level << 8) // yellow
-        return (level << 16) | level // purple = no policy, or it cannot be read
+            return ws2812.rgb(true, true, false, level) // yellow
+        return ws2812.rgb(true, false, true, level) // purple = no policy, or it cannot be read
 
     fn show(s: Self, by_safety: Bool) //< shows the state
-        //<
         //< **It may be called every loop** (it sends to the line only when what is shown changes).
         //< **`by_safety` means "a safety timeout issued the previous command"**, shown separately
         //< because its triple looks like the policy's own reversing.
@@ -90,10 +85,8 @@ impl State
         _ok: = ws2812.send(U32[]::px)
 
 priv const BLINK_ROUNDS: U32 = 5 //< the blink's half period, in loops
-    //<
     //< **Make it long enough for the eye** (5 loops of 100ms is 0.5 seconds).
 priv const ALERT_ROUNDS: U32 = 3 //< how long the safety timeout's red stays on, in loops
-    //<
     //< **One loop is too short to see.**
 
 priv $level: U32 = 0
@@ -109,7 +102,6 @@ priv $tick: U32 = 0
 priv $alert_left: U32 = 0
 
 fn init(pin: U32, brightness: U32): Void!mmio.Driver_error //< makes the LEDs usable
-    //<
     //< The caller passes the brightness (`board.ws2812_level`).
     ready = false
     ws2812.init(pin)!

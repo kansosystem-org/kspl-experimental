@@ -1,5 +1,4 @@
 //< The documents' own checks: their kinds, the Principles' numbering, tables, and the manual
-//<
 //< Not the suite; `../suite/conventions_test.kspl` runs each part.
 import "std/chars" // `ends_with`
 import "std/ds" { List }
@@ -10,7 +9,6 @@ import "std/sys"
 import "std/verdict"
 import "tests/support/conventions_scan" as scan + { Sample }
 import "tests/support/harness"
-import "tests/support/harness_text"
 
 // ==========================================
 // The kind of a document is its name
@@ -26,7 +24,6 @@ priv const KIND_HEADS: U8[][_] = ::{ "SPEC-", "HOWTO-", "DESIGN-" } //<
 priv const OUTSIDE_NAMES: U8[][_] = ::{ "CONTRIBUTING.md", "LICENSE.md", "THIRD-PARTY-NOTICES.md",
     "SECURITY.md" } //<
         //< The document names fixed from outside
-        //<
         //< The table is "Documents whose name is fixed from outside" in `docs/SPEC-documents.md`.
         //< Caution: **Add a name here only with a row in that table.** A document that no outside
         //< tool looks for takes one of the six kinds' names.
@@ -84,7 +81,6 @@ priv fn check_kind_fires(arena: Arena$@)
         "name_samples", is_kind_name, arena)
 
 fn run_kind(arena: Arena$@) //< this section's entry point
-    //<
     //< Caution: **Call it from `suite/conventions_test.kspl`'s `main`** (there is one suite).
     check_kind_fires(arena)
     check_names(arena)
@@ -99,13 +95,11 @@ fn run_kind(arena: Arena$@) //< this section's entry point
 priv const RULE_DOC: U8[] = "docs/DESIGN-principles.md" //< where the numbers come from
 priv const RULE_HEAD: U8[] = "## Development Principles" //<
     //< The heading where the Development Principles' list begins
-    //<
     //< Caution: **Do not mix it with another numbered list**: `docs/DESIGN-principles.md` uses `1.
     //< **…**` in its chapters too, so only the text under this heading is read.
 priv const RULE_MARK: U8[] = ". **"
 
 priv const CITE_WORD: U8[] = "Principle " //< the form of a citation
-    //<
     //< Caution: **Do not drop the trailing space**: `take_numbers` reads the number right after
     //< this text, and would not reach `Principle 5`'s `5`.
 
@@ -130,7 +124,6 @@ priv fn numbers_in_doc(arena: Arena$@): List<|U8[]|> //<
 
 priv fn cited(line: U8[], arena: Arena$@): List<|U8[]|> //<
     //< Picks the numbers of the principles cited in one line
-    //<
     //< **Two are always written in full, as `Principle 1 and Principle 6`**, so reading one at a
     //< time is enough. The word with no number after it (`Principle compliance`) yields nothing.
     $out: = List<|U8[]|>.new(arena)
@@ -145,7 +138,6 @@ priv fn cited(line: U8[], arena: Arena$@): List<|U8[]|> //<
 
 priv fn take_numbers(line: U8[], from: Sz, out: List<|U8[]|>$@) //<
     //< Pushes the number that starts at `from`
-    //<
     //< With no number there, nothing is pushed.
     $n: = from
     for n < line.len && (line.ptr + n).is_digit()
@@ -155,7 +147,7 @@ priv fn take_numbers(line: U8[], from: Sz, out: List<|U8[]|>$@) //<
     out.push(line.sub(from, n - from))
 
 priv fn check_cites(arena: Arena$@)
-    $numbers: = numbers_in_doc(arena)
+    numbers: = numbers_in_doc(arena)
     $seen: Sz = 0
     $bad: = List<|U8[]|>.new(arena)
     specs: = scan.kspl_specs_with(U8[][]::{ "*.md", "*.py", "*.mk" }, arena)
@@ -165,7 +157,7 @@ priv fn check_cites(arena: Arena$@)
             i += 1
             for n in cited(line, arena)
                 seen += 1
-                if !harness_text.has(numbers@, n)
+                if !numbers.contains(n)
                     bad
                         .push(arena.text().s(rel).s(":\{i\}: there is no ").s(CITE_WORD).s(n).take())
     verdict.check_list("a Principle's number named really exists", seen, "namings", bad@,
@@ -214,7 +206,6 @@ priv fn strip_quote(line: U8[]): U8[] //<
 
 priv fn cell_count(line: U8[], arena: Arena$@): Sz //<
     //< The number of cells, counted after masking the escaped vertical bars
-    //<
     //< The mask is NUL (`\0`), absent from Markdown, so it is neither a `|` nor part of a word.
     $s: = strip_quote(line).replace("\\|", "\0", arena)
     s = s.strip_prefix("|").strip_suffix("|")
@@ -290,6 +281,46 @@ priv fn check_cell_fires(arena: Arena$@)
 fn run_prose(arena: Arena$@)
     check_cell_fires(arena)
     check_md_tables(arena)
+    check_not_carried(arena)
+
+// ==========================================
+// The features not carried are named alike in the two documents that list them
+// The specification's Appendix A says what to write instead; "Notations not carried" in
+// `docs/DESIGN-principles.md` says why. A row added to one alone leaves a feature without its
+// reason or its replacement. Each row's bold first cell is its name.
+// ==========================================
+priv fn carried_names(rel: U8[], from: U8[], to: U8[], arena: Arena$@): List<|U8[]|> //<
+    //< The bold names that open the table rows between two marks of one document
+    $out: = List<|U8[]|>.new(arena)
+    $inside: = false
+    for line in harness.read_under_root(rel).lines(arena)
+        if line.starts_with(from)
+            inside = true
+        if inside && line.starts_with(to)
+            break
+        if inside && line.starts_with("| **")
+            rest: = line.sub_from(4)
+            if shut: = rest.find_str("**")
+                out.push(rest.sub(0, shut))
+    return out
+
+priv fn check_not_carried(arena: Arena$@) //< both tables name the same features
+    why: =
+        carried_names("docs/DESIGN-principles.md", "### Notations not carried",
+        "**Withdrawing a notation", arena)
+    what: =
+        carried_names("docs/SPEC-programming-language.md", "## Appendix A", "## Appendix B", arena)
+    $bad: = str.Str_builder.new()
+    for n in why
+        if !what.contains(n)
+            bad.s("  only in docs/DESIGN-principles.md: \{n\}\n")
+    for n in what
+        if !why.contains(n)
+            bad.s("  only in docs/SPEC-programming-language.md: \{n\}\n")
+    name: = arena.text()
+        .s("the \{what.len\} features not carried are named alike in the specification and the \
+            principles").take()
+    verdict.check(name, what.len > 0 && bad.slice().len == 0, bad.slice())
 
 // ==========================================
 // Checks that the manual matches what the screen shows
@@ -300,7 +331,6 @@ fn run_prose(arena: Arena$@)
 // ==========================================
 priv fn tab_names(text: U8[], arena: Arena$@): List<|U8[]|> //<
     //< The navigation labels' names (they appear as `>name<span class="tally">`)
-    //<
     //< Caution: **Take the name from the `>` just before**: searched for by its text, this would
     //< need a fix for every label added. Only a label carries `tally`, so that mark is enough.
     $out: = List<|U8[]|>.new(arena)
@@ -321,7 +351,6 @@ priv fn tab_names(text: U8[], arena: Arena$@): List<|U8[]|> //<
 
 priv fn joined(names: List<|U8[]|>@, arena: Arena$@): U8[] //<
     //< Joins the names the way the manual writes them (`the 3 tabs A, B and C`)
-    //<
     //< **The last one is joined by `and`**, as in English lists; commas alone would fail on correct
     //< prose.
     want: = arena.text()
@@ -333,7 +362,6 @@ priv fn joined(names: List<|U8[]|>@, arena: Arena$@): U8[] //<
 
 priv fn count_after_digit(text: U8[], needle: U8[]): Sz //<
     //< How many times the needle appears with a digit in front of it, no two overlapping
-    //<
     //< **Anchor a needle that is ordinary English to something that is not.** `" tabs "` alone
     //< catches "the tab characters" or "the tabs and a run of empty lines". It then counts a
     //< place not about the navigation as written wrong.
@@ -351,7 +379,6 @@ priv fn count_after_digit(text: U8[], needle: U8[]): Sz //<
 
 priv fn check_manual_tabs(arena: Arena$@) //<
     //< That the manual counts the navigation's labels correctly and lists their names
-    //<
     //< Caution: **Do not search for a name in the whole text**: "Slides" and "Headings" appear
     //< anywhere, making **a check that cannot fail**. The form "`the N tabs` and the names" is
     //< matched, so the count, names and order are checked at once. **Check every place it is
@@ -387,7 +414,6 @@ priv const TAB_TOLD: U8[] = "the 3 tabs Alpha, Beta and Gamma"
 
 priv const COUNT_TEXT: U8[] = "the 2 tabs and 13 tabs , not the tabs; x1111" //<
     //< the sample for counting with a digit in front
-    //<
     //< Caution: **Include an overlapping case** — get the advance wrong and `11` counts as 2.
 priv const COUNT_NEEDLE: U8[][_] = ::{ " tabs ", "11", "absent" }
 priv const COUNT_WANT: Sz[_] = ::{ 2, 1, 0 }

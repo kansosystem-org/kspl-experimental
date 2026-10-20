@@ -1,5 +1,4 @@
 //< Reads the project settings file `ksplc.cfg`
-//<
 //< The format is INI-style sections, one setting per line; a `#` starts a comment to the line end,
 //< and a blank line is ignored. **The nearest file applies whole**: the search walks up from the
 //< file's folder to the current one, the first `ksplc.cfg` found wins, and settings never merge.
@@ -26,17 +25,14 @@ import "std/sys"
 const CONFIG_FILE_NAME: U8[] = "ksplc.cfg"
 
 priv const MAX_PARENT_WALK: Sz = 64 //< the limit on how many folders the search walks up
-    //<
     //< Enough for any repository, and it stops a `..` chain or a symbolic link loop.
 
 priv fn is_known_section(name: U8[]): Bool //< the known sections
-    //<
     //< Add each new kind of setting here; nothing about the file is lint-specific.
     return name.equals("lint") || name.equals(PACKAGE_SECTION)
 
 const PACKAGE_SECTION: U8[] = "package" //<
     //< The section a package names itself in (`ksplc/base/package.kspl` reads it)
-    //<
     //< **It marks the top of a package**: `package_top` below looks for it.
 
 struct Setting
@@ -59,7 +55,6 @@ priv $own_cache: Map<|U8[], Cfg_file$@|>$@ = null
 priv $in_force_cache: Map<|U8[], List<|Setting|>$@|>$@ = null
 
 priv fn fail(file: U8[], line: Sz, msg: U8[]) //< it refuses a line of a settings file, and exits
-    //<
     //< **Every refusal names the file from the project's root**, however the folder was reached.
     //< Some callers reach it by an absolute path, and the two spellings read as two files.
     base_diag.print_unplaced(base_locate.to_project_relative(file), line, msg)
@@ -85,7 +80,6 @@ fn files_missed(): List<|U8[]|>$@ //< every `ksplc.cfg` looked for and not found
     return files_absent
 
 priv fn note_once(names: List<|U8[]|>$@, path: U8[]) //< adds a file's project-relative name once
-    //<
     //< Under that name, a file reached from the root and from its own folder gives one entry.
     named: = base_locate.to_project_relative(path)
     for f in names
@@ -97,7 +91,7 @@ priv fn load_one(path: U8[], out: List<|Setting|>$@): Bool //<
     //< It reads one `ksplc.cfg` and appends to out; false where there is no such file
     // Caution: **Stop on one that is there and cannot be read.** Taken as absent, the build would
     // go on under the defaults, reading sources from another place than `[package]` says.
-    text: = io.read_file(path) catch
+    text: = io.read_file(path, null) catch
         if fs.exists(path)
             fail(path, 0, "this ksplc.cfg is there but cannot be read")
         note_once(files_missed(), path)
@@ -162,14 +156,12 @@ priv fn load_one(path: U8[], out: List<|Setting|>$@): Bool //<
     return true
 
 fn reject(setting: Setting, msg: U8[]) //< it rejects one setting as invalid
-    //<
     //< It prints the error with file:line and exits at once. A settings file is not KSPL source, so
     //< there is no caret.
     fail(setting.file, setting.line, msg)
 
 priv fn settings_for_dir(dir: U8[]): List<|Setting|>$@ //<
     //< The settings that apply in dir: those of the nearest `ksplc.cfg`, walking up from dir
-    //<
     //< **The first file found wins**, even an empty one. **A relative dir is walked up to the
     //< current folder, which is included**. A package's top always holds a file, so the settings
     //< above a package never reach into it.
@@ -195,7 +187,6 @@ fn settings_in(dir: U8[]): List<|Setting|>$@ //< what dir's own `ksplc.cfg` says
 
 fn package_top(dir: U8[]): U8[] //<
     //< The nearest folder at or above dir whose own `ksplc.cfg` names a package; empty where none
-    //<
     //< **It walks on past the nearest file**, which can be inside the package and name none.
     $dirs: = List<|U8[]|>.new(null)
     defer dirs.free()
@@ -206,7 +197,6 @@ fn package_top(dir: U8[]): U8[] //<
     return ""
 
 priv fn walk_up(dir: U8[], out: List<|U8[]|>$@) //< dir and each folder above it, innermost first
-    //<
     //< **`..` is folded first** (`fold_dots` in `locate.kspl`). Cutting one name at a time,
     //< `pkg/..` steps back into `pkg`, and a file whose path only spells `pkg` would get that
     //< package and its settings. A relative dir that climbs above the current folder is walked from
@@ -261,7 +251,6 @@ priv fn none(): List<|Setting|>$@ //< the one empty list, for `std` and a folder
 
 fn settings_for_file(file_path: U8[]): List<|Setting|>$@ //<
     //< The settings that apply to a source file, given its logical name
-    //<
     //< **They are looked for next to the file as read** (`disk_name` in `base/locate.kspl`).
     //< **None reach into `std`**: it is the compiler's own, and a project must not change how it is
     //< checked.

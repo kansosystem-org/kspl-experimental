@@ -1,5 +1,4 @@
 //< Generates C99 for statements
-//<
 //< It dispatches the control structures by kind_id. Expressions are in expr.kspl, declarations
 //< in decl.kspl.
 import "ksplc/base/ast" { Ast_node }
@@ -17,7 +16,6 @@ import "ksplc/sema/body/binary" as sema_body_binary
 import "ksplc/sema/body/call" as sema_body_call
 import "ksplc/sema/decl/eval" as sema_decl_eval
 import "ksplc/sema/decl/layout" as sema_decl_layout
-import "ksplc/sema/type/def" as sema_type_def
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/naming" as sema_type_naming
 import "ksplc/sema/type/query" as sema_type_query
@@ -27,7 +25,6 @@ import "std/str" { Str_builder }
 priv fn emit_assign_tail(c: Genc_ctx$@, left_node: Ast_node$@, dst: U8[], op_text: U8[],
     right_node: Ast_node$@) //<
         //< It emits an assignment from its operator on, after the target was emitted
-        //<
         //< For `<<=` `>>=` / `/=` `%=` it goes through the binary operators' check
         //< (emit_shift_amount / emit_divisor / open_signed_div), or run-time values would slip past
         //< it. dst names the target through its temporary (`*_kspl_dst_N`), empty for the target
@@ -57,7 +54,6 @@ priv fn emit_assign_tail(c: Genc_ctx$@, left_node: Ast_node$@, dst: U8[], op_tex
 priv fn emit_wrapped_compound(c: Genc_ctx$@, left_node: Ast_node$@, dst: U8[], op_text: U8[],
     right_node: Ast_node$@): Bool //<
         //< Emits a `+=` `-=` `*=` `<<=` through the unsigned twin; false if the type needs none
-        //<
         //< Caution: **Do not leave it as C's `+=`.** KSPL wraps signed overflow (`mod 2^N`), C
         //< makes it undefined, and the optimizer relies on that: `i += 1` on `i > 0` never ends at
         //< `-O2`. The binary operators go the same way (wrap_twin in expr.kspl).
@@ -85,7 +81,6 @@ priv fn emit_assign_target(c: Genc_ctx$@, left_node: Ast_node$@, dst: U8[])
 
 priv fn calls_statement_intrinsic(r: Ast_node$@): Bool //<
     //< Whether r calls an intrinsic that returns no value or embeds raw code
-    //<
     //< `__kspl_read_volatile` is not one: the value it reads can be discarded with `(void)()`.
     if r == null || r.kind_id != .k_expr_postfix
         return false
@@ -150,14 +145,12 @@ impl Ast_node
         c.s("}\n")
     priv fn emit_block_inline(r: Ast_node$@, c: Genc_ctx$@) //<
         //< It emits only the block's contents (its statements)
-        //<
         //< The caller owns the enclosing {} (a switch's case uses it to avoid an extra nested
         //< block).
         for child in r.children
             child.emit(c)
     priv fn block_ends_in_jump(r: Ast_node$@): Bool //<
         //< Whether a block ends in an unconditional jump (return / throw / break / continue / goto)
-        //<
         //< Then the following `break;` can be omitted.
         for $i: = I32::r.children.len - 1; i >= 0; i -= 1
             switch r.get_child(i).kind_id
@@ -170,7 +163,6 @@ impl Ast_node
 
     priv fn dest_has_ordered_subexpr(r: Ast_node$@): Bool //<
         //< Whether the assignment target holds a subexpression whose evaluation order is visible
-        //<
         //< Subscripts and call arguments must be evaluated before the right-hand side ("Evaluation
         //< order" in docs/SPEC-programming-language.md). A `.` or `$` only moves on to its
         //< receiver; a plain name has nothing to fix.
@@ -375,7 +367,6 @@ impl Ast_node
         // "undeclared"**. That is no KSPL diagnostic, and it does not say what is wrong. A local
         // named `near` is declared as `near_kw`, and a `switch (near)` then fails.
         $safe: = cond_slice.c_safe_name()
-        defer safe.free()
         cond_slice = base_core.arena.dup_str(safe.slice())
         // A `Bool` subject is switched on as an `int`: clang warns on a boolean one
         // (-Wswitch-bool).
@@ -400,24 +391,28 @@ impl Ast_node
             c.s(".tag")
         c.s(") {\n")
 
+        // Lower grouped the arms and resolved each label (group_switch_arms in lower/root.kspl).
         $has_default: = false
         for $i: Sz = 2; i < r.children.len; i += 1
-            child_node: = r.get_child(i)
-            if child_node.is_keyword("case")
-                i = r.emit_switch_case(c, i, cond_slice, is_enum, enum_def_ptr, safe_enum_name)
-            else if child_node.is_keyword("default")
+            arm: = r.get_child(i)
+            arm.ice_assert(arm.kind_id == .k_switch_arm,
+                "genc: a switch reached the backend without its arms grouped")
+            block: = arm.get_arm_block()
+            if arm.is_default_arm()
                 has_default = true
                 c.s("    default:\n")
-                $def_block: Ast_node$@ = null
-                for $k: = i + 1; k < r.children.len; k += 1
-                    if r.get_child(k).kind_id == .k_stmt_block
-                        def_block = r.get_child(k)
-                        break
-                if def_block != null
-                    def_block.emit(c)
-                if def_block == null || !def_block.block_ends_in_jump()
+                block.emit(c)
+                if !block.block_ends_in_jump()
                     c.s("        break;\n")
-                i += 1
+                continue
+            for $k: Sz = 0; k + 1 < arm.children.len; k += 1
+                arm.get_child(k).emit_case_label(c, enum_id, safe_enum_name)
+            // The body goes inline inside the case's {}, not in a second block.
+            c.s("    {\n")
+            block.emit_block_inline(c)
+            if !block.block_ends_in_jump()
+                c.s("        break;\n")
+            c.s("    }\n")
         // sema (process_switch_exhaustiveness) accepts an enum or Bool switch without an explicit
         // 'default' only if it covers every value. So this branch is never reached at run time.
         // But a scalar enum is emitted as its base type (`emit_struct_enum_fwd` in
@@ -427,110 +422,21 @@ impl Ast_node
         if (is_enum || is_bool) && !has_default
             c.s("    default: __builtin_unreachable();\n")
         c.s("    }\n")
-        mangled_enum_name.free()
-    priv fn emit_case_payload_bindings(r: Ast_node$@, c: Genc_ctx$@,
-        enum_def_ptr: sema_type_def.Enum_def$@, cond_slice: U8[]) //<
-            //< It emits a case's payload binding `Type name = cond.payload.variant.field;`.
-            //<
-            //< self is the first pattern (a k_case_pattern).
-        if r == null || r.kind_id != .k_case_pattern || r.children.len == 0
+    priv fn emit_case_label(r: Ast_node$@, c: Genc_ctx$@, enum_id: I32, safe_enum_name: U8[]) //<
+        //< One `case` label: the variant Lower resolved (a `case_pattern`), else the value
+        if r.kind_id == .k_case_pattern
+            variant: = c.env.variant_at(enum_id, r.ival) catch
+                r.ice_panic("genc: a switch label names no variant")
+                return
+            $mangled_variant: = variant.name.mangle_c_identifier()
+            c.s("    case kspl_\{safe_enum_name\}_\{mangled_variant.slice()\}:\n")
             return
-        $v_name_node: Ast_node$@ = null
-        $payload_start_idx: Sz = 0
-        switch r.extract_case_variant()
-        case .variant(vn, ps)
-            v_name_node = vn
-            payload_start_idx = ps
-        default
-            return
-        if v_name_node == null
-            return
-        variant_name: = v_name_node.text
-        $variant_def: sema_type_def.Enum_variant$@ = null
-        switch enum_def_ptr.get_variant(variant_name)
-        case .some(d)
-            variant_def = d
-        case .none
-            return
-        $field_idx: Sz = 0
-        for $k: = payload_start_idx; k < r.children.len; k += 1
-            bind_var: = r.get_child(k)
-            if bind_var.kind_id != .k_identifier
-                continue
-            if field_idx < variant_def.payload_fields.len
-                field_def: = variant_def.payload_fields.get(field_idx)
-                bv_text: = bind_var.text
-                // A payload variable starting with '_' gets its unused warning suppressed too.
-                if bv_text.len > 0 && (bv_text.ptr + 0)$ == '_'
-                    c.s("        KSPL_UNUSED ")
-                c.map_c_type_to(field_def.type_id, c)
-                c.s(" ")
-                c.nm(bv_text)
-                c.s(" = \{cond_slice\}.payload.\{variant_name\}.")
-                c.nm(field_def.name)
-                c.s(";\n")
-            field_idx += 1
-
-    priv fn emit_switch_case(r: Ast_node$@, c: Genc_ctx$@, case_idx: Sz, cond_slice: U8[],
-        is_enum: Bool, enum_def_ptr: sema_type_def.Enum_def$@, safe_enum_name: U8[]): Sz
-        $pat_idx: = case_idx + 1
-        r.ice_assert(pat_idx < r.children.len, "emit_switch_case: case missing pattern")
-        first_pattern: = r.get_child(pat_idx)
-
-        for pat_idx < r.children.len
-            pat_node: = r.get_child(pat_idx)
-            if pat_node.kind_id == .k_case_pattern
-                pat_node.ice_assert(pat_node.children.len > 0,
-                    "emit_switch_case: empty case_pattern")
-
-                $is_variant_case: = false
-                switch pat_node.extract_case_variant()
-                case .variant(v_name_node, _p_start)
-                    if is_enum && v_name_node != null
-                        variant_name: = v_name_node.text
-                        $mangled_variant: = variant_name.mangle_c_identifier()
-                        c.s("    case kspl_\{safe_enum_name\}_\{mangled_variant.slice()\}:\n")
-                        mangled_variant.free()
-                        is_variant_case = true
-                default {}
-
-                if !is_variant_case
-                    c.s("    case ")
-                    $expr_node: Ast_node$@ = null
-                    switch pat_node.first_expr()
-                    case .some(fe)
-                        expr_node = fe
-                    case .none
-                        expr_node = pat_node.get_child(0)
-                    expr_node.emit_case_value(c)
-                    c.s(":\n")
-                pat_idx += 1
-            else if pat_node.is_literal(",")
-                pat_idx += 1
-            else if pat_node.kind_id != .k_stmt_block && pat_node.kind_id != .k_keyword
-                c.s("    case ")
-                pat_node.emit_case_value(c)
-                c.s(":\n")
-                pat_idx += 1
-            else
-                break
-
-        c.s("    {\n")
-        if is_enum
-            first_pattern.emit_case_payload_bindings(c, enum_def_ptr, cond_slice)
-
-        r.ice_assert(pat_idx < r.children.len, "emit_switch_case: case missing block")
-        // The body goes inline inside the case's {}, not in a second block.
-        body: = r.get_child(pat_idx)
-        body.emit_block_inline(c)
-        if !body.block_ends_in_jump()
-            c.s("        break;\n")
-        c.s("    }\n")
-        return pat_idx
+        c.s("    case ")
+        r.emit_case_value(c)
+        c.s(":\n")
 
     priv fn emit_case_value(r: Ast_node$@, c: Genc_ctx$@) //<
         //< A non-enum case label, written as the value sema folded
-        //<
         //< Caution: **Do not emit a constant's name.** A C `const` object is no integer constant
         //< expression. So `case kspl_f_one:` is refused (gcc -O0 says so, -O2 lets it pass).
         switch c.sema.try_eval_constexpr_wide(r)

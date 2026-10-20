@@ -239,11 +239,22 @@ priv fn f(): Shape!Err
 
 **A constant that does not fit is a compile error**, as a constant integer overflow is (6.8 in [`SPEC-programming-language.md`](SPEC-programming-language.md)). What is fixed at translation time is not left to the rule for run time. `I32::1.0e20` written in the source is a mistake, never a deliberate clip. The width checked is the one every target holds, so `Sz::3.0e9` is refused on a 64-bit machine too. One fold decides it (`float_cast_of` in `ksplc/sema/decl/fold_float.kspl`). Both backends write a constant cast as that fold's value. So the C compiler and LLVM never fold it a second time.
 
-**`to_i32` and its kin say none instead** (`x.to_i32(): I32?`, on `F64` and `F32`, in `std/math`, not in `std/lang`, which every program carries whether it calls them or not). Saturation hides that a bound was reached; a caller who must know, such as one reading a number from a file, needs the absence. The two do not spell one thing twice (Principle 6): the cast answers for every input, the method answers whether the input had an answer. Without the method, that caller writes the bounds by hand. The right ones are open one past the range (`-128.9` fits `I8`), which a hand-written check easily gets wrong. The name follows `std/strnum`'s `to_i64` for a string.
+**There is no conversion that gives none instead.** A caller who must know that a bound was reached compares the value with the type's range before the cast. One example is a caller that reads a number from a file. No program needs that often enough to pay for one method per integer type on `F64` and on `F32` (Principle 1). Caution: **The right bounds are open one past the range** (`-128.9` truncates to `-128` and fits `I8`). A check closed at the type's own minimum refuses values that fit.
 
 ### A tag names another variant through its enum
 
 **`b = E.a + 1` is written with the enum's name, and a bare `a` is refused** ("3.4 Enums (`enum`)" in [`SPEC-programming-language.md`](SPEC-programming-language.md)). A variant is named `E.a` or, where an enum is expected, `.a`. Say a tag expression could read `a` alone. That would open one place where the enum's names stand bare beside the file's own. A `const a` in the same file would then mean two things, depending on where it is written. The refusal names `E.a`, the spelling that folds. A bare `a` meant as an alias cannot arise either: two variants sharing a tag are refused.
+
+### An enum lists its variants and reads one back
+
+**An `enum` whose variants carry no payload gets `E.variants()` and `E.from_variant_name(name)`, which the compiler writes as it writes `variant_name()`.** The rules are "3.4 Enums (`enum`)" in [`SPEC-programming-language.md`](SPEC-programming-language.md). A program that saves a variant as its name needs the way back, and a form or a menu needs every variant. Without the two, each such program writes the list of variants a second time, and a lookup from each name. A variant added later is missing from both copies, with nothing to show it: its name reads back as some default (Principle 4).
+
+* **The list is a constant slice.** Every call returns the same read-only elements, so nothing is allocated and nothing is freed. A call in a loop, or on a target with no heap, costs nothing. It is a function of the type, not a constant of it, because a KSPL type has functions as its members and no constants.
+* **A name not found gives `.none`.** A name read from a file or from the user is often unknown, and that is ordinary input, not a fault. The caller decides what it means: a default, a refusal or a message. An error would make every caller write a `catch` for the common case, and a stop would let a file end the program.
+* **It is not a second spelling of the cast `E::x`.** The cast reads a tag, a number; this reads a name. A wire format holds the tag and a saved text the name, so neither can stand in for the other.
+* **An enum with a payload gets neither.** A variant with a payload is not a value without its data. A list could not hold it, and a name cannot supply the data. Asking for either is a compile error that names the variant carrying data, so the reader knows why it is absent.
+* **A name the file already uses wins**, as a hand-written `variant_name` does. The file's own method of that name, or a variant of that name, is kept as written, and the compiler makes nothing for that name. A variant is never renamed for the compiler's sake.
+* **The lookup compares the names one by one.** An enum holds few variants, and a table would need memory set up before the first call.
 
 ### A slice is a std struct, under generics' rules
 
@@ -393,7 +404,7 @@ What can be written is in [`docs/SPEC-programming-language.md`, "3.3 Structs (`s
 **What is given up:**
 
 * **A separate body per value.** `Ring<|4|>` and `Ring<|8|>` are different types, so a type and its functions are emitted into the generated C once per value used.
-* **The declaration-synthesizing features skip it.** `variant_name` is not synthesized for an `enum` carrying a const generic, because the type arguments' notation is not reconstructed ([`ksplc/docs/DESIGN-parse.md`, "Synthesizing an `enum`'s `variant_name`"](../ksplc/docs/DESIGN-parse.md#synthesizing-an-enums-variant_name)). Every new declaration-synthesizing feature needs the same exception.
+* **The declaration-synthesizing features skip it.** `variant_name` is not synthesized for an `enum` carrying a const generic, because the type arguments' notation is not reconstructed ([`ksplc/docs/DESIGN-parse.md`, "Synthesizing an `enum`'s members"](../ksplc/docs/DESIGN-parse.md#synthesizing-an-enums-members)). Every new declaration-synthesizing feature needs the same exception.
 
 ### Whatever returns a view returns an immutable view
 
@@ -535,7 +546,7 @@ A value that can be absent is written `T?`. It is `std/lang`'s `Option<|T|>`, fo
 * **Diagnostics show the sugar**, as they do for a slice; an optional result is written in brackets, `(T!E)?`.
 * **`T!E?` is refused.** The `!` takes the whole type after it, so the `?` would land on the error type. An absent error is a failure with nothing to say. The note names both readings the writer can have meant.
 * **The long form is refused as a type, and stands only in an expression.** A type written `Option<|I32|>` is a compile error naming `I32?`, an `impl`'s target included (`impl<|T|> T?`). So an optional is spelled one way (Principle 6). A hint would leave the second spelling accepted. An expression that names the type has no other spelling (`Option<|I32|>.none`, where a `?` cannot stand), so it keeps the long form. Source the compiler writes from a folded type spells the sugar back (`spell_as_written` in `ksplc/parse/desugar_slice.kspl`).
-* **A `?` after a value marks nothing.** There is no early return of an absent value (Rust's `?` on an `Option`). `if v: = x` takes the value out ("Unwrapping an `Option`" in [`DESIGN-principles.md`](DESIGN-principles.md)). Keeping it the one way keeps what a `?` means to one thing.
+* **A `?` after a value marks nothing.** There is no early return of an absent value (Rust's `?` on an `Option`). `v: = x catch { return … }` takes the value or leaves, and `if v: = x` uses it inside a block ("Unwrapping an `Option`" in [`DESIGN-principles.md`](DESIGN-principles.md)). With no `?` for this, a `?` means one thing.
 
 ### `T!E` is sugar for `Result<|T, E|>`
 
@@ -644,7 +655,7 @@ flowchart TD
     Q4 -->|"no: (5)"| TR
 ```
 
-**First, see whether a type can carry the property instead**, as `Rc<|T|>` and `Ci32` do. That is stronger than a marker and adds no language machinery. A marker is needed only to add a property to an existing type afterwards, or to let users add it to their own types.
+**First, see whether a type can carry the property instead**, as `Rc<|T|>` does. That is stronger than a marker and adds no language machinery. A marker is needed only to add a property to an existing type afterwards, or to let users add it to their own types.
 
 **(1) Is the subject a type, or a declaration or a site?** A trait attaches only to a type. So it is not an option for `#naked` / `#interrupt` / `#noreturn` / `#inline` / `#export` / `#section` (a function), `#align` / `#packed` (a struct's layout) or `#cfg` (any declaration). A choice arises only for "this type is such-and-such".
 
@@ -783,6 +794,26 @@ The table's own shape (nesting, widths, containers) is `std`'s ("The field table
 * **No source struct to copy from** (the value is assembled from several sources; `kssrv/api.kspl`, `ksplc/lsp/msg.kspl`).
 
 **These are not added to the mechanism.** Two hands would then decide how a key is written, and "no mechanism renames keys" would collapse (the chapter "One notation per purpose" in [`DESIGN-principles.md`](DESIGN-principles.md)). Each is a deliberate decision by the writer, and bending it to fit the mechanism has the order backwards.
+
+#### Why a suite finds a test by its name
+
+**A test written twice drifts.** When a test is a function and also a line in a hand-kept list of calls, a test missing from the list never runs. Every check then stays green, because nothing reports a test that is absent. A second check that searches for unlisted tests only repairs the first mistake. So the compiler finds the tests and writes the list.
+
+**A test is found by its name, `test_…`, with no mark.** A mark such as `#test` would cost one line on every test, about as many lines as the lists it replaces. It would also be the one attribute whose removal changes what runs. That would break the rule that deleting every `#` line leaves the program's logic unchanged ("The order of decision" (5), and chapter 10 of `SPEC-programming-language.md`). The name is written anyway, and a reader already takes `test_` to mean a test.
+
+**A misnamed test is reported, so the name cannot fail silently.** A test found by its name has one weak point: a misspelt name (`tset_sum`) leaves it out with no sign. Such a function stands in a file of tests, nothing calls it, and its name does not start with `test_`. That shape is reported ([W0503]). A helper that a test calls is in use, so it is not reported. A step that another test calls must not be named `test_…`, or the suite would also run it on its own.
+
+**The suite is a trait**, by (2): the compiler requires `run` of it, and writes that body, as it writes `fields()` for an empty `impl X: reflect.Reflectable {}`. Its file, `std/suite`, holds that trait alone ("When it can sit outside `std/lang`").
+
+**The order is fixed, never random.** Tests share one process: a file left in the working folder, the environment, a thread started. A random or parallel order would make a failure come and go between runs. The order is the one the reader sees. The suite's own file comes first, then the files it imports by their import lines. Each file's tests go in the order declared. A test that must run before the others is placed first by that order alone: its file's name sorts its import first. No notation of its own is added for one test.
+
+**A suite reaches only the files it imports itself.** The import lines are the list of test files, written once for each file, not once for each test. Reaching further would also run the tests of a library that a test file happens to use.
+
+**A test takes the suite's fields by name.** A test that needs an arena or a path receives it as a parameter. No global holds it, and no list of values must be kept in step. A parameter with no field, or a field of another type, is a compile error at the test. The test's signature is the place to change, so the message points there.
+
+**`before_each` and `after_each` hold what each test would repeat**, such as a fresh arena for each test. Their default bodies do nothing, so a suite that needs neither writes neither.
+
+**A test that no suite runs is reported** ([W0214]). That check, and [W0503], work only on a whole program: a file compiled alone has no suite to run it. So a compile with no `main` reports neither.
 
 ### No syntax equivalent to concepts is added
 
@@ -936,13 +967,13 @@ The rules are "8.1 Definitions" in [`SPEC-programming-language.md`](SPEC-program
 
 **KSPL does not prove at compile time that every pointer stays valid, as Rust's borrow checker does. So what the language protects has to be chosen.** It protects what local data flow alone can follow: what happens to a value inside one function, read from that function's code alone. The rest is stated as the writer's responsibility (Principle 8).
 
-| Section | What the language does | What stays the writer's |
+| Area | What the language does | What stays the writer's |
 | :-- | :-- | :-- |
-| 4.1 | Stops an accidental copy of an owning handle, such as a lock or a file (`Move_only`) | A duplicate made through a pointer |
-| 4.2 | Runs a `defer` on the variables as they are when the scope ends | Copying a value to keep it as it was at registration |
-| 4.3 | Stops a pointer into the frame leaving by `return` / `throw`. Also stops a pointer the compiler would make unseen from leaving by a store into a global or behind a pointer | Storing `x@` of a local; an escape through a call or a struct field set afterwards |
-| 4.4 | Warns where a block can be left before the `defer` that frees a value | A value with no `defer` at all |
-| 4.5 | Keeps a counted value a `switch` arm binds alive for the whole arm | A pointer to the binding (`a@`) kept past the arm |
+| Copies | Stops an accidental copy of an owning handle, such as a lock or a file (`Move_only`) | A duplicate made through a pointer |
+| `defer` | Runs a `defer` on the variables as they are when the scope ends | Copying a value to keep it as it was at registration |
+| Escapes | Stops a pointer into the frame leaving by `return` / `throw`. Also stops a pointer the compiler would make unseen from leaving by a store into a global or behind a pointer | Storing `x@` of a local; an escape through a call or a struct field set afterwards |
+| A missed free | Warns where a block can be left before the `defer` that frees a value | A value with no `defer` at all |
+| `switch` bindings | Keeps a counted value a `switch` arm binds alive for the whole arm | A pointer to the binding (`a@`) kept past the arm |
 
 **Raw pointers are set apart rather than banned.** `T@` is a first-class type, and unchecked access has its own form, `(p + i)$` (docs/SPEC-programming-language.md §6.2.1), so C-level control need not move into a library.
 
@@ -956,11 +987,15 @@ A builder needs cleanup on every exit. Repeating that obligation at every call s
 
 | Contract | What the compiler supplies | Where it belongs |
 | :-- | :-- | :-- |
-| `Drop` | Automatic cleanup and ownership moves | An ordinary resource owner, including `Str_builder` |
-| `Manual_free` | Checks after an explicit `free()` | A low-level owner whose caller chooses cleanup |
-| `Move_only` | Checks after ownership transfers | A manual handle that must not be copied |
+| `Drop` | Automatic cleanup and ownership moves | An owner of one resource for one scope: `Str_builder`, a file, a lock, a thread primitive, a function's scratch arena |
+| `Manual_free` | Checks after an explicit `free()` | An arena, a container, or a value that keeps its own arena: the caller chooses when cleanup runs |
+| `Move_only` | Checks after ownership transfers | A manual handle that must not be copied, such as a child process |
 
-**Manual cleanup remains a separate contract.** An arena and its containers often share one explicit lifetime. Automatically destroying their owning fields would conflict with their `free()` implementations. `Manual_free` leaves those fields under that explicit contract. It does not prove pointer lifetimes or prevent copies; its name states the narrower guarantee.
+**A type that owns one resource for one scope frees itself.** Such a resource is taken, used and given back inside one function, so the line that frees it would be written at every use. One missing line leaks a file or holds a lock until the process ends. A second `free()` cannot happen either: a free by hand ends the owner's life and cancels its cleanup. In `std` these are `io.File_stream`, `fs.File_lock`, `thread.Mutex<|T|>` with its lock, `thread.Cond_var`, `reactor.Reactor`, a regular expression's search state, and `mem.Scratch`, the arena a function works in.
+
+**Manual cleanup remains a separate contract for arenas and containers.** An arena and its containers often share one explicit lifetime. Automatically destroying their owning fields would conflict with their `free()` implementations. `Manual_free` leaves those fields under that explicit contract. It does not prove pointer lifetimes or prevent copies; its name states the narrower guarantee. A handle with more than one way to end also stays manual. A child process ends by a wait or by a kill, and only the caller knows which.
+
+**A free written beside an automatic owner is reported** ([I0311] in [`../ksplc/docs/SPEC-diagnostics.md`](../ksplc/docs/SPEC-diagnostics.md)). A `defer x.free()` repeats the drop, and so does a free with nothing after it before the owner's scope ends. A free with more work after it is an early release, and stays. Examples are a lock let go before another process takes it, and a file closed before it is read back.
 
 **Cleanup uses the same exit machinery as `defer`.** It runs on ordinary exits and propagated errors, in reverse acquisition order. A move cancels the source cleanup, and assignment destroys the previous value before installing its replacement. Uninitialized storage receives no destruction. A destructor cannot report failure, so flushing or committing remains an explicit operation when its failure matters.
 
@@ -980,7 +1015,7 @@ An invalid method stays unusable. Its first use reports the error with the concr
 
 KSPL checks one simple thing instead of every pointer's lifetime: once a `Move_only` or `Drop` value is handed over, the old name cannot be used again.
 
-Conformance to `Move_only` forbids implicitly copying an owning handle, such as an OS lock or a file descriptor. There a duplicate means a double free (docs/SPEC-programming-language.md §5.4). Rust's borrow checker is not adopted.
+Conformance to `Move_only` forbids implicitly copying an owning handle, such as a child process or a file descriptor. There a duplicate means a double free (docs/SPEC-programming-language.md §5.4). Rust's borrow checker is not adopted.
 
 **Why no borrow checker**: Rust's borrow checker proves that no reference outlives the data it points at. It also proves that no two places change the same data at once. That proof tracks an order of magnitude more. It infers the region of code each reference is valid in. It excludes aliases (two live references to one place where one writes). It would also reject the raw pointers (`T@`) KSPL code uses routinely. Move-only tracks one thing, "this binding can no longer be read", and local data flow suffices for that.
 

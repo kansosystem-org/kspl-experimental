@@ -181,7 +181,7 @@ Use "fire" for a check and "raise" for an interrupt. Keep another product's voca
 
 ### Comment notation and limits
 
-The first line of a `//<` comment is its one-line summary ([W0213]). Write a short sentence or phrase without a final full stop. **Keep each comment to at most six lines, or ten lines for a file's opening header.** Every comment line before the next code line counts. A blank line does not start a new comment. A section divider opening with `---` or `===` starts a new subject and a new comment.
+The first line of a `//<` comment is its one-line summary, and the detail starts on the next line with no empty `//<` between them ("2.1 Comments" in [`SPEC-programming-language.md`](SPEC-programming-language.md)). Write a short sentence or phrase without a final full stop. **Keep each comment to at most six lines, or ten lines for a file's opening header.** Every comment line before the next code line counts. A blank line does not start a new comment. A section divider opening with `---` or `===` starts a new subject and a new comment. A `//<` run's summary and a line a gate reads (`// EXPECT:`) do not count. An empty `//<` parts two paragraphs of a detail, and the count starts again after it. `ksplc explain H0806` gives the whole count.
 
 **Comments occupy at most 30% of the hand-written source.** This is the repository-wide share, shown as `cmt%` on `tools/repo_stat.kspl`'s `total (hand-written)` line. Individual files may exceed it.
 
@@ -191,4 +191,4 @@ Documents state the present behavior and its reasons. Use the past in reports of
 
 ### Checking the rules
 
-`make test-conventions` checks published document sentence and heading lengths. It does not establish compliance with every writing rule. Review meaning, terminology, instructions and the remaining limits separately. The checks and their scope are specified in [`SPEC-gates.md`](SPEC-gates.md).
+`make test-conventions` checks published document sentence and heading lengths. `make lint` checks a comment's length. Neither establishes compliance with every writing rule. Review meaning, terminology, instructions and the remaining limits separately. The checks and their scope are specified in [`SPEC-gates.md`](SPEC-gates.md).

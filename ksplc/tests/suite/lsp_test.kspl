@@ -1,5 +1,4 @@
 //< A smoke test of the LSP supervisor's recovery from a crash or a hang, and of its answers
-//<
 //< The language server is a supervisor process plus a worker. `std/jsonrpc` provides the framing
 //< (Content-Length, the id, the standard error, the timeout). `../support/lsp_client.kspl` builds
 //< LSP's params.
@@ -14,8 +13,7 @@ import "ksplc/tests/support/lsp_hover"
 import "ksplc/tests/support/lsp_outline" + { HEAVY_MS, incoming, off_words, prepare_fn,
     read_tokens }
 import "ksplc/tests/support/lsp_pick"
-import "ksplc/tests/support/lsp_read" { col_in_line, decl_line, end_text, from_names, has_name,
-    is_missing }
+import "ksplc/tests/support/lsp_read" { col_in_line, decl_line, end_text, from_names, is_missing }
 import "ksplc/tests/support/lsp_recover"
 import "ksplc/tests/support/lsp_rename"
 import "ksplc/tests/support/lsp_spell"
@@ -58,13 +56,11 @@ priv const PROBE_URI: U8[] = "file:///t.kspl"
 
 priv const CH_FILE: U8[] = "lsp/call_hier.kspl" //<
     //< The Call Hierarchy's starting file, named from the package's top
-    //<
     //< This Call Hierarchy comes with a workspace walk.
 priv const CH_DECL: U8[] = "fn prepare_call_hierarchy"
 
 priv const AFTER_HANG_MS: I32 = 10000 + lsp_client.READ_MS //<
     //< how long a hover after the hang hook may take
-    //<
     //< The supervisor's watchdog (`WORKER_TIMEOUT_MS` in `ksplc/lsp/server.kspl`, 10 s) must give
     //< up first. The worker it starts in place must analyse the probe, which takes as long as
     //< any first answer (`lsp_client.READ_MS`). The 10 s is written again here: the constant is the
@@ -346,7 +342,6 @@ priv const CFG_URI: U8[] = "file:///cfg_probe.kspl"
 
 priv const CLOSE_SRC: U8[] = "fn main(): I32\n  probe: I64 = 1\n  return 0\n\n" //<
     //< The source of the document the restore check closes
-    //<
     //< The supervisor remembers the open documents' text, and hands it to a remade worker.
     //< **The supervisor's record marks the document closed**, or a closed document revives in the
     //< remade worker.
@@ -454,7 +449,6 @@ priv const WALK_RELS: U8[][5] = ::{ ".gitignore", "pkg/lib.kspl", "user.kspl", "
     "saved.kspl" }
 priv const WALK_LIB: U8[] = "fn hit(): I32\n  return 0\n" //<
     //< The library file of the workspace-walk probe
-    //<
     //< Caution: **Write the imports as paths from the root** (paths holding a `/`). A path without
     //< one resolves **from that file's folder**, so only the copy in `built/` stops resolving, and
     //< **skipped cannot be told from unresolved**. `use` and `stray` have different names to show
@@ -586,7 +580,7 @@ priv fn check_generic_caller(exe: U8[], arena: Arena$@)
     $in_relay: = false
     for n in names
         in_relay = in_relay || n.find_str("relay").is_some()
-    verdict.check(name, in_relay && has_name(names@, "direct"), shown)
+    verdict.check(name, in_relay && names.contains("direct"), shown)
 
 // ==========================================
 // The worker keeps showing it is alive even in the middle of one heavy request. The supervisor
@@ -715,7 +709,7 @@ fn main(): I32
 
     check_wide_range(c@, arena)
 
-    ch_text: = io.read_file(CH_FILE) catch
+    ch_text: = io.read_file(CH_FILE, null) catch
         return harness.fatal("the call hierarchy's starting point cannot be read")
     prep: = prepare_fn(c@, CH_FILE, ch_text, CH_DECL, arena)
     d16: = lsp_client.why(c@, prep.raw, arena)

@@ -1,6 +1,5 @@
 #!/usr/bin/env -S ksplc run
 //< The backend-equivalence test
-//<
 //< It builds the same program (`tests/prog/equiv.kspl`) on the C and the LLVM backend, runs both
 //< and checks that their standard output agrees. The C is built under clang and gcc both, where
 //< both are installed. Each fills in what C leaves open (an evaluation order) its own way. It is
@@ -15,6 +14,7 @@ import "std/chars"
 import "std/ds" { List }
 import "std/fs"
 import "std/io"
+import "std/math"
 import "std/mem" { Arena }
 import "std/str"
 import "std/strfmt" as _strfmt
@@ -26,7 +26,6 @@ priv const TRAP_CFLAGS: U8[][_] = ::{ "-std=c99", "-O0",
     "-fsanitize=alignment,signed-integer-overflow",
     "-fsanitize-trap=alignment,signed-integer-overflow" } //<
         //< C's traps for what C leaves undefined and KSPL defines, which stop the program
-        //<
         //< A trap needs no sanitizer library, so every C compiler the suite runs on can build it.
         //< **At `-O0` a misaligned store or an `int` overflow still answers right.** So only a trap
         //< shows that the C is undefined. A word store to a `#packed` field faults on a Cortex-M0.
@@ -58,7 +57,6 @@ priv const PACKED_IR_SAMPLE: U8[] =
 """ //< through `Wire`: two with no `align`, one with and a byte's; one access outside it
 
 priv struct Built //< the result of building and running
-    //<
     //< Caution: **Do not mix "it did not build" with "the output was empty".**
     ok: Bool
     out: U8[]
@@ -99,7 +97,6 @@ priv fn is_clang(cc: U8[]): Bool? //< whether cc is clang, none where it does no
     return .some(r.out.find_str("clang").is_some())
 
 priv fn other_cc(): U8[] //< the other family's C compiler (gcc beside clang), empty where none
-    //<
     //< Caution: **Ask the compiler what it is.** macOS's `gcc` is clang, and a build under it would
     //< pass for the gcc check while seeing clang's order.
     switch is_clang(harness.cc())
@@ -115,7 +112,6 @@ priv fn other_cc(): U8[] //< the other family's C compiler (gcc beside clang), e
 
 priv fn binary_literals(text: U8[], arena: Arena$@): List<|U8[]|> //<
     //< The binary literals left in the generated C
-    //<
     //< Caution: **Leave no binary literal in the generated C.** C99 has no `0b1010`; it passes only
     //< as a gcc/clang extension, where the values agree, so this checks the text.
     $out: = List<|U8[]|>.new(arena)
@@ -135,11 +131,10 @@ priv fn binary_literals(text: U8[], arena: Arena$@): List<|U8[]|> //<
     return out
 
 priv fn first_diff(a: U8[], b: U8[], arena: Arena$@): U8[] //< the first line that disagreed
-    //<
     //< Caution: Do not print both whole texts (a long program's output would appear twice).
     al: = a.lines(arena)
     bl: = b.lines(arena)
-    n: = al.len if al.len < bl.len else bl.len
+    n: = math.min(al.len, bl.len)
     for i in Range.asc(n)
         if !al.get(i).equals(bl.get(i))
             return arena.text().s("line \{i + 1\} differs\n  C   : ").s(al.get(i)).s("\n  LLVM: ")
@@ -169,15 +164,8 @@ priv fn defined_reg(line: U8[]): U8[] //< the register a line defines (`%5 = ...
     case .none
         return ""
 
-priv fn holds(regs: List<|U8[]|>@, reg: U8[]): Bool //< whether reg is one of regs
-    for r in regs
-        if r.equals(reg)
-            return true
-    return false
-
 priv fn packed_scan(ir: U8[], arena: Arena$@): Packed_scan //<
     //< The loads and stores `wire_fill` makes through a `#packed` field, and those with no `align`
-    //<
     //< One without an `align` takes its type's own alignment, which a `Wire` field lacks; x86 runs
     //< it unharmed, so the IR is read. A one-byte access needs none.
     $out: = Packed_scan::{ .seen = 0, .bad = List<|U8[]|>.new(arena) }
@@ -190,7 +178,7 @@ priv fn packed_scan(ir: U8[], arena: Arena$@): Packed_scan //<
         t: = line.trim_spaces()
         if !inside || t.len == 0
             continue
-        through: = holds(held@, ptr_operand(t))
+        through: = held.contains(ptr_operand(t))
         if t.find_str("= getelementptr ").is_some()
             if through || t.find_str(PACKED_GEP).is_some()
                 held.push(defined_reg(t))
@@ -215,7 +203,7 @@ fn main(): I32
     if !c.ok
         verdict.check("the C backend's build", false, c.out)
         return harness.finish()
-    gen_text: = io.read_file(c_gen) catch
+    gen_text: = io.read_file(c_gen, null) catch
         return harness.fatal("cannot read the generated C")
     lits: = binary_literals(gen_text, arena)
     found: = arena.text()
@@ -278,7 +266,7 @@ priv fn check_packed_ir(ll: U8[], arena: Arena$@) //<
     verdict.check("the IR scan finds the accesses through a `#packed` field with no `align`",
         sample.seen == 3 && sample.bad.len == 2,
         arena.text().s("seen \{sample.seen\}, without `align` \{sample.bad.len\}").take())
-    ir: = io.read_file(ll) catch
+    ir: = io.read_file(ll, null) catch
         verdict.check("a `#packed` field is loaded and stored at its alignment", false,
             "cannot read the IR")
         return

@@ -1,9 +1,7 @@
 //< Constants: evaluation, overflow and what a constant may hold
-//<
 //< Each case below is compiled alone, as the file its head names.
 // ==== case const_cycle
 //< A cycle among constant definitions is rejected
-//<
 //< Otherwise the name goes straight into C's initialiser and the C compiler fails there ("Failing
 //< fast through an exception or an ICE" in ksplc/docs/DESIGN-compiler.md). **A backward reference is not a cycle** and must pass. A refusal of
 //< it binds top-level declarations to file order (sema's collect Pass 2a/2b, emit_top_level_vars).
@@ -24,7 +22,6 @@ fn main()
   _z: = buf.len
 // ==== case const_init_call
 //< A top-level `const`'s initialiser must be a constant expression, so a call in it is rejected
-//<
 //< It becomes a C file-scope initialiser, just like a variable's. Left unchecked, an initialiser
 //< with a call in it passes through and becomes a C compiler error.
 // EXPECT: top-level variable initializer is not a compile-time constant
@@ -37,7 +34,6 @@ fn main()
   _y: = X
 // ==== case const_init_overflow
 //< A top-level initialiser is folded and checked for overflow even when nothing uses it
-//<
 //< Caution: **Leave it to `eval_constexpr` and it passes through.** That one runs only where a
 //< value is needed (an array length, an enum tag, an index, a generic bound). An unfoldable
 //< initialiser must pass silently. An unsigned wrap (`mod 2^N` by the specification) is fine.
@@ -89,16 +85,15 @@ fn main(): I32
   return 0
 // ==== case const_init_part_read
 //< A top-level initializer reading a part of another value is refused, by ksplc itself
-//<
 //< Let through, C99 refuses a read of an element or a member in a file-scope initializer. gcc says
 //< "initializer element is not constant"; clang lets some by. LLVM refuses it with
 //< advice to use C. An array's `.len` is no read and passes.
-// EXPECT: const_init_part_read.kspl:20:21: error: a top-level initializer cannot read a part of another value
-// EXPECT: const_init_part_read.kspl:21:21: error: a top-level initializer cannot read a part
+// EXPECT: const_init_part_read.kspl:19:21: error: a top-level initializer cannot read a part of another value
+// EXPECT: const_init_part_read.kspl:20:21: error: a top-level initializer cannot read a part
+// EXPECT: const_init_part_read.kspl:21:20: error: a top-level initializer cannot read a part
 // EXPECT: const_init_part_read.kspl:22:20: error: a top-level initializer cannot read a part
 // EXPECT: const_init_part_read.kspl:23:20: error: a top-level initializer cannot read a part
-// EXPECT: const_init_part_read.kspl:24:20: error: a top-level initializer cannot read a part
-// EXPECT: const_init_part_read.kspl:25:16: error: a top-level initializer cannot read a part
+// EXPECT: const_init_part_read.kspl:24:16: error: a top-level initializer cannot read a part
 // EXPECT: Finished with 6 error(s)
 // EXPECT-NOT: initializer element
 pub struct P
@@ -119,7 +114,6 @@ fn main(): I32
   return Z1 + Z2 + I32::Z3 + I32::Z4 + I32::Z5 + I32::OK_LEN + I32::z6$
 // ==== case const_ptr_field_write
 //< A write into a field at the target of a read-only pointer (`T@`)
-//<
 //< The type declares the target immutable. So it is refused, as a write to an element of a
 //< read-only slice `T[]` is. A check of the element side alone lets a pointer's target through.
 //< `P` itself is mutable (bare), so the refusal is shown to be on the type axis, not the binding's.
@@ -132,7 +126,6 @@ fn main()
   p.f = 1
 // ==== case const_ptr_in_struct_field_write
 //< A write into the target of a read-only pointer (`T@`) held as a struct's field
-//<
 //< A step that is "a pointer beyond a field access" has its immutability forced just the same.
 //< It easily passes sema and fails on the generated C's `const`. For a field chain, only the root
 //< is inferred. Then the type side is walked (write_target_type in sema/body/stmt.kspl).
@@ -151,7 +144,6 @@ fn main(): I32
   return v
 // ==== case const_ptr_nested_deref_write
 //< A multi-step dereference (`pp$$`) where the middle step is a read-only pointer (`I32@`)
-//<
 //< `pp$ = g2@` is correct (the outer step is `$@`), but `pp$$`'s target is immutable. If
 //< write_target_type walks only `.` and not `$`, reject_write_through_const_ptr gives up
 //< (fail-open). C still refuses by its const qualifier. LLVM has none, and the write holds.
@@ -166,7 +158,6 @@ fn main()
   pp$$ = 99 // invalid: the inner step's target is read-only
 // ==== case const_signed_overflow
 //< Where folding is required, a signed overflow is rejected
-//<
 //< Caution: **Look at the intermediate result too**: `(2147483647 + 1) - 1` fits an `I32` at last.
 //< **Decide by the operands' type width**, not `I64`'s boundary: `1 << 31` is 2^31, past `I32`'s
 //< maximum, as `1I64 << 63` is past `I64`'s. A bit pattern is written unsigned and cast.
@@ -210,7 +201,6 @@ fn main(): I32
   return 0
 // ==== case const_slice_descriptor_write
 //< Replacing the descriptor through a pointer to an immutable slice descriptor (`U8$[]@`)
-//<
 //< The type declares the target immutable, so it is refused. `U8[]$@` (a mutable pointer to a
 //< slice of immutable elements) is another type, where `P$ = other;` is allowed. Collapse the two
 //< into one canonical type, or exempt writes through any pointer to a view type, and this passes.
@@ -224,7 +214,6 @@ fn main()
   p$ = sb
 // ==== case const_slice_elem_compound_assign
 //< A **compound assignment** to an element of a read-only slice
-//<
 //< Caution: If a write on an index is checked only for `=`, `S[0] += v` rewrites the element. The C
 //< compiler does not catch it: the generated C's const qualifier covers only the slice
 //< descriptor's value (the `S.ptr` of `const Const_I32_Slice S` is not const).
@@ -239,13 +228,12 @@ fn main(): I32
   return a[0]
 // ==== case const_type_arg_does_not_fit
 //< A value type argument its `const` parameter's type does not hold is refused at the use
-//<
 //< **Inside the instance nothing hanging on a type argument is reported**, so `Ring<|3000000000|>`
 //< for `const N: I32` was truncated in silence, and `Ring<|true|>` was reported inside the
 //< template's body (`check_const_arg` in `ksplc/sema/decl/mono.kspl`).
-// EXPECT: const_type_arg_does_not_fit.kspl:22:6: error: type argument '3000000000' does not fit 'const N: I32'
-// EXPECT: const_type_arg_does_not_fit.kspl:23:6: error: type argument 'true' does not fit 'const N: I32'
-// EXPECT: const_type_arg_does_not_fit.kspl:24:6: error: type argument '1' does not fit 'const ON: Bool'
+// EXPECT: const_type_arg_does_not_fit.kspl:21:6: error: type argument '3000000000' does not fit 'const N: I32'
+// EXPECT: const_type_arg_does_not_fit.kspl:22:6: error: type argument 'true' does not fit 'const N: I32'
+// EXPECT: const_type_arg_does_not_fit.kspl:23:6: error: type argument '1' does not fit 'const ON: Bool'
 // EXPECT-NOT: has no field or method named
 // EXPECT-NOT: '-5' does not fit
 struct Ring<|const N: I32|>
@@ -266,7 +254,6 @@ fn main(): I32
   return b.get() + c.get() + d.v + e.get()
 // ==== case const_type_arg_expression
 //< A computed value passed as a type argument is refused
-//<
 //< Only a literal, a negated literal or a const's name can stand there. Let `2 + 1` through and it
 //< is read as a type, the instance is named after the node, and the C holds `return expr;`
 //< (Principle 2). The three spellings the rule allows have to pass alongside.
@@ -284,7 +271,6 @@ fn main(): I32
   return a + b + c + d
 // ==== case const_writable_elements
 //< A `$` on the type side cannot be written for a fixed-length array's elements
-//<
 //< The elements are the array's own substance. So the write permission belongs to **the side
 //< holding it** (the `$` before the name, or the receiver for a field). `T$[]` and `T$@` target a
 //< separate substance and keep it on the type. A `$` on a `const` slice gets another diagnostic.
@@ -300,11 +286,10 @@ fn main(): I32
   return I32::ARR[0] + I32::SL[0] + I32::LOCAL[0]
 // ==== case const_narrow_overflow
 //< A constant that overflows its operands' width is refused, at every operator
-//<
 //< Folded at I64's width, `-2147483648 / -1` passed, and the C backend wrote a run-time division
 //< into a file-scope initializer, which the C compiler refused; `-(-128I8)` passed as 128.
-// EXPECT: const_narrow_overflow.kspl:7:16: error: integer overflow in compile-time constant
-// EXPECT: const_narrow_overflow.kspl:8:15: error: integer overflow in compile-time constant
+// EXPECT: const_narrow_overflow.kspl:6:16: error: integer overflow in compile-time constant
+// EXPECT: const_narrow_overflow.kspl:7:15: error: integer overflow in compile-time constant
 const P: I32 = -2147483648 / -1
 const M: I8 = -(-128I8)
 

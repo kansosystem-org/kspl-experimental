@@ -1,6 +1,5 @@
 #!/usr/bin/env -S ksplc run
 //< The property checks run against both back ends at once
-//<
 //< Each builds one program, runs it through genc and genllvm, and compares the two answers with
 //< the value computed here.
 
@@ -30,7 +29,6 @@ priv const DEFAULT_SEED: U64 = 20260720U64
 priv const DEFAULT_N: Sz = 200
 
 priv const WRAP_TIMEOUT_MS: I32 = 30000 //< the timeout for the cases that check it does not hang
-    //<
     //< Under the default 10 minutes a failure looks like a hang of unknown cause.
 
 // ==========================================
@@ -39,7 +37,6 @@ priv const WRAP_TIMEOUT_MS: I32 = 30000 //< the timeout for the cases that check
 
 priv struct Int_kind //<
     //< One integer type's model, built out of bit operations
-    //<
     //< **Build the model yourself**, or the expected value is the same compiler answering twice.
     //< The value is held as a 64-bit sequence, and norm applies the type's width and sign.
     //< Caution: **Do not include `Sz`.** Its width changes per target
@@ -58,7 +55,6 @@ priv const INT_KINDS: Int_kind[8] = ::{ Int_kind::{ .name = "I8", .bits = 8, .si
     Int_kind::{ .name = "U64", .bits = 64, .signed = false } }
 
 priv fn norm(v: I64, k: Int_kind@): I64 //< it wraps at that type's width
-    //<
     //< Signed types wrap as `mod 2^N` too (the same rule as an explicit cast).
     if k.bits >= 64
         return v
@@ -77,7 +73,6 @@ priv fn hi_of(k: Int_kind@): I64
     return I64::((1U64 << U64::(k.bits - 1)) - 1U64)
 
 priv fn num_text(v: I64, k: Int_kind@, arena: Arena$@): U8[] //< the string
-    //<
     //< Caution: An unsigned one must read the bit sequence as unsigned (the top end looks like -1).
     b: = arena.text()
     if k.signed
@@ -87,14 +82,12 @@ priv fn num_text(v: I64, k: Int_kind@, arena: Arena$@): U8[] //< the string
     return b.take()
 
 priv struct Expr //< one expression
-    //<
     //< Caution: **Always keep the text and the value together**, or fixing only one of them passes.
     text: U8[]
     v: I64
 
 priv fn div_of(a: I64, b: I64, k: Int_kind@): I64 //<
     //< division and remainder truncating toward zero
-    //<
     //< Only the minimum / -1 overflows in I64, so it is handled first.
     if !k.signed
         return norm(I64::(U64::a / U64::b), k)
@@ -110,7 +103,6 @@ priv fn less(a: I64, b: I64, k: Int_kind@): Bool
 
 // ==========================================
 priv fn leaf(r: Prng$@, k: Int_kind@, arena: Arena$@): Expr //< random integer expressions
-    //<
     //< Caution: **Make unsigned ones too.** Division, remainder, right shift and comparison differ
     //< by sign (`sdiv`/`udiv`, `ashr`/`lshr`). **Make overflows regardless of sign.**
     // The signed minimum cannot be written: `-128I8` negates `128I8`, an out-of-range literal.
@@ -173,7 +165,6 @@ priv fn gen_int(r: Prng$@, depth: Sz, k: Int_kind@, arena: Arena$@): Expr
 
 priv fn gen_divmod(r: Prng$@, depth: Sz, k: Int_kind@, arena: Arena$@): Expr //<
     //< Division and remainder
-    //<
     //< A divisor of 0 halts at run time, so a known constant replaces it. **The minimum / -1 is not
     //< avoided.** The specification defines it (the dividend back, remainder 0). Only this
     //< shape checks that the generated code sends it to the run-time helper.
@@ -191,7 +182,6 @@ priv fn gen_divmod(r: Prng$@, depth: Sz, k: Int_kind@, arena: Arena$@): Expr //<
     return wrap2(op, a@, b@, v, arena)
 
 priv struct Item //< the items printed
-    //<
     //< The type, the text, and the one line expected.
     ty: U8[]
     text: U8[]
@@ -224,7 +214,6 @@ priv fn gen_cmp(r: Prng$@, k: Int_kind@, arena: Arena$@): Item
 // ==========================================
 priv fn src_values(r: Prng$@, k: Int_kind@, out: List<|I64|>$@) //<
     //< It puts the source values for the integer explicit cast `Dst::src` into out
-    //<
     //< The specification defines `::` as "truncation, bit pattern" (`U8::300` is 44).
     //< Caution: **Always include a value with the top bit set and one without**, or neither the
     //< extension nor the truncation's wrap shows. With 64 pairs, few values are taken per type.
@@ -237,7 +226,6 @@ priv fn src_values(r: Prng$@, k: Int_kind@, out: List<|I64|>$@) //<
 
 priv const F32_EDGES: I64[3] = ::{ 127, -126, -149 } //<
     //< The exponent's ends per type
-    //<
     //< In order: a power above this is inf, the smallest normal, the smallest subnormal.
     //< Caution: **Write them as powers of 2.** A decimal literal (`5e-324`) tests the
     //< decimal-to-binary conversion instead.
@@ -245,7 +233,6 @@ priv const F64_EDGES: I64[3] = ::{ 1023, -1022, -1074 }
 
 priv fn float_edge_items(out: List<|Item|>$@, arena: Arena$@) //<
     //< It adds the exponent-end shapes as a fixed choice
-    //<
     //< Caution: **Do not leave it to random numbers** — landing at an end is rare, and it goes
     //< green untested. Always include gradual underflow (`the smallest normal - the smallest
     //< subnormal`): a target that flushes it to 0 passes unnoticed.
@@ -289,7 +276,6 @@ priv fn float_edge_items(out: List<|Item|>$@, arena: Arena$@) //<
                 .want = float_bytes(f.v, k, arena) })
 
 priv const FIXED_MANTISSAS: I64[6] = ::{ 0, 0, 1, -1, 1, -4095 } //< only fixed shapes
-    //<
     //< It pins down the casts between `F32` and `F64`, the signed zeros, and the exponent's ends.
 priv const FIXED_SHIFTS: Sz[6] = ::{ 0, 0, 0, 0, 1, 4 }
 priv const FIXED_NEGATE_ZERO: Bool[6] = ::{ false, true, false, false, false, false }
@@ -319,7 +305,6 @@ priv fn float_items(out: List<|Item|>$@, arena: Arena$@)
 
 priv const F2I_MANTISSAS: I64[4] = ::{ 0, -1, 201, -128 } //<
     //< The integers converted to floating point, and the floating point converted to integers
-    //<
     //< **From integer to floating point, rounding happens** (`U64`'s maximum rounds up to 2^64); a
     //< sign mix-up (`sitofp` / `uitofp`) makes `I64`'s minimum huge. **The reverse direction uses
     //< only values whose truncation fits**: the rest, and NaN, are undefined.
@@ -406,7 +391,6 @@ priv fn gen_item(r: Prng$@, arena: Arena$@): Item
 // ==========================================
 
 priv fn append_show(b: Str_builder$@, k: Float_kind@) //< it prints the bit sequence
-    //<
     //< Caution: Go by way of `U8@` (`U64::v` is a value conversion and the bits do not remain).
     b.s("priv fn show_").s(k.name).s("(v: ").s(k.name).s(")\n")
     b.s("  p: U8@ = U8@::(v@)\n  for i in Range.asc(\{k.bytes\})\n")
@@ -414,7 +398,6 @@ priv fn append_show(b: Str_builder$@, k: Float_kind@) //< it prints the bit sequ
 
 priv fn build_arith_program(decls: List<|U8[]|>@, items: List<|Item|>@, arena: Arena$@): U8[] //<
     //< It builds the program that binds each item to a typed local and prints it
-    //<
     //< Caution: **Do not pass an expression straight to the output call.** Its expected type
     //< propagates into the literals, evaluating at another width; go through a typed local
     //< variable. Integers and Bool are printed by string interpolation, which prints even a top-bit
@@ -443,7 +426,6 @@ priv struct Side //< the result of building and running on one of the backends
 
 priv fn build_side(src: U8[], llvm: Bool, work: U8[], tag: U8[], opt: U8[], arena: Arena$@): Side //<
     //< It builds and runs src on one backend: genllvm where llvm, genc otherwise
-    //<
     //< Caution: **Report each stage's failure with that stage's name and output.** Generated C / IR
     //< **not compiling** is a finding too (`-(-x)` as `--x` can be a C error, not a wrong value).
     label: = "genllvm" if llvm else "genc"
@@ -505,7 +487,6 @@ priv fn compare(items: List<|Item|>@, c: U8[], l: U8[], arena: Arena$@): U8[]
 // ==========================================
 priv const ESCAPE_BYTES: U8[6] = ::{ 10U8, 13U8, 9U8, 0U8, 92U8, 34U8 } //<
     //< The escaped bytes the strings use, all from the canonical escape set
-    //<
     //< The set is the one `eval_char` (`ksplc/sema/decl/eval.kspl`) defines. Besides these, only
     //< bare printable ASCII is used (not the backslash or the double quote).
     //< Other escapes are checked elsewhere, against the specification.
@@ -518,7 +499,6 @@ priv fn escape_of(b: U8): U8[]
     return ""
 
 priv fn gen_bytes(r: Prng$@, n: Sz, arena: Arena$@): U8[] //< one random byte sequence
-    //<
     //< `\` and `"` are never placed bare (the escape set has them).
     b: = arena.text()
     for _i in Range.asc(n)

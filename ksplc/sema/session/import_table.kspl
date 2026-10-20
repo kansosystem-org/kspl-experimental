@@ -1,5 +1,4 @@
 //< The table of import lines, which every pass reads to look up a name's renaming
-//<
 //< `import "m" as a;` (an import alias) and `import "m" { A as B };` (a selective import) are kept
 //< in one Map keyed `"file name::name"` (import_key). It also registers the `std/lang` every file
 //< imports implicitly, and records which imported names are written.
@@ -21,7 +20,6 @@ import "std/ds" { List, Map }
 import "std/str"
 
 priv fn decl_name_of(r: Ast_node$@): U8[] //< the name of a declaration node
-    //<
     //< A kind with no name (an impl, an extern block and so on) returns empty.
     switch r.kind_id
     case .k_decl_struct, .k_decl_enum, .k_decl_trait, .k_decl_fn, .k_decl_fn_proto, .k_decl_const,
@@ -53,7 +51,6 @@ fn import_key_name(key: U8[]): U8[] //< the name half of an import table key (`f
 
 fn register_implicit_lang_imports(r: Ast_node$@, c: Sema_ctx$@) //<
     //< Adds std/lang's public names to every file as "a selective import nobody wrote"
-    //<
     //< The import alias (`lang`) too. **Call it right after Pass 0**: Pass 1 resolves the declared
     //< type nodes, where `Option` or `Range` would be undefined.
     //< Caution: **Do not add them to a file that declares the same name itself**, or the user can
@@ -133,14 +130,12 @@ impl Sema_ctx
 
     priv fn import_key(r: Self$@, file: U8[], name: U8[]): U8[] //<
         //< The table's key for `name` in `file`, built in the scratch buffer
-        //<
         //< Caution: **Copy it before storing it**; the next use of the scratch buffer overwrites
         //< it.
         return r.clear_scratch().s(file).s("::").s(name).slice()
 
     fn peek_file_alias(r: Self$@, file: U8[], ali: U8[]): Alias_info$@ //<
         //< Looks up that alias's information **without setting the used flag** (null if absent)
-        //<
         //< Caution: **Do not reuse `find_file_alias` below for this.** That one sets is_used as
         //< soon as it looks up. It silences the unused lint ([I0401]) on a written `as` (an LSP
         //< operation would change it too).
@@ -148,7 +143,6 @@ impl Sema_ctx
 
     fn find_file_alias(r: Self$@, file: U8[], ali: U8[]): Alias_info$@? //<
         //< Looks up the alias information keyed by "file::ali", setting the used flag if found
-        //<
         //< It serves get_file_alias and get_file_alias_target.
         entry: = r.peek_file_alias(file, ali)
         if entry != null
@@ -162,7 +156,6 @@ impl Sema_ctx
 
     fn is_file_imported(r: Self$@, target_file: U8[]): Bool //<
         //< Whether this file imports target_file
-        //<
         //< Caution: Check both an import alias (`import "m";`) and a selective import
         //< (`import "m" { X };`). A match gets is_used set, because it is what makes this call
         //< valid. Calling it unused would be advice that breaks the build if followed.
@@ -180,7 +173,6 @@ impl Sema_ctx
 
     priv fn build_import_reach(r: Self$@) //<
         //< Indexes every import line by the file that writes it and the file it names
-        //<
         //< **One lookup per call instead of a walk over every line of every file.** A method call
         //< on another file's type asks, and std/lang's names alone are a line in each file.
         //< Each pair keeps the line a walk over the slots meets first, aliases before selective
@@ -198,7 +190,6 @@ impl Sema_ctx
 
     priv fn reach_key(r: Self$@, import_key: U8[], target_path: U8[]): U8[] //<
         //< build_import_reach's key for one line: "the file writing it::the file it names"
-        //<
         //< Caution: **Copy it before storing it**, as with import_key.
         file: = import_key.sub(0, import_key.find_str("::").unwrap_or(import_key.len))
         return r.import_key(file, target_path)
@@ -220,7 +211,6 @@ impl Sema_ctx
 
     fn add_withheld_alias(r: Self$@, file: U8[], ali: U8[], path: U8[]) //<
         //< Records the file name a selective import with no `+` leaves out, for the message on use
-        //<
         //< `p.x` then fails as an unknown name; the note that suggests `+` reads this
         //< (`append_withheld_alias_note`).
         arena_key: = base_core.arena.dup_str(r.import_key(file, ali))
@@ -228,7 +218,6 @@ impl Sema_ctx
 
     fn add_implicit_file_alias(r: Self$@, file: U8[], ali: U8[], target_path: U8[]) //<
         //< Registers `std/lang`'s import alias in file as an import line nobody wrote
-        //<
         //< So a file declaring the same name can still write `lang.Ref_counted`.
         //< Caution: **If that name is already taken, do nothing.** A written import line wins. Look
         //< up without setting is_used: find_file_alias here would silence I0401 on a written `as
@@ -239,13 +228,11 @@ impl Sema_ctx
 
     fn peek_import_symbol(r: Self$@, file: U8[], local_name: U8[]): Import_symbol_info$@ //<
         //< Looks up the selective-import information **without setting the used flag** (or null)
-        //<
         //< Caution: the reason not to reuse `find_import_symbol` is at peek_file_alias.
         return r.import_symbols.files.get(r.import_key(file, local_name)).unwrap_or(null)
 
     fn find_import_symbol(r: Self$@, file: U8[], local_name: U8[]): Import_symbol_info$@? //<
         //< Looks up the selective-import information keyed by "file::local_name"
-        //<
         //< If found, it sets the used flag and returns it.
         entry: = r.peek_import_symbol(file, local_name)
         if entry != null
@@ -255,7 +242,6 @@ impl Sema_ctx
 
     fn mark_import_written(r: Self$@, file: U8[], name: U8[], heads_member: Bool) //<
         //< Records that file wrote that name; heads_member: a `.member` follows it
-        //<
         //< Caution: Decide whether an import is unused by **whether it was written**. Marking only
         //< on resolution misses an uninstantiated template body, and the same import flips between
         //< used and unused depending on what else is compiled.
@@ -272,14 +258,12 @@ impl Sema_ctx
 
     fn get_import_symbol_original_name(r: Self$@, file: U8[], local_name: U8[]): U8[] //<
         //< A selectively imported symbol's original name at the import source
-        //<
         //< It is the original name even where the import renames it.
         entry: = r.find_import_symbol(file, local_name).unwrap_or(null)
         return entry.original_name if entry != null else ""
 
     fn imported_symbol_fqn(r: Self$@, local_name: U8[]): U8[] //<
         //< Turns a name a selective import brought in (`import "p" { A as B };`) to its FQN (`p.A`)
-        //<
         //< Such a name is in no namespace. **Name resolution starts by looking this up.**
         //< Caution: **Look it up before a same-named one outside the file.** That is safe: in one
         //< file a declaration and a selective import never share a name (each rejects the other).
@@ -300,14 +284,12 @@ impl Sema_ctx
 
     fn has_explicit_import_symbol(r: Self$@, file: U8[], local_name: U8[]): Bool //<
         //< Whether that name is taken by "a written selective import"
-        //<
         //< An implicit import is not counted, or lang's names could not name a local binding.
         entry: = r.peek_import_symbol(file, local_name)
         return entry != null && entry.decl_node != null
 
     fn add_implicit_import_symbol(r: Self$@, file: U8[], name: U8[], target_path: U8[], taken: Bool) //<
         //< Registers `std/lang`'s names in file as a selective import nobody wrote
-        //<
         //< **If that name is already taken, do nothing** (an implicit name always loses).
         //< **decl_node is null**: with no written line, neither the unused lint ([I0401]) nor the
         //< selector's existence check may apply to it.
@@ -323,7 +305,6 @@ impl Sema_ctx
     fn add_import_symbol(r: Self$@, file: U8[], local_name: U8[], target_path: U8[],
         original_name: U8[], decl_node: Ast_node$@) //<
             //< Registers one selector of `import "path" { A, B as C };`.
-            //<
             //< A local_name already used in the file is an ordinary redefinition error (no
             //< first-wins or last-wins).
         if r.symtab.has_in_current_scope(local_name)
@@ -388,7 +369,6 @@ impl Ast_node
                 c.add_import_symbol(file_name, local_name, target_path, name_node.text, selector)
         if selector_list != null && !plus
             c.add_withheld_alias(file_name, clean_path.default_import_alias(), clean_path)
-            resolved_sb.free()
             return
 
         // The whole file's alias.
@@ -403,14 +383,11 @@ impl Ast_node
                 .s("import alias '\{alias_name\}' already points at '\{taken.target_path\}'. Rename \
                     one alias with 'as'.")
             c.err(r, c.scratch.slice())
-            resolved_sb.free()
             return
         c.add_file_alias(file_name, alias_name, target_path, r)
-        resolved_sb.free()
 
     fn mark_written_imports(r: Self$@, c: Sema_ctx$@) //<
         //< Records the identifiers written in the tree as uses of that file's imports
-        //<
         //< **Call it before a generic's template body is discarded** (see run in
         //< sema/body/infer.kspl). Afterwards, an import used only from a template body looks
         //< unused.
@@ -420,7 +397,6 @@ impl Ast_node
 
     priv fn mark_written_under(r: Self$@, c: Sema_ctx$@, heads_member: Bool, generic_body: Bool) //<
         //< One node of mark_written_imports; heads_member: whether a `.member` follows r
-        //<
         //< Caution: **Count a file alias only where a member follows it** (the head of `io.out` or
         //< of `ds.List`). An alias appears nowhere else, so a field (`p.strnum`) or a function
         //< (`strnum()`) with the same name would hide a dead import from [I0401]. A member is

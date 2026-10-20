@@ -19,7 +19,6 @@ priv struct Dyn_entry
 priv const MAX_DYN: Sz = 32 // as task.kspl's max_tasks: at most this many dynamic tasks at once
 
 priv const MAX_QUEUE_BYTES: Sz = 16777216 //< the limit [bytes] on a queue's element buffer
-    //<
     //< **It keeps `cap * sizeof(T)` from overflowing `Sz`** (signed, so an overflow is undefined
     //< and cannot be tested for afterwards).
     //< Caution: **Keep it a value that fits even where `Sz` is 32-bit.** At 2^31 or more the
@@ -28,7 +27,6 @@ priv $g_dyn: Dyn_entry[32]
 priv $g_dyn_count: Sz = 0
 
 priv fn find_dyn_by_tcb(t: Task$@): Sz //< returns t's index in g_dyn
-    //<
     //< If there is none it returns max_dyn.
     $idx: Sz = MAX_DYN
     $found: = false
@@ -40,7 +38,6 @@ priv fn find_dyn_by_tcb(t: Task$@): Sz //< returns t's index in g_dyn
 
 priv fn find_dyn_slot(): Sz //<
     //< Returns the index of a free slot (tcb==null), or else the end of the array
-    //<
     //< The end is max_dyn when the capacity is exceeded.
     $slot: Sz = g_dyn_count
     $found: = false
@@ -53,7 +50,6 @@ priv fn find_dyn_slot(): Sz //<
     return slot
 
 priv fn release_dyn(idx: Sz): Dyn_entry //< [Call it inside a critical section] frees the entry
-    //<
     //< It returns what the entry held. The caller gives it back to the heap once the critical
     //< section is over. Claimed here, no other task can free the same memory.
     e: = g_dyn[idx]
@@ -67,7 +63,6 @@ priv fn free_dyn(e: Dyn_entry) //< returns a released entry's stack and Task to 
     heap.heap_free(Void$@::e.tcb)
 
 priv fn find_reapable(): Sz //< [Call it inside a critical section] an entry reap_pending frees
-    //<
     //< If there is none it returns max_dyn.
     //< Caution: **Wait for `.done`, not for the flag alone.** delete_dyn sets the flag before the
     //< task's own delete, and a tick can hold that delete off. `.done` is set inside that delete's
@@ -79,7 +74,6 @@ priv fn find_reapable(): Sz //< [Call it inside a critical section] an entry rea
 
 fn reap_pending(): Sz //<
     //< Frees every entry whose task deleted itself and has since switched away
-    //<
     //< Task.create_dyn and delete_dyn call it first; any task may call it too.
     $reaped: Sz = 0
     for
@@ -100,7 +94,6 @@ priv fn reap_hook(): Void //<
 
 fn install_idle_reap(stack: U8$[]) //<
     //< Turns on an idle task that frees what waits after a delete
-    //<
     //< It calls task.enable_idle_task(stack, reap_hook); the caller allocates stack
     //< statically. Without it, freeing waits until some task next calls into this file.
     task.enable_idle_task(stack, reap_hook)
@@ -110,7 +103,6 @@ impl Task
     fn create_dyn(entry: task.Task_fn, arg: Void$@, prio: I32, name: U8[], stack_size: Sz):
         Task$@? //<
             //< Allocates the Task and the stack from the heap and creates a task
-            //<
             //< It frees both and returns none when max_tasks in task.kspl, the port's contexts or
             //< max_dyn run out. An allocation failure panics inside heap_alloc.
         reap_pending()
@@ -140,7 +132,6 @@ impl Task
 
     fn delete_dyn(r: Self$@) //<
         //< Deletes an instance created by create_dyn and returns the Task and the stack to the heap
-        //<
         //< To delete the current task, call Task.current().delete_dyn() (null does not mean
         //< "myself" as in FreeRTOS's vTaskDelete(NULL), which is tacit knowledge). If r did not
         //< come from create_dyn it does nothing, so no wrong pointer is freed.

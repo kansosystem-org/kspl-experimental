@@ -1,6 +1,5 @@
 #!/usr/bin/env -S ksplc run
 //< Bundles the template, the texts named inside it and the wasm into one HTML file
-//<
 //< Caution: **Do not pass the texts as a list of arguments.** The day a text is added, the `make`
 //< line and the count here must both change, and changing only one passes silently.
 //< Do not do it with a replace over the whole text. `replace` swaps the mark wherever it is, so
@@ -18,7 +17,6 @@ import "std/str" { Str_builder }
 import "std/sys"
 
 priv const MARK_HEAD: U8[] = "__KSPAGE_" //< the start of every mark
-    //<
     //< Every text starting with this is a mark, and an unknown one is refused. Let through
     //< silently, a typo shows only when the page is opened.
 priv const MARK_WASM: U8[] = "__KSPAGE_WASM_BASE64__"
@@ -34,12 +32,11 @@ priv enum Bundle_error
     write //< the output cannot be written
 
 priv fn read_or_report(path: U8[]): U8[]!Bundle_error
-    return io.read_file(path) catch
+    return io.read_file(path, null) catch
         io.err().s("bundle: cannot read: \{path\}\n")
         throw .read
 
 priv fn folder_of(path: U8[]): U8[] //< the template's own folder
-    //<
     //< It includes the trailing `/` (empty means the current folder).
     $cut: Sz = 0
     for $i: Sz = 0; i < path.len; i += 1
@@ -48,17 +45,14 @@ priv fn folder_of(path: U8[]): U8[] //< the template's own folder
     return path.sub(0, cut)
 
 priv fn safe_name(name: U8[]): Bool //< whether it is safe as a text's name
-    //<
     //< Caution: **Do not let it leave the folder** — with `..` or `/` the template alone could
     //< bundle a file from outside the page.
     if name.len <= 0
         return false
     for $i: Sz = 0; i < name.len; i += 1
         c: = name[i]
-        ok: =
-            (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.'
-            || c == '_' || c == '-'
-        if !ok
+        // `is_alnum` counts `_` as a letter.
+        if !c.is_alnum() && c != '.' && c != '-'
             return false
     return name.find_str("..").is_none()
 

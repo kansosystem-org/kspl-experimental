@@ -1,5 +1,4 @@
 //< The desugaring that needs no types: one post-order walk over a file's normalized tree
-//<
 //< `run` is the one entry point and `desugar_node` the one walk. A `for x in`, a binding `if`, a
 //< string's interpolation, an anonymous function or closure (`desugar_closure.kspl`) and a written
 //< slice type (`desugar_slice.kspl`) are each expanded on the way. What needs types is Sema's
@@ -27,7 +26,6 @@ const CLOSURE_EMPTY_FIELD: U8[] = "_empty" //<
 
 struct Desugar_ctx //<
     //< What the walk carries from node to node
-    //<
     //< That is the closure synthesis's parser and serials, the statements to put before the current
     //< one, and whether a diagnostic was reported.
     parser: kspeg.Target$@ //<
@@ -37,19 +35,16 @@ struct Desugar_ctx //<
     lifted: List<|Ast_node$@|>$@ //< the synthesized declarations to add to the top level
     hoisted: List<|Ast_node$@|>$@ //<
         //< The statements inserted **before** the statement being handled now
-        //<
         //< They are the temporaries binding a closure's value. Only an lvalue can be passed to a
         //< trait, so a `::{}`'s result cannot be placed directly in an argument.
     gen_params: List<|U8[]|>$@ //<
         //< The type argument names of the enclosing declarations, innermost last
-        //<
         //< They are pushed during the walk (an `fn f<|U|>` inside an `impl<|T|>` holds both). Those
         //< a closure's signature uses are copied to its synthesized declarations.
     anon_serials: Map<|U8[], Sz|>$@ //<
         //< The **per-file** serial for naming the declaration an anonymous function is lifted into
     block_depth: Sz //<
         //< How many levels of block it is inside now
-        //<
         //< At 0 there is nowhere to insert a statement (desugar_closure checks it).
     ok: Bool //< false once `desugar_err` has reported a diagnostic; `run` returns it
 
@@ -122,7 +117,6 @@ impl Ast_node
 
     priv fn desugar_slice_elems(r: Ast_node$@) //<
         //< It expands a `T[]::{ v1, v2, … }` (elements with no field names) into an array's slice
-        //<
         //< The result is `T[]::(T[_]::{ v1, v2, … })`: a slice of an array made from the elements.
         //<
         //< **Field names tell it apart from building a descriptor** (`T[]::{ .ptr = p, .len = n
@@ -198,7 +192,6 @@ impl Ast_node
 
     priv fn desugar_for_in_loop(r: Ast_node$@, new_children: List<|Ast_node$@|>$@) //<
         //< It copies a `for … in`'s collection into a temporary and leaves the expansion to sema
-        //<
         //< _%for_collN: = collection; for item; _%for_collN; ; { ...the original body... }   <-
         //< item is the marker; sema expands it
         loc: = r.loc
@@ -330,7 +323,6 @@ impl Ast_node
 impl Ast_node
     fn desugar_err(r: Ast_node$@, ctx: Desugar_ctx$@, msg: U8[]) //<
         //< It reports an error the desugaring found at the position the user wrote
-        //<
         //< **It is the only function here that reports.**
         //< Caution: **Set `ctx.ok` to false.** The desugaring rewrites the tree rather than
         //< returning a value, so otherwise the error reaches sema as a distant diagnostic about a
@@ -342,7 +334,6 @@ impl Ast_node
 
     fn check_format_spec(r: Ast_node$@, ctx: Desugar_ctx$@, spec: U8[]) //<
         //< It reports the first thing wrong with a format specification, once
-        //<
         //< **One report for one spec**: `:,.2xq` read as both unreadable and misordered gave two
         //< errors at one position.
         if spec.len == 0
@@ -397,7 +388,6 @@ impl Ast_node
 
     priv fn block_else_if_beside_bind(r: Ast_node$@) //<
         //< It puts an `else if` beside a binding `if` into a block: `else { if v: = X { … } }`
-        //<
         //< desugar_if_bind folds only a block's statement, and its `case` bodies are blocks.
         //< Without this, a binding `else if` stays unfolded and a plain one is a bare `case` body.
         //< **Not every `else if`**: Lower relocates a plain chain's hoisted statements itself.
@@ -409,7 +399,6 @@ impl Ast_node
 
     priv fn desugar_if_bind(r: Ast_node$@): Ast_node$@ //<
         //< It folds `if v: = X { A } else { B }` to `switch X case .some(v) { A } case .none { B }`
-        //<
         //< Sema, which knows the types, rejects anything but `Option`; this side only builds the
         //< shape (`../sema/body/switch.kspl` reads the mark it leaves). The grounds are in
         //< "Branching" in `../../docs/SPEC-programming-language.md`.
@@ -429,7 +418,6 @@ impl Ast_node
 
 fn next_anon_serial(ctx: Desugar_ctx$@, file: U8[]): Sz //<
     //< The next per-file number for the declaration an anonymous function is lifted into
-    //<
     //< Caution: **Count it per file, never per function** (unlike `for_in_counter`). The lifted
     //< declaration is a top-level `priv`, and `write_priv_prefix_to` in `lower/abi.kspl` makes its
     //< C name unique by the file path.
@@ -446,7 +434,6 @@ fn serial_str(serial: Sz): U8[]
 
 fn build_path_ref(name: U8[], loc: base_ast.Loc): Ast_node$@ //<
     //< A reference to a plain name (one `Identifier` under an `expr_path`)
-    //<
     //< This is the only shape lower/abi.kspl mangles (the reason is at desugar_fn_lit).
     return Ast_node.new(.k_expr_path, name, loc)
         .add_child(Ast_node.build_ident(name, 0, loc))

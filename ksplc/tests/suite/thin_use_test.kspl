@@ -1,6 +1,5 @@
 #!/usr/bin/env -S ksplc run
 //< The test of what is demanded of "a thin user that uses just one of std's APIs"
-//<
 //< It checks that **the compilation passes** and **how much one std file brings along**. The
 //< repository's own programs use std widely, so they always reach an instantiation another way too.
 //< Caution: Add a shape where a std function returns a concrete generic type (`ds.List<|U8[]|>` and
@@ -141,9 +140,8 @@ import "std/io"
 import "std/reactor" { Reactor }
 
 fn main(): I32
-  $r: = Reactor.new()
+  _r: = Reactor.new()
   io.out().s("ok\n")
-  r.free()
   return 0
 
 """
@@ -199,21 +197,18 @@ fn main(): I32
 """
 
 priv const SMALL_C_MAX_LINES: Sz = 9000 //< the cap on the generated C's line count
-    //<
     //< **The compilation succeeds even when it fails to drop them**; the generated C only grows
     //< several times over. The cap is about 1.5 times the current value, failing when the order of
     //< magnitude changes; the current value is shown on passing.
 
 priv const BASE_FILES: U8[][2] = ::{ "std/lang", "std/libc" } //<
     //< The base: the files that go into every program
-    //<
     //< Each `List<|X|>` instantiated brings, through `where` / `select`'s signatures, the **type
     //< declarations** of `List_seq<|X|>` / `Keep<|...|>` / `X?` / `Callable1<|X, Bool|>`.
     //< **A type that appears only in a signature is dropped after that function is**: dead-code
     //< removal runs for functions, then types (`../../lower/prune.kspl`).
-priv const BASE_MAX_LINES: Sz = 739 //<
+priv const BASE_MAX_LINES: Sz = 669 //<
     //< The cap on the base's line count
-    //<
     //< One line is `#cfg(!freestanding)`'s directive, not code in the generated C (a freestanding
     //< build imports one **fewer**)
     //< **Nothing counted by this cap can be placed anywhere but `std/lang`.**
@@ -225,17 +220,15 @@ priv const EXT: U8[] = ".kspl" //<
 
 // The files that bring nothing but themselves besides BASE. An import under `#cfg` counts:
 // `std/chars` is not here, as a freestanding build brings `std/mem` along for `memcmp`.
-priv const LEAF_FILES: U8[][10] = ::{ "std/bytes", "std/math", "std/checked_int", "std/mem",
-    "std/reflect", "std/ring", "std/prng", "std/bignat", "std/log", "std/stack_limit" }
+priv const LEAF_FILES: U8[][11] = ::{ "std/bytes", "std/math", "std/checked_int", "std/mem",
+    "std/reflect", "std/ring", "std/prng", "std/bignat", "std/log", "std/stack_limit", "std/suite" }
 
 priv const HEAVIEST: U8[] = "std/str" //< the heaviest unit
-    //<
     //< **`std/io` is not in here.** Writer / Formattable are in std/lang, so string handling pays
     //< for no file I/O (io still brings str along).
 
-priv const CORE_MAX_LINES: Sz = 3841 //<
+priv const CORE_MAX_LINES: Sz = 3670 //<
     //< The cap on the line count of the chunk the heaviest unit reaches
-    //<
     //< **An added line costs every program that uses strings**, such as a format's field padding
     //< that even programs not using it pay for.
     //< Caution: **Update it to the current value whenever it changes, up or down.** Left loose, it
@@ -247,7 +240,6 @@ priv struct Std_file
     entry: Bool //< whether it defines `main`, so a program holding its own cannot import it
 
 priv struct Edge //< an import's edge
-    //<
     //< "The source's index" and "the target's name", avoiding nested generics.
     from: Sz
     to: U8[]
@@ -273,12 +265,6 @@ priv fn index_of(files: List<|Std_file|>@, name: U8[]): I32
             return I32::i
     return -1
 
-priv fn has_name(names: List<|U8[]|>@, name: U8[]): Bool
-    for i in Range.asc(names.len)
-        if names.get(i).equals(name)
-            return true
-    return false
-
 priv fn imported_std_name(line: U8[]): U8[] //<
     //< It returns the logical name an `import "std/..."` line imports (empty if it is not one)
     head: = "import \""
@@ -301,7 +287,7 @@ priv fn collect_std(files: List<|Std_file|>$@, edges: List<|Edge|>$@, arena: Are
         if !path.ends_with(EXT) || path.len <= std.len
             continue
         rel: = arena.text().s("std/").s(path.sub_from(std.len + 1)).take()
-        text: = io.read_file(path) catch
+        text: = io.read_file(path, null) catch
             continue
         // Caution: **Do not trim by length.** A changed extension leaves a name with a trailing
         // `.`.
@@ -331,7 +317,7 @@ priv fn closure(files: List<|Std_file|>@, edges: List<|Edge|>@, name: U8[], buil
     for stack.len > 0
         cur: = stack.get(stack.len - 1)
         stack.len -= 1
-        if has_name(seen@, cur)
+        if seen.contains(cur)
             continue
         at: = index_of(files, cur)
         if at < 0
@@ -363,12 +349,11 @@ priv fn numbers_in(cell: U8[], arena: Arena$@): List<|Sz|> //< each run of digit
 priv fn check_tier_table(files: List<|Std_file|>@, edges: List<|Edge|>@,
     base_names: List<|U8[]|>@, arena: Arena$@) //<
         //< Checks the table "How many files one import brings along" in std's README.md
-        //<
         //< A row's number is a hosted build's; `(N on a freestanding build ...)` is that build's,
         //< and `N+` is a floor. **Hand-kept, it drifted by a file or more** when an import was
         //< added, and nothing failed.
     path: = fs.join(harness.std_dir(), "README.md", arena)
-    doc: = io.read_file(path) catch ""
+    doc: = io.read_file(path, null) catch ""
     $bad: = List<|U8[]|>.new(arena)
     $rows: Sz = 0
     $inside: = false
@@ -393,7 +378,7 @@ priv fn check_tier_table(files: List<|Std_file|>@, edges: List<|Edge|>@,
             if name.len == 0 || name.find_char(' ').is_some() || !name[0].is_lower()
                 continue
             file: = arena.text().s("std/").s(name).take()
-            if has_name(base_names, file)
+            if base_names.contains(file)
                 if want.get(0) != base_names.len
                     bad
                         .push(arena.text().s(name).s(": BASE is \{base_names.len\} files").take())
@@ -428,7 +413,6 @@ priv fn sum_lines(files: List<|Std_file|>@, names: List<|U8[]|>@): Sz
 
 priv fn thin_case(slot: U8[], name: U8[], src: U8[], arena: Arena$@) //<
     //< Checks that a thin user compiles as one file
-    //<
     //< cwd is the working directory and std is given by `--std-dir=` (as `harness.ksplc` does);
     //< from the repository root the default "std" would match.
     dir: = harness.sandbox(arena.text().s("thin_\{slot\}").take())
@@ -447,7 +431,6 @@ priv fn thin_case(slot: U8[], name: U8[], src: U8[], arena: Arena$@) //<
 
 priv fn solo_case(name: U8[], arena: Arena$@) //<
     //< Whether a program that imports **just** one file of std builds
-    //<
     //< **The stage table does not check this.** It measures the closure of the written `import`s.
     //< But an extension method on a built-in type (`s.sub()` / `c.is_digit()`) makes **a dependency
     //< in no import**. It checks only "is it complete with that one file" (an empty `main`).
@@ -462,7 +445,6 @@ priv fn solo_case(name: U8[], arena: Arena$@) //<
 
 priv fn check_no_unused_stage_types(gen: U8[], arena: Arena$@) //<
     //< Checks that a program with no chain has no stage type of `std/seq` left in it
-    //<
     //< **It is needed besides the line-count cap.** A test may match text; the compiler need not.
     name: = "a program writing no chain has no stage type left"
     stage_names: U8[][3] = ::{ "std_seq_List_seq", "std_seq_Keep", "std_seq_Conv" }
@@ -501,7 +483,7 @@ fn main(): I32
     if !r.exited_with(0)
         verdict.check(small_name, false, r.out)
     else
-        gen: = io.read_file(fs.join(dir, "small.c", arena)) catch ""
+        gen: = io.read_file(fs.join(dir, "small.c", arena), null) catch ""
         n: = gen.count_str("\n")
         verdict.check(small_name, n <= SMALL_C_MAX_LINES,
             arena.text()
@@ -528,7 +510,7 @@ fn main(): I32
     $leaves: = List<|U8[]|>.new(arena)
     for i in Range.asc(files.len)
         name: = files.get(i).name
-        if has_name(base_names@, name)
+        if base_names.contains(name)
             continue
         reach: = closure(files@, edges@, name, .all, arena)
         if reach.len == base_names.len + 1
@@ -552,15 +534,15 @@ fn main(): I32
     $looped: = ""
     for i in Range.asc(files.len)
         name: = files.get(i).name
-        if has_name(base_names@, name)
+        if base_names.contains(name)
             continue
         for e in edges
             if e.from != i || looped.len > 0
                 continue
-            if has_name(base_names@, e.to)
+            if base_names.contains(e.to)
                 continue
             back: = closure(files@, edges@, e.to, .all, arena)
-            if has_name(back@, name)
+            if back.contains(name)
                 looped = arena.text().s(name).s(" <-> ").s(e.to).take()
     verdict.check("std has no import cycle", looped.len == 0,
         arena.text().s("there is a cycle: \{looped\} (the stages collapse into a chunk. ")

@@ -1,5 +1,4 @@
 //< Checks that the editor's client and the language server fit together (not the suite)
-//<
 //< **Nothing fails when this drifts.** **Nobody reads the VS Code extension**, the only client
 //< ("kspage starts no program" in `kspage/docs/DESIGN-application.md`). Two things
 //< are checked: ① the entry points declared and the ones that can answer agree. ② The server can
@@ -15,7 +14,6 @@ import "std/strfmt" as _strfmt
 import "std/verdict"
 import "tests/support/conventions_scan" as scan
 import "tests/support/harness"
-import "tests/support/harness_text" as htext
 
 priv const CAPS_FILE: U8[] = "ksplc/lsp/worker.kspl"
 priv const VSCODE_CLIENT: U8[] = ".vscode/extensions/kspl/extension.js"
@@ -34,7 +32,6 @@ priv const CAP_METHODS: U8[][_] = ::{ "textDocument/hover", "textDocument/defini
     "textDocument/documentSymbol" }
 
 priv fn served(arena: Arena$@): List<|U8[]|> //< the methods the server handles
-    //<
     //< **The ones starting with `$/` are not counted**: only the tests send them, and a real client
     //< sends none (the test hooks in `run_lsp_worker`, `ksplc/lsp/worker.kspl`).
     $out: = List<|U8[]|>.new(arena)
@@ -46,7 +43,6 @@ priv fn served(arena: Arena$@): List<|U8[]|> //< the methods the server handles
 
 priv fn cap_says(src: U8[], name: U8[], arena: Arena$@): Bool? //<
     //< Whether the declaration is true or false
-    //<
     //< Where there is none, none.
     for got in scan.find_all(src,
         arena.text().s(".set(\"").s(name).s("\", b.bool_val(").take(), "))", arena)
@@ -63,7 +59,6 @@ priv const CAP_SAYS_SAMPLES: U8[][_] = ::{ ".set(\"hoverProvider\", b.bool_val(t
     ".set(\"hoverProviderX\", b.bool_val(true))", ".set(\"otherProvider\", b.bool_val(true))" }
 priv const CAP_SAYS_WANT: I32[_] = ::{ 1, 0, 1, -1, -1 } //<
     //< The expected answer for each sample
-    //<
     //< In order: true / false / true (the form with a body) / none (another name) / none (another
     //< declaration)
 
@@ -86,15 +81,15 @@ priv fn check_cap_says_fires(arena: Arena$@)
 priv fn check_caps(arena: Arena$@) //<
     //< ① The entry points declared and the ones that can answer agree
     src: = harness.read_under_root(CAPS_FILE)
-    $can: = served(arena)
-    $asked: = asked_by_any(arena)
+    can: = served(arena)
+    asked: = asked_by_any(arena)
     $bad: = List<|U8[]|>.new(arena)
 
     // Caution: **Do not let a declaration missing from the table pass.**
     for got in scan.find_all(src, ".set(\"", "\"", arena)
         if !got.ends_with("Provider")
             continue
-        if !named_in(U8[][]::CAP_NAMES, got)
+        if !(U8[][]::CAP_NAMES).contains(got)
             bad
                 .push(arena.text().s(got).s(": ").s(CAPS_FILE)
                 .s(" declares it, and it is not in this check's table").take())
@@ -116,7 +111,7 @@ priv fn check_caps(arena: Arena$@) //<
                 .push(arena.text().s(name).s(": there is no declaration in ").s(CAPS_FILE)
                 .s(" (either the reading place broke, or the declaration was deleted)").take())
             continue
-        answers: = htext.has(can@, method)
+        answers: = can.contains(method)
         if told && !answers
             bad
                 .push(arena.text().s(name).s(": it declares true and there is no place handling `")
@@ -127,7 +122,7 @@ priv fn check_caps(arena: Arena$@) //<
                 .s("` anyway").take())
         // Caution: **A declaration nobody asks for is the half-built feature.** Where no client
         // sends the name, the entry point is dead on the screen while every check above goes green.
-        if told && !htext.has(asked@, method)
+        if told && !asked.contains(method)
             bad
                 .push(arena.text().s(name).s(": it declares true and no client sends `").s(method)
                 .s("` (").s(VSCODE_CLIENT).s(")").take())
@@ -135,15 +130,8 @@ priv fn check_caps(arena: Arena$@) //<
         "declarations", bad@,
         "declare the handler where the server lists them, and handle each declared one")
 
-priv fn named_in(list: U8[][], want: U8[]): Bool
-    for w in list
-        if w.equals(want)
-            return true
-    return false
-
 priv fn sent_by(rel: U8[], heads: U8[][], arena: Arena$@): List<|U8[]|> //<
     //< The methods a client sends
-    //<
     //< Caution: **Read a client added later through here too**, or a wrong name in it passes. Each
     //< client writes its requests its own way (the extension's `sendRequest("…"`), so `heads` names
     //< the form.
@@ -157,13 +145,11 @@ priv fn sent_by(rel: U8[], heads: U8[][], arena: Arena$@): List<|U8[]|> //<
     return out
 
 priv fn ignorable(m: U8[]): Bool //< the names this check skips
-    //<
     //< **Exactly one**: to add another, write out why the server need not handle it.
     //< `initialized` only says "it is ready", and LSP allows it to be ignored.
     return m.equals("initialized")
 
 priv fn asked_by_any(arena: Arena$@): List<|U8[]|> //< the names the client sends
-    //<
     //< **There is one client now** (this file's header).
     $out: = List<|U8[]|>.new(arena)
     vs: =
@@ -173,12 +159,12 @@ priv fn asked_by_any(arena: Arena$@): List<|U8[]|> //< the names the client send
     return out
 
 priv fn check_sent(arena: Arena$@) //< ② The server can handle the names a client sends
-    $can: = served(arena)
+    can: = served(arena)
     $bad: = List<|U8[]|>.new(arena)
     vs: =
         sent_by(VSCODE_CLIENT, U8[][]::{ "sendRequest(\"", "sendNotification(\"" }, arena)
     for i in Range.asc(vs.len)
-        if !ignorable(vs.get(i)) && !htext.has(can@, vs.get(i))
+        if !ignorable(vs.get(i)) && !can.contains(vs.get(i))
             bad
                 .push(arena.text().s(vs.get(i)).s(": ").s(VSCODE_CLIENT)
                 .s(" sends it, and the language server has no place handling it").take())
@@ -199,7 +185,6 @@ priv const WS_VIEW: U8[] = "Bodies.mentioning(old_name)"
 
 priv fn check_body_views(arena: Arena$@) //<
     //< Checks that the document view narrows the bodies and the workspace view does not
-    //<
     //< Caution: **Read both lines, not one.** If only the narrow one is checked, the day the wide
     //< one is narrowed too the editor goes quiet with nothing saying why.
     src: = harness.read_under_root(SERVER_FILE)
@@ -226,13 +211,11 @@ priv fn check_body_views(arena: Arena$@) //<
 // ==========================================
 priv const WAKE_LINE: U8[] = "base_core.config.recover_syntax = true" //<
     //< The line of code that turns on the recovering branches
-    //<
     //< **No terminator**: the default notation writes none, so a needle with a `;` matches no line.
 priv const WAKE_FILE: U8[] = "ksplc/lsp/worker.kspl"
 
 priv fn check_recovery_wake(arena: Arena$@) //<
     //< Checks that the recovering branches are turned on from one place only
-    //<
     //< Caution: **Count them across the whole of `ksplc/`, not in one file**, or a second one
     //< elsewhere goes unseen.
     $bad: = List<|U8[]|>.new(arena)
@@ -277,7 +260,7 @@ priv fn ignored_dirs(arena: Arena$@): List<|U8[]|> //<
     return out
 
 priv fn check_exclude(arena: Arena$@)
-    $told: = ignored_dirs(arena)
+    told: = ignored_dirs(arena)
     $bad: = List<|U8[]|>.new(arena)
     $seen: Sz = 0
     for got in scan.find_all(harness.read_under_root(VSCODE_CLIENT), "findFiles(", ")", arena)
@@ -288,7 +271,7 @@ priv fn check_exclude(arena: Arena$@)
             rest: = got.sub_from(at + 6)
             if end: = rest.find_str("/**'")
                 name: = rest.sub(0, end)
-                if !htext.has(told@, name)
+                if !told.contains(name)
                     bad
                         .push(arena.text().s(VSCODE_CLIENT).s(": it leaves `").s(name)
                         .s("` out, and ").s(IGNORE_FILE).s(" does not name that folder").take())
@@ -301,7 +284,6 @@ priv fn check_exclude(arena: Arena$@)
 // ==========================================
 
 priv const WIND_FILE: U8[] = "ksplc/lsp/state.kspl" //< the file for two checks
-    //<
     //< ① the arena is rewound from one place only. ② every `$` global in ksplc is either discarded
     //< there, or listed below as one that does not live on that arena.
     //< Caution: **Review a new global before you add its row.** The row
@@ -310,7 +292,6 @@ priv const WIND_HEAD: U8[] = "fn wind_back("
 priv const WIND_CALL: U8[] = "base_core.arena.restore("
 priv const GLOBAL_SPECS: U8[][_] = ::{ "ksplc/*.kspl", ":!ksplc/tests/" } //<
     //< The sources whose `$` globals are counted
-    //<
     //< **`ksplc/tests/` is left out on purpose**: its globals are feature-test fixtures in static
     //< storage the LSP never touches.
 
@@ -379,13 +360,11 @@ priv const OFF_ARENA: U8[][_] = ::{ "ksplc/base/ast.kspl:shared | the shared emp
 priv const ROW_BAR: U8[] = " | "
 
 priv fn row_head(row: U8[]): U8[] //< the `<path>:<name>` half of a row
-    //<
     //< Where there is no separator, the whole row (so a row written wrong is reported by name
     //< rather than silently matching nothing).
     return row.sub(0, row.find_str(ROW_BAR).unwrap_or(row.len))
 
 priv fn row_tail(row: U8[]): U8[] //< the half after the separator
-    //<
     //< Where there is none, empty — and an empty one fails below.
     if at: = row.find_str(ROW_BAR)
         return row.sub_from(at + ROW_BAR.len)
@@ -393,12 +372,10 @@ priv fn row_tail(row: U8[]): U8[] //< the half after the separator
 
 priv const GLOBALS_FLOOR: Sz = 25 //<
     //< The fewest `$` globals the count may find
-    //<
     //< Caution: **Fail where the count comes out short**: a broken reading of `$` empties the list
     //< and goes green having checked nothing.
 
 priv fn wind_body(): U8[] //< the body of the one function that rewinds the arena
-    //<
     //< Where it cannot be found, empty.
     src: = harness.read_under_root(WIND_FILE)
     if at: = src.find_str(WIND_HEAD)
@@ -408,7 +385,6 @@ priv fn wind_body(): U8[] //< the body of the one function that rewinds the aren
 
 priv fn ksplc_globals(arena: Arena$@): List<|U8[]|> //<
     //< The `$` globals ksplc declares, as `<path>:<name>`
-    //<
     //< **A `$` at the start of a line, after any visibility word, is a global.** A mutable local is
     //< always indented, so no check of the body is needed.
     $out: = List<|U8[]|>.new(arena)
@@ -438,7 +414,7 @@ priv fn row_named(list: U8[][], want: U8[]): Bool //< whether any row of list na
 
 priv fn check_wind_back(arena: Arena$@)
     body: = wind_body()
-    $seen: = ksplc_globals(arena)
+    seen: = ksplc_globals(arena)
     $bad: = List<|U8[]|>.new(arena)
 
     // ① The arena is rewound from one place.
@@ -469,11 +445,11 @@ priv fn check_wind_back(arena: Arena$@)
             bad
                 .push(arena.text().s(row_head(ON_ARENA[i])).s(": `wind_back` does not hold `")
                 .s(row_tail(ON_ARENA[i])).c('`').take())
-        if !htext.has(seen@, row_head(ON_ARENA[i]))
+        if !seen.contains(row_head(ON_ARENA[i]))
             bad
                 .push(arena.text().s(ON_ARENA[i]).s(": no such global is declared").take())
     for i in Range.asc(OFF_ARENA.len)
-        if !htext.has(seen@, row_head(OFF_ARENA[i]))
+        if !seen.contains(row_head(OFF_ARENA[i]))
             bad
                 .push(arena.text().s(OFF_ARENA[i]).s(": no such global is declared").take())
         if row_tail(OFF_ARENA[i]).len == 0
@@ -515,7 +491,6 @@ priv fn ksplc_keywords(arena: Arena$@): List<|U8[]|> //<
 
 priv fn grammar_keywords(src: U8[], arena: Arena$@): List<|U8[]|> //<
     //< The words the grammar names in the form `\b(a|b|c)\b`
-    //<
     //< **Only this form counts**, and only whole words: a numeric suffix or a run of symbols
     //< inside the brackets is no keyword.
     $out: = List<|U8[]|>.new(arena)
@@ -554,7 +529,7 @@ priv fn check_keywords(arena: Arena$@)
     $told: = grammar_keywords(src, arena)
     $bad: = List<|U8[]|>.new(arena)
     for w in told.slice()
-        if !htext.has(mine@, w)
+        if !mine.contains(w)
             bad
                 .push(arena.text().s(w).s(": the grammar colours it, and ksplc has no such word")
                 .take())

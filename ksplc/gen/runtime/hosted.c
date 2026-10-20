@@ -59,6 +59,35 @@ KSPL_LINK __attribute__((noreturn)) void kspl_tag_fail(int64_t value, const char
     kspl_check_fail("panic: enum %s has no tag %lld at %s:%d\n", enum_name, (long long)value, file, line);
 }
 
+/* The largest number a failure's exit status passes on as it is; any other gives 1. A POSIX shell
+ * sees only the low 8 bits, so 256 would read as 0, success. **A failure always exits non-zero**,
+ * and with one rule on every OS a program's status is the same everywhere. */
+#define KSPL_EXIT_CODE_MAX 255
+
+/* What the generated main does when `main` returns an error: it prints the failure line on
+ * standard error and returns the exit status. The generated main then prints the propagation
+ * trace and returns that status. Both backends call it, so a program fails alike on either.
+ * `err_kind` says what the error is. The numbers are ksplc's `Main_err` (ksplc/gen/entry.kspl):
+ * 0 any other type; 1 a signed integer in `code`; 2 an unsigned integer, `code` holding its bits;
+ * 3 an enum, its variant's name in `variant`. */
+KSPL_LINK int kspl_main_fail(int err_kind, int64_t code, const char* variant)
+{
+    switch (err_kind) {
+    case 1:
+        fprintf(stderr, "[Kanso] Error: main() failed with code %lld\n", (long long)code);
+        return (code >= 1 && code <= KSPL_EXIT_CODE_MAX) ? (int)code : 1;
+    case 2:
+        fprintf(stderr, "[Kanso] Error: main() failed with code %llu\n", (unsigned long long)code);
+        return ((uint64_t)code >= 1 && (uint64_t)code <= KSPL_EXIT_CODE_MAX) ? (int)code : 1;
+    case 3:
+        fprintf(stderr, "[Kanso] Error: main() failed with %s\n", variant);
+        return 1;
+    default:
+        fprintf(stderr, "[Kanso] Error: main() failed.\n");
+        return 1;
+    }
+}
+
 #include <time.h>
 /* The monotonically increasing real time (in microseconds). The origin is not settled — only a
  * difference has a meaning.

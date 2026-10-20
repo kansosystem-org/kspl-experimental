@@ -1,0 +1,23 @@
+//< The trait a test runner conforms to, so the compiler writes the runner's list of calls
+//< A test is a function named `test_…`. A suite is a struct whose fields are the values its tests
+//< take. For `impl S: suite.Suite`, the compiler writes `run`: it calls each test in the suite's
+//< own file and in the files that file imports ("8.5 Tests: functions named `test_`, run by a
+//< suite" in `../docs/SPEC-programming-language.md`).
+
+// ==========================================
+// Caution: **ksplc refers to `Suite`, `run`, `before_each` and `after_each` by name**
+// (`../ksplc/sema/decl/suite.kspl`). Rename one, and change it there too. **This file has no
+// import lines**; do not add one: every runner pays for what it brings along.
+// ==========================================
+pub trait Suite //< tests run together, each handed the values the suite holds
+    pub fn run(r: Self) //< runs every test the suite reaches, in order
+        //< **The compiler writes it**; an `impl` that writes its own is refused.
+
+    pub fn before_each(_r: Self, _name: U8[]) { //< runs before each test, named as declared
+        //< It does nothing unless the `impl` writes its own (a fresh arena per test, say).
+    }
+
+    pub fn after_each(_r: Self, _name: U8[]) { //< runs after each test that returned
+        //< It does nothing unless the `impl` writes its own. A test that fails stops the program,
+        //< so this does not run after it.
+    }

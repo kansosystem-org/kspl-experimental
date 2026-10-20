@@ -110,18 +110,9 @@ function kspageProbeKeep(ks) {
 // contents is enough. **It is the last section** (the document changes).
 
 function kspageProbeOutline(ks) {
-  const app = ks.app;
+  const { app, until } = ks;
   const done = ks.hold();
   const rowsOf = () => Array.from(document.querySelectorAll("#outline .item"));
-  // Caution: **Poll, with a cap.** A settled wait cannot fit a layout growing with the document,
-  // and a wait with no cap never lets the marks out.
-  const until = async (ok) => {
-    for (let waited = 0; waited < 1200; waited += 25) {
-      if (ok()) return true;
-      await new Promise((go) => setTimeout(go, 25));
-    }
-    return false;
-  };
 
   // Caution: **Always let a held section go**, or it runs out of time with no mark (nor what fell).
   (async function () {

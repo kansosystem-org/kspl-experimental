@@ -193,7 +193,7 @@ The last catches a demo whose checks were never reached. A kernel bug that leave
 
 **The compiler's own suites run from copies.** On Linux and ucrt64, each compiler extraction share copies ksplc's folder alone and rebuilds the compiler there. The two shares together run every entry of `SUITES` in `ksplc/Makefile` against those compilers, without repeating a suite. The core share alone also runs the copy's unit tests, its fuzzing, and the check that the copy does not build without its `ksplc.cfg`. macOS runs the ones its column marks by name, from the repository.
 
-**The lint gate passes only when `ksplc lint` exits with 0 and its whole tally line counts 0 of every kind, hints included.** It analyses the entry points listed in `LINT_TARGETS` in `mk/lint.mk`. A generic (code written once for many types) is analysed only where it is instantiated, that is, used with a concrete type. So code that only one entry point instantiates (`tests/debug/main.kspl`, say) escapes the gate unless that entry point is listed. `make test-lint-gate` checks two files, and each must make `make lint` exit non-zero. One holds one information diagnostic. The other holds ten errors, and its tally ends in the clean tally's text.
+**The lint gate passes only when `ksplc lint` exits with 0 and its whole tally line counts 0 of every kind, hints included.** It analyses the entry points listed in `LINT_TARGETS` in `mk/lint.mk`. The lint of one entry point checks every file it reads. So a file that an entry point imports is checked there, for an unused `priv` ([W0206]) and a comment's length ([H0806]) too. A generic (code written once for many types) is analysed only where it is instantiated, that is, used with a concrete type. So code that only one entry point instantiates (`tests/debug/main.kspl`, say) escapes the gate unless that entry point is listed. `make test-lint-gate` checks two files, and each must make `make lint` exit non-zero. One holds one information diagnostic. The other holds ten errors, and its tally ends in the clean tally's text.
 
 ### Gates that pass silently where a tool is missing
 
@@ -359,6 +359,10 @@ This section defines the size limits and what `make test-conventions` counts. Re
 **A file over 900 lines fails `make test-conventions` unless "Files near the limit and how they split" in the `README.md` of the top-level folder it sits in names it.** What that section holds is "Where a file's splitting plan is written" in [`SPEC-documents.md`](SPEC-documents.md). A warning on screen alone would let the README's "no file exceeds it" go stale without anyone seeing it (Principle 7).
 
 **In C, splitting only the definitions by subject is enough.** The headers (`.h`) do not multiply. The definition files are joined into one translation unit, so `static` helpers and types from an earlier file stay visible (`ksplc/gen/runtime/hosted*.c` and `write_impl` in `ksplc/gen/runtime.kspl`).
+
+### Principle 7 - how long a comment is
+
+**A comment's length is lint's to measure** ([H0806]), in KSPL source alone: 6 lines before the next line of code, or 10 for a file's opening header. The caps are "Comment notation and limits" in [`SPEC-plain-language.md`](SPEC-plain-language.md), and `ksplc explain H0806` says what counts. A file the lint gate's entry points do not read is not measured: the fixtures compiled alone.
 
 ### Principle 7 - how long a sentence is
 

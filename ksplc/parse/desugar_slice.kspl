@@ -1,5 +1,4 @@
 //< Folds a type's sugar postfixes into `std/lang`'s generics
-//<
 //< `T[]` / `T$[]` become `Slice<|T|>` / `Slice<|$T|>`, `T?` becomes `Option<|T|>`, and `T!E`
 //< becomes `Result<|T, E|>`.
 //< It applies only to type expressions written in the source. **Each type has one origin.** The
@@ -15,7 +14,6 @@ import "std/str" { Str_builder }
 
 fn wrap_type_expr(base: Ast_node$@, posts: List<|Ast_node$@|>$@, loc: base_ast.Loc): Ast_node$@ //<
     //< It wraps the base and the postfixes still attached to it into one `type_expr`
-    //<
     //< Where there is no postfix, it returns the base unchanged.
     if posts.len == 0
         return base
@@ -27,7 +25,6 @@ fn wrap_type_expr(base: Ast_node$@, posts: List<|Ast_node$@|>$@, loc: base_ast.L
     return node
 
 fn is_slice_postfix(p: Ast_node$@): Bool //< whether it is a postfix to fold
-    //<
     //< **A postfix holding a size is not folded**: a `[N]` is recognized by its child, and a `[_]`,
     //< which has none, by its text. A `[_]` comes from expanding `T[]::{ v1, … }`
     //< (desugar_slice_elems in `desugar.kspl`); if folded, its elements would read as the
@@ -44,7 +41,6 @@ fn is_result_postfix(p: Ast_node$@): Bool //< whether it is a result's `!E` (its
 fn make_generic_atom(ident: U8[], inner_raw: Ast_node$@, is_mut: Bool, loc: base_ast.Loc):
     Ast_node$@ //<
         //< It builds the `type_atom` for `<ident><|arg|>`
-        //<
         //< With `is_mut`, it is `<ident><|$arg|>`.
     one: = base_ast.new_ast_node_list()
     one.push(inner_raw)
@@ -53,7 +49,6 @@ fn make_generic_atom(ident: U8[], inner_raw: Ast_node$@, is_mut: Bool, loc: base
 fn make_generic_atom_of(ident: U8[], args_raw: List<|Ast_node$@|>$@, first_mut: Bool,
     loc: base_ast.Loc): Ast_node$@ //<
         //< It builds the `type_atom` for `<ident><|arg, …|>`
-        //<
         //< The first argument is `$`-marked if asked.
         //< Caution: **Set the `type_args` text here**: normalization (`normalize_type_args_text`)
         //< runs before desugar, and `get_full_path_str_to` (`../base/ast_spell.kspl`) reads it.
@@ -95,7 +90,6 @@ fn make_generic_atom_of(ident: U8[], args_raw: List<|Ast_node$@|>$@, first_mut: 
     return atom
 
 fn spell_type_expr(node: Ast_node$@): U8[] //< a type expression's name
-    //<
     //< **Just join the text of the base and the postfixes**: `extract_type_name` drops the
     //< mutability mark, turning `Slice<|$U8|>` into `Slice<|U8|>`.
     b: = base_core.arena.text()
@@ -107,7 +101,6 @@ fn spell_type_expr(node: Ast_node$@): U8[] //< a type expression's name
     return b.take()
 
 fn spell_as_written(node: Ast_node$@): U8[] //< a type expression with its folds spelled as sugar
-    //<
     //< **Source the compiler writes from a folded type uses this.** The long form
     //< (`Slice<|U8|>`, `Option<|I32|>`) is refused as a type wherever it is parsed
     //< (check_spelled_out_sugar in `../sema/decl/type_check.kspl`). So a fold is written back as
@@ -144,7 +137,6 @@ fn spell_as_written(node: Ast_node$@): U8[] //< a type expression with its folds
     return node.text if node.text.len > 0 else spell_atom(node)
 
 priv fn needs_group(inner: Ast_node$@): Bool //< whether a sugar's argument is put in brackets
-    //<
     //< A result (`I32!E`) or a function type takes the postfix itself unless grouped.
     if inner.kind_id != .k_type_expr
         return inner.kind_id == .k_type_fn_sig || is_result_atom(inner)
@@ -159,7 +151,6 @@ priv fn is_result_atom(node: Ast_node$@): Bool //< whether it is a `T!E` folded 
         node.get_child(0).get_child(0).text.equals(base_core.result_ident())
 
 fn spell_atom(node: Ast_node$@): U8[] //< a `type_atom`'s name
-    //<
     //< It reads the child path, for an atom whose text is empty.
     $b: = Str_builder.new()
     for c in node.children
@@ -169,7 +160,6 @@ fn spell_atom(node: Ast_node$@): U8[] //< a `type_atom`'s name
 impl Ast_node
     fn fold_sugar_under(r: Ast_node$@) //<
         //< It folds every type under r, outermost first, as the desugar walk does
-        //<
         //< For a declaration made after that walk (a lifted closure, whose source spells its types
         //< with the sugar), which nothing else would fold.
         if r == null
@@ -181,7 +171,6 @@ impl Ast_node
 
     fn fold_sugar_postfixes(r: Ast_node$@) //<
         //< It folds the postfixes `[]` / `$[]`, `?` and `!E` into `Slice`, `Option` and `Result`
-        //<
         //< Caution: **Fold from the left in order.** Postfixes apply from the left (`U8$[][]` is an
         //< immutable-element slice of a mutable-element slice, `U8[]?` an optional slice, `I32?!E`
         //< a result of an optional); reversed, the meaning changes. An `@` stays a postfix.

@@ -1,5 +1,4 @@
 //< Inserts cleanup for automatic owners and retain/release for ARC values
-//<
 //< `Drop` transfers one cleanup responsibility when a value moves. `Ref_counted` shares ownership
 //< by counting copies. Both use the cleanup stack, whose exits also run `defer` statements.
 //< The contracts are in `docs/SPEC-programming-language.md` under "Memory management".
@@ -31,7 +30,6 @@ import "std/str" { Str_builder }
 
 priv const MAX_ARC_EMIT_DEPTH: Sz = 1000 //<
     //< The depth limit for emit_managed_op's walk over the owning positions
-    //<
     //< The owning positions are a struct's fields, an enum's payload and an array's elements.
     //< Cycles are already rejected during resolution. This limit stops a non-cyclic but very deep
     //< chain from overflowing the native stack (as max_type_layout_depth in sema/session/ctx.kspl
@@ -39,7 +37,6 @@ priv const MAX_ARC_EMIT_DEPTH: Sz = 1000 //<
 
 priv const MAX_ARC_PLACE_DEPTH: Sz = 1000 //<
     //< The depth limit for the place-expression check's walk down pointers and fields
-    //<
     //< The same idea as max_extract_type_name_depth in ast_ext.kspl: it stops even on broken
     //< input.
 
@@ -47,11 +44,9 @@ priv const ARC_PAYLOAD_BIND_PREFIX: U8[] = "_arc_pay_" //<
     //< The prefix of the name of a synthesized enum payload binding
 
 priv const ARC_HELPER_PARAM_NAME: U8[] = "_arc_self" //< the chain helper's parameter name
-    //<
     //< It lives only in the helper's own function scope, so it cannot collide with the user's code.
 
 priv struct Arc_helper_parts //< a partial result while generating the chain helper
-    //<
     //< It holds the param node so that the body can link a reference to the parameter.
     helper_fn: Ast_node$@
     param: Ast_node$@
@@ -60,7 +55,6 @@ priv struct Arc_helper_parts //< a partial result while generating the chain hel
 impl Arc_helper_parts
     priv fn arc_param_ref(r: Self, loc: base_ast.Loc): Ast_node$@ //<
         //< It creates a new identifier node that refers to the helper's parameter
-        //<
         //< def_node must point at the parameter declaration. genllvm looks up a local variable's ID
         //< by that identity; without it, the IR refers to an undefined SSA value.
         ref_node: = Ast_node.build_ident(ARC_HELPER_PARAM_NAME, r.ptr_id, loc)
@@ -70,7 +64,6 @@ impl Arc_helper_parts
 fn synth_arc_stmt(lctx: Lowering_ctx$@, recv: Ast_node$@, type_id: I32, method_name: U8[],
     loc: base_ast.Loc): Ast_node$@? //<
         //< It synthesizes the statement `recv.<method>()` for a `Ref_counted` retain or release
-        //<
         //< def_node holds the resolved declaration, so the ABI pass adds self and mangles the name.
         //< It returns none when the method is not found (the caller ignores it).
     real_id: = lctx.sema.env.get_real_type(type_id)
@@ -90,7 +83,6 @@ fn synth_arc_stmt(lctx: Lowering_ctx$@, recv: Ast_node$@, type_id: I32, method_n
 
 priv fn expand_place_index_ops(lctx: Lowering_ctx$@, n: Ast_node$@, depth: Sz) //<
     //< It expands each place-returning subscript `l[i]` in a place expression's copy to `l.at(i)$`
-    //<
     //< A place-returning subscript is one through std/lang's Index_place.
     //< **The ARC decision happens before lower_default, so a cloned subscript is not expanded
     //< yet.** genc emits `[` only for a built-in slice or array, so an unexpanded receiver is an
@@ -162,7 +154,6 @@ priv fn arc_helper_type(lctx: Lowering_ctx$@, type_id: I32): I32 //<
 
 priv fn arc_helper_ptr_type(lctx: Lowering_ctx$@, real_id: I32): I32 //<
     //< The helper borrows read-only for ARC, and writable for automatic destruction
-    //<
     //< Only an array becomes "a pointer to the element". `@` on an array gives a pointer to the
     //< first element, so a `T[N]$@` parameter would disagree with the call's type.
     //< Read-only, since `retain` / `release` take `Self@`: a read-only array copied by `for x in`
@@ -182,7 +173,6 @@ priv fn arc_helper_ptr_type(lctx: Lowering_ctx$@, real_id: I32): I32 //<
 priv fn get_or_create_arc_helper(lctx: Lowering_ctx$@, type_id: I32, method_name: U8[],
     loc: base_ast.Loc, depth: Sz): Ast_node$@? //<
         //< The per-type chain helper `fn kspl_arc_<method>_<type>(p: T@)`, created once
-        //<
         //< Caution: The argument must be **a pointer**. By value, lowering a cleanup again for each
         //< way out makes add_arc_call_args take the argument and retain it. Then it is counted
         //< twice.
@@ -289,7 +279,6 @@ priv fn build_arc_helper_call(lctx: Lowering_ctx$@, helper: Ast_node$@, recv: As
 priv fn emit_managed_enum_op(lctx: Lowering_ctx$@, parts: Arc_helper_parts,
     def: sema_type_def.Enum_def$@, method_name: U8[], out: List<|Ast_node$@|>$@, depth: Sz) //<
         //< An enum's chain retain/release, which operates on the live variant's payload only
-        //<
         //< Each variant has its own payload, and only one is live at run time. So a switch on the
         //< tag is synthesized, and each case binds the payload before recursing into each element.
         //< Caution: **Bind `p$` to a temporary here**, as lower_stmt_switch would. This body is
@@ -336,10 +325,10 @@ priv fn emit_managed_enum_op(lctx: Lowering_ctx$@, parts: Arc_helper_parts,
     subject: = lctx.gen_tmp_name()
     out.push(lctx.build_let_decl(subject, enum_id, deref, loc))
     switch_node.set_child(1, Ast_node.build_ident(subject, enum_id, loc))
+    switch_node.group_switch_arms(lctx)
     out.push(switch_node)
 
 priv fn arc_binding_ref(bind: Ast_node$@): Ast_node$@ //< a reference to a pattern's binding
-    //<
     //< def_node ties it to the binding (genllvm's slot follows that identity, as in
     //< emit_managed_enum_op). A clone of the binding itself would get a slot of its own.
     ref_node: = Ast_node.build_ident(bind.text, bind.type_id, bind.loc)
@@ -363,7 +352,6 @@ impl Lowering_ctx
     fn register_arc_arm_bindings(r: Self$@, pattern: Ast_node$@, subject: Ast_node$@):
         List<|Ast_node$@|>$@ //<
             //< The retains a `switch` arm's managed bindings owe; their releases wait for its block
-            //<
             //< A binding copies a payload its subject still owns, and the arm can let the subject
             //< go (`s = .none`). So each binding holds a count of its own for the arm, as `for x
             //< in` does. The arm's block releases it on every way out (arc_scope_pending).
@@ -389,7 +377,6 @@ impl Lowering_ctx
 
     fn register_arc_params(r: Self$@, fn_node: Ast_node$@) //<
         //< It creates a release for each managed value argument, pushing it onto arc_scope_pending
-        //<
         //< A managed value is an ARC-managed type, or a struct holding one. A pointer (a borrowed
         //< argument) is excluded.
         //< The body block flushes these into its cleanup scope, so they are released on every way
@@ -412,7 +399,6 @@ impl Lowering_ctx
             emit_managed_op(r, recv, pid, "release", r.arc_scope_pending, 0)
 
 struct Arc_take //< the count a new owner of a managed value is owed, decided before lowering
-    //<
     //< A new value brings its own count. A place read is retained at its own type. A read that only
     //< its lowered form can name (arc_read_once_lowered) is retained once lowered.
     //< Caution: A missed retain passes on Linux (freed memory keeps the value) and crashes on
@@ -437,7 +423,6 @@ impl Arc_take
 
     fn retain(r: Self, lowered: Ast_node$@, lctx: Lowering_ctx$@) //<
         //< It puts the retain owed into pre_stmts; lowered is the value after its lowering
-        //<
         //< Emit it where the copy is made, after whatever runs before the copy. A retain emitted
         //< ahead of a later `!` is never given back when that `!` leaves.
         if r.src != null
@@ -452,7 +437,6 @@ struct Arc_assign //< what an assignment to a managed place owes once its right 
 
 priv fn arc_retain_lowered(value: Ast_node$@, lctx: Lowering_ctx$@) //<
     //< The retain for a read only its lowered form can name, once lowering made it a plain place
-    //<
     //< arc_read_once_lowered decided it before lowering. The lowered read now names a temporary
     //< (lower_expr_postfix, lower_arc_part_of_fresh), so cloning it runs nothing twice.
     if value == null
@@ -468,7 +452,6 @@ struct Arc_held //< a managed value held in a flagged temporary until its taker 
 
 fn arc_hold_until_taken(value: Ast_node$@, take: Arc_take, lctx: Lowering_ctx$@): Arc_held //<
     //< It stores a lowered value that already carries its taker's count, released by any exit
-    //<
     //< An operand evaluated ahead of a later one that can leave (a `!`, a catch's `return`) holds
     //< that count until its taker runs. arc_taken lowers the flag once nothing can leave any more.
     //< Declared at the statement's level (`stmt_decls`), as arc_hoist_owned_relocated does.
@@ -504,7 +487,6 @@ fn arc_taken(live_name: U8[], lctx: Lowering_ctx$@, loc: base_ast.Loc) //<
 
 fn arc_release_now(value: Ast_node$@, lctx: Lowering_ctx$@) //<
     //< Releases a fresh managed value nothing takes, already lowered, right where it is computed
-    //<
     //< A statement made of a call (`mk(5)`), or a `fallback` whose catch gives no value. It goes
     //< into a temporary first: the release's receiver is a clone, and a clone of a call runs twice.
     tmp: = value.hoist_to_tmp(lctx, value.loc)
@@ -523,7 +505,6 @@ priv fn arc_release_if_live(lctx: Lowering_ctx$@, tmp_name: U8[], live_name: U8[
 impl Ast_node
     fn is_arc_fresh(r: Self$@, lctx: Lowering_ctx$@): Bool //<
         //< Whether it is a managed value no binding owns yet: a call's result, a literal, a branch
-        //<
         //< Such a value arrives counted once, and whoever takes it takes that count. One nothing
         //< takes is owned by a temporary (arc_hoist_owned) or released on the spot
         //< (arc_release_now). A ternary and a catch count as one: each branch hands over a count.
@@ -546,7 +527,6 @@ impl Ast_node
 
     fn arc_hoist_owned(r: Self$@, lctx: Lowering_ctx$@): Ast_node$@ //<
         //< Lowers a fresh managed value into a temporary the enclosing scope releases; refers to it
-        //<
         //< The temporary lives as a binding `x: = f();` written there would. So a field or a view
         //< read from it stays valid to the end of the scope. Only where can_own_temporaries holds.
         type_id: = r.type_id
@@ -558,7 +538,6 @@ impl Ast_node
 
     priv fn arc_hoist_owned_relocated(r: Self$@, lctx: Lowering_ctx$@): Ast_node$@ //<
         //< arc_hoist_owned where the hoisted statements move into a block of their own
-        //<
         //< The temporary and a flag saying it holds a value are declared at the statement's own
         //< level (`stmt_decls`), so the scope's exit can see them. A branch not taken leaves the
         //< flag down.
@@ -593,7 +572,6 @@ impl Ast_node
 
     fn lower_arc_part_of_fresh(r: Self$@, lctx: Lowering_ctx$@): Bool //<
         //< A part read off a fresh value (`mk(8).id`, `arr()[1]`); whether it lowered r
-        //<
         //< The value goes into a temporary released at the scope's exit, else it is never released.
         //< The part is then a place in that temporary: only a taker retains it (arc_part_of_fresh),
         //< and a read alone borrows it.
@@ -629,7 +607,6 @@ impl Ast_node
 
     fn arc_bare_copy_source(r: Self$@): Ast_node$@? //<
         //< It returns the expression itself where it reads existing memory (a place expression)
-        //<
         //< That expression can be cloned as the retain's receiver, at its own type.
         //< A newly built value (a call, a compound literal) is already +1 and returns none.
         //< Caution: **Look through a Result built or unwrapped around a place.** `return e.value`
@@ -648,7 +625,6 @@ impl Ast_node
 
     priv fn arc_read_once_lowered(r: Self$@, lctx: Lowering_ctx$@): Bool //<
         //< Whether it copies existing memory that only its lowered form names: `b.get().v`, `f().v`
-        //<
         //< **Such a copy reads existing memory, so it needs a retain** like any place's. It reads
         //< where a call's pointer leads, or a temporary holding a fresh value read in part.
         //< The retain's receiver cannot be a clone, since the call would run twice. So lowering
@@ -683,7 +659,6 @@ impl Ast_node
 
     fn arc_needs_pointer_hoist(r: Self$@, lctx: Lowering_ctx$@): Bool //<
         //< Whether this `.` / `$` reads a managed value through a pointer a call yields
-        //<
         //< lower_expr_postfix moves that pointer into a temporary, so the lowered read holds no
         //< call and a retain can clone it. The order of the operands around it is already fixed by
         //< then (`Operand_order`), and a short-circuit operand keeps its hoists in its own block.
@@ -702,7 +677,6 @@ impl Ast_node
 
     priv fn arc_has_call(r: Self$@, depth: Sz): Bool //<
         //< Whether there is a call anywhere in the subexpressions
-        //<
         //< A retain/release receiver is a **clone** of the expression, so a call in it would run
         //< twice.
         if r == null || depth >= MAX_ARC_PLACE_DEPTH
@@ -718,7 +692,6 @@ impl Ast_node
 
     priv fn is_arc_place_expr(r: Self$@, depth: Sz): Bool //<
         //< Whether it is a place expression, one pointing at existing memory
-        //<
         //< The reference there remains when it is read.
         //< An identifier, a path, `s.f`, `a[i]` and `p$` are all place expressions.
         //< Caution: Identifiers and paths alone are not enough: `y: = s.f;` would get no retain,
@@ -744,7 +717,6 @@ impl Ast_node
 
     fn lower_arc_aggregate_literal(r: Ast_node$@, lctx: Lowering_ctx$@) //<
         //< Each element of a compound literal `S::{ .f = x }` / `::{ x, y }`
-        //<
         //< A struct and an array are both represented as a list of k_expr_field_init (see
         //< gen/llvm/expr_agg.kspl). Each managed element is taken with a count of its own.
         $ops: = Operand_order.new()
@@ -773,7 +745,6 @@ impl Ast_node
 
     fn lower_arc_assign(r: Ast_node$@, lctx: Lowering_ctx$@): Arc_assign //<
         //< What an assignment to an existing binding (`dst = src;`) owes, decided before lowering
-        //<
         //< It retains src and releases dst's overwritten value (else it leaks). **The release waits
         //< until src is lowered and held** (finish_arc_assign). src's own retains are inserted as
         //< it lowers. Released first, `head = Rc.new(Node::{ .next = head })` freed `head` before
@@ -806,7 +777,6 @@ impl Ast_node
 
     fn finish_arc_assign(r: Ast_node$@, lctx: Lowering_ctx$@, owed: Arc_assign) //<
         //< What lower_arc_assign decided, once the right side is lowered
-        //<
         //< The right side is held in a temporary before the old value goes. So neither its retains
         //< nor its reads come after the release: `tmp = src; retain; release(dst); dst = tmp`, the
         //< order Swift uses.
@@ -823,7 +793,6 @@ impl Ast_node
 
     fn arc_receiver_takes(r: Self$@, lctx: Lowering_ctx$@): Bool //<
         //< Whether the method call `r` passes its receiver by value to a parameter taking a count
-        //<
         //< Caution: **Retain such a receiver as an argument is retained.** The callee releases
         //< every managed parameter it takes by value, the receiver included (register_arc_params).
         //< Without the count, `key.hash()` on a struct holding an `Rc` frees what the caller holds.
@@ -837,7 +806,6 @@ impl Ast_node
 
     fn add_arc_call_args(r: Self$@, lctx: Lowering_ctx$@, ops: Operand_order$@) //<
         //< It adds each argument of the call `r` to ops, as taken where it passes a managed value
-        //<
         //< A parameter that is a borrowed pointer takes nothing. The count taken pairs with the
         //< callee's release (register_arc_params), balancing it across the call (Swift's +1
         //< transfer). On a method call parameter[0] is the receiver, which the caller adds.
@@ -861,7 +829,6 @@ impl Ast_node
 
     fn lower_arc_var_decl(r: Self$@, lctx: Lowering_ctx$@) //<
         //< It lowers the decl_var, adding retain and release where its type is ARC-managed
-        //<
         //< The retain goes in at the copy, and the release where the scope exits.
         expr_node: = r.get_var_decl_expr()
         id_node: = r.get_var_decl_id()

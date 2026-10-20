@@ -1,13 +1,12 @@
 //< What the car's piloting policy means, shared by the side that trains it and the car that runs it
-//<
 //< kssrv trains the policy and writes it (`kssrv/pilot.kspl`); the car reads it and decides
 //< (`ksos/demo/common/pilot_policy.kspl`). **Both read their features here**: written twice,
 //< fixing one alone shows up as "training works, yet the car's answers are wrong".
 import "ksai/tensor" { Tensor }
+import "std/math"
 import "std/mem" { Arena }
 
 pub const FORMAT_VERSION: U8[] = "2" //< the version written in the policy, and the one read
-    //<
     //< Caution: **Raise it when the features' order, the activation (SiLU) or the manoeuvre
     //< table's meaning changes.** The shapes still fit, so an old reader silently uses new weights
     //< with the old meaning.
@@ -28,7 +27,7 @@ pub fn features( //< an observation as the feature vector the policy takes
     shape: Sz[2] = ::{ 1, FEATURE_COUNT }
     x: = Tensor<|F32|>.new(Sz[]::shape, arena)
     valid: = dist_mm > 0I64
-    clamped: = dist_mm if dist_mm < far_mm else far_mm
+    clamped: = math.min(dist_mm, far_mm)
     x[0] = 1.0 if valid else 0.0
     x[1] = F32::(F64::clamped / F64::far_mm) if valid else 0.0
     x[2] = 1.0 if (line & LINE_LEFT) != 0I64 else 0.0

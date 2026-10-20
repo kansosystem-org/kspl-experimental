@@ -29,7 +29,9 @@ Put a test next to what it checks. A test that looks inside one package lives in
 
 "A test of a unit's inside goes inside that unit" in [`docs/DESIGN-repository.md`](../../docs/DESIGN-repository.md) lists the packages and why.
 
-Caution: **After adding a test, add its import and call to that package's `<package>/tests/all.kspl`.** `make debug` cannot see a file no entry point calls, so forgetting this stays green.
+**Name a new test `test_…`, and do nothing else.** The suite in `<package>/tests/all.kspl` runs every `test_…` function of the files it imports. So no list names the test again ("8.5 Tests: functions named `test_`, run by a suite" in [`docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md)). A test takes nothing, or the suite's fields its parameters name (an arena, say). A step that another test calls is named `check_…`, or the suite would run it on its own too.
+
+Caution: **A new file of tests needs one import line in `<package>/tests/all.kspl`.** Nothing compiles a file that no entry point imports. `make test-conventions` fails with "a file of tests is imported, so a suite can run them" until the line is there. A misspelt test (a function in a file of tests that nothing calls) is warning [W0503], and a `test_…` function that no suite runs is [W0214].
 
 **Do not write individual tests into `tests/debug/`.** It holds only the run that calls each package's entry point in turn. A test placed there sits outside the package it checks, so everything it inspects would have to be `pub` (visible to every file).
 

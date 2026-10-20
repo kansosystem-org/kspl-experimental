@@ -87,12 +87,11 @@ These folders hold material that a package's own checks run against; this table 
 
 ## Files near the limit and how they split
 
-Two files here have their split planned before they reach the line limit for one file. The table says what moves out of each and where. How to choose where a file splits is "Choosing where to split a file" in [`docs/DESIGN-principles.md`](../docs/DESIGN-principles.md). A package's tests live in its `tests/`, so how they split is in that package's README.
+One file here has its split planned before it reaches the line limit for one file. The table says what moves out of each and where. How to choose where a file splits is "Choosing where to split a file" in [`docs/DESIGN-principles.md`](../docs/DESIGN-principles.md). A package's tests live in its `tests/`, so how they split is in that package's README.
 
 | File | What to split out | Destination | Why it parts there |
 | :-- | :-- | :-- | :-- |
 | `tests/suite/docref_test.kspl` | the "what may refer to what" side: `LAYER_FROM` / `LAYER_TO` / `SPEC_MAY_REACH_UP` / `REF_HEADS` / `REF_NAMES` / `group_of` / `may_refer` / `unit_ref_defects` | a new `docref_layer.kspl` under `tests/support/` | It answers "may this folder point at that one" from folder names alone. It is the one part that reads no reference, so the split leaves `docref_refs` and `docref_cite` untouched |
-| `tests/suite/conventions_test.kspl` | the shape of a comment in a source: `MAX_COMMENT_LINES` / `MAX_HEADER_LINES` / `is_header_lead` / `check_comments` / `check_summary_inside` | a new `conventions_comment.kspl` under `tests/support/` | It reads a source as lines of text alone. It checks how long a `//` run can stand over the code, and where a `//<` run goes when the declaration has braces. It touches no AST (the compiler's tree of a parsed program) and no other check's tables |
 
 ## Further reading
 

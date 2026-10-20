@@ -1,5 +1,4 @@
 //< The shapes the backend-equivalence program checks that C leaves open or lays out its own way
-//<
 //< The evaluation order, tagged unions in arrays and globals, nested `#align(N)` and `#packed`
 //< layout, 16-bit products, globals naming globals, locals named as a C symbol, and casts from
 //< floating point to an integer. Each is a function that `equiv.kspl`'s `main` calls with the
@@ -14,7 +13,6 @@ priv enum Ev //< a tagged union whose variants differ in size, kept in arrays an
     two(a: I64, b: U8)
 
 priv enum Ev_arr //< a payload holding a fixed-size array, assigned as a whole value
-    //<
     //< Caution: **Keep the reassignment**: C refuses to assign a value whose member is `const`, so
     //< a payload array emitted with read-only elements breaks only there.
     none
@@ -50,7 +48,6 @@ priv struct Ev_row
 
 priv const G_EVS: Ev[3] = ::{ .none, .one(200), .two(-7, 9) } //<
     //< A global holding tagged unions, which LLVM cannot fill through their named type
-    //<
     //< Caution: **Keep variants of different sizes, an `I64` among them, and one inside a struct.**
     //< genllvm lays such a value out as packed bytes; one shape alone hides a misplaced payload.
 priv const G_EV_ROWS: Ev_row[2] = ::{::{ .k = 1, .e = .two(5, 6) },
@@ -105,7 +102,6 @@ impl Ev
             return a * 1000 + b
 
 fn tagged_union_lines(b: Str_builder$@) //< tagged unions in array literals and in globals
-    //<
     //< An element of a `const` array carries the immutability mark. Both backends once took it
     //< for another type: C named `Const_Ev`, LLVM read every element as the first variant.
     locals: Ev[3] = ::{ .none, .one(200), .two(-7, 9) }
@@ -136,7 +132,6 @@ fn tagged_union_lines(b: Str_builder$@) //< tagged unions in array literals and 
         .s(bool_word(false)).s("\n")
 
 fn eval_order_lines(b: Str_builder$@) //< the evaluation order, a line per group of shapes
-    //<
     //< The order is "Evaluation order" in docs/SPEC-programming-language.md.
     // Caution: **Put an expression with a side effect on both sides of an assignment.** C does not
     // define the order of an assignment's left and right sides. Without them, a shape that gives
@@ -171,7 +166,6 @@ priv struct Aligned16 //< a struct whose `#align(N)` its single field does not s
     priv a: U8
 
 priv struct Aligned_holder //< it, nested: LLVM lays a struct out by its fields' own alignments
-    //<
     //< Caution: **Measure the offsets at run time, and write through the nested one.** The fold
     //< answers from ksplc's layout either way, and a `zero(…, sizeof(Aligned16))` overran the next
     //< field on LLVM, whose type held the struct as one byte.
@@ -228,7 +222,6 @@ fn layout_lines(b: Str_builder$@) //<
 
 #packed
 priv struct Wire //< a wire record: `#packed` leaves every field but the first under-aligned
-    //<
     //< Caution: **Reach the fields through a subscript.** The C backend fixes such a target's
     //< address first. An aligned pointer to the field makes the store a word store, which
     //< faults on a Cortex-M0 (`make test-equiv` builds this C with C's alignment trap).

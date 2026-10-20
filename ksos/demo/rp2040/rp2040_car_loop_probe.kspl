@@ -1,5 +1,4 @@
 //< **Runs a closed loop** between the car and kssrv on the PC
-//<
 //< The car is the Freenove 4WD mecanum one (Pico W). The steps are in
 //< "Stage 6e — a closed loop with the PC's kssrv" in `ksos/docs/HOWTO-bring-up.md`.
 
@@ -50,10 +49,8 @@ const OUR_ISN: U32 = 13000 // a fixed value (a demo; real use randomizes it)
 const STAGE_REPORT_INTERVAL_MS: U32 = 3000
 
 const LOOP_INTERVAL_MS: U32 = 100 //< the control period [ms]
-    //<
     //< Caution: Keep it well above the ultrasonic's 36ms worst case.
 const REPLY_DEADLINE_MS: U32 = 300 //< the limit on waiting for a valid answer [ms]
-    //<
     //< Past this it stops.
 const EMERGENCY_MM: U32 = 100 //<
     //< The distance at which it backs off, before the server's decision [mm]
@@ -89,7 +86,6 @@ priv fn apply(cmd: U8[], lon: I32, lat: I32, rot: I32) //<
     motor.drive(lon, lat, rot)
 
 priv fn halt(reason: U8[]) //< stops from then on
-    //<
     //< **It does not resume by itself**; setting off unasked is worse than staying stopped. Only
     //< the battery's minimum has a way back (halt_battery / watch_battery).
     halted = true
@@ -97,14 +93,12 @@ priv fn halt(reason: U8[]) //< stops from then on
     apply("halted", 0, 0, 0)
 
 priv fn halt_battery() //< stops at the battery's minimum
-    //<
     //< **This one resumes when a person turns the switch off and on** (watch_battery;
     //< `common/battery.kspl` records the voltage and the flag).
     halt("battery low")
 
 priv fn exchange(dist_mm: U32, line: U32, seq: U32): Sz //<
     //< POSTs one observation as JSON and puts the answer's body into resp_buf
-    //<
     //< It returns the body's length, 0 if no answer came.
     // The body first, since its length goes in the header; no malloc/free in the control loop.
     $body_buf: U8[128] = ::{}
@@ -125,7 +119,6 @@ priv fn exchange(dist_mm: U32, line: U32, seq: U32): Sz //<
     return got
 
 priv fn body_offset(resp: U8[]): Sz //< finds where the body starts in the response
-    //<
     //< 0 if the end of the header has not arrived, rather than a number cut off partway.
     if at: = resp.find_str("\r\n\r\n")
         return at + 4
@@ -152,7 +145,6 @@ priv fn drive_from_reply(resp: U8[], seq: U32): Bool //<
 
 priv fn watch_battery(ln: con.Line$@): Bool //<
     //< Checks the battery for one round and returns whether a decision may be made this round
-    //<
     //< **The rules are `common/battery.kspl`'s**; only how this car stops is here.
     //< Caution: **Call it while stopped too** (the reason is at `battery.Watch.look`).
     $may: = false
@@ -168,7 +160,6 @@ priv fn watch_battery(ln: con.Line$@): Bool //<
     return may
 
 priv fn one_round(seq: U32) //< runs one round
-    //<
     //< Caution: **Whichever path it takes, set the wheels' state at the end**, or the last command
     //< keeps running after the answers stop.
     dist: = range.read_mm()
@@ -194,7 +185,6 @@ priv fn one_round(seq: U32) //< runs one round
     replies += 1
 
 priv fn report(ln: con.Line$@) //< prints one line
-    //<
     //< Not every round, or USB's send queue drops lines. One line describes **one moment**: the
     //< values the latest decision used.
     dist: = last_dist

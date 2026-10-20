@@ -1,6 +1,5 @@
 #!/usr/bin/env -S ksplc run
 //< The way to redirect a child's standard output and standard error to named files
-//<
 //< `spawn_redirect` in `std/subproc`, and a long argument and environment value reaching a child
 //< whole.
 //< Caution: **Do not check only "it does not fail"** — the check is that **both streams remain**.
@@ -52,7 +51,6 @@ fn main()
 
 priv fn build_child(work: U8[], name: U8[], source: U8[], arena: Arena$@): U8[] //<
     //< it builds a child from source as name
-    //<
     //< Empty if it cannot be built.
     src: = fs.join(work, arena.text().s("\{name\}.kspl").take(), arena)
     gen: = fs.join(work, arena.text().s("\{name\}.c").take(), arena)
@@ -72,13 +70,12 @@ priv fn build_child(work: U8[], name: U8[], source: U8[], arena: Arena$@): U8[] 
 
 priv fn ran(exe: U8[], out_path: U8[], err_path: U8[]): U8[] //<
     //< It starts exe, waits until it ends, and returns what out_path holds
-    //<
     //< It returns empty where exe cannot be started or the file cannot be read.
     argv: = U8[][]::{ exe }
     $child: = subproc.spawn_redirect(argv, "", out_path, err_path) catch
         return ""
     _code: = child.wait()
-    return io.read_file(out_path) catch
+    return io.read_file(out_path, null) catch
         return ""
 
 fn main(): I32
@@ -107,7 +104,7 @@ fn main(): I32
     two_out: = fs.join(work, "two_out.log", arena)
     two_err: = fs.join(work, "two_err.log", arena)
     split_out: = ran(exe, two_out, two_err)
-    split_err: = io.read_file(two_err) catch
+    split_err: = io.read_file(two_err, null) catch
         return harness.finish()
     verdict.check("pointed at separate records, only standard output enters one",
         split_out.find_str("this is standard output").is_some() &&
@@ -120,7 +117,6 @@ fn main(): I32
 
 priv fn check_long(work: U8[], arena: Arena$@) //<
     //< 3. A long argument and a long environment value reach the child whole
-    //<
     //< Windows counts both in UTF-16 units: a command line to 32767, a value past 4096. Counted in
     //< UTF-8 bytes, the kana (three bytes a unit) would be refused at a third of the limit.
     exe: = build_child(work, "longargs", LONG_CHILD_SRC, arena)
@@ -156,7 +152,6 @@ priv fn check_long(work: U8[], arena: Arena$@) //<
 // ==========================================
 
 priv const LINES: Sz = 300 //< the number of lines printed
-    //<
     //< Caution: **Make it more than one full buffer**, or a loss cannot be told from everything
     //< happening to stay in the buffer.
 
@@ -190,7 +185,6 @@ priv fn program(prologue: U8[], death: U8[], arena: Arena$@): U8[] //<
 priv fn check_flush_case(slot: U8[], name: U8[], prologue: U8[], death: U8[], want_all: Bool,
     want_text: U8[], arena: Arena$@) //<
         //< One case; want_all demands every one of lines remain.
-        //<
         //< Caution: Take the directory's name as `slot`. The case name as it is makes a directory
         //< holding a `:`, which cannot be made on Windows.
     work: = harness.sandbox(arena.text().s("flush_\{slot\}").take())
@@ -229,7 +223,6 @@ fn main(): I32
 
 priv fn check_bytes(arena: Arena$@) //<
     //< Standard output and standard error land as written, each "\r\n" once
-    //<
     //< The run's text folds each "\r\n" to "\n" and keeps a lone "\r", so a "\r\r\n" shows as one.
     name: = "standard output and standard error carry the bytes written"
     work: = harness.sandbox("flush_crlf")
@@ -264,7 +257,6 @@ priv fn run_prompt(exe_cmd: U8[], arena: Arena$@): verdict.Run_out //<
 
 priv fn check_prompt(arena: Arena$@) //<
     //< A prompt written to a terminal shows before the program waits to read
-    //<
     //< The terminal is util-linux's `script`. Where there is none (macOS's takes other options),
     //< the case is a skip, and on Windows too. MSYS2's `script` makes a pseudo-terminal that a
     //< native program sees as a pipe. `/bin/sh` is no path a native program can start.

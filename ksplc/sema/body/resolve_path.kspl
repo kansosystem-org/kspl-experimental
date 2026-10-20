@@ -1,5 +1,4 @@
 //< Infers the meaning of a path expression
-//<
 //< An identifier, an alias prefix, or a type's static member. Kept apart from `resolve.kspl`.
 import "ksplc/base/ast" { Ast_node, is_anon_fn_name }
 import "ksplc/base/ast_ext" as base_ast_ext
@@ -74,7 +73,6 @@ priv fn fn_value_type_id(node: Ast_node$@, c: Sema_ctx$@, sym: Sema_symbol$@, ex
 priv fn refuse_unwritten_type_args(c: Sema_ctx$@, at: Ast_node$@, what: U8[], name: U8[],
     form: U8[], gen_params: Ast_node$@) //<
         //< Reports a generic named as a value without its type arguments, with the form to write
-        //<
         //< `what` is "function" or "method"; `form` is the path to write, `<|…|>` included.
     c.clear_scratch()
         .s("generic \{what\} '\{name\}' cannot be used as a value without its type arguments. There \
@@ -86,7 +84,6 @@ priv fn refuse_unwritten_type_args(c: Sema_ctx$@, at: Ast_node$@, what: U8[], na
 priv fn instantiate_written(node: Ast_node$@, c: Sema_ctx$@, fn_tmpl: sema_decl_mono.Fn_instance,
     tmpl: Ast_node$@, type_args: Ast_node$@): Sema_symbol$@?!Sema_error //<
         //< Builds the specialization of the template `tmpl` that `type_args` name
-        //<
         //< None once reported. As at a call, a bound violation is reported at node's line, not the
         //< template's.
     args: = type_args.build_resolved_type_args(c, tmpl)!
@@ -97,13 +94,11 @@ priv fn instantiate_written(node: Ast_node$@, c: Sema_ctx$@, fn_tmpl: sema_decl_
     c.generics.inst_site = node
     defer c.generics.inst_site = prev_inst_site
     $inst_name: = c.instantiate_fn(sema_body_call.with_args(fn_tmpl, args), false)!
-    defer inst_name.free()
     return c.symtab.resolve(inst_name.slice())
 
 priv fn specialization_named(node: Ast_node$@, c: Sema_ctx$@, named: sema_decl_name.Written_name):
     Sema_symbol$@?!Sema_error //<
         //< What a function named as a value stands for: itself, or the specialization it names
-        //<
         //< The written type arguments name the specialization, which is instantiated here. It gives
         //< none once it reports a generic function without them, or them on a non-generic one. See
         //< "A generic function used as a value names its specialization" in
@@ -139,7 +134,6 @@ priv fn specialization_named(node: Ast_node$@, c: Sema_ctx$@, named: sema_decl_n
 priv fn fn_value_id(node: Ast_node$@, c: Sema_ctx$@, named: sema_decl_name.Written_name,
     expected_id: I32): I32!Sema_error //<
         //< The type of a function's name used as a value rather than called
-        //<
         //< A generic function stands for the specialization written after it.
     if inst: = specialization_named(node, c, named)!
         return value_of_fn(node, c, inst, expected_id, false)!
@@ -148,7 +142,6 @@ priv fn fn_value_id(node: Ast_node$@, c: Sema_ctx$@, named: sema_decl_name.Writt
 priv fn value_of_fn(node: Ast_node$@, c: Sema_ctx$@, sym: Sema_symbol$@, expected_id: I32,
     is_method: Bool): I32!Sema_error //<
         //< The type of the function sym, named at node as a value, checked against the expected
-        //<
         //< **A function's name takes its type from where it is written.** With nothing expected, it
         //< is the mark generic_fn_value_type_id ("a function"). The position that receives it
         //< supplies the type later (a generic call's parameter, the other side of a `==`).
@@ -164,7 +157,6 @@ priv fn value_of_fn(node: Ast_node$@, c: Sema_ctx$@, sym: Sema_symbol$@, expecte
 fn infer_method_value(node: Ast_node$@, c: Sema_ctx$@, owner_id: I32, owner: Ast_node$@,
     member: Ast_node$@, own_args: Ast_node$@, expected_id: I32): I32!Sema_error //<
         //< The type of a method named through its type as a value
-        //<
         //< It is the function whose first parameter is the receiver as declared (`Plain.m`,
         //< `Holder<|I32|>.get`, `Plain.gen<|I32|>`). owner_id is the type owner names, instantiated
         //< from its written type arguments. The method's own are own_args, and a generic one
@@ -180,7 +172,7 @@ fn infer_method_value(node: Ast_node$@, c: Sema_ctx$@, owner_id: I32, owner: Ast
     fqn.s(owner_name).s(".").s(member.text)
     // A trait's method is a slot each conforming type fills, with no function of its own.
     switch c.env.get_info(owner_real)
-    case .trait_type(_def)
+    case .trait_type
         c.clear_scratch()
             .s("trait method '\{written.slice()\}' cannot be used as a value. Each type conforming \
                 to the trait has its own method\n  Hint: name the method on one conforming type, as \
@@ -227,7 +219,6 @@ fn infer_method_value(node: Ast_node$@, c: Sema_ctx$@, owner_id: I32, owner: Ast
 fn refuse_method_of_bare_generic(c: Sema_ctx$@, node: Ast_node$@, owner: Ast_node$@,
     member: Ast_node$@, owner_tmpl: Ast_node$@, is_call: Bool) //<
         //< Refuses a member of a generic type named with no type arguments, called or as a value
-        //<
         //< `Holder.get`, `Holder.mk(1)`: each instance has its own copy of the method, and nothing
         //< here says which. A call's arguments do not choose it either: a generic type's are
         //< written on the type ("Structs (`struct`)" in docs/SPEC-programming-language.md).
@@ -302,7 +293,6 @@ fn infer_path_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32!Sema_
 
 priv fn report_unread_name(c: Sema_ctx$@, node: Ast_node$@, named: sema_decl_name.Written_name) //<
     //< Reports a value's name that names nothing this file can see
-    //<
     //< Caution: **Do not let a capitalized name through as "probably a type".** A mistyped
     //< `Str_builde` becomes a genc ICE in an inferred declaration, and elsewhere a **C compiler
     //< error** (Principle 2).
@@ -317,7 +307,6 @@ priv fn report_unread_name(c: Sema_ctx$@, node: Ast_node$@, named: sema_decl_nam
 
 fn refuse_type_name(c: Sema_ctx$@, node: Ast_node$@): Bool //<
     //< Reports a value's expression that is a type's name (`Row`, `m.Row`, `Box<|I32|>`)
-    //<
     //< infer_path_expr leaves such a name with no type, and its declaration as the node's. It does
     //< so because the left of a `.` (`Row.new()`) is inferred as a value too. What asks for a value
     //< refuses it here (settle_expected in expr.kspl, a comparison's side in binary.kspl).

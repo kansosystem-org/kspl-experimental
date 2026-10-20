@@ -1,5 +1,4 @@
 //< Laying out a chart
-//<
 //< **The contents do not go into the document.** Bars and a line are built from the range's
 //< values at layout time (as a table of contents is).
 //< **No new drawing primitive is added.**
@@ -13,15 +12,14 @@ import "kspage/model/doc" { Block, Doc, Rect }
 import "kspage/model/panel_paint" + { Panel_paint }
 import "kspage/model/style" + { Look, Sheet, Shape }
 import "std/ds" { List }
+import "std/math"
 import "std/mem" { Arena }
 import "std/str"
 
 priv const BAR_SHARE: F32 = 0.6F32 //< the share of the width one bar takes
-    //<
     //< **Do not make it 1** (the bars would touch, and the count could not be read).
 
 priv struct Area //< the range drawn as a chart
-    //<
     //< **A table's name is required** (a chart sits in the flow, so it has no table of its own).
     table: U8[]
     r0: Sz
@@ -34,7 +32,6 @@ priv fn no_area(): Area
     return Area::{ .table = "", .r0 = 0, .c0 = 0, .r1 = 0, .c1 = 0, .found = false }
 
 priv fn read_area(text: U8[]): Area //< reads `<name>!<cell>` or `<name>!<cell>:<cell>`
-    //<
     //< **A text with anything left unread is not a range** (or a typo would silently point at
     //< another cell).
     $c: = Reader::{ .src = text, .pos = 0 }
@@ -62,15 +59,14 @@ priv fn read_area(text: U8[]): Area //< reads `<name>!<cell>` or `<name>!<cell>:
         return no_area()
     return Area::{
         .table = name,
-        .r0 = a.row if a.row <= b.row else b.row,
-        .c0 = a.col if a.col <= b.col else b.col,
-        .r1 = b.row if a.row <= b.row else a.row,
-        .c1 = b.col if a.col <= b.col else a.col,
+        .r0 = math.min(a.row, b.row),
+        .c0 = math.min(a.col, b.col),
+        .r1 = math.max(b.row, a.row),
+        .c1 = math.max(b.col, a.col),
         .found = true,
     }
 
 priv fn named(b: Block$@, name: U8[]): Block$@? //< the block of that name
-    //<
     //< **Search the nesting too.** Where two have the same name it is the earlier one in document
     //< order (as `find_grid` in `../expr/calc.kspl`).
     if b.name.len > 0 && b.name.equals(name)
@@ -82,7 +78,6 @@ priv fn named(b: Block$@, name: U8[]): Block$@? //< the block of that name
 
 fn collect_figures(d: Doc$@, b: Block$@, sheet: Sheet$@, out: List<|Figure|>$@, arena: Arena$@) //<
     //< Where b is a chart, collects its range's values into out
-    //<
     //< **Walk into the nesting too** (there are charts inside cells).
     //< **Collect them before layout** (the reason is at `Figure` in `page.kspl`). **A cell that is
     //< not a number is skipped** (as `take` in `../expr/value.kspl`).
@@ -93,7 +88,6 @@ fn collect_figures(d: Doc$@, b: Block$@, sheet: Sheet$@, out: List<|Figure|>$@, 
 
 priv fn charted_style(sheet: Sheet$@, name: U8[]): Bool //<
     //< Whether the style of that name draws a range as a picture
-    //<
     //< **An unknown name draws none.**
     if s: = sheet.find(name)
         return s.collect.charted()
@@ -121,7 +115,6 @@ priv fn values_in(d: Doc$@, b: Block$@, out: List<|Figure|>$@, arena: Arena$@)
                     out.push(Figure::{ .block = b, .value = v, .label = n.showing() })
 
 priv struct Scale //< the top and bottom that contain the values
-    //<
     //< **0 is always included** (a bar grows from 0).
     lo: F64
     hi: F64
@@ -141,13 +134,11 @@ priv fn scale_of(points: List<|Figure|>$@): Scale
     return Scale::{ .lo = lo, .hi = hi }
 
 priv fn y_of(v: F64, s: Scale, top: F32, tall: F32): F32 //< the y a value is drawn at
-    //<
     //< **The larger value is higher** (the screen's y grows downward).
     return top + tall * F32::((s.hi - v) / (s.hi - s.lo))
 
 priv fn drawn(base: Panel_paint): Panel_paint //<
     //< The look used where the style sets neither line nor fill
-    //<
     //< Caution: **Do not let it draw nothing**, or **it can only look like "I got the range
     //< wrong"** (Principle 5). The color is the inserting code's (`drawn_color` in
     //< [`../model/style.kspl`](../model/style.kspl)), or an inserted chart and a loaded chart
@@ -163,7 +154,6 @@ priv fn drawn(base: Panel_paint): Panel_paint //<
 
 priv fn band(dst: Page$@, b: Block$@, at: Rect, paint: Panel_paint, form: Shape, arena: Arena$@) //<
     //< Lays out one band
-    //<
     //< Caution: **Pass the shape too** (a bar is a box, a line a diagonal).
     fresh: = Panel::{ .rect = at, .block = b, .width = paint.width, .color = paint.color,
         .fill = paint.fill, .shape = form }
@@ -171,7 +161,6 @@ priv fn band(dst: Page$@, b: Block$@, at: Rect, paint: Panel_paint, form: Shape,
 
 priv fn label(dst: Page$@, text: U8[], look: Look, x: F32, y: F32, slot: F32, arena: Arena$@) //<
     //< Lays out one value's text centred in width slot
-    //<
     //< Caution: **Point at none of the document's texts** (`inline` is null). Otherwise a position
     //< in a text built at layout time would be taken for a position in the document.
     if text.len <= 0
@@ -186,7 +175,6 @@ priv fn label(dst: Page$@, text: U8[], look: Look, x: F32, y: F32, slot: F32, ar
 priv fn place_bars(dst: Page$@, b: Block$@, points: List<|Figure|>$@, s: Scale, at: Rect,
     look: Look, paint: Panel_paint, tall: F32, arena: Arena$@) //<
         //< Lays out the bars
-        //<
         //< Caution: **Grow them from 0** (from the smallest value, a short bar looks long).
     slot: = at.w / F32::points.len
     zero: = y_of(0.0, s, at.y, tall)
@@ -197,15 +185,14 @@ priv fn place_bars(dst: Page$@, b: Block$@, points: List<|Figure|>$@, s: Scale, 
         wide: = slot * BAR_SHARE
         x: = at.x + slot * F32::i + (slot - wide) / 2.0F32
         // **A negative value grows below 0** (the smaller y of the two is the top edge).
-        high: = top if top < zero else zero
-        low: = zero if top < zero else top
+        high: = math.min(top, zero)
+        low: = math.max(zero, top)
         band(dst, b, Rect::{ .x = x, .y = high, .w = wide, .h = low - high }, paint, .box, arena)
         label(dst, p.label, look, at.x + slot * F32::i, top - label_h, slot, arena)
 
 priv fn place_line(dst: Page$@, b: Block$@, points: List<|Figure|>$@, s: Scale, at: Rect,
     look: Look, paint: Panel_paint, tall: F32, arena: Arena$@) //<
         //< Lays out the line
-        //<
         //< **Where there is one point no line is drawn.** **Each segment is a band's diagonal**:
         //< the rectangle enclosing the two points, plus which diagonal.
     slot: = at.w / F32::points.len
@@ -221,7 +208,7 @@ priv fn place_line(dst: Page$@, b: Block$@, points: List<|Figure|>$@, s: Scale, 
         // A falling line runs upper left to lower right, and a rising one lower left to upper
         // right.
         form: = Shape.fall_line if next >= y else Shape.rise_line
-        high: = y if y < next else next
+        high: = math.min(y, next)
         band(dst, b,
             Rect::{ .x = x, .y = high, .w = slot, .h = (next - y if next >= y else y - next) },
             paint, form, arena)
@@ -229,7 +216,6 @@ priv fn place_line(dst: Page$@, b: Block$@, points: List<|Figure|>$@, s: Scale, 
 fn place(dst: Page$@, b: Block$@, sheet: Sheet$@, at: Rect, look: Look, kind: Collect,
     arena: Arena$@): F32 //<
         //< Lays out one chart from `at`'s upper left, and returns the height used
-        //<
         //< **The style decides the height** (`Style.height`); where none is set nothing is laid
         //< out. **The axis is drawn at 0.** Where there are no values only the axis appears.
     found: = sheet.find(b.style)

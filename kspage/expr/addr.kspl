@@ -1,5 +1,4 @@
 //< The text form of a cell address and of a table's name
-//<
 //< Reads and writes a position in `A1` form (the column in letters, the row counted from 1) and
 //< `<table's name>!`.
 //< Caution: **Do not separate the reader from the writer.** The formula evaluator only reads; the
@@ -16,7 +15,6 @@ import "std/checked_int"
 import "std/str" { Str_builder }
 
 struct Reader //< the position a text is read from, front to back
-    //<
     //< **`pos` advances by what was read.** **It is not the text cursor** (that one is
     //< [`../lay/caret.kspl`](../lay/caret.kspl)'s). Where nothing could be read, the caller puts
     //< `pos` back (as `parse_table_name` does itself).
@@ -24,12 +22,10 @@ struct Reader //< the position a text is read from, front to back
     pos: Sz
 
 fn at(c: Reader$@): U8 //< the current byte
-    //<
     //< **Past the end it is 0** (it does not read outside the text).
     return 0U8 if c.pos >= c.src.len else c.src[c.pos]
 
 fn at_next(c: Reader$@): U8 //< the next byte
-    //<
     //< **For telling a two-character symbol apart** (`<=` from `<`). It does not advance.
     return 0U8 if c.pos + 1 >= c.src.len else c.src[c.pos + 1]
 
@@ -38,12 +34,10 @@ fn skip_ws(c: Reader$@)
         c.pos += 1
 
 const BROKEN_REF: U8[] = "#REF!" //< the mark for a position that can no longer be pointed at
-    //<
     //< **It must be the same text as the mark that is shown** (`error_text` in
     //< `expr/value.kspl`).
 
 enum Addr_kind //< a cell's position
-    //<
     //< **It separates "could not be read" from "was too large"** (they are fixed differently).
     unreadable //< as text it is not a position
     out_of_range //< it reads as a position, but points at no cell
@@ -59,7 +53,6 @@ struct Addr
     kind: Addr_kind
     abs_col: Bool //<
         //< The part that has a `$`
-        //<
         //< **It is a mark that only affects copying**: adding or removing rows or columns moves it
         //< anyway, since the cell itself moves.
     abs_row: Bool
@@ -76,14 +69,9 @@ fn is_spot(a: Addr): Bool
 
 priv fn push_digit(acc: Sz?, base: Sz, d: Sz): Sz? //<
     //< Adds one digit to the number
-    //<
     //< Caution: **Return "none" once it overflows.** A formula's text puts no cap on the digits.
     //< **Keep the same 32-bit limit on every target**: a number past that points at no cell.
-    $v: Sz = 0
-    switch acc
-    case .some(got)
-        v = got
-    case .none
+    v: Sz = acc catch
         return .none
     scaled: = v.checked_mul(base) catch
         return .none
@@ -94,7 +82,6 @@ priv fn push_digit(acc: Sz?, base: Sz, d: Sz): Sz? //<
     return .some(sum)
 
 fn parse_addr(c: Reader$@): Addr //< reads a position in A1 form
-    //<
     //< The column is in letters (A is 1, AA is 27), and the row is counted from 1.
     //< **It is not turned into a value**, so it also serves for a range's ends.
     // **A `$` can go on either part** (there is both `$A1` and `A$1`).
@@ -105,7 +92,7 @@ fn parse_addr(c: Reader$@): Addr //< reads a position in A1 form
         c.pos += 1
     $col: Sz? = .some(0)
     $letters: Sz = 0
-    for at(c) >= 'A' && at(c) <= 'Z'
+    for at(c).is_upper()
         col = push_digit(col, 26, (at(c) - 'A') + 1)
         c.pos += 1
         letters += 1
@@ -115,7 +102,7 @@ fn parse_addr(c: Reader$@): Addr //< reads a position in A1 form
         c.pos += 1
     $row: Sz? = .some(0)
     $digits: Sz = 0
-    for at(c) >= '0' && at(c) <= '9'
+    for at(c).is_digit()
         row = push_digit(row, 10, at(c) - '0')
         c.pos += 1
         digits += 1
@@ -124,17 +111,9 @@ fn parse_addr(c: Reader$@): Addr //< reads a position in A1 form
         // the caller copies the text byte by byte.
         c.pos = start
         return Addr_kind.unreadable.no_addr()
-    $r: Sz = 0
-    $n: Sz = 0
-    switch row
-    case .some(got)
-        r = got
-    case .none
+    r: Sz = row catch
         return Addr_kind.out_of_range.no_addr()
-    switch col
-    case .some(got)
-        n = got
-    case .none
+    n: Sz = col catch
         return Addr_kind.out_of_range.no_addr()
     // A row is counted from 1, so 0 is not a position.
     if r <= 0
@@ -146,7 +125,6 @@ fn parse_addr(c: Reader$@): Addr //< reads a position in A1 form
     return a
 
 fn write_addr(a: Addr, out: Str_builder$@) //< writes a position in `A1` form
-    //<
     //< Caution: **It must be text that `parse_addr` can read back.**
     if a.abs_col
         out.c('$')
@@ -165,7 +143,6 @@ fn write_addr(a: Addr, out: Str_builder$@) //< writes a position in `A1` form
     out.s("\{a.row + 1\}")
 
 fn is_break(ch: U8): Bool //< a formula's separator: an operator, a bracket, a comma or a space
-    //<
     //< **A name ends at one**, so `A1>T!A1` reads `T` as the name. These and the `!` are the only
     //< characters that a table's name cannot use. A list of allowed characters would shut out
     //< every other script. `name_fault` in `calc.kspl` holds the whole rule.
@@ -175,7 +152,6 @@ fn is_break(ch: U8): Bool //< a formula's separator: an operator, a bracket, a c
         || ch == ',' || ch == ':' || ch == '<' || ch == '>' || ch == '=' || ch == 0U8
 
 fn parse_table_name(c: Reader$@): U8[] //< reads a table's name and the `!` after it
-    //<
     //< **Where there is no name it returns empty without moving the position** (so the `A1` of
     //< `A1+2` is not taken for a name).
     start: = c.pos

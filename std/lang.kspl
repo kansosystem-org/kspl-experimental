@@ -1,5 +1,4 @@
 //< Language support that every file imports automatically
-//<
 //< **Explicit `import "std/lang"` is forbidden.** Every file already imports it automatically.
 //< An explicit import would provide a second way to access the same names.
 //< Local bindings, declarations in the file, and explicit imports take precedence over these names.
@@ -17,14 +16,12 @@ import "std/libc"
 
 pub typedef Panic_hook = fn(msg: U8$[]): Void //<
     //< the callback for panic messages on a freestanding port
-    //<
     //< A port with a console sets this callback. `lang` cannot detect the console itself.
     //< The default, `null`, stops execution without printing a message.
 pub $panic_hook: Panic_hook = Panic_hook::null
 
 priv const PANIC_MSG_CAP: Sz = 128 //<
     //< The maximum number of message bytes stored in a panic record
-    //<
     //< The port's linker script reserves `.noinit_panic` as RAM that startup does not zero.
     //< After a warm reset without power loss, `take_panic_record()` can read the record.
     //< Recording a panic does not trigger a reset. The caller must arrange one, for example with a
@@ -68,7 +65,6 @@ priv fn record_panic(msg: U8$[])
     _panic_rec.magic = PANIC_MAGIC
 
 pub struct Panic_info //< information about a panic from the previous run
-    //<
     //< The stack fragment is separate because a fixed-length array cannot be returned by value.
     //< Read each word with `panic_stack_word()`, using `0 <= index < stack_len`.
     pub msg: U8$[] //< the panic's message
@@ -108,8 +104,11 @@ pub fn panic( //< stops the program and reports the location and reason
     err: = libc.get_stderr()
     libc.fwrite(Void$@::"panic: ".ptr, 1, 7, err)
     libc.fwrite(Void$@::msg.ptr, 1, msg.len, err)
+    // **Write the same text as the built-in bounds check**, `kspl_bounds_fail` in
+    // `ksplc/gen/runtime/hosted.c`. Without a location, nothing is written.
     $at: = Panic_msg.new()
-    at.at_caller(file, line)
+    if file.len > 0
+        at.s(" at ").s(file).s(":").n(line)
     where: = at.slice()
     libc.fwrite(Void$@::where.ptr, 1, where.len, err)
     libc.fwrite(Void$@::"\n".ptr, 1, 1, err)
@@ -119,7 +118,7 @@ pub fn panic( //< stops the program and reports the location and reason
     for
         libc.abort()
 // The freestanding version stops without libc, including `fprintf` or `malloc`.
-// `kspl_bounds_check` in `ksplc/gen/runtime/freestanding.h` also stops this way.
+// `kspl_bounds_breach` in `ksplc/gen/runtime/freestanding.h` also stops this way.
 #cfg(freestanding)
 #noreturn
 pub fn panic( //< stops without libc and sends the message to the panic hook
@@ -145,7 +144,6 @@ pub fn assert( //< stops the program unless the condition holds
         panic(msg, file, line)
 
 pub struct Panic_msg //< a fixed-size panic message buffer with no allocation
-    //<
     //< This buffer requires no `io`. **String interpolation (`\{v\}`) is unavailable here.**
     //< Caution: The buffer silently discards bytes beyond `PANIC_MSG_CAP`.
     //< Reporting another failure during a panic would leave no recovery path.
@@ -168,7 +166,6 @@ impl Panic_msg
         return r
 
     pub fn n(r: Self$@, v: I64): Self$@ //< writes a number as decimal, including the minimum
-        //<
         //< Caution: **Calculate the absolute value as unsigned.** Negating the minimum signed value
         //< overflows, as in `Range.new`. `U64::0 - U64::v` gives its magnitude.
         $mag: U64 = U64::0 - U64::v if v < 0 else U64::v
@@ -191,22 +188,6 @@ impl Panic_msg
 
     pub fn slice(r: Self$@): U8$[] //< what has been written, to pass to `panic`
         return U8$[]::{ .ptr = r.buf[0]@, .len = r.len }
-
-    priv fn at_caller( //< writes ` at <file>:<line>`, and returns the buffer
-        //<
-        //< Without a location, this method returns the buffer unchanged.
-        //< **Use the same text as the built-in bounds check**, `kspl_bounds_check` in
-        //< `ksplc/gen/runtime/hosted.h`.
-        //< Caution: **Return the same `Self$@`, as `s` does.** Returning only the appended text
-        //< would allow accidental duplication.
-        //< The pointer return prevents calls such as `b.s(msg).s(b.at_caller(…))`.
-        r: Self$@,
-        file: U8[], //< the file to name
-        line: Sz, //< the line to name
-    ): Self$@
-        if file.len == 0
-            return r
-        return r.s(" at ").s(file).s(":").n(line)
 
 // ============================ The error trace ============================
 // The runtime records the error trace at each `throw` and `!`.
@@ -246,6 +227,7 @@ impl Trace_text
         libc.fflush(err)
         r.len = 0
 
+#cfg(!freestanding)
 priv fn c_text(p: U8@): U8[] //<
     //< a C string without its terminating NUL, or an empty slice for a null pointer
     if p == null
@@ -255,6 +237,7 @@ priv fn c_text(p: U8@): U8[] //<
         n += 1
     return U8[]::{ .ptr = p, .len = n }
 
+#cfg(!freestanding)
 priv fn has_at(s: U8[], part: U8[], at: Sz): Bool //< whether `s` contains `part` at offset `at`
     if at + part.len > s.len
         return false
@@ -263,15 +246,16 @@ priv fn has_at(s: U8[], part: U8[], at: Sz): Bool //< whether `s` contains `part
             return false
     return true
 
+#cfg(!freestanding)
 priv fn trace_module(file: U8[]): U8[] //< the file path before its first `.kspl`
     for k in Range.asc(file.len)
         if has_at(file, ".kspl", k)
             return U8[]::{ .ptr = file.ptr, .len = k }
     return file
 
+#cfg(!freestanding)
 priv fn trace_fn_name(raw_func: U8[], module: U8[]): U8[] //<
     //< The function name extracted from its generated C symbol
-    //<
     //< Symbols use `kspl_[priv_]<module>_<name>`, with module separators replaced by underscores.
     $at: Sz = 0
     if has_at(raw_func, "kspl_priv_", 0)
@@ -291,7 +275,6 @@ priv fn trace_fn_name(raw_func: U8[], module: U8[]): U8[] //<
 
 #cfg(!freestanding)
 pub fn print_trace() //< writes this thread's latest error trace to standard error
-    //<
     //< A failing `main` also calls this function.
     //< Caution: **Write with libc alone**, as `panic` does. Every program includes this file.
     //< Buffering lines reduces `fwrite` calls, making interleaved output less likely.
@@ -335,10 +318,18 @@ pub enum Result<|T, E|> //< a value or an error that the caller must use
     ok(value: T) //< a successful value, omitted for `Void!E`
     err(error: E) //< the error from a failed operation
 
+impl<|T, E|> T!E
+    pub fn is_err(r: Self): Bool //< whether it holds an error; the value is dropped, not freed
+        switch r
+        case .ok
+            return false
+        case .err
+            return true
+
 impl<|T|> T?
     pub fn is_some(r: Self): Bool //< whether there is a value
         switch r
-        case .some(_)
+        case .some
             return true
         case .none
             return false
@@ -347,7 +338,6 @@ impl<|T|> T?
         return !r.is_some()
 
     pub fn unwrap_or( //< the value if present, otherwise the alternative
-        //<
         //< The caller always evaluates the alternative before this call.
         r: Self,
         alt: T, //< what is returned if there is no value
@@ -358,45 +348,8 @@ impl<|T|> T?
         case .none
             return alt
 
-    pub fn unwrap_or_else( //< the value if present, otherwise a computed alternative
-        r: Self,
-        alt: fn(): T, //< a function with no captures, called only when the value is absent
-    ): T
-        switch r
-        case .some(v)
-            return v
-        case .none
-            return alt()
-
-pub fn map<|T, U|>( //< applies a function to the value, if there is one
-    //<
-    //< **Write both type arguments** for this free function: `map<|I32, Sz|>(o, f)`.
-    //< A method with its own type parameter (`fn map<|U|>`) could also work, like `select` in
-    //< `std/seq`.
-    //< See "A name on the impl that the receiver leaves open" in
-    //< `../docs/DESIGN-programming-language.md`.
-    o: T?, //< the value that can be absent
-    f: fn(x: T): U, //< the function applied to a present value
-): U? //< `f`'s result, or none if `o` is none
-    switch o
-    case .some(v)
-        return .some(f(v))
-    case .none
-        return .none
-
-pub fn and_then<|T, U|>( //< applies a step that can also return an absent value
-    o: T?, //< the value that can be absent
-    f: fn(x: T): U?, //< the next step, which can also return an absent value
-): U? //< what `f` returns, or none if `o` is none
-    switch o
-    case .some(v)
-        return f(v)
-    case .none
-        return .none
-
 // ============================ A subsequence's length ============================
 pub fn sub_count( //< the number of requested elements available within the sequence
-    //<
     //< The sequence contains `count` items. The request starts at `start` and asks for `len` items.
     //< **Check the lower bound of `start` too.** `Sz` is signed.
     //< Checking only the upper bound permits negative offsets that point before the sequence.
@@ -424,7 +377,6 @@ impl Range: Index<|Sz, Sz|> //< supports iteration with `for i in Range.asc(n)`
 
 impl Range
     pub fn new( //< constructs a range with the specified step
-        //<
         //< A zero step or a step in the wrong direction produces an empty range.
         start: Sz, //< the first value
         stop: Sz, //< the exclusive upper or lower bound
@@ -494,7 +446,6 @@ pub trait Index_mut<|Idx, Val|> //< what `x[i] = v` desugars to
     fn set(r: Self, index: Idx, val: Val): Void //< writes the element
 
 pub trait Index_place<|Idx, Output|> //< what `x[i] += v` and `x[i]@` desugar to
-    //<
     //< This trait returns a mutable pointer to the element. It takes precedence over `Index` and
     //< `Index_mut`. `at` supports both reading and writing.
     fn at( //< the element's address, not a copy
@@ -505,7 +456,6 @@ pub trait Index_place<|Idx, Output|> //< what `x[i] += v` and `x[i]@` desugar to
     ): Output$@
 
 pub trait Index_ref<|Idx, Output|> //< what `x[i]` desugars to through a read-only receiver
-    //<
     //< **Immutable content requires this trait**, because `Index_place.at` returns a mutable
     //< `Output$@`. The compiler selects `Index_place` for writable receivers and `Index_ref` for
     //< read-only receivers. See "Indexing" in `../docs/SPEC-programming-language.md`.
@@ -517,7 +467,6 @@ pub trait Index_ref<|Idx, Output|> //< what `x[i]` desugars to through a read-on
     ): Output@
 
 pub trait Iter<|T|> //< a sequence that only yields items in order, with no length or index
-    //<
     //< A chain of filters or maps implements `Iter`. `for x in` iterates over it through
     //< `ksplc/sema/body/for_in.kspl`. The separate `Index` family requires access by position.
     //< Caution: **Declare the receiver as `Self`.** An implementation can take `Self$@` to advance
@@ -534,7 +483,6 @@ pub trait Iter<|T|> //< a sequence that only yields items in order, with no leng
 // See "Indexing costs one comparison; the stop is out of line" in `std/docs/DESIGN-core.md`.
 #noinline
 pub fn bounds_panic( //< the one message every container stops with when an index is out of range
-    //<
     //< Every container uses this message, matching the built-in bounds check.
     //< See "Conditions that stop execution at run time" in `../docs/SPEC-programming-language.md`.
     //< Caution: **Pass the caller's location.** A default would report `std/lang`, making a
@@ -550,7 +498,6 @@ pub fn bounds_panic( //< the one message every container stops with when an inde
     panic(m.slice(), file, line)
 
 pub struct Slice<|$T|> //< a borrowed sequence: a pointer and a length, owning nothing
-    //<
     //< The type argument controls element mutability. `U8$[]` has mutable elements; `U8[]` has
     //< immutable elements. One level of mutability weakening permits passing a mutable slice to an
     //< immutable parameter. Public `ptr` and `len` fields support construction from a raw pointer:
@@ -559,7 +506,6 @@ pub struct Slice<|$T|> //< a borrowed sequence: a pointer and a length, owning n
     pub len: Sz //< how many elements it holds
 
 impl<|T|> T$[]: Index_place<|Sz, T|> //< so an element of a writable slice can be written
-    //<
     //< This implementation applies only to mutable slices, as the `$` on the type specifies.
     //< The `Self@` receiver only reads the slice descriptor.
     //< Requiring `Self$@` would prevent writing elements through a slice stored in a read-only
@@ -572,7 +518,6 @@ impl<|T|> T$[]: Index_place<|Sz, T|> //< so an element of a writable slice can b
         return r.ptr + index
 
 impl<|T|> T[]: Index_ref<|Sz, T|> //< so an element can be read without copying
-    //<
     //< This implementation supports both mutable and immutable slices because the implementing type
     //< has no `$`.
     #inline
@@ -583,14 +528,12 @@ impl<|T|> T[]: Index_ref<|Sz, T|> //< so an element can be read without copying
         return r.ptr + index
 
 pub trait Cast<|Output|> //< what `Output::value` desugars to where C would not allow the cast
-    //<
     //< C rejects value casts to or from structures. Implementing this trait on the source type
     //< replaces the cast with `cast()`. See `ksplc/sema/body/postfix.kspl`.
     fn cast(r: Self): Output //< the value as the other type
 
 // ============================ The marker traits ============================
 pub trait Ref_counted //< the compiler counts copies and scope exits for this type
-    //<
     //< See "Why ARC is expressed as a trait" in `docs/DESIGN-programming-language.md` for the
     //< reason to use a trait.
     //< Caution: **Keep these methods `priv`, including in implementations.** Manual calls duplicate
@@ -601,20 +544,17 @@ pub trait Ref_counted //< the compiler counts copies and scope exits for this ty
     priv fn release(r: Self) //< one owner fewer; only the compiler calls it
 
 pub trait Move_only { //< a value that cannot be copied implicitly
-    //<
     //< The compiler matches the fully qualified name `std.lang.Move_only` exactly.
     //< A structure containing a `Move_only` field by value is also `Move_only`.
 }
 
 pub trait Drop //< an owner whose cleanup runs automatically when its lifetime ends
-    //<
     //< Passing it by value transfers ownership. The compiler calls `drop` on the remaining owner
     //< on every normal exit, including a propagated error. A panic aborts without cleanup.
     //< No separate `Move_only` implementation is needed. The method cannot report failure.
     priv fn drop(r: Self) //< releases the owned resource; only the compiler calls it
 
 pub trait Manual_free //< an explicit free ends this value's usable lifetime
-    //<
     //< Use this for manual cleanup. Use `Drop` for automatic cleanup; it needs neither this trait
     //< nor a separate `Move_only`. A `free()` method alone does not enable release tracking.
     //< **`free` cannot report failure.** It runs during exit or `defer`, when the caller cannot
@@ -623,7 +563,6 @@ pub trait Manual_free //< an explicit free ends this value's usable lifetime
     fn free(r: Self) //< releases it, reporting no failure
 
 pub trait Writer //< a destination characters can be written to
-    //<
     //< Only the declaration belongs here. Primitive formatting, such as `impl I32: Formattable`,
     //< belongs in `std/strfmt`. Placing it here would add the string library to every file.
     //< Caution: **Do not add methods for writing numbers or booleans.** `Formattable` already lets
@@ -633,12 +572,10 @@ pub trait Writer //< a destination characters can be written to
     fn flush(r: Self): Self //< passes on what has accumulated, reporting no failure
 
 pub trait Formattable //< what `\{x\}` in a string calls
-    //<
     //< `ksplc/parse/desugar.kspl` does the desugaring.
     fn fmt(r: Self, w: Writer): Writer //< writes the value into the destination
 
 pub fn put<|W: Writer, T: Formattable|>( //< writes one value, keeping the destination's own type
-    //<
     //< Caution: **Keep the destination's concrete type.** Accepting `Writer` would also make the
     //< return type `Writer`.
     //< Interpolating into a `Str_builder` would then hide its `.slice()` method.
@@ -650,7 +587,6 @@ pub fn put<|W: Writer, T: Formattable|>( //< writes one value, keeping the desti
     return w
 
 pub trait Callable1<|A, Ret|> //< a callable value that takes one argument, with its captures
-    //<
     //< Caution: **Declare the receiver as `Self`.** An implementation can take `Self@`; a generated
     //< adapter converts between them. See "Why a trait's receiver is fixed to a bare `Self`" in
     //< `docs/DESIGN-programming-language.md`. An implementing value uses the trait representation

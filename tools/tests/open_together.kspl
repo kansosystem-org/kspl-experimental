@@ -1,5 +1,4 @@
 //< Opens two documents from two folders at once, as choosing both and opening them together does
-//<
 //< Usage: `open_together <opener> <kssrv> <work folder>` (`make test-kspage-open`). It copies both
 //< programs into the work folder with a page beside them. It starts two `--show` opens at once
 //< naming one port. It checks that each got a server of its own, for its own folder, and that the
@@ -18,13 +17,20 @@ import "std/sys"
 import "std/verdict"
 import "tools/kspage_aim" as aim
 
-priv const SHARED_PORT: U8[] = "18640" //< the port both opens name, so they compete for it
 priv const URL_WAIT_STEPS: Sz = 300 //< how many times, 100ms apart, the opens' output is read
 priv const ANSWER_WAIT_MS: I32 = 10000 //< how long a server may take to answer one request
 priv const TOOL_WAIT_MS: I32 = 60000 //< how long `--list` and `--stop-all` may take
 
+priv fn free_port(arena: Arena$@): U8[]!net.Net_error //< a port no one listens on now
+    //< Both opens name it, so they still compete for it. **Taken from the system, not fixed**:
+    //< two runs on one machine then name different ports and never meet.
+    listener: = net.Tcp_listener.bind("127.0.0.1", 0)!
+    defer listener.free()
+    port: = listener.port()!
+    return arena.text().s("\{port\}").take()
+
 priv fn url_of(out_path: U8[]): U8[] //< the URL an opener put out, "" until a whole line of it
-    body: = io.read_file(out_path) catch
+    body: = io.read_file(out_path, null) catch
         return ""
     if at: = body.find_str("http://")
         rest: = body.sub_from(at)
@@ -34,7 +40,6 @@ priv fn url_of(out_path: U8[]): U8[] //< the URL an opener put out, "" until a w
 
 priv fn status_of(url: U8[], target: U8[], arena: Arena$@): I32 //<
     //< The status the server behind `url` answers `GET target` with, with the URL's token
-    //<
     //< 0 where nothing answered.
     stream: =
         net.Tcp_stream.connect("127.0.0.1", aim.port_num(aim.port_in_url(url))) catch
@@ -51,7 +56,6 @@ priv fn status_of(url: U8[], target: U8[], arena: Arena$@): I32 //<
 
 priv fn place(work: U8[], opener: U8[], server: U8[], arena: Arena$@): U8[]!fs.Fs_error //<
     //< Copies the opener and the server into `<work>/bin` with a page beside them
-    //<
     //< Returns the opener's copy. **The page is only looked for**, never served here, so any text
     //< stands in for it.
     bin: = fs.join(work, "bin", arena)
@@ -67,17 +71,15 @@ priv fn doc_in(work: U8[], folder: U8[], name: U8[], arena: Arena$@): U8[]!fs.Fs
     fs.write_tree(dir, U8[][]::{ name }, U8[][]::{ "{}\n" }, arena)!
     return fs.join(dir, name, arena)
 
-priv fn open_argv(opener: U8[], doc: U8[], arena: Arena$@): U8[][5] //<
+priv fn open_argv(opener: U8[], doc: U8[], port: U8[], arena: Arena$@): U8[][5] //<
     //< The command opening `doc` with its own folder served, on the shared port
-    //<
     //< **The folder is named**: the work folder stands inside this repository, so left to itself
     //< the opener would serve the repository's root for both.
     return U8[][5]::{ opener, doc,
         arena.text().s("--root=").s(aim.parent_of(doc)).take(),
-        arena.text().s("--port=").s(SHARED_PORT).take(), "--show" }
+        arena.text().s("--port=").s(port).take(), "--show" }
 
 priv fn reap(kid: subproc.Child$@) //< waits for an open to end, and kills one that does not
-    //<
     //< **A `--show` open ends once its server has**; one still running would hold the gate open.
     for _step in Range.asc(URL_WAIT_STEPS)
         if !kid.alive()
@@ -107,8 +109,10 @@ fn main(): I32 //< the exit code is the checks' verdict (`verdict.finish`)
 
     // Caution: **Start both before waiting on either**: one after the other, the second finds the
     // first's server in the note and never meets the race.
-    argv_a: = open_argv(opener, doc_a, arena)
-    argv_b: = open_argv(opener, doc_b, arena)
+    shared: = free_port(arena) catch
+        return verdict.fatal("no free port can be found to share")
+    argv_a: = open_argv(opener, doc_a, shared, arena)
+    argv_b: = open_argv(opener, doc_b, shared, arena)
     $first: = subproc.spawn_redirect(U8[][]::argv_a, "", out_a, out_a) catch
         return verdict.fatal("the first open cannot be started")
     $second: = subproc.spawn_redirect(U8[][]::argv_b, "", out_b, out_b) catch
@@ -124,8 +128,8 @@ fn main(): I32 //< the exit code is the checks' verdict (`verdict.finish`)
         sys.sleep_ms(100)
     came: = url_a.len > 0 && url_b.len > 0
     verdict.check("both opens put out a URL", came,
-        arena.text().s("first: ").s(io.read_file(out_a) catch "(no output)").s("\nsecond: ")
-        .s(io.read_file(out_b) catch "(no output)").take())
+        arena.text().s("first: ").s(io.read_file(out_a, null) catch "(no output)").s("\nsecond: ")
+        .s(io.read_file(out_b, null) catch "(no output)").take())
     if came
         port_a: = aim.port_in_url(url_a)
         port_b: = aim.port_in_url(url_b)

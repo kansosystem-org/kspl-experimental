@@ -1,5 +1,4 @@
 //< Type names in the generated code and in the instantiation cache
-//<
 //< An extension on `Env` in `env.kspl`: it reads the type table and each instance's record.
 //< `mangle_type_id_to` spells each output name once from Lower onward;
 //< `instance_key_to` spells a cache key. `Mangle_seen` admits each output name only once.
@@ -15,7 +14,6 @@ import "std/sys"
 
 priv const MAX_MANGLE_DEPTH: Sz = 1000 //<
     //< The safety limit on how deep mangle_type_id_to walks a pointer, slice or array type
-    //<
     //< The parser does not count `@` / `[N]` postfixes as depth, so a long chain (`f: I32@@@...@;`)
     //< could exhaust the native stack. Not every caller has a Ctx, so exceeding it reports with
     //< io.err() and sys.exit(1).
@@ -23,7 +21,6 @@ priv const MAX_MANGLE_DEPTH: Sz = 1000 //<
 impl Env
     fn mangle_type_id_to(r: Self$@, type_id: I32, w: Writer): Writer //<
         //< Writes type_id's mangled name, the type's name in the generated C and LLVM IR
-        //<
         //< **Once the names are settled (`c_names_final`), each type's is spelled once** and kept
         //< on its entry (`Entry.c_name`). Spelling walks the name a character at a time, and code
         //< generation asks for the same few thousand names tens of thousands of times.
@@ -99,7 +96,6 @@ impl Env
 
     fn c_repr_type_id(r: Self$@, type_id: I32): I32 //<
         //< The type id of what shares the C representation
-        //<
         //< **Instances differing only in the immutability at a position that declared it are folded
         //< into one C struct** (variance_stripped in env.kspl). So the generated C's reordering is
         //< matched on this id. Without it, a struct holding a `Slice<|U8 immut|>` is emitted before
@@ -115,7 +111,6 @@ impl Env
 
     fn type_args_to(r: Self$@, args: I32[], w: Writer): Writer //<
         //< Writes a list of type arguments (`I32, U8[]`), each by its canonical string
-        //<
         //< **The separator is `type_arg_sep`**, as every list of resolved type arguments has it.
         $res: = w
         for i in Range.asc(args.len)
@@ -126,7 +121,6 @@ impl Env
 
     fn instance_key_to(r: Self$@, inst: Instance, w: Writer): Writer //<
         //< Writes the instance's registration key, `template<|args|>` (`std.ds.List<|I32|>`)
-        //<
         //< It is how a person would write the instance (display_type_to in `display.kspl` shows
         //< it in the surface notation), and the instantiation cache's key.
         return r.type_args_to(inst.args, w.s(inst.template).s("<|")).s("|>")
@@ -143,7 +137,6 @@ impl Env
 
     fn instance_c_name_to(r: Self$@, inst: Instance, w: Writer): Writer //<
         //< Writes the instance's mangled name, the one it has in the type table and in C
-        //<
         //< Caution: **Name an instance through here only.** A second spelling of the rule makes
         //< two names for one instance, and C fails with `redefinition` or `unknown type name`.
         $full: = Str_builder.new()
@@ -153,7 +146,6 @@ impl Env
         return full.slice().mangle_type_name_to(w)
 
 struct Mangle_seen //< the record for emitting a composite type "once per mangled name"
-    //<
     //< Caution: **Do not write how duplicates are skipped anywhere but here.** Two generators walk
     //< `complex_types` (`../../gen/c/root.kspl`, `../../gen/c/decl.kspl`). If either drifts on a
     //< copied rule, two definitions of the same name are emitted, and **clang fails while ksplc
@@ -178,7 +170,6 @@ impl Mangle_seen
 
     fn admit(r: Self$@, type_id: I32): Bool //<
         //< A mangled name seen for the first time is noted and true; the second time, false.
-        //<
         //< Caution: **Call it "after" the caller's filtering.** Filling a slot with a type that is
         //< not emitted makes the type of the same name that **should be emitted** go missing.
         //< Noting a length-less array first in `gen/c/root.kspl` made

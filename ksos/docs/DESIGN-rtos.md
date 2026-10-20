@@ -587,7 +587,7 @@ A composite device that offers **two functions** on one USB cable:
 * a way to receive the zero-length OUT after the data stage;
 * a STALL, not an empty answer, for a request it cannot answer (a host expecting content stops at an empty one).
 
-Caution: **Always run ksos's `make test` after touching a descriptor** (`make debug-ksos` from the repository's root). A descriptor is a byte run that claims its own length, and one byte out of place makes enumeration fail without a word. KSPL's fixed-length array pads what is short with 0. So a mismatch between the declared length and the element count compiles without complaint (`ksos/tests/usb_descriptors.kspl`).
+Caution: **Always run ksos's `make test` after touching a descriptor** (`make debug-ksos` from the repository's root). A descriptor is a byte run that claims its own length, and one byte out of place makes enumeration fail without a word. So each descriptor is a `U8[_]` array, whose length is its element count: a length written out pads what is short with 0 without complaint. `ksos/tests/usb_descriptors.kspl` imports the arrays and checks their length bytes.
 
 ### The CDC-NCM framework (`cdc_ncm.kspl`) — **independent of the hardware**
 

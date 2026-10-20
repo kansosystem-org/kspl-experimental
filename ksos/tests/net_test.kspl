@@ -24,7 +24,6 @@ priv fn to_peer(): net.Ends //< a frame's ends from us to the peer
         .dst_ip = PEER_IP, .src_port = OUR_PORT, .dst_port = PEER_PORT }
 
 priv fn from_peer(): net.Ends //< a frame's ends from the peer to us
-    //<
     //< The MACs stay as in to_peer: nothing here reads them back.
     return net.Ends::{ .src_mac = our_mac(), .dst_mac = peer_mac(), .src_ip = PEER_IP,
         .dst_ip = OUR_IP, .src_port = PEER_PORT, .dst_port = OUR_PORT }
@@ -93,7 +92,6 @@ $got: U8[1200] = ::{}
 
 fn test_tcp_conn_segment_larger_than_buffer() //<
     //< A segment larger than the caller's buffer is returned in parts, not truncated
-    //<
     //< Caution: **Do not truncate a segment to the caller's buffer size.** Otherwise nothing can
     //< read the connection again (the reason is at `rx_pending_off` in ksos/net/tcp_conn.kspl).
     verdict
@@ -133,7 +131,6 @@ fn test_tcp_conn_segment_larger_than_buffer() //<
 
 fn test_tcp_conn_rejects_wrong_seq() //<
     //< A segment whose seq differs from the expected one is dropped
-    //<
     //< Reordering is out of scope by design. It also checks that dropping it leaves the kept state
     //< clean.
     verdict
@@ -156,7 +153,6 @@ fn test_tcp_conn_rejects_wrong_seq() //<
     verdict.pass("throwing a wrong order away does not dirty the carried-over state.")
 
 fn test_tcp_conn_acks_received_data() //< received data is ACKed, and a resend ACKed again
-    //<
     //< Caution: **Without an ACK, the peer resends what it sent.** It stops once its window is
     //< full (the reason is at `send_ack` in ksos/net/tcp_conn.kspl).
     verdict.start("[ksos/net] ACKing what was handed over, and a resend again, test...")
@@ -215,7 +211,6 @@ fn test_tcp_conn_reads_fin_as_end_of_stream() //<
     verdict.pass("data before a FIN arrives, the FIN is ACKed, and then the stream reads 0.")
 
 fn test_tcp_conn_reports_reset() //< the peer's RST at the expected seq reads as an error
-    //<
     //< Caution: **An RST at another seq is ignored** (the reason is at the RST check in
     //< ksos/net/tcp_conn.kspl).
     verdict.start("[ksos/net] reporting the peer's RST, and ignoring one at the wrong seq, test...")
@@ -235,7 +230,6 @@ fn test_tcp_conn_reports_reset() //< the peer's RST at the expected seq reads as
     verdict.pass("an RST at the expected seq reads as a reset from then on; one elsewhere is not.")
 
 fn test_tcp_conn_send_is_partial() //< sending is one frame per call
-    //<
     //< A request over the limit (1400) becomes a partial send (send_t's contract).
     verdict.start("[ksos/net] a send request over the ceiling becoming a partial send test...")
 
@@ -250,7 +244,6 @@ fn test_tcp_conn_send_is_partial() //< sending is one frame per call
     verdict.pass("one frame per call, and seq advances by exactly that much.")
 fn test_tcp_conn_send_failure_does_not_advance_seq() //<
     //< **our_seq must not advance when it could not send**
-    //<
     //< The reason is at `tcp_stream_send` in ksos/net/tcp_conn.kspl. A single-buffer link (the
     //< RP2040's USB NCM) hits it all the time.
     verdict.start("[ksos/net] not advancing seq where it could not send test...")
@@ -274,7 +267,6 @@ fn test_tcp_conn_send_failure_does_not_advance_seq() //<
 
 fn test_frame_builders_pad_to_min() //<
     //< A built frame is padded with 0 to the minimum length (60 bytes)
-    //<
     //< Caution: **An Ethernet frame under 60 bytes breaks the standard** (see pad_to_min in
     //< ksos/net/mini_ipv4.kspl). An ARP request (42 bytes) and an empty UDP/TCP are below it.
     verdict
@@ -315,7 +307,6 @@ priv fn check_zero_tail(buf: U8[], from: Sz, to: Sz, msg: U8$[]) //<
         assert(buf[i] == 0, msg)
 fn test_frame_builders_refuse_a_small_buffer() //<
     //< **A building function returns 0 if the frame does not fit the buffer**
-    //<
     //< The reason is at `fits` in ksos/net/mini_ipv4.kspl.
     verdict.start("[ksos/net] not assembling a frame that does not fit the buffer test...")
 
@@ -342,7 +333,6 @@ fn test_frame_builders_refuse_a_small_buffer() //<
 
 fn test_tcp_parse_ignores_ethernet_padding() //<
     //< **Ethernet's zero padding must not be counted as payload**
-    //<
     //< A pure ACK is 54 bytes padded to 60 (the reason is at `parse_tcp_segment` in
     //< ksos/net/mini_ipv4.kspl).
     verdict.start("[ksos/net] not reading an ACK filled with 0 to 60 as data test...")
@@ -372,11 +362,9 @@ fn test_tcp_parse_ignores_ethernet_padding() //<
         .pass("it does not mistake the 0 filling for payload, and does not move peer_seq either.")
 priv fn parses(buf: U8[], len: Sz): Bool //<
     //< Whether it parses as a segment addressed to this connection
-    //<
     //< The expected value is not an argument, so each caller's line says what it expects.
     return net.parse_tcp_segment(buf, len, PEER_IP, PEER_PORT, OUR_PORT).ok
 fn test_tcp_parse_rejects_malformed_headers() //< the lengths the peer declares are not trusted
-    //<
     //< **Drop a segment whose declared lengths are too short, or whose data has not arrived.**
     verdict.start("[ksos/net] throwing a segment whose naming is broken away test...")
 
@@ -417,7 +405,6 @@ fn test_tcp_parse_rejects_malformed_headers() //< the lengths the peer declares 
     verdict.pass("the data offset, the version, a fragment and a cut-off tail are all thrown away.")
 fn test_tcp_parse_follows_ip_options() //<
     //< The payload is found even on a header with IP options
-    //<
     //< Caution: **Compute the TCP header's position from IHL.** If it is fixed at 20 bytes, a
     //< peer's IP options are read as the port number.
     verdict.start("[ksos/net] not losing the payload even on a header with IP options test...")

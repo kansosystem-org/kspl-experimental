@@ -1,5 +1,4 @@
 //< What a client facing the server from outside cannot take from it
-//<
 //< The names it does not hand out, the memory a large file costs, and the slots one address may
 //< hold. Run by `kssrv/tests/main.kspl` against the outward-facing server.
 import "kssrv/tests/client"
@@ -28,7 +27,6 @@ priv const READERS: Sz = 4 //< how many readers hold the large file unread at on
 priv const ALONE_POLL_MS: I32 = 10 //< how often `alone` asks again
 
 priv const PER_PEER: Sz = 16 //< `MAX_CONNS_PER_PEER` in `kssrv/conn.kspl`
-    //<
     //< The server is driven from outside, so the figure is stated here. A change there fails the
     //< check on the cap rather than passing it silently.
 
@@ -84,7 +82,6 @@ priv fn big_cases(port: I32, arena: Arena$@): Void!client.Http_end //<
 
 priv fn trickle_cases(port: I32, arena: Arena$@): Void!client.Http_end //<
     //< A request sent a byte at a time is answered; a bare LF is still refused at once
-    //<
     //< Caution: **Split the head's end between sends too**: the server looks for it only where it
     //< can newly be (`head_decided` in `kssrv/main.kspl`).
     $conn: = client.Conn.open(port)!
@@ -103,7 +100,6 @@ priv fn trickle_cases(port: I32, arena: Arena$@): Void!client.Http_end //<
 
 priv fn peer_cases(port: I32, arena: Arena$@): Void!client.Http_end //<
     //< One address holds at most `PER_PEER` connections; one closing makes room again
-    //<
     //< Caution: **Start from none held**: one left from an earlier case takes a place among them.
     verdict.check("the server holds nothing from earlier cases before the cap is filled",
         alone(port, arena)!, "a connection from an earlier case stayed open")
@@ -119,14 +115,13 @@ priv fn peer_cases(port: I32, arena: Arena$@): Void!client.Http_end //<
     none: client.Resp = ::{ .status = 0, .head = "", .body = "" }
     refused: = over.next(false, 2000, arena) catch none
     nm: = arena.text().s("the connection past \{PER_PEER\} from one address is refused").take()
-    verdict.check(nm, refused.status == 0, client.shown(refused, arena))
+    client.expect_status(nm, refused, 0, arena)
     held.get(0).free()
     held.set(0, held.get(held.len - 1))
     held.len -= 1
     sys.sleep_ms(200)
     again: = client.get(port, "/style.css", "", arena)!
-    verdict.check("once one closes, a new connection from it is served", again.status == 200,
-        client.shown(again, arena))
+    client.expect_status("once one closes, a new connection from it is served", again, 200, arena)
 
 priv fn alone(port: I32, arena: Arena$@): Bool!client.Http_end //<
     //< Whether the server comes to hold only the connection asking, within the usual timeout

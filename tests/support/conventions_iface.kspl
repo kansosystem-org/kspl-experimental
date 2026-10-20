@@ -1,5 +1,4 @@
 //< Checks that the interfaces offered to the outside agree with the documents
-//<
 //< The entry points are the CLI, make's targets, the lists, a place on real hardware. It is not a
 //< suite of its own; it is a part of conventions.
 //< **Each of these builds either way** (Principle 5 turned round); the canonical source is the
@@ -12,6 +11,7 @@ import "std/str"
 import "std/strfmt" as _strfmt
 import "std/verdict"
 import "tests/support/conventions_scan" as scan
+import "tests/support/docref_make" as make_targets
 import "tests/support/harness"
 import "tests/support/harness_text" as htext
 
@@ -23,23 +23,20 @@ priv const SPEC_TOOLS: U8[] = "ksplc/docs/SPEC-tools.md" //<
 // source is the implementation (the declarations passed to argparse).
 // Each direction checks a different range.
 // ==========================================
-priv const MAIN_FILE: U8[] = "ksplc/main.kspl"
+priv const MAIN_FILE: U8[] = "ksplc/cli.kspl" //< where ksplc declares its command line
 
 priv const ARGPARSE_BUILTIN: U8[][_] = ::{ "--help" } //<
     //< the entry point argparse provides by itself
-    //<
     //< There is no declaration in `main.kspl`, but the documents' table lists them.
 
-priv const UNDOCUMENTED_OK: U8[][_] = ::{ "lsp-worker" } //<
+priv const UNDOCUMENTED_OK: U8[][_] = ::{ "lsp-worker", "compile" } //<
     //< What may be in the implementation and not in the documents
-    //<
     //< Caution: Do not add one whose reason cannot be written: this is the only record of "it is
     //< not written in the documents". `lsp-worker` is the inner process that lsp's supervisor
-    //< starts.
+    //< starts. `compile` is the default subcommand's name, which is never typed.
 
 priv const CLI_DOC_PLACEHOLDER: U8[][_] = ::{ "--name", "--foo", "--gc-sections", "--out-implib" } //<
     //< The forms that appear in the documents and are not ksplc's entry points
-    //<
     //< This is not the place to silence a typo.
 
 priv fn collect_impl_cli(out: List<|U8[]|>$@, arena: Arena$@)
@@ -48,6 +45,20 @@ priv fn collect_impl_cli(out: List<|U8[]|>$@, arena: Arena$@)
         "p.flag(\"", "p.str_opt(\"", "p.str_list_opt(\"" }
         for w in scan.find_all(src, head, "\"", arena)
             scan.push_unique(out, w)
+    // The subcommands are the variants of `enum Face`, each named with `_` written `-`.
+    $in_faces: = false
+    for line in src.lines(arena)
+        if line.starts_with("enum Face ")
+            in_faces = true
+            continue
+        if !in_faces || line.len == 0
+            continue
+        if !line.starts_with("    ")
+            in_faces = false
+            continue
+        word: = line.trim_spaces()
+        if !line.starts_with("     ") && word.len > 0 && word[0].is_lower()
+            scan.push_unique(out, word.replace("_", "-", arena))
     // The short side of a `p.short("--long", "-s")`.
     for line in src.lines(arena)
         if at: = line.find_str("p.short(\"")
@@ -60,7 +71,6 @@ priv fn collect_impl_cli(out: List<|U8[]|>$@, arena: Arena$@)
 
 priv fn collect_dash_words(text: U8[], out: List<|U8[]|>$@) //<
     //< The forms `-x` / `--xxx` that appear in the documents
-    //<
     //< Caution: **Do not pick them up between a pair of backquotes.** A code fence breaks the
     //< pairing, and a whole section is picked up as one form.
     $i: Sz = 0
@@ -95,7 +105,7 @@ priv fn check_cli(arena: Arena$@)
         scan.push_unique(mentioned@, w)
     $bad: = List<|U8[]|>.new(arena)
     for w in impl_cli
-        if htext.has(mentioned@, w)
+        if mentioned.contains(w)
             continue
         $ok: = false
         for u in UNDOCUMENTED_OK
@@ -111,7 +121,7 @@ priv fn check_cli(arena: Arena$@)
             opt: = cut_at_any(w, "=<\"")
             if opt.len == 0 || !opt.starts_with("-")
                 continue
-            $known: = htext.has(impl_cli@, opt)
+            $known: = impl_cli.contains(opt)
             for b in ARGPARSE_BUILTIN
                 if opt.equals(b)
                     known = true
@@ -134,7 +144,7 @@ priv fn check_cli(arena: Arena$@)
         collect_dash_words(harness.read_under_root(rel), words@)
         for w in words
             doc_seen += 1
-            if !w.starts_with("--") || htext.has(impl_cli@, w)
+            if !w.starts_with("--") || impl_cli.contains(w)
                 continue
             $ok: = false
             for b in ARGPARSE_BUILTIN
@@ -167,7 +177,6 @@ priv fn cut_at_any(s: U8[], seps: U8[]): U8[] //<
 // ==========================================
 priv const STYLE_SRC: U8[] = "ksplc/fmt/style.kspl" //<
     //< The file holding the style keys accepted
-    //<
     //< **The accepted list and the reader are in two files.** `ksplc/fmt/style.kspl` holds the
     //< accepted spelling and `ksplc/fmt/printer.kspl` the field the formatter reads, so one name
     //< here would check only one of the two.
@@ -175,7 +184,6 @@ priv const READ_SRC: U8[] = "ksplc/fmt/printer.kspl"
 
 priv const STYLE_KEYS: U8[][_] = ::{ "IndentWidth", "ColumnLimit", "AllowShortBlocks" } //<
     //< The table's key name -> the field the formatter reads
-    //<
     //< Caution: Add a field and add it in here too.
 priv const STYLE_FIELDS: U8[][_] = ::{ "indent_width", "column_limit", "allow_short_blocks" }
 
@@ -191,7 +199,7 @@ priv fn check_style(arena: Arena$@)
     scan.diff_into(impl_keys@, spec_keys@, STYLE_SRC,
         arena.text().s("\{SPEC_TOOLS\}'s table").take(), bad@, arena)
     for i in Range.asc(3)
-        if !htext.has(impl_keys@, STYLE_KEYS[i])
+        if !impl_keys.contains(STYLE_KEYS[i])
             bad
                 .push(arena.text().s(STYLE_KEYS[i]).s(": in this test's pairing table and not in ")
                 .s(STYLE_SRC).s("'s list").take())
@@ -210,63 +218,27 @@ priv fn check_style(arena: Arena$@)
 // ksos's make targets can be walked to from the documents
 // Caution: **Do not leave a target out of the documents.** ksos records hardware confirmations
 // in the documents. With no path to the entry point that confirms, it cannot be tried again.
+// The other direction, a document naming a target make lacks, is `docref_make.kspl`'s.
 // ==========================================
 priv const KSOS_MK: U8[] = "ksos/Makefile"
 
-priv fn mk_var_words(text: U8[], name: U8[], out: List<|U8[]|>$@, arena: Arena$@) //<
-    //< Lists the words of a `<name> := …`, each up to its first `:`
-    //<
-    //< A continuation after a `\` at a line's end is picked up too. **A word may be a row**
-    //< (`<suffix>:<field>…`, `row_field` in `ksos/Makefile`), whose suffix names the target.
-    head: = arena.text().s(name).s(" :=").take()
-    $inside: = false
-    for line in text.lines(arena)
-        if !inside && !line.starts_with(head)
-            continue
-        $t: = (line.sub_from(head.len) if !inside else line).trim_spaces()
-        inside = true
-        cont: = t.ends_with("\\")
-        if cont
-            t = t.sub(0, t.len - 1)
-        for w in t.split(' ', arena)
-            word: = w.trim_spaces()
-            if word.len > 0
-                out.push(word.sub(0, word.find_char(':').unwrap_or(word.len)))
-        if !cont
-            return
+priv const KSOS_HELPERS: U8[][_] = ::{ "ksos-linkcheck-", "ksos-qemugate-", "ksos-posixgate-",
+    "ksos-capgate-" } //<
+        //< The prefixes of the targets a gate starts, one per demo, which no person runs
+        //< They come from `ksos_linkcheck_rule` and `ksos_gate_rule` in `ksos/Makefile`. A new
+        //< family of them fails this check until it is added here.
 
-// Builds the targets of each family from its list and prefix.
-//
-// Caution: **When you add a family, add it here too.** Otherwise the gate stops seeing that
-// family's targets. (A `make <target>` named in the documents still fails as "in the .md and not in
-// ksos/Makefile".)
-priv const KSOS_FAMILIES: U8[][2][_] = ::{::{ "KSOS_POSIX_TEMPLATED", "ksos-" },
-    ::{ "KSOS_POSIX_PANIC", "ksos-" }, ::{ "KSOS_CM_DEMOS", "ksos-cm-" },
-    ::{ "KSOS_CM0_DEMOS", "ksos-cm0-" }, ::{ "KSOS_NRF51_DEMOS", "ksos-nrf51-" },
-    ::{ "KSOS_RP2040_DEMOS", "ksos-rp2040-" } }
+priv fn is_ksos_helper(target: U8[]): Bool
+    for p in KSOS_HELPERS
+        if target.starts_with(p)
+            return true
+    return false
 
 priv fn check_ksos_targets(arena: Arena$@)
     $targets: = List<|U8[]|>.new(arena)
-    mk_text: = harness.read_under_root(KSOS_MK)
-    for fam in KSOS_FAMILIES
-        $sufs: = List<|U8[]|>.new(arena)
-        mk_var_words(mk_text, fam[0], sufs@, arena)
-        for i in Range.asc(sufs.len)
-            scan.push_unique(targets@,
-                arena.text().s(fam[1]).s(sufs.get(i)).take())
-    for line in mk_text.lines(arena)
-        if !line.starts_with("ksos")
-            continue
-        at: = line.find_char(':').unwrap_or(0)
-        if at == 0 || (at + 1 < line.len && line[at + 1] == '=')
-            continue
-        name: = line.sub(0, at)
-        $ok: = true
-        for c in name
-            if !(c.is_alnum() || c == '_' || c == '-')
-                ok = false
-        if ok
-            scan.push_unique(targets@, name)
+    for t in make_targets.rules_of("ksos", arena).targets
+        if t.starts_with("ksos") && !is_ksos_helper(t)
+            scan.push_unique(targets@, t)
     $runnable: = List<|U8[]|>.new(arena)
     for rel in harness.tracked_matching(U8[][]::{ "*.md" })
         text: = harness.read_under_root(rel)
@@ -283,10 +255,12 @@ priv fn check_ksos_targets(arena: Arena$@)
             else
                 break
     $bad: = List<|U8[]|>.new(arena)
+    if targets.len == 0
+        bad
+            .push(arena.text().s("make names no ksos target in ").s(KSOS_MK).take())
     scan.diff_into(targets@, runnable@, KSOS_MK, "a document in the `make ...` shape", bad@, arena)
-    scan.diff_into(runnable@, targets@, ".md", KSOS_MK, bad@, arena)
-    verdict.check_list("ksos's make targets agree with the documents", targets.len, "targets", bad@,
-        "a make target the documents name must exist in ksos/Makefile, and the reverse")
+    verdict.check_list("every ksos make target is named in a document", targets.len, "targets",
+        bad@, "name it as `make <target>` in a document, or add a gate's prefix to `KSOS_HELPERS`")
 
 // ==========================================
 // std's list of files agrees with what is really there
@@ -294,7 +268,6 @@ priv fn check_ksos_targets(arena: Arena$@)
 
 priv const STD_RECORD: U8[] = "std/SURFACE.txt" //<
     //< The record of what std publishes, one row per declaration, the file's logical name first
-    //<
     //< **A file that publishes nothing has no row**, and to std's users a file `ksplc doc std` does
     //< not list does not exist. `std/` is flat, so only the `.kspl` directly under it counts, and
     //< **`std/tests/` is not counted**: std's users do not choose from it.
@@ -323,7 +296,6 @@ priv fn check_std_list(arena: Arena$@)
 
 priv const FLASH_DRV: U8[] = "ksos/drivers/rp2040/flash.kspl" //<
     //< The driver that holds the Flash region reserved for the record
-    //<
     //< **When they disagree, the link passes even where the image reaches the record's region.**
     //< The ASSERT sees only "the image does not come this far". So a change to the driver alone
     //< puts the record at **a place nobody looks at**.
@@ -331,14 +303,12 @@ priv const FLASH_LD: U8[] = "ksos/port/rp2040/link.ld"
 
 priv const DRV_HEAD: U8[] = "const REGION_BASE: Sz = " //<
     //< The marker in front of the number, on each side
-    //<
     //< Caution: **Do not hard-code the marker's length**: the column drifts on an edit and fails as
     //< "not found", which reads like a differing value. **Do not put the visibility into the
     //< marker**: a `pub` comes and goes; it is stripped before reading.
 priv const LD_HEAD: U8[] = "ASSERT(_flash_image_end <= ORIGIN(FLASH) + "
 
 priv fn value_at(rest: U8[]): U8[] //< takes the number written at the start of `rest`
-    //<
     //< **Both sides carry something behind the number** (a `//<` on the driver's, the ASSERT's rest
     //< on the linker script's). So a stop where the number stops serves both.
     $k: Sz = 0

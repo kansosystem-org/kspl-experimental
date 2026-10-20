@@ -1,5 +1,4 @@
 //< Infers the type of `::{ … }`
-//<
 //< It covers four things: matching fields (named and positional), the defaults of fields left out,
 //< visibility, and deciding a `T[_]` array's element count.
 //< **A field's visibility is checked from where it was written.**
@@ -21,7 +20,6 @@ import "std/ds" { Map }
 fn size_inferred_array_literal(node: Ast_node$@, c: Sema_ctx$@, type_node: Ast_node$@,
     actual_id: I32, base_struct_id: I32): I32 //<
         //< Decides the count of a `T[_]` literal and returns the sized type id; otherwise actual_id
-        //<
         //< The count comes from the initializers and the largest [idx] written.
     $arr_base_id: I32 = 0
     $is_unsized: = false
@@ -52,7 +50,6 @@ fn size_inferred_array_literal(node: Ast_node$@, c: Sema_ctx$@, type_node: Ast_n
 
 priv fn has_named_field_init(node: Ast_node$@): Bool //<
     //< Whether any initializer names a field (`.f =`) or an index (`[i] =`)
-    //<
     //< Such a literal is a slice's descriptor, not a list of elements.
     for child in node.children
         if child.kind_id != .k_expr_field_init
@@ -64,7 +61,6 @@ priv fn has_named_field_init(node: Ast_node$@): Bool //<
 priv fn check_omitted_fields_visibility(node: Ast_node$@, c: Sema_ctx$@,
     struct_def: sema_type_def.Struct_def$@, written: Map<|Sz, Ast_node$@|>$@, shown: U8[]) //<
         //< Checks whether the fields not written are visible from this position.
-        //<
         //< **Checking the written ones alone is not enough**: with zero filling, `S::{}` **would
         //< build a value with an invisible field from outside**. Written fields are reported at
         //< their own position (check_field_visibility); the rest as one item here.
@@ -82,7 +78,6 @@ priv fn check_omitted_fields_visibility(node: Ast_node$@, c: Sema_ctx$@,
         return
 
 priv fn has_field_init(node: Ast_node$@): Bool //< whether any field is written
-    //<
     //< Caution: **Tell it apart from an empty `::{}`.** An empty literal writes nothing, so it
     //< means zero filling and passes even for a type with no fields. See "Initialization and
     //< construction" in `docs/SPEC-programming-language.md`.
@@ -92,13 +87,12 @@ priv fn has_field_init(node: Ast_node$@): Bool //< whether any field is written
     return false
 
 priv fn has_no_fields(c: Sema_ctx$@, id: I32): Bool //< whether this type has fields to fill
-    //<
     //< A number, a boolean, an enumeration and a Result do not.
     if c.env.is_numeric(id) || c.env.is_bool(id) || c.env.is_result(id) ||
         sema_type_env.is_void(c.env.get_real_type(id))
         return true
     switch c.env.get_info(c.env.get_real_type(id))
-    case .enum_type(_def)
+    case .enum_type
         return true
     default {}
     return false
@@ -120,7 +114,6 @@ priv struct Init_walk //< what a walk over a literal's initializers carries from
 priv fn place_array_element(c: Sema_ctx$@, child: Ast_node$@, walk: Init_walk$@, arr_size: I32):
     Void!Sema_error //<
         //< It moves past one array element, reporting one beyond the declared length
-        //<
         //< The elements must fit the declared length; **if not counted here, the C compiler reports
         //< it.** A `T[_]` is sized earlier (size_inferred_array_literal), so `arr_size < 0` means
         //< uncheckable, not "not known yet".
@@ -140,7 +133,6 @@ priv fn place_array_element(c: Sema_ctx$@, child: Ast_node$@, walk: Init_walk$@,
 
 priv fn take_struct_field(c: Sema_ctx$@, child: Ast_node$@, walk: Init_walk$@): I32 //<
     //< The type of the field one initializer writes, by its name or else by its place
-    //<
     //< Unknown where the literal is no struct's, the name is no field's, or the fields ran out.
     if walk.struct_def == null
         return I32::sema_type_env.Builtin_type_id.unknown
@@ -170,8 +162,10 @@ priv fn take_struct_field(c: Sema_ctx$@, child: Ast_node$@, walk: Init_walk$@): 
 priv fn mark_field_written(c: Sema_ctx$@, walk: Init_walk$@, idx: Sz, child: Ast_node$@,
     shown_at: Ast_node$@): I32 //<
         //< It records field `idx` as written by `child`, checks it is visible, and returns its type
+        //< The index stays in `child`'s `ival`, where genllvm reads which field to store.
     field_def: = walk.struct_def.fields_list.get(idx)
     child.def_node = field_def.node
+    child.ival = I32::idx
     if walk.check_visibility
         c.check_field_visibility(field_def, shown_at)
     c.clear_scratch().s("field '\{field_def.name\}'")
@@ -181,7 +175,6 @@ priv fn mark_field_written(c: Sema_ctx$@, walk: Init_walk$@, idx: Sz, child: Ast
 
 priv fn mark_written(c: Sema_ctx$@, walk: Init_walk$@, at: Sz, child: Ast_node$@) //<
     //< It records place `at` as written by `child`, refusing a second write of it
-    //<
     //< The caller leaves the place's name ("field 'x'", "index 0") in scratch. **Refused, not
     //< merged**: the later value would silently replace the earlier one, as C lets it.
     first: = walk.written.get(at).unwrap_or(null)

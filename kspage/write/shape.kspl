@@ -1,5 +1,4 @@
 //< The actions that combine `edit`'s tools
-//<
 //< Applying things to text (a style, a color, a note, an annotation, a link). Changing and adding
 //< styles, dragging a cell's size and a slide's frame, find and replace.
 //< Note: The operations that move a block itself are in [`block.kspl`](block.kspl), and the
@@ -22,10 +21,10 @@ import "kspage/write/field"
 import "kspage/write/record" { Step }
 import "kspage/write/typing"
 import "std/ds" { List }
+import "std/math"
 import "std/str" { Str_builder }
 
 priv fn swappable(c: Caret): Bool //< whether the text there may be replaced
-    //<
     //< A formula's text is not replaced — changing it changes what the formula points at and means
     //< (changing the formula itself is `Editor.set_source`).
     if c.inline == null || c.anchor == null
@@ -33,7 +32,6 @@ priv fn swappable(c: Caret): Bool //< whether the text there may be replaced
     return !c.inline.is_formula() && !c.anchor.is_formula()
 
 priv fn link_ink(): paint.Ink //< a link's look
-    //<
     //< The link itself is not part of the look (shared by name, it would split the style by where
     //< each link points).
     $ink: paint.Ink = paint.inherit_ink()
@@ -43,7 +41,6 @@ priv fn link_ink(): paint.Ink //< a link's look
 
 priv fn dragged(now: Rect, grip: Grip, px: F32, py: F32, ratio: Bool): Rect //<
     //< The shape of a frame grabbed and dragged to (`px`, `py`)
-    //<
     //< `px` and `py` are relative to the container's top left. The opposite corner stays fixed.
     //< Moving keeps the offset from the point grabbed (otherwise the top left jumps to the
     //< pointer).
@@ -56,14 +53,14 @@ priv fn dragged(now: Rect, grip: Grip, px: F32, py: F32, ratio: Bool): Rect //<
     bottom: = now.y + now.h
     if grip.wide
         if grip.left
-            to.x = px if px < right else right
+            to.x = math.min(px, right)
             to.w = right - to.x
         else
             wide: = px - now.x
             to.w = wide if wide > 0.0 else 0.0F32
     if grip.tall
         if grip.top
-            to.y = py if py < bottom else bottom
+            to.y = math.min(py, bottom)
             to.h = bottom - to.y
         else
             tall: = py - now.y
@@ -72,7 +69,6 @@ priv fn dragged(now: Rect, grip: Grip, px: F32, py: F32, ratio: Bool): Rect //<
 
 priv fn kept(now: Rect, to: Rect, grip: Grip): Rect //<
     //< The shape with the current height-to-width ratio kept
-    //<
     //< Only when a corner is grabbed (with an edge handle the other side would move; no other
     //< product keeps it there either). It follows whichever side moved more. The opposite corner
     //< stays fixed.
@@ -92,7 +88,6 @@ priv fn kept(now: Rect, to: Rect, grip: Grip): Rect //<
 
 impl Editor
     fn set_style(r: Self$@, name: U8[]): Bool //< applies a style name to the selected range
-        //<
         //< A style is a name (no weight or size is stored directly). An empty name, or one not in
         //< the table, looks like the parent. With nothing selected it applies to the whole inline
         //< the cursor is in; otherwise the inline is split at the selection's ends.
@@ -107,7 +102,6 @@ impl Editor
 
     priv fn apply_style(r: Self$@, st: Step$@, name: U8[]) //<
         //< Writes a name onto the selection (with nothing selected, the whole current inline)
-        //<
         //< The caller opens the step. Applying a color is "prepare the style and apply it", and
         //< split into two steps it would take two undos.
         // Caution: Copy the name. The caller's text is gone at the next call.
@@ -129,7 +123,6 @@ impl Editor
 
     priv fn tidy(r: Self$@, st: Step$@, runs: List<|Inline$@|>$@) //<
         //< Joins the inlines again in the parents of the inlines written to
-        //<
         //< Caution: **Call it every time an inline is written to.** Without it, applying and
         //< removing keeps adding inlines. Every parent is collected, since a selection can span
         //< blocks.
@@ -149,7 +142,6 @@ impl Editor
 
     fn set_chrome(r: Self$@, n: Inline$@, s: U8[]) //<
         //< Replaces the whole text of the page's header or footer band
-        //<
         //< Caution: **Record it in the same record as typing** (changed directly, undo does not
         //< work). It is not sent to the peer's window (no path points there, so it would be
         //< silently lost).
@@ -168,7 +160,6 @@ impl Editor
 
     fn paint_span(r: Self$@, sheet: Sheet$@, ink: paint.Ink, accent: paint.Accent): Bool //<
         //< Applies a color and emphasis to the selection
-        //<
         //< They are not stored on the inline directly: a name is built from the settings, and that
         //< style is prepared and applied. The same settings give the same name, so styles do not
         //< pile up. Both are replaced whole.
@@ -184,7 +175,6 @@ impl Editor
     priv fn paint_ink(r: Self$@, st: Step$@, sheet: Sheet$@, ink: paint.Ink, accent: paint.Accent):
         Bool //<
             //< The contents a color style gets.
-            //<
             //< The caller opens the step (the same reason as `apply_style`).
         $sb: = Str_builder.new()
         if !paint.span_name(ink, accent, sb@)
@@ -203,7 +193,6 @@ impl Editor
         return false
 
     fn set_note(r: Self$@, text: U8[]): Bool //< puts a note at the cursor
-        //<
         //< An empty text removes it. True if a note was set. The mark appears at the cursor: the
         //< inline is split there and the note set on the first half. No number is set (it is
         //< counted where notes are listed).
@@ -229,7 +218,6 @@ impl Editor
 
     fn set_remark(r: Self$@, text: U8[], by: U8[]): Bool //<
         //< Puts an annotation on the selection
-        //<
         //< An empty text removes it. True if set. An annotation applies to a range (like a link),
         //< so it stays on both sides of a split. The caller passes who wrote it (the core has no
         //< user name).
@@ -251,7 +239,6 @@ impl Editor
         return true
 
     fn link_span(r: Self$@, sheet: Sheet$@, href: U8[]): Bool //< makes the selection a link
-        //<
         //< An empty link removes it. True if applied.
         //< Caution: **Apply the link and the look in the same step.** Separate, one undo leaves
         //< text that is merely blue, or a link with no look. Removing the link restores the look
@@ -270,7 +257,6 @@ impl Editor
 
     priv fn span_runs(r: Self$@, st: Step$@, out: List<|Inline$@|>$@) //<
         //< Collects the inlines to write into
-        //<
         //< They are split so that the whole selection is included. With nothing selected it is the
         //< whole inline the cursor is in. It writes nothing (the callers write a style or a link).
         if !caret.has_selection(r.caret)
@@ -302,7 +288,6 @@ impl Editor
 
     fn drag_edge(r: Self$@, page: Page$@, edge: Edge, x: F32, y: F32) //<
         //< Drags the grabbed boundary to (`x`, `y`)
-        //<
         //< Caution: **Call it after layout.** A size is measured from the column's left (the row's
         //< top) edge, otherwise from the layout before. It is called again and again while
         //< dragging, without growing the record.
@@ -323,7 +308,6 @@ impl Editor
 
     fn fit_edge(r: Self$@, page: Page$@, edge: Edge): Bool //<
         //< Fits the column (or row) at that boundary to its contents. True if anything moved
-        //<
         //< Fitting a row removes the setting, fitting a column sets a width — the reason is at
         //< `Fit` in [`../lay/ask.kspl`](../lay/ask.kspl).
         //< End the undo step on both sides (a fit is one click, separate from typing).
@@ -338,7 +322,6 @@ impl Editor
         return true
 
     fn set_look(r: Self$@, s: Style$@, fresh: Style) //< replaces a style's contents whole
-        //<
         //< There is no function that changes it field by field. "Not set" is one of the settings,
         //< and field by field "there was none" and "it was 0" get mixed up. **Changing one changes
         //< every place that uses that name.**
@@ -352,7 +335,6 @@ impl Editor
         r.break_group()
 
     fn set_paper(r: Self$@, sheet: Sheet$@, fresh: Paper) //< replaces the paper settings whole
-        //<
         //< Replacing with the same settings does nothing (`store.same_paper`): the screen passes
         //< every field whichever one is touched, and each would record an undo that restores
         //< nothing.
@@ -366,7 +348,6 @@ impl Editor
 
     fn styled(r: Self$@, st: Step$@, sheet: Sheet$@, name: U8[], how: Arrange): Style$@? //<
         //< Prepares the style with that name and that arrangement
-        //<
         //< Adds one where there is none; returns none where the arrangement does not match. The
         //< caller opens the step (adding the style and the change undo together).
         if sheet == null || name.len <= 0
@@ -387,7 +368,6 @@ impl Editor
 
     fn add_style(r: Self$@, sheet: Sheet$@, name: U8[], how: Arrange): Style$@? //<
         //< Adds one style and returns it
-        //<
         //< An existing name is returned without adding, and the arrangement is set only when
         //< adding. **Reject a name holding whitespace, here and only here** (`style.name_plain`
         //< says why).
@@ -402,7 +382,6 @@ impl Editor
 
     fn drag_frame(r: Self$@, page: Page$@, grip: Grip, x: F32, y: F32, ratio: Bool) //<
         //< Drags the grabbed frame to (`x`, `y`)
-        //<
         //< Caution: **Call it after layout.** A frame's position is from the slide's top left,
         //< otherwise from the layout before. It is called again and again while dragging: the step
         //< stays open until release (`break_group`), one undo, and the record does not grow.
@@ -410,11 +389,7 @@ impl Editor
             return
         if !grip.found
             return
-        $now: = Rect::{ .x = 0.0, .y = 0.0, .w = 0.0, .h = 0.0 }
-        switch grip.block.frame
-        case .some(f)
-            now = f
-        case .none
+        now: = grip.block.frame catch
             return
         if surface: = ask.grip_surface(page, grip)
             to: = dragged(now, grip, x - surface.x, y - surface.y, ratio)
@@ -427,7 +402,6 @@ impl Editor
 
     fn move_picks(r: Self$@, dx: F32, dy: F32): Bool //<
         //< Moves the selected frame by (`dx`, `dy`)
-        //<
         //< True if moved. One undo takes it back, through the same path as dragging.
         if r.picked() == null
             return false
@@ -438,7 +412,6 @@ impl Editor
 
     priv fn slid(r: Self$@, but: Block$@, dx: F32, dy: F32): Bool //<
         //< Moves the selected frame by (`dx`, `dy`), skipping `but`
-        //<
         //< True if moved. `but` is the frame already moved (or null). A frame with no position is
         //< not moved (it covers the whole slide).
         one: = r.picked()
@@ -452,16 +425,11 @@ impl Editor
 
     fn place_frame(r: Self$@, x: F32, y: F32, w: F32, h: F32): Bool //<
         //< Sets the current frame's position and size by numbers from the slide's top left
-        //<
         //< It makes no negative size (inside out, it could not be grabbed). One undo takes it back.
         //< It acts on the same frame as dragging (`frame_at`).
         if r.shut()
             return false
-        $b: Block$@ = null
-        switch r.frame_at()
-        case .some(got)
-            b = got
-        case .none
+        b: Block$@ = r.frame_at() catch
             return false
         switch b.frame
         case .none
@@ -476,7 +444,6 @@ impl Editor
 
     fn move_block(r: Self$@, from: Sz, to: Sz): Bool //<
         //< Moves one top-level block from index `from` to index `to`
-        //<
         //< Caution: **Make the removal and the insertion one action** (a step break only before and
         //< after), or an undo leaves the block removed. Insert at the index after the removal
         //< (everything after it has moved one place forward).
@@ -495,16 +462,11 @@ impl Editor
         return true
 
     fn set_step(r: Self$@, at: Sz): Bool //< sets the step at which the current frame appears
-        //<
         //< True if set. 0 means "always shown" (and removes the setting). One undo takes it back;
         //< it acts on the same frame as dragging (`frame_at`).
         if r.shut()
             return false
-        $b: Block$@ = null
-        switch r.frame_at()
-        case .some(got)
-            b = got
-        case .none
+        b: Block$@ = r.frame_at() catch
             return false
         // Caution: **Refuse it where it is not a frame.** A step on a paragraph in the flow has no
         // effect (only absolute-coordinate layout reads it).
@@ -519,7 +481,6 @@ impl Editor
 
     fn find_next(r: Self$@, needle: U8[], back: Bool = false): Bool //<
         //< finds a text and selects it
-        //<
         //< True if found.
         //< Caution: **Select it.** Moving the cursor alone leaves the match unseen. At the end it
         //< wraps to the start. Called again it goes on to the next.
@@ -538,7 +499,6 @@ impl Editor
         return false
 
     fn replace_next(r: Self$@, needle: U8[], with: U8[]): Bool //< replaces one match
-        //<
         //< True if replaced. It selects and then types over, so one replacement is one undo.
         if r.shut()
             return false
@@ -553,7 +513,6 @@ impl Editor
 
     fn replace_all(r: Self$@, needle: U8[], with: U8[]): Sz //<
         //< replaces every match in the document
-        //<
         //< Returns the number replaced.
         //< Caution: **Do not wrap around at the end**, or the replaced text is found again forever
         //< ("a" into "aa"). Skip a match that cannot be replaced and go on. One undo takes it all

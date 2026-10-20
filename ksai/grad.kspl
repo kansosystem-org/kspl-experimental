@@ -1,5 +1,4 @@
 //< The backward-pass operations a gradient is built from, added as methods on `Tensor`
-//<
 //< **There is no automatic-differentiation tape.** Each forward operation has a backward method
 //< beside it, called in order. The "allocate and return" versions put an intermediate gradient on
 //< the tensor's own arena, so **the allocation is entirely predictable**. The `_into` versions
@@ -15,7 +14,6 @@ priv struct Reduce_stats //<
 impl<|T|> Tensor<|T|>
     priv fn softmax_reduce(r: Self$@, offset: Sz, n: Sz): Reduce_stats //<
         //< Returns the max of the last-dimension slice [offset, offset+n) and the sum of exp(x-max)
-        //<
         //< Softmax and the cross-entropy family share it.
         $max_v: = (r.data + offset)$
         for $i: Sz = 1; i < n; i += 1
@@ -114,7 +112,6 @@ impl<|T|> Tensor<|T|>
             (dx.data + i)$ = (dy.data + i)$ * deriv
         return dx
     fn apply_rope_grad(r: Self$@, start_pos: Sz): Tensor<|T|> //< RoPE's backward pass
-        //<
         //< RoPE is a rotation, so the gradient is the inverse rotation (-θ), the forward matrix's
         //< transpose (self = the upstream gradient dY_rope → dY). It reuses the forward body (the
         //< reason is at `rope_rotate` in `ksai/tensor.kspl`).
@@ -123,7 +120,6 @@ impl<|T|> Tensor<|T|>
         return r.rope_rotate(start_pos, true)
     // --- The classification loss (Softmax + cross entropy) -------
     pub fn cross_entropy_loss( //< how wrong the last position's prediction was, in nats
-        //<
         //< Self's final dimension is the vocabulary; L = logsumexp(logits) - logits[target]. Of
         //< several rows it takes only the last (one step of teacher forcing); for every row, use
         //< `cross_entropy_loss_seq`.
@@ -139,7 +135,6 @@ impl<|T|> Tensor<|T|>
         log_z: = st.max_v + math.log(st.sum_exp)
         return log_z - (r.data + offset + target)$
     pub fn grad_softmax_cross_entropy( //< the gradient of the last position's scores
-        //<
         //< It is softmax(logits) with 1 subtracted at [target].
         r: Self$@,
         target: I32, //< the correct next token; a token outside the vocabulary is rejected
@@ -161,7 +156,6 @@ impl<|T|> Tensor<|T|>
         (dlogits.data + ti)$ = (dlogits.data + ti)$ - T::1.0
         return dlogits
     pub fn cross_entropy_loss_seq( //< how wrong every position's prediction was, averaged, in nats
-        //<
         //< Every row's loss: next-token prediction, what a language model is trained on.
         r: Self$@,
         targets: I32$[], //< the correct next token at each position, one per row
@@ -179,7 +173,6 @@ impl<|T|> Tensor<|T|>
             total += log_z - (r.data + t * n + targets[t])$
         return total / (F64::rows)
     pub fn grad_softmax_cross_entropy_seq( //< the gradient of every position's scores
-        //<
         //< Each row is averaged by 1/rows.
         r: Self$@,
         targets: I32$[], //< the correct next token at each position, one per row
@@ -202,7 +195,6 @@ impl<|T|> Tensor<|T|>
             (dlogits.data + ti)$ = (dlogits.data + ti)$ - scale
         return dlogits
     pub fn accumulate( //< adds another gradient into this one, in place
-        //<
         //< self += grad. **The caller decides the order of the additions.** Floating-point addition
         //< is not associative. So a sum that must match on every run has to be taken in one fixed
         //< order.
@@ -214,7 +206,6 @@ impl<|T|> Tensor<|T|>
             (r.data + i)$ = (r.data + i)$ + (grad.data + i)$
     // --- Updating a parameter (SGD) --------------------------------
     pub fn sgd_step( //< one plain gradient-descent step, changing the parameter in place
-        //<
         //< self -= lr * grad
         r: Self$@,
         grad: Tensor<|T|>, //< the parameter's gradient; a different size is rejected

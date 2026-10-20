@@ -1,5 +1,4 @@
 //< Rejects badly written type expressions
-//<
 //< **This reads types for a different purpose than the resolver.** `ksplc/sema/decl/resolve.kspl`
 //< turns a name into a type id; here "it did not resolve / it is miswritten" becomes a diagnostic.
 //< Caution: **Do not silently make it Unknown.** The mistake would show only as a differently
@@ -21,7 +20,6 @@ import "std/str" { Str_builder }
 fn report_type_existence_error(c: Sema_ctx$@, kind: sema_decl_name.Written_kind, base_name: U8[],
     err_node: Ast_node$@) //<
         //< Reports what a written type's name is instead of a type, where it is not one
-        //<
         //< base_name is the path as written up to its type arguments, the whole path for a value's.
     switch kind
     case .unknown_alias
@@ -45,7 +43,6 @@ fn report_type_existence_error(c: Sema_ctx$@, kind: sema_decl_name.Written_kind,
 
 fn refuse_type_args_on_plain_type(c: Sema_ctx$@, w: sema_decl_name.Written_type): Bool //<
     //< Reports type arguments written after a type that declares none, and says whether it did
-    //<
     //< They would bind nothing and change nothing (Principle 5), in a type position and before a
     //< member alike (`Plain<|I32|>`, `Plain<|I32|>.mk(3)`), as after a function that declares none.
     if w.args == null || c.written_template(w) != null
@@ -70,7 +67,7 @@ priv fn check_and_report_type(node: Ast_node$@, c: Sema_ctx$@,
                 c.check_visibility_and_mark_used(sym, err_node)
         if w.member == null
             refuse_type_args_on_plain_type(c, w)
-    case .names_value(_w)
+    case .names_value
         $path_str: = Str_builder.new()
         node.get_full_path_str_to(path_str)
         report_type_existence_error(c, kind, path_str.slice(), err_node)
@@ -88,7 +85,6 @@ priv fn atom_path(atom: Ast_node$@): Ast_node$@? //< the path a type atom names 
 
 fn names_missing_type(c: Sema_ctx$@, type_node: Ast_node$@): Bool //<
     //< Whether a written type names a type check_and_report_type refuses as missing
-    //<
     //< The resolver still gives such a name an id of its own. So **a binding of it is typed unknown
     //< instead** (declare_param in `../body/infer.kspl`). Its uses then add nothing to the one
     //< report, an unread-parameter warning included.
@@ -110,7 +106,6 @@ fn names_missing_type(c: Sema_ctx$@, type_node: Ast_node$@): Bool //<
 priv fn refuse_sizeof_of_value_name(c: Sema_ctx$@, target: Ast_node$@,
     gen_params: List<|Ast_node$@|>$@): Bool //<
         //< Reports a `sizeof` of a function's name or a type's member, and says whether it did
-        //<
         //< **A function's size has no one meaning** (`sizeof(twice)`, `sizeof(same<|I32|>)`): the
         //< pointer's, the machine code's or the result's would each be one reader's guess. The
         //< message names the form that gives a pointer's size. A target with a postfix (`twice@`)
@@ -176,7 +171,6 @@ impl Ast_node
 
     priv fn report_untyped_fn_ptr_params(r: Ast_node$@, c: Sema_ctx$@) //<
         //< Reports a formal parameter of a function pointer type (`fn(…): R`) with no type written
-        //<
         //< Caution: **It must not be silently made Unknown.** `fn(T): T` is a parameter named `T`
         //< with no type. **Decide by whether a type is written**: parse/normalize.kspl adds an
         //< empty `type_expr` anyway.
@@ -194,7 +188,6 @@ impl Ast_node
     priv fn report_bad_param_defaults(r: Ast_node$@, c: Sema_ctx$@,
         gen_params: List<|Ast_node$@|>$@, is_closure: Bool) //<
             //< Checks a parameter's default value at the declaration, once, not per instance
-            //<
             //< **`k_type_fn_sig` is both a function's and a function pointer type's**; one
             //< rejection covers both.
         param_list: = r.find_child(.k_param_list)
@@ -225,7 +218,6 @@ impl Ast_node
 
     fn check_spelled_out_sugar(r: Ast_node$@, c: Sema_ctx$@) //<
         //< Refuses each type under r that spells a slice, an optional or a result out
-        //<
         //< It refuses an optional error type (`T!E?`) too.
         //< **One spelling per type** (Principle 6 in docs/DESIGN-principles.md): `T[]` / `T$[]`,
         //< `T?` and `T!E` stand everywhere a type does, an `impl`'s target included. An expression
@@ -278,7 +270,6 @@ impl Ast_node
 
     priv fn mentions_gen_param(r: Ast_node$@, gen_params: List<|Ast_node$@|>$@): Bool //<
         //< Whether the type's name names one of the type parameters currently in scope
-        //<
         //< Caution: **Walk the tree**; checking only the outermost name misses `List<|T|>` and
         //< `T$@`.
         if (r.kind_id == .k_identifier || r.kind_id == .k_type_path) &&
@@ -304,7 +295,6 @@ impl Ast_node
     priv fn check_type_arg_kinds(r: Ast_node$@, c: Sema_ctx$@, tmpl: Ast_node$@,
         gen_params: List<|Ast_node$@|>$@, bound: List<|U8[]|>$@) //<
             //< Checks each argument of a `<|…|>` in a generic's declaration against its parameter
-            //<
             //< **Only in a generic's declaration.** A template is resolved only as its instances,
             //< where its own parameters' names are already their arguments. Elsewhere each is
             //< judged where it is resolved (build_resolved_type_args in resolve.kspl). tmpl is null
@@ -348,7 +338,6 @@ impl Ast_node
     fn validate_all_type_exprs(r: Ast_node$@, c: Sema_ctx$@,
         gen_params: List<|Ast_node$@|>$@, bound: List<|U8[]|>$@ = null) //<
             //< Reports each type expression under r naming no type
-            //<
             //< bound lists the names a function binds (parameters and locals), once inside one.
         if r == null
             return

@@ -1,5 +1,4 @@
 //< The entry points for page breaks, and for a page's header and footer
-//<
 //< **The paper settings belong to the document** (not to a style). The size, the margins and the
 //< body's width all live in `Paper` in [`model/style.kspl`](../../model/style.kspl).
 //< Note: It is split from [`bridge.kspl`](bridge.kspl) for the 1000-line-per-file cap, and
@@ -7,74 +6,58 @@
 import "kspage/lay/chrome" as band
 import "kspage/lay/flow"
 import "kspage/model/doc" { Chrome }
-import "kspage/model/limit"
-import "kspage/model/paper" + { Paper }
-import "kspage/port/web/state" + { doc, ed, ensure, input, INPUT_CAP, page, sheet, source }
+import "kspage/model/paper"
+import "kspage/port/web/state" + { doc, ed, ensure, in_ptr, page, sheet, source }
+import "kspage/share/store"
 import "kspage/write/edit" as _edit
 import "kspage/write/shape"
 import "std/mem" { Arena }
 
 // ---- Splitting into pages ----
 
-// Writes eight values for one page's settings into out (the paper's width / the page's height /
-// left / top / right / bottom / the content height / the body's width).
-// **Height 0 means "do not split" and width 0 means "the container's width".** The core computes
-// the content height too. Computing the height minus the margins in the caller would put the
+// Writes one page's settings as their saved text (a JSON object: `page_width`, `page_height`, the
+// four `margin_*` and `reading_width`) and returns the length. **A field left out is 0**: height 0
+// means "do not split" and width 0 "the container's width".
+#export
+fn kspage_web_paper(): Sz
+    ensure()
+    state.out.clear()
+    store.paper_text(sheet.paper, state.out)
+    return state.out.len
+
+// The height a page holds for the content, the page's height less its margins (0: not split).
+// **The core computes it.** Computing the height minus the margins in the caller would put the
 // layout and the printed copy out of step (`Sheet.column_height`).
 #export
-fn kspage_web_paper(out: F32$@)
+fn kspage_web_paper_band(): F32
     ensure()
-    out$ = sheet.paper.width
-    (out + 1)$ = sheet.paper.height
-    (out + 2)$ = sheet.paper.left
-    (out + 3)$ = sheet.paper.top
-    (out + 4)$ = sheet.paper.right
-    (out + 5)$ = sheet.paper.bottom
-    (out + 6)$ = sheet.column_height()
-    (out + 7)$ = sheet.paper.reading
+    return sheet.column_height()
 
-// Writes six values for the default paper into out (the paper's width / the page's height / left
-// / top / right / bottom).
+// Writes the default paper as its saved text, as `kspage_web_paper` does, and returns the length.
 // Caution: **Do not copy the numbers into JS.** The canonical source is `a4_portrait` in
 // `../../model/paper.kspl`. A copy drifts (15mm margins in one place and one inch in the other),
 // and two documents made from the same screen get different margins.
 #export
-fn kspage_web_default_paper(out: F32$@)
+fn kspage_web_default_paper(): Sz
     ensure()
-    had: = paper.a4_portrait()
-    out$ = had.width
-    (out + 1)$ = had.height
-    (out + 2)$ = had.left
-    (out + 3)$ = had.top
-    (out + 4)$ = had.right
-    (out + 5)$ = had.bottom
+    state.out.clear()
+    store.paper_text(paper.a4_portrait(), state.out)
+    return state.out.len
 
-// Replaces one page's settings as a whole.
-// At height 0 it stops splitting.
+// Replaces one page's settings with the `len` bytes in the loading arena, read as a saved document
+// is (out of range, refused: `kspage/model/limit`); 1 if read. **A field left out is 0.**
 // Caution: **Do not write `sheet.paper` directly.** Written directly, it is not in the undo
 // record. Then clicking undo after changing the paper undoes the change before it, while the
 // paper stays changed.
 #export
-fn kspage_web_set_paper(width: F32, height: F32, left: F32, top: F32, right: F32, bottom: F32,
-    reading: F32)
+fn kspage_web_set_paper(len: Sz): I32
     ensure()
-    // Past its range the change is not made, as a document read from a file is refused
-    // (`kspage/model/limit`). A page of a pixel splits the document into a page per pixel.
-    for v in F32[]::{ width, height }
-        if v > 0.0 && !limit.page_fits(v)
-            return
-    for v in F32[]::{ left, top, right, bottom, reading }
-        if !limit.length_fits(state.given(v))
-            return
-    $fresh: Paper = sheet.paper
-    fresh.width = width if width > 0.0 else 0.0
-    fresh.height = height if height > 0.0 else 0.0
-    fresh.left = left if left > 0.0 else 0.0
-    fresh.top = top if top > 0.0 else 0.0
-    fresh.right = right if right > 0.0 else 0.0
-    fresh.bottom = bottom if bottom > 0.0 else 0.0
-    fresh.reading = reading if reading > 0.0 else 0.0
+    if in_ptr == null || len <= 0
+        return 0
+    fresh: = store.paper_from_text(U8[]::{ .ptr = in_ptr, .len = len }) catch
+        return 0
     ed.set_paper(sheet, fresh)
+    return 1
 
 // Sets the step to show now. **A negative value shows all steps** (no filtering).
 // It is a viewer setting. It is neither saved nor applied when printing. It is a filter that lasts
@@ -172,13 +155,13 @@ fn kspage_web_chrome_text(i: Sz): Sz
 #export
 fn kspage_web_set_chrome(which: I32, len: Sz): I32
     ensure()
-    if len < 0 || len > INPUT_CAP
-        return 0
     b: = doc.chrome_of(.footer if which != 0 else .header)
     if b.inlines.len <= 0
         return 0
-    ed.set_chrome(b.inlines.get(0), U8[]::{ .ptr = input@, .len = len })
-    return 1
+    if text: = state.typed(len)
+        ed.set_chrome(b.inlines.get(0), text)
+        return 1
+    return 0
 
 // Writes the band's text and returns the length. It is the text before replacement (with `{page}`
 // as it is).

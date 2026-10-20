@@ -18,6 +18,7 @@ function kspageProbeFilter(ks) {
   const openNarrow = () => {
     openMenu("narrow-here");
     document.getElementById("narrow-here").click();
+    document.getElementById("narrow-condition").open = true;
   };
 
   // The sample's price column holds 120 and 80. "Is above 100" leaves the 80 row out, and the
@@ -93,8 +94,37 @@ function kspageProbeFilter(ks) {
   // The panel reached from the ribbon's button opens at the column the cursor stands in.
   check(app.openNarrow() === "", "the ribbon's button opens the same panel");
   check(!document.getElementById("narrow").hidden, "and it is out");
+  const upButton = document.getElementById("sort-up").getBoundingClientRect();
+  const downButton = document.getElementById("sort-down").getBoundingClientRect();
+  check(upButton.top >= downButton.bottom, "sort commands occupy separate menu rows");
+  check(!document.getElementById("narrow-condition").open, "conditions start folded away");
+  const search = document.getElementById("narrow-find");
+  search.value = "blanks";
+  search.dispatchEvent(new Event("input", { bubbles: true }));
+  check(document.getElementById("narrow-list").textContent.includes("(Blanks)"),
+    "search can find blank cells without matching case");
+
   document.getElementById("narrow-shut").click();
   check(document.getElementById("narrow").hidden, "closing it puts it away");
+  app.openNarrow();
+  const pending = document.querySelector("#narrow-list input");
+  pending.click();
+  document.getElementById("narrow-shut").click();
+  check(app.rowsShown()[0] === every[0], "Cancel discards pending checkbox changes");
+  app.openNarrow();
+  document.querySelector("#narrow-list input").click();
+  document.getElementById("narrow-ticked").click();
+  check(document.getElementById("narrow").hidden && app.rowsShown()[0] < every[0],
+    "OK applies checkbox changes and closes the menu");
+  app.openNarrow();
+  document.getElementById("narrow-clear").click();
+  check(document.getElementById("narrow").hidden && app.rowsShown()[0] === every[0],
+    "Clear filter restores rows and closes the menu");
+  app.openNarrow();
+  document.getElementById("narrow-find").dispatchEvent(new KeyboardEvent("keydown",
+    { key: "Escape", bubbles: true, cancelable: true }));
+  check(document.getElementById("narrow").hidden, "Escape closes the filter menu");
+
 
   // The arrow drawn in the heading. **It is painted on the canvas, so only a press on the canvas
   // reaches it.** Misplace it by a few pixels, and nothing here would say so.

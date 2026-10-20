@@ -1,0 +1,46 @@
+name: Gate report
+description: Each gate's outcome on the job's summary, and a log per gate kept with the run
+
+# ci.yml's jobs each end with this, so the three jobs report the same way. Call it with
+# `if: always()`: the round that fell is the point. Each step here says `always()` too, so the
+# upload runs after a summary that fails.
+inputs:
+  title:
+    description: "the summary's title: the job, and its shard where it has one"
+    required: true
+  name:
+    description: "the name the logs are kept under, one per job and shard"
+    required: true
+
+runs:
+  using: composite
+  steps:
+    # `digest_md` in `tools/ci_gates.kspl` writes it. `LOGGING=1`, since out/log/make.log may be
+    # unwritable outside the container. A step here takes no job's `defaults:`, so Windows names
+    # its MSYS2 shell, where make is.
+    - name: Emit each gate's outcome to the summary
+      if: always() && runner.os != 'Windows'
+      shell: bash
+      run: make ci-summary LOGGING=1
+      env:
+        TITLE: ${{ inputs.title }}
+    - name: Emit each gate's outcome to the summary (MSYS2)
+      if: always() && runner.os == 'Windows'
+      shell: msys2 {0}
+      run: make ci-summary LOGGING=1
+      env:
+        TITLE: ${{ inputs.title }}
+    # `tools/ci.kspl` keeps `out/log/ci/<name>.log`. A pattern that matches nothing in a job is
+    # passed over; `warn` marks a round that left no log, which fell before its first gate.
+    - name: Keep a log per gate
+      if: always()
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: ${{ inputs.name }}
+        path: |
+          out/log/ci/*.log
+          out/log/ci/*.end
+          out/log/suite/*.times
+          out/log/extract/*.log
+        if-no-files-found: warn
+        retention-days: 14

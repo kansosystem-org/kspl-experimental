@@ -1,5 +1,4 @@
 //< How kssrv decides the steering it returns to the car (`POST /api/car`)
-//<
 //< The car sends **the distance and the line** as raw readings, and how to move is decided here.
 //< **This net learns from `rule_action` below.** The net is no smarter than the rules.
 //< **The safety timeout is on the car's side.**
@@ -28,7 +27,6 @@ const ACTION_COUNT: Sz = 10 //< how many manoeuvres can be picked
 priv const HIDDEN: Sz = 24
 
 const ACT_STOP: Sz = 0 //< a manoeuvre's number
-    //<
     //< It is also the logit's index.
 const ACT_FORWARD: Sz = 1
 const ACT_BACK: Sz = 2
@@ -41,7 +39,6 @@ const ACT_TRACK_LEFT_HARD: Sz = 8
 const ACT_TRACK_RIGHT_HARD: Sz = 9
 
 struct Maneuver //< the instruction for one manoeuvre
-    //<
     //< lon/lat/rot go to the car's `motor.drive` unchanged; **positive = forward / right /
     //< clockwise**.
     name: U8[]
@@ -69,7 +66,6 @@ const MANEUVERS: Maneuver[_] = ::{
 }
 
 struct Obs //< the observation arriving from the car
-    //<
     //< In `dist_mm`, **0 means "it could not be measured"** (the ultrasonic ECHO never went high),
     //< not "close"; hence `valid` among the features.
     dist_mm: I64
@@ -79,28 +75,23 @@ struct Obs //< the observation arriving from the car
 priv const BACK_MM: I64 = 150 // closer than this -> back off
 priv const AVOID_MM: I64 = 400 // closer than this -> dodge sideways
 priv const FAR_MM: I64 = 1000 //< the distance cap used for normalizing
-    //<
     //< Anything farther than this is treated as the same "far".
 
 const COMMAND_VALID_MS: I64 = 500 //< how long [ms] the car may wait for the next answer
-    //<
     //< If no answer comes in time, the car stops. **The server decides it**, or every policy change
     //< would mean reflashing the car.
 
 priv const TRAIN_EPOCHS: Sz = 400 //< the training settings
-    //<
     //< They run at every startup; keep them within what the startup time allows.
 priv const LEARNING_RATE: F64 = 0.08
 priv const WEIGHT_SEED: U64 = 4242U64
 priv const TRAIN_DIST_SEED: U64 = 31337U64 //< the seed for the random distances used in training
-    //<
     //< The line has only 8 patterns, all used; only the distance is random.
 const LINE_PATTERNS: Sz = 8 //< every value the three line sensors give
 priv const TRAIN_DISTS: Sz = 96
 
 priv const EVAL_STEP_MM: I64 = 5 //<
     //< The step [mm] and the cap used when the agreement rate is measured
-    //<
     //< Caution: **Measure by stepping through the whole range, not by random draws.** The
     //< disagreements lie within tens of mm of the boundaries, which random draws can miss entirely
     //< and report "100%"; stepping always covers them, with no seed.
@@ -118,7 +109,6 @@ struct Pilot
     checked: Sz
 
 fn rule_action(o: Obs): Sz //< the rules the net learns from
-    //<
     //< **They are checked nearest first**: an obstacle takes priority over the line.
     if o.dist_mm <= 0I64
         return ACT_STOP // the ultrasonic gives no answer; it does not drive without seeing ahead
@@ -155,7 +145,6 @@ priv fn features(o: Obs, arena: Arena$@): Tensor<|F32|> //< an observation as th
     return encoding.features(o.dist_mm, o.line, FAR_MM, arena)
 
 priv fn sample_dist(rng: prng.Prng$@, index: Sz): I64 //< picks one distance for training
-    //<
     //< The distances always include 0 (not measurable); the rest are random in 0-3000mm.
     //< Caution: Randomize only the distance; a random line might never show some of its 8 patterns.
     if index == 0
@@ -164,7 +153,6 @@ priv fn sample_dist(rng: prng.Prng$@, index: Sz): I64 //< picks one distance for
 
 priv fn measure_agreement(p: Pilot$@, compute: Arena$@, out_seen: Sz$@): F64 //<
     //< Measures the share of points where the net agrees with the rules, from 0mm to eval_max_mm
-    //<
     //< It steps by eval_step_mm and puts the number of points measured into `out_seen`.
     base: = compute.save()
     $hit: Sz = 0
@@ -180,7 +168,6 @@ priv fn measure_agreement(p: Pilot$@, compute: Arena$@, out_seen: Sz$@): F64 //<
     return F64::hit / F64::seen if seen > 0 else 0.0
 
 priv fn train(mlp: nn.Mlp<|F32|>$@, compute: Arena$@): F64 //< the start-up training
-    //<
     //< It learns from `rule_action`, with cross-entropy loss.
     base: = compute.save()
     $last_loss: F64 = 0.0
@@ -207,7 +194,6 @@ priv fn train(mlp: nn.Mlp<|F32|>$@, compute: Arena$@): F64 //< the start-up trai
     return last_loss
 
 fn build(compute: Arena$@): Pilot$@ //< makes one steering policy
-    //<
     //< `compute` is working space, no longer used once this returns.
     arena: = Arena.new(64 * 1024)
     p: = mem.alloc_as<|Pilot|>()
@@ -234,7 +220,6 @@ fn free(p: Pilot$@)
 
 fn decide(p: Pilot$@, o: Obs, compute: Arena$@): Sz //<
     //< Picks a manoeuvre's number from an observation
-    //<
     //< `compute` is a working arena the caller rewinds.
     x: = features(o, compute)
     logits: = p.mlp.forward(x)
@@ -242,7 +227,6 @@ fn decide(p: Pilot$@, o: Obs, compute: Arena$@): Sz //<
 
 priv fn maneuver_tensor(arena: Arena$@): Tensor<|F32|> //<
     //< Copies the manoeuvre table into an [action_count, 3] tensor (one row is lon, lat, rot)
-    //<
     //< **The integers are stored as F32**, the only dtype that can be written here. F32 holds these
     //< small integers exactly, and the reader converts them back.
     shape: Sz[2] = ::{ ACTION_COUNT, encoding.DRIVE_FIELDS }
@@ -257,7 +241,6 @@ priv fn maneuver_tensor(arena: Arena$@): Tensor<|F32|> //<
 
 fn export(p: Pilot$@, arena: Arena$@): Str_builder //<
     //< Builds the whole steering policy the car downloads, as one safetensors (`GET /api/pilot`)
-    //<
     //< Caution: **Make the file enough on its own to reproduce `decide` and the manoeuvres'
     //< meaning.** With the weights alone, the reader must copy the features (`FAR_MM`) and the
     //< table, and cannot notice when the server changes them.

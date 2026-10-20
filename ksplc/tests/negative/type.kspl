@@ -1,9 +1,7 @@
 //< Types: names, aliases and the literals that need one
-//<
 //< Each case below is compiled alone, as the file its head names.
 // ==== case alias_fn_ptr_hides_type
 //< The same rule applies to a function pointer's alias too
-//<
 //< There is no declaration that it follows, but the visibility works as a cap. **It cannot be
 //< wider than any name in the type expression**. If the check misses a type inside a parameter,
 //< a side that cannot name the type still receives that value.
@@ -21,7 +19,6 @@ fn main(): I32
   return 0
 // ==== case alias_wider_than_target
 //< An alias cannot be more public than its target type
-//<
 //< An alias publishes a type's name. If the alias is wider, a side that cannot name the target can
 //< receive its value. The visibility written on the target then has no effect (the same
 //< rule as Rust's E0364 / E0365, Swift's public typealias and Kotlin's typealias).
@@ -37,7 +34,6 @@ fn main(): I32
   return e.v
 // ==== case cast_fn_type_signature
 //< A cast between function types whose signatures differ is refused
-//<
 //< A call through it hands the function its arguments in the other signature's shape, undefined
 //< behaviour that C compiles without a word. The parameters' names and an alias do not count, and
 //< an address that arrives as `Void@` still becomes a function type.
@@ -62,7 +58,6 @@ fn main(): I32
   return renamed(1) + back(2)
 // ==== case cast_to_aggregate
 //< A cast to or from an aggregate is refused in KSPL, not left to the C compiler
-//<
 //< C casts only to a scalar, so each of these would reach the C compiler as an invalid cast. An
 //< enum without payloads cast from an integer, and a slice made from an array, stay casts.
 // EXPECT: cannot cast to enum type 'cast_to_aggregate.E' with payloads
@@ -106,7 +101,6 @@ fn main(): I32
   return 0
 // ==== case type_arg_bare_is_readonly
 //< An **unmarked** type argument at a position declared mutable makes the target immutable
-//<
 //< In `struct Box<|$T|>` KSPL's default is immutable and the mark attaches to the mutable side.
 //< Caution: **Pin it down together with the passing side**: `Box<|$I32|>` must stay writable
 //< (`ksplc/tests/variance_test.kspl`), or a checker refusing both passes here too.
@@ -125,7 +119,6 @@ fn main(): I32
   return 0
 // ==== case type_arg_mut_method_body
 //< An immutable type argument at a declared position cannot be written even in a method's body
-//<
 //< An immutable slice can call the built-in slice's `impl U8$[]` body, which fails at run time.
 //< The generic body is different: it is instantiated per type argument. So its immutable version
 //< is refused at translation time.
@@ -148,7 +141,6 @@ fn main(): I32
   return 0
 // ==== case type_arg_mut_not_named
 //< The mutability mark on a type argument can be written only where the declaration declared it
-//<
 //< Caution: **It must not be ignored in silence.** Ignored, `Plain<|$I32|>` and `Plain<|I32|>`
 //< become the same type, and whoever wrote it believes the target became mutable (Principle 5).
 //< The shape that declares it is held by `ksplc/tests/variance_test.kspl`.
@@ -164,7 +156,6 @@ fn main(): I32
   return 0
 // ==== case type_arg_mut_only_method
 //< An impl with `$` on the target's type argument attaches **only to the mutable version**
-//<
 //< The form is `impl<|T|> Box<|$T|>`; from the immutable version its method is "no such method".
 //< **A method that writes goes in this shape**: in `impl<|T|> Box<|T|>` the declaration fails
 //< (the case `type_arg_mut_method_body`). The passing side is `ksplc/tests/variance_test.kspl`.
@@ -189,7 +180,6 @@ fn main(): I32
   return 0
 // ==== case type_arg_weaken_wrong_way
 //< The one-step weakening goes **only in the weakening direction**
-//<
 //< `Box<|I32|>` does not pass as `Box<|$I32|>` (passing side: `ksplc/tests/variance_test.kspl`).
 //< Caution: **The mark is checked in the text too.** Without it both sides display `Box<|I32|>`,
 //< and "expected 'X', but got 'X'" passes (display_generic_arg_to in `sema/type/display.kspl`).
@@ -211,7 +201,6 @@ fn main(): I32
   return 0
 // ==== case type_args_on_plain_type
 //< Type arguments after a type that declares none are refused where they are written
-//<
 //< They would bind nothing (Principle 5), before a member, in a type position and on a struct
 //< literal alike, as after a function that declares none. Let through, the call ran on the plain
 //< type and the type position named a type no declaration holds.
@@ -246,7 +235,6 @@ fn main()
   x: I32 = "not an int"
 // ==== case type_name_as_value
 //< A type's own name is not a value: with nothing expected it has no type, and with a type expected
-//<
 //< Let through, a primitive reaches genc as a bare `Primitive_type` node (an ICE). A declared type
 //< emits an undefined C symbol: a C compiler error, not a diagnostic (Principle 8 in
 //< `../../../docs/DESIGN-principles.md`). Where a value was expected, it was silently taken as one.
@@ -287,7 +275,6 @@ fn main(): I32
     I32::case_compared(null)
 // ==== case typedef_cycle
 //< A typedef that leads back to itself is refused once, naming the alias
-//<
 //< It never reaches an underlying type. The bare "circular typedef detected" named no alias, so in
 //< a file of many the writer had to find the cycle by hand. **A use of the alias adds nothing**: a
 //< mismatch against a type nothing can reach would only hide the cycle's error.
@@ -301,11 +288,10 @@ fn main(): I32
     return x
 // ==== case typedef_written_as_alias
 //< Another language's keyword for a type alias suggests `typedef`, with the line to write
-//<
 //< `alias Id = I32` reads as a variable `alias` wanting a `:`, so the expectation list alone leads
 //< nowhere (`append_typedef_spelling_hint` in `../../parse/syntax_msg.kspl`). Rust's, Go's and
 //< Python's `type`, Swift's `typealias` and C++'s `using` get the same note; visibility stays.
-// EXPECT: typedef_written_as_alias.kspl:8:11: error: expected ':'
+// EXPECT: typedef_written_as_alias.kspl:7:11: error: expected ':'
 // EXPECT: use 'typedef' to declare another name for a type: 'pub typedef Id = I32'.
 pub alias Id = I32
 
@@ -314,7 +300,6 @@ fn main(): I32
   return x
 // ==== case undefined_callee_once
 //< An undefined function is reported once, by the name check
-//<
 //< A callee is resolved as a name before the call is checked, so the call's own report would count
 //< the same mistake twice.
 // EXPECT: undefined path or identifier 'nope'
@@ -330,7 +315,6 @@ fn main()
   y: = undefined_thing_xyz
 // ==== case undefined_ident_capitalized
 //< An undefined name starting with a capital is reported in a value position too
-//<
 //< If "a capital means a type" skips the check, a misspelling passes. Declared by inference, it is
 //< an internal error in genc (no type); elsewhere a C compiler error (Principle 2). The report stops
 //< at one item, so only one position can be pinned down.
@@ -340,7 +324,6 @@ fn main()
   _x: = Str_builde
 // ==== case unknown_attribute
 //< An attribute whose name is mistyped (`#inlne`)
-//<
 //< The grammar takes any identifier as an attribute name, so an unknown one parses and would
 //< silently do nothing (an unimplemented one such as `#no_mangle` too). It is matched against
 //< `is_known_attribute` in `ksplc/sema/decl/attrs.kspl` and refused.
@@ -362,7 +345,6 @@ fn main()
   q: = p.nonexistent
 // ==== case untyped_literal_bounds
 //< Checks that an integer literal whose type is not yet decided fits the type actually computed
-//<
 //< **At the literal's position it cannot be checked**: the default I32 and a later wider type look
 //< alike there. So a binary's node and an unannotated declaration's initialiser decide.
 //< Caution: **Keep the non-firing side alongside**, or an unsettled literal turns `wide_ok` away.
@@ -410,7 +392,6 @@ fn main(): I32
   return 0
 // ==== case value_name_as_type
 //< A value's name is not a type, so a declaration typed with one is refused
-//<
 //< Let through, the name read as the value's type. `x: twice` declared an `I32` (the function's
 //< return type), and `y: g` the global's `I64`. Nothing was reported. A pointer to a function
 //< is written as a function type. The inverse is
@@ -466,9 +447,35 @@ fn case_field(): I32
 fn main()
     _a: = case_function() + I32::case_pointer() + case_specialization() + I32::case_variable() +
         case_member() + case_field()
+// ==== case variant_list_of_payload_enum
+//< An enum with a payload variant has no list of variants, and the message names that variant
+//< The compiler makes `variants()` only for an enum whose variants carry no payload. Without its
+//< own message, the use reads as an undefined name, with a hint that the enum is not a type.
+// EXPECT: has no 'variants': its variant 'message' carries data
+// EXPECT: Finished with 1 error(s)
+// EXPECT-NOT: undefined path
+priv enum Event
+    quit
+    message(text: U8[])
+
+fn main(): I32
+    all: = Event.variants()
+    return I32::all.len
+// ==== case variant_lookup_of_payload_enum
+//< An enum with a payload variant cannot read a variant back from its name either
+//< A variant with a payload needs its data too, which a name does not hold.
+// EXPECT: has no 'from_variant_name': its variant 'message' carries data
+// EXPECT: Finished with 1 error(s)
+priv enum Event
+    quit
+    message(text: U8[])
+
+fn main(): I32
+    if _e: = Event.from_variant_name("quit")
+        return 1
+    return 0
 // ==== case variant_where_no_enum
 //< A `.variant` where the expected type is no enum is refused, naming that type
-//<
 //< The short form takes its enum from the place. An `I32` gives none. So the message says which
 //< type the place expects, and that the value must be written in full.
 // EXPECT: '.small' needs an enum here. The expected type is 'I32'. Write the value in full
@@ -477,7 +484,6 @@ fn main(): I32
     return x
 // ==== case missing_param_type_once
 //< A parameter whose type does not exist is reported once, at the type
-//<
 //< **Its uses add nothing**: the parameter is typed unknown, so it is neither "unread" nor the
 //< subject of a field error.
 // EXPECT: undefined type 'Nope'

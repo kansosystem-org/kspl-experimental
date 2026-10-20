@@ -1,5 +1,4 @@
 //< Tests of `std/fuzz`: mutating bytes, picking seeds, and reading how a round ended
-//<
 //< **Read a round's end from a real child where possible.** The marks an abort prints and the
 //< exit codes differ per platform. A constructed result would agree with itself on every
 //< platform. The line that `report_all` prints is checked in a child, since it goes into the
@@ -13,6 +12,7 @@ import "std/prng" { Prng }
 import "std/str" // `arena.text()` and `replace`
 import "std/subproc"
 import "std/tests/fs_test"
+import "std/tests/sys_test"
 import "std/verdict"
 
 priv const WORK_DIR: U8[] = "out/tmp/kspl_test_fuzz"
@@ -158,18 +158,8 @@ RESULT: SOME FAILED (2) -> probe does not crash on broken input (5 rounds), idle
 
 fn test_fuzz_report(ksplc: U8[], arena: Arena$@) //< ksplc runs the child
     verdict.start("[fuzz] the lines a scattering ends on test...")
-    fs.mkdir_all(WORK_DIR) catch panic("the work directory must be creatable")
-    src: = fs.join(WORK_DIR, "report.kspl", arena)
-    io.write_file(src, REPORT_MAIN) catch panic("the child's program must be writable")
-    r: =
-        subproc.run_capture(U8[][]::{ ksplc, "run", src }, "", 300000, 1 << 20, arena)
-        catch panic("the child must start")
-    assert(r.exit_code.is_some(), "the child must come to an end")
-    // A child's standard output is text mode on Windows, so its lines arrive as CRLF.
-    got: = r.stdout_data.replace("\r\n", "\n", arena)
-    if !got.equals(REPORT_OUT) || !r.exited_with(1)
-        panic(U8$[]::arena.text().s("the report put out\n").s(got)
-            .s("and ended on \{r.exit_code.unwrap_or(-1)\}\n").s(r.stderr_data).take())
+    r: = sys_test.run_to_end(sys_test.child_argv(ksplc, "fuzz_report", REPORT_MAIN, arena), arena)
+    sys_test.expect_output(r, "the report", REPORT_OUT, 1, arena)
     verdict
         .pass("Each way of ending has its line, the way to run it again follows, and none is none.")
 
@@ -244,10 +234,7 @@ fn test_fuzz_scatter(ksplc: U8[], arena: Arena$@) //< ksplc runs the child and t
         subproc.run_capture(U8[][]::{ ksplc, "run", src, ksplc, script, WORK_DIR }, "", 600000,
         1 << 20, arena) catch panic("the child must start")
     assert(r.exit_code.is_some(), "the child must start and come to an end")
-    got: = r.stdout_data.replace("\r\n", "\n", arena)
-    if !got.equals(SCATTER_OUT) || !r.exited_with(1)
-        panic(U8$[]::arena.text().s("the fuzz run put out\n").s(got)
-            .s("and ended on \{r.exit_code.unwrap_or(-1)\}\n").s(r.stderr_data).take())
+    sys_test.expect_output(r, "the fuzz run", SCATTER_OUT, 1, arena)
     verdict
         .pass("A refused seed the run made fails, a found one is dropped, one that stops the \
             subject fails, so does a kind left with no seed, and no reach fails.")

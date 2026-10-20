@@ -1,6 +1,5 @@
 #!/usr/bin/env -S ksplc run
 //< That a direct call's argument types agree with the callee's `define` in the LLVM IR
-//<
 //< It also checks that no instruction follows a block's terminator. LLVM's verifier checks
 //< neither.
 //< Caution: **Do not rewrite it with a regular expression.** It cannot count nested brackets (the
@@ -11,13 +10,13 @@
 import "std/chars"
 import "std/ds" { List, Map }
 import "std/io"
+import "std/math"
 import "std/mem" { Arena, dealloc }
 import "std/str"
 import "std/strfmt" as _strfmt
 import "std/sys"
 
 priv const MAX_REPORTED: Sz = 40 //< the cap on the disagreements reported
-    //<
     //< Caution: Always print the remaining count when cut short (cut silently, a fix that seems to
     //< work may be "merely not displayed").
 
@@ -41,7 +40,6 @@ priv const TERMINATORS: U8[][_] = ::{ "ret", "br", "switch", "unreachable", "res
 }
 
 priv struct Call //< one direct call
-    //<
     //< Matched after every define is read (forward references leave the callee unknown at the
     //< call).
     lineno: Sz
@@ -50,7 +48,6 @@ priv struct Call //< one direct call
     raw: U8[]
 
 priv struct Def_params //< the callee's parameters
-    //<
     //< Caution: **Keep a `count`.** The text alone cannot tell "a define with no parameters"
     //< (to match) from "no define" (a `declare`-only external, to skip).
     count: Sz
@@ -76,14 +73,12 @@ priv fn is_name_char(c: U8): Bool //<
     return c.is_alnum() || c == '_' || c == '.' || c == '$'
 
 priv fn is_word_char(c: U8): Bool //< whether it is a character used to find a word boundary
-    //<
     //< Caution: Keep it separate from `is_name_char`, whose `.` and `$` would read `ret.foo` as a
     //< longer word than `ret` and miss a terminator.
     return c.is_alnum() || c == '_'
 
 priv fn starts_word(s: U8[], w: U8[]): Bool //<
     //< Whether the text starts with the word `w` followed by a space
-    //<
     //< **A prefix match is not enough** — `defineX` would pass.
     return s.starts_with(w) && s.len > w.len && s[w.len].is_space()
 
@@ -106,7 +101,6 @@ priv fn is_type_attr(t: U8[]): Bool
 
 priv fn type_of(operand: U8[]): U8[] //<
     //< Cuts only the type out of `i64 %3` / `ptr @g` / `[2 x i64] zeroinitializer`
-    //<
     //< Caution: **Do not allocate** (it runs per operand); it returns a view into the operand. **A
     //< define's parameters, a call's arguments and a `ret` all use this**, or one type disagrees.
     $begin: Sz = -1
@@ -138,7 +132,6 @@ priv fn type_of(operand: U8[]): U8[] //<
 
 priv fn next_top_level(s: U8[], pos: Sz$@, out_part: U8[]$@): Bool //<
     //< Returns the next element delimited by a top-level comma
-    //<
     //< A comma inside `{i64, i64}` or `[2 x i64]` is not counted.
     //< Caution: **Do not return a trailing empty element** (`a,` is one; counted, a trailing comma
     //< adds an argument).
@@ -166,7 +159,6 @@ priv fn next_top_level(s: U8[], pos: Sz$@, out_part: U8[]$@): Bool //<
     return true
 
 priv fn top_level_count(s: U8[]): Sz //< the count of top-level elements
-    //<
     //< Empty and `void` count as 0.
     body: = s.trim_spaces()
     if body.len == 0 || body.equals("void")
@@ -180,7 +172,6 @@ priv fn top_level_count(s: U8[]): Sz //< the count of top-level elements
 
 priv fn callee_at(s: U8[], from: Sz, out_name: U8[]$@, out_open: Sz$@): Bool //<
     //< Searches for the `@name(` form and returns the name and its `(`'s position
-    //<
     //< Caution: **Check only the first `@`.** In a call through a function pointer (`call void
     //< %12(ptr @g)`) it is an argument, not followed by `(`, so it fails here. Search further, and
     //< **the function passed as an argument is mistaken for the callee**.
@@ -200,7 +191,6 @@ priv fn callee_at(s: U8[], from: Sz, out_name: U8[]$@, out_open: Sz$@): Bool //<
 
 priv fn define_parts(ln: U8[], out_name: U8[]$@, out_params: U8[]$@, out_ret: U8[]$@): Bool //<
     //< Reads `define [attributes] <return type> @name(<parameters>) [attributes] {`
-    //<
     //< Caution: **Read a define whose parameters wrap across lines as one too.** Otherwise it is
     //< "not a define" and **its `ret` is matched against the previous function's return type** —
     //< unseen where they happen to agree.
@@ -258,14 +248,12 @@ priv fn call_parts(ln: U8[], out_name: U8[]$@, out_args: U8[]$@): Bool //<
     return true
 
 priv fn is_varargs(raw: U8[]): Bool //< whether it is a variadic call
-    //<
     //< Such a call is not matched. The check is **before the callee's `@`** (the arguments hold no
     //< `...`).
     head: = raw.sub(0, raw.find_char('@').unwrap_or(raw.len))
     return head.find_str("...").is_some()
 
 priv fn ret_type(ln: U8[], out_ty: U8[]$@): Bool //< the type of `ret <type> [value]`
-    //<
     //< Cut by type_of, as the parameters and arguments are.
     s: = ln.trim_spaces()
     if !starts_word(s, "ret")
@@ -277,7 +265,6 @@ priv fn ret_type(ln: U8[], out_ty: U8[]$@): Bool //< the type of `ret <type> [va
     return true
 
 priv fn is_terminator(ln: U8[]): Bool //< whether it is a block terminator instruction
-    //<
     //< Caution: **Check only a line that starts with a space** (a `ret` at column 0 is outside the
     //< function).
     if ln.len == 0 || !ln[0].is_space()
@@ -300,7 +287,6 @@ priv fn is_label(ln: U8[]): Bool //< a block's label (`name:`), only at a line's
 
 priv fn join_define(lines: List<|U8[]|>, at: Sz, used: Sz$@, arena: Arena$@): U8[] //<
     //< Joins a wrapped define into one line and returns the number of lines used in used
-    //<
     //< Caution: **Join until it closes**, not just one line. A declaration wrapped over three
     //< lines would be missed, unseen as long as today's IR closes in one.
     b: = arena.text()
@@ -320,7 +306,6 @@ priv fn add_bad(bad: List<|Bad|>$@, lineno: Sz, name: U8[], why: U8[], raw: U8[]
 
 priv fn check_call(c: Call, want: Def_params, bad: List<|Bad|>$@, arena: Arena$@) //<
     //< Matches the callee's parameters against the caller's actual arguments
-    //<
     //< With opaque pointers a call's signature comes from the call itself, so `define void @f(i64
     //< %n)` next to `call void @f(i32 2)` passes the verifier. In a register it comes out right.
     //< On the stack (the fifth argument on Win64), the upper 4 bytes keep the slot's old value.
@@ -353,12 +338,11 @@ priv fn check_call(c: Call, want: Def_params, bad: List<|Bad|>$@, arena: Arena$@
 
 priv fn check(path: U8[], stats: File_stats$@, bad: List<|Bad|>$@, arena: Arena$@): Bool //<
     //< Reads one file and adds the disagreements to bad
-    //<
     //< false where it cannot be read.
     //< Caution: **Check for an instruction after a terminator on "the raw line".** On a line where
     //< a wrapped define was joined, the line number is off by the joined lines and points away from
     //< the cause.
-    heap_text: = io.read_file(path) catch
+    heap_text: = io.read_file(path, null) catch
         return false
     // Caution: Copy into the arena before letting go. The strings in bad are views into the body,
     // so a free before the copy reads freed memory at the report.
@@ -460,7 +444,7 @@ priv fn report(path: U8[], stats: File_stats, bad: List<|Bad|>$@)
     io.out().s(path).s(": ")
     io.out()
         .s("\{stats.defines\} defines, \{stats.calls\} direct calls, \{stats.rets\} rets checked\n")
-    shown: = MAX_REPORTED if bad.len > MAX_REPORTED else bad.len
+    shown: = math.min(MAX_REPORTED, bad.len)
     for k in Range.asc(shown)
         b: = bad.get(k)
         io.out().s("  ").s(path).s(":\{b.lineno\}: @\{b.name\}: \{b.why\}\n")

@@ -1,5 +1,4 @@
 //< Where a text names a file, and which file that name resolves to
-//<
 //< Not a suite; a piece of the reference check (`tests/suite/docref_test.kspl`) alone.
 //< Caution: **The matching copies the Python version's regular expressions**: when changing it,
 //< confirm that broken input reports the same lines ("Moving a tool out of Python" in
@@ -28,7 +27,6 @@ priv fn skip_dotdot(text: U8[], i: Sz): Sz //< the position past the run of `../
 
 priv fn bare_doc_len(text: U8[], i: Sz, bares: U8[][]): Sz //<
     //< The length of a document's name carrying no folder, starting at i in text (0 where none)
-    //<
     //< Limited to the documents' names, so a `.md` in prose followed by a number is not a citation.
     //< Caution: **Without this, the section-number check misses a citation inside the same folder**
     //< (`[`DESIGN-principles.md` §8.1.1](DESIGN-principles.md)` in `docs/`), green while pointing
@@ -51,7 +49,6 @@ priv fn dir_prefix_len(text: U8[], i: Sz, dirs: U8[][]): Sz //<
     return 0
 
 struct Hit //< one match
-    //<
     //< `at` is the starting position in text (kept so that a line number can be printed).
     at: Sz
     end: Sz
@@ -93,7 +90,6 @@ priv fn ext_end(text: U8[], dot: Sz, exts: U8[][], word_end: Bool): Sz? //<
 fn find_paths(text: U8[], dirs: U8[][], exts: U8[][], word_end: Bool, bares: U8[][],
     arena: Arena$@): List<|Hit|> //<
         //< Picks up the paths that are cited
-        //<
         //< It cuts at the first position ending in one of `exts` (as Python's lazy quantifier
         //< does). With `word_end`, it does not cut where a word character follows (so `.cpp`'s
         //< `.c` is not picked up).
@@ -150,7 +146,6 @@ fn find_paths(text: U8[], dirs: U8[][], exts: U8[][], word_end: Bool, bares: U8[
 
 fn find_doc_paths(text: U8[], dirs: U8[][], arena: Arena$@): List<|Hit|> //<
     //< the cited `.md` files
-    //<
     //< It picks up both a Markdown link and a bare path inside a comment.
     return find_paths(text, dirs, U8[][]::{ "md" }, false, U8[][]::{}, arena)
 
@@ -171,13 +166,11 @@ fn find_src_paths(text: U8[], dirs: U8[][], arena: Arena$@): List<|Hit|>
 
 priv fn is_link_target(text: U8[], at: Sz): Bool //<
     //< whether the hit at `at` is a Markdown link's target
-    //<
     //< The two resolve differently, so they are told apart first (the rule is at `linked_target`).
     return at >= 2 && text[at - 1] == '(' && text[at - 2] == ']'
 
 fn masked_code(text: U8[], arena: Arena$@): U8[] //<
     //< The text with the inside of each code span masked
-    //<
     //< So the notation shown as code (`[text](target)`, C++'s `[lo](int x)`) is not read as a link.
     //< Caution: **Do not change the length**: a line number is computed from a position, so each
     //< byte becomes one byte. **Do not mask after an unclosed backtick**: it would swallow
@@ -205,7 +198,6 @@ fn masked_code(text: U8[], arena: Arena$@): U8[] //<
 
 priv fn span_close(text: U8[], from: Sz, n: Sz): Sz //<
     //< Just past the run of `n` backticks closing the code span whose opening run ends at `from`
-    //<
     //< It is 0 where none does. A span closes inside its own paragraph (a blank line or a fence
     //< ends the search).
     //< Caution: **Do not search past the paragraph.** One run left open would pair with the next of
@@ -240,7 +232,6 @@ priv fn paragraph_ends(text: U8[], at: Sz): Bool //<
     return k - at <= 3 && (rest.starts_with("```") || rest.starts_with("~~~"))
 
 fn find_kspage_links(text: U8[], arena: Arena$@): List<|Hit|> //< the links inside a `.kspage`
-    //<
     //< Caution: **Do not read the body's text as a path** (`ksplc run hello.kspl` in a monospace
     //< run is not a naming). **Unescape only three escapes** (`\"` `\\` `\/`): any other keeps its
     //< `\` and names nothing, which is better than passing as a different name (Principle 8).
@@ -297,7 +288,6 @@ fn find_kspage_links(text: U8[], arena: Arena$@): List<|Hit|> //< the links insi
 
 fn links_of(rel: U8[], text: U8[], arena: Arena$@): List<|Hit|> //<
     //< The links of a document, by its format
-    //<
     //< **How they are picked up differs by format. How they are checked is in one place**: the
     //< target, relative to the file that writes it, and the existence check.
     //< Caution: **Do not branch on the format in the caller** (Principle 6). If it is split in two,
@@ -314,7 +304,6 @@ priv fn skip_json_space(text: U8[], from: Sz): Sz
     return i
 
 fn find_links(raw: U8[], arena: Arena$@): List<|Hit|> //< the `](path#anchor)` links
-    //<
     //< It picks up `](#anchor)` too (the form pointing at a heading in the same document).
     text: = masked_code(raw, arena)
     $out: = List<|Hit|>.new(arena)
@@ -353,13 +342,11 @@ fn find_links(raw: U8[], arena: Arena$@): List<|Hit|> //< the `](path#anchor)` l
 // ==========================================
 
 fn is_external(t: U8[]): Bool //< whether a link points outside this repository
-    //<
     //< Caution: **Do not check existence** (what is out on the network is not this check's
     //< business).
     return t.starts_with("http://") || t.starts_with("https://") || t.starts_with("mailto:")
 
 fn normalize(path: U8[], arena: Arena$@): U8[] //< folds `a/../b` into `b`
-    //<
     //< A `..` left at the start is returned as it is. **The filesystem is not consulted**: a path
     //< that does not exist folds too, so the report can say which one was named.
     $parts: = List<|U8[]|>.new(arena)
@@ -377,7 +364,6 @@ fn normalize(path: U8[], arena: Arena$@): U8[] //< folds `a/../b` into `b`
 
 fn hit_target(here: U8[], text: U8[], hit: Hit, arena: Arena$@): U8[] //<
     //< The path a picked hit points at, resolved from the file that writes it
-    //<
     //< Whether the hit is a Markdown link's target is decided by its position in `text`.
     //< Caution: **Keep the resolving in this one place, and send every check's hits through it**;
     //< two copies read one naming two ways (Principle 6).
@@ -385,7 +371,6 @@ fn hit_target(here: U8[], text: U8[], hit: Hit, arena: Arena$@): U8[] //<
 
 priv fn linked_target(here: U8[], text: U8[], linked: Bool, arena: Arena$@): U8[] //<
     //< The same, given whether the text came from a Markdown link's `](…)`
-    //<
     //< **A bare name, and a link's target, are relative to the file that writes it.** Only a naming
     //< that already has a folder is relative to the root.
     //< Caution: **Read a link the other way, and a correct one looks broken.** That happens where
@@ -408,7 +393,6 @@ const SCANNED_EXT: U8[][_] = ::{ ".ksplb", ".kspl", ".c", ".h", ".py", ".S", ".m
 
 const READ_AS_DATA: U8[][_] = ::{ "ksplc/seed.c", "tests/support/docref_samples.kspl" } //<
     //< The files whose namings are data, not references
-    //<
     //< The generated file first: references are checked in its canonical source. **The sample
     //< table is left out too**: its citations are wrong on purpose; the table showing the check can
     //< fire covers them.
@@ -424,7 +408,6 @@ fn is_scanned(rel: U8[]): Bool //< whether a tracked file is read for its refere
 
 fn find_misnamed_links(text: U8[], arena: Arena$@): List<|Hit|> //<
     //< The `` [`X`](Y) `` links whose text names a file other than the one they point at
-    //<
     //< A hit's `text` is X and its `extra` is Y. **Only the file names are compared**, since a
     //< comment and a document write the folder each from its own place. A text with no file
     //< extension (`` `Row.put` ``, `` `ksai/` ``) names no file and is not read.
@@ -467,20 +450,17 @@ priv fn last_step(path: U8[]): U8[] //< what follows the last `/`
 
 const SRC_SUFFIX: U8[][_] = ::{ ".kspl", ".ksplb" } //<
     //< The extensions added to an import path
-    //<
     //< A source's comes first, as the compiler adds it (`source_ext` in
     //< `../../ksplc/base/core.kspl`).
     //< Caution: **Do not drop `.ksplb`** — `ksplc/tests/parse/` holds parser input written in it.
 
 struct Src_places //< where a naming of a source file is looked up, in order
-    //<
     //< `bases` are the folders as written; `src_place` folds each one only when asked.
     bases: List<|U8[]|>
     raw: U8[]
 
 fn src_places(here: U8[], raw: U8[], arena: Arena$@): Src_places //<
     //< Where a named implementation or test file is looked up
-    //<
     //< They start from the naming file's folder.
     //< Four, in this order: next to the naming file, from its package's root, from the repository's
     //< root, and under `tests/` (where `mk/test.mk`'s `suite_*` points).
@@ -498,7 +478,6 @@ fn src_places(here: U8[], raw: U8[], arena: Arena$@): Src_places //<
 
 fn src_place(p: Src_places@, k: Sz, arena: Arena$@): U8[] //<
     //< The k-th location (from 0), folded; empty past the last
-    //<
     //< Every base as written comes first, then each base with each extension added, but only where
     //< the last step has no extension of its own.
     //< Caution: **Build a location only when asked.** Built all at once, the work per reference
@@ -515,7 +494,6 @@ fn src_place(p: Src_places@, k: Sz, arena: Arena$@): U8[] //<
     return normalize(arena.text().s(base).s(SRC_SUFFIX[j % SRC_SUFFIX.len]).take(), arena)
 
 priv fn last_segment_has_dot(raw: U8[]): Bool //< whether the last step has an extension
-    //<
     //< If it does, none is added (having one yet not existing is the naming's own error).
     $tail: = raw
     if cut: = raw.rfind_char('/')

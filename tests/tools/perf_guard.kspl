@@ -1,6 +1,5 @@
 #!/usr/bin/env -S ksplc run
 //< CI performance guard: checks whether memory use has grown markedly over the baseline
-//<
 //< It compares the "Compile time" / "AST Arena usage" / "AST Arena headroom" / "System Peak Memory"
 //< lines that ksplc prints to the log when self-hosting against tests/tools/perf_baseline.json.
 //< Caution: **There are two verdicts. Do not remove either.** The peak (`System Peak Memory`)
@@ -21,7 +20,6 @@ import "std/strfmt"
 import "std/sys"
 
 priv const MEM_THRESHOLD: F64 = 1.3 //< the multiple allowed for the peak
-    //<
     //< **It cannot be tighter than a step.** The AST's arena grows a chunk at a time (`Arena` in
     //< `std/mem.kspl`), so one step is a large fraction of the peak.
     //< Caution: **Where only the peak fails, suspect a step first** — a rise of about one `arena
@@ -30,19 +28,16 @@ priv const MEM_THRESHOLD: F64 = 1.3 //< the multiple allowed for the peak
     //< fails.
 
 priv const AST_THRESHOLD: F64 = 1.05 //< the multiple allowed for the usage
-    //<
     //< Caution: **Do not give it the peak's value**: this count has no steps to absorb. Tighter
     //< than 5%, the baseline would need a new measurement at every intended feature addition.
 
 priv const TIME_PATTERN: U8[] = "Compile time\\s*:\\s*([\\d,]+) ms" //<
     //< The patterns picked out of the log
-    //<
     //< **The canonical source is the lines `ksplc/main.kspl` prints**; change them and change
     //< this. `[\d,]+` includes the grouping comma (`7,052`). `Compile time` is `N/A` on backends
     //< other than C and so is not picked up (`make perf-log` measures on C).
 priv const PEAK_PATTERN: U8[] = "System Peak Memory:\\s*([\\d,]+) bytes" //<
     //< The pattern for the peak memory
-    //<
     //< **The build time is not used for the verdict**; only its ratio against the baseline is
     //< recorded.
     //< On the same tree and machine, cold time varies by nearly a factor of two while the peak
@@ -51,7 +46,6 @@ priv const PEAK_PATTERN: U8[] = "System Peak Memory:\\s*([\\d,]+) bytes" //<
     //< breakdown. To investigate time, compare the minimum of several runs on a quiet machine.
 priv const AST_PATTERN: U8[] = "AST Arena usage\\s*:\\s*([\\d,]+) /" //<
     //< The memory the AST occupies
-    //<
     //< Caution: **Capture the usage (the left), not the capacity (right of the `/`)**, which is the
     //< sum of the chunks and steps like the peak. **Both memory figures are our own count, not
     //< RSS** (the peak is the most bytes `std/mem.kspl` held from malloc at once).
@@ -61,7 +55,6 @@ priv const HEADROOM_PATTERN: U8[] =
     "AST Arena headroom:\\s*([\\d,]+) bytes before next chunk \\(\\+([\\d,]+) bytes\\)"
 
 priv enum Guard_error //< the tool failed
-    //<
     //< Caution: **Do not add variants.** The code that finds the problem prints the reason, and the
     //< caller returns exit code 2 for any; only "something went wrong" is carried.
     failed
@@ -73,14 +66,12 @@ priv struct Metrics
 
 priv struct Headroom //<
     //< the distance to the carry (the AST's arena growing by one more chunk)
-    //<
     //< Caution: **Do not merge it into `Metrics`**, the baseline JSON's format: a new key makes
     //< every existing baseline unreadable. This is read from the log each time.
     free: I64
     step: I64
 
 priv struct Shapes //< the sizes of the types the tree is built from
-    //<
     //< Caution: **Do not merge it into `Metrics`.** That holds per-machine values, while this is
     //< **fixed, the same on any 64-bit machine** — there, `--update` would silently rewrite a fixed
     //< value.
@@ -89,7 +80,6 @@ priv struct Shapes //< the sizes of the types the tree is built from
 
 priv const WANT_NODE_BYTES: I64 = 64I64 //<
     //< The fixed sizes of the tree's two types (64-bit: `Sz` and a pointer are 8 bytes)
-    //<
     //< Caution: **When it fails, do not change these numbers first.** 8 bytes more each is tens of
     //< MB over the tree, but `AST_THRESHOLD` absorbs it. **`AST bytes` passes while it gains
     //< weight**.
@@ -98,7 +88,6 @@ priv const NODE_PATTERN: U8[] = "AST Node bytes\\s*:\\s*([\\d,]+)"
 priv const KIDS_PATTERN: U8[] = "AST Kids bytes\\s*:\\s*([\\d,]+)"
 
 priv struct Baseline //< holds cold and warm together
-    //<
     //< Caution: **Do not allow a form that holds only one**; split, the missing side passes
     //< unchecked.
     cold: Metrics
@@ -110,14 +99,12 @@ priv struct Baseline //< holds cold and warm together
 impl Baseline: reflect.Reflectable {}
 
 priv const VALUE_CEILING: I64 = 1_000_000_000_000_000I64 //< the cap on a readable value
-    //<
     //< It is a petabyte, or thirty thousand years in ms; no indicator reaches it.
     //< Caution: **Never let an overflow pass silently.** An overflowed I64 becomes "a small
     //< positive number", so a regression passes as an "improvement"; the cap stops before the next
     //< digit.
 
 priv fn digits_value(s: U8[]): I64 //< drops the grouping commas and returns an integer
-    //<
     //< It returns -1 past the cap. The capture is `[\d,]+`, so the comma is the only non-digit.
     $v: I64 = 0
     for i in Range.asc(s.len)
@@ -130,7 +117,6 @@ priv fn digits_value(s: U8[]): I64 //< drops the grouping commas and returns an 
 
 priv fn max_capture(text: U8[], pattern: U8[], path: U8[], arena: Arena$@): I64!Guard_error //<
     //< The largest number the pattern captures across the whole log
-    //<
     //< Caution: **Take the worst value.** One log holds stage1 and stage2; the first or the average
     //< dilutes the bad side. **Finding none is a failure too** — read as 0, an indicator that stops
     //< being printed records an "improvement".
@@ -155,7 +141,6 @@ priv fn max_capture(text: U8[], pattern: U8[], path: U8[], arena: Arena$@): I64!
 
 priv fn parse_headroom(text: U8[], path: U8[], arena: Arena$@): Headroom!Guard_error //<
     //< Reads the distance to the carry from the log
-    //<
     //< Caution: **Take the value nearest the edge**; with several measurements, the far one reads
     //< as "there is still slack".
     re: = regex.Regex.compile(HEADROOM_PATTERN) catch
@@ -179,7 +164,6 @@ priv fn parse_headroom(text: U8[], path: U8[], arena: Arena$@): Headroom!Guard_e
     return out
 
 priv struct Reading //< everything read out of one log
-    //<
     //< Caution: **Do not read a log twice**; read separately, one could come from an old log.
     metrics: Metrics
     head: Headroom
@@ -187,7 +171,7 @@ priv struct Reading //< everything read out of one log
 
 priv fn parse_log(path: U8[], arena: Arena$@): Reading!Guard_error //<
     //< Reads the indicators and the distance to the carry from one log
-    text: = io.read_file(path) catch
+    text: = io.read_file(path, null) catch
         io.err().s("[perf_guard] the log cannot be read: ").s(path).s("\n")
         throw .failed
     defer dealloc(Void$@::text.ptr)
@@ -200,7 +184,6 @@ priv fn parse_log(path: U8[], arena: Arena$@): Reading!Guard_error //<
         .kids = max_capture(text, KIDS_PATTERN, path, arena)! } }
 
 priv fn baseline_path(arena: Arena$@): U8[] //< the baseline's path
-    //<
     //< Caution: **Do not derive it from cwd.** It is called from outside `make` too, so it looks
     //< next to the script (`tests/`); only when the script path is unknown does it assume the root.
     script: = sys.script_path().unwrap_or("")
@@ -210,7 +193,6 @@ priv fn baseline_path(arena: Arena$@): U8[] //< the baseline's path
 
 priv fn write_baseline(path: U8[], cur: Baseline, arena: Arena$@): Bool //<
     //< Writes the baseline
-    //<
     //< Caution: **Do not build the JSON by hand.** Write with `dump` in `std/json` (a second
     //< writer drifts in escaping and number form), two-space indent so `git diff` shows which value
     //< moved. `--update` rewrites all three keys; to add one key alone, write it by hand.
@@ -229,14 +211,13 @@ priv fn write_baseline(path: U8[], cur: Baseline, arena: Arena$@): Bool //<
 
 priv fn read_baseline(path: U8[], arena: Arena$@): Baseline!Guard_error //<
     //< Reads the baseline, which differs per machine
-    //<
     //< The time varies with the machine and its load, and the two memory figures move when a `#cfg`
     //< branch changes.
     //<
     //< Taken on the Linux CI's devcontainer image (used as they are on macOS, they raise false
     //< alarms; "note 16" in `docs/SPEC-gates.md`). The memory figures repeat exactly for one
     //< source.
-    text: = io.read_file(path) catch
+    text: = io.read_file(path, null) catch
         io.err().s("[perf_guard] the baseline cannot be read: ").s(path).s("\n")
         throw .failed
     defer dealloc(Void$@::text.ptr)
@@ -266,14 +247,12 @@ priv fn read_baseline(path: U8[], arena: Arena$@): Baseline!Guard_error //<
     return out
 
 priv fn ratio_text(base: I64, cur: I64, arena: Arena$@): U8[] //< the ratio against the baseline
-    //<
     //< Where the baseline is 0 it cannot divide, so it returns `n/a`.
     return ("n/a" if base == 0I64
         else arena.text().s("x\{F64::cur / F64::base:.2\}").take())
 
 priv fn report(kind: U8[], base: Metrics, cur: Reading, arena: Arena$@): Bool //<
     //< Prints one measurement and returns whether both memory figures are within their limits
-    //<
     //< Caution: **Do not write `RECORDED` on the time's line.** Beside the baseline it **reads as
     //< though the baseline were rewritten** (only `--update` writes it); say it is not used for the
     //< verdict.
@@ -294,7 +273,6 @@ priv fn report(kind: U8[], base: Metrics, cur: Reading, arena: Arena$@): Bool //
 
 priv fn report_headroom(kind: U8[], limit: I64, cur: Reading) //<
     //< Prints the distance to the carry
-    //<
     //< Caution: **Do not return a verdict.** Being near the edge is not a regression; the reader
     //< asks "if it takes the next step, does this guard still pass" against today's limit. `IT
     //< WOULD FAIL THIS GATE` means the slack is under one step — raise the baseline now, not after
@@ -312,7 +290,6 @@ priv fn report_headroom(kind: U8[], limit: I64, cur: Reading) //<
 
 priv fn report_shapes(cold: Shapes, warm: Shapes): Bool //<
     //< whether the types' sizes match the fixed values
-    //<
     //< Caution: **Do not compare by ratio**: a size is fixed, so one byte off means a type changed.
     //< **Compare the two logs with each other** — the same executable printed them, so a difference
     //< means an old log is being read.
@@ -331,7 +308,6 @@ priv fn report_shapes(cold: Shapes, warm: Shapes): Bool //<
 
 fn main(): I32 //<
     //< Compares a build's cost against the baseline
-    //<
     //< Usage: `make perf-log` (the proper entry point), or `ksplc run tests/tools/perf_guard.kspl
     //< --cold=<log> --warm=<log> [--update]`
     //<

@@ -47,7 +47,7 @@ flowchart LR
 | `ksplc run`, `--split`, `--library`, `commit-seed` | yes | refused |
 | Machines | every row of `MACHINES` in `base/target.kspl` | those with 8-byte pointers, by their `target triple`; refused otherwise |
 
-**genllvm lays out only 8-byte pointers and `Sz`** (a slice is `{ ptr, i64 }`, "The runtime memory layout and the ABI specification"). So `check_machine` in `main.kspl` refuses `--to=llvm` for a machine whose row has no LLVM triple. It does so before any IR is written. The IR names the row's `target triple` and no `target datalayout`. LLVM derives the layout from the triple. clang replaces a module's own layout with its target's without a word. So a copy would state what nothing reads.
+**genllvm lays out only 8-byte pointers and `Sz`** (a slice is `{ ptr, i64 }`, "The runtime memory layout and the ABI specification"). So `check_machine` in `cli.kspl` refuses `--to=llvm` for a machine whose row has no LLVM triple. It does so before any IR is written. The IR names the row's `target triple` and no `target datalayout`. LLVM derives the layout from the triple. clang replaces a module's own layout with its target's without a word. So a copy would state what nothing reads.
 
 ### What they answer for
 
@@ -60,7 +60,7 @@ The backends only translate; every decision has been made before them. They are 
 | What is shared | The file | What it holds |
 | :-- | :-- | :-- |
 | the C runtime that completes either output | `gen/runtime.kspl` | The embedded `gen/runtime/` files in order. Also the version symbol that stops a runtime of another version from linking ("The runtime written alone, and its version symbol"). |
-| what the generated `main` does around `kspl_main` | `gen/entry.kspl` | the startup calls and their order, how the return value becomes an exit code, and the words printed on failure |
+| what the generated `main` does around `kspl_main` | `gen/entry.kspl` | the startup calls and their order, how the return value becomes an exit code, and the kind of error a failure passes to the runtime's `kspl_main_fail` |
 | reading the file an `embed` names | `gen/embed.kspl` | finding it the way an import is found, and refusing one that cannot be read |
 
 **A decision written twice drifts with no warning until someone runs the other backend.** A `main` written per backend can lack a call in one of them. Take the call that puts standard output into binary mode. Without it, a program built with `--to=llvm` writes `\r\n` on Windows where the C one writes `\n`. The reason is "Standard output carries the bytes a program writes" in [`../../docs/DESIGN-programming-language.md`](../../docs/DESIGN-programming-language.md). And a symbol that one backend owns, such as the runtime's version symbol, would make the other import it.
@@ -257,11 +257,20 @@ Only `-Wmissing-field-initializers` and `-Woverlength-strings` are left out. The
 * **Do not emit an implicit `::` cast to restore the immutability.** The representations are identical in C and in LLVM, so restoring the type is enough. A cast would give `.ptr = (const U8 *)buf`, a discarded-qualifier warning against the non-const target.
 * **Where the value really is a `const T *` (from KSPL's `T@`), cast explicitly to non-const.** This is emitted only for the `.ptr` of an immutable slice's descriptor literal (`gen/c/expr.kspl`; the same convention as `emit_slice_cast_prefix` for array-to-slice).
 
-#### A switch reaches the backends with a named subject
+#### A switch reaches the backends grouped, its subject named
 
-**The value a `switch` tests (its subject) must arrive at genc as a plain name: an identifier or a one-segment path (`is_plain_name` in `base/ast_ext.kspl`).** Genc's `switch` and a case's payload binding write it more than once. **Lower makes it one, and only Lower**: `lower_stmt_switch` binds any other subject to a `let` temporary. A subject that reaches genc as anything else is an ICE. Spelled as a name, it would silently emit broken C, such as `switch (.tag)`.
+**The value a `switch` tests (its subject) must arrive at genc as a plain name: an identifier or a one-segment path (`is_plain_name` in `base/ast_ext.kspl`).** Genc's `switch` and each payload read write it more than once. **Lower makes it one, and only Lower**: `lower_stmt_switch` binds any other subject to a `let` temporary. A subject that reaches genc as anything else is an ICE. Spelled as a name, it would silently emit broken C, such as `switch (.tag)`.
 
-Caution: **A `switch` built after Lower's walk binds its subject itself**, since nothing lowers it. The chained release ARC synthesizes for an enum (`emit_managed_enum_op` in `lower/arc.kspl`) binds its `p$` with `build_let_decl` before switching on it.
+**Lower also resolves every arm, so neither backend walks the patterns** (`group_switch_arms` in `lower/root.kspl`):
+
+* Each `case` or `default` becomes one `switch_arm` node: its labels, then its block (`build_switch_arm` in `base/ast.kspl`).
+* A label that names a variant of the subject's enum stays its `case_pattern`, with the variant's index in `ival`. Both backends read the variant back with `variant_at` in `sema/type/query.kspl`: genc for its enumerator's name, genllvm for its tag. Any other label is its constant value.
+* A variant's payload bindings are ordinary declarations at the head of the arm's block. Each reads its field through a `payload_access` node (`build_payload_access`). Genc writes it as `<subject>.payload.<variant>.<field>`, and genllvm loads it at the field's offset (`payload_field_ptr` in `gen/llvm/types.kspl`).
+* A declaration keeps its binding's identity (`def_node`), so the references and ARC's count for the binding (`register_arc_arm_bindings` in `lower/arc.kspl`) name the same local.
+
+A `switch` whose arms are not grouped reaches a backend as an ICE.
+
+Caution: **A `switch` built after Lower's walk binds its subject and groups its arms itself**, since nothing lowers it. The chained release ARC synthesizes for an enum (`emit_managed_enum_op` in `lower/arc.kspl`) binds its `p$` with `build_let_decl`, then calls `group_switch_arms`.
 
 #### How the generated code makes overflow wrap around
 
@@ -331,7 +340,7 @@ This is `emit_const_ref_inline` in `ksplc/gen/c/expr.kspl`. `const_init_expr` in
 
 ```mermaid
 flowchart LR
-    A[emit_slice_base_types] --> B[emit_type_decls] --> C[emit_globals] --> D[emit_fn_defs] --> E["emit_instantiated_fns<br/>(no answering phase in genc)"] --> F[emit_runtime_and_main] --> G["emit_string_pool<br/>(the strings gathered lazily, put out in one lot at the end)"]
+    A[emit_slice_base_types] --> B[emit_type_decls] --> C[emit_globals] --> D[emit_fn_defs] --> F[emit_runtime_and_main] --> G["emit_string_pool<br/>(the strings gathered lazily, put out in one lot at the end)"]
 ```
 
 The call chain mirrors Genc's: `emit_llvm_fn_def` (`ksplc/gen/llvm/decl.kspl`) → `block.emit_llvm_stmt` (`ksplc/gen/llvm/stmt.kspl`) → `node.emit_llvm_expr` / `emit_llvm_lvalue` (`ksplc/gen/llvm/expr.kspl`). SSA registers and alloca hoisting sit on top. In *SSA* form every value gets a fresh numbered register (`%1`, `%2`, …) that is assigned once; an *alloca* reserves a stack slot for a local variable.
@@ -383,6 +392,8 @@ genllvm does not rely on "the memory is already zeroed" to make a value right. A
 #### Runtime checks share their failure reports
 
 Bounds, division, shift and enum-tag checks keep their comparisons in C's inline helpers and LLVM's IR so each optimizer can remove checks it proves unnecessary. On hosted targets, a failed check calls the C runtime's corresponding `kspl_*_fail` function. That function owns the message and uses one reporter to flush stdout, write and flush stderr, then abort. The backend passes the original operands and source position; unsigned shift amounts retain their unsigned spelling. Freestanding checks retain their target's failure policy.
+
+**A `main` that returns an error is reported the same way.** Both backends call `kspl_main_fail` in `gen/runtime/hosted.c` with the error's kind (`Main_err` in `gen/entry.kspl`), the error as a 64-bit integer and an enum variant's name. The runtime function owns the failure line and the rule that turns the number into an exit status. The backend then prints the propagation trace and returns that status. Only the choice of the variant's name stays in each backend, because it reads the program's own enum.
 
 #### Passing an aggregate is an explicit internal ABI
 
@@ -455,7 +466,7 @@ Caution: **Decide the position on the same grounds as the code that emits the de
 
 A raw pointer leaves out the leading `const` for another reason: its type name already emits `const T*`, so another would qualify it twice (`emits_c_const` / `type_name_carries_const` in `gen/c/ctx.kspl`).
 
-**genllvm: a function's address does not go through integer constant folding.** Rebuilding a global initializer as a static constant (`emit_llvm_const_init`) defaults to that folding, which rejects a function name as "not a constant expression". Build the name by the path a run-time reference takes (`emit_llvm_lvalue`). Adding the `@` yourself lets a doubled `kspl_` or an `#export` name slip through. It then breaks by pointing at a different symbol, not as a link error (the verdict is `is_kspl_prefixed_or_ext` in `gen/llvm/ctx.kspl`).
+**genllvm: a function's address does not go through integer constant folding.** Rebuilding a global initializer as a static constant (`emit_llvm_const_init`) defaults to that folding, which rejects a function name as "not a constant expression". Build the name by the path a run-time reference takes (`emit_llvm_lvalue`). That path alone tells a global from a local. A local read as a global breaks by pointing at a different symbol, not as a link error.
 
 The regression test is `tests/prog/equiv.kspl`. It stores a `const`, a mutable and a `null` in globals and reassigns the mutable one before the call, so folding to its initial value would show. **For the `const` it covers both a signature through an alias and one written directly.** C's position for the `const` differs between them, so with only one the mismatch above passes.
 
@@ -483,7 +494,7 @@ The regression test is `tests/prog/equiv.kspl`. It stores a `const`, a mutable a
 **One way to ask, on the subcommand that needs it** (Principles 5 and 6):
 
 * A compile that writes C has nothing to mark: its C compiler marks the C it reads. `--sanitize` there would change nothing, so it is refused, naming `-fsanitize=` for the C compiler instead.
-* `ksplc build` runs the C compiler itself, so `--sanitize` hands it `-fsanitize=<names>`. The same word in `--cflags` would be a second way to ask, and is refused (`check_sanitize` in `main.kspl`). The packages' fuzz builds ask this way.
+* `ksplc build` runs the C compiler itself, so `--sanitize` hands it `-fsanitize=<names>`. The same word in `--cflags` would be a second way to ask, and is refused (`check_sanitize` in `cli.kspl`). The packages' fuzz builds ask this way.
 * `ksplc run` does not take it: it caches one program a script, which a sanitized build would have to be kept apart from, and `ksplc build` already makes one.
 
 **A compile with `--to=llvm` cannot check that the C compiler is told the same.** The link is the user's, as with `--machine`: the marks alone change nothing, and `-fsanitize=` alone watches only the runtime. The specification says to name both.

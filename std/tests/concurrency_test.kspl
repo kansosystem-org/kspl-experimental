@@ -1,5 +1,4 @@
 //< Tests of threads, processes started side by side, and locks
-//<
 //< `std/thread` over real OS threads, `std/subproc` started from two at once, a file lock, and a
 //< `Mutex` locked again or unlocked by another thread.
 import "std/ds" { List }
@@ -68,7 +67,6 @@ fn test_thread_spawn_join()
     assert(final_val$ == 2000,
         "mutex-protected counter must equal 2000 after 2 threads x 1000 increments")
     mx.unlock()
-    mx.free()
 
     // 3. Even a single-thread Rc<|I32|> is safe to use when wrapped in a Mutex
     $g_rc: = thread.Mutex<|Rc<|I32|>|>.new(Rc<|I32|>.new(7)) catch panic("mutex<rc> create failed")
@@ -80,7 +78,6 @@ fn test_thread_spawn_join()
     held: = g_rc.lock()
     assert(held.get()$ == 7, "the Rc guarded by a mutex must survive the thread round-trip")
     g_rc.unlock()
-    g_rc.free()
 
     verdict
         .pass("The argument/return round trip, Mutex mutual exclusion under real parallelism \
@@ -141,8 +138,6 @@ fn test_atomic_and_cond_var()
     for flag$ == 0
         cv.wait(mx@)
     mx.unlock()
-    mx.free()
-    cv.free()
 
     verdict
         .pass("Lock-free addition (20000/20000) and Cond_var's signal/wait round trip are \
@@ -179,9 +174,9 @@ priv const GATE_WAITERS: Sz = 3
 
 fn test_cond_var_broadcast_and_wait_for()
     verdict.start("[Thread] Cond_var's broadcast and wait_for test...")
-    ctx: = mem.alloc_as<|Gate_ctx|>()
-    ctx.mx = thread.Mutex<|Gate|>.new(Gate::{}) catch panic("mutex create failed")
-    ctx.cv = thread.Cond_var.new() catch panic("cond create failed")
+    mx: = thread.Mutex<|Gate|>.new(Gate::{}) catch panic("mutex create failed")
+    cv: = thread.Cond_var.new() catch panic("cond create failed")
+    $ctx: = Gate_ctx::{ .mx = mx, .cv = cv }
     // A wait with nobody to wake it comes back at its limit, holding the lock again.
     _held: = ctx.mx.lock()
     t0: = sys.mono_us()
@@ -196,7 +191,7 @@ fn test_cond_var_broadcast_and_wait_for()
     $ts: = List<|thread.Thread$@|>.new(null)
     defer ts.free()
     for _i in Range.asc(GATE_WAITERS)
-        ts.push(thread.Thread.spawn<|Gate_ctx|>(gate_waiter, ctx) catch panic("spawn failed"))
+        ts.push(thread.Thread.spawn<|Gate_ctx|>(gate_waiter, ctx@) catch panic("spawn failed"))
     for
         w: = ctx.mx.lock()
         all_in: = w.waiting == GATE_WAITERS
@@ -214,9 +209,6 @@ fn test_cond_var_broadcast_and_wait_for()
     late: = done.late
     ctx.mx.unlock()
     assert(woken == GATE_WAITERS && late == 0, "one broadcast wakes every waiter")
-    ctx.mx.free()
-    ctx.cv.free()
-    dealloc(Void$@::ctx)
     verdict.pass("wait_for came back at its limit, and one broadcast woke all three waiters.")
 
 // ==========================================
@@ -253,7 +245,6 @@ fn concurrency_start_lingering(arg: Lingering_ctx$@): Void$@
 
 fn test_spawn_from_threads(ksplc: U8[]) //<
     //< That a short child's end of output is not held by a child another thread starts meanwhile
-    //<
     //< ksplc is both children (`run_std` passes it): `info keywords` prints and ends, `lsp`
     //< lingers.
     verdict
@@ -309,22 +300,20 @@ priv struct Holder //< the thread that holds the lock, and what it tells the mai
     let_go: thread.Atomic_sz //< 1 just before it releases the lock
 
 priv fn held_elsewhere(path: U8[]): Bool //< whether try_take is refused because another holds it
-    $lock: = fs.File_lock.try_take(path) catch e
+    _lock: = fs.File_lock.try_take(path) catch e
         switch e
         case .held_elsewhere
             return true
         default
             return false
-    lock.free()
     return false
 
 #export
 fn lock_test_hold(h: Holder$@): Void$@ //< takes the lock, holds it a while, and releases it
-    $lock: = fs.File_lock.take(h.path) catch panic("the holder must get the free lock")
+    _lock: = fs.File_lock.take(h.path) catch panic("the holder must get the free lock")
     h.holding.store(1)
     sys.sleep_ms(HOLD_MS)
     h.let_go.store(1)
-    lock.free()
     return null
 
 fn test_file_lock()
@@ -365,7 +354,6 @@ fn main()
   _second: = m.lock()
   io.out().s("the second lock returned\n")
   m.unlock()
-  m.free()
 """
 priv const FOREIGN_UNLOCK_SRC: U8[] = //< a child whose second thread unlocks the main one's mutex
     """import "std/thread"
@@ -381,12 +369,10 @@ fn main()
   t: = thread.Thread.spawn<|thread.Mutex<|I32|>|>(foreign_unlock, m@) catch panic("must start")
   t.join_and_free()
   m.unlock()
-  m.free()
 """
 
 fn expect_lock_misuse(relock: U8[][], foreign_unlock: U8[][], arena: Arena$@) //<
     //< Runs the two children and checks that each stopped with its reason
-    //<
     //< The argvs are given whole, so a run under Wine can pass children built beforehand.
     relocked: = sys_test.stops_with(relock, "Mutex.lock: this thread already holds the lock", arena)
     assert(relocked, "a second lock on the holding thread must stop the program with the reason")
@@ -512,7 +498,6 @@ priv fn json_refuses(arena: Arena$@): Bool //< 400 levels, within `max_nesting_d
     return refused
 
 priv fn regex_refuses(_arena: Arena$@): Bool //< 400 nested `(?:`, within `max_nesting_depth`
-    //<
     //< **Compiling is the walk that recurses**, once per group level. Matching follows its ways
     //< through a list on the heap, so only the pattern's nesting can reach the stack.
     $pattern: = Str_builder.new()

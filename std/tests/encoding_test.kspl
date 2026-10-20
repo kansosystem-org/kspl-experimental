@@ -76,13 +76,6 @@ priv fn check_base64_roundtrip(input: U8[])
     defer dealloc(Void$@::dec.ptr)
     assert(dec.equals(input), "base64 round-trip must reproduce the original bytes")
 
-priv fn base64_refuses(s: U8[]): Bool //< whether `decode` refuses s
-    arena: = Arena.new(256)
-    defer arena.free()
-    _d: = base64.decode(s, arena) catch
-        return true
-    return false
-
 fn test_base64_codec()
     verdict.start("[Base64] encode/decode test (known test vectors + the round trip)...")
 
@@ -103,9 +96,13 @@ fn test_base64_codec()
     check_base64_roundtrip("The quick brown fox jumps over the lazy dog")
     // **One encoding per byte string**: a non-zero bit the padding leaves unused is refused, and
     // the same text with those bits zero is read.
-    assert(base64_refuses("QR==") && base64_refuses("Zm9=") && base64_refuses("Zh=="),
-        "base64: a non-zero unused bit before the padding must be refused")
-    assert(!base64_refuses("QQ==") && !base64_refuses("Zm8="), "base64: canonical text is read")
+    arena: = Arena.new(256)
+    defer arena.free()
+    for unused_bit in U8[][]::{ "QR==", "Zm9=", "Zh==" }
+        assert(base64.decode(unused_bit, arena).is_err(),
+            "base64: a non-zero unused bit before the padding must be refused")
+    for canonical in U8[][]::{ "QQ==", "Zm8=" }
+        assert(!base64.decode(canonical, arena).is_err(), "base64: canonical text is read")
 
     base64.decode("abc", null) catch
         verdict
@@ -132,11 +129,6 @@ priv fn parsed(s: U8[]): F64 //< tries `to_f64` once
     return s.to_f64() catch
         return -987654.0
 
-priv fn rejects(s: U8[]): Bool //< true if the string is not accepted
-    _v: = s.to_f64() catch
-        return true
-    return false
-
 priv struct Loose_case //< a string whose power of 10 goes beyond ±22, and its correct value
     text: U8[]
     want: F64
@@ -152,7 +144,6 @@ priv const LOOSE_CASES: Loose_case[_] = ::{
 }
 
 fn test_to_f64() //< the conversion from a string to F64
-    //<
     //< **The same implementation runs in a freestanding build too**, so `std/json` and
     //< `std/argparse` return the same value on a microcontroller.
     verdict.start("[Str] the conversion from a string to F64 test...")
@@ -239,7 +230,7 @@ fn test_to_f64() //< the conversion from a string to F64
     bad: U8[][_] = ::{ "", " ", "-", "+", ".", "1.", ".5", "-.5", "1e", "1e+", "1.5abc", "abc",
         "1..2", "1 2", "--1", "0x10", "inf", "nan", "1e2e3" }
     for b in bad
-        assert(rejects(b), "to_f64: a malformed spelling must be rejected")
+        assert(b.to_f64().is_err(), "to_f64: a malformed spelling must be rejected")
 
     verdict.pass("Fractions, exponents, the boundaries and malformed strings are all as expected.")
 
@@ -252,7 +243,6 @@ priv fn check_json_escape(src: U8[], want: U8[]) //<
         "json: \\u escapes must decode to the same bytes as UTF-8")
 
 fn test_json_escapes(arena: Arena$@) //< std/json: a string holding `\uXXXX`
-    //<
     //< **Refuse a `\u` whose hex is not four digits**, or a different byte sequence comes out as if
     //< it were read. Combine a surrogate pair, or an emoji splits into invalid UTF-8.
     verdict.start("[Json] a string holding \\uXXXX test...")
@@ -355,7 +345,6 @@ fn test_json_numbers(arena: Arena$@)
 
 fn test_json_string_escapes(arena: Arena$@) //<
     //< A string's escapes must decode to the actual byte sequence
-    //<
     //< Caution: **Always test `\uXXXX`.** Python's `json.dumps` escapes non-ASCII this way by
     //< default; passed straight through, `あ` becomes `u3042`, which looks read but is broken.
     //< The expected values are written as UTF-8; only control characters are checked as bytes.
@@ -407,15 +396,8 @@ priv fn expect_str(src: U8[], want: U8[], arena: Arena$@)
     got: = v.val.get("t").as_str().unwrap_or("")
     assert(got.equals(want), "json: an escaped string must decode to its bytes")
 
-priv fn json_parses(src: U8[], arena: Arena$@): Bool //<
-    //< Whether it parses
-    _v: = json.parse(src, arena) catch
-        return false
-    return true
-
 priv fn json_rejects_as_trailing_comma(src: U8[], arena: Arena$@): Bool //<
     //< Whether it was refused as a trailing comma
-    //<
     //< Caution: Check the name, or calling a `}` in a key's position `invalid_string` passes.
     _v: = json.parse(src, arena) catch e
         switch e
@@ -427,7 +409,6 @@ priv fn json_rejects_as_trailing_comma(src: U8[], arena: Arena$@): Bool //<
 
 fn test_json_malformed_input(arena: Arena$@) //<
     //< std/json: malformed input must not be accepted silently
-    //<
     //< Caution: **Test what is refused and what is accepted as a pair**, or refusing everything
     //< passes.
     verdict.start("[Json] refusing malformed input test...")
@@ -437,7 +418,7 @@ fn test_json_malformed_input(arena: Arena$@) //<
     bad: U8[][13] = ::{ "1 2", "{\"a\":1}{\"b\":2}", "[1][2]", "\"a\" x", "\"\\x41\"", "\"\\q\"",
         "01", "-01", "[00]", "\"a\nb\"", "\"a\tb\"", "[1,]", "{\"a\":1,}" }
     for src in bad
-        assert(!json_parses(src, arena), "json: malformed input must be rejected")
+        assert(json.parse(src, arena).is_err(), "json: malformed input must be rejected")
     assert(json_rejects_as_trailing_comma("[1,]", arena), "json: `[1,]` is named a trailing comma")
     assert(json_rejects_as_trailing_comma("{\"a\":1,}", arena),
         "json: `{\"a\":1,}` is named a trailing comma")
@@ -445,7 +426,7 @@ fn test_json_malformed_input(arena: Arena$@) //<
     good: U8[][9] = ::{ "  {\"a\":1}  \n", "0", "-0", "0.5", "\"\\/\"", "[0,1]", "\"a\\nb\\tc\"",
         "[]", "{}" }
     for src in good
-        assert(json_parses(src, arena), "json: well-formed input must still parse")
+        assert(!json.parse(src, arena).is_err(), "json: well-formed input must still parse")
     verdict
         .pass("Anything left over, a non-JSON escape, a leading 0, a raw control character and a \
             trailing comma are refused, and well-formed strings go through.")
@@ -467,7 +448,6 @@ priv fn nested_outcome(depth: Sz, arena: Arena$@): U8[] //<
 
 fn test_json_nesting_to_the_count(arena: Arena$@) //<
     //< std/json: nesting to `max_nesting_depth` parses, and one level more is `too_deep`
-    //<
     //< **On every build, a sanitized one too**: the stack check beside the count must not refuse
     //< what the main thread's stack holds.
     verdict.start("[Json] nesting up to the count parses, one level more is too deep...")
@@ -489,7 +469,6 @@ priv fn quoted_hex(hex: U8[], arena: Arena$@): U8[] //< a JSON string of the byt
 
 fn test_json_utf8(arena: Arena$@) //<
     //< std/json: a string's raw bytes must be UTF-8 (RFC 8259 §8.1)
-    //<
     //< Caution: **Test each edge of the table of well-formed sequences**, from both sides. One byte
     //< too low in a second byte is an overlong form or a surrogate. One too high is past 10FFFF.
     verdict.start("[Json] refusing bytes that are not UTF-8 test...")
@@ -498,13 +477,14 @@ fn test_json_utf8(arena: Arena$@) //<
     bad: U8[][11] = ::{ "fffe", "c0af", "c1bf", "e080af", "f08fbfbf", "eda080", "f4908080",
         "f5808080", "80", "e38161", "e3" }
     for hex in bad
-        assert(!json_parses(quoted_hex(hex, arena), arena),
+        assert(json.parse(quoted_hex(hex, arena), arena).is_err(),
             "json: bytes that are not UTF-8 are refused")
     // Each width at its lowest and highest, and either side of the surrogates.
     good: U8[][10] = ::{ "41", "c280", "dfbf", "e0a080", "ed9fbf", "ee8080", "efbfbf", "f0908080",
         "f48fbfbf", "e38182" }
     for hex in good
-        assert(json_parses(quoted_hex(hex, arena), arena), "json: well-formed UTF-8 is accepted")
+        assert(!json.parse(quoted_hex(hex, arena), arena).is_err(),
+            "json: well-formed UTF-8 is accepted")
     // **What the writer puts out must read back.** A string holding bytes that are not UTF-8 is
     // written with U+FFFD in their place. Well-formed bytes are written as they are.
     mixed: U8[6] = ::{ 'a', 0xffU8, 0xe3U8, 0x81U8, 0x82U8, 0xc0U8 }
@@ -529,7 +509,6 @@ priv fn repeat_at(src: U8[], arena: Arena$@): I64 //< where parse finds a repeat
 
 fn test_json_duplicate_keys(arena: Arena$@) //<
     //< std/json: a repeated key is refused, and the builder replaces
-    //<
     //< Caution: **Test both sizes of object.** Past `key_scan_max` members the parser checks keys
     //< with a set, a path a small object never takes.
     verdict.start("[Json] a duplicated key test...")
@@ -572,7 +551,6 @@ fn test_json_duplicate_keys(arena: Arena$@) //<
 
 fn test_json_reads_tell_absence(arena: Arena$@) //<
     //< std/json: a read tells a value from an absent one, a `null` and another kind
-    //<
     //< Caution: **Each pair below collapses into one answer under a read with a default.** `""` is
     //< for both an absent key and an empty string. 0 is for both an absent number and a written 0.
     verdict.start("[Json] reading a member that is absent, null or of another kind test...")
@@ -596,7 +574,6 @@ fn test_json_reads_tell_absence(arena: Arena$@) //<
 
 fn test_json_indent(arena: Arena$@) //<
     //< That JSON written out with indentation has the expected shape
-    //<
     //< Caution: **Always test that the default (0) stays on one line**, or spaces silently enter
     //< the strings sent to others. **Keep an empty `{}` and `[]` on one line**, as others do. The
     //< expected values come from Python's `json.dumps(indent=2)`.

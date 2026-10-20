@@ -1,5 +1,4 @@
 //< Tests of `std/verdict`'s run of checks that continues past a failure
-//<
 //< **Each run is its own child process**: the tally lasts as long as the process, so a run in
 //< this process would end this one. The test checks all of the child's output and its exit code.
 //< Caution: **Test the failing path above all.** No suite would notice a `finish` that prints
@@ -14,8 +13,6 @@ import "std/subproc"
 import "std/sys"
 import "std/tests/sys_test"
 import "std/verdict"
-
-priv const WORK_DIR: U8[] = "out/tmp/kspl_test_verdict"
 
 priv const CHILD_HEAD: U8[] =
     """
@@ -120,15 +117,8 @@ priv fn run_child( //< writes one child's program and runs it to the end
     body: U8[], //< the child's `main`, indented
     arena: Arena$@,
 ): subproc.Run_result
-    fs.mkdir_all(WORK_DIR) catch panic("the work directory must be creatable")
-    src: = arena.text().s(WORK_DIR).c('/').s(name).s(".kspl").take()
-    io.write_file(src, arena.text().s(CHILD_HEAD).s(body).take()) catch
-        panic("the child's program must be writable")
-    r: =
-        subproc.run_capture(U8[][]::{ ksplc, "run", src }, "", 300000, 1 << 20, arena)
-        catch panic("the child must start")
-    assert(r.exit_code.is_some(), "the child must start and come to an end")
-    return r
+    src: = arena.text().s(CHILD_HEAD).s(body).take()
+    return sys_test.run_to_end(sys_test.child_argv(ksplc, name, src, arena), arena)
 
 priv fn holds_to( //< runs one child and stops if its output or exit code is not what is wanted
     ksplc: U8[],
@@ -138,14 +128,7 @@ priv fn holds_to( //< runs one child and stops if its output or exit code is not
     want_code: I32, //< the exit code it should end with
     arena: Arena$@,
 )
-    r: = run_child(ksplc, name, body, arena)
-    // A child's standard output is text mode on Windows, so its lines arrive as CRLF.
-    got: = r.stdout_data.replace("\r\n", "\n", arena)
-    if got.equals(want) && r.exited_with(want_code)
-        return
-    panic(U8$[]::arena.text().s(name).s(" put out\n").s(got)
-        .s("and ended on \{r.exit_code.unwrap_or(-1)\}, where ").s("it should put out\n").s(want)
-        .s("and end on \{want_code\}\n").s(r.stderr_data).take())
+    sys_test.expect_output(run_child(ksplc, name, body, arena), name, want, want_code, arena)
 
 fn test_verdict_goes_on_past_a_failure(ksplc: U8[], arena: Arena$@)
     verdict.start("[Verdict] a run of checks going on past a failure test...")
@@ -178,7 +161,6 @@ fn test_verdict_names_what_fits(ksplc: U8[], arena: Arena$@)
 
 fn test_verdict_names_an_unmade_work_folder(arena: Arena$@) //<
     //< `run_children` with a work folder that cannot be made says so in each run
-    //<
     //< **Not "it could not start"**, which reads as a child that could not be found.
     verdict.start("[Verdict] run_children naming a work folder it cannot make test...")
     fs.mkdir_all("out/tmp") catch panic("out/tmp must be creatable")
@@ -336,7 +318,6 @@ fn test_log_parts_its_fields_with_the_separator_given()
 
 priv struct Tally //<
     //< A destination that counts how often it is told to flush
-    //<
     //< **Nothing else shows the flushes**: a missing flush would look like a pass.
     text: Str_builder
     flushes: Sz
@@ -361,7 +342,6 @@ fn test_log_pushes_a_heavy_line_out_at_once()
     // lines that say what went wrong. So the two most severe levels are flushed as each line
     // closes.
     $t: Tally = ::{ .text = Str_builder.new(), .flushes = 0 }
-    defer t.text.free()
     $lg: = Log.new(t@, .hint, "t")
     lg.say(.information, "a")
     lg.say(.hint, "b")
@@ -403,7 +383,6 @@ fn main()
 """
 
 fn test_log_keeps_a_heavy_line_through_a_kill(ksplc: U8[], arena: Arena$@) //< ksplc runs the child
-    //<
     //< **SIGKILL runs no exit path**: what still waits in a buffer is gone, so only a line already
     //< passed on reaches the reader. The killer starts first, since starting a child flushes the
     //< outputs; the child is killed a second later, with the line still open.

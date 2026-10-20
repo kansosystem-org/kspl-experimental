@@ -1,9 +1,7 @@
 //< Control flow: `if`, `switch`, loops, labels and `defer`
-//<
 //< Each case below is compiled alone, as the file its head names.
 // ==== case break_to_no_name_label
 //< A `break` must not target a label that has no name (`_`)
-//<
 //< **A `_` can be written any number of times in the same scope.** So what it points at is not
 //< settled. Choose the innermost in silence and, where the writer meant to point at another step,
 //< it passes just so (Principle 5 in `../../../docs/DESIGN-principles.md`). To jump, give it a name.
@@ -20,7 +18,6 @@ fn main(): I32
   return n
 // ==== case defer_double_free_at_scope_exit
 //< A defer's body is checked against the state at the point of leaving the scope
-//<
 //< At registration, nothing after the defer statement is visible. An analysis there passes this
 //< double free with zero diagnostics. The reverse order is detected: that asymmetry marks the bug
 //< (ksplc/docs/DESIGN-diagnostics.md "A check of one kind lives in one place").
@@ -34,7 +31,6 @@ fn main()
   b.free()
 // ==== case defer_move_at_scope_exit
 //< The Move_only version of the same root cause as above
-//<
 //< Move it in the body and then use it in the defer's body and the run order becomes "move -> move
 //< again". Analysed at the state at registration it goes undiagnosed (ksplc/docs/DESIGN-diagnostics.md "A check
 //< of one kind lives in one place").
@@ -58,7 +54,6 @@ fn main()
   _x: = move_then_use_in_defer()
 // ==== case defer_names_no_receiver
 //< A `defer` block whose one statement calls a method on nothing
-//<
 //< The block form and the statement form are one `defer`, so the same message stands for both.
 // EXPECT: a 'defer' must name its resource. '.close()' has no receiver
 import "std/ds" { List }
@@ -70,17 +65,16 @@ fn main(): I32
   return 0
 // ==== case defer_read_at_early_exit
 //< A defer's body is checked against the state at each early exit, not only at the block's end
-//<
 //< Checked at the end alone, each path below that leaves before its variable is set reads it
 //< uninitialized, or frees `s` twice. The last function sets `g` first and passes: the count is exact.
-// EXPECT: variable 'a' may be used uninitialized here (this `defer` body runs when line 31 leaves the scope)
-// EXPECT: variable 'b' may be used uninitialized here (this `defer` body runs when line 37 leaves the scope)
-// EXPECT: variable 'c' may be used uninitialized here (this `defer` body runs when line 45 leaves the scope)
-// EXPECT: variable 'cc' may be used uninitialized here (this `defer` body runs when line 51 leaves the scope)
-// EXPECT: variable 'd' may be used uninitialized here (this `defer` body runs when line 59 leaves the scope)
-// EXPECT: variable 'e' may be used uninitialized here (this `defer` body runs when line 67 leaves the scope)
-// EXPECT: variable 'f' may be used uninitialized here (this `defer` body runs when line 75 leaves the scope)
-// EXPECT: variable 's' may already be freed here (use-after-free or double free) (this `defer` body runs when line 84 leaves the scope)
+// EXPECT: variable 'a' may be used uninitialized here (this `defer` body runs when line 30 leaves the scope)
+// EXPECT: variable 'b' may be used uninitialized here (this `defer` body runs when line 36 leaves the scope)
+// EXPECT: variable 'c' may be used uninitialized here (this `defer` body runs when line 44 leaves the scope)
+// EXPECT: variable 'cc' may be used uninitialized here (this `defer` body runs when line 50 leaves the scope)
+// EXPECT: variable 'd' may be used uninitialized here (this `defer` body runs when line 58 leaves the scope)
+// EXPECT: variable 'e' may be used uninitialized here (this `defer` body runs when line 66 leaves the scope)
+// EXPECT: variable 'f' may be used uninitialized here (this `defer` body runs when line 74 leaves the scope)
+// EXPECT: variable 's' may already be freed here (use-after-free or double free) (this `defer` body runs when line 83 leaves the scope)
 // EXPECT: Finished with 8 error(s)
 import "std/str"
 import "std/str" { Str_builder }
@@ -175,7 +169,6 @@ fn main()
   _g: = set_before_every_exit(1) catch 0
 // ==== case endless_for_from_iter
 //< `for x in` over an `Iter` ends when `next()` gives nothing
-//<
 //< It expands to a `for` with no condition whose `break` the compiler writes ("Loops" in
 //< `../../../docs/SPEC-programming-language.md`). That `break` must count, or a loop that runs out would read
 //< as endless and the function would fall off its end.
@@ -198,7 +191,6 @@ fn main(): I32
   return first_of(Countdown::{ .n = 3 })
 // ==== case endless_for_left_by_break
 //< A `for` with no condition still ends where a `break` leaves it
-//<
 //< Only a loop no `break` leaves may end a function that returns a value ("Loops" in
 //< `../../../docs/SPEC-programming-language.md`). Here the `break` hands control to the function's end.
 // EXPECT: function 'count_up' is expected to return 'I32', but control may reach the end
@@ -213,7 +205,6 @@ fn main(): I32
   return count_up(3)
 // ==== case endless_for_left_from_inner_loop
 //< A labelled `break` from a nested loop leaves the outer `for`
-//<
 //< An unlabelled `break` in the inner loop would leave only the inner one, so the outer loop would
 //< still never end. `break outer` names the outer loop, so control reaches the function's end.
 // EXPECT: function 'scan' is expected to return 'I32', but control may reach the end
@@ -228,7 +219,6 @@ fn main(): I32
   return scan(3)
 // ==== case endless_for_left_to_outer_block
 //< A `break` to a labelled block around a `for` ends the block, and the function goes on
-//<
 //< The loop itself never reaches its own end, but the block does, so the function's end is reached
 //< ("Labelled blocks and breaking out of nested constructs" in `../../../docs/SPEC-programming-language.md`).
 // EXPECT: function 'probe' is expected to return 'I32', but control may reach the end
@@ -243,7 +233,6 @@ fn main(): I32
   return probe(3)
 // ==== case endless_for_with_condition
 //< A `for` with a condition can end, even where the condition is always true
-//<
 //< Only the absence of a condition makes a loop endless; a constant `true` is [W0205]'s to remove,
 //< and the loop is read as written.
 // EXPECT: function 'below' is expected to return 'I32', but control may reach the end
@@ -258,7 +247,6 @@ fn main(): I32
   return below(3)
 // ==== case if_bind_alias_to_non_option
 //< An alias to a user's enum does not widen what `if <name>: = <expr>` unwraps
-//<
 //< Caution: **Resolving the alias must not lose the refusal.** The check reads the resolved name so
 //< that `typedef Opt = T?` goes through. Stop there, and this alias to an enum goes through too.
 //< The day the enum grows, **a branch passes silently** (7.1 of docs/SPEC-programming-language.md).
@@ -280,7 +268,6 @@ fn main(): I32
   return 0
 // ==== case if_bind_else_if_non_option
 //< An `else if name: = expression` is held to `Option` as the first `if` of a chain is
-//<
 //< A `T!E` is not an `Option` either: its error side has a case of its own to handle, and a binding
 //< would pass it in silence. The binding stands in the `else` here, where the check once never ran
 //< and genc stopped on it instead.
@@ -305,7 +292,6 @@ fn main(): I32
   return 0
 // ==== case if_bind_non_option
 //< `if name: = expression` unwraps only `Option`
-//<
 //< **Not on a user's enum.** `Option` is fixed at two variants, but a user's enum can grow. The day
 //< it grows, **a branch passes silently** (7.1 of docs/SPEC-programming-language.md). The wording names the
 //< characters the user wrote (`synthesized_option_spelling` in `ksplc/base/ast_ext.kspl`).
@@ -325,7 +311,6 @@ fn main(): I32
   return 0
 // ==== case labelled_block_left_by_break
 //< A labelled block that a `break` leaves does not return on every path
-//<
 //< The block's last statement returns, but `break leave` passes it by and reaches the function's
 //< end ("Labelled blocks and breaking out of nested constructs" in
 //< `../../../docs/SPEC-programming-language.md`).
@@ -340,14 +325,13 @@ fn main(): I32
   return pick(true)
 // ==== case loop_carries_a_move
 //< A `Move_only` value moved inside a loop is moved again by the next pass
-//<
 //< **Each pass starts from what the last one left**, in all four shapes of `for`. Walked once
 //< from the state before the loop, the body never sees its own move, and the handle is handed
 //< out once per pass. The note says where the first move was, which is below the use.
-// EXPECT: loop_carries_a_move.kspl:24:15: error: variable 'm' was moved out of
-// EXPECT: loop_carries_a_move.kspl:31:15: error: variable 'm' was moved out of
-// EXPECT: loop_carries_a_move.kspl:40:15: error: variable 'm' was moved out of
-// EXPECT: loop_carries_a_move.kspl:47:15: error: variable 'm' was moved out of
+// EXPECT: loop_carries_a_move.kspl:23:15: error: variable 'm' was moved out of
+// EXPECT: loop_carries_a_move.kspl:30:15: error: variable 'm' was moved out of
+// EXPECT: loop_carries_a_move.kspl:39:15: error: variable 'm' was moved out of
+// EXPECT: loop_carries_a_move.kspl:46:15: error: variable 'm' was moved out of
 // EXPECT: It was moved by an earlier pass of the loop around this use.
 // EXPECT: Finished with 4 error(s)
 priv struct M
@@ -392,12 +376,11 @@ fn main(): I32
   return three_part(2) + condition_only(2) + bare(2) + each_element(2)
 // ==== case loop_carries_a_release
 //< A value released inside a loop is released already on the next pass, and after the loop
-//<
 //< The `free()` can run on a pass before the use, in the body or in a `defer` of it. A second
 //< pass then frees twice. The loop's exit hands the released value to what follows.
-// EXPECT: loop_carries_a_release.kspl:15:5: error: variable 'b' may already be freed here (use-after-free or double free), by an earlier pass of the loop around this use
-// EXPECT: loop_carries_a_release.kspl:16:10: error: variable 'b' may already be freed here
-// EXPECT: loop_carries_a_release.kspl:22:5: error: variable 'b' may already be freed here
+// EXPECT: loop_carries_a_release.kspl:14:5: error: variable 'b' may already be freed here (use-after-free or double free), by an earlier pass of the loop around this use
+// EXPECT: loop_carries_a_release.kspl:15:10: error: variable 'b' may already be freed here
+// EXPECT: loop_carries_a_release.kspl:21:5: error: variable 'b' may already be freed here
 // EXPECT: Finished with 3 error(s)
 import "std/str" { Str_builder }
 
@@ -419,16 +402,15 @@ fn main(): I32
   return I32::freed_in_the_body(2)
 // ==== case loop_exit_carries_a_move
 //< What follows a statement a jump leaves starts from the state each jump carries
-//<
 //< **A `break`, a `continue` and a `fallback` each carry the state of their own path.** If it is
 //< dropped, a move just before the jump is lost, and the value goes out twice. The `continue`
 //< carries its move to the next pass as well as past the loop.
-// EXPECT: loop_exit_carries_a_move.kspl:35:19: error: variable 'm' was moved out of
-// EXPECT: loop_exit_carries_a_move.kspl:43:15: error: variable 'm' was moved out of
-// EXPECT: loop_exit_carries_a_move.kspl:50:17: error: variable 'm' was moved out of
-// EXPECT: loop_exit_carries_a_move.kspl:52:19: error: variable 'm' was moved out of
-// EXPECT: loop_exit_carries_a_move.kspl:61:15: error: variable 'm' was moved out of
-// EXPECT: loop_exit_carries_a_move.kspl:67:19: error: variable 'm' was moved out of
+// EXPECT: loop_exit_carries_a_move.kspl:34:19: error: variable 'm' was moved out of
+// EXPECT: loop_exit_carries_a_move.kspl:42:15: error: variable 'm' was moved out of
+// EXPECT: loop_exit_carries_a_move.kspl:49:17: error: variable 'm' was moved out of
+// EXPECT: loop_exit_carries_a_move.kspl:51:19: error: variable 'm' was moved out of
+// EXPECT: loop_exit_carries_a_move.kspl:60:15: error: variable 'm' was moved out of
+// EXPECT: loop_exit_carries_a_move.kspl:66:19: error: variable 'm' was moved out of
 // EXPECT: Finished with 6 error(s)
 priv struct M
   v: I32
@@ -491,10 +473,9 @@ fn main(): I32
     by_fallback(-1)
 // ==== case loop_written_as_while
 //< Another language's `while` suggests `for` with the condition alone, the line to write shown
-//<
 //< `while x > 0` reads as a name followed by a value (`append_statement_word_hint` in
 //< `../../parse/syntax_msg.kspl`); the word stays a name, as the first line of `main` shows.
-// EXPECT: loop_written_as_while.kspl:9:11: error: expected ':'
+// EXPECT: loop_written_as_while.kspl:8:11: error: expected ':'
 // EXPECT: every loop is written with 'for'. A condition alone repeats the loop while the condition holds: 'for x > 0'.
 fn main()
     while: = 3
@@ -502,12 +483,11 @@ fn main()
         return
 // ==== case missing_return_after_other_error
 //< An error in one function does not hide the diagnostics of the functions after it
-//<
 //< Counted over the whole compilation, the first error silenced every later "control may reach
 //< the end" and "undefined path". So each fix showed one more error and needed one more run.
-// EXPECT: missing_return_after_other_error.kspl:9:12: error: undefined path or identifier 'nosuch'
-// EXPECT: missing_return_after_other_error.kspl:11:1: error: function 'second' is expected to
-// EXPECT: missing_return_after_other_error.kspl:17:12: error: undefined path or identifier 'gone'
+// EXPECT: missing_return_after_other_error.kspl:8:12: error: undefined path or identifier 'nosuch'
+// EXPECT: missing_return_after_other_error.kspl:10:1: error: function 'second' is expected to
+// EXPECT: missing_return_after_other_error.kspl:16:12: error: undefined path or identifier 'gone'
 fn first(): I32
     return nosuch
 
@@ -523,7 +503,6 @@ fn main(): I32
     return first() + second() + third()
 // ==== case switch_case_not_constant
 //< A case value is fixed at translation time
-//<
 //< **Let it through and C refuses it** ("case label does not reduce to an integer constant"),
 //< with no KSPL diagnostic.
 // EXPECT: a 'case' value must be a compile-time constant
@@ -537,7 +516,6 @@ fn main(): I32
   return pick(1, 1)
 // ==== case switch_case_value_twice
 //< Two cases may not name one value, however each is spelled
-//<
 //< **Let it through and the backends part**: C refuses the pair ("duplicate case value"), and LLVM
 //< sends both to the first case. `'a'` and `97` are one value, as are a constant and its number.
 // EXPECT: the case value 97 is already matched by an earlier case
@@ -564,7 +542,6 @@ fn main(): I32
   return letter(97) + number(1)
 // ==== case switch_on_string_shown_as_written
 //< A string subject is refused, and the message names its type as written
-//<
 //< **The C spelling (`std_lang_Slice_U8_Const`) is a name the writer never wrote**, and a reader
 //< cannot tell it is the `U8[]` they switched on.
 // EXPECT: cannot 'switch' on 'U8[]'. Only scalars
@@ -577,10 +554,9 @@ fn main(): I32
     return 0
 // ==== case switch_written_as_match
 //< Rust's and Python's `match` suggests `switch`, its cases opening with `case`
-//<
 //< The note writes the head with the subject the line gave; `match` stays a name, as the call on
 //< the first line of `main` shows.
-// EXPECT: switch_written_as_match.kspl:12:11: error: expected ':'
+// EXPECT: switch_written_as_match.kspl:11:11: error: expected ':'
 // EXPECT: KSPL branches on a value with 'switch'. Start each case with 'case'. Do not enclose all cases in braces: 'switch x case ...'.
 fn match(n: I32): I32
     return n

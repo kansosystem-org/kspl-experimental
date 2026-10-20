@@ -1,5 +1,4 @@
 //< `textDocument/documentSymbol`: the outline of one document, read from its syntax tree
-//<
 //< It lists what the file declares (functions, types, a type's fields and variants, an `impl`'s
 //< and a trait's members, constants), nested as written. **It reads the tree already kept for the
 //< document** (`Doc_state.root_file`), so it parses nothing and resolves no import. A function's
@@ -27,7 +26,6 @@ priv struct Ctx //< what every step of the walk shares
 
 priv fn kind_of(k: base_ast_kinds.Ast_kind, in_type: Bool): I32 //<
     //< The symbol kind of a declaration, or -1 for a node that is not one
-    //<
     //< `in_type` says the walk is inside an `impl` or a trait, where a function is a method.
     switch k
     case .k_decl_fn, .k_decl_fn_proto
@@ -55,7 +53,6 @@ priv fn kind_of(k: base_ast_kinds.Ast_kind, in_type: Bool): I32 //<
 
 priv fn holds_members(k: base_ast_kinds.Ast_kind): Bool //<
     //< Whether the walk enters this declaration for its members
-    //<
     //< **A function, a constant and a variable are not entered.** What is inside a body is no part
     //< of the outline. A constant's initializer can hold a function literal.
     switch k
@@ -71,7 +68,6 @@ priv fn name_node(node: Ast_node$@): Ast_node$@ //< the identifier that names a 
 
 priv fn impl_name(c: Ctx$@, node: Ast_node$@): U8[] //<
     //< An `impl`'s header as written, up to its line's end (`impl Align: Formattable`)
-    //<
     //< **The header is shown as written**, not resolved. An impl's type can come through an
     //< import's alias. Resolving it is the analysis's work, not the outline's.
     from: Sz = node.loc.offset
@@ -88,7 +84,6 @@ priv fn impl_name(c: Ctx$@, node: Ast_node$@): U8[] //<
 
 priv fn end_of(c: Ctx$@, node: Ast_node$@): Sz //<
     //< The furthest byte any part of the declaration reaches in this file
-    //<
     //< Caution: **Do not take the last child's span alone** (`get_span_length`). Normalization
     //< reorders children, so the last one need not be the furthest. Then the range would end inside
     //< the body.
@@ -132,7 +127,6 @@ priv fn symbol(c: Ctx$@, node: Ast_node$@, kind: I32, in_type: Bool): json.Value
 priv fn members(c: Ctx$@, node: Ast_node$@, in_type: Bool, $out: json.Array_builder):
     json.Array_builder //<
         //< Adds the declarations at or under `node` to `out`, stopping at each one found
-        //<
         //< **Nothing the compiler generated is listed** (`made_by_compiler`), and nothing from
         //< another file (normalization can bring one in).
     if node == null || node.made_by_compiler() || !node.loc.file().equals(c.file)
@@ -148,7 +142,6 @@ priv fn members(c: Ctx$@, node: Ast_node$@, in_type: Bool, $out: json.Array_buil
 
 fn handle(state: Doc_state$@, id_val: json.Value, arena: Arena$@) //<
     //< It answers `textDocument/documentSymbol` with the document's declarations, nested
-    //<
     //< Caution: **Answer an empty list for a document with no tree**, not null. The editor shows
     //< an empty outline either way. An empty list says the request was understood.
     $b: = Json_builder.new(arena)

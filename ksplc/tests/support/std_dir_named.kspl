@@ -1,5 +1,4 @@
 //< Named-package and path-identity checks for the package-location suite
-//<
 //< The runner helpers reset both package-directory variables for each child. The suite imports
 //< them too, so the std-directory and named-package checks use the same environment setup.
 import "ksplc/tests/support/harness"
@@ -23,7 +22,6 @@ fn main(): I32
 fn ksplc_env(args: U8[][], cwd: U8[], env_std: U8[], env_unit: U8[], arena: Arena$@):
     verdict.Run_out //<
         //< It runs ksplc, resetting both package-directory variables
-        //<
         //< Caution: **Set this one again every time too**, for the same reason as `KSPLC_STD_DIR`.
     return run_exe(harness.ksplc_exe(), args, cwd, env_std, env_unit, arena)
 
@@ -45,7 +43,6 @@ fn run_exe(exe: U8[], args: U8[][], cwd: U8[], env_std: U8[], env_unit: U8[], ar
 
 fn case_dir(name: U8[], slot: U8[], rels: U8[][], bodies: U8[][]): U8[] //<
     //< It makes the working directory holding the given files
-    //<
     //< An empty string means the files could not be written, which it reports as check `name`
     //< failing.
     dir: = harness.sandbox(harness.arena().text().s("std_dir_\{slot\}").take())
@@ -135,7 +132,6 @@ priv fn named_dir(name: U8[], slot: U8[]): U8[] //<
 
 fn case_named_anywhere(std: U8[], arena: Arena$@) //<
     //< It runs a named package from its own folder, from one below it and from the one above
-    //<
     //< Each time, its own test sees its unmarked declaration.
     //< **The unmarked `hello` is the point**: it is visible only inside one package, so its answer
     //< shows the entry file was named `mylib/…`, not `probe/…`.
@@ -162,7 +158,6 @@ fn case_named_anywhere(std: U8[], arena: Arena$@) //<
 
 fn case_named_inner_cfg(std: U8[], arena: Arena$@) //<
     //< A folder inside a package holding its own `ksplc.cfg` is still read as the package's
-    //<
     //< **The nearest file names no package there**, so the search continues past it to the top
     //< (`package_top` in `ksplc/base/config_file.kspl`). Otherwise the entry file is `probe/…`, and
     //< `import "mylib/thing"` reaches nothing.
@@ -204,7 +199,6 @@ fn main(): I32
 
 fn case_named_dotted(std: U8[], arena: Arena$@) //<
     //< It checks a path spelt through `..` reaches the package the plain path reaches
-    //<
     //< It never reaches a package it only passes through.
     //< **The walk up to a package's top folds `..` first** (`fold_dots` in
     //< `ksplc/base/locate.kspl`). Removing one name at a time would step `lib_here/probe/..` back
@@ -219,9 +213,9 @@ fn case_named_dotted(std: U8[], arena: Arena$@) //<
         ksplc_env(U8[][]::{ "lib_here/probe/main.kspl", "plain.c" }, dir, std, "", arena)
     dotted: =
         ksplc_env(U8[][]::{ "lib_here/probe/../probe/main.kspl", "dotted.c" }, dir, std, "", arena)
-    a: = io.read_file(fs.join(dir, "plain.c", arena)) catch
+    a: = io.read_file(fs.join(dir, "plain.c", arena), null) catch
         fallback ""
-    b: = io.read_file(fs.join(dir, "dotted.c", arena)) catch
+    b: = io.read_file(fs.join(dir, "dotted.c", arena), null) catch
         fallback ""
     verdict.check(name,
         plain.exited_with(0) && dotted.exited_with(0) && a.len > 0 && a.equals(b),
@@ -233,7 +227,7 @@ fn case_named_dotted(std: U8[], arena: Arena$@) //<
     top: = fs.join(dir, "lib_here", arena)
     beside: = fs.join("..", "outside/lone.kspl", arena) // the file beside the package, through `..`
     lone: = ksplc_env(U8[][]::{ beside, "lone.c" }, top, std, "", arena)
-    c: = io.read_file(fs.join(top, "lone.c", arena)) catch
+    c: = io.read_file(fs.join(top, "lone.c", arena), null) catch
         fallback ""
     verdict.check("a file the package's .. only passes through is not named as its file",
         lone.exited_with(0) && c.find_str("used_helper").is_some() &&
@@ -294,7 +288,6 @@ fn main(): I32
 
 fn case_unit_dotted(std: U8[], arena: Arena$@) //<
     //< A file no package claims, reached as `lib/n` and as `sub/../lib/n`, is one module in `lib`
-    //<
     //< Kept as spelt, the second name would make a second module with its own counter (the program
     //< would say 1), and put the file in `sub`. A file of `sub` would reach its unmarked `peek`.
     name: = "a file named through .. outside every package is one module"
@@ -313,7 +306,6 @@ fn case_unit_dotted(std: U8[], arena: Arena$@) //<
 
 fn case_named_uses(std: U8[], arena: Arena$@) //<
     //< It checks an import of an unlisted package is rejected where it is written
-    //<
     //< A listed one is found at the directory the list gives.
     name: = "an import of a package not listed in uses is refused at the import"
     dir: = named_dir(name, "named_uses")
@@ -337,7 +329,6 @@ fn case_named_uses(std: U8[], arena: Arena$@) //<
 
 fn case_named_embed(std: U8[], arena: Arena$@) //<
     //< An embed finds its file the way an import does, wherever the package stands
-    //<
     //< `mylib/data/note.txt` is found through the package, and a bare name beside the embedding
     //< file however far above it the compiler runs.
     //< **The rejection is the other half.** An embed of an unlisted package is rejected where it is
@@ -371,7 +362,6 @@ fn case_named_embed(std: U8[], arena: Arena$@) //<
 
 fn case_named_refused(std: U8[], arena: Arena$@) //<
     //< A declaration that cannot mean what it says is rejected on reading, with its line
-    //<
     //< Caution: **Compile rather than run.** `ksplc run` answers from its cache, which would have
     //< to notice the edited settings file; compiling reads it every time.
     dir: = named_dir("a malformed [package] is refused", "named_refused")
@@ -395,7 +385,6 @@ fn case_named_refused(std: U8[], arena: Arena$@) //<
 
 fn case_named_elsewhere(std: U8[], arena: Arena$@) //<
     //< It checks a folder reached under one name and naming itself another is rejected
-    //<
     //< The settings above a package's top do not reach into it either.
     //< The second half's contrast is in the same working directory: the same broken settings **do**
     //< reach a file outside every package.

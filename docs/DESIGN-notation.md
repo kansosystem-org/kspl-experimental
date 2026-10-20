@@ -296,25 +296,29 @@ priv const HELP: U8[] = "usage: tool [options] <file>, \
 
 ### The documentation a declaration carries
 
-A documentation comment starts with `//<` and stands on the line of what it describes, or just below it. An empty `//<` line separates a one-line summary from the details.
+A documentation comment starts with `//<` and stands on the line of what it describes, or just below it. Its first line is a one-line summary, and the detail starts on the next line.
 
 ```kspl
 priv struct Window //< a rectangle on the screen
-    //<
     //< Its origin is the top-left corner, and every size is in pixels.
     width: I32 //< how wide it is
     height: I32 //< how tall it is
 ```
 
-**One marker, `//<`, describes the thing on its own line, and a `//<` with no text separates the summary from the detail.** One marker spares the writer a question that does not matter to a reader: whether a sentence is about the line or about its contents. Where each kind of declaration takes it is "2.1 Comments" in [`SPEC-programming-language.md`](SPEC-programming-language.md). `Rule_prof` in `kspeg/engine.kspl` shows a summary with its detail below, and `Mode` in `ksplc/main.kspl` the anchor shape (an empty `//<` on the declaration's line, with the description below).
+**One marker, `//<`, describes the thing on its own line, and the first line of its run is the summary.** One marker spares the writer a question that does not matter to a reader: whether a sentence is about the line or about its contents. Where each kind of declaration takes it is "2.1 Comments" in [`SPEC-programming-language.md`](SPEC-programming-language.md). `Rule_prof` in `kspeg/engine.kspl` shows a summary with its detail below, and `Mode` in `ksplc/main.kspl` the anchor shape (an empty `//<` on the declaration's line, with the description below).
 
 **The description sits behind the thing it describes.** So no name is written twice, and no pair gets out of step: a renamed parameter takes its description along. Javadoc and Doxygen restate the name in a `@param x`. Behind rather than in front, because prose in front pushes the signature down, and the reader meets the description before the shape. That is why Python puts its docstring after the `def` line.
 
-**A run stands one step in** from the line it continues. (A *run* is a description's lines of `//<` one after another.) At the declaration's column, it would have the shape of a comment block over the *next* declaration. Only the mark would say which way it points. That is also why Python's docstring takes the body's indent. Where the declaration has braces, the run goes inside them, or a marker trait written `pub trait Move_only {}` would be described from outside. `make test-conventions` holds this.
+**A run stands one step in** from the line it continues. (A *run* is a description's lines of `//<` one after another.) At the declaration's column, it would have the shape of a comment block over the *next* declaration. Only the mark would say which way it points. That is also why Python's docstring takes the body's indent. Where the declaration has braces, the run goes inside them, or a marker trait written `pub trait Move_only {}` would be described from outside. The linter holds this (`[H0807]`).
 
-**A `//<` with no text separates the summary from what follows.** That is Python's rule (PEP 257: a summary line, a blank line, the elaboration), and Rust and Swift take the first paragraph the same way. A first sentence cut at a `.` is not taken. Javadoc and Doxygen's `AUTOBRIEF` do that, and the cut lands at `e.g.`, at `Dr.` and inside version numbers. That is why Javadoc also offers `{@summary}` to mark the summary explicitly.
+**The line boundary ends the summary.** A tool has to know where the summary stops, and there are two other ways to tell it, each with a cost:
 
-**The summary is one line that says what the thing is.** It is what the hover, the completion list and `ksplc doc` open with, and a run with no separator carries all of itself there. Such a run would also slip past the six-line cap, which counts only what stands past the separator. The compiler warns about a longer summary (`[W0213]`, in [`../ksplc/docs/SPEC-diagnostics.md`](../ksplc/docs/SPEC-diagnostics.md)), asked of the same reader the hover walks. One line rather than one sentence cut at a `.`, for the reason above; Go's doc comments and PEP 257 open with one line too.
+* **A first sentence cut at a `.`** is a guess. Javadoc and Doxygen's `AUTOBRIEF` make it, and the cut lands at `e.g.`, at `Dr.` and inside version numbers. That is why Javadoc also offers `{@summary}` to mark the summary explicitly.
+* **An empty line after the summary** (Python's PEP 257, and the first paragraph Rust and Swift take) is a separator the writer must remember. It costs a line in every comment and a check that reports it missing. Where the summary is one line anyway, it tells the reader nothing the line boundary has not.
+
+So the summary is the run's first line, and nothing follows it to mark the end. `ksplc fmt` removes an empty `//<` right below a summary, so the old shape does not come back. Further down, an empty `//<` still parts two paragraphs of the detail.
+
+**The summary is one line that says what the thing is.** It is what the hover, the completion list and `ksplc doc` open with. A second line is detail by position, so the summary cannot grow, and the six-line cap counts every line past it. The compiler warns about a summary that opens with a `Caution:` or `Note:` label (`[W0213]`, in [`../ksplc/docs/SPEC-diagnostics.md`](../ksplc/docs/SPEC-diagnostics.md)), asked of the same reader the hover walks. One line rather than one sentence cut at a `.`, for the reason above; Go's doc comments and PEP 257 open with one line too.
 
 **Where the head closes on a later line, the run hangs off that line.** The opening line belongs to the parameters below it, and a run there would read as the last parameter's.
 
@@ -355,9 +359,9 @@ flowchart LR
 
 Caution: **Count against the current shape, not against the record.** The record is what was committed. A declaration added and published in the same round would be judged against a row not there yet. The entry that most needs a sentence would be the one let through.
 
-**The detail does not travel to a declaration file**, which holds headings, not contents. It carries the run's first paragraph and stops at the separator. A run with no separator publishes the lot. What keeps a detail in its place is the six-line cap on what stands past the separator, which `make test-conventions` counts. Nor does a parameter's description reach the record. A parameter is not an entry, so its description is for the source and the editor to show. The return value's description stands in the same place, read by `return_doc` beside `param_docs`.
+**The detail does not travel to a declaration file**, which holds headings, not contents. It carries the run's first line, the summary, and stops there. What keeps a detail in its place is the six-line cap on what stands past the summary, which the linter counts (`[H0806]`). Nor does a parameter's description reach the record. A parameter is not an entry, so its description is for the source and the editor to show. The return value's description stands in the same place, read by `return_doc` beside `param_docs`.
 
-**Do not add a third marker for "the file as a whole".** It would be a second means to one end (Principle 6), which Rust's `//!` pays for with two rules the reader must hold apart. So a file says what it is with the same `//<`, opening the file above its imports, with nothing over it but blank lines. A banner over the run pushes what the file is for off the screen, and `make test-conventions` refuses that order.
+**Do not add a third marker for "the file as a whole".** It would be a second means to one end (Principle 6), which Rust's `//!` pays for with two rules the reader must hold apart. So a file says what it is with the same `//<`, opening the file above its imports, with nothing over it but blank lines. A banner over the run pushes what the file is for off the screen, and the linter reports that order (`[H0808]`).
 
 **The run takes what a *caller* needs, and the banner below it keeps what an *editor* needs.**
 
@@ -374,4 +378,4 @@ The run does not restate the file's name. `ksplc doc` titles the file's referenc
 
 **An enum of another file or package is left out.** Its `impl` would hold another package's reading of it, against the reference direction. (kspage's readers of std's `json.Value` stay in kspage.) The direction is the chapter "What crosses a package boundary" in [`DESIGN-repository.md`](DESIGN-repository.md).
 
-**The language allows both shapes; this is the repository's rule for its own sources.** `make test-conventions` checks it (`check_enum_functions` in [`../tests/support/conventions_spell.kspl`](../tests/support/conventions_spell.kspl)), leaving out fixtures whose text a test compiles. It reads one line at a time, so a signature it does not recognize still breaks the rule (Principle 8).
+**The language allows both shapes; the linter reports the free function** (`[I0503]`, in [`../ksplc/docs/SPEC-diagnostics.md`](../ksplc/docs/SPEC-diagnostics.md)). It reads the declaration as the compiler parsed it, so a signature wrapped over several lines is found too. It reports only an enum taken by value as the first parameter. Review judges a function over a pointer to the enum, or over a slice of it (Principle 8).

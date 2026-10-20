@@ -6,6 +6,7 @@ import "std/refcount" { Rc }
 import "std/ring"
 import "std/seq"
 import "std/str"
+import "std/tests/mem_test" { back_to }
 import "std/tests/sys_test"
 import "std/verdict"
 
@@ -85,7 +86,6 @@ fn test_seq_combinators(arena: Arena$@)
 
 fn test_seq_two_element_types(arena: Arena$@) //<
     //< That a chain of adapters works with two or more element types
-    //<
     //< Caution: **Use two or more element types.** Each adapter of a chain (`Keep` / `Conversion`)
     //< binds `T` once, so a lookup in the wrong direction finds the outer adapter's type
     //< (`find_generic_arg` in `ksplc/sema/session/ctx.kspl`); one type alone shows nothing.
@@ -117,7 +117,6 @@ struct Seq_tagged //< a key to sort by, and its position before sorting
 
 fn test_seq_order_by_stable(arena: Arena$@) //<
     //< That order_by sorts long lists and keeps equal keys in their original order
-    //<
     //< Caution: **Go past the insertion-sort run length** (16). Below it no merge runs, so lengths
     //< up to 16 test no merging. The equal keys show whether a tie is reversed.
     verdict.start("[Seq] order_by sorts long lists and keeps equals in order test...")
@@ -148,9 +147,8 @@ fn test_seq_order_by_stable(arena: Arena$@) //<
     heap_before: = mem.heap_used_bytes()
     $heap_sorted: = on_heap.order_by(by_key, null)
     heap_sorted.free()
-    heap_after: = mem.heap_used_bytes()
+    back_to(heap_before, "order_by: nothing but the list returned stays on the heap")
     on_heap.free()
-    assert(heap_after == heap_before, "order_by: nothing but the list returned stays on the heap")
     verdict.pass("order_by sorts past its insertion runs and keeps equal keys in their order.")
 
 struct Seq_handle //< an owning handle, which must not be copied, and a key to sort it by
@@ -162,7 +160,6 @@ priv fn lies_in(p: Seq_handle@, xs: List<|Seq_handle|>@): Bool //< whether p poi
 
 fn test_seq_move_only_in_place(arena: Arena$@) //<
     //< That a list of `Move_only` elements is tested, thinned and ordered with no element copied
-    //<
     //< Each test and comparison is handed a `T@`, so the instance for such a type passes the move
     //< check. Caution: **Check the address too.** A copy compares the same; only where the pointer
     //< lies shows that the element was not copied to make the call.
@@ -205,7 +202,6 @@ $ring_buf: U8[8]
 
 priv const NAMED_CAP: Sz = 4 //<
     //< The capacity written as a named const (the form a driver's buffer uses)
-    //<
     //< Both the buffer's length and the const generic argument come from one constant.
 $named_buf: U8[NAMED_CAP]
 
@@ -312,7 +308,6 @@ fn main()
 """
 
 fn test_ring_refuses_other_lengths(ksplc: U8[], arena: Arena$@) //< ksplc runs the children
-    //<
     //< Shorter, the queue would write past the buffer's end; longer, bytes the caller sized would
     //< never be used.
     verdict.start("[Ring] storage of a length other than cap...")
@@ -394,7 +389,6 @@ fn test_iteration(arena: Arena$@)
 
 fn test_map_removal() //<
     //< That after removal and re-insertion in a Map every key is found, and found once
-    //<
     //< Caution: **Test with a pair of colliding keys**: a plain empty slot left behind ends the
     //< probe before the key that was pushed past it. **Test re-insertion too**: writing into the
     //< tombstone can duplicate a key that stands further along.
@@ -460,7 +454,6 @@ fn test_map_removal() //<
         .pass("A colliding key is not lost to removal, and putting it back in does not double it.")
 
 fn test_map_churn() //< setting and removing ever new keys keeps a small map small
-    //<
     //< Caution: **Keep live keys whose buckets sit at the table's end**, so their run wraps past
     //< slot 0. Rehashing in place must not lose a pair whose probe crosses the end.
     verdict.start("[Map] a small map under endless set and remove of new keys test...")
@@ -499,7 +492,7 @@ fn test_map_churn() //< setting and removing ever new keys keeps a small map sma
     // A value moved within the slots keeps its count: nothing leaks and nothing is freed early.
     before: = mem.heap_used_bytes()
     churn_counted_values()
-    assert(mem.heap_used_bytes() == before, "a moved ARC value is neither leaked nor freed twice")
+    back_to(before, "a moved ARC value is neither leaked nor freed twice")
     verdict.pass("A map that keeps a few pairs keeps its size however many keys pass through.")
 
 priv fn churn_counted_values() //< sets and removes ARC values past several in-place rehashes
@@ -572,9 +565,24 @@ fn test_list_pop_and_clear() //< removal keeps capacity and releases ARC ownersh
         xs.free()
         before: = mem.heap_used_bytes()
         list_counted_removal(storage)
-        assert(mem.heap_used_bytes() == before,
-            "pop, clear, reuse and free release every counted value exactly once")
+        back_to(before, "pop, clear, reuse and free release every counted value exactly once")
     verdict.pass("pop returns the last value; clear releases elements and keeps their storage.")
+
+fn test_list_contains(arena: Arena$@) //< membership by the element's own `equals`
+    verdict.start("[ds] List.contains and a slice's contains test...")
+    $names: = List<|U8[]|>.new(arena)
+    assert(!names.contains(""), "contains: an empty list holds nothing")
+    names.push("alpha")
+    names.push("beta")
+    // A text built apart from the list compares by its bytes, not by its address.
+    beta: = arena.text().s("be").s("ta").take()
+    assert(names.contains(beta) && !names.contains("bet") && !names.contains("betas"),
+        "contains: a text is found by its bytes, and a prefix or a longer text is not")
+    assert(U8[][]::{ "x", "y" }.contains("y") && !U8[][]::{ "x" }.contains("y"),
+        "contains: a slice of texts answers as a list does")
+    assert(Sz[]::{ 3, 5 }.contains(5) && !I32[]::{ 3, 5 }.contains(4),
+        "contains: a number is found by its value")
+    verdict.pass("contains finds an equal element in a list and a slice, and nothing else.")
 
 priv fn list_counted_removal(storage: Arena$@)
     $xs: = List<|Rc<|I32|>|>.new_with_cap(4, storage)
@@ -592,12 +600,10 @@ priv fn list_counted_removal(storage: Arena$@)
         else
             panic("pop: a non-empty list must return its last value")
     assert(xs.len == 0 && xs.pop().is_none(), "clear: no stale element remains")
-    assert(mem.heap_used_bytes() == before_values,
-        "pop: its old slot owns nothing after the returned value leaves scope")
+    back_to(before_values, "pop: its old slot owns nothing after the returned value leaves scope")
     xs.push(Rc<|I32|>.new(4))
     xs.pop()
-    assert(mem.heap_used_bytes() == before_values,
-        "pop: discarding the result releases the removed owner")
+    back_to(before_values, "pop: discarding the result releases the removed owner")
     for n in I32[]::{ 4, 5, 6, 7, 8 }
         xs.push(Rc<|I32|>.new(n))
     xs.remove_at(1)

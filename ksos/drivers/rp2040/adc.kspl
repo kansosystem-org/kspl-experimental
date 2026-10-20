@@ -1,5 +1,4 @@
 //< The ADC (successive-approximation, 12-bit) for the real Raspberry Pi Pico / Pico W (RP2040) chip
-//<
 //< **Channels 0 to 3 are GPIO 26 to 29** (pin_channel() converts), and channel 4 is the built-in
 //< temperature sensor.
 //< Caution: **Call clocks.init() first.** Without clk_adc, READY is never set while the registers
@@ -25,16 +24,13 @@ const CS_ERR: U32 = 1U32 << 9
 const CS_AINSEL_BITS: U32 = 0x7U32 << 12
 
 const MAX_VALUE: U32 = 4095 //< the conversion result's range
-    //<
     //< Not Arduino's 10 bits (1023).
 
 const FIRST_ADC_GPIO: U32 = 26 //< the first GPIO the ADC input is connected to
-    //<
     //< Channel n = GPIO (first_adc_gpio + n).
 const CHANNEL_COUNT: U32 = 4 // channel 4 is the temperature sensor; only external inputs here
 
 fn pin_channel(pin: U32): U32 //< turns a GPIO number into the ADC's channel number
-    //<
     //< Caution: Pass only 26 to 29 (out of range it returns 0, which cannot be told apart from
     //< "channel 0 was read").
     if pin < FIRST_ADC_GPIO || pin >= FIRST_ADC_GPIO + CHANNEL_COUNT
@@ -42,7 +38,6 @@ fn pin_channel(pin: U32): U32 //< turns a GPIO number into the ADC's channel num
     return pin - FIRST_ADC_GPIO
 
 fn init(): Void!mmio.Driver_error //< starts the ADC block
-    //<
     //< Call it once after clocks.init() and before reading; gpio.init_analog is needed separately.
     resets.unreset(RESET_ADC)!
     mmio.write32(ADC_CS, CS_EN)
@@ -54,7 +49,6 @@ struct Reading
     value: U32 //< 0 to 4095
 
 fn read_channel(ch: U32): Reading //< converts a channel once
-    //<
     //< **Do not read RESULT while converting (READY=0).** It returns the previous value.
     cur: = mmio.read32(ADC_CS)
     mmio.write32(ADC_CS, (cur & ~CS_AINSEL_BITS) | ((ch & 0x7) << 12))
@@ -71,7 +65,6 @@ fn read_pin(pin: U32): Reading //< reads once by GPIO number
     return read_channel(pin_channel(pin))
 
 fn read_pin_avg(pin: U32, n: U32): Reading //< reads n times and returns the average
-    //<
     //< One reading varies by a few LSB; average where it meets a threshold. n = 0 counts as once.
     count: = 1U32 if n == 0 else n
     ch: = pin_channel(pin)

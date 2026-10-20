@@ -140,13 +140,6 @@ function kspageKeys(ks) {
         return;
       }
     }
-    // **A double click on a border fits it to its contents** (as in Excel and Calc; `detail`
-    // counts consecutive clicks, so no clock of our own).
-    // Caution: **Check it before grabbing** (grabbed first, it starts an empty drag, no fitting).
-    if (e.detail === 2 && w.kspage_web_edge_at(x, y) !== 0) {
-      if (w.kspage_web_fit_edge(x, y) !== 0) draw();
-      return;
-    }
     // **A cell border comes first** (otherwise clicking it moves the cursor and the drag selects).
     if (w.kspage_web_grab_edge(x, y) !== 0) {
       sizing = true;
@@ -267,6 +260,15 @@ function kspageKeys(ks) {
   canvas.addEventListener("pointerup", endDrag);
   canvas.addEventListener("pointercancel", endDrag);
 
+  // Pointer events do not supply a portable click count. The browser owns double-click timing.
+  canvas.addEventListener("dblclick", (e) => {
+    if (e.button !== 0 || ks.api.armed || ks.showing >= 0 || e.ctrlKey || e.metaKey) return;
+    const [x, y] = spotOf(e);
+    if (w.kspage_web_edge_at(x, y) === 0) return;
+    e.preventDefault();
+    if (w.kspage_web_fit_edge(x, y) !== 0) draw();
+  });
+
   ime.addEventListener("compositionstart", () => { ks.composing = true; });
   ime.addEventListener("compositionupdate", (e) => { compose(e.data || ""); });
   // Caution: **A cancelled composition is not a commit** — with Esc, `data` comes empty, and
@@ -343,6 +345,18 @@ function kspageKeys(ks) {
     }
     const ext = e.shiftKey ? 1 : 0;
     const mod = e.ctrlKey || e.metaKey;
+    // Insert a fixed local date or time, as in spreadsheets; neither changes on reopening.
+    if (mod && !e.altKey && (e.key === ";" || (e.shiftKey && e.key === ":"))) {
+      e.preventDefault();
+      const now = new Date();
+      const two = (n) => String(n).padStart(2, "0");
+      const text = e.shiftKey ? `${two(now.getHours())}:${two(now.getMinutes())}`
+        : `${now.getFullYear()}-${two(now.getMonth() + 1)}-${two(now.getDate())}`;
+      w.kspage_web_break_undo_group();
+      type(text);
+      w.kspage_web_break_undo_group();
+      return;
+    }
     if (mod && (e.key === "z" || e.key === "Z")) {
       // Ctrl+Shift+Z redoes too (a Mac cannot press Ctrl+Y); the boundary redraws.
       e.preventDefault();

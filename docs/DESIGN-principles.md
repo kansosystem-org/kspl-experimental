@@ -49,7 +49,7 @@ Eight rules come first in every folder: in the language, the libraries, the tool
 | 4 | Following DRY — one canonical source, copies tied together by a check | Keep each fact in one place. Where a copy must exist, a check compares it with the original | A runtime helper written in C and its LLVM counterpart are compared by `make test-conventions` ("What cannot be written in C's types" in [`DESIGN-programming-language.md`](DESIGN-programming-language.md)) | The check added with each copy, most of them in `make test-conventions` |
 | 5 | Do not leave anything "writable but ineffective" | Whatever the compiler or a tool accepts must have an effect; otherwise it is an error | `defer` has no capture list, since one would change nothing ("Why `defer` has no capture list" in [`DESIGN-programming-language.md`](DESIGN-programming-language.md)) | By review; each check's own samples show that the check can fire |
 | 6 | One means to one purpose | Offer one way to write each thing | No number casts to `Bool`, since `x != 0` already says it ("Why `Bool` keeps ordering and has no arithmetic" in [`DESIGN-programming-language.md`](DESIGN-programming-language.md)) | By review |
-| 7 | Documents and comments state only "how it is now", in plain language | Write the present state and its reasons, never the history, in the short, plain sentences of [`SPEC-plain-language.md`](SPEC-plain-language.md) | This document says "X is", never "X used to be" | `make test-conventions` for a comment's length, a document sentence's length and phrases that tell a history; `tools/repo_stat.kspl` measures the share of comments; the rest by review |
+| 7 | Documents and comments state only "how it is now", in plain language | Write the present state and its reasons, never the history, in the short, plain sentences of [`SPEC-plain-language.md`](SPEC-plain-language.md) | This document says "X is", never "X used to be" | `make lint` for a comment's length (H0806); `make test-conventions` for a document sentence's length and phrases that tell a history; `tools/repo_stat.kspl` measures the share of comments; the rest by review |
 | 8 | A check that can only be half kept is not made a guarantee | If ordinary code can slip past a check, do not let the check pose as a guarantee | There is no thread-safety marker, since a global variable bypasses it ("Why data races are not prevented by the type system" in [`DESIGN-programming-language.md`](DESIGN-programming-language.md)) | By review |
 
 Each chapter below applies the principles to one subject, and [`ksplc/docs/DESIGN-compiler.md`](../ksplc/docs/DESIGN-compiler.md) applies them to the compiler's implementation.
@@ -206,12 +206,13 @@ What KSPL leaves out, and what to write instead, is "Appendix A: Features not ca
 | :-- | :-- |
 | **try-finally** | Each resource nests a level deeper, and an early `return` sits badly. `defer` gives `finally`'s guarantee, running on every way out |
 | **Automatic cleanup for every type** | A type opts into `Drop` or `Ref_counted`. Manual owners keep explicit cleanup. No collector or automatic policy covers every type |
+| **An explicit destructor call (`x.drop()`)** | The cleanup runs where the owner's lifetime ends, which the source shows. A call by hand could run it twice, or run it on a value still in use |
 | **Garbage collection** | When something is freed can be read from the source |
 | **A cleanup joined onto its declaration** | One form for every cleanup, naming what it cleans up. A form bound to the declaration fixes what runs (`Dispose`, `close`, the attribute's function). A form that took any call would need a receiver filled in, as no other construct does. See "A `defer` is not joined onto a declaration" below |
 | **Class inheritance** | It keeps the memory layout simple |
 | **Named actual arguments** | One call would have two spellings (`f(0)` and `f(offset = 0)`), and **parameter names would become published API** (Python offers the positional-only `/` to keep them out of it). Through a function-pointer type, the names in the type and in the definition can disagree |
 | **Function overloading** | No tracing which of several same-named candidates is called |
-| **A distinct type made from another, and other spellings of a type's other name** | One word, one meaning, one spelling. `typedef` stays a name, as in C, Rust and Swift. A type kept apart is declared as one, so a mix-up is an error at no run-time cost. See "The spelling of reserved words is taken from C" in [`DESIGN-notation.md`](DESIGN-notation.md) |
+| **A distinct type made from another**, and other spellings of a type's other name | One word, one meaning, one spelling. `typedef` stays a name, as in C, Rust and Swift. A type kept apart is declared as one, so a mix-up is an error at no run-time cost. See "The spelling of reserved words is taken from C" in [`DESIGN-notation.md`](DESIGN-notation.md) |
 | **`?` for a result** | `!` marks the place a function can stop and hand a failure back, and `?` marks absence ("Failure" below) |
 | **The abbreviated error type `T!`** | It would be a second spelling of one type |
 | **Another language's word for a loop or a branch** | One word for each job, spelled as C spells it. So a keyword takes no name a writer would use. See "The spelling of reserved words is taken from C" in [`DESIGN-notation.md`](DESIGN-notation.md) |
@@ -223,15 +224,17 @@ What KSPL leaves out, and what to write instead, is "Appendix A: Features not ca
 | **A closure that can be taken outside its function** | A closure keeps its captured values on the frame that built it. See "Why capture is made explicit and escape is forbidden" in [`DESIGN-programming-language.md`](DESIGN-programming-language.md). Where the values must leave, an ordinary struct makes their lifetime the writer's to decide |
 | **A trailing closure** | One call would have two spellings (`f(xs, g)` and `f(xs) g`). In the indentation notation, a closure after `if xs.any()` could not be told from the `if`'s body. See "Why a closure is not written after the call" in [`DESIGN-programming-language.md`](DESIGN-programming-language.md) |
 | **A static variable inside a function** | State persisting across calls lines up at the head of the file, where what touches it can be seen |
-| **A counterpart to `guard let` / `?.` / `??`** | It keeps the flow of control plain. `if name: = expression` is the one exception ("Unwrapping an `Option`" below) |
+| **`guard let`, `?.` and `??`** | `catch { … }` on an optional already takes the value or leaves, so `guard let` would be a second notation. `unwrap_or(v)` already gives a value in place of `.none`, so `??` would be a second spelling. `?.` would end a chain with no mark where it stops. See "Unwrapping an `Option`" below |
 | **A separate prefixed string form for formatting** | An ordinary string literal already formats in place, so it would be a second notation for one string |
-| **Block comments** | `//` already writes every comment, so it would be a second notation |
-| **A documentation comment in front of what it documents, or inside it** | A description sits on what it describes, and no name is written twice ("The documentation a declaration carries" in [`DESIGN-notation.md`](DESIGN-notation.md)) |
+| **Block comments `/* */`** | `//` already writes every comment, so it would be a second notation |
+| **A documentation comment in front of what it documents**, or inside it | A description sits on what it describes, and no name is written twice ("The documentation a declaration carries" in [`DESIGN-notation.md`](DESIGN-notation.md)) |
 | **Escapes outside the ten** | "Escapes are closed at ten" below |
-| **A built-in `Char` type, and a multi-byte character literal** | "There is no `Char` type" below |
-| **An octal literal, and a decimal integer that starts with `0`** | "A decimal integer does not start with 0" below |
+| **A built-in `Char` type** | "There is no `Char` type" below |
+| **A multi-byte character literal** | "There is no `Char` type" below |
+| **An octal literal**, and a decimal integer that starts with `0` | "A decimal integer does not start with 0" below |
 | **Link flags in the source** | A flag forces one machine's link line on every machine that builds it. It can also run code at build time. A library's name carries neither. See "The library an `extern` block needs is named on the block" in [`DESIGN-programming-language.md`](DESIGN-programming-language.md) |
 | **A postfix `if` / a conditional `break`** | The action before its condition runs against reading top to bottom (the condition, then the contents) |
+| **A deprecation mark** | A feature that stops paying its way is removed outright, its callers changed with it (Principle 1). A period of warnings would keep two ways of doing one thing alive |
 
 **Withdrawing a notation removes it from every place the source is read.** That is the grammar, and the compiler's own code that skips whitespace and comments. Removed from only one, a form the grammar refuses would pass silently through the other. Where the compiler reads comments apart from the grammar is "Every place a source enters reads it the same way" in [`../ksplc/docs/DESIGN-parse.md`](../ksplc/docs/DESIGN-parse.md).
 
@@ -360,6 +363,12 @@ Whichever reading KSPL took, a writer from the other half would get a different 
 * a bare `{ … }` already scopes;
 * chaining while keeping the contents bound is the `,` form's job.
 
+**`catch { … }` takes an `Option`'s value or leaves, as it takes a result's.** Most uses of an optional do one of the two at once. Without a form for that, each use would need a `switch` of about six lines. `T?` and `T!E` are both library enums, so one mechanism serves both, and no notation is added. On an optional, the block must leave in every position, a statement's block included:
+
+* **The name is always bound after the `catch`.** No reader has to ask whether a value came.
+* **A block that gave a value would repeat `unwrap_or(v)`.** So `fallback` and the expression form `opt catch v` are refused, and the note writes `unwrap_or`. One purpose keeps one spelling (Principle 6).
+* **`.none` carries nothing, so the block names nothing.** A result's block may give a value, because the error it names can decide that value. An optional's block has nothing to decide by.
+
 #### Translation-time conditions
 
 **`#cfg(flag)` leaves a declaration out of the build, and `##error` / `##warning` stop or warn the build. These translation-time conditions stay two separate tools. `#cfg` stays the weaker one on purpose.** (*Translation time* is while the compiler runs, before the program does.)
@@ -380,13 +389,14 @@ Two grounds follow from the table.
 
 #### Things that look like duplication and are not
 
-**Some pairs look like two ways of doing one thing, but each covers cases the other cannot, so both stay.** `std/thread.kspl` and `std/reactor.kspl` can both "handle many connections", and which to use is in `std/docs/DESIGN-core.md`. The three indexing traits are each needed (docs/SPEC-programming-language.md §6.1):
+**Some pairs look like two ways of doing one thing, but each covers cases the other cannot, so both stay.** `std/thread.kspl` and `std/reactor.kspl` can both "handle many connections", and which to use is in `std/docs/DESIGN-core.md`. The four indexing traits are each needed (docs/SPEC-programming-language.md §6.1):
 
 | Trait | The case only it serves | Example |
 | :-- | :-- | :-- |
 | `Index` | Elements with no address | `Range` / `sys.Args` |
 | `Index_mut` | A write whose destination does not exist yet | A new key into a `Map` |
 | `Index_place` | A body that becomes an lvalue (something that can be assigned to) | `List` |
+| `Index_ref` | A read-only receiver, read with no copy | `Slice<\|T\|>` over immutable content |
 
 **Two forms whose writable positions exclude each other are not two ways of writing one thing either.** Gathering them would leave a position where nothing can be written.
 
@@ -430,7 +440,7 @@ There are two grounds for allowing it.
 
 **An API can require a real arena.** Compound objects with shared storage need one lifetime; supporting heap fallback as well would add independent cleanup rules and ownership flags. Such constructors reject `null`, and callers release the arena after all views are finished. Allocation details belong behind constructors, with non-public fields preventing raw construction; plain data records can still use public literals. This changes library contracts without adding a second allocation spelling or removing low-level heap allocation.
 
-**`make test-conventions` holds it**: it refuses a parameter whose type names `Arena` and carries `=`. It reads the text, so a spelling it does not see (an arena behind a typedef) is still a violation.
+**The linter holds it** (`[I0702]`): it reports a parameter whose type is an arena and that carries a default. It reads the type as the compiler resolved it, so an arena behind a typedef is found too.
 
 **Where a default cannot be placed**, and why, is the table in docs/SPEC-programming-language.md §8.1.1. Each such place is rejected with a diagnostic (the cases `param_default_*` in `ksplc/tests/negative/fn.kspl`). A trait's declaration can carry one (the same section; `Index_place.at` in `std/lang` takes this form).
 

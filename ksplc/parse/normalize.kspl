@@ -1,5 +1,4 @@
 //< Normalizes the raw syntax tree from kspeg into the AST shape
-//<
 //< The entry point for loading and parsing is in `parse/load.kspl`.
 //< **Sema assumes a tree that has been through here.** Removing wrappers, moving modifiers and
 //< folding a type's postfixes (`@` / `$@` / `[]`) all happen here. A sema branch for the raw shape
@@ -20,14 +19,12 @@ import "std/sys"
 
 const MAX_PARSE_TREE_DEPTH: Sz = 2000 //<
     //< The depth guard of normalize_ast and the raw tree's reader (`to_ast_node` in `load.kspl`)
-    //<
     //< Both recurse as deep as KSPEG's guard (max_parse_depth in kspeg/rule.kspl) lets the tree
     //< nest. They walk it before any later guard such as validate_layout (the reason is at
     //< clone_with / validate_layout_impl in base/ast.kspl).
 
 fn is_expr_wrapper_kind(kind_id: base_ast_kinds.Ast_kind): Bool //<
     //< The expression kinds whose one-child node only wraps its child, so `elide_node` removes it
-    //<
     //< **The raw tree's reader never creates them** (`to_ast_node` in `load.kspl`); it asks this
     //< one list. A statement's wrapper is not on it: its raw child count still changes (the `;` is
     //< dropped), so the reader and `is_pass_through` would disagree about it.
@@ -131,7 +128,6 @@ impl Ast_node
 
     priv fn is_pass_through(r: Ast_node$@): Bool //<
         //< Whether a one-child node only wraps its child
-        //<
         //< It is a statement's or a declaration's wrapper, or an expression's
         //< (`is_expr_wrapper_kind`).
         if r == null
@@ -144,7 +140,6 @@ impl Ast_node
 
     priv fn is_modifier_target(r: Ast_node$@): Bool //<
         //< Whether the attributes and visibility are moved onto this node
-        //<
         //< **Not a statement** (`stmt_if` and the like). parse/normalize_stmt.kspl picks its
         //< children by kind into fixed positions. An attribute list placed first would be taken
         //< for another child. Its attributes stay on the `stmt` wrapper until elide_attributed_stmt
@@ -162,7 +157,6 @@ impl Ast_node
 
     priv fn elide_attributed_stmt(r: Ast_node$@): Ast_node$@? //<
         //< It handles the attributes put on a statement and removes the `stmt` wrapper
-        //<
         //< Its one meaningful attribute, `#cfg`, is already applied (`should_drop_by_cfg`).
         //< Caution: **Discard nothing but `#cfg`**, or an attribute with no effect on a statement
         //< passes with no diagnostic (Principle 5).
@@ -238,7 +232,6 @@ impl Ast_node
 
     priv fn wants_inline(r: Ast_node$@, c: Ast_node$@): Bool //<
         //< Whether `c` is a child whose contents are lifted into `r`
-        //<
         //< Caution: **Do not copy this check.** The scanning round and the building round share it.
         //< A copy silently drifts when one of them is changed.
         return (c.kind_id == .k_decl_fn_proto && r.kind_id == .k_decl_fn) ||
@@ -246,7 +239,6 @@ impl Ast_node
 
     priv fn flatten_inline_nodes(r: Ast_node$@) //<
         //< Where there is a child to lift, it splices that child's children into its own list
-        //<
         //< Caution: **Do not allocate the new list first** (the reason is at
         //< `clean_and_classify_stmt`): the scan only reads and stops at the first hit.
         $has_inline: = false
@@ -316,14 +308,12 @@ impl Ast_node
         r.text = base_core.arena.dup_str(slice)
     fn prepend_children(r: Ast_node$@, items: List<|Ast_node$@|>$@) //<
         //< It inserts `items` at the head of r's children, keeping their order
-        //<
         //< Note: parse/normalize_decl.kspl also uses it for the modifier list.
         for $m: = items.len; m > 0; m -= 1
             r.insert_child(0, items.get(m - 1))
 
     priv fn apply_modifiers_to_targets(r: Ast_node$@) //<
         //< It moves the modifiers (visibility and attributes) to the start of the next declaration
-        //<
         //< Caution: **Do not allocate the new list first** (as in `flatten_inline_nodes`).
         $has_mod: = false
         for c in r.children
@@ -610,7 +600,6 @@ priv enum Decl_kind_info
 
 priv fn map_keyword_to_decl_kind(t: U8[]): Decl_kind_info //<
     //< It decides what declaration or statement a wrapper node really is, from its leading keyword
-    //<
     //< The wrapper is a `stmt` / `decl_top` and the like.
     //<
     //< **Only syntax beginning with a keyword goes here.** Syntax beginning with a mark (`##error`)

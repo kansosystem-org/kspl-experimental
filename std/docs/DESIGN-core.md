@@ -30,7 +30,7 @@ When you add or change a file, check whether the table can gain a row. If it can
 | :-- | :-- | :-- |
 | A problem other libraries are known for | any | [What was inherited, and what was changed](#what-was-inherited-and-what-was-changed) |
 | Memory: who frees what | `mem`, `refcount`, `ds` | [Memory and ownership](DESIGN-core.md#memory-and-ownership) |
-| Text, numbers, bytes | `chars`, `str`, `strfmt`, `strnum`, `buf`, `bytes`, `checked_int` | [Strings, numbers and bytes](DESIGN-core.md#strings-numbers-and-bytes) |
+| Text, numbers, bytes | `chars`, `str`, `strfmt`, `strnum`, `buf`, `bytes`, `checked_int`, `math` | [Strings, numbers and bytes](DESIGN-core.md#strings-numbers-and-bytes) |
 | Lists, maps, loops, chains | `ds`, `seq`, `lang`, `ring` | [Containers and iteration](DESIGN-core.md#containers-and-iteration) |
 | Reporting failures, logging | every file's `T!E`, `log` | [Failures and the log](#failures-and-the-log) |
 | Arguments, output, tests, children, the clock | `argparse`, `io`, `verdict`, `fuzz`, `subproc`, `sys` | [The process](DESIGN-system.md#the-process-arguments-output-children-and-the-clock) |
@@ -64,7 +64,8 @@ Each row is a bug or attack that other libraries are known for. It says what the
 | File | The problem | Seen in | What `std` does |
 | :-- | :-- | :-- | :-- |
 | `str` | **A NUL byte cuts a string short** ("the poison NUL byte"). A KSPL string carries its length, so it can hold a byte 0. C reads a string only up to its first 0. So a conversion to a C string silently drops everything after it. PHP and Java had path checks bypassed this way | C's strings | `to_cstr()` returns `U8$@?`: `.none` when the input holds a NUL. `switch` must cover every case, so the caller has to handle it. `contains_nul()` is public too |
-| `checked_int` | **Signed overflow is undefined behavior**: the C compiler can assume it never happens, so optimization changes the result | C's integer arithmetic | The plain operators wrap around (`mod 2^N`) whatever the signedness. The generated code goes through the unsigned type of the same width, which erases C's undefined behavior. Native `checked_*` methods report failure; `Ci8` through `Cu64` and `Csz` keep checks on a formula’s operators. There is no wrapping type, since the plain operators already are that |
+| `checked_int` | **Signed overflow is undefined behavior**: the C compiler can assume it never happens, so optimization changes the result | C's integer arithmetic | The plain operators wrap around (`mod 2^N`) whatever the signedness. The generated code goes through the unsigned type of the same width, which erases C's undefined behavior. Native `checked_*` methods report failure. There is no wrapping type, since the plain operators already are that |
+| `math` | **The absolute value of a signed integer's minimum is the minimum itself.** Negating it wraps, so the "absolute value" is negative and a check `abs(x) >= 0` fails | C's `abs` (undefined), Java's `Math.abs` | `math.abs` stops the program there, naming the reason. The other values of every number type come back without their sign |
 | `option` | **Null references**: a forgotten check for `null` still compiles | A raw pointer's `null` | `T?`'s content comes out only through `switch`. The linter's [H0701] proposes `T?` for a raw pointer returned as `null` |
 | `chars`, `regex`, `subproc` and the rest | **"None" spelt as a value of the answer's own type**: a `-1`, an empty string or a flag beside the value. A forgotten check still compiles, and the stand-in flows on as data. Examples are `-1` as an index or as a digit of a number, and an empty string as a name | C's `EOF` and `-1`, an `indexOf` or `find` answering -1 | "There can be none" is `T?`, and "it failed" is `T!E`, never a stand-in ("Absent or failed: one rule" below) |
 | `mem` | **Double free and use after free** | `malloc` / `free` | The arena (`Arena`) is the main route, and `defer` shows in the code where memory is freed. The compiler traces the paths for a use after the free |
@@ -95,6 +96,7 @@ Each row is a bug or attack that other libraries are known for. It says what the
 | `http` | **A writer that frames otherwise than its reader**: a `Content-Length` that the body does not have, or one beside `Transfer-Encoding`. Either splits the message where another reader cuts it | The same | Refuses at write time whatever the reader refuses: `Transfer-Encoding`, and a `Content-Length` that is not the body's or is given twice (`length_mismatch`). A header value with a space or a tab at either end is refused too (`invalid_header`). RFC 9110 §5.5 gives a value none, and the reader trims it, so it would read back as another value. 1xx, 204 and 304 get no length and no body (RFC 9110 §8.6). A HEAD's answer names the length of a body that it does not carry. It has its own builder (`format_response_to_head`) |
 | `http` | **Two `Host` headers, or one value, read differently by two programs on the way.** A proxy routes by one, and the server checks the other. So a request reaches a host by a name that nobody checked. `user@a` is host `a` to a reader that takes userinfo, and `a/b` is host `a` to one that takes a path. A request with no `Host` on HTTP/1.1 is malformed the same way | HTTP/1.1 implementations in general; RFC 9112 §3.2 asks a server to answer each with 400 | `parse_request` and `request_length` refuse such a request (`invalid_host`). That is a request that names `Host` more than once, or not at all on HTTP/1.1 and later. It is also one whose value is not a host and an optional port (RFC 3986's `uri-host [":" port]`, the port up to 65535). HTTP/1.0 can leave it out. `format_request` and `write_request` refuse the same head. One place decides whether a version is "1.1 or later": `http.is_1_1_or_later`. A server's keep-alive default reads it too |
 | `http` | **A body that runs to the close** cannot be told from one cut off early | The same | Refuses a response that can carry a body but names no length (`unsupported_close_delimited`). It does not return what arrived as the whole body. 1xx, 204 and 304 end at their head |
+| `http` | **A `Connection` value read as one word.** `keep-alive, close` and a second `Connection` line both ask to close. A reader that compares the whole value keeps the connection open | Hand-written servers; RFC 9110 §7.6.1 makes the field a list of tokens | `http.lists_token` reads a value as a list, in any case. `Request.wants_close` reads every `Connection` line (RFC 9112 §9.3), and `format_response_head` finds `close` the same way |
 | `jsonrpc` | **Two readers cut one stream into different frames.** Readers differ on which of two `Content-Length` lines counts, the first or the last. And take a limit on the head, checked against what one read brought. It takes a long head that arrives at once, and refuses it when it arrives a byte at a time | LSP clients and servers in general | A head that names two lengths that differ, or one that it cannot read, has no length. So the frame is `broken`. The head's limit counts its own bytes. Its end is looked for only within `max_head_bytes`, however the bytes arrive |
 | `jsonrpc` | **Nothing comes back for a broken frame or a dropped response.** (A *frame* is one message with its `Content-Length` header in front.) On a frame without `Content-Length`, `lsp4j` sends no response, only a log line ([#210](https://github.com/eclipse-lsp4j/lsp4j/issues/210)). On a dropped response, `pylspclient` cannot look up the id and throws | LSP clients in general (`lsp4j` / `lsp-server` / `pylspclient`) | A frame that declares no length, or is over the limit, returns `Rpc_end.broken` **as a value**. Its broken head is dropped from the pool, so it cannot repeat forever ("The frame is kept apart from the transport" below) |
 
@@ -154,11 +156,17 @@ fn main()
     in_arena.push(2)
 ```
 
-### Builders own their cleanup
+### An owner of one resource cleans up itself
 
-`Str_builder` implements `Drop`. A local builder needs no `defer`; moving it transfers responsibility for its buffer. A slice borrows the builder's bytes and becomes invalid when that owner is destroyed. Returning the builder transfers ownership, while returning its slice does not.
+**A type that owns one resource for one scope implements `Drop`.** In `std` these are `str.Str_builder`, `io.File_stream`, `fs.File_lock`, `thread.Mutex<|T|>` with the OS lock it holds, `thread.Cond_var`, `reactor.Reactor`, the search state of `regex`, and `mem.Scratch`. A local one needs no `defer`. Its cleanup runs on every way out of its scope, a propagated failure's included. So a file is closed and a lock let go where nobody wrote the line. Moving it transfers the responsibility. The reasons, and what stays manual, are "Automatic cleanup follows one owner" in [`../../docs/DESIGN-programming-language.md`](../../docs/DESIGN-programming-language.md#automatic-cleanup-follows-one-owner).
 
-**Containers distinguish a live element from an empty slot.** Push and insertion initialize storage without destroying its old bytes. Pop transfers a live element out. Removal, replacement and clear destroy the old element exactly once. Resizing transfers bytes without creating another owner. A manually managed container still needs its `free()`, including one whose storage belongs to an arena.
+* **A slice borrows.** It borrows the builder's bytes and becomes invalid when that owner is destroyed. Returning the builder transfers ownership, while returning its slice does not.
+* **Some keep a `free()` for an early release**, where more work follows that needs the resource gone. A `File_stream` is closed before the file is read back, and a `File_lock` let go before another process takes it. A `Scratch` is given back before more is written into the caller's arena. A free followed by nothing in the scope repeats the drop, and the linter reports it.
+* **What a program shares is not such an owner.** Standard output and standard error stay open for the whole program, so `io.out()` and `io.err()` hand out a stream that never closes. A global cannot hold an automatic owner either.
+* **An owner with more than one way to end stays manual.** A `subproc.Child` ends by `wait` or by `kill`, and a drop could choose only one. Killing would cut short a child the caller meant to wait for. Waiting would block at a scope's end. So it conforms to `Move_only` and is ended by hand.
+* **A network stream stays manual too.** `net.Tcp_stream` and `net.Tcp_listener` are handed out as pointers. A server keeps them in its table of connections past any one scope, and a pointer owns nothing.
+
+**Containers distinguish a live element from an empty slot.** Push and insertion initialize storage without destroying its old bytes. Pop transfers a live element out. Removal, replacement and clear destroy the old element exactly once. Resizing transfers bytes without creating another owner. A manually managed container on the heap still needs its `free()`. One in an arena needs it only when its elements carry cleanup (a `Drop` or ARC value). The arena gives back the memory, but it runs no element's cleanup.
 
 **Shared ownership owns its payload once.** `Rc` and `Arc` transfer a new payload into their control block. The last strong owner destroys that payload through the same storage operations. A payload can itself contain an automatic owner.
 
@@ -176,7 +184,9 @@ Pass `null` where a function takes an arena, and it works on the heap instead. *
 | A value of many blocks. Examples are a JSON document (`json.parse`), a `Json_builder`, an HTTP request or response, and the headers that `http.headers` builds. Others are a query's pairs, an `argparse.Parser`, and the fuzz driver's `Findings` and `Setup` | `v.free()`, which lets all of it go at once ([below](#a-value-of-many-blocks-keeps-its-own-arena)) |
 | The fields that `json_struct.into_struct` fills in the caller's struct | Each string with `mem.dealloc` and each list with `free()`, as above. **A refusal leaves the fields that it filled before it**, freed the same way |
 
-**What a function does not return, it frees before it returns**, `null` or not. Examples are a path joined on the way, a list that it sorts from, and the object that it encodes into text. That work goes in `mem.scratch(arena)`. With an arena, that is the caller's arena from a mark, rewound to the mark on the way out. Given `null`, it is an arena of the function's own, freed on the way out. So the caller's arena keeps the result alone, however many calls pass through it and however many fail. With `null`, the caller owes a free for the result alone.
+**A whole file is read into the arena given** (`io.read_file`). A caller that keeps the text with other values in an arena reads it there directly. Read onto the heap and copied, the file would be held twice at the peak.
+
+**What a function does not return, it frees before it returns**, `null` or not. Examples are a path joined on the way, a list that it sorts from, and the object that it encodes into text. That work goes in `mem.scratch(arena)`. With an arena, that is the caller's arena from a mark, rewound to the mark on the way out. Given `null`, it is an arena of the function's own, freed on the way out. The scratch frees itself (`Drop`), so a failure thrown halfway gives the work back too. So the caller's arena keeps the result alone, however many calls pass through it and however many fail. With `null`, the caller owes a free for the result alone.
 
 * **Why the caller's arena is rewound, not left as it is**: a server reads each request into one arena per connection. A reader that left its work there would grow that arena by every head that it reads, until the connection closes. That includes each try at a request that is still incomplete.
 * **Why the work does not go in its own arena when one is given**: a caller who passes an arena avoids the heap. That includes a fixed buffer on a microcontroller.
@@ -188,7 +198,7 @@ Pass `null` where a function takes an arena, and it works on the heap instead. *
 
 #### A value of many blocks keeps its own arena
 
-**Given `null`, a value of many blocks is built in an arena of its own, which the value keeps** (`mem.Own_arena`). Its `free()` lets that arena go at once. The arena is the same `mem.scratch` that a function's work goes in. The function keeps it with the result, instead of freeing it on the way out. Given an arena, the value keeps nothing, and its `free()` frees nothing: that arena does. A build that fails rewinds the caller's arena, as any work does. So you write `doc: = json.parse(text, null)!` and then `defer doc.free()`, as for a `List`.
+**Given `null`, a value of many blocks is built in an arena of its own, which the value keeps** (`mem.Own_arena`). Its `free()` lets that arena go at once. The arena is the same `mem.scratch` that a function's work goes in. The function's `keep()` hands it to the result, and leaves the scratch empty, so its drop frees nothing. `keep()` is the only way out of the scratch, as its arena field is private. So a copy cannot leave the result holding an arena that the drop frees. Given an arena, the value keeps nothing, and its `free()` frees nothing: that arena does. A build that fails rewinds the caller's arena, as any work does. So you write `doc: = json.parse(text, null)!` and then `defer doc.free()`, as for a `List`.
 
 | What it settles | How |
 | :-- | :-- |
@@ -266,7 +276,7 @@ Caution: **Do not mark an arena parameter with a suffix**, least of all `_in`. `
 
 **Do not take an arena only to discard it.** The signature is the one mark that a function takes an arena. So the caller reads one there as "I handed over where the content goes". A discarded one misleads them about whether clean-up is needed.
 
-**Only a function that takes an arena allocates.** In `std/str`:
+**Only a function that takes an arena allocates.** The one exception is an owner that frees itself (`Drop`), such as `Str_builder.new()`. It lives on the heap, and its cleanup runs where its owner's scope ends. So no `free()` is owed, and no arena is needed. In `std/str`:
 
 | Functions | Take an arena? | Return |
 | :-- | :-- | :-- |
@@ -407,6 +417,14 @@ A predicate (a test that returns `Bool`), selector or comparator is taken as `Ca
 Caution: **Do not turn it back into a function pointer.** `where` / `any` / `all` are useless unless the predicate can be given what is searched for. "Does it contain this node" could not be written, and a plain `for` would replace them. A function value with a capture carries the function and its environment. One function pointer cannot hold both ([`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md) 8.1, "Closures").
 
 **Whether a callback is a function pointer or a `Callable` depends on whether it needs a capture.** The rule is "Whether a callback arrives as a function pointer or a `Callable`" in [`../../docs/DESIGN-programming-language.md`](../../docs/DESIGN-programming-language.md). `std/fs`'s `skip_dir` makes do with a constant set of names, so it takes a function pointer. `std/thread`'s `spawn` has no choice, since its `entry` crosses the C boundary. Do not reason "it is a predicate, so a `Callable`". A `Callable` where no capture is needed stops one named predicate from being passed to several functions.
+
+### `contains` compares by the element's own `equals`
+
+**`xs.contains(x)` answers whether an element equals `x`, on a `List` and on a slice.** It calls the element's `equals`: the method that a `Map` key provides. So a list of texts or of numbers needs no closure and no loop of its own.
+
+* **Why no closure, as `distinct` takes**: the common question is "is this name in this list". A closure at each call would repeat `a.equals(b$)` at every call. A test of any other kind is `any`, which takes a closure.
+* **Why no trait bound on the `impl`**: a bound on an `impl` is checked for every instance of the type. A `List` of structs would then fail to compile, also where nothing calls `contains`. Without a bound, the body is checked only where it is called. There, a type with no `equals` is refused, with the type named.
+* **Why not `==`**: a slice has no `==`. Text compares by its bytes only through `equals`, so `==` would refuse a list of texts.
 
 ### A test or comparison gets `T@`; `select` gets the element
 
@@ -597,15 +615,26 @@ The code that applies a format specifier (the `:08` or `.2` in `\{v:08\}`) is wr
 
 `std/strfmt.kspl` implements `fmt_spec` / `fmt_prec` / `fmt_hex` / `fmt_char` separately for twelve built-in types. Each delegates to the shared `int_fmt_spec` / `hex_fmt_spec` / `float_fmt_spec`. So the impls read as one shape repeated. **They are not folded, because the return type differs per type.** It is `Int_fmt` (signed, and `U8` through `U32`), `Uint_fmt` (`U64`) or `Float_fmt` (`F32` / `F64`). A default body declares one return type.
 
+### `abs`, `min` and `max` are one generic each
+
+**`math.abs`, `math.min` and `math.max` take every number type, with one name each.** The first argument fixes the type. Both arguments of `min` and `max` have that type, so the call converts nothing silently. Write the typed operand first: `math.min(n, 16)`, not `math.min(16, n)`.
+
+* **`abs` of a signed integer's minimum stops the program.** Negated, the minimum wraps to itself, so the answer would be negative. A caller that can meet the minimum widens the value first.
+* **`min` and `max` give the second argument when their comparison is false**: on a tie, and where either argument is a NaN. `min(a, b)` is `a if a < b else b`. So replacing that conditional with the call changes no answer.
+* **They live in `std/math`, not `std/lang`.** Every program carries `std/lang`, and most programs use none of the three.
+* **One generic, not a method per type.** A method needs one `impl` per number type, and a type added later would lack it.
+
+### The largest `Sz` is one constant
+
+**`mem.SZ_MAX` is the largest `Sz`.** `Sz` is as wide as a pointer, so no literal is right on every target. The expression that computes it shifts by the width minus one. Written by hand, a shift that is off by one bit gives -1 or half the value, and nothing catches it.
+
 ### Checked arithmetic shares its checks
 
 **Native methods own overflow detection.** I64 and U64 hold the two algorithms. Narrower types calculate in I64 or U64, then check their own bounds before converting. `Sz` checks the target machine's width. No associated type or constant is needed.
 
-**A formula keeps its checked type.** `Ci8` through `Cu64` and `Csz` name instances of `Signed` or `Unsigned` in `std/checked_int.kspl`. Convert each input once, then keep the formula's ordinary operators until reading the final `.val`. Each operator checks its intermediate result and panics on failure. The wrappers keep long formulas readable; they do not offer recovery from an operator's panic. Each family shares its methods and operators; signed and unsigned stay separate because only signed values support negation.
+**Each checked operation is a method that returns a failure.** A size multiplication returns `Sz!Checked_error`. A longer calculation propagates each method's failure with `!`, or handles it with `catch`. Containers keep their local size check, so importing a List brings no checked arithmetic into every string program. Application limits still need their own checks: fitting in `Sz` does not mean a tensor or request is acceptably small.
 
-**A calculation that must recover uses methods.** A size multiplication can return `Sz!Checked_error` without constructing a wrapper. A longer calculation propagates each method's failure with `!`, or handles it with `catch`. Containers keep their local size check, so importing a List brings no checked wrappers into every string program. Application limits still need their own checks: fitting in `Sz` does not mean a tensor or request is acceptably small.
-
-**Importing checks changes no native operator.** Hashes and random generators depend on wrapping. A checked wrapper makes a whole formula stop on overflow; a native method marks one operation whose caller handles failure.
+**Importing checks changes no native operator.** Hashes and random generators depend on wrapping. A native method marks one operation whose caller handles failure.
 
 ### Hexadecimal uses a format specifier; the wrapper adds only `0x`
 
@@ -823,6 +852,11 @@ A pattern with more than 9 capture groups is refused with `too_many_groups` too.
 * **`std/libc` and `std/mem`**, which speak C. Their `-1`, `EOF` and `null` stay. The null rule in "Things that look like duplication and are not" in [`../../docs/DESIGN-principles.md`](../../docs/DESIGN-principles.md) says so.
 
 **A caller that does not care says so where it calls.** `.unwrap_or("")` writes an unknown HTTP phrase as empty, and `catch 0` reads a broken number as 0. The decision is in the caller's code, where a reader sees it, not in the function's documentation.
+
+**A caller that asks only "did it fail?" writes `.is_err()`.** A test of a parser asks this of many inputs. Without the method, each test file wrote its own helper around a `catch`. `is_err()` hands out neither the value nor the error, so it does not weaken the rule above: the value still comes out only past `!`, `catch` or a `switch`.
+
+* **There is no `is_ok()`.** `!r.is_err()` says it, and two names for one question would need a rule for which to use.
+* Caution: **`is_err()` drops the value without freeing it.** Ask it of a value in an arena, or of one that owns nothing. A test that frees what succeeded keeps its `catch`.
 
 **Within one file, failure takes one shape.** `std/fs.kspl` returns every failure as `!Fs_error`, as `std/io.kspl` does with `!Io_error`. A file that mixed `T!E`, `T?` and `Bool` for failure would make the caller read each signature for the function's style.
 

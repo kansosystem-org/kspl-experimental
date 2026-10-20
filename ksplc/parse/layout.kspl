@@ -1,5 +1,4 @@
 //< Rewrites the indentation notation (`.kspl`) into the brace notation for the analyser
-//<
 //< **The two notations differ in three marks only**: indenting, outdenting and a newline stand
 //< for `{`, `}` and `;`. No lines are added: the `{` goes at the end of the heading line and the
 //< `}` at the end of the block's last line.
@@ -16,14 +15,12 @@ import "std/mem" { Arena }
 import "std/str" { Str_builder }
 
 struct Note //< a problem found in the indentation
-    //<
     //< **No diagnostic is printed here**, so that no second reporter states a syntax error before
     //< the analyser does (Principle 6). What it finds is returned as a value. It is reported once
     //< sema starts (`report_layout_notes` in `../source_checks.kspl`).
     kind: Note_kind
     line: Sz //<
         //< Which line it is (1-based)
-        //<
         //< **A line, because line numbers are the same before and after the conversion** (inserted
         //< text goes at a line's end, or replaces a space).
         //< Caution: **Do not report a column** — it would need the inserted text added back, and
@@ -32,47 +29,40 @@ struct Note //< a problem found in the indentation
 enum Note_kind
     ragged(want: Sz, got: Sz) //<
         //< Siblings on the same level are not aligned to one column.
-        //<
         //< Caution: **The conversion hides it silently** — only the heading's column is pushed, so
         //< any deeper line joins the level whatever its column (see `to_braces`).
     tab //<
         //< A tab is used for indentation.
-        //<
         //< **A tab is not counted in the column** (the walk below counts only spaces). So that line
         //< is treated as column 0, and ends up outside the level around it.
     terminator(col: Sz) //<
         //< A statement's line ends in a written `;`, where the line's end already ends it
-        //<
         //< `col` is the `;`'s byte within its line: nothing is inserted before it on that line.
         //< **No `;` is added after it.** So the parse goes on, and `fn f(): I32;` meets the
         //< analysis's own "has no body" rather than a syntax error about an empty statement.
     block_end(col: Sz) //<
         //< A `;` written right after a one-line block whose `}` already ended the statement
-        //<
         //< `col` is the `;`'s byte within its line. **The `;` is read as a space**, so the parse
         //< goes on and this note is the one report (`if x { f() }; g()` reads as `if x { f() }
         //< g()`).
 
 priv const TAB_BYTE: U8 = '\t' //< one level of indentation
-    //<
     //< Caution: **Do not guess its width.** Levels are told apart only by deeper or shallower; a
     //< fixed width would mistake a line continued by indentation for a level.
 
 priv const CR_BYTE: U8 = '\r' //< the `\r` at the end of a line (CRLF)
-    //<
     //< **Do not treat it as a character.** A CRLF blank line would read as not blank, and a
     //< terminator or brace put after the `\r` breaks the text. **Do not drop a `\r` inside a
     //< string.** `open_str` keeps that one, which is part of the newline a raw string holds.
 
 // The block-opening headings that need no `;` after the block closes; **any other gets one** (the
 // `r: = f() catch` kind, a block inside an expression). `"label:"` is a marker: no name contains a
-// `:`.
-priv const BLOCK_HEADS: U8[][14] = ::{ "fn", "struct", "enum", "trait", "impl", "extern", "if",
-    "else", "for", "switch", "case", "default", "defer", "label:" }
+// `:`. `tests/suite/notation_test.kspl` compares the list with the grammar.
+const BLOCK_HEADS: U8[][14] = ::{ "fn", "struct", "enum", "trait", "impl", "extern", "if", "else",
+    "for", "switch", "case", "default", "defer", "label:" }
 
 priv const LABELLED_HEADS: U8[][3] = ::{ "for", "switch", "if" } //<
     //< What a label can stand before (a bare block's label stands alone: `is_label_only`)
-    //<
     //< Caution: **Not every block heading**: `p: fn(x: I32): Bool = fn(…)` would read as the label
     //< `p:` before `fn`, and the closure's block then got no `;` after it.
 
@@ -88,12 +78,10 @@ priv struct Phys //< one physical line
     blank: Bool //< no code (a blank line, or a line comment alone)
     joins: Bool //<
         //< The line continues the logical line above it
-        //<
         //< Its start is inside a bracket or a string, or a mark joins it (`joins_next` in
         //< `line_cont.kspl`). Blank lines in between are passed over, as a comment can stand there.
     seg_from: Sz //<
         //< Where the logical line's last statement starts: past its last `;` outside every bracket
-        //<
         //< **The heading is read from here**, so in `import "std/io"; fn main() { … }` the line is
         //< a `fn`'s. **It can lie on a line above**: a `for` heading wrapped after its first `;`
         //< is still the `for`'s, and its later `;` split nothing.
@@ -107,14 +95,12 @@ priv struct Logical //< one logical line (= one statement or declaration)
     attr: Bool //< a line holding only an attribute (`#name`); it takes no terminator
 
 priv struct Insert //< one insertion
-    //<
     //< Caution: **Do not reorder by position** — the order of several insertions at the same
     //< position (`; }`, `} }`) matters.
     at: Sz
     text: U8[]
     drop: Sz //<
         //< How many source bytes from `at` it replaces (0 = a pure insertion)
-        //<
         //< **A one-line block's `;` replaces the space before its `}`**, so no column moves
         //< (diagnostics and the editor read positions from the converted text).
 
@@ -133,7 +119,6 @@ priv struct Line_open //< a bracket opened on the physical line being walked
 // ---------------------------------------------------------
 priv fn begins_anew(c: U8): Bool //<
     //< Whether a line starting with this byte starts something new
-    //<
     //< Otherwise it continues what the line above left open.
     //<
     //< **A closing bracket continues**: a value written over several lines puts its `}` at column
@@ -284,7 +269,6 @@ priv struct Line_opens //< the brackets held open on the physical line being wal
 impl Line_opens
     fn step(r: Self$@, src: U8[], i: Sz, semis: List<|Insert|>$@): Bool //<
         //< It processes the byte at `i`: a bracket opening or closing, or a statement's `;`
-        //<
         //< The `;` ends a statement of the block it stands in. **It returns true for a `;` the
         //< `}` before it already ended** (`block_end`), which the caller turns into a space.
         c: = src[i]
@@ -325,7 +309,6 @@ priv fn starts_import(src: U8[], at: Sz): Bool //< whether an `import` starts at
 
 priv fn splits_statements(src: U8[], seg_from: Sz, at: Sz, closed_block: Bool): Bool //<
     //< Whether the `;` at `at`, outside every bracket, ends a statement
-    //<
     //< Another statement then starts on the line.
     //< **A C-style loop heading's `;` does not** (`for $i: Sz = 0; i < n; i += 1`): it belongs to
     //< the `for` until that loop's block has closed on the line.
@@ -333,7 +316,6 @@ priv fn splits_statements(src: U8[], seg_from: Sz, at: Sz, closed_block: Bool): 
 
 priv fn supply_block_end(src: U8[], o: Line_open, close: Sz, semis: List<|Insert|>$@) //<
     //< It inserts the missing `;` after the last statement of a block opened and closed on one line
-    //<
     //< It follows the same rule as a line's end: a statement ending in `}` takes one unless its
     //< heading opens a block.
     $last: = close - 1
@@ -351,7 +333,6 @@ priv fn supply_block_end(src: U8[], o: Line_open, close: Sz, semis: List<|Insert
 
 priv fn skip_string(src: U8[], at: Sz, open_str: Sz$@): Sz //<
     //< It skips a string starting with a `"`
-    //<
     //< Left open at the line's end, it sets `open_str` (1 raw, 2 plain) and returns at the newline.
     raw: = src.starts_with("\"\"\"", at)
     open_str$ = 1 if raw else 2
@@ -359,7 +340,6 @@ priv fn skip_string(src: U8[], at: Sz, open_str: Sz$@): Sz //<
 
 priv fn skip_interp(src: U8[], at: Sz): Sz //<
     //< It skips an interpolation's expression, from past its `\{` to past its `\}`
-    //<
     //< Caution: **A quote inside it opens a string of its own** (`\{"""ab""".len\}`). Read as the
     //< end of the string around it, a raw string would seem left open, and the line get no `;`.
     //< It stops at a newline, which the string around it then reports open.
@@ -392,7 +372,6 @@ priv fn skip_char(src: U8[], at: Sz): Sz
 
 priv fn string_goes_on(src: U8[], at: Sz, open_str: Sz$@): Sz //<
     //< It walks a string's contents from `at` to past its close, or to the line's end
-    //<
     //< `open_str` says which kind is open (1 raw, 2 plain), and is 0 once it closes. **The one walk
     //< for a string's contents**, its first line and the lines a `\` continues alike. Walked apart,
     //< a continued line would read the quotes of a string inside `\{ … \}` as the outer string's.
@@ -423,7 +402,6 @@ priv fn string_goes_on(src: U8[], at: Sz, open_str: Sz$@): Sz //<
 
 fn next_line_comment(src: U8[], from: Sz): Sz //<
     //< Where the next line comment at or past `from` starts (`src.len` where none does)
-    //<
     //< **It skips string and character literals**, raw ones across lines too. So a `//` inside a
     //< URL or inside program text held in a string is not taken for a comment.
     //< Caution: **Start it on code, never inside a string.** It reads from wherever it starts.
@@ -454,7 +432,6 @@ fn next_line_comment(src: U8[], from: Sz): Sz //<
 priv fn joins_above(src: U8[], lead_start: Sz, lead_end: Sz, lead_indent: Sz, indent: Sz, at: Sz):
     Bool //<
         //< Whether the line whose code starts at `at` joins the logical line above it
-        //<
         //< That line's code runs `lead_start`..`lead_end`, its first line at column `lead_indent`.
         //< The marks decide (`joins_next`), but **the level after a `catch` is a block, not a
         //< continuation**: a line deeper than `lead_indent` there opens it.
@@ -504,7 +481,6 @@ priv fn merge(src: U8[], phys: List<|Phys|>@, arena: Arena$@): List<|Logical|>
     return out
 
 priv fn head_word(src: U8[], from: Sz, to: Sz): U8[] //< a logical line's leading word
-    //<
     //< The visibility (`pub` / `priv`) and a label (`<name>:`) are skipped.
     if is_label_only(src.sub(from, to - from))
         return "label:"
@@ -562,12 +538,10 @@ priv fn is_block_head(word: U8[]): Bool
 
 fn heads_a_block(code: U8[]): Bool //<
     //< Whether a line's leading word, after `pub` / `priv`, opens a block, or the line is a label
-    //<
     //< The syntax messages ask it too (`syntax_msg.kspl`), so both use one list.
     return is_block_head(head_word(code, 0, code.len))
 
 priv fn is_attribute(head: U8[]): Bool //< whether the line is an attribute (`#name`)
-    //<
     //< **A directive (`##name(…)`) is not** — that one ends in a `;`.
     return head.len > 0 && head[0] == '#' && !head.starts_with("##")
 
@@ -576,7 +550,6 @@ priv fn is_attribute(head: U8[]): Bool //< whether the line is an attribute (`#n
 // ---------------------------------------------------------
 
 priv struct Frame //< one level on the stack of open levels
-    //<
     //< **Remember each level's column, not the indent width** (indenting by two and by four work
     //< the same).
     //< Caution: **Do not keep the closing position per level.** Every level closes at "the end of
@@ -586,7 +559,6 @@ priv struct Frame //< one level on the stack of open levels
     head: U8[]
     body: Sz //<
         //< The column of this level's first child. 0 = not seen yet.
-        //<
         //< **Kept only to report whether siblings align; do not close levels by it**, or the rule
         //< above (the column, not the width) breaks.
 
@@ -596,7 +568,6 @@ struct Mended //< a source as an entry point read it, made ready for the parser
 
 fn mend(raw: U8[], notes: List<|Note|>$@, arena: Arena$@): Mended //<
     //< The bytes an entry point read, normalized and converted into braces
-    //<
     //< **Every entry point for a source goes through here.** These are the loader for what it
     //< opens, the formatter, and the language server for what the editor sends and what it reads
     //< from disk.
@@ -608,7 +579,6 @@ fn mend(raw: U8[], notes: List<|Note|>$@, arena: Arena$@): Mended //<
 
 fn to_braces(src: U8[], notes: List<|Note|>$@, arena: Arena$@): U8[] //<
     //< It converts `src` into the brace notation
-    //<
     //< **Pass `notes` empty**: it only appends the problems found, and never reads them.
     $ins: = List<|Insert|>.new(arena)
     phys: = scan_phys(src, notes, ins@, arena)
@@ -655,14 +625,12 @@ fn to_braces(src: U8[], notes: List<|Note|>$@, arena: Arena$@): U8[] //<
 
 priv const DEFER_STATEMENT: U8[] = "defer statement" //<
     //< The head word for a `defer` holding one statement (`defer buf.free()`)
-    //<
     //< It opens no level of its own.
     //<
     //< The space keeps it from matching any written word, as with `"label:"`.
 
 priv fn heading_of(src: U8[], from: Sz, to: Sz): U8[] //<
     //< The line's head word, telling apart a `defer` that holds one statement
-    //<
     //< Caution: **Only a `defer` alone or before a `{` opens its own level.** Treated as one,
     //< `defer f() catch {}` would end in the block's `}` and get no terminator. A `catch` level
     //< below `defer f() catch e` would close without one. The next statement would be read into it.
@@ -676,7 +644,6 @@ priv fn heading_of(src: U8[], from: Sz, to: Sz): U8[] //<
 
 priv fn closes_inline_block(src: U8[], cur: Logical): Bool //<
     //< Whether the line opens and closes a block on itself
-    //<
     //< That is `fn f() {}` / `for {}` / `case .x {}` / `defer { … }`.
     //<
     //< Caution: **Add no terminator**: `fn f() {};` is not in the grammar. The heading word tells
@@ -703,7 +670,6 @@ priv fn written_terminator(src: U8[], cur: Logical): Note //<
 
 priv fn arms_follow(cur: Logical, lines: List<|Logical|>@, n: Sz): Bool //<
     //< Whether `cur` (the `n`th line) is a `switch`'s head whose first `case` is the next line
-    //<
     //< **The head then takes no terminator**: the `case` continues it, as a later arm continues the
     //< `}` before it. A comment or blank line between them is no logical line, so changes nothing.
     //< Caution: **Only at the head's own column.** A deeper `case` would open a block `switch` does

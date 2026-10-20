@@ -1,5 +1,4 @@
 //< The language server's supervisor, which passes every editor message to a worker process
-//<
 //< It owns the stdio with the editor; the worker is `worker.kspl`.
 //<
 //< A worker that crashes or hangs is killed and restarted, and handed the open documents' texts
@@ -31,7 +30,6 @@ priv const WORKER_TIMEOUT_MS: I32 = 10000 // the hang-detection timeout (a first
 
 priv fn relay_stripping_alive(src: U8[], out: Str_builder$@) //<
     //< It copies into out while removing the liveness markers
-    //<
     //< Without this the markers reach the editor unchanged and break the LSP's framing.
     tag: = lsp_msg.WORKER_ALIVE_TAG
     $i: Sz = 0
@@ -43,7 +41,6 @@ priv fn relay_stripping_alive(src: U8[], out: Str_builder$@) //<
             return
         i = end + lsp_msg.marker_len(tag)
 priv enum Worker_end //< the reason a worker was given up on
-    //<
     //< Caution: **Do not merge the cases.** The editor sees the same null response for all of them.
     //< But the fix differs entirely: a hang means the analysis is too heavy, and exited means the
     //< worker crashes. Merged, they can only look like "it stops working after a while", which
@@ -70,7 +67,6 @@ impl Worker_end
 
     priv fn log_worker_giveup(e: Self, method: U8[], restores: Sz) //<
         //< It prints why it gave up to stderr, on one line, and how many documents it restores
-        //<
         //< **Never to stdout**, the JSON-RPC channel to the editor; mixing breaks the protocol.
         //< **The count says how much is analysed again** after the restart. Each document is
         //< analysed once, one at a time, before the first request naming it or while the editor is
@@ -82,7 +78,6 @@ impl Worker_end
 
 priv fn pump_worker_output(worker: subproc.Piped_child@, arena: Arena$@): Worker_end //<
     //< It reads the worker's output up to the completion marker and relays what precedes it
-    //<
     //< Nothing is relayed before the marker comes, so a partial message never breaks the protocol.
     cap: Sz = 65536
     rbuf: = U8$@::arena.alloc(cap)
@@ -120,7 +115,6 @@ priv fn pump_worker_output(worker: subproc.Piped_child@, arena: Arena$@): Worker
     return ok
 
 priv fn spawn_worker(): subproc.Piped_child? //< it starts one worker
-    //<
     //< **A failed start is `none`, not 0.** The worker is restarted on the next round, and without
     //< "not there yet" in the type, a write to a missing worker would be accepted. This is the only
     //< place that holds the name `lsp-worker`.
@@ -132,7 +126,6 @@ priv fn spawn_worker(): subproc.Piped_child? //< it starts one worker
 
 priv fn exchange(w: subproc.Piped_child?@, frame: U8[], arena: Arena$@): Worker_end //<
     //< It writes one framed message to the worker and relays what it answers, up to the marker
-    //<
     //< **The worker is lent, not handed over**: the caller still kills it.
     // Caution: **Bound the write by the watchdog too.** A worker stuck in an analysis reads
     // nothing, and once the pipe is full an unbounded write would hang the editor's server with it.
@@ -142,19 +135,16 @@ priv fn exchange(w: subproc.Piped_child?@, frame: U8[], arena: Arena$@): Worker_
         return pump_worker_output(c@, arena)
     return .write_failed
 priv struct Lsp_docs //< the open documents' texts, and what the worker has made of them
-    //<
     //< It restores a restarted worker's state, sends each document's analysis again, and
     //< quarantines a document that crashes reproducibly.
     store: Doc_store //< uri -> the latest text, raw (the worker converts its own copy)
     quarantine: Map<|U8[], I32|>$@ //< the poisoned uris, on store's arena
     unchecked: Map<|U8[], I32|>$@ //<
         //< The documents the current worker holds but has not analysed since it started
-        //<
         //< Keyed by the store's own keys. Until one is analysed, the editor shows the diagnostics
         //< an earlier worker published for it.
     first: U8[] //<
         //< The document the message lost in the restart named, analysed first while idle
-        //<
         //< Empty for none. Its diagnostics were never published for its current text, and it is the
         //< likeliest to crash again. A store key, so it outlives the message.
 
@@ -171,7 +161,6 @@ impl Lsp_docs
 
     priv fn observe(r: Self$@, method: U8[], params: json.Value) //<
         //< It records the text on didOpen / didChange and discards it on didClose
-        //<
         //< **Each of the three settles the document's analysis**: the worker analyses the new text
         //< itself, or the document is gone. So none is sent again.
         td: = params.get("textDocument")
@@ -200,7 +189,6 @@ impl Lsp_docs
 
     priv fn restores(r: Self$@, uri: U8[], is_open: Bool): Bool //<
         //< whether a restart hands it to the new worker
-        //<
         //< Caution: **Do not send a closed document.** The entry remains, so without checking
         //< is_open a document already closed by didClose is reopened on every worker restart.
         return is_open && !r.is_poison(uri)
@@ -239,7 +227,6 @@ priv fn build_doc_frame(method: U8[], uri: U8[], text: U8[], arena: Arena$@): St
 
 priv fn quarantine(docs: Lsp_docs$@, uri: U8[], end: Worker_end) //<
     //< It marks a document whose analysis brought the worker down, and says so
-    //<
     //< Caution: **Name a quarantined document explicitly.** Only that document loses hover and
     //< jump-to-definition, and nothing shows it on the editor's side.
     io.err().s("ksplc lsp: quarantining '\{uri\}': \{end.worker_end_text()\}\n")
@@ -247,7 +234,6 @@ priv fn quarantine(docs: Lsp_docs$@, uri: U8[], end: Worker_end) //<
 
 priv fn restart_worker(docs: Lsp_docs$@, lost_uri: U8[], arena: Arena$@): subproc.Piped_child? //<
     //< It starts a worker and hands it every unquarantined open document's text, unanalysed
-    //<
     //< **Nothing is analysed here**, so the next request waits for its own document alone.
     //< Each handed document is marked unchecked, to be analysed later (`check_doc`): the
     //< diagnostics on screen came from a worker that has just failed. `lost_uri` names the
@@ -275,7 +261,6 @@ priv fn restart_worker(docs: Lsp_docs$@, lost_uri: U8[], arena: Arena$@): subpro
 priv fn hand_over(docs: Lsp_docs$@, w: subproc.Piped_child?@, lost_uri: U8[], arena: Arena$@):
     Worker_end //<
         //< It hands a new worker each document `restart_worker` restores; done where all went over
-        //<
         //< A document whose text alone brings the worker down (its conversion fails on it every
         //< time) is quarantined.
     docs.first = ""
@@ -303,12 +288,10 @@ priv fn hand_over(docs: Lsp_docs$@, w: subproc.Piped_child?@, lost_uri: U8[], ar
 priv fn check_doc(docs: Lsp_docs$@, worker: subproc.Piped_child?, uri: U8[], arena: Arena$@):
     subproc.Piped_child? //<
         //< It has the worker analyse one unchecked document, as a didOpen of its text
-        //<
         //< The worker publishes the document's diagnostics, which replace those on screen. A
         //< document that brings the worker down is quarantined and the worker restarted.
     text: = docs.store.open_text(uri).unwrap_or("")
     $frame: = build_doc_frame("textDocument/didOpen", uri, text, arena)
-    defer frame.free()
     end: = exchange(worker@, frame.slice(), arena)
     switch end
     case .done
@@ -330,7 +313,6 @@ priv fn message_of(body: U8[], arena: Arena$@): json.Value //<
     return doc.val
 
 priv fn named_uri(params: json.Value): U8[] //< the document a message names; empty for none
-    //<
     //< A call hierarchy's second step names it in `item`, every other request in `textDocument`.
     td_uri: = params.get("textDocument").get("uri").as_str().unwrap_or("")
     if td_uri.len > 0
@@ -362,7 +344,6 @@ priv enum Inbound //< what the editor has for the supervisor now
 #export
 fn ksplc_lsp_read_editor(r: Editor_reader$@): Void$@ //<
     //< The reading thread: each message the editor sends, framed into the inbox
-    //<
     //< Caution: **Stop at `exit`, not only at the end of input.** A client can keep the pipe open
     //< after `exit`. A thread left blocked in the C library's read holds standard input's lock. The
     //< C library's exit waits for that lock, so the process would never end.
@@ -392,26 +373,23 @@ fn ksplc_lsp_read_editor(r: Editor_reader$@): Void$@ //<
 
 priv fn start_editor_reader(): Editor_reader$@? //<
     //< It starts the reading thread; none where the OS gives no thread or lock
-    $inbox: =
+    inbox: =
         thread.Mutex<|Inbox|>.new(Inbox::{ .frames = Str_builder.new(), .ended = false }) catch
         return .none
     arrived: = thread.Cond_var.new() catch
-        inbox.free()
         return .none
+    // Caution: **Initialize the block, do not assign into it.** An assignment would first let go
+    // of the garbage the fresh block holds.
     r: = mem.alloc_as<|Editor_reader|>()
-    r.inbox = inbox
-    r.arrived = arrived
+    mem.init_at(r, Editor_reader::{ .inbox = inbox, .arrived = arrived, .reading = null })
     r.reading = thread.Thread.spawn<|Editor_reader|>(ksplc_lsp_read_editor, r) catch
-        r.inbox.free()
-        r.arrived.free()
-        dealloc(Void$@::r)
+        r.let_go()
         return .none
     return .some(r)
 
 impl Editor_reader
     priv fn next(r: Self$@, taken: Str_builder$@, wait: Bool, arena: Arena$@): Inbound //<
         //< The editor's next message, copied onto `arena`; without `wait`, idle where none is there
-        //<
         //< `taken` holds the frames moved out of the inbox and not yet handed on.
         for
             // **The limit the reader took the frame under** (`read_message`), or a body between
@@ -434,11 +412,12 @@ impl Editor_reader
 
     priv fn free(r: Self$@) //< it waits for the thread to stop, at `exit` or the end of input
         r.reading.join_and_free()
-        box: = r.inbox.lock()
-        box.frames.free()
-        r.inbox.unlock()
-        r.inbox.free()
-        r.arrived.free()
+        r.let_go()
+
+    priv fn let_go(r: Self$@) //< lets go the inbox with its frames, the signal and the block
+        //< The thread must have stopped, or never started.
+        mem.drop_at(r.inbox@)
+        mem.drop_at(r.arrived@)
         dealloc(Void$@::r)
 
 impl Editor_reader: Manual_free {}

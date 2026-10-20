@@ -35,19 +35,21 @@ function kspagePaper(ui) {
   const READ_WIDTH = 640;
   const textWide = document.getElementById("text-width");
   const marginOf = (side) => document.getElementById(`margin-${side}`);
-  const numOr = (box, or) => (box.value === "" ? or : Number(box.value));
+  // A field's length; **empty and below 0 are 0** (unset; a negative page or margin means nothing).
+  const lengthOf = (box) => (box.value === "" ? 0 : Math.max(Number(box.value), 0));
+  // The settings by their saved names (`app.paper()`); **a name left out is 0**, shown empty.
+  const shown = (v) => (v > 0 ? v : "");
   const showPaper = () => {
     const p = app.paper();
-    paperBox.value = p.height === 0 ? "" : p.height;
-    paperWide.value = p.width === 0 ? "" : p.width;
-    marginOf("left").value = p.left === 0 ? "" : p.left;
-    marginOf("top").value = p.top === 0 ? "" : p.top;
-    marginOf("right").value = p.right === 0 ? "" : p.right;
-    marginOf("bottom").value = p.bottom === 0 ? "" : p.bottom;
-    textWide.value = p.reading === 0 ? "" : p.reading;
+    paperBox.value = shown(p.page_height);
+    paperWide.value = shown(p.page_width);
+    for (const side of ["left", "top", "right", "bottom"]) {
+      marginOf(side).value = shown(p[`margin_${side}`]);
+    }
+    textWide.value = shown(p.reading_width);
     // **A landscape page is found in the list too** (portrait pairs only; swapped means landscape).
-    const upright = `${p.width},${p.height}`;
-    const turned = `${p.height},${p.width}`;
+    const upright = `${p.page_width || 0},${p.page_height || 0}`;
+    const turned = `${p.page_height || 0},${p.page_width || 0}`;
     const has = (v) => PAPER_PICKS.some((one) => one[0] === v);
     if (has(upright)) {
       paperSize.set(upright);
@@ -57,16 +59,18 @@ function kspagePaper(ui) {
       paperTurn.set("1");
     }
   };
+  // Caution: **Start from the settings read** — a saved field this form has no box for would
+  // otherwise be dropped.
   const applyPaper = () => {
-    app.setPaper({
-      width: numOr(paperWide, 0),
-      height: numOr(paperBox, 0),
-      left: numOr(marginOf("left"), 0),
-      top: numOr(marginOf("top"), 0),
-      right: numOr(marginOf("right"), 0),
-      bottom: numOr(marginOf("bottom"), 0),
-      reading: numOr(textWide, 0),
-    });
+    const p = app.paper();
+    delete p.band;
+    p.page_width = lengthOf(paperWide);
+    p.page_height = lengthOf(paperBox);
+    for (const side of ["left", "top", "right", "bottom"]) {
+      p[`margin_${side}`] = lengthOf(marginOf(side));
+    }
+    p.reading_width = lengthOf(textWide);
+    app.setPaper(p);
     showPaper();
     say(app.paper().band === 0 ? "It will not split into pages"
       : `It comes to ${ui.count(app.paperCount(), "page")}`);
@@ -122,7 +126,7 @@ function kspagePaper(ui) {
     // document with no paper borrows one when drawn, so `@page` would get no size. Each canvas
     // would spill over the browser's own page into a blank one (`break-inside: avoid` cannot help).
     const p = app.printPaper();
-    pageRule.textContent = `@page { size: ${p.width}px ${p.height}px; margin: 0 }`;
+    pageRule.textContent = `@page { size: ${p.page_width}px ${p.page_height}px; margin: 0 }`;
     printBox.textContent = "";
     // Caution: **Do not ask the page count each round**: `paintPages` lays out and counts once.
     app.paintPages(() => {

@@ -1,5 +1,4 @@
 //< Infers an expression's type: the dispatch on its kind, and the kinds no other file takes
-//<
 //< `infer_expr` hands a literal, a path, a postfix, a binary operator and a struct literal to their
 //< own files. It keeps the small kinds here: a character, a string, `sizeof` / `offsetof`, a unary
 //< operator, `?:`, a `catch` chain and an enum's `.variant`. Every expression ends in
@@ -41,7 +40,6 @@ impl Ast_node
     fn infer_enum_payload_args(r: Self$@, c: Sema_ctx$@,
         variant_def: sema_type_def.Enum_variant$@): Void!Sema_error //<
             //< Infers an enum_init_call's payload arguments, each against its variant field's type
-            //<
             //< The node itself is the argument list. The call path and the expr path both use it.
         $arg_idx: Sz = 0
         for arg_node in r.children
@@ -126,7 +124,6 @@ impl Ast_node
 
     fn settle_expected(r: Self$@, c: Sema_ctx$@, type_id: I32, expected_id: I32): I32!Sema_error //<
         //< Applies the outer expected type to an expression whose inference has finished
-        //<
         //< Caution: **Do not duplicate this final step.** A numeric operation's result is widened
         //< here, once, after it was computed at its operands' width (`infer_binary_expr` in
         //< `binary.kspl`).
@@ -153,7 +150,6 @@ priv fn infer_primitive_type(node: Ast_node$@, c: Sema_ctx$@, _expected_id: I32)
 
 priv fn check_literal_escapes(node: Ast_node$@, c: Sema_ctx$@, one_byte: Bool) //<
     //< Rejects a literal with a malformed escape or character
-    //<
     //< For example a `\b`, a `\u` short of digits, or a character that does not fit in one byte.
     //<
     //< Caution: **Do not copy the list of accepted escapes here.** Its canonical source is
@@ -224,7 +220,6 @@ priv fn infer_sizeof_expr(node: Ast_node$@, c: Sema_ctx$@, _expected_id: I32): I
 
 priv fn infer_offsetof_expr(node: Ast_node$@, c: Sema_ctx$@, _expected_id: I32): I32!Sema_error //<
     //< An `offsetof(T, f)` is a `Sz` (like `sizeof`)
-    //<
     //< **The field name is not typed.** It goes as written to `field_offset_of` in
     //< `sema/decl/layout.kspl`. Resolved as an identifier, it would match a local of the same name
     //< and give a wrong offset with no diagnostic.
@@ -238,7 +233,6 @@ priv fn infer_offsetof_expr(node: Ast_node$@, c: Sema_ctx$@, _expected_id: I32):
 
 priv fn infer_string_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32!Sema_error //<
     //< The only place that decides which type a string literal takes to match the expected type
-    //<
     //< `Void immut@` is for C's format arguments. `printf` takes a plain `char*`, which KSPL cannot
     //< name (one byte is `U8`: "Primitive types" in docs/SPEC-programming-language.md). A void
     //< pointer fits both the hosted stdio.h and the freestanding declaration.
@@ -318,7 +312,6 @@ priv fn infer_unary_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32
 priv fn ternary_numeric_type(c: Sema_ctx$@, true_node: Ast_node$@, t_id: I32,
     false_node: Ast_node$@, f_id: I32): I32 //<
         //< The type two numeric branches meet at, or unknown where neither holds the other
-        //<
         //< An integer literal with no suffix takes the other branch's integer type, as in a binary
         //< operation (operand_type in `binary.kspl`).
     promoted: = c.env.get_promoted_numeric_type(t_id, f_id)
@@ -332,7 +325,6 @@ priv fn ternary_numeric_type(c: Sema_ctx$@, true_node: Ast_node$@, t_id: I32,
 
 priv fn settle_branch_literal(c: Sema_ctx$@, node: Ast_node$@, type_id: I32, final_id: I32): I32 //<
     //< Gives a branch's untyped integer literal the type the branches meet at, and returns its type
-    //<
     //< Caution: **Do not wrap it in a cast instead**: from I32, `-1` into a `U32` would widen a
     //< value the range check never saw.
     if !sema_type_env.is_unknown(final_id) &&
@@ -411,7 +403,6 @@ priv fn infer_ternary_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I
 
 priv fn infer_unknown_expr_type(node: Ast_node$@, c: Sema_ctx$@, _expected_id: I32): I32 //<
     //< An expression form no rule above takes: reported, then Unknown
-    //<
     //< Caution: **Do not return Unknown in silence.** Unknown reads as "already reported" to every
     //< later check, so the form would pass to the backend and fail there with no word from ksplc.
     //< Not an internal error that stops: the language server analyses half-written text too.
@@ -427,19 +418,29 @@ priv fn infer_upcast_expr(node: Ast_node$@, c: Sema_ctx$@, _expected_id: I32): I
 
 fn require_result_operand(c: Sema_ctx$@, node: Ast_node$@, type_id: I32, op: U8[]): Bool //<
     //< Unknown already has a diagnostic; only a known non-Result needs another one.
-    //<
-    //< On an Option the hint names its own idiom: a `T?`'s none is an answer, not a failure. So the
-    //< reader who wrote `catch` or `!` out of habit learns the spelling that takes it apart.
+    //< On an Option the hint names its own idioms: a `T?`'s none is an answer, not a failure. So
+    //< the reader who wrote `!` out of habit learns the spellings that take it apart.
     if sema_type_env.is_unknown(type_id) || c.env.is_result(type_id)
         return true
     c.clear_scratch().s("'\{op\}' operator can only be applied to a Result type")
-    if c.env.instance_base(c.env.get_clean_real_type(type_id)).equals(base_core.OPTION_FQN)
+    if c.env.is_option(type_id)
         c.scratch
             .s("\n  Hint: the operand has type '\{c.env.display(type_id)\}'. Its 'none' represents \
-                absence of a value, not failure. Take the value with 'if x: = …', or supply a \
-                substitute with '.unwrap_or(v)'.")
+                absence of a value, not failure. Take the value or leave with 'x: = opt catch { \
+                return }'. Take it in a condition with 'if x: = …', or supply a substitute with \
+                '.unwrap_or(v)'.")
     c.err(node, c.scratch.slice())
     return false
+
+priv fn require_catch_operand(c: Sema_ctx$@, node: Ast_node$@, type_id: I32) //<
+    //< Refuses a `catch` on a type that is neither a Result nor an Option
+    if sema_type_env.is_unknown(type_id) || c.env.is_result(type_id) ||
+        c.env.is_option(type_id)
+        return
+    c.clear_scratch()
+        .s("'catch' cannot be written on type '\{c.env.display(type_id)\}'. Write it only on a \
+            result ('T!E') or an optional ('T?')")
+    c.err(node, c.scratch.slice())
 
 priv fn infer_catch_chain(node: Ast_node$@, ctx: Sema_ctx$@, expected_id: I32): I32!Sema_error
     // Read and cleared at once: the flag applies to this catch alone. A catch nested in its subject
@@ -450,8 +451,8 @@ priv fn infer_catch_chain(node: Ast_node$@, ctx: Sema_ctx$@, expected_id: I32): 
     catch_node: = node.get_catch_chain_catch()
 
     current_id: = left.infer_expr(ctx, I32::sema_type_env.Builtin_type_id.unknown)!
-    require_result_operand(ctx, node, current_id, "catch")
-    base_id: = ctx.env.strip_result(current_id)
+    require_catch_operand(ctx, node, current_id)
+    base_id: = ctx.env.caught_value(current_id)
     $err_id_node: Ast_node$@ = null
     $target_block: Ast_node$@ = null
     $target_expr: Ast_node$@ = null
@@ -462,6 +463,9 @@ priv fn infer_catch_chain(node: Ast_node$@, ctx: Sema_ctx$@, expected_id: I32): 
             target_block = ch
         else if ch.kind_id != .k_keyword
             target_expr = ch
+    if ctx.env.is_option(current_id)
+        infer_option_catch(ctx, catch_node, current_id, err_id_node, target_block, target_expr)!
+        return base_id
     if target_block != null
         lint_rethrow_only(ctx, catch_node, target_block, err_id_node)
         infer_catch_block(ctx, catch_node, target_block, err_id_node,
@@ -490,6 +494,43 @@ priv fn infer_catch_chain(node: Ast_node$@, ctx: Sema_ctx$@, expected_id: I32): 
         return ctx.result_type_of(base_id, ctx.env.get_result_err_id(fb_id))
     return base_id
 
+priv fn infer_option_catch(ctx: Sema_ctx$@, catch_node: Ast_node$@, opt_id: I32,
+    err_id_node: Ast_node$@, block: Ast_node$@, substitute: Ast_node$@): Void!Sema_error //<
+        //< A `catch` on an Option: a block with no name, which leaves
+        //< **Only the block form, and it must leave**, wherever the value goes. So the value is
+        //< always bound after the `catch`. A value in `.none`'s place is `unwrap_or`'s job, and a
+        //< second spelling of it is refused (Principle 6 in `../../../docs/DESIGN-principles.md`).
+    shown: = ctx.env.display(opt_id)
+    if substitute != null
+        ctx.clear_scratch()
+            .s("'catch' with a value cannot be written on an optional ('\{shown\}'). Give the value \
+                with 'unwrap_or' instead\n  Note: write 'opt.unwrap_or(v)' to use 'v' where 'opt' \
+                is '.none'.")
+        ctx.err(catch_node, ctx.scratch.slice())
+        return
+    if err_id_node != null
+        ctx.clear_scratch()
+            .s("an optional ('\{shown\}') has no error value, so its 'catch' takes no name. Remove \
+                '\{err_id_node.text\}' and write 'catch { … }'")
+        ctx.err(err_id_node, ctx.scratch.slice())
+    if block == null
+        return
+    ctx.symtab.enter_scope()
+    prev_on_option: = ctx.fn_ctx.catch_on_option
+    ctx.fn_ctx.catch_on_option = true
+    ctx.fn_ctx.catch_depth += 1
+    defer
+        ctx.fn_ctx.catch_depth -= 1
+        ctx.fn_ctx.catch_on_option = prev_on_option
+        ctx.symtab.exit_scope()
+    block.infer_stmts(ctx)!
+    if !block.is_guaranteed_to_leave(true)
+        ctx.clear_scratch()
+            .s("the 'catch' block on an optional ('\{shown\}') can reach its end. End it with \
+                'return', 'throw', 'break', 'continue' or a call that does not return, such as \
+                'panic'\n  Note: write 'opt.unwrap_or(v)' to use 'v' where 'opt' is '.none'.")
+        ctx.err(catch_node, ctx.scratch.slice())
+
 priv fn lint_rethrow_only(ctx: Sema_ctx$@, catch_node: Ast_node$@, block: Ast_node$@,
     err_id_node: Ast_node$@) //<
         //< [I0701] A handler that only throws the error it caught, which `!` says shorter
@@ -516,7 +557,9 @@ priv fn infer_catch_block(ctx: Sema_ctx$@, catch_node: Ast_node$@, block: Ast_no
         //< A `catch` handler's block, with the caught error bound in a scope of its own
     ctx.symtab.enter_scope()
     prev_fb_type: = ctx.fn_ctx.fallback_type
+    prev_on_option: = ctx.fn_ctx.catch_on_option
     ctx.fn_ctx.fallback_type = base_id
+    ctx.fn_ctx.catch_on_option = false
     ctx.fn_ctx.catch_depth += 1
     if err_id_node != null
         err_sym: = Sema_symbol.new(.variable, err_id_node.text, err_id_node)
@@ -535,12 +578,12 @@ priv fn infer_catch_block(ctx: Sema_ctx$@, catch_node: Ast_node$@, block: Ast_no
                 reach the end of its block without 'fallback'")
         ctx.err(catch_node, ctx.scratch.slice())
     ctx.fn_ctx.catch_depth -= 1
+    ctx.fn_ctx.catch_on_option = prev_on_option
     ctx.fn_ctx.fallback_type = prev_fb_type
     ctx.symtab.exit_scope()
 
 fn mark_variant_used(c: Sema_ctx$@, enum_name: U8[], variant_name: U8[]) //<
     //< Marks `Enum.variant`'s symbol used, for a variant written as the shorthand `.variant`
-    //<
     //< The shorthand (in an expression or a `case`) skips symbol resolution, so unless marked used
     //< here the unused-symbol warnings ([W0206] and the like) misfire.
     name: = c.clear_scratch().s(enum_name).s(".").s(variant_name).slice()
@@ -550,7 +593,6 @@ fn mark_variant_used(c: Sema_ctx$@, enum_name: U8[], variant_name: U8[]) //<
 
 priv fn implicit_variant_target(c: Sema_ctx$@, node: Ast_node$@, result_id: I32): I32 //<
     //< The type a `.variant` builds where a Result is expected
-    //<
     //< **The value's enum comes first**: `.red` against `Color!E` is the value, wrapped as any
     //< value is. Only a variant the value's type lacks and the Result has (`.ok(v)`, `.err(e)`)
     //< builds the Result itself.
@@ -632,7 +674,6 @@ priv fn infer_implicit_enum_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I
 
 fn infer_expr_of(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32!Sema_error //<
     //< The function stored in Sema_ctx.infer_expr_fn
-    //<
     //< A `sizeof(<expr>)` in a declaration gets its type here (infer_expr_fn in
     //< sema/session/ctx.kspl; set in ksplc/pipeline.kspl).
     return node.infer_expr(c, expected_id)!

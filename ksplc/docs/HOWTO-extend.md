@@ -35,8 +35,8 @@
 
 ## A subcommand
 
-1. **`ksplc/main.kspl`**: a `Mode` variant, `p.subcommand("<name>", ...)` in `declare_options`, its branch in `read_mode`, and its case in `dispatch`.
-2. **`ksplc/usage.kspl`**: a `Face` in `FACES` (raise the array's length), and the subcommand's name in the `flag_faces` row of each option it takes; one that lays values out also joins `MACHINE_FACES`.
+1. **`ksplc/cli.kspl`**: a `Face` variant (its name, with `_` written `-`, is the subcommand's), its row in `FACES` (raise the array's length), a `Mode` variant, and its case in `read_mode`. The row gives its line in the usage, its usage line, and whether it lays values out. Add the subcommand's name to the `only_for` of each option it takes.
+2. **`ksplc/main.kspl`**: its cases in `needs_grammar` and `dispatch`.
 3. **[`SPEC-tools.md`](SPEC-tools.md)**: a row in the table of commands and a section of its own. Left out, `make test-conventions` fails with "the CLI's entry points agree"; the only name let through is `UNDOCUMENTED_OK` in `tests/support/conventions_iface.kspl`.
 4. **Run `make test-cli`**: `case_help_matches_behavior` tries every subcommand and option `--help` lists.
 5. **Update the seed** (below).

@@ -1,0 +1,166 @@
+//< The Qwen2.5 model `qwen_infer` runs, and how it is read from the exported safetensors
+//< It is built from `ksai/nn`'s `Gqa_attention` / `Swiglu_mlp` / `Rms_norm` / `Embedding` /
+//< `Linear`. Under `tie_word_embeddings`, `LM_head`'s weight is the embedding's transpose, exported
+//< as `"lm_head.weight"` [hidden, vocab].
+//< **The weights and the settings both come from the safetensors `export_qwen_to_kspl.py` wrote.**
+//< PyTorch's [out,in] is already KSPL's `Linear` [in,out] there. The settings are its `"cfg"`
+//< tensor (one-dimensional F32). **To change a tensor's name or `"cfg"`'s order, change the
+//< exporter too**, or loading fails.
+
+// ==========================================
+// The composition, per layer and then the end:
+//   h += Attn(RMSNorm(h))
+//   h += SwiGLU(RMSNorm(h))
+//   logits = LM_head(RMSNorm(h))
+// ==========================================
+import "ksai/lora_set"
+import "ksai/model_file" as ai_file
+import "ksai/nn"
+import "ksai/safetensors" as st
+import "ksai/tensor" + { Tensor }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+
+struct Qwen_config //< the settings, in the order of the `"cfg"` tensor
+    n_layers: Sz
+    hidden: Sz
+    n_heads: Sz
+    n_kv_heads: Sz
+    priv head_dim: Sz
+    priv intermediate: Sz
+    vocab: Sz
+    priv rope_theta: F64
+    priv eps: F64
+
+priv struct Qwen_layer<|T|> //<
+    //< One Qwen decoder layer: attention and an MLP, each after its RMS norm
+    //< The naming matches ksai/examples/llama_engine/model.Mini_llama
+    //< (ksai/nn.Transformer_block): attention / attention_norm / ffn_norm. But this one's fourth
+    //< field is mlp, not ffn.
+    priv attention_norm: nn.Rms_norm<|T|>
+    priv attention: nn.Gqa_attention<|T|>
+    priv ffn_norm: nn.Rms_norm<|T|>
+    priv mlp: nn.Swiglu_mlp<|T|>
+
+struct Qwen_model<|T|>
+    cfg: Qwen_config
+    priv tok_embed: nn.Embedding<|T|>
+    priv layers: Qwen_layer<|T|>$@ //< cfg.n_layers of them
+    priv norm: nn.Rms_norm<|T|>
+    priv lm_head: nn.Linear<|T|>
+
+impl<|T|> Qwen_model<|T|>
+    fn load(path: U8[], max_seq_len: Sz, arena: Arena$@):
+        Qwen_model<|T|>!st.Safetensors_error //<
+            //< Builds the whole model from exported safetensors (each weight mapped, not copied).
+        $s: = ai_file.load_safetensors(path, arena)!
+        cfg: = read_cfg(s, arena)!
+        eps: = T::cfg.eps
+
+        $tok_embed: = nn.Embedding<|T|>.new(cfg.vocab, cfg.hidden, arena)
+        s.map_into<|F32|>("embed.weight", tok_embed.weight@, arena)!
+
+        layers: =
+            Qwen_layer<|T|>$@::arena.alloc(cfg.n_layers * sizeof(Qwen_layer<|T|>))
+        $b: = Str_builder.new()
+        for i in Range.asc(cfg.n_layers)
+            // A safetensors key (".attn.wq.weight" and the like) is an external format fixed by
+            // export_qwen_to_kspl.py. So it does not follow the field names above.
+            $attention: = nn.Gqa_attention<|T|>
+                .new(cfg.hidden, cfg.n_heads, cfg.n_kv_heads, cfg.head_dim, max_seq_len,
+                cfg.rope_theta, arena)
+            s.map_into<|F32|>(key(b@, i, ".attn.wq.weight"), attention.wq.weights@, arena)!
+            s.map_into<|F32|>(key(b@, i, ".attn.wq.bias"), attention.wq.bias@, arena)!
+            s.map_into<|F32|>(key(b@, i, ".attn.wk.weight"), attention.wk.weights@, arena)!
+            s.map_into<|F32|>(key(b@, i, ".attn.wk.bias"), attention.wk.bias@, arena)!
+            s.map_into<|F32|>(key(b@, i, ".attn.wv.weight"), attention.wv.weights@, arena)!
+            s.map_into<|F32|>(key(b@, i, ".attn.wv.bias"), attention.wv.bias@, arena)!
+            s.map_into<|F32|>(key(b@, i, ".attn.wo.weight"), attention.wo.weights@, arena)!
+
+            $mlp: = nn.Swiglu_mlp<|T|>.new(cfg.hidden, cfg.intermediate, arena)
+            s.map_into<|F32|>(key(b@, i, ".mlp.gate.weight"), mlp.gate.weights@, arena)!
+            s.map_into<|F32|>(key(b@, i, ".mlp.up.weight"), mlp.up.weights@, arena)!
+            s.map_into<|F32|>(key(b@, i, ".mlp.down.weight"), mlp.down.weights@, arena)!
+
+            $attention_norm: = nn.Rms_norm<|T|>.new(cfg.hidden, eps, arena)
+            s.map_into<|F32|>(key(b@, i, ".attn_norm.weight"), attention_norm.weight@, arena)!
+            $ffn_norm: = nn.Rms_norm<|T|>.new(cfg.hidden, eps, arena)
+            s.map_into<|F32|>(key(b@, i, ".ffn_norm.weight"), ffn_norm.weight@, arena)!
+            (layers + i)$ = Qwen_layer<|T|>::{ .attention_norm = attention_norm,
+                .attention = attention, .ffn_norm = ffn_norm, .mlp = mlp }
+        $norm: = nn.Rms_norm<|T|>.new(cfg.hidden, eps, arena)
+        s.map_into<|F32|>("norm.weight", norm.weight@, arena)!
+        $lm_head: = nn.Linear<|T|>.new(cfg.hidden, cfg.vocab, arena)
+        s.map_into<|F32|>("lm_head.weight", lm_head.weights@, arena)!
+
+        return Qwen_model<|T|>::{ .cfg = cfg, .tok_embed = tok_embed, .layers = layers,
+            .norm = norm, .lm_head = lm_head }
+    fn load_lora_set(r: Self$@, path: U8[], arena: Arena$@):
+        lora_set.Qkv_lora<|T|>$@!st.Safetensors_error //<
+            //< Reads a set of externally fine-tuned LoRA adapters
+            //< They are named "blocks.{i}.attn.{q,v}.lora_{a,b,scale}" (`load_qkv_lora_set` in
+            //< ksai/model_file.kspl).
+        attention: = r.layers.attention
+        q: = attention.wq.weights.shape
+        v: = attention.wv.weights.shape
+        return ai_file.load_qkv_lora_set<|T|>(path, r.cfg.n_layers,
+            lora_set.Lora_widths::{ .in_dim = q[0], .out_dim = q[1] },
+            lora_set.Lora_widths::{ .in_dim = v[0], .out_dim = v[1] }, arena)
+    fn forward(r: Self$@, token_id: I32, start_pos: Sz, adapters: lora_set.Qkv_lora<|T|>$@,
+        ca: Arena$@): Tensor<|T|> //<
+            //< Streams token_id one step at start_pos and returns the logits [1, vocab]
+            //< A non-null adapters applies LoRA to each layer's Q/V.
+        $h: = r.tok_embed.forward(token_id, ca)
+        for i in Range.asc(r.cfg.n_layers)
+            attn_in: = (r.layers + i).attention_norm.forward(h)
+            attn_out: =
+                ((r.layers + i).attention.forward(attn_in, start_pos) if adapters == null
+                else (r.layers + i).attention
+                .forward_lora(attn_in, start_pos, (adapters + i).q@, (adapters + i).v@))
+            h = h + attn_out
+            ffn_in: = (r.layers + i).ffn_norm.forward(h)
+            mlp_out: = (r.layers + i).mlp.forward(ffn_in)
+            h = h + mlp_out
+        final_norm: = r.norm.forward(h)
+        return r.lm_head.forward(final_norm)
+
+// Reads one F32 field of the cfg tensor as an Sz dimension.
+// Caution: The F32→Sz cast (fptosi) is poison (undefined behaviour) out of range (NaN, Inf, a
+// huge value, a negative), with neither saturation nor wrap-around. A tampered "cfg" can hold
+// any of them. So the value is compared while still F32 (safe even against NaN or Inf).
+priv fn safe_cfg_dim(v: F32): Sz!st.Safetensors_error //< a setting no tensor can outgrow
+    if !(v >= 0.0 && v <= F32::tensor.MAX_TENSOR_ELEMS)
+        throw .invalid_header
+    return Sz::v
+
+priv fn read_cfg($s: st.Safetensors, arena: Arena$@): Qwen_config!st.Safetensors_error
+    c: = s.get_tensor<|F32|>("cfg", arena)! // [9] = Qwen_config's field order
+    // get_tensor verifies only that the declared shape fits inside the file. With fewer than 9
+    // elements, the fixed nine-element read below would run past the raw data.
+    if c.size < 9
+        throw .invalid_header
+    n_layers: = safe_cfg_dim((c.data + 0)$)!
+    hidden: = safe_cfg_dim((c.data + 1)$)!
+    n_heads: = safe_cfg_dim((c.data + 2)$)!
+    n_kv_heads: = safe_cfg_dim((c.data + 3)$)!
+    head_dim: = safe_cfg_dim((c.data + 4)$)!
+    intermediate: = safe_cfg_dim((c.data + 5)$)!
+    vocab: = safe_cfg_dim((c.data + 6)$)!
+    cfg: = Qwen_config::{ .n_layers = n_layers, .hidden = hidden, .n_heads = n_heads,
+        .n_kv_heads = n_kv_heads, .head_dim = head_dim, .intermediate = intermediate,
+        .vocab = vocab, .rope_theta = (c.data + 7)$, .eps = (c.data + 8)$ }
+    // Beyond each field's range, check the values' consistency. A broken or tampered cfg can
+    // divide by zero (n_heads/n_kv_heads=0). It can also overflow Sz into an out-of-bounds write
+    // (an abnormal n_layers).
+    if cfg.n_layers == 0 || cfg.hidden == 0 || cfg.n_heads == 0 || cfg.n_kv_heads == 0 ||
+        cfg.head_dim == 0 || cfg.intermediate == 0 || cfg.vocab == 0
+        throw .invalid_header
+    // GQA assumes each KV head serves n_heads/n_kv_heads query heads evenly. The Q projection's
+    // width must be hidden (what goes back to the residual stream through wo).
+    if cfg.n_heads % cfg.n_kv_heads != 0 || cfg.n_heads * cfg.head_dim != cfg.hidden
+        throw .invalid_header
+    return cfg
+
+fn key(b: Str_builder$@, i: Sz, suffix: U8[]): U8[] //< a layer's tensor name, `layers.{i}{suffix}`
+    //< `ksai/tests/examples_qwen.kspl` writes its weights with these names too.
+    return b.clear().s("layers.\{I32::i\}").s(suffix).slice()

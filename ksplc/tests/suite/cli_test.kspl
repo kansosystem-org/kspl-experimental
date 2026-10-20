@@ -1,6 +1,5 @@
 #!/usr/bin/env -S ksplc run
 //< The test of ksplc's command-line shape
-//<
 //< The subcommands, and which options each subcommand accepts.
 
 // ==========================================
@@ -15,8 +14,9 @@
 //     holds only what was asked for (`support/cli_streams.kspl`)
 // ==========================================
 
-// Caution: **Do not copy the per-subcommand list into here.** Its source is flag_faces in
-// ksplc/usage.kspl, which `--help` prints; the test checks that ksplc behaves as those lines say.
+// Caution: **Do not copy the per-subcommand list into here.** Its source is each option's
+// `only_for` in ksplc/cli.kspl, which `--help` prints; the test checks that ksplc behaves as those
+// lines say.
 import "ksplc/tests/support/cli_emit" + { cli, ok_case, ng_case, std_flag }
 import "ksplc/tests/support/cli_sanitize"
 import "ksplc/tests/support/cli_streams"
@@ -28,7 +28,6 @@ import "std/io"
 import "std/json"
 import "std/mem" { Arena }
 import "std/regex"
-import "std/seq"
 import "std/str" { Str_builder }
 import "std/subproc"
 import "std/sys"
@@ -36,11 +35,9 @@ import "std/verdict"
 
 priv const CACHE_ENV: U8[] = "KSPLC_CACHE_DIR" //<
     //< The environment variable naming the disk cache's directory
-    //<
     //< It is cache_env_name in `ksplc/base/cache.kspl`.
 
 priv fn cache_root(arena: Arena$@): U8[] //< the cache directory for this suite only
-    //<
     //< `info cache-dir` and `clean` point here.
     return fs.join(harness.tmp_dir(), "cli_cache", arena)
 
@@ -50,24 +47,25 @@ priv struct Face_flags //<
     flags: List<|U8[]|>
 
 priv struct Help //< the result of reading `--help`'s output
-    //<
     //< `with_value` is the name of an option that takes a value; `declared` is every option the
-    //< `Options:` list names.
+    //< `Options:` list names. `everywhere` is what the line "on every subcommand" names.
     faces: List<|Face_flags|>
     with_value: List<|U8[]|>
     declared: List<|U8[]|>
+    everywhere: U8[]
 
 priv fn parse_help(arena: Arena$@): Help //<
     //< From `--help`'s output it reads the per-subcommand lines and the options that take a value
-    //<
     //< Caution: **Finding no subcommand line at all is itself a failure**, or a changed list format
     //< lets the checks below pass without testing anything.
     $out: = List<|Face_flags|>.new(arena)
     $with_value: = List<|U8[]|>.new(arena)
     $declared: = List<|U8[]|>.new(arena)
+    $everywhere: U8[] = ""
     r: = cli(U8[][]::{ "--help" })
     if !r.exited_with(0)
-        return Help::{ .faces = out, .with_value = with_value, .declared = declared }
+        return Help::{ .faces = out, .with_value = with_value, .declared = declared,
+            .everywhere = everywhere }
     $inside: = false
     for raw in r.out.lines(arena)
         ln: = raw.trim_end()
@@ -90,24 +88,20 @@ priv fn parse_help(arena: Arena$@): Help //<
             continue
         if colon: = ln.find_str(":")
             face: = ln.sub(0, colon).trim_spaces()
-            if face.equals("on every subcommand")
-                continue
             rest: = ln.sub_from(colon + 1).trim_spaces()
+            if face.equals("on every subcommand")
+                everywhere = rest
+                continue
             $fl: = List<|U8[]|>.new(arena)
             if rest.len > 0
                 for w in rest.split(' ', arena)
                     fl.push(w)
             out.push(Face_flags::{ .face = face, .flags = fl })
-    return Help::{ .faces = out, .with_value = with_value, .declared = declared }
-
-priv fn has(names: List<|U8[]|>@, name: U8[]): Bool
-    return names.any(fn(n: U8[]@; name: U8[]): Bool {
-        return n.equals(name);
-    })
+    return Help::{ .faces = out, .with_value = with_value, .declared = declared,
+        .everywhere = everywhere }
 
 priv fn case_help_matches_behavior(arena: Arena$@) //<
     //< It tries every pair of subcommand and option against what `--help` lists
-    //<
     //< Caution: **Test the accepted pairs too.** With only the rejected ones, an emptied table
     //< makes everything green.
     h: = parse_help(arena)
@@ -118,17 +112,22 @@ priv fn case_help_matches_behavior(arena: Arena$@) //<
     $all: = List<|U8[]|>.new(arena)
     for f in h.faces
         for fl in f.flags
-            if !has(all@, fl)
+            if !all.contains(fl)
                 all.push(fl)
     // Caution: **Every declared option is on some subcommand's line.** One left off is accepted
     // everywhere unchecked, which is how an option comes to be written where it does nothing.
     $rowless: = Str_builder.new()
     for d in h.declared
-        if !d.equals("--help") && !has(all@, d)
+        if !d.equals("--help") && !all.contains(d)
             rowless.s("  ").s(d).s(" is on no subcommand's line\n")
     verdict.check(arena.text()
         .s("every option --help lists takes effect somewhere (\{h.declared.len\})").take(),
         h.declared.len > 0 && rowless.slice().len == 0, rowless.slice())
+    // Caution: **Only `--help` takes effect on every subcommand.** An option left without its
+    // `only_for` lands on that line, and is taken where it may do nothing.
+    verdict.check("only --help takes effect on every subcommand",
+        h.everywhere.equals("--help"),
+        arena.text().s("the line names: \{h.everywhere\}\n").take())
     $bad: = Str_builder.new()
     $pairs: Sz = 0
     for f in h.faces
@@ -136,58 +135,16 @@ priv fn case_help_matches_behavior(arena: Arena$@) //<
             // Caution: Do not put `=x` on an option taking no value: argparse rejects it before the
             // per-subcommand check, and every pair passes as "rejected".
             arg: =
-                arena.text().s(fl).s("=x").take() if has(h.with_value@, fl) else fl
+                arena.text().s(fl).s("=x").take() if h.with_value.contains(fl) else fl
             r: = cli(U8[][]::{ f.face, arg })
             refused: = r.out.find_str("does not take effect on this subcommand").is_some()
             pairs += 1
-            if has(f.flags@, fl) == refused
+            if f.flags.contains(fl) == refused
                 bad.s("  ").s(f.face).s(" should take ").s(fl)
                     .s(" but turned it away\n" if refused
                     else " but should have turned it away and did not\n")
     verdict.check(arena.text().s("it accepts as --help's list says (\{pairs\} pairs)").take(),
         bad.slice().len == 0, bad.slice())
-
-priv fn quoted_words(text: U8[], pattern: U8[], arena: Arena$@): List<|U8[]|> //<
-    //< Every space-separated word of each first group pattern finds in text
-    $out: = List<|U8[]|>.new(arena)
-    rx: = regex.Regex.compile(pattern) catch
-        return out
-    defer rx.free()
-    for m in rx.find_all(text, arena)
-        for w in m.group(1, text).unwrap_or("").split(' ', arena)
-            if w.len > 0
-                out.push(w)
-    return out
-
-priv fn case_face_names(arena: Arena$@) //<
-    //< Every subcommand `usage.kspl` names by hand is one `main.kspl` declares
-    //<
-    //< `flag_faces`, `machine_faces` and `faces` spell the names again; one misspelt or left over
-    //< matches no subcommand, so its option or its machine check silently applies nowhere.
-    name: = "every subcommand usage.kspl names is a declared one"
-    main_src: = io.read_file("main.kspl") catch
-        verdict.check(name, false, "main.kspl cannot be read")
-        return
-    usage_src: = io.read_file("usage.kspl") catch
-        verdict.check(name, false, "usage.kspl cannot be read")
-        return
-    $declared: =
-        quoted_words(main_src, "p\\.subcommand(?:_trailing|_hidden)?\\(\"([a-z-]+)\"", arena)
-    // The default subcommand has no name to declare.
-    declared.push("compile")
-    from: = usage_src.find_str("fn flag_faces").unwrap_or(0)
-    to: = usage_src.find_str("fn machine_refusal_to").unwrap_or(usage_src.len)
-    $named: =
-        quoted_words(usage_src.sub(from, to - from),
-        "(?:return|machine_faces: U8\\[\\] =) \"([a-z -]+)\"", arena)
-    for w in quoted_words(usage_src, "\\.name = \"([a-z-]+)\"", arena)
-        named.push(w)
-    $bad: = Str_builder.new()
-    for w in named
-        if !has(declared@, w)
-            bad.s("  '").s(w).s("' is no declared subcommand\n")
-    verdict.check(arena.text().s("\{name\} (\{named.len\} names, \{declared.len\} declared)").take(),
-        declared.len > 1 && named.len > 0 && bad.slice().len == 0, bad.slice())
 
 priv fn case_info(arena: Arena$@)
     ok_case("info std-dir", U8[][]::{ "info", "std-dir" }, "std")
@@ -219,7 +176,6 @@ priv const PLANTED_NAME: U8[] = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 priv const SLOT_NAME: U8[] = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
 priv fn plant_link(at: U8[], target: U8[], arena: Arena$@): Bool //< false where none can be made
-    //<
     //< Windows has no `ln -s`, and `mklink` needs privileges, so the case becomes a `skip` there.
     r: =
         subproc.run_capture(U8[][]::{ "ln", "-s", target, at }, "", 10000, 4096, arena) catch
@@ -228,7 +184,6 @@ priv fn plant_link(at: U8[], target: U8[], arena: Arena$@): Bool //< false where
 
 priv fn case_clean_keeps_link_targets(arena: Arena$@) //<
     //< `clean` removes a link planted in the cache, never what it points at
-    //<
     //< Whoever can write a shared cache folder could otherwise plant `run/<hex>`, or `obj` inside a
     //< slot, pointing at a home folder. The next cleaning would empty it.
     name: = "clean: a link in the cache leaves its target alone"
@@ -256,7 +211,6 @@ priv fn case_clean_keeps_link_targets(arena: Arena$@) //<
 
 priv fn hand_over(dir: U8[]): Bool //<
     //< Gives `dir` to user 65534 (`nobody`), and whether that worked
-    //<
     //< **Only root can hand a folder over**, so a user who is not tries `sudo -n`, which never
     //< waits for a password.
     if harness.run(U8[][]::{ "chown", "65534", dir }).exited_with(0)
@@ -265,7 +219,6 @@ priv fn hand_over(dir: U8[]): Bool //<
 
 priv fn case_cache_others_can_write(arena: Arena$@) //<
     //< A cache folder everyone can write is refused by `ksplc run`, and skipped by a compile
-    //<
     //< Whoever can write it could plant a normalized AST carrying inline C, or a built program, and
     //< the next build would take it in. Windows's permissions are an ACL, not read here.
     name_run: = "cache: ksplc run refuses a cache folder everyone can write"
@@ -320,7 +273,7 @@ priv fn case_emit_runtime(arena: Arena$@)
     dir: = harness.sandbox("cli")
     gen: = fs.join(dir, "rt.c", arena)
     ok_case("emit-runtime: it can write taking no input", U8[][]::{ "emit-runtime", gen }, "")
-    body: = io.read_file(gen) catch
+    body: = io.read_file(gen, null) catch
         verdict.check("emit-runtime: the output can be read", false, "cannot be read")
         return
     verdict.check("emit-runtime: the runtime's source is in it",
@@ -329,7 +282,7 @@ priv fn case_emit_runtime(arena: Arena$@)
     bare: = fs.join(dir, "rt_bare.c", arena)
     ok_case("emit-runtime: --freestanding takes effect",
         U8[][]::{ "--freestanding", "emit-runtime", bare }, "")
-    b2: = io.read_file(bare) catch
+    b2: = io.read_file(bare, null) catch
         verdict.check("emit-runtime: --freestanding's output can be read", false, "cannot be read")
         return
     verdict.check("emit-runtime: --freestanding changes the content", !b2.equals(body), "")
@@ -338,21 +291,20 @@ priv fn case_emit_runtime(arena: Arena$@)
 
 priv fn case_explain(arena: Arena$@) //<
     //< `ksplc explain <code>` prints that code's section and nothing past it
-    //<
     //< `tests/support/conventions_match.kspl` checks that every registered code has a section and
     //< every section a code; this checks the printing.
-    ok_case("explain: a code in lower case is taken", U8[][]::{ "explain", "w0702" }, "### [W0702]")
-    ok_case("explain: it names where the text came from", U8[][]::{ "explain", "W0702" },
+    ok_case("explain: a code in lower case is taken", U8[][]::{ "explain", "w0207" }, "### [W0207]")
+    ok_case("explain: it names where the text came from", U8[][]::{ "explain", "W0207" },
         "\"2. The list of warnings (W)\" in ksplc/docs/SPEC-diagnostics.md")
     ng_case("explain: an unknown code is turned away", U8[][]::{ "explain", "W9999" },
         "not a diagnostic code")
     ng_case("explain: with no code it turns it away", U8[][]::{ "explain" }, "usage: ksplc explain")
-    ng_case("explain: two codes are turned away", U8[][]::{ "explain", "W0702", "W0202" },
+    ng_case("explain: two codes are turned away", U8[][]::{ "explain", "W0207", "W0202" },
         "usage: ksplc explain")
-    ng_case("explain: an option is turned away", U8[][]::{ "explain", "--stats", "W0702" },
+    ng_case("explain: an option is turned away", U8[][]::{ "explain", "--stats", "W0207" },
         "does not take effect")
-    // The registered codes are `base/lint_codes.kspl`'s quoted codes (`"W0702"`).
-    reg: = io.read_file("base/lint_codes.kspl") catch
+    // The registered codes are `base/lint_codes.kspl`'s quoted codes (`"W0207"`).
+    reg: = io.read_file("base/lint_codes.kspl", null) catch
         verdict.check("explain prints each registered code's section alone", false,
             "base/lint_codes.kspl cannot be read")
         return
@@ -361,8 +313,16 @@ priv fn case_explain(arena: Arena$@) //<
             "the pattern for a registered code does not compile")
         return
     defer rx.free()
-    // `off_by_default` names some codes again; only `codes`, before it, lists each once.
-    listed: = reg.sub(0, reg.find_str("priv const off_by_default").unwrap_or(reg.len))
+    // `OFF_BY_DEFAULT` names some codes again; only `CODES`, before it, lists each once.
+    $end: Sz = 0
+    switch reg.find_str("priv const OFF_BY_DEFAULT")
+    case .some(at)
+        end = at
+    case .none
+        verdict.check("explain prints each registered code's section alone", false,
+            "base/lint_codes.kspl holds no `OFF_BY_DEFAULT` to end the list at")
+        return
+    listed: = reg.sub(0, end)
     found: = rx.find_all(listed, arena)
     $bad: = Str_builder.new()
     $seen: Sz = 0
@@ -385,7 +345,6 @@ priv fn case_explain(arena: Arena$@) //<
 
 priv fn case_summary_codes(arena: Arena$@) //<
     //< The closing line offers `ksplc explain` only the codes the registry knows
-    //<
     //< A value where a trait is wanted brings a codeless hint beside the [I0401]. Named on the
     //< closing line, it would send the reader to a command with nothing to print.
     dir: = fs.join(harness.tmp_dir(), "cli_summary", arena)
@@ -404,7 +363,6 @@ priv fn case_summary_codes(arena: Arena$@) //<
 
 priv fn case_build(arena: Arena$@) //<
     //< `ksplc build` leaves a runnable executable, with its C and libraries beside it
-    //<
     //< **`--cflags` is shown to reach the C compiler by a flag it refuses**: one it accepts would
     //< pass whether it reached it or not.
     dir: = harness.sandbox("cli_build")
@@ -434,7 +392,6 @@ priv fn case_build(arena: Arena$@) //<
 
 priv fn case_main_failure_status(arena: Arena$@) //<
     //< A failing `main` exits non-zero whatever its error: a number in 1..255 as it is, else 1
-    //<
     //< **256 and an enum's first variant are the cases that read as success** were the status the
     //< number's low bits or the variant's tag (both 0).
     dir: = harness.sandbox("cli_main_failure")
@@ -463,7 +420,7 @@ priv fn case_output_language(arena: Arena$@) //<
         return
     ll: = fs.join(dir, "prog.ll", arena)
     ok_case("--to=llvm writes LLVM IR", U8[][]::{ std_flag(), "--to=llvm", src, ll }, "")
-    text: = io.read_file(ll) catch ""
+    text: = io.read_file(ll, null) catch ""
     verdict.check("--to=llvm's output is LLVM IR", text.find_str("define ").is_some(), text)
     ok_case("--to=c writes C",
         U8[][]::{ std_flag(), "--to=c", src, fs.join(dir, "prog.c", arena) }, "")
@@ -472,7 +429,6 @@ priv fn case_output_language(arena: Arena$@) //<
 
 priv fn case_machine(arena: Arena$@) //<
     //< `--machine` names a machine from ksplc's table, and nothing else
-    //<
     //< **A name the table lacks is refused with the list**, never guessed: a guess folds sizes the
     //< C compiler then disagrees with. `info machine` answers the default, which compiles.
     dir: = harness.sandbox("cli_machine")
@@ -497,7 +453,7 @@ priv fn case_machine(arena: Arena$@) //<
     ll: = fs.join(dir, "prog.ll", arena)
     ok_case("--to=llvm takes a 64-bit machine",
         U8[][]::{ std_flag(), "--to=llvm", "--machine=aarch64-linux-gnu", src, ll }, "")
-    text: = io.read_file(ll) catch ""
+    text: = io.read_file(ll, null) catch ""
     verdict.check("the IR names the machine's triple",
         text.find_str("target triple = \"aarch64-unknown-linux-gnu\"").is_some(), text)
 
@@ -544,7 +500,6 @@ priv fn case_refusals()
         "usage: ksplc fmt [options...] <input.kspl>...")
 
 priv fn case_bom(arena: Arena$@) //< checks that a leading BOM runs and survives formatting
-    //<
     //< Caution: **Check that it survives formatting** — forget to put the mark back and `make fmt`
     //< alone silently erases the encoding's mark.
     dir: = fs.join(harness.tmp_dir(), "cli_bom", arena)
@@ -568,12 +523,11 @@ priv fn case_bom(arena: Arena$@) //< checks that a leading BOM runs and survives
             .take(), r.exited_with(0) && r.out.find_str("ok").is_some(), r.out)
         // Caution: Do not pass `--std-dir` to `fmt` (it has no effect there, so it is rejected).
         f: = harness.run_in(U8[][]::{ harness.ksplc_exe(), "fmt", "--in-place", path }, dir)
-        back: = io.read_file(path) catch ""
+        back: = io.read_file(path, null) catch ""
         verdict.check(arena.text().s("BOM: the BOM survives formatting (").s(path).s(")").take(),
             f.exited_with(0) && back.starts_with(bom, 0), f.out)
 
 priv fn case_fmt_reads_back(arena: Arena$@) //< checks `fmt` writes no file that fails to parse
-    //<
     //< **A `for` header longer than the limit breaks inside its condition**, and the reader must
     //< keep the `;` after the break as the heading's. Formatting must succeed, and the file must
     //< still run afterwards.
@@ -596,7 +550,6 @@ priv fn case_fmt_reads_back(arena: Arena$@) //< checks `fmt` writes no file that
         r.exited_with(0) && r.out.find_str("3").is_some(), r.out)
 
 priv fn case_bad_utf8(arena: Arena$@) //< checks that a byte that is not UTF-8 stops the read
-    //<
     //< A string's stray byte went on to C, and a comment's passed unseen. **Ask `fmt` too**: it
     //< parses on its own path, and passing it would write the bytes back as if they were text.
     dir: = fs.join(harness.tmp_dir(), "cli_bad_utf8", arena)
@@ -676,7 +629,6 @@ priv fn case_entry_spelling(arena: Arena$@)
 
 priv fn json_lines(args: U8[][], arena: Arena$@): List<|json.Value|> //<
     //< Each line of what one run wrote to stderr, read as JSON (a line that is not is `null_val`)
-    //<
     //< **Only standard error**: `harness.ksplc` joins the two streams, and json is promised on
     //< standard error alone.
     r: =
@@ -712,7 +664,6 @@ priv fn closes(rows: List<|json.Value|>@, result: U8[], errors: I32, warnings: I
 
 priv fn case_diagnostic_json(arena: Arena$@) //<
     //< `--diagnostic-format=json`: one object per diagnostic, with its code apart from its message
-    //<
     //< Caution: **Build the text form's head from the JSON and search for it in the text run**, so
     //< the two forms cannot name different places.
     dir: = fs.join(harness.tmp_dir(), "cli_diag_json", arena)
@@ -829,7 +780,6 @@ fn main(): I32
     case_machine(arena)
     cli_sanitize.case_sanitize(arena)
     case_help_matches_behavior(arena)
-    case_face_names(arena)
     case_bom(arena)
     case_bad_utf8(arena)
     case_fmt_reads_back(arena)

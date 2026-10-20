@@ -1,5 +1,4 @@
-//< The math functions (square root, powers, logarithms, sine, cosine, tangent), and `x.to_i32()`
-//<
+//< The math functions (square root, powers, logarithms, sine, cosine, tangent)
 //< A hosted build passes `sqrt` / `exp` / `log` / `sin` / `cos` / `tan` / `pow` straight to libm. A
 //< freestanding build has no libm, so it uses software implementations with no dependencies
 //< (Newton's method, the Taylor and atanh series, range reduction). **The two must agree.** A
@@ -68,67 +67,27 @@ pub fn round(x: F64): F64 //< rounds to the nearest whole number, halves away fr
     return t
 
 // ==========================================
-// The checked conversions from floating point to an integer
+// The absolute value, and the lesser and the greater of two, for every number type
 // ==========================================
-// `I32::x` saturates (NaN gives 0); each `to_<type>` here gives none instead, for a caller who must
-// notice. A bound is the first value past the type's range that the truncation toward zero
-// reaches, so it is open: `-128.9` gives `I8`'s -128.
+// Each is one generic over the operand's type, so `I32`, `Sz` and `F64` share one name. Both
+// operands of `min` and `max` have one type: the call converts nothing.
 
-priv fn within(x: F64, below: F64, above: F64): Bool //< whether below < x < above; false for NaN
-    return x > below && x < above
+pub fn abs<|T|>(x: T): T //< the value without its sign; a signed minimum stops the program
+    //< **A signed integer's minimum has no positive value of its type** (`I32`'s -2147483648).
+    //< Negated, it wraps to itself, so `abs` stops there instead of returning a negative. A NaN and
+    //< -0.0 come back as they are. An unsigned type is refused when compiled, as unary minus is.
+    if x < T::0
+        n: = -x
+        if n < T::0
+            panic("math.abs: the minimum of a signed integer has no positive value of its type")
+        return n
+    return x
 
-impl F64
-    pub fn to_i8(r: Self): I8? //< truncated toward zero, or none where `I8` cannot hold it
-        return .some(I8::r) if within(r, -129.0, 128.0) else .none
-    pub fn to_i16(r: Self): I16? //< truncated toward zero, or none where `I16` cannot hold it
-        return .some(I16::r) if within(r, -32769.0, 32768.0) else .none
-    pub fn to_i32(r: Self): I32? //< truncated toward zero, or none where `I32` cannot hold it
-        return .some(I32::r) if within(r, -2147483649.0, 2147483648.0) else .none
-    pub fn to_i64(r: Self): I64? //< truncated toward zero, or none where `I64` cannot hold it
-        // -2^63 - 1 is no `F64`, so the lower bound is the closed -2^63.
-        fits: = r >= -9223372036854775808.0 && r < 9223372036854775808.0
-        return .some(I64::r) if fits else .none
-    pub fn to_u8(r: Self): U8? //< truncated toward zero, or none where `U8` cannot hold it
-        return .some(U8::r) if within(r, -1.0, 256.0) else .none
-    pub fn to_u16(r: Self): U16? //< truncated toward zero, or none where `U16` cannot hold it
-        return .some(U16::r) if within(r, -1.0, 65536.0) else .none
-    pub fn to_u32(r: Self): U32? //< truncated toward zero, or none where `U32` cannot hold it
-        return .some(U32::r) if within(r, -1.0, 4294967296.0) else .none
-    pub fn to_u64(r: Self): U64? //< truncated toward zero, or none where `U64` cannot hold it
-        return .some(U64::r) if within(r, -1.0, 18446744073709551616.0) else .none
-    pub fn to_sz(r: Self): Sz? //< truncated toward zero, or none where `Sz` cannot hold it
-        fits: =
-            r.to_i32().is_some() if sizeof(Sz) == sizeof(I32) else r.to_i64().is_some()
-        return .some(Sz::r) if fits else .none
+pub fn min<|T|>(a: T, b: T): T //< the lesser of the two; `b` where they are equal or one is a NaN
+    return a if a < b else b
 
-impl F32 //< the same, through `F64`, which holds every `F32` exactly
-    pub fn to_i8(r: Self): I8? //< truncated toward zero, or none where `I8` cannot hold it
-        wide: = F64::r
-        return wide.to_i8()
-    pub fn to_i16(r: Self): I16? //< truncated toward zero, or none where `I16` cannot hold it
-        wide: = F64::r
-        return wide.to_i16()
-    pub fn to_i32(r: Self): I32? //< truncated toward zero, or none where `I32` cannot hold it
-        wide: = F64::r
-        return wide.to_i32()
-    pub fn to_i64(r: Self): I64? //< truncated toward zero, or none where `I64` cannot hold it
-        wide: = F64::r
-        return wide.to_i64()
-    pub fn to_u8(r: Self): U8? //< truncated toward zero, or none where `U8` cannot hold it
-        wide: = F64::r
-        return wide.to_u8()
-    pub fn to_u16(r: Self): U16? //< truncated toward zero, or none where `U16` cannot hold it
-        wide: = F64::r
-        return wide.to_u16()
-    pub fn to_u32(r: Self): U32? //< truncated toward zero, or none where `U32` cannot hold it
-        wide: = F64::r
-        return wide.to_u32()
-    pub fn to_u64(r: Self): U64? //< truncated toward zero, or none where `U64` cannot hold it
-        wide: = F64::r
-        return wide.to_u64()
-    pub fn to_sz(r: Self): Sz? //< truncated toward zero, or none where `Sz` cannot hold it
-        wide: = F64::r
-        return wide.to_sz()
+pub fn max<|T|>(a: T, b: T): T //< the greater of the two; `b` where they are equal or one is a NaN
+    return a if a > b else b
 
 // ==========================================
 // cfg(freestanding): the dependency-free software implementations

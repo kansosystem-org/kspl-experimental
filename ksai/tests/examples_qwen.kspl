@@ -1,10 +1,10 @@
 //< Runs `qwen_infer` and compares its answer against reference values
-//<
 //< It writes small weights for this (not a suite; part of `ksai/tests/examples_main.kspl`).
 //< Caution: **Do not fill them with random numbers**: values that change per environment make the
 //< reference values meaningless.
 //< **Keep the vocabulary at 10 or under.** Every value then appears in the output's
 //< `LOGITS[0:10]`, so the gap between the top two can be measured here as well.
+import "ksai/examples/qwen_infer/model" { key } // the tensors' names, as qwen_infer reads them
 import "ksai/lora" { Lora }
 import "ksai/lora_set" { Qkv_lora }
 import "ksai/model_file" as ai_file
@@ -13,6 +13,7 @@ import "ksai/tensor" { Tensor }
 import "std/chars"
 import "std/ds" { List }
 import "std/fs"
+import "std/math"
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
 import "std/strfmt" as _strfmt
@@ -21,7 +22,6 @@ import "std/subproc"
 import "std/verdict"
 
 priv const N_LAYERS: Sz = 2 //< the shape of a small Qwen
-    //<
     //< **Keep hidden = n_heads * head_dim** (as in the real model; otherwise the attention's shapes
     //< do not match). The vocabulary is 8 so every logit is printed.
 priv const HIDDEN: Sz = 8
@@ -34,30 +34,25 @@ priv const ROPE_THETA: F32 = 10000.0
 priv const EPS: F32 = 0.000001
 
 priv const TOKENS_IN: U8[] = "3 1 4\n" //< the token IDs sent through
-    //<
     //< **Keep them inside the vocabulary** (outside it, the embedding lookup reads out of
     //< bounds).
 
 priv const WANT_ARGMAX: I64 = 4 //< the answer's reference values
-    //<
     //< **When you remeasure them, update `WANT_ARGMAX` too** (where this row is largest).
     //< How to remeasure is in `case_the_answer_matches` below.
 priv const WANT_LOGITS: F64[8] = ::{ -2.632505, 1.153767, -1.171534, 0.666626, 2.246295, -2.437649,
     0.450880, -2.924789 }
 
 priv const TOL: F64 = 0.0001 //< the matching tolerance
-    //<
     //< Caution: **Check how large the drift is before loosening it.** It is about 100 times F32's
     //< rounding and fixed per code path, so a drift of another order means **a different path**,
     //< not rounding.
 
 priv const NEED_GAP: F64 = 0.01 //<
     //< The minimum gap between the top two, so `ARGMAX` does not flip
-    //<
     //< It is 100 times the tolerance.
 
 priv fn fill(t: Tensor<|F32|>$@, step: Sz) //< fills the weights with a fixed formula
-    //<
     //< `step` differs per tensor so that different weights do not get the same rows.
     for i in Range.asc(t.size)
         (t.data + i)$ = (F32::0.05) * (F32::((i * step + 7) % 29) - F32::14.0)
@@ -75,7 +70,6 @@ priv fn made1(d0: Sz, step: Sz, arena: Arena$@): Tensor<|F32|>
     return t
 
 priv fn made_norm(step: Sz, arena: Arena$@): Tensor<|F32|> //< the normalisation's weights
-    //<
     //< **Keep them near 1.** Near 0 the output collapses and the gap between the top two vanishes.
     //< Caution: **Do not drop `step`.** If the rows before attention and before the MLP were the
     //< same, **a swap of the two would not show in the answer.** Swapping `attention_norm` for
@@ -87,8 +81,7 @@ priv fn made_norm(step: Sz, arena: Arena$@): Tensor<|F32|> //< the normalisation
     return t
 
 priv fn made_cfg(arena: Arena$@): Tensor<|F32|> //< the config tensor
-    //<
-    //< **`read_cfg` in `ksai/examples/qwen_infer/main.kspl` decides the layout** (the order of
+    //< **`read_cfg` in `ksai/examples/qwen_infer/model.kspl` decides the layout** (the order of
     //< the 9 elements).
     shape: Sz[1] = ::{ 9 }
     t: = Tensor<|F32|>.new(Sz[]::shape, arena)
@@ -103,14 +96,7 @@ priv fn made_cfg(arena: Arena$@): Tensor<|F32|> //< the config tensor
     (t.data + 8)$ = EPS
     return t
 
-priv fn key(b: Str_builder$@, i: Sz, suffix: U8[]): U8[] //< the tensors' names
-    //<
-    //< **A name is an external format fixed by the exporter** (the names of `key` in
-    //< `ksai/examples/qwen_infer/main.kspl`; change one side alone and reading fails on the name).
-    return b.clear().s("layers.\{I32::i\}").s(suffix).slice()
-
 priv fn write_weights(path: U8[], arena: Arena$@): Bool //< writes one small weights file
-    //<
     //< Caution: **Vary the formula per layer** (with one formula, mixing layers up would not show
     //< in the answer).
     $w: = st.Safetensors_writer.new()
@@ -139,7 +125,6 @@ priv fn write_weights(path: U8[], arena: Arena$@): Bool //< writes one small wei
     return true
 
 priv fn write_adapters(path: U8[], v_out: Sz, arena: Arena$@): Bool //< writes a set of adapters
-    //<
     //< `v_out` is the value adapter's output width: `N_KV_HEADS * HEAD_DIM` fits the model above,
     //< and another width makes an adapter for another model.
     adapters: = Qkv_lora<|F32|>$@::arena.alloc(N_LAYERS * sizeof(Qkv_lora<|F32|>))
@@ -154,7 +139,6 @@ priv fn write_adapters(path: U8[], v_out: Sz, arena: Arena$@): Bool //< writes a
     return true
 
 priv struct Said //< the result of running it
-    //<
     //< **Keep the standard error too**: that is where the program says why it did not answer.
     out: U8[]
     err: U8[]
@@ -164,7 +148,6 @@ priv const READ_WAIT: I32 = 20000
 
 priv fn drain(child: subproc.Piped_child$@, want_err: Bool, arena: Arena$@): U8[] //<
     //< Reads one pipe to the end
-    //<
     //< **Note a timeout in the text too** (otherwise it looks like an empty answer, and nobody can
     //< tell whether it stopped or wrote nothing).
     buf: = U8$[]::{ .ptr = U8$@::arena.alloc(READ_CHUNK), .len = READ_CHUNK }
@@ -199,7 +182,6 @@ priv fn ran(exe: U8[], weights: U8[], input: U8[], arena: Arena$@, adapters: U8[
 
 priv fn after(text: U8[], head: U8[], arena: Arena$@): U8[] //<
     //< Returns what follows `<head>` on a `<head><number>` line
-    //<
     //< Empty if there is none.
     for line in text.lines(arena)
         if line.starts_with(head)
@@ -207,7 +189,6 @@ priv fn after(text: U8[], head: U8[], arena: Arena$@): U8[] //<
     return ""
 
 priv fn i64_or(text: U8[], spare: I64): I64 //< the number, or a fallback if it cannot be read
-    //<
     //< **`catch` accepts only a branching form, so this wraps it.**
     return text.to_i64() catch
         return spare
@@ -216,7 +197,6 @@ priv const ARGMAX_HEAD: U8[] = "ARGMAX "
 priv const LOGITS_HEAD: U8[] = "LOGITS[0:10]"
 
 priv fn logits_of(out: U8[], arena: Arena$@): List<|F64|> //< the logits listed in the output
-    //<
     //< A value that cannot be read is not skipped: the list stops there (and the short list shows
     //< as a failure).
     $got: = List<|F64|>.new(arena)
@@ -230,13 +210,12 @@ priv fn logits_of(out: U8[], arena: Arena$@): List<|F64|> //< the logits listed 
 
 priv fn near(a: F64, b: F64): Bool
     d: = a - b
-    return (-d if d < 0.0 else d) <= TOL
+    return math.abs(d) <= TOL
 
-fn test_qwen_answers(exe: U8[], work: U8[], arena: Arena$@) //<
+fn test_qwen_answers(qwen_exe: U8[], work: U8[], arena: Arena$@) //<
     //< `qwen_infer` reads small weights and gives the reference answer, the same way twice
-    //<
-    //< `exe` is the program `make test` built, **with the options `make` uses**, so the path tested
-    //< here is the one that ships.
+    //< `qwen_exe` is the program `make test` built, **with the options `make` uses**, so the path
+    //< tested here is the one that ships.
     verdict.start("[examples] qwen_infer answers as the reference does")
     weights: = fs.join(work, "mini_qwen.safetensors", arena)
     fs.mkdir_all(work) catch
@@ -244,7 +223,7 @@ fn test_qwen_answers(exe: U8[], work: U8[], arena: Arena$@) //<
     assert(write_weights(weights, arena),
         U8$[]::arena.text().s("cannot write \{weights\}").take())
 
-    said: = ran(exe, weights, TOKENS_IN, arena)
+    said: = ran(qwen_exe, weights, TOKENS_IN, arena)
     // The shape read matches the config. **Check this first**: with the wrong shape the answer
     // never matches, so this tells "the weights are not being read" apart.
     shape_said: = "layers=2 hidden=8 heads=2/1 vocab=8"
@@ -295,7 +274,7 @@ fn test_qwen_answers(exe: U8[], work: U8[], arena: Arena$@) //<
 
     // The same input gives the same answer. **Run the second time on the same executable**: a
     // rebuild would add translation differences, so a difference could not be pinned down.
-    twice: = ran(exe, weights, TOKENS_IN, arena)
+    twice: = ran(qwen_exe, weights, TOKENS_IN, arena)
     assert(twice.out.equals(said.out),
         U8$[]::arena.text().s("the second round said otherwise: \{twice.out.trim_spaces()\}").take())
     verdict.pass("the second round puts out the same answer")
@@ -303,7 +282,7 @@ fn test_qwen_answers(exe: U8[], work: U8[], arena: Arena$@) //<
     // The run with no tokens.
     // Caution: **Do not end silently**: an empty answer cannot be told apart from "it could not be
     // read".
-    empty: = ran(exe, weights, "", arena)
+    empty: = ran(qwen_exe, weights, "", arena)
     assert(empty.err.find_str("there is no token ID on standard input").is_some(),
         U8$[]::arena.text().s("with no token it said: \{empty.err.trim_spaces()\}").take())
     verdict.pass("with no token handed over it says the reason")
@@ -314,11 +293,11 @@ fn test_qwen_answers(exe: U8[], work: U8[], arena: Arena$@) //<
     foreign: = fs.join(work, "other_lora.safetensors", arena)
     assert(write_adapters(fits, N_KV_HEADS * HEAD_DIM, arena) &&
         write_adapters(foreign, N_HEADS * HEAD_DIM, arena), "cannot write the adapters")
-    tuned: = ran(exe, weights, TOKENS_IN, arena, fits)
+    tuned: = ran(qwen_exe, weights, TOKENS_IN, arena, fits)
     assert(tuned.err.find_str("LoRA adapter loaded").is_some() &&
         after(tuned.out, ARGMAX_HEAD, arena).len > 0,
         U8$[]::arena.text().s("the adapters that fit were not used: \{tuned.err\}").take())
-    refused: = ran(exe, weights, TOKENS_IN, arena, foreign)
+    refused: = ran(qwen_exe, weights, TOKENS_IN, arena, foreign)
     assert(refused.err.find_str(arena.text().s("LoRA load failed: \{foreign\}").take()).is_some(),
         U8$[]::arena.text().s("an adapter for another model was not refused: \{refused.err\}")
         .take())

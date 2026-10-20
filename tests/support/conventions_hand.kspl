@@ -1,5 +1,4 @@
 //< Checks that the page's JS functions match between definition and call (not the suite)
-//<
 //< **The page's JS has no imports.** It runs joined into one `<script>`. So **`node --check`
 //< passes whether the caller got the form wrong or the provider is called by nobody**. The same
 //< check across the wasm is in "the wasm's boundary" in `tests/support/conventions_bound.kspl`.
@@ -16,7 +15,6 @@ priv const WEB_JS: U8[] = "kspage/port/web/*.js" //< the files checked
 
 priv const KS_HOME: U8[] = "kspage/port/web/kspage.js" //<
     //< Where the entry points passed around are built
-    //<
     //< **Exactly these two.** `ks` is what the code that started the wasm passes to each part. `ui`
     //< is what the page's frame builds and mixes the parts into. **Many parts touch both**. **`kf`
     //< and `ks.api` are not checked.** `kf` sits between two files and writes in **both
@@ -29,7 +27,6 @@ priv const UI_HOME: U8[] = "kspage/port/web/page.js"
 
 priv fn mask_js(src: U8[], arena: Arena$@): U8[] //<
     //< Blanks out the comments and strings in a JS source, keeping its length
-    //<
     //< Caution: **Do not change the length**, or later positions drift from the original. **Do not
     //< count without masking**: a bracket or `,` inside a string or comment moves the split points.
     //< A regular expression (`/…/`) is not masked. **A template's `${…}` is code, and stays**
@@ -80,7 +77,6 @@ priv fn mask_js(src: U8[], arena: Arena$@): U8[] //<
 
 priv fn template_code_into(src: U8[], at: Sz, b: str.Arena_text$@): Sz //<
     //< Copies a template's `${…}` that starts at `at`, and returns where it ends
-    //<
     //< **The code is kept as it stands; its own `${` and `}` are blanked**, so the braces counted
     //< are the template's alone. A string inside it is blanked as `mask_js` blanks one.
     b.s("  ")
@@ -127,7 +123,6 @@ priv const TEMPLATE_SAMPLES: Sample[_] = ::{ Sample::{ .text =
 
 priv fn brace_hidden(text: U8[], arena: Arena$@): Bool //<
     //< whether a `{` is left in the masked text
-    //<
     //< Caution: **List samples on both sides** (otherwise masking too much or too little passes).
     return mask_js(text, arena).find_char('{').is_none()
 
@@ -145,7 +140,6 @@ priv const MASK_SAMPLES: Sample[_] = ::{ Sample::{ .text = "const a = \"{\";", .
 // ==========================================
 
 priv fn is_name_byte(c: U8): Bool //< whether the byte can be part of an identifier
-    //<
     //< Caution: **Do not drop the `$`** (it can be written in a JS name).
     return c.is_alnum() || c == '_' || c == '$'
 
@@ -157,7 +151,6 @@ priv fn name_len(src: U8[], at: Sz): Sz
 
 priv fn key_of(entry: U8[]): U8[] //<
     //< Returns the name a field's text declares, or empty where it declares none
-    //<
     //< Caution: **Handle the three ways of writing as one**: `name: value`, the shortened `name`
     //< and `name() { … }`; drop one and every entry point written so **looks like "nobody provides
     //< it"**.
@@ -182,7 +175,6 @@ priv const FIELD_SAMPLES: Sample[_] = ::{ Sample::{ .text = "hoverNow: hoverNow"
 
 priv fn literal_end(src: U8[], at: Sz): Sz //<
     //< The position of the closing bracket matching the opening bracket at `at`
-    //<
     //< Caution: **Return `src.len` where it is not found**, so the caller can refuse (a silent
     //< partial pick turns what was dropped into "nobody provides it").
     $depth: Sz = 0
@@ -199,7 +191,6 @@ priv fn literal_end(src: U8[], at: Sz): Sz //<
     return src.len
 
 priv fn push_key(out: List<|U8[]|>$@, entry: U8[]) //< adds one field
-    //<
     //< Caution: **Do not add a field that declares no name** (with one empty name, the comparison
     //< that follows matches on neither side).
     name: = key_of(entry)
@@ -229,7 +220,6 @@ priv fn keys_into(src: U8[], at: Sz, end: Sz, out: List<|U8[]|>$@) //<
 
 priv fn load_web(rels: List<|U8[]|>$@, srcs: List<|U8[]|>$@, arena: Arena$@) //<
     //< Builds the masked text once and passes it around
-    //<
     //< Caution: **Do not rebuild it for each walk** (that masks every file again once per part).
     for rel in harness.tracked_matching(U8[][]::{ WEB_JS })
         rels.push(rel)
@@ -237,7 +227,6 @@ priv fn load_web(rels: List<|U8[]|>$@, srcs: List<|U8[]|>$@, arena: Arena$@) //<
 
 priv fn scan_dots(src: U8[], obj: U8[], gives: List<|U8[]|>$@, takes: List<|U8[]|>$@) //<
     //< Files an `obj.name` as provided where it is assigned, and as read otherwise
-    //<
     //< Caution: **Do not count an assignment as a place it is read**, or a new field counts as its
     //< own reader and "a field nobody reads" passes.
     $i: Sz = 0
@@ -264,7 +253,6 @@ priv fn scan_dots(src: U8[], obj: U8[], gives: List<|U8[]|>$@, takes: List<|U8[]
 
 priv fn scan_opened(src: U8[], obj: U8[], takes: List<|U8[]|>$@) //<
     //< Picks up reads in the form `const { … } = obj`
-    //<
     //< Caution: **Do not drop this form**: nearly every part reads `ks` this way, and without it
     //< **nearly every field looks like "nobody reads it"**.
     $i: Sz = 0
@@ -311,7 +299,6 @@ priv fn home_gives(home: U8[], obj: U8[], gives: List<|U8[]|>$@, bad: List<|U8[]
 priv fn returns_gives(src: U8[], rel: U8[], start: Sz, end: Sz, gives: List<|U8[]|>$@,
     bad: List<|U8[]|>$@, arena: Arena$@) //<
         //< The fields of the `return { … }` a part returns.
-        //<
         //< Caution: **Check only a `return {` indented by two**, or an inner return makes a name
         //< look like an entry point.
     mark: = "\n  return {"
@@ -364,7 +351,6 @@ priv fn part_gives(rels: List<|U8[]|>@, srcs: List<|U8[]|>@, part: U8[],
 priv fn check_object(obj: U8[], home: U8[], parts: Bool, rels: List<|U8[]|>@,
     srcs: List<|U8[]|>@, arena: Arena$@) //<
         //< Compares the entry points one object provides with the ones read from it
-        //<
         //< **The same name from two places is not refused**: declaring an entry point's field first
         //< and filling it later (`ui.takeName`) is normal.
     $gives: = List<|U8[]|>.new(arena)

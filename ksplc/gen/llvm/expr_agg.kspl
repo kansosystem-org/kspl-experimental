@@ -1,5 +1,4 @@
 //< The part of `emit_llvm_expr` that builds aggregate values, kept in a file of its own
-//<
 //< They are struct, enum, trait and result.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
@@ -10,22 +9,11 @@ import "ksplc/gen/llvm/types" as gen_llvm_types
 import "ksplc/sema/decl/layout" as sema_decl_layout
 import "ksplc/sema/type/def" as sema_type_def
 import "ksplc/sema/type/query" as sema_type_query
-import "std/ds" { Map }
 
 priv struct Field_slot //< where one initializer's value is stored
     reg: I32 //< the register holding the slot's address
     type_id: I32 //< the type the store is emitted in (the reason is at Ctx.emit_numeric_coerce)
     align: Sz //< what a `#packed` struct leaves of the field's alignment, 0 for the type's own
-
-priv fn named_field_index(child: Ast_node$@, by_name: Map<|U8[], I32|>$@, at: I32): I32 //<
-    //< The field a struct literal's initializer writes: the one it names, else the one at `at`
-    if by_name == null
-        return at
-    name_node: = child.get_field_init_name().unwrap_or(null)
-    if name_node == null || name_node.kind_id != .k_identifier
-        return at
-    found_idx: = by_name.get(name_node.text).unwrap_or(-1)
-    return at if found_idx == -1 else found_idx
 
 impl Ast_node
     fn emit_llvm_enum_init(r: Ast_node$@, cg: Genllvm_ctx$@): U8$[]
@@ -69,7 +57,6 @@ impl Ast_node
     priv fn emit_llvm_enum_payload(r: Ast_node$@, cg: Genllvm_ctx$@, real_type_id: I32,
         tmp_ptr: U8[], v_def: sema_type_def.Enum_variant$@) //<
             //< It writes an enum's payload fields one at a time into `tmp_ptr`'s payload area.
-            //<
             //< `r` is a k_expr_args. Each field is reached at ksplc's offset (payload_field_ptr).
         $arg_idx: Sz = 0
         for arg_node in r.children
@@ -112,7 +99,6 @@ impl Ast_node
 
     fn emit_llvm_struct_literal(r: Ast_node$@, cg: Genllvm_ctx$@): U8$[] //<
         //< It builds a compound literal in a temporary and returns its **value**
-        //<
         //< Where the caller already has the memory the value is to end up in, use
         //< emit_llvm_struct_literal_into. This one does "build in a temporary -> load as a value ->
         //< the caller stores": three copies, with waste proportional to the aggregate's size.
@@ -124,7 +110,6 @@ impl Ast_node
 
     priv fn covers_whole_aggregate(r: Ast_node$@, cg: Genllvm_ctx$@): Bool //<
         //< Whether this literal fills every byte of the memory (so the leading zero-fill can go)
-        //<
         //< It requires not "the value is the same anyway" but "not one uninitialized byte remains".
         //< Dropping the fill is for robustness, not speed. With a zero-fill right before, the
         //< backend learns "the high bytes are already 0" and can narrow the following store. No
@@ -153,7 +138,6 @@ impl Ast_node
 
     fn emit_llvm_struct_literal_into(r: Ast_node$@, cg: Genllvm_ctx$@, tmp_ptr: U8[]) //<
         //< It builds a compound literal directly in the memory dest_ptr points at (with no copy)
-        //<
         //< Where the literal does not fill all the memory, dest_ptr is first overwritten with a
         //< zeroinitializer. So it cannot be used where a field's initializer reads dest_ptr itself.
         //< A variable declaration (`x: T = ::{...}`) cannot read x before its declaration, so it is
@@ -163,18 +147,11 @@ impl Ast_node
             cg.emit_zero_fill(tmp_ptr, r.type_id)
         is_array: = cg.env.is_array(r.type_id)
         $current_field_idx: = 0
-
-        // It builds the table from a named field initializer's field name to its index once here
-        // (it does not change with r.type_id). A linear walk of fields_list per initializer would
-        // be O(F*M).
-        $field_name_idx: Map<|U8[], I32|>$@ = null
+        $s_def: sema_type_def.Struct_def$@ = null
         if !is_array
-            clean_str: = cg.env.base_type_name(cg.env.get_real_type(r.type_id))
-            if s_def: = cg.env.get_struct_def(clean_str)
-                field_name_idx = base_core.arena
-                    .create(Map<|U8[], I32|>.new(base_core.arena))
-                for f in Range.asc(s_def.fields_list.len)
-                    field_name_idx.set(s_def.fields_list.get(f).name, I32::f)
+            type_name: = cg.env.base_type_name(cg.env.get_real_type(r.type_id))
+            if sd: = cg.env.get_struct_def(type_name)
+                s_def = sd
 
         for child in r.children
             if child.kind_id != .k_expr_field_init
@@ -187,7 +164,9 @@ impl Ast_node
                 if child.get_field_init_index().is_none()
                     current_field_idx += 1
             else
-                field_idx: = named_field_index(child, field_name_idx, current_field_idx)
+                // Sema recorded the field each initializer writes (mark_field_written in
+                // sema/body/struct_literal.kspl).
+                field_idx: = child.ival if s_def != null else current_field_idx
                 current_field_idx = field_idx + 1
                 slot = r.struct_slot(cg, tmp_ptr, field_idx, val_expr.type_id)
             stored_reg: = cg.emit_numeric_coerce(val_reg, val_expr.type_id, slot.type_id)

@@ -1,5 +1,4 @@
 //< Generates LLVM IR for function and method calls, kept in a file of its own
-//<
 //< The postfix `(`.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
@@ -14,12 +13,10 @@ import "ksplc/sema/type/query" as sema_type_query
 import "ksplc/sema/type/scope" { Sema_symbol }
 import "std/chars" // the one-character tests and cuts
 import "std/ds" { List, Map }
-import "std/str"
 
 impl Genllvm_ctx
     fn get_or_build_trait_method_idx(r: Self$@, d: sema_type_def.Trait_def$@, name: U8[]): I32 //<
         //< A trait method's vtable index by name, from a table built once per trait
-        //<
         //< A linear walk of methods_list per call site would be O(N*M). The table is built once per
         //< trait and stored in cg.trait_method_idx_cache, so later calls are O(1).
         cache_key: = Sz::d
@@ -115,7 +112,6 @@ priv fn callee_param_type_ids(cg: Genllvm_ctx$@, recv: Ast_node$@, is_trait: Boo
 
 priv fn variadic_value_id(cg: Genllvm_ctx$@, arg_id: I32): I32 //<
     //< The value's type as used to decide the promotion
-    //<
     //< An enum is decided by its base integer.
     //< Caution: **Do not keep the enum's type id.** Its width reads as the default 32, so no
     //< conversion seems needed and no instruction is emitted, while the IR uses `i32` (LLVM rejects
@@ -129,7 +125,6 @@ priv fn variadic_value_id(cg: Genllvm_ctx$@, arg_id: I32): I32 //<
 
 priv fn variadic_promoted_id(cg: Genllvm_ctx$@, id: I32): I32 //<
     //< The "default argument promotion" for an argument passed to C's variadic part (`...`)
-    //<
     //< **Without it, the width disagrees with what the callee reads.** A `Bool` and an enum both
     //< promote to `int` in C. Checked by width, they take the same branch.
     bits: = cg.env.get_primitive_bit_size(id)
@@ -166,8 +161,6 @@ impl Ast_node
         $obj_reg: = ""
         $obj_type_id: = 0
 
-        // Whether the callee's name is emitted as `@<name>` unchanged (unmangled).
-        $verbatim_name: = false
         // Whether the callee uses the C ABI. If true, aggregates are not passed or returned through
         // pointers.
         $callee_uses_c_abi: = false
@@ -181,7 +174,6 @@ impl Ast_node
             recv.def_node.sym_ptr != null
             sym: = Sema_symbol$@::recv.def_node.sym_ptr
             fn_def_node = recv.def_node
-            verbatim_name = sym.uses_verbatim_c_name()
             callee_uses_c_abi = sym.uses_c_abi()
             switch sym.kind
             case .function(v)
@@ -262,7 +254,7 @@ impl Ast_node
                 cg.s(", ")
             cg.s("...) ")
 
-        emit_callee_name(cg, callee_operand, verbatim_name)
+        emit_callee_name(cg, callee_operand)
 
         cg.s("(")
         $emitted_any: = false
@@ -291,7 +283,6 @@ impl Ast_node
 priv fn emit_trait_fn_ptr(cg: Genllvm_ctx$@, obj: Ast_node$@, method_idx: I32, obj_ptr: U8[]$@):
     U8[] //<
         //< It loads a trait method's function pointer from the value's vtable
-        //<
         //< obj_ptr receives the object pointer the method takes as its receiver.
     $trait_val: = obj.emit_llvm_expr(cg)
     // Automatic dereferencing must work on a multi-level pointer too (MyTrait@@, say). So the
@@ -340,7 +331,6 @@ priv fn emit_trait_fn_ptr(cg: Genllvm_ctx$@, obj: Ast_node$@, method_idx: I32, o
 priv fn emit_call_args(cg: Genllvm_ctx$@, args_node: Ast_node$@, param_type_ids: List<|I32|>$@,
     first_param: Sz, is_variadic: Bool, arg_regs: List<|U8[]|>$@, arg_types: List<|I32|>$@) //<
         //< It evaluates a call's arguments, each converted to the type its parameter takes
-        //<
         //< The callee's parameter types: an argument is always passed in this type (the reason is
         //< at callee_param_type_ids). For a call that cannot be resolved the list is empty, and
         //< only then is the argument's own type used.
@@ -377,7 +367,6 @@ priv fn emit_call_args(cg: Genllvm_ctx$@, args_node: Ast_node$@, param_type_ids:
 priv fn pass_aggregates_by_ptr(cg: Genllvm_ctx$@, arg_regs: List<|U8[]|>$@,
     arg_types: List<|I32|>$@, use_kspl_abi: Bool): List<|Bool|>$@ //<
         //< It stores each aggregate argument into a slot of its own and passes that slot instead
-        //<
         //< An aggregate argument is passed by pointer. Here it is a value register. So before the
         //< call, it is stored into a temporary slot for this call only. Each call has its own slot,
         //< so it stays by-value even if the callee writes to it. The result says which went so.
@@ -392,15 +381,9 @@ priv fn pass_aggregates_by_ptr(cg: Genllvm_ctx$@, arg_regs: List<|U8[]|>$@,
             arg_regs.set(i, slot)
     return arg_by_ptr
 
-priv fn emit_callee_name(cg: Genllvm_ctx$@, callee_operand: U8[], verbatim_name: Bool) //<
-    //< It writes the callee: a register, or a function's global name as its kind spells it
+priv fn emit_callee_name(cg: Genllvm_ctx$@, callee_operand: U8[]) //<
+    //< It writes the callee: a register, or a function's global name as `lower/abi.kspl` gave it
     if callee_operand.starts_with("%") || callee_operand.starts_with("@")
         cg.s(callee_operand)
-    else if verbatim_name
-        cg.s("@").s(callee_operand)
-    else if callee_operand.equals("main") || callee_operand.equals("kspl_main")
-        cg.s("@kspl_main")
-    else if gen_llvm_ctx.is_kspl_prefixed_or_ext(callee_operand, false)
-        cg.s("@").s(callee_operand)
     else
-        cg.s("@kspl_").s(callee_operand)
+        cg.s("@").s(callee_operand)

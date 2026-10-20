@@ -8,6 +8,7 @@ std/argparse	Argument_error.help_requested	help_requested	`--help` was given; no
 std/argparse	Argument_error.missing_required	missing_required(name: U8[])	an item that cannot be omitted was omitted
 std/argparse	Argument_error.missing_value	missing_value(name: U8[])	an item that takes a value has no `=value` attached
 std/argparse	Argument_error.multiple_commands	multiple_commands(name: U8[])	two commands were named at once
+std/argparse	Argument_error.not_for_command	not_for_command(name: U8[], command: U8[], commands: U8[])	An option was given with a command it does not take effect on. `command` is the one chosen (empty where none is). `commands` are those the option takes effect on, separated by spaces, as `only_for` declared them.
 std/argparse	Argument_error.repeated	repeated(name: U8[])	an item taking one value was given twice; the second would replace it
 std/argparse	Argument_error.unexpected_arg	unexpected_arg(name: U8[])	a positional argument was given to a CLI that takes none
 std/argparse	Argument_error.unexpected_value	unexpected_value(name: U8[])	a flag carried `=value`
@@ -16,17 +17,21 @@ std/argparse	Argument_error:Formattable	impl Argument_error: Formattable	so a fa
 std/argparse	Parser	pub struct Parser	the declarations, and where the parsed values go
 std/argparse	Parser.about	pub about: U8[]	one line saying what the program is, shown above the options
 std/argparse	Parser.append_names	pub fn append_names(r: Self$@, out: List<|U8[]|>$@)	pushes every declared name, in declaration order. For a caller that walks the items (with `saw`). Caution: **Do not let the caller copy the list of names.** A copy silently drifts when a declaration is added.
-std/argparse	Parser.command	pub command: U8[]?	the chosen command, or none; the caller decides the default. A default kept in argparse would drift from the declaration.
+std/argparse	Parser.command	pub command: U8[]?	the chosen command, or none. Where no command is named, it is the one `default_command` declared, or none.
 std/argparse	Parser.command_flag	pub fn command_flag(r: Self$@, name: U8[], help: U8[])	a command chosen by an option's name (`--version`); takes no value. Not a flag, so the commands stay **mutually exclusive** (`prog fmt --version` is refused). Caution: **Add a mode as an option only where one is enough.** As they multiply, the name no longer says which is a subcommand and which is an option.
+std/argparse	Parser.command_form	pub fn command_form(r: Self$@, name: U8[], form: U8[], file: U8[] = caller_file, line: Sz = caller_line)	what follows a command's name in its usage line. Once any command has a form, or a default is declared, the usage opens with one line per command. `print_command_usage` writes one of them. A name declared nowhere stops the program, as at `saw`.
 std/argparse	Parser.create	pub fn create(prog: U8[], about: U8[], arena: Arena$@): Parser$@	a parser with nothing declared yet. With `null`, `defer p.free()` frees it and all it holds.
+std/argparse	Parser.default_command	pub fn default_command(r: Self$@, name: U8[], file: U8[] = caller_file, line: Sz = caller_line)	the command chosen when no command is named (`ksplc a.kspl a.c`). **Its name is never typed**: one way to ask for it, not two. The name stands in the usage, in `command` after parsing, and in `only_for`. Caution: **A second default stops the program**; one of the two would never be chosen.
 std/argparse	Parser.flag	pub fn flag(r: Self$@, name: U8[], out: Bool$@, help: U8[])	a switch taking no value (Python's `action="store_true"`)
 std/argparse	Parser.free	pub fn free(r: Self$@)	lets go the parser and all it holds, when `create` was given null. Made in the caller's arena, it frees nothing: that arena does. The values it stored stay where the caller's variables hold them.
 std/argparse	Parser.int_opt	pub fn int_opt(r: Self$@, name: U8[], out: I64$@, help: U8[])	an integer; a value that cannot be read gives `bad_value`
+std/argparse	Parser.only_for	pub fn only_for(r: Self$@, name: U8[], commands: U8[], file: U8[] = caller_file, line: Sz = caller_line)	limits an option to the commands it takes effect on. **Given with any other command, parsing refuses it** (`not_for_command`). Accepted, it would do nothing. Without this call, an option takes effect on every command. Caution: **Declare the commands first.** A name that is no declared option or command stops the program, as at `saw`. So does a second call for one option.
 std/argparse	Parser.parse	pub fn parse(r: Self$@, a: sys.Args, arena: Arena$@): Void!Argument_error	reads the process's own arguments, skipping the program name at the start
 std/argparse	Parser.parse_list	pub fn parse_list(r: Self$@, argv: List<|U8[]|>$@): Void!Argument_error	reads an argument list into the declared destinations. Also for arguments from elsewhere, such as a configuration file or a test.
 std/argparse	Parser.parse_or_exit	pub fn parse_or_exit(r: Self$@, a: sys.Args, arena: Arena$@)	reads the arguments, or prints why and ends the process. **It returns only on success.** `--help` prints the usage on standard output and exits 0. An error prints the reason and the usage on standard error and exits 2. So a caller reading the output never takes a refusal for it.
 std/argparse	Parser.positional	pub fn positional(r: Self$@, usage: U8[])	declares that this CLI takes positional arguments. **A positional argument given to a CLI that declares none is an error**, for the same reason as an unknown `--name`. A path's word-split fragments arrive **as positional arguments**, and dropping them silently hides the cause.
-std/argparse	Parser.print_options	pub fn print_options(r: Self$@, out: Writer)	writes only the commands and options, with no heading. For a CLI that appends **the list built from the declarations** after its own text; a copied list goes stale.
+std/argparse	Parser.print_command_usage	pub fn print_command_usage(r: Self$@, name: U8[], out: Writer, file: U8[] = caller_file, line: Sz = caller_line)	writes one command's usage line, for refusing its arguments. The line is `usage: prog name form`, with the form `command_form` gave. A name declared nowhere stops the program, as at `saw`.
+std/argparse	Parser.print_options	pub fn print_options(r: Self$@, out: Writer)	writes only the commands and options, with no heading. For a CLI that appends **the list built from the declarations** after its own text; a copied list goes stale. Where an option is limited (`only_for`), the options each command takes come first.
 std/argparse	Parser.print_usage	pub fn print_usage(r: Self$@, out: Writer)	writes the whole usage
 std/argparse	Parser.prog	pub prog: U8[]	the program's name, used in the usage and in every error
 std/argparse	Parser.rest	pub rest: List<|U8[]|>$@	the positional arguments, in the order they appeared. Neither an option nor a command name. Unless `positional` declared them, each is an error.
@@ -123,7 +128,7 @@ std/chars	U8[].trim_start	pub fn trim_start(r: U8[]): U8[]	a view past the leadi
 std/chars	U8[].utf8_seq_len	pub fn utf8_seq_len(r: U8[], offset: Sz): Sz?	the length of the well-formed UTF-8 sequence at offset, or none. **It is strict where `next_codepoint` is lenient.** An overlong form (`C0 AF`), a surrogate (`ED A0 80`), anything past 10FFFF and a cut-off sequence all give none. That follows Unicode's table of well-formed sequences.
 std/chars	codepoint_byte	pub fn codepoint_byte(cp: I32, i: Sz): U8	one byte of a code point's UTF-8 encoding
 std/chars	codepoint_len	pub fn codepoint_len(cp: I32): Sz	how many bytes a code point takes in UTF-8, 1 to 4. **The count has its own function**, to get a `\uXXXX`'s length with no buffer to write to. **Refuse a surrogate (D800-DFFF) and anything over 10FFFF before passing it**; otherwise an invalid sequence is written and fails only later. Caution: `codepoint_byte`'s `i` must be less than this (beyond it, the last byte is returned).
-std/checked_int	Checked_arithmetic	pub trait Checked_arithmetic<|T|>	the native operations a checked value delegates to
+std/checked_int	Checked_arithmetic	pub trait Checked_arithmetic<|T|>	checked arithmetic, implemented by each native integer type
 std/checked_int	Checked_arithmetic.checked_add	fn checked_add(r: Self, rhs: T): T!Checked_error	the sum, or overflow
 std/checked_int	Checked_arithmetic.checked_div	fn checked_div(r: Self, rhs: T): T!Checked_error	the quotient, or overflow or a 0 divisor
 std/checked_int	Checked_arithmetic.checked_mul	fn checked_mul(r: Self, rhs: T): T!Checked_error	the product, or overflow
@@ -133,119 +138,61 @@ std/checked_int	Checked_error.div_by_zero	div_by_zero	the divisor was 0
 std/checked_int	Checked_error.overflow	overflow	the result does not fit in the type
 std/checked_int	Checked_negation	pub trait Checked_negation<|T|>	checked negation, available only for signed integers
 std/checked_int	Checked_negation.checked_neg	fn checked_neg(r: Self): T!Checked_error	the negated value, or overflow
-std/checked_int	Ci16	pub typedef Ci16 = Signed<|I16|>	a checked `I16`
-std/checked_int	Ci32	pub typedef Ci32 = Signed<|I32|>	a checked `I32`
-std/checked_int	Ci64	pub typedef Ci64 = Signed<|I64|>	a checked `I64`
-std/checked_int	Ci8	pub typedef Ci8 = Signed<|I8|>	a checked `I8`
-std/checked_int	Csz	pub typedef Csz = Signed<|Sz|>	a checked `Sz`
-std/checked_int	Cu16	pub typedef Cu16 = Unsigned<|U16|>	a checked `U16`
-std/checked_int	Cu32	pub typedef Cu32 = Unsigned<|U32|>	a checked `U32`
-std/checked_int	Cu64	pub typedef Cu64 = Unsigned<|U64|>	a checked `U64`
-std/checked_int	Cu8	pub typedef Cu8 = Unsigned<|U8|>	a checked `U8`
-std/checked_int	I16.cast	pub fn cast(r: Self$@): Ci16	the same value, now checked
 std/checked_int	I16.checked_add	pub fn checked_add(r: Self, rhs: I16): I16!Checked_error	the checked sum
 std/checked_int	I16.checked_div	pub fn checked_div(r: Self, rhs: I16): I16!Checked_error	the checked quotient
 std/checked_int	I16.checked_mul	pub fn checked_mul(r: Self, rhs: I16): I16!Checked_error	the checked product
 std/checked_int	I16.checked_neg	pub fn checked_neg(r: Self): I16!Checked_error	the negated value, or overflow
 std/checked_int	I16.checked_sub	pub fn checked_sub(r: Self, rhs: I16): I16!Checked_error	the checked difference
-std/checked_int	I16:Cast<|Ci16|>	impl I16: Cast<|Ci16|>	conversion into a checked value
 std/checked_int	I16:Checked_arithmetic<|I16|>	impl I16: Checked_arithmetic<|I16|>	checked arithmetic on a native value
 std/checked_int	I16:Checked_negation<|I16|>	impl I16: Checked_negation<|I16|>	checked signed negation
-std/checked_int	I32.cast	pub fn cast(r: Self$@): Ci32	the same value, now checked
 std/checked_int	I32.checked_add	pub fn checked_add(r: Self, rhs: I32): I32!Checked_error	the checked sum
 std/checked_int	I32.checked_div	pub fn checked_div(r: Self, rhs: I32): I32!Checked_error	the checked quotient
 std/checked_int	I32.checked_mul	pub fn checked_mul(r: Self, rhs: I32): I32!Checked_error	the checked product
 std/checked_int	I32.checked_neg	pub fn checked_neg(r: Self): I32!Checked_error	the negated value, or overflow
 std/checked_int	I32.checked_sub	pub fn checked_sub(r: Self, rhs: I32): I32!Checked_error	the checked difference
-std/checked_int	I32:Cast<|Ci32|>	impl I32: Cast<|Ci32|>	conversion into a checked value
 std/checked_int	I32:Checked_arithmetic<|I32|>	impl I32: Checked_arithmetic<|I32|>	checked arithmetic on a native value
 std/checked_int	I32:Checked_negation<|I32|>	impl I32: Checked_negation<|I32|>	checked signed negation
-std/checked_int	I64.cast	pub fn cast(r: Self$@): Ci64	the same value, now checked
 std/checked_int	I64.checked_add	pub fn checked_add(r: Self, rhs: I64): I64!Checked_error	the sum, or overflow
 std/checked_int	I64.checked_div	pub fn checked_div(r: Self, rhs: I64): I64!Checked_error	the quotient, or a failure
 std/checked_int	I64.checked_mul	pub fn checked_mul(r: Self, rhs: I64): I64!Checked_error	the product, or overflow
 std/checked_int	I64.checked_neg	pub fn checked_neg(r: Self): I64!Checked_error	the negated value, or overflow
 std/checked_int	I64.checked_sub	pub fn checked_sub(r: Self, rhs: I64): I64!Checked_error	the difference, or overflow
-std/checked_int	I64:Cast<|Ci64|>	impl I64: Cast<|Ci64|>	conversion into a checked value
 std/checked_int	I64:Checked_arithmetic<|I64|>	impl I64: Checked_arithmetic<|I64|>	checked arithmetic on a native value
 std/checked_int	I64:Checked_negation<|I64|>	impl I64: Checked_negation<|I64|>	checked signed negation
-std/checked_int	I8.cast	pub fn cast(r: Self$@): Ci8	the same value, now checked
 std/checked_int	I8.checked_add	pub fn checked_add(r: Self, rhs: I8): I8!Checked_error	the checked sum
 std/checked_int	I8.checked_div	pub fn checked_div(r: Self, rhs: I8): I8!Checked_error	the checked quotient
 std/checked_int	I8.checked_mul	pub fn checked_mul(r: Self, rhs: I8): I8!Checked_error	the checked product
 std/checked_int	I8.checked_neg	pub fn checked_neg(r: Self): I8!Checked_error	the negated value, or overflow
 std/checked_int	I8.checked_sub	pub fn checked_sub(r: Self, rhs: I8): I8!Checked_error	the checked difference
-std/checked_int	I8:Cast<|Ci8|>	impl I8: Cast<|Ci8|>	conversion into a checked value
 std/checked_int	I8:Checked_arithmetic<|I8|>	impl I8: Checked_arithmetic<|I8|>	checked arithmetic on a native value
 std/checked_int	I8:Checked_negation<|I8|>	impl I8: Checked_negation<|I8|>	checked signed negation
-std/checked_int	Signed	pub struct Signed<|T: Checked_arithmetic<|T|>|>	a signed integer whose arithmetic operators panic on failure
-std/checked_int	Signed.val	pub val: T	the plain value
-std/checked_int	Signed<|T|>.add	pub fn add(r: Self$@, rhs: Self): Self	the checked operation; failure stops the program
-std/checked_int	Signed<|T|>.checked_add	pub fn checked_add(r: Self, rhs: Self): Self!Checked_error	the checked sum
-std/checked_int	Signed<|T|>.checked_div	pub fn checked_div(r: Self, rhs: Self): Self!Checked_error	the checked quotient
-std/checked_int	Signed<|T|>.checked_mul	pub fn checked_mul(r: Self, rhs: Self): Self!Checked_error	the checked product
-std/checked_int	Signed<|T|>.checked_neg	pub fn checked_neg(r: Self): Self!Checked_error	the negated value, or overflow
-std/checked_int	Signed<|T|>.checked_sub	pub fn checked_sub(r: Self, rhs: Self): Self!Checked_error	the checked difference
-std/checked_int	Signed<|T|>.div	pub fn div(r: Self$@, rhs: Self): Self	the checked operation; failure stops the program
-std/checked_int	Signed<|T|>.mul	pub fn mul(r: Self$@, rhs: Self): Self	the checked operation; failure stops the program
-std/checked_int	Signed<|T|>.neg	pub fn neg(r: Self$@): Self	the checked negation; overflow stops the program
-std/checked_int	Signed<|T|>.sub	pub fn sub(r: Self$@, rhs: Self): Self	the checked operation; failure stops the program
-std/checked_int	Signed<|T|>:Add<|Signed<|T|>, Signed<|T|>|>	impl<|T|> Signed<|T|>: Add<|Signed<|T|>, Signed<|T|>|>	checked addition
-std/checked_int	Signed<|T|>:Div<|Signed<|T|>, Signed<|T|>|>	impl<|T|> Signed<|T|>: Div<|Signed<|T|>, Signed<|T|>|>	checked division
-std/checked_int	Signed<|T|>:Mul<|Signed<|T|>, Signed<|T|>|>	impl<|T|> Signed<|T|>: Mul<|Signed<|T|>, Signed<|T|>|>	checked multiplication
-std/checked_int	Signed<|T|>:Neg<|Signed<|T|>|>	impl<|T: Checked_negation<|T|>|> Signed<|T|>: Neg<|Signed<|T|>|>	checked negation
-std/checked_int	Signed<|T|>:Sub<|Signed<|T|>, Signed<|T|>|>	impl<|T|> Signed<|T|>: Sub<|Signed<|T|>, Signed<|T|>|>	checked subtraction
-std/checked_int	Sz.cast	pub fn cast(r: Self$@): Csz	the same value, now checked
 std/checked_int	Sz.checked_add	pub fn checked_add(r: Self, rhs: Sz): Sz!Checked_error	the checked sum
 std/checked_int	Sz.checked_div	pub fn checked_div(r: Self, rhs: Sz): Sz!Checked_error	the checked quotient
 std/checked_int	Sz.checked_mul	pub fn checked_mul(r: Self, rhs: Sz): Sz!Checked_error	the checked product
 std/checked_int	Sz.checked_neg	pub fn checked_neg(r: Self): Sz!Checked_error	the negated value, or overflow
 std/checked_int	Sz.checked_sub	pub fn checked_sub(r: Self, rhs: Sz): Sz!Checked_error	the checked difference
-std/checked_int	Sz:Cast<|Csz|>	impl Sz: Cast<|Csz|>	conversion into a checked value
 std/checked_int	Sz:Checked_arithmetic<|Sz|>	impl Sz: Checked_arithmetic<|Sz|>	checked arithmetic on a native value
 std/checked_int	Sz:Checked_negation<|Sz|>	impl Sz: Checked_negation<|Sz|>	checked signed negation
-std/checked_int	U16.cast	pub fn cast(r: Self$@): Cu16	the same value, now checked
 std/checked_int	U16.checked_add	pub fn checked_add(r: Self, rhs: U16): U16!Checked_error	the checked sum
 std/checked_int	U16.checked_div	pub fn checked_div(r: Self, rhs: U16): U16!Checked_error	the checked quotient
 std/checked_int	U16.checked_mul	pub fn checked_mul(r: Self, rhs: U16): U16!Checked_error	the checked product
 std/checked_int	U16.checked_sub	pub fn checked_sub(r: Self, rhs: U16): U16!Checked_error	the checked difference
-std/checked_int	U16:Cast<|Cu16|>	impl U16: Cast<|Cu16|>	conversion into a checked value
 std/checked_int	U16:Checked_arithmetic<|U16|>	impl U16: Checked_arithmetic<|U16|>	checked arithmetic on a native value
-std/checked_int	U32.cast	pub fn cast(r: Self$@): Cu32	the same value, now checked
 std/checked_int	U32.checked_add	pub fn checked_add(r: Self, rhs: U32): U32!Checked_error	the checked sum
 std/checked_int	U32.checked_div	pub fn checked_div(r: Self, rhs: U32): U32!Checked_error	the checked quotient
 std/checked_int	U32.checked_mul	pub fn checked_mul(r: Self, rhs: U32): U32!Checked_error	the checked product
 std/checked_int	U32.checked_sub	pub fn checked_sub(r: Self, rhs: U32): U32!Checked_error	the checked difference
-std/checked_int	U32:Cast<|Cu32|>	impl U32: Cast<|Cu32|>	conversion into a checked value
 std/checked_int	U32:Checked_arithmetic<|U32|>	impl U32: Checked_arithmetic<|U32|>	checked arithmetic on a native value
-std/checked_int	U64.cast	pub fn cast(r: Self$@): Cu64	the same value, now checked
 std/checked_int	U64.checked_add	pub fn checked_add(r: Self, rhs: U64): U64!Checked_error	the sum, or overflow
 std/checked_int	U64.checked_div	pub fn checked_div(r: Self, rhs: U64): U64!Checked_error	the quotient, or a 0 divisor
 std/checked_int	U64.checked_mul	pub fn checked_mul(r: Self, rhs: U64): U64!Checked_error	the product, or overflow
 std/checked_int	U64.checked_sub	pub fn checked_sub(r: Self, rhs: U64): U64!Checked_error	the difference, or underflow
-std/checked_int	U64:Cast<|Cu64|>	impl U64: Cast<|Cu64|>	conversion into a checked value
 std/checked_int	U64:Checked_arithmetic<|U64|>	impl U64: Checked_arithmetic<|U64|>	checked arithmetic on a native value
-std/checked_int	U8.cast	pub fn cast(r: Self$@): Cu8	the same value, now checked
 std/checked_int	U8.checked_add	pub fn checked_add(r: Self, rhs: U8): U8!Checked_error	the checked sum
 std/checked_int	U8.checked_div	pub fn checked_div(r: Self, rhs: U8): U8!Checked_error	the checked quotient
 std/checked_int	U8.checked_mul	pub fn checked_mul(r: Self, rhs: U8): U8!Checked_error	the checked product
 std/checked_int	U8.checked_sub	pub fn checked_sub(r: Self, rhs: U8): U8!Checked_error	the checked difference
-std/checked_int	U8:Cast<|Cu8|>	impl U8: Cast<|Cu8|>	conversion into a checked value
 std/checked_int	U8:Checked_arithmetic<|U8|>	impl U8: Checked_arithmetic<|U8|>	checked arithmetic on a native value
-std/checked_int	Unsigned	pub struct Unsigned<|T: Checked_arithmetic<|T|>|>	an unsigned integer whose arithmetic operators panic on failure
-std/checked_int	Unsigned.val	pub val: T	the plain value
-std/checked_int	Unsigned<|T|>.add	pub fn add(r: Self$@, rhs: Self): Self	the checked operation; failure stops the program
-std/checked_int	Unsigned<|T|>.checked_add	pub fn checked_add(r: Self, rhs: Self): Self!Checked_error	the checked sum
-std/checked_int	Unsigned<|T|>.checked_div	pub fn checked_div(r: Self, rhs: Self): Self!Checked_error	the checked quotient
-std/checked_int	Unsigned<|T|>.checked_mul	pub fn checked_mul(r: Self, rhs: Self): Self!Checked_error	the checked product
-std/checked_int	Unsigned<|T|>.checked_sub	pub fn checked_sub(r: Self, rhs: Self): Self!Checked_error	the checked difference
-std/checked_int	Unsigned<|T|>.div	pub fn div(r: Self$@, rhs: Self): Self	the checked operation; failure stops the program
-std/checked_int	Unsigned<|T|>.mul	pub fn mul(r: Self$@, rhs: Self): Self	the checked operation; failure stops the program
-std/checked_int	Unsigned<|T|>.sub	pub fn sub(r: Self$@, rhs: Self): Self	the checked operation; failure stops the program
-std/checked_int	Unsigned<|T|>:Add<|Unsigned<|T|>, Unsigned<|T|>|>	impl<|T|> Unsigned<|T|>: Add<|Unsigned<|T|>, Unsigned<|T|>|>	checked addition
-std/checked_int	Unsigned<|T|>:Div<|Unsigned<|T|>, Unsigned<|T|>|>	impl<|T|> Unsigned<|T|>: Div<|Unsigned<|T|>, Unsigned<|T|>|>	checked division
-std/checked_int	Unsigned<|T|>:Mul<|Unsigned<|T|>, Unsigned<|T|>|>	impl<|T|> Unsigned<|T|>: Mul<|Unsigned<|T|>, Unsigned<|T|>|>	checked multiplication
-std/checked_int	Unsigned<|T|>:Sub<|Unsigned<|T|>, Unsigned<|T|>|>	impl<|T|> Unsigned<|T|>: Sub<|Unsigned<|T|>, Unsigned<|T|>|>	checked subtraction
 std/ds	Hashable	pub trait Hashable<|Key|>	what a type must provide to be a `Map`'s key. A key type declares `impl X: ds.Hashable<|X|>`. `Map`'s type argument carries the constraint. So a type that does not meet it is diagnosed in the user's code, not inside std. `Self` cannot be written on a non-receiver parameter, so the other key arrives as `Key`.
 std/ds	Hashable.equals	fn equals(r: Self, other: Key): Bool	whether the two are the same key
 std/ds	Hashable.hash	fn hash(r: Self): U32	a value spread over the buckets; equal keys must give equal values
@@ -263,6 +210,7 @@ std/ds	List.ptr	pub ptr: T$@	the memory holding the elements
 std/ds	List<|T|>.at #inline	pub fn at(r: Self$@, index: Sz, file: U8[], line: Sz): T$@	the element's address, not a copy
 std/ds	List<|T|>.at_ref #inline	pub fn at_ref(r: Self@, index: Sz, file: U8[], line: Sz): T@	the element, read-only
 std/ds	List<|T|>.clear	pub fn clear(r: Self$@)	releases every element, keeping the capacity for reuse; O(n). Drop and ARC values release their resources. Manual resources need their explicit free.
+std/ds	List<|T|>.contains	pub fn contains(r: Self@, want: T): Bool	whether an element equals `want`; O(n)
 std/ds	List<|T|>.create	pub fn create(arena: Arena$@): List<|T|>$@	an empty list stored in the arena itself, to be passed around as a pointer. With `null`, `xs.free()` frees the elements and `mem.dealloc(Void$@::xs)` then the list's own block.
 std/ds	List<|T|>.free	pub fn free(r: Self$@)	frees the elements and the memory. **The list itself stays**: a second `free()` frees nothing, and the block `create(null)` put it in is the caller's to give back with `mem.dealloc`.
 std/ds	List<|T|>.get #inline	pub fn get(r: Self@, index: Sz): T	a copy of the element; out of range stops the program
@@ -276,8 +224,6 @@ std/ds	List<|T|>.set #inline	pub fn set(r: Self$@, index: Sz, item: T)	writes on
 std/ds	List<|T|>.slice	pub fn slice(r: Self$@): T$[]	a view of every element, for a function that takes a slice. Caution: It is borrowed: a push/insert that grows the capacity reallocates the memory and invalidates it (the same promise as Str_builder.slice's).
 std/ds	List<|T|>.sub	pub fn sub(r: Self$@, start: Sz, len: Sz): T$[]	a view of part of it; out of range gives an empty view instead of stopping. **Out of range it returns empty; it does not panic** (unlike `xs[i]`, see `Index` below). Caution: **Do not build the descriptor by hand.** `T$[]::{ .ptr = xs.ptr + s, .len = xs.len - s }` has length −1 when `xs` is empty, and code that trusts `len` reads on forever.
 std/ds	List<|T|>.sub_from	pub fn sub_from(r: Self$@, start: Sz): T$[]	a view from a position to the end
-std/ds	List<|T|>:Index<|Sz, T|>	impl<|T|> List<|T|>: Index<|Sz, T|>	so `xs[i]` reads an element. An index out of range panics: the caller can check it against len, so a failure is a bug. Map.get answers none for an absent key (V?), since a key's presence is run-time data.
-std/ds	List<|T|>:Index_mut<|Sz, T|>	impl<|T|> List<|T|>: Index_mut<|Sz, T|>	so `xs[i] = v` writes an element
 std/ds	List<|T|>:Index_place<|Sz, T|>	impl<|T|> List<|T|>: Index_place<|Sz, T|>	so `xs[i] += v` and `xs[i]@` can be written. It makes `l[i]` an lvalue, as with a built-in slice; with only get/set a compound assignment cannot be built, and `@` would give a temporary's address.
 std/ds	List<|T|>:Index_ref<|Sz, T|>	impl<|T|> List<|T|>: Index_ref<|Sz, T|>	so `xs[i]` through a read-only pointer copies nothing. **`at` cannot be used through a read-only pointer (`xs: List<|T|>@`).** Without this impl, `xs[i]` there resolves to `get` and **copies the whole element**, even for `xs[i].f`, and `xs[i]@` is rejected.
 std/ds	List<|T|>:Manual_free	impl<|T|> List<|T|>: Manual_free	explicit cleanup
@@ -310,6 +256,7 @@ std/ds	Map_seq<|K, V|>:Iter<|Map_entry<|K, V|>$@|>	impl<|K: Hashable<|K|>, V|> M
 std/ds	Sz.equals	pub fn equals(r: Self@, other: Sz): Bool	whether the two are the same number
 std/ds	Sz.hash	pub fn hash(r: Self@): U32	the value spread over the buckets
 std/ds	Sz:Hashable<|Sz|>	impl Sz: Hashable<|Sz|>	so an `Sz` can be a `Map`'s key. `Sz` is here because keying on a pointer's address is common. Caution: **Do not put an impl that makes a built-in type a key of std's containers in the compiler.** That would invert the layers. It goes here, next to the trait that requires it.
+std/ds	T[].contains	pub fn contains(r: T[], want: T): Bool	whether an element equals `want`; O(n)
 std/ds	fmix32	pub fn fmix32(h: U32): U32	MurmurHash3's finalizer, for a hash whose differences are in the high bits. `Map` takes the bucket from the low bits with `hash & (cap-1)`. So **a key whose differences are in the high bits** (a string through FNV, a sequential I32) runs its hash through this last in `hash()`. Caution: **Do not add it everywhere.** It costs extra work per lookup. In a `hash` that runs in the innermost loop, that cost outweighs the better spread. For a parser's memo key, it slows self-hosting's parse by 10-20%.
 std/fs	Dir_trust	pub enum Dir_trust	who besides the current user could change what a directory holds
 std/fs	Dir_trust.foreign	foreign	another user owns it
@@ -325,12 +272,11 @@ std/fs	File_kind	pub enum File_kind	what stands at a path
 std/fs	File_kind.dir	dir	a directory
 std/fs	File_kind.file	file	a regular file, read through to its end
 std/fs	File_kind.other	other	anything else: a FIFO or a socket, whose read can wait for good, or a device. Caution: **Do not serve or copy one as a file.** A FIFO's read waits for a writer that can never come, and a device's never ends.
-std/fs	File_lock	pub struct File_lock	a lock on a file; another process that asks for it waits. **The OS releases it when the process ends**, however it ends (flock / LockFileEx). So no lock outlives its holder, as a hand-made lock file does after a crash. The file serves only as a name: nothing is written to it, and it stays where it was created.
-std/fs	File_lock.free	pub fn free(r: Self$@)	releases the lock and closes the file
+std/fs	File_lock	pub struct File_lock	a lock on a file; another process that asks for it waits. **The OS releases it when the process ends**, however it ends (flock / LockFileEx). So no lock outlives its holder, as a hand-made lock file does after a crash. The file serves only as a name: nothing is written to it, and it stays where it was created. **Within the process it releases itself when its owner leaves scope** (`Drop`); `free()` releases it sooner.
+std/fs	File_lock.free	pub fn free(r: Self$@)	releases the lock before its scope ends, and closes the file
 std/fs	File_lock.take	pub fn take(path: U8[]): File_lock!Fs_error	takes the lock, waiting while another holds it
 std/fs	File_lock.try_take	pub fn try_take(path: U8[]): File_lock!Fs_error	takes the lock if free, without waiting. If someone else holds it, it throws `held_elsewhere`, so a caller can report the wait first.
-std/fs	File_lock:Manual_free	impl File_lock: Manual_free	it owns its lock and releases it with `free()`
-std/fs	File_lock:Move_only	impl File_lock: Move_only	copying it would release one lock twice
+std/fs	File_lock:Drop	impl File_lock: Drop	releases the lock when its owner leaves scope
 std/fs	Fs_error	pub enum Fs_error	why a filesystem operation failed. Every failure in this file is returned as this type (the same convention as `!Io_error` in `std/io.kspl`). Only the predicates (`exists` / `is_dir`) do not fail, so they return `Bool`. Splitting `operation_failed` further would need errno passed up from the C code (ksplc/gen/runtime/hosted.c). Do not split into variants what the code cannot tell apart.
 std/fs	Fs_error.held_elsewhere	held_elsewhere	another holder has the lock (only `File_lock.try_take`, which does not wait)
 std/fs	Fs_error.invalid_path	invalid_path	a path the OS cannot take, such as one containing a NUL
@@ -459,6 +405,7 @@ std/http	Request.headers	pub headers: Headers	the headers in the order they arri
 std/http	Request.method	pub method: U8$[]	the method as it arrived, such as `GET`
 std/http	Request.target	pub target: U8$[]	the raw target, including the query string, such as `/foo?x=1`
 std/http	Request.version	pub version: U8$[]	the version as it arrived, such as `HTTP/1.1`
+std/http	Request.wants_close	pub fn wants_close(r: Self@): Bool	whether the connection closes after the answer to it. `close` among the `Connection` tokens closes it (RFC 9112 §9.3). Otherwise HTTP/1.1 stays open, and HTTP/1.0 only when it lists `keep-alive`. Caution: **Do not keep a 1.0 client open unasked**: it reads the answer to the close, so it waits for the server.
 std/http	Request:Manual_free	impl Request: Manual_free	`free()` lets go the arena a request read with null lives in
 std/http	Response	pub struct Response	one received response, and how much of the buffer it used
 std/http	Response.body	pub body: U8$[]	the body, of the length `Content-Length` gave
@@ -475,22 +422,22 @@ std/http	format_response_head	pub fn format_response_head(b: Str_builder$@, stat
 std/http	format_response_to_head	pub fn format_response_to_head(b: Str_builder$@, status: I32, head: Headers, length: Sz): Void!Http_error	builds the answer to a HEAD request: a head with no body. The head is the one a GET would get: its `Content-Length` names `length`, the length of the body a GET would carry, which is not sent (RFC 9110 §9.3.2). For 1xx, 204 and 304 no length is named, and `length` must be 0. **On failure b is left as it was.**
 std/http	headers	pub fn headers(arena: Arena$@): Header_builder	an empty header builder. With `null`, the first `add` makes an arena the list keeps, and `defer h.free()` on what `build` returns frees it all.
 std/http	is_1_1_or_later	pub fn is_1_1_or_later(version: U8[]): Bool	whether a message's version is HTTP/1.1 or later. **This is the one place that decides it**: on 1.1 and later a request must name `Host`, and a connection stays open unless `Connection: close` asks otherwise.
+std/http	lists_token	pub fn lists_token(list: U8[], want: U8[]): Bool	whether a comma-separated header value holds the token, in any case. `close, TE` holds `close`. Each item is compared with the spaces around it trimmed, so `x-close` and `closed` do not hold it (RFC 9110 §5.6.1).
 std/http	parse_request	pub fn parse_request(src: U8[], max_body: Sz, arena: Arena$@): Request$@!Http_error	the one request at the start of the buffer; fails if it is incomplete. **A body over `max_body` fails as soon as the head says so**, before it arrives. A head over `MAX_HEAD_BYTES` fails as soon as that much has arrived without its end.
 std/http	parse_response	pub fn parse_response(src: U8[], arena: Arena$@): Response$@!Http_error	the one response at the start of the buffer; fails if it is incomplete. The body limit is `DEFAULT_MAX_BODY_BYTES`; the head's is `MAX_HEAD_BYTES`.
 std/http	read_response	pub fn read_response(stream: net.Tcp_stream$@, arena: Arena$@, max_body: Sz, timeout_ms: I32): Response$@!Http_error	reads one whole response from a connection and splits it into its parts
 std/http	reason_phrase	pub fn reason_phrase(status: I32): U8[]?	the standard phrase for a status number, so the two cannot disagree. RFC 9110's "reason-phrase"; none for a number it does not know. The builders below write it from the number, so no caller passes the number and the phrase as a pair (which could say `404 Bad Request`). Caution: **Do not fill in `"unknown"`**: a phrase from nowhere stays in the receiver's log.
 std/http	request_length	pub fn request_length(src: U8[], max_body: Sz, arena: Arena$@): Sz!Http_error	how many bytes the request at the start of the buffer takes in all. **For a reader that waits for the body without parsing again**: once the head has arrived, the rest is a count. It fails as `parse_request` does on the head, `incomplete` included until the head's empty line arrives.
 std/http	write_request	pub fn write_request(stream: net.Tcp_stream$@, method: U8[], target: U8[], head: Headers, body: U8[]): Void!Http_error	sends one whole request: the first line, the headers and the body. It refuses what `format_request` refuses, before anything is written.
-std/io	File_stream	pub struct File_stream	one open file to write to, read from and close
+std/io	File_stream	pub struct File_stream	one open file to write to, read from and close. **It closes itself when its owner leaves scope** (`Drop`). Call `sync()!` before that to learn whether the written data arrived, and `free()` to close it sooner.
 std/io	File_stream.c	pub fn c(r: Self$@, val: U8): Self$@	writes one byte and returns the stream
-std/io	File_stream.flush	pub fn flush(r: Self$@): Self$@	flushes buffered data; does not report a failure. Caution: **Check for a refusal at the flush, too.** A buffered `fwrite` reports success, and a destination that has gone away **shows up only at the flush**.
-std/io	File_stream.free	pub fn free(r: Self$@)	closes the handle; a failure while closing is not reported. That is `Manual_free`'s contract. Caution: **To know whether the written data arrived, call `sync()!` before freeing it.**
+std/io	File_stream.flush	pub fn flush(r: Self$@): Self$@	flushes buffered data; does not report a failure. A destination that has gone away ends the program quietly, as a refused write does. `sync()` is the flush that reports a failure.
+std/io	File_stream.free	pub fn free(r: Self$@)	closes the file before its scope ends; a closing failure is not reported. Caution: **To know whether the written data arrived, call `sync()!` before freeing it.**
 std/io	File_stream.read	pub fn read(r: Self$@, buf: U8$[]): Sz!Io_error	fills the buffer; 0 means the end
 std/io	File_stream.s	pub fn s(r: Self$@, val: U8[]): Self$@	writes a string and returns the stream
 std/io	File_stream.stream	pub stream: Void$@	the C `FILE *`; null once `free()` has closed it
 std/io	File_stream.sync	pub fn sync(r: Self$@): Void!Io_error	flushes buffered data and reports a failure. It does not mean the data reached the disk: `fs.replace_file` is what puts a file there. `Writer.flush()` returns `Self$@` for chaining, so only this method can report a failure, **an earlier write's included**. A write the stream refused (a full disk) is kept on it. A flush with nothing left to write would report success.
-std/io	File_stream:Manual_free	impl File_stream: Manual_free	it owns the handle and releases it in `free()`
-std/io	File_stream:Move_only	impl File_stream: Move_only	copying it would close one file twice
+std/io	File_stream:Drop	impl File_stream: Drop	closes the file when its owner leaves scope
 std/io	File_stream:Reader	impl File_stream: Reader	so it can be used wherever a `Reader` is expected
 std/io	File_stream:Writer	impl File_stream: Writer	so it can be used wherever a `Writer` is expected
 std/io	Io_error	pub enum Io_error	why a read, a write or an open failed
@@ -501,12 +448,13 @@ std/io	Io_error.read_failed	read_failed(path: U8[])	the read was refused, or the
 std/io	Io_error.write_failed	write_failed(path: U8[])	the write was refused or incomplete; names the file. Empty from an open `File_stream`, as `read_failed`.
 std/io	Reader	pub trait Reader	anything bytes can be read from
 std/io	Reader.read	fn read(r: Self, $buf: U8$[]): Sz!Io_error	fills buf; returns the count read, 0 at the end
+std/io	Std_stream:Writer	impl Std_stream: Writer	what `out()` and `err()` hand out
 std/io	copy	pub fn copy(src: Reader, dst: Writer): Sz!Io_error	reads to the end, writes it all out, and returns how much was copied. Caution: **A write failure is not reported here**: `Writer` returns no failure. Check the destination after it (`File_stream.sync()!`), or a full disk passes for a whole copy.
 std/io	err	pub fn err(): Writer	standard error, opened on the first call
 std/io	getchar	pub fn getchar(): U8?!Io_error	one byte from standard input, or none at the end. **A failed read is an error, not the end**, as at `read_stdin`.
 std/io	open	pub fn open(path: U8[], mode: U8[]): File_stream!Io_error	opens a file, handling a non-ASCII path on Windows too. A child process started while it is open does not get it.
 std/io	out	pub fn out(): Writer	standard output, opened on the first call
-std/io	read_file	pub fn read_file(path: U8[]): U8[]!Io_error	The whole file, on the heap; the caller frees it with `mem.dealloc(text.ptr)`. A `/proc` file that reports 0 bytes, and a pipe, are still read to the end.
+std/io	read_file	pub fn read_file(path: U8[], arena: Arena$@): U8[]!Io_error	the whole file. A `/proc` file that reports 0 bytes, and a pipe, are still read to the end.
 std/io	read_file_capped	pub fn read_file_capped(path: U8[], cap: Sz, arena: Arena$@): U8[]!Io_error	the file's first `cap` bytes, or the whole file if it is shorter. **It stops at `cap` however long the file grows**, so a child still writing cannot fill the memory. The buffer grows with what is read, never to the whole cap up front.
 std/io	read_stdin	pub fn read_stdin(arena: Arena$@): U8[]!Io_error	the whole of standard input, read to the end. **A failed read is an error, not the end.** Read as the end, input cut off by a fault would pass for the whole of it.
 std/io	set_line_buffered	pub fn set_line_buffered(): Void	flushes standard output at every newline from here on. A piped standard output (`| tee`) is fully buffered, so a watched run prints nothing until it ends. It avoids setvbuf(_IOLBF): `_IOLBF`'s value differs per libc, so a constant in the IR would mean another mode on Windows.
@@ -661,24 +609,22 @@ std/lang	Slice.len	pub len: Sz	how many elements it holds
 std/lang	Slice.ptr	pub ptr: T$@	where the sequence begins
 std/lang	Sub	pub trait Sub<|Rhs, Output|>	what `-` desugars to
 std/lang	Sub.sub	fn sub(r: Self, rhs: Rhs): Output	the difference
+std/lang	T!E.is_err	pub fn is_err(r: Self): Bool	whether it holds an error; the value is dropped, not freed
 std/lang	T$[].at #inline	pub fn at(r: Self@, index: Sz, file: U8[], line: Sz): T$@	the element's address
 std/lang	T$[]:Index_place<|Sz, T|>	impl<|T|> T$[]: Index_place<|Sz, T|>	so an element of a writable slice can be written. This implementation applies only to mutable slices, as the `$` on the type specifies. The `Self@` receiver only reads the slice descriptor. Requiring `Self$@` would prevent writing elements through a slice stored in a read-only frame. See "The receiver shape an implementation declared" in `../docs/SPEC-programming-language.md`.
 std/lang	T?.is_none	pub fn is_none(r: Self): Bool	whether there is no value
 std/lang	T?.is_some	pub fn is_some(r: Self): Bool	whether there is a value
 std/lang	T?.unwrap_or	pub fn unwrap_or(r: Self, alt: T): T	the value if present, otherwise the alternative. The caller always evaluates the alternative before this call.
-std/lang	T?.unwrap_or_else	pub fn unwrap_or_else(r: Self, alt: fn(): T): T	the value if present, otherwise a computed alternative
 std/lang	T[].at_ref #inline	pub fn at_ref(r: Self@, index: Sz, file: U8[], line: Sz): T@	the element's read-only address
 std/lang	T[]:Index_ref<|Sz, T|>	impl<|T|> T[]: Index_ref<|Sz, T|>	so an element can be read without copying. This implementation supports both mutable and immutable slices because the implementing type has no `$`.
 std/lang	Writer	pub trait Writer	a destination characters can be written to. Only the declaration belongs here. Primitive formatting, such as `impl I32: Formattable`, belongs in `std/strfmt`. Placing it here would add the string library to every file. Caution: **Do not add methods for writing numbers or booleans.** `Formattable` already lets each value's type define its format.
 std/lang	Writer.c	fn c(r: Self, val: U8): Self	writes one byte and returns the destination
 std/lang	Writer.flush	fn flush(r: Self): Self	passes on what has accumulated, reporting no failure
 std/lang	Writer.s	fn s(r: Self, val: U8[]): Self	writes a string and returns the destination
-std/lang	and_then	pub fn and_then<|T, U|>(o: T?, f: fn(x: T): U?): U?	applies a step that can also return an absent value
 std/lang	assert	pub fn assert(cond: Bool, msg: U8$[], file: U8[] = caller_file, line: Sz = caller_line)	stops the program unless the condition holds
 std/lang	bounds_panic #noinline	pub fn bounds_panic(func_name: U8$[], idx: Sz, len: Sz, file: U8[], line: Sz)	the one message every container stops with when an index is out of range. Every container uses this message, matching the built-in bounds check. See "Conditions that stop execution at run time" in `../docs/SPEC-programming-language.md`. Caution: **Pass the caller's location.** A default would report `std/lang`, making a caller's error appear to be a library bug.
 std/lang	kspl_error_trace_depth #cfg(!freestanding)	pub fn kspl_error_trace_depth(): I32	the number of frames in the error trace
 std/lang	kspl_get_trace_frame_info #cfg(!freestanding)	pub fn kspl_get_trace_frame_info(index: I32, file: U8@$@, func: U8@$@, line: I32$@)	the file, function, and line for the trace frame at `index`
-std/lang	map	pub fn map<|T, U|>(o: T?, f: fn(x: T): U): U?	applies a function to the value, if there is one. **Write both type arguments** for this free function: `map<|I32, Sz|>(o, f)`. A method with its own type parameter (`fn map<|U|>`) could also work, like `select` in `std/seq`. See "A name on the impl that the receiver leaves open" in `../docs/DESIGN-programming-language.md`.
 std/lang	panic #cfg(!freestanding) #noreturn	pub fn panic(msg: U8$[], file: U8[] = caller_file, line: Sz = caller_line)	stops the program and reports the location and reason
 std/lang	panic #cfg(freestanding) #noreturn	pub fn panic(msg: U8$[], _file: U8[] = caller_file, _line: Sz = caller_line)	stops without libc and sends the message to the panic hook
 std/lang	panic_stack_word #cfg(freestanding)	pub fn panic_stack_word(index: Sz): Sz	one word from the saved stack
@@ -717,31 +663,16 @@ std/log	Log.new	pub fn new(dest: Writer, least: Level, tag: U8[], sep: U8[] = ":
 std/log	Log.say	pub fn say(r: Self$@, lv: Level, text: U8[], file: U8[] = caller_file, line: Sz = caller_line)	writes one whole line. **It takes text that is already built**; anything that carries a value goes through `at`. Caution: **In a wrapper of your own, do not leave the place to its default.** `caller_file` looks back one step only, so such a wrapper names itself. Take the place as parameters and pass it on, as this one does ("The caller's position" in `../docs/SPEC-programming-language.md`).
 std/log	Pushing:Writer	impl Pushing: Writer	so `at` can hand it out as a serious line's destination
 std/math	E	pub const E: F64 = 2.718281828459045	the base of the natural logarithm
-std/math	F32.to_i16	pub fn to_i16(r: Self): I16?	truncated toward zero, or none where `I16` cannot hold it
-std/math	F32.to_i32	pub fn to_i32(r: Self): I32?	truncated toward zero, or none where `I32` cannot hold it
-std/math	F32.to_i64	pub fn to_i64(r: Self): I64?	truncated toward zero, or none where `I64` cannot hold it
-std/math	F32.to_i8	pub fn to_i8(r: Self): I8?	truncated toward zero, or none where `I8` cannot hold it
-std/math	F32.to_sz	pub fn to_sz(r: Self): Sz?	truncated toward zero, or none where `Sz` cannot hold it
-std/math	F32.to_u16	pub fn to_u16(r: Self): U16?	truncated toward zero, or none where `U16` cannot hold it
-std/math	F32.to_u32	pub fn to_u32(r: Self): U32?	truncated toward zero, or none where `U32` cannot hold it
-std/math	F32.to_u64	pub fn to_u64(r: Self): U64?	truncated toward zero, or none where `U64` cannot hold it
-std/math	F32.to_u8	pub fn to_u8(r: Self): U8?	truncated toward zero, or none where `U8` cannot hold it
-std/math	F64.to_i16	pub fn to_i16(r: Self): I16?	truncated toward zero, or none where `I16` cannot hold it
-std/math	F64.to_i32	pub fn to_i32(r: Self): I32?	truncated toward zero, or none where `I32` cannot hold it
-std/math	F64.to_i64	pub fn to_i64(r: Self): I64?	truncated toward zero, or none where `I64` cannot hold it
-std/math	F64.to_i8	pub fn to_i8(r: Self): I8?	truncated toward zero, or none where `I8` cannot hold it
-std/math	F64.to_sz	pub fn to_sz(r: Self): Sz?	truncated toward zero, or none where `Sz` cannot hold it
-std/math	F64.to_u16	pub fn to_u16(r: Self): U16?	truncated toward zero, or none where `U16` cannot hold it
-std/math	F64.to_u32	pub fn to_u32(r: Self): U32?	truncated toward zero, or none where `U32` cannot hold it
-std/math	F64.to_u64	pub fn to_u64(r: Self): U64?	truncated toward zero, or none where `U64` cannot hold it
-std/math	F64.to_u8	pub fn to_u8(r: Self): U8?	truncated toward zero, or none where `U8` cannot hold it
 std/math	PI	pub const PI: F64 = 3.141592653589793	the ratio of a circle's circumference to its diameter
+std/math	abs	pub fn abs<|T|>(x: T): T	the value without its sign; a signed minimum stops the program. **A signed integer's minimum has no positive value of its type** (`I32`'s -2147483648). Negated, it wraps to itself, so `abs` stops there instead of returning a negative. A NaN and -0.0 come back as they are. An unsigned type is refused when compiled, as unary minus is.
 std/math	cos #cfg(!freestanding)	pub fn cos(x: F64): F64	the cosine of an angle in radians
 std/math	cos #cfg(freestanding)	pub fn cos(x: F64): F64	the cosine of an angle in radians
 std/math	exp #cfg(!freestanding)	pub fn exp(x: F64): F64	e raised to the power of `x`
 std/math	exp #cfg(freestanding)	pub fn exp(x: F64): F64	e raised to the power of `x`
 std/math	log #cfg(!freestanding)	pub fn log(x: F64): F64	the natural logarithm, base e
 std/math	log #cfg(freestanding)	pub fn log(x: F64): F64	the natural logarithm, base e
+std/math	max	pub fn max<|T|>(a: T, b: T): T	the greater of the two; `b` where they are equal or one is a NaN
+std/math	min	pub fn min<|T|>(a: T, b: T): T	the lesser of the two; `b` where they are equal or one is a NaN
 std/math	pow #cfg(!freestanding)	pub fn pow(base: F64, exponent: F64): F64	`base` raised to the power of `exponent`
 std/math	pow #cfg(freestanding)	pub fn pow(base: F64, exponent: F64): F64	`base` raised to the power of `exponent`
 std/math	round	pub fn round(x: F64): F64	rounds to the nearest whole number, halves away from 0
@@ -775,7 +706,8 @@ std/mem	Arena_state.used	pub used: Sz	how much of that chunk was used at the mar
 std/mem	Own_arena	pub struct Own_arena	the arena of its own a value made with a null arena keeps, for its `free()`. **Empty in a value made in the caller's arena**, and in a value read out of another, so their `free()` lets nothing go. Only std makes one that is not empty.
 std/mem	Own_arena:Manual_free	impl Own_arena: Manual_free	`free()` releases the arena it holds
 std/mem	Raw_value<|T|>:Move_only	impl<|T|> Raw_value<|T|>: Move_only	transfers stored bytes without copying ownership
-std/mem	Scratch:Manual_free	impl Scratch: Manual_free	`free()` gives the work back
+std/mem	SZ_MAX	pub const SZ_MAX: Sz = Sz::((~0U64) >> U64::(65 - sizeof(Sz) * 8))	the largest `Sz`. `Sz` is as wide as a pointer, so its largest value differs by target. The shift keeps all bits but the sign bit, so the value is right on a 32-bit and a 64-bit target alike.
+std/mem	Scratch:Drop	impl Scratch: Drop	gives the work back when its owner leaves scope
 std/mem	alloc #cfg(!freestanding)	pub fn alloc(size: Sz): Void$@	allocates raw bytes from the global heap
 std/mem	alloc #cfg(freestanding)	pub fn alloc(size: Sz): Void$@	allocates raw bytes from the free-list heap, which must already be set up
 std/mem	alloc_as	pub fn alloc_as<|T|>(): T$@	heap memory for one value, with no `sizeof` written by hand. Caution: Do not write it out as `T$@::alloc(sizeof(T))` in the caller (docs/DESIGN-principles.md's "One means to one purpose"). Nothing catches a mismatch between the two types. `alloc(<byte count>)` remains for raw bytes (`U8$@::alloc(n + 1)`), which no type describes.
@@ -849,11 +781,10 @@ std/reactor	HANGUP	pub const HANGUP: U8 = 0x8	the peer closed its sending side; 
 std/reactor	READABLE	pub const READABLE: U8 = 0x1	there is data to read, or the peer closed. Caution: **The values must match `kspl_net_poll` in `ksplc/gen/runtime/hosted_net.c`** (`make test-conventions` checks this).
 std/reactor	Reactor	pub struct Reactor	watches many handles at once and reports which became ready
 std/reactor	Reactor.clear	pub fn clear(r: Self$@)	drops every registration but keeps the memory already allocated. Use it to rebuild the set before each `wait()`, so no registration for a closed peer and no stale interest remains.
-std/reactor	Reactor.free	pub fn free(r: Self$@)	frees the registration lists; it owns no socket
 std/reactor	Reactor.new	pub fn new(): Reactor	a reactor with nothing registered yet
 std/reactor	Reactor.register	pub fn register(r: Self$@, handle: I64, interest: U8, token: Sz)	adds one handle to watch
 std/reactor	Reactor.wait	pub fn wait(r: Self$@, timeout_ms: I32): List<|Ready|>!Reactor_error	waits, and returns only the handles something happened on
-std/reactor	Reactor:Manual_free	impl Reactor: Manual_free	it owns its resources and releases them with `free()`.
+std/reactor	Reactor:Drop	impl Reactor: Drop	frees the registration lists when its owner leaves scope; it owns no socket
 std/reactor	Reactor_error	pub enum Reactor_error	why a wait failed
 std/reactor	Reactor_error.poll_failed	poll_failed	the OS refused the wait itself, not any one handle
 std/reactor	Ready	pub struct Ready	one watched handle that became ready
@@ -901,6 +832,7 @@ std/reflect	Field_info.nested	pub nested: Field_info[]	the table of a nested str
 std/reflect	Field_info.offset	pub offset: Sz	how far into the struct it sits, counting padding
 std/reflect	Field_kind	pub enum Field_kind	what one field is, as far as a round trip needs to know. **List only the kinds the round-trip functions can walk**, or a name could be written that does nothing (`../docs/DESIGN-principles.md`'s Principle 5). A number's width is in `Field_extra.width`.
 std/reflect	Field_kind.bool_field	bool_field	a `Bool`
+std/reflect	Field_kind.fits_int	pub fn fits_int(r: Self, width: Sz, v: I64): Bool	whether an integer is held unchanged by a field of this kind and width. **Ask before `store_int`**, which keeps only the low bytes: 300 stored into a `U8` reads back as 44, and -1 into a `U32` as 4294967295. Refuse a value that does not fit; never store it.
 std/reflect	Field_kind.float_field	float_field	floating point (`F32` / `F64`)
 std/reflect	Field_kind.int_field	int_field	a signed integer (`I8` / `I16` / `I32` / `I64` / `Sz`)
 std/reflect	Field_kind.list_field	list_field	a `List<|T|>`, whose element is described by `Field_info.extra`
@@ -910,7 +842,6 @@ std/reflect	Field_kind.struct_field	struct_field	a nested struct, whose table is
 std/reflect	Field_kind.uint_field	uint_field	an unsigned integer (`U8` / `U16` / `U32` / `U64`). **It is separate from the signed kind for the reader's sake**: sign-extending a `U32`'s `0xFFFFFFFF` gives `-1`.
 std/reflect	Reflectable	pub trait Reflectable	a type that returns its own field table. **Writing the body by hand turns off the synthesis.** Do so when key names differ from the declaration, or when the synthesis cannot handle the type. Caution: **Do not let the names and positions disagree with the declaration.** No diagnostic catches it: the code reads or writes the neighbouring field.
 std/reflect	Reflectable.fields	fn fields(r: Self): Field_info[]	the table, which points at a `const` and is not built
-std/reflect	fits_int	pub fn fits_int(kind: Field_kind, width: Sz, v: I64): Bool	whether an integer is held unchanged by a field of that kind and width. **Ask before `store_int`**, which keeps only the low bytes: 300 stored into a `U8` reads back as 44, and -1 into a `U32` as 4294967295. Refuse a value that does not fit; never store it.
 std/reflect	load_float	pub fn load_float(at: U8@, width: Sz): F64	reads a floating-point value of that width as an `F64`. An `F32` is widened; the round-trip formats hold only double precision.
 std/reflect	load_int	pub fn load_int(at: U8@, width: Sz): I64	reads a signed integer of that width, widened to `I64`. Caution: **Keep the per-width branching in these `load_*` / `store_*` functions only**, not in a walker such as `std/json_struct` (Principle 6 in `../docs/DESIGN-principles.md`). Widths: 1/2/4/8. **Read it as the type of that width, then widen** (that type decides the sign extension).
 std/reflect	load_uint	pub fn load_uint(at: U8@, width: Sz): I64	reads an unsigned integer of that width, widened without sign extension. **Keeping it separate from the signed kind is the point** (see `Field_kind`). **A `U64` with its top bit set does not fit in an `I64`**, and `I64` is the widest integer a round trip carries.
@@ -938,7 +869,7 @@ std/regex	Regex_error.too_many_groups	too_many_groups	there are more capturing g
 std/regex	Regex_error.unmatched_bracket	unmatched_bracket	a `[` has no `]`
 std/regex	Regex_error.unmatched_paren	unmatched_paren	an opening parenthesis has no closing one, or the other way round
 std/regex	Regex_error.unsupported_backreference	unsupported_backreference	`\1`…`\9`, which refer to a captured string inside the pattern
-std/regex	Vm:Manual_free	impl Vm: Manual_free	it owns its block and frees it in `free()`.
+std/regex	Vm:Drop	impl Vm: Drop	frees its block when its owner leaves scope
 std/regex_node	MAX_GROUPS	pub const MAX_GROUPS: Sz = 9	how many capturing groups a pattern can have. Caution: **Refuse a pattern that exceeds it** (`too_many_groups`); otherwise the tenth group onward silently comes back empty. 9 matches `\1`…`\9` and sets the size a Match holds.
 std/regex_node	MAX_PROGRAM_SIZE	pub const MAX_PROGRAM_SIZE: Sz = 20000	the most states a compiled pattern can hold. A search's memory and its time per byte grow with them, so a pattern past it is refused (`too_large`). A counted repetition is written out round by round, so `(a{1000}){1000}` would hold a million.
 std/regex_node	MAX_REPEAT_COUNT	pub const MAX_REPEAT_COUNT: Sz = 1000	the largest `{m,n}` count accepted, as in RE2 and Go. Caution: **Refuse a count that exceeds it** (`invalid_repeat`), as a count no engine accepts would make a pattern that works here alone.
@@ -1163,6 +1094,10 @@ std/subproc	spawn_limited #cfg(!freestanding)	pub fn spawn_limited(argv: U8[][],
 std/subproc	spawn_piped #cfg(!freestanding)	pub fn spawn_piped(argv: U8[][], cwd: U8[]): Piped_child!Spawn_error	starts a child for two-way communication over pipes
 std/subproc	spawn_redirect #cfg(!freestanding)	pub fn spawn_redirect(argv: U8[][], cwd: U8[], out_path: U8[], err_path: U8[]): Child!Spawn_error	starts a child without waiting, with its outputs going to files
 std/subproc	spawn_wait	pub fn spawn_wait(argv: U8[][], cwd: U8[]): I32!Spawn_error	runs one child with the standard I/O inherited, and waits for it. argv[0] is the executable's path or a name looked up in PATH alone. The current directory is never searched unless PATH names it ("A bare program name is looked up in PATH alone" in std/docs/DESIGN-system.md). **A relative path is read from `cwd`**, on every OS. Caution: **Give a third-party tool its location with `cwd` and keep the paths relative** ("Paths are UTF-8" in std/docs/DESIGN-system.md). When argv's length is known only at run time, build a `List<|U8[]|>` and pass its `slice()`.
+std/suite	Suite	pub trait Suite	tests run together, each handed the values the suite holds
+std/suite	Suite.after_each	pub fn after_each(_r: Self, _name: U8[])	runs after each test that returned. It does nothing unless the `impl` writes its own. A test that fails stops the program, so this does not run after it.
+std/suite	Suite.before_each	pub fn before_each(_r: Self, _name: U8[])	runs before each test, named as declared. It does nothing unless the `impl` writes its own (a fresh arena per test, say).
+std/suite	Suite.run	pub fn run(r: Self)	runs every test the suite reaches, in order. **The compiler writes it**; an `impl` that writes its own is refused.
 std/sys	Args	pub struct Args	the arguments this process was started with; `[0]` is the program
 std/sys	Args.get	pub fn get(r: Self@, index: Sz): U8[]	one argument; an index out of range stops the program
 std/sys	Args.len	pub len: Sz	how many there are, counting the program's own name
@@ -1204,26 +1139,21 @@ std/thread	Atomic_sz.fetch_add	pub fn fetch_add(r: Self$@, delta: Sz): Sz	adds, 
 std/thread	Atomic_sz.load	pub fn load(r: Self$@): Sz	reads the value without tearing
 std/thread	Atomic_sz.new	pub fn new(initial: Sz): Atomic_sz	creates one holding the initial value
 std/thread	Atomic_sz.store	pub fn store(r: Self$@, new_val: Sz)	writes the value without tearing
-std/thread	Cond_var	pub struct Cond_var	lets a thread wait, together with a lock, until a condition holds. pthread_cond_t / CONDITION_VARIABLE, paired with a `Mutex<|T|>` (a producer-consumer queue, waiting for completion).
+std/thread	Cond_var	pub struct Cond_var	lets a thread wait, together with a lock, until a condition holds. pthread_cond_t / CONDITION_VARIABLE, paired with a `Mutex<|T|>` (a producer-consumer queue, waiting for completion). It is destroyed when its owner leaves scope (`Drop`).
 std/thread	Cond_var.broadcast	pub fn broadcast(r: Self$@)	wakes every waiting thread. For a change every waiter must see (a queue closing, a stop): `signal` wakes one, and the others sleep on past it.
-std/thread	Cond_var.free	pub fn free(r: Self$@)	destroys the OS condition variable. As with `Raw_mutex.free`, the value itself has no memory to free.
 std/thread	Cond_var.new	pub fn new(): Cond_var!Thread_error	creates one through the OS
 std/thread	Cond_var.signal	pub fn signal(r: Self$@)	wakes exactly one waiting thread
 std/thread	Cond_var.wait	pub fn wait<|T|>(r: Self$@, m: Mutex<|T|>$@)	releases the lock and waits; returns holding the lock again. Caution: **A spurious wakeup is possible**, so check the condition again in a `for` and wait again if it does not hold. Waiting without holding the lock stops the program.
 std/thread	Cond_var.wait_for	pub fn wait_for<|T|>(r: Self$@, m: Mutex<|T|>$@, timeout_ms: I32): Cond_wait	waits as `wait` does, for no longer than the limit. Caution: **Check the condition again whatever comes back**: `woken` can be spurious, and the condition can come true just as the limit passes. The limit is on the monotonic clock, so setting the date neither stretches nor cuts it.
-std/thread	Cond_var:Manual_free	impl Cond_var: Manual_free	it owns an OS object and releases it with `free()`
-std/thread	Cond_var:Move_only	impl Cond_var: Move_only	copying it would destroy one OS object twice
+std/thread	Cond_var:Drop	impl Cond_var: Drop	destroys the OS condition variable when its owner leaves scope
 std/thread	Cond_wait	pub enum Cond_wait	how a wait with a limit ended
 std/thread	Cond_wait.timed_out	timed_out	the limit passed first
 std/thread	Cond_wait.woken	woken	a signal or a broadcast came, or a spurious wakeup did
-std/thread	Mutex	pub struct Mutex<|T|>	a lock and the data it protects, kept together so neither is forgotten. The data is reachable only through lock() (like Rust's `Mutex<T>`). This is the only public mutex in KSPL (the bare Raw_mutex is priv). Caution: **It is not re-entrant: locking it again on the thread that holds it stops the program** with a message, on every OS. Unlocking it from a thread that does not hold it does the same ("A mutex is locked once, by one thread" in std/docs/DESIGN-system.md).
-std/thread	Mutex<|T|>.free	pub fn free(r: Self$@)	destroys the OS lock
+std/thread	Mutex	pub struct Mutex<|T|>	a lock and the data it protects, kept together so neither is forgotten. The data is reachable only through lock(). This is the only public mutex in KSPL. Caution: **It is not re-entrant: locking it again on the thread that holds it stops the program** with a message, on every OS. Unlocking it from a thread that does not hold it does the same ("A mutex is locked once, by one thread" in std/docs/DESIGN-system.md). **Its owner leaving scope destroys the lock and lets the value go** (both held by value).
 std/thread	Mutex<|T|>.lock	pub fn lock(r: Self$@): T$@	takes the lock and returns a pointer to the data. Caution: Call `unlock()` when you are done with the data.
 std/thread	Mutex<|T|>.new	pub fn new(value: T): Mutex<|T|>!Thread_error	creates a lock around a value
 std/thread	Mutex<|T|>.unlock	pub fn unlock(r: Self$@)	releases the lock
-std/thread	Mutex<|T|>:Manual_free	impl<|T|> Mutex<|T|>: Manual_free	it owns an OS object and releases it with `free()`
-std/thread	Raw_mutex:Manual_free	impl Raw_mutex: Manual_free	it owns an OS object and releases it with `free()`
-std/thread	Raw_mutex:Move_only	impl Raw_mutex: Move_only	copying it would destroy one OS object twice. `Mutex<|T|>` holds a Raw_mutex by value, so it is Move_only too. To borrow one, pass a pointer with `@`.
+std/thread	Raw_mutex:Drop	impl Raw_mutex: Drop	destroys the OS mutex when its owner leaves scope
 std/thread	Thread	pub struct Thread	one running OS thread, joined and freed in one call
 std/thread	Thread.join_and_free	pub fn join_and_free(r: Self$@): Void$@	waits for the thread to end and returns its result. `spawn` / `join_and_free` pair like malloc / free; this call frees `r` itself.
 std/thread	Thread.spawn	pub fn spawn<|T|>(entry: fn(arg: T$@): Void$@, arg: T$@): Thread$@!Thread_error	starts a function on a new OS thread. Caution: **Only the type is checked, not whether the data is safe to share.** Threads that touch what `arg` points at race; wrap a shared value in a `Mutex<|T|>` or an `Arc<|T|>` (the count of an `Rc<|T|>` breaks).

@@ -1,5 +1,4 @@
 //< JSON-RPC 2.0's frames, delimited by `Content-Length`, and its bodies
-//<
 //< It cuts a frame out of what a stream has delivered and builds one to send, as a language server
 //< and its client exchange them. It starts no process and reads no pipe: the carrier is the
 //< caller's.
@@ -20,11 +19,9 @@ pub const VERSION: U8[] = "2.0" //< the protocol version written in every body
 
 priv const FRAME_SEP: U8[] = "\r\n\r\n" //< the separator between the header and the body
 pub const LENGTH_TAG: U8[] = "Content-Length:" //< the header that gives the body's length.
-    //<
     //< **Do not copy the name** (the reason is at `frame_into`).
 
 pub const MAX_BODY_BYTES: Sz = 16 * 1024 * 1024 //< the largest body to wait for, so a lie ends.
-    //<
     //< Caution: **Keep a bound**, or a server that declares 4GB puts this client into a wait that
     //< never completes (as with `std/http`'s body bound).
 
@@ -34,7 +31,6 @@ pub enum Rpc_end //< why a response could not be read
     broken //< the frame could not be read, or the response was dropped
 
 pub fn content_length( //< the length the header declares, or none if it declares none
-    //<
     //< The name matches at a line's start, in any case; the value is digits alone between spaces.
     //< **Every such line must name the same length**: one unreadable, or two that differ, fail
     //< with `broken`. A value past `limit` is unreadable, so the digits never overflow.
@@ -62,7 +58,6 @@ pub fn content_length( //< the length the header declares, or none if it declare
     return found
 
 pub fn frame_into( //< writes the header and then the body to the destination
-    //<
     //< Caution: **Write the header's name only here.** If each sender writes its own, one drops the
     //< `\r\n`, the server sees no Content-Length, and "nothing comes back" gives no reason.
     out: Str_builder$@, //< where the framed message is written
@@ -78,8 +73,7 @@ pub fn encode( //< assembles one JSON-RPC body
 ): U8[] //< the body text, without the frame header
     // The object is only work: built apart, it leaves the caller only the text to free. Apart from
     // `arena` too, which takes the text while the work stands (`mem.scratch`).
-    $work: = mem.scratch(null)
-    defer work.free()
+    work: = mem.scratch(null)
     $b: = Json_builder.new(work.arena)
     $obj: = b.obj().set("jsonrpc", b.str_val(VERSION))
     if id >= 0
@@ -91,12 +85,10 @@ pub fn encode( //< assembles one JSON-RPC body
 
 pub const MAX_HEAD_BYTES: Sz = 8192 //<
     //< the longest head taken, its blank line counted, so a lie ends
-    //<
     //< A real header is a few dozen bytes. Without it, a peer that never ends one grows the buffer
     //< for good, and each read searches all of it again.
 
 pub fn take_frame( //< cuts out one whole frame, or nothing if none is complete yet
-    //<
     //< Caution: **Drop a broken header before returning too**, or every later read returns the same
     //< failure forever. **Take the reader's own limit.** A reader that lets a larger body in than
     //< this one waits for loses the frame boundary. Every frame after it is then misread.

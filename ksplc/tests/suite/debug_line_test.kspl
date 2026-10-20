@@ -1,6 +1,5 @@
 #!/usr/bin/env -S ksplc run
 //< The test that pins down that debug position information keeps pointing at the source's line
-//<
 //< ksplc writes `#line <line> "<file>.kspl"` into the generated C (`ksplc/gen/c/ctx.kspl`), so
 //< lldb's stepping and the C compiler's errors point at the original source. **This mapping can
 //< break silently**, so both ends are pinned down here.
@@ -34,7 +33,6 @@ import "std/verdict"
 priv const FIXTURE: U8[] = "tests/prog/debug_line.kspl"
 
 priv const IMPORTED: U8[] = "std/io.kspl" //< the file the fixture imports
-    //<
     //< The imported file's lines need a mapping too (under split compilation it breaks first).
 
 priv const MARK_TAG: U8[] = "// MARK:"
@@ -44,7 +42,6 @@ priv struct Directive //< one `#line` line of the generated C
     path: U8[]
 
 priv fn is_ident(s: U8[]): Bool //< whether the text is a valid name
-    //<
     //< Caution: **Do not loosen this.** If it picks up a `// MARK:<name>` inside prose, the mapping
     //< check demands lines that have nothing to do with the body.
     if s.len == 0 || !(s[0].is_alpha() || s[0] == '_')
@@ -73,11 +70,7 @@ priv fn directives(text: U8[], arena: Arena$@): List<|Directive|> //<
         if !raw.starts_with(head)
             continue
         rest: = raw.sub_from(head.len)
-        $quote: Sz = 0
-        switch rest.find_str(" \"")
-        case .some(at)
-            quote = at
-        case .none
+        quote: Sz = rest.find_str(" \"") catch
             continue
         n: = rest.sub(0, quote).to_i64() catch
             continue
@@ -107,7 +100,7 @@ priv fn case_own_folder(dir: U8[], arena: Arena$@) //<
     if !r.exited_with(0)
         verdict.check(name, false, r.out)
         return
-    text: = io.read_file(gen) catch
+    text: = io.read_file(gen, null) catch
         verdict.check(name, false, "the generated C cannot be read")
         return
     $own: Sz = 0
@@ -125,7 +118,6 @@ priv fn case_own_folder(dir: U8[], arena: Arena$@) //<
 
 priv fn check_for_has_its_own_line(text: U8[], arena: Arena$@) //<
     //< Every C `for` of the fixture comes right after a `#line`
-    //<
     //< A loop's init is written between the loop's directive and its `for`. C counts each of
     //< those lines as a source line, so the debugger stood three lines past the loop.
     name: = "a C `for` comes right after its own #line"
@@ -155,7 +147,7 @@ fn main(): I32
     arena: = harness.begin(256 * 1024 * 1024)
     dir: = harness.sandbox("debug_line")
     io.out().s("# debug position information\n")
-    body: = io.read_file(FIXTURE) catch
+    body: = io.read_file(FIXTURE, null) catch
         return harness.fatal("the fixture cannot be read")
     marks: = mark_lines(body, arena)
     verdict.check("the fixture has MARKs", marks.len >= 4,
@@ -166,7 +158,7 @@ fn main(): I32
     if !r.exited_with(0)
         verdict.check("the fixture's C generation", false, r.out)
         return harness.finish()
-    text: = io.read_file(gen) catch
+    text: = io.read_file(gen, null) catch
         return harness.fatal("the generated C cannot be read")
     dirs: = directives(text, arena)
     verdict.check("#line comes out in the generated C", dirs.len > 0, "")
@@ -215,7 +207,7 @@ fn main(): I32
     if !with_g.exited_with(0)
         verdict.check("the build with -g", false, with_g.out)
         return harness.finish()
-    blob: = io.read_file(exe_g) catch
+    blob: = io.read_file(exe_g, null) catch
         return harness.fatal("the built executable cannot be read")
     verdict.check("-g's artefact keeps its own source name",
         has_nul_string(blob, fixture_name, arena), fixture_name)
@@ -230,7 +222,7 @@ fn main(): I32
     if !no_g.exited_with(0)
         verdict.check("the build without -g", false, no_g.out)
     else
-        plain: = io.read_file(exe_nog) catch
+        plain: = io.read_file(exe_nog, null) catch
             return harness.fatal("the built executable cannot be read")
         verdict.check("without -g no source name is left (proof the check answers to -g)",
             !has_nul_string(plain, fixture_name, arena), fixture_name)
