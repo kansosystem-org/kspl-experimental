@@ -45,7 +45,7 @@ ifeq ($(PLATFORM),win32)
 WINDRES ?= windres
 KSPAGE_OPEN_RES := $(OUT_DIR)/kspage_open_icon.o
 $(KSPAGE_OPEN_RES): $(KSPAGE_ICON_DIR)/kspage.rc $(KSPAGE_ICON_DIR)/kspage.ico | $(OUT_DIR)
-	$(WINDRES) --include-dir=$(KSPAGE_ICON_DIR) -O coff $< -o $@
+	$(WINDRES) --include-dir=$(KSPAGE_ICON_DIR) -O coff $(KSPAGE_ICON_DIR)/kspage.rc -o $@
 endif
 
 # **The association points at this executable**, not `ksplc run`: a double-click stands elsewhere.

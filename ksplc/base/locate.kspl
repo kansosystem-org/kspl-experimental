@@ -10,8 +10,8 @@ import "std/chars"
 import "std/ds" { List }
 import "std/fs"
 import "std/str" { Arena_text, Str_builder }
+import "std/strfmt"
 import "std/sys"
-import "std/url"
 
 const STD_DIR_ENV_NAME: U8[] = "KSPLC_STD_DIR"
 priv const DEFAULT_STD_DIR: U8[] = "std"
@@ -392,11 +392,16 @@ struct Uri_style //< how one client writes a document URI, read from one it sent
     //< page send `std/lang.kspl`.
     has_scheme: Bool //< the `file://` was present
     is_absolute: Bool //< the path started from the root
+    drive_slash: Bool //< a `/` stood before a drive (`file:///C:/x`), as an editor writes it
 
 fn uri_style_of(uri: U8[]): Uri_style //<
     //< It keeps the client's form instead of choosing one, as clangd's `URIForFile` does
-    return Uri_style::{ .has_scheme = uri.starts_with(base_core.FILE_URI_SCHEME),
-        .is_absolute = sys.is_absolute(uri.strip_file_uri()) }
+    path: = uri.strip_file_uri()
+    has_scheme: = uri.starts_with(base_core.FILE_URI_SCHEME)
+    return Uri_style::{ .has_scheme = has_scheme, .is_absolute = sys.is_absolute(path),
+        .drive_slash =
+        has_scheme && uri.strip_prefix(base_core.FILE_URI_SCHEME).starts_with("/") &&
+        !path.starts_with("/") }
 
 impl Uri_style
     fn spell(r: Self, name: U8[]): U8[] //<
@@ -409,25 +414,23 @@ impl Uri_style
         path: = to_absolute(named.slice()) if r.is_absolute else named.slice()
         if r.has_scheme
             out.s(base_core.FILE_URI_SCHEME)
+            if r.drive_slash && !path.starts_with("/")
+                out.c('/')
             spell_uri_path(path, out)
         else
             out.s(path)
         return out.take()
 
-fn spell_uri_path(path: U8[], out: Arena_text$@) //< a path as a `file://` URI's path, encoded
-    //< Caution: **Encode what `strip_file_uri` decodes** (`../base/core.kspl`): a space, a
-    //< Japanese letter or a drive's `:` written bare is a URI the editor reads as another file.
-    //< `/` stays, and a drive gets the `/` in front of it (`/C%3A/x`).
-    if sys.root_len(path) > 0 && !sys.is_path_sep(path[0])
-        out.c('/')
-    $start: Sz = 0
-    for $at: Sz = 0; at <= path.len; at += 1
-        if at < path.len && !sys.is_path_sep(path[at])
-            continue
-        out.s(url.encode(path.sub(start, at - start), base_core.arena))
-        if at < path.len
-            out.c('/')
-        start = at + 1
+fn spell_uri_path(path: U8[], out: Arena_text$@) //< a path as a `file://` URI's path, escaped
+    //< Caution: **Escape only what a URI cannot hold bare**, which `strip_file_uri` decodes
+    //< (`../base/core.kspl`): a space, a Japanese letter, a control byte, `%`, `#` and `?`.
+    //< Anything else stays as the client wrote it, a drive's `:` and `/` included, so a client
+    //< comparing its own URI with the answer finds them equal.
+    for c in path
+        if c <= ' ' || c >= 0x7F || c == '%' || c == '#' || c == '?'
+            out.c('%').c((c >> 4).to_hex_upper()).c((c & 15U8).to_hex_upper())
+        else
+            out.c('/' if c == '\\' else c)
 
 fn append_file_path(import_path: U8[], out: Str_builder$@) //<
     //< It writes into out the file path to read for an import path (a file's logical name)

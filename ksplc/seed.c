@@ -3503,6 +3503,7 @@ struct ksplc_base_core_Global_pools {
 struct ksplc_base_locate_Uri_style {
   Bool has_scheme;
   Bool is_absolute;
+  Bool drive_slash;
 };
 
 struct std_json_Array {
@@ -19764,8 +19765,6 @@ static I64 kspl_priv_ksplc_base_cache_used_time(std_lang_Slice_U8 dir, I64 dir_t
 void kspl_ksplc_base_cache_prune_dirs(std_lang_Slice_U8 base_dir, Sz name_len, Sz keep, I64 spare_secs, std_lang_Slice_U8 live, std_mem_Arena *arena);
 Bool kspl_ksplc_base_cache_append_generation_dir(std_lang_Slice_U8 kind, std_str_Str_builder *out, std_mem_Arena *arena);
 Bool kspl_ksplc_base_cache_clear_all(std_str_Str_builder *out, std_mem_Arena *arena);
-static Bool kspl_priv_std_url_is_unreserved(U8 c);
-std_lang_Slice_U8 kspl_std_url_encode(std_lang_Slice_U8 s, std_mem_Arena *arena);
 std_lang_Result_std_lang_Slice_U8_Const_std_url_Url_error kspl_std_url_decode_component(std_lang_Slice_U8 s, std_mem_Arena *arena);
 static std_lang_Result_std_lang_Slice_U8_Const_std_url_Url_error kspl_priv_std_url_decode_impl(std_lang_Slice_U8 s, Bool plus_is_space, std_mem_Arena *arena);
 std_lang_Slice_U8 kspl_ksplc_base_core_slice_ident(void);
@@ -39559,84 +39558,6 @@ Bool kspl_ksplc_base_cache_clear_all(std_str_Str_builder *out, std_mem_Arena *ar
   return true;
 }
 
-static KSPL_UNUSED Bool kspl_priv_std_url_is_unreserved(U8 c) {
-  KSPL_UNUSED Bool __kspl_tmp_004 = kspl_U8_is_alnum(c);
-  if (!__kspl_tmp_004) {
-    __kspl_tmp_004 = c == 45;
-  }
-
-  KSPL_UNUSED Bool __kspl_tmp_003 = __kspl_tmp_004;
-  if (!__kspl_tmp_003) {
-    __kspl_tmp_003 = c == 46;
-  }
-
-  KSPL_UNUSED Bool __kspl_tmp_002 = __kspl_tmp_003;
-  if (!__kspl_tmp_002) {
-    __kspl_tmp_002 = c == 95;
-  }
-
-  KSPL_UNUSED Bool __kspl_tmp_001 = __kspl_tmp_002;
-  if (!__kspl_tmp_001) {
-    __kspl_tmp_001 = c == 126;
-  }
-
-  return __kspl_tmp_001;
-}
-
-std_lang_Slice_U8 kspl_std_url_encode(std_lang_Slice_U8 s, std_mem_Arena *arena) {
-  Sz n = (Sz)0;
-  KSPL_UNUSED std_lang_Slice_U8 __kspl_for_coll1 = s;
-  {
-    KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
-    for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1.len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      U8 c = (*(kspl_std_lang_Slice_U8_Const_at_ref(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "std/url"), (Sz)21)));
-      KSPL_UNUSED I32 __kspl_tmp_003 = {0};
-      if (kspl_priv_std_url_is_unreserved(c)) {
-        __kspl_tmp_003 = 1;
-      }
-
-      else {
-        __kspl_tmp_003 = 3;
-      }
-      n = (Sz)((size_t)(n) + (size_t)((Sz)__kspl_tmp_003));
-    }
-  }
-  KSPL_UNUSED U8 *__kspl_tmp_004 = (U8 *)kspl_std_mem_Arena_alloc(arena, n);
-  std_lang_Slice_U8 out = (std_lang_Slice_U8){.ptr = __kspl_tmp_004, .len = n};
-  Sz at = (Sz)0;
-  KSPL_UNUSED std_lang_Slice_U8 __kspl_for_coll2 = s;
-  {
-    KSPL_UNUSED I32 __kspl_for_idx_s2 = 0;
-    for (; (Sz)__kspl_for_idx_s2 < __kspl_for_coll2.len; __kspl_for_idx_s2 = (I32)((U32)(__kspl_for_idx_s2) + (U32)(1))) {
-      U8 c = (*(kspl_std_lang_Slice_U8_Const_at_ref(&__kspl_for_coll2, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "std/url"), (Sz)25)));
-      if (kspl_priv_std_url_is_unreserved(c)) {
-        {
-          U8 *_kspl_dst_48 = &((*(kspl_std_lang_Slice_U8_at(&out, at, KSPL_STR(std_lang_Slice_U8, "std/url"), (Sz)27))));
-          *_kspl_dst_48 = c;
-        }
-        at = (Sz)((size_t)(at) + (size_t)((Sz)1));
-      }
-
-      else {
-        {
-          U8 *_kspl_dst_49 = &((*(kspl_std_lang_Slice_U8_at(&out, at, KSPL_STR(std_lang_Slice_U8, "std/url"), (Sz)30))));
-          *_kspl_dst_49 = 37;
-        }
-        {
-          U8 *_kspl_dst_50 = &((*(kspl_std_lang_Slice_U8_at(&out, (Sz)((size_t)(at) + (size_t)((Sz)1)), KSPL_STR(std_lang_Slice_U8, "std/url"), (Sz)31))));
-          *_kspl_dst_50 = kspl_std_chars_hex_digit(c >> (4), 65);
-        }
-        {
-          U8 *_kspl_dst_51 = &((*(kspl_std_lang_Slice_U8_at(&out, (Sz)((size_t)(at) + (size_t)((Sz)2)), KSPL_STR(std_lang_Slice_U8, "std/url"), (Sz)32))));
-          *_kspl_dst_51 = kspl_std_chars_hex_digit((U8)((I32)c & 0xF), 65);
-        }
-        at = (Sz)((size_t)(at) + (size_t)((Sz)3));
-      }
-    }
-  }
-  return out;
-}
-
 std_lang_Result_std_lang_Slice_U8_Const_std_url_Url_error kspl_std_url_decode_component(std_lang_Slice_U8 s, std_mem_Arena *arena) {
   return kspl_priv_std_url_decode_impl(s, false, arena);
 }
@@ -39678,8 +39599,8 @@ static KSPL_UNUSED std_lang_Result_std_lang_Slice_U8_Const_std_url_Url_error ksp
     if ((U8)c == 37) {
       KSPL_UNUSED I32 __kspl_tmp_008 = (I32)((U32)(kspl_std_lang_Option_I32_unwrap_or(kspl_U8_hex_val((*(kspl_std_lang_Slice_U8_Const_at_ref(&s, (Sz)((size_t)(i) + (size_t)((Sz)1)), KSPL_STR(std_lang_Slice_U8, "std/url"), (Sz)66)))), 0)) * (U32)(16));
       {
-        U8 *_kspl_dst_52 = &((*(kspl_std_lang_Slice_U8_at(&out, at, KSPL_STR(std_lang_Slice_U8, "std/url"), (Sz)65))));
-        *_kspl_dst_52 = (U8)((I32)((U32)(__kspl_tmp_008) + (U32)(kspl_std_lang_Option_I32_unwrap_or(kspl_U8_hex_val((*(kspl_std_lang_Slice_U8_Const_at_ref(&s, (Sz)((size_t)(i) + (size_t)((Sz)2)), KSPL_STR(std_lang_Slice_U8, "std/url"), (Sz)66)))), 0))));
+        U8 *_kspl_dst_48 = &((*(kspl_std_lang_Slice_U8_at(&out, at, KSPL_STR(std_lang_Slice_U8, "std/url"), (Sz)65))));
+        *_kspl_dst_48 = (U8)((I32)((U32)(__kspl_tmp_008) + (U32)(kspl_std_lang_Option_I32_unwrap_or(kspl_U8_hex_val((*(kspl_std_lang_Slice_U8_Const_at_ref(&s, (Sz)((size_t)(i) + (size_t)((Sz)2)), KSPL_STR(std_lang_Slice_U8, "std/url"), (Sz)66)))), 0))));
       }
       i = (Sz)((size_t)(i) + (size_t)((Sz)3));
     }
@@ -39699,8 +39620,8 @@ static KSPL_UNUSED std_lang_Result_std_lang_Slice_U8_Const_std_url_Url_error ksp
         __kspl_tmp_009 = c;
       }
       {
-        U8 *_kspl_dst_53 = &((*(kspl_std_lang_Slice_U8_at(&out, at, KSPL_STR(std_lang_Slice_U8, "std/url"), (Sz)69))));
-        *_kspl_dst_53 = __kspl_tmp_009;
+        U8 *_kspl_dst_49 = &((*(kspl_std_lang_Slice_U8_at(&out, at, KSPL_STR(std_lang_Slice_U8, "std/url"), (Sz)69))));
+        *_kspl_dst_49 = __kspl_tmp_009;
       }
       i = (Sz)((size_t)(i) + (size_t)((Sz)1));
     }
@@ -40840,8 +40761,20 @@ Bool kspl_ksplc_base_locate_is_same_file(std_lang_Slice_U8 a, std_lang_Slice_U8 
 }
 
 ksplc_base_locate_Uri_style kspl_ksplc_base_locate_uri_style_of(std_lang_Slice_U8 uri) {
-  KSPL_UNUSED Bool __kspl_tmp_001 = kspl_std_lang_Slice_U8_Const_starts_with(uri, kspl_ksplc_base_core_FILE_URI_SCHEME, (Sz)0);
-  return (ksplc_base_locate_Uri_style){.has_scheme = __kspl_tmp_001, .is_absolute = kspl_std_sys_is_absolute(kspl_std_lang_Slice_U8_Const_strip_file_uri(uri))};
+  std_lang_Slice_U8 path = kspl_std_lang_Slice_U8_Const_strip_file_uri(uri);
+  Bool has_scheme = kspl_std_lang_Slice_U8_Const_starts_with(uri, kspl_ksplc_base_core_FILE_URI_SCHEME, (Sz)0);
+  KSPL_UNUSED Bool __kspl_tmp_001 = kspl_std_sys_is_absolute(path);
+  KSPL_UNUSED Bool __kspl_tmp_003 = has_scheme;
+  if (__kspl_tmp_003) {
+    __kspl_tmp_003 = kspl_std_lang_Slice_U8_Const_starts_with(kspl_std_lang_Slice_U8_Const_strip_prefix(uri, kspl_ksplc_base_core_FILE_URI_SCHEME), KSPL_STR(std_lang_Slice_U8, "/"), (Sz)0);
+  }
+
+  KSPL_UNUSED Bool __kspl_tmp_002 = __kspl_tmp_003;
+  if (__kspl_tmp_002) {
+    __kspl_tmp_002 = !kspl_std_lang_Slice_U8_Const_starts_with(path, KSPL_STR(std_lang_Slice_U8, "/"), (Sz)0);
+  }
+
+  return (ksplc_base_locate_Uri_style){.has_scheme = has_scheme, .is_absolute = __kspl_tmp_001, .drive_slash = __kspl_tmp_002};
 }
 
 std_lang_Slice_U8 kspl_ksplc_base_locate_Uri_style_spell(ksplc_base_locate_Uri_style r, std_lang_Slice_U8 name) {
@@ -40860,19 +40793,28 @@ std_lang_Slice_U8 kspl_ksplc_base_locate_Uri_style_spell(ksplc_base_locate_Uri_s
   std_lang_Slice_U8 path = __kspl_tmp_002;
   if (r.has_scheme) {
     (void)(kspl_std_str_Arena_text_s(out, kspl_ksplc_base_core_FILE_URI_SCHEME));
+    KSPL_UNUSED Bool __kspl_tmp_003 = r.drive_slash;
+    if (__kspl_tmp_003) {
+      __kspl_tmp_003 = !kspl_std_lang_Slice_U8_Const_starts_with(path, KSPL_STR(std_lang_Slice_U8, "/"), (Sz)0);
+    }
+
+    if (__kspl_tmp_003) {
+      (void)(kspl_std_str_Arena_text_c(out, 47));
+    }
+
     kspl_ksplc_base_locate_spell_uri_path(path, out);
   }
 
   else {
     (void)(kspl_std_str_Arena_text_s(out, path));
   }
-  KSPL_UNUSED std_lang_Slice_U8 __kspl_tmp_003 = kspl_std_str_Arena_text_take(out);
+  KSPL_UNUSED std_lang_Slice_U8 __kspl_tmp_004 = kspl_std_str_Arena_text_take(out);
   if (__kspl_tmp_001) {
     __kspl_tmp_001 = false;
     kspl_arc_release_std_str_Str_builder(&named);
   }
 
-  return __kspl_tmp_003;
+  return __kspl_tmp_004;
   if (__kspl_tmp_001) {
     __kspl_tmp_001 = false;
     kspl_arc_release_std_str_Str_builder(&named);
@@ -40880,36 +40822,48 @@ std_lang_Slice_U8 kspl_ksplc_base_locate_Uri_style_spell(ksplc_base_locate_Uri_s
 }
 
 void kspl_ksplc_base_locate_spell_uri_path(std_lang_Slice_U8 path, std_str_Arena_text *out) {
-  KSPL_UNUSED Bool __kspl_tmp_001 = kspl_std_sys_root_len(path) > (Sz)0;
-  if (__kspl_tmp_001) {
-    __kspl_tmp_001 = !kspl_std_sys_is_path_sep((*(kspl_std_lang_Slice_U8_Const_at_ref(&path, (Sz)0, KSPL_STR(std_lang_Slice_U8, "ksplc/base/locate"), (Sz)421))));
-  }
-
-  if (__kspl_tmp_001) {
-    (void)(kspl_std_str_Arena_text_c(out, 47));
-  }
-
-  Sz start = (Sz)0;
+  KSPL_UNUSED std_lang_Slice_U8 __kspl_for_coll1 = path;
   {
-    Sz at = (Sz)0;
-    for (; at <= path.len; at = (Sz)((size_t)(at) + (size_t)((Sz)1))) {
-      KSPL_UNUSED Bool __kspl_tmp_004 = at < path.len;
-      if (__kspl_tmp_004) {
-        __kspl_tmp_004 = !kspl_std_sys_is_path_sep((*(kspl_std_lang_Slice_U8_Const_at_ref(&path, at, KSPL_STR(std_lang_Slice_U8, "ksplc/base/locate"), (Sz)425))));
+    KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
+    for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1.len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
+      U8 c = (*(kspl_std_lang_Slice_U8_Const_at_ref(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/base/locate"), (Sz)429)));
+      KSPL_UNUSED Bool __kspl_tmp_006 = c <= 32;
+      if (!__kspl_tmp_006) {
+        __kspl_tmp_006 = (I32)c >= 0x7F;
       }
 
-      if (__kspl_tmp_004) {
-        goto _mir_label_002;
+      KSPL_UNUSED Bool __kspl_tmp_005 = __kspl_tmp_006;
+      if (!__kspl_tmp_005) {
+        __kspl_tmp_005 = c == 37;
       }
 
-      KSPL_UNUSED std_lang_Slice_U8 __kspl_tmp_005 = kspl_std_lang_Slice_U8_Const_sub(path, start, (Sz)((size_t)(at) - (size_t)(start)));
-      (void)(kspl_std_str_Arena_text_s(out, kspl_std_url_encode(__kspl_tmp_005, kspl_ksplc_base_core_arena)));
-      if (at < path.len) {
-        (void)(kspl_std_str_Arena_text_c(out, 47));
+      KSPL_UNUSED Bool __kspl_tmp_004 = __kspl_tmp_005;
+      if (!__kspl_tmp_004) {
+        __kspl_tmp_004 = c == 35;
       }
 
-      start = (Sz)((size_t)(at) + (size_t)((Sz)1));
-    _mir_label_002:;
+      KSPL_UNUSED Bool __kspl_tmp_003 = __kspl_tmp_004;
+      if (!__kspl_tmp_003) {
+        __kspl_tmp_003 = c == 63;
+      }
+
+      if (__kspl_tmp_003) {
+        KSPL_UNUSED std_str_Arena_text *__kspl_tmp_008 = kspl_std_str_Arena_text_c(out, 37);
+        KSPL_UNUSED std_str_Arena_text *__kspl_tmp_007 = kspl_std_str_Arena_text_c(__kspl_tmp_008, kspl_U8_to_hex_upper(c >> (4)));
+        (void)(kspl_std_str_Arena_text_c(__kspl_tmp_007, kspl_U8_to_hex_upper(c & 15)));
+      }
+
+      else {
+        KSPL_UNUSED U8 __kspl_tmp_009 = {0};
+        if (c == 92) {
+          __kspl_tmp_009 = 47;
+        }
+
+        else {
+          __kspl_tmp_009 = c;
+        }
+        (void)(kspl_std_str_Arena_text_c(out, __kspl_tmp_009));
+      }
     }
   }
   return;
@@ -40951,7 +40905,7 @@ void kspl_ksplc_base_locate_note_embedded(std_lang_Slice_U8 path) {
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1.len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      std_lang_Slice_U8 p = (*(kspl_std_lang_Slice_std_lang_Slice_U8_Const_at(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/base/locate"), (Sz)456)));
+      std_lang_Slice_U8 p = (*(kspl_std_lang_Slice_std_lang_Slice_U8_Const_at(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/base/locate"), (Sz)459)));
       if (kspl_std_lang_Slice_U8_Const_equals(p, path)) {
         return;
       }
@@ -48713,8 +48667,8 @@ static KSPL_UNUSED ksplc_base_literal_Literal_walk kspl_priv_ksplc_base_literal_
         if (__kspl_tmp_008) {
           if (depth < kspl_priv_ksplc_base_literal_MAX_OPEN_INTERPOLATIONS) {
             {
-              Sz *_kspl_dst_54 = &(opens.data[kspl_bounds_check(depth, 16, "ksplc/base/literal", 150)]);
-              *_kspl_dst_54 = j;
+              Sz *_kspl_dst_50 = &(opens.data[kspl_bounds_check(depth, 16, "ksplc/base/literal", 150)]);
+              *_kspl_dst_50 = j;
             }
           }
 
@@ -49250,8 +49204,8 @@ void kspl_ksplc_fmt_kinds_Fmt_rules_set_flag(ksplc_fmt_kinds_Fmt_rules *r, ksplc
 
   if (__kspl_tmp_001) {
     {
-      I32 *_kspl_dst_55 = &(r->flags.data[kspl_bounds_check((Sz)kind_id, 512, "ksplc/fmt/kinds", 23)]);
-      *_kspl_dst_55 = r->flags.data[kspl_bounds_check((Sz)kind_id, 512, "ksplc/fmt/kinds", 23)] | flag;
+      I32 *_kspl_dst_51 = &(r->flags.data[kspl_bounds_check((Sz)kind_id, 512, "ksplc/fmt/kinds", 23)]);
+      *_kspl_dst_51 = r->flags.data[kspl_bounds_check((Sz)kind_id, 512, "ksplc/fmt/kinds", 23)] | flag;
     }
   }
 
@@ -49271,8 +49225,8 @@ void kspl_ksplc_fmt_kinds_Fmt_rules_init(ksplc_fmt_kinds_Fmt_rules *r) {
       KSPL_UNUSED Sz __kspl_tmp_003 = kspl_std_lang_Range_get(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1);
       Sz i = __kspl_tmp_003;
       {
-        I32 *_kspl_dst_56 = &(r->flags.data[kspl_bounds_check(i, 512, "ksplc/fmt/kinds", 31)]);
-        *_kspl_dst_56 = 0;
+        I32 *_kspl_dst_52 = &(r->flags.data[kspl_bounds_check(i, 512, "ksplc/fmt/kinds", 31)]);
+        *_kspl_dst_52 = 0;
       }
     }
   }
@@ -55572,8 +55526,8 @@ Bool kspl_ksplc_parse_layout_Line_opens_step(ksplc_parse_layout_Line_opens *r, s
         __kspl_tmp_007 = c;
       }
       {
-        ksplc_parse_layout_Line_open *_kspl_dst_57 = &(r->items.data[kspl_bounds_check(r->n, 32, "ksplc/parse/layout", 280)]);
-        *_kspl_dst_57 = (ksplc_parse_layout_Line_open){.at = i, .kind = __kspl_tmp_007, .stmt_from = (Sz)((size_t)(i) + (size_t)((Sz)1))};
+        ksplc_parse_layout_Line_open *_kspl_dst_53 = &(r->items.data[kspl_bounds_check(r->n, 32, "ksplc/parse/layout", 280)]);
+        *_kspl_dst_53 = (ksplc_parse_layout_Line_open){.at = i, .kind = __kspl_tmp_007, .stmt_from = (Sz)((size_t)(i) + (size_t)((Sz)1))};
       }
     }
 
@@ -55687,8 +55641,8 @@ Bool kspl_ksplc_parse_layout_Line_opens_step(ksplc_parse_layout_Line_opens *r, s
 
       if (__kspl_tmp_022) {
         {
-          Sz *_kspl_dst_58 = &(r->items.data[kspl_bounds_check((Sz)((size_t)(r->n) - (size_t)((Sz)1)), 32, "ksplc/parse/layout", 303)].stmt_from);
-          *_kspl_dst_58 = (Sz)((size_t)(i) + (size_t)((Sz)1));
+          Sz *_kspl_dst_54 = &(r->items.data[kspl_bounds_check((Sz)((size_t)(r->n) - (size_t)((Sz)1)), 32, "ksplc/parse/layout", 303)].stmt_from);
+          *_kspl_dst_54 = (Sz)((size_t)(i) + (size_t)((Sz)1));
         }
       }
     }
@@ -60433,8 +60387,8 @@ static KSPL_UNUSED Sz kspl_priv_ksplc_parse_syntax_msg_innermost_open(std_lang_S
         }
 
         {
-          Sz *_kspl_dst_59 = &(open.data[kspl_bounds_check(n, 64, "ksplc/parse/syntax_msg", 481)]);
-          *_kspl_dst_59 = i;
+          Sz *_kspl_dst_55 = &(open.data[kspl_bounds_check(n, 64, "ksplc/parse/syntax_msg", 481)]);
+          *_kspl_dst_55 = i;
         }
         n = (Sz)((size_t)(n) + (size_t)((Sz)1));
       }
@@ -100695,8 +100649,8 @@ static KSPL_UNUSED std_lang_Result_std_lang_Option_ksplc_sema_type_scope_Sema_sy
     inst->flags.is_used = true;
     node->def_node = inst->node;
     {
-      ksplc_base_ast_Ast_node **_kspl_dst_60 = &(kspl_ksplc_base_ast_Ast_node_get_child(node, (Sz)((size_t)(node->children->len) - (size_t)((Sz)2)))->def_node);
-      *_kspl_dst_60 = inst->node;
+      ksplc_base_ast_Ast_node **_kspl_dst_56 = &(kspl_ksplc_base_ast_Ast_node_get_child(node, (Sz)((size_t)(node->children->len) - (size_t)((Sz)2)))->def_node);
+      *_kspl_dst_56 = inst->node;
     }
     break;
   }
@@ -101042,8 +100996,8 @@ std_lang_Result_I32_ksplc_sema_session_ctx_Sema_error kspl_ksplc_sema_body_resol
   if (named.parts.owner == null) {
     if (node->children->len >= (Sz)1) {
       {
-        ksplc_base_ast_Ast_node **_kspl_dst_61 = &(kspl_ksplc_base_ast_Ast_node_get_child(node, (Sz)0)->def_node);
-        *_kspl_dst_61 = sym->node;
+        ksplc_base_ast_Ast_node **_kspl_dst_57 = &(kspl_ksplc_base_ast_Ast_node_get_child(node, (Sz)0)->def_node);
+        *_kspl_dst_57 = sym->node;
       }
     }
 
@@ -106053,8 +106007,8 @@ std_lang_Result_I32_ksplc_sema_session_ctx_Sema_error kspl_ksplc_sema_body_dot_i
     case kspl_std_lang_Option_ksplc_sema_decl_mono_name_Method_template_some: {
       KSPL_UNUSED ksplc_sema_decl_mono_name_Method_template _tmpl = __kspl_tmp_034.payload.some.value;
       {
-        I32 *_kspl_dst_62 = &(kspl_ksplc_sema_decl_name_named_fn(node).owner->type_id);
-        *_kspl_dst_62 = owner_id;
+        I32 *_kspl_dst_58 = &(kspl_ksplc_sema_decl_name_named_fn(node).owner->type_id);
+        *_kspl_dst_58 = owner_id;
       }
       KSPL_UNUSED std_lang_Result_I32_ksplc_sema_session_ctx_Sema_error __kspl_tmp_035 = (std_lang_Result_I32_ksplc_sema_session_ctx_Sema_error){.tag = kspl_std_lang_Result_I32_ksplc_sema_session_ctx_Sema_error_ok, .payload.ok = {(I32)((ksplc_sema_type_env_Builtin_type_id)kspl_ksplc_sema_type_env_Builtin_type_id_unknown)}};
       if (__kspl_tmp_024) {
@@ -106075,8 +106029,8 @@ std_lang_Result_I32_ksplc_sema_session_ctx_Sema_error kspl_ksplc_sema_body_dot_i
     case kspl_std_lang_Option_ksplc_sema_type_scope_Sema_symbol_Ptr_some: {
       KSPL_UNUSED ksplc_sema_type_scope_Sema_symbol *_sym = __kspl_tmp_036.payload.some.value;
       {
-        I32 *_kspl_dst_63 = &(kspl_ksplc_sema_decl_name_named_fn(node).owner->type_id);
-        *_kspl_dst_63 = owner_id;
+        I32 *_kspl_dst_59 = &(kspl_ksplc_sema_decl_name_named_fn(node).owner->type_id);
+        *_kspl_dst_59 = owner_id;
       }
       KSPL_UNUSED std_lang_Result_I32_ksplc_sema_session_ctx_Sema_error __kspl_tmp_037 = (std_lang_Result_I32_ksplc_sema_session_ctx_Sema_error){.tag = kspl_std_lang_Result_I32_ksplc_sema_session_ctx_Sema_error_ok, .payload.ok = {(I32)((ksplc_sema_type_env_Builtin_type_id)kspl_ksplc_sema_type_env_Builtin_type_id_unknown)}};
       if (__kspl_tmp_024) {
@@ -106094,8 +106048,8 @@ std_lang_Result_I32_ksplc_sema_session_ctx_Sema_error kspl_ksplc_sema_body_dot_i
     }
     if (kspl_ksplc_sema_session_ctx_Sema_ctx_has_failed_constraint(c, kspl_ksplc_sema_type_env_Env_base_type_name(c->env, owner_id))) {
       {
-        I32 *_kspl_dst_64 = &(kspl_ksplc_sema_decl_name_named_fn(node).owner->type_id);
-        *_kspl_dst_64 = owner_id;
+        I32 *_kspl_dst_60 = &(kspl_ksplc_sema_decl_name_named_fn(node).owner->type_id);
+        *_kspl_dst_60 = owner_id;
       }
       KSPL_UNUSED std_lang_Result_I32_ksplc_sema_session_ctx_Sema_error __kspl_tmp_038 = (std_lang_Result_I32_ksplc_sema_session_ctx_Sema_error){.tag = kspl_std_lang_Result_I32_ksplc_sema_session_ctx_Sema_error_ok, .payload.ok = {(I32)((ksplc_sema_type_env_Builtin_type_id)kspl_ksplc_sema_type_env_Builtin_type_id_unknown)}};
       if (__kspl_tmp_024) {
@@ -106725,8 +106679,8 @@ static KSPL_UNUSED Sz kspl_priv_ksplc_sema_body_dot_edit_distance(std_lang_Slice
       KSPL_UNUSED Sz __kspl_tmp_004 = kspl_std_lang_Range_get(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1);
       Sz j = __kspl_tmp_004;
       {
-        Sz *_kspl_dst_65 = &(row.data[kspl_bounds_check(j, 65, "ksplc/sema/body/dot", 636)]);
-        *_kspl_dst_65 = j;
+        Sz *_kspl_dst_61 = &(row.data[kspl_bounds_check(j, 65, "ksplc/sema/body/dot", 636)]);
+        *_kspl_dst_61 = j;
       }
     }
   }
@@ -106739,8 +106693,8 @@ static KSPL_UNUSED Sz kspl_priv_ksplc_sema_body_dot_edit_distance(std_lang_Slice
       before = last;
       last = row;
       {
-        Sz *_kspl_dst_66 = &(row.data[(Sz)0]);
-        *_kspl_dst_66 = (Sz)((size_t)(i) + (size_t)((Sz)1));
+        Sz *_kspl_dst_62 = &(row.data[(Sz)0]);
+        *_kspl_dst_62 = (Sz)((size_t)(i) + (size_t)((Sz)1));
       }
       KSPL_UNUSED std_lang_Range __kspl_for_coll2 = kspl_std_lang_Range_asc(b.len);
       {
@@ -106797,8 +106751,8 @@ static KSPL_UNUSED Sz kspl_priv_ksplc_sema_body_dot_edit_distance(std_lang_Slice
           }
 
           {
-            Sz *_kspl_dst_67 = &(row.data[kspl_bounds_check((Sz)((size_t)(j) + (size_t)((Sz)1)), 65, "ksplc/sema/body/dot", 649)]);
-            *_kspl_dst_67 = cost;
+            Sz *_kspl_dst_63 = &(row.data[kspl_bounds_check((Sz)((size_t)(j) + (size_t)((Sz)1)), 65, "ksplc/sema/body/dot", 649)]);
+            *_kspl_dst_63 = cost;
           }
         }
       }
@@ -114452,8 +114406,8 @@ static KSPL_UNUSED std_lang_Result_I32_ksplc_sema_session_ctx_Sema_error kspl_pr
     else
         if (left->children->len > (Sz)0) {
       {
-        ksplc_base_ast_Ast_node **_kspl_dst_68 = &(kspl_ksplc_base_ast_Ast_node_last_child(left)->def_node);
-        *_kspl_dst_68 = inst_sym->node;
+        ksplc_base_ast_Ast_node **_kspl_dst_64 = &(kspl_ksplc_base_ast_Ast_node_last_child(left)->def_node);
+        *_kspl_dst_64 = inst_sym->node;
       }
     }
   }
@@ -114817,8 +114771,8 @@ std_lang_Result_I32_ksplc_sema_session_ctx_Sema_error kspl_ksplc_sema_body_call_
     left->def_node = sym->node;
     if (left->children->len > (Sz)0) {
       {
-        ksplc_base_ast_Ast_node **_kspl_dst_69 = &(kspl_ksplc_base_ast_Ast_node_last_child(left)->def_node);
-        *_kspl_dst_69 = sym->node;
+        ksplc_base_ast_Ast_node **_kspl_dst_65 = &(kspl_ksplc_base_ast_Ast_node_last_child(left)->def_node);
+        *_kspl_dst_65 = sym->node;
       }
     }
 
@@ -119574,8 +119528,8 @@ ksplc_base_ast_Ast_node *kspl_ksplc_lower_expr_build_linked_method_call(ksplc_ba
   ksplc_base_ast_Ast_node *m_acc = kspl_ksplc_base_ast_Ast_node_get_child(call_node, (Sz)0);
   m_acc->def_node = method_node;
   {
-    ksplc_base_ast_Ast_node **_kspl_dst_70 = &(kspl_ksplc_base_ast_Ast_node_get_child(m_acc, (Sz)1)->def_node);
-    *_kspl_dst_70 = method_node;
+    ksplc_base_ast_Ast_node **_kspl_dst_66 = &(kspl_ksplc_base_ast_Ast_node_get_child(m_acc, (Sz)1)->def_node);
+    *_kspl_dst_66 = method_node;
   }
   return call_node;
 }
@@ -122783,8 +122737,8 @@ void kspl_ksplc_base_ast_Ast_node_declare_payload_bindings(ksplc_base_ast_Ast_no
         ksplc_base_ast_Ast_node *read = kspl_ksplc_base_ast_Ast_node_build_payload_access(__kspl_tmp_008, r->ival, f->name, (I32)field_idx, f->type_id, b->loc);
         ksplc_base_ast_Ast_node *decl = kspl_ksplc_lower_ctx_Lowering_ctx_build_let_decl(lctx, b->text, f->type_id, read, b->loc);
         {
-          ksplc_base_ast_Ast_node **_kspl_dst_71 = &(kspl_ksplc_base_ast_Ast_node_get_var_decl_id(decl)->def_node);
-          *_kspl_dst_71 = b;
+          ksplc_base_ast_Ast_node **_kspl_dst_67 = &(kspl_ksplc_base_ast_Ast_node_get_var_decl_id(decl)->def_node);
+          *_kspl_dst_67 = b;
         }
         kspl_ksplc_base_ast_Ast_node_insert_child(block, at, decl);
         at = (Sz)((size_t)(at) + (size_t)((Sz)1));
@@ -126828,20 +126782,20 @@ static KSPL_UNUSED ksplc_gen_c_root_Dep_block kspl_priv_ksplc_gen_c_root_node_bl
       KSPL_UNUSED I32 _size_str = info.payload.array.size;
       is_value_dep = true;
       {
-        I32 *_kspl_dst_72 = &(dep_ids.data[(Sz)0]);
-        *_kspl_dst_72 = base_id;
+        I32 *_kspl_dst_68 = &(dep_ids.data[(Sz)0]);
+        *_kspl_dst_68 = base_id;
       }
       {
-        I32 *_kspl_dst_73 = &(dep_ids.data[(Sz)1]);
-        *_kspl_dst_73 = t_id;
+        I32 *_kspl_dst_69 = &(dep_ids.data[(Sz)1]);
+        *_kspl_dst_69 = t_id;
       }
       dep_ids_len = (Sz)2;
       break;
     }
     default: {
       {
-        I32 *_kspl_dst_74 = &(dep_ids.data[(Sz)0]);
-        *_kspl_dst_74 = t_id;
+        I32 *_kspl_dst_70 = &(dep_ids.data[(Sz)0]);
+        *_kspl_dst_70 = t_id;
       }
       dep_ids_len = (Sz)1;
     } break;
@@ -126874,8 +126828,8 @@ static KSPL_UNUSED ksplc_gen_c_root_Dep_block kspl_priv_ksplc_gen_c_root_node_bl
 
     if (__kspl_tmp_003) {
       {
-        I32 *_kspl_dst_75 = &(dep_ids.data[kspl_bounds_check(dep_ids_len, 4, "ksplc/gen/c/root", 388)]);
-        *_kspl_dst_75 = curr->def_node->type_id;
+        I32 *_kspl_dst_71 = &(dep_ids.data[kspl_bounds_check(dep_ids_len, 4, "ksplc/gen/c/root", 388)]);
+        *_kspl_dst_71 = curr->def_node->type_id;
       }
       dep_ids_len = (Sz)((size_t)(dep_ids_len) + (size_t)((Sz)1));
     }
@@ -135466,8 +135420,8 @@ void kspl_ksplc_base_ast_Ast_node_desugar_slice_elems(ksplc_base_ast_Ast_node *r
 
   ksplc_base_ast_Ast_node *inner_ty = kspl_ksplc_base_ast_Ast_node_clone(ty);
   {
-    std_lang_Slice_U8 *_kspl_dst_76 = &(kspl_ksplc_base_ast_Ast_node_last_child(inner_ty)->text);
-    *_kspl_dst_76 = KSPL_STR(std_lang_Slice_U8, "[_]");
+    std_lang_Slice_U8 *_kspl_dst_72 = &(kspl_ksplc_base_ast_Ast_node_last_child(inner_ty)->text);
+    *_kspl_dst_72 = KSPL_STR(std_lang_Slice_U8, "[_]");
   }
   std_ds_List_ksplc_base_ast_Ast_node_Ptr *inner_children = kspl_ksplc_base_ast_new_ast_node_list();
   kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_push(inner_children, inner_ty);
@@ -138623,8 +138577,8 @@ static KSPL_UNUSED void kspl_priv_ksplc_sema_decl_collect_register_type_symbols(
           }
           struct_def->pending_decl = __kspl_tmp_004;
           {
-            ksplc_sema_type_env_Info *_kspl_dst_77 = &(kspl_std_ds_List_ksplc_sema_type_def_Entry_Ptr_get(c->env->id_to_type, (Sz)type_id)->info);
-            *_kspl_dst_77 = (ksplc_sema_type_env_Info){.tag = kspl_ksplc_sema_type_env_Info_struct_type, .payload.struct_type = {struct_def}};
+            ksplc_sema_type_env_Info *_kspl_dst_73 = &(kspl_std_ds_List_ksplc_sema_type_def_Entry_Ptr_get(c->env->id_to_type, (Sz)type_id)->info);
+            *_kspl_dst_73 = (ksplc_sema_type_env_Info){.tag = kspl_ksplc_sema_type_env_Info_struct_type, .payload.struct_type = {struct_def}};
           }
           break;
         }
@@ -138652,8 +138606,8 @@ static KSPL_UNUSED void kspl_priv_ksplc_sema_decl_collect_register_type_symbols(
           }
           enum_def->pending_decl = __kspl_tmp_005;
           {
-            ksplc_sema_type_env_Info *_kspl_dst_78 = &(kspl_std_ds_List_ksplc_sema_type_def_Entry_Ptr_get(c->env->id_to_type, (Sz)type_id)->info);
-            *_kspl_dst_78 = (ksplc_sema_type_env_Info){.tag = kspl_ksplc_sema_type_env_Info_enum_type, .payload.enum_type = {enum_def}};
+            ksplc_sema_type_env_Info *_kspl_dst_74 = &(kspl_std_ds_List_ksplc_sema_type_def_Entry_Ptr_get(c->env->id_to_type, (Sz)type_id)->info);
+            *_kspl_dst_74 = (ksplc_sema_type_env_Info){.tag = kspl_ksplc_sema_type_env_Info_enum_type, .payload.enum_type = {enum_def}};
           }
           break;
         }
@@ -138670,8 +138624,8 @@ static KSPL_UNUSED void kspl_priv_ksplc_sema_decl_collect_register_type_symbols(
           KSPL_UNUSED std_lang_Slice_U8 _f = trait_reg.payload.ok.fqn;
           I32 type_id = trait_reg.payload.ok.type_id;
           {
-            ksplc_sema_type_env_Info *_kspl_dst_79 = &(kspl_std_ds_List_ksplc_sema_type_def_Entry_Ptr_get(c->env->id_to_type, (Sz)type_id)->info);
-            *_kspl_dst_79 = (ksplc_sema_type_env_Info){.tag = kspl_ksplc_sema_type_env_Info_trait_type, .payload.trait_type = {kspl_ksplc_sema_type_def_Trait_def_new()}};
+            ksplc_sema_type_env_Info *_kspl_dst_75 = &(kspl_std_ds_List_ksplc_sema_type_def_Entry_Ptr_get(c->env->id_to_type, (Sz)type_id)->info);
+            *_kspl_dst_75 = (ksplc_sema_type_env_Info){.tag = kspl_ksplc_sema_type_env_Info_trait_type, .payload.trait_type = {kspl_ksplc_sema_type_def_Trait_def_new()}};
           }
           break;
         }
@@ -146928,8 +146882,8 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_tools_run_compile_units(std_ds_List_kspl
       }
       std_subproc_Child child = __kspl_tmp_004;
       {
-        std_lang_Option_std_subproc_Child *_kspl_dst_80 = &((*(kspl_std_ds_List_ksplc_tools_run_Unit_at(units, i, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)412))).child);
-        *_kspl_dst_80 = (std_lang_Option_std_subproc_Child){.tag = kspl_std_lang_Option_std_subproc_Child_some, .payload.some = {child}};
+        std_lang_Option_std_subproc_Child *_kspl_dst_76 = &((*(kspl_std_ds_List_ksplc_tools_run_Unit_at(units, i, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)412))).child);
+        *_kspl_dst_76 = (std_lang_Option_std_subproc_Child){.tag = kspl_std_lang_Option_std_subproc_Child_some, .payload.some = {child}};
       }
     _mir_label_001:;
     }
@@ -146939,8 +146893,8 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_tools_run_compile_units(std_ds_List_kspl
     for (; i < units->len; i = (Sz)((size_t)(i) + (size_t)((Sz)1))) {
       std_lang_Option_std_subproc_Child taken = (*(kspl_std_ds_List_ksplc_tools_run_Unit_at(units, i, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)416))).child;
       {
-        std_lang_Option_std_subproc_Child *_kspl_dst_81 = &((*(kspl_std_ds_List_ksplc_tools_run_Unit_at(units, i, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)417))).child);
-        *_kspl_dst_81 = (std_lang_Option_std_subproc_Child){.tag = kspl_std_lang_Option_std_subproc_Child_none};
+        std_lang_Option_std_subproc_Child *_kspl_dst_77 = &((*(kspl_std_ds_List_ksplc_tools_run_Unit_at(units, i, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)417))).child);
+        *_kspl_dst_77 = (std_lang_Option_std_subproc_Child){.tag = kspl_std_lang_Option_std_subproc_Child_none};
       }
       switch (taken.tag) {
       case kspl_std_lang_Option_std_subproc_Child_some: {
@@ -154581,8 +154535,8 @@ Sz kspl_std_lang_Slice_U8_copy_from(const std_lang_Slice_U8 *r, Sz at, std_lang_
       Sz i = n;
       for (; i > (Sz)0; i = (Sz)((size_t)(i) - (size_t)((Sz)1))) {
         {
-          U8 *_kspl_dst_82 = &((*(kspl_std_lang_Slice_U8_at(r, (Sz)((size_t)((Sz)((size_t)(at) + (size_t)(i))) - (size_t)((Sz)1)), KSPL_STR(std_lang_Slice_U8, "std/bytes"), (Sz)80))));
-          *_kspl_dst_82 = (*(kspl_std_lang_Slice_U8_Const_at_ref(&src, (Sz)((size_t)(i) - (size_t)((Sz)1)), KSPL_STR(std_lang_Slice_U8, "std/bytes"), (Sz)80)));
+          U8 *_kspl_dst_78 = &((*(kspl_std_lang_Slice_U8_at(r, (Sz)((size_t)((Sz)((size_t)(at) + (size_t)(i))) - (size_t)((Sz)1)), KSPL_STR(std_lang_Slice_U8, "std/bytes"), (Sz)80))));
+          *_kspl_dst_78 = (*(kspl_std_lang_Slice_U8_Const_at_ref(&src, (Sz)((size_t)(i) - (size_t)((Sz)1)), KSPL_STR(std_lang_Slice_U8, "std/bytes"), (Sz)80)));
         }
       }
     }
@@ -154593,8 +154547,8 @@ Sz kspl_std_lang_Slice_U8_copy_from(const std_lang_Slice_U8 *r, Sz at, std_lang_
       Sz i = (Sz)0;
       for (; i < n; i = (Sz)((size_t)(i) + (size_t)((Sz)1))) {
         {
-          U8 *_kspl_dst_83 = &((*(kspl_std_lang_Slice_U8_at(r, (Sz)((size_t)(at) + (size_t)(i)), KSPL_STR(std_lang_Slice_U8, "std/bytes"), (Sz)83))));
-          *_kspl_dst_83 = (*(kspl_std_lang_Slice_U8_Const_at_ref(&src, i, KSPL_STR(std_lang_Slice_U8, "std/bytes"), (Sz)83)));
+          U8 *_kspl_dst_79 = &((*(kspl_std_lang_Slice_U8_at(r, (Sz)((size_t)(at) + (size_t)(i)), KSPL_STR(std_lang_Slice_U8, "std/bytes"), (Sz)83))));
+          *_kspl_dst_79 = (*(kspl_std_lang_Slice_U8_Const_at_ref(&src, i, KSPL_STR(std_lang_Slice_U8, "std/bytes"), (Sz)83)));
         }
       }
     }
@@ -154604,20 +154558,20 @@ Sz kspl_std_lang_Slice_U8_copy_from(const std_lang_Slice_U8 *r, Sz at, std_lang_
 
 void kspl_std_lang_Slice_U8_put_u32_be(const std_lang_Slice_U8 *r, Sz at, U32 v) {
   {
-    U8 *_kspl_dst_84 = &((*(kspl_std_lang_Slice_U8_at(r, at, KSPL_STR(std_lang_Slice_U8, "std/bytes"), (Sz)92))));
-    *_kspl_dst_84 = (U8)(v >> (24));
+    U8 *_kspl_dst_80 = &((*(kspl_std_lang_Slice_U8_at(r, at, KSPL_STR(std_lang_Slice_U8, "std/bytes"), (Sz)92))));
+    *_kspl_dst_80 = (U8)(v >> (24));
   }
   {
-    U8 *_kspl_dst_85 = &((*(kspl_std_lang_Slice_U8_at(r, (Sz)((size_t)(at) + (size_t)((Sz)1)), KSPL_STR(std_lang_Slice_U8, "std/bytes"), (Sz)93))));
-    *_kspl_dst_85 = (U8)(v >> (16) & 0xffU);
+    U8 *_kspl_dst_81 = &((*(kspl_std_lang_Slice_U8_at(r, (Sz)((size_t)(at) + (size_t)((Sz)1)), KSPL_STR(std_lang_Slice_U8, "std/bytes"), (Sz)93))));
+    *_kspl_dst_81 = (U8)(v >> (16) & 0xffU);
   }
   {
-    U8 *_kspl_dst_86 = &((*(kspl_std_lang_Slice_U8_at(r, (Sz)((size_t)(at) + (size_t)((Sz)2)), KSPL_STR(std_lang_Slice_U8, "std/bytes"), (Sz)94))));
-    *_kspl_dst_86 = (U8)(v >> (8) & 0xffU);
+    U8 *_kspl_dst_82 = &((*(kspl_std_lang_Slice_U8_at(r, (Sz)((size_t)(at) + (size_t)((Sz)2)), KSPL_STR(std_lang_Slice_U8, "std/bytes"), (Sz)94))));
+    *_kspl_dst_82 = (U8)(v >> (8) & 0xffU);
   }
   {
-    U8 *_kspl_dst_87 = &((*(kspl_std_lang_Slice_U8_at(r, (Sz)((size_t)(at) + (size_t)((Sz)3)), KSPL_STR(std_lang_Slice_U8, "std/bytes"), (Sz)95))));
-    *_kspl_dst_87 = (U8)(v & 0xffU);
+    U8 *_kspl_dst_83 = &((*(kspl_std_lang_Slice_U8_at(r, (Sz)((size_t)(at) + (size_t)((Sz)3)), KSPL_STR(std_lang_Slice_U8, "std/bytes"), (Sz)95))));
+    *_kspl_dst_83 = (U8)(v & 0xffU);
   }
   return;
 }
@@ -154630,20 +154584,20 @@ void kspl_std_lang_Slice_U8_put_u64_be(const std_lang_Slice_U8 *r, Sz at, U64 v)
 
 void kspl_std_lang_Slice_U8_put_u32_le(const std_lang_Slice_U8 *r, Sz at, U32 v) {
   {
-    U8 *_kspl_dst_88 = &((*(kspl_std_lang_Slice_U8_at(r, at, KSPL_STR(std_lang_Slice_U8, "std/bytes"), (Sz)107))));
-    *_kspl_dst_88 = (U8)(v & 0xffU);
+    U8 *_kspl_dst_84 = &((*(kspl_std_lang_Slice_U8_at(r, at, KSPL_STR(std_lang_Slice_U8, "std/bytes"), (Sz)107))));
+    *_kspl_dst_84 = (U8)(v & 0xffU);
   }
   {
-    U8 *_kspl_dst_89 = &((*(kspl_std_lang_Slice_U8_at(r, (Sz)((size_t)(at) + (size_t)((Sz)1)), KSPL_STR(std_lang_Slice_U8, "std/bytes"), (Sz)108))));
-    *_kspl_dst_89 = (U8)(v >> (8) & 0xffU);
+    U8 *_kspl_dst_85 = &((*(kspl_std_lang_Slice_U8_at(r, (Sz)((size_t)(at) + (size_t)((Sz)1)), KSPL_STR(std_lang_Slice_U8, "std/bytes"), (Sz)108))));
+    *_kspl_dst_85 = (U8)(v >> (8) & 0xffU);
   }
   {
-    U8 *_kspl_dst_90 = &((*(kspl_std_lang_Slice_U8_at(r, (Sz)((size_t)(at) + (size_t)((Sz)2)), KSPL_STR(std_lang_Slice_U8, "std/bytes"), (Sz)109))));
-    *_kspl_dst_90 = (U8)(v >> (16) & 0xffU);
+    U8 *_kspl_dst_86 = &((*(kspl_std_lang_Slice_U8_at(r, (Sz)((size_t)(at) + (size_t)((Sz)2)), KSPL_STR(std_lang_Slice_U8, "std/bytes"), (Sz)109))));
+    *_kspl_dst_86 = (U8)(v >> (16) & 0xffU);
   }
   {
-    U8 *_kspl_dst_91 = &((*(kspl_std_lang_Slice_U8_at(r, (Sz)((size_t)(at) + (size_t)((Sz)3)), KSPL_STR(std_lang_Slice_U8, "std/bytes"), (Sz)110))));
-    *_kspl_dst_91 = (U8)(v >> (24));
+    U8 *_kspl_dst_87 = &((*(kspl_std_lang_Slice_U8_at(r, (Sz)((size_t)(at) + (size_t)((Sz)3)), KSPL_STR(std_lang_Slice_U8, "std/bytes"), (Sz)110))));
+    *_kspl_dst_87 = (U8)(v >> (24));
   }
   return;
 }
