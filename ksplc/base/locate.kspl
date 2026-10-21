@@ -9,8 +9,9 @@ import "ksplc/base/core" as base_core
 import "std/chars"
 import "std/ds" { List }
 import "std/fs"
-import "std/str" { Str_builder }
+import "std/str" { Arena_text, Str_builder }
 import "std/sys"
+import "std/url"
 
 const STD_DIR_ENV_NAME: U8[] = "KSPLC_STD_DIR"
 priv const DEFAULT_STD_DIR: U8[] = "std"
@@ -405,10 +406,28 @@ impl Uri_style
         $named: = Str_builder.new()
         append_file_path(name, named@)
         out: = base_core.arena.text()
+        path: = to_absolute(named.slice()) if r.is_absolute else named.slice()
         if r.has_scheme
             out.s(base_core.FILE_URI_SCHEME)
-        out.s(to_absolute(named.slice()) if r.is_absolute else named.slice())
+            spell_uri_path(path, out)
+        else
+            out.s(path)
         return out.take()
+
+fn spell_uri_path(path: U8[], out: Arena_text$@) //< a path as a `file://` URI's path, encoded
+    //< Caution: **Encode what `strip_file_uri` decodes** (`../base/core.kspl`): a space, a
+    //< Japanese letter or a drive's `:` written bare is a URI the editor reads as another file.
+    //< `/` stays, and a drive gets the `/` in front of it (`/C%3A/x`).
+    if sys.root_len(path) > 0 && !sys.is_path_sep(path[0])
+        out.c('/')
+    $start: Sz = 0
+    for $at: Sz = 0; at <= path.len; at += 1
+        if at < path.len && !sys.is_path_sep(path[at])
+            continue
+        out.s(url.encode(path.sub(start, at - start), base_core.arena))
+        if at < path.len
+            out.c('/')
+        start = at + 1
 
 fn append_file_path(import_path: U8[], out: Str_builder$@) //<
     //< It writes into out the file path to read for an import path (a file's logical name)

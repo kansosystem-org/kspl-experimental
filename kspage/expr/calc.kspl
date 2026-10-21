@@ -595,6 +595,10 @@ priv fn value_at(g: Grid$@, r: Sz, c: Sz): Value //< cell (r, c)'s value
     if st == WORKING
         return Cell_error.circular.failed()
     book: = g.book
+    // Caution: **Once a chain is set aside, compute nothing more in this pass**: nothing it
+    // computes is kept, and a range walking on would compute each later cell anew, without end.
+    if book.deferring
+        return Cell_error.no_cell.failed()
     // Caution: **Set the chain aside rather than go deeper**: each cell is several calls, and a
     // chain of thousands runs the stack out. What it stands for is not kept (`deferring`).
     if book.depth >= MAX_DEPTH

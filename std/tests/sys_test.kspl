@@ -506,20 +506,24 @@ fn test_run_many(arena: Arena$@)
     empty: = subproc.run_many(Job[]::{}, 1, verdict.DEFAULT_TIMEOUT_MS, 16, work, arena)
     assert(empty.len == 0, "no jobs give no results")
 
-    // Runs the same work with 1 slot and with 3; the parallel run must be clearly faster.
-    // Caution: **Keep the margin wide.** A `run_many` that ignores the slot count gets a ratio of
-    // one and is caught at any threshold. A tight threshold fails a slow runner that works
-    // correctly.
-    waits: = List<|Job|>.create(arena)
-    for _i in Range.asc(3)
-        waits.push(Job::{ .argv = U8[][]::{ "/bin/sh", "-c", "sleep 0.2" }, .cwd = "" })
-    t0: = sys.mono_us()
-    _one_slot: = subproc.run_many(waits.slice(), 1, verdict.DEFAULT_TIMEOUT_MS, 16, work, arena)
-    serial: = sys.mono_us() - t0
-    t1: = sys.mono_us()
-    _three_slots: = subproc.run_many(waits.slice(), 3, verdict.DEFAULT_TIMEOUT_MS, 16, work, arena)
-    par: = sys.mono_us() - t1
-    assert(par * 4 < serial * 3, "at 3 slots it comes in well inside the time 1 slot takes")
+    // Each child waits for all three arrival files. With fewer than three live children,
+    // one must time out: elapsed-time ratios cannot decide this on a busy runner.
+    barrier: = fs.mkdir_unique(work, "overlap_", arena) catch panic("make the barrier folder")
+    script: =
+        "touch \"$1/$2\" || exit 1; while ! { test -f \"$1/a\" && test -f \"$1/b\" && test -f \
+            \"$1/c\"; }; do sleep 0.02; done"
+    waits: = Job[]::{
+        Job::{ .argv = U8[][]::{ "/bin/sh", "-c", script, "overlap", barrier, "a" }, .cwd = "" },
+        Job::{ .argv = U8[][]::{ "/bin/sh", "-c", script, "overlap", barrier, "b" }, .cwd = "" },
+        Job::{ .argv = U8[][]::{ "/bin/sh", "-c", script, "overlap", barrier, "c" }, .cwd = "" },
+    }
+    overlapping: = subproc.run_many(waits, 3, 30000, 16, work, arena)
+    for name in U8[][]::{ "a", "b", "c" }
+        fs.remove_path(fs.join(barrier, name, arena)) catch {}
+    fs.remove_path(barrier) catch {}
+    for i in Range.asc(3)
+        child: = overlapping.get(i) catch panic("each barrier child must start")
+        assert(child.exited_with(0), "all three jobs run before any waits for another to finish")
 
     // A job past its limit is killed with what it wrote by then, and the one behind it still
     // answers. Caution: **Keep the sleep far beyond the limit**, so waiting it out shows as time.
@@ -538,7 +542,7 @@ fn test_run_many(arena: Arena$@)
     assert(behind.exit_code.is_some() && behind.stdout_data.trim_end().equals("after"),
         "the job behind it still runs")
     verdict
-        .pass("confirmed the order stays the input's, the streams are separate, parallel is faster, \
+        .pass("confirmed the order stays the input's, the streams are separate, three jobs overlap, \
             and a job past its limit is killed.")
 
 // ==========================================

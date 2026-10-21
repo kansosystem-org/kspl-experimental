@@ -405,6 +405,31 @@ fn test_db_exec_refuses_rows()
     conn.free()
     verdict.pass("exec refuses a SELECT and a RETURNING before either runs.")
 
+fn test_db_exec_refuses_parameters()
+    verdict.start("[Db] exec refusing parameters before changing the database...")
+    conn: = db.Db.open(":memory:") catch panic("open should succeed")
+    defer conn.free()
+    conn.exec("CREATE TABLE t (value TEXT)") catch panic("create should succeed")
+    for parameter in U8[][]::{ "?", "?3", ":value", "@value", "$value" }
+        arena: = Arena.new(1024)
+        defer arena.free()
+        sql: = arena.text().s("INSERT INTO t VALUES (").s(parameter).s(")").take()
+        $refused: = false
+        conn.exec(sql) catch e
+            switch e
+            case .requires_bindings
+                refused = true
+            default {}
+        assert(refused, "exec refuses every parameter form")
+    count: = conn.prepare("SELECT count(*) FROM t") catch panic("count should prepare")
+    defer count.free()
+    count.step() catch panic("count should step")
+    assert(count.column_i64(0) == 0I64, "refused inserts have no side effects")
+    // SQLite's parser decides: quoted text and comments are not parameters.
+    conn.exec("INSERT INTO t VALUES ('? :value @value $value') /* ? */")
+        catch panic("parameter-like text should be accepted")
+    verdict.pass("exec refuses parameters without rejecting quoted text or comments.")
+
 priv const DB_BASE: U8[] = "out/tmp/ksbind_db" //< where a test that needs a database file makes it
 
 fn test_db_free_with_a_statement_open()

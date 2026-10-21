@@ -477,6 +477,40 @@ priv fn walk_changes(exe: U8[], dir: U8[], arena: Arena$@): json.Value //<
         .set("newName", b.str_val("tap")).build()
     return lsp_client.answer(c@, "textDocument/rename", params, HEAVY_MS, arena)
 
+// ==========================================
+// A workspace whose folder name an editor must encode (a space, Japanese letters). **The editor
+// sends the encoded URI**, so a server reading it as written looks for a folder that is not there.
+// ==========================================
+priv const SPACED_FOLDER: U8[] = "a b かんそ"
+priv const SPACED_RELS: U8[][2] = ::{ "lib.kspl", "user.kspl" }
+priv const SPACED_BODIES: U8[][2] = ::{ "fn hit(): I32\n  return 0\n",
+    "import \"lib\"\n\nfn use(): I32\n  return lib.hit()\n" }
+
+priv fn check_spaced_folder(exe: U8[], arena: Arena$@)
+    name: = "a jump from a folder named with a space and Japanese letters lands, its URI encoded"
+    dir: = fs.join(harness.sandbox("lsp_uri"), SPACED_FOLDER, arena)
+    fs.mkdir(dir) catch {}
+    fs.write_tree(dir, U8[][]::SPACED_RELS, U8[][]::SPACED_BODIES, arena) catch
+        verdict.check(name, false, "it cannot be placed in the working directory")
+        return
+    $c: =
+        lsp_client.start(exe, U8[][]::{ .ptr = null, .len = 0 }, dir, arena) catch
+        verdict.check(name, false, "the language server cannot be started")
+        return
+    defer c.free()
+    _ready: =
+        c.request("initialize", lsp_client.empty_obj(arena), lsp_client.READ_MS, arena) catch
+        verdict.check(name, false, "initialize does not return")
+        return
+    user: = lsp_client.encoded_uri_of(dir, "user.kspl", arena)
+    c.notify("textDocument/didOpen", lsp_client.did_open(user, SPACED_BODIES[1], arena),
+        lsp_client.SEND_MS, arena) catch {}
+    got: = lsp_client.answer(c@, "textDocument/definition",
+        lsp_client.at_pos(user, 3, 13, arena), HEAVY_MS, arena)
+    landed: = got.get("result").get("uri").as_str().unwrap_or("")
+    verdict.check(name, landed.equals(lsp_client.encoded_uri_of(dir, "lib.kspl", arena)),
+        lsp_client.why(c@, arena.text().s("'").s(landed).s("'").take(), arena))
+
 priv fn check_walk(exe: U8[], arena: Arena$@)
     dir: = harness.sandbox("lsp_walk")
     fs.write_tree(dir, U8[][]::WALK_RELS, U8[][]::WALK_BODIES, arena) catch
@@ -764,6 +798,7 @@ fn main(): I32
     lsp_recover.run_restart(exe, arena)
     check_worker_alive(exe, top, ch_text, arena)
     check_walk(exe, arena)
+    check_spaced_folder(exe, arena)
     lsp_rename.run_rename(exe, init.val.get("result").get("capabilities"), arena)
     check_cfg_after_walk(exe, arena)
     lsp_recover.run_package(exe, arena)

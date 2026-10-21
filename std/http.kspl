@@ -294,14 +294,15 @@ impl Header_builder
 // Request / Response. The reader drops `consumed` bytes to reach the next message
 // (Str_builder.drop_prefix).
 // ---------------------------------------------------------
-pub struct Request //< one received request, and how much of the buffer it used
+pub struct Request //< a request or its head, with validated headers and lengths
     pub method: U8$[] //< the method as it arrived, such as `GET`
     pub target: U8$[] //< the raw target, including the query string, such as `/foo?x=1`
     pub version: U8$[] //< the version as it arrived, such as `HTTP/1.1`
     pub headers: Headers //< the headers in the order they arrived
-    pub body: U8$[] //< the body, of the length `Content-Length` gave
-    pub consumed: Sz //< how many bytes of the buffer this message used; the rest is the next one
-    priv own: Own_arena //< the arena it lives in, when `parse_request` was given null
+    pub body: U8$[] //< the received body; empty when only the head was read
+    pub body_length: Sz //< the declared body length, even when only the head has arrived
+    pub consumed: Sz //< bytes read: the head alone for `parse_request_head`, else the whole request
+    priv own: Own_arena //< the arena it lives in, when either request reader was given null
 
 impl Request
     pub fn free(r: Self$@) //< lets go the request and all its parts, when made with a null arena
@@ -517,11 +518,24 @@ pub fn parse_request( //< the one request at the start of the buffer; fails if i
     max_body: Sz, //< the largest body accepted (`DEFAULT_MAX_BODY_BYTES` when the caller has none)
     arena: Arena$@, //< where the parts go; null means an arena of the request's own and a `free()`
 ): Request$@!Http_error //< the request; fails with incomplete while more bytes are due
+    return request_in(src, max_body, arena, false)
+
+pub fn parse_request_head( //< reads and validates a request before its body arrives
+    //< The body is empty; `consumed` counts only the head. `body_length` gives the bytes still due.
+    //< This shares the complete reader's syntax, Host and size checks.
+    src: U8[], //< received bytes
+    max_body: Sz, //< largest accepted body
+    arena: Arena$@, //< storage; null makes an owned request, released with `free`
+): Request$@!Http_error
+    return request_in(src, max_body, arena, true)
+
+priv fn request_in(src: U8[], max_body: Sz, arena: Arena$@, head_only: Bool):
+    Request$@!Http_error
     $work: = mem.scratch(arena)
     at: = work.arena
     r: = scan_request_head(src, max_body, at)!
     body_len: = r.parts.length.unwrap_or(0)
-    body: = body_in(src, r.parts, body_len)!
+    body: = "" if head_only else body_in(src, r.parts, body_len)!
     return at
         .create(Request::{
         .own = work.keep(),
@@ -530,7 +544,8 @@ pub fn parse_request( //< the one request at the start of the buffer; fails if i
         .version = at.dup_str(r.line.version),
         .headers = r.parts.head,
         .body = at.dup_str(body),
-        .consumed = r.parts.head_end + body_len,
+        .body_length = body_len,
+        .consumed = r.parts.head_end + body.len,
     })
 
 pub fn request_length( //< how many bytes the request at the start of the buffer takes in all

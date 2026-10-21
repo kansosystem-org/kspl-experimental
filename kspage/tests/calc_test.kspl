@@ -699,6 +699,24 @@ fn test_a_long_running_total_computes(arena: Arena$@) //<
         "a row partway holds its own sum")
     verdict.pass("a chain far deeper than one pass is settled from its end and comes out whole.")
 
+priv const RANGE_CHAIN: Sz = 300 //< rows of ranges, past one pass's depth
+
+fn test_a_long_chain_of_ranges_computes(arena: Arena$@) //<
+    //< Each row reading the range below it (`=A2:A300.max()+1`, …) computes, and soon
+    //< A range used to walk on past a chain set aside, computing each later cell anew: 129 rows
+    //< froze the page.
+    verdict.start("[kspage/calc] a chain of ranges longer than one pass test...")
+    d: = Doc.new(arena)
+    t: = d.add_block("table")
+    for i in Range.asc(RANGE_CHAIN - 1)
+        add_cell(add_row(t),
+            arena.text().s("=A\{i + 2\}:A\{RANGE_CHAIN\}.max()+1").take())
+    add_cell(add_row(t), "1")
+    calc.recalc(d, base.grid_sheet(arena))
+    want: = arena.text().s("\{RANGE_CHAIN\}").take()
+    assert(cell_text(t, 0, 0).equals(want), "the first row counts every row below it")
+    verdict.pass("a chain of ranges deeper than one pass is settled, not computed again and again.")
+
 fn test_a_long_cycle_is_reported(arena: Arena$@) //<
     //< A cycle longer than one pass (`=A2`, …, `=A1`) still reads as a cycle, and ends
     verdict.start("[kspage/calc] a cycle longer than one pass coming out as a mark test...")

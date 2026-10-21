@@ -42,12 +42,29 @@ priv fn formula_like(text: U8[]): Bool //<
     c: = text[i]
     return c == '=' || c == '+' || c == '-' || c == '@' || c == '\t' || c == '\r'
 
-priv fn field_into(out: Str_builder$@, text: U8[], number: Bool) //< writes one cell to `out`
+priv fn plain_figure(text: U8[]): Bool //< whether the text is a bare signed number, `-1,234.5%`
+    //< Only digits, `.`, `,` and `%` after one sign: nothing a spreadsheet could run.
+    $i: Sz = 0
+    if text.len > 0 && (text[0] == '-' || text[0] == '+')
+        i = 1
+    $digits: = false
+    for i < text.len
+        c: = text[i]
+        if c.is_digit()
+            digits = true
+        else if c != '.' && c != ',' && c != '%'
+            return false
+        i += 1
+    return digits
+
+priv fn field_into(out: Str_builder$@, text: U8[]) //< writes one cell to `out`
     //< **A text a spreadsheet would run as a formula gets a leading `'`** (Excel's mark for "this
     //< is text"). A cell reading `+HYPERLINK(…)` or `-2+3` must stay words for whoever opens the
-    //< file. **A cell whose value is a number never does** (`number`), so `-5` stays `-5`.
+    //< file. **A bare number is never guarded**, so `-5` stays `-5`.
+    //< Caution: **Decide by the text written, not by the value's type.** A number cell's style
+    //< puts its prefix in front (`=HYPERLINK(…)+0*`), and a spreadsheet runs what it reads.
     $sb: = Str_builder.new()
-    if !number && formula_like(text)
+    if formula_like(text) && !plain_figure(text)
         sb.c(GUARD)
     sb.s(text)
     got: = sb.slice()
@@ -79,15 +96,14 @@ fn write_table(t: Block$@, out: Str_builder$@, arena: Arena$@) //< writes one ta
             if c > 0
                 out.c(',')
             if n: = cell_inline(tiles, r, c)
-                field_into(out, n.showing(), n.figure().is_some())
+                field_into(out, n.showing())
             else
-                field_into(out, "", false)
+                field_into(out, "")
         out.c('\n')
 
 priv fn cell_inline(tiles: List<|Tile|>$@, row: Sz, column: Sz): Inline$@? //<
     //< The text of the cell at row `row`, column `column`; none for a covered or empty cell
-    //< Its shown text is written, and whether its value is a number decides the guard
-    //< (`field_into`).
+    //< Its shown text is written, and that text decides the guard (`field_into`).
     for $i: Sz = 0; i < tiles.len; i += 1
         one: = tiles.get(i)
         if one.row == row && one.column == column && one.block != null &&

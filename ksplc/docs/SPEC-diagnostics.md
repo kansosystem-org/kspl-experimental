@@ -8,7 +8,7 @@ This document lists every diagnostic code `ksplc` reports: what each points at, 
 
 A diagnostic code's letter gives the weight ("5.2 The diagnostics' four weights" in [`SPEC-tools.md`](SPEC-tools.md#52-the-diagnostics-four-weights)), and each code is explained in [2](#2-the-list-of-warnings-w) / [3](#3-the-list-of-information-diagnostics-i) / [4](#4-the-list-of-hints-h).
 
-**`ksplc explain <code>` prints that code's section** (the code in either case), so the explanation is available where the diagnostic appeared. A compile or lint that printed a coded diagnostic names the command under its summary. An error, having no code, has no section: its message explains itself.
+**`ksplc explain <code>` prints that code's section** (the code in either case), so the explanation is available where the diagnostic appeared. **`ksplc explain` with no code lists every code**, one line each with its title, in this document's order, and marks the codes off by default. **A code's start lists the codes it begins**: `ksplc explain W` lists the warnings, `ksplc explain I03` the codes from I0301 on. A compile or lint that printed a coded diagnostic names the command under its summary. An error, having no code, has no section: its message explains itself.
 
 **Seven shapes are errors with no code**, so no setting can silence them (only a coded diagnostic has a level, "5.2 The diagnostics' four weights" in [`SPEC-tools.md`](SPEC-tools.md#52-the-diagnostics-four-weights)). The first four silently change what runs. The fifth is written but does nothing. The last two are a second way of writing what the notation already says:
 

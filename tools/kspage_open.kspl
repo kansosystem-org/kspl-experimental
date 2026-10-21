@@ -246,7 +246,7 @@ priv fn reusable(root: U8[], state_path: U8[]): U8[] //<
     count: = aim.state_count(body)
     for $i: Sz = 0; i < count; i += 1
         one: = aim.state_record(body, i)
-        if !one[1].equals(root)
+        if !one[1].equals(root) || !aim.on_loopback(one[0])
             continue
         at: = aim.port_num(aim.port_in_url(one[0]))
         if at != 0 && server_answers(at, aim.token_in_url(one[0]))
@@ -479,6 +479,10 @@ fn main(): I32 //< opens one document in kspage, starting the server and the bro
     tree: = tree_root(split[0], arena)
     said: = root_said if root_said.len > 0 else split[0] if tree.len == 0 else tree
     root: = full(said, arena)
+    if !aim.fits_note(root)
+        io.err()
+            .s("\{sys.program_name()\}: a folder whose name holds a line break cannot be served\n")
+        return 1
     // **Make it relative to the served folder** (the reason is at `aim.doc_under`).
     doc: = aim.doc_under(root, path)
 

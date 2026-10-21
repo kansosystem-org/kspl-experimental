@@ -76,7 +76,7 @@ priv fn load_jsonc(path: U8[], arena: Arena$@): json.Value
     return doc.val
 
 priv struct Make_cmd //<
-    //< The make target and the `VAR=` variable names read out of `command`'s literal text
+    //< The make target and the `VAR=` variable names read out of `command` and `args`
     found: Bool
     target: U8[]
     vars: List<|U8[]|>
@@ -147,12 +147,19 @@ priv fn typable(arena: Arena$@): List<|U8[]|> //<
                 out.push(arena.text().s("test-").s(s).take())
     return out
 
+priv fn command_line(task: json.Value, arena: Arena$@): U8[] //< `command` and its `args`, by spaces
+    //< A task may name make alone and its target among `args` (run with no shell between).
+    line: = arena.text().s(task.get("command").as_str().unwrap_or(""))
+    for a in task.get("args").arr_list(arena)
+        line.c(' ').s(arg_text(a))
+    return line.take()
+
 priv fn check_make_targets(tasks: json.Value, arena: Arena$@) //<
     //< Checks that each `make <target>` in `tasks.json` names a target that really exists
     names: = typable(arena)
     for t in tasks.get("tasks").arr_list(arena)
         label: = t.get("label").as_str().unwrap_or("")
-        cmd: = parse_make_cmd(t.get("command").as_str().unwrap_or(""), arena)
+        cmd: = parse_make_cmd(command_line(t, arena), arena)
         if !cmd.found
             continue
         name: = arena.text().s("tasks.json[\{label\}]: 'make \{cmd.target\}' really exists").take()

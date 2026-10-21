@@ -332,7 +332,7 @@ function kspageNarrow(ks) {
   });
   // Cancel and Escape discard the pending checkboxes; only OK applies them.
   panel.addEventListener("keydown", (e) => {
-    if (e.key !== "Escape") return;
+    if (e.key !== "Escape" || e.isComposing || e.keyCode === 229) return;
     e.preventDefault();
     e.stopPropagation();
     shut();

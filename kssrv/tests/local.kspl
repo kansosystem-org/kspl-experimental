@@ -8,6 +8,7 @@ import "kssrv/tests/client"
 import "std/chars"
 import "std/fs"
 import "std/mem" { Arena }
+import "std/sha256"
 import "std/str"
 import "std/strfmt" as _strfmt
 import "std/subproc"
@@ -52,15 +53,44 @@ fn mode_column(path: U8[], mode: U8[], arena: Arena$@): U8[] //<
 fn cases(port: I32, token: U8[], root: U8[], arena: Arena$@): Void!client.Http_end //<
     //< Runs every check on the local-use server, one topic after another
     auth: = client.bearer_head(token, arena)
+    early_cases(port, auth, arena)!
     token_cases(port, auth, root, arena)!
     host_cases(port, auth, arena)!
+    early_head_cases(port, auth, arena)!
     refusal_cases(port, token, arena)!
     status_cases(port, auth, arena)!
     read_cases(port, auth, arena)!
     stat_cases(port, auth, arena)!
     write_cases(port, auth, root, arena)!
+    conditional_cases(port, auth, arena)!
     cap_cases(port, auth, arena)!
     files_only_cases(port, auth, arena)!
+
+priv fn early_head_cases(port: I32, auth: U8[], arena: Arena$@): Void!client.Http_end
+    $valid: = client.Conn.open(port)!
+    defer valid.free()
+    // Split the last CRLF too, so checking a partial head cannot lose authentication.
+    valid
+        .send(arena.text().s("PUT /api/file?path=early.txt HTTP/1.1\r\nHost: 127.0.0.1\r\n").s(auth)
+        .s("Content-Length: 5\r\n\r").take())!
+    valid.send("\nhe")!
+    $waiting: = false
+    _early: = valid.next(false, 50, arena) catch e
+        if e != .timed_out
+            throw e
+        waiting = true
+    verdict.check("an authorized upload waits for its remaining bytes", waiting, "")
+    valid.send("llo")!
+    saved: = valid.next(false, 3000, arena)!
+    client.expect_status("an authorized partial upload completes", saved, 200, arena)
+    read: = client.get(port, "/api/file?path=early.txt", auth, arena)!
+    verdict.check("the partial upload keeps all its bytes", read.body.equals("hello"), "")
+    // A token on the first request must not authorize the next one on that connection.
+    valid
+        .send("PUT /api/file?path=early.txt HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: \
+            200000\r\n\r\n")!
+    again: = valid.next(false, 3000, arena)!
+    client.expect_status("each keep-alive request needs its own token", again, 401, arena)
 
 priv fn token_cases(port: I32, auth: U8[], root: U8[], arena: Arena$@): Void!client.Http_end //<
     //< which files need the token
@@ -207,6 +237,28 @@ priv fn stat_cases(port: I32, auth: U8[], arena: Arena$@): Void!client.Http_end 
     st_gone: = client.get(port, "/api/stat?path=nope.txt", auth, arena)!
     client.expect_status("/api/stat on a name that is not there is 404", st_gone, 404, arena)
 
+priv fn conditional_cases(port: I32, auth: U8[], arena: Arena$@): Void!client.Http_end //<
+    //< A stale writer and a second creator must leave the first writer's bytes intact.
+    path: = "/api/file?path=conditional.txt"
+    missing: = arena.text().s(auth).s("X-Kanso-If-Content: missing\r\n").take()
+    first: = client.put_file(port, path, missing, "original", arena)!
+    client.expect_status("conditional creation succeeds once", first, 200, arena)
+    second: = client.put_file(port, path, missing, "overwrite", arena)!
+    client.expect_status("conditional creation refuses an existing file", second, 409, arena)
+    hex: U8[sha256.HEX_LEN] = ::{}
+    sha256.write_hex(sha256.hash("original"), U8$[]::hex)
+    expected: = arena.text().s(auth).s("X-Kanso-If-Content: ").s(U8[]::hex).s("\r\n").take()
+    saved: = client.put_file(port, path, expected, "winner", arena)!
+    client.expect_status("matching content allows the write", saved, 200, arena)
+    stale: = client.put_file(port, path, expected, "loser", arena)!
+    client.expect_status("a stale baseline refuses the write", stale, 409, arena)
+    got: = client.get(port, path, auth, arena)!
+    verdict.check("the first writer's bytes survive", got.body.equals("winner"),
+        client.shown(got, arena))
+    bad: = arena.text().s(auth).s("X-Kanso-If-Content: invalid\r\n").take()
+    refused: = client.put_file(port, path, bad, "bad", arena)!
+    client.expect_status("malformed content guards are refused", refused, 400, arena)
+
 priv fn write_cases(port: I32, auth: U8[], root: U8[], arena: Arena$@): Void!client.Http_end //<
     //< writing a file
     put: = client.put_file(port, "/api/file?path=sub/two.txt", auth, PUT_BODY, arena)!
@@ -272,3 +324,19 @@ priv fn files_only_cases(port: I32, auth: U8[], arena: Arena$@): Void!client.Htt
     car: = client.post_json(port, "/api/car", auth, "{\"dist_mm\":250,\"line\":2,\"seq\":1}",
         client.DEFAULT_TIMEOUT_MS, arena)!
     client.expect_status("--local answers files only: /api/car is not there", car, 404, arena)
+
+priv fn early_cases(port: I32, auth: U8[], arena: Arena$@): Void!client.Http_end //<
+    //< refuses a head before its body
+    for which in Range.asc(3)
+        $c: = client.Conn.open(port)!
+        defer c.free()
+        host: = "untrusted.example" if which == 1 else "localhost"
+        target: = "/" if which == 2 else "/api/file?path=early.txt"
+        method: = "GET" if which == 2 else "PUT"
+        head: = arena.text().s(method).s(" ").s(target).s(" HTTP/1.1\r\nHost: ").s(host)
+            .s("\r\nContent-Length: 200000\r\nConnection: close\r\n")
+        if which == 1
+            head.s(auth)
+        c.send(head.s("\r\n").take())!
+        got: = c.next(false, client.DEFAULT_TIMEOUT_MS, arena)!
+        client.expect_status("a refused head needs no body", got, 403 if which == 1 else 401, arena)

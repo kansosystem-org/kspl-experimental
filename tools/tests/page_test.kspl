@@ -114,6 +114,25 @@ fn test_a_port_that_cannot_be_waited_on() //< a string that is not a port become
     verdict
         .pass("only a port that gets through becomes a number; out of range and non-numeric give 0.")
 
+fn test_a_folder_cannot_plant_a_record() //< a line break in a value adds no record of its own
+    //< A folder from an archive, named with line breaks, once added a record naming another host.
+    verdict.start("[tools/kspage_aim] a folder planting a record in the note test...")
+    planted: = "x\nhttp://evil.example:8999/#t=AT\n/home/u/notes"
+    $one: = Str_builder.new()
+    note: = aim.state_text("http://127.0.0.1:8100/#t=k1", planted, "", one@)
+    assert(aim.state_count(note) == 0, "a folder holding a line break is not written")
+    assert(!aim.fits_note(planted) && !aim.fits_note("a\rb") && aim.fits_note("/home/u/notes"),
+        "only a value with no line break fits")
+    // A note written before this check could hold one; it is not copied forward.
+    old: = "http://evil.example:8999/#t=AT\n/home/u/notes\n"
+    $two: = Str_builder.new()
+    kept: = aim.state_text("http://127.0.0.1:8100/#t=k1", "/home/u/dl", old, two@)
+    assert(aim.state_count(kept) == 1, "a record naming another host is dropped")
+    assert(aim.on_loopback("http://127.0.0.1:8100/#t=k1") &&
+        !aim.on_loopback("http://evil.example:8999/#t=AT") &&
+        !aim.on_loopback("http://127.0.0.1.evil.example:8999/"), "only 127.0.0.1 is this machine")
+    verdict.pass("a folder's name cannot plant a record, and one naming another host is dropped.")
+
 fn test_the_note_lists_the_running_servers() //< the note is a run of records, newest first
     verdict.start("[tools/kspage_aim] the note of the running servers test...")
     $one: = Str_builder.new()
@@ -160,7 +179,7 @@ fn test_a_note_that_was_cut_short() //< a note cut off partway is read as far as
         dir.clear()
         dir.s("/dir/\{i\}")
         body.clear()
-        made: = aim.state_text("http://h:1/#t=k", dir.slice(), had, body@)
+        made: = aim.state_text("http://127.0.0.1:1/#t=k", dir.slice(), had, body@)
         // Caution: **Copy it**; the next pass rebuilds the same buffer.
         keep: = arena.text()
         keep.s(made)
@@ -173,7 +192,9 @@ fn test_a_note_rebuilt_from_its_records() //< records put back one by one read b
     //< **Listing and stopping rebuild the note this way**, keeping only the servers still
     //< answering.
     verdict.start("[tools/kspage_aim] rebuilding the note record by record test...")
-    had: = "http://h:1/#t=a\n/one\nhttp://h:2/#t=b\n/two\nhttp://h:3/#t=c\n/my docs\n"
+    had: =
+        "http://127.0.0.1:1/#t=a\n/one\nhttp://127.0.0.1:2/#t=b\n/two\nhttp://127.0.0.1:3/#t=c\n/my \
+            docs\n"
     $kept: = Str_builder.new()
     // The second server stopped answering, so only the first and the third are put back.
     for i in Sz[]::{ 0, 2 }
@@ -182,7 +203,7 @@ fn test_a_note_rebuilt_from_its_records() //< records put back one by one read b
     got: = kept.slice()
     assert(aim.state_count(got) == 2, "the records put back are all there is")
     assert(aim.state_record(got, 0)[1].equals("/one"), "the order is kept")
-    assert(aim.state_record(got, 1)[0].equals("http://h:3/#t=c"), "the URL comes back whole")
+    assert(aim.state_record(got, 1)[0].equals("http://127.0.0.1:3/#t=c"), "the URL comes back whole")
     // A folder with a space in it stays one folder.
     assert(aim.state_record(got, 1)[1].equals("/my docs"), "a space in a folder does not split it")
     verdict.pass("a note put back record by record reads back the records, in order, unchanged.")

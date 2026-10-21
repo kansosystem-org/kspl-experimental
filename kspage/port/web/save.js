@@ -96,12 +96,14 @@ function kspageSave(kf) {
     // Caution: **Do not write the extension here** — only `file.js`'s `bodyExt` decides it, or a
     // text document would be offered kspage's extension.
     const target = path || first;
+    let expected = mine.read;
     if (target !== mine.path) {
       const there = await ui.localStat(target);
       if (there === null) {
         app.focus();
         return;   // `localStat` has said why it could not tell
       }
+      expected = there ? undefined : null;
       const asked = mine.id + "\n" + target;
       if (there && armed !== asked) {
         armed = asked;
@@ -112,11 +114,11 @@ function kspageSave(kf) {
       }
     }
     armed = "";
-    await saveToPath(target, body, mine);
+    await saveToPath(target, body, mine, expected);
   };
 
   // Writes back to the local path.
-  const saveToPath = async (path, body, mine) => {
+  const saveToPath = async (path, body, mine, expected) => {
     // Caution: **Where it changed outside, do not silently overwrite** (another window's write
     // would be lost); how it compares is named.
     if (await changedOutside(path, mine)) {
@@ -124,7 +126,12 @@ function kspageSave(kf) {
       app.focus();
       return;
     }
-    const stopped = await ui.localWrite(path, body);
+    const stopped = await ui.localWrite(path, body, expected);
+    if (stopped === "conflict") {
+      deniedOutside(path);
+      app.focus();
+      return;
+    }
     if (stopped) {
       deny("Could not write to the file on the local server (" + stopped + ")");
       app.focus();

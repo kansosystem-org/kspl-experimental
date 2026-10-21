@@ -35,10 +35,23 @@ kspage-serve: kspage-web kssrv
 
 KSPAGE_OPEN_EXE := $(OUT_DIR)/kspage_open.exe
 
+# The file icon, drawn once as `kspage.svg`; `kspage.ico` is rendered from it.
+KSPAGE_ICON_DIR := kspage/port/desktop
+
+# **On Windows the icon is built into the opener**: a file associated with a program shows that
+# program's icon, so no registry entry is needed.
+KSPAGE_OPEN_RES :=
+ifeq ($(PLATFORM),win32)
+WINDRES ?= windres
+KSPAGE_OPEN_RES := $(OUT_DIR)/kspage_open_icon.o
+$(KSPAGE_OPEN_RES): $(KSPAGE_ICON_DIR)/kspage.rc $(KSPAGE_ICON_DIR)/kspage.ico | $(OUT_DIR)
+	$(WINDRES) --include-dir=$(KSPAGE_ICON_DIR) -O coff $< -o $@
+endif
+
 # **The association points at this executable**, not `ksplc run`: a double-click stands elsewhere.
-$(KSPAGE_OPEN_EXE): $(STAGE1_EXE)
+$(KSPAGE_OPEN_EXE): $(STAGE1_EXE) $(KSPAGE_OPEN_RES)
 	@echo "# BUILDING the opener (out/kspage_open.exe)"
-	$(call kspl_build,tools/kspage_open.kspl,kspage_open,,$(GUI_LDFLAGS))
+	$(call kspl_build,tools/kspage_open.kspl,kspage_open,,$(GUI_LDFLAGS) $(KSPAGE_OPEN_RES))
 	@echo "# built -> $(KSPAGE_OPEN_EXE)"
 
 ## Run|kspage-open|Open one document (`FILE=` is wanted)
@@ -83,9 +96,11 @@ KSPAGE_ASSOC_STEPS := \
 	'its body: $(KSPAGE_OPEN_EXE) "$$1"  (Pass input: as arguments); save the app' \
 	'Finder -> Get Info on $(KSPAGE_SAMPLE) -> Open with -> that app -> Change All'
 else
-KSPAGE_ASSOC_LEAD := install it for your user with these four lines:
+KSPAGE_ASSOC_LEAD := install it for your user with these six lines:
 KSPAGE_ASSOC_STEPS := \
 	'xdg-mime install --novendor $(KSPAGE_MIME)' \
+	'mkdir -p ~/.local/share/icons/hicolor/scalable/mimetypes' \
+	'cp $(KSPAGE_ICON_DIR)/kspage.svg ~/.local/share/icons/hicolor/scalable/mimetypes/application-x-kspage.svg' \
 	'cp $(KSPAGE_DESKTOP) ~/.local/share/applications/' \
 	'update-desktop-database ~/.local/share/applications' \
 	'xdg-mime default kspage.desktop application/x-kspage'
@@ -101,7 +116,7 @@ test-kspage-desktop: | $(OUT_DIR)
 		'[Desktop Entry]' 'Type=Application' 'Version=1.0' \
 		'Name=kspage' 'Comment=Open this file with kspage in a browser' \
 		"Exec=$$here/$(KSPAGE_OPEN_EXE) %f" \
-		"Path=$$here" 'Terminal=false' 'NoDisplay=true' \
+		"Path=$$here" "Icon=$$here/$(KSPAGE_ICON_DIR)/kspage.svg" 'Terminal=false' 'NoDisplay=true' \
 		'MimeType=application/x-kspage;text/plain;text/csv;' \
 		> $(KSPAGE_DESKTOP)
 	@if command -v desktop-file-validate >/dev/null 2>&1; then \
@@ -120,6 +135,7 @@ kspage: kspage-web kssrv $(KSPAGE_OPEN_EXE) $(KSPAGE_SAMPLE) test-kspage-desktop
 		'  <mime-type type="application/x-kspage">' \
 		'    <comment>kspage document</comment>' \
 		'    <sub-class-of type="application/json"/>' \
+		'    <generic-icon name="x-office-document"/>' \
 		'    <glob pattern="*.kspage"/>' \
 		'  </mime-type>' \
 		'</mime-info>' \

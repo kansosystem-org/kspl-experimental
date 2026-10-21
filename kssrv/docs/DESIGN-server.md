@@ -34,7 +34,7 @@ The one flag `--local` sets four things together, and the body cap follows it, s
 
 How the token is made, passed on and compared is in the agreement ("How the token gets across" in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md)).
 
-**The body cap is checked as soon as the head names the length, but the token only once the whole request has arrived.** So a client without a token can make the server hold the connection cap × the body cap (over 500MB for local use). Checking the token earlier needs `std/http` to pass on a head whose body has not arrived. That cost is not paid in advance, since local use listens on the loopback alone. The stage is in the "kssrv" section of [`docs/PLAN.md`](../../docs/PLAN.md).
+**The server checks the Host and token as soon as the request head arrives.** `http.parse_request_head` shares the complete reader's validation. A refused request never waits for its declared body. The page needs no token only for GET or HEAD with no body. Before a head is accepted, each socket read returns to the parser. A read can include body bytes, but the server checks the head before collecting further chunks.
 
 ## One thread, many connections
 
@@ -84,7 +84,7 @@ A *non-blocking* socket returns at once when it has nothing to give, instead of 
 
 **A blocking read or write cannot be used**: waiting partway through one connection would stop every other. Instead:
 
-* **Receiving** applies `http.parse_request` to the part-read buffer each time more arrives. `Http_error.incomplete` means "wait for more".
+* **Receiving** validates the head once, then waits for the declared byte count before parsing the complete request.
 * **Sending** builds the bytes with `http.format_response`, and `Conn` holds how far it has sent.
 
 **The interests (readable or writable) are rebuilt before every wait** (`reactor.clear`, then registration). Kept by difference, they can leave a closed peer registered, or a connection never switched back from part-sent to part-read.
@@ -162,7 +162,7 @@ With no free slot, an accepted connection is closed without a response. Making i
 
 ### Parsing waits until there is something new to decide
 
-**`conn_build` parses only when the head has ended (or met a line break it refuses), and then only once the whole body is in** (`head_decided`, `need`). Parsed from the start on every read, a request arriving a byte at a time costs its length squared. Take a 64 KiB head of short headers, with its body sent one byte per packet: each byte cost a full parse. `http.request_length` gives the whole request's length once the head is in, so the body's arrival is a count.
+**`conn_build` checks the head once it ends** (`head_decided`). It checks local authorization before waiting for the declared body (`need`). `http.parse_request_head` supplies the head size and body length through the same parser as `http.parse_request`. Temporary head allocations are released before waiting. Once the body arrives, the complete reader supplies the request. This avoids reparsing on every incoming byte.
 
 ### A file is sent in chunks as the connection drains
 

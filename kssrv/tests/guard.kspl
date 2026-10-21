@@ -17,7 +17,8 @@ import "std/verdict"
 priv const DOT_RELS: U8[][4] = ::{ ".env", ".git/config", "sub/.hidden.txt",
     ".well-known/acme.txt" }
 priv const DOT_BODIES: U8[][4] = ::{ "SECRET=1\n", "[core]\n", "hidden\n", "well known\n" }
-priv const HIDDEN_TARGETS: U8[][4] = ::{ "/.env", "/.git/config", "/sub/.hidden.txt", "/%2eenv" }
+priv const HIDDEN_TARGETS: U8[][5] = ::{ "/.env", "/.git/config", "/sub/.hidden.txt", "/%2eenv",
+    "/sub%5c.hidden.txt" }
 
 priv const BIG_REL: U8[] = "big.bin" //< larger than the chunks the server sends a file in
 priv const BIG_BYTES: Sz = 3 * 1024 * 1024 + 7 //< not a multiple of a chunk, so the last is short
@@ -35,6 +36,12 @@ fn place(root: U8[], arena: Arena$@): Bool //< puts this file's fixtures under t
         return false
     io.write_file(fs.join(root, BIG_REL, arena), client.filler(BIG_BYTES, arena)) catch
         return false
+    // Elsewhere a `\` is part of a name, so the file Windows reaches by `sub\.hidden.txt` is
+    // made under that name: the request then finds a file, and only the filter keeps it back.
+    if !sys.is_windows()
+        literal: = arena.text().s(root).s("/sub\\.hidden.txt").take()
+        io.write_file(literal, "SECRET=2\n") catch
+            return false
     return true
 
 fn cases(port: I32, arena: Arena$@): Void!client.Http_end //< every check in this file, in turn

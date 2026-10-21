@@ -72,6 +72,7 @@ function kspageLocal(ui) {
   // Caution: **Keep "it is there" and "it got through" apart.** A 401 means "there, but no token";
   // calling it "absent" hides that reopening the URL is all it takes.
   let here = false;   // the server is there and the token got through too
+  let conditionalWrites = false;
   let told = "";      // what to tell a person (empty means there is nothing to say)
   const ask = async () => {
     let got = null;
@@ -99,6 +100,7 @@ function kspageLocal(ui) {
       return;   // it is a page served by something that is not kssrv
     }
     here = said.local === true;
+    conditionalWrites = said.conditional_writes === true;
   };
 
   // Reads the bytes at that path; where they cannot be read it returns null and gives the reason.
@@ -128,14 +130,22 @@ function kspageLocal(ui) {
     }
   };
   // Writes to that path. Empty text if written, and the reason if not.
-  const writeAt = async (path, data) => {
+  const writeAt = async (path, data, expected) => {
+    if (!conditionalWrites) return "Rebuild and restart kssrv to save with conflict protection";
     let got = null;
     try {
-      got = await send(at(path), { method: "PUT", body: data });
+      const headers = head();
+      if (expected !== undefined) {
+        const digest = expected === null ? null : await crypto.subtle.digest("SHA-256",
+          new TextEncoder().encode(expected));
+        headers["X-Kanso-If-Content"] = digest === null ? "missing"
+          : Array.from(new Uint8Array(digest), (n) => n.toString(16).padStart(2, "0")).join("");
+      }
+      got = await send(at(path), { method: "PUT", headers, body: data });
     } catch (e) {
       return lostWhy(e);
     }
-    return got.ok ? "" : reasonOf(got.status);
+    return got.status === 409 ? "conflict" : (got.ok ? "" : reasonOf(got.status));
   };
   // Whether something is at that path: true or false, and null where it could not be asked (it
   // gives the reason, as `readAt` does). **The contents are not returned** (read it again where

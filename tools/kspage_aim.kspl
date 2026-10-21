@@ -221,7 +221,7 @@ fn state_text(url: U8[], root: U8[], had: U8[], text: Str_builder$@): U8[] //< t
         if kept >= MAX_RECORDS
             break
         one: = state_record(had, i)
-        if one[1].equals(root)
+        if one[1].equals(root) || !on_loopback(one[0])
             continue
         state_put(text, one[0], one[1])
         kept += 1
@@ -230,7 +230,18 @@ fn state_text(url: U8[], root: U8[], had: U8[], text: Str_builder$@): U8[] //< t
 fn state_put(text: Str_builder$@, url: U8[], root: U8[]) //< adds one record to the end of a note
     //< **The one place that writes a record**, so `state_record` reads back what every writer
     //< wrote.
+    //< Caution: **Write nothing for a value holding a line break** (`fits_note`): a folder named
+    //< with one would add a record of its own choosing, a URL to some other server included.
+    if !fits_note(url) || !fits_note(root)
+        return
     text.s(url).c('\n').s(root).c('\n')
+
+fn fits_note(value: U8[]): Bool //< whether a value can stand as one line of the note
+    return value.find_char('\n').is_none() && value.find_char('\r').is_none()
+
+fn on_loopback(url: U8[]): Bool //< whether the URL names a server on this machine, 127.0.0.1
+    //< kssrv's URL always does; a record naming another host was not written by this tool.
+    return url.starts_with("http://127.0.0.1:")
 
 priv fn state_line(body: U8[], i: Sz): U8[] //< the note's i-th line
     //< **Empty where the note has fewer lines** (a note cut off partway can still be read).

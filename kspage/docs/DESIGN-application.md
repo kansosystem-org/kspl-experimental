@@ -60,7 +60,7 @@ Opening a saved text replaces the whole document, and everything that pointed in
 
 **A text a spreadsheet would run as a formula is written with a leading `'`** (`field_into`): one starting with `=`, `+`, `-`, `@`, a tab or a carriage return. A spreadsheet opening the file reads such a field as a formula. So a cell typed as words (`-to do`, or a received document's `+HYPERLINK(…)`) would run on the reader's machine. `'` is the mark spreadsheets read as "this is text". A field is changed, not merely quoted, because spreadsheets run a quoted formula too.
 
-* **A cell whose value is a number is never marked** (`Inline.figure`): `-5` stays `-5`, and so does a formula's answer. Marked, every negative number would arrive as text.
+* **A bare number is never marked** (`plain_figure`): `-5` stays `-5`, and so does a formula's answer. Marked, every negative number would arrive as text. **The text written decides, not the value's type**: a number style's prefix stands in front of the figure, and a received document's prefix can read `=HYPERLINK(…)`.
 * **Reading takes the `'` back off, exactly where writing puts one on** (`unguarded`). Take a field whose text, after its leading `'`s, starts with one of those characters. That field loses one `'`. So a text typed with its own leading `'` (`'=x`) goes out as `''=x` and comes back as typed, and kspage reads what it wrote (the rule above).
 
 ## A document's past lives in its files
@@ -106,6 +106,11 @@ Just before saving, kspage reads the file again. If it is not the text this wind
 
 The same path can be open in two windows.
 
+**The server checks the baseline again when accepting the write.** The page sends its SHA-256 digest in `X-Kanso-If-Content`. A new name uses `missing`, so two creators cannot overwrite each other. An explicitly confirmed replacement remains unconditional.
+
+The server checks and replaces in one event-loop turn. Two windows sharing that server cannot both replace the same baseline with different text. Direct filesystem writers and other server processes are outside this guarantee. An older server without `conditional_writes` is refused for saving, with instructions to rebuild and restart it.
+
+
 Caution: **Overwrite it silently and what was written in the other window is lost.**
 
 So the file is read again before writing, and **if it differs from the text last seen there, the save refuses**, naming that place. A save goes like this:
@@ -119,9 +124,16 @@ sequenceDiagram
   S->>F: read
   S-->>P: the file's text now
   alt the same as the text this page last read or wrote there
-    P->>S: PUT /api/file (the new text)
-    S->>F: write
-    Note over P: the new text becomes the text last seen
+    P->>S: PUT /api/file (new text and baseline digest)
+    S->>F: compare bytes again
+    alt baseline still matches
+      S->>F: replace
+      S-->>P: 200
+      Note over P: remember the saved text
+    else another write won
+      S-->>P: 409
+      Note over P: refuse and keep the draft
+    end
   else different, since another window saved meanwhile
     Note over P: refuse, naming the file
   end

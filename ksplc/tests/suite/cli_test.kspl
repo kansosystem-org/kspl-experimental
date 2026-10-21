@@ -6,7 +6,7 @@
 // The properties pinned down:
 //   * `ksplc info <subject>` answers one line, and rejects a wrong subject, naming the valid ones
 //   * `ksplc clean` answers with the directory it erased; `ksplc build`, a runnable program
-//   * `ksplc explain <code>` prints only that code's section, and rejects an unknown code
+//   * `ksplc explain` prints one code's section, or lists the codes, and rejects an unknown code
 //   * **an option that has no effect on that subcommand is an error** (Principle 5 in
 //     docs/DESIGN-principles.md). The error names the subcommands that accept it
 //   * `ksplc --help`'s per-subcommand list agrees with the pairs really accepted
@@ -298,7 +298,14 @@ priv fn case_explain(arena: Arena$@) //<
         "\"2. The list of warnings (W)\" in ksplc/docs/SPEC-diagnostics.md")
     ng_case("explain: an unknown code is turned away", U8[][]::{ "explain", "W9999" },
         "not a diagnostic code")
-    ng_case("explain: with no code it turns it away", U8[][]::{ "explain" }, "usage: ksplc explain")
+    ok_case("explain: with no code it lists every code with its title", U8[][]::{ "explain" },
+        "W0101  An out-of-bounds array access")
+    ok_case("explain: the list marks a code off by default", U8[][]::{ "explain" },
+        "I0402  A `pub` used only from inside its package  (off by default)")
+    ok_case("explain: a code's start lists the codes it begins", U8[][]::{ "explain", "i03" },
+        "I0301  An unnecessary `::` cast")
+    ng_case("explain: a start no code begins with is turned away", U8[][]::{ "explain", "W9" },
+        "no diagnostic code starts with 'W9'")
     ng_case("explain: two codes are turned away", U8[][]::{ "explain", "W0207", "W0202" },
         "usage: ksplc explain")
     ng_case("explain: an option is turned away", U8[][]::{ "explain", "--stats", "W0207" },

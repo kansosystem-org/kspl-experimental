@@ -103,6 +103,45 @@ Note: **A library can also be handed over without its KSPL source.** Build it wi
 
   With [CodeLLDB](https://marketplace.visualstudio.com/items?itemName=vadimcn.vscode-lldb) installed (third-party, not in the release artifacts), `F5` on an open `.kspl` runs everything from the build to the debugger's launch.
 
+### The `.kspl` file icon outside VS Code
+
+**Inside VS Code, the extension gives each `.kspl` file its icon**: the KSPL ensō and K on a white page. A `.kspage` document's icon has a larger K and no ring, so the two differ even at their smallest. File managers need the steps below, run once from this folder.
+
+**Linux:**
+
+```sh
+mkdir -p ~/.local/share/mime/packages ~/.local/share/icons/hicolor/scalable/mimetypes
+cat > ~/.local/share/mime/packages/kspl.xml <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="text/x-kspl">
+    <comment>KSPL source</comment>
+    <sub-class-of type="text/plain"/>
+    <glob pattern="*.kspl"/>
+  </mime-type>
+</mime-info>
+EOF
+update-mime-database ~/.local/share/mime
+cp .vscode/extensions/kspl/kspl-file.svg ~/.local/share/icons/hicolor/scalable/mimetypes/text-x-kspl.svg
+```
+
+**Windows** (PowerShell, as yourself). It ties `.kspl` to VS Code under a name of its own, which carries the icon:
+
+```powershell
+$ico = (Resolve-Path .vscode\extensions\kspl\kspl-file.ico).Path
+$code = "$env:LOCALAPPDATA\Programs\Microsoft VS Code\Code.exe"
+reg add "HKCU\Software\Classes\KSPL.Source" /ve /d "KSPL source" /f
+reg add "HKCU\Software\Classes\KSPL.Source\DefaultIcon" /ve /d "$ico" /f
+reg add "HKCU\Software\Classes\KSPL.Source\shell\open\command" /ve /d "`"$code`" `"%1`"" /f
+reg add "HKCU\Software\Classes\.kspl" /ve /d "KSPL.Source" /f
+reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.kspl" /f
+ie4uinit.exe -show
+```
+
+* The `reg delete` line drops an earlier "Open with" choice, which would hide the icon. An error saying the key does not exist only means there was none.
+* **The icon is read from this folder.** After moving or cloning it again, run the lines again.
+* VS Code installed for all users sits under `C:\Program Files\Microsoft VS Code\`; change `$code` to match.
+
 ## Opening a `.kspage` document on a double-click
 
 **This section makes a `.kspage` document open in your browser when you double-click it in the file manager.** It needs a clone of this repository that builds from source ([`HOWTO-build.md`](HOWTO-build.md)), not only the unpacked folder. `make kspage` builds the three programs it uses: the opener, the server and the page ("Where the double-click opener lives" in [`tools/docs/DESIGN-tools.md`](../tools/docs/DESIGN-tools.md)).
@@ -135,12 +174,14 @@ A `.kspage` file double-clicked in a file manager opens in a browser through `ou
   make kspage
   ```
 
-  It builds the page, the server, the opener and `out/sample.kspage` to double-click. It writes `out/kspage.desktop` (checked by `desktop-file-validate` where installed) and prints the four lines below.
+  It builds the page, the server, the opener and `out/sample.kspage` to double-click. It writes `out/kspage.desktop` (checked by `desktop-file-validate` where installed) and prints the six lines below.
 
-2. **Run the four lines yourself.** `make` does not write under your home directory.
+2. **Run the six lines yourself.** `make` does not write under your home directory.
 
   ```sh
   xdg-mime install --novendor out/kspage-mime.xml
+  mkdir -p ~/.local/share/icons/hicolor/scalable/mimetypes
+  cp kspage/port/desktop/kspage.svg ~/.local/share/icons/hicolor/scalable/mimetypes/application-x-kspage.svg
   cp out/kspage.desktop ~/.local/share/applications/
   update-desktop-database ~/.local/share/applications
   xdg-mime default kspage.desktop application/x-kspage
@@ -148,7 +189,9 @@ A `.kspage` file double-clicked in a file manager opens in a browser through `ou
 
 3. **Double-click `out/sample.kspage`**, the one way to confirm the association works. It holds [`kspage/content/example.kspl`](../kspage/content/example.kspl)'s content. Its title is "Sample document".
 
-**Do not skip the first of the four lines.** Linux ties an application to a MIME type (a name for a kind of file), not to an extension. Undeclared, `.kspage` reads as `application/octet-stream`, which the last line cannot tie.
+**Do not skip the first of the six lines.** Linux ties an application to a MIME type (a name for a kind of file), not to an extension. Undeclared, `.kspage` reads as `application/octet-stream`, which the last line cannot tie.
+
+**The second and third lines give each `.kspage` file its icon**, a white page with the KSPL K. A file manager may show it only after you log in again.
 
 **Do not edit `Path=` or `%f` in the `.desktop` file.** A double-click starts in the home directory, hence `Path=`, and opens one file, hence `%f`, not `%F`.
 
@@ -170,9 +213,44 @@ Each association below runs `out/kspage_open.exe` with one file's path. **No gat
 * **Windows**:
   1. Right-click a `.kspage` file.
   2. Choose "Open with ▸ Choose another app ▸ Look for another app on this PC".
-  3. Pick `out\kspage_open.exe`, and tick "Always use this app".
+  3. Pick `out\kspage_open.exe`, and tick "Always use this app". The files then show the opener's icon, a white page with the KSPL K, which the build puts inside it.
   * **Do not tie `.json` to it.** Every settings and data file on the machine would open in kspage ("The extension is kspage's own and names no format inside" in [`kspage/docs/DESIGN-application.md`](../kspage/docs/DESIGN-application.md)).
 * **macOS** — Finder's "Get Info ▸ Open with" needs an application bundle (`.app`). Make one in Automator's "Application" running `out/kspage_open.exe "$1"`, and tie that.
+
+### Resetting the association
+
+**Do this when a `.kspage` file shows the wrong icon or opens the wrong program.** This happens after a rebuild in another folder, or after a fresh clone. The system then remembers an old opener, or two of them.
+
+**Windows** (PowerShell, as yourself; no administrator needed):
+
+1. **Rebuild the opener, so it holds the icon.** In the MSYS2 UCRT64 shell, run `pacman -S --needed mingw-w64-ucrt-x86_64-binutils` once, then `make kspage`. In Explorer, `out\kspage_open.exe` itself now shows the washi page. If it still shows a plain program icon, the rebuild did not happen.
+2. **Make Windows forget the old choices.** An error saying a key does not exist only means there was nothing to forget.
+
+  ```powershell
+  reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.kspage" /f
+  reg delete "HKCU\Software\Classes\Applications\kspage_open.exe" /f
+  reg delete "HKCU\Software\Classes\.kspage" /f
+  ```
+
+  * The first line removes the program chosen for `.kspage`, and the "Open with" list.
+  * The second removes where Windows remembers `kspage_open.exe` to be. A stale path there is why the menu can list it twice.
+  * The third removes any other tie to `.kspage`.
+3. **Clear the icon cache:** run `ie4uinit.exe -show`, or sign out and in again.
+4. **Tie it again**, as in the steps above. In step 3 there, pick the `out\kspage_open.exe` of the folder you now work in. Do not pick an entry already in the list.
+
+If a `reg delete` line says access is denied, sign out and in, then run it again. Explorer may hold the key open.
+
+**Linux:**
+
+```sh
+rm -f ~/.local/share/applications/kspage.desktop
+sed -i '/application\/x-kspage/d' ~/.config/mimeapps.list
+update-desktop-database ~/.local/share/applications
+```
+
+Then run `make kspage` and its six lines again. The new `kspage.desktop` holds the path of the folder you ran it in.
+
+**macOS:** delete the Automator application, make it again for the current `out/kspage_open.exe`, and tie that.
 
 ### When a double-click shows nothing
 

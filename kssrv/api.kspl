@@ -12,6 +12,7 @@ import "std/http"
 import "std/io"
 import "std/json" + { Json_builder }
 import "std/mem" { heap_used_bytes }
+import "std/sha256" + { Sha256 }
 import "std/str" { Str_builder }
 import "std/sys"
 import "std/url"
@@ -55,6 +56,7 @@ fn queue_api_status(c: conn.Conn$@, ctx: conn.Ctx$@, keep: Bool) //<
     // absolute path would tell anyone who asks how this machine's folders are laid out.
     val: = b.obj().set("root", b.str_val(ctx.root if ctx.is_local() else ""))
         .set("local", b.bool_val(ctx.is_local()))
+        .set("conditional_writes", b.bool_val(ctx.is_local()))
         .set("uptime_s", b.int_val(sys.wall_seconds() - conn.stats.started_s))
         .set("requests", b.int_val(conn.stats.requests))
         .set("commands", b.int_val(conn.stats.commands))
@@ -113,6 +115,11 @@ fn queue_api_file(c: conn.Conn$@, t: conn.Target, req: http.Request$@, root: U8[
     if req.method.equals("GET")
         queue_get_file(c, path, keep)
         return
+    if expected: = req.headers.find("X-Kanso-If-Content")
+        status: = check_content(path, expected)
+        if status != 200
+            queue_json_error(c, status)
+            return
     queue_put_file(c, path, req.body, keep)
 
 fn queue_get_file(c: conn.Conn$@, path: U8[], keep: Bool) //<
@@ -129,6 +136,34 @@ fn queue_get_file(c: conn.Conn$@, path: U8[], keep: Bool) //<
         queue_json_error(c, 500)
         return
     conn.queue_file(c, "application/octet-stream", file, size, keep)
+
+priv fn check_content(path: U8[], expected: U8[]): I32 //< checks a conditional write's baseline
+    //< The event loop checks and replaces without yielding to another request.
+    //< This orders writes through this server; it cannot lock out unrelated filesystem writers.
+    if expected.equals("missing")
+        return 409 if fs.exists(path) else 200
+    if expected.len != sha256.HEX_LEN
+        return 400
+    for c in expected
+        if !(c >= '0' && c <= '9') && !(c >= 'a' && c <= 'f')
+            return 400
+    // Caution: **Only an ordinary file is opened**, as for a GET (`conn.regular_file_size`): a
+    // FIFO's read waits for ever and holds the server.
+    if conn.regular_file_size(path).is_none()
+        return 409
+    $file: = io.open(path, "rb") catch
+        return 500
+    $hash: = Sha256.new()
+    buf: U8[8192] = ::{}
+    for
+        n: = file.read(U8$[]::buf) catch
+            return 500
+        if n == 0
+            break
+        hash.update((U8[]::buf).sub(0, n))
+    hex: U8[sha256.HEX_LEN] = ::{}
+    sha256.write_hex(hash.finalize(), U8$[]::hex)
+    return 200 if (U8[]::hex).equals(expected) else 409
 
 fn queue_put_file(c: conn.Conn$@, path: U8[], body: U8[], keep: Bool) //<
     //< Writes `body` to the file at `path` and queues a response saying how much was written
@@ -307,11 +342,7 @@ priv fn takes(r: Route, method: U8[]): Bool //< whether the route takes that met
     return false
 
 fn queue_api(c: conn.Conn$@, t: conn.Target, req: http.Request$@, ctx: conn.Ctx$@, keep: Bool)
-    // **For local use, all of `/api/` needs a token**; decided per endpoint, a new one forgets it.
-    // Only static serving, which passes the token on, needs none.
-    if ctx.is_local() && !authorized(req, ctx.token)
-        queue_json_error(c, 401)
-        return
+    // The connection pump authorizes the head before reading its body.
     for r in ROUTES
         if !t.path.equals(r.path)
             continue

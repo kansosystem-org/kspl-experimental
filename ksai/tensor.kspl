@@ -53,6 +53,8 @@ impl<|T|> Tensor<|T|>
         shape_ptr: = Sz$@::arena.alloc(shape_bytes)
         for $i: = I32::ndim - 1; i >= 0; i -= 1
             s: = shape[i]
+            if s < 0
+                panic("Tensor dimensions must be non-negative")
             (shape_ptr + i)$ = s
             // Caution: **Check before multiplying.** A multiply first and then a compare with
             // `MAX_TENSOR_ELEMS` lets through a product that overflowed Sz and wrapped below the
@@ -173,7 +175,7 @@ impl<|T|> Tensor<|T|>
         if r.shape.len < 2
             throw .rank_mismatch
         n: = r.shape[r.shape.len - 1]
-        if weight.size != n
+        if n == 0 || weight.size != n
             throw .shape_mismatch
 
         out: = Tensor<|T|>.new(r.shape, r.arena)
@@ -222,6 +224,8 @@ impl<|T|> Tensor<|T|>
         if r.shape.len < 2
             throw .rank_mismatch
         n: = r.shape[r.shape.len - 1]
+        if n == 0
+            throw .shape_mismatch
         rows: = r.size / n
         out: = Tensor<|T|>.new(r.shape, r.arena)
 
@@ -248,7 +252,8 @@ impl<|T|> Tensor<|T|>
     ): Tensor<|T|>!Tensor_error
         if r.shape.len < 2
             throw .rank_mismatch
-        if r.shape[r.shape.len - 1] % 2 != 0
+        if r.shape[r.shape.len - 2] == 0 || r.shape[r.shape.len - 1] == 0 ||
+            r.shape[r.shape.len - 1] % 2 != 0
             throw .shape_mismatch
         return r.rope_rotate(start_pos, false)
     fn rope_rotate(r: Self$@, start_pos: Sz, invert: Bool): Tensor<|T|> //<

@@ -57,6 +57,8 @@ Caution: **Do not inspect only the last level**: a link on a folder would pass u
 * **Naming it is the launching person's judgment.** Named while the server faces outward (without `--local`), that file is served to other machines. So treat it as a choice as weighty as choosing the root.
 * **Do not start up when the named file does not exist**: a later 404 leaves nobody able to tell why the page is blank.
 
+**The server checks the Host and token after reading the headers, before waiting for the body.** Only GET or HEAD for the page with no body needs no token. Syntax and size errors can be refused before authorization.
+
 ### How the token gets across
 
 **The token reaches the page once, inside the URL a person opens: the server prints one line, `http://127.0.0.1:<number>/#t=<token>`, and a person opens it once.** Then:
@@ -93,6 +95,12 @@ The page reads a file whole and writes a file whole, by its path under the root.
 | :-- | :-- |
 | `GET /api/file?path=<p>` | That byte sequence. 404 if absent |
 | `PUT /api/file?path=<p>` | Writes the body under that name. On success, `{"wrote":<byte count>}` |
+
+A PUT can carry `X-Kanso-If-Content`: either `missing`, or the 64-character lowercase SHA-256 digest of the expected file bytes. `missing` permits creation only when the path does not exist. A digest permits replacement only when the existing bytes match. A mismatch returns 409 without writing; a malformed guard returns 400. Without this header, PUT replaces unconditionally.
+
+The check and replacement run together before this server handles another request. This protects clients sharing one server. It does not lock out other server processes or programs writing directly to the filesystem.
+
+`GET /api/status` declares `conditional_writes: true` when these guards are supported. A client relying on them must refuse writes when this declaration is absent.
 
 **`HEAD` is not supported**: "Watching" below returns the size and whether the file exists. The server does not guess the type; it returns `application/octet-stream` (plain bytes). The character encoding is UTF-8 only, with no way to read another.
 
@@ -153,6 +161,7 @@ Each refusal comes back as one of the HTTP status codes below. **A refusal must 
 | 403 | It pointed outside the root, or named a `Host` other than the loopback |
 | 404 | A name that does not exist, or an unknown endpoint |
 | 405 | A `HEAD`, `DELETE`, and so on to the file endpoint |
+| 409 | The conditional write no longer matches the file, or its target is not a regular file |
 | 413 | The body exceeded the ceiling |
 | 500 | It could not be written or replaced |
 

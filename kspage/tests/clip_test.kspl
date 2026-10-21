@@ -7,6 +7,7 @@ import "kspage/lay/page" { Page }
 import "kspage/model/doc" + { Block, Doc }
 import "kspage/model/filter"
 import "kspage/model/fixed_font" as fixed
+import "kspage/model/paint"
 import "kspage/model/run"
 import "kspage/model/style" as _style + { Sheet }
 import "kspage/tests/base"
@@ -404,6 +405,26 @@ fn test_a_text_a_spreadsheet_would_run_is_guarded(arena: Arena$@) //<
         assert(book.cell_source(back, 0, i).equals(texts[i]),
             "a guarded text reads back as it was typed")
     verdict.pass("a text a spreadsheet would run goes out guarded and comes back as it was.")
+
+fn test_a_number_dressed_as_a_formula_is_guarded(arena: Arena$@) //<
+    //< A formula's answer whose style puts `=HYPERLINK(…)` in front goes out behind a `'`
+    //< The guard used to look at the value's type, so a received document's number style could
+    //< write a live formula into the CSV.
+    verdict.start("[kspage/csv] a number dressed as a formula guarded test...")
+    d: = Doc.new(arena)
+    sheet: = base.grid_sheet(arena)
+    dressed: = sheet.add("dressed", paint.inherit_all())
+    dressed.number.prefix = "=HYPERLINK(\"http://x.example/\")+0*"
+    t: = d.add_block("table")
+    row: = t.add_child("")
+    row.add_child("").add_text("=1+1", "dressed")
+    row.add_child("").add_text("-1,234.5%")
+    calc.recalc(d, sheet)
+    $out: = Str_builder.new()
+    csv.write_table(t, out@, arena)
+    assert(out.slice().equals("\"'=HYPERLINK(\"\"http://x.example/\"\")+0*2\",\"-1,234.5%\"\n"),
+        "a dressed number is guarded, a bare one is not")
+    verdict.pass("a number style cannot put a live formula into the CSV.")
 
 fn test_inserting_a_csv_table_undoes_as_one_step(arena: Arena$@) //<
     //< It inserts after the paragraph the cursor is in

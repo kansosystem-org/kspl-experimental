@@ -30,6 +30,7 @@ extern "C"
     fn sqlite3_bind_text(stmt: sqlite3_stmt$@, idx: I32, val: Void@, n_byte: I32, destructor: Sz):
         I32
     fn sqlite3_bind_null(stmt: sqlite3_stmt$@, idx: I32): I32
+    fn sqlite3_bind_parameter_count(stmt: sqlite3_stmt$@): I32
     fn sqlite3_bind_parameter_index(stmt: sqlite3_stmt$@, name: Void@): I32
     fn sqlite3_column_count(stmt: sqlite3_stmt$@): I32
     fn sqlite3_column_type(stmt: sqlite3_stmt$@, col: I32): I32
@@ -79,6 +80,8 @@ pub enum Db_error //< why a database operation failed
     several_statements //< the SQL holds a second statement after the first.
         //< Caution: **`prepare` and `exec` take one statement**; run each on its own. Taken, the
         //< rest would be dropped without a word.
+    requires_bindings //< `exec` was given SQL parameters; use `prepare` and bind their values.
+        //< The statement is refused before it runs, so missing values cannot become SQL NULL.
     returns_rows //< `exec` was given SQL that returns rows (a `SELECT`, a `RETURNING`).
         //< **It is refused before it runs**: run, its rows would be thrown away unread. Read them
         //< through `prepare` and `step`.
@@ -193,12 +196,14 @@ impl Db
 
     pub fn exec( //< prepares, steps and frees in one call, for SQL with no parameters and no rows
         //< Use it for one `CREATE TABLE` / `INSERT` / `UPDATE` / `DELETE`; SQL holding a second
-        //< statement, or returning rows, is refused before it runs.
+        //< statement, parameters, or returning rows, is refused before it runs.
         r: Self$@,
         sql: U8[], //< the SQL to run
     ): Void!Db_error
         stmt: = r.prepare(sql)!
         defer stmt.free()
+        if sqlite3_bind_parameter_count(stmt.handle) > 0
+            throw .requires_bindings
         // Caution: **Decide by the columns, before the step.** A `RETURNING` has made its change by
         // the time its first row comes. Refused then, the change would stand behind an error.
         if sqlite3_column_count(stmt.handle) > 0

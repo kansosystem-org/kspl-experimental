@@ -545,3 +545,30 @@ fn test_safetensors_reads_a_file_as_written(arena: Arena$@)
         default {}
     assert(refused, "an adapter whose scale holds no value is refused as a shape mismatch")
     verdict.pass("")
+
+fn test_empty_tensor_operations(arena: Arena$@)
+    verdict.start("[Tensor] empty dimensions give catchable shape errors...")
+    dims: Sz[2] = ::{ 1, 0 }
+    $x: = Tensor<|F32|>.new(Sz[]::dims, arena)
+    assert(x.size == 0, "empty tensor construction stays valid")
+    $caught: I32 = 0
+    _soft: = x.softmax() catch e
+        assert(e == .shape_mismatch, "softmax reports the shape")
+        caught += 1
+        fallback x
+    _rope: = x.apply_rope(0) catch e
+        assert(e == .shape_mismatch, "RoPE reports the shape")
+        caught += 1
+        fallback x
+    _norm: = x.rmsnorm(x, F32::0.00001) catch e
+        assert(e == .shape_mismatch, "rmsnorm reports the shape")
+        caught += 1
+        fallback x
+    empty_rows: Sz[2] = ::{ 0, 2 }
+    $rows: = Tensor<|F32|>.new(Sz[]::empty_rows, arena)
+    _rotated: = rows.apply_rope(0) catch e
+        assert(e == .shape_mismatch, "RoPE reports an empty sequence")
+        caught += 1
+        fallback rows
+    assert(caught == 4, "all empty reductions report errors")
+    verdict.pass("Empty reductions report shape errors without a panic.")

@@ -137,19 +137,22 @@ priv fn hides_name(rel: U8[]): Bool //<
     //< Caution: **Do not serve them.** A root that is a checkout or holds settings has `.git/`,
     //< `.env` and the like, and anyone the server faces could read them (`/.git/config`).
     //< Answered as absent (404), so a probe learns nothing of what is there.
-    $at: Sz = 0
-    for at < rel.len
-        end: = at + rel.sub_from(at).find_char('/').unwrap_or(rel.len - at)
-        name: = rel.sub(at, end - at)
+    //< Caution: **Split at `\` too** (`sys.is_path_sep`, as std/fs splits): Windows opens
+    //< `sub\.env` as `sub/.env`, and a `/` alone let `/sub%5c.env` through.
+    $start: Sz = 0
+    for $at: Sz = 0; at <= rel.len; at += 1
+        if at < rel.len && !sys.is_path_sep(rel[at])
+            continue
+        name: = rel.sub(start, at - start)
         if name.starts_with(".") && !name.equals(WELL_KNOWN)
             return true
-        at = end + 1
+        start = at + 1
     return false
 
 priv fn asks_for_page(decoded: U8[]): Bool //<
     //< Whether a decoded path names the page: the root itself, or `index.html` in it
     //< **Decided from the text alone.** So a caller can ask it before looking at anything under the
-    //< root (the reason is at the token's check in `queue_for_request`).
+    //< root (the reason is at the token's check in `accept_head`).
     $rest: = decoded
     for rest.len > 0 && rest[0] == '/'
         rest = rest.sub_from(1)
@@ -202,15 +205,6 @@ priv fn queue_for_request(c: conn.Conn$@, req: http.Request$@, ctx: conn.Ctx$@) 
     t: = conn.split_target(req.target)
     // **Under `/api/` every answer is JSON, a refusal's included**: an API client reads one form.
     is_api: = t.path.starts_with(api.API_PREFIX)
-    // Caution: **For local use, answer only a request that names this server.** A web page whose
-    // name is re-pointed at 127.0.0.1 (DNS rebinding) reaches the port as its own origin. Without
-    // this, it would read every file the page can, the page itself included.
-    if ctx.is_local() && !names_this_server(req)
-        if is_api
-            api.queue_json_error(c, 403)
-        else
-            conn.queue_error(c, 403)
-        return
     if is_api
         api.queue_api(c, t, req, ctx, keep_alive)
         return
@@ -229,15 +223,6 @@ priv fn queue_for_request(c: conn.Conn$@, req: http.Request$@, ctx: conn.Ctx$@) 
     // `..` or an absolute path). The agreement is "Where it listens" in
     // `docs/SPEC-local-server.md`.
     is_page: = asks_for_page(decoded)
-    // Caution: **For local use, hand out only the page without the token** (where the token is
-    // handed over). Any other file comes from the origin that keeps the token. Served freely, an
-    // HTML file in the root opened in the page's tab could read it. Any program on this machine
-    // could read the root. The page reads its pictures through `/api/file`, with the token.
-    // **Check it before the path is resolved.** Resolving answers a link with 403. So a client
-    // without the token would learn which names under the root are links.
-    if ctx.is_local() && !is_page && !api.authorized(req, ctx.token)
-        conn.queue_error(c, 401)
-        return
     $rel: U8[] = ""
     switch path_to_rel(decoded, ctx.root, is_page, c.arena)
     case .ok(r)
@@ -279,6 +264,41 @@ priv fn queue_for_request(c: conn.Conn$@, req: http.Request$@, ctx: conn.Ctx$@) 
 // How one connection is driven
 // ==========================================
 
+priv fn reject_parse(c: conn.Conn$@, error: http.Http_error) //<
+    //< one response for a malformed request
+    switch error
+    case .incomplete {}
+    case .head_too_large
+        conn.queue_error(c, 431)
+    case .body_too_large
+        conn.queue_error(c, 413)
+    default
+        conn.queue_error(c, 400)
+
+priv fn accept_head(c: conn.Conn$@, req: http.Request$@, ctx: conn.Ctx$@): Bool //<
+    //< checks before buffering a body
+    if !ctx.is_local()
+        return true
+    target: = conn.split_target(req.target)
+    is_api: = target.path.starts_with(api.API_PREFIX)
+    $status: I32 = 0
+    if !names_this_server(req)
+        status = 403
+    else if !api.authorized(req, ctx.token)
+        decoded: = url.decode_component(target.path, c.arena) catch target.path
+        page: =
+            !is_api && (req.method.equals("GET") || req.method.equals("HEAD")) &&
+            asks_for_page(decoded) && req.body_length == 0
+        if !page
+            status = 401
+    if status == 0
+        return true
+    if is_api
+        api.queue_json_error(c, status)
+    else
+        conn.queue_error(c, status)
+    return false
+
 priv fn conn_build(c: conn.Conn$@, ctx: conn.Ctx$@) //<
     //< Builds the response to the next complete request in `inbuf`
     //< Caution: Do not move on to the next request until `outbuf` is empty, or two responses mix.
@@ -290,24 +310,25 @@ priv fn conn_build(c: conn.Conn$@, ctx: conn.Ctx$@) //<
         return
     base: = c.arena.save()
     c.answers_head = false
+    if c.need == 0
+        head: =
+            http.parse_request_head(c.inbuf.slice(), body_limit(ctx), c.arena) catch e
+            reject_parse(c, e)
+            c.arena.restore(base)
+            return
+        c.answers_head = head.method.equals("HEAD")
+        if !accept_head(c, head, ctx)
+            c.arena.restore(base)
+            return
+        c.need = head.consumed + head.body_length
+        c.arena.restore(base)
+        if c.inbuf.len < c.need
+            return
     req: =
         http.parse_request(c.inbuf.slice(), body_limit(ctx), c.arena) catch e
-        switch e
-        case .incomplete
-            // The head is whole and the body is not: wait until all of it is there.
-            whole: =
-                http.request_length(c.inbuf.slice(), body_limit(ctx), c.arena) catch 0
-            c.need = whole if whole > 0 else c.inbuf.len + 1
-            return
-        case .head_too_large
-            conn.queue_error(c, 431)
-            return
-        case .body_too_large
-            conn.queue_error(c, 413)
-            return
-        default
-            conn.queue_error(c, 400)
-            return
+        reject_parse(c, e)
+        c.arena.restore(base)
+        return
     c.answers_head = req.method.equals("HEAD")
     queue_for_request(c, req, ctx)
     // Caution: Drop only what the finished parse used. Emptied completely, the start of the next
@@ -427,8 +448,9 @@ priv fn conn_read(c: conn.Conn$@, ctx: conn.Ctx$@): Bool //< reads from the sock
             conn.queue_error(c, 431)
             c.inbuf.clear()
             return true
-        if n < IO_CHUNK
-            return true // everything there is has been read
+        // Check the head before collecting further body chunks.
+        if c.need == 0 || n < IO_CHUNK
+            return true
     return true
 
 priv fn conn_pump(c: conn.Conn$@, ctx: conn.Ctx$@, can_read: Bool): Bool //<

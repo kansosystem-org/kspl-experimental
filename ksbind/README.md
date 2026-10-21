@@ -44,6 +44,8 @@ Run `ksplc doc ksbind/<file>` to list a file's published API.
 
 ## Pitfalls
 
+**TLS operations have no deadline.** `Tls_stream.connect` waits for the TLS handshake after opening the TCP connection. A peer that stops responding can leave the caller waiting indefinitely. Reads, writes, and closing the TLS stream can also wait for the peer. Do not use this API where network operations must finish within a fixed time.
+
 Linking combines the compiled program with its libraries. These limitations apply:
 
 * A missing library causes a link failure after compilation. The linker message names `-l<name>`. If the library is outside the search path, set `LIBRARY_PATH`. Homebrew's OpenSSL on macOS is one example.

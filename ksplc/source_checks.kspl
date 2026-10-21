@@ -126,7 +126,8 @@ priv fn report_doc_marks(files: List<|Read_file|>@, sema: Sema_ctx$@) //<
             // inside a string that spans lines. The finder reads from wherever it starts.
             for cmt < at
                 cmt = parse_layout.next_line_comment(src, base_lines.line_end(src, cmt))
-            if cmt < stop && src.sub_from(cmt).starts_with("//<")
+            doc_comment: = cmt < stop && src.sub_from(cmt).starts_with("//<")
+            if doc_comment
                 report_summary_fault(f.name, src, at, base_ast_doc.summary_fault_at(src, at), sema)
             if under_braces && cmt == base_lines.skip_blanks(src, at) &&
                 base_ast_doc.is_continuation_line(src, at)
@@ -135,7 +136,7 @@ priv fn report_doc_marks(files: List<|Read_file|>@, sema: Sema_ctx$@) //<
                         outside it. Open the braces and put the //< lines between them.")
             under_braces = written_code(f.name, src, at, stop, cmt, line).ends_with("{}")
             line += 1
-            if base_ast_doc.is_continuation_line(src, at) && !opens
+            if doc_comment && base_ast_doc.is_continuation_line(src, at) && !opens
                 mark: = base_lines.skip_blanks(src, at)
                 $msg: = Str_builder.new()
                 msg
@@ -144,7 +145,7 @@ priv fn report_doc_marks(files: List<|Read_file|>@, sema: Sema_ctx$@) //<
                 sema.report_diagnostic_at(f.name, src, mark, 3, .warning, msg.slice())
             // **The line below holds the anchor's whole description.** `is_continuation_line`
             // returns false past the end, so the last line needs no case of its own.
-            if base_ast_doc.is_bare_summary(src, at) &&
+            if doc_comment && base_ast_doc.is_bare_summary(src, at) &&
                 !base_ast_doc.is_continuation_line(src, stop + 1)
                 // Caution: **Point at the start of the line, not at the mark.** This walks the
                 // source after the layout stage added `;` and braces, but reports against the file
@@ -156,7 +157,7 @@ priv fn report_doc_marks(files: List<|Read_file|>@, sema: Sema_ctx$@) //<
                     .s("[W0210] This //< has no text or continuation. Write a description after the \
                         marker or on //< lines below it.")
                 sema.report_diagnostic_at(f.name, src, head, 3, .warning, msg2.slice())
-            opens = base_ast_doc.opens_a_summary_run(src, at)
+            opens = doc_comment && base_ast_doc.opens_a_summary_run(src, at)
             at = stop + 1
 
 priv fn written_code(file: U8[], src: U8[], at: Sz, stop: Sz, cmt: Sz, line: Sz): U8[] //<
@@ -335,7 +336,7 @@ priv fn report_comment_caps(f: Read_file, sema: Sema_ctx$@) //<
                 seen_decl = true
         else if text.starts_with("//<")
             if text.len == 3
-                run.len = 0
+                seen_decl = close_cap_run(f.name, src, run@, seen_decl, sema)
             else if run.in_detail
                 run.add(at)
             else

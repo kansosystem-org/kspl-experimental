@@ -239,6 +239,21 @@ function kspageProbeLocal(ks) {
     ks.check(!laidBeside.ok, "nothing is laid next to the document");
     ks.undoKey();
 
+    // Two windows may read the same baseline before either writes. Exactly one edit can win.
+    const racePath = at("concurrent.txt");
+    await fetch(racePath, { method: "PUT", headers: head, body: "original" });
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode("original"));
+    const baseline = Array.from(new Uint8Array(digest), (n) => n.toString(16).padStart(2, "0")).join("");
+    const guarded = Object.assign({}, head, { "X-Kanso-If-Content": baseline });
+    const edits = ["first edit", "second edit"];
+    const results = await Promise.all(edits.map((body) => fetch(racePath,
+      { method: "PUT", headers: guarded, body })));
+    ks.check(results.filter((r) => r.status === 200).length === 1 &&
+      results.filter((r) => r.status === 409).length === 1, "simultaneous saves have one winner");
+    const winner = results.findIndex((r) => r.status === 200);
+    ks.check(await (await fetch(racePath, { headers: head })).text() === edits[winner],
+      "the refused save leaves the winning edit intact");
+
     // ---- Writing back to a file that changed outside after it was read ----
     //
     // **This can be seen nowhere else** (whether it changed outside takes asking the server). This
@@ -255,6 +270,25 @@ function kspageProbeLocal(ks) {
     // Caution: **Change the content and the length** (so a length-only check is caught too).
     const byOther = "{\"kspage\":6,\"sheet\":{},\"blocks\":[{\"style\":\"body\","
       + "\"inlines\":[{\"text\":\"a text another window wrote\"}]}]}";
+    // Interleave another writer after the page's preflight but before its PUT reaches the server.
+    const beforeRaceFetch = window.fetch;
+    let interleaved = false;
+    window.fetch = async (url, opts) => {
+      if (!interleaved && String(url) === at("saved.kspage") && opts && opts.method === "PUT") {
+        interleaved = true;
+        await beforeRaceFetch(url, { method: "PUT", headers: head, body: byOther });
+      }
+      return beforeRaceFetch(url, opts);
+    };
+    try {
+      clear();
+      document.getElementById("save").click();
+      ks.check(await untilSays("has been changed outside"), "the page reports a race at the final write");
+    } finally {
+      window.fetch = beforeRaceFetch;
+    }
+    ks.check(interleaved && await (await fetch(at("saved.kspage"), { headers: head })).text() === byOther,
+      "the page's stale save cannot overwrite an interleaved edit");
     const put2 = await fetch(at("saved.kspage"),
       { method: "PUT", headers: head, body: byOther });
     ks.check(put2.ok, "it can be rewritten from outside");

@@ -158,6 +158,22 @@ priv fn fifo_cases(port: I32, root: U8[], arena: Arena$@): Void!client.Http_end 
     fs.remove_path(fifo) catch {}
     client.expect_status(name, r, 404, arena)
 
+priv fn fifo_save_case(port: I32, token: U8[], root: U8[], arena: Arena$@): Void!client.Http_end //<
+    //< Checks that a save checked against a FIFO is refused (409), not read
+    //< **Comparing the file's bytes reads it**, so a server that opens a FIFO stops answering.
+    name: = "a save checked against a FIFO is refused, not read"
+    fifo: = fs.join(root, "pipe.kspage", arena)
+    if !make_fifo(fifo, arena)
+        verdict.skip_check(name, "a FIFO cannot be made with `mkfifo` in this environment")
+        return
+    heads: = arena.text().s(client.bearer_head(token, arena)).s("X-Kanso-If-Content: ")
+        .s("0000000000000000000000000000000000000000000000000000000000000000").s("\r\n").take()
+    r: = client.put_file(port, "/api/file?path=pipe.kspage", heads, "new", arena)!
+    fs.remove_path(fifo) catch {}
+    client.expect_status(name, r, 409, arena)
+    alive: = client.get(port, "/api/status", client.bearer_head(token, arena), arena)!
+    client.expect_status("the server answers after refusing the FIFO", alive, 200, arena)
+
 priv fn serve_run(name: U8[], at: Placed, arena: Arena$@) //< runs the server run `name` (`RUNS`)
     //< Caution: **Each mode is a server of its own.** The mode is fixed at start. Each run
     //< listens on the free port the system gave it, so a leftover from one cannot answer another.
@@ -439,6 +455,8 @@ priv fn serve_local_and_check(at: Placed, arena: Arena$@) //<
         $srv: = got.srv
         local.cases(srv.port, got.token, at.root, arena) catch e
             srv.failed("--local goes on answering requests", e.reason(), arena)
+        fifo_save_case(srv.port, got.token, at.root, arena) catch e2
+            srv.failed("--local answers the save checked against a FIFO", e2.reason(), arena)
         srv.stop()
 
 priv const TOKEN_LINE: U8[] = "#t=" //< the marker before the token in the output

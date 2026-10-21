@@ -78,7 +78,7 @@ priv const FACES: Face_row[12] = ::{ Face_row::{ .face = .compile, .declared = .
     .help = "write the C runtime's source out as one translation unit",
     .form = "[options...] <output.c>", .lays_out = false },
     Face_row::{ .face = .explain, .declared = .named,
-    .help = "print what a diagnostic code means and what to do about it", .form = "<code>",
+    .help = "print what a diagnostic code means, or list the codes", .form = "[<code> | <start>]",
     .lays_out = false },
     Face_row::{ .face = .doc, .declared = .named,
     .help = "print what a file, one entry or a folder publishes, from its source",
@@ -420,14 +420,17 @@ priv fn read_mode(p: argparse.Parser$@, face: Face, in_files: List<|U8[]|>$@, o:
     case .emit_runtime
         return .emit_runtime(only_input(in_files, face))
     case .explain
+        // **No code lists every code; a code's start (`W`, `I03`) lists the codes it begins.**
+        if in_files.len == 0
+            return .explain("")
         asked: = only_input(in_files, face)
         code: = tools_explain.canonical_code(asked, base_core.arena)
         // An error has no code, so a message the reader wants explained may well have none.
-        if !base_lint_codes.is_known(code)
+        if !base_lint_codes.is_known(code) && !tools_explain.is_code_start(code)
             msg: = base_core.arena.text().s("ksplc explain: '").s(asked)
                 .s("' is not a diagnostic code. Only warnings, information diagnostics and hints \
-                    carry codes. The table is in ksplc/docs/SPEC-diagnostics.md. An error's message \
-                    explains the error.\n").take()
+                    carry codes; `ksplc explain` lists them. An error's message explains the \
+                    error.\n").take()
             usage.error_exit(msg)
         return .explain(code)
     case .doc

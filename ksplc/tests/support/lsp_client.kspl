@@ -14,6 +14,7 @@ import "std/json" + { Json_builder }
 import "std/mem" { Arena }
 import "std/str" + { Str_builder }
 import "std/subproc"
+import "std/url"
 
 pub const READ_MS: I32 = 15000 //< how long the answer to a request that walks no files may take
 
@@ -47,6 +48,21 @@ pub fn uri_of(top: U8[], rel: U8[], arena: Arena$@): U8[] //<
     //< Caution: **Spell the separators `/`**, as the server does (`to_absolute` in
     //< `../../base/locate.kspl`); a Windows working directory's `\` would never equal the answer.
     return arena.text().s("file://").s(slashed(top, arena)).c('/').s(rel).take()
+
+pub fn encoded_uri_of(top: U8[], rel: U8[], arena: Arena$@): U8[] //<
+    //< The `file://` URI of `rel` under `top`, each byte outside a name's plain set as `%XX`
+    //< **An editor sends this form** (`/C%3A/` for a drive, `%20` for a space), unlike `uri_of`.
+    path: = arena.text().s(slashed(top, arena)).c('/').s(rel).take()
+    out: = arena.text().s("file://")
+    if !path.starts_with("/")
+        out.c('/')
+    $first: = true
+    for piece in path.split('/', arena)
+        if !first
+            out.c('/')
+        first = false
+        out.s(url.encode(piece, arena))
+    return out.take()
 
 pub fn rel_of(top: U8[], uri: U8[], arena: Arena$@): U8[] //<
     //< The workspace-relative path a returned URI names, whichever spelling it came back in

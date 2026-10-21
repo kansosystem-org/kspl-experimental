@@ -1,7 +1,9 @@
-//< `ksplc explain <code>`: one diagnostic code's section of the diagnostics specification
+//< `ksplc explain [<code> | <start>]`: one code's section of the diagnostics specification, or a list
 //< The text is `ksplc/docs/SPEC-diagnostics.md` itself, embedded at build time, with no second copy
-//< to drift. The codes come from `ksplc/base/lint_codes.kspl`; `case_explain` in
+//< to drift. The list is its section headings, so a code given a section is listed with no other
+//< edit. The codes come from `ksplc/base/lint_codes.kspl`; `case_explain` in
 //< `tests/suite/cli_test.kspl` checks that each has a section.
+import "ksplc/base/lint_codes" as base_lint_codes
 import "std/chars"
 import "std/io"
 import "std/mem" { Arena }
@@ -61,6 +63,54 @@ fn section_of(code: U8[], arena: Arena$@): Explanation //< the code's section; e
         if t.len > 0 && !t.equals("---")
             kept = body.len
     return Explanation::{ .text = arena.dup_str(body.slice().sub(0, kept)), .chapter = chapter }
+
+fn answer(asked: U8[], arena: Arena$@): U8[] //<
+    //< prints a code's section, or the codes a start begins
+    //< Returns why nothing was printed, empty when something was.
+    if !base_lint_codes.is_known(asked)
+        if print_list(asked, arena) > 0
+            return ""
+        return arena.text()
+            .s("ksplc explain: no diagnostic code starts with '\{asked\}'; `ksplc explain` lists \
+                them all\n").take()
+    if !print_explanation(asked, arena)
+        return arena.text().s("ksplc explain: '\{asked\}' has no section in \{SPEC_NAME\}\n").take()
+    return ""
+
+fn is_code_start(text: U8[]): Bool //< whether it can start a code: `W`, `I0`, `H080`
+    //< A code is a letter (`W`, `I` or `H`) then four digits, so a start is the letter and up to
+    //< three of them.
+    if text.len == 0 || text.len > 4 ||
+        !(text[0] == 'W' || text[0] == 'I' || text[0] == 'H')
+        return false
+    for c in text.sub_from(1)
+        if !c.is_digit()
+            return false
+    return true
+
+fn print_list(start: U8[], arena: Arena$@): Sz //< lists the codes that begin with `start`
+    //< One line each, `W0101  An out-of-bounds array access`, in the specification's order; an
+    //< empty start lists every code. **It is the section headings**, so it cannot disagree with
+    //< what `ksplc explain <code>` prints. Returns how many were listed.
+    $n: Sz = 0
+    $in_fence: = false
+    for line in diagnostics_spec.lines(arena)
+        if is_fence(line)
+            in_fence = !in_fence
+        if in_fence || heading_level(line) != 3 || !line.starts_with("### [")
+            continue
+        close: = line.find_char(']').unwrap_or(0)
+        code: = line.sub(5, close - 5) if close > 5 else ""
+        if !base_lint_codes.is_known(code) || !code.starts_with(start)
+            continue
+        io.out().s(code).s("  ").s(line.sub_from(close + 1).trim_spaces())
+        if !base_lint_codes.is_default_on(code)
+            io.out().s("  (off by default)")
+        io.out().c('\n')
+        n += 1
+    if n > 0
+        io.out().s("\n`ksplc explain <code>` prints what one means and what to do about it.\n")
+    return n
 
 fn print_explanation(code: U8[], arena: Arena$@): Bool //< it prints the section; false if none
     //< The Markdown is printed as written, as `rustc --explain` does, followed by its source. Its

@@ -121,6 +121,14 @@ function kspageProbeFilter(ks) {
   check(document.getElementById("narrow").hidden && app.rowsShown()[0] === every[0],
     "Clear filter restores rows and closes the menu");
   app.openNarrow();
+  search.focus();
+  for (const composing of [{ isComposing: true }, { keyCode: 229 }]) {
+    const escape = new KeyboardEvent("keydown", Object.assign(
+      { key: "Escape", bubbles: true, cancelable: true }, composing));
+    search.dispatchEvent(escape);
+    check(!escape.defaultPrevented && !document.getElementById("narrow").hidden &&
+      document.activeElement === search, "IME Escape keeps the filter and focus in place");
+  }
   document.getElementById("narrow-find").dispatchEvent(new KeyboardEvent("keydown",
     { key: "Escape", bubbles: true, cancelable: true }));
   check(document.getElementById("narrow").hidden, "Escape closes the filter menu");

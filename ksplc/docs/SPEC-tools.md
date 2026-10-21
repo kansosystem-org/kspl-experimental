@@ -33,7 +33,7 @@ flowchart LR
 | `ksplc info <subject>` | prints one answer ksplc holds (where the standard library is, the link conditions, where the cache is, the reserved words) | [7. Querying and tidying up](#7-querying-and-tidying-up-ksplc-info--ksplc-clean) |
 | `ksplc clean` | empties the disk cache ksplc made | [7. Querying and tidying up](#7-querying-and-tidying-up-ksplc-info--ksplc-clean) |
 | `ksplc emit-runtime <output.c>` | writes only the C runtime's source, as one translation unit, for LLVM IR to link | [2.10.5 Writing the runtime for LLVM IR](#2105-writing-the-runtime-for-llvm-ir-ksplc-emit-runtime) |
-| `ksplc explain <code>` | prints what a diagnostic code means and what to do about it: that code's section of the diagnostics specification | [`SPEC-diagnostics.md`](SPEC-diagnostics.md) |
+| `ksplc explain [<code> \| <start>]` | prints what a diagnostic code means and what to do about it: that code's section of the diagnostics specification. With no code it lists every code and its title; with a code's start (`W`, `I03`), the codes it begins | [`SPEC-diagnostics.md`](SPEC-diagnostics.md) |
 | `ksplc doc <file>[.<name>]` | prints what a file, one entry or a folder publishes, rendered from the source | [7.5 ksplc doc](#75-ksplc-doc-what-a-file-publishes-as-a-reference) |
 
 The words in the table: *semantic analysis* is the stage that works out every type and name. *Lower* is the stage after it, which prepares the code for output. A *diagnostic* is a message about your code: an error, a warning, an information or a hint ([§5.2](#52-the-diagnostics-four-weights)). A *translation unit* is one `.c` file as the C compiler reads it.
@@ -1011,7 +1011,7 @@ Caution: **An outer file's setting does not reach a folder that has its own file
 A mistake in `ksplc.cfg` stops the compile, with the line it is on. An unknown section, key (diagnostic code) or value (level name) is refused as `ksplc.cfg:<line>: error: ...`, and compilation stops. A key set twice in one section is refused too, in `[lint]` as in `[package]`: the second line would silently override the first. The file is named by its path from the current folder, whatever the error. Silently ignoring it would leave a setting that is written and does nothing.
 
 ```
-ksplc.cfg:3: error: unknown diagnostic code 'W9999': the codes are listed under "Diagnostic codes, and the errors that have none" in ksplc/docs/SPEC-diagnostics.md, and 'ksplc explain <code>' prints what one means
+ksplc.cfg:3: error: unknown diagnostic code 'W9999': the codes are listed under "Diagnostic codes, and the errors that have none" in ksplc/docs/SPEC-diagnostics.md; 'ksplc explain' lists them, and 'ksplc explain <code>' prints what one means
 ```
 
 The check runs for every source read, whether or not a diagnostic comes out. So a typo shows even in a file with no finding at all.

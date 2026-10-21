@@ -397,9 +397,10 @@ std/http	Http_error.unsupported_close_delimited	unsupported_close_delimited	a re
 std/http	Http_error.unsupported_transfer_encoding	unsupported_transfer_encoding	the message has `Transfer-Encoding`, which is always refused. Ignoring it silently would let it disagree with Content-Length (request smuggling).
 std/http	Http_error.unsupported_version	unsupported_version	the version is not `HTTP/` plus one digit, a dot and one digit
 std/http	MAX_HEAD_BYTES	pub const MAX_HEAD_BYTES: Sz = 64 * 1024	the most a message's head can take, against DoS. The head is the first line and the headers; every reader here refuses a longer one.
-std/http	Request	pub struct Request	one received request, and how much of the buffer it used
-std/http	Request.body	pub body: U8$[]	the body, of the length `Content-Length` gave
-std/http	Request.consumed	pub consumed: Sz	how many bytes of the buffer this message used; the rest is the next one
+std/http	Request	pub struct Request	a request or its head, with validated headers and lengths
+std/http	Request.body	pub body: U8$[]	the received body; empty when only the head was read
+std/http	Request.body_length	pub body_length: Sz	the declared body length, even when only the head has arrived
+std/http	Request.consumed	pub consumed: Sz	bytes read: the head alone for `parse_request_head`, else the whole request
 std/http	Request.free	pub fn free(r: Self$@)	lets go the request and all its parts, when made with a null arena. Made in the caller's arena, it frees nothing: that arena does.
 std/http	Request.headers	pub headers: Headers	the headers in the order they arrived
 std/http	Request.method	pub method: U8$[]	the method as it arrived, such as `GET`
@@ -424,6 +425,7 @@ std/http	headers	pub fn headers(arena: Arena$@): Header_builder	an empty header 
 std/http	is_1_1_or_later	pub fn is_1_1_or_later(version: U8[]): Bool	whether a message's version is HTTP/1.1 or later. **This is the one place that decides it**: on 1.1 and later a request must name `Host`, and a connection stays open unless `Connection: close` asks otherwise.
 std/http	lists_token	pub fn lists_token(list: U8[], want: U8[]): Bool	whether a comma-separated header value holds the token, in any case. `close, TE` holds `close`. Each item is compared with the spaces around it trimmed, so `x-close` and `closed` do not hold it (RFC 9110 §5.6.1).
 std/http	parse_request	pub fn parse_request(src: U8[], max_body: Sz, arena: Arena$@): Request$@!Http_error	the one request at the start of the buffer; fails if it is incomplete. **A body over `max_body` fails as soon as the head says so**, before it arrives. A head over `MAX_HEAD_BYTES` fails as soon as that much has arrived without its end.
+std/http	parse_request_head	pub fn parse_request_head(src: U8[], max_body: Sz, arena: Arena$@): Request$@!Http_error	reads and validates a request before its body arrives. The body is empty; `consumed` counts only the head. `body_length` gives the bytes still due. This shares the complete reader's syntax, Host and size checks.
 std/http	parse_response	pub fn parse_response(src: U8[], arena: Arena$@): Response$@!Http_error	the one response at the start of the buffer; fails if it is incomplete. The body limit is `DEFAULT_MAX_BODY_BYTES`; the head's is `MAX_HEAD_BYTES`.
 std/http	read_response	pub fn read_response(stream: net.Tcp_stream$@, arena: Arena$@, max_body: Sz, timeout_ms: I32): Response$@!Http_error	reads one whole response from a connection and splits it into its parts
 std/http	reason_phrase	pub fn reason_phrase(status: I32): U8[]?	the standard phrase for a status number, so the two cannot disagree. RFC 9110's "reason-phrase"; none for a number it does not know. The builders below write it from the number, so no caller passes the number and the phrase as a pair (which could say `404 Bad Request`). Caution: **Do not fill in `"unknown"`**: a phrase from nowhere stays in the receiver's log.

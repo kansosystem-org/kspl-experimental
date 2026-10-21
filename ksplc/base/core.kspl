@@ -9,6 +9,7 @@ import "std/math"
 import "std/mem" + { Arena, alloc, dealloc }
 import "std/str" { Str_builder }
 import "std/sys"
+import "std/url"
 
 const MAX_AST_KINDS: I32 = 512
 
@@ -416,7 +417,19 @@ impl U8[]
 
     fn strip_file_uri(r: U8[]): U8[] //<
         //< A `file://` URI as a local path (the LSP's document URI; anything else unchanged)
-        return r.strip_prefix(FILE_URI_SCHEME)
+        //< Caution: **Decode it** (RFC 8089): an editor writes a space as `%20`, a Japanese letter
+        //< as its UTF-8 bytes in `%XX`, and a Windows drive as `/c%3A/`. Left as written, a file
+        //< under such a folder matches nothing on the disk. `spell_uri_path` writes the other way.
+        if !r.starts_with(FILE_URI_SCHEME)
+            return r
+        rest: = r.strip_prefix(FILE_URI_SCHEME)
+        path: = url.decode_component(rest, arena) catch
+            return rest
+        // A drive comes after a `/` (`/c:/x`); the path is `c:/x`.
+        if sys.is_windows() && path.len >= 3 && path[0] == '/' && path[2] == ':' &&
+            path[1].is_alpha()
+            return path.sub_from(1)
+        return path
 
     fn get_line_info(r: U8[], target_offset: Sz, starts: List<|Sz|>$@): Line_info //<
         //< char_idx: the UTF-16 code-unit offset given to the LSP (a surrogate pair's worth is +2)
