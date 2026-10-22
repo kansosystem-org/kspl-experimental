@@ -15,7 +15,6 @@ import "ksplc/sema/type/display" as sema_type_display
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
 import "ksplc/sema/type/scope" { Sema_symbol }
-import "std/str"
 
 impl Ast_node
     fn check_unnecessary_cast(r: Ast_node$@, c: Sema_ctx$@, expected_id: I32): Void!Sema_error
@@ -93,19 +92,6 @@ impl Ast_node
             r.build_implicit_cast(c, type_id, expected_id)
             r.type_id = expected_id
         return expected_id
-
-    fn is_noreturn_call(r: Ast_node$@): Bool //<
-        //< Whether it is a call to a function that declares `#noreturn`
-        //< **The declaration is trusted**, as with C's `__attribute__((noreturn))`: if such a
-        //< function does return, control continues with no value stored.
-        if r.kind_id != .k_expr_postfix
-            return false
-        op: = r.get_postfix_op()
-        if op == null || !op.text.equals("(")
-            return false
-        callee: = r.get_child(0)
-        return callee != null && callee.def_node != null &&
-            callee.def_node.has_attribute("noreturn")
 
     fn apply_type_coercion(r: Ast_node$@, c: Sema_ctx$@, type_id: I32, expected_id: I32): I32
         if type_id == expected_id || sema_type_env.is_unknown(expected_id) ||

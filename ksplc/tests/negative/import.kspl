@@ -215,9 +215,6 @@ fn main(): I32
 // EXPECT: may already be freed here
 struct Foo
   priv other: I32
-impl Foo
-  priv fn free($r: Self$@)
-    r.other = 0
 fn takes(x: Foo) {}
 fn main()
   $f: = Foo::{ .other = 2 }
@@ -225,7 +222,9 @@ fn main()
   takes(f)
 
 // The declaration that has the release tracked (Manual_free in std/lang.kspl).
-impl Foo: Manual_free {}
+impl Foo: Manual_free
+  priv fn free($r: Self$@)
+    r.other = 0
 // ==== case use_after_free_before_block_dealloc
 //< A use between a pointer's `free()` and its block's `dealloc` is still a use after free
 //< Only the `dealloc` that gives the block back is let through, not a read of what `free()` released.
@@ -317,17 +316,15 @@ import "std/mem" { dealloc }
 priv struct S
   v: I32
 
-impl S
-  priv fn free(r: Self$@)
-    dealloc(Void$@::r)
-
 fn main()
   p: = mem.alloc_as<|S|>()
   p.free()
   dealloc(Void$@::p)
 
 // The declaration that has the release tracked (Manual_free in std/lang.kspl).
-impl S: Manual_free {}
+impl S: Manual_free
+  priv fn free(r: Self$@)
+    dealloc(Void$@::r)
 // ==== case use_after_free_receiver_ok
 //< The counterpart of the two cases above
 //< Where the release happens once, or where it is reassigned after the release, no diagnostic comes
@@ -412,9 +409,6 @@ priv struct S
   v: I32
 
 impl S
-  priv fn free(r: Self$@)
-    dealloc(Void$@::r)
-
   // The method's name not being `free`, a decision looking at the name alone does not count it
   // as a release.
   fn close_it(r: Self$@)
@@ -426,7 +420,9 @@ fn main()
   _x: = p.v
 
 // The declaration that has the release tracked (Manual_free in std/lang.kspl).
-impl S: Manual_free {}
+impl S: Manual_free
+  priv fn free(r: Self$@)
+    dealloc(Void$@::r)
 // ==== case use_after_free_via_receiver
 //< A use in the receiver position after a release is a use after free too
 //< The access can be a field read, a field write or a method call. If the check is off at the
@@ -439,26 +435,21 @@ import "std/mem" { dealloc }
 priv struct S
   v: I32
 
-impl S
-  priv fn free(r: Self$@)
-    dealloc(Void$@::r)
-
 fn main()
   p: = mem.alloc_as<|S|>()
   p.free()
   _x: = p.v
 
 // The declaration that has the release tracked (Manual_free in std/lang.kspl).
-impl S: Manual_free {}
+impl S: Manual_free
+  priv fn free(r: Self$@)
+    dealloc(Void$@::r)
 // ==== case use_after_free_via_wrapper
 //< Use after free (across a function boundary)
 //< It is detected where a wrapper function under another name .free()s internally.
 // EXPECT: may already be freed here
 struct Foo
   priv other: I32
-impl Foo
-  priv fn free($r: Self$@)
-    r.other = 0
 fn close_it(x: Foo$@)
   x.free()
 fn takes(x: Foo) {}
@@ -468,7 +459,9 @@ fn main()
   takes(f)
 
 // The declaration that has the release tracked (Manual_free in std/lang.kspl).
-impl Foo: Manual_free {}
+impl Foo: Manual_free
+  priv fn free($r: Self$@)
+    r.other = 0
 // ==== case vis_wider_than_impl_target
 //< An `impl`'s methods do not reach wider than the target type either
 // EXPECT: widens nothing
@@ -513,3 +506,12 @@ impl Box: Hidden_trait
 fn main(): I32
   b: = Box::{ .n = 1 }
   return b.m()
+// ==== case selector_keeps_its_name
+//< A name in an import's braces keeps its name; `as` there is refused
+//< The note names the ways that do rename: the file's own alias, and a `typedef` for a type.
+// EXPECT: Note: a name in an import's braces keeps its name
+// EXPECT: import "p" as p
+import "std/math" { sqrt as root }
+
+fn main(): I32
+  return 0

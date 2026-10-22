@@ -144,7 +144,7 @@ fn test_last_after_a_big_record() //<
     bv: = U8$[]::big
     bv.fill('p')
     lg.append(KIND_POLICY, U8[]::big) catch panic("append policy")
-    for $i: Sz = 0; i < 10; i += 1
+    for i in Range.asc(10)
         sample: U8[8] = ::{}
         sv: = U8$[]::sample
         sv.fill(U8::(0x40 + i))
@@ -253,13 +253,13 @@ fn test_a_corrupt_header_is_detected() //<
     // clears only the top four bits, which a small value does not have.
     zero: U8[1] = ::{ 0x00 }
     offsets: Sz[2] = ::{ 0, 2 } // len and kind inside the header
-    for $k: Sz = 0; k < offsets.len; k += 1
+    for offset in offsets
         store: = ram.make(U8$[]::store_buf, SECTOR)
         $lg: = ksdblog.Log.open(store)
         lg.append(KIND_SAMPLE, "first") catch panic("append first")
         second_at: = lg.used()
         lg.append(KIND_POLICY, "second") catch panic("append second")
-        store.program_at(second_at + offsets[k], U8[]::zero)
+        store.program_at(second_at + offset, U8[]::zero)
 
         $reopened: = ksdblog.Log.open(store)
         $seen: Sz = 0
@@ -287,7 +287,7 @@ fn test_full_is_reported_not_overwritten() //< a full log is reported, not silen
     // One record is 8 + 24 = 32B, so 32 of them fill the 1KB medium.
     $wrote: Sz = 0
     $hit_full: = false
-    for $i: Sz = 0; i < 100; i += 1
+    for _i in Range.asc(100)
         lg.append(KIND_SAMPLE, "0123456789abcdefghijklmn") catch e
             hit_full = e == ksdblog.Ksdb_error.full
             break
@@ -356,7 +356,7 @@ fn test_open_when_the_last_record_ends_near_the_end() //<
     big: U8[244] = ::{}
     bv: = U8$[]::big
     bv.fill('z')
-    for $i: Sz = 0; i < 4; i += 1
+    for _i in Range.asc(4)
         lg.append(KIND_SAMPLE, U8[]::big) catch panic("append should fit")
     used: = lg.used()
     assert(used == store.capacity - 4, "the last record ends 4 bytes before the end")
@@ -393,7 +393,7 @@ fn test_append_does_not_erase() //< that it erases no more than it has to (see `
     store: = ram.make(U8$[]::store_buf, SECTOR)
     $lg: = ksdblog.Log.open(store)
     erases_before: = ram.erases
-    for $i: Sz = 0; i < 10; i += 1
+    for _i in Range.asc(10)
         lg.append(KIND_SAMPLE, "abcd") catch panic("append should succeed")
     assert(ram.erases == erases_before, "appending erases not one sector")
     verdict.pass("Appending brings no erase with it (only reset erases a sector).")
@@ -482,10 +482,10 @@ fn test_every_power_cut_keeps_what_was_written()
         // Caution: **Do not test only "no byte was written"**: on a device the bytes written stay,
         // so a partial write is the likeliest. **Keep the one-byte case**: only it reveals an erase
         // check that is one byte off.
-        for $mode: Sz = 0; mode < CUT_BYTES_MODES.len; mode += 1
+        for item in CUT_BYTES_MODES
             store: = ram.make(U8$[]::store_buf, CUT_SECTOR)
             $lg: = ksdblog.Log.open(store)
-            ram.arm_cut(cut, CUT_BYTES_MODES[mode])
+            ram.arm_cut(cut, item)
             $done: Sz = 0
             $alive: = true
             for $i: Sz = 0; alive && i < CUT_PAYLOADS.len; i += 1
@@ -511,7 +511,7 @@ fn test_every_power_cut_keeps_what_was_written()
             // nothing until a `reset`, and nobody notices.
             // Caution: **Do not stop at one record.** With the half-written record in a sector
             // beyond `tail`'s, the next record still fits; the one after it runs into it.
-            for $k: Sz = 0; k < 3; k += 1
+            for _k in Range.asc(3)
                 again.append(KIND_POLICY, "after")
                     catch panic("appending has to go on after a power cut")
             checked += 1
@@ -545,7 +545,7 @@ fn test_a_scrambled_store_is_survivable()
     $noise: U8[16] = ::{}
     $buf: U8[64] = ::{}
     $seen_any: Sz = 0
-    for $trial: Sz = 0; trial < SCRAMBLE_TRIALS; trial += 1
+    for _trial in Range.asc(SCRAMBLE_TRIALS)
         store: = ram.make(U8$[]::store_buf, SECTOR)
         $lg: = ksdblog.Log.open(store)
         for p in SCRAMBLE_PAYLOADS
@@ -555,7 +555,7 @@ fn test_a_scrambled_store_is_survivable()
         // Caution: **Also hit a sector's start and its end**, where the scan jumps sectors.
         width: = 1 + Sz::(rng.next_u64() % U64::noise.len)
         at: = Sz::(rng.next_u64() % U64::(store.capacity - width))
-        for $i: Sz = 0; i < width; i += 1
+        for i in Range.asc(width)
             noise[i] = U8::(rng.next_u64() % 256U64)
         store.program_at(at, U8[]::{ .ptr = noise[0]@, .len = width })
 

@@ -14,10 +14,6 @@ embed "ksplc/docs/SPEC-diagnostics.md" as diagnostics_spec
 const SPEC_NAME: U8[] = "ksplc/docs/SPEC-diagnostics.md" //<
     //< the document the text is taken from
 
-struct Explanation //< one code's section, and the chapter it is in
-    text: U8[] //< from the `### [CODE]` heading to the line before the next heading
-    chapter: U8[] //< the `##` heading above it, marks left out (`2. The list of warnings (W)`)
-
 fn canonical_code(raw: U8[], arena: Arena$@): U8[] //< the code as the table spells it
     //< A code is a capital letter and four digits, so normalizing it only upper-cases the letter.
     b: = arena.text()
@@ -36,14 +32,13 @@ priv fn heading_level(line: U8[]): Sz //< how many `#` start a heading, 0 if the
 priv fn is_fence(line: U8[]): Bool //< whether the line opens or closes a code block
     return line.trim_start().starts_with("```")
 
-fn section_of(code: U8[], arena: Arena$@): Explanation //< the code's section; empty text if none
+fn section_of(code: U8[], arena: Arena$@): U8[] //< the code's section; empty text if none
     //< A section runs to the next heading of any level outside a code block, and its trailing blank
     //< lines and a trailing `---` are dropped.
     head: = arena.text().s("### [").s(code).s("]").take()
-    $chapter: U8[] = ""
     $in_fence: = false
     $taking: = false
-    $body: = Str_builder.new()
+    defer $body: = Str_builder.new()
     $kept: Sz = 0 // the length of `body` up to its last line that is neither blank nor `---`
     for line in diagnostics_spec.lines(arena)
         if is_fence(line)
@@ -51,8 +46,6 @@ fn section_of(code: U8[], arena: Arena$@): Explanation //< the code's section; e
         level: = 0 if in_fence else heading_level(line)
         if taking && level > 0
             break
-        if level == 2
-            chapter = line.sub_from(3)
         if !taking && level == 3 &&
             (line.starts_with(head) && (line.len == head.len || line[head.len] == ' '))
             taking = true
@@ -62,7 +55,7 @@ fn section_of(code: U8[], arena: Arena$@): Explanation //< the code's section; e
         t: = line.trim_spaces()
         if t.len > 0 && !t.equals("---")
             kept = body.len
-    return Explanation::{ .text = arena.dup_str(body.slice().sub(0, kept)), .chapter = chapter }
+    return arena.dup_str(body.slice().sub(0, kept))
 
 fn answer(asked: U8[], arena: Arena$@): U8[] //<
     //< prints a code's section, or the codes a start begins
@@ -112,12 +105,92 @@ fn print_list(start: U8[], arena: Arena$@): Sz //< lists the codes that begin wi
         io.out().s("\n`ksplc explain <code>` prints what one means and what to do about it.\n")
     return n
 
-fn print_explanation(code: U8[], arena: Arena$@): Bool //< it prints the section; false if none
-    //< The Markdown is printed as written, as `rustc --explain` does, followed by its source. Its
-    //< links are relative to `ksplc/docs/`. A bare section number refers to that document.
+priv fn closing_paren(text: U8[], start: Sz): Sz //< matching close, or text.len if unfinished
+    $depth: Sz = 0
+    $code: = false
+    for $i: Sz = start; i < text.len; i += 1
+        if text[i] == '`'
+            code = !code
+        if code
+            continue
+        if text[i] == '('
+            depth += 1
+        else if text[i] == ')'
+            depth -= 1
+            if depth == 0
+                return i
+    return text.len
+
+priv fn readable_line(line: U8[], arena: Arena$@): U8[] //<
+    //< prose without document citations or link targets
+    out: = arena.text()
+    $i: Sz = 0
+    $code: = false
+    for i < line.len
+        ch: = line[i]
+        if ch == '`'
+            code = !code
+        start: = i + 1 if ch == ' ' && i + 1 < line.len && line[i + 1] == '(' else i
+        if !code && line[start] == '('
+            end: = closing_paren(line, start)
+            if end < line.len
+                inside: = line.sub(start + 1, end - start - 1)
+                // Omit document citations and their preceding space, not explanatory parentheses.
+                if inside.find_str("](").is_some() && inside.find_str(".md").is_some()
+                    i = end + 1
+                    continue
+        if !code && ch == '['
+            if close: = line.sub_from(i).find_str("](")
+                label_end: = i + close
+                end: = closing_paren(line, label_end + 1)
+                if end < line.len
+                    out.s(line.sub(i + 1, label_end - i - 1))
+                    i = end + 1
+                    continue
+        if !code && ch == '*' && i + 1 < line.len && line[i + 1] == '*'
+            i += 2
+            continue
+        out.c(ch)
+        i += 1
+    return out.take()
+
+priv fn print_wrapped(text: U8[], arena: Arena$@) //<
+    //< wraps prose at spaces; never cuts a word or code example
+    $rest: = text.trim_spaces()
+    $indent: = text.sub(0, text.len - text.trim_start().len)
+    continuation: = arena.text().s(indent).s("  ").take()
+    for rest.len > 88 - indent.len
+        $cut: Sz = 0
+        for i in Range.asc(88 - indent.len)
+            if rest[i] == ' '
+                cut = i
+        if cut == 0
+            break
+        io.out().s(indent).s(rest.sub(0, cut)).c('\n')
+        rest = rest.sub_from(cut + 1).trim_start()
+        indent = continuation
+    io.out().s(indent).s(rest).c('\n')
+
+fn print_explanation(code: U8[], arena: Arena$@): Bool //<
+    //< prints a terminal view; false if no section
     e: = section_of(code, arena)
-    if e.text.len == 0
+    if e.len == 0
         return false
-    io.out().s(e.text).s("\nFrom \"").s(e.chapter).s("\" in ").s(SPEC_NAME)
-        .s(" (its links count from ksplc/docs/).\n")
+    $in_fence: = false
+    for line in e.lines(arena)
+        if is_fence(line)
+            in_fence = !in_fence
+            io.out().c('\n')
+            continue
+        if in_fence
+            io.out().s("    ").s(line).c('\n')
+            continue
+        level: = heading_level(line)
+        text: = line.sub_from(level + 1) if level > 0 else line
+        if text.starts_with("* **Fix**")
+            io.out().c('\n')
+        print_wrapped(readable_line(text, arena), arena)
+        if level > 0
+            io.out().c('\n')
+    io.out().s("\nDetails: ").s(SPEC_NAME).c('\n')
     return true

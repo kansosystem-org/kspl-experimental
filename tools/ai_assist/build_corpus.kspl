@@ -119,7 +119,7 @@ priv fn normalize_all(files: List<|U8[]|>$@, use_fmt: Bool, arena: Arena$@): Lis
 
     worker_arenas: = List<|Arena$@|>.create(arena)
     threads: = List<|thread.Thread$@|>.create(arena)
-    for $w: Sz = 0; w < num_workers; w += 1
+    for w in Range.asc(num_workers)
         wa: = mem.alloc_as<|Fmt_worker_args|>()
         wa.files = files
         wa.use_fmt = use_fmt
@@ -146,7 +146,7 @@ priv fn normalize_all(files: List<|U8[]|>$@, use_fmt: Bool, arena: Arena$@): Lis
 
 priv fn write_records(path: U8[], recs: List<|Rec|>$@)
     $f: = io.open(path, "w") catch panic("cannot open output file for writing")
-    $b: = Str_builder.new()
+    defer $b: = Str_builder.new()
     for rec in recs
         b.clear()
         b.s("{\"path\":\"").escape_and_append(rec.path).s("\",\"code\":\"")
@@ -183,13 +183,12 @@ priv fn write_stats(use_fmt: Bool, dups: Sz, total: Agg, train: Agg, val: Agg)
 // main
 // ==========================================
 fn main() //< collects the repository's sources into the train/val corpus
-    arena: = Arena.new(512 * 1024 * 1024)
-    defer arena.free()
+    defer arena: = Arena.new(512 * 1024 * 1024)
     $use_fmt: = false
     p: = argparse.Parser
         .create(sys.program_name(), "make a training corpus from the repository's sources", arena)
     p.flag("--fmt", use_fmt@, "normalize through ksplc fmt before building")
-    p.parse_or_exit(sys.args(), arena)
+    p.parse_or_exit()
     if use_fmt && !fs.exists(oracle.KSPLC_PATH)
         io.err()
             .s("[error] --fmt requires \{oracle.KSPLC_PATH\} (check that make self-host has run)\n")

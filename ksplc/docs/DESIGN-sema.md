@@ -136,7 +136,7 @@ flowchart TD
 **`collect.kspl` type-checks no function body.** It walks the top-level declarations of the whole file in passes. Each pass is an independent loop over `r.children`, numbered as the `// --- Pass` comments in `sema/decl/collect.kspl` number them:
 
 * **Pass 0**: resolving the imports, gathering the `##lint`s, and detecting the attributes.
-* **Pass 1**: provisionally registering the type symbols (empty `Struct_def` / `Enum_def` / `Trait_def` placeholders, and the aliases). 1b copies a trait declaration's default values to the implementing type, before an instantiation copies a template's tree.
+* **Pass 1**: provisionally registering the type symbols (empty `Struct_def` / `Enum_def` / `Trait_def` placeholders, and the aliases). 1b first refuses a trait's method that the type writes outside the block that names the trait. It then copies the trait declaration's default values to the implementing type, before an instantiation copies a template's tree.
 * **Pass 2**: registering the value symbols and resolving the aliases, in two runs.
   * **2a registers without resolving a single type.** 2b resolves the declared type nodes, which can cause an instantiation, so two things must be registered first:
     * The names of the top-level `var`s / `const`s (`declare_var_syms`), which folding an array's length (`U8[n]`) reads. The folding reads only the declaration's initializer, not `type_id`, so unresolved types do not stop it.
@@ -513,13 +513,13 @@ Caution: **Do not add a test rejecting it.** Monomorphization has one starting p
 | Axis | KSPL's choice | What it permits |
 | :-- | :-- | :-- |
 | The unit of checking | Each concrete instantiation | Operations whose validity depends on the actual type arguments |
-| The range of body checking | Referenced methods and required implicit hooks | A container of automatic owners, even when unused copying methods cannot support them |
+| The range of body checking | Referenced methods and required implicit hooks | A container of `Move_only` elements, even when unused copying methods cannot support them |
 
-**The benefit includes which programs can be written.** `List<|Str_builder|>` can push and pop values without copying them. Its copying methods remain invalid when called. Separate container families would duplicate those working operations. Less inference work is an additional benefit, rather than the reason to weaken a diagnostic.
+**The benefit includes which programs can be written.** `List<|io.File_stream|>` can push and pop values without copying them. Its copying methods remain invalid when called. Separate container families would duplicate those working operations. Less inference work is an additional benefit, rather than the reason to weaken a diagnostic.
 
 The body queue retains each declaration's type-argument bindings when its method table is made. `sema/body/infer.kspl` checks referenced bodies, then repeats until no additional body is needed. Each declaration is checked once. Only checked function bodies enter the tree passed to Lower. Signatures remain in their method tables for lookup.
 
-**Implicit calls count as uses.** An upcast requires every slot of its trait table. `Ref_counted` requires `retain` and `release`; `Drop` requires its cleanup hook. Their tables cannot wait until Lower, which synthesizes those calls after semantic analysis ends. `Manual_free.free` is explicit and follows ordinary reference tracking.
+**Implicit calls count as uses.** An upcast requires every slot of its trait table. `Ref_counted` requires `retain` and `release`. Their tables cannot wait until Lower, which synthesizes those calls after semantic analysis ends. `Manual_free.free` is explicit and follows ordinary reference tracking.
 
 A use mark records a reference from any body being checked. It does not prove reachability from the program's entry point. Nongeneric unused functions can still reference generic methods. Lower's removal of unreachable code remains a separate pass.
 
@@ -543,6 +543,12 @@ Caution: **Raise `Self`'s counterpart (`fn_ctx.impl_name`) before resolving the 
 The collection's type decides, so `expand_for_in` in `sema/body/for_in.kspl` (at the head of `infer_loop_stmt`) expands it. It acts only where Desugar left its mark ("Desugar: expanding the syntactic sugar that needs no types" in [`DESIGN-parse.md`](DESIGN-parse.md)).
 
 Caution: **Look at `Iter` first.** Choosing the index on a type satisfying both quietly disables the `Iter` the writer declared explicitly (Principle 5). The index is the default only for a collection that declares nothing, and `.len` and `[]` stay usable by writing them directly.
+
+**The temporary that Desugar declares points at a place, rather than copying it.** `hold_for_in_subject` in `sema/body/for_in.kspl` decides this when `infer_var_decl` types the temporary. Desugar marks the temporary for it (`mark_for_in_subject`). The rules a writer sees are in "7.2 Loops" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#72-loops).
+
+* **A name or a `.field` chain of names becomes `x@`**, and a fixed-length array becomes a slice over it. Then the index shape reads `.len` and `[i]` through the pointer at each step. The move check sees a borrow, so a move-only collection stays usable after the loop.
+* **The pointer is read-only unless a read needs it writable** (`index_read_needs_writable`). The flow analysis then reads that `@` as a read, not a write (`df_decl_var` in `sema/flow/track.kspl`), so a spare `$` on the place is still reported.
+* **An `Iter` stays a copy.** `next()` writes the position, and the subject must keep its own.
 
 **The shape is decided per instantiation, not by the template.** A `for v in c` in a generic's body takes one shape for a `List` and another for an `Iter`. The expansion runs inside the body's inference, so each body cloned per instantiation gets its own (the regression test: `test_loop_in_inside_generic` in `ksplc/tests/trait_test.kspl`).
 

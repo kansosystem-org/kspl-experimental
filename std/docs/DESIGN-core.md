@@ -132,10 +132,16 @@ KSPL has no garbage collector. Memory that `std` hands you lives in one of four 
 
 | Where it lives | How you ask for it | Who frees it, and when |
 | :-- | :-- | :-- |
-| The global heap | Pass `null` as the arena: `List.new(null)` | The type decides: `Str_builder` uses `Drop`; manual owners use `defer xs.free()` |
-| An arena | Pass the arena: `List.new(arena)` | The arena releases storage; containers still release their automatic elements |
+| The global heap | Pass `null` as the arena: `List.new(null)` | You, with `defer` in front of the declaration: `defer $xs: = List<\|I32\|>.new(null)` |
+| An arena | Pass the arena: `List.new(arena)` | The arena, all at once |
 | Your own buffer | `Buf_writer.new(U8$[]::buf)`, `Arena.from_buffer(…)` | Nothing is allocated, and the buffer stays yours |
 | Shared by several owners | `Rc<\|T\|>.new(v)` / `Arc<\|T\|>.new(v)` (ARC) | The compiler, when the last owner lets go |
+
+**Choose an arena first, and the heap only when no arena fits.** A value made in an arena needs no `free()`, so it cannot leak. A forgotten free is the commonest mistake that manual cleanup allows.
+
+* **A function given an arena makes what it returns there**: `arena.text().s(…).take()`, not a `Str_builder` on the heap handed back.
+* **Use the heap** where nothing that outlives the result holds an arena, or where memory must go back early, such as inside a long loop. Then declare the value with `defer` in front.
+* **Work that a function does not return** goes in `defer $work: = mem.scratch(arena)`. Its `free()` rewinds the caller's arena, or frees an arena of its own when given `null`.
 
 The first two side by side:
 
@@ -144,31 +150,31 @@ import "std/ds" { List }
 import "std/mem" { Arena }
 
 fn main()
-    // On the heap: this function owes a free().
-    $on_heap: = List<|I32|>.new(null)
-    defer on_heap.free()
+    // On the heap: this function owes a free(), which `defer` in front says.
+    defer $on_heap: = List<|I32|>.new(null)
     on_heap.push(1)
 
     // In an arena: freed with the arena, all at once.
-    arena: = Arena.new(4096)
-    defer arena.free()
+    defer arena: = Arena.new(4096)
     $in_arena: = List<|I32|>.new(arena)
     in_arena.push(2)
 ```
 
-### An owner of one resource cleans up itself
+### An owner is freed where it is declared
 
-**A type that owns one resource for one scope implements `Drop`.** In `std` these are `str.Str_builder`, `io.File_stream`, `fs.File_lock`, `thread.Mutex<|T|>` with the OS lock it holds, `thread.Cond_var`, `reactor.Reactor`, the search state of `regex`, and `mem.Scratch`. A local one needs no `defer`. Its cleanup runs on every way out of its scope, a propagated failure's included. So a file is closed and a lock let go where nobody wrote the line. Moving it transfers the responsibility. The reasons, and what stays manual, are "Automatic cleanup follows one owner" in [`../../docs/DESIGN-programming-language.md`](../../docs/DESIGN-programming-language.md#automatic-cleanup-follows-one-owner).
+**Every type that owns something conforms to `Manual_free`, and its owner frees it.** In `std` these include `str.Str_builder`, `io.File_stream`, `fs.File_lock`, `thread.Mutex<|T|>`, `thread.Cond_var`, `reactor.Reactor`, the search state of `regex`, `mem.Scratch`, and the containers on the heap. A local one is declared with `defer` in front (`defer $f: = io.open(path, "rb") catch …`), which frees it on every way out of its block, a propagated failure's included. No type frees itself, so a reader sees each free on the page. The reasons are "Every cleanup stands in the source" in [`../../docs/DESIGN-programming-language.md`](../../docs/DESIGN-programming-language.md#every-cleanup-stands-in-the-source).
 
-* **A slice borrows.** It borrows the builder's bytes and becomes invalid when that owner is destroyed. Returning the builder transfers ownership, while returning its slice does not.
-* **Some keep a `free()` for an early release**, where more work follows that needs the resource gone. A `File_stream` is closed before the file is read back, and a `File_lock` let go before another process takes it. A `Scratch` is given back before more is written into the caller's arena. A free followed by nothing in the scope repeats the drop, and the linter reports it.
-* **What a program shares is not such an owner.** Standard output and standard error stay open for the whole program, so `io.out()` and `io.err()` hand out a stream that never closes. A global cannot hold an automatic owner either.
-* **An owner with more than one way to end stays manual.** A `subproc.Child` ends by `wait` or by `kill`, and a drop could choose only one. Killing would cut short a child the caller meant to wait for. Waiting would block at a scope's end. So it conforms to `Move_only` and is ended by hand.
-* **A network stream stays manual too.** `net.Tcp_stream` and `net.Tcp_listener` are handed out as pointers. A server keeps them in its table of connections past any one scope, and a pointer owns nothing.
+* **A copy of a file, a lock or a thread primitive is refused.** `File_stream`, `File_lock`, `thread.Raw_mutex` and `Cond_var` conform to `Move_only` too, and `Mutex<|T|>` is move-only through its lock. A copy would close or destroy one resource twice.
+* **A slice borrows.** It borrows the builder's bytes and becomes invalid when the builder is freed. Returning the builder hands it to the caller, while returning its slice does not.
+* **A free by hand releases early**, where more work follows that needs the resource gone. A `File_stream` is closed before the file is read back, and a `File_lock` let go before another process takes it.
+* **An owner frees the owners in its fields.** A struct holding a `Str_builder` or a `File_stream` frees it in its own `free()`.
+* **What a program shares is not an owner.** Standard output and standard error stay open for the whole program, so `io.out()` and `io.err()` hand out a stream that has no `free()`.
+* **An owner with more than one way to end has no `free()`.** A `subproc.Child` ends by `wait` or by `kill`, and only the caller knows which. So it conforms to `Move_only` alone, and its end is a `defer` statement of its own.
+* **A network stream is handed out as a pointer.** `net.Tcp_stream` and `net.Tcp_listener` are kept in a server's table of connections past any one scope; their owner frees them.
 
-**Containers distinguish a live element from an empty slot.** Push and insertion initialize storage without destroying its old bytes. Pop transfers a live element out. Removal, replacement and clear destroy the old element exactly once. Resizing transfers bytes without creating another owner. A manually managed container on the heap still needs its `free()`. One in an arena needs it only when its elements carry cleanup (a `Drop` or ARC value). The arena gives back the memory, but it runs no element's cleanup.
+**Containers distinguish a live element from an empty slot.** Push and insertion initialize storage without destroying its old bytes. Pop transfers a live element out. Removal, replacement and clear release the old element's ARC counts exactly once. Resizing transfers bytes without creating another owner. A container on the heap needs its `free()`. One in an arena needs it only when its elements hold ARC values. The arena gives back the memory, but it releases no element's count. An element that owns something (a `List` of `Str_builder`s) is freed by its owner before the container.
 
-**Shared ownership owns its payload once.** `Rc` and `Arc` transfer a new payload into their control block. The last strong owner destroys that payload through the same storage operations. A payload can itself contain an automatic owner.
+**Shared ownership owns its payload once.** `Rc` and `Arc` transfer a new payload into their control block. The last strong owner destroys that payload through the same storage operations. A payload can itself hold ARC values, which that release releases too.
 
 ### A null arena is the heap, for every function
 
@@ -186,7 +192,7 @@ Pass `null` where a function takes an arena, and it works on the heap instead. *
 
 **A whole file is read into the arena given** (`io.read_file`). A caller that keeps the text with other values in an arena reads it there directly. Read onto the heap and copied, the file would be held twice at the peak.
 
-**What a function does not return, it frees before it returns**, `null` or not. Examples are a path joined on the way, a list that it sorts from, and the object that it encodes into text. That work goes in `mem.scratch(arena)`. With an arena, that is the caller's arena from a mark, rewound to the mark on the way out. Given `null`, it is an arena of the function's own, freed on the way out. The scratch frees itself (`Drop`), so a failure thrown halfway gives the work back too. So the caller's arena keeps the result alone, however many calls pass through it and however many fail. With `null`, the caller owes a free for the result alone.
+**What a function does not return, it frees before it returns**, `null` or not. Examples are a path joined on the way, a list that it sorts from, and the object that it encodes into text. That work goes in `mem.scratch(arena)`. With an arena, that is the caller's arena from a mark, rewound to the mark on the way out. Given `null`, it is an arena of the function's own, freed on the way out. The scratch is declared with `defer` in front (`defer $work: = mem.scratch(arena)`), so a failure thrown halfway gives the work back too. A result built in the scratch takes the work with `keep()`, which leaves the scratch empty. So the caller's arena keeps the result alone, however many calls pass through it and however many fail. With `null`, the caller owes a free for the result alone.
 
 * **Why the caller's arena is rewound, not left as it is**: a server reads each request into one arena per connection. A reader that left its work there would grow that arena by every head that it reads, until the connection closes. That includes each try at a request that is still incomplete.
 * **Why the work does not go in its own arena when one is given**: a caller who passes an arena avoids the heap. That includes a fixed buffer on a microcontroller.
@@ -276,7 +282,7 @@ Caution: **Do not mark an arena parameter with a suffix**, least of all `_in`. `
 
 **Do not take an arena only to discard it.** The signature is the one mark that a function takes an arena. So the caller reads one there as "I handed over where the content goes". A discarded one misleads them about whether clean-up is needed.
 
-**Only a function that takes an arena allocates.** The one exception is an owner that frees itself (`Drop`), such as `Str_builder.new()`. It lives on the heap, and its cleanup runs where its owner's scope ends. So no `free()` is owed, and no arena is needed. In `std/str`:
+**Only a function that takes an arena allocates.** The one exception is `Str_builder`, a growing buffer on the heap. Its owner frees it, usually by `defer` in front of its declaration. In `std/str`:
 
 | Functions | Take an arena? | Return |
 | :-- | :-- | :-- |
@@ -507,7 +513,7 @@ C also keeps writability in the type (`char *` against `const char *`). `strdup`
 
 ### `dedent`, which removes common indentation, empties a whitespace-only line
 
-`std/str`'s `dedent` removes the indentation that all lines share. A line that holds only whitespace is emptied. It does not count when the shared indentation is measured.
+`std/str`'s `dedent` removes the indentation that all lines share. A line that holds only whitespace is emptied. It does not count when the shared indentation is measured. Like `replace` and `join`, it returns the text in the arena it is given.
 
 ```
 before   "    a\n      \n    b\n"

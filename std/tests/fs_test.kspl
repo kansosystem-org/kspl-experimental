@@ -57,8 +57,7 @@ fn test_fs_ops()
     assert(replaced.equals("again"), "the destination should hold the new bytes")
     dealloc(Void$@::replaced.ptr)
 
-    dir_arena: = Arena.new(4096)
-    defer dir_arena.free()
+    defer dir_arena: = Arena.new(4096)
     entries: = fs.read_dir(tmp_dir, dir_arena)
         catch panic("read_dir should succeed for an existing directory")
     assert(entries.len == 1, "directory should contain exactly one entry")
@@ -79,8 +78,7 @@ fn test_fs_wide_path() //<
     //< This test checks the functions themselves. The compiler's own suites test a program run
     //< through `ksplc run` from such a folder.
     verdict.start("[Fs] file operations in a place holding a space and non-ASCII...")
-    arena: = Arena.new(4096)
-    defer arena.free()
+    defer arena: = Arena.new(4096)
     // **Delete by name, deepest first** (a folder with contents cannot be deleted).
     root: = "out/tmp/kspl_test 場所 と 空白"
     deep: = "out/tmp/kspl_test 場所 と 空白/深い 所"
@@ -137,8 +135,7 @@ fn test_fs_past_max_path() //<
     //< `ksplc/gen/runtime/hosted_fs.c`). The tree is built through a relative path, which is
     //< resolved before the long-path prefix is added. It is read back through the absolute one.
     verdict.start("[Fs] file operations on a path longer than Windows's 260 characters...")
-    arena: = Arena.new(8192)
-    defer arena.free()
+    defer arena: = Arena.new(8192)
     root: = "out/tmp/kspl_test_past_max_path"
     // Five levels of 58 characters put the relative path alone past 300, wherever the tests
     // run.
@@ -202,8 +199,7 @@ priv const WALK_ROOT: U8[] = "out/tmp/kspl_test_debug_walk"
 // ==========================================
 fn test_fs_walk()
     verdict.start("[Fs] mkdir_all/walk_files...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
+    defer arena: = Arena.new(64 * 1024)
     remove_walk_tree()
 
     fs.mkdir_all("out/tmp/kspl_test_debug_walk/z/deep")
@@ -276,8 +272,7 @@ priv fn race_entry(c: Race_ctx$@): Void$@
 
 fn test_fs_mkdir_all_race()
     verdict.start("[Fs] mkdir_all creating the same tree at once...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
+    defer arena: = Arena.new(64 * 1024)
     root: = "out/tmp/kspl_test_debug_mkdir_race"
     clear_tree_best_effort(root, arena)
     deep: = "out/tmp/kspl_test_debug_mkdir_race/a/b/c/d"
@@ -378,9 +373,8 @@ fn test_fs_path_guard()
     fs.remove_path("out/tmp/kspl_test_path_guard/present.txt") catch {}
 
     // Over the limit, walk must return too_deep rather than crash, so the caller can report it.
-    arena: = Arena.new(1024 * 1024)
-    defer arena.free()
-    $deep: = build_deep_tree(520)
+    defer arena: = Arena.new(1024 * 1024)
+    defer $deep: = build_deep_tree(520)
     // **Where the OS path-length limit is hit first, the tree cannot be created** (Windows, macOS).
     // There mkdir_all rightly fails, and the test stops after the text checks. Linux verifies
     // depth.
@@ -411,7 +405,7 @@ fn test_fs_long_path()
     verdict.start("[Fs] a path too long to hand to the OS...")
     // **A path exceeding max_path_len is refused with invalid_path**, not operation_failed, which
     // would not tell the caller the length was the cause.
-    $b: = Str_builder.new()
+    defer $b: = Str_builder.new()
     for $i: Sz = 0; i <= fs.MAX_PATH_LEN; i += 1
         b.c('x')
     long_path: = b.slice()
@@ -455,7 +449,7 @@ fn test_fs_inner_nul()
     // before it: here, create `dir`.
     dir: = "out/tmp/kspl_test_debug_nul"
     fs.remove_path(dir) catch {}
-    $b: = Str_builder.new()
+    defer $b: = Str_builder.new()
     b.s(dir).c(0U8).s("tail")
     $saw_invalid: = false
     fs.mkdir(b.slice()) catch e
@@ -466,7 +460,7 @@ fn test_fs_inner_nul()
     assert(saw_invalid, "an mkdir on a path holding a NUL is refused with invalid_path")
     assert(!fs.exists(dir), "the part before the NUL is not created")
     // The runtime refuses it too, so a call std/fs does not check is not cut either.
-    $sh: = Str_builder.new()
+    defer $sh: = Str_builder.new()
     sh.s("/bin/sh").c(0U8).s("x")
     assert(!fs.is_executable(sh.slice()), "the runtime refuses a path holding a NUL")
     verdict.pass("a path holding a NUL is refused, both by std/fs and by the runtime.")
@@ -482,7 +476,7 @@ priv fn build_deep_tree(levels: Sz): Str_builder
 
 priv fn remove_deep_tree(levels: Sz) //< deletes from the leaves in order
     for $n: Sz = levels; n > 0; n -= 1
-        $b: = build_deep_tree(n)
+        defer $b: = build_deep_tree(n)
         fs.remove_path(b.slice()) catch {}
     fs.remove_path(DEEP_ROOT) catch {}
 

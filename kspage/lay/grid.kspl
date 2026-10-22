@@ -29,8 +29,7 @@ priv fn natural_width(cell: Block$@, sheet: Sheet$@, src: Font_source, avail: F3
     at: = Rect::{ .x = 0.0, .y = 0.0, .w = avail, .h = 0.0 }
     flow.place_blocks(scratch, only(cell, arena), sheet, at, look, 0.0, 0.0, arena)
     $w: F32 = 0.0
-    for $i: Sz = 0; i < scratch.boxes.len; i += 1
-        b: = scratch.boxes.get(i)
+    for b in scratch.boxes
         right: = b.rect.x + b.rect.w
         if right > w
             w = right
@@ -70,7 +69,7 @@ priv fn resolve_columns(table: Block$@, sheet: Sheet$@, src: Font_source, avail:
     // The set columns are taken first; the rest is shared among the others.
     $taken: F32 = 0.0
     $autos: Sz = 0
-    for $c: Sz = 0; c < cols; c += 1
+    for c in Range.asc(cols)
         widths.push(0.0)
         switch table.size_of(.column, c)
         case .some(v)
@@ -87,8 +86,7 @@ priv fn resolve_columns(table: Block$@, sheet: Sheet$@, src: Font_source, avail:
     // **A merged cell does not decide a column's width** (the narrow columns would all widen at
     // once). Contents that do not fit stick out, as with a set width.
     tiles: = table.tiles_of(arena)
-    for $i: Sz = 0; i < tiles.len; i += 1
-        t: = tiles.get(i)
+    for t in tiles
         if t.cols > 1 || !is_auto(table, t.column)
             continue
         row_look: = style.look_for(sheet, table.children.get(t.row).style, look)
@@ -99,16 +97,16 @@ priv fn resolve_columns(table: Block$@, sheet: Sheet$@, src: Font_source, avail:
     // Caution: **Give a width to a column with no contents too.** A column of width 0 cannot be
     // clicked, and a newly inserted table cannot even be seen on the screen. **A column with a
     // setting is not touched** (the written width applies as it is; write 0 and it is 0).
-    for $c: Sz = 0; c < cols; c += 1
+    for c in Range.asc(cols)
         if is_auto(table, c) && widths.get(c) <= 0.0
             widths.set(c, BLANK_COLUMN)
     $total: F32 = 0.0
-    for $c: Sz = 0; c < cols; c += 1
+    for c in Range.asc(cols)
         if is_auto(table, c)
             total += widths.get(c)
     if total <= room || total <= 0.0
         return widths
-    for $c: Sz = 0; c < cols; c += 1
+    for c in Range.asc(cols)
         if is_auto(table, c)
             widths.set(c, widths.get(c) * room / total)
     return widths
@@ -239,8 +237,7 @@ fn place_rows(dst: Page$@, table: Block$@, sheet: Sheet$@, at: Rect, look: Look,
     // Stretches a cell merged downward to the lower edge of the rows it covers. **Across a page, it
     // stretches by the amount moved on**, so a table that must not be split keeps its rows within
     // the page.
-    for $i: Sz = 0; i < tall.len; i += 1
-        one: = tall.get(i)
+    for one in tall
         $last: Sz = one.spot.row + one.rows - 1
         if last >= heights.len
             last = heights.len - 1

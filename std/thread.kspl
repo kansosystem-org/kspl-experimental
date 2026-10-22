@@ -66,12 +66,6 @@ impl Thread
         //< without joining nor join and forget to free.
         return kspl_thread_join(r.handle)
 
-    priv fn free(r: Self$@) //<
-        //< Free tracking needs the name `free` and conformance to `Manual_free`
-        //< When another name (join_and_free) wraps it, the tracking (`mark_call_freed_args`)
-        //< follows one level, so the caller's use-after-free and double free are still caught.
-        dealloc(Void$@::r)
-
     pub fn join_and_free(r: Self$@): Void$@ //< waits for the thread to end and returns its result
         //< `spawn` / `join_and_free` pair like malloc / free; this call frees `r` itself.
         ret: = r.join()
@@ -95,9 +89,13 @@ impl Raw_mutex
     fn unlock(r: Self$@)
         kspl_mutex_unlock(r.handle)
 
-impl Raw_mutex: Drop //< destroys the OS mutex when its owner leaves scope
-    priv fn drop(r: Self$@)
-        // A Raw_mutex is a value stored in place, so there is no memory to free here.
+impl Raw_mutex: Move_only { //< copying it would destroy one OS object twice
+    //< `Mutex<|T|>` holds a Raw_mutex by value, so it is Move_only too. To borrow one, pass a
+    //< pointer with `@`.
+}
+impl Raw_mutex: Manual_free //< it owns an OS object and releases it with `free()`
+    fn free(r: Self$@) //< destroys the OS mutex
+        //< A Raw_mutex is a value stored in place, so there is no memory to free here.
         kspl_mutex_destroy(r.handle)
 
 // ============================ Cond_var ============================
@@ -107,7 +105,7 @@ pub enum Cond_wait //< how a wait with a limit ended
 
 pub struct Cond_var //< lets a thread wait, together with a lock, until a condition holds
     //< pthread_cond_t / CONDITION_VARIABLE, paired with a `Mutex<|T|>` (a producer-consumer queue,
-    //< waiting for completion). It is destroyed when its owner leaves scope (`Drop`).
+    //< waiting for completion). Its owner destroys it with `free()`.
     priv handle: I64
 
 impl Cond_var
@@ -143,9 +141,10 @@ impl Cond_var
         //< the others sleep on past it.
         kspl_cond_broadcast(r.handle)
 
-impl Cond_var: Drop //< destroys the OS condition variable when its owner leaves scope
-    priv fn drop(r: Self$@)
-        // As with `Raw_mutex`, the value itself has no memory to free.
+impl Cond_var: Move_only {} //< copying it would destroy one OS object twice
+impl Cond_var: Manual_free //< it owns an OS object and releases it with `free()`
+    pub fn free(r: Self$@) //< destroys the OS condition variable
+        //< As with `Raw_mutex.free`, the value itself has no memory to free.
         kspl_cond_destroy(r.handle)
 
 // ============================ Mutex<T> ============================
@@ -154,7 +153,8 @@ pub struct Mutex<|T|> //< a lock and the data it protects, kept together so neit
     //< Caution: **It is not re-entrant: locking it again on the thread that holds it stops the
     //< program** with a message, on every OS. Unlocking it from a thread that does not hold it does
     //< the same ("A mutex is locked once, by one thread" in std/docs/DESIGN-system.md).
-    //< **Its owner leaving scope destroys the lock and lets the value go** (both held by value).
+    //< **Its owner destroys the lock with `free()`.** The value is held by value; what it owns is
+    //< the owner's to free before.
     priv mutex: Raw_mutex
     priv value: T
 
@@ -172,6 +172,10 @@ impl<|T|> Mutex<|T|>
 
     pub fn unlock(r: Self$@) //< releases the lock
         r.mutex.unlock()
+
+impl<|T|> Mutex<|T|>: Manual_free //< it owns an OS object and releases it with `free()`
+    pub fn free(r: Self$@) //< destroys the OS lock
+        r.mutex.free()
 
 // ============================ Atomic_sz ============================
 pub struct Atomic_sz //< a shared counter or flag that changes without taking a lock
@@ -202,4 +206,9 @@ impl Atomic_sz
     ): Bool
         return kspl_atomic_cas(r.value@, expected, new_val) == expected
 
-impl Thread: Manual_free {} //< it owns its resources and frees them with `free()`.
+impl Thread: Manual_free //< it owns its resources and frees them with `free()`.
+    priv fn free(r: Self$@) //<
+        //< Free tracking needs the name `free` and conformance to `Manual_free`
+        //< When another name (join_and_free) wraps it, the tracking (`mark_call_freed_args`)
+        //< follows one level, so the caller's use-after-free and double free are still caught.
+        dealloc(Void$@::r)

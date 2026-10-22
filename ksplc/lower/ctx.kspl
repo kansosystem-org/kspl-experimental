@@ -72,10 +72,6 @@ struct Lowering_ctx
     stmt_decls: List<|Ast_node$@|>$@ //<
         //< Declarations that go before the statement being lowered, in its own block
         //< lower_block puts them ahead of that statement's pre_stmts.
-    drop_flags: Map<|U8[], U8[]|>$@ //< the live flags of automatic owners in this function
-    entry_stmts: List<|Ast_node$@|>$@ //< parameter live flags waiting for the function body
-    release_params: Map<|Sz, List<|Bool|>$@|>$@ //<
-        //< explicit-release effects before bodies are lowered
 
 impl Lowering_ctx
     fn new(sema: Sema_ctx$@): Lowering_ctx$@
@@ -92,12 +88,7 @@ impl Lowering_ctx
             .cleanup_stack = cleanup_stack, .jump_stack = jump_stack,
             .arc_scope_pending = arc_scope_pending, .lower_depth = 0, .in_fn_body = false,
             .arc_helpers = arc_helpers, .arc_helper_decls = arc_helper_decls, .relocating = 0,
-            .stmt_decls = stmt_decls,
-            .drop_flags = base_core.arena
-            .create(Map<|U8[], U8[]|>.new(base_core.arena)),
-            .entry_stmts = base_ast.new_ast_node_list(),
-            .release_params = base_core.arena
-            .create(Map<|Sz, List<|Bool|>$@|>.new(base_core.arena)) }
+            .stmt_decls = stmt_decls }
         return base_core.arena.create(ctx)
 
     fn can_own_temporaries(r: Self$@): Bool //<
@@ -132,7 +123,7 @@ impl Lowering_ctx
         //< prefix is only read, so it is a `U8[]`; as `U8$[]` a `.rodata` string could not be
         //< passed.
         r.tmp_counter += 1
-        $s: = Str_builder.new()
+        defer $s: = Str_builder.new()
         c: = r.tmp_counter
         pad: = "00" if c < 10 else ("0" if c < 100 else "")
         s.s(prefix).s(pad).s("\{c\}")

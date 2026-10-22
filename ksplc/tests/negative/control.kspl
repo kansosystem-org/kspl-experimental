@@ -16,6 +16,111 @@ fn main(): I32
     n += 1
     continue _
   return n
+// ==== case defer_decl_handed_over
+//< A value declared with `defer` in front is freed when its block ends, so it is not handed over
+//< Returned, stored as a whole or passed on by value where its type is `Move_only`, the value
+//< would reach someone else after its `free()`. The check reads the function as written.
+// EXPECT: 'sb' is freed when its block ends, so it cannot be returned here. Declare it without 'defer' to hand it over
+// EXPECT: 'xs' is freed when its block ends, so it cannot be stored here
+// EXPECT: 'h' is freed when its block ends, so it cannot be moved here
+import "std/ds" { List }
+import "std/str" { Str_builder }
+
+priv struct Handle
+  id: I32
+
+impl Handle: Move_only {}
+
+impl Handle: Manual_free
+  fn free(_r: Self) {}
+
+priv fn eat(_h: Handle) {}
+
+priv fn build(): Str_builder
+  defer $sb: = Str_builder.new()
+  sb.s("x")
+  return sb
+
+priv fn keep(): I32
+  defer $xs: = List<|I32|>.new(null)
+  ys: = xs
+  return I32::ys.len
+
+priv fn give()
+  defer h: = Handle::{ .id = 1 }
+  eat(h)
+
+fn main()
+  _b: = build()
+  _n: = keep()
+  give()
+// ==== case defer_decl_handed_over_in_generic
+//< A generic body is read for a handover too, in each instance used, and reported once per place
+//< Each body below is used by two instances; one report each shows that they are not repeated.
+// EXPECT: 'sb' is freed when its block ends, so it cannot be returned here
+// EXPECT: 'xs' is freed when its block ends, so it cannot be returned here
+import "std/ds" { List }
+import "std/str" { Str_builder }
+
+priv fn tagged<|T|>(_v: T): Str_builder
+  defer $sb: = Str_builder.new()
+  sb.s("x")
+  return sb
+
+priv struct Box<|T|>
+  v: T
+
+impl<|T|> Box<|T|>
+  fn many(r: Self): List<|T|>
+    defer $xs: = List<|T|>.new(null)
+    xs.push(r.v)
+    return xs
+
+fn main()
+  _a: = tagged(1)
+  _b: = tagged(true)
+  _c: = Box<|I32|>::{ .v = 1 }.many()
+  _d: = Box<|Bool|>::{ .v = true }.many()
+// ==== case defer_decl_needs_manual_free
+//< `defer` in front of a declaration calls `free()` through `Manual_free`
+//< **A method that is only named `free` does not count**: the trait is matched by its full name.
+//< The report stands at the declaration, and the call made for it says nothing more.
+// EXPECT: does not conform to 'Manual_free', so 'defer' on the declaration of 'p' has nothing to call. Declare it without 'defer', and write its cleanup on the next line
+// EXPECT-NOT: no method
+priv struct Plain
+  x: I32
+
+impl Plain
+  fn free(_r: Self$@) {}
+
+fn main()
+  defer p: = Plain::{ .x = 1 }
+  _x: = p.x
+// ==== case defer_decl_one_name
+//< `defer` in front of a declaration takes one name, so it is clear what it frees
+// EXPECT: expected
+fn main()
+  defer a: = 1, b: = 2
+// ==== case decl_one_name
+//< A declaration names one variable: two names in one would be a second way to write two
+//< declarations
+// EXPECT: Note: a declaration names one variable
+fn main()
+  a: = 1, b: = 2
+  _c: = a + b
+// ==== case for_one_init
+//< A loop's header declares one variable; a second one is declared before the loop
+// EXPECT: Note: a loop's header takes one declaration and one step
+fn main()
+  for $i: = 0, $j: = 10; i < j; i += 1
+    j -= 1
+// ==== case for_one_step
+//< A loop's header has one step; a second variable changes in the body
+// EXPECT: Note: a loop's header takes one declaration and one step
+fn main()
+  $j: = 10
+  for $i: = 0; i < j; i += 1, j -= 1
+    _k: = i
 // ==== case defer_double_free_at_scope_exit
 //< A defer's body is checked against the state at the point of leaving the scope
 //< At registration, nothing after the defer statement is visible. An analysis there passes this
@@ -501,6 +606,25 @@ fn third(): I32
 
 fn main(): I32
     return first() + second() + third()
+// ==== case switch_case_with_type_name
+//< A case names an enum's variant in one spelling, `.quit`
+//< **Two spellings of one case leave the reader asking which is canonical** (Principle 6 in
+//< `../../../docs/DESIGN-principles.md`). The message names the spelling to write.
+// EXPECT: a 'case' on an enum names its variant without the type. Write 'case .quit'
+// EXPECT: a 'case' on an enum names its variant without the type. Write 'case .click'
+enum Event
+  quit
+  click(x: I32)
+
+fn pick(e: Event): I32
+  switch e
+  case Event.quit
+    return 1
+  case Event.click(_x)
+    return 2
+
+fn main(): I32
+  return pick(.quit)
 // ==== case switch_case_not_constant
 //< A case value is fixed at translation time
 //< **Let it through and C refuses it** ("case label does not reduce to an integer constant"),

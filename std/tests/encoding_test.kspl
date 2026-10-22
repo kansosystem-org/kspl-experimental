@@ -96,8 +96,7 @@ fn test_base64_codec()
     check_base64_roundtrip("The quick brown fox jumps over the lazy dog")
     // **One encoding per byte string**: a non-zero bit the padding leaves unused is refused, and
     // the same text with those bits zero is read.
-    arena: = Arena.new(256)
-    defer arena.free()
+    defer arena: = Arena.new(256)
     for unused_bit in U8[][]::{ "QR==", "Zm9=", "Zh==" }
         assert(base64.decode(unused_bit, arena).is_err(),
             "base64: a non-zero unused bit before the padding must be refused")
@@ -236,8 +235,7 @@ fn test_to_f64() //< the conversion from a string to F64
 
 priv fn check_json_escape(src: U8[], want: U8[]) //<
     //< Reads one `\uXXXX` and checks that it becomes the expected byte sequence
-    arena: = Arena.new(4 * 1024)
-    defer arena.free()
+    defer arena: = Arena.new(4 * 1024)
     v: = json.parse(src, arena) catch panic("json: a well-formed \\u escape must parse")
     assert(v.val.as_str().unwrap_or("").equals(want),
         "json: \\u escapes must decode to the same bytes as UTF-8")
@@ -264,7 +262,7 @@ fn test_json_escapes(arena: Arena$@) //< std/json: a string holding `\uXXXX`
 
 fn test_json_numbers(arena: Arena$@)
     verdict.start("[Json] reading and writing integers and fractions test...")
-    $b: = Str_builder.new()
+    defer $b: = Str_builder.new()
 
     // A fraction and an exponent read back. A whole value keeps its decimal point, or reading it
     // again gives the integer variant.
@@ -370,7 +368,7 @@ fn test_json_string_escapes(arena: Arena$@) //<
     raw: = U8[]::ctrl_bytes
     $jb: = Json_builder.new(arena)
     built: = jb.obj().set("t", jb.str_val(raw)).build()
-    $ob: = Str_builder.new()
+    defer $ob: = Str_builder.new()
     built.dump(ob@)
     written: = ob.slice()
     escaped_ok: = written.equals("{\"t\":\"a\\u0001\\b\\f\\u001fb\"}")
@@ -433,7 +431,7 @@ fn test_json_malformed_input(arena: Arena$@) //<
 
 priv fn nested_outcome(depth: Sz, arena: Arena$@): U8[] //<
     //< What parsing `depth` nested arrays gives: "parses", "too_deep", or "other"
-    $doc: = Str_builder.new()
+    defer $doc: = Str_builder.new()
     for _i in Range.asc(depth)
         doc.c('[')
     for _i in Range.asc(depth)
@@ -489,7 +487,7 @@ fn test_json_utf8(arena: Arena$@) //<
     // written with U+FFFD in their place. Well-formed bytes are written as they are.
     mixed: U8[6] = ::{ 'a', 0xffU8, 0xe3U8, 0x81U8, 0x82U8, 0xc0U8 }
     $jb: = Json_builder.new(arena)
-    $ob: = Str_builder.new()
+    defer $ob: = Str_builder.new()
     jb.str_val(U8[]::mixed).dump(ob@)
     back: = json.parse(ob.slice(), arena) catch panic("json: what the writer puts out must parse")
     assert(back.val.as_str().unwrap_or("").equals("a\uFFFDあ\uFFFD"),
@@ -512,7 +510,7 @@ fn test_json_duplicate_keys(arena: Arena$@) //<
     //< Caution: **Test both sizes of object.** Past `key_scan_max` members the parser checks keys
     //< with a set, a path a small object never takes.
     verdict.start("[Json] a duplicated key test...")
-    $out: = Str_builder.new()
+    defer $out: = Str_builder.new()
     flat: U8[] = "{\"a\":1,\"a\":2}"
     verdict.check("a repeated key is refused at the second name", repeat_at(flat, arena) == 7, "")
     around: U8[] = "{\"a\":1,\"b\":{\"a\":2},\"a\":3}"
@@ -521,7 +519,7 @@ fn test_json_duplicate_keys(arena: Arena$@) //<
     verdict.check("the same key in an inner object is not a repeat",
         repeat_at("{\"a\":{\"a\":1}}", arena) == -1, "")
     // The 40th member repeats the 1st, past where keys are compared one by one.
-    $big: = Str_builder.new()
+    defer $big: = Str_builder.new()
     big.c('{')
     $last_at: Sz = 0
     for i in Range.asc(40)
@@ -578,7 +576,7 @@ fn test_json_indent(arena: Arena$@) //<
     //< the strings sent to others. **Keep an empty `{}` and `[]` on one line**, as others do. The
     //< expected values come from Python's `json.dumps(indent=2)`.
     verdict.start("[Json] writing out with indentation test...")
-    $out: = Str_builder.new()
+    defer $out: = Str_builder.new()
     src: U8[] = "{\"a\":{\"b\":1},\"e\":{},\"f\":[],\"g\":[1,[2]]}"
     v: = json.parse(src, arena) catch panic("json: the fixture must parse")
 

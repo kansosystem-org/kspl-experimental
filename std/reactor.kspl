@@ -74,6 +74,7 @@ impl Reactor
         ready_count: =
             kspl_net_poll(r.handles.ptr, r.interests.ptr, n, timeout_ms, r.revents_scratch.ptr)
         if ready_count < 0
+            results.free()
             throw .poll_failed
 
         $i: Sz = 0
@@ -84,8 +85,8 @@ impl Reactor
             i += 1
         return results
 
-impl Reactor: Drop //< frees the registration lists when its owner leaves scope; it owns no socket
-    priv fn drop(r: Self$@)
+impl Reactor: Manual_free //< it owns its resources and releases them with `free()`
+    pub fn free(r: Self$@) //< frees the registration lists; it owns no socket
         r.handles.free()
         r.interests.free()
         r.tokens.free()

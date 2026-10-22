@@ -554,8 +554,7 @@ pub struct Greet_point
     pub y: I32
 #export
 pub fn greet_hello(times: I32): I32 //< the length of the text `hello <i>` for each i below times
-    $b: = Str_builder.new()
-    defer b.free()
+    defer $b: = Str_builder.new()
     for i in Range.asc(Sz::times)
         b.s("hello \{i\}\n")
     return I32::b.slice().len
@@ -810,7 +809,7 @@ flowchart LR
   * **Where the server finds nothing, nothing happens.** The VS Code extension does not search the text for a match instead. A search lands on another declaration of the same name, shown as surely as a real answer.
   * On a name where it is declared, it jumps to the definition of the variable's type.
 * **Finding references**: every place in the project that uses the name. It matches on the declaration a name points at, not on its spelling. So the same characters in a comment or a string do not match. The results are ordered by file name, line, then column. `context.includeDeclaration` is followed exactly as asked, and the declaration counts where the option is absent.
-* **Renaming**: renames a function or a variable across the project, without confusing it with a same-named declaration hidden further in. It changes the same places finding references returns. **A name a selective import brings in is renamed on the import line too.** An `as` name is a name of its own. In `import "lib" { helper as h }`, renaming `helper` changes the left side alone. Renaming `h` changes the right side and the uses of `h`.
+* **Renaming**: renames a function or a variable across the project, without confusing it with a same-named declaration hidden further in. It changes the same places finding references returns. **A name a selective import brings in is renamed on the import line too** (`import "lib" { helper }`).
   * **It refuses, with a message, rather than write a program that no longer compiles or means something else.** It refuses:
     * a new name the grammar does not read as one identifier (`1bad name`), or a keyword (`return`, `I32`, `true`);
     * a name declared in a file outside the workspace: the standard library, or a package read from another folder. The workspace is what the server walks: the files under the folder the editor opened, outside the folders `.gitignore` names and those starting with a dot. Asked first (`textDocument/prepareRename`), the editor says so before a new name is typed;
@@ -959,7 +958,6 @@ A code off by default is advice that matters only for one kind of system, and is
 | The code | The meaning | Enable it for |
 | :-- | :-- | :-- |
 | [W0601] | points out where ARC's hidden `retain`/`release` makes timing invisible | a system putting determinism first — an OS, embedded, real-time control |
-| [I0602] | recommends a reference-counted type over hand-made ownership (a raw pointer plus one's own `free`) | a system putting memory robustness first, such as a web server |
 | [I0402] | points out a `pub` used only inside its package | an artifact closed at that unit, such as an executable |
 
 (ARC, automatic reference counting, is the compiler inserting `retain` and `release` calls that count a value's owners and free it when the last one lets go.)

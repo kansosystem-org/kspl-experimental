@@ -135,7 +135,7 @@ impl Ast_node
             r.emit_unknown_stmt(c)
 
     priv fn emit_unknown_stmt(r: Ast_node$@, _c: Genc_ctx$@)
-        $msg: = Str_builder.new()
+        defer $msg: = Str_builder.new()
         msg.s("emit_stmt: unhandled AST kind '").s(r.get_kind_str()).s("' reached Genc")
         r.ice_panic(msg.slice())
 
@@ -317,11 +317,7 @@ impl Ast_node
 
         if has_init
             c.s("    {\n")
-            if init_node.kind_id == .k_for_init
-                for child in init_node.children
-                    child.emit(c)
-            else
-                init_node.emit(c)
+            init_node.emit(c)
             // The init's lines lie between the loop's own directive and its `for`.
             c.emit_line_directive(r, true)
         c.s("    for (; ")
@@ -330,20 +326,14 @@ impl Ast_node
         c.s("; ")
 
         if step_node != null && step_node.kind_id != .k_empty
-            limit: = step_node.children.len if step_node.kind_id == .k_for_step else 1
-            for i in Range.asc(limit)
-                if i > 0
-                    c.s(", ")
-                step_ch: =
-                    step_node.get_child(i) if step_node.kind_id == .k_for_step else step_node
-                if step_ch.kind_id == .k_stmt_expr && step_ch.get_assign_right() != null
-                    step_left: = step_ch.get_assign_left()
-                    step_left.emit_expr(c)
-                    op_node: = step_ch.get_assign_op()
-                    op_text: = op_node.text if op_node != null else ""
-                    emit_assign_tail(c, step_left, "", op_text, step_ch.get_assign_right())
-                else
-                    step_ch.emit_expr(c)
+            if step_node.kind_id == .k_stmt_expr && step_node.get_assign_right() != null
+                step_left: = step_node.get_assign_left()
+                step_left.emit_expr(c)
+                op_node: = step_node.get_assign_op()
+                op_text: = op_node.text if op_node != null else ""
+                emit_assign_tail(c, step_left, "", op_text, step_node.get_assign_right())
+            else
+                step_node.emit_expr(c)
         c.s(") ")
 
         if block_node != null && block_node.kind_id != .k_empty
@@ -366,7 +356,7 @@ impl Ast_node
         // (`../../base/c_name.kspl`). The plain name here makes **the C compiler say
         // "undeclared"**. That is no KSPL diagnostic, and it does not say what is wrong. A local
         // named `near` is declared as `near_kw`, and a `switch (near)` then fails.
-        $safe: = cond_slice.c_safe_name()
+        defer $safe: = cond_slice.c_safe_name()
         cond_slice = base_core.arena.dup_str(safe.slice())
         // A `Bool` subject is switched on as an `int`: clang warns on a boolean one
         // (-Wswitch-bool).
@@ -379,7 +369,7 @@ impl Ast_node
         // Caution: **Name the enum by its type's mangled name**, as its declaration and a variant's
         // construction are. Spelled from its canonical string, an instance whose immutability is
         // dropped (`Pick<|I32|>` of an `enum Pick<|$T|>`) names tags C never declared.
-        $mangled_enum_name: = Str_builder.new()
+        defer $mangled_enum_name: = Str_builder.new()
         c.env.mangle_type_id_to(enum_id, mangled_enum_name)
         safe_enum_name: = mangled_enum_name.slice()
 
@@ -427,8 +417,7 @@ impl Ast_node
         if r.kind_id == .k_case_pattern
             variant: = c.env.variant_at(enum_id, r.ival) catch
                 r.ice_panic("genc: a switch label names no variant")
-                return
-            $mangled_variant: = variant.name.mangle_c_identifier()
+            defer $mangled_variant: = variant.name.mangle_c_identifier()
             c.s("    case kspl_\{safe_enum_name\}_\{mangled_variant.slice()\}:\n")
             return
         c.s("    case ")

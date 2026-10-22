@@ -151,8 +151,7 @@ impl Sema_ctx
             return
         file: = impl_node.loc.file()
         reached_files.set(file, true)
-        $reached: = List<|Reached|>.new(null)
-        defer reached.free()
+        defer $reached: = List<|Reached|>.new(null)
         if own: = tests.get(file)
             for d in own
                 reached.push(Reached::{ .decl = d, .prefix = "" })
@@ -160,7 +159,7 @@ impl Sema_ctx
             imp: = top_node.unwrap_top_level()
             if imp.kind_id == .k_decl_import && imp.loc.file().equals(file)
                 r.add_imported_tests(imp, tests, reached@, reached_files)
-        $src: = Str_builder.new()
+        defer $src: = Str_builder.new()
         src.s("impl ").s(impl_node.find_text(.k_type_expr)).s(" {\n  fn ").s(RUN_NAME)
             .s("(r: Self$@) {\n")
         $ok: = true
@@ -171,11 +170,9 @@ impl Sema_ctx
         src.s("  }\n}\n")
         if !ok
             return
-        made: = base_core.arena.create(List<|Ast_node$@|>.new(null))
-        defer made.free()
+        defer made: = base_core.arena.create(List<|Ast_node$@|>.new(null))
         parse_load.parse_synth_decls(src.slice(), file, parser, made) catch
             base_diag.ice_panic("suite: the synthesized 'run' failed to parse")
-            return
         base_diag.ice_assert(made.len == 1 && made.get(0).kind_id == .k_decl_impl,
             "suite: the synthesized source is not one impl")
         method: = made.get(0).find_child(.k_decl_fn)
@@ -216,7 +213,7 @@ impl Sema_ctx
         if clean.len == 0
             return
         file: = imp.loc.file()
-        $target_sb: = file.resolve_import_path(clean)
+        defer $target_sb: = file.resolve_import_path(clean)
         found: = tests.get(target_sb.slice()).unwrap_or(null)
         if found == null || found.len == 0
             return
@@ -272,7 +269,7 @@ impl Sema_ctx
                         'panic')")
                 r.err(ret, r.scratch.slice())
                 ok = false
-        $args: = Str_builder.new()
+        defer $args: = Str_builder.new()
         for p in base_ast_ext.Param_cursor.new(d.get_fn_params(), false)
             p_name: = p.find_text(.k_identifier)
             if !r.check_test_param(p, p_name, name, fields, suite)

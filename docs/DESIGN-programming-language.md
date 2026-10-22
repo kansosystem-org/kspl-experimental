@@ -467,11 +467,11 @@ Caution: **Keep `slice` / `at` / `items` as `Self$@`.** Each returns a writable 
 
 #### The receiver's permission decides whether an index is a 'place'
 
-On a read-only receiver, `a[i]` reads through `get`, which returns a copy, never through `at`, which returns a writable pointer.
+On a read-only receiver, `a[i]` reads through `at_ref`, which returns a read-only pointer, never through `at`, which returns a writable pointer.
 
 `a[i]` resolves first to `Index_place`'s `at`, a mutable pointer to the element.
 
-Caution: **Do not choose it when the receiver is read-only.** `at` takes `Self$@`, so through a read-only place such as `xs: List<|T|>@` the generated C discards const, with zero diagnostics from ksplc (against Principle 2). `for x in xs` expands to indexing and takes the same path. Reads go to `Index.get` instead (safe, as it returns a value), and writes to `Index_mut.set`. How the compiler keeps this choice in one place is "Where immutability's two axes are enforced" in [`../ksplc/docs/DESIGN-sema.md`](../ksplc/docs/DESIGN-sema.md).
+Caution: **Do not choose it when the receiver is read-only.** `at` takes `Self$@`, so through a read-only place such as `xs: List<|T|>@` the generated C discards const, with zero diagnostics from ksplc (against Principle 2). `for x in xs` expands to indexing and takes the same path. Reads go to `Index_ref.at_ref` instead (safe, as its pointer is read-only), and only a type with neither `at` nor `at_ref` falls back to `Index.get`, which returns a copy. A write through the read-only receiver is refused. How the compiler keeps this choice in one place is "Where immutability's two axes are enforced" in [`../ksplc/docs/DESIGN-sema.md`](../ksplc/docs/DESIGN-sema.md).
 
 ### A typedef is only another name
 
@@ -633,9 +633,35 @@ The rule is docs/SPEC-programming-language.md §5.2:
 
 Rust extends the temporary's lifetime to the end of the statement and accepts the call; its borrow checker does not stop the write being discarded. C++ binds a temporary to `const&` but not to a non-`const` lvalue reference, which is in effect KSPL's line. Swift, Java and Python have reference semantics, so the question does not arise.
 
+### Why a trait's methods stand in the trait's block
+
+**A method a trait requires counts only when it stands in `impl T: Trait`.** A method of that name in the plain `impl T`, or in the block of another trait, is a compile error at the conformance block. The error names the line the method stands on, so the fix is one move. A file also holds one plain `impl T` block per type, which `ksplc lint` holds at zero (I0801). The rules are in "5.2 Implementations (`impl`) and receivers" in [`SPEC-programming-language.md`](SPEC-programming-language.md).
+
+**The conformance block answers "how does this type meet the trait?" by itself.** If the method could stand anywhere, `impl Arena: Manual_free {}` would say that the type conforms and show nothing more. The reader would then search every block of the type for each method the trait names.
+
+**Joining a trait is a decision written where the trait is named.** If any block counted, a method written for another purpose would meet the trait by its name alone. Inside the conformance block, each method that meets the trait is one the writer put there for it.
+
+**One place for each kind of method** (Principle 6). A trait's methods have one place, the conformance block. A type's own methods have one place in each file, its plain block. A reader who finds the block has found all of that kind in the file.
+
+**The grouping that several plain blocks gave stays as comments.** A banner comment heads each group inside the one block, so nothing that the split said is lost.
+
+**The first rule is an error, and the second is a lint.** The first decides what a conformance is made of, so a setting must not switch it off. A plain block split in two runs the same as one block, so the second is an information diagnostic, which a setting can change.
+
+**Two kinds of conformance keep an empty `{}`**:
+
+* **A trait with no methods**, such as `Move_only`. The block has nothing to hold.
+* **A trait whose methods the compiler writes into the block**: `Reflectable`'s field table, and a suite's `run`. The compiler adds them to that same block, so the rule holds for them too.
+
+**A call does not change.** `a.free()` finds the method whichever block holds it, so moving a method into its conformance block changes no caller.
+
+**What is given up**:
+
+* **One type cannot meet two traits that require a method of the same name.** A type has one method of each name, and that method stands in one block. Rename one trait's method, or meet one of the traits through a small wrapper type.
+* **A file that adds methods to another file's type keeps its own plain block.** The type's methods are then in more than one file. Adding methods to another file's type needs a block in that file ("9.3 Adding a method to another file's type" in [`SPEC-programming-language.md`](SPEC-programming-language.md)).
+
 ### Whether a marker is an attribute or a trait
 
-A marker that changes how the compiler treats a type or a declaration has two means. One is an attribute (`#inline`). The other is a trait the compiler knows (`Ref_counted` / `Move_only` / `Manual_free` / `Drop`, and the operator group in `std/lang`). Often either fits, so the order of decision is fixed ("The order of decision").
+A marker that changes how the compiler treats a type or a declaration has two means. One is an attribute (`#inline`). The other is a trait the compiler knows (`Ref_counted` / `Move_only` / `Manual_free`, and the operator group in `std/lang`). Often either fits, so the order of decision is fixed ("The order of decision").
 
 #### The order of decision
 
@@ -710,7 +736,7 @@ Three markers are deliberately absent: `#arc`, `#deterministic` and `Thread_shar
 
 The traits the compiler looks up by name all live in one file, `std/lang`. Whoever renames something there can see that the name is special.
 
-The traits the compiler names by FQN (the operator traits, and `Ref_counted` / `Move_only` / `Manual_free` / `Drop` / `Callable1` / `Callable2`) stand only in `std/lang`, with one exception, under "When it can sit outside `std/lang`" below.
+The traits the compiler names by FQN (the operator traits, and `Ref_counted` / `Move_only` / `Manual_free` / `Callable1` / `Callable2`) stand only in `std/lang`, with one exception, under "When it can sit outside `std/lang`" below.
 
 **The motive**: "The order of decision" names a cost: "the compiler depends on a name in the standard library". That cost cannot be removed, since a name is the only tie. What is left is to show by placement which names bear the load.
 
@@ -943,6 +969,14 @@ The rules are "8.1 Definitions" in [`SPEC-programming-language.md`](SPEC-program
 
 **What is given up**: sorting function values by address, as a table's keys. Where an order is wanted, cast to an integer first (`U64::f`).
 
+### A type call selects its existing constructor
+
+**`T(...)` calls the static `new` that the type already declares.** Repeated construction stays short without a constructor trait or another kind of function declaration. The call uses ordinary member lookup, so visibility, defaults, errors and argument order have one implementation.
+
+**The function decides what it returns and where it allocates.** The call notation promises neither a value of exactly `T` nor a heap allocation. An arena argument stays explicit, and cleanup still needs `defer`. A function taking an instance as its first parameter is a method, not a constructor for this notation.
+
+Type arguments remain explicit, and names resolve before the call is interpreted. A local function value named like a type is still that value. A bare type does not become a function value; `T.new` names that function. Named factories and casts retain their own purposes. Both `T(...)` and the explicit `T.new(...)` call are accepted.
+
 ### A function's name has no size
 
 `sizeof(twice)` is a compile error, as is a function's name where a type goes (`x: twice`). The message names what answers the question its writer most likely had: `sizeof(fn(x: I32): I32)`. That is the size of a pointer to a function, which is the same for every function type.
@@ -972,48 +1006,49 @@ The rules are "8.1 Definitions" in [`SPEC-programming-language.md`](SPEC-program
 | Copies | Stops an accidental copy of an owning handle, such as a lock or a file (`Move_only`) | A duplicate made through a pointer |
 | `defer` | Runs a `defer` on the variables as they are when the scope ends | Copying a value to keep it as it was at registration |
 | Escapes | Stops a pointer into the frame leaving by `return` / `throw`. Also stops a pointer the compiler would make unseen from leaving by a store into a global or behind a pointer | Storing `x@` of a local; an escape through a call or a struct field set afterwards |
-| A missed free | Warns where a block can be left before the `defer` that frees a value | A value with no `defer` at all |
+| A missed free | Warns where a value the function makes is left unfreed on some path, a way out before its `defer` included | A field, a value reached through a pointer, and a value in a generic body |
 | `switch` bindings | Keeps a counted value a `switch` arm binds alive for the whole arm | A pointer to the binding (`a@`) kept past the arm |
 
 **Raw pointers are set apart rather than banned.** `T@` is a first-class type, and unchecked access has its own form, `(p + i)$` (docs/SPEC-programming-language.md §6.2.1), so C-level control need not move into a library.
 
-**What is given up: how a type's memory is managed has to be read from its name.** Raw pointers and ARC live side by side, so the reader checks which one manages a type. Consistency is chosen per project, not by the language. The lints [W0601] and [I0602], off by default, find code departing from the chosen policy ([`../ksplc/docs/SPEC-diagnostics.md`](../ksplc/docs/SPEC-diagnostics.md)).
+**What is given up: how a type's memory is managed has to be read from its name.** Raw pointers and ARC live side by side, so the reader checks which one manages a type. Consistency is chosen per project, not by the language. The lint [W0601], off by default, finds a project departing from a no-ARC policy ([`../ksplc/docs/SPEC-diagnostics.md`](../ksplc/docs/SPEC-diagnostics.md)).
 
-### Automatic cleanup follows one owner
+### Every cleanup stands in the source
 
-A builder needs cleanup on every exit. Repeating that obligation at every call site lets one missing line leak its buffer. The type declares that obligation once, through `Drop`.
-
-**One trait supplies both cleanup and moves.** Copying an automatic owner would schedule two cleanups for one resource. Therefore `Drop` also forbids ownership copies. Borrowing through pointers or trait views transfers nothing. There is no separate marker to remember alongside `Drop`.
+**No type frees itself.** A value that owns something is freed where the source says so. That is `defer` in front of its declaration (`defer $b: = Str_builder.new()`), a `defer` statement, or a `free()` call. A reader sees on the page when each resource goes, and needs no list of the types that free themselves.
 
 | Contract | What the compiler supplies | Where it belongs |
 | :-- | :-- | :-- |
-| `Drop` | Automatic cleanup and ownership moves | An owner of one resource for one scope: `Str_builder`, a file, a lock, a thread primitive, a function's scratch arena |
-| `Manual_free` | Checks after an explicit `free()` | An arena, a container, or a value that keeps its own arena: the caller chooses when cleanup runs |
-| `Move_only` | Checks after ownership transfers | A manual handle that must not be copied, such as a child process |
+| `Manual_free` | The call `defer` in front of a declaration makes, checks after an explicit `free()`, and the warning for a value left unfreed | Every owner: a builder, a file, a lock, an arena, a container |
+| `Move_only` | Checks after ownership transfers | An owner whose copy would free one resource twice: a file, a lock, a thread primitive, a child process |
 
-**A type that owns one resource for one scope frees itself.** Such a resource is taken, used and given back inside one function, so the line that frees it would be written at every use. One missing line leaks a file or holds a lock until the process ends. A second `free()` cannot happen either: a free by hand ends the owner's life and cancels its cleanup. In `std` these are `io.File_stream`, `fs.File_lock`, `thread.Mutex<|T|>` with its lock, `thread.Cond_var`, `reactor.Reactor`, a regular expression's search state, and `mem.Scratch`, the arena a function works in.
+**Why `defer` goes in front of the declaration**: the cleanup costs one word, and nothing can come between the acquisition and its cleanup. The call is fixed by `Manual_free`, so the word means the same thing on every declaration. A value declared this way is freed when its block ends, so handing it over (returning it, storing it, moving it) is refused. A function that builds a value for its caller declares it without `defer`, and that difference shows on the page. The form's rule, and why it stands in front rather than behind, are "A declaration takes `defer` in front, and only to free" in [`DESIGN-principles.md`](DESIGN-principles.md).
 
-**Manual cleanup remains a separate contract for arenas and containers.** An arena and its containers often share one explicit lifetime. Automatically destroying their owning fields would conflict with their `free()` implementations. `Manual_free` leaves those fields under that explicit contract. It does not prove pointer lifetimes or prevent copies; its name states the narrower guarantee. A handle with more than one way to end also stays manual. A child process ends by a wait or by a kill, and only the caller knows which.
+**Why automatic cleanup is left out**: a type that frees itself frees at a place the source does not show. Passing it by value then hands it over, with no marker on the type to say so. A struct holding one frees that field by itself too. Each of these is a rule a reader must carry, for a set of types the reader has to know. The compiler's part grows as well. It needs live flags per owner and moves through fields and payloads. It also needs rules for raw storage and for a generic body that copies an element. Writing the cleanup costs one word per owner. It keeps "when something is freed can be read from the source" ("Notations not carried" in [`DESIGN-principles.md`](DESIGN-principles.md)).
 
-**A free written beside an automatic owner is reported** ([I0311] in [`../ksplc/docs/SPEC-diagnostics.md`](../ksplc/docs/SPEC-diagnostics.md)). A `defer x.free()` repeats the drop, and so does a free with nothing after it before the owner's scope ends. A free with more work after it is an early release, and stays. Examples are a lock let go before another process takes it, and a file closed before it is read back.
+**Why `Manual_free` and `Move_only` stay two markers**: a list or a map conforms to `Manual_free`. Ordinary code copies one as a borrowed view of its arena. Making every owner move-only would turn each such copy into an error. A file, a lock and a thread primitive conform to both: their copy would close or destroy one resource twice.
 
-**Cleanup uses the same exit machinery as `defer`.** It runs on ordinary exits and propagated errors, in reverse acquisition order. A move cancels the source cleanup, and assignment destroys the previous value before installing its replacement. Uninitialized storage receives no destruction. A destructor cannot report failure, so flushing or committing remains an explicit operation when its failure matters.
+One marker would also catch less than it seems. The move check follows names and fields, not a read through a pointer. So a copy taken out of a container (`rows.get(i)`) still makes a second owner unseen. That is the likeliest double free, and only an arena prevents it. Handles over an arena (HTTP headers, a JSON builder) would become move-only as well, with no safety gained.
 
-A custom hook runs before its automatic fields. The hook needs those fields alive, so moving or explicitly releasing one is refused. Assignment can replace a field while preserving a complete object. An aggregate without a custom hook tracks field moves separately.
+**Why ARC stays in the compiler**: with no type that frees itself, a library `Rc` would need a `free()` written by hand at each release. That is manual reference counting, a known source of leaks (one release missed) and of use-after-free (one too many). Shared values are where counts are hardest to check, and the warning for a value left unfreed reads only locals. So the hidden retain and release are kept for the few types that conform to `Ref_counted`: there they buy safety that hand-written calls would not.
 
-**Raw storage needs separate operations.** Assignment replaces a live value; allocation supplies bytes without a live value. `mem.init_at`, `mem.take_at` and `mem.drop_at` distinguish initialization, transfer and destruction. Treating initialization as replacement would read garbage and run a destructor on it. These operations belong to raw slots; normal locals use ordinary moves and assignment.
+**A free written on the line after the declaration has the form in front as its canonical spelling.** A hint ([H0303] in [`../ksplc/docs/SPEC-diagnostics.md`](../ksplc/docs/SPEC-diagnostics.md)) asks for it, so one cleanup has one spelling. A cleanup other than `free()` keeps its own line.
+
+**What is given up**: a missed free is possible again. The warning [W0109] reports a value a function makes and leaves unfreed on some path, but it reads one function's code only. It does not see a field or a value reached through a pointer. Nor does it see a generic body that no instance uses, or an arena variable that is `null` at run time. A lock left held (`File_lock`, `Mutex<|T|>`) is the costliest case: it blocks every later taker until the process ends.
+
+**Raw storage keeps its own operations.** Assignment replaces a live value; allocation supplies bytes without a live value. `mem.init_at`, `mem.take_at` and `mem.drop_at` tell initialization, transfer and release apart for ARC. Treating initialization as replacement would read garbage and release a count it never held. These operations belong to raw slots, such as a container's elements; normal locals use ordinary moves and assignment.
 
 ### A generic method body is checked when needed
 
-A container can store an automatic owner without being able to copy it. Checking every method body when its type is instantiated would reject even unused copying methods. Separate container families would repeat almost every operation.
+A container can store a `Move_only` element without being able to copy it. Checking every method body when its type is instantiated would reject even unused copying methods. Separate container families would repeat almost every operation.
 
-**Signatures and trait requirements are checked independently of bodies.** Method bodies are checked when referenced, as generic free functions already are. A trait view requires every method in its table. Automatic cleanup requires its hooks. The compiler follows those dependencies until no new body is needed, and emits only checked bodies.
+**Signatures and trait requirements are checked independently of bodies.** Method bodies are checked when referenced, as generic free functions already are. A trait view requires every method in its table. ARC requires `retain` and `release`, whose calls Lower makes after the analysis. The compiler follows those dependencies until no new body is needed, and emits only checked bodies.
 
 An invalid method stays unusable. Its first use reports the error with the concrete type arguments. This changes when a generic body is diagnosed, without making a forbidden ownership copy valid.
 
 ### Why there is no borrow checker, only a move-only marker
 
-KSPL checks one simple thing instead of every pointer's lifetime: once a `Move_only` or `Drop` value is handed over, the old name cannot be used again.
+KSPL checks one simple thing instead of every pointer's lifetime: once a `Move_only` value is handed over, the old name cannot be used again.
 
 Conformance to `Move_only` forbids implicitly copying an owning handle, such as a child process or a file descriptor. There a duplicate means a double free (docs/SPEC-programming-language.md §5.4). Rust's borrow checker is not adopted.
 
@@ -1138,15 +1173,15 @@ A store's place outlives the frame when it is a global. It does so too when it l
 
 **What is given up**: calling a method on such a field directly. The copy costs a line or two where it happens. For a method that writes its receiver (`Self$@`), assigning the copy back is the writer's to remember.
 
-### Why an early exit before a `defer` warns, and how narrowly
+### Why a value left unfreed warns, and how narrowly
 
-**A `defer` is its own statement. So the language cannot stop a way out from standing between an acquisition and its cleanup** ("A `defer` is not joined onto a declaration" in [`DESIGN-principles.md`](DESIGN-principles.md)). A warning asks about it instead. What it reports, and what it exempts, are [W0109] in `ksplc/docs/SPEC-diagnostics.md`.
+**No type frees itself, so a forgotten free leaks.** The form in front of a declaration leaves no gap to fill. A value handed on along some paths, or freed by hand, can still miss one. A warning asks about it. What it reports, and what it exempts, are [W0109] in `ksplc/docs/SPEC-diagnostics.md`.
 
-* **It asks only where a later `defer` in the same block frees the value.** A value freed by hand, passed on or kept has another shape. Calling it a leak would be a false report.
-* **A shape rather than every path.** Checkers that follow a resource along every path pay in false reports. A rule read off the code as written, like Error Prone's `MustBeClosed`, does not. The gap before a `defer` is such a rule.
-* **`Manual_free` says which values are asked about.** `Manual_free` is the trait whose `free()` the compiler reads as freeing the value. It is the same contract the use-after-free check reads (docs/SPEC-programming-language.md §8.4.5), so a type taking part in one takes part in the other.
+* **It asks only about values the function makes.** A parameter is the caller's, an element read from a container stays the container's, and a value made in an arena is the arena's. Reporting them would be false reports.
+* **A shape read off the code, branch by branch.** Checkers that follow a resource along every path through calls pay in false reports. A rule read off one function's code, like Error Prone's `MustBeClosed`, does not. A way out before a `defer` is one such shape; a block end reached with the value still owned is another. One fault is reported once, at the first place it shows.
+* **`Manual_free` says which values are asked about.** It is the trait whose `free()` the compiler calls for `defer` in front of a declaration, and the contract the use-after-free check reads (docs/SPEC-programming-language.md §8.4.5). So a type taking part in one takes part in all three.
 
-**What is given up**: a value with no later `defer` in the block, never freed at all, is not this warning's to find.
+**What is given up**: this warning does not find an owner held in a field, reached through a pointer, or made in a generic body. A value the function keeps in an arena variable that holds `null` when the program runs is skipped as the arena's.
 
 ### Why a `switch` arm's binding holds its own count
 

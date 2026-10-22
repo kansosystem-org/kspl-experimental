@@ -17,8 +17,8 @@ import "tests/support/harness"
 
 priv fn lines_in(src: U8[]): Sz //< the count of lines in a text (the count of newlines + 1)
     $n: Sz = 1
-    for $i: Sz = 0; i < src.len; i += 1
-        if src[i] == '\n'
+    for elem in src
+        if elem == '\n'
             n += 1
     return n
 
@@ -35,8 +35,8 @@ fn main(): I32
     arena: = harness.begin(512 * 1024 * 1024)
     root: = harness.root()
     files: = harness.tracked()
-    $moved: = Str_builder.new()
-    $binary: = Str_builder.new()
+    defer $moved: = Str_builder.new()
+    defer $binary: = Str_builder.new()
     $seen: Sz = 0
     $skipped: Sz = 0
     $lines: Sz = 0
@@ -49,7 +49,7 @@ fn main(): I32
             continue
         seen += 1
         lines += lines_in(text_of)
-        $back: = Str_builder.new()
+        defer $back: = Str_builder.new()
         trip.text_trip(text_of, back@, arena)
         if !text_of.equals(back.slice())
             at: = parts_at(text_of, back.slice())
@@ -61,7 +61,7 @@ fn main(): I32
     // working.**
     if skipped == 0
         binary.s("\n    not one file holding a NUL (whether the telling-apart works is unknown)")
-    $name: = Str_builder.new()
+    defer $name: = Str_builder.new()
     name.s("a text format round-trips without one byte changed (\{seen\} files, \{lines\} lines)")
     verdict.check(name.slice(), moved.slice().len == 0, moved.slice())
     name.clear()

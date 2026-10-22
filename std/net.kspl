@@ -125,10 +125,6 @@ impl Tcp_listener
     pub fn port(r: Self@): I32!Net_error //< the port it listens on, the OS's choice for a 0
         return bound_port(r.handle)!
 
-    pub fn free(r: Self$@) //< closes the listener and frees it
-        kspl_tcp_close(r.handle)
-        dealloc(Void$@::r)
-
     pub fn raw_handle(r: Self@): I64 //<
         //< the raw handle, the only thing `std/reactor` uses to register the socket
         //< Only for registering; send/recv/accept still go only through this type's methods.
@@ -332,10 +328,6 @@ impl Tcp_stream
             throw .io_failed // the peer is already gone
         return Peer_addr::{ .host_len = host_len, .port = port }
 
-    pub fn free(r: Self$@) //< closes the connection and frees it
-        kspl_tcp_close(r.handle)
-        dealloc(Void$@::r)
-
     pub fn raw_handle(r: Self@): I64 //<
         //< the raw handle, the only thing `std/reactor` uses to register the socket
         return r.handle
@@ -358,5 +350,11 @@ impl Tcp_stream
         if kspl_net_shutdown_write(r.handle) != 0
             throw .io_failed // the peer is already gone, or the socket is already closed
 
-impl Tcp_listener: Manual_free {} //< it owns its resources and frees them with `free()`.
-impl Tcp_stream: Manual_free {} //< it owns its socket and memory and frees them with `free()`
+impl Tcp_listener: Manual_free //< it owns its resources and frees them with `free()`.
+    pub fn free(r: Self$@) //< closes the listener and frees it
+        kspl_tcp_close(r.handle)
+        dealloc(Void$@::r)
+impl Tcp_stream: Manual_free //< it owns its socket and memory and frees them with `free()`
+    pub fn free(r: Self$@) //< closes the connection and frees it
+        kspl_tcp_close(r.handle)
+        dealloc(Void$@::r)

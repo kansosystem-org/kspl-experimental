@@ -63,7 +63,7 @@ pub fn built_seeds(out: List<|fuzz.Sample|>$@, name: U8[], arena: Arena$@) //<
     got: = built(arena)
     d: = got.doc
     sheet: = got.sheet
-    $sb: = Str_builder.new()
+    defer $sb: = Str_builder.new()
     store.save(d, sheet, sb@)
     out
         .push(fuzz.Sample::{ .kind = "doc", .name = name,
@@ -74,8 +74,7 @@ pub fn built_seeds(out: List<|fuzz.Sample|>$@, name: U8[], arena: Arena$@) //<
         .push(fuzz.Sample::{ .kind = "txt", .name = name,
         .data = arena.dup_str(sb.slice()), .built = true })
     // Caution: **Find one table.** CSV holds only a table, so the whole document is no seed.
-    for $i: Sz = 0; i < d.blocks.len; i += 1
-        b: = d.blocks.get(i)
+    for b in d.blocks
         if b.children.len > 0 && b.children.get(0).children.len > 0
             sb.clear()
             csv.write_table(b, sb@, arena)

@@ -28,8 +28,7 @@ fn no_edge(): Edge
 fn edge_origin(page: Page$@, edge: Edge): F32? //<
     //< That column's left edge (or the row's top edge)
     //< Caution: **Compute it again after every layout** (a drag can move the columns before it).
-    for $i: Sz = 0; i < page.cells.len; i += 1
-        cell: = page.cells.get(i)
+    for cell in page.cells
         if cell.table != edge.table
             continue
         switch edge.axis
@@ -123,16 +122,15 @@ fn cell_range(page: Page$@, c: Caret): Cell_range //< the cells the selection co
 fn is_cell(page: Page$@, b: Block$@): Bool //< whether that block is a table's cell
     //< A cell is part of a table's structure, so the command that turns it into a paragraph is
     //< disabled here.
-    for $i: Sz = 0; i < page.cells.len; i += 1
-        if page.cells.get(i).block == b
+    for elem in page.cells
+        if elem.block == b
             return true
     return false
 
 fn row_laid(page: Page$@, table: Block$@, r: Sz): Bool //< whether row `r` is in the layout
     //< It is when a cell of it was laid out. A row that a filter hides has none (the heading and
     //< the cursor's row are always laid out).
-    for $i: Sz = 0; i < page.cells.len; i += 1
-        cell: = page.cells.get(i)
+    for cell in page.cells
         if cell.table == table && cell.row == r
             return true
     return false
@@ -152,12 +150,11 @@ fn no_head_band(): Head_band
 
 priv fn nested_table(page: Page$@, table: Block$@): Bool //< whether that table lies inside a cell
     //< The outer table's heading is the one the window keeps (two bands at one edge would overlap).
-    for $i: Sz = 0; i < page.cells.len; i += 1
-        cell: = page.cells.get(i)
+    for cell in page.cells
         if cell.table == table
             continue
-        for $k: Sz = 0; k < cell.block.children.len; k += 1
-            if cell.block.children.get(k) == table
+        for item in cell.block.children
+            if item == table
                 return true
     return false
 
@@ -173,8 +170,7 @@ priv fn band_of(page: Page$@, table: Block$@): Head_band //< one table's band
     //< not to a merge).
     $got: Head_band = no_head_band()
     $row_h: F32 = 0.0
-    for $i: Sz = 0; i < page.cells.len; i += 1
-        cell: = page.cells.get(i)
+    for cell in page.cells
         if cell.table != table
             continue
         got.table = cell.rect if !got.found else joined(got.table, cell.rect)
@@ -231,8 +227,7 @@ fn head_cell_count(page: Page$@, i: Sz): Sz //< how many cells the i-th table's 
     //< **A cell covered by a merge is not counted** (only what can be clicked is counted).
     $n: Sz = 0
     if table: = table_at(page, i)
-        for $k: Sz = 0; k < page.cells.len; k += 1
-            cell: = page.cells.get(k)
+        for cell in page.cells
             if cell.table == table && cell.row == 0
                 n += 1
     return n
@@ -241,8 +236,7 @@ fn head_cell_at(page: Page$@, i: Sz, c: Sz): Head_cell //< the c-th cell of that
     //< They come left to right.
     if table: = table_at(page, i)
         $n: Sz = 0
-        for $k: Sz = 0; k < page.cells.len; k += 1
-            cell: = page.cells.get(k)
+        for cell in page.cells
             if cell.table != table || cell.row != 0
                 continue
             if n == c
@@ -352,16 +346,14 @@ fn frame_under(page: Page$@, x: F32, y: F32): Block$@? //<
 
 fn frame_rect(page: Page$@, b: Block$@): Rect? //<
     //< Where b was laid out (screen coordinates)
-    for $i: Sz = 0; i < page.frames.len; i += 1
-        got: = page.frames.get(i)
+    for got in page.frames
         if got.block == b
             return .some(got.rect)
     return .none
 
 fn grip_surface(page: Page$@, grip: Grip): Rect? //<
     //< The position of the slide holding the grabbed frame
-    for $i: Sz = 0; i < page.frames.len; i += 1
-        got: = page.frames.get(i)
+    for got in page.frames
         if got.block == grip.block
             return .some(got.surface.rect)
     return .none
@@ -432,8 +424,7 @@ priv const FIT_LEAST: F32 = 24.0 //< the narrowest column a fitting makes
 priv fn run_width(page: Page$@, n: Inline$@): F32 //< how wide that run was laid out, all boxes
     //< **Every box of that run is added up** (a wrapped run's unwrapped width).
     $wide: F32 = 0.0
-    for $i: Sz = 0; i < page.boxes.len; i += 1
-        b: = page.boxes.get(i)
+    for b in page.boxes
         if b.inline == n
             wide += b.rect.w
     return wide

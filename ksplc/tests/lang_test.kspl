@@ -5,9 +5,9 @@ import "std/chars"
 import "std/checked_int" { Checked_error }
 import "std/ds" + { Map }
 import "std/io"
-import "std/math" { PI as math_pi, sqrt as math_sqrt }
+import "std/math" { PI, sqrt }
 import "std/mem" { Arena }
-import "std/prng" + { Prng as Generator }
+import "std/prng" + { Prng }
 import "std/str" { Str_builder }
 import "std/verdict"
 
@@ -168,26 +168,25 @@ fn test_struct_operators_and_cast()
         .pass("a generic struct's operator impls and `Cast` work through the operators and through \
             the prefix cast notation alike.")
 
-// The selective import `import "path" { A, B as C };` (dropping the namespace, renaming).
+// The selective import `import "path" { A, B };` (dropping the namespace).
 // A `typedef` taken by a selective import can be written as a type. **That this declaration
 // compiles at all is the check.**
 priv fn _uses_selective_alias(_h: Panic_hook) {}
 
 fn test_selective_import()
-    verdict.start("[Import] the selective import (namespace-free, renaming) test...")
+    verdict.start("[Import] the selective import (namespace-free) test...")
 
-    // Built through the renaming (`as`) and held as prng.Prng: the same type.
-    renamed: = Generator.new(42U64)
-    qualified: prng.Prng = renamed
-    assert(qualified.state == 42U64, "Generator (renamed) must be the same type as prng.Prng")
+    // Built through the bare name and held as prng.Prng: the same type.
+    bare: = Prng.new(42U64)
+    qualified: prng.Prng = bare
+    assert(qualified.state == 42U64, "Prng (bare) must be the same type as prng.Prng")
 
     // Caution: **Kinds other than a type must resolve too.** If one kind does not, the import line
     // passes yet the use fails with `undefined path or identifier` (Principle 5 of
     // docs/DESIGN-principles.md).
-    root: = math_sqrt(16.0)
-    assert(root > 3.99 && root < 4.01,
-        "a selectively imported function (with a renaming) must be callable")
-    assert(math_pi > 3.14 && math_pi < 3.15, "a selectively imported constant must be readable")
+    root: = sqrt(16.0)
+    assert(root > 3.99 && root < 4.01, "a selectively imported function must be callable")
+    assert(PI > 3.14 && PI < 3.15, "a selectively imported constant must be readable")
 
     // An enum must resolve not only the type name but a variant reference (`Type.variant`) too.
     kind: = Checked_error.div_by_zero
@@ -197,8 +196,7 @@ fn test_selective_import()
     // **A generic must resolve to the same instance as the prefixed one too.** A slice's default
     // immutability is not in the spelling (`U8[]` is `U8 immut[]`); as a different instance, `U8[]`
     // is rejected as "not implementing" `Hashable<|U8[]|>`.
-    $tbl: = Map<|U8[], I32|>.new(null)
-    defer tbl.free()
+    defer $tbl: = Map<|U8[], I32|>.new(null)
     tbl.set("answer", 42)
     looked_up: = tbl.get("answer").unwrap_or(0)
     assert(looked_up == 42,
@@ -271,14 +269,14 @@ fn test_interp_keeps_concrete_writer() //<
     //< a Str_builder passed by value is a copy.
     verdict.start("[fmt] a chain with an interpolation in between keeps the concrete type test...")
     n: = 7
-    $b: = Str_builder.new()
+    defer $b: = Str_builder.new()
     head: = b.s("n=\{n\}").slice()
     assert(head.equals("n=7"),
         "`.slice()` can be continued from a chain of interpolation starting with a literal")
     lead: = b.clear().s("\{n\}<").slice()
     assert(lead.equals("7<"),
         "the builder's length advances even for a string starting with an interpolation")
-    $v: = Str_builder.new()
+    defer $v: = Str_builder.new()
     two: = v.s("\{n\}\{n\}").slice()
     assert(two.equals("77"), "a string of interpolation alone")
     verdict.pass("")
@@ -299,7 +297,7 @@ fn test_generic_param_not_first_arg()
 // The method table and the trait conformance attach even where the instantiation (at the type
 // annotation) comes before that type's generic impl.
 // Caution: Keep the two declarations below **before** the impl block. Reordered, they test nothing.
-priv early_bag: Order_bag<|I32|> = ::{ .slot = 7 }
+priv $early_bag: Order_bag<|I32|> = ::{ .slot = 7 }
 
 priv fn peek_early(b: Order_bag<|I32|>@): I32
     return b.peek()

@@ -145,8 +145,7 @@ impl Sema_ctx
         // Under this flag, check_type_constraint checks instead of queueing again.
         r.mono.draining_constraints = true
         defer r.mono.draining_constraints = false
-        kept: = List<|sema_session_state.Pending_constraint|>.create(base_core.arena)
-        defer kept.free()
+        defer kept: = List<|sema_session_state.Pending_constraint|>.create(base_core.arena)
         $i: Sz = 0
         for i < r.mono.pending_constraints.len
             pc: = r.mono.pending_constraints.get(i)
@@ -217,9 +216,7 @@ impl Sema_ctx
             // it. A deeper instance comes from a function body, whose own limit names the
             // recursion. Its limit only stops a conformance that names a deeper instance.
             defers: =
-                p.awaits_pull &&
-                !(r.env.is_arc_type(r.env.get_real_type(p.type_id)) ||
-                r.env.is_drop_type(p.type_id))
+                p.awaits_pull && !r.env.is_arc_type(r.env.get_real_type(p.type_id))
             limit: = sema_decl_mono.MAX_MONO_DEPTH if defers else MAX_METHOD_CHAIN_DEPTH
             if p.depth > limit && r.mono.chain_cut
                 throw .analysis_failed
@@ -275,7 +272,7 @@ impl Sema_ctx
                 // **Only an ARC-managed type is not deferred.** lower synthesizes its retain /
                 // release (synth_arc_stmt in lower/arc.kspl), which looks nothing up; with no
                 // table the value silently leaks.
-                if !r.env.is_arc_type(real_id) && !r.env.is_drop_type(real_id)
+                if !r.env.is_arc_type(real_id)
                     r.mono.deferred_methods.set(real_id, p)
                     continue
             // A body that violated a constraint is not checked, so as not to bury the real

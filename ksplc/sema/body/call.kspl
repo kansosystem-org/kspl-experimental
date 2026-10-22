@@ -195,7 +195,7 @@ priv fn instance_for_written_args(c: Sema_ctx$@, node: Ast_node$@,
     prev_inst_site: = c.generics.inst_site
     c.generics.inst_site = node
     defer c.generics.inst_site = prev_inst_site
-    $inst_name: = c.instantiate_fn(with_args(fn_tmpl, args), false)!
+    defer $inst_name: = c.instantiate_fn(with_args(fn_tmpl, args), false)!
     inst_sym: = c.symtab.resolve(inst_name.slice()).unwrap_or(null)
     return .some(inst_sym.node) if inst_sym != null && inst_sym.node != null else .none
 
@@ -223,7 +223,7 @@ priv fn infer_generic_call_result(c: Sema_ctx$@, node: Ast_node$@, left: Ast_nod
     prev_inst_site: = c.generics.inst_site
     c.generics.inst_site = node
     defer c.generics.inst_site = prev_inst_site
-    $inst_name: = c.instantiate_fn(with_args(fn_tmpl, inst_args), false)!
+    defer $inst_name: = c.instantiate_fn(with_args(fn_tmpl, inst_args), false)!
 
     inst_sym: = c.symtab.resolve(inst_name.slice()).unwrap_or(null)
     if inst_sym != null
@@ -330,7 +330,7 @@ fn infer(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@, target_id: I32, expe
         return I32::sema_type_env.Builtin_type_id.unknown
     // The name looked up, without any `<|…|>`, and the type arguments written for the function.
     parts: = sema_decl_name.named_fn(left)
-    $base_fn_name: = Str_builder.new()
+    defer $base_fn_name: = Str_builder.new()
     $written: Ast_node$@ = null
     // What the callee's name names, read once (read_written_name in sema/decl/name.kspl).
     $named: = sema_decl_name.Written_name::{ .parts = parts, .spelled = "", .fqn = "",
@@ -566,7 +566,6 @@ enum Intrinsic //< a call the compiler builds in: `__kspl_<name>(…)`, declared
     read_volatile //< `__kspl_read_volatile(p)`: a volatile load through p
     write_volatile //< `__kspl_write_volatile(p, v)`: a volatile store of v through p
     asm_volatile //< `__kspl_asm_volatile("…", …)`: inline assembly
-    inline_c //< `__kspl_inline_c("…")`: C source embedded as it stands (the C target only)
 
 fn intrinsic_of(name: U8[]): Intrinsic //< the intrinsic a callee's name calls
     //< **Sema and both backends tell an intrinsic by this alone.**
@@ -576,8 +575,6 @@ fn intrinsic_of(name: U8[]): Intrinsic //< the intrinsic a callee's name calls
         return .write_volatile
     if name.equals("__kspl_asm_volatile")
         return .asm_volatile
-    if name.equals("__kspl_inline_c")
-        return .inline_c
     return .not_intrinsic
 
 priv fn finish_intrinsic(node: Ast_node$@, left: Ast_node$@, id: I32): I32 //<
@@ -614,18 +611,6 @@ priv fn check_and_infer_intrinsic(c: Sema_ctx$@, node: Ast_node$@, left: Ast_nod
 
     is_llvm: = base_core.is_llvm_target()
 
-    if intr == .inline_c
-        if args_node != null && args_node.children.len > 0
-            first_arg: = args_node.get_child(0)
-            if first_arg.kind_id != .k_string
-                c.err(first_arg, "__kspl_inline_c requires a string literal")
-        else
-            c.err(node, "__kspl_inline_c requires a string argument")
-        if is_llvm
-            c.err(node,
-                "__kspl_inline_c is only supported on the C target. Use __kspl_asm_volatile for \
-                    LLVM")
-        return finish_intrinsic(node, left, void_id)
     if intr == .asm_volatile
         if args_node != null && args_node.children.len > 0
             check_asm_args(c, args_node, is_llvm)!

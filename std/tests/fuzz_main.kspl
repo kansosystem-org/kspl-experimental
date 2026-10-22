@@ -68,13 +68,13 @@ priv fn built_json(arena: Arena$@): U8[] //<
     arr: = b.arr().push(b.int_val(0I64)).push(inner)
         .push(b.arr().push(b.str_val("")).build()).build()
     root: = b.obj().set("items", arr).set("empty_obj", b.obj().build()).build()
-    $out: = Str_builder.new()
+    defer $out: = Str_builder.new()
     root.dump(out@, 2)
     return arena.dup_str(out.slice())
 
 priv fn built_query(arena: Arena$@): U8[] //< the query that std's writer produces
     //< Caution: **Keep the `%` and the `+`**: decoding branches on those two.
-    $out: = Str_builder.new()
+    defer $out: = Str_builder.new()
     for one in U8[][]::{ "name", "value with spaces", "a+b", "%" }
         if out.len > 0
             out.c('&')
@@ -94,7 +94,7 @@ priv fn built_response(arena: Arena$@): U8[] //< the HTTP response that std's wr
     head: = http.headers(arena).add("Content-Type", "text/plain; charset=utf-8")
         .add("X-Long", "0123456789012345678901234567890123456789").add("Connection", "close")
         .build()
-    $out: = Str_builder.new()
+    defer $out: = Str_builder.new()
     http.format_response(out@, 200, head, "this is the body.") catch
         return ""
     return arena.dup_str(out.slice())
@@ -111,14 +111,14 @@ priv fn built_numbers(arena: Arena$@): U8[] //< `BUILT_FLOATS`, and I64's ends, 
         .push(b.int_val(9223372036854775807I64))
     for f in BUILT_FLOATS
         arr = arr.push(b.float_val(f))
-    $out: = Str_builder.new()
+    defer $out: = Str_builder.new()
     arr.build().dump(out@)
     return arena.dup_str(out.slice())
 
 priv fn built_frames(arena: Arena$@): U8[] //< two JSON-RPC frames that std's writer produces
     //< A request and a notification, so a mutation reaches the second frame's head too.
     $b: = Json_builder.new(arena)
-    $out: = Str_builder.new()
+    defer $out: = Str_builder.new()
     params: = b.obj().set("uri", b.str_val("file:///a b.kspl")).set("n", b.int_val(7I64)).build()
     jsonrpc.frame_into(out@, jsonrpc.encode("textDocument/hover", params, 3, arena))
     jsonrpc.frame_into(out@, jsonrpc.encode("exit", b.arr().build(), -1, arena))
@@ -150,7 +150,7 @@ priv fn built_shape(arena: Arena$@): U8[] //<
         b.arr().push(b.int_val(1I64)).push(b.int_val(-2147483648I64)).build())
         .set("parts", b.arr().push(part).build()).set("note", b.str_val("é"))
         .set("limit", b.int_val(7I64)).set("spare", part).build()
-    $out: = Str_builder.new()
+    defer $out: = Str_builder.new()
     root.dump(out@)
     return arena.dup_str(out.slice())
 
@@ -240,8 +240,7 @@ priv fn collect_samples(dirs: U8[][], arena: Arena$@): List<|fuzz.Sample|> //<
 
 fn main(): I32
     verdict.begin("fuzz")
-    arena: = Arena.new(512 * 1024 * 1024)
-    defer arena.free()
+    defer arena: = Arena.new(512 * 1024 * 1024)
     $o: = fuzz.Options::{ .trials = DEFAULT_TRIALS, .seed = DEFAULT_SEED }
     $a: = fuzz.Sanitized::{ .asan = false, .required = false }
     p: = argparse.Parser.create("fuzz_main", "scatters broken input at std's readers", arena)

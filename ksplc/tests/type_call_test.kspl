@@ -1,0 +1,85 @@
+//< Calling a type uses its named constructor without changing allocation or result types
+import "std/ds" + { List }
+import "std/mem" + { Arena }
+import "std/str" { Str_builder }
+import "std/verdict"
+
+priv typedef Type_call_text = Str_builder
+priv typedef Type_call_ints = List<|I32|>
+
+priv enum Type_call_error
+    refused
+
+priv struct Type_call_factory
+    unused: I32
+
+impl Type_call_factory
+    fn new(value: I32 = 7, bias: I32 = 0): I32!Type_call_error
+        if value < 0
+            throw .refused
+        return value + bias * 10
+
+    fn through_self(value: I32): I32!Type_call_error
+        return Self(value)!
+
+priv struct Type_call_box<|T|>
+    value: T
+
+impl<|T|> Type_call_box<|T|>
+    fn new(value: T): Self
+        return Self::{ .value = value }
+    fn through_self(value: T): Self
+        return Self(value)
+
+priv fn next_argument(count: I32$@): I32
+    count$ += 1
+    return count$
+
+fn test_type_calls()
+    verdict.start("[calls] a type call uses new with its existing return type...")
+    defer a: = Arena(4096)
+    defer b: = mem.Arena(4096)
+    assert(a.default_chunk_size == b.default_chunk_size, "qualified and bare types agree")
+    defer $text: = Type_call_text()
+    text.s("yes")
+    assert(text.len == 3, "an alias keeps the constructor")
+    defer $items: = List<|I32|>(null)
+    defer $qualified: = ds.List<|I32|>(null)
+    qualified.push(4)
+    assert(qualified[0] == 4, "a qualified generic type calls its constructor")
+    defer $aliased: = Type_call_ints(null)
+    items.push(9)
+    aliased.push(items[0])
+    assert(aliased[0] == 9, "generic types and aliases keep their arguments")
+    make: fn(): Str_builder = Str_builder.new
+    defer $via_value: = make()
+    via_value.s("ok")
+    assert(via_value.len == 2, "ordinary function values still call normally")
+    n: = Type_call_factory() catch panic("default construction should succeed")
+    assert(n == 7, "defaults and a result other than the owner type are preserved")
+    $count: I32 = 0
+    ordered: =
+        Type_call_factory(next_argument(count@), next_argument(count@))
+        catch panic("construction should succeed")
+    assert(count == 2 && ordered == 21, "arguments run once, from left to right")
+    $failed: = false
+    _bad: = Type_call_factory(-1) catch
+        failed = true
+        fallback 0
+    assert(failed, "constructor errors retain normal handling")
+    verdict.pass("Type calls preserve aliases, generic arguments, defaults and results.")
+
+fn test_type_call_self_and_propagation()
+    verdict.start("[calls] Self calls preserve the impl and propagate errors...")
+    n: = Type_call_factory.through_self(5) catch panic("construction should succeed")
+    assert(n == 5, "Self calls the current type's new")
+    box: = Type_call_box<|I32|>.through_self(6)
+    assert(box.value == 6, "Self keeps the generic impl's arguments")
+    $failed: = false
+    _bad: = Type_call_factory.through_self(-1) catch e
+        switch e
+        case .refused
+            failed = true
+        fallback 0
+    assert(failed, "the original constructor error propagates")
+    verdict.pass("Self calls and explicit error propagation agree with named construction.")

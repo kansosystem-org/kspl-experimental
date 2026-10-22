@@ -135,7 +135,8 @@ impl Sema_ctx
         //< Caution: **Code that synthesizes a slice type must go through here** (a string literal's
         //< type, the reflection table). **Return unknown if the instantiation fails** (it is
         //< reported).
-        $inst: = r.instantiate_struct(base_core.SLICE_FQN, I32[]::{ elem_id }) catch
+        defer $inst: =
+            r.instantiate_struct(base_core.SLICE_FQN, I32[]::{ elem_id }) catch
             return I32::sema_type_env.Builtin_type_id.unknown
         return r.env.get_or_add(base_core.arena.dup_str(inst.slice()))
 
@@ -145,7 +146,7 @@ impl Sema_ctx
         //< `slice_type_of`. **Return unknown if the instantiation fails** (it is reported).
         if sema_type_env.is_unknown(ok_id) || sema_type_env.is_unknown(err_id)
             return I32::sema_type_env.Builtin_type_id.unknown
-        $inst: =
+        defer $inst: =
             r.instantiate_struct(base_core.RESULT_FQN, I32[]::{ ok_id, err_id }) catch
             return I32::sema_type_env.Builtin_type_id.unknown
         return r.env.get_or_add(base_core.arena.dup_str(inst.slice()))
@@ -171,7 +172,7 @@ impl Sema_ctx
                 args = canonical.slice()
                 break
         inst_rec: = sema_type_env.Instance::{ .template = base_name, .args = args }
-        $args_text: = Str_builder.new()
+        defer $args_text: = Str_builder.new()
         r.env.type_args_to(args, args_text)
         if sema_decl_mono_name.contains_unknown(args_text.slice())
             return sema_decl_mono_name.unknown_type_str()
@@ -182,10 +183,10 @@ impl Sema_ctx
         $shares_c_repr: = false
         if plain_rec: = r.env.strip_variance(inst_rec)
             shares_c_repr = true
-            _plain: = r.instantiate_struct(base_name, plain_rec.args)!
-        $inst_name: = Str_builder.new()
+            defer $_plain: = r.instantiate_struct(base_name, plain_rec.args)!
+        $inst_name: = Str_builder.new() // the result, handed to the caller
         r.env.instance_c_name_to(inst_rec, inst_name)
-        $full_inst_name: = Str_builder.new()
+        defer $full_inst_name: = Str_builder.new()
         r.env.instance_key_to(inst_rec, full_inst_name)
 
         $backup: = r.backup_mono_state()
@@ -398,7 +399,7 @@ impl Sema_ctx
         target_node: = generic_impl.get_decl_type_node()
         if target_node == null
             return false
-        $raw_target_type: = target_node.extract_type_name()
+        defer $raw_target_type: = target_node.extract_type_name()
         // Resolve the FQN in the impl block's file, or another file's impl resolves without its
         // import table.
         prev_file: = r.file_name
@@ -437,7 +438,7 @@ impl Sema_ctx
                 if sema_decl_mono_name.introduces_own_generic_param(m_node, impl_gen_params)
                     continue
                 // skip_infer=true: the loop below queues the bodies on pending.
-                $inst_m_name: = r.instantiate_fn(Fn_instance::{ .template =
+                defer $inst_m_name: = r.instantiate_fn(Fn_instance::{ .template =
                     join_dotted_name(inst.template, m_name), .owner = type_id,
                     .args = I32[]::{} }, true)!
                 arena_inst_m_name: = base_core.arena.dup_str(inst_m_name.slice())
@@ -513,7 +514,7 @@ impl Sema_ctx
                     return .own_args(type_name)
                 return .type_args(type_name, inst.template, inst.args)
         // Reached through the template's own name, the type arguments are the call's.
-        $tmp_b: = r.instantiate_struct(type_fqn, fi.args)!
+        defer $tmp_b: = r.instantiate_struct(type_fqn, fi.args)!
         type_name: = base_core.arena.dup_str(tmp_b.slice())
         return .type_args(type_name, type_fqn, fi.args)
 
@@ -521,7 +522,7 @@ impl Sema_ctx
         //< Makes the instance fi records of a generic function or method, once
         //< It returns the instance's mangled name (fn_instance_names derives it). The signature is
         //< resolved at once; the body joins the work list (`queue_fn_body`) unless skip_infer.
-        $bound_text: = Str_builder.new()
+        defer $bound_text: = Str_builder.new()
         r.env.type_args_to(fi.args, bound_text)
         if sema_decl_mono_name.contains_unknown(bound_text.slice())
             return sema_decl_mono_name.unknown_type_str()
@@ -548,8 +549,8 @@ impl Sema_ctx
             struct_inst_name_str = type_name
         default {}
 
-        $inst_name: = Str_builder.new()
-        $full_inst_name: = Str_builder.new()
+        $inst_name: = Str_builder.new() // the result, handed to the caller
+        defer $full_inst_name: = Str_builder.new()
         r.fn_instance_names(fi, owner, full_inst_name@, inst_name@)
 
         $backup: = r.backup_mono_state()

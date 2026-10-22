@@ -386,7 +386,13 @@ impl Ast_node
             c.add_local(r)
             r.get_var_decl_type_node().df_type_array_sizes(c, state)
             has_value: = expr_node != null && expr_node.kind_id != .k_empty
-            if has_value
+            // **A `for … in` that holds its subject by a `T@` only reads it**, so its `@` marks no
+            // write, and a spare `$` on the subject is still reported (`../body/for_in.kspl`).
+            if has_value && r.is_for_in_subject() && expr_node.kind_id == .k_expr_postfix &&
+                expr_node.postfix_op_text().equals("@") &&
+                c.sema.env.is_const(c.sema.env.strip_ptr(expr_node.type_id))
+                expr_node.get_postfix_receiver().analyze_as_borrow(c, state)
+            else if has_value
                 expr_node.analyze_df_node(c, state)
             state.bind(r, has_value)
 
@@ -443,6 +449,9 @@ impl Ast_node
             return
         if right == null || op == null
             left.analyze_df_node(c, state) // an expression statement, not an assignment
+            // Control does not come back from a `#noreturn` call, so what follows is unreachable.
+            if left.is_noreturn_call()
+                state.reachable = false
             return
         // Storing a new value in a field makes it usable again, and anything below it.
         if op.text.equals("=")
@@ -577,15 +586,6 @@ impl Ast_node
                 frees_the_pointer = true
         $def: Ast_node$@ = null
         if freed_expr != null
-            if c.sema.env.type_has_drop(freed_expr.type_id)
-                if freed_expr.has_drop_parent(c)
-                    c.sema
-                        .err(freed_expr,
-                        "cannot release an automatic field of a type with Drop; replace the field \
-                            by assignment")
-                    c.has_error = true
-                else if freed_expr.owned_field_root(c).is_some()
-                    state.moved_fields.add(freed_expr)
             if d: = freed_expr.get_addressed_local_def()
                 def = d
         if def != null && def.is_tracked_local(c)
@@ -722,18 +722,6 @@ impl Ast_node
         $op_text: = r.text
         if op_node != null
             op_text = op_node.text
-        if op_text.equals("$") && !c.suppress_move && c.sema.env.type_has_drop(r.type_id)
-            c.sema
-                .err(r,
-                "cannot move a Drop value through a borrowed pointer; use mem.take_at to transfer \
-                    the slot")
-            c.has_error = true
-        if op_text.equals("[") && !c.suppress_move && c.sema.env.type_has_drop(r.type_id)
-            receiver: = r.get_postfix_receiver()
-            if receiver != null && !c.sema.env.is_pointer(receiver.type_id)
-                c.sema
-                    .err(r, "cannot move a Drop value through an index; borrow the element instead")
-                c.has_error = true
         if op_text.equals("@") || op_text.equals("[") || op_text.equals("$") ||
             (op_text.equals("::") && r.cast_makes_mutable_view(c))
             r.mark_postfix_receiver_mutated(c)
@@ -760,30 +748,6 @@ impl Ast_node
                 // level).
                 r.mark_free_call_if_any(c, state)
                 r.mark_call_freed_args(c, state)
-                r.check_raw_storage_arg(c)
-
-    priv fn check_raw_storage_arg(r: Self$@, c: Df_ctx$@) //< raw storage has no local cleanup flag
-        callee: = r.get_postfix_receiver()
-        decl: = callee.def_node if callee != null else null
-        if decl == null
-            return
-        name: = c.sema.env.fn_templates.get(Sz::decl).unwrap_or("")
-        if !name.equals("std.mem.init_at") && !name.equals("std.mem.take_at") &&
-            !name.equals("std.mem.drop_at")
-            return
-        args: = r.find_child(.k_expr_args)
-        if args == null || args.children.len == 0
-            return
-        arg: = args.get_child(0)
-        if arg.kind_id != .k_expr_postfix || !arg.postfix_op_text().equals("@")
-            return
-        place: = arg.get_postfix_receiver()
-        if c.sema.env.type_has_drop(place.type_id) && !place.write_crosses_indirection(c)
-            c.sema
-                .err(arg,
-                "raw-storage operations cannot end a local owner's lifetime; move or assign the \
-                    local directly")
-            c.has_error = true
 
 fn intersect_states(s1: Df_state$@, s2: Df_state$@): Df_state$@
     if !s1.reachable
@@ -851,6 +815,18 @@ impl Df_ctx
             st.is_mutated = true
             r.locals.set(i, st)
 
+    fn reads_payload(r: Self$@, pattern: Ast_node$@): Bool //< whether any binding of it is read
+        for local in r.locals
+            if local.pattern == pattern && local.is_read
+                return true
+        return false
+
+    fn binds_first(r: Self$@, st: Local_state): Bool //< whether `st` is its pattern's first binding
+        for local in r.locals
+            if local.pattern == st.pattern
+                return local.node == st.node
+        return false
+
 fn analyze_definite_initialization(c: Sema_ctx$@, fn_node: Ast_node$@, block: Ast_node$@): Bool
     $ctx: = Df_ctx::{ .sema = c, .locals = List<|Local_state|>.create(base_core.arena),
         .has_error = false, .has_reported_unreachable = false, .suppress_move = false,
@@ -874,16 +850,3 @@ fn analyze_definite_initialization(c: Sema_ctx$@, fn_node: Ast_node$@, block: As
             else if ctx.binds_first(local)
                 sema_flow_report.report_unread_payload(c, local.pattern)
     return !ctx.has_error
-
-impl Df_ctx
-    fn reads_payload(r: Self$@, pattern: Ast_node$@): Bool //< whether any binding of it is read
-        for local in r.locals
-            if local.pattern == pattern && local.is_read
-                return true
-        return false
-
-    fn binds_first(r: Self$@, st: Local_state): Bool //< whether `st` is its pattern's first binding
-        for local in r.locals
-            if local.pattern == st.pattern
-                return local.node == st.node
-        return false

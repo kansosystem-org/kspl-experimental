@@ -15,16 +15,14 @@ import "ksbind/db"
 import "std/io"
 
 fn main()
-    conn: = db.Db.open(":memory:") catch
+    defer conn: = db.Db.open(":memory:") catch
         return
-    defer conn.free()
     conn.exec("CREATE TABLE t (n INTEGER)") catch
         return
     conn.exec("INSERT INTO t (n) VALUES (42)") catch
         return
-    stmt: = conn.prepare("SELECT n FROM t") catch
+    defer stmt: = conn.prepare("SELECT n FROM t") catch
         return
-    defer stmt.free()
     stmt.step() catch
         return
     io.out().s("n=\{stmt.column_i64(0)\}\n")

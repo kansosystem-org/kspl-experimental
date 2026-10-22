@@ -130,7 +130,7 @@ priv fn tree_root(from: U8[], arena: Arena$@): U8[] //<
     //< Caution: **Do not decide it from the document's own path**: being a KSPL source is
     //< irrelevant.
     $at: U8[] = from
-    for $step: Sz = 0; step < MAX_CLIMB; step += 1
+    for _step in Range.asc(MAX_CLIMB)
         if at.len == 0
             break
         if fs.is_dir(fs.join(at, TREE_MARK, arena))
@@ -146,12 +146,10 @@ priv const ANSWER_WAIT_MS: I32 = 10000 //< how long a local server may take to a
 priv fn ask(at: I32, token: U8[], method: U8[], target: U8[]): I32 //<
     //< Sends one request with our token to the server on that port, and returns the status
     //< **0 where nothing answered** (nothing listens there, or it closed without an answer).
-    arena: = Arena.new(16 * 1024)
-    defer arena.free()
-    stream: = net.Tcp_stream.connect("127.0.0.1", at) catch
+    defer arena: = Arena.new(16 * 1024)
+    defer stream: = net.Tcp_stream.connect("127.0.0.1", at) catch
         return 0
-    defer stream.free()
-    $bearer: = Str_builder.new()
+    defer $bearer: = Str_builder.new()
     bearer.s("Bearer ").s(token)
     head: = http.headers(arena).add("Host", "127.0.0.1").add("Authorization", bearer.slice())
         .build()
@@ -178,7 +176,7 @@ priv fn stop_server(at: I32, token: U8[]): Bool //<
     //< gone.
     if ask(at, token, "POST", "/api/stop") != 200
         return false
-    for $step: Sz = 0; step < GONE_STEPS; step += 1
+    for _step in Range.asc(GONE_STEPS)
         if !server_answers(at, token)
             return true
         sys.sleep_ms(100)
@@ -192,16 +190,16 @@ priv fn tend(where: Where, stop_root: U8[], stop_all: Bool): I32 //<
     //< Returns the exit code.
     // **Under the lock** (the reason is at `open_or_start`): a record written meanwhile would be
     // lost to this rewrite.
-    _lock: = fs.File_lock.take(where.lock) catch
+    defer $_lock: = fs.File_lock.take(where.lock) catch
         io.err().s("\{sys.program_name()\}: cannot take the lock on the note: \{where.lock\}\n")
         return 1
     body: = io.read_file(where.state, null) catch ""
     listing: = stop_root.len == 0 && !stop_all
-    $kept: = Str_builder.new()
+    defer $kept: = Str_builder.new()
     $stopped: Sz = 0
     $failed: = false
     count: = aim.state_count(body)
-    for $i: Sz = 0; i < count; i += 1
+    for i in Range.asc(count)
         one: = aim.state_record(body, i)
         at: = aim.port_num(aim.port_in_url(one[0]))
         token: = aim.token_in_url(one[0])
@@ -244,7 +242,7 @@ priv fn reusable(root: U8[], state_path: U8[]): U8[] //<
     body: = io.read_file(state_path, null) catch
         return ""
     count: = aim.state_count(body)
-    for $i: Sz = 0; i < count; i += 1
+    for i in Range.asc(count)
         one: = aim.state_record(body, i)
         if !one[1].equals(root) || !aim.on_loopback(one[0])
             continue
@@ -366,7 +364,7 @@ priv fn open_or_start( //< finds the server for `root` in the note, or starts on
     show_only: Bool, //< `--show`: the server gets no idle stop
     arena: Arena$@,
 ): Opened
-    _lock: = fs.File_lock.take(where.lock) catch
+    defer $_lock: = fs.File_lock.take(where.lock) catch
         io.err().s("\{sys.program_name()\}: cannot take the lock on the note: \{where.lock\}\n")
         return Opened::{ .url = "", .log = "", .child = .none }
     // A running server is reused; starting one without looking piles up a server per document,
@@ -409,15 +407,14 @@ priv fn open_or_start( //< finds the server for `root` in the note, or starts on
     // **Add to the existing records**; overwritten, an earlier server for another folder is lost,
     // holding its port with nobody able to reuse it.
     had_body: = io.read_file(where.state, null) catch ""
-    $note: = Str_builder.new()
+    defer $note: = Str_builder.new()
     aim.write_owned(where.state, aim.state_text(url, root, had_body, note@)) catch
         io.err().s("\{sys.program_name()\}: cannot write the note: \{where.state\}\n")
     return Opened::{ .url = url, .log = log, .child = .some(child) }
 
 fn main(): I32 //< opens one document in kspage, starting the server and the browser as needed
     io.set_line_buffered()
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
+    defer arena: = Arena.new(64 * 1024)
     $show_only: = false
     $root_said: U8[] = ""
     $at: U8[] = DEFAULT_PORT
@@ -437,7 +434,7 @@ fn main(): I32 //< opens one document in kspage, starting the server and the bro
     p.command_flag("--list", "put out each running server's URL and the folder it serves")
     p.str_opt("--stop", stop_said@, "stop the server serving that folder")
     p.command_flag("--stop-all", "stop every running server")
-    p.parse_or_exit(sys.args(), arena)
+    p.parse_or_exit()
     tending: = p.command.is_some() || p.saw("--stop")
     if tending &&
         (p.rest.len != 0 || p.saw("--root") || p.saw("--port") || p.saw("--show") ||
@@ -489,7 +486,7 @@ fn main(): I32 //< opens one document in kspage, starting the server and the bro
     opened: = open_or_start(where, root, at, show_only, arena)
     if opened.url.len == 0
         return 1
-    $text: = Str_builder.new()
+    defer $text: = Str_builder.new()
     open_url: = aim.url_for(opened.url, doc, sys.is_windows(), text@)
     io.out().s("\{open_url\}\n")
     if c: = opened.child

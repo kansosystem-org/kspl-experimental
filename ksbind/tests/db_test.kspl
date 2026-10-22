@@ -106,8 +106,7 @@ impl Person: reflect.Reflectable {} //< the table is the declaration's, made by 
 
 fn test_db_row_roundtrip()
     verdict.start("[Db] walking the table to round-trip one row test...")
-    arena: = Arena.new(8 * 1024)
-    defer arena.free()
+    defer arena: = Arena.new(8 * 1024)
 
     conn: = db.Db.open(":memory:") catch panic("open(:memory:) should not fail")
     conn.exec("CREATE TABLE p (name TEXT, age INTEGER, height REAL, active INTEGER)")
@@ -219,8 +218,7 @@ impl Unsigned_wide: reflect.Reflectable {}
 
 priv fn refused_field(conn: db.Db$@, select: U8[], arena: Arena$@): U8[] //<
     //< Reads the one row `select` gives into a `Bounded`, and names the field refused ("" for none)
-    sel: = conn.prepare(select) catch panic("the select should prepare")
-    defer sel.free()
+    defer sel: = conn.prepare(select) catch panic("the select should prepare")
     sel.step() catch panic("the select should step")
     $back: Bounded = ::{}
     $which: U8[] = ""
@@ -234,8 +232,7 @@ priv fn refused_field(conn: db.Db$@, select: U8[], arena: Arena$@): U8[] //<
 
 fn test_db_row_out_of_range()
     verdict.start("[Db] an integer a field cannot hold being refused, not cut test...")
-    arena: = Arena.new(8 * 1024)
-    defer arena.free()
+    defer arena: = Arena.new(8 * 1024)
     conn: = db.Db.open(":memory:") catch panic("open(:memory:) should not fail")
 
     // Each field's edges read back as they are, a negative `Sz` among them.
@@ -407,12 +404,10 @@ fn test_db_exec_refuses_rows()
 
 fn test_db_exec_refuses_parameters()
     verdict.start("[Db] exec refusing parameters before changing the database...")
-    conn: = db.Db.open(":memory:") catch panic("open should succeed")
-    defer conn.free()
+    defer conn: = db.Db.open(":memory:") catch panic("open should succeed")
     conn.exec("CREATE TABLE t (value TEXT)") catch panic("create should succeed")
     for parameter in U8[][]::{ "?", "?3", ":value", "@value", "$value" }
-        arena: = Arena.new(1024)
-        defer arena.free()
+        defer arena: = Arena.new(1024)
         sql: = arena.text().s("INSERT INTO t VALUES (").s(parameter).s(")").take()
         $refused: = false
         conn.exec(sql) catch e
@@ -421,8 +416,7 @@ fn test_db_exec_refuses_parameters()
                 refused = true
             default {}
         assert(refused, "exec refuses every parameter form")
-    count: = conn.prepare("SELECT count(*) FROM t") catch panic("count should prepare")
-    defer count.free()
+    defer count: = conn.prepare("SELECT count(*) FROM t") catch panic("count should prepare")
     count.step() catch panic("count should step")
     assert(count.column_i64(0) == 0I64, "refused inserts have no side effects")
     // SQLite's parser decides: quoted text and comments are not parameters.
@@ -434,8 +428,7 @@ priv const DB_BASE: U8[] = "out/tmp/ksbind_db" //< where a test that needs a dat
 
 fn test_db_free_with_a_statement_open()
     verdict.start("[Db] freeing the database while a statement is still open test...")
-    arena: = Arena.new(4 * 1024)
-    defer arena.free()
+    defer arena: = Arena.new(4 * 1024)
     dir: = fs.mkdir_unique(DB_BASE, "db_", arena) catch panic("the scratch folder should be made")
     path: = fs.join(dir, "t.db", arena)
     // **In WAL mode the `-wal` file stands while a connection is open.** The last one to close

@@ -76,6 +76,21 @@ fn main()
   f: = 2.5
   n: = 7
   io.out().s("[\{f:.19\}][\{f:.20\}][\{n:0\}][\{n:\}][\{n:,.2xq\}]\n")
+// ==== case format_spec_zero_with_comma
+//< Zero padding and `,` grouping are not written together
+//< Zeros among groups have no reading every writer shares (`0001,234` or `0,001,234`). The error
+//< names both ways out. Each alone still passes.
+// EXPECT: format spec ':011,' pads with zeros and groups with ','. Pad with spaces (drop the '0'), or drop the ','
+// EXPECT: format spec ':014,.2' pads with zeros and groups with ','
+// EXPECT-NOT: ':11,'
+// EXPECT-NOT: ':011'
+import "std/io"
+import "std/strfmt"
+
+fn main()
+  n: I32 = 1234567
+  f: F64 = 1234567.25
+  io.out().s("[\{n:011,\}][\{f:014,.2\}][\{n:11,\}][\{n:011\}]\n")
 // ==== case format_spec_hex_on_float
 //< Hex is a setting only for integers
 //< There is no function putting a floating-point value's bit pattern out as it stands, so the
@@ -229,6 +244,21 @@ fn main(): I32
   m: = take("arg \{n\}")
   io.out().s(x).s("\{m\}").c('\n')
   return 0
+// ==== case string_raw_line_break
+//< A line break written as it stands inside an ordinary string is refused
+//< It would carry the next line's indentation into the text (SPEC 2.3.4). The message names the
+//< forms that write it: `\n`, a `\` at the line's end, and a raw string.
+// EXPECT: a string cannot hold a line break as it stands
+// EXPECT: Write '\n' for a line break, end the line with '\'
+// EXPECT-NOT: string_raw_line_break.kspl:10:
+fn main(): I32
+  two: U8[] = "one
+    two"
+  ok: U8[] = """one
+two"""
+  joined: U8[] = "one \
+    two"
+  return I32::(two.len + ok.len + joined.len)
 // ==== case string_line_continuation
 //< A `\` at a line's end continues a **string** on the next line
 //< A character literal holds one byte on one line, so the mark there is refused like any other

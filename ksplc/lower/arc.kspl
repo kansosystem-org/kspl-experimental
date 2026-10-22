@@ -1,7 +1,7 @@
-//< Inserts cleanup for automatic owners and retain/release for ARC values
-//< `Drop` transfers one cleanup responsibility when a value moves. `Ref_counted` shares ownership
-//< by counting copies. Both use the cleanup stack, whose exits also run `defer` statements.
-//< The contracts are in `docs/SPEC-programming-language.md` under "Memory management".
+//< Inserts `retain()` / `release()` for an ARC-managed type, in the Lower layer
+//< `Ref_counted` shares ownership by counting copies. The releases use the cleanup stack, whose
+//< exits also run `defer` statements. The contracts are in `docs/SPEC-programming-language.md`
+//< under "Memory management".
 
 // ==========================================
 //   - Every time an ARC-managed type's value is copied (a read of existing memory), a retain() is
@@ -15,7 +15,6 @@ import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/core" as base_core
 import "ksplc/lower/ctx" as lower_ctx + { Lowering_ctx }
-import "ksplc/lower/drop" as lower_drop
 import "ksplc/lower/expr" as lower_expr
 import "ksplc/lower/order" { Operand_order }
 import "ksplc/lower/root" as lower_root
@@ -69,7 +68,7 @@ fn synth_arc_stmt(lctx: Lowering_ctx$@, recv: Ast_node$@, type_id: I32, method_n
     real_id: = lctx.sema.env.get_real_type(type_id)
     type_name: = lctx.sema.env.get_str(real_id)
 
-    $fqn_b: = Str_builder.new()
+    defer $fqn_b: = Str_builder.new()
     fqn_b.s(type_name).s(".").s(method_name)
     sym: = lctx.sema.resolve_type_method_fqn(fqn_b.slice()).unwrap_or(null)
     if sym == null || sym.node == null
@@ -103,37 +102,6 @@ priv fn expand_place_index_ops(lctx: Lowering_ctx$@, n: Ast_node$@, depth: Sz) /
 // ksplc/docs/DESIGN-lower.md.
 fn emit_managed_op(lctx: Lowering_ctx$@, recv: Ast_node$@, type_id: I32, method_name: U8[],
     out: List<|Ast_node$@|>$@, depth: Sz)
-    if lctx.sema.env.type_has_drop(type_id)
-        if method_name.equals("retain")
-            lower_drop.set_live(lctx, recv, false, out)
-            return
-        if lower_drop.live_flag(lctx, recv).len > 0
-            ops: = base_ast.new_ast_node_list()
-            if !emit_local_drop_fields(lctx, recv, type_id, ops, depth)
-                emit_owned_op(lctx, recv, type_id, method_name, ops, depth)
-            lower_drop.guard_cleanup(lctx, recv, ops, out)
-            return
-    emit_owned_op(lctx, recv, type_id, method_name, out, depth)
-
-priv fn emit_local_drop_fields(lctx: Lowering_ctx$@, recv: Ast_node$@, type_id: I32,
-    out: List<|Ast_node$@|>$@, depth: Sz): Bool //< each field keeps its own move state
-    if lctx.sema.env.is_drop_type(type_id)
-        return false
-    switch lctx.sema.env.get_info(lctx.sema.env.get_clean_real_type(type_id))
-    case .struct_type(def)
-        for k in Range.asc(def.fields_list.len)
-            i: = def.fields_list.len - 1 - k
-            f: = def.fields_list.get(i)
-            if lctx.sema.env.type_is_managed(f.type_id)
-                field: = Ast_node.build_member_access(recv.clone(), f.name, I32::i, f.type_id,
-                    recv.loc)
-                emit_managed_op(lctx, field, f.type_id, "release", out, depth + 1)
-        return true
-    default {}
-    return false
-
-priv fn emit_owned_op(lctx: Lowering_ctx$@, recv: Ast_node$@, type_id: I32, method_name: U8[],
-    out: List<|Ast_node$@|>$@, depth: Sz)
     expand_place_index_ops(lctx, recv, 0)
     if depth >= MAX_ARC_EMIT_DEPTH
         if !lctx.sema.has_error()
@@ -153,17 +121,11 @@ priv fn arc_helper_type(lctx: Lowering_ctx$@, type_id: I32): I32 //<
     return lctx.sema.env.copy_value_type(lctx.sema.env.get_real_type(type_id))
 
 priv fn arc_helper_ptr_type(lctx: Lowering_ctx$@, real_id: I32): I32 //<
-    //< The helper borrows read-only for ARC, and writable for automatic destruction
+    //< The type of the pointer the chain helper receives: a read-only one
     //< Only an array becomes "a pointer to the element". `@` on an array gives a pointer to the
     //< first element, so a `T[N]$@` parameter would disagree with the call's type.
     //< Read-only, since `retain` / `release` take `Self@`: a read-only array copied by `for x in`
     //< passes as it is, where a writable parameter discarded C's `const` (Principle 2).
-    if lctx.sema.env.type_has_drop(real_id)
-        switch lctx.sema.env.get_info(real_id)
-        case .array(elem_id, _size)
-            return lctx.sema.env.make_ptr(lctx.sema.env.copy_value_type(elem_id))
-        default
-            return lctx.sema.env.make_ptr(lctx.sema.env.copy_value_type(real_id))
     switch lctx.sema.env.get_info(real_id)
     case .array(elem_id, _size)
         return lctx.sema.env.make_ptr(lctx.sema.env.make_const(elem_id))
@@ -177,7 +139,7 @@ priv fn get_or_create_arc_helper(lctx: Lowering_ctx$@, type_id: I32, method_name
         //< way out makes add_arc_call_args take the argument and retain it. Then it is counted
         //< twice.
     real_id: = arc_helper_type(lctx, type_id)
-    $key_b: = Str_builder.new()
+    defer $key_b: = Str_builder.new()
     key_b.s(method_name).s(":")
     lctx.sema.env.mangle_type_id_to(real_id, key_b)
     key: = key_b.slice()
@@ -185,7 +147,7 @@ priv fn get_or_create_arc_helper(lctx: Lowering_ctx$@, type_id: I32, method_name
     if existing != null
         return .some(existing)
 
-    $name_b: = Str_builder.new()
+    defer $name_b: = Str_builder.new()
     name_b.s("kspl_arc_").s(method_name).s("_")
     lctx.sema.env.mangle_type_id_to(real_id, name_b)
     helper_name: = base_core.arena.dup_str(name_b.slice())
@@ -200,9 +162,6 @@ priv fn get_or_create_arc_helper(lctx: Lowering_ctx$@, type_id: I32, method_name
 
     body: = Ast_node.build_block(loc)
     ops: = List<|Ast_node$@|>.create(base_core.arena)
-    if method_name.equals("release") && lctx.sema.env.is_drop_type(real_id)
-        if stmt: = synth_arc_stmt(lctx, parts.arc_param_ref(loc), real_id, "drop", loc)
-            ops.push(stmt)
     emit_arc_owned_positions(lctx, parts, real_id, method_name, ops, depth)
     for op in ops
         body.add_child(op)
@@ -229,10 +188,6 @@ priv fn emit_arc_owned_positions(lctx: Lowering_ctx$@, parts: Arc_helper_parts, 
         for k in Range.asc(def.fields_list.len)
             f_idx: = def.fields_list.len - 1 - k if method_name.equals("release") else k
             f: = def.fields_list.get(f_idx)
-            if lctx.sema.env.has_release_contract(real_id) &&
-                !lctx.sema.env.is_drop_type(real_id) &&
-                lctx.sema.env.type_has_drop(f.type_id)
-                continue
             if !lctx.sema.env.type_is_managed(f.type_id)
                 continue
             fa: = Ast_node.build_member_access(parts.arc_param_ref(loc), f.name, I32::f_idx,
@@ -345,32 +300,24 @@ impl Lowering_ctx
             return
         recv: = id_node.clone()
         recv.type_id = type_id
-        lower_drop.register_owner(r, recv, true, r.pre_stmts)
         cleanup: = r.cleanup_stack.get(r.cleanup_stack.len - 1)
         emit_managed_op(r, recv, type_id, "release", cleanup, 0)
 
-    fn register_arc_arm_bindings(r: Self$@, pattern: Ast_node$@, subject: Ast_node$@):
-        List<|Ast_node$@|>$@ //<
-            //< The retains a `switch` arm's managed bindings owe; their releases wait for its block
-            //< A binding copies a payload its subject still owns, and the arm can let the subject
-            //< go (`s = .none`). So each binding holds a count of its own for the arm, as `for x
-            //< in` does. The arm's block releases it on every way out (arc_scope_pending).
+    fn register_arc_arm_bindings(r: Self$@, pattern: Ast_node$@): List<|Ast_node$@|>$@ //<
+        //< The retains a `switch` arm's managed bindings owe; their releases wait for its block
+        //< A binding copies a payload its subject still owns, and the arm can let the subject go
+        //< (`s = .none`). So each binding holds a count of its own for the arm, as `for x in`
+        //< does. The arm's block releases it on every way out (arc_scope_pending).
         out: = base_ast.new_ast_node_list()
         if pattern == null
             return out
-        moving: = r.sema.env.type_has_drop(subject.type_id)
         switch pattern.extract_case_variant()
         case .variant(_v, start)
-            if moving && pattern.children.len > start
-                lower_drop.set_live(r, subject, false, out)
             for k in Range.new(start, pattern.children.len, 1)
                 b: = pattern.get_child(k)
                 if b.kind_id != .k_identifier || !r.sema.env.type_is_managed(b.type_id)
                     continue
-                if moving
-                    lower_drop.register_owner(r, arc_binding_ref(b), true, out)
-                else
-                    emit_managed_op(r, arc_binding_ref(b), b.type_id, "retain", out, 0)
+                emit_managed_op(r, arc_binding_ref(b), b.type_id, "retain", out, 0)
                 emit_managed_op(r, arc_binding_ref(b), b.type_id, "release", r.arc_scope_pending, 0)
         default {}
         return out
@@ -395,7 +342,6 @@ impl Lowering_ctx
                 (id_node.clone() if id_node != null
                 else Ast_node.build_ident(p_name, pid, p.loc))
             recv.type_id = pid
-            lower_drop.register_owner(r, recv, true, r.entry_stmts)
             emit_managed_op(r, recv, pid, "release", r.arc_scope_pending, 0)
 
 struct Arc_take //< the count a new owner of a managed value is owed, decided before lowering
@@ -473,8 +419,6 @@ fn arc_hold_until_taken(value: Ast_node$@, take: Arc_take, lctx: Lowering_ctx$@)
         .push(Ast_node.build_assign_stmt(live_ref, Ast_node.build_bool_literal(true, loc), loc))
     cleanup: = lctx.cleanup_stack.get(lctx.cleanup_stack.len - 1)
     cleanup.push(arc_release_if_live(lctx, tmp_name, live_name, type_id, loc))
-    if lctx.sema.env.type_has_drop(type_id)
-        lower_drop.bind_flag(lctx, Ast_node.build_ident(tmp_name, type_id, loc), live_name)
     return Arc_held::{ .tmp = Ast_node.build_ident(tmp_name, type_id, loc),
         .live_name = live_name }
 
@@ -555,17 +499,11 @@ impl Ast_node
         down: = Ast_node.build_bool_literal(false, loc)
         lctx.stmt_decls.push(lctx.build_let_decl(live_name, bool_id, down, loc))
         tmp_ref: = Ast_node.build_ident(tmp_name, type_id, loc)
-        moving: = lctx.sema.env.type_has_drop(type_id)
-        if moving
-            lower_drop.bind_flag(lctx, tmp_ref, live_name)
-            lower_drop.register_owner(lctx, tmp_ref, false, lctx.stmt_decls)
         lctx.pre_stmts.push(arc_release_if_live(lctx, tmp_name, live_name, type_id, loc))
         lctx.pre_stmts.push(Ast_node.build_assign_stmt(tmp_ref, r, loc))
         live_ref: = Ast_node.build_ident(live_name, bool_id, loc)
         up: = Ast_node.build_bool_literal(true, loc)
         lctx.pre_stmts.push(Ast_node.build_assign_stmt(live_ref, up, loc))
-        if moving
-            lower_drop.set_live(lctx, tmp_ref, true, lctx.pre_stmts)
         cleanup: = lctx.cleanup_stack.get(lctx.cleanup_stack.len - 1)
         cleanup.push(arc_release_if_live(lctx, tmp_name, live_name, type_id, loc))
         return Ast_node.build_ident(tmp_name, type_id, loc)
@@ -719,8 +657,7 @@ impl Ast_node
         //< Each element of a compound literal `S::{ .f = x }` / `::{ x, y }`
         //< A struct and an array are both represented as a list of k_expr_field_init (see
         //< gen/llvm/expr_agg.kspl). Each managed element is taken with a count of its own.
-        $ops: = Operand_order.new()
-        defer ops.free()
+        defer $ops: = Operand_order.new()
         for child in r.children
             if child.kind_id == .k_expr_field_init
                 ops.add_value(child, child.children.len - 1,
@@ -731,8 +668,7 @@ impl Ast_node
 
     fn lower_arc_enum_init_call(r: Ast_node$@, lctx: Lowering_ctx$@) //<
         //< An enum's payload construction `E.variant(x)`, each managed payload taken with its count
-        $ops: = Operand_order.new()
-        defer ops.free()
+        defer $ops: = Operand_order.new()
         args: = r.find_child(.k_expr_args)
         if args != null
             for i in Range.asc(args.children.len)
@@ -789,7 +725,6 @@ impl Ast_node
         owed.take.retain(right, lctx)
         if owed.dst != null
             emit_managed_op(lctx, owed.dst, owed.type_id, "release", lctx.pre_stmts, 0)
-            lower_drop.set_live(lctx, owed.dst, true, lctx.pre_stmts)
 
     fn arc_receiver_takes(r: Self$@, lctx: Lowering_ctx$@): Bool //<
         //< Whether the method call `r` passes its receiver by value to a parameter taking a count
@@ -837,18 +772,14 @@ impl Ast_node
         // catch and the like into an if / fallback and loses both (the release would go
         // unregistered: a leak).
         has_expr: = expr_node != null && expr_node.kind_id != .k_empty
-        type_id: = expr_node.type_id if has_expr else r.type_id
+        type_id: = expr_node.type_id if has_expr else 0
         take: = Arc_take.decide(expr_node if has_expr else null, lctx)
 
         r.lower_default(lctx)
 
-        if !lctx.sema.env.type_is_managed(type_id)
+        if !has_expr || !lctx.sema.env.type_is_managed(type_id)
             return
         // A copy gets a retain (chained per ARC field for a struct); a call's result is already +1.
         take.retain(r.get_var_decl_expr(), lctx)
         if id_node != null
-            if id_node.def_node == null
-                id_node.def_node = r
-            id_node.type_id = type_id
-            lower_drop.register_owner(lctx, id_node, has_expr, lctx.pre_stmts)
             lctx.register_arc_release(id_node, type_id)

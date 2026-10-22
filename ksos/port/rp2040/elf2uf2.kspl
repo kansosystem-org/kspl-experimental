@@ -173,7 +173,9 @@ priv fn convert(in_path: U8[], out_path: U8[], arena: Arena$@): Void!Uf2_error
         _n: = blk_out.copy_from(32, U8[]::pages[i].data)
         blk_out.put_u32_le(32 + DATA_AREA, MAGIC_END)
         out.s(blk_view)
+    // Freed here, not by a `defer`: `verify` reads the file back, so it must be closed first.
     out.sync() catch
+        out.free()
         throw .read_back_failed
     out.free()
 
@@ -189,8 +191,7 @@ fn main(): I32
     if args.len != 3
         io.err().s("Usage: elf2uf2 <input.elf> <output.uf2>\n")
         return 1
-    arena: = Arena.new(1024 * 1024)
-    defer arena.free()
+    defer arena: = Arena.new(1024 * 1024)
     in_path: = args.get(1)
     convert(in_path, args.get(2), arena) catch e
         io.err().s("elf2uf2: \{in_path\}: \{e\}\n")

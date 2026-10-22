@@ -125,7 +125,7 @@ priv fn exe_folder(): U8[] //< this executable's folder, links resolved; empty w
     if n == 0
         return ""
     // `/` throughout, as cwd() below does, so `info std-dir` names it in one spelling.
-    $exe: = Str_builder.new()
+    defer $exe: = Str_builder.new()
     for c in U8[]::{ .ptr = buf[0]@, .len = n }
         exe.c('/' if sys.is_path_sep(c) else c)
     return base_core.arena.dup_str(sys.get_dir_name(exe.slice()))
@@ -258,8 +258,7 @@ fn fold_dots(path: U8[], keep_first: Bool = false): U8[] //<
     $head: Sz = sys.root_len(path) if sys.is_absolute(path) else 0
     if head < 2 && path.len >= 2 && sys.is_path_sep(path[0]) && sys.is_path_sep(path[1])
         head = 2
-    $parts: = List<|U8[]|>.new(null)
-    defer parts.free()
+    defer $parts: = List<|U8[]|>.new(null)
     $at: = head
     for at < path.len
         $end: = at
@@ -276,7 +275,7 @@ fn fold_dots(path: U8[], keep_first: Bool = false): U8[] //<
         if part.equals("..") && head > 0
             continue
         parts.push(part)
-    $out: = Str_builder.new()
+    defer $out: = Str_builder.new()
     for i in Range.asc(head)
         out.c('/' if sys.is_path_sep(path[i]) else path[i])
     for i in Range.asc(parts.len)
@@ -408,7 +407,7 @@ impl Uri_style
         //< A file's logical name written as a document URI in this form
         //< **It names the file where it is read from** (`append_file_path` below): from ksdb's own
         //< folder, `ksdb/log` is the `log.kspl` there, and `std/lang` is the one in std's folder.
-        $named: = Str_builder.new()
+        defer $named: = Str_builder.new()
         append_file_path(name, named@)
         out: = base_core.arena.text()
         path: = to_absolute(named.slice()) if r.is_absolute else named.slice()
@@ -444,7 +443,7 @@ fn append_file_path(import_path: U8[], out: Str_builder$@) //<
 fn embed_disk_path(logical: U8[]): U8[] //< the path an embedded file is read from
     //< **The same path as a source's** (`append_disk_path` below), with nothing added: an embedded
     //< file's name includes its own extension.
-    $out: = Str_builder.new()
+    defer $out: = Str_builder.new()
     append_disk_path(logical, out@)
     return base_core.arena.dup_str(out.slice())
 

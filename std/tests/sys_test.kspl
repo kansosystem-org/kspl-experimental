@@ -48,7 +48,7 @@ fn test_env_set_unset()
 
     // A value past 4096 characters reads back whole: held in a fixed buffer, it would read as
     // unset.
-    $long: = Str_builder.new()
+    defer $long: = Str_builder.new()
     for _i in Range.asc(5000)
         long.c('v')
     sys.set_env(name, long.slice()) catch panic("set_env takes a value of 5000 characters")
@@ -186,8 +186,7 @@ fn test_share_roots() //< a Windows share, and a path past `\\?\`, as a root
     share: U8[] = "\\\\srv\\sh" if win else "\\\\srv"
     assert(sys.get_dir_name("\\\\srv\\sh").equals(share),
         "a share named with no separator after it is its own folder")
-    arena: = Arena.new(1024)
-    defer arena.free()
+    defer arena: = Arena.new(1024)
     assert(fs.join("\\\\srv\\sh", "x", arena).equals("\\\\srv\\sh/x"), "a share takes a separator")
     verdict
         .pass("on Windows a share and what follows `\\\\?\\` are roots; `\\\\` alone is not a \
@@ -195,8 +194,7 @@ fn test_share_roots() //< a Windows share, and a path past `\\?\`, as a root
 
 fn test_fs_absolute() //< a relative path joined onto the working directory, nothing collapsed
     verdict.start("[Fs] making a path absolute...")
-    arena: = Arena.new(16 * 1024)
-    defer arena.free()
+    defer arena: = Arena.new(16 * 1024)
     $buf: U8[4096] = ::{}
     here: = sys.cwd(U8$[]::buf) catch panic("the working directory should be readable")
     got: = fs.absolute("a/../b", arena) catch panic("absolute should answer for a relative path")
@@ -783,8 +781,7 @@ fn test_fs_stat_fifo() //<
         return
     fifo: = "out/tmp/kspl_test_fs_fifo"
     fs.remove_path(fifo) catch {}
-    arena: = Arena.new(4096)
-    defer arena.free()
+    defer arena: = Arena.new(4096)
     made: =
         subproc.run_capture(U8[][]::{ "mkfifo", fifo }, "", 10000, 4096, arena)
         catch panic("mkfifo must start")

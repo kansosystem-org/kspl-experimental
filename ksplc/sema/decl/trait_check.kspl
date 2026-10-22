@@ -81,7 +81,7 @@ impl Sema_ctx
                 // check, unseen in the text. See "Why a trait's receiver is fixed to a bare `Self`"
                 // in docs/DESIGN-programming-language.md.
                 if param_ordinal == 0 && p_type != null && p_type.mentions_self_type()
-                    $extracted: = p_type.extract_type_name()
+                    defer $extracted: = p_type.extract_type_name()
                     if !extracted.slice().equals("Self")
                         r.err(p_type,
                             "interface method receivers must be written as plain 'Self'. The '@' / \
@@ -113,7 +113,7 @@ impl Sema_ctx
             //< kind is "argument N" or "return".
         trait_type_str: = r.env.display(r.env.get_real_type(trait_tid))
         impl_type_str: = r.env.display(r.env.get_real_type(impl_tid))
-        $e: = Str_builder.new()
+        defer $e: = Str_builder.new()
         e
             .s("method '\{m_name\}': \{kind\} type mismatch. The interface expects \
                 '\{trait_type_str\}'. The impl has '\{impl_type_str\}'")
@@ -155,7 +155,7 @@ impl Sema_ctx
                 if bi != unknown && bp != unknown &&
                     (bi != bp ||
                     r.env.is_pointer(rp.type_id) != r.env.is_pointer(ip.type_id))
-                    $kind: = Str_builder.new()
+                    defer $kind: = Str_builder.new()
                     kind.s("argument \{param_ordinal\}")
                     kind_slice: = kind.slice()
                     r.report_sig_mismatch(req_m.name, kind_slice, rp.type_id, ip.type_id, err_node)
@@ -177,7 +177,7 @@ impl Sema_ctx
         // pointer".
         if req_ret_node != null && req_ret_node.mentions_self_type() &&
             !req_ret_node.names_self_type()
-            $spelled: = req_ret_node.extract_type_name()
+            defer $spelled: = req_ret_node.extract_type_name()
             r.clear_scratch()
                 .s("method '\{req_m.name\}' of interface '\{r.env.display(real_trait)\}' has 'Self' \
                     inside its return type ('\{spelled.slice()\}'), not as the whole of it. That \
@@ -220,7 +220,7 @@ impl Sema_ctx
         case .trait_type(d)
             trait_def = d
         default
-            $sb: = Str_builder.new()
+            defer $sb: = Str_builder.new()
             sb.s("'\{r.env.display(trait_id)\}' is not an interface")
             r.err(err_node, sb.slice())
             return false
@@ -231,10 +231,6 @@ impl Sema_ctx
         // sema/type/env.kspl).
         real_target: = r.env.strip_const_deep(r.env.get_real_type(target_id))
         target_str: = r.env.display(real_target)
-        if r.env.get_str(real_trait).equals("std.lang.Drop")
-            if !r.check_drop_contract(real_target, err_node)
-                return false
-
         t_entry: = r.env.id_to_type.get(real_target)
         $success: = true
 
@@ -245,7 +241,7 @@ impl Sema_ctx
                 // Caution: **Show the trait as written** (`std.lang.Eq<|S|>`), not its instance's
                 // mangled name (`std_lang_Eq_S`).
                 trait_shown: = r.env.display(trait_id)
-                $err_sb: = Str_builder.new()
+                defer $err_sb: = Str_builder.new()
                 err_sb
                     .s("Type '\{target_str\}' does not implement required method '\{req_m.name\}' \
                         of interface '\{trait_shown\}'")
@@ -253,8 +249,7 @@ impl Sema_ctx
                 success = false
             else
                 impl_m.flags.is_required = true
-                if r.env.get_str(real_trait).equals("std.lang.Drop") ||
-                    r.env.get_str(real_trait).equals("std.lang.Ref_counted")
+                if r.env.get_str(real_trait).equals("std.lang.Ref_counted")
                     impl_m.flags.is_used = true
                 req_params: = req_m.node.get_fn_params()
                 impl_params: = impl_m.node.get_fn_params()
@@ -275,32 +270,6 @@ impl Sema_ctx
                 else if !r.check_trait_method_sig(req_m, impl_m, real_trait, real_target, err_node)
                     success = false
         return success
-
-    priv fn check_drop_contract(r: Self$@, target_id: I32, at: Ast_node$@): Bool // correct cleanup ABI
-        switch r.env.get_info(target_id)
-        case .struct_type {}
-        default
-            r.err(at, "Drop requires a struct type; pointers and borrowed views do not own cleanup")
-            return false
-        if r.env.is_arc_type(target_id)
-            r.err(at,
-                "a type cannot implement both Drop and Ref_counted; choose unique or shared \
-                    ownership")
-            return false
-        entry: = r.env.id_to_type.get(target_id)
-        if method: = entry.get_method("drop")
-            if method.node.get_visibility() != sema_type_scope.Visibility.file_private
-                r.err(at, "Drop.drop must be priv; only the compiler calls automatic cleanup")
-                return false
-            $params: = base_ast_ext.Param_cursor.new(method.node.get_fn_params(), false)
-            if p: = params.next()
-                if !r.env.is_pointer(p.param_type_id()) ||
-                    r.env.const_elem_of(p.param_type_id())
-                    r.err(at,
-                        "Drop.drop must receive 'Self$@'; taking Self by value would destroy it \
-                            recursively")
-                    return false
-        return true
 
     priv fn warn_shadowed_known_trait(r: Self$@, trait_fqn: U8[], err_node: Ast_node$@) //<
         //< [W0501] Warns where the trait conformed to only shares a known trait's name

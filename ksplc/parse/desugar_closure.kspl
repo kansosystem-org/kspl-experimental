@@ -50,7 +50,7 @@ impl Ast_node
         // this check, the lifted `T` gives the baffling "missing import alias prefix for type 'T'".
         fwd: = forwarded_gen_params(ctx, sig, sig.find_child(.k_param_list), null)
         if fwd.len > 0
-            $msg: = Str_builder.new()
+            defer $msg: = Str_builder.new()
             msg
                 .s("an anonymous function cannot use the enclosing type parameter '\{fwd.get(0)\}'. \
                     It becomes a top-level function passed as a plain function pointer. Add a \
@@ -122,7 +122,7 @@ impl Ast_node
         // not visible. Those the signature uses are copied over (with none, it stays non-generic).
         fwd_params: = forwarded_gen_params(ctx, sig, params, captures)
 
-        $src: = Str_builder.new()
+        defer $src: = Str_builder.new()
         if !r.build_closure_src(ctx, sig, captures, serial, gen_args_text(fwd_params), src@)
             return
 
@@ -131,7 +131,6 @@ impl Ast_node
         synth_decls: = base_ast.new_ast_node_list()
         parse_load.parse_synth_decls(src.slice(), loc.file(), ctx.parser, synth_decls) catch
             base_diag.ice_panic("desugar_closure: synthesized closure source failed to parse")
-            return
 
         // Not realigned, diagnostics would point at the synthesized source's offsets in the user
         // file.
@@ -261,7 +260,7 @@ impl Ast_node
             return false
         c_ty: = written_type_text(cap.get_decl_type_node())
         if c_ty.len == 0 || c_ty.equals(base_core.UNKNOWN_TYPE_NAME)
-            $m: = Str_builder.new()
+            defer $m: = Str_builder.new()
             m
                 .s("capture '\{c_name\}' needs a type annotation ('\{c_name\}: I32'). Only local \
                     variables can omit their type")
@@ -283,7 +282,6 @@ impl Ast_node
         recv_id: = recv.find_child(.k_identifier) if recv != null else null
         if recv_id == null || body == null
             base_diag.ice_panic("name_closure_receiver: synthesized 'call' has no receiver")
-            return
         recv_name: = base_c_name.made_name("env")
         recv_id.text = recv_name
         for rebind in body.children
@@ -293,7 +291,6 @@ impl Ast_node
             if head == null ||
                 (head.kind_id != .k_expr_path && head.kind_id != .k_identifier)
                 base_diag.ice_panic("name_closure_receiver: a capture's rebinding has no receiver")
-                return
             head.text = recv_name
             for seg in head.children
                 if seg.kind_id == .k_identifier
@@ -304,11 +301,9 @@ impl Ast_node
         call_fn: = r.find_child(.k_decl_fn)
         if call_fn == null
             base_diag.ice_panic("graft_closure_body: synthesized impl has no 'call'")
-            return
         dest: = call_fn.find_child(.k_stmt_block)
         if dest == null
             base_diag.ice_panic("graft_closure_body: synthesized 'call' has no body")
-            return
         for stmt in body.children
             dest.add_child(stmt)
 
@@ -338,7 +333,7 @@ fn forwarded_gen_params(ctx: Desugar_ctx$@, sig: Ast_node$@, params: Ast_node$@,
     out: = List<|U8[]|>.create(base_core.arena)
     if ctx.gen_params.len == 0
         return out
-    $types: = Str_builder.new()
+    defer $types: = Str_builder.new()
     signature_type_text(sig, params, captures, types@)
     type_text: = types.slice()
     for name in ctx.gen_params

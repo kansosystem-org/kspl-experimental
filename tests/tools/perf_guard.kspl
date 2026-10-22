@@ -120,10 +120,9 @@ priv fn max_capture(text: U8[], pattern: U8[], path: U8[], arena: Arena$@): I64!
     //< Caution: **Take the worst value.** One log holds stage1 and stage2; the first or the average
     //< dilutes the bad side. **Finding none is a failure too** — read as 0, an indicator that stops
     //< being printed records an "improvement".
-    re: = regex.Regex.compile(pattern) catch
+    defer re: = regex.Regex.compile(pattern) catch
         io.err().s("[perf_guard] the pattern cannot be read: ").s(pattern).s("\n")
         throw .failed
-    defer re.free()
     ms: = re.find_all(text, arena)
     if ms.len == 0
         io.err().s("[perf_guard] no metrics found in ").s(path).s("\n")
@@ -143,10 +142,9 @@ priv fn parse_headroom(text: U8[], path: U8[], arena: Arena$@): Headroom!Guard_e
     //< Reads the distance to the carry from the log
     //< Caution: **Take the value nearest the edge**; with several measurements, the far one reads
     //< as "there is still slack".
-    re: = regex.Regex.compile(HEADROOM_PATTERN) catch
+    defer re: = regex.Regex.compile(HEADROOM_PATTERN) catch
         io.err().s("[perf_guard] the pattern cannot be read: ").s(HEADROOM_PATTERN).s("\n")
         throw .failed
-    defer re.free()
     ms: = re.find_all(text, arena)
     if ms.len == 0
         io.err().s("[perf_guard] no arena headroom found in ").s(path).s("\n")
@@ -198,7 +196,7 @@ priv fn write_baseline(path: U8[], cur: Baseline, arena: Arena$@): Bool //<
     //< moved. `--update` rewrites all three keys; to add one key alone, write it by hand.
     $jb: = json.Json_builder.new(arena)
     // Keys are not listed here; the function that walks the table and its nesting builds them.
-    $out: = Str_builder.new()
+    defer $out: = Str_builder.new()
     doc: = json_struct.from_struct(cur@, jb@) catch
         io.err().s("[perf_guard] the baseline cannot be written as JSON\n")
         return false
@@ -315,8 +313,7 @@ fn main(): I32 //<
     //< again on the same cache (warm), **against separate baselines**. A hit in the AST disk cache
     //< (`ksplc/parse/ast_cache.kspl`) changes time and peak memory several-fold. So one
     //< baseline for both leaves one side unchecked.
-    arena: = Arena.new(1024 * 1024)
-    defer arena.free()
+    defer arena: = Arena.new(1024 * 1024)
     $update: = false
     $cold_log: U8[] = ""
     $warm_log: U8[] = ""
@@ -325,7 +322,7 @@ fn main(): I32 //<
     p.str_required("--cold", cold_log@, "the log of the build on an empty cache")
     p.str_required("--warm", warm_log@, "the log of the build on the same cache again")
     p.flag("--update", update@, "rewrite the baseline with these measurements")
-    p.parse_or_exit(sys.args(), arena)
+    p.parse_or_exit()
     cold: = parse_log(cold_log, arena) catch
         return 2
     warm: = parse_log(warm_log, arena) catch

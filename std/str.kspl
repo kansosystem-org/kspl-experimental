@@ -20,7 +20,7 @@ pub fn from_cstr(c_str: U8$@): U8$[] //<
     //< A null pointer gives an empty slice, so what a C function returns can be passed as it is.
     return c_str.to_slice()
 
-pub struct Str_builder //< a growing buffer whose owner releases it automatically
+pub struct Str_builder //< a growing buffer whose owner frees it with `free()`
     pub ptr: U8$@ //< the memory holding the written bytes
     pub len: Sz //< how many bytes have been written
     pub cap: Sz //< how many bytes fit before it has to grow
@@ -76,7 +76,7 @@ impl Str_builder: Writer //< so it can be used anywhere a `Writer` is expected
                 r.s("\\f")
             default
                 if c < 0x20U8
-                    r.s("\\u00").c((c >> 4U8).to_hex_lower()).c((c & 0xfU8).to_hex_lower())
+                    r.s("\\u00\{c:02x\}")
                 else
                     r.c(c)
             i += 1
@@ -169,12 +169,6 @@ impl Str_builder: Writer //< so it can be used anywhere a `Writer` is expected
     pub fn slice(r: Self$@): U8$[] //< a view of what has been written, valid until it grows
         return U8$[]::{ .ptr = r.ptr, .len = r.len }
 
-    pub fn free(r: Self$@) //< frees the memory and empties it
-        if r.cap > 0
-            dealloc(Void$@::r.ptr)
-        r.len = 0
-        r.cap = 0
-
 impl Str_builder: Formattable //< so it can be used inside an interpolation
     pub fn fmt(r: Self$@, w: Writer): Writer //< writes its contents to `w`
         return w.s(r.slice())
@@ -244,7 +238,7 @@ impl U8[]
         new: U8[], //< the text to put in its place
         arena: Arena$@, //< where the new string goes; null uses the global heap, freed with `dealloc`
     ): U8[]
-        $b: = Str_builder.new()
+        defer $b: = Str_builder.new()
         $pos: Sz = 0
         for old.len > 0 && pos < r.len
             rest: = r.sub_from(pos)
@@ -359,10 +353,13 @@ impl U8[]
         (buf_ptr + w)$ = 0U8
         return U8$[]::{ .ptr = buf_ptr, .len = w }
 
-    pub fn dedent(r: U8[]): Str_builder //< the same lines with the common indentation removed
-        $res: = Str_builder.new()
+    pub fn dedent( //< the same lines with the common indentation removed
+        r: U8[],
+        arena: Arena$@, //< where the new string goes; null uses the global heap, freed with `dealloc`
+    ): U8[]
+        defer $res: = Str_builder.new()
         if r.len == 0
-            return res
+            return arena.dup_str("")
         // Pass 1: the leading whitespace every non-blank line shares, compared byte by byte, as
         // Python's textwrap.dedent does. Caution: **Do not count a tab as a space**: lines indented
         // `\t` and `    ` share no indentation, and stripping both would change what they mean.
@@ -416,11 +413,14 @@ impl U8[]
             i += 1
         if is_empty_line
             res.len = line_start
-        return res
+        return arena.dup_str(res.slice())
 
-impl Str_builder: Drop //< releases the buffer when its owner leaves scope
-    priv fn drop(r: Self$@)
-        r.free()
+impl Str_builder: Manual_free //< it owns its buffer and frees it with `free()`
+    pub fn free(r: Self$@) //< frees the memory and empties it
+        if r.cap > 0
+            dealloc(Void$@::r.ptr)
+        r.len = 0
+        r.cap = 0
 
 // Caution: **Call `take()`.** Without it the builder's memory leaks (`make debug` fails at the end
 // with "Should be 0 - memory leak").

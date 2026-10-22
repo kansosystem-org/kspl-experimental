@@ -256,6 +256,65 @@ pub fn leak(): Leaked
 
 fn main()
   hidden_g.v = I32::PUBLIC_N
+// ==== case operator_on_user_type
+//< An operator on a struct, a tagged union, an array or a slice is refused unless a trait takes it
+//< Such a type has no C operator. Let one through and the C compiler's `invalid operands` reaches
+//< the user (Principle 2). `%`, `&&` and `~` have no trait, an array takes none, a struct on the
+//< right is never the receiver, and `+` without `Add` names the trait.
+//< Caution: Keep the passing side: `+` through an implemented `Add` still calls `add`.
+// EXPECT: operator '%' does not apply to
+// EXPECT: '%' has no operator trait, so call a method instead, such as 'a.rem(b)'
+// EXPECT: operator '&&' does not apply to
+// EXPECT: '&&' takes only 'Bool' values
+// EXPECT: operator '~' does not apply to
+// EXPECT: such as 'a.bit_not()'
+// EXPECT: operator '==' does not apply to 'I32[2]'
+// EXPECT: Apply it to the elements one at a time ('a[i]')
+// EXPECT: operator '+' does not apply to
+// EXPECT: to a left operand whose type implements 'Add' from std/lang
+// EXPECT: Operator '+' requires
+// EXPECT: to implement 'Add' interface
+// EXPECT: operator '<<' does not apply to
+// EXPECT: or take the value apart with 'switch'
+// EXPECT: Operator '-' cannot be applied to slice type 'U8[]'
+// EXPECT: operator '+=' does not apply to 'I32$[2]'
+// EXPECT: Finished with 9 error(s)
+pub struct V
+  pub x: I32
+
+impl V: Add<|V, V|>
+  pub fn add(r: Self, rhs: V): V
+    return ::{ .x = r.x + rhs.x }
+
+pub struct W
+  pub x: I32
+
+enum Tagged
+  quit
+  click(x: I32)
+
+fn main(): I32
+  a: V = ::{ .x = 1 }
+  b: V = ::{ .x = 2 }
+  w: W = ::{ .x = 3 }
+  t: = Tagged.quit
+  n: I32[2] = ::{ 1, 2 }
+  m: I32[2] = ::{ 1, 2 }
+  // The passing side.
+  sum: = a + b
+  // The stopping side.
+  _rem: = a % b
+  _and: = a && true
+  _inv: = ~a
+  _same: = n == m
+  _left_number: = 1 + a
+  _no_add: = w + w
+  _tagged: = t << 1
+  text: U8[] = "ab"
+  _neg: = -text
+  $k: = n
+  k += m
+  return sum.x
 // ==== case packed_managed_field
 //< An ARC-managed field `#packed` leaves under-aligned is refused where the struct declares it
 //< Its count is kept through the field's address, which a pointer could not give aligned. A struct

@@ -49,14 +49,13 @@ priv struct Car_link //< a stand-in that talks to the server the way the car doe
     conn: client.Conn
     seq: Sz
 
-impl Car_link: Manual_free {}
+impl Car_link: Manual_free
+    priv fn free(r: Self$@)
+        r.conn.free()
 
 impl Car_link
     priv fn open(port: I32): Car_link!client.Http_end
         return Car_link::{ .conn = client.Conn.open(port)!, .seq = 0 }
-
-    priv fn free(r: Self$@)
-        r.conn.free()
 
     priv fn observe(r: Self$@, dist_mm: I64, line: I64, arena: Arena$@):
         client.Resp!client.Http_end
@@ -89,8 +88,7 @@ priv struct Sweep //< what the sweep collected
 
 // --- The car's closed loop ---
 fn car_cases(port: I32, blob: pilot.Blob?, arena: Arena$@): Void!client.Http_end
-    $link: = Car_link.open(port)!
-    defer link.free()
+    defer $link: = Car_link.open(port)!
     first: = link.observe(250I64, 2I64, arena)!
     doc: = client.doc_of(first, arena)
     ok45: =
@@ -163,8 +161,7 @@ priv fn sweep(link: Car_link$@, blob: pilot.Blob?, arena: Arena$@): Sweep!client
     //< hold even after a change that lowers the match rate (`bad` is the real target). The same
     //< sweep checks that **the downloaded policy gives the same answer** (with no extra
     //< requests). If it does not, the car "moves differently from when it asked the server".
-    scratch: = Arena.new(1024 * 1024)
-    defer scratch.free()
+    defer scratch: = Arena.new(1024 * 1024)
     $sw: = Sweep::{ .seen = 0, .agree = 0, .bad = List<|U8[]|>.create(arena),
         .diff = List<|U8[]|>.create(arena), .tight = 0 }
     for k in Range.asc(DIST_STEPS)

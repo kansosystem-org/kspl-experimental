@@ -7,7 +7,6 @@ import "ksplc/base/core" as base_core
 import "ksplc/base/diag" as base_diag
 import "ksplc/base/locate" as base_locate
 import "ksplc/sema/session/ctx" { Sema_ctx }
-import "ksplc/sema/type/arc" as sema_type_arc
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/naming" as sema_type_naming
 import "ksplc/sema/type/query" as sema_type_query
@@ -160,9 +159,6 @@ impl Genc_ctx
             return FILE_LOCAL_WORD
         return "" if definition else "extern "
 
-    fn free(r: Self$@)
-        r.scratch.free()
-
     fn clear_scratch(r: Self$@): Str_builder$@
         return r.scratch.clear()
     fn mangled_in_scratch(r: Self$@, type_id: I32): U8$[] //<
@@ -242,7 +238,7 @@ impl Genc_ctx
             // `../../base/locate.kspl`). The C compiler records the folder it ran in next to the
             // name. So a debugger started in a package's own folder finds the file. Symbols and
             // `last_file` keep the logical name, so the current folder changes no symbol.
-            $named: = Str_builder.new()
+            defer $named: = Str_builder.new()
             base_locate.recorded_name_to(loc_file, named@)
             r.s("#line \{loc_line\} \"").s(named.slice()).s("\"\n")
 
@@ -309,7 +305,7 @@ impl Genc_ctx
             // An array whose elements are immutable shares its struct tag with the bare type (see
             // gen/c/decl.kspl), so this outer `const ` makes it read-only. Drop it and an element
             // write passes at the C level.
-            if r.env.is_const(base_id) && !suppress_const && !r.env.type_has_drop(type_id)
+            if r.env.is_const(base_id) && !suppress_const
                 res = res.s("const ")
             return r.env.mangle_type_id_to(type_id, res)
         default {}
@@ -342,7 +338,7 @@ impl Genc_ctx
             r.had_error = true
             r.s("{0}")
             return
-        for $i: Sz = 0; i < pairs; i += 1
+        for _i in Range.asc(pairs)
             r.s("{")
         r.s("0")
         for _i in Range.asc(pairs)
@@ -373,7 +369,6 @@ impl Genc_ctx
         // Anything that reaches here is a scalar in C (a number, a Bool, a pointer, Void).
         return 0
 
-impl Genc_ctx
     fn nm(r: Self$@, val: U8[]): Self$@ //< it emits a KSPL identifier into C
         //< A C reserved word gets a suffix, and a made name its own spelling (`c_safe_name_to`).
         //< Caution: **Pass both the declaration and every reference of a plain name through here.**
@@ -399,7 +394,9 @@ impl Genc_ctx: Writer
         r.out = r.out.flush()
         return r
 
-impl Genc_ctx: Manual_free {}
+impl Genc_ctx: Manual_free
+    fn free(r: Self$@)
+        r.scratch.free()
 
 priv fn emits_c_const(env: sema_type_env.Env$@, type_id: I32): Bool //<
     //< Whether the C type name itself carries the `const `, so the declaration adds none

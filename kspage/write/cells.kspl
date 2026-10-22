@@ -77,7 +77,7 @@ priv fn sorted_order(keys: List<|Key|>$@, down: Bool, arena: Arena$@): List<|Sz|
     //< Caution: **Keep equal keys in their original order** (`order_by` is stable), or sorting on
     //< another column destroys the earlier order.
     at: = List<|Sz|>.create(arena)
-    for $i: Sz = 0; i < keys.len; i += 1
+    for i in Range.asc(keys.len)
         at.push(i)
     return at.order_by(fn(a: Sz@, b: Sz@; keys: List<|Key|>$@, down: Bool): I32 {
         return key_order(keys.get(a$), keys.get(b$), down);
@@ -122,8 +122,8 @@ fn column_values(table: Block$@, column: Sz, arena: Arena$@, out: List<|U8[]|>$@
     return Column_values::{ .blank = blank, .cut = cut }
 
 priv fn held(out: List<|U8[]|>$@, text: U8[]): Bool //< whether that value is already in the list
-    for $i: Sz = 0; i < out.len; i += 1
-        if out.get(i).equals_ignore_case(text)
+    for item in out
+        if item.equals_ignore_case(text)
             return true
     return false
 
@@ -156,7 +156,7 @@ enum Line_end //< the result of adding a row or a column
 
 priv fn same_order(order: List<|Sz|>$@): Bool //< whether a sort would leave the order unchanged
     //< Where it is unchanged, do nothing (or an undo would restore nothing).
-    for $i: Sz = 0; i < order.len; i += 1
+    for i in Range.asc(order.len)
         if order.get(i) != i
             return false
     return true
@@ -164,15 +164,14 @@ priv fn same_order(order: List<|Sz|>$@): Bool //< whether a sort would leave the
 priv fn tile_at(tiles: List<|Tile|>$@, row: Sz, column: Sz): Tile //<
     //< The cell at (`row`, `column`) in the table
     //< Only a merge's top-left cell is found. Where `block` is null, no cell is there.
-    for $i: Sz = 0; i < tiles.len; i += 1
-        t: = tiles.get(i)
+    for t in tiles
         if t.row == row && t.column == column
             return t
     return Tile::{ .row = row, .column = column, .rows = 0, .cols = 0, .block = null }
 
 priv fn index_in(row: Block$@, cell: Block$@): Sz //< which child of the row that cell is
     //< -1 where it is not one.
-    for $i: Sz = 0; i < row.children.len; i += 1
+    for i in Range.asc(row.children.len)
         if row.children.get(i) == cell
             return i
     return -1
@@ -181,8 +180,7 @@ priv fn cells_before(tiles: List<|Tile|>$@, row: Sz, column: Sz): Sz //<
     //< The number of cells in that row before `column`
     //< It is the index a restored cell is inserted at.
     $n: Sz = 0
-    for $i: Sz = 0; i < tiles.len; i += 1
-        t: = tiles.get(i)
+    for t in tiles
         if t.row == row && t.column < column
             n += 1
     return n
@@ -288,8 +286,7 @@ impl Editor
         st: = r.step()
         $done: = false
         // The cells are counted to the edge (`tiles_of`, merges included).
-        for $i: Sz = 0; i < tiles.len; i += 1
-            t: = tiles.get(i)
+        for t in tiles
             if !after_along(spot, t, axis)
                 continue
             dr: = t.row - spot.row
@@ -303,7 +300,7 @@ impl Editor
         //< Rewrites one cell with the source text shifted by `dr` rows and `dc` columns
         if cell == null || cell.inlines.len <= 0
             return
-        $sb: = Str_builder.new()
+        defer $sb: = Str_builder.new()
         // Only a formula is shifted (a text form holds no references).
         if src.len > 0 && src[0] == '='
             shift.offset_refs(src, dr, dc, sb@)
@@ -315,15 +312,14 @@ impl Editor
 
     priv fn shift_row(r: Self$@, st: Step$@, row: Block$@, dr: Sz) //<
         //< Shifts the references in a row's formulas by `dr` rows
-        for $i: Sz = 0; i < row.children.len; i += 1
-            cell: = row.children.get(i)
+        for cell in row.children
             if cell.inlines.len <= 0
                 continue
             // Only a formula is shifted (a text form holds no references).
             if !cell.inlines.get(0).is_formula()
                 continue
             src: = cell.inlines.get(0).text()
-            $sb: = Str_builder.new()
+            defer $sb: = Str_builder.new()
             shift.offset_refs(src, dr, 0, sb@)
             edit.replace_source(r, st, cell.inlines.get(0), sb.slice())
 
@@ -343,8 +339,7 @@ impl Editor
         if table.children.len - first < 2
             return .too_few
         tiles: = table.tiles_of(r.arena)
-        for $i: Sz = 0; i < tiles.len; i += 1
-            t: = tiles.get(i)
+        for t in tiles
             if t.rows > 1 && t.row + t.rows > first
                 return .merged
         keys: = List<|Key|>.create(r.arena)
@@ -374,14 +369,14 @@ impl Editor
             edit.do_line(r, st, table, .row, i, false, null, null, .none)
         // Caution: **Restore them with contents** (`fresh` false), or an empty row reaches the
         // peer.
-        for $k: Sz = 0; k < order.len; k += 1
+        for k in Range.asc(order.len)
             one: = List<|Block$@|>.create(r.arena)
             one.push(rows.get(order.get(k)))
             edit.do_line(r, st, table, .row, first + k, true, one, null,
                 sizes.get(order.get(k)))
         // Caution: **Change the formulas once the rows are in place**, or they mix with unmoved
         // rows.
-        for $k: Sz = 0; k < order.len; k += 1
+        for k in Range.asc(order.len)
             was: = order.get(k)
             if k != was
                 r.shift_row(st, rows.get(was), k - was)
@@ -538,8 +533,7 @@ impl Editor
     priv fn stand_in(r: Self$@, tiles: List<|Tile|>$@, row: Sz, column: Sz): Bool //<
         //< Puts the cursor in the cell covering (`row`, `column`)
         //< A covered position puts it in the merge's own cell.
-        for $i: Sz = 0; i < tiles.len; i += 1
-            t: = tiles.get(i)
+        for t in tiles
             if t.row <= row && row < t.row + t.rows && t.column <= column &&
                 column < t.column + t.cols
                 if n: = t.block.first_run()

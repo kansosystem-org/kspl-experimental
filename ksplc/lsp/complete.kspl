@@ -153,7 +153,7 @@ priv fn detail_of(c: Sema_ctx$@, p: Pick, out: Str_builder$@) //<
     if c == null
         return
     if p.node.is_fn_decl()
-        $sig: = lsp_spell.format_fn_sig_flat(c, p.node)
+        defer $sig: = lsp_spell.format_fn_sig_flat(c, p.node)
         out.s(sig.slice())
         return
     if p.type_id != 0
@@ -172,7 +172,7 @@ priv fn send_picks(state: Doc_state$@, out: List<|Pick|>$@, id_val: json.Value, 
         order: = arena.text().s("\{i / 1000 % 10\}\{i / 100 % 10\}\{i / 10 % 10\}\{i % 10\}")
         $item: = b.obj().set("label", b.str_val(p.name)).set("kind", b.int_val(p.kind))
             .set("sortText", b.str_val(order.take())).set("filterText", b.str_val(p.name))
-        $detail: = Str_builder.new()
+        defer $detail: = Str_builder.new()
         detail_of(state.sema, p, detail@)
         if detail.len > 0
             item = item.set("detail", b.str_val(arena.dup_str(detail.slice())))
@@ -252,10 +252,9 @@ fn handle_completion(state: Doc_state$@, swapped: Swapped, id_val: json.Value, a
     default
         send_none(id_val, arena)
         return
-    path: = base_core.arena.create(List<|Ast_node$@|>.new(null))
+    defer path: = base_core.arena.create(List<|Ast_node$@|>.new(null))
     // Caution: **Free the list's buffer**, which is on the heap though the list is on the arena
     // (`find_path_at_params`'s contract); otherwise each request leaks one.
-    defer path.free()
     lsp_position.find_path_at_offset(state.root_file, state.sema, swapped.offset,
         state.mod_name_perm, path)
     $out: = List<|Pick|>.new(arena)

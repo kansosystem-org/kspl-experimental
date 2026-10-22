@@ -15,7 +15,6 @@ import "std/prng" { Prng }
 import "std/str" // `arena.text()`
 import "std/strfmt" as _strfmt
 import "std/subproc"
-import "std/sys"
 import "std/verdict"
 
 priv const STOP_MARK: U8[] = "panic:" //<
@@ -93,12 +92,11 @@ pub struct Setup //< what a fuzz driver's command line names
     pub again: U8[] //< the command that runs the driver again, without the two numbers
     priv own: Own_arena //< the arena it lives in, when `setup` was given null
 
-impl Setup
+impl Setup: Manual_free //< `free()` lets go the arena a setup made with null lives in
     pub fn free(r: Self) //< lets go all it names, when `setup` was given null
         //< Made in the caller's arena, it frees nothing: that arena does.
         $own: = r.own
         own.free()
-impl Setup: Manual_free {} //< `free()` lets go the arena a setup made with null lives in
 
 pub fn setup( //< reads `<program> <work folder> [seed folder ...]`, and makes the work folder
     //< It declares the positional arguments and the two numbers (`declare`), so the caller declares
@@ -131,7 +129,7 @@ priv fn setup_in(p: argparse.Parser$@, o: Options$@, run_as: U8[], program: U8[]
         .s(" [seed folder ...]" if seed_dirs else "").take()
     p.positional(usage)
     declare(p, o)
-    p.parse(sys.args(), arena) catch e
+    p.parse() catch e
         throw arena.text().s("\{e\}").take()
     if p.rest.len < 2 || (!seed_dirs && p.rest.len > 2)
         throw arena.text().s("usage: ").s(run_as).s(" ").s(usage).take()
@@ -190,7 +188,7 @@ pub fn gather( //< collects the files with the given endings under the folders, 
     $out: = List<|Sample|>.new(arena)
     // The walk's paths are work, kept apart from `arena` (`mem.scratch`): each seed keeps a copy of
     // its name.
-    work: = mem.scratch(null)
+    defer $work: = mem.scratch(null)
     for handed in dirs
         dir: = handed.strip_suffix("/")
         files: = fs.walk_files(dir, fs.skip_build_output, work.arena) catch
@@ -369,7 +367,7 @@ pub fn check_seeds( //< has the program read every seed once, and returns those 
     $live: = List<|Sample|>.new(arena)
     // The trials and the lines are work, kept apart from `arena`, which takes `live`
     // (`mem.scratch`).
-    work: = mem.scratch(null)
+    defer $work: = mem.scratch(null)
     $bad: = List<|U8[]|>.new(work.arena)
     for i in Range.asc(all.len)
         one: = all.get(i)
@@ -417,7 +415,7 @@ pub fn scatter( //< runs the trials, checks that they reached the program, and r
 ): Void!U8[] //< fails with the line to stop on: no seed, or a trial that could not be run
     // The inputs, the outputs and the findings are work, kept apart from `arena`, which takes the
     // line a failure stops on (`mem.scratch`).
-    work: = mem.scratch(null)
+    defer $work: = mem.scratch(null)
     $kinds: = List<|Input_kind|>.new(work.arena)
     for k in c.kinds
         if count_of(seeds, k.name) > 0
@@ -476,18 +474,17 @@ pub fn findings_new( //< an empty set of findings
     //< With `null`, `defer found.free()` frees it and every finding `note` adds.
     arena: Arena$@, //< where they go; null means an arena of their own and a `free()`
 ): Findings
-    $work: = mem.scratch(arena)
+    defer $work: = mem.scratch(arena)
     at: = work.arena
     return Findings::{ .crashes = List<|Finding|>.create(at),
         .aborts = List<|Finding|>.create(at), .hangs = List<|Finding|>.create(at), .arena = at,
         .own = work.keep() }
 
-impl Findings
+impl Findings: Manual_free //< `free()` lets go the arena findings made with null live in
     pub fn free(r: Self) //< lets go every finding, when `findings_new` was given null
         //< Made in the caller's arena, it frees nothing: that arena does.
         $own: = r.own
         own.free()
-impl Findings: Manual_free {} //< `free()` lets go the arena findings made with null live in
 
 priv fn classify(got: subproc.Run_result@): Verdict //< how a trial ended, seen from outside
     //< Caution: **Do not decide by the exit code's sign**: a signal gives 128 plus its number on
@@ -580,7 +577,7 @@ pub fn report_all( //< prints the findings, the three check lines, and how to ru
     again: U8[], //< the command that starts this fuzz run, without the two numbers
     arena: Arena$@, //< where the text is built while reporting; null builds it on the heap
 )
-    work: = mem.scratch(arena)
+    defer $work: = mem.scratch(arena)
     report_in(f, o, subject, wait_ms, again, work.arena)
 
 priv fn report_in(f: Findings, o: Options, subject: U8[], wait_ms: I32, again: U8[],

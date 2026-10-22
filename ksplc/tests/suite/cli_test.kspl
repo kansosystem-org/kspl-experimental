@@ -116,7 +116,7 @@ priv fn case_help_matches_behavior(arena: Arena$@) //<
                 all.push(fl)
     // Caution: **Every declared option is on some subcommand's line.** One left off is accepted
     // everywhere unchecked, which is how an option comes to be written where it does nothing.
-    $rowless: = Str_builder.new()
+    defer $rowless: = Str_builder.new()
     for d in h.declared
         if !d.equals("--help") && !all.contains(d)
             rowless.s("  ").s(d).s(" is on no subcommand's line\n")
@@ -128,7 +128,7 @@ priv fn case_help_matches_behavior(arena: Arena$@) //<
     verdict.check("only --help takes effect on every subcommand",
         h.everywhere.equals("--help"),
         arena.text().s("the line names: \{h.everywhere\}\n").take())
-    $bad: = Str_builder.new()
+    defer $bad: = Str_builder.new()
     $pairs: Sz = 0
     for f in h.faces
         for fl in all
@@ -219,8 +219,9 @@ priv fn hand_over(dir: U8[]): Bool //<
 
 priv fn case_cache_others_can_write(arena: Arena$@) //<
     //< A cache folder everyone can write is refused by `ksplc run`, and skipped by a compile
-    //< Whoever can write it could plant a normalized AST carrying inline C, or a built program, and
-    //< the next build would take it in. Windows's permissions are an ACL, not read here.
+    //< Whoever can write it could plant a normalized AST carrying inline assembly, or a built
+    //< program, and the next build would take it in. Windows's permissions are an ACL, not read
+    //< here.
     name_run: = "cache: ksplc run refuses a cache folder everyone can write"
     name_cc: = "cache: a compile warns and goes on without such a cache folder"
     if sys.is_windows()
@@ -293,9 +294,9 @@ priv fn case_explain(arena: Arena$@) //<
     //< `ksplc explain <code>` prints that code's section and nothing past it
     //< `tests/support/conventions_match.kspl` checks that every registered code has a section and
     //< every section a code; this checks the printing.
-    ok_case("explain: a code in lower case is taken", U8[][]::{ "explain", "w0207" }, "### [W0207]")
+    ok_case("explain: a code in lower case is taken", U8[][]::{ "explain", "w0207" }, "[W0207]")
     ok_case("explain: it names where the text came from", U8[][]::{ "explain", "W0207" },
-        "\"2. The list of warnings (W)\" in ksplc/docs/SPEC-diagnostics.md")
+        "Details: ksplc/docs/SPEC-diagnostics.md")
     ng_case("explain: an unknown code is turned away", U8[][]::{ "explain", "W9999" },
         "not a diagnostic code")
     ok_case("explain: with no code it lists every code with its title", U8[][]::{ "explain" },
@@ -310,16 +311,34 @@ priv fn case_explain(arena: Arena$@) //<
         "usage: ksplc explain")
     ng_case("explain: an option is turned away", U8[][]::{ "explain", "--stats", "W0207" },
         "does not take effect")
+    readable: = cli(U8[][]::{ "explain", "W0601" })
+    verdict.check("explain: document citations do not interrupt the advice",
+        readable.exited_with(0) && readable.out.find_str("Off by default.").is_some() &&
+        readable.out.find_str("* Fix:").is_some() &&
+        readable.out.find_str("SPEC-tools.md").is_none() &&
+        readable.out.find_str("SPEC-programming-language.md").is_none() &&
+        readable.out.find_str("its links count").is_none(), readable.out)
+    verdict.check("explain: ordinary explanatory parentheses remain",
+        readable.out.find_str("(automatic reference counting)").is_some(), readable.out)
+    $short_lines: = true
+    for line in readable.out.lines(arena)
+        if line.len > 88
+            short_lines = false
+    verdict.check("explain: prose fits a readable terminal width", short_lines, readable.out)
+    example: = cli(U8[][]::{ "explain", "I0401" })
+    verdict.check("explain: code examples keep their text and line breaks",
+        example.exited_with(0) &&
+        example.out.find_str("    #cfg(freestanding)\n    import \"std/sys\" { panic }\n").is_some(),
+        example.out)
     // The registered codes are `base/lint_codes.kspl`'s quoted codes (`"W0207"`).
     reg: = io.read_file("base/lint_codes.kspl", null) catch
         verdict.check("explain prints each registered code's section alone", false,
             "base/lint_codes.kspl cannot be read")
         return
-    rx: = regex.Regex.compile("\"([WIH][0-9][0-9][0-9][0-9])\"") catch
+    defer rx: = regex.Regex.compile("\"([WIH][0-9][0-9][0-9][0-9])\"") catch
         verdict.check("explain prints each registered code's section alone", false,
             "the pattern for a registered code does not compile")
         return
-    defer rx.free()
     // `OFF_BY_DEFAULT` names some codes again; only `CODES`, before it, lists each once.
     $end: Sz = 0
     switch reg.find_str("priv const OFF_BY_DEFAULT")
@@ -331,20 +350,20 @@ priv fn case_explain(arena: Arena$@) //<
         return
     listed: = reg.sub(0, end)
     found: = rx.find_all(listed, arena)
-    $bad: = Str_builder.new()
+    defer $bad: = Str_builder.new()
     $seen: Sz = 0
     for m in found
         code: = m.group(1, listed).unwrap_or("")
         seen += 1
         r: = cli(U8[][]::{ "explain", code })
-        head: = arena.text().s("### [").s(code).s("]").take()
+        head: = arena.text().s("[").s(code).s("]").take()
         // Caution: **Check past the start too.** A section that runs on into the next one still
         // starts right. A `#` line inside an example has no space after it, so it is no heading.
         ran_on: =
-            r.out.find_str("\n#### ").is_some() || r.out.find_str("\n### ").is_some() ||
-            r.out.find_str("\n## ").is_some()
+            r.out.find_str("\n[W").is_some() || r.out.find_str("\n[I").is_some() ||
+            r.out.find_str("\n[H").is_some()
         if !r.exited_with(0) || !r.out.starts_with(head) || ran_on ||
-            r.out.find_str("\nFrom \"").is_none()
+            r.out.find_str("\nDetails: ").is_none()
             bad.s("  ").s(code).c('\n')
     verdict.check(arena.text()
         .s("explain prints each registered code's section alone (\{seen\} codes)").take(),

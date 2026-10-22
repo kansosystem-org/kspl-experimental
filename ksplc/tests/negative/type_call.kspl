@@ -1,0 +1,67 @@
+//< Type calls reuse associated-function errors and never become casts or field constructors
+// ==== case type_call_without_new
+// EXPECT: new
+struct Empty
+    n: I32
+fn main()
+    _x: = Empty()
+// ==== case type_call_wrong_argument
+// EXPECT: expected 'Sz', but got 'Bool'
+import "std/mem" { Arena }
+fn main()
+    _x: = Arena(true)
+// ==== case type_call_bare_generic
+// EXPECT: type arguments
+import "std/ds" { List }
+fn main()
+    _x: = List(null)
+// ==== case type_call_receiver
+// EXPECT: a type call requires a static 'new'
+struct Existing
+    n: I32
+impl Existing
+    fn new(r: Self): Self
+        return r
+fn main()
+    before: = Existing::{ .n = 1 }
+    _after: = Existing(before)
+// ==== case type_call_shadowed_by_value
+// EXPECT: not a function
+struct Shadowed
+    n: I32
+impl Shadowed
+    fn new(): Self
+        return Self::{ .n = 1 }
+fn main()
+    Shadowed: = 3
+    _x: = Shadowed()
+// ==== case type_call_is_not_a_cast
+// EXPECT: error:
+fn main()
+    _x: = I32(3)
+// ==== case type_call_wrong_arity
+// EXPECT: argument count mismatch
+import "std/mem" { Arena }
+fn main()
+    _x: = Arena()
+// ==== case type_call_generic_receiver
+// EXPECT: a type call requires a static 'new'
+struct Existing<|T|>
+    n: T
+impl<|T|> Existing<|T|>
+    fn new(r: Self): Self
+        return r
+fn main()
+    before: = Existing<|I32|>::{ .n = 1 }
+    _after: = Existing<|I32|>(before)
+// ==== case type_call_alias_receiver
+// EXPECT: a type call requires a static 'new'
+struct Existing
+    n: I32
+typedef Renamed = Existing
+impl Existing
+    fn new(r: Self@): Self
+        return r$
+fn main()
+    before: = Existing::{ .n = 1 }
+    _after: = Renamed(before@)

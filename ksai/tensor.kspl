@@ -65,7 +65,7 @@ impl<|T|> Tensor<|T|>
                 // tell the cause apart: a bug in the caller or in code generation. The intent is
                 // that of "A program keeps its own output on an abnormal exit" in
                 // std/docs/DESIGN-system.md.
-                $b: = Str_builder.new()
+                defer $b: = Str_builder.new()
                 b
                     .s("Tensor shape product overflow (shape too large): ndim=\{ndim\} \
                         shape[\{i\}]=\{s\} product_before=\{size\} shape.ptr=")
@@ -355,16 +355,18 @@ impl<|T|> Tensor<|T|>
         return Tensor<|T|>.from_raw_parts(r.data + first * dim, shape_ptr, 2, num_rows * dim, arena)
 
     // ---------------------------------------------------------
-    // Operator overloading (+, -, *). An operator cannot return an error union under the trait's
-    // contract. So `checked_add` / `checked_sub` / `checked_mul` hold the body, and the operator
-    // panics on their error. A shape mismatch thus stays available as a recoverable error.
+    // Operator overloading (+, -, *), the one way to add, subtract or multiply two tensors element
+    // by element. An operator cannot return an error union under the trait's contract, so **a
+    // shape mismatch stops the program**, as an index out of range does: the caller has both
+    // shapes at hand. The bodies below are private, so no second, error-returning way stands
+    // beside the operator.
     // ---------------------------------------------------------
     priv fn elementwise_out(r: Self$@, rhs: Tensor<|T|>): Tensor<|T|>!Tensor_error
         if r.size != rhs.size
             throw .shape_mismatch
         return Tensor<|T|>.new(r.shape, r.arena)
 
-    pub fn checked_add( //< element-wise sum; rejects shapes that do not match
+    priv fn checked_add( //< element-wise sum; rejects shapes that do not match
         //< **Do not merge the three loops below into one.** Passing the operation as a function
         //< pointer makes an indirect call per element. Then -O3's auto-vectorization stops working
         //< (the property the SIMD gate in `tests` checks).
@@ -376,7 +378,7 @@ impl<|T|> Tensor<|T|>
             (out.data + i)$ = (r.data + i)$ + (rhs.data + i)$
         return out
 
-    pub fn checked_sub( //< element-wise difference; rejects shapes that do not match
+    priv fn checked_sub( //< element-wise difference; rejects shapes that do not match
         r: Self$@,
         rhs: Tensor<|T|>, //< the other tensor, which must be the same shape
     ): Tensor<|T|>!Tensor_error
@@ -385,7 +387,7 @@ impl<|T|> Tensor<|T|>
             (out.data + i)$ = (r.data + i)$ - (rhs.data + i)$
         return out
 
-    pub fn checked_mul( //< element-wise product; rejects shapes that do not match
+    priv fn checked_mul( //< element-wise product; rejects shapes that do not match
         r: Self$@,
         rhs: Tensor<|T|>, //< the other tensor, which must be the same shape
     ): Tensor<|T|>!Tensor_error

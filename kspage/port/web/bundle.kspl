@@ -39,7 +39,7 @@ priv fn read_or_report(path: U8[]): U8[]!Bundle_error
 priv fn folder_of(path: U8[]): U8[] //< the template's own folder
     //< It includes the trailing `/` (empty means the current folder).
     $cut: Sz = 0
-    for $i: Sz = 0; i < path.len; i += 1
+    for i in Range.asc(path.len)
         if path[i] == '/'
             cut = i + 1
     return path.sub(0, cut)
@@ -49,8 +49,7 @@ priv fn safe_name(name: U8[]): Bool //< whether it is safe as a text's name
     //< bundle a file from outside the page.
     if name.len <= 0
         return false
-    for $i: Sz = 0; i < name.len; i += 1
-        c: = name[i]
+    for c in name
         // `is_alnum` counts `_` as a letter.
         if !c.is_alnum() && c != '.' && c != '-'
             return false
@@ -78,7 +77,7 @@ priv fn put_mark(out: Str_builder$@, page: U8[], at: Sz, dir: U8[], blob: U8[]):
     if !safe_name(name)
         io.err().s("bundle: the text's name is not safe: \{name\}\n")
         throw .bad_name
-    $where: = Str_builder.new()
+    defer $where: = Str_builder.new()
     where.s(dir).s(name)
     body: = read_or_report(where.slice())!
     defer dealloc(Void$@::body.ptr)
@@ -102,7 +101,7 @@ priv fn bundle(template: U8[], wasm: U8[], out: U8[]): Void!Bundle_error
 
     // It copies the template once from the start. An inserted text is not read again (no second
     // replacement).
-    $built: = Str_builder.new()
+    defer $built: = Str_builder.new()
     $at: Sz = 0
     for at < page.len
         switch page.sub_from(at).find_str(MARK_HEAD)

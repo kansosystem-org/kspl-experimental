@@ -124,10 +124,9 @@ impl<|T|> Box_of<|T|>
     priv fn get(r: Self): T
         return r.v
 
-// **A closure's type is the synthesized environment (`_anon_env_N`)**, so against `Callable1<|T,
-// U|>` the type arguments come from its `Callable1` conformance (implemented_trait_instance in
-// `ksplc/sema/type/env.kspl`).
-impl<|T|> Box_of<|T|>
+    // **A closure's type is the synthesized environment (`_anon_env_N`)**, so against
+    // `Callable1<|T, U|>` the type arguments come from its `Callable1` conformance
+    // (implemented_trait_instance in `ksplc/sema/type/env.kspl`).
     priv fn conv<|U|>(r: Self, f: Callable1<|T, U|>): Box_of<|U|>
         return Box_of<|U|>::{ .v = f.call(r.v) }
 
@@ -154,6 +153,9 @@ impl<|S|> Nest<|S|>
         x: = Nest<|Box2<|S|>|>::{ .v = Box2<|S|>::{ .inner = r.v }, .n = r.n + 1 }
         return x.n
 
+    priv fn maybe(r: Self): Maybe<|Nest<|S|>|>
+        return .some(r)
+
 fn test_method_body_building_deeper_self()
     verdict
         .start("[Generic] a method only building a self one step deeper in its body goes through \
@@ -171,17 +173,13 @@ priv enum Maybe<|T|> //<
     none
     some(v: T)
 
-impl<|S|> Nest<|S|>
-    priv fn maybe(r: Self): Maybe<|Nest<|S|>|>
-        return .some(r)
-
 fn test_enum_born_in_a_signature_formats()
     verdict
         .start("[Generic] a generic enum born in a signature can be written into an interpolation \
             test...")
     c: = Nest<|I32|>::{ .v = 1, .n = 5 }
     o: = c.maybe()
-    $b: = Str_builder.new()
+    defer $b: = Str_builder.new()
     b.s("\{o\}")
     assert(b.slice().equals("some"), "the variant name comes out")
     verdict
@@ -198,3 +196,18 @@ fn test_method_own_type_param()
     verdict
         .pass("a generic type's method can introduce its own type argument, instantiated at the \
             call position.")
+
+priv struct Selective<|T|>
+    value: T
+
+impl<|T|> Selective<|T|>
+    fn get(r: Self@): T
+        return r.value
+    fn unused(r: Self@): I32
+        return r.value.no_such_field
+
+fn test_generic_methods_when_used()
+    verdict.start("[Generic] an unused generic method body is not checked...")
+    value: Selective<|I32|> = ::{ .value = 12 }
+    assert(value.get() == 12, "only the referenced generic method body is checked")
+    verdict.pass("only the methods a program reaches have their bodies checked.")

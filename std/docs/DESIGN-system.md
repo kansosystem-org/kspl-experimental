@@ -18,7 +18,7 @@ p: = argparse.Parser.create("build_corpus", "build a corpus", arena)
 p.str_opt("--out", out@, "where to write")
 p.int_opt("--vocab", vocab@, "the target vocabulary size")
 p.flag("--verbose", verbose@, "show the progress")
-p.parse_or_exit(sys.args(), arena)
+p.parse_or_exit()
 ```
 
 The destination carries `$` because argparse rewrites it. Without it, the diagnostic is `expected 'Bool$@', but got 'Bool@'`. The `$` also tells the reader that the variable changes later. **There is no lookup by name** (`get_str("--out")`). So the compiler catches a misspelt name or a mismatched type at compile time, not at run time.
@@ -100,9 +100,9 @@ Standard error waits for nothing: each call is written at once.
 
 ### A write to a freed file stream stops the program
 
-**A `File_stream` closes itself when its owner leaves scope** (`Drop`). `free()` closes it sooner, closing the C stream and leaving the handle null, and the compiler refuses a use of that local after it. **A later write through a pointer stops the program with a message**, since a `Writer` call returns no failure. Otherwise the bytes would go to standard output or into the closed stream, and be lost. The program would carry on and exit 0. `read` and `sync` can report a failure, so they refuse it as `invalid_arg`. A copy would keep the stream that its original closes, so a `File_stream` moves instead (`Drop` brings that rule).
+**Its owner closes a `File_stream` with `free()`**, usually by declaring it with `defer` in front. `free()` closes the C stream and leaves the handle null, and the compiler refuses a use of that local after it. **A later write through a pointer stops the program with a message**, since a `Writer` call returns no failure. Otherwise the bytes would go to standard output or into the closed stream, and be lost. The program would carry on and exit 0. `read` and `sync` can report a failure, so they refuse it as `invalid_arg`. A copy would keep the stream that its original closes, so `File_stream` conforms to `Move_only`: it moves instead.
 
-**Standard output and standard error are not `File_stream`s.** The whole program shares them and nothing closes them, so `out()` / `err()` hand out a stream of another type, opened on the first call. It is never a null that stands for them. It also lives in a global, where an owner that frees itself cannot.
+**Standard output and standard error are not `File_stream`s.** The whole program shares them and nothing closes them, so `out()` / `err()` hand out a stream of another type, opened on the first call. It is never a null that stands for them. It has no `free()`, so no part of the program can close the stream every other part writes to.
 
 ### A crash names what happened, in one line
 
@@ -664,9 +664,9 @@ A second lock on the holding thread is a bug in the program. The first holder ca
 
 `Raw_mutex` and `Cond_var` are small values, not pointers to the heap, so the creation of one allocates nothing. They cannot be copied, because a copy could free the OS object twice.
 
-`Raw_mutex` and `Cond_var` hold one number (`I64`) that names the OS-side object. They need not stay at one address. So `new()` returns a value with no heap allocation, and `Mutex<|T|>` holds it by value too. That is one allocation and one indirection fewer than a returned pointer (`Mutex<|I32|>.new()` adds 0 bytes to the heap). **Both destroy the OS-side object when their owner leaves scope** (`Drop`). The value itself lives as long as the place that it sits in. A `Mutex<|T|>` holds its lock and its value by value, so it is destroyed with them, and lets its value go too. **As a value type, a copy could free twice.** So each moves instead of being copied, the rule `Drop` brings.
+`Raw_mutex` and `Cond_var` hold one number (`I64`) that names the OS-side object. They need not stay at one address. So `new()` returns a value with no heap allocation, and `Mutex<|T|>` holds it by value too. That is one allocation and one indirection fewer than a returned pointer (`Mutex<|I32|>.new()` adds 0 bytes to the heap). **Their owner destroys the OS-side object with `free()`.** The value itself lives as long as the place that it sits in. A `Mutex<|T|>` holds its lock and its value by value. Its `free()` destroys the lock; what the value owns is the owner's to free before. **As a value type, a copy could free twice.** So both conform to `Move_only`, and a `Mutex<|T|>` is move-only through its lock: each moves instead of being copied.
 
-A lock kept in memory that the program allocated by hand is let go by hand too. `mem.drop_at` runs its cleanup before the block is given back.
+A lock kept in memory that the program allocated by hand is freed by hand too, before the block is given back.
 
 ### A bounded condition wait names how it ended
 

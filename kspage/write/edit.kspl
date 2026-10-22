@@ -74,6 +74,58 @@ impl Editor
         //< selected). null selects nothing.
         r.pick = b
 
+    fn shut(r: Self$@): Bool //< whether a change is refused
+        //< Every function in this folder that opens a step must check this before doing anything.
+        //< So read-only is enforced in one place (`../tests/edit_test.kspl` tries the paths
+        //< and expects the saved text unchanged).
+        //< Caution: **Do not enforce it in the `do_*` functions.** If they quietly did nothing, a
+        //< caller that "repeats until it acts" (`join_here` in `block.kspl`) would never end.
+        return r != null && r.read_only
+
+    fn step(r: Self$@): Step$@ //< the step to write to
+        //< Opens one where there is none.
+        if r.open == null
+            r.open = new_step(r.caret, r.arena)
+            // Anything new drops the redo steps (otherwise redo jumps to a text that does not
+            // match).
+            r.redone.clear()
+        return r.open
+
+    fn break_group(r: Self$@) //< closes the open step
+        //< This is where one undo ends. Moving and committing a composition close it by themselves;
+        //< a pause in typing is for the caller to close (the core has no clock).
+        if r.open == null
+            return
+        r.open.after = r.caret
+        // A step that changed nothing is not stored (its undo would restore nothing).
+        if r.open.ops.len > 0
+            r.undone.push(r.open)
+        r.open = null
+
+    fn undo(r: Self$@): Bool //<
+        //< Goes back one step, and returns true if it did.
+        //< Caution: **Do not undo while read-only.** The `do_*` below stop, but the record alone
+        //< would move a step and report "undone" when nothing has changed.
+        return r.step_over(r.undone, r.redone)
+
+    fn redo(r: Self$@): Bool //< redoes one undone step
+        //< True if redone.
+        return r.step_over(r.redone, r.undone)
+
+    priv fn step_over(r: Self$@, from: List<|Step$@|>$@, to: List<|Step$@|>$@): Bool //<
+        //< Reverses the last step of `from` and records the reversal in `to` (undo and redo alike)
+        r.break_group()
+        if r.shut()
+            return false
+        if st: = from.pop()
+            back: = new_step(st.after, r.arena)
+            apply_inverse(r, st, back)
+            back.after = st.before
+            to.push(back)
+            r.caret = st.before
+            return true
+        return false
+
 fn keep(e: Editor$@, into: Step$@, op: Op) //< adds one operation to the undo record
     //< This is the only place that adds them (a second place would miss a newly added operation).
     _unused: = e
@@ -208,8 +260,7 @@ fn shift_formulas(e: Editor$@, into: Step$@, table: Block$@, axis: Axis, at: Sz,
     // ---- applying a style ----
     plans: = List<|Shift|>.create(e.arena)
     shift.plan_shift(e.doc, table, axis, at, delta, plans, e.arena)
-    for $i: Sz = 0; i < plans.len; i += 1
-        s: = plans.get(i)
+    for s in plans
         replace_source(e, into, s.inline, s.source)
 
 // ---- laying a style on ----
@@ -311,56 +362,3 @@ priv fn apply_inverse(e: Editor$@, st: Step$@, into: Step$@) //<
             field.do_set_aside(e, into, op.block, op.was)
         case .step(op)
             field.do_set_step(e, into, op.block, op.was)
-
-impl Editor
-    fn shut(r: Self$@): Bool //< whether a change is refused
-        //< Every function in this folder that opens a step must check this before doing anything.
-        //< So read-only is enforced in one place (`../tests/edit_test.kspl` tries the paths
-        //< and expects the saved text unchanged).
-        //< Caution: **Do not enforce it in the `do_*` functions.** If they quietly did nothing, a
-        //< caller that "repeats until it acts" (`join_here` in `block.kspl`) would never end.
-        return r != null && r.read_only
-
-    fn step(r: Self$@): Step$@ //< the step to write to
-        //< Opens one where there is none.
-        if r.open == null
-            r.open = new_step(r.caret, r.arena)
-            // Anything new drops the redo steps (otherwise redo jumps to a text that does not
-            // match).
-            r.redone.clear()
-        return r.open
-
-    fn break_group(r: Self$@) //< closes the open step
-        //< This is where one undo ends. Moving and committing a composition close it by themselves;
-        //< a pause in typing is for the caller to close (the core has no clock).
-        if r.open == null
-            return
-        r.open.after = r.caret
-        // A step that changed nothing is not stored (its undo would restore nothing).
-        if r.open.ops.len > 0
-            r.undone.push(r.open)
-        r.open = null
-
-    fn undo(r: Self$@): Bool //<
-        //< Goes back one step, and returns true if it did.
-        //< Caution: **Do not undo while read-only.** The `do_*` below stop, but the record alone
-        //< would move a step and report "undone" when nothing has changed.
-        return r.step_over(r.undone, r.redone)
-
-    fn redo(r: Self$@): Bool //< redoes one undone step
-        //< True if redone.
-        return r.step_over(r.redone, r.undone)
-
-    priv fn step_over(r: Self$@, from: List<|Step$@|>$@, to: List<|Step$@|>$@): Bool //<
-        //< Reverses the last step of `from` and records the reversal in `to` (undo and redo alike)
-        r.break_group()
-        if r.shut()
-            return false
-        if st: = from.pop()
-            back: = new_step(st.after, r.arena)
-            apply_inverse(r, st, back)
-            back.after = st.before
-            to.push(back)
-            r.caret = st.before
-            return true
-        return false

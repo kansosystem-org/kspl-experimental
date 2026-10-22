@@ -1,0 +1,29 @@
+//< `defer` in front of a declaration, laid out by indentation
+//< **The reader gives it no level of its own**: a `defer` not followed by `{` heads one statement
+//< (`heading_of` in `../../parse/layout.kspl`). So a `catch` block under the declaration closes as
+//< it does under the same declaration without `defer`.
+import "std/ds" { List }
+import "std/io"
+import "std/str" { Str_builder }
+
+fn first_byte(path: U8[]): I32
+    defer $f: = io.open(path, "rb") catch e
+        io.out().s("cannot open: \{e\}\n")
+        return -1
+    $buf: U8[1] = ::{ 0 }
+    n: = f.read(U8$[]::buf) catch
+        return -1
+    return buf[0] if n == 1 else -1
+
+fn joined(): Sz
+    defer $parts: = List<|U8[]|>.new(null)
+    parts.push("a")
+    parts.push("b")
+    defer $sb: = Str_builder.new()
+    for p in parts
+        sb.s(p)
+    return sb.len
+
+fn main(): I32
+    io.out().s("\{first_byte("/no/such/file")\} \{joined()\}\n")
+    return 0

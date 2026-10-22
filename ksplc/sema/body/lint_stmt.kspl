@@ -1,9 +1,8 @@
 //< The lints on statements, called as hooks from where a statement or an initializer is typed
 //< They cover a constant condition, a call subject that wraps, an empty block, and a lock used past
-//< its unlock or never released. They also cover an exit between a `Manual_free` binding and its
-//< `defer`, a free of a value that frees itself, a digit-accumulating loop with no bound, and a
-//< type written twice. **This is not where all the lints are**: the rest sit with the checks that
-//< hold the context to detect them.
+//< its unlock or never released. They also cover a digit-accumulating loop with no bound, and a
+//< type written twice. **This is not where
+//< all the lints are**: the rest sit with the checks that hold the context to detect them.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_place" as base_ast_place
@@ -11,9 +10,7 @@ import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/core" as base_core
 import "ksplc/sema/body/analyze" as sema_body_analyze
 import "ksplc/sema/body/coerce" as sema_body_coerce
-import "ksplc/sema/flow/release" as sema_flow_release
 import "ksplc/sema/session/ctx" { Sema_ctx }
-import "ksplc/sema/type/arc" as sema_type_arc
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
 import "std/chars" // testing and slicing single characters
@@ -57,7 +54,7 @@ fn spans_multiple_lines(c: Sema_ctx$@, node: Ast_node$@): Bool
     return c.source.sub(node.loc.offset, end_offset - node.loc.offset).find_char('\n').is_some()
 
 fn lint_multiline_call_subject(c: Sema_ctx$@, node: Ast_node$@, label: U8$[]) //<
-    //< [H0804] Detects a switch or if whose subject is a call with an argument list spanning lines
+    //< [H0802] Detects a switch or if whose subject is a call with an argument list spanning lines
     //< For example `switch x.foo(a, b,\n c) case ...`.
     //< Only a wrap inside the argument list counts: a chained-call wrap (`x.method()\n .chain()`)
     //< is legitimate and not reported.
@@ -70,7 +67,7 @@ fn lint_multiline_call_subject(c: Sema_ctx$@, node: Ast_node$@, label: U8$[]) //
     if args_node == null || !spans_multiple_lines(c, args_node)
         return
     c.clear_scratch()
-        .s("[H0804] This '\{label\}' directly wraps a call whose argument list spans multiple \
+        .s("[H0802] This '\{label\}' directly wraps a call whose argument list spans multiple \
             lines. Assign the call to a named temporary variable first. Then apply \{label\} to \
             that variable to separate the operations.")
     c.hint(node, c.scratch.slice())
@@ -99,7 +96,7 @@ fn lint_multiline_nested_call(c: Sema_ctx$@, node: Ast_node$@): Bool //<
         return false
     k: = node.kind_id
     if k == .k_stmt_block || k == .k_stmt_labeled_block || k == .k_stmt_if || k == .k_stmt_for ||
-        k == .k_stmt_switch || k == .k_stmt_defer || k == .k_for_init || k == .k_for_step
+        k == .k_stmt_switch || k == .k_stmt_defer
         return false
     if k == .k_expr_postfix
         op: = node.get_postfix_op()
@@ -241,10 +238,8 @@ fn lint_lock_escape(c: Sema_ctx$@, block: Ast_node$@) //<
     //< catch only typical mistakes.
     if !base_core.config.run_lint_checks
         return
-    $borrows: = List<|Lock_borrow$@|>.new(null)
-    defer borrows.free()
-    $sites: = List<|Lock_site$@|>.new(null)
-    defer sites.free()
+    defer $borrows: = List<|Lock_borrow$@|>.new(null)
+    defer $sites: = List<|Lock_site$@|>.new(null)
     for stmt in block.children
         k: = stmt.kind_id
         if k == .k_stmt_defer
@@ -310,243 +305,6 @@ fn lint_lock_escape(c: Sema_ctx$@, block: Ast_node$@) //<
                     \{s.guard\}.unlock()' immediately after locking to release it on every exit \
                     path.")
             c.warn(s.node, c.scratch.slice())
-
-fn lint_defer_gap(c: Sema_ctx$@, node: Ast_node$@) //<
-    //< [W0109] An exit between a `Manual_free` value's binding and the `defer` that frees it
-    //< A `!`, `return`, `throw`, `break` or `continue` there leaves before the `defer` is
-    //< registered, so the value leaks on that path. Every block of the body is walked, a closure's
-    //< included; the check reads the code as written, so a generic's instantiations are skipped.
-    if !base_core.config.run_lint_checks || node == null || c.is_instantiating()
-        return
-    if node.kind_id == .k_stmt_block
-        lint_block_defer_gap(c, node)
-    for child in node.children
-        lint_defer_gap(c, child)
-
-priv fn lint_block_defer_gap(c: Sema_ctx$@, block: Ast_node$@) //<
-    //< Checks each binding of a `Manual_free` value in one block against the exits before its `defer`
-    for i in Range.asc(block.children.len)
-        stmt: = block.get_child(i)
-        id: = stmt.get_var_decl_id() if stmt.kind_id == .k_decl_var else null
-        if id == null || !c.env.has_release_contract(stmt.type_id) ||
-            c.env.type_has_drop(stmt.type_id)
-            continue
-        // Caution: **Check only where a `defer` later in the same block frees it.** A value freed
-        // by hand, passed on or kept is a different case, and reporting it as a leak would be
-        // wrong.
-        $at: Sz = 0
-        for j in Range.new(i + 1, block.children.len, 1)
-            later: = block.get_child(j)
-            if later.kind_id == .k_stmt_defer && later.frees_local(c, id.text)
-                at = j
-                break
-        for j in Range.new(i + 1, at, 1)
-            between: = block.get_child(j)
-            // A statement that frees it on its own path (`if bad { x.free(); return }`) leaks
-            // nothing.
-            if between.frees_local(c, id.text)
-                continue
-            if way: = between.way_out(id.text, false)
-                report_defer_gap(c, way, id.text, c.line_of(stmt.loc),
-                    c.line_of(block.get_child(at).loc))
-                break
-
-priv fn report_defer_gap(c: Sema_ctx$@, way: Ast_node$@, name: U8[], bound: Sz, freed: Sz) //<
-    //< Reports [W0109] at the exit, naming the line to move the `defer` to
-    $what: U8[] = "!"
-    k: = way.kind_id
-    if k == .k_stmt_return
-        what = "return"
-    else if k == .k_stmt_throw
-        what = "throw"
-    else if k == .k_stmt_break
-        what = "break"
-    else if k == .k_stmt_continue
-        what = "continue"
-    c.clear_scratch()
-        .s("[W0109] '\{name\}' leaks if this '\{what\}' exits. Its 'defer \{name\}.free()' is \
-            registered only on line \{freed\}. Register the defer immediately after binding \
-            '\{name\}' on line \{bound\}. This covers every exit path.")
-    c.warn(way, c.scratch.slice())
-
-priv struct Self_free_walk //< [I0311] what the walk of one function knows
-    locals: List<|Ast_node$@|>$@ //< the function's locals; a closure has a walk of its own
-    body: Ast_node$@ //< the function's body, where its parameters' lifetime ends
-    in_closure: Bool //< a closure's walk, where an outer parameter is not its own
-
-fn lint_self_free(c: Sema_ctx$@, body: Ast_node$@) //<
-    //< [I0311] An explicit free of a local that frees itself, where its own cleanup comes next
-    //< Three shapes: a `defer x.free()` in the block that declares `x`, an `x.free()` that ends
-    //< that block, and an `x.free()` right before a `return` or `throw` that calls nothing. A free
-    //< with more work after it in the scope is an early release, and is not reported.
-    if !base_core.config.run_lint_checks || body == null || c.is_instantiating()
-        return
-    walk_self_free(c, body, false)
-
-priv fn walk_self_free(c: Sema_ctx$@, body: Ast_node$@, in_closure: Bool) //<
-    //< Checks one function's body, and each closure's body with a walk of its own
-    $locals: = List<|Ast_node$@|>.new(null)
-    defer locals.free()
-    collect_own_locals(body, locals@)
-    $w: = Self_free_walk::{ .locals = locals@, .body = body, .in_closure = in_closure }
-    check_self_free(c, body, w@)
-
-priv fn collect_own_locals(node: Ast_node$@, out: List<|Ast_node$@|>$@) //<
-    //< Every local declared under node, leaving out a closure's
-    if node == null || node.kind_id == .k_expr_fn_lit
-        return
-    if node.kind_id == .k_decl_var
-        out.push(node)
-    for child in node.children
-        collect_own_locals(child, out)
-
-priv fn check_self_free(c: Sema_ctx$@, node: Ast_node$@, w: Self_free_walk$@) //<
-    //< Checks every block under node; a closure's body starts a walk of its own
-    if node == null
-        return
-    if node.kind_id == .k_expr_fn_lit
-        inner: = node.find_child(.k_stmt_block)
-        if inner != null
-            walk_self_free(c, inner, true)
-        return
-    if node.kind_id == .k_stmt_block
-        check_block_self_free(c, node, w)
-    for child in node.children
-        check_self_free(c, child, w)
-
-priv fn check_block_self_free(c: Sema_ctx$@, block: Ast_node$@, w: Self_free_walk$@) //<
-    //< Reports each statement of one block that frees a local just before its own cleanup would
-    n: = block.children.len
-    for i in Range.asc(n)
-        stmt: = block.get_child(i)
-        if stmt.kind_id == .k_stmt_defer
-            if owner: = stmt.deferred_self_free(c)
-                if w.declares_in(owner, block)
-                    report_self_free(c, stmt, owner.get_path_or_ident_name(), true)
-            continue
-        if owner: = self_free_receiver(c, stmt)
-            if !w.owns(owner)
-                continue
-            if i + 1 == n
-                if w.declares_in(owner, block)
-                    report_self_free(c, stmt, owner.get_path_or_ident_name(), false)
-                continue
-            next: = block.get_child(i + 1)
-            if (next.kind_id == .k_stmt_return || next.kind_id == .k_stmt_throw) &&
-                !next.calls_anything()
-                report_self_free(c, stmt, owner.get_path_or_ident_name(), false)
-
-priv fn self_free_receiver(c: Sema_ctx$@, stmt: Ast_node$@): Ast_node$@? //<
-    //< The bare local that the statement `x.free()` frees, where its type frees itself (`Drop`)
-    e: = stmt.safe_get_child(0) if stmt.kind_id == .k_stmt_expr else stmt
-    if e == null || e.kind_id != .k_expr_postfix || !e.postfix_op_text().equals("(")
-        return .none
-    access: = e.get_postfix_receiver()
-    if access == null
-        return .none
-    if receiver: = access.get_free_call_receiver(c)
-        if receiver.is_path_or_ident() && receiver.def_node != null &&
-            c.env.is_drop_type(receiver.type_id)
-            return .some(receiver)
-    return .none
-
-priv fn report_self_free(c: Sema_ctx$@, at: Ast_node$@, name: U8[], deferred: Bool) //<
-    //< Reports [I0311] at the free, saying which of its shapes it is
-    c.clear_scratch()
-    if deferred
-        c.scratch
-            .s("[I0311] '\{name\}' frees itself when this block ends, so 'defer \{name\}.free()' \
-                repeats its own cleanup. Remove the defer.")
-    else
-        c.scratch
-            .s("[I0311] '\{name\}' frees itself when its scope ends, right after this \
-                '\{name\}.free()'. Remove the call. Free it by hand only where more work follows \
-                that needs it gone.")
-    c.information(at, c.scratch.slice())
-
-impl Self_free_walk
-    priv fn owns(r: Self$@, owner: Ast_node$@): Bool //<
-        //< Whether the local freed is this function's own, so leaving the function ends its life
-        def: = owner.def_node
-        if def.kind_id == .k_fn_param
-            return !r.in_closure
-        for local in r.locals
-            if local == def
-                return true
-        return false
-
-    priv fn declares_in(r: Self$@, owner: Ast_node$@, block: Ast_node$@): Bool //<
-        //< Whether the local freed lives exactly as long as block: declared in it, or a parameter
-        //< of the function whose body it is
-        def: = owner.def_node
-        if def.kind_id == .k_fn_param
-            return !r.in_closure && block == r.body
-        for stmt in block.children
-            if stmt == def
-                return true
-        return false
-
-impl Ast_node
-    priv fn deferred_self_free(r: Self$@, c: Sema_ctx$@): Ast_node$@? //<
-        //< The local a `defer` frees, where its body is that one `x.free()` and `x` frees itself
-        if inner: = r.get_defer_block()
-            if inner.kind_id != .k_stmt_block
-                return self_free_receiver(c, inner)
-            if inner.children.len == 1
-                return self_free_receiver(c, inner.get_child(0))
-        return .none
-
-    priv fn calls_anything(r: Self$@): Bool //<
-        //< Whether the subtree holds a call, which would run after a free placed before it
-        if r == null
-            return false
-        if r.kind_id == .k_expr_postfix && r.postfix_op_text().equals("(")
-            return true
-        for child in r.children
-            if child.calls_anything()
-                return true
-        return false
-
-    priv fn frees_local(r: Self$@, c: Sema_ctx$@, name: U8[]): Bool //<
-        //< Whether the subtree holds `name.free()` on a `Manual_free` value
-        //< It looks in a `defer`'s body, or at a hand-written free along the way.
-        if r == null
-            return false
-        // The call `x.free()` has two levels; the member access under the "(" is the one checked.
-        if r.kind_id == .k_method_access
-            if receiver: = r.get_free_call_receiver(c)
-                if receiver.is_path_or_ident() &&
-                    receiver.get_path_or_ident_name().equals(name)
-                    return true
-        for child in r.children
-            if child.frees_local(c, name)
-                return true
-        return false
-
-    priv fn way_out(r: Self$@, name: U8[], in_loop: Bool): Ast_node$@? //<
-        //< The first node in the subtree that leaves the block holding it
-        //< That is a `!`, a `return` that does not pass `name` on, a `throw`, or a `break` or
-        //< `continue` that targets no loop inside the subtree.
-        //< A closure's body is its own function, so an exit there leaves only the closure.
-        if r == null || r.kind_id == .k_expr_fn_lit
-            return .none
-        k: = r.kind_id
-        if k == .k_expr_postfix
-            op: = r.get_postfix_op()
-            if op != null && op.text.equals("!")
-                return .some(r)
-        if k == .k_stmt_return
-            e: = r.get_return_expr()
-            if e == null || !e.refs_ident(name)
-                return .some(r)
-            return .none
-        if k == .k_stmt_throw || ((k == .k_stmt_break || k == .k_stmt_continue) && !in_loop)
-            return .some(r)
-        nested: = in_loop || k == .k_stmt_for
-        for child in r.children
-            if way: = child.way_out(name, nested)
-                return .some(way)
-        return .none
 
 priv fn lint_lock_return_escape(c: Sema_ctx$@, stmt: Ast_node$@,
     borrows: List<|Lock_borrow$@|>$@)
@@ -779,8 +537,7 @@ fn lint_accumulator_overflow(c: Sema_ctx$@, loop_node: Ast_node$@, has_preceding
     loop_block: = loop_node.get_loop_block()
     if loop_block == null
         return
-    $guarded_names: = Map<|U8[], Bool|>.new(null)
-    defer guarded_names.free()
+    defer $guarded_names: = Map<|U8[], Bool|>.new(null)
     collect_if_cond_idents(loop_block, guarded_names@)
     find_accumulator_assigns(c, loop_block, guarded_names@, has_preceding_bound_check)
 

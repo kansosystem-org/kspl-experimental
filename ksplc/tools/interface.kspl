@@ -196,14 +196,9 @@ impl Walk
         default
             return ""
 
-priv fn c_scalar(id: I32): U8[] //< a built-in type's C spelling; empty for any other
-    return sema_type_env.BUILTIN_TYPES[id].c_name if sema_type_env.is_builtin(id) else ""
-
-// ==========================================
-// Spelling a type in C (a declarator around a name) and in KSPL
-// ==========================================
-
-impl Walk
+    // ==========================================
+    // Spelling a type in C (a declarator around a name) and in KSPL
+    // ==========================================
     fn c_decl(r: Self$@, raw: I32, inner: U8[], leaf_const: Bool, out: Str_builder$@, depth: Sz) //<
         //< It writes the type `raw` as C declares `inner` (a name, or empty for a bare type)
         //< **The declarator grows from the inside out**, as C reads it: a pointer puts `*` before
@@ -229,7 +224,7 @@ impl Walk
                 out.s("const " if is_const else "").s("void ").s(starred)
             return
         case .fn_type(sig)
-            $params: = Str_builder.new()
+            defer $params: = Str_builder.new()
             for i in Range.asc(sig.params.len)
                 if i > 0
                     params.s(", ")
@@ -304,6 +299,9 @@ impl Walk
             return
         default {}
         out.s(r.c.env.get_str(id))
+
+priv fn c_scalar(id: I32): U8[] //< a built-in type's C spelling; empty for any other
+    return sema_type_env.BUILTIN_TYPES[id].c_name if sema_type_env.is_builtin(id) else ""
 
 // ==========================================
 // Writing the two forms
@@ -395,7 +393,7 @@ priv fn c_doc(doc: U8[], indent: U8[], out: Str_builder$@) //< a summary as a C 
         out.s(indent).s("/** ").s(doc.replace("*/", "* /", base_core.arena)).s(" */\n")
 
 priv fn c_ident(name: U8[]): U8[] //< a parameter's or a field's name as C may write it
-    $safe: = name.c_safe_name()
+    defer $safe: = name.c_safe_name()
     return base_core.arena.dup_str(safe.slice())
 
 priv fn guard_of(out_path: U8[]): U8[] //< the include guard, from the file's name
@@ -418,7 +416,7 @@ priv fn guard_of(out_path: U8[]): U8[] //< the include guard, from the file's na
 
 priv fn render_c(walk: Walk$@, exports: List<|Export|>$@, out_path: U8[]): U8[]
     guard: = guard_of(out_path)
-    $out: = Str_builder.new()
+    defer $out: = Str_builder.new()
     out.s("/* The C interface of a library, written by `ksplc --library`.\n")
     out.s(" * Caution: Do not edit it. The compiler regenerates it with the library. */\n")
     out.s("#ifndef \{guard\}\n#define \{guard\}\n\n")
@@ -450,7 +448,7 @@ priv fn render_c(walk: Walk$@, exports: List<|Export|>$@, out_path: U8[]): U8[]
         out.s("};\n\n")
     for e in exports
         c_doc(e.doc, "", out@)
-        $params: = Str_builder.new()
+        defer $params: = Str_builder.new()
         ps: = params_of(e.node)
         for i in Range.asc(ps.len)
             p: = ps.get(i)
@@ -521,7 +519,7 @@ priv fn render_c_enum(walk: Walk$@, name: U8[], def: sema_type_def.Enum_def$@, o
 priv fn render_kspl(walk: Walk$@, exports: List<|Export|>$@, root: Ast_node$@, out_path: U8[],
     parser: kspeg.Target$@): U8[] //<
         //< The KSPL form, written in braces, then printed by the formatter in the file's notation
-    $out: = Str_builder.new()
+    defer $out: = Str_builder.new()
     out.s("// The C interface of a library, written by `ksplc --library`.\n")
     out.s("// Caution: Do not edit it. The compiler regenerates it with the library.\n\n")
     for t in walk.types
@@ -569,11 +567,9 @@ priv fn render_kspl(walk: Walk$@, exports: List<|Export|>$@, root: Ast_node$@, o
             walk.k_type(ret, out@, 0)
         out.c(';').s(kspl_doc(e.doc)).c('\n')
     out.s("}\n")
-    $formatter: =
+    defer $formatter: =
         fmt_text.format_text(out.slice(), out_path, parser, Config.default_fmt(), false) catch
         base_diag.ice_panic("--library: the KSPL form does not parse")
-        return ""
-    defer formatter.free()
     return base_core.arena.dup_str(formatter.out.slice())
 
 priv fn kspl_doc(doc: U8[]): U8[] //< a summary as a `//<` after its declaration; empty for none

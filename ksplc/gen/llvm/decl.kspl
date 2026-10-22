@@ -206,7 +206,7 @@ impl Ast_node
             // gen_llvm_ctx.format_f32_hex_literal).
             cg.s(gen_llvm_ctx.format_f32_hex_literal(r.text))
             return
-        $clean_str: = Str_builder.new()
+        defer $clean_str: = Str_builder.new()
         r.text.append_clean_number(clean_str@, "Ff")
         cg.s(clean_str.slice())
 
@@ -390,7 +390,6 @@ impl Ast_node
             if idx_node: = child.get_field_init_index()
                 idx = idx_node.eval_constexpr(cg.sema) catch
                     r.ice_panic("genllvm: array global initializer index is not a constant")
-                    fallback 0
             r.ice_assert(idx >= 0 && idx < size,
                 "genllvm: array global initializer index is out of range")
             slots.set(idx, child.get_field_init_expr())
@@ -478,7 +477,6 @@ impl Ast_node
                 f: = s_def.fields_list.get(i)
                 off: = cg.sema.field_offset_of(real_id, f.name, r) catch
                     r.ice_panic("genllvm: a field of a global initializer has no offset")
-                    fallback 0
                 parts.at(off)
                 parts.piece(slots.get(i), f.type_id, cg.sema.type_layout(f.type_id).size)
         case .enum_type(e_def)
@@ -540,7 +538,7 @@ impl Ast_node
                 cg.s("c\"")
                 for bi in Range.asc(file_data.len)
                     b: = (file_data.ptr + bi)$
-                    cg.s("\\").c((b >> 4).to_hex_upper()).c((b & 15U8).to_hex_upper())
+                    cg.s("\\\{b:02X\}")
                 cg.s("\"\n")
             else
                 cg.s("zeroinitializer\n")

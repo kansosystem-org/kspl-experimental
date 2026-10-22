@@ -58,8 +58,7 @@ priv fn role_of(sheet: Sheet$@, how: Arrange, sized: Bool): Style$@? //<
     //< part. Where there is none, the caller makes one by name.
     if sheet == null
         return .none
-    for $i: Sz = 0; i < sheet.styles.len; i += 1
-        one: = sheet.styles.get(i)
+    for one in sheet.styles
         if !one.arrange.same_arrange(how)
             continue
         // Only a style with a size counts as a slide (without one, a frame's size is undefined).
@@ -96,8 +95,7 @@ priv fn collector_of(sheet: Sheet$@, what: Collect): Style$@? //<
     //< Not by its arrangement (a collecting block flows too, like the body).
     if sheet == null
         return .none
-    for $i: Sz = 0; i < sheet.styles.len; i += 1
-        one: = sheet.styles.get(i)
+    for one in sheet.styles
         if one.collect.same_collect(what)
             return .some(one)
     return .none
@@ -172,8 +170,7 @@ impl Editor
         //< undo), styled by `dress_cell`.
         //< Caution: **A style that already has the name is used as it is**, whatever its look —
         //< restyling it would move every cell already using it.
-        for $i: Sz = 0; i < sheet.styles.len; i += 1
-            s: = sheet.styles.get(i)
+        for s in sheet.styles
             if style.cell_like(s) && s.align.same_align(.left)
                 return s.name
         if had: = sheet.find(CELL_NAME)
@@ -230,9 +227,9 @@ impl Editor
         made: = doc.new_block(s.name, r.arena)
         // A row gets no style name (the rule of the saved format).
         cell_name: = r.cell_styled(st, sheet)
-        for $y: Sz = 0; y < rows; y += 1
+        for _y in Range.asc(rows)
             row: = made.add_child("")
-            for $x: Sz = 0; x < cols; x += 1
+            for _x in Range.asc(cols)
                 row.add_child(cell_name).add_text("")
         // The columns get equal shares of the table's laid-out width (`table_room`). So a column
         // keeps its width while typing wraps inside it. Unset, the columns follow their contents.
@@ -241,7 +238,7 @@ impl Editor
         edit.do_block(r, st, room.block, room.index + 1, true, made)
         if across > 0.0F32
             share: = across / F32::cols
-            for $c: Sz = 0; c < cols; c += 1
+            for c in Range.asc(cols)
                 edit.do_set_size(r, st, made, .column, c, .some(share))
         head: = made.children.get(0).children.get(0)
         r.caret = caret.at(head.inlines.get(0), 0)
@@ -487,7 +484,7 @@ impl Editor
         if !own.found
             return false
         // First check that it can be referred to. The built text is not used.
-        $sb: = Str_builder.new()
+        defer $sb: = Str_builder.new()
         if !number.refer_into(sb@, sheet, page.serials, page.headings, name)
             return false
         r.break_group()

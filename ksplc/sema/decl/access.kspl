@@ -17,7 +17,6 @@ import "ksplc/sema/decl/mono_queue" as _sema_decl_mono_queue // `ensure_instance
 import "ksplc/sema/decl/name" as _sema_decl_name
 import "ksplc/sema/decl/resolve" as sema_decl_resolve
 import "ksplc/sema/session/ctx" { Sema_ctx }
-import "ksplc/sema/type/arc" as sema_type_arc
 import "ksplc/sema/type/def" { Struct_field }
 import "ksplc/sema/type/display" as sema_type_display
 import "ksplc/sema/type/query" as sema_type_query
@@ -182,6 +181,16 @@ impl Sema_ctx
             return .ref_place
         return .by_value
 
+    fn index_read_needs_writable(r: Self$@, recv_id: I32): Bool //<
+        //< Whether `a[i]` can read only through a writable receiver of this type
+        //< That is so where `index_route` gives `.place` alone, from an `at(r: Self$@, …)`.
+        r.ensure_instance_methods(recv_id) catch {}
+        base_id: = r.env.strip_ptr(recv_id)
+        return r.env.has_implemented_operator_trait(base_id, "Index_place") &&
+            r.index_place_wants_writable(base_id) &&
+            !r.env.has_implemented_operator_trait(base_id, "Index_ref") &&
+            !r.env.has_implemented_operator_trait(base_id, "Index")
+
     fn index_only_reads(r: Self$@, route: Index_route, recv_id: I32): Bool //<
         //< Whether the subscript returns only a read-only place (`Index_ref` without `Index_mut`)
         //< Only the assignment's diagnostics use it; with `Index_mut` the error is "assigned into a
@@ -317,8 +326,7 @@ impl Sema_ctx
         //< elements can write nothing (Principle 5). If allowed, C fails to compile the generated
         //< code and LLVM fails at run time. It descends into neither **a struct's fields** nor a
         //< pointer, whose target can be in RAM (`const P: I32$@ = ram@;` is legitimate).
-        $seen: = List<|I32|>.new(null)
-        defer seen.free()
+        defer $seen: = List<|I32|>.new(null)
         if !r.find_mut_in_const_storage(type_id, seen@)
             return
         // The `$` is always on a slice level: a fixed-length array cannot have one on its element
@@ -367,8 +375,7 @@ impl Sema_ctx
         owner_rank: = vis_rank(owner_vis)
         if owner_rank == 0
             return // there is no visibility narrower than file_private
-        $seen: = List<|Ast_node$@|>.new(null)
-        defer seen.free()
+        defer $seen: = List<|Ast_node$@|>.new(null)
         r.check_type_node_vis(node, owner_rank, position, owner, seen@)
 
     fn is_bound_generic_type(r: Self$@, sym: Sema_symbol$@): Bool //<
@@ -401,7 +408,7 @@ impl Sema_ctx
                 // Keep function and field names out of the message: a generic reaches here once per
                 // instance. Differing internal names slip past report_diagnostic's de-duplication
                 // (the file:offset:msg key), and give N entries for one line.
-                $shown: = Str_builder.new()
+                defer $shown: = Str_builder.new()
                 r.write_shown_name(sym, node, shown@)
                 r.clear_scratch()
                     .s("\{position\} '\{shown.slice()\}' is less visible than the \{owner\} \
@@ -481,7 +488,7 @@ impl Sema_ctx
             file_env: = r.env.files.get(info.target_path).unwrap_or(null)
             if file_env == null
                 continue // the loading itself failed (another diagnostic has been reported)
-            sym: = file_env.symbols.get(info.original_name).unwrap_or(null)
+            sym: = file_env.symbols.get(info.name).unwrap_or(null)
             if sym != null
                 name: = info.decl_node.get_selector_name()
                 if name != null
@@ -490,8 +497,7 @@ impl Sema_ctx
             if r.suppress_errors
                 continue
             // The diagnostic takes its file from the declaration node, so no current file is set.
-            r.clear_scratch()
-                .s("file '\{info.target_path\}' has no symbol named '\{info.original_name\}'")
+            r.clear_scratch().s("file '\{info.target_path\}' has no symbol named '\{info.name\}'")
             r.err(info.decl_node, r.scratch.slice())
         if r.suppress_errors
             return
@@ -504,15 +510,14 @@ impl Sema_ctx
             file_env: = r.env.files.get(info.target_path).unwrap_or(null)
             if file_env == null
                 continue
-            sym: = file_env.symbols.get(info.original_name).unwrap_or(null)
+            sym: = file_env.symbols.get(info.name).unwrap_or(null)
             if sym == null
                 continue // the loop above reports it
             r.set_current_file(info.decl_node.loc.file())
             if r.is_symbol_visible_here(sym)
                 continue
             r.clear_scratch()
-                .s("cannot access symbol '\{info.original_name\}'\n(defined in \
-                    \{info.target_path\})")
+                .s("cannot access symbol '\{info.name\}'\n(defined in \{info.target_path\})")
             r.err(info.decl_node, r.scratch.slice())
 
     fn is_field_visible_here(r: Self$@, field: Struct_field$@): Bool //<
@@ -529,7 +534,7 @@ impl Sema_ctx
         //< (`app_lib_kspl_Box_I64`), and its methods' are named after it. See "A diagnostic points
         //< at 'the position the user wrote'" in ksplc/docs/DESIGN-diagnostics.md.
         if sym.flags.is_generated_instance && sym.kind.is_type() && sym.type_id != 0
-            $d: = r.env.display_str(sym.type_id)
+            defer $d: = r.env.display_str(sym.type_id)
             out.s(d.slice())
             return
         if !sym.flags.is_generated_instance && !sym.flags.is_method
@@ -545,15 +550,6 @@ impl Sema_ctx
             out.s(sym.name)
 
     fn check_visibility_and_mark_used(r: Self$@, sym: Sema_symbol$@, loc: Ast_node$@)
-        if sym.flags.is_method && sym.node != null &&
-            r.env.source_fn_name(sym.node).equals("drop")
-            $params: = base_ast_ext.Param_cursor.new(sym.node.get_fn_params(), false)
-            if p: = params.next()
-                if r.env.is_drop_type(r.env.strip_ptr_full(p.param_type_id()))
-                    r.err(loc,
-                        "a destructor cannot be called or taken as a function value; let its owner \
-                            leave scope")
-                    return
         defined_in: = sym.get_defined_in()
         if defined_in.len == 0 || defined_in.equals(r.file_name)
             return
@@ -570,7 +566,7 @@ impl Sema_ctx
             // An instance's own name is mangled (`app_lib_kspl_Box_I64`), so it is shown as the
             // source spells the type. See "A diagnostic points at 'the position the user wrote'" in
             // ksplc/docs/DESIGN-diagnostics.md.
-            $shown: = Str_builder.new()
+            defer $shown: = Str_builder.new()
             r.write_shown_name(sym, loc, shown@)
             r.clear_scratch()
                 .s("cannot access symbol '\{shown.slice()\}'\n(defined in \{defined_in\})")

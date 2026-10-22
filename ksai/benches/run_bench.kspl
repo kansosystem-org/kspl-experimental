@@ -85,7 +85,7 @@ priv fn core_list(threads: U8[], arena: Arena$@): U8$[] //<
     //< The string passed for pinning the cores
     //< `0` for one thread, `0-(n-1)` for n.
     n: = threads.to_i64() catch 1I64
-    $b: = Str_builder.new()
+    defer $b: = Str_builder.new()
     b.s("0")
     if n > 1I64
         b.s("-\{n - 1I64\}")
@@ -154,14 +154,13 @@ priv fn run_all(threads: U8[], arena: Arena$@)
         io.out().s("  (cannot start)\n")
 
 fn main(): I32 //< runs the KSPL-against-numpy bench and prints the table
-    arena: = Arena.new(8 * 1024 * 1024)
-    defer arena.free()
+    defer arena: = Arena.new(8 * 1024 * 1024)
     // Caution: **Do not read the arguments by hand.** Rejecting an unknown `--name` is
     // `std/argparse`'s job.
     p: = argparse.Parser
         .create(sys.program_name(), "measure and compare KSPL's and numpy's training step", arena)
     p.positional("[thread count] the default is 1")
-    p.parse_or_exit(sys.args(), arena)
+    p.parse_or_exit()
     if p.rest.len > 1
         io.err()
             .s("\{sys.program_name()\}: there is only one thread count (\{p.rest.len\} given)\n")

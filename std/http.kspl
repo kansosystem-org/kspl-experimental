@@ -157,10 +157,6 @@ pub struct Header //< one header, as `Headers.each` hands it out
     priv next: Header$@ //< the header after this one; null after the last
 
 impl Headers
-    pub fn free(r: Self$@) //< lets go the list's arena, when `headers(null)` built it
-        $own: = r.own
-        own.free()
-
     pub fn find( //< the first value with that name, or nothing; case is ignored
         r: Self,
         name: U8[], //< the header name to look for
@@ -200,7 +196,10 @@ priv fn connection_lists(head: Headers, token: U8[]): Bool //<
         if h.name.equals_ignore_case("Connection") && lists_token(h.value, token)
             return true
     return false
-impl Headers: Manual_free {} //< `free()` lets go the arena a list from `headers(null)` lives in
+impl Headers: Manual_free //< `free()` lets go the arena a list from `headers(null)` lives in
+    pub fn free(r: Self$@) //< lets go the list's arena, when `headers(null)` built it
+        $own: = r.own
+        own.free()
 
 pub struct Header_seq //< walks a list of headers one at a time, in order
     priv at: Header$@
@@ -274,7 +273,7 @@ impl Header_builder
         value: U8[], //< its value
     ): Self
         if r.arena == null
-            $work: = mem.scratch(null)
+            defer $work: = mem.scratch(null)
             r.arena = work.arena
             r.own = work.keep()
         hdr: Header = ::{ .name = r.arena.dup_str(name), .value = r.arena.dup_str(value),
@@ -305,11 +304,6 @@ pub struct Request //< a request or its head, with validated headers and lengths
     priv own: Own_arena //< the arena it lives in, when either request reader was given null
 
 impl Request
-    pub fn free(r: Self$@) //< lets go the request and all its parts, when made with a null arena
-        //< Made in the caller's arena, it frees nothing: that arena does.
-        $own: = r.own
-        own.free()
-
     pub fn wants_close(r: Self@): Bool //< whether the connection closes after the answer to it
         //< `close` among the `Connection` tokens closes it (RFC 9112 §9.3). Otherwise HTTP/1.1
         //< stays open, and HTTP/1.0 only when it lists `keep-alive`. Caution: **Do not keep a 1.0
@@ -317,7 +311,11 @@ impl Request
         if connection_lists(r.headers, "close")
             return true
         return !is_1_1_or_later(r.version) && !connection_lists(r.headers, "keep-alive")
-impl Request: Manual_free {} //< `free()` lets go the arena a request read with null lives in
+impl Request: Manual_free //< `free()` lets go the arena a request read with null lives in
+    pub fn free(r: Self$@) //< lets go the request and all its parts, when made with a null arena
+        //< Made in the caller's arena, it frees nothing: that arena does.
+        $own: = r.own
+        own.free()
 
 pub struct Response //< one received response, and how much of the buffer it used
     pub version: U8$[] //< the version as it arrived, such as `HTTP/1.1`
@@ -328,12 +326,11 @@ pub struct Response //< one received response, and how much of the buffer it use
     pub consumed: Sz //< how many bytes of the buffer this message used; the rest is the next one
     priv own: Own_arena //< the arena it lives in, when it was read with a null arena
 
-impl Response
+impl Response: Manual_free //< `free()` lets go the arena a response read with null lives in
     pub fn free(r: Self$@) //< lets go the response and all its parts, when read with a null arena
         //< Read into the caller's arena, it frees nothing: that arena does.
         $own: = r.own
         own.free()
-impl Response: Manual_free {} //< `free()` lets go the arena a response read with null lives in
 
 // ---------------------------------------------------------
 // The shared core of buffer parsing (the state of one CRLF-delimited scan)
@@ -429,7 +426,7 @@ priv fn parse_status_line(line: U8[], arena: Arena$@): Status_line!Http_error
             .reason = arena.dup_str(reason) }
     throw .invalid_status_line
 
-priv fn build_response($work: mem.Scratch, line: Status_line, head: Headers, body: U8[],
+priv fn build_response(work: mem.Scratch$@, line: Status_line, head: Headers, body: U8[],
     consumed: Sz): Response$@ //<
         //< Shared by parse_response/read_response; the response keeps the arena it is built in
     arena: = work.arena
@@ -531,7 +528,7 @@ pub fn parse_request_head( //< reads and validates a request before its body arr
 
 priv fn request_in(src: U8[], max_body: Sz, arena: Arena$@, head_only: Bool):
     Request$@!Http_error
-    $work: = mem.scratch(arena)
+    defer $work: = mem.scratch(arena)
     at: = work.arena
     r: = scan_request_head(src, max_body, at)!
     body_len: = r.parts.length.unwrap_or(0)
@@ -556,7 +553,7 @@ pub fn request_length( //< how many bytes the request at the start of the buffer
     max_body: Sz, //< the largest body accepted, as `parse_request` takes it
     arena: Arena$@, //< where the head's parts go while it reads them; null reads them on the heap
 ): Sz!Http_error //< the head's length plus the body's
-    work: = mem.scratch(arena)
+    defer $work: = mem.scratch(arena)
     r: = scan_request_head(src, max_body, work.arena)!
     return r.parts.head_end + r.parts.length.unwrap_or(0)
 
@@ -565,9 +562,12 @@ pub fn parse_response( //< the one response at the start of the buffer; fails if
     src: U8[], //< what has arrived so far
     arena: Arena$@, //< where the parts go; null means an arena of the response's own and a `free()`
 ): Response$@!Http_error //< the response; fails with incomplete while more bytes are due
-    return response_in(src, mem.scratch(arena))
+    // The scratch gives its work back where the parse fails; `build_response` keeps it.
+    defer $work: = mem.scratch(arena)
+    return response_in(src, work@)
 
-priv fn response_in(src: U8[], work: mem.Scratch): Response$@!Http_error //< parse_response's work
+priv fn response_in(src: U8[], work: mem.Scratch$@): Response$@!Http_error //<
+    //< parse_response's work
     h: = scan_head(src, DEFAULT_MAX_BODY_BYTES, work.arena)!
     status_line: = parse_status_line(h.first_line, work.arena)!
     body_len: = response_body_len(h, status_line.status)!
@@ -613,13 +613,15 @@ pub fn read_response( //< reads one whole response from a connection and splits 
     max_body: Sz, //< the largest body accepted; a larger one is refused, not read
     timeout_ms: I32, //< how long the whole response can take to arrive; past it `.io(.timed_out)`
 ): Response$@!Http_error //< the response, held in `arena`; fails if the connection closes first
-    return response_from(stream, mem.scratch(arena), max_body, timeout_ms)
+    // The scratch gives its work back where the read fails; `build_response` keeps it.
+    defer $work: = mem.scratch(arena)
+    return response_from(stream, work@, max_body, timeout_ms)
 
-priv fn response_from(stream: net.Tcp_stream$@, work: mem.Scratch, max_body: Sz, timeout_ms: I32):
+priv fn response_from(stream: net.Tcp_stream$@, work: mem.Scratch$@, max_body: Sz, timeout_ms: I32):
     Response$@!Http_error //<
         //< read_response's work, every part in `work`'s arena
     deadline: = sys.deadline_after_ms(timeout_ms)
-    $b: = Str_builder.new()
+    defer $b: = Str_builder.new()
     chunk: U8[READ_CHUNK] = ::{}
     h: = read_head(stream, b@, work.arena, max_body, deadline, U8$[]::chunk)!
     status_line: = parse_status_line(h.first_line, work.arena)!
@@ -699,7 +701,7 @@ pub fn write_request( //< sends one whole request: the first line, the headers a
     target: U8[], //< the target, including the query string
     head: Headers, //< the headers, `Host` among them once
     body: U8[]): Void!Http_error
-    $b: = Str_builder.new()
+    defer $b: = Str_builder.new()
     format_request(b@, method, target, head, body)!
     // Caution: write can stop partway and silently truncate the message. Use write_all (see the
     // note in std/net.kspl).

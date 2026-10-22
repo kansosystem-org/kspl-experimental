@@ -232,28 +232,6 @@ impl Sema_ctx
             },
         }
 
-    fn free(r: Self$@)
-        r.symtab.free()
-        r.generics.templates.free()
-        r.generics.impls.free()
-        r.generics.args.free()
-        r.aliases.files.free()
-        r.aliases.withheld.free()
-        r.aliases.written_methods.free()
-        r.import_symbols.files.free()
-        r.drop_import_reach()
-        r.env.free()
-        r.symtab.global_scope.free()
-        // source_map's lifetime is managed by Doc_state, so it is not freed here.
-        r.resolving.aliases.free()
-        r.jump_stack.free()
-        r.diags.reported.free()
-        r.diags.undefined_at.free()
-        r.diags.lint_settings.free()
-        r.scratch.free()
-        r.layout.memo.free()
-        r.resolving.consts.free()
-
     fn line_starts_for(r: Self$@, file: U8[], src: U8[]): List<|Sz|>$@ //<
         //< Returns the table of line-start offsets for file
         //< Built on the first call and reused afterwards. This only holds the cache; how the table
@@ -336,7 +314,7 @@ impl Sema_ctx
         //< **The caller keeps it as it is**, with no copy: it is the one copy name_text in
         //< ksplc/base/core.kspl holds. It is built in a builder of its own, so a name held in
         //< the context's scratch is read intact.
-        $b: = Str_builder.new()
+        defer $b: = Str_builder.new()
         b.s_path_as_dots(file_path).c('.').s(name)
         return base_core.pools.name_text(b.slice())
 
@@ -347,6 +325,17 @@ impl Sema_ctx
         //< becomes advice that breaks the build if followed. check_unnecessary_cast in coerce.kspl
         //< and lint_empty_block in lint_stmt.kspl hold back for this reason.
         return r.in_generic_instance || r.generics.inst_site != null
+
+    fn is_type_argument(r: Self$@, type_id: I32): Bool //<
+        //< Whether the type, or what it points at, is one a bound type argument stands for
+        //< **A check of a value of that type varies with the instance** (`T` is `I32` in one and
+        //< a `List` in another), so a check that must not do so (is_instantiating) leaves it out.
+        //< Another type the body names is the same in every instance.
+        want: = r.env.get_clean_real_type(r.env.strip_ptr_full(type_id))
+        for g_arg in r.generics.args
+            if !g_arg.is_const && r.env.get_clean_real_type(g_arg.bound_type_id) == want
+                return true
+        return false
 
     fn set_in_generic_instance(r: Self$@, v: Bool)
         r.in_generic_instance = v
@@ -429,9 +418,9 @@ impl Sema_ctx
             return
         if eff_sev == base_diag.Diagnostic_severity.error
             r.diags.errors_met += 1
-        $key_sb: = Str_builder.new()
+        defer $key_sb: = Str_builder.new()
         if has_pos
-            key_sb.s(file).c(':').s("\{offset\}").c(':')
+            key_sb.s("\{file\}:\{offset\}:")
         // **One error per place in a generic's body**, whichever instance found it. Each instance
         // repeats the same mistake with its own type in the text (`type 'I32' has no field…`, then
         // `'I64'`). The copies bury the diagnostics after them.
@@ -452,7 +441,7 @@ impl Sema_ctx
             r.diags.counts.errors >= MAX_ERRORS - 1
             if r.diags.counts.errors == MAX_ERRORS - 1
                 starts: = r.line_starts_for(file, src)
-                $cap: = Str_builder.new()
+                defer $cap: = Str_builder.new()
                 cap.s("Too many errors (>= \{MAX_ERRORS\}). Further errors are suppressed.")
                 base_diag.print_diagnostic(file, src, offset, span, cap.slice(), eff_sev, starts)
                 r.diags.counts.errors += 1
@@ -579,13 +568,13 @@ impl Sema_ctx
         //< records where an undefined name was reported
         //< A call's callee is resolved as a name before the call is. So its undefined head is
         //< reported there first, and the call's own report is skipped (`undefined_reported_at`).
-        $key: = Str_builder.new()
+        defer $key: = Str_builder.new()
         r.offset_key(node, key@)
         r.diags.undefined_at.set(base_core.arena.dup_str(key.slice()), true)
 
     fn undefined_reported_at(r: Self$@, node: Ast_node$@): Bool //<
         //< whether one was reported where node starts
-        $key: = Str_builder.new()
+        defer $key: = Str_builder.new()
         r.offset_key(node, key@)
         return r.diags.undefined_at.get(key.slice()).unwrap_or(false)
 
@@ -607,7 +596,7 @@ impl Sema_ctx
         //< Caution: Keep the wording in this one place. Name resolution has two failure points, an
         //< undefined identifier and an undefined callee. With a copy, only one of them gets each
         //< fix.
-        $key: = Str_builder.new()
+        defer $key: = Str_builder.new()
         key.s(r.file_name).s("::").s(name)
         path: = r.aliases.withheld.get(key.slice()).unwrap_or("")
         if path.len == 0
@@ -775,11 +764,32 @@ impl Sema_ctx
         r.check_snake_case(name, target_node, "Identifier")
 
 // It releases what it owns with `free()`; see `Manual_free` in std/lang.kspl for why it conforms.
-impl Sema_ctx: Manual_free {}
+impl Sema_ctx: Manual_free
+    fn free(r: Self$@)
+        r.symtab.free()
+        r.generics.templates.free()
+        r.generics.impls.free()
+        r.generics.args.free()
+        r.aliases.files.free()
+        r.aliases.withheld.free()
+        r.aliases.written_methods.free()
+        r.import_symbols.files.free()
+        r.drop_import_reach()
+        r.env.free()
+        r.symtab.global_scope.free()
+        // source_map's lifetime is managed by Doc_state, so it is not freed here.
+        r.resolving.aliases.free()
+        r.jump_stack.free()
+        r.diags.reported.free()
+        r.diags.undefined_at.free()
+        r.diags.lint_settings.free()
+        r.scratch.free()
+        r.layout.memo.free()
+        r.resolving.consts.free()
 
 fn join_dotted_name(base_name: U8[], sub_name: U8[]): U8[] //<
     //< `base_name.sub_name`, a member's name under its owner's (`Enum.variant`), kept by name_text
-    $b: = Str_builder.new()
+    defer $b: = Str_builder.new()
     b.s(base_name).c('.').s(sub_name)
     return base_core.pools.name_text(b.slice())
 
@@ -835,7 +845,7 @@ priv fn is_initial_upper_snake(name: U8[]): Bool //<
     //< whether only the first letter of name is uppercase
     if name.len == 0 || !(name.ptr + 0).is_upper()
         return false
-    for $i: Sz = 1; i < name.len; i += 1
+    for i in Range.new(1, name.len, 1)
         if (name.ptr + i).is_upper()
             return false
     return true

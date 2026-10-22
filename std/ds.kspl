@@ -181,18 +181,10 @@ impl<|T|> List<|T|>
         r.len -= 1
 
     pub fn clear(r: Self$@) //< releases every element, keeping the capacity for reuse; O(n)
-        //< Drop and ARC values release their resources. Manual resources need their explicit free.
+        //< ARC values release their counts. Manual resources need their explicit free first.
         for $i: = r.len; i > 0; i -= 1
             mem.drop_at(r.ptr + i - 1)
         r.len = 0
-
-    pub fn free(r: Self$@) //< frees the elements and the memory
-        //< **The list itself stays**: a second `free()` frees nothing, and the block `create(null)`
-        //< put it in is the caller's to give back with `mem.dealloc`.
-        r.clear()
-        if r.cap > 0 && r.arena == null
-            dealloc(Void$@::r.ptr)
-        r.cap = 0
 
     pub fn slice(r: Self$@): T$[] //< a view of every element, for a function that takes a slice
         //< Caution: It is borrowed: a push/insert that grows the capacity reallocates the memory
@@ -219,10 +211,10 @@ impl<|T|> List<|T|>
     ): T$[]
         return r.sub(start, r.len - start if start >= 0 && start < r.len else 0)
 
-impl<|T|> List<|T|> //< reading and writing one element by value
-    //< An index out of range panics: the caller can check it against len, so a failure is a bug.
-    //< Map.get answers none for an absent key (V?), since a key's presence is run-time data.
-    //< `xs[i]` uses `Index_place` or `Index_ref` below, never these: they would copy.
+    // Reading and writing one element by value
+    // An index out of range panics: the caller can check it against len, so a failure is a bug.
+    // Map.get answers none for an absent key (V?), since a key's presence is run-time data.
+    // `xs[i]` uses `Index_place` or `Index_ref` below, never these: they would copy.
     #inline
     pub fn get(r: Self@, index: Sz): T //< a copy of the element; out of range stops the program
         if index < 0 || index >= r.len
@@ -235,6 +227,11 @@ impl<|T|> List<|T|> //< reading and writing one element by value
         if index < 0 || index >= r.len
             bounds_panic("List.set", index, r.len, "", 0)
         (r.ptr + index)$ = item
+
+    // Membership by the element's own `equals`, the method a `Map` key provides. A test of any
+    // other kind is `any` in `std/seq`, which takes a closure.
+    pub fn contains(r: Self@, want: T): Bool //< whether an element equals `want`; O(n)
+        return T[]::{ .ptr = r.ptr, .len = r.len }.contains(want)
 
 impl<|T|> List<|T|>: Index_place<|Sz, T|> //< so `xs[i] += v` and `xs[i]@` can be written
     //< It makes `l[i]` an lvalue, as with a built-in slice; with only get/set a compound assignment
@@ -255,12 +252,6 @@ impl<|T|> List<|T|>: Index_ref<|Sz, T|> //< so `xs[i]` through a read-only point
         if index < 0 || index >= r.len
             bounds_panic("List.at_ref", index, r.len, file, line)
         return r.ptr + index // the same address as `at` returns, but read-only
-
-// Membership by the element's own `equals`, the method a `Map` key provides. A test of any other
-// kind is `any` in `std/seq`, which takes a closure.
-impl<|T|> List<|T|>
-    pub fn contains(r: Self@, want: T): Bool //< whether an element equals `want`; O(n)
-        return T[]::{ .ptr = r.ptr, .len = r.len }.contains(want)
 
 impl<|T|> T[]
     pub fn contains(r: T[], want: T): Bool //< whether an element equals `want`; O(n)
@@ -450,17 +441,6 @@ impl<|K: Hashable<|K|>, V|> Map<|K, V|>
         slot.is_active = true
         slot.is_tombstone = false
 
-    pub fn free(r: Self$@) //< frees the pairs and the memory
-        //< As in `List.free`, the live slots' ownership is released before the memory is freed.
-        for i in Range.asc(r.cap)
-            e: = r.entries + i
-            if e.is_active
-                e.drop_pair()
-        if r.cap > 0 && r.arena == null
-            dealloc(Void$@::r.entries)
-        r.len = 0
-        r.cap = 0
-
     pub fn items(r: Self$@): Map_seq<|K, V|> //<
         //< a chain over the live pairs (`for e in m.items()`)
         //< Caution: **Do not return a list.** It would instantiate **all of `List` for the nested
@@ -501,5 +481,22 @@ impl<|K: Hashable<|K|>, V|> Map<|K, V|>: Index<|K, V?|> //< so `m[k]` reads a pa
         if entry: = r.find_entry(key)
             return .some(entry.value)
         return .none
-impl<|T|> List<|T|>: Manual_free {} //< explicit cleanup
-impl<|K: Hashable<|K|>, V|> Map<|K, V|>: Manual_free {} //< explicit cleanup
+impl<|T|> List<|T|>: Manual_free //< explicit cleanup
+    pub fn free(r: Self$@) //< frees the elements and the memory
+        //< **The list itself stays**: a second `free()` frees nothing, and the block `create(null)`
+        //< put it in is the caller's to give back with `mem.dealloc`.
+        r.clear()
+        if r.cap > 0 && r.arena == null
+            dealloc(Void$@::r.ptr)
+        r.cap = 0
+impl<|K: Hashable<|K|>, V|> Map<|K, V|>: Manual_free //< explicit cleanup
+    pub fn free(r: Self$@) //< frees the pairs and the memory
+        //< As in `List.free`, the live slots' ownership is released before the memory is freed.
+        for i in Range.asc(r.cap)
+            e: = r.entries + i
+            if e.is_active
+                e.drop_pair()
+        if r.cap > 0 && r.arena == null
+            dealloc(Void$@::r.entries)
+        r.len = 0
+        r.cap = 0

@@ -20,7 +20,6 @@ import "std/regex" { Regex }
 import "std/seq"
 import "std/str" + { Str_builder }
 import "std/subproc"
-import "std/sys"
 import "std/tests/mem_test" { back_to }
 import "std/url"
 import "std/verdict"
@@ -99,6 +98,9 @@ fn test_null_arena_text_and_bytes() //< the functions that return one block of t
     lines.free()
     swapped: = "aXa".replace("X", "b", null)
     freed(swapped)
+    flat: = "  a\n  b\n".dedent(null)
+    assert(flat.equals("a\nb\n"), "dedent on the heap")
+    freed(flat)
     plain: = "a\\tb".unescape_to_arena(null) catch panic("a good escape is read")
     assert(plain.equals("a\tb"), "unescape on the heap")
     freed(plain)
@@ -186,8 +188,8 @@ fn test_null_arena_json() //< a JSON document, and a builder, free with their ow
     top.free()
     n: = json.parse("7", null) catch panic("a lone number parses")
     n.free()
-    _cut: = json.parse("[1,{\"x\":[true", null) catch {}
-    _extra: = json.parse("{\"a\":\"b\"} 2", null) catch {}
+    defer _cut: = json.parse("[1,{\"x\":[true", null) catch {}
+    defer _extra: = json.parse("{\"a\":\"b\"} 2", null) catch {}
     back_to(before, "a lone string frees too, and a failed parse leaves nothing")
 
     $b: = Json_builder.new(null)
@@ -206,8 +208,7 @@ fn test_json_doc_val_switch() //<
     before: = mem.heap_used_bytes()
     $seen: = 0
     for text in U8[][]::{ "\"s\"", "[1]", "{\"k\":2}" }
-        doc: = json.parse(text, null) catch panic("each kind parses")
-        defer doc.free()
+        defer doc: = json.parse(text, null) catch panic("each kind parses")
         switch doc.val
         case .str_val(s)
             seen += 1 if s.equals("s") else 0
@@ -291,14 +292,13 @@ fn test_null_arena_work_is_freed() //< a function frees the work it does not ret
     src: = "GET / HTTP/1.1\r\nHost: h\r\n\r\n"
     // A parse adds the test's own arguments to the parser. So the first parse comes before the
     // count, and the second adds no more than the room the first made.
-    p: = argparse.Parser.create("probe", "a null arena", null)
-    defer p.free()
+    defer p: = argparse.Parser.create("probe", "a null arena", null)
     p.positional("[anything]")
-    p.parse_or_exit(sys.args(), null)
+    p.parse_or_exit()
     before: = mem.heap_used_bytes()
     n: = http.request_length(src, 0, null) catch panic("a whole request has a length")
     assert(n == src.len, "request_length with a null arena")
-    p.parse(sys.args(), null) catch panic("the test's own arguments are read")
+    p.parse() catch panic("the test's own arguments are read")
     $b: = Json_builder.new(null)
     body: = jsonrpc.encode("m", b.int_val(1), 3, null)
     freed(body)
@@ -425,7 +425,7 @@ fn test_null_arena_fuzz() //< the fuzz driver's steps: a record frees with `free
     $o: = fuzz.Options::{ .trials = 1I64, .seed = 1I64 }
     p: = argparse.Parser.create("probe", "a null arena", null)
     $refused: = false
-    _set: = fuzz.setup(p, o@, "probe", "<program>", false, null) catch why
+    defer _set: = fuzz.setup(p, o@, "probe", "<program>", false, null) catch why
         refused = true
         freed(why)
     assert(refused, "setup refuses a command line naming no work folder")

@@ -160,11 +160,6 @@ impl Symbol_table
             .create(Symbol_table::{ .global_scope = global_scope, .current_file = null,
             .by_fqn = by_fqn, .scope_stack = scope_stack })
 
-    fn free(r: Self$@)
-        for scope in r.scope_stack
-            scope.free()
-        r.scope_stack.free()
-
     fn resolve(r: Self$@, name: U8[]): Sema_symbol$@? //< what `name` names in scope, marked used
         if sym: = r.peek(name)
             sym.flags.is_used = true
@@ -284,8 +279,6 @@ impl File_env
         symbols: = base_core.arena
             .create(Map<|U8[], Sema_symbol$@|>.new_with_cap(128, null))
         return base_core.arena.create(File_env::{ .file_name = file_name, .symbols = symbols })
-    fn free(r: Self$@)
-        r.symbols.free()
 
 impl Ast_node
     fn get_visibility(r: Ast_node$@): Visibility
@@ -312,5 +305,11 @@ impl Ast_node
             (attr_list.has_keyword("pub") || attr_list.has_keyword("priv"))
 
 // It releases what it owns with `free()`; see `Manual_free` in std/lang.kspl for why it conforms.
-impl Symbol_table: Manual_free {}
-impl File_env: Manual_free {}
+impl Symbol_table: Manual_free
+    fn free(r: Self$@)
+        for scope in r.scope_stack
+            scope.free()
+        r.scope_stack.free()
+impl File_env: Manual_free
+    fn free(r: Self$@)
+        r.symbols.free()

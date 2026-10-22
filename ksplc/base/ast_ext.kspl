@@ -28,6 +28,15 @@ priv const COMPILER_MADE: I32 = 1 //<
     //< The mark in `ival` on a declaration the compiler made rather than one the user wrote
     //< `made_by_compiler` below reads it.
 
+priv const DEFER_DECLARED: I32 = 1 //<
+    //< The mark in `ival` on a local declared with `defer` in front (`defer $b: = X`)
+    //< `mark_defer_declared` sets it, `is_defer_declared` reads it.
+
+priv const FOR_IN_SUBJECT: I32 = 2 //<
+    //< The mark in `ival` on the local that holds a `for … in`'s subject
+    //< `mark_for_in_subject` sets it, `is_for_in_subject` reads it. It differs from
+    //< `DEFER_DECLARED`, which marks the same kind of node.
+
 priv const SUGAR_MADE: I32 = 1 //<
     //< The mark in `ival` on a type path a sugar postfix folded into (`I32?`, `U8[]`)
     //< `mark_sugar_made` sets it, `is_sugar_made` reads it.
@@ -100,14 +109,23 @@ impl Param_cursor: Iter<|Ast_node$@|>
 
 impl Ast_node
     fn made_by_compiler(r: Ast_node$@): Bool //<
-        //< Whether it is a declaration the compiler made, which the user never wrote
+        //< Whether it is a declaration or member name the compiler made, which the user never wrote
         //< Examples are the per-enum `variant_name` and the constant array `variants()` returns
         //< (`../parse/load.kspl`).
         //<
         //< Caution: **An editor's walk by position skips it** (colours, hover, go-to, references).
         //< It sits at the position of what it was made for. Treated as written, it doubles that
         //< name or lands on unrelated text.
-        return r != null && r.can_be_made() && r.ival == COMPILER_MADE
+        return r != null && r.ival == COMPILER_MADE &&
+            (r.can_be_made() ||
+            (r.kind_id == .k_identifier && r.def_node != null && r.def_node.is_fn_decl()))
+
+    fn mark_implicit_name(r: Ast_node$@) //< a member selected by syntax, absent from source text
+        //< Type calls select `new`; the editor must not treat that name as written at the type.
+        //< A function name has no field index. `made_by_compiler` checks the resolved declaration
+        //< too, so index 1 of a field (including a slice's `len`) is not this mark.
+        r.ice_assert(r.kind_id == .k_identifier, "only an identifier can be an implicit name")
+        r.ival = COMPILER_MADE
 
     fn place_as_made(r: Ast_node$@, origin: Loc) //<
         //< It moves a declaration the compiler made to `origin`, marking it and its methods
@@ -124,9 +142,31 @@ impl Ast_node
             child.place_as_made(origin)
 
     priv fn can_be_made(r: Ast_node$@): Bool //<
-        //< Whether it is of a kind the compiler makes: an `impl`, a function or a constant
+        //< Whether it is of a kind the compiler makes
+        //< That is an `impl`, a function, a constant, or the `defer b.free()` that a declaration
+        //< with `defer` in front stands for.
         k: = r.kind_id
-        return k == .k_decl_impl || k == .k_decl_fn || k == .k_decl_const
+        return k == .k_decl_impl || k == .k_decl_fn || k == .k_decl_const || k == .k_stmt_defer
+
+    fn mark_defer_declared(r: Ast_node$@) //<
+        //< Records that this local was declared with `defer` in front
+        //< The one writer is the desugaring (`../parse/desugar.kspl`); sema refuses to hand the
+        //< value over (`../sema/body/defer_decl.kspl`).
+        if r != null && r.kind_id == .k_decl_var
+            r.ival = DEFER_DECLARED
+
+    fn is_defer_declared(r: Ast_node$@): Bool //< whether this local was declared with `defer`
+        return r != null && r.kind_id == .k_decl_var && r.ival == DEFER_DECLARED
+
+    fn mark_for_in_subject(r: Ast_node$@) //<
+        //< Records that this local holds a `for … in`'s subject
+        //< The one writer is the desugaring (`../parse/desugar.kspl`); sema decides there whether
+        //< the local copies the subject or points at it (`../sema/body/for_in.kspl`).
+        if r != null && r.kind_id == .k_decl_var
+            r.ival = FOR_IN_SUBJECT
+
+    fn is_for_in_subject(r: Ast_node$@): Bool //< whether this local holds a `for … in`'s subject
+        return r != null && r.kind_id == .k_decl_var && r.ival == FOR_IN_SUBJECT
 
     fn mark_sugar_made(r: Ast_node$@) //<
         //< Records that a sugar postfix wrote this type path
@@ -155,6 +195,23 @@ impl Ast_node
         return r != null && r.ival == LEFT_BY_BREAK &&
             (r.kind_id == .k_stmt_for || r.kind_id == .k_stmt_if || r.kind_id == .k_stmt_switch ||
             r.kind_id == .k_stmt_labeled_block)
+
+    fn is_noreturn_call(r: Ast_node$@): Bool //<
+        //< Whether it is a call to a function that declares `#noreturn`
+        //< **The declaration is trusted**, as with C's `__attribute__((noreturn))`: if such a
+        //< function does return, control continues with no value stored. What follows one is
+        //< unreachable ([W0201], `df_stmt_expr` in `../sema/flow/track.kspl`).
+        if r.kind_id != .k_expr_postfix
+            return false
+        op: = r.get_postfix_op()
+        if op == null || !op.text.equals("(")
+            return false
+        $callee: = r.get_child(0)
+        // A method's declaration hangs on its name (`r.ice_panic(…)`).
+        if callee != null && callee.kind_id == .k_method_access
+            callee = callee.get_postfix_member()
+        return callee != null && callee.def_node != null &&
+            callee.def_node.has_attribute("noreturn")
 
     fn is_endless_loop(r: Ast_node$@): Bool //<
         //< Whether this `for` never ends: it has no condition, and no `break` leaves it
@@ -447,12 +504,9 @@ impl Ast_node
         got: = r.find_child(.k_identifier)
         return "" if got == null else got.text
     fn get_selector_name(r: Self$@): Ast_node$@ //<
-        //< The source symbol name of a decl_import_selector (`A`, or `A as B`)
+        //< The symbol name of a decl_import_selector (`A`)
         //< It is the leading Identifier, always present.
         return r.safe_get_child(0)
-    fn get_selector_alias(r: Self$@): Ast_node$@ //<
-        //< A decl_import_selector's new name (null without `as B`: the source name is used)
-        return r.safe_get_child(1)
     fn get_embed_path(r: Self$@): Ast_node$@
         return r.find_child(.k_string)
     fn get_embed_id(r: Self$@): Ast_node$@
@@ -588,6 +642,14 @@ impl Ast_node
         return r.safe_get_child(2)
     fn get_struct_literal_type(r: Self$@): Ast_node$@
         return r.safe_get_child(0)
+
+    fn get_defer_decl(r: Self$@): Ast_node$@? //<
+        //< The declaration of `defer $b: = X`, before the desugaring splits it off
+        //< `.none` for a `defer` that holds a statement or a block.
+        d: = r.safe_get_child(1)
+        if r.kind_id == .k_stmt_defer && d != null && d.kind_id == .k_decl_var
+            return .some(d)
+        return .none
 
     fn get_defer_block(r: Self$@): Ast_node$@? //<
         //< A `defer { ... }`'s body block (stmt_defer's children are the keyword and stmt_block)

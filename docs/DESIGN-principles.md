@@ -184,7 +184,7 @@ A notation is judged by three questions, in this order. *Sugar* means a short sp
 * the block form and the expression form of `catch`;
 * the named and positional forms of a struct literal.
 
-**Symmetry outranks the use count.** Declaring several variables in one statement (`a: I32 = 1, b: I32 = 2;`) has no real use as a statement, yet it stays. The reason is the C-style loop. Its init part uses the same grammar rule (`decl_var`), and `for $i: = 0, $j: = 100; …` depends on it. The loop's step part can list several updates with `,` as well. Narrowing only the init to one declaration would make the two halves of one loop differ. A writer would then remember two rules ("the step can be listed, the init cannot") instead of one ("they can be listed with `,`"). That costs more understanding than removing one option gains.
+**Symmetry does not save a form nobody uses.** Two forms were once kept together. One declared several variables at once (`a: I32 = 1, b: I32 = 2;`). The other gave a C-style loop several inits and steps (`for $i: = 0, $j: = 100; …; i += 1, j -= 1`). Narrowing only the init would have made the two halves of one loop differ. The tree then held no use of either outside the compiler's own tests. Each was a second way to write what two declarations, or a variable declared before the loop and changed in its body, already write. So both went at once, and the two halves keep one rule. **A declaration names one variable, and a loop's header holds one init and one step.**
 
 **What is given up: the code does not get shorter.** With little sugar, the same work takes more lines than in a language with shorter forms. In return, only what is written happens. The extra lines have three sources.
 
@@ -205,19 +205,21 @@ What KSPL leaves out, and what to write instead, is "Appendix A: Features not ca
 | Not carried | Why |
 | :-- | :-- |
 | **try-finally** | Each resource nests a level deeper, and an early `return` sits badly. `defer` gives `finally`'s guarantee, running on every way out |
-| **Automatic cleanup for every type** | A type opts into `Drop` or `Ref_counted`. Manual owners keep explicit cleanup. No collector or automatic policy covers every type |
-| **An explicit destructor call (`x.drop()`)** | The cleanup runs where the owner's lifetime ends, which the source shows. A call by hand could run it twice, or run it on a value still in use |
+| **Automatic cleanup** | Every cleanup stands in the source, where a reader sees when it runs. `defer` in front of a declaration costs one word and says it. A type that frees itself leaves nothing on the page, and a reader has to know which types do. Shared ownership opts into `Ref_counted` |
 | **Garbage collection** | When something is freed can be read from the source |
-| **A cleanup joined onto its declaration** | One form for every cleanup, naming what it cleans up. A form bound to the declaration fixes what runs (`Dispose`, `close`, the attribute's function). A form that took any call would need a receiver filled in, as no other construct does. See "A `defer` is not joined onto a declaration" below |
+| **A cleanup joined behind its declaration** | A form behind the declaration that took any call would need a receiver filled in, as no other construct does. `defer` in front of the declaration covers `free()`, the one call a declaration fixes. See "A declaration takes `defer` in front, and only to free" below |
 | **Class inheritance** | It keeps the memory layout simple |
 | **Named actual arguments** | One call would have two spellings (`f(0)` and `f(offset = 0)`), and **parameter names would become published API** (Python offers the positional-only `/` to keep them out of it). Through a function-pointer type, the names in the type and in the definition can disagree |
 | **Function overloading** | No tracing which of several same-named candidates is called |
 | **A distinct type made from another**, and other spellings of a type's other name | One word, one meaning, one spelling. `typedef` stays a name, as in C, Rust and Swift. A type kept apart is declared as one, so a mix-up is an error at no run-time cost. See "The spelling of reserved words is taken from C" in [`DESIGN-notation.md`](DESIGN-notation.md) |
 | **`?` for a result** | `!` marks the place a function can stop and hand a failure back, and `?` marks absence ("Failure" below) |
 | **The abbreviated error type `T!`** | It would be a second spelling of one type |
+| **Several variables in one declaration, and several inits or steps in a loop's header** | Two declarations, or a variable declared before the loop and changed in its body, already write it, and nothing used the short form. See "Symmetry does not save a form nobody uses" above |
+| **The type's name in a `case`** | The subject already fixes the type, so `case Event.quit` would be a second spelling of `case .quit` |
 | **Another language's word for a loop or a branch** | One word for each job, spelled as C spells it. So a keyword takes no name a writer would use. See "The spelling of reserved words is taken from C" in [`DESIGN-notation.md`](DESIGN-notation.md) |
 | **`::` as a path separator** | A second mark would give a member two spellings. And `::` already has a job: `json::Value` would read like `Sz::n`. See "Why `::` stays the cast, and what it costs to parse" in [`DESIGN-programming-language.md`](DESIGN-programming-language.md) |
 | **Range syntax (`a..b`)** | A call already writes it, so an operator would be a second notation. `a..b` does not show whether its bound is exclusive; `Range.new`'s argument names do |
+| **A rename inside an import's braces** | A name then has a spelling of its own in one file, which a reader of another does not know. The file's own alias (`import "p" as q`) already renames, and keeps `q.` in front so the origin shows. Nothing outside the tests used it |
 | **`a[i..j]` for cutting out a slice** | It keeps the language small; a method already cuts any element type |
 | **Tuples** | Each returned value gets a name, so the contents can be read |
 | **A named local function** | Only a closure can be written inside a function body. Its environment rides on the caller's frame. So it cannot be named and reused from several functions |
@@ -274,32 +276,41 @@ What KSPL leaves out, and what to write instead, is "Appendix A: Features not ca
 
 **If a word is reserved anyway, reserve it in sema's name check, not in the grammar.** (*Sema*, semantic analysis, is the compiler stage that resolves names and types.) A word blocked by the grammar's `_Keyword` gets the same "expected 'character class'" error as `struct I32`, which does not say why it cannot be written.
 
-#### A `defer` is not joined onto a declaration
+#### A declaration takes `defer` in front, and only to free
 
-For a manually managed resource, write cleanup as its own line, `defer buf.free()`, right after the line that acquires `buf`. The joined form `buf: = … defer .free()` is not KSPL.
+A value that is freed when its block ends is declared with `defer` in front: `defer $buf: = List<|I32|>.new(null)`. It means the declaration followed by `defer buf.free()`. A cleanup other than `free()` is a `defer` statement of its own, on the next line, naming what it cleans up.
 
 `defer` runs a statement when the enclosing block exits; it is how a file is closed or memory freed on every way out.
 
 ```kspl
 import "std/ds" { List }
+import "std/thread"
 
 priv fn greet()
-    $buf: = List<|I32|>.new(null)
-    defer buf.free()
+    defer $buf: = List<|I32|>.new(null)
     buf.push(1)
+
+priv fn count(m: thread.Mutex<|I32|>$@)
+    n: = m.lock()
+    defer m.unlock()
+    n$ += 1
 ```
 
-**Frequent use does not keep the joined `defer`.** Step 2 of the decision order keeps a sugar used in hundreds of places. This one saves only a name and a line, and it costs three things.
+**The call goes through the trait `Manual_free`, matched by its full name.** A method that is only named `free` does not count, and no parameter names another method. So the one word in front always means the same call, and a type that has nothing to free is refused at the declaration.
 
-| Cost | What happens |
+**One way stays canonical.** `defer x.free()` on the line after `x`'s declaration says the same thing in two lines, so a hint ([H0303]) asks for the form in front. The two-line form stays for every other cleanup (`unlock`, a child's `wait`, an arena's `restore`).
+
+**The form behind the declaration, `buf: = … defer .free()`, stays out.** It costs three things, and the form in front avoids each.
+
+| Cost of the form behind | How the form in front avoids it |
 | :-- | :-- |
-| **It would be the one statement that carries on behind a closed level** | Under `x: = f() catch`, with a deeper `fallback` line, a `defer .free()` back at `x`'s column would join `x`'s statement. The indentation reader would need an exception for a line opening with `defer .`. That is the kind of word-keyed rule the conditional value gives up in favour of brackets ("How a column is read" in [`DESIGN-notation.md`](DESIGN-notation.md)) |
-| **It fills in a receiver nothing else fills in** | Everywhere else a leading `.` names an enum value (`.ok`). So a `defer .free()` moved to a line of its own would meet "cannot infer the enum type" |
-| **It is written nowhere else** | A `defer` of its own on the next line is what Go, Zig and C's draft `defer` write, and what a model writes unprompted. No form bound to a declaration fills a receiver into an arbitrary call |
+| **It would be the one statement that carries on behind a closed level.** Under `x: = f() catch`, with a deeper `fallback` line, a `defer .free()` back at `x`'s column would join `x`'s statement. The indentation reader would need an exception for a line opening with `defer .` | It starts the line. The indentation reader already reads a `defer` with no block after it as one statement. So a `catch` block under the declaration closes as it does without `defer` ("How a column is read" in [`DESIGN-notation.md`](DESIGN-notation.md)) |
+| **It fills in a receiver nothing else fills in.** Everywhere else a leading `.` names an enum value (`.ok`). So a `defer .free()` moved to a line of its own would meet "cannot infer the enum type" | Nothing is filled in. The name is the declared one, and the call is the trait's |
+| **It is written nowhere else.** No form bound to a declaration fills a receiver into an arbitrary call | It has the shape of a declaration that frees what it binds, which other languages write too, and which a model reads at sight |
 
-**The joined form would guarantee that nothing comes between an acquisition and its cleanup; that is the writer's to keep.** [W0109] asks about a way out of the block in between ("Why an early exit before a `defer` warns, and how narrowly" in [`DESIGN-programming-language.md`](DESIGN-programming-language.md)). Go and Zig carry the same exposure. The specification says to write the `defer` on the next line (8.4.1 in [`SPEC-programming-language.md`](SPEC-programming-language.md)).
+**Nothing can come between an acquisition and its cleanup in the form in front.** The two-line form leaves that to the writer, and [W0109] asks about a way out in between. A value declared with `defer` is freed when its block ends, so handing it over is refused. Declare it without `defer` to return or store it.
 
-`defer` takes one statement, so the separate line costs only the name. If `defer` took only a block, the form would be `defer { buf.free(); }`, the one `;` the indentation notation would still show. **What holds it**: a `defer` behind a statement is refused with the line to write instead (`append_trailing_defer_hint` in [`../ksplc/parse/syntax_msg.kspl`](../ksplc/parse/syntax_msg.kspl)). A `defer .free()` standing alone is refused by name (`reject_receiverless_cleanup` in [`../ksplc/sema/body/stmt.kspl`](../ksplc/sema/body/stmt.kspl)). `make test-negative` holds both.
+**What holds it**: a `defer` behind a statement is refused. For a `.free()`, the refusal gives the form in front as the line to write (`append_trailing_defer_hint` in [`../ksplc/parse/syntax_msg.kspl`](../ksplc/parse/syntax_msg.kspl)). A `defer .free()` standing alone is refused by name (`reject_receiverless_cleanup` in [`../ksplc/sema/body/stmt.kspl`](../ksplc/sema/body/stmt.kspl)). `make test-negative` holds both.
 
 #### A decimal integer does not start with 0
 
@@ -322,7 +333,7 @@ Whichever reading KSPL took, a writer from the other half would get a different 
 | Purpose | Where it was gathered | How a departure is noticed |
 | :-- | :-- | :-- |
 | Importing a file | `as` only to rename; unmarked when the name stays | lint [I0310] |
-| Iterating n times | `for x in Range.asc(n)`; a C-style three-part loop only when the body changes the index or the bound | — (the count would be evaluated differently, so it cannot be gathered mechanically) |
+| Iterating n times | `for x in Range.asc(n)`, or `for x in xs` where the index only reads the element; a C-style three-part loop only when the body changes the index or the bound | lint [I0314], which says nothing where it cannot tell whether the body changes them |
 | Heap allocation | `alloc_as<\|T\|>()` / `arena.alloc_as<\|T\|>()` / `heap_alloc_as<\|T\|>()`; `alloc(<byte count>)` for raw bytes only | `alloc_as` in `std/mem.kspl` |
 | Boolean conjunction and disjunction | `&&` / `\|\|`; `&` / `\|` when both sides must be evaluated. `*` / `+` would work identically over `_Bool`, so they are rejected at translation time | `make test-negative` (what is rejected) and `ksplc/tests/lang_limits_test.kspl` (what is kept) |
 

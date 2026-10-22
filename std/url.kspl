@@ -86,11 +86,6 @@ pub struct Query_param //< one `name=value` pair of a query string, as `Query.ea
     priv next: Query_param$@ //< the pair after this one; null after the last
 
 impl Query
-    pub fn free(r: Self$@) //< lets go every pair, when `parse_query` was given null
-        //< Parsed into an arena, it frees nothing: that arena does.
-        $own: = r.own
-        own.free()
-
     pub fn find( //< the value of the first pair with that name, or nothing
         //< The name is compared byte for byte, after decoding (`a%20b` is found as `a b`).
         r: Self,
@@ -106,7 +101,11 @@ impl Query
 
     pub fn is_empty(r: Self): Bool //< whether it holds no pair
         return r.first == null
-impl Query: Manual_free {} //< `free()` lets go the arena a query parsed with null lives in
+impl Query: Manual_free //< `free()` lets go the arena a query parsed with null lives in
+    pub fn free(r: Self$@) //< lets go every pair, when `parse_query` was given null
+        //< Parsed into an arena, it frees nothing: that arena does.
+        $own: = r.own
+        own.free()
 
 pub struct Query_seq //< walks a query's pairs one at a time, in order
     priv at: Query_param$@
@@ -125,7 +124,7 @@ pub fn parse_query( //< splits a query string into its pairs
     query: U8[], //< the text after the `?`; a leading `?` is dropped
     arena: Arena$@, //< where the pairs go; null means an arena of the pairs' own and a `free()`
 ): Query!Url_error //< the pairs; a broken `%XX` fails, having left nothing behind
-    $work: = mem.scratch(arena)
+    defer $work: = mem.scratch(arena)
     $q: = pairs_of(query, work.arena)!
     q.own = work.keep()
     return q

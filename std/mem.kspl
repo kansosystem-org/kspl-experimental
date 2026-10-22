@@ -100,7 +100,6 @@ pub fn alloc( //< allocates raw bytes from the free-list heap, which must alread
         return freestanding_heap_alloc(size)
     panic("mem.alloc: no global heap under freestanding — call mem.init_freestanding_heap() \
         first, or pass an Arena (see Arena.from_buffer)")
-    return null // unreachable; satisfies the type check
 
 #cfg(!freestanding)
 pub fn dealloc( //< returns bytes to the global heap
@@ -228,7 +227,6 @@ priv fn freestanding_heap_alloc(size: Sz): Void$@
     if cur == null
         fh_unlock()
         panic("mem.alloc: out of memory (freestanding heap)")
-        return null // unreachable
 
     leftover: = cur.size - need
     if leftover >= sizeof(Fh_block) + FH_MIN_USEFUL_BYTES
@@ -362,16 +360,17 @@ priv struct Live_value<|T|> //< an initialized slot whose contained value receiv
 #inline
 pub fn init_at<|T|>(dest: T$@, value: T) //< transfers value into uninitialized storage
     //< Caution: **The destination must hold no live value.** Assignment replaces an initialized
-    //< value and runs its cleanup; this operation initializes storage without reading its old
-    //< bytes.
+    //< value and releases its ARC counts; this operation initializes storage without reading its
+    //< old bytes.
     held: Raw_value<|T|> = ::{ .value = value }
     copy(Void$@::dest, Void$@::held.value@, sizeof(T))
 
 #inline
 pub fn take_at<|T|>(src: T$@): T //< transfers the initialized value out and zeroes its old storage
-    //< Caution: **The slot must hold a live value.** The result owns its cleanup. The source slot
-    //< becomes uninitialized; initialize it before reading it again. Use ordinary moves for locals,
-    //< whose compiler-managed lifetime must not be changed through these raw-storage operations.
+    //< Caution: **The slot must hold a live value.** The result owns its ARC counts. The source
+    //< slot becomes uninitialized; initialize it before reading it again. Use ordinary moves for
+    //< locals, whose compiler-managed lifetime must not be changed through these raw-storage
+    //< operations.
     $held: Raw_value<|T|> = ::{}
     copy(Void$@::held@, Void$@::src, sizeof(T))
     zero(Void$@::src, sizeof(T))
@@ -379,7 +378,7 @@ pub fn take_at<|T|>(src: T$@): T //< transfers the initialized value out and zer
 
 #inline
 pub fn drop_at<|T|>(src: T$@) //< ends an initialized value's lifetime and clears its storage
-    //< Drop and ARC cleanup runs here. A manually freed resource still requires its explicit free.
+    //< ARC cleanup runs here. A manually freed resource still requires its explicit free.
     _value: Live_value<|T|> = ::{ .value = take_at(src) }
 
 pub fn copy( //< copies a range of bytes; the two ranges must not overlap (`move` where they can)
@@ -646,11 +645,6 @@ impl Arena
             curr = curr.next
         return total
 
-    pub fn free(r: Self$@) //< frees every chunk, and the arena itself
-        if r.default_chunk_size == 0
-            return // from_buffer(): both the chunk and the Arena itself are the caller's static memory
-        _freed: = free_chunks(r.head, null)
-        dealloc(Void$@::r)
     pub fn headroom(r: Self$@): Arena_headroom //< how far away the next chunk is, and how big
         //< **`free` is the first chunk's room alone**, the only one `alloc` uses: room left in the
         //< other chunks does not count. One byte past `free` adds a chunk of `step` bytes, so peak
@@ -669,7 +663,12 @@ impl Arena
         ptr: = r.alloc_as<|T|>()
         init_at(ptr, init_val)
         return ptr
-impl Arena: Manual_free {} //< it owns its resources and releases them with `free()`.
+impl Arena: Manual_free //< it owns its resources and releases them with `free()`.
+    pub fn free(r: Self$@) //< frees every chunk, and the arena itself
+        if r.default_chunk_size == 0
+            return // from_buffer(): both the chunk and the Arena itself are the caller's static memory
+        _freed: = free_chunks(r.head, null)
+        dealloc(Void$@::r)
 
 // ==========================================
 // Where a std function does work it does not return, and where a value of many blocks lives
@@ -680,22 +679,21 @@ pub struct Own_arena //<
     //< their `free()` lets nothing go. Only std makes one that is not empty.
     arena: Arena$@ //< the arena, or null
 
-impl Own_arena
+impl Own_arena: Manual_free //< `free()` releases the arena it holds
     fn free(r: Self$@) //< frees the arena, if there is one, and leaves this empty
         if r.arena != null
             r.arena.free()
             r.arena = null
-impl Own_arena: Manual_free {} //< `free()` releases the arena it holds
 
 struct Scratch //< the arena a function works in: the caller's, or one of its own
     //< **A function frees the work it does not return, whatever arena it was given.** The caller
     //< owes a free only for the result ("A null arena is the heap, for every function" in
-    //< `std/docs/DESIGN-core.md`). So the scratch frees itself when its owner leaves scope
-    //< (`Drop`), on every way out. A result of many blocks is built here, and `keep()` hands it
+    //< `std/docs/DESIGN-core.md`). So its owner declares it with `defer` in front, which gives the
+    //< work back on every way out. A result of many blocks is built here, and `keep()` hands it
     //< the work instead.
     arena: Arena$@ //< where the work goes; null once `keep()` has handed it on
     priv own: Own_arena //< the arena made for a caller who passed null, or empty
-    priv lent_at: Arena_state //< where the caller's arena stood when it was lent; the drop rewinds
+    priv lent_at: Arena_state //< where the caller's arena stood when it was lent; `free` rewinds
 
 priv const SCRATCH_CHUNK: Sz = 64 * 1024 //< the largest chunk a scratch arena of its own takes
 
@@ -716,13 +714,10 @@ impl Scratch
         r.own = ::{}
         r.arena = null
         return kept
-    fn free(r: Self$@) //< gives the work back before the scope ends, where more work follows
-        //< It frees the arena made here, or rewinds the caller's to its mark.
+impl Scratch: Manual_free //< `free()` gives the work back
+    fn free(r: Self$@) //< frees the arena made here, or rewinds the caller's to its mark
         if r.own.arena != null
             r.own.free()
         else if r.arena != null
             r.arena.restore(r.lent_at)
         r.arena = null
-impl Scratch: Drop //< gives the work back when its owner leaves scope
-    priv fn drop(r: Self$@)
-        r.free()

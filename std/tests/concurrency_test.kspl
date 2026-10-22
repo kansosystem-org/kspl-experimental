@@ -53,7 +53,7 @@ fn test_thread_spawn_join()
     assert(echoed == Void$@::marker@, "join() must return exactly what entry() returned")
 
     // 2. Two threads each add 1000 times while protecting the counter with the same Mutex<I32>
-    $mx: = thread.Mutex<|I32|>.new(0) catch panic("mutex create failed")
+    defer $mx: = thread.Mutex<|I32|>.new(0) catch panic("mutex create failed")
     t1: =
         thread.Thread.spawn<|thread.Mutex<|I32|>|>(thread_test_increment, mx@)
         catch panic("thread spawn failed")
@@ -69,7 +69,8 @@ fn test_thread_spawn_join()
     mx.unlock()
 
     // 3. Even a single-thread Rc<|I32|> is safe to use when wrapped in a Mutex
-    $g_rc: = thread.Mutex<|Rc<|I32|>|>.new(Rc<|I32|>.new(7)) catch panic("mutex<rc> create failed")
+    defer $g_rc: = thread.Mutex<|Rc<|I32|>|>.new(Rc<|I32|>.new(7))
+        catch panic("mutex<rc> create failed")
     t3: =
         thread.Thread
         .spawn<|thread.Mutex<|Rc<|I32|>|>|>(thread_test_touch_mutex_rc, g_rc@)
@@ -126,8 +127,8 @@ fn test_atomic_and_cond_var()
     dealloc(Void$@::ctx)
 
     // 3. Cond_var: wait wakes after a signal (on a Mutex<|Sz|>; Raw_mutex is priv).
-    $mx: = thread.Mutex<|Sz|>.new(0) catch panic("mutex create failed")
-    $cv: = thread.Cond_var.new() catch panic("cond create failed")
+    defer $mx: = thread.Mutex<|Sz|>.new(0) catch panic("mutex create failed")
+    defer $cv: = thread.Cond_var.new() catch panic("cond create failed")
 
     ready: = mx.lock()
     ready$ = 1
@@ -177,6 +178,8 @@ fn test_cond_var_broadcast_and_wait_for()
     mx: = thread.Mutex<|Gate|>.new(Gate::{}) catch panic("mutex create failed")
     cv: = thread.Cond_var.new() catch panic("cond create failed")
     $ctx: = Gate_ctx::{ .mx = mx, .cv = cv }
+    defer ctx.mx.free()
+    defer ctx.cv.free()
     // A wait with nobody to wake it comes back at its limit, holding the lock again.
     _held: = ctx.mx.lock()
     t0: = sys.mono_us()
@@ -188,8 +191,7 @@ fn test_cond_var_broadcast_and_wait_for()
         "wait_for with nobody to wake it times out, after its limit")
     assert(at_once == .timed_out, "wait_for with a limit already up looks once")
     // Every waiter wakes on one broadcast.
-    $ts: = List<|thread.Thread$@|>.new(null)
-    defer ts.free()
+    defer $ts: = List<|thread.Thread$@|>.new(null)
     for _i in Range.asc(GATE_WAITERS)
         ts.push(thread.Thread.spawn<|Gate_ctx|>(gate_waiter, ctx@) catch panic("spawn failed"))
     for
@@ -300,7 +302,7 @@ priv struct Holder //< the thread that holds the lock, and what it tells the mai
     let_go: thread.Atomic_sz //< 1 just before it releases the lock
 
 priv fn held_elsewhere(path: U8[]): Bool //< whether try_take is refused because another holds it
-    _lock: = fs.File_lock.try_take(path) catch e
+    defer $_lock: = fs.File_lock.try_take(path) catch e
         switch e
         case .held_elsewhere
             return true
@@ -310,7 +312,7 @@ priv fn held_elsewhere(path: U8[]): Bool //< whether try_take is refused because
 
 #export
 fn lock_test_hold(h: Holder$@): Void$@ //< takes the lock, holds it a while, and releases it
-    _lock: = fs.File_lock.take(h.path) catch panic("the holder must get the free lock")
+    defer $_lock: = fs.File_lock.take(h.path) catch panic("the holder must get the free lock")
     h.holding.store(1)
     sys.sleep_ms(HOLD_MS)
     h.let_go.store(1)
@@ -318,8 +320,7 @@ fn lock_test_hold(h: Holder$@): Void$@ //< takes the lock, holds it a while, and
 
 fn test_file_lock()
     verdict.start("[Fs] a file lock refuses a second holder, and take waits for the first...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
+    defer arena: = Arena.new(64 * 1024)
     dir: = fs.mkdir_unique(BASE, "lock_", arena) catch panic("cannot create the working directory")
     path: = fs.join(dir, "lock", arena)
     $first: = fs.File_lock.take(path) catch panic("a lock nobody holds must be taken")
@@ -484,7 +485,7 @@ priv fn on_short_stack( //< runs `job` with about `SHORT_ROOM` of the stack left
     return ok && pad[0] <= 1U8
 
 priv fn json_refuses(arena: Arena$@): Bool //< 400 levels, within `max_nesting_depth`
-    $doc: = Str_builder.new()
+    defer $doc: = Str_builder.new()
     for _i in Range.asc(400)
         doc.c('[')
     for _i in Range.asc(400)
@@ -500,7 +501,7 @@ priv fn json_refuses(arena: Arena$@): Bool //< 400 levels, within `max_nesting_d
 priv fn regex_refuses(_arena: Arena$@): Bool //< 400 nested `(?:`, within `max_nesting_depth`
     //< **Compiling is the walk that recurses**, once per group level. Matching follows its ways
     //< through a list on the heap, so only the pattern's nesting can reach the stack.
-    $pattern: = Str_builder.new()
+    defer $pattern: = Str_builder.new()
     for _i in Range.asc(400)
         pattern.s("(?:")
     pattern.c('a')

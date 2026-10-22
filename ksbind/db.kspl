@@ -200,8 +200,7 @@ impl Db
         r: Self$@,
         sql: U8[], //< the SQL to run
     ): Void!Db_error
-        stmt: = r.prepare(sql)!
-        defer stmt.free()
+        defer stmt: = r.prepare(sql)!
         if sqlite3_bind_parameter_count(stmt.handle) > 0
             throw .requires_bindings
         // Caution: **Decide by the columns, before the step.** A `RETURNING` has made its change by
@@ -215,16 +214,6 @@ impl Db
 
     pub fn last_insert_rowid(r: Self$@): I64 //< the row id the last `INSERT` created
         return sqlite3_last_insert_rowid(r.handle)
-
-    pub fn free(r: Self$@) //<
-        //< frees it; the database closes once its statements are freed too
-        //< Caution: **The name must be `free`.** The use-after-free check treats a call as a
-        //< release when "the receiver's type conforms to `Manual_free` and the method called is
-        //< `free`" (get_free_call_receiver in ksplc/sema/flow/track.kspl). Under a different name,
-        //< `c.free(); c.query(…);` compiles with no diagnostics. [W0107] reports it.
-        sqlite3_close_v2(r.handle)
-        r.said.free()
-        dealloc(Void$@::r)
 
 impl Statement
     pub fn bind_i64( //< binds an integer to a parameter
@@ -335,19 +324,9 @@ impl Statement
         mem.copy(Void$@::buf.ptr, Void$@::text, n)
         return n
 
-    pub fn free(r: Self$@) //< frees the prepared statement
-        sqlite3_finalize(r.handle)
-        r.said.free()
-        dealloc(Void$@::r)
-
-impl Db: Manual_free {} //< it owns its memory and releases it with `free()`
-impl Statement: Manual_free {} //< it owns its memory and releases it with `free()`
-
-// ---------------------------------------------------------
-// The round trip between a struct and one row, walking `std/reflect`'s table.
-// ---------------------------------------------------------
-
-impl Statement
+    // ---------------------------------------------------------
+    // The round trip between a struct and one row, walking `std/reflect`'s table.
+    // ---------------------------------------------------------
     pub fn bind_row<|T: reflect.Reflectable|>( //< binds a whole table type to `:field` parameters
         //< **It matches by name** (`:field`, and the column's name when reading).
         //< Caution: **If it matched by position, swapping two columns in the SQL would silently
@@ -464,3 +443,19 @@ impl Statement
             return r.column_i64(col)
         default {}
         throw .column_type(name)
+
+impl Db: Manual_free //< it owns its memory and releases it with `free()`
+    pub fn free(r: Self$@) //<
+        //< frees it; the database closes once its statements are freed too
+        //< Caution: **The name must be `free`.** The use-after-free check treats a call as a
+        //< release when "the receiver's type conforms to `Manual_free` and the method called is
+        //< `free`" (get_free_call_receiver in ksplc/sema/flow/track.kspl). Under a different name,
+        //< `c.free(); c.query(…);` compiles with no diagnostics. [W0107] reports it.
+        sqlite3_close_v2(r.handle)
+        r.said.free()
+        dealloc(Void$@::r)
+impl Statement: Manual_free //< it owns its memory and releases it with `free()`
+    pub fn free(r: Self$@) //< frees the prepared statement
+        sqlite3_finalize(r.handle)
+        r.said.free()
+        dealloc(Void$@::r)

@@ -117,10 +117,6 @@ fn recovered(): Bool
 $kspeg_arena: Arena$@ = null
 
 impl Profiler
-    fn free(r: Self$@)
-        r.kspeg_map.free()
-        r.kspeg_list.free()
-
     fn init(r: Self$@)
         r.kspeg_map.free()
         r.kspeg_list.clear()
@@ -149,7 +145,7 @@ impl Profiler
             total_memo += p.memo_hits
             if p.memo_off
                 memo_off += 1
-        $head: = Str_builder.new()
+        defer $head: = Str_builder.new()
         head.s("\n[KSPEG Rule] \{Sz::total:,\} rule invocations, ")
             .s("\{Sz::total_memo:,\} from memo, \{memo_off:,\} rules left it (Top 20 by calls)\n")
         io.err().s(head.slice())
@@ -160,7 +156,7 @@ impl Profiler
         for i in Range.asc(limit)
             p: = ranked.get(i)
             failed: = p.calls - p.memo_hits - p.parsed_ok
-            $sb: = Str_builder.new()
+            defer $sb: = Str_builder.new()
             sb.s("      \{Sz::p.calls:7,\}\{Sz::p.memo_hits:11,\}\{Sz::p.parsed_ok:11,\}")
                 .s("\{Sz::failed:11,\}  \{p.name\}\n")
             io.err().s(sb.slice())
@@ -237,7 +233,7 @@ impl Parse_error
             //< a full-text search. On true the caller throws `syntax_error`, the signal for
             //< "already reported" (as parse_raw_ast does) that outer stages pass along, so it is
             //< reported once.
-        $why: = Str_builder.new()
+        defer $why: = Str_builder.new()
         switch e
         case .io(io_err)
             // Caution: **Print the absolute name.** Some import names are looked up from the
@@ -266,7 +262,7 @@ fn parse_raw_ast(src: U8[], file_path: U8[], parser: kspeg.Target$@, laid_out: B
     // grammar reads bytes, so a stray byte in a string or a comment would pass on to C.
     bad: = parse_source_fix.first_bad_utf8(src)
     if bad >= 0
-        $msg: = Str_builder.new()
+        defer $msg: = Str_builder.new()
         msg
             .s("this byte (0x\{src[bad]:02X\}) does not begin a valid UTF-8 sequence. KSPL source \
                 is UTF-8 throughout, including comments and strings. Save the file as UTF-8. Write \
@@ -296,7 +292,8 @@ fn parse_raw_ast(src: U8[], file_path: U8[], parser: kspeg.Target$@, laid_out: B
             base_diag.print_syntax_error(file_path, src, fatal_pos, fatal_msg, starts)
         case .mismatch
             max_pos: = target_parser.fail.max_fail_pos
-            $msg: = parse_syntax_msg.build_parse_error_msg(target_parser@, src, max_pos, laid_out)
+            defer $msg: = parse_syntax_msg.build_parse_error_msg(target_parser@, src, max_pos,
+                laid_out)
             starts: = src.line_starts(base_core.arena)
             at: = parse_syntax_msg.parse_error_at(src, max_pos)
             base_diag.print_syntax_error(file_path, src, at, msg.slice(), starts)
@@ -500,7 +497,7 @@ fn load_and_parse_file(import_path: U8[], loaded_files: List<|U8$[]|>$@, root_fi
             continue
         next_path: = path_opt.unwrap_or("")
         refuse_at_import(base_package.refused_written(next_path), decl, import_path, perm_src)!
-        $resolved_str: = import_path.resolve_import_path(next_path)
+        defer $resolved_str: = import_path.resolve_import_path(next_path)
         perm_slice: = base_core.arena.dup_str(resolved_str.slice())
         // **A package that declares its name declares what it uses**; an import outside that list
         // is rejected where written, before its file is read (`refused_use` in
@@ -521,7 +518,7 @@ priv fn read_mended(import_path: U8[], path_key: U8[]): U8$[]!Parse_error //<
     //< The file import_path names, read from disk and mended, in the arena
     //< The logical name (import_path) and the path read from are different things. A `std/...`
     //< resolves pinned to base_locate.std_dir() (see base/locate.kspl).
-    $file_path: = Str_builder.new()
+    defer $file_path: = Str_builder.new()
     base_locate.append_file_path(import_path, file_path@)
     raw: = read_source(file_path.slice())!
     // The notes are only collected (the reason is at `layout_notes` above).
@@ -584,11 +581,10 @@ priv fn append_enum_members(decls: List<|Ast_node$@|>$@, file_path: U8[],
         //< constant array that `variants()` returns.
         //< Caution: **Keep the return value at U8[] and do not use a Writer.** Making every enum
         //< depend on std/io would pull all of the trait's thunks into a freestanding build.
-    $src: = Str_builder.new()
+    defer $src: = Str_builder.new()
     // Where each generated declaration goes (`place_as_made` in `../base/ast_ext.kspl`): the enum's
     // name, in the order the declarations are written into `src`.
-    $origins: = List<|base_ast.Loc|>.new(null)
-    defer origins.free()
+    defer $origins: = List<|base_ast.Loc|>.new(null)
     // **Push after finishing the walk** (the synthesis results are added to the same decls).
     for decl in decls
         if decl.kind_id != .k_decl_enum
@@ -597,15 +593,15 @@ priv fn append_enum_members(decls: List<|Ast_node$@|>$@, file_path: U8[],
         name: = decl.find_text(.k_identifier)
         if name_node == null || name.len == 0
             continue
-        $params: = Str_builder.new()
+        defer $params: = Str_builder.new()
         if !append_gen_params(decl, params@)
             continue // a const generic is out of scope for the synthesis
         // **Each enum's declarations are built separately** and added only once a member was
         // written. Built and cleared in `src`, one enum with nothing to add would discard the
         // declarations of the enums before it.
-        $fns: = Str_builder.new()
+        defer $fns: = Str_builder.new()
         write_variant_name(decls, decl, name, params.slice(), fns@)
-        $list: = Str_builder.new()
+        defer $list: = Str_builder.new()
         if params.len == 0 && write_variant_list(decls, decl, name, list@, fns@)
             src.s(list.slice())
             origins.push(name_node.loc)
@@ -632,7 +628,7 @@ priv fn write_variant_name(decls: List<|Ast_node$@|>$@, decl: Ast_node$@, name: 
         //< Nothing is written when no variant could be read.
     if has_user_method(decls, name, "variant_name")
         return
-    $one: = Str_builder.new()
+    defer $one: = Str_builder.new()
     one.s("  ").s(enum_vis(decl)).s("fn variant_name(r: ").s(name).s(p).s("): U8[] {\n    switch r")
     $any: = false
     for v in decl.children
@@ -651,7 +647,7 @@ priv fn write_variant_list(decls: List<|Ast_node$@|>$@, decl: Ast_node$@, name: 
         //< is to be made. **A name the file already uses is left to it**: its own method of that
         //< name, or a variant of that name. The array is a constant, so `variants()` allocates
         //< nothing; its name opens with `_`, which the unused-name and naming checks pass over.
-    $items: = Str_builder.new()
+    defer $items: = Str_builder.new()
     $count: Sz = 0
     for v in decl.children
         if v.kind_id != .k_enum_variant || v.children.len == 0
@@ -703,7 +699,7 @@ priv fn has_user_method(decls: List<|Ast_node$@|>$@, enum_name: U8[], member: U8
         target: = decl.get_decl_type_node()
         if target == null
             continue
-        $t_name: = target.extract_type_name()
+        defer $t_name: = target.extract_type_name()
         if !t_name.slice().get_generic_base_name().equals(enum_name)
             continue
         for m in decl.children
@@ -718,8 +714,7 @@ priv fn append_gen_params(decl: Ast_node$@, out: Str_builder$@): Bool //<
     gp: = decl.find_child(.k_type_gen_params)
     if gp == null
         return true
-    $names: = List<|U8[]|>.new(null)
-    defer names.free()
+    defer $names: = List<|U8[]|>.new(null)
     for p in gp.children
         if p.is_const_gen_param()
             return false
@@ -740,4 +735,7 @@ priv fn append_gen_params(decl: Ast_node$@, out: Str_builder$@): Bool //<
 
 // It owns memory and releases it with `free()` (why it must conform: `Manual_free` in
 // std/lang.kspl).
-impl Profiler: Manual_free {}
+impl Profiler: Manual_free
+    fn free(r: Self$@)
+        r.kspeg_map.free()
+        r.kspeg_list.free()

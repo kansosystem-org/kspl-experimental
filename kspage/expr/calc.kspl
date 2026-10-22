@@ -86,8 +86,7 @@ priv fn new_book(sheet: Sheet$@, arena: Arena$@, kept: Arena$@, editing: Inline$
 
 priv fn find_grid(book: Book$@, name: U8[]): Grid$@? //< the table a name points at
     //< **Where two have the same name it is the earlier one in document order.**
-    for $i: Sz = 0; i < book.grids.len; i += 1
-        g: = book.grids.get(i)
+    for g in book.grids
         if g.table.name.len > 0 && g.table.name.equals(name)
             return .some(g)
     return .none
@@ -106,15 +105,14 @@ priv fn new_grid(table: Block$@, book: Book$@): Grid$@
         .book = book,
         .arena = arena,
     }
-    for $i: Sz = 0; i < rows * cols; i += 1
+    for _i in Range.asc(rows * cols)
         g.state.push(UNVISITED)
         g.value.push(Cell_error.no_cell.failed())
         g.anchor.push(null)
     // **A cell's position counts merges** (`Block.tiles_of`). Counted separately, the address in a
     // merged table would disagree with where it is laid out. A covered address holds no cell.
     tiles: = table.tiles_of(arena)
-    for $i: Sz = 0; i < tiles.len; i += 1
-        t: = tiles.get(i)
+    for t in tiles
         if t.row < rows && t.column < cols
             g.anchor.set(t.row * cols + t.column, t.block)
     return arena.create(g)
@@ -707,12 +705,10 @@ priv fn show_prose(b: Block$@, sheet: Sheet$@, book: Book$@, out: Str_builder$@)
         for $i: Sz = 0; i < b.children.len; i += 1
             show_prose(b.children.get(i), sheet, book, out)
         return
-    for $r: Sz = 0; r < b.children.len; r += 1
-        row: = b.children.get(r)
+    for row in b.children
         for $i: Sz = 0; i < row.inlines.len; i += 1
             show_free(row.inlines.get(i), book, out)
-        for $c: Sz = 0; c < row.children.len; c += 1
-            cell: = row.children.get(c)
+        for cell in row.children
             // Index 0 is the cell the table computes.
             for $i: Sz = 1; i < cell.inlines.len; i += 1
                 show_free(cell.inlines.get(i), book, out)
@@ -745,10 +741,8 @@ fn takes_formula(d: Doc$@, sheet: Sheet$@, n: Inline$@): Bool //<
 
 priv fn seek_cell(b: Block$@, sheet: Sheet$@, n: Inline$@): Bool
     if sheet.arrange_of(b.style).same_arrange(.grid)
-        for $r: Sz = 0; r < b.children.len; r += 1
-            row: = b.children.get(r)
-            for $c: Sz = 0; c < row.children.len; c += 1
-                cell: = row.children.get(c)
+        for row in b.children
+            for cell in row.children
                 if cell.inlines.len > 0 && cell.inlines.get(0) == n
                     return true
     for $i: Sz = 0; i < b.children.len; i += 1
@@ -762,9 +756,8 @@ fn recalc(d: Doc$@, sheet: Sheet$@, editing: Inline$@ = null) //<
     //< **Also move the cursor back in bounds** (`Editor.clamp` in `write/typing.kspl`): a shrunk
     //< text leaves it outside. **Build the tables' structure here and throw it away here**; in the
     //< document's arena it would pile up at every keystroke.
-    $out: = Str_builder.new()
-    scratch: = Arena.new(16 * 1024)
-    defer scratch.free()
+    defer $out: = Str_builder.new()
+    defer scratch: = Arena.new(16 * 1024)
     book: = new_book(sheet, scratch, d.arena, editing)
     for $i: Sz = 0; i < d.blocks.len; i += 1
         collect(d.blocks.get(i), sheet, book)

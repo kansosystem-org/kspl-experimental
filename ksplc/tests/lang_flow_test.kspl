@@ -3,6 +3,7 @@
 //< The shapes the compiler refuses are the cases `loop_*` in `negative/control.kspl` and
 //< `move_only_field_moved_out` in `negative/closure.kspl`; the syntax and basic types are in
 //< `lang_test.kspl`.
+import "std/ds" { List }
 import "std/verdict"
 
 // ==========================================
@@ -73,6 +74,75 @@ fn test_loop_exits_carry_their_state()
     verdict.pass("a loop's exits, `break` included, carry what each path set, moved or released.")
 
 // ==========================================
+// `for x in` reads a place where it stands, and evaluates anything else once ("Loops" in
+// `../../docs/SPEC-programming-language.md`). The loop points at the place, so it moves nothing
+// and sees an element the body pushes. An `Iter` is copied, so each loop starts from its start.
+// ==========================================
+priv struct Loop_bag //< a move-only value that a `for x in` reads by index
+    vals: I32[3]
+    len: Sz
+
+impl Loop_bag: Move_only {}
+
+impl Loop_bag: Index<|Sz, I32|>
+    fn get(r: Self@, i: Sz): I32
+        return r.vals[i]
+
+priv struct Loop_count //< an `Iter` that counts down from `n` to 1
+    n: I32
+
+impl Loop_count: Iter<|I32|>
+    fn next(r: Self$@): I32?
+        if r.n <= 0
+            return .none
+        r.n -= 1
+        return .some(r.n + 1)
+
+priv $loop_made: I32 = 0 //< how many times `loop_three` ran
+
+priv fn loop_three(): I32[3] //< three values, counting each call
+    loop_made += 1
+    return ::{ 1, 2, 3 }
+
+priv fn move_only_read_twice(): I32 //< two loops over one move-only value, then a read of it
+    bag: = Loop_bag::{ .vals = ::{ 1, 2, 3 }, .len = 3 }
+    $t: = 0
+    for v in bag
+        t += v
+    for v in bag
+        t += v
+    return t + I32::bag.len
+
+priv fn sees_its_own_pushes(): Sz //< how many elements a loop visits while it pushes
+    defer $xs: = List<|I32|>.new(null)
+    xs.push(1)
+    xs.push(2)
+    $seen: Sz = 0
+    for x in xs
+        // **Push until the buffer moves**, so a read of a stale copy would read freed memory.
+        if x < 20
+            xs.push(x + 2)
+        seen += 1
+    return seen
+
+fn test_for_in_reads_in_place()
+    verdict.start("[Lang] for x in reads a place where it stands test...")
+    assert(move_only_read_twice() == 6 + 6 + 3, "a move-only value is read, not moved")
+    assert(sees_its_own_pushes() == 21, "the loop visits each element its body pushed")
+    counter: = Loop_count::{ .n = 3 }
+    $sum: = 0
+    for v in counter
+        sum += v
+    for v in counter
+        sum += v
+    assert(sum == 12 && counter.n == 3, "each loop over an Iter starts from the Iter's start")
+    $total: = 0
+    for v in loop_three()
+        total += v
+    assert(total == 6 && loop_made == 1, "a call's result is evaluated once")
+    verdict.pass("`for x in` reads a place in place, copies an Iter, and evaluates a call once.")
+
+// ==========================================
 // `catch` on an Option takes its value or leaves ("Catching an optional" in
 // `../../docs/SPEC-programming-language.md`). Each way out is tried on both sides: with a value
 // the block is skipped, and without one the block leaves. The shapes refused are the cases
@@ -140,3 +210,74 @@ fn test_catch_on_option()
     assert(catch_nested_result(4) == 8 && catch_nested_result(-1) == 20,
         "a Result's catch in the block keeps its own fallback")
     verdict.pass("`x: = opt catch { … }` binds the value, or leaves by every way out.")
+
+// Each free appends its owner's digit. Missing, repeated or reordered frees change the trace.
+priv struct Cleanup_probe
+    trace: I64$@
+    digit: I64
+
+impl Cleanup_probe: Manual_free
+    fn free(r: Self)
+        r.trace$ = r.trace$ * 10I64 + r.digit
+
+priv enum Cleanup_exit
+    stop
+
+priv fn cleanup_failure(): Void!Cleanup_exit
+    throw .stop
+
+priv fn cleanup_path(trace: I64$@, path: I32): Void!Cleanup_exit
+    defer outer: = Cleanup_probe::{ .trace = trace, .digit = 1I64 }
+    if path >= 0
+        defer inner: = Cleanup_probe::{ .trace = trace, .digit = 2I64 }
+        if path == 1
+            return
+        if path == 2
+            throw .stop
+        if path == 3
+            cleanup_failure()!
+    assert(trace$ == 2I64, "leaving an inner block must not free the outer owner")
+
+priv fn cleanup_generic<|T|>(trace: I64$@, path: I32, _tag: T): Void!Cleanup_exit
+    defer outer: = Cleanup_probe::{ .trace = trace, .digit = 3I64 }
+    cleanup_path(trace, path)!
+
+priv struct Cleanup_runner<|T|>
+    tag: T
+
+impl<|T|> Cleanup_runner<|T|>
+    fn run(r: Self, trace: I64$@, path: I32): Void!Cleanup_exit
+        defer outer: = Cleanup_probe::{ .trace = trace, .digit = 4I64 }
+        cleanup_generic(trace, path, r.tag)!
+
+priv fn cleanup_loop(trace: I64$@)
+    defer outer: = Cleanup_probe::{ .trace = trace, .digit = 9I64 }
+    for $i: I32 = 1; i <= 3; i += 1
+        defer iteration: = Cleanup_probe::{ .trace = trace, .digit = i }
+        if i == 1
+            continue
+        if i == 2
+            break
+    assert(trace$ == 12I64, "continue and break free only the iterations they leave")
+
+fn test_defer_declarations_on_each_exit()
+    verdict.start("[defer] declarations free once on each scope exit...")
+    for $path: I32 = 0; path < 4; path += 1
+        $direct: I64 = 0I64
+        $failed: = false
+        cleanup_path(direct@, path) catch
+            failed = true
+        assert(failed == (path >= 2), "cleanup must preserve the thrown result")
+        assert(direct == 21I64, "each direct exit frees inner then outer exactly once")
+        $generic: I64 = 0I64
+        cleanup_generic(generic@, path, 0) catch {}
+        assert(generic == 213I64, "a generic function frees once after its callee exits")
+        $method: I64 = 0I64
+        runner: = Cleanup_runner<|Bool|>::{ .tag = true }
+        runner.run(method@, path) catch {}
+        assert(method == 2134I64, "a generic method frees once after its callee exits")
+    $looped: I64 = 0I64
+    cleanup_loop(looped@)
+    assert(looped == 129I64, "the loop's outer owner is freed only on function exit")
+    verdict
+        .pass("Normal exit, return, throw, propagation, break and continue preserve cleanup order.")

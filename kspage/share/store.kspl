@@ -63,7 +63,7 @@ fn spec_into($ob: Object_builder, b: Json_builder$@, spec: Font_spec): Object_bu
 
 priv fn color_val(b: Json_builder$@, v: U32): Value //< writes one color as `#rrggbb`
     //< `str_val` makes the copy (the arena here is freed on return).
-    $sb: = Str_builder.new()
+    defer $sb: = Str_builder.new()
     paint.color_into(v, sb@)
     return b.str_val(sb.slice())
 
@@ -130,7 +130,7 @@ priv fn read_number(v: Value): Number_spec!Store_error //<
 priv fn when_into(b: Json_builder$@, ob: Object_builder, how: U8[], w: When): Object_builder //<
     //< Writes the rule that changes the look by the value as text
     //< The field's name says how it compares (`when_above` and the like).
-    $sb: = Str_builder.new()
+    defer $sb: = Str_builder.new()
     sb.s("when_")
     sb.s(how)
     out: Object_builder = ob.set(sb.slice(), b.float_val(w.than))
@@ -141,7 +141,7 @@ priv fn read_when(v: Value): When //<
     //< There is only one way of comparing, read in the enum's order (`none` is never saved). So a
     //< text holding two does not give an answer that depends on the writer's order.
     $out: When = style_when.no_when()
-    $sb: = Str_builder.new()
+    defer $sb: = Str_builder.new()
     for how in style_when.Compare.variants()
         switch how
         case .none
@@ -250,15 +250,13 @@ fn same_style(a: Style$@, b: Style$@): Bool //< whether two styles save as the s
     //< Caution: **Do not compare field by field** — a field added to `Style` and forgotten there
     //< makes a change to it alone "the same". **The work is freed before returning** (written into
     //< the document's arena, every comparison would grow it).
-    work: = Arena.new(SAME_ROOM)
-    defer work.free()
+    defer work: = Arena.new(SAME_ROOM)
     $jb: = Json_builder.new(work)
     return dump_equal(style_val(jb@, a), style_val(jb@, b))
 
 fn same_paper(a: Paper, b: Paper): Bool //< whether two paper settings save as the same text
     //< The same reasons as `same_style`.
-    work: = Arena.new(SAME_ROOM)
-    defer work.free()
+    defer work: = Arena.new(SAME_ROOM)
     $jb: = Json_builder.new(work)
     return dump_equal(paper_val(jb@, a), paper_val(jb@, b))
 
@@ -269,8 +267,7 @@ fn same_paper(a: Paper, b: Paper): Bool //< whether two paper settings save as t
 
 fn style_text(s: Style$@, out: Str_builder$@) //< writes one style as its saved text
     //< The work is freed before returning (the reason is at `same_style`).
-    work: = Arena.new(SAME_ROOM)
-    defer work.free()
+    defer work: = Arena.new(SAME_ROOM)
     $jb: = Json_builder.new(work)
     style_val(jb@, s).dump(out)
 
@@ -283,23 +280,21 @@ fn style_from_text(src: U8[], arena: Arena$@): Style!Store_error //<
     return read_face(root.val)
 
 fn paper_text(p: Paper, out: Str_builder$@) //< writes the paper settings as their saved text
-    work: = Arena.new(SAME_ROOM)
-    defer work.free()
+    defer work: = Arena.new(SAME_ROOM)
     $jb: = Json_builder.new(work)
     paper_val(jb@, p).dump(out)
 
 fn paper_from_text(src: U8[]): Paper!Store_error //<
     //< Builds the paper settings from their saved text, with the checks a document read gets
     //< They hold no text, so nothing outlives the work here.
-    work: = Arena.new(SAME_ROOM)
-    defer work.free()
+    defer work: = Arena.new(SAME_ROOM)
     root: = json.parse(src, work) catch
         throw .broken
     return read_paper(root.val)
 
 priv fn dump_equal(a: json.Value, b: json.Value): Bool //< whether two values dump as the same text
-    $one: = Str_builder.new()
-    $other: = Str_builder.new()
+    defer $one: = Str_builder.new()
+    defer $other: = Str_builder.new()
     a.dump(one@)
     b.dump(other@)
     return one.slice().equals(other.slice())
@@ -369,7 +364,7 @@ priv fn sizes_val(b: Json_builder$@, specs: List<|F32?|>$@): Value //<
     //< Writes the list of column widths and row heights
     //< An unset entry is null (packed together, the entries would shift).
     $out: = b.arr()
-    for $i: Sz = 0; i < specs.len; i += 1
+    for i in Range.asc(specs.len)
         switch specs.get(i)
         case .some(v)
             out = out.push(b.float_val(v))
@@ -435,8 +430,7 @@ fn save(d: Doc$@, sheet: Sheet$@, out: Str_builder$@) //<
     //< Writes the document and the styles to `out`
     //< Caution: **Create and free the builder's memory here.** Borrowing the document's arena piles
     //< up allocations with every save.
-    scratch: = Arena.new(64 * 1024)
-    defer scratch.free()
+    defer scratch: = Arena.new(64 * 1024)
     $b: = Json_builder.new(scratch)
     $blocks: = b.arr()
     for $i: Sz = 0; i < d.blocks.len; i += 1
@@ -578,8 +572,8 @@ priv fn read_sheet(v: Value, arena: Arena$@): Sheet$@!Store_error
     sheet: = Sheet.new(read_font(v.get("root"), font.default_root())!, arena)
     sheet.paper = read_paper(v)!
     styles: = v.get("styles").arr_list(arena)
-    for $i: Sz = 0; i < styles.len; i += 1
-        read_style(sheet, styles.get(i))!
+    for e in styles
+        read_style(sheet, e)!
     return sheet
 
 priv fn read_rect(v: Value): Rect!Store_error
@@ -594,8 +588,7 @@ priv fn read_sizes(v: Value, into: List<|F32?|>$@, arena: Arena$@): Void!Store_e
     //< Reads the list and appends it to `into`
     //< null means "not set".
     list: = v.arr_list(arena)
-    for $i: Sz = 0; i < list.len; i += 1
-        got: = list.get(i)
+    for got in list
         $spec: F32? = .none
         if present(got)
             spec = .some(checked_f32(got, 0.0, limit.length_fits)!)
@@ -635,8 +628,7 @@ priv fn read_block_at(v: Value, arena: Arena$@, depth: Sz): Block$@!Store_error 
     // Absent, it is 0 (it appears at every step).
     blk.step = v.get("step").as_int().unwrap_or(0)
     inlines: = v.get("inlines").arr_list(arena)
-    for $i: Sz = 0; i < inlines.len; i += 1
-        n: = inlines.get(i)
+    for n in inlines
         made: = blk.add_text(n.get("text").as_str().unwrap_or(""),
             n.get("style").as_str().unwrap_or(""))
         made.href = n.get("href").as_str().unwrap_or("")
@@ -645,8 +637,8 @@ priv fn read_block_at(v: Value, arena: Arena$@, depth: Sz): Block$@!Store_error 
         made.remark_by = n.get("remark_by").as_str().unwrap_or("")
         made.refers = n.get("refers").as_str().unwrap_or("")
     children: = v.get("children").arr_list(arena)
-    for $i: Sz = 0; i < children.len; i += 1
-        blk.children.push(read_block_at(children.get(i), arena, depth + 1)!)
+    for elem in children
+        blk.children.push(read_block_at(elem, arena, depth + 1)!)
     return blk
 
 fn load(src: U8[], arena: Arena$@): Loaded!Store_error //<
@@ -664,8 +656,8 @@ fn load(src: U8[], arena: Arena$@): Loaded!Store_error //<
         throw .unknown_version
     d: = Doc.new(arena)
     blocks: = root.val.get("blocks").arr_list(arena)
-    for $i: Sz = 0; i < blocks.len; i += 1
-        d.blocks.push(read_block(blocks.get(i), arena)!)
+    for item in blocks
+        d.blocks.push(read_block(item, arena)!)
     // The page's header and footer. Without them they stay empty (the empty bands `Doc.new` made
     // are kept).
     if present(root.val.get("header"))

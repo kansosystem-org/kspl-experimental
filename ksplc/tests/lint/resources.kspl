@@ -80,12 +80,12 @@ pub fn indexes(): I32
   a: I32[3] = ::{ 1, 2, 3 }
   return a[5] + a[-1]
 // ==== case defer_after_way_out
-//< [W0109] An exit between a `Manual_free` value's binding and the `defer` that frees it
+//< [W0109] A way out between a `Manual_free` value's binding and the `defer` that frees it
 //< The `!` in late() and the `continue` in per_round() leave before the `defer` is registered.
-//< A `defer` right after the binding, a value handed back, a hand free and a closure's `!` do not.
+//< `defer` in front of the binding, a value handed back, a hand free and a closure's `!` do not.
 //< **The line numbers name the way out and the two lines the message gives.** Mend them on a move.
 // EXPECT: defer_after_way_out.kspl:24:8: warning: [W0109] 'arena' leaks if this '!' exits
-// EXPECT: registered only on line 25. Register the defer immediately after binding 'arena' on line 23
+// EXPECT: registered only on line 25. Put 'defer' in front of its declaration on line 23
 // EXPECT: defer_after_way_out.kspl:53:7: warning: [W0109] 'buf' leaks if this 'continue' exits
 // EXPECT-NOT: defer_after_way_out.kspl:31:
 // EXPECT-NOT: defer_after_way_out.kspl:36:
@@ -98,7 +98,7 @@ priv enum E
 
 priv fn step(ok: Bool): I32!E //< a road that may throw
   if !ok
-    throw E.bad
+    throw .bad
   return 1
 
 priv fn late(ok: Bool): I32!E //< the `!` leaves before the `defer` (a finding)
@@ -107,9 +107,9 @@ priv fn late(ok: Bool): I32!E //< the `!` leaves before the `defer` (a finding)
   defer arena.free()
   return n
 
-priv fn early(ok: Bool): I32!E //< the `defer` straight after the binding (not a finding)
-  arena: = Arena.new(1024)
-  defer arena.free()
+priv fn early(ok: Bool): I32!E //< `defer` in front of the binding (not a finding)
+  defer arena: = Arena.new(1024)
+  _p: = arena.alloc(8)
   return step(ok)!
 
 priv fn handed(ok: Bool): Arena$@ //< the value handed back is the caller's (not a finding)
@@ -301,10 +301,9 @@ impl G
   pub fn open(): G
     return G::{ .id = 1 }
 
+impl G: Manual_free
   pub fn free(r: Self$@)
     r.id = 0
-
-impl G: Manual_free {}
 
 fn main(): I32
   $h: = H.open()
@@ -362,3 +361,143 @@ priv fn none(_a: Arena$@): Sz
 fn main(): I32
   h: Holder = ::{ .cb = none }
   return I32::(h.grow(1) + via_alias(1) + seen(1) + plain(null) + h.cb(null))
+// ==== case value_never_freed
+//< [W0109] A value made here that no path frees, and one that only some paths free
+//< **Only what this function makes counts**: a parameter, an element read out of a list, a value
+//< from an arena and a value another function hands back from its own arena are not its own. A
+//< part read out of a value (`b.len`) does not hand the value on.
+// EXPECT: value_never_freed.kspl:16:4: warning: [W0109] 'b' is never freed. Put 'defer' in front of its declaration ('defer $b: = …'), or hand it on.
+// EXPECT: value_never_freed.kspl:21:4: warning: [W0109] 'xs' is not freed on every path to the end of its block
+// EXPECT: value_never_freed.kspl:29:5: warning: [W0109] 'out' leaks if this 'return' exits. Nothing frees it on this way out.
+// EXPECT-NOT: 'first'
+// EXPECT-NOT: 'given'
+// EXPECT: 0 error(s), 3 warning(s)
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+
+priv fn length(s: U8[]): Sz //< made and never freed (a finding)
+  $b: = Str_builder.new()
+  b.s(s)
+  return b.len
+
+priv fn maybe(keep: Bool) //< freed on one path only (a finding)
+  $xs: = List<|I32|>.new(null)
+  xs.push(1)
+  if keep
+    xs.free()
+
+priv fn early(bad: Bool): Str_builder //< handed back, but left behind on an early return (a finding)
+  $out: = Str_builder.new()
+  if bad
+    return Str_builder.new()
+  out.s("ok")
+  return out
+
+priv fn in_arena(a: Arena$@, rows: List<|List<|I32|>|>$@, given: Str_builder): Sz //< none of these
+  $xs: = List<|I32|>.new(a)
+  xs.push(1)
+  first: = rows.get(0)
+  return xs.len + first.len + given.len
+
+fn main()
+  _n: = length("x")
+  maybe(true)
+  $o: = early(false)
+  o.free()
+  defer a: = Arena.new(64)
+  defer $rows: = List<|List<|I32|>|>.new(null)
+  rows.push(List<|I32|>.new(a))
+  _m: = in_arena(a, rows@, Str_builder.new())
+// ==== case value_never_freed_in_generic
+//< [W0109] in a body that is checked only in its instances
+//< Those are a generic's method, a generic function and a slice's method. **Each finding is printed
+//< once**, at the line written, though each body here is checked once per instance. A value of
+//< the type argument's own type is not a finding: in the `Str_builder` instance it owns, in the
+//< `I32` one it does not, and `defer` in front of it would not compile there.
+// EXPECT: value_never_freed_in_generic.kspl:21:6: warning: [W0109] 'b' is never freed
+// EXPECT: value_never_freed_in_generic.kspl:31:6: warning: [W0109] 'xs' is never freed
+// EXPECT: value_never_freed_in_generic.kspl:46:4: warning: [W0109] 'b' is never freed
+// EXPECT: value_never_freed_in_generic.kspl:54:7: warning: [W0109] 'out' leaks if this 'return' exits
+// EXPECT-NOT: 'v'
+// EXPECT-NOT: 'kept'
+// EXPECT: 0 error(s), 4 warning(s)
+import "std/ds" { List }
+import "std/str" { Str_builder }
+
+struct Box<|T|>
+  v: T
+
+impl<|T|> Box<|T|>
+  fn width(_r: Self$@): Sz //< made and never freed (a finding)
+    $b: = Str_builder.new()
+    b.s("x")
+    return b.len
+
+  fn freed_width(_r: Self$@): Sz //< freed by `defer` in front (silent)
+    defer $b: = Str_builder.new()
+    b.s("x")
+    return b.len
+
+  fn count(r: Self$@): Sz //< a list of the argument's type, never freed (a finding)
+    $xs: = List<|T|>.new(null)
+    xs.push(r.v)
+    return xs.len
+
+  fn peek(r: Self$@): T
+    return r.v
+
+  fn read(r: Self$@): Sz //< a value of type `T`, an owner in one instance only (silent)
+    v: = r.peek()
+    return size_of(v@)
+
+priv fn size_of<|T|>(_v: T$@): Sz
+  return sizeof(T)
+
+priv fn length<|T|>(_v: T): Sz //< a generic function's value, never freed (a finding)
+  $b: = Str_builder.new()
+  b.s("y")
+  return b.len
+
+impl U8[]
+  priv fn quoted(r: Self, bad: Bool): Str_builder //< left behind on an early return (a finding)
+    $out: = Str_builder.new()
+    if bad
+      return Str_builder.new()
+    out.s(r)
+    return out
+
+  priv fn kept(r: Self): Sz //< handed back (silent)
+    defer $q: = r.quoted(false)
+    return q.len
+
+fn main()
+  $a: = Box<|I32|>::{ .v = 1 }
+  $c: = Box<|U8|>::{ .v = 2 }
+  _w: = a.width() + c.width() + a.freed_width() + a.count() + c.count()
+  $s: = Box<|Str_builder|>::{ .v = Str_builder.new() }
+  _r: = a.read() + s.read()
+  s.v.free()
+  _n: = length<|I32|>(1) + length<|U8|>(2) + "ab".kept()
+// ==== case free_written_twice
+//< [H0303] `defer x.free()` right after the declaration of `x`, which `defer` in front says once
+//< **One spelling for one cleanup.** Another cleanup (`unlock`, `wait`) keeps its own line, and so
+//< does a free with a statement between.
+// EXPECT: free_written_twice.kspl:10:3: hint: [H0303] 'defer b.free()' follows the declaration of 'b'. Put 'defer' in front of the declaration instead ('defer $b: = …'), and remove this line.
+// EXPECT: 0 error(s), 0 warning(s), 0 information(s), and 1 hint(s)
+import "std/str" { Str_builder }
+
+priv fn twice(): Sz
+  $b: = Str_builder.new()
+  defer b.free()
+  b.s("x")
+  return b.len
+
+priv fn once(): Sz
+  defer $b: = Str_builder.new()
+  b.s("x")
+  return b.len
+
+fn main()
+  _a: = twice()
+  _b: = once()

@@ -59,7 +59,7 @@ priv fn report_notes_of(sema: Sema_ctx$@, file: U8[], src: U8[],
             // **It has no code, because a code could be switched off**, leaving two readings that
             // run differently ("1. Diagnostic codes, and the errors that have none" in
             // `ksplc/docs/SPEC-diagnostics.md`).
-            $msg: = Str_builder.new()
+            defer $msg: = Str_builder.new()
             msg
                 .s("this line is indented \{got\} columns; sibling lines use \{want\}. It belongs \
                     to the same block. Match their indentation so the text reflects the block \
@@ -138,7 +138,7 @@ priv fn report_doc_marks(files: List<|Read_file|>@, sema: Sema_ctx$@) //<
             line += 1
             if doc_comment && base_ast_doc.is_continuation_line(src, at) && !opens
                 mark: = base_lines.skip_blanks(src, at)
-                $msg: = Str_builder.new()
+                defer $msg: = Str_builder.new()
                 msg
                     .s("[W0209] This //< has no preceding description to continue. The line above \
                         has no //<. This text appears in neither editor hover nor the API record.")
@@ -152,7 +152,7 @@ priv fn report_doc_marks(files: List<|Read_file|>@, sema: Sema_ctx$@) //<
                 // as written. So a later column is off in `.kspl`, and the line start is the one
                 // place both agree on.
                 head: = base_lines.skip_blanks(src, at)
-                $msg2: = Str_builder.new()
+                defer $msg2: = Str_builder.new()
                 msg2
                     .s("[W0210] This //< has no text or continuation. Write a description after the \
                         marker or on //< lines below it.")
@@ -184,7 +184,7 @@ priv fn report_banner_over(file: U8[], src: U8[], own: Sz, sema: Sema_ctx$@) //<
         shebang: = at == 0 && base_as_written.opened_with_shebang(file)
         if !shebang && src.sub(at, stop - at).trim_spaces().len > 0
             line: = src.sub(0, at).count_str("\n") + 1
-            $msg: = Str_builder.new()
+            defer $msg: = Str_builder.new()
             msg
                 .s("[H0808] This file's //< description stands below a comment on line \{line\}. \
                     Move the description to the top of the file, and put the other comment below \
@@ -200,7 +200,7 @@ priv fn report_summary_fault(file: U8[], src: U8[], at: Sz, fault: base_ast_doc.
         //< The summary is what the hover, the completion list and `ksplc doc` show. So it says
         //< what the thing is. See "The documentation a declaration carries" in
         //< `../docs/DESIGN-notation.md`.
-    $why: = Str_builder.new()
+    defer $why: = Str_builder.new()
     switch fault
     case .none
         return
@@ -262,7 +262,7 @@ priv fn report_unread_mark(sema: Sema_ctx$@, file: U8[], src: U8[], at: Sz, line
     //< One `[W0212]`, under the mark as the file is written, naming where the text should go
     //< **The two marks point in different directions in their home languages**, so each gets its
     //< own advice. A `///` means the thing after it, and a `//!` the file or the item it is inside.
-    $msg: = Str_builder.new()
+    defer $msg: = Str_builder.new()
     if src.starts_with("//!", at)
         msg
             .s("[W0212] This //! is not read. Its text appears in neither editor hover nor `ksplc \
@@ -293,7 +293,7 @@ priv fn report_pointer(sema: Sema_ctx$@, file: U8[], src: U8[], pos: Sz, line_en
         member_end += 1
     owner: = name.sub(0, cut - 1)
     member: = name.sub(cut, member_end - cut)
-    $msg: = Str_builder.new()
+    defer $msg: = Str_builder.new()
     msg
         .s("[W0211] This comment references `\{name\}`, but `\{owner\}` has no `\{member\}`. \
             Reference an existing member. Identify the file that adds a name (`\{name\}` in \
@@ -371,7 +371,7 @@ priv fn close_cap_run(file: U8[], src: U8[], run: Cap_run$@, seen_decl: Bool, se
         return seen_decl
     cap: = COMMENT_CAP if seen_decl else HEADER_CAP
     if n > cap
-        $msg: = Str_builder.new()
+        defer $msg: = Str_builder.new()
         msg
             .s("[H0806] This comment has \{n\} lines before the next line of code. The cap is \
                 \{cap\} lines (\{COMMENT_CAP\}, or \{HEADER_CAP\} for the header at a file's \

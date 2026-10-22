@@ -157,6 +157,141 @@ impl Task
         preempt_if_outranked()
         return true
 
+    fn yield() //< the current task gives up the CPU voluntarily (a cooperative yield)
+        //< It acts on the running task and takes no Task@ (like Java's `Thread.yield()`). From an
+        //< ISR it panics: there it would switch the interrupted task out behind its back.
+        refuse_in_isr()
+        s: = ksos_port_irq_save()
+        defer ksos_port_irq_restore(s) // restoring PRIMASK fires the pending PendSV and switches
+        schedule()
+
+    fn delay(ticks: U64) //<
+        //< the current task sleeps for the given number of ticks (a relative time)
+        //< **ticks are logical ticks, not real time.** It never wakes before the expiry, but when
+        //< no other task is runnable it returns in zero real time. For a real-time period on
+        //< hardware, use a hardware timer (`ksos/drivers/rp2040/timer.kspl` and the like).
+        refuse_in_isr()
+        s: = ksos_port_irq_save()
+        defer ksos_port_irq_restore(s)
+        if g_current != null
+            g_current.state = .delayed
+            g_current.delay_until = deadline_after(ticks)
+        schedule()
+
+    fn delay_until(wake_tick: U64) //<
+        //< Unlike delay (a relative time), it sleeps until the absolute tick wake_tick
+        //< A periodic task sleeping a relative time drifts by the length of its work; this does not
+        //< (next += period; Task.delay_until(next);).
+        refuse_in_isr()
+        s: = ksos_port_irq_save()
+        defer ksos_port_irq_restore(s)
+        if g_current != null && wake_tick > g_tick
+            g_current.state = .delayed
+            g_current.delay_until = wake_tick
+        schedule()
+
+    fn suspend(r: Self$@) //<
+        //< Takes r out of scheduling; it can be paused from any state (ready, delayed or blocked)
+        //< Paused while blocked, it keeps what it waits on. But it lends a mutex's holder nothing
+        //< while paused. Paused in a delay, it keeps the delay's expiry. A wake it had not yet
+        //< acted on goes to the next waiter. If done or already paused, it does nothing. Pausing
+        //< the current task, or a holder dropping below a ready task, switches at once.
+        s: = ksos_port_irq_save()
+        defer ksos_port_irq_restore(s)
+        if r.state == .done || r.state == .suspended
+            return
+        was_current: = r == g_current
+        r.delay_kept = r.state == .delayed
+        r.state = .suspended
+        pass_on_wake(r)
+        if r.wait_obj != null // a paused waiter no longer counts among the holder's lenders
+            relend_all()
+        if was_current
+            schedule()
+        else
+            preempt_if_outranked()
+
+    fn resume(r: Self$@) //< lets a paused r run again
+        //< **A delay not yet expired goes on to its expiry**, since `delay` never returns early;
+        //< one that expired while paused wakes at once. It does not recheck a wait's condition; the
+        //< wake-and-recheck loop in Sem.take and the like does that when it next runs. From any
+        //< state other than suspended it does nothing.
+        s: = ksos_port_irq_save()
+        defer ksos_port_irq_restore(s)
+        if r.state != .suspended
+            return
+        if r.delay_kept && r.delay_until > g_tick
+            r.state = .delayed
+            return
+        r.state = .ready
+        preempt_if_outranked()
+
+    fn delete(r: Self$@) //<
+        //< Makes r done and returns its g_tasks slot and its port context for a later create
+        //< The Task's and the stack's memory stay the caller's (static, or from create_dyn in
+        //< ksos/kernel/dynamic.kspl). This method does not free them. A task whose entry
+        //< returned is done but keeps both until deleted. Deleting again does nothing. A deleted
+        //< waiter leaves its wait, and the kernel takes back what it lent a mutex's holder. A wake
+        //< it had not yet acted on goes to the next waiter.
+        s: = ksos_port_irq_save()
+        defer ksos_port_irq_restore(s)
+        slot: = slot_of(r)
+        if slot >= MAX_TASKS
+            return // deleted already
+        if r.state != .done
+            end_task(r)
+        g_tasks[slot] = null
+        pass_on_wake(r)
+        waited: = r.wait_obj != null // blocked, or suspended while blocked
+        r.wait_obj = null
+        if waited
+            relend_all()
+        // The context goes back now even for the running task: schedule() then switches with a
+        // null from, which saves nothing into it.
+        ksos_port_ctx_free(r.ctx)
+        r.ctx = null
+        if r == g_current
+            schedule()
+        else
+            preempt_if_outranked()
+
+    fn get_name(r: Self$@): U8[] //<
+        //< The getters for the name, the priority, the state and the CPU use (ticks accumulated)
+        //< The fields are visible only inside ksos/kernel/; these methods expose them to other
+        //< files.
+        return r.name
+    fn get_prio(r: Self$@): I32
+        return r.prio
+    fn get_state(r: Self$@): Task_state
+        return r.state
+    fn waits_on(r: Self$@, obj: Void$@): Bool //< whether r is blocked waiting on obj
+        //< [Call it inside a critical section] Only then is r's `wait_note` its live record.
+        return r.state == .blocked && r.wait_obj == obj
+    fn get_cpu_ticks(r: Self$@): U64 //<
+        //< How many of ksos_tick()'s firings found r as g_current (accumulated)
+        //< Its ratio to current_tick() gives a rough CPU use (`cpu_percent`).
+        return r.cpu_ticks
+    fn cpu_percent(r: Self$@): I32 //< CPU use (%, an approximate integer from 0 to 100)
+        //< ksos_tick() samples it per tick. Without enable_preemption() (cooperative only)
+        //< current_tick() does not advance, and it always returns 0. **Heap use is not offered
+        //< here**: call `heap_used_bytes` / `heap_peak_used_bytes` in `std/mem.kspl` directly, as
+        //< a pass-through would be a second entry point for one question.
+        total: = current_tick()
+        if total == 0
+            return 0
+        return I32::((r.get_cpu_ticks() * 100) / total)
+
+    // --- Reading the task listing and the states (a task manager and the rest use it) ---
+    fn current(): Task$@ //<
+        //< Returns the running task's own Task@ (like Java's `Thread.currentThread()`)
+        //< g_tasks is priv, so files that walk every task use count and at, a read-only snapshot.
+        //< at can return null for a deleted slot, so always check for null.
+        return g_current
+    fn count(): Sz
+        return g_task_count
+    fn at(i: Sz): Task$@
+        return g_tasks[i]
+
 priv fn slot_of(t: Task$@): Sz //< t's index in g_tasks, or max_tasks if it is not there
     $slot: Sz = MAX_TASKS
     for i in Range.asc(g_task_count)
@@ -283,40 +418,6 @@ priv fn switch_to_main(from_ctx: Void$@) //< [Call it inside a critical section]
     g_current = null
     ksos_port_switch(from_ctx, g_main_ctx)
 
-impl Task
-    fn yield() //< the current task gives up the CPU voluntarily (a cooperative yield)
-        //< It acts on the running task and takes no Task@ (like Java's `Thread.yield()`). From an
-        //< ISR it panics: there it would switch the interrupted task out behind its back.
-        refuse_in_isr()
-        s: = ksos_port_irq_save()
-        defer ksos_port_irq_restore(s) // restoring PRIMASK fires the pending PendSV and switches
-        schedule()
-
-    fn delay(ticks: U64) //<
-        //< the current task sleeps for the given number of ticks (a relative time)
-        //< **ticks are logical ticks, not real time.** It never wakes before the expiry, but when
-        //< no other task is runnable it returns in zero real time. For a real-time period on
-        //< hardware, use a hardware timer (`ksos/drivers/rp2040/timer.kspl` and the like).
-        refuse_in_isr()
-        s: = ksos_port_irq_save()
-        defer ksos_port_irq_restore(s)
-        if g_current != null
-            g_current.state = .delayed
-            g_current.delay_until = deadline_after(ticks)
-        schedule()
-
-    fn delay_until(wake_tick: U64) //<
-        //< Unlike delay (a relative time), it sleeps until the absolute tick wake_tick
-        //< A periodic task sleeping a relative time drifts by the length of its work; this does not
-        //< (next += period; Task.delay_until(next);).
-        refuse_in_isr()
-        s: = ksos_port_irq_save()
-        defer ksos_port_irq_restore(s)
-        if g_current != null && wake_tick > g_tick
-            g_current.state = .delayed
-            g_current.delay_until = wake_tick
-        schedule()
-
 fn current_tick(): U64
     return g_tick
 
@@ -335,109 +436,6 @@ fn deadline_passed(deadline: U64?): Bool //<
     if d: = deadline
         return g_tick >= d
     return false
-
-impl Task
-    fn suspend(r: Self$@) //<
-        //< Takes r out of scheduling; it can be paused from any state (ready, delayed or blocked)
-        //< Paused while blocked, it keeps what it waits on. But it lends a mutex's holder nothing
-        //< while paused. Paused in a delay, it keeps the delay's expiry. A wake it had not yet
-        //< acted on goes to the next waiter. If done or already paused, it does nothing. Pausing
-        //< the current task, or a holder dropping below a ready task, switches at once.
-        s: = ksos_port_irq_save()
-        defer ksos_port_irq_restore(s)
-        if r.state == .done || r.state == .suspended
-            return
-        was_current: = r == g_current
-        r.delay_kept = r.state == .delayed
-        r.state = .suspended
-        pass_on_wake(r)
-        if r.wait_obj != null // a paused waiter no longer counts among the holder's lenders
-            relend_all()
-        if was_current
-            schedule()
-        else
-            preempt_if_outranked()
-
-    fn resume(r: Self$@) //< lets a paused r run again
-        //< **A delay not yet expired goes on to its expiry**, since `delay` never returns early;
-        //< one that expired while paused wakes at once. It does not recheck a wait's condition; the
-        //< wake-and-recheck loop in Sem.take and the like does that when it next runs. From any
-        //< state other than suspended it does nothing.
-        s: = ksos_port_irq_save()
-        defer ksos_port_irq_restore(s)
-        if r.state != .suspended
-            return
-        if r.delay_kept && r.delay_until > g_tick
-            r.state = .delayed
-            return
-        r.state = .ready
-        preempt_if_outranked()
-
-    fn delete(r: Self$@) //<
-        //< Makes r done and returns its g_tasks slot and its port context for a later create
-        //< The Task's and the stack's memory stay the caller's (static, or from create_dyn in
-        //< ksos/kernel/dynamic.kspl). This method does not free them. A task whose entry
-        //< returned is done but keeps both until deleted. Deleting again does nothing. A deleted
-        //< waiter leaves its wait, and the kernel takes back what it lent a mutex's holder. A wake
-        //< it had not yet acted on goes to the next waiter.
-        s: = ksos_port_irq_save()
-        defer ksos_port_irq_restore(s)
-        slot: = slot_of(r)
-        if slot >= MAX_TASKS
-            return // deleted already
-        if r.state != .done
-            end_task(r)
-        g_tasks[slot] = null
-        pass_on_wake(r)
-        waited: = r.wait_obj != null // blocked, or suspended while blocked
-        r.wait_obj = null
-        if waited
-            relend_all()
-        // The context goes back now even for the running task: schedule() then switches with a
-        // null from, which saves nothing into it.
-        ksos_port_ctx_free(r.ctx)
-        r.ctx = null
-        if r == g_current
-            schedule()
-        else
-            preempt_if_outranked()
-
-    fn get_name(r: Self$@): U8[] //<
-        //< The getters for the name, the priority, the state and the CPU use (ticks accumulated)
-        //< The fields are visible only inside ksos/kernel/; these methods expose them to other
-        //< files.
-        return r.name
-    fn get_prio(r: Self$@): I32
-        return r.prio
-    fn get_state(r: Self$@): Task_state
-        return r.state
-    fn waits_on(r: Self$@, obj: Void$@): Bool //< whether r is blocked waiting on obj
-        //< [Call it inside a critical section] Only then is r's `wait_note` its live record.
-        return r.state == .blocked && r.wait_obj == obj
-    fn get_cpu_ticks(r: Self$@): U64 //<
-        //< How many of ksos_tick()'s firings found r as g_current (accumulated)
-        //< Its ratio to current_tick() gives a rough CPU use (`cpu_percent`).
-        return r.cpu_ticks
-    fn cpu_percent(r: Self$@): I32 //< CPU use (%, an approximate integer from 0 to 100)
-        //< ksos_tick() samples it per tick. Without enable_preemption() (cooperative only)
-        //< current_tick() does not advance, and it always returns 0. **Heap use is not offered
-        //< here**: call `heap_used_bytes` / `heap_peak_used_bytes` in `std/mem.kspl` directly, as
-        //< a pass-through would be a second entry point for one question.
-        total: = current_tick()
-        if total == 0
-            return 0
-        return I32::((r.get_cpu_ticks() * 100) / total)
-impl Task
-    // --- Reading the task listing and the states (a task manager and the rest use it) ---
-    fn current(): Task$@ //<
-        //< Returns the running task's own Task@ (like Java's `Thread.currentThread()`)
-        //< g_tasks is priv, so files that walk every task use count and at, a read-only snapshot.
-        //< at can return null for a deleted slot, so always check for null.
-        return g_current
-    fn count(): Sz
-        return g_task_count
-    fn at(i: Sz): Task$@
-        return g_tasks[i]
 // --- The critical section (the synchronization primitives and the drivers use it) ---
 fn irq_save(): U32 //< the port's interrupt disable, offered as a kernel API
     //< Caution: **Do not copy the port's names around**: an `extern "C"` declaration in each file

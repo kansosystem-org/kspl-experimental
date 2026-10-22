@@ -12,13 +12,12 @@ import "std/str" { Str_builder }
 import "std/sys"
 
 fn main(): I32 //< writes the one sample document
-    arena: = Arena.new(1024 * 1024)
-    defer arena.free()
+    defer arena: = Arena.new(1024 * 1024)
     // Caution: **Do not parse the arguments by hand.** `std/argparse` refuses an unknown `--name`
     // (by hand, `--foo` would become the output path) and builds the usage text.
     p: = argparse.Parser.create(sys.program_name(), "write one sample .kspage out", arena)
     p.positional("<the destination (.kspage)>")
-    p.parse_or_exit(sys.args(), arena)
+    p.parse_or_exit()
     if p.rest.len != 1
         p.print_usage(io.err())
         return 1
@@ -27,7 +26,7 @@ fn main(): I32 //< writes the one sample document
     title: = made.doc.blocks.get(0)
     title.inlines.len = 0
     title.add_text("Sample document")
-    $text: = Str_builder.new()
+    defer $text: = Str_builder.new()
     store.save(made.doc, made.sheet, text@)
     io.write_file(out_path, text.slice()) catch e
         io.err().s("\{sys.program_name()\}: cannot write: \{out_path\} (\{e\})\n")

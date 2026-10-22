@@ -95,7 +95,7 @@ impl<|T|> Mini_llama<|T|>
         st.map_into<|F32|>("model.norm.weight", r.norm.weight@, arena)!
         st.map_into<|F32|>("lm_head.weight", r.lm_head.weights@, arena)!
 
-        $b: = Str_builder.new()
+        defer $b: = Str_builder.new()
 
         for i in Range.asc(r.blocks.len)
             ws: = r.block_weights(i)
@@ -108,7 +108,7 @@ impl<|T|> Mini_llama<|T|>
         w.add("model.embed_tokens.weight", r.token_embed.weight)
         w.add("model.norm.weight", r.norm.weight)
         w.add("lm_head.weight", r.lm_head.weights)
-        $b: = Str_builder.new()
+        defer $b: = Str_builder.new()
         for i in Range.asc(r.blocks.len)
             ws: = r.block_weights(i)
             for k in Range.asc(BLOCK_WEIGHT_KEYS.len)
@@ -185,8 +185,7 @@ impl<|T|> Mini_llama<|T|>
         //< returns the cross-entropy loss.
         $cache: = r.train_forward(tokens, arena)
         loss: = cache.logits.cross_entropy_loss(target)
-        $u: = ai_optim.Updater<|T|>.sgd(lr)
-        defer u.free()
+        defer $u: = ai_optim.Updater<|T|>.sgd(lr)
         $g: = r.grads_of(cache@, tokens, cache.logits.grad_softmax_cross_entropy(target), arena)
         r.apply_grads(g@, u@)
         return loss

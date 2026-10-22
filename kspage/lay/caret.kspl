@@ -114,8 +114,7 @@ fn hit_test(page: Page$@, x: F32, y: F32): Caret //<
     //< click on the margin would make a screen where clicking does nothing.
     $best: Box$@ = null
     $best_d: F32 = -1.0
-    for $i: Sz = 0; i < page.boxes.len; i += 1
-        b: = page.boxes.get(i)
+    for b in page.boxes
         // Caution: **Skip a box that is not in the document.** A bullet list's mark is not text.
         // A click there would compute a position inside the mark's text and report it as a
         // position in the body.
@@ -156,8 +155,7 @@ fn hit_test(page: Page$@, x: F32, y: F32): Caret //<
 fn inline_under(page: Page$@, x: F32, y: F32): Inline$@? //<
     //< The text of the box that (x, y) is exactly on
     //< **It does not snap to the nearest** (outside a box, there is none).
-    for $i: Sz = 0; i < page.boxes.len; i += 1
-        b: = page.boxes.get(i)
+    for b in page.boxes
         // **Skip a box that is not in the document** (the reason is at `hit_test`).
         if b.inline == null
             continue
@@ -251,8 +249,7 @@ priv fn row_beyond(page: Page$@, y: F32, h: F32, dir: I32): F32? //<
     //< `hit_test` pulls the landing back to the line it started from, and ↓ stays put.
     //< **A line entirely clear of the current one is another line** (the split `same_row` makes).
     $near: Box$@ = null
-    for $i: Sz = 0; i < page.boxes.len; i += 1
-        b: = page.boxes.get(i)
+    for b in page.boxes
         // Caution: **Skip a box that is not in the document** (the reason is at `hit_test`). That
         // makes a collected block one step rather than a wall.
         if b.inline == null
@@ -274,8 +271,7 @@ priv fn row_beyond(page: Page$@, y: F32, h: F32, dir: I32): F32? //<
     // middle is inside the big box, but not the other way round. Aimed at the big box's middle,
     // the small text on that line could not be reached.
     $best: Box$@ = near
-    for $i: Sz = 0; i < page.boxes.len; i += 1
-        b: = page.boxes.get(i)
+    for b in page.boxes
         if b.inline != null && same_row(near, b) && b.rect.y > best.rect.y
             best = b
     return .some(best.rect.y + best.rect.h * 0.5F32)
@@ -418,8 +414,7 @@ fn selection_rects(d: Doc$@, page: Page$@, c: Caret, out: List<|Rect|>$@) //<
     sp: = selection(d, c)
     from_i: = d.index_of(sp.from)
     to_i: = d.index_of(sp.to)
-    for $i: Sz = 0; i < page.boxes.len; i += 1
-        b: = page.boxes.get(i)
+    for b in page.boxes
         bi: = d.index_of(b.inline)
         if bi < from_i || bi > to_i
             continue
@@ -442,8 +437,7 @@ fn mark_composing(page: Page$@, c: Caret) //<
     if c.inline == null || c.preedit <= 0
         return
     start: = c.offset - c.preedit
-    for $i: Sz = 0; i < page.boxes.len; i += 1
-        b: = page.boxes.get(i)
+    for b in page.boxes
         if b.inline != c.inline
             continue
         if b.offset < c.offset && b.offset + b.text.len > start
@@ -457,7 +451,7 @@ priv fn box_index(page: Page$@, c: Caret, prefer_last: Bool): Sz //<
     if c.inline == null
         return -1
     $found: Sz = -1
-    for $i: Sz = 0; i < page.boxes.len; i += 1
+    for i in Range.asc(page.boxes.len)
         b: = page.boxes.get(i)
         if b.inline != c.inline || c.offset < b.offset || c.offset > b.offset + b.text.len
             continue

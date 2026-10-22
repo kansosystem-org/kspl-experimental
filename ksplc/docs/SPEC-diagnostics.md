@@ -1,6 +1,6 @@
 # The ksplc diagnostics specification
 
-This document lists every diagnostic code `ksplc` reports: what each points at, and how to fix it. **It is the text `ksplc explain <code>` prints**, embedded in the compiler, so the explanation is at hand where the diagnostic appeared. How a code is switched on, off or promoted to an error, and the four weights, are "5. Static analysis and the linter (ksplc lint)" in [`SPEC-tools.md`](SPEC-tools.md).
+This document lists every diagnostic code `ksplc` reports: what each points at, and how to fix it. **It supplies the text `ksplc explain <code>` prints**, embedded in the compiler, so the explanation is at hand where the diagnostic appeared. How a code is switched on, off or promoted to an error, and the four weights, are "5. Static analysis and the linter (ksplc lint)" in [`SPEC-tools.md`](SPEC-tools.md).
 
 ---
 
@@ -10,7 +10,9 @@ A diagnostic code's letter gives the weight ("5.2 The diagnostics' four weights"
 
 **`ksplc explain <code>` prints that code's section** (the code in either case), so the explanation is available where the diagnostic appeared. **`ksplc explain` with no code lists every code**, one line each with its title, in this document's order, and marks the codes off by default. **A code's start lists the codes it begins**: `ksplc explain W` lists the warnings, `ksplc explain I03` the codes from I0301 on. A compile or lint that printed a coded diagnostic names the command under its summary. An error, having no code, has no section: its message explains itself.
 
-**Seven shapes are errors with no code**, so no setting can silence them (only a coded diagnostic has a level, "5.2 The diagnostics' four weights" in [`SPEC-tools.md`](SPEC-tools.md#52-the-diagnostics-four-weights)). The first four silently change what runs. The fifth is written but does nothing. The last two are a second way of writing what the notation already says:
+The terminal view omits parenthetical document references and Markdown link targets. It wraps prose, preserves code examples, and names this document once at the end. The full references remain here.
+
+**Eight shapes are errors with no code**, so no setting can silence them (only a coded diagnostic has a level, "5.2 The diagnostics' four weights" in [`SPEC-tools.md`](SPEC-tools.md#52-the-diagnostics-four-weights)). The first four silently change what runs. The fifth is written but does nothing. The sixth and seventh are a second way of writing what the notation already says. The eighth hides from the reader how a type meets a trait:
 
 | The shape | What goes wrong |
 | :-- | :-- |
@@ -21,8 +23,9 @@ A diagnostic code's letter gives the weight ("5.2 The diagnostics' four weights"
 | an `#export` on a `priv` | written but does nothing: `priv` makes the generated C `static`, so the exported name still links to nothing outside (the attribute-combination check refuses it) |
 | a `;` at the end of a statement's line in the indentation notation | a second way of writing the line's end, which already ends the statement. `ksplc fmt` drops it |
 | a `;` right after the `}` of a block written on one line, where that block ends its statement (`if c { f() }; g()`) | a second way of writing that end, which the `}` already made. A block inside a value (`x: = f() catch { 0 }; g(x)`) ends no statement, and its `;` stays |
+| a method a trait requires, written in another block of the type than `impl T: Trait` (`'Arena: Manual_free' requires 'free'. Move 'fn free' (line 650) into this block`) | the conformance block no longer shows what meets the trait, and a reader has to search the type's other blocks for it. The error names the line the method stands on now |
 
-The language rules are "2.3 Literals" and "6.8 Integer arithmetic: folding, overflow, division, shifts" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md), and for `#export`, "11.3 Exposing a KSPL function to C (`#export`)" in the same document.
+The language rules are "2.3 Literals" and "6.8 Integer arithmetic: folding, overflow, division, shifts" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md), and for `#export`, "11.3 Exposing a KSPL function to C (`#export`)" in the same document. For a trait's methods, it is "5.3 Checking trait conformance" in the same document.
 
 ## 2. The list of warnings (W)
 
@@ -60,26 +63,36 @@ After `thread.Mutex<|T|>.lock()`, neither an `unlock()` nor a `defer` releasing 
 * **Fix**: call `g.unlock()` when done, or, more safely, `defer g.unlock()` right after locking, which releases on every exit, `return`, `throw` and `break` included.
 
 ### [W0107] A method that frees outside a release contract
-A method frees its object, but the compiler cannot tell, so using the object afterwards goes unreported. The use-after-free check reads "freed" only when the receiver's type conforms to `Manual_free` or `Drop` and the method called is `free`. So a `pub` method that frees its receiver outside that contract lets `x.close(); x.read();` compile with zero diagnostics. It is reported where the name differs (one of `close` / `destroy` / `deinit` / `dispose` / `shutdown` / `delete` / `teardown`), or where it does not conform (the name is `free`, but the type has no `impl X: Manual_free {}`).
+A method frees its object, but the compiler cannot tell, so using the object afterwards goes unreported. The use-after-free check reads "freed" only when the receiver's type conforms to `Manual_free` and the method called is `free`. So a `pub` method that frees its receiver outside that contract lets `x.close(); x.read();` compile with zero diagnostics. It is reported where the name differs (one of `close` / `destroy` / `deinit` / `dispose` / `shutdown` / `delete` / `teardown`), or where it does not conform (the name is `free`, but the type has no `impl X: Manual_free {}`).
 * **Fix**: where it frees, name it `free` and add `impl X: Manual_free {}`. `Manual_free`'s `free` returns no failure, so move a clean-up whose result must be checked (a flush, say) into a separate method. An operation that does not free the receiver, or that takes an argument (`delete(key)`), is out of scope.
 
 ### [W0108] A bit operation's operand is compared without brackets
 The result of `&` / `|` / `^` is compared without brackets, as in `a & b == c`. KSPL binds all three more tightly than comparison, so it reads `(a & b) == c`. **C reads it the other way** (`a & (b == c)`), and neither the types nor a run-time check catch it. Where each operator stands is the table in "6.1 The operator list and precedence" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#61-the-operator-list-and-precedence).
 * **Fix**: bracket the intended grouping (`(a & b) == c`). [H0301]'s "unneeded brackets" does not look at binary operations, so both can be followed.
 
-### [W0109] An early exit before the `defer` that frees a `Manual_free` value
-A value that must be freed can leave the function before its `defer` is reached, so it leaks. The `defer` is the statement that frees it at the end of the block. A `!`, `return`, `throw`, or a `break` / `continue` out of the block stands between binding a value whose type conforms to `Manual_free` and the `defer name.free()` later in the same block. That path leaves before the `defer` is registered, so the value is never freed. The finding sits on the exit and names both lines.
-Automatic owners receive no such warning: their cleanup already covers every exit.
-* **Only a later `defer` in the same block starts the question.** A value freed by hand, passed on or kept has another shape. It is not read as a leak.
+### [W0109] A value made here that some path leaves unfreed
+A function makes a value whose type conforms to `Manual_free`, and some path leaves it without freeing it. No type frees itself, so that value leaks. A value is made here where its declaration's initializer is a call or a struct literal. It is ended where it is freed, or where a `defer` frees it. It is also ended where it is handed on: returned, thrown, stored whole, or passed by value. So are `take()`, `keep()`, and a call to a function that always frees that parameter. Three shapes are reported, each with its own message:
+* **It is never freed**: no path ends it before its block ends. The finding sits on the declaration.
+* **It is not freed on every path**: some paths end it and some reach the block's end with it. The finding sits on the declaration.
+* **A way out leaves before it is ended**: a `!`, `return`, `throw`, or a `break` / `continue` out of its block. The finding sits on the way out. Where a `defer` later in the same block frees it, the message names that line: the way out leaves before the `defer` is registered.
+
+A pointer to such a value (`Arena.new(…)`'s result) is read only up to a `defer` later in its block that frees it. A call does not say whether a pointer it returns owns what it points at (`arena.create(…)`).
 * **Not reported**:
-  * a `return` that returns the value itself (the caller owns it then);
-  * a statement freeing it by hand on the exiting path (`if bad { x.free(); return }`);
-  * an exit inside a closure, which leaves only the closure.
-* **Fix**: put the `defer` on the line right after the binding, so it runs on every exit. A type that allocates only on its first write (`Str_builder.new()`) leaks nothing on that path, but moving the `defer` up costs nothing there either.
+  * a value declared with `defer` in front, which its block's end frees;
+  * a parameter, which the caller made;
+  * a value whose initializer passes an arena other than the literal `null` (`List<|I32|>.new(arena)`): the arena frees it;
+  * a value that keeps its arena in a field (a `List`, a `Map`, a `json.Doc`), made by a call that passes no literal `null`. The callee may have made it in an arena of its own;
+  * an arena held by value, which stands over a buffer its caller owns (`Arena.from_buffer`);
+  * an element read out of a container that holds such values (`rows.get(i)`);
+  * an exit inside a closure, which leaves only the closure;
+  * in a generic body, a value whose type is a type argument itself (`v: T`). In one instance it is an owner, in another it is an `I32`, where `defer` in front would not compile.
+* **A generic body is checked in each instance the program uses**, since only instances are checked. That is a generic's method, a generic function, or a method on a slice such as `impl U8[]`. A finding is printed once, at the line written, whichever instance met it.
+* **What it does not see**: a field or a value reached through a pointer. Nor does it see a generic body that no instance uses, or an arena variable that holds `null` at run time. The check reads one function's code as written, branch by branch, as the language's other lints do.
+* **Fix**: put `defer` in front of the declaration (`defer $b: = Str_builder.new()`), which frees it on every way out. Where the value is handed on along some paths, free it by hand on the others.
 
 ### [W0201] Unreachable code
-Code that never runs, because it follows a `return`, a `throw`, a `for` that never ends (no condition, and no `break` leaves it) or the like. What follows a labelled `switch`, `if` or block that a `break` to its label leaves is reachable, whatever its branches end in.
-* **Fix**: delete it. A function returning a value needs no `return` after a `for` that never ends ("Loops" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#72-loops)).
+Code that never runs. It follows a `return`, a `throw`, a `for` that never ends (no condition, and no `break` leaves it), a `#noreturn` call (`sys.exit`, `panic`) or the like. What follows a labelled `switch`, `if` or block that a `break` to its label leaves is reachable, whatever its branches end in.
+* **Fix**: delete it. A function returning a value needs no `return` after a `for` that never ends ("Loops" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#72-loops)), nor after a `#noreturn` call. A `catch` block ending in one needs no `fallback` ("8.3.2 Catching an error (`catch`)" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#832-catching-an-error-catch)).
 
 ### [W0202] An unused expression with no side effect
 An expression is evaluated, but its result is not stored. It holds no side effect (a function call, an assignment), so it does nothing. Examples are a plain `1 + 1;` and a bare variable reference.
@@ -153,7 +166,7 @@ A top-level function's name starts with `test_`, but no suite in the program run
 * **Not reported**: a compile with no `main`. A file compiled alone (a library, an editor's view of one file) is not the program that runs its tests.
 
 ### [W0501] Conformance to a look-alike of a known trait
-A type claims a trait that only looks like one the compiler treats specially, so the special treatment never happens. The `X` of `impl <type>: X` names a different declaration with the same name as a trait the compiler knows (`Ref_counted` / `Move_only` / `Manual_free` / `Drop`). The known traits are matched by FQN, the name with its full module path (`std.lang.Ref_counted` and so on). So conforming to the look-alike turns on none of ARC's `retain`/`release`, automatic cleanup, move checks or free tracking. **Nothing else reports this for these four.**
+A type claims a trait that only looks like one the compiler treats specially, so the special treatment never happens. The `X` of `impl <type>: X` names a different declaration with the same name as a trait the compiler knows (`Ref_counted` / `Move_only` / `Manual_free`). The known traits are matched by FQN, the name with its full module path (`std.lang.Ref_counted` and so on). So conforming to the look-alike turns on none of ARC's `retain`/`release`, the move checks, free tracking or `defer` in front of a declaration. **Nothing else reports this for these three.**
 * **Fix**: to conform to the real trait, qualify it with `lang.`, as in `impl <type>: lang.Ref_counted` (the `std/lang` item in ["9. Files and import" in `../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#9-files-and-import)). Where the name serves an unrelated purpose, rename it, or silence this for that one file with `##lint(W0501 = off)`.
 
 ### [W0502] A local or parameter hiding an imported module
@@ -220,16 +233,6 @@ A branch that could return a boolean directly, as in `if cond { return true; } e
 The `as io` of `import "std/io" as io` adds nothing: the bare `import "std/io"` derives the same alias from the path's last part. The two are entirely synonymous: two ways to write one thing.
 * **Fix**: drop the `as`: `import "std/io"`. The `as` itself is kept for imports that change the name (`import "ksplc/base/ast" as base_ast`, or `import "std/strfmt" as _strfmt`, whose leading `_` lets it go unused). Confined to them, it leaves one spelling per import.
 
-### [I0311] A free of a value that frees itself
-A local whose type frees itself (`Drop`) is freed by hand just where its own cleanup would run. Deleting the line changes nothing: the cleanup runs at the same point, on every way out, a propagated failure's included. Three shapes are reported:
-* `defer x.free()` in the block that declares `x`;
-* `x.free()` as the last statement of the block that declares `x`;
-* `x.free()` right before a `return` or `throw` whose value calls nothing.
-
-A parameter taken by value counts as declared in the function's body.
-* **Not reported**: a free with more work after it in the scope. It releases early, where that work needs the resource gone. Examples are a lock let go before another process takes it, and a file closed before it is read back. A free before a `return` that still calls something is such a release too.
-* **Fix**: delete the line. Where the resource must go sooner, keep the free and put the work that needs it gone after it.
-
 ### [I0312] A `lang.` that changes no name
 A name is written after `lang.`, but the file can write it alone and mean the same declaration. `std/lang` enters every file: its alias `lang`, and each name it publishes with `pub` ("9.2 Which names an import brings in" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md)). So `lang.Option` and `Option` would be two spellings of one name.
 * **Fix**: drop the `lang.`.
@@ -248,12 +251,30 @@ A `case` binds a variant's payload, but the case reads none of the names it bind
 
   [W0207] does not report a name of a payload this reports.
 
+### [I0314] A counting loop written in three parts
+A C-style loop only counts (`for $i: = 0; i < xs.len; i += 1`). It starts its index at a constant, compares `i < bound` and steps `i += 1`. Its body writes neither the index nor anything the bound reads. Counting is written with `for … in` over a `Range` or over the sequence itself ("7.2 Loops" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md)), so the three parts are a second way to write it.
+* **Fix**: the message names the form to write.
+  * Where the body reads the index only as `xs[i]` or `xs.get(i)`, and the bound is `xs.len`: `for x in xs`, and `x` for the element.
+  * From 0: `for i in Range.asc(bound)`.
+  * From another constant: `for i in Range.new(start, bound, 1)`.
+
+  The index of a `Range` is an `Sz`. Where the body needs another type, cast it (`I32::i`).
+  An index the body never reads is named with a leading `_` (`for _i in Range.asc(n)`).
+* **Not reported**, since the three parts are then the only way to say it:
+  * a body that may write the index or a variable the bound reads. A write is an assignment, an address (`x@`), a method whose receiver is `Self$@`, or the variable handed on as a pointer or a slice. A write into an element of the sequence the bound measures (`xs[k] = v` under `i < xs.len`) leaves its length alone, and does not count;
+  * a bound that reads a global variable or calls a function, since either can change between steps without the body naming it;
+  * a body holding a closure, whose captures are not followed;
+  * a step other than `+= 1`, a comparison other than `<`, or a start that is not an integer literal;
+  * an index written with a type other than `Sz` (`$i: I32 = 0`), or a bound that does not widen to `Sz` by itself (a `U32`, an `I64`). A `Range` counts in `Sz`, so the index would change type, or the bound would need a cast.
+
+  The check looks no further than this: where it cannot tell, it says nothing.
+
 ### [I0401] An unused import
 Something an `import` brought in is never used in that file. It comes in two shapes with one fix: a whole file's alias (`import "path" as name`) or one symbol of a selective import (`import "path" { A, B }`, the selective import of `docs/SPEC-programming-language.md` §9).
 * **The verdict covers that one file alone.** It rests only on whether the file writes the name, so a use inside a generic template never instantiated counts.
 * An alias counts only at the head of a qualified name (`io.out()`, `ds.List`), not as a field (`p.io`) or a function (`io()`) spelled the same.
 * An import an extension method's call needs ("An extension method requires the import" in [§9](../../docs/SPEC-programming-language.md)) counts as used. This holds for a method on a built-in type too (`import "std/str"` for `s.equals(...)`) and for a format specifier (`import "std/strfmt"` for `\{n:x\}`).
-* **Fix**: delete the import. Where loading it is deliberate, mark it ignored: a `_` on the alias, or a `_` leading the local name for a selective one (`{ A as _a }` and the like).
+* **Fix**: delete the import. Where loading it is deliberate, mark it ignored with a `_` on the alias (`import "p" as _p`).
   * A file can be imported only so that its conformances hold (`import "std/strfmt" as _strfmt` for the `fmt` each type's `\{x\}` reaches). The importing file writes nothing that uses it: the call is made inside `put`'s instantiation, which asks for no import. Give it the `_`.
   * A name inside a declaration `#cfg` dropped is not counted, since that build lacks the declaration. For a symbol used in only one of the builds, put the same `#cfg` on the import, **on the line directly before it**. Written on the same line, it is moved to its own line by `ksplc fmt` anyway.
 
@@ -318,10 +339,6 @@ A variable or parameter declared with the mutability marker `$` is never reassig
   | `U8$[]::buf` (a writable slice made from the array `buf`) | **yes** | Without the `$`, `buf` becomes read-only memory in the generated C, and a write through the slice would hit it |
 * **Fix**: remove the `$` (`$x: = ...` → `x: = ...`). Unmarked is immutable, so the type system then guarantees the variable is never reassigned.
 
-### [I0602] Detecting a hand-made ownership struct
-Off by default ("5.3" in [`SPEC-tools.md`](SPEC-tools.md#53-enabling-disabling-or-promoting-a-diagnostic-to-an-error-lint----lint--ksplccfg)). Reported where a struct not conforming to `Ref_counted` holds a raw-pointer field and defines its own `free` method: hand-made ownership. Structs under `std/` are out of scope (ARC's own primitives, such as `Arena` and `List`, would make the advice circular).
-* **Fix**: following `Rc<|T|>` / `Arc<|T|>`, consider conforming it to `Ref_counted` so that reference counting manages its lifetime ("8.4 Memory management" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md)).
-
 ### [I0701] Error propagation using '!' is recommended
 A `catch` that only rethrows the caught error, as in `catch e { throw e; }`.
 * **Fix**: replace the whole `catch` block with the `!` operator, which propagates the error (hands it to the caller) more safely and concisely.
@@ -330,6 +347,14 @@ A `catch` that only rethrows the caught error, as in `catch e { throw e; }`.
 A parameter that takes an arena has a default (`a: Arena$@ = null`). A call that leaves the argument out does not show where it allocates, nor whether the caller owes a `free()`.
 * **Fix**: remove the default. A caller that wants the global heap passes `null` (`List<|I32|>.new(null)`).
 * The type is read as the analysis resolved it. So an arena behind a typedef, or behind a pointer of either kind (`Arena@`, `Arena$@`), is found.
+
+### [I0801] A second plain `impl` block in one file
+A file holds a second plain `impl` block for a type it already gave one (a plain block names no trait). A reader who finds one block takes it for all the type's own methods in that file, and misses the rest. The information names the line of the first block.
+* **Fix**: move the methods into the first block. A comment that headed a group of methods (a banner) can stay inside the block, above that group.
+* **Not reported**:
+  * a block that names a trait (`impl T: Trait`). It holds that trait's methods ("5.3 Checking trait conformance" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md));
+  * a block in another file than the first one, such as a file that adds methods to a type of another file. Each file can hold one plain block for the type;
+  * a block for one instance of a generic type (`impl Box<|I32|>`) beside `impl<|T|> Box<|T|>`. It holds what only that instance has. Two blocks for the same instance, or two `impl<|T|> Box<|T|>`, are reported.
 
 ## 4. The list of hints (H)
 
@@ -376,6 +401,11 @@ A type written where the line, or the place the value goes, already says it. It 
 
   The places outside the nine are an inferred declaration (`k: = Kind.small`) and an argument a generic infers its type from (`same(Kind.small)`). They are also a comparison (`mode == Mode.on`), either side of an `if … else` standing outside the nine, and a compound assignment such as `+=`. A struct literal keeps its type at these places too (`return Point::{ … }`).
 
+### [H0303] A free written on the line after its declaration
+`defer x.free()` is the statement right after the declaration of `x`, whose type conforms to `Manual_free`. `defer` in front of the declaration says the same in one line (`defer $x: = …`), so the two lines are a second spelling of one cleanup.
+* **Not reported**: a `defer` that runs another cleanup (`unlock`, `wait`) or does more than the free. Nor is one with a statement between it and the declaration.
+* **Fix**: put `defer` in front of the declaration, and remove the `defer x.free()` line.
+
 ### [H0701] `T?` proposed for a raw pointer that can be null
 A function returning a raw pointer (`T@`) can hand back null on some path, so a caller can forget to check for null. Three shapes are reported:
 * `return null`;
@@ -402,18 +432,15 @@ An `if` block always leaves, so control never reaches the code after the `if` fr
 * **Not reported**: an `if` that a `break` to its own label leaves (`ui: if c`). `break ui` continues after the `if`, so without the `else` its body would run after the `break` as well, and a `break ui` inside the `else` would be left with no label.
 * **Fix**: the code after the `if` already acts as the `else`. Remove the `else` to reduce the indentation, into the "reject first and leave" shape.
 
-### [H0802] A wrap at a call inside an argument
-A call is passed as an argument to another call, and the outer argument list wraps over several lines, tangling with the inner call's wrapping (`borrows.push(base_core.arena.create(Lock_borrow::{ .borrow = id.text,\n    .guard = g, ... }))`). **The inner call's own argument list must wrap too.** Where only the outer one wraps, the inner call stays on one line as a single argument and does not tangle. Only the argument list's own wrapping is judged (as with [H0804]), so a chained call at a method boundary is out of scope.
-* **Fix**: move the inner call into a named temporary and pass that (`lb: = base_core.arena.create(Lock_borrow::{ ... }); borrows.push(lb);`).
+### [H0802] A wrapping call inside an argument or a subject
+A call whose own argument list wraps over several lines stands where its wrap tangles with another. **Where only one of the two wraps, nothing tangles**, and nothing is reported. Only an argument list's own wrap is judged, so a chained call wrapping at a method boundary (`x.method()\n    .chain()`) is out of scope. The two places are these:
+* **An argument of another call whose argument list wraps too** (`borrows.push(base_core.arena.create(Lock_borrow::{ .borrow = id.text,\n    .guard = g, ... }))`).
+* **The subject of a `switch` or an `if`** (`switch x.foo(a, b,\n    c) case ...`). The wrap tangles with the `case` or with the condition's block.
+* **Fix**: move the call into a named temporary, and pass that or make it the subject (`lb: = base_core.arena.create(Lock_borrow::{ ... }); borrows.push(lb);`). The call itself can still wrap.
 
 ### [H0803] A function exceeds 300 lines
 A function or method exceeds 300 lines. The limit is defined in "Principle 3 - what is counted, and how" in [`../../docs/SPEC-gates.md`](../../docs/SPEC-gates.md).
 * **Fix**: split it into small helpers by task.
-
-### [H0804] A direct wrap of a multi-line call
-The subject of a `switch` or `if` directly wraps a call whose argument list spans several lines (`switch x.foo(a, b,\n    c) case ...`). The wrapping tangles with the `switch`/`case` or the `if`'s condition and is hard to read. Out of scope: a chained call wrapping between the receiver and the method name (`x.method()\n    .chain()`), and a single struct literal as the argument.
-* **Fix**: assign the call to a temporary and make that the subject (`result: = x.foo(a, b, c); switch result case ...`); the call itself can still wrap.
-* It urges splitting for readability, not correctness, so it is a Hint, like H0802, which gives the same advice.
 
 ### [H0805] A function nests blocks past 8 levels
 A function's blocks nest deeper than 8 levels. The limit is defined in "Principle 3 - what is counted, and how" in [`../../docs/SPEC-gates.md`](../../docs/SPEC-gates.md). The function body is level 0, so each `if`, `for`, `switch` case or bare block inside it opens one more. It is reported once per function, at the function, with the depth it reached.

@@ -104,10 +104,9 @@ impl Sema_ctx
         // them). Reset per type, a deep embedding chain is measured quadratically.
         r.reset_layout_memo()
         r.layout.scanning_all = true
-        $resolving: = List<|I32|>.new(null)
-        defer resolving.free()
+        defer $resolving: = List<|I32|>.new(null)
         count: = r.env.id_to_type.len
-        for $id: Sz = 1; id < count; id += 1
+        for id in Range.new(1, count, 1)
             $is_aggregate: = false
             switch r.env.get_info(I32::id)
             case .struct_type
@@ -131,7 +130,7 @@ impl Sema_ctx
         //< retain and release helpers. Such a field cannot give that address
         //< ("refuse_packed_address").
         count: = r.env.id_to_type.len
-        for $id: Sz = 1; id < count; id += 1
+        for id in Range.new(1, count, 1)
             switch r.env.get_info(I32::id)
             case .struct_type(def)
                 if def.is_packed
@@ -156,8 +155,7 @@ impl Sema_ctx
             //< Caution: **The `sizeof` path must go through here** (eval_sizeof in
             //< `sema/decl/eval.kspl`). It does not walk past a pointer or a slice: the pointee
             //< does not affect the size, and a linked list would never end.
-        $seen: = List<|I32|>.new(null)
-        defer seen.free()
+        defer $seen: = List<|I32|>.new(null)
         r.ensure_type_registry_walk(type_id, seen@, err_node)!
 
     priv fn ensure_type_registry_walk(r: Self$@, type_id: I32, seen: List<|I32|>$@,
@@ -269,8 +267,7 @@ impl Sema_ctx
         if enum_def: = r.env.get_enum_def(r.env.base_type_name(real_id))
             if enum_def.is_scalar()
                 return 0
-            $resolving: = List<|I32|>.new(null)
-            defer resolving.free()
+            defer $resolving: = List<|I32|>.new(null)
             return r.enum_parts(enum_def, resolving@).payload_offset
         return 0
 
@@ -291,8 +288,7 @@ impl Sema_ctx
     fn payload_field_offset(r: Self$@, v_def: sema_type_def.Enum_variant$@, field_name: U8[]): Sz //<
         //< Where a variant's payload field lies, counted from the payload's start
         //< The same walk as a struct's `offsetof` (`walk_fields`), over the variant's fields.
-        $resolving: = List<|I32|>.new(null)
-        defer resolving.free()
+        defer $resolving: = List<|I32|>.new(null)
         return r.walk_fields(v_def.payload_fields, resolving@, true, field_name).size
 
     // `offsetof(T, f)`'s answer. **Offsets come from this one place** (`walk_fields`); padding
@@ -306,8 +302,7 @@ impl Sema_ctx
         // Caution: Use `display_str`'s name in the diagnostic; `clean_name` is internal and not in
         // the user's source.
         shown: = r.env.display(type_id)
-        $resolving: = List<|I32|>.new(null)
-        defer resolving.free()
+        defer $resolving: = List<|I32|>.new(null)
         if struct_def: = r.env.get_struct_def(clean_name)
             walk: = r.walk_fields(struct_def.fields_list, resolving@, !struct_def.is_packed,
                 field_name)
@@ -409,8 +404,7 @@ impl Sema_ctx
 
     priv fn field_kept_align(r: Self$@, def: sema_type_def.Struct_def$@, start: Sz, name: U8[]): Sz //<
         //< the alignment a field keeps in a struct whose start is aligned to `start`
-        $resolving: = List<|I32|>.new(null)
-        defer resolving.free()
+        defer $resolving: = List<|I32|>.new(null)
         return low_align(start,
             r.walk_fields(def.fields_list, resolving@, !def.is_packed, name).size)
 
@@ -423,7 +417,7 @@ impl Sema_ctx
         real_id: = r.env.get_clean_real_type(type_id)
         if at == null || !r.c_can_measure(real_id, 0)
             return
-        $key: = Str_builder.new()
+        defer $key: = Str_builder.new()
         key.s("\{real_id\}")
         switch measure
         case .size
@@ -462,8 +456,7 @@ impl Sema_ctx
         //< The size and alignment of the type type_id, measured afresh
         //< The entry point for code that needs one size; it holds the cycle list calc_type_layout
         //< walks.
-        $resolving: = List<|I32|>.new(null)
-        defer resolving.free()
+        defer $resolving: = List<|I32|>.new(null)
         return r.calc_type_layout(type_id, resolving@)
 
     priv fn named_type_layout(r: Self$@, real_id: I32, resolving: List<|I32|>$@):

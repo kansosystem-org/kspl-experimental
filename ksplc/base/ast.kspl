@@ -66,7 +66,7 @@ fn is_anon_env_type(name: U8[]): Bool //<
     //< `.`; a plain substring match would also hit `Foo_anon_env_1`.
     if name.starts_with(ANON_ENV_PREFIX)
         return true
-    $sb: = Str_builder.new()
+    defer $sb: = Str_builder.new()
     sb.c('.').s(ANON_ENV_PREFIX)
     return name.find_str(sb.slice()).is_some()
 
@@ -131,6 +131,7 @@ struct Ast_node
     ival: I32 //<
         //< A number whose meaning depends on the node's kind (DESIGN-lower.md's annotation table)
         //< A field's index on an `Identifier` (a field reference) and an `expr_field_init`; a
+        //< function name: 1 for an implicit member selected by a type call. A
         //< variant's index on a lowered `case_pattern` and a `payload_access`. A `stmt_throw`: 1
         //< for a `!`'s propagation. A declaration: `made_by_compiler`. A `for` / `if` / `switch` /
         //< labelled block: whether a `break` leaves it. Make 0 the plain case, so a forgotten value
@@ -273,8 +274,7 @@ impl U8[]
         //< **It is found the way an import's file is** (`logical_path` below), so a package's data
         //< is read from its folder. Nothing is added: an embedded file's name includes its
         //< extension.
-        $res: = r.logical_path(written)
-        defer res.free()
+        defer $res: = r.logical_path(written)
         return base_core.arena.dup_str(res.slice())
 
     priv fn logical_path(r: U8[], written: U8[]): Str_builder //<
@@ -658,6 +658,7 @@ impl Ast_node
         for c in r.children
             c.print_tree_to(depth + 1, out)
 
+    #noreturn
     fn ice_panic(r: Self$@, msg: U8$[])
         if r != null
             _l: = base_diag.log()

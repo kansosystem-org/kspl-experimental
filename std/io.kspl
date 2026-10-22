@@ -20,9 +20,12 @@ pub trait Reader //< anything bytes can be read from
     fn read(r: Self, $buf: U8$[]): Sz!Io_error //< fills buf; returns the count read, 0 at the end
 
 pub struct File_stream //< one open file to write to, read from and close
-    //< **It closes itself when its owner leaves scope** (`Drop`). Call `sync()!` before that to
-    //< learn whether the written data arrived, and `free()` to close it sooner.
+    //< **Its owner closes it with `free()`**, usually by declaring it with `defer` in front.
+    //< Call `sync()!` before that to learn whether the written data arrived.
     pub stream: Void$@ //< the C `FILE *`; null once `free()` has closed it
+
+// Caution: **`free()` closes the `FILE *`**: a copy would keep it, and write into a closed stream.
+impl File_stream: Move_only {} //< copying it would close one file twice
 
 impl File_stream: Writer //< so it can be used wherever a `Writer` is expected
     priv fn live(r: Self$@): Void$@ //< the open `FILE *`; a freed stream stops the program
@@ -49,18 +52,15 @@ impl File_stream: Reader //< so it can be used wherever a `Reader` is expected
             throw .invalid_arg
         return read_into(r.stream, buf)!
 
-impl File_stream: Drop //< closes the file when its owner leaves scope
-    priv fn drop(r: Self$@)
-        r.free()
-
-impl File_stream
-    pub fn free(r: Self$@) //<
-        //< closes the file before its scope ends; a closing failure is not reported
+impl File_stream: Manual_free //< it owns the handle and releases it in `free()`
+    pub fn free(r: Self$@) //< closes the handle; a failure while closing is not reported
+        //< That is `Manual_free`'s contract.
         //< Caution: **To know whether the written data arrived, call `sync()!` before freeing it.**
         if r.stream != null
             _res: = libc.fclose(r.stream)
             r.stream = null
 
+impl File_stream
     pub fn sync(r: Self$@): Void!Io_error //< flushes buffered data and reports a failure
         //< It does not mean the data reached the disk: `fs.replace_file` is what puts a file there.
         //< `Writer.flush()` returns `Self$@` for chaining, so only this method can report a
@@ -74,8 +74,8 @@ impl File_stream
             throw .write_failed("")
 
 priv struct Std_stream //< standard output or error, which the whole program shares
-    //< **Nothing closes it**, so it is not a `File_stream`, which closes itself. A global cannot
-    //< hold a value that frees itself either.
+    //< **Nothing closes it**, so it is not a `File_stream`, whose owner closes it. It has no
+    //< `free()`, so no caller can close the stream every other part of the program writes to.
     stream: Void$@ //< the C library's `FILE *`, taken on first use
 
 impl Std_stream: Writer //< what `out()` and `err()` hand out
@@ -185,7 +185,7 @@ pub fn open( //< opens a file, handling a non-ASCII path on Windows too
     path: U8[], //< the file to open
     mode: U8[], //< `r`, `w` or `a`, then any of `+` and `b`, and `x` after `w`; another letter fails
 ): File_stream!Io_error //<
-    //< the open file, closed when its owner leaves scope; fails if it cannot open
+    //< the open file, which the caller frees; fails if it cannot be opened
     return File_stream::{ .stream = fopen_checked(path, mode)! }
 
 pub fn read_file( //< the whole file
@@ -306,7 +306,7 @@ pub fn read_stdin( //< the whole of standard input, read to the end
     //< would pass for the whole of it.
     arena: Arena$@, //< where the text goes; null means the heap, freed with `dealloc`
 ): U8[]!Io_error //< the text read, empty if nothing came; `read_failed("")` if a read failed
-    $b: = Str_builder.new()
+    defer $b: = Str_builder.new()
     $chunk: U8[4096] = ::{}
     for
         got: = read_into(libc.get_stdin(), U8$[]::chunk)!

@@ -11,8 +11,7 @@ import "std/ds" { List }
 import "std/io"
 
 fn main()
-    $nums: = List<|I32|>.new(null)
-    defer nums.free()
+    defer $nums: = List<|I32|>.new(null)
     nums.push(42)
     io.out().s("first = \{nums[0]\}\n")
 ```
@@ -80,8 +79,7 @@ import "std/io"
 import "std/mem" { Arena }
 
 fn main()
-    arena: = Arena.new(4096)
-    defer arena.free()
+    defer arena: = Arena.new(4096)
 
     // new: the list is the value in your variable; it keeps its items in the arena.
     $mine: = List<|I32|>.new(arena)

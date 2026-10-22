@@ -93,7 +93,7 @@ priv fn instantiate_written(node: Ast_node$@, c: Sema_ctx$@, fn_tmpl: sema_decl_
     prev_inst_site: = c.generics.inst_site
     c.generics.inst_site = node
     defer c.generics.inst_site = prev_inst_site
-    $inst_name: = c.instantiate_fn(sema_body_call.with_args(fn_tmpl, args), false)!
+    defer $inst_name: = c.instantiate_fn(sema_body_call.with_args(fn_tmpl, args), false)!
     return c.symtab.resolve(inst_name.slice())
 
 priv fn specialization_named(node: Ast_node$@, c: Sema_ctx$@, named: sema_decl_name.Written_name):
@@ -118,7 +118,7 @@ priv fn specialization_named(node: Ast_node$@, c: Sema_ctx$@, named: sema_decl_n
         c.err(node, c.scratch.slice())
         return .none
     if type_args == null
-        $form: = Str_builder.new()
+        defer $form: = Str_builder.new()
         form.s(sym.name).s("<|…|>")
         refuse_unwritten_type_args(c, node, "function", sym.name, form.slice(), gen_params)
         return .none
@@ -165,10 +165,10 @@ fn infer_method_value(node: Ast_node$@, c: Sema_ctx$@, owner_id: I32, owner: Ast
     owner_real: = c.env.get_real_type(owner_id)
     owner_name: = c.env.get_str(owner_real)
     // The path as written (`Holder<|I32|>.get`), for a diagnostic.
-    $written: = Str_builder.new()
+    defer $written: = Str_builder.new()
     owner.get_full_path_str_to(written)
     written.s(".").s(member.text)
-    $fqn: = Str_builder.new()
+    defer $fqn: = Str_builder.new()
     fqn.s(owner_name).s(".").s(member.text)
     // A trait's method is a slot each conforming type fills, with no function of its own.
     switch c.env.get_info(owner_real)
@@ -222,7 +222,7 @@ fn refuse_method_of_bare_generic(c: Sema_ctx$@, node: Ast_node$@, owner: Ast_nod
         //< `Holder.get`, `Holder.mk(1)`: each instance has its own copy of the method, and nothing
         //< here says which. A call's arguments do not choose it either: a generic type's are
         //< written on the type ("Structs (`struct`)" in docs/SPEC-programming-language.md).
-    $name: = Str_builder.new()
+    defer $name: = Str_builder.new()
     owner.get_full_path_str_to(name)
     n: = name.slice()
     m: = member.text

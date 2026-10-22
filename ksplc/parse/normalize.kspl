@@ -118,8 +118,8 @@ impl Ast_node
         if r == null
             return false
         switch r.kind_id
-        case .k_stmt, .k_top_level_item, .k_decl_top, .k_for_init, .k_for_step, .k_stmt_return,
-            .k_stmt_throw, .k_stmt_fallback, .k_stmt_expr, .k_decl_extern, .k_decl_extern_block,
+        case .k_stmt, .k_top_level_item, .k_decl_top, .k_stmt_return, .k_stmt_throw,
+            .k_stmt_fallback, .k_stmt_expr, .k_decl_extern, .k_decl_extern_block,
             .k_decl_extern_struct, .k_decl_var, .k_decl_const, .k_stmt_break, .k_stmt_labeled_block,
             .k_stmt_continue, .k_decl_embed, .k_decl_typedef
             return true
@@ -133,7 +133,7 @@ impl Ast_node
         if r == null
             return false
         switch r.kind_id
-        case .k_empty, .k_stmt, .k_top_level_item, .k_decl_top, .k_for_init, .k_for_step
+        case .k_empty, .k_stmt, .k_top_level_item, .k_decl_top
             return true
         default
             return is_expr_wrapper_kind(r.kind_id)
@@ -260,7 +260,7 @@ impl Ast_node
     priv fn elide_type_paths(r: Ast_node$@)
         if r.kind_id == .k_expr_path || r.kind_id == .k_type_path
             flat: = base_ast.new_ast_node_list()
-            $s: = Str_builder.new()
+            defer $s: = Str_builder.new()
             $is_first_id: = true
             for child in r.children
                 if child.kind_id == .k_literal
@@ -281,7 +281,7 @@ impl Ast_node
                 r.set_kind(.k_expr_path)
 
     priv fn normalize_type_args_text(r: Ast_node$@)
-        $s: = Str_builder.new()
+        defer $s: = Str_builder.new()
         s.s("<|")
         $is_first: = true
         for c in r.children
@@ -519,16 +519,14 @@ impl Ast_node
                 flat.push(r.get_child(4))
                 r.children = flat
         case .k_stmt_for
-            // A multi-variable init (`for i: = 0, j: = 10; ...`) is split before normalize_loop
-            // bundles it into for_init, keeping five children; the later flatten does not reach
-            // inside for_init.
-            r.flatten_var_decl_lists()
             r.normalize_loop()
         case .k_if_bind
             r.normalize_if_bind()
         case .k_stmt_if
             r.normalize_if_stmt()
         case .k_stmt_defer
+            // The declaration of `defer $b: = X` takes a declaration statement's shape first.
+            r.flatten_var_decl_lists()
             r.normalize_defer_stmt()
         case .k_enum_variant
             r.normalize_enum_variant()
@@ -577,7 +575,7 @@ impl Ast_node
 
         if r.kind_id == .k_type_expr
             // The postfixes' texts keep their `$` (`"$[]"` / `"$@"`; see normalize_type_postfix).
-            $s: = Str_builder.new()
+            defer $s: = Str_builder.new()
             for c in r.children
                 s.s(c.text)
             r.text = base_core.arena.dup_str(s.slice())
@@ -589,7 +587,7 @@ impl Ast_node
         return r
 
 priv fn wrap_child_text(prefix: U8[], inner_text: U8[], suffix: U8[]): U8$[]
-    $s: = Str_builder.new()
+    defer $s: = Str_builder.new()
     s.s(prefix).s(inner_text).s(suffix)
     slice: = s.slice()
     return base_core.arena.dup_str(slice)

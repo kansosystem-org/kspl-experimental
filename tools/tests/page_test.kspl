@@ -41,7 +41,7 @@ priv fn owner_only(path: U8[], arena: Arena$@): Bool //< whether only its owner 
 
 fn test_the_url_keeps_the_token_last() //< the query goes before the fragment, the token last
     verdict.start("[tools/kspage_aim] building the URL that opens test...")
-    $sb: = Str_builder.new()
+    defer $sb: = Str_builder.new()
     got: = aim.url_for("http://127.0.0.1:8080/#t=abc123", "kspage/model/filter.kspl", false, sb@)
     assert(got.equals("http://127.0.0.1:8080/?doc=kspage/model/filter.kspl#t=abc123"),
         "the query goes before the fragment")
@@ -118,14 +118,14 @@ fn test_a_folder_cannot_plant_a_record() //< a line break in a value adds no rec
     //< A folder from an archive, named with line breaks, once added a record naming another host.
     verdict.start("[tools/kspage_aim] a folder planting a record in the note test...")
     planted: = "x\nhttp://evil.example:8999/#t=AT\n/home/u/notes"
-    $one: = Str_builder.new()
+    defer $one: = Str_builder.new()
     note: = aim.state_text("http://127.0.0.1:8100/#t=k1", planted, "", one@)
     assert(aim.state_count(note) == 0, "a folder holding a line break is not written")
     assert(!aim.fits_note(planted) && !aim.fits_note("a\rb") && aim.fits_note("/home/u/notes"),
         "only a value with no line break fits")
     // A note written before this check could hold one; it is not copied forward.
     old: = "http://evil.example:8999/#t=AT\n/home/u/notes\n"
-    $two: = Str_builder.new()
+    defer $two: = Str_builder.new()
     kept: = aim.state_text("http://127.0.0.1:8100/#t=k1", "/home/u/dl", old, two@)
     assert(aim.state_count(kept) == 1, "a record naming another host is dropped")
     assert(aim.on_loopback("http://127.0.0.1:8100/#t=k1") &&
@@ -135,7 +135,7 @@ fn test_a_folder_cannot_plant_a_record() //< a line break in a value adds no rec
 
 fn test_the_note_lists_the_running_servers() //< the note is a run of records, newest first
     verdict.start("[tools/kspage_aim] the note of the running servers test...")
-    $one: = Str_builder.new()
+    defer $one: = Str_builder.new()
     first: = aim.state_text("http://127.0.0.1:8080/#t=k9", ".", "", one@)
     assert(aim.state_count(first) == 1, "start one and there is one record")
     a: = aim.state_record(first, 0)
@@ -143,13 +143,13 @@ fn test_the_note_lists_the_running_servers() //< the note is a run of records, n
     assert(a[1].equals("."), "a record holds the folder being served")
     // A server for a different folder is **added**, not written over. Written over, the first one
     // is lost, and it holds its port with nobody able to reuse it.
-    $two: = Str_builder.new()
+    defer $two: = Str_builder.new()
     both: = aim.state_text("http://127.0.0.1:8081/#t=zz", "/home/me/docs", first, two@)
     assert(aim.state_count(both) == 2, "a different folder makes two records")
     assert(aim.state_record(both, 0)[1].equals("/home/me/docs"), "the newer one comes first")
     assert(aim.state_record(both, 1)[1].equals("."), "the one started first is left too")
     // Serving the same folder again drops the old record.
-    $again: = Str_builder.new()
+    defer $again: = Str_builder.new()
     fresh: = aim.state_text("http://127.0.0.1:8082/#t=n1", ".", both, again@)
     assert(aim.state_count(fresh) == 2, "records for the same folder do not grow")
     assert(aim.state_record(fresh, 0)[0].equals("http://127.0.0.1:8082/#t=n1"),
@@ -170,12 +170,11 @@ fn test_a_note_that_was_cut_short() //< a note cut off partway is read as far as
     assert(aim.state_record("http://h:1/#t=k\n", 0)[1].len == 0, "a line that is not there is empty")
     assert(aim.state_record("http://h:1/#t=k\n.\n", 9)[0].len == 0, "a record not there is empty")
     // **Do not let it grow without LIMIT**: past the cap, the oldest records go first.
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
-    $body: = Str_builder.new()
-    $dir: = Str_builder.new()
+    defer arena: = Arena.new(64 * 1024)
+    defer $body: = Str_builder.new()
+    defer $dir: = Str_builder.new()
     $had: U8[] = ""
-    for $i: Sz = 0; i < 12; i += 1
+    for i in Range.asc(12)
         dir.clear()
         dir.s("/dir/\{i\}")
         body.clear()
@@ -195,7 +194,7 @@ fn test_a_note_rebuilt_from_its_records() //< records put back one by one read b
     had: =
         "http://127.0.0.1:1/#t=a\n/one\nhttp://127.0.0.1:2/#t=b\n/two\nhttp://127.0.0.1:3/#t=c\n/my \
             docs\n"
-    $kept: = Str_builder.new()
+    defer $kept: = Str_builder.new()
     // The second server stopped answering, so only the first and the third are put back.
     for i in Sz[]::{ 0, 2 }
         one: = aim.state_record(had, i)
@@ -281,8 +280,7 @@ fn test_the_browser_is_handed_a_page_not_the_url() //< the token stays off the c
     //< **A command line is open to every user on the machine** (`ps`). So the browser is started on
     //< a page that moves on to the URL. Only its owner can read that page.
     verdict.start("[tools/kspage_aim] handing the browser a page, not the URL test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
+    defer arena: = Arena.new(64 * 1024)
     dir: = fs.mkdir_unique(SCRATCH, "page_", arena)
         catch panic("cannot create the working directory")
     page: = aim.write_page(SECRET_URL, dir, arena) catch panic("the page should be written")
@@ -299,7 +297,7 @@ fn test_the_browser_is_handed_a_page_not_the_url() //< the token stays off the c
     assert(holding(page, linked), "and offers it as a link too")
     assert(owner_only(page, arena), "only its owner may read the page")
     // **The URL is written as an attribute's value**, so a `"` cannot end it.
-    $text: = Str_builder.new()
+    defer $text: = Str_builder.new()
     quoted: = aim.page_text("http://h:1/?doc=a\"b<c>&d#t=k", text@)
     assert(quoted.find_str("a&quot;b&lt;c&gt;&amp;d").is_some() &&
         quoted.find_str("a\"b").is_none(), "a mark in the URL is escaped")
@@ -310,8 +308,7 @@ fn test_the_browser_is_handed_a_page_not_the_url() //< the token stays off the c
 
 fn test_a_page_handed_long_ago_is_removed() //< a page goes once a browser has had time to read it
     verdict.start("[tools/kspage_aim] removing the pages handed long ago test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
+    defer arena: = Arena.new(64 * 1024)
     dir: = fs.mkdir_unique(SCRATCH, "sweep_", arena)
         catch panic("cannot create the working directory")
     page: = aim.write_page(SECRET_URL, dir, arena) catch panic("the page should be written")
@@ -329,8 +326,7 @@ fn test_a_page_handed_long_ago_is_removed() //< a page goes once a browser has h
 
 fn test_the_note_is_written_for_its_owner() //< the note and the log hold the token too
     verdict.start("[tools/kspage_aim] writing the note for its owner alone test...")
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
+    defer arena: = Arena.new(64 * 1024)
     dir: = fs.mkdir_unique(SCRATCH, "note_", arena)
         catch panic("cannot create the working directory")
     note: = fs.join(dir, "kspage_open.state", arena)
@@ -388,7 +384,7 @@ fn test_telling_the_difference(arena: Arena$@) //< it counts the removed, change
     now: = "# a header\np/a\tk1\tunchanged\np/b\tk2\tafter\np/d\tk4\tbrand new\n"
     $o: = surface.rows_of(old, arena)
     $w: = surface.rows_of(now, arena)
-    $b: = Str_builder.new()
+    defer $b: = Str_builder.new()
     n: = surface.classify(o@, w@, b@)
     // One removed, one changed, one added; k1 is unchanged.
     assert(n == 3, "the removed, the changed and the added are counted one each")
@@ -420,7 +416,7 @@ fn test_an_entry_that_says_nothing(arena: Arena$@) //< the rows carrying no summ
             tree\nkspeg/rule\tRule.wildcard\twildcard\nksdb/log\tLog.used\tpub fn used(r: Self$@): \
             Sz\n"
     $rows: = surface.rows_of(data, arena)
-    $b: = Str_builder.new()
+    defer $b: = Str_builder.new()
     n: = surface.undocumented(rows@, b@)
     assert(n == 2, "the two rows with no fourth column are counted, and the one with it is not")
     out: = b.slice()
@@ -460,7 +456,7 @@ fn test_a_drifted_twin_is_named(arena: Arena$@) //< twins per `#cfg` differing b
     //< **Twins that differ only by a parameter's unused mark agree** (an argument is passed by
     //< place); any other difference is named, once.
     verdict.start("[tools/surface] a drifted #cfg twin is named test...")
-    $b: = Str_builder.new()
+    defer $b: = Str_builder.new()
     same: =
         "std/lang\tpanic #cfg(!freestanding)\tpub fn panic(msg: U8$[], file: U8[])\nstd/lang\tpanic \
             #cfg(freestanding)\tpub fn panic(msg: U8$[], _file: U8[])\n"

@@ -36,9 +36,9 @@
 1. **An error is a value, and it is listed** — `Step_error`
 1. **Failing, and a return type that says so** — `step`
 1. **Passing a failure on with `!`** — `step_twice`
-1. **Automatic ownership** — `pick_builder`
+1. **`defer`, in front of what it frees** — `pick_builder`
 1. **Leaving early** — `note`
-1. **Where the braces have to stay** — `Shade`
+1. **Where the braces have to stay** — `tally`
 1. **A global, and why there is one here** — `seen`
 1. **Where memory comes from, and leaving two loops** — `gather`
 1. **Putting it together** — `main`
@@ -74,12 +74,12 @@ priv fn greet(who: U8[])
 
 ## A changing binding, and the three shapes of a loop
 
-**A binding (a name given to a value) is immutable unless it opens with `$`.** A loop takes one of three shapes: `for a; b; c` counts, `for x in …` walks what it is given, and a bare `for` goes round until something stops it. `continue` takes the next turn; `else if` and `else` chain as they read.
+**A binding (a name given to a value) is immutable unless it opens with `$`.** A loop takes one of three shapes. `for x in …` walks what it is given; over `Range.asc(n)` it counts. `for a; b; c` serves an index the body moves itself. A bare `for` goes round until something stops it. `continue` takes the next turn; `else if` and `else` chain as they read.
 
 ```kspl
 priv fn count_up(n: Sz): Sz
     $total: Sz = 0
-    for $i: Sz = 0; i < n; i += 1
+    for i in Range.asc(n)
         if i % 2 == 0
             total += i
         else if i == 3
@@ -206,9 +206,9 @@ priv fn step_twice(n: I32): I32!Step_error
     return step(once)!
 ```
 
-## Automatic ownership
+## `defer`, in front of what it frees
 
-**A builder releases its buffer automatically.** Returning it transfers ownership to the caller. Passing it by value also transfers ownership; a pointer or Writer view borrows it. The caller needs no `defer`. A borrowed `slice()` stays valid only while its builder lives. Manual owners still use `defer`, as `Arena` does in `main` below.
+**`defer` in front of a declaration frees the value when the block ends**, however it ends. That is its last line, or a `return` or a `!` that leaves early (`defer $b: = …` in `main` below). Nothing frees itself, so every free stands on the page. A function that hands a value to its caller, as this one does, declares it without `defer`. Another cleanup is a `defer` statement on the next line, naming what it cleans up.
 
 ```kspl
 priv fn pick_builder(ok: Bool): Str_builder!Step_error
@@ -233,9 +233,9 @@ priv fn note(on: Bool)
 **A block holding only a comment cannot be written by indentation.** A comment is not a statement, so laid out by indentation the block would be empty. The braces are kept for that arm alone. Every `case` and `default` sits at the `switch`'s column, the first on the line below it. A `case` that uses nothing its variant carries names the variant alone.
 
 ```kspl
-impl Shade
-    fn tally(r: Self)
-        switch r
+priv fn tally(shades: Shade[])
+    for shade in shades
+        switch shade
         case .dark
             seen += 1
         case .mid {
@@ -275,8 +275,7 @@ priv fn gather(arena: Arena$@): List<|U8[]|>
 
 ```kspl
 fn main(): I32
-    arena: = Arena.new(1024 * 1024)
-    defer arena.free()
+    defer arena: = Arena.new(1024 * 1024)
     greet("Kanso")
     p: Point = ::{ .x = 3, .y = 4 }
     span: Span = ::{ .from = 2, .to = 5 }
@@ -295,14 +294,13 @@ fn main(): I32
         case .too_far
             io.out().s("too far.\n")
         fallback -2
-    $b: = pick_builder(true) catch
+    defer $b: = pick_builder(true) catch
         io.out().s("the place to assemble into could not be taken.\n")
         fallback Str_builder.new()
     b.s("held")
     note(true)
     note(false)
-    Shade.dark.tally()
-    Shade.mid(1).tally()
+    tally(Shade[]::{ .dark, .mid(1) })
     words: = gather(arena)
     // **It carries a label.** A block with no heading cannot be told from a continuation of the
     // statement before it. So a block of its own is written only with a label in front.

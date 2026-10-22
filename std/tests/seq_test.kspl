@@ -134,7 +134,7 @@ fn test_seq_order_by_stable(arena: Arena$@) //<
             xs.push(Seq_tagged::{ .key = I32::((i * 5) % 7), .was = i })
         got: = xs.order_by(by_key, arena)
         assert(got.len == Sz::n, "order_by: the length changed")
-        for $i: Sz = 1; i < got.len; i += 1
+        for i in Range.new(1, got.len, 1)
             prev: = got.get(i - 1)
             here: = got.get(i)
             assert(prev.key <= here.key, "order_by: out of order")
@@ -406,8 +406,7 @@ fn test_map_removal() //<
                 found = true
     assert(found, "a pair of colliding keys is found")
 
-    $m: = Map<|I32, I32|>.new(null)
-    defer m.free()
+    defer $m: = Map<|I32, I32|>.new(null)
     m.set(ka, 100)
     m.set(kb, 200)
     assert(m.remove(ka), "the earlier key can be removed")
@@ -420,8 +419,7 @@ fn test_map_removal() //<
     assert(m.get(kb).unwrap_or(-1) == 300, "the value put back in is reachable")
 
     // Through repeated removal and insertion, only the remaining keys are reachable.
-    $m2: = Map<|I32, I32|>.new(null)
-    defer m2.free()
+    defer $m2: = Map<|I32, I32|>.new(null)
     for i in Range.asc(200)
         m2.set(I32::i, I32::(i * 10))
     for i in Range.asc(200)
@@ -442,8 +440,7 @@ fn test_map_removal() //<
 
     // **Test repeated set and remove**: if growth ignores the tombstones, they fill the table while
     // the count stays small.
-    $m3: = Map<|I32, I32|>.new(null)
-    defer m3.free()
+    defer $m3: = Map<|I32, I32|>.new(null)
     for _i in Range.asc(5000)
         m3.set(7, 1)
         m3.remove(7)
@@ -457,10 +454,8 @@ fn test_map_churn() //< setting and removing ever new keys keeps a small map sma
     //< Caution: **Keep live keys whose buckets sit at the table's end**, so their run wraps past
     //< slot 0. Rehashing in place must not lose a pair whose probe crosses the end.
     verdict.start("[Map] a small map under endless set and remove of new keys test...")
-    $m: = Map<|I32, I32|>.new(null)
-    defer m.free()
-    $live: = List<|I32|>.new(null)
-    defer live.free()
+    defer $m: = Map<|I32, I32|>.new(null)
+    defer $live: = List<|I32|>.new(null)
     for $k: I32 = 1; live.len < 6; k += 1
         if (ds.fmix32(U32::k) & 31) >= 30
             live.push(k)
@@ -478,8 +473,7 @@ fn test_map_churn() //< setting and removing ever new keys keeps a small map sma
     assert(all_found, "every kept key is still reachable")
 
     // An arena takes back nothing, so a rehash that moved to new slots would grow it every time.
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
+    defer arena: = Arena.new(64 * 1024)
     $ma: = Map<|I32, I32|>.new(arena)
     ma.set(1, 1)
     held: = arena.get_total_allocated()
@@ -496,8 +490,7 @@ fn test_map_churn() //< setting and removing ever new keys keeps a small map sma
     verdict.pass("A map that keeps a few pairs keeps its size however many keys pass through.")
 
 priv fn churn_counted_values() //< sets and removes ARC values past several in-place rehashes
-    $m: = Map<|I32, Rc<|I32|>|>.new(null)
-    defer m.free()
+    defer $m: = Map<|I32, Rc<|I32|>|>.new(null)
     for $k: I32 = 0; k < 40; k += 1
         m.set(k, Rc<|I32|>.new(k))
     for $i: I32 = 100; i < 5000; i += 1
@@ -510,8 +503,7 @@ fn test_map_odd_cap() //< a capacity that is not a power of two
     verdict.start("[Map] new_with_cap with a count that is not a power of two test...")
     // Caution: **Check the slots before inserting.** Taken as it is, 3 leaves a slot no probe
     // reaches and the third `set` never returns, so the test would hang rather than fail.
-    $m: = Map<|I32, I32|>.new_with_cap(3, null)
-    defer m.free()
+    defer $m: = Map<|I32, I32|>.new_with_cap(3, null)
     assert(m.cap == 4, "the count is rounded up to the next power of two")
     for $k: I32 = 1; k <= 3; k += 1
         m.set(k, k * 10)
@@ -519,8 +511,7 @@ fn test_map_odd_cap() //< a capacity that is not a power of two
     verdict.pass("A count that is not a power of two is rounded up, and the map works.")
 fn test_list_remove_at() //< the counterpart of `List.insert`
     verdict.start("[ds] List.remove_at test...")
-    arena: = Arena.new(8 * 1024)
-    defer arena.free()
+    defer arena: = Arena.new(8 * 1024)
     xs: = List<|I32|>.create(arena)
     for $i: I32 = 0; i < 5; i += 1
         xs.push(i)
@@ -541,8 +532,7 @@ fn test_list_remove_at() //< the counterpart of `List.insert`
 
 fn test_list_pop_and_clear() //< removal keeps capacity and releases ARC ownership
     verdict.start("[ds] List.pop and clear test...")
-    arena: = Arena.new(8 * 1024)
-    defer arena.free()
+    defer arena: = Arena.new(8 * 1024)
     for storage in Arena$@[2]::{ null, arena }
         $xs: = List<|I32|>.new(storage)
         assert(xs.pop().is_none(), "pop: an empty list has no last element")

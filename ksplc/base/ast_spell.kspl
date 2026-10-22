@@ -72,8 +72,7 @@ fn write_sig(fn_node: Ast_node$@, spell: Callable2<|Sig_part, Str_builder$@, Boo
         //< `spell` could not.
         //< Caution: **Do not drop a default.** Without it, a reader takes the parameter for one
         //< every call must pass.
-    $parts: = List<|Sig_part|>.new(null)
-    defer parts.free()
+    defer $parts: = List<|Sig_part|>.new(null)
     fn_node.sig_parts(parts@)
     out.c('(')
     for i in Range.asc(parts.len)
@@ -105,7 +104,7 @@ impl Ast_node
         if node == null || node.text.len < 2 || node.text.starts_with("\"\"\"")
             return .none
         return .some(node.text.sub(1, node.text.len - 2))
-    // The selective import list of `import "path" { A, B as C };`; null where absent (the plain
+    // The selective import list of `import "path" { A, B };`; null where absent (the plain
     // `as alias` is read by sema/collect.kspl through r.get_child(2)).
 
     fn sig_parts(r: Self$@, out: List<|Sig_part|>$@) //<
@@ -140,7 +139,7 @@ impl Ast_node
     priv fn last_path_segment_node(r: Self$@): Ast_node$@ //<
         //< A path node's trailing segment, before any `type_args`
         //< The path node is an expr_path, a type_path or a generic_path.
-        //< null without children. get_path_name and extract_case_variant share it.
+        //< null without children. get_path_name shares it.
         len: = r.children.len
         if len == 0
             return null
@@ -245,7 +244,7 @@ impl Ast_node
         //< `Wrap<|Self|>` too: "is the implementing type" versus "contains it somewhere".
         if r == null
             return false
-        $spelled: = r.extract_type_name()
+        defer $spelled: = r.extract_type_name()
         base: = spelled.slice()
         return base.equals("Self") || base.equals("Self@") || base.equals("Self$@")
 
@@ -265,44 +264,12 @@ impl Ast_node
         r.ice_assert(r != null, "flatten_to_identifier: node is null")
         r.morph(.k_identifier, c_name)
 
-    fn extract_case_variant(r: Self$@): base_ast.Case_variant_info
-        if r == null || r.children.len == 0
+    fn extract_case_variant(r: Self$@): base_ast.Case_variant_info //<
+        //< The variant a `case` pattern names in its one form, `.quit` or `.click(x, y)`
+        //< Any other pattern is a value (`case 1`). Sema refuses one on an enum subject.
+        if r == null || r.children.len == 0 || !r.get_child(0).is_literal(".")
             return .not_variant
-
-        $actual: = r.get_child(0)
-        for
-            id: = actual.kind_id
-            if id == .k_literal || id == .k_identifier || id == .k_enum_init ||
-                id == .k_enum_init_call || id == .k_expr_path || id == .k_type_path ||
-                id == .k_generic_path
-                break
-            if actual.children.len > 0
-                actual = actual.get_child(0)
-            else
-                break
-
-        if actual.is_literal(".")
-            return .variant(r.get_child(1), 2) if r.children.len > 1 else .variant(null, 1)
-
-        if actual.kind_id == .k_identifier
-            return .variant(actual, 1)
-
-        if actual.kind_id == .k_enum_init || actual.kind_id == .k_enum_init_call ||
-            actual.kind_id == .k_expr_postfix
-            $inner: = actual
-            if actual.kind_id == .k_enum_init_call && actual.children.len > 0
-                inner = actual.get_child(0)
-            for $ci: I32 = (I32::inner.children.len) - 1; ci >= 0; ci -= 1
-                v_node: = inner.get_child(ci)
-                if v_node.kind_id == .k_identifier
-                    return .variant(v_node, 1)
-        else if actual.kind_id == .k_expr_path || actual.kind_id == .k_type_path ||
-            actual.kind_id == .k_generic_path
-            last: = actual.last_path_segment_node()
-            if last != null && last.kind_id == .k_identifier
-                return .variant(last, 1)
-            return .variant(actual, 1)
-        return .not_variant
+        return .variant(r.get_child(1), 2) if r.children.len > 1 else .variant(null, 1)
 
     // Whether a subscript (`a[i]`) goes through an operator trait; a built-in one holds no
     // def_node.

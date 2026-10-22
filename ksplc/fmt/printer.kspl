@@ -177,11 +177,6 @@ impl Formatter
             .last_was_postfix_mark = false,
         } }
 
-    fn free(r: Self$@)
-        r.out.free()
-        r.last_text.free()
-        r.paren_spans.free()
-
     fn in_continuation(r: Self$@): Bool //<
         //< Whether the line being written carries on, so its wrapping indent is kept
         //< Caution: **Keep the wrapping indent where the line carries on.** Dropping it puts the
@@ -385,7 +380,7 @@ impl Formatter
         is_postfix_mark: = r.postfix_mark_next && kind == .k_literal
         r.postfix_mark_next = false
         // The joined spelling of a string literal, held for as long as `text` points into it.
-        $joined: = Str_builder.new()
+        defer $joined: = Str_builder.new()
         $carry: = false
         if kind == .k_assign_op || (kind == .k_literal && node.text.equals("assign_op"))
             op_len: = node.get_assign_op_len(r.src)
@@ -572,7 +567,7 @@ impl Formatter
         span: = node.get_string_span(r.src)
         raw_text: = U8[]::{ .ptr = r.src.ptr + node.loc.offset, .len = span }
         // Laid out from its joined spelling, as in `write_token`.
-        $joined: = Str_builder.new()
+        defer $joined: = Str_builder.new()
         carry: = join_string_lines(raw_text, joined@)
         text: = joined.slice() if carry else raw_text
         last_txt: = r.last_text.slice()
@@ -735,9 +730,7 @@ impl Formatter
             // A `;` ends a statement, except where it splits a header. It splits a loop's three
             // parts, and a closure signature's parameters from its captures (`fn(x: I32; n: I32)`,
             // even with no capture after it). Those get a space, never a newline.
-            ends_stmt: =
-                is_semi && kind_id != .k_stmt_for && kind_id != .k_for_init &&
-                kind_id != .k_expr_fn_lit_sig
+            ends_stmt: = is_semi && kind_id != .k_stmt_for && kind_id != .k_expr_fn_lit_sig
             is_comma: = child.is_literal(",")
             is_assign: = child.kind_id == .k_assign_op || child.is_literal("=")
             is_logical: = child.is_literal("&&") || child.is_literal("||")
@@ -889,4 +882,8 @@ fn with_parens(src: U8[], spans: List<|Sz|>@, arena: Arena$@): U8[] //<
 
 // It owns memory and releases it with `free()` (why it must conform: `Manual_free` in
 // std/lang.kspl).
-impl Formatter: Manual_free {}
+impl Formatter: Manual_free
+    fn free(r: Self$@)
+        r.out.free()
+        r.last_text.free()
+        r.paren_spans.free()

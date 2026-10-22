@@ -1,4 +1,4 @@
-//< Shape: guard clauses, nesting, wrapped argument lists and length
+//< Shape: guard clauses, nesting, wrapped argument lists, length and split impl blocks
 //< Each case below is compiled alone, as the file its head names.
 // ==== case guard_clause
 //< When the `if` branch always leaves, the `else` is unnecessary (a guard clause)
@@ -545,7 +545,7 @@ pub fn kept_never_null(arena: Arena$@): Cell$@
 //< Caution: The arguments must be long enough that the wrap survives formatting. `make fmt` folds a
 //< call that fits the column width onto one line, and then the finding stops coming out.
 // EXPECT: [H0802] This call passes another call as an argument
-// EXPECT: [H0804] This 'if' directly wraps a call
+// EXPECT: [H0802] This 'if' directly wraps a call
 priv fn combine_three_values(first_operand: I32, second_operand: I32, third_operand: I32): I32
   return first_operand + second_operand + third_operand
 
@@ -705,3 +705,42 @@ pub fn answer(): I32 //< gives the answer
     //<
     //< Last paragraph.
     return 42
+// ==== case split_impl
+//< A type's second plain `impl` block in one file is reported, naming the first block's line
+//< Every `impl<|T|> Box<|T|>` is one type. A block that names a trait, and a block for one
+//< instance (`impl Box<|I32|>`), hold what the first block cannot, so they are not counted.
+// EXPECT: split_impl.kspl:21:1: information: [I0801] 'Plain' already has a plain 'impl' block in this file, at line 13.
+// EXPECT: split_impl.kspl:32:1: information: [I0801] 'Box<|T|>' already has a plain 'impl' block in this file, at line 28.
+// EXPECT-NOT: 'Box<|I32|>' already has
+pub trait Sized
+  fn size(r: Self): Sz
+
+pub struct Plain
+  pub v: I32
+
+impl Plain
+  pub fn get(r: Self@): I32
+    return r.v
+
+impl Plain: Sized
+  pub fn size(_r: Self@): Sz
+    return 4
+
+impl Plain
+  pub fn set(r: Self$@, v: I32)
+    r.v = v
+
+pub struct Box<|T|>
+  pub v: T
+
+impl<|T|> Box<|T|>
+  pub fn get(r: Self@): T
+    return r.v
+
+impl<|T|> Box<|T|>
+  pub fn set(r: Self$@, v: T)
+    r.v = v
+
+impl Box<|I32|>
+  pub fn twice(r: Self@): I32
+    return r.v * 2

@@ -35,9 +35,19 @@ priv const SRC: U8[] = "fn main(): Void\n    var x = 1\n\n"
 // document that does not parse comes back empty (`ksplc/lsp/semtok.kspl`'s header). A function's
 // name, a type's position, a struct's name and fields, and an import's alias are all in one.
 // **An enum too**: the compiler gives it a `variant_name` from a string of its own, which must
-// colour nothing (`made_by_compiler` in `ksplc/base/ast_ext.kspl`).
+// colour nothing (`made_by_compiler` in `ksplc/base/ast_ext.kspl`). So must the `xs.free()` it
+// makes for `defer $xs: = …`, at the `defer`.
 priv const SEMTOK_SRC: U8[] =
-    """struct Pair
+    """import "std/ds" { List }
+
+
+fn count(): Sz
+  defer $xs: = List<|I32|>.new(null)
+  xs.push(1)
+  return xs.len
+
+
+struct Pair
   left: I32
   right: I32
 
@@ -629,7 +639,7 @@ priv fn check_worker_alive(exe: U8[], top: U8[], ch_text: U8[], arena: Arena$@)
     defer w.kill()
     $b: = Json_builder.new(arena)
     root: = b.obj().set("rootUri", b.str_val(top)).build()
-    $frames: = Str_builder.new()
+    defer $frames: = Str_builder.new()
     jsonrpc.frame_into(frames@, jsonrpc.encode("initialize", root, 1, arena))
     opened: = jsonrpc.encode("textDocument/didOpen",
         lsp_client.did_open(CH_FILE, ch_text, arena), -1, arena)
@@ -646,7 +656,7 @@ priv fn check_worker_alive(exe: U8[], top: U8[], ch_text: U8[], arena: Arena$@)
             "the worker took no request")
         return
     w.close_stdin() // if not closed, the worker keeps waiting: it answers after reading everything
-    $answers: = Str_builder.new()
+    defer $answers: = Str_builder.new()
     buf: = U8$[]::{ .ptr = U8$@::arena.alloc(64 * 1024), .len = 64 * 1024 }
     for _k in Range.asc(4000)
         got: = w.read(buf, 300000) catch

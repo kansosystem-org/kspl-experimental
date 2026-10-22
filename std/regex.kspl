@@ -452,11 +452,11 @@ priv fn new_vm(states: Sz, width: Sz): Vm
         .slots = base + 2 * part, .best = base + 2 * part + width, .end = 0, .visits = 0 }
 
 priv fn copy_slots(to: Sz$@, from: Sz$@, width: Sz) //< a way's slots, a handful, copied in place
-    for $i: Sz = 0; i < width; i += 1
+    for i in Range.asc(width)
         (to + i)$ = (from + i)$
 
-impl Vm: Drop //< frees its block when its owner leaves scope
-    priv fn drop(r: Self$@)
+impl Vm: Manual_free //< it owns its block and frees it in `free()`
+    fn free(r: Self$@)
         dealloc(Void$@::r.block)
 
 impl Vm
@@ -527,11 +527,9 @@ priv fn first_bytes(prog: List<|Inst|>$@, first: Bool$[]): Bool //<
     //< would skip a start that matches, while one too many only costs a look.
     for i in Range.asc(BYTE_COUNT)
         first[i] = false
-    $seen: = List<|Bool|>.new_with_cap(prog.len, null)
-    defer seen.free()
+    defer $seen: = List<|Bool|>.new_with_cap(prog.len, null)
     seen.len = prog.len
-    $todo: = List<|Sz|>.new(null)
-    defer todo.free()
+    defer $todo: = List<|Sz|>.new(null)
     todo.push(0)
     for todo.len > 0
         pc: = todo.get(todo.len - 1)
@@ -675,7 +673,7 @@ impl Regex
                     for p < text.len && !r.first[(text.ptr + p)$]
                         p += 1
                 if r.may_be_empty || p < text.len && r.first[(text.ptr + p)$]
-                    for $i: Sz = 0; i < vm.width; i += 1
+                    for i in Range.asc(vm.width)
                         (vm.slots + i)$ = -1
                     if vm.width > 0
                         vm.slots$ = p
@@ -722,7 +720,7 @@ impl Regex
         r: Self$@,
         text: U8[], //< the text to search
     ): Sz
-        $vm: = new_vm(r.states, r.width())
+        defer $vm: = new_vm(r.states, r.width())
         _found: = r.search(text, 0, vm@)
         return vm.visits
 
@@ -730,7 +728,7 @@ impl Regex
         r: Self$@,
         text: U8[], //< the text to search
     ): Match?
-        $vm: = new_vm(r.states, r.width())
+        defer $vm: = new_vm(r.states, r.width())
         if !r.search(text, 0, vm@)
             return .none
         return .some(r.found(vm@))
@@ -745,7 +743,7 @@ impl Regex
         arena: Arena$@, //< where the list goes; null means the heap and a `free()`
     ): List<|Match|>
         $out: = List<|Match|>.new(arena)
-        $vm: = new_vm(r.states, r.width())
+        defer $vm: = new_vm(r.states, r.width())
         $from: Sz = 0
         for from <= text.len && r.search(text, from, vm@)
             m: = r.found(vm@)
@@ -757,13 +755,12 @@ impl Regex
         r: Self$@,
         text: U8[], //< the text to search
     ): Bool
-        $vm: = new_vm(r.states, 0)
+        defer $vm: = new_vm(r.states, 0)
         return r.search(text, 0, vm@)
 
+impl Regex: Manual_free //< it owns its resources and frees them in `free()`.
     pub fn free(r: Self$@) //< frees the compiled tree and its program
         r.prog.free() // the steps only point into the tree, which goes next, then the handle
         r.pc_of.free()
         free_rx_alts(r.alts@)
         dealloc(Void$@::r)
-
-impl Regex: Manual_free {} //< it owns its resources and frees them in `free()`.

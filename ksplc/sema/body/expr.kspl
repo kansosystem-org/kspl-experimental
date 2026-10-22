@@ -179,6 +179,11 @@ priv fn check_literal_escapes(node: Ast_node$@, c: Sema_ctx$@, one_byte: Bool) /
         m
             .s("'\{spell\}' is more than one byte in UTF-8. A character literal holds one byte. Use \
                 a string literal, or keep '\\u' at U+007F or below")
+    case .line_break
+        m
+            .s("a string cannot hold a line break as it stands: the next line's indentation would \
+                become text. Write '\\n' for a line break, end the line with '\\' to continue the \
+                text on the next one, or use a raw string (\"\"\"…\"\"\")")
     case .wide_char_body
         m
             .s("a character literal holds exactly one byte. '\{spell\}' is more than one byte. Use \
@@ -208,8 +213,7 @@ priv fn infer_sizeof_expr(node: Ast_node$@, c: Sema_ctx$@, _expected_id: I32): I
             // resolve registers the name.
             if !c.is_instantiating()
                 errors_before: = c.error_mark()
-                $gen_params: = List<|Ast_node$@|>.new(null)
-                defer gen_params.free()
+                defer $gen_params: = List<|Ast_node$@|>.new(null)
                 node.validate_all_type_exprs(c, gen_params@)
                 if c.error_mark() != errors_before
                     return I32::sema_type_env.Builtin_type_id.size_type
@@ -307,6 +311,8 @@ priv fn infer_unary_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32
         case .failed
             return I32::sema_type_env.Builtin_type_id.unknown
         case .builtin {}
+    if sema_body_binary.refuses_operator_operand(c, node, op, inner_type_id, true)
+        return I32::sema_type_env.Builtin_type_id.unknown
     return inner_type_id
 
 priv fn ternary_numeric_type(c: Sema_ctx$@, true_node: Ast_node$@, t_id: I32,

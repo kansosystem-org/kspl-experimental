@@ -198,9 +198,9 @@ pub fn check_list( //< reports a walk's findings as one check, with how many thi
 ): Bool //< true when it held, as `list_verdict` decides
     ok: = list_verdict(seen, bad.len)
     cur_tag = ""
-    $shown: = Str_builder.new()
+    defer $shown: = Str_builder.new()
     shown.s(name).s(" (\{seen\} \{unit\})")
-    $why: = Str_builder.new()
+    defer $why: = Str_builder.new()
     for i in Range.asc(bad.len)
         if i >= MAX_FINDINGS_SHOWN
             why.s("\n    (and \{bad.len - MAX_FINDINGS_SHOWN\} more)")
@@ -304,7 +304,7 @@ pub fn run_child( //< runs one child to its end, and returns how it ended and wh
 ): Run_out
     // The outputs and the folding are work, kept apart from `arena` (`mem.scratch`); only the
     // folded text is copied to the caller.
-    work: = mem.scratch(null)
+    defer $work: = mem.scratch(null)
     t0: = sys.mono_us()
     r: = subproc.run_capture(argv, cwd, timeout_ms, RUN_OUTPUT_CAP, work.arena)
     o: = folded(r, work.arena)
@@ -354,7 +354,7 @@ pub fn run_children( //< runs children side by side (`jobs`), and returns their 
             outs.push(Run_out::{ .code = .none, .out = lost })
         return outs
     // The outputs and the folding are work, as in `run_child`.
-    work: = mem.scratch(null)
+    defer $work: = mem.scratch(null)
     rs: = subproc.run_many(items, jobs(), DEFAULT_TIMEOUT_MS, RUN_OUTPUT_CAP, work_dir, work.arena)
     for i in Range.asc(rs.len)
         o: = folded(rs.get(i), work.arena)

@@ -111,8 +111,8 @@ Caution: When adding an accessor, confirm that the kind really comes at that ind
 | :--- | :--- | :--- |
 | **`program`** | `[0...]`: the top-level elements (`decl_top` and the like) | the file's root |
 | **`decl_import`** | `[0]: Keyword("import")`<br>`[1]: String`<br>`[2]?: Identifier` or `decl_import_selector_list` | `[2]` is either an alias for the whole file (`Identifier`) or a selective import list, never both. The alias form's `as` is removed. Accessors: `get_import_path()` / `get_decl_import_selector_list()` and the like |
-| **`decl_import_selector_list`** | `[0...]: decl_import_selector` | the inside of the `{ }` in `import "path" { A, B as C }`; one or more |
-| **`decl_import_selector`** | `[0]: Identifier` (the original name in the imported file)<br>`[1]?: Identifier` (the alias used with no namespace; omitted, the same name as `[0]`) | the `as` is removed. Accessors: `get_selector_name()` / `get_selector_alias()` |
+| **`decl_import_selector_list`** | `[0...]: decl_import_selector` | the inside of the `{ }` in `import "path" { A, B }`; one or more |
+| **`decl_import_selector`** | `[0]: Identifier` (the name in the imported file, used with no namespace) | Accessor: `get_selector_name()` |
 | **`decl_embed`** | `[0]: Keyword("embed")`<br>`[1]: String`<br>`[2]: Identifier` (the bound name) |  |
 | **`decl_extern_block`** | `[0]: Keyword("extern")`<br>`[1...]: decl_extern`, `decl_fn_proto`, `decl_var`, `decl_extern_struct` | kept in the AST as an external-linkage block, never flattened |
 | **`decl_extern`** | `[0...]: decl_fn_proto` or `decl_var` or `decl_extern_struct` | a child of `decl_extern_block`; `pub` is removed, since Sema handles it |
@@ -136,11 +136,11 @@ Caution: When adding an accessor, confirm that the kind really comes at that ind
 | **`stmt_block`** | `[0...]: stmt` | the `{` and `}` are removed |
 | **`stmt_labeled_block`** | `[0]`: `label`<br>`[1]`: `stmt_block` | Lower flattens it into an ordinary block plus a `stmt_label` |
 | **`stmt_if`** | `[0]`: `label` or `empty`<br>`[1]`: `expr` (the condition)<br>`[2]`: `stmt_block` (the then block)<br>`[3]`: `stmt_block`, `stmt_if`, or `empty` (the else block) | |
-| **`stmt_for`** | `[0]`: `label` or `empty`<br>`[1]`: `for_init` or `empty`<br>`[2]`: `expr` or `empty` (the condition)<br>`[3]`: `for_step` or `empty`<br>`[4]`: `stmt_block` or `empty` (the loop's body) | always five elements, whether C-style, while or endless |
+| **`stmt_for`** | `[0]`: `label` or `empty`<br>`[1]`: `decl_var`, `stmt_expr`, the bare `Identifier` of a `for x in` (until Desugar), or `empty` (the init)<br>`[2]`: `expr` or `empty` (the condition)<br>`[3]`: `stmt_expr` or `empty` (the step)<br>`[4]`: `stmt_block` or `empty` (the loop's body) | always five elements, whether C-style, while or endless |
 | **`stmt_switch`** | `[0]`: `label` or `empty`<br>`[1]`: `expr` (the condition)<br>`[2...]`: `case_pattern` or `stmt_block` or `Keyword("case"/"default")` | |
 | **`stmt_return`**<br>**`stmt_break`**<br>**`stmt_continue`** | `[0]`: `Keyword`<br>`[1]`: `expr` or `Identifier` (optional) | |
 | **`stmt_fallback`** | `[0]`: `Keyword`<br>`[1]`: `expr` | |
-| **`stmt_defer`** | `[0]`: `Keyword("defer")`<br>`[1]: stmt_block` | the body is always a `stmt_block`: `normalize_defer_stmt` in `parse/normalize_stmt.kspl` gives a one-statement `defer` (`defer buf.free()`) that shape. It holds no capture list (`docs/SPEC-programming-language.md` §8.4.1; the grounds are docs/DESIGN-programming-language.md "Why `defer` has no capture list") |
+| **`stmt_defer`** | `[0]`: `Keyword("defer")`<br>`[1]: stmt_block`, or a `decl_var` before the desugaring | the body is a `stmt_block`: `normalize_defer_stmt` in `parse/normalize_stmt.kspl` gives a one-statement `defer` (`defer buf.free()`) that shape. A declaration (`defer $b: = X`) stays one `decl_var` child until the desugaring splits it. It holds no capture list (`docs/SPEC-programming-language.md` §8.4.1; the grounds are docs/DESIGN-programming-language.md "Why `defer` has no capture list") |
 | **`stmt_expr`** | `[0]`: `expr` (the left-hand side)<br>`[1]?: assign_op` (the assignment operator)<br>`[2]?: expr` (the right-hand side) | |
 
 #### The expressions and the types
@@ -183,8 +183,8 @@ Caution: **To move it, first make sure that a file which emitted a diagnostic is
 
 | layer | its half | why there |
 | :-- | :-- | :-- |
-| Desugar | moves the collection expression into a temporary, so an expression with a side effect is not evaluated on every iteration | only this layer can insert that declaration into the enclosing block |
-| Sema | expands the `for` itself (["`for x in` is expanded in Sema, since its shape needs types"](DESIGN-sema.md#for-x-in-is-expanded-in-sema-since-its-shape-needs-types)) | the subject's type decides its shape |
+| Desugar | declares a temporary for the collection expression, so an expression with a side effect is not evaluated on every iteration | only this layer can insert that declaration into the enclosing block |
+| Sema | expands the `for` itself, and decides whether the temporary copies the collection or points at it (["`for x in` is expanded in Sema, since its shape needs types"](DESIGN-sema.md#for-x-in-is-expanded-in-sema-since-its-shape-needs-types)) | the subject's type decides both |
 
 #### A closure is synthesized as source for the same parser
 
@@ -243,13 +243,14 @@ Read their reasons at `desugar_node` in `parse/desugar.kspl` before adding a Des
 | layer | the sugar | the place (the entry point's symbol) |
 | :-- | :-- | :-- |
 | **Parse / normalizing** | removing wrappers, moving modifiers, folding the type postfixes (`@` `$@` `[]`), dropping by `#cfg` | `normalize_ast` in `parse/normalize.kspl` |
-| | splitting `$a: T, b: T` into one node per name | `flatten_var_decl_lists` in `parse/normalize_decl.kspl` (called by `normalize_by_kind` in `parse/normalize.kspl`) |
+| | giving each `name: T = v` the shape later stages read (a `var` or `let` keyword, the name, the type, the value) | `flatten_var_decl_lists` in `parse/normalize_decl.kspl` (called by `normalize_by_kind` in `parse/normalize.kspl`) |
 | **Parse / loading** | synthesizing an `enum`'s `variant_name()`, `variants()` and `from_variant_name()` | `append_enum_members` in `parse/load.kspl` (["Synthesizing an `enum`'s members"](#synthesizing-an-enums-members)) |
 | **Desugar** | string interpolation → a method chain | `desugar_string_call` in `parse/desugar.kspl` |
 | | a format specifier's SPEC `\{v:SPEC\}` → the arguments of `fmt_spec` / `fmt_prec` / `fmt_hex` | `build_call` in `parse/format_spec.kspl` |
 | | `for x in`'s **collection expression** moved aside into a temporary variable | `desugar_for_in_loop` in `parse/desugar.kspl` |
 | | an anonymous function or closure → `_anon_fn_N` plus an environment struct plus impls for `Callable` | `desugar_fn_lit` in `parse/desugar_closure.kspl` (["A closure is synthesized as source for the same parser"](#a-closure-is-synthesized-as-source-for-the-same-parser)) |
 | | `if v: = X { }` → a `switch` shape (**the rejection is Sema's**) | `desugar_if_bind` in `parse/desugar.kspl` |
+| | `defer $b: = X` → the declaration plus a `defer b.free()` marked as made by the compiler (**the check that `b`'s type conforms to `Manual_free` is Sema's**) | `build_deferred_free` in `parse/desugar.kspl` |
 | | a **written** `T[]` / `T$[]` → `Slice<\|T\|>` / `Slice<\|$T\|>`, and `T?` → `Option<\|T\|>` | `fold_sugar_postfixes` in `parse/desugar_slice.kspl` |
 | **Sema** | `for x in`'s shape (an index or `next()`, decided by the subject's type) | `expand_for_in` in `sema/body/for_in.kspl` (["`for x in` is expanded in Sema, since its shape needs types"](DESIGN-sema.md#for-x-in-is-expanded-in-sema-since-its-shape-needs-types)) |
 | | the rejection that holds `if v: =` to an `Option` | `infer_switch_stmt` in `sema/body/switch.kspl` |

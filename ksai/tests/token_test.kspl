@@ -64,16 +64,14 @@ fn test_tokenizer_keeps_its_size() //<
     //< result itself. A server keeps one tokenizer for its lifetime. So anything else it put on its
     //< own arena would grow without limit.
     verdict.start("[Tokenizer] encoding and decoding leave the tokenizer's arena as it was...")
-    own: = Arena.new(1024 * 1024)
-    defer own.free()
+    defer own: = Arena.new(1024 * 1024)
     $tok: = ai_tokenizer.Tokenizer.new(own)
     tok.add_token("a", 1)
     tok.add_token("b", 2)
     tok.add_token("ab", 3)
     tok.add_token(" ", 4)
     tok.add_merge(1, 2, 3)
-    work: = Arena.new(64 * 1024)
-    defer work.free()
+    defer work: = Arena.new(64 * 1024)
     _warm: = tok.encode("ab ab", work)
     held: = own.get_total_used()
     for _i in Range.asc(1000)
@@ -83,7 +81,7 @@ fn test_tokenizer_keeps_its_size() //<
         work.reset()
     assert(own.get_total_used() == held, "a cached text adds nothing to the tokenizer")
     // More distinct words than the cache holds, then new ones once it is full.
-    $words: = str.Str_builder.new()
+    defer $words: = str.Str_builder.new()
     for i in Range.asc(70000)
         words.s(" \{I32::i\}")
     _full: = tok.encode(words.slice(), work)
@@ -99,8 +97,7 @@ priv fn broken_line(vocab: U8[], merges: U8[]): Sz //<
     fs.mkdir_all(dir) catch panic("the work directory must be creatable")
     io.write_file("out/tmp/ksai_tokenizer_load/vocab.txt", vocab) catch panic("vocab must write")
     io.write_file("out/tmp/ksai_tokenizer_load/merges.txt", merges) catch panic("merges must write")
-    scratch: = Arena.new(1024 * 1024)
-    defer scratch.free()
+    defer scratch: = Arena.new(1024 * 1024)
     $tok: = ai_tokenizer.Tokenizer.new(scratch)
     tok.load("out/tmp/ksai_tokenizer_load/vocab.txt", "out/tmp/ksai_tokenizer_load/merges.txt")
         catch e
@@ -195,7 +192,7 @@ priv fn insertion_pick(logits: Tensor<|F32|>, cfg: ai_sampler.Sample_config, rng
         (probs + i)$ = (probs + i)$ / sum_exp
     // With neither cut, the candidates are walked unranked, in ID order.
     ranked: Sz = n if cfg.top_k > 0 || cfg.top_p < 1.0 else 0
-    for $i: Sz = 1; i < ranked; i += 1
+    for i in Range.new(1, ranked, 1)
         cur: = (idx + i)$
         $j: = i - 1
         for j >= 0 && (probs + (idx + j)$)$ < (probs + cur)$
@@ -227,8 +224,7 @@ fn test_sampler_keeps_the_rank_order() //<
     //< candidates changes the pick. The large vocabulary is a real model's: ranked by a sort that
     //< costs O(n²), one token takes seconds.
     verdict.start("[Sampler] top-k / top-p pick as a stable sort would, on any vocabulary size...")
-    arena: = Arena.new(1024 * 1024)
-    defer arena.free()
+    defer arena: = Arena.new(1024 * 1024)
     $draw: = prng.Prng.new(11U64)
     for trial in Range.asc(300)
         mark: = arena.save()

@@ -51,7 +51,7 @@ priv fn load_text(path: U8[], arena: Arena$@): U8[] //<
     recs: = oracle.load_jsonl(path, arena) catch
         io.err().s("\{sys.program_name()\}: cannot read \{path\}\n")
         sys.exit(1)
-    $b: = Str_builder.new()
+    defer $b: = Str_builder.new()
     for i in Range.asc(recs.len)
         if i > 0
             b.c('\n')
@@ -63,8 +63,8 @@ priv fn load_text(path: U8[], arena: Arena$@): U8[] //<
 
 priv fn count_words(text: U8[], arena: Arena$@): Map<|U8[], Sz|>$@ //<
     //< Pre-splits the text and counts each word's occurrences
-    rx: = regex.Regex.compile(WORD_PATTERN) catch panic("the word pattern itself does not compile")
-    defer rx.free()
+    defer rx: = regex.Regex.compile(WORD_PATTERN)
+        catch panic("the word pattern itself does not compile")
     out: = arena.create(Map<|U8[], Sz|>.new_with_cap(4096, arena))
     $pos: Sz = 0
     for pos < text.len
@@ -159,10 +159,10 @@ priv fn concat_bytes(x: U8[], y: U8[], arena: Arena$@): U8[] //<
 priv fn write_vocab(expand: List<|U8[]|>$@)
     path: = VOCAB_OUT
     $f: = io.open(path, "w") catch panic("cannot write vocab.txt")
-    $b: = Str_builder.new()
+    defer $b: = Str_builder.new()
     for i in Range.asc(expand.len)
         bytes: = expand.get(i)
-        b.clear().s("\{i\}").c('\t')
+        b.clear().s("\{i\}\t")
         for by in bytes
             b.c((by >> 4U8).to_hex_lower()).c((by & 0xfU8).to_hex_lower())
         b.c('\n')
@@ -172,9 +172,9 @@ priv fn write_vocab(expand: List<|U8[]|>$@)
 priv fn write_merges(merges: List<|Merge|>$@)
     path: = MERGES_OUT
     $f: = io.open(path, "w") catch panic("cannot write merges.txt")
-    $b: = Str_builder.new()
+    defer $b: = Str_builder.new()
     for m in merges
-        b.clear().s("\{m.a\}").c(' ').s("\{m.b\}").c(' ').s("\{m.id\}").c('\n')
+        b.clear().s("\{m.a\} \{m.b\} \{m.id\}\n")
         f.s(b.slice())
     oracle.close_or_die(f@, path)
 
@@ -217,13 +217,12 @@ priv fn count_tokens(text: U8[], merges: List<|Merge|>$@, arena: Arena$@): Sz //
     return total
 
 fn main() //< derives the BPE vocabulary and merges from the corpus
-    arena: = Arena.new(512 * 1024 * 1024)
-    defer arena.free()
+    defer arena: = Arena.new(512 * 1024 * 1024)
     $target_vocab: I64 = 2000
     p: = argparse.Parser
         .create(sys.program_name(), "train BPE's vocabulary and merges from the corpus", arena)
     p.int_opt("--vocab", target_vocab@, "the target vocabulary size")
-    p.parse_or_exit(sys.args(), arena)
+    p.parse_or_exit()
 
     fs.mkdir(OUT_DIR) catch {} // fails harmlessly if it already exists
 

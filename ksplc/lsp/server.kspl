@@ -81,7 +81,7 @@ priv fn pump_worker_output(worker: subproc.Piped_child@, arena: Arena$@): Worker
     //< Nothing is relayed before the marker comes, so a partial message never breaks the protocol.
     cap: Sz = 65536
     rbuf: = U8$@::arena.alloc(cap)
-    $acc: = Str_builder.new()
+    defer $acc: = Str_builder.new()
     $ok: = Worker_end.exited
     // Each search resumes marker-length-1 before where the last found none. So a marker crossing a
     // chunk boundary is still found. Re-walking the whole buffer per chunk is quadratic in an
@@ -105,7 +105,7 @@ priv fn pump_worker_output(worker: subproc.Piped_child@, arena: Arena$@): Worker
         idx: = lsp_msg.marker_at(acc.slice(), search_from, tag)
         if idx >= 0
             if idx > 0
-                $clean: = Str_builder.new()
+                defer $clean: = Str_builder.new()
                 relay_stripping_alive(acc.slice().sub(0, idx), clean@)
                 io.out().s(clean.slice())
                 io.out().flush()
@@ -155,9 +155,6 @@ impl Lsp_docs
         unchecked: = store.arena.create(Map<|U8[], I32|>.new(store.arena))
         return Lsp_docs::{ .store = store, .quarantine = quarantine, .unchecked = unchecked,
             .first = "" }
-
-    priv fn free(r: Self$@)
-        r.store.free()
 
     priv fn observe(r: Self$@, method: U8[], params: json.Value) //<
         //< It records the text on didOpen / didChange and discards it on didClose
@@ -214,7 +211,9 @@ impl Lsp_docs
 // It owns memory and releases it with `free()` (why it must conform: `Manual_free` in
 // std/lang.kspl). [W0107] checks only `pub` methods, so nothing warns if this one, with `priv fn
 // free`, is missing.
-impl Lsp_docs: Manual_free {}
+impl Lsp_docs: Manual_free
+    priv fn free(r: Self$@)
+        r.store.free()
 priv fn build_doc_frame(method: U8[], uri: U8[], text: U8[], arena: Arena$@): Str_builder //<
     //< It builds a message (framed) carrying one document's cached text: a didOpen or a restore
     $b: = Json_builder.new(arena)
@@ -347,10 +346,9 @@ fn ksplc_lsp_read_editor(r: Editor_reader$@): Void$@ //<
     //< Caution: **Stop at `exit`, not only at the end of input.** A client can keep the pipe open
     //< after `exit`. A thread left blocked in the C library's read holds standard input's lock. The
     //< C library's exit waits for that lock, so the process would never end.
-    arena: = Arena.new(64 * 1024)
-    defer arena.free()
+    defer arena: = Arena.new(64 * 1024)
     base: = arena.save()
-    $body: = Str_builder.new()
+    defer $body: = Str_builder.new()
     for
         arena.restore(base)
         $got: = true
@@ -373,13 +371,12 @@ fn ksplc_lsp_read_editor(r: Editor_reader$@): Void$@ //<
 
 priv fn start_editor_reader(): Editor_reader$@? //<
     //< It starts the reading thread; none where the OS gives no thread or lock
-    inbox: =
+    $inbox: =
         thread.Mutex<|Inbox|>.new(Inbox::{ .frames = Str_builder.new(), .ended = false }) catch
         return .none
     arrived: = thread.Cond_var.new() catch
+        inbox.free()
         return .none
-    // Caution: **Initialize the block, do not assign into it.** An assignment would first let go
-    // of the garbage the fresh block holds.
     r: = mem.alloc_as<|Editor_reader|>()
     mem.init_at(r, Editor_reader::{ .inbox = inbox, .arrived = arrived, .reading = null })
     r.reading = thread.Thread.spawn<|Editor_reader|>(ksplc_lsp_read_editor, r) catch
@@ -410,17 +407,19 @@ impl Editor_reader
             r.inbox.unlock()
             return .ended if ended else .idle
 
+    priv fn let_go(r: Self$@) //< lets go the inbox with its frames, the signal and the block
+        //< The thread must have stopped, or never started.
+        box: = r.inbox.lock()
+        box.frames.free()
+        r.inbox.unlock()
+        r.inbox.free()
+        r.arrived.free()
+        dealloc(Void$@::r)
+
+impl Editor_reader: Manual_free
     priv fn free(r: Self$@) //< it waits for the thread to stop, at `exit` or the end of input
         r.reading.join_and_free()
         r.let_go()
-
-    priv fn let_go(r: Self$@) //< lets go the inbox with its frames, the signal and the block
-        //< The thread must have stopped, or never started.
-        mem.drop_at(r.inbox@)
-        mem.drop_at(r.arrived@)
-        dealloc(Void$@::r)
-
-impl Editor_reader: Manual_free {}
 
 fn run_lsp_supervisor(base_parser: kspeg.Target$@): Void
     // Where no worker or no reading thread can be started, it runs in-process instead.
@@ -439,12 +438,10 @@ priv fn supervise(reader: Editor_reader$@, first_worker: subproc.Piped_child?) /
     //< It relays the editor's messages to the worker until `shutdown` or the end of input
     defer reader.free()
     $worker: = first_worker
-    $docs: = Lsp_docs.new()
-    defer docs.free()
-    arena: = Arena.new(8 * 1024 * 1024)
-    defer arena.free()
+    defer $docs: = Lsp_docs.new()
+    defer arena: = Arena.new(8 * 1024 * 1024)
     base: = arena.save()
-    $taken: = Str_builder.new()
+    defer $taken: = Str_builder.new()
 
     for
         arena.restore(base)
@@ -472,7 +469,7 @@ priv fn supervise(reader: Editor_reader$@, first_worker: subproc.Piped_child?) /
         if docs.is_unchecked(named)
             worker = check_doc(docs@, worker, named, arena)
         // forward to the worker (rebuilt with a proper header)
-        $frame: = Str_builder.new()
+        defer $frame: = Str_builder.new()
         jsonrpc.frame_into(frame@, msg_body)
         end: = exchange(worker@, frame.slice(), arena)
         $handled: = false

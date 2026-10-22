@@ -27,8 +27,7 @@ priv const VERDICT_LINE: U8[] = "RESULT: ALL PASS" //<
     //< The line a gate with `Gate.verdict` must print ("How a run is read" in `docs/SPEC-gates.md`)
 
 fn main(): I32
-    arena: = Arena.new(1024 * 1024)
-    defer arena.free()
+    defer arena: = Arena.new(1024 * 1024)
     $make: U8[] = "make"
     $jobs: I64 = 1I64
     $title: U8[] = "ci"
@@ -44,7 +43,7 @@ fn main(): I32
     p.str_opt("--platform", platform@, "make's PLATFORM: a SKIP its rows do not expect fails")
     p.str_opt("--relaxed", relaxed@, "the switches turned off, space-separated: their SKIPs pass")
     p.int_opt("--cap", cap@, "the seconds a gate may run before it is stopped (`CI_GATE_CAP`)")
-    p.parse_or_exit(sys.args(), arena)
+    p.parse_or_exit()
     if platform.len == 0
         if sys.is_windows()
             platform = "win32"
@@ -156,7 +155,7 @@ priv fn run_gate(g: Gate, r: Round, arena: Arena$@): Bool //<
     //< Runs one gate through `make`, its output on the screen and in its log; true when it passed
     //< **`bash -o pipefail`**, or the pipe answers with `tee`'s status and a fallen gate passes.
     log: = ci_gates.log_path(g.log, arena)
-    $cmd: = Str_builder.new()
+    defer $cmd: = Str_builder.new()
     cmd.c('\'').s(r.make).c('\'')
     if g.par != ci_gates.Par.serial
         cmd.s(" -j\{r.jobs\}")
@@ -179,7 +178,7 @@ priv fn run_gate(g: Gate, r: Round, arena: Arena$@): Bool //<
             rc = 1
             io.out().s("# \{g.log\}: a SKIP no row of `expected_skips` holds for \{r.platform\}: ")
                 .s(odd).c('\n')
-    $end: = Str_builder.new()
+    defer $end: = Str_builder.new()
     end.s("\{rc\} \{sec\} \{r.platform\}\n")
     io.write_file(ci_gates.end_path(g.log, arena), end.slice()) catch {}
     if rc != 0
@@ -206,7 +205,7 @@ priv fn annotate(g: Gate, text: U8[], rc: I32, j: ci_gates.Judge@, arena: Arena$
     if !sys.get_env("GITHUB_ACTIONS").is_some()
         return
     why: = ci_gates.causes(text, g.log, g.verdict, j, arena)
-    $b: = Str_builder.new()
+    defer $b: = Str_builder.new()
     if why.len > 0
         ci_gates.put_cause(why.get(0), b@)
     else
@@ -217,7 +216,7 @@ priv fn print_digest(r: Round, arena: Arena$@) //<
     //< The gates that ran and why any fell, on the screen
     j: = ci_gates.Judge::{ .platform = r.platform, .relaxed = r.relaxed }
     outs: = ci_gates.outcomes(j@, arena)
-    $b: = Str_builder.new()
+    defer $b: = Str_builder.new()
     ci_gates.digest_plain(outs@, r.jobs, j@, b@)
     io.out().s(b.slice())
 
@@ -226,7 +225,7 @@ priv fn summary(title: U8[], jobs: I64, j: ci_gates.Judge, arena: Arena$@): I32 
     //< Caution: **Return 0 with no log too, and say so**: the step runs after a fall, and the cause
     //< is the step above.
     outs: = ci_gates.outcomes(j@, arena)
-    $b: = Str_builder.new()
+    defer $b: = Str_builder.new()
     if outs.len == 0
         b.s("no gate log: the round fell before a gate ran (the cause is the step above)\n")
     else
@@ -234,7 +233,7 @@ priv fn summary(title: U8[], jobs: I64, j: ci_gates.Judge, arena: Arena$@): I32 
     switch sys.get_env("GITHUB_STEP_SUMMARY")
     case .some(path)
         // The file may hold an earlier step's lines; they stay.
-        $all: = Str_builder.new()
+        defer $all: = Str_builder.new()
         all.s(io.read_file(path, arena) catch "").s(b.slice())
         io.write_file(path, all.slice()) catch
             io.err().s("ci: cannot write the summary to \{path\}\n")

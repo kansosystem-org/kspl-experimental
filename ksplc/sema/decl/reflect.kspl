@@ -103,8 +103,7 @@ impl Sema_ctx
                 "only a struct can derive 'Reflectable'. Its field table requires fields at fixed \
                     offsets, which other type kinds do not provide")
             return .none
-        $rows: = List<|Row_spec|>.new(null)
-        defer rows.free()
+        defer $rows: = List<|Row_spec|>.new(null)
         if !r.collect_field_kinds(def_fields, rows@, impl_node, emitted, extra, depth)
             return .none
         prefix: = r.reflect_prefix(impl_node)
@@ -362,9 +361,9 @@ priv fn make_table_decl(impl_node: Ast_node$@, target: Ast_node$@, rows_in: List
         //< Builds the const declaration of `_reflect_fields_X`, one row per field
     loc: = impl_node.loc
     info_spelling: = qualified(prefix, INFO_NAME)
-    $name: = Str_builder.new()
+    defer $name: = Str_builder.new()
     name.s(TABLE_PREFIX).s(flatten_name(target.text))
-    $sized: = Str_builder.new()
+    defer $sized: = Str_builder.new()
     sized.s(info_spelling).s("[\{rows_in.len\}]")
     mods: = Ast_node.new(.k_attribute_list, "mods", loc)
     mods.add_child(Ast_node.new(.k_keyword, "priv", loc))
@@ -536,7 +535,7 @@ priv fn make_type_expr(spelling: U8[], loc: Loc): Ast_node$@ //<
     //< Caution: **Build the children too.** The resolution walks the children rather than the name
     //< (resolve_type in `resolve.kspl`), so text alone ends up as "an unknown type".
     $bracket: Sz = spelling.len
-    for $i: Sz = 0; i < spelling.len; i += 1
+    for i in Range.asc(spelling.len)
         if spelling[i] == '['
             bracket = i
             break

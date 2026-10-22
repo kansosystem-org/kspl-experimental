@@ -242,8 +242,7 @@ priv fn build_registries(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error //<
     // Caution: **Finish this before the registries are built**: a struct field of an instantiated
     // type needs that type's conformance.
     c.drain_pending_instances()!
-    gen_params: = base_core.arena.create(List<|Ast_node$@|>.new(null))
-    defer gen_params.free()
+    defer gen_params: = base_core.arena.create(List<|Ast_node$@|>.new(null))
 
     for top_node in r.children
         child: = top_node.unwrap_top_level()
@@ -285,7 +284,7 @@ priv fn impl_needs_early_collect(node: Ast_node$@): Bool //<
     target: = node.get_decl_type_node()
     if target == null
         return false
-    $name: = target.extract_type_name()
+    defer $name: = target.extract_type_name()
     return name.slice().find_str("<|").is_some()
 
 priv fn is_own_param(raw_target: U8[], gen_params_node: Ast_node$@): Bool //<
@@ -378,7 +377,7 @@ impl Ast_node
         target_node: = r.get_decl_type_node()
         $gen_params_node: = r.find_child(.k_type_gen_params)
 
-        $raw_target_type: = target_node.extract_type_name()
+        defer $raw_target_type: = target_node.extract_type_name()
         ts: = raw_target_type.slice()
 
         // A postfix `$` stays in the text of its k_type_postfix, so extract_type_name shows it, and
@@ -432,7 +431,6 @@ impl Ast_node
         for m in r.children
             if m.kind_id == .k_decl_fn
                 m.collect_impl_method(c, gen_params_node, base_slice, target_fqn)!
-        raw_target_type.free()
         c.fn_ctx.impl_name = ""
 
     priv fn check_impl_gen_params(r: Ast_node$@, c: Sema_ctx$@, gen_params_node: Ast_node$@,
@@ -643,6 +641,16 @@ impl Ast_node
         Void!Sema_error //<
             //< Sets the resolved declared type on the names declare_var_syms registered.
             //< Registering them again would add each name twice.
+        // **A top-level binding is `const` or `$`.** One with neither would be read-only data
+        // kept in RAM: a `const` that misses ROM, a second way to write it.
+        if r.kind_id == .k_decl_var && r.has_keyword("let")
+            id: = r.find_child(.k_identifier)
+            name: = id.text if id != null else ""
+            c.clear_scratch()
+                .s("top-level binding '\{name\}' needs 'const' or '$'. Make it a 'const' (named in \
+                    capitals) for data nothing writes, which goes in ROM. Write '$\{name\}' for a \
+                    variable the program changes")
+            c.err(id if id != null else r, c.scratch.slice())
         children_len: = r.children.len
         type_node: = r.get_decl_type_node()
         $shared_type_id: I32 = 0
@@ -651,7 +659,7 @@ impl Ast_node
             shared_type_id = type_node.resolve_type(c)!
             c.check_type_vis_leak(type_node, top_vis, "declared type", "declaration")
 
-        for $k: = 1; k < children_len; k += 1
+        for k in Range.new(1, children_len, 1)
             c_child: = r.get_child(k)
             if c_child.kind_id == .k_identifier
                 name: = c_child.text

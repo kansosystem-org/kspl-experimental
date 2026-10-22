@@ -1,11 +1,13 @@
 //< Copies what a trait's declaration provides into the impls of that trait
 //< **A default value has one source, the trait's declaration** (an impl's own is rejected by
-//< check_trait_method_sig in `trait_check.kspl`).
+//< check_trait_method_sig in `trait_check.kspl`). Before it copies, it refuses a trait's method
+//< that the type writes outside the block that names the trait.
 //< **It runs in collect's Pass 1b, before generic instantiation** (the reason is at Pass 1b in
 //< `collect.kspl`).
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/base/core" as base_core
 import "ksplc/sema/decl/access" as sema_decl_access
 import "ksplc/sema/decl/mono" as sema_decl_mono
 import "ksplc/sema/decl/mono_name" as sema_decl_mono_name
@@ -13,6 +15,7 @@ import "ksplc/sema/decl/name" as _sema_decl_name
 import "ksplc/sema/decl/subst" as sema_decl_subst
 import "ksplc/sema/session/ctx" { Sema_ctx }
 import "ksplc/sema/type/scope" as sema_type_scope
+import "std/ds" { List, Map }
 import "std/str"
 
 const INHERITED_DEFAULT: I32 = 1 //< the flag for a copied default value
@@ -22,22 +25,44 @@ const INHERITED_DEFAULT: I32 = 1 //< the flag for a copied default value
 impl Sema_ctx
     fn propagate_trait_defaults(r: Self$@, root: Ast_node$@) //<
         //< Copies the trait declaration's default values to every impl of the trait
+        impls: = r.impls_by_target(root)
         for top_node in root.children
             child: = top_node.unwrap_top_level()
             if child.kind_id != .k_decl_impl
                 continue
             if t_node: = child.get_impl_trait_node()
                 r.set_current_file(child.loc.file())
-                r.copy_defaults_from_trait(child, t_node)
+                r.copy_defaults_from_trait(child, t_node, impls)
 
-    priv fn copy_defaults_from_trait(r: Self$@, impl_node: Ast_node$@, trait_node: Ast_node$@) //<
-        //< Copies the default values, method by method, from the trait that impl names
-        //< It looks up the trait's **declaration node** first.
-        //<
-        //< Caution: **Do not resolve it as a type.** `resolve_type` and `resolve_type_method_fqn`
-        //< **create an instance at once**, an unneeded one in the output; look up the symbol by
-        //< FQN.
-        $spelled: = trait_node.extract_type_name()
+    priv fn impls_by_target(r: Self$@, root: Ast_node$@):
+        Map<|U8[], List<|Ast_node$@|>$@|>$@ //<
+            //< Every impl of the program, grouped by the FQN of the type it names
+        by_target: = base_core.arena
+            .create(Map<|U8[], List<|Ast_node$@|>$@|>.new(base_core.arena))
+        for top_node in root.children
+            child: = top_node.unwrap_top_level()
+            if child.kind_id != .k_decl_impl || child.get_decl_type_node() == null
+                continue
+            r.set_current_file(child.loc.file())
+            fqn: = r.impl_target_fqn(child)
+            if fqn.len == 0
+                continue
+            $list: = by_target.get(fqn).unwrap_or(null)
+            if list == null
+                list = base_core.arena.create(List<|Ast_node$@|>.new(base_core.arena))
+                by_target.set(fqn, list)
+            list.push(child)
+        return by_target
+
+    priv fn copy_defaults_from_trait(r: Self$@, impl_node: Ast_node$@, trait_node: Ast_node$@,
+        impls: Map<|U8[], List<|Ast_node$@|>$@|>$@) //<
+            //< Copies the default values, method by method, from the trait that impl names
+            //< It looks up the trait's **declaration node** first.
+            //<
+            //< Caution: **Do not resolve it as a type.** `resolve_type` and
+            //< `resolve_type_method_fqn` **create an instance at once**, an unneeded one in the
+            //< output; look up the symbol by FQN.
+        defer $spelled: = trait_node.extract_type_name()
         full: = spelled.slice()
         // A generic's actual arguments are dropped: the template holds the default values.
         // **A generic trait is in the template table, not the symbol table**; if it is missed,
@@ -58,6 +83,9 @@ impl Sema_ctx
         $target_vis: = sema_type_scope.Visibility.public
         if t_sym: = sema_decl_access.impl_target_symbol(r, impl_node)
             target_vis = t_sym.vis
+        // **Check before the copy**: a default copied into this block would hide a method the type
+        // writes in another block, and the type would then hold two of that name.
+        r.require_methods_in_block(impl_node, trait_node, decl, full, impls)
         r.copy_default_bodies(impl_node, decl, full, target_vis)
         for m in impl_node.children
             if m.kind_id != .k_decl_fn
@@ -67,6 +95,42 @@ impl Sema_ctx
                 continue
             if req: = find_trait_method(decl, m_name)
                 copy_param_defaults(req, m)
+
+    priv fn require_methods_in_block(r: Self$@, impl_node: Ast_node$@, trait_node: Ast_node$@,
+        decl: Ast_node$@, spelled: U8[], impls: Map<|U8[], List<|Ast_node$@|>$@|>$@) //<
+            //< Refuses a trait's method that the type writes in a block other than this conformance
+            //< The rule is in "5.2 Implementations (`impl`) and receivers" of
+            //< docs/SPEC-programming-language.md. A method the type writes nowhere is left to
+            //< verify_trait_implementation in `trait_check.kspl`, which reports it missing.
+        others: = impls.get(r.impl_target_fqn(impl_node)).unwrap_or(null)
+        if others == null
+            return
+        for m in decl.children
+            if m.kind_id != .k_decl_fn && m.kind_id != .k_decl_fn_proto
+                continue
+            name: = m.get_decl_id_text()
+            if name.len == 0 || impl_defines(impl_node, name)
+                continue
+            for other in others
+                if other == impl_node
+                    continue
+                if found: = method_named(other, name)
+                    r.report_method_elsewhere(impl_node, trait_node, spelled, found)
+                    break
+
+    priv fn report_method_elsewhere(r: Self$@, impl_node: Ast_node$@, trait_node: Ast_node$@,
+        spelled: U8[], found: Ast_node$@) //<
+            //< Reports where the trait's method stands now, and that it moves into this block
+        name: = found.get_decl_id_text()
+        defer $target: = impl_node.get_decl_type_node().extract_type_name()
+        r.clear_scratch()
+            .s("'\{target.slice()\}: \{spelled\}' requires '\{name\}'. Move 'fn \{name\}' (")
+        if !found.loc.file().equals(impl_node.loc.file())
+            r.scratch.s("\{found.loc.file()\}, ")
+        r.scratch
+            .s("line \{r.line_of(found.loc)\}) into this block. A trait's methods are written in \
+                the block that names the trait, so that block shows how the type meets the trait")
+        r.err(trait_node, r.scratch.slice())
 
     // Copies a trait's default bodies **into the impl's block** where the impl does not write them,
     // so `Self` and the impl's type arguments apply directly.
@@ -147,10 +211,14 @@ priv fn has_default_body(decl: Ast_node$@): Bool //<
 
 priv fn impl_defines(impl_node: Ast_node$@, name: U8[]): Bool //<
     //< Whether that impl writes a method of that name itself
+    return method_named(impl_node, name).is_some()
+
+priv fn method_named(impl_node: Ast_node$@, name: U8[]): Ast_node$@? //<
+    //< The method of that name that the impl's block writes, if any
     for m in impl_node.children
         if m.kind_id == .k_decl_fn && m.get_decl_id_text().equals(name)
-            return true
-    return false
+            return .some(m)
+    return .none
 
 priv fn find_trait_method(trait_decl: Ast_node$@, name: U8[]): Ast_node$@? //<
     //< Finds, in the trait's declaration, the declaration of the method with that name

@@ -59,6 +59,7 @@ enum Literal_fault //< the reason a literal's spelling is invalid
     surrogate //< the `\u` points at a surrogate code point (D800-DFFF)
     wide_in_char //< a `\u` that does not fit in one byte is written into a character literal
     wide_char_body //< a character literal's body does not fit in one byte (`'€'` / `'ab'`)
+    line_break //< a line ends inside an ordinary string without a `\` before it
 
 struct Literal_check //<
     //< The fault found in a spelling, with its position and length
@@ -179,6 +180,10 @@ fn literal_fault(text: U8[], one_byte: Bool): Literal_check //<
         return ok
     $j: Sz = span.start
     for j < span.end
+        // **A line break written as it stands would carry the next line's indentation into the
+        // text**, which belongs to the layout (SPEC 2.3.4).
+        if (text.ptr + j)$ == '\n' || (text.ptr + j)$ == '\r'
+            return Literal_check::{ .fault = .line_break, .at = j, .len = 1 }
         if (text.ptr + j)$ != '\\' || j + 1 >= span.end
             j += 1
             continue
@@ -278,7 +283,7 @@ impl U8[]
         //< For a string the compiler reads itself (`##error`'s message, `embed`'s path). Caution:
         //< **Do not cut the quotes off by hand.** `"a\"b"` would keep its backslash. A path read
         //< one way at loading and another way at emitting names two files.
-        $b: = Str_builder.new()
+        defer $b: = Str_builder.new()
         r.append_literal_bytes(b, fn(out: Writer, byte: U8) {
             out.c(byte);
         })
@@ -327,6 +332,6 @@ impl U8[]
         //< An integer literal's absolute value as U64; it ignores the sign
         //< The spelling can use `_` separators, `0x`/`0b`, and a type suffix.
         //< In source, `-1` is unary minus on `1`; the caller handles the sign.
-        $clean: = Str_builder.new()
+        defer $clean: = Str_builder.new()
         _stop: = r.append_clean_number(clean@, "UIS")
         return clean.slice().parse_clean_number_u64()

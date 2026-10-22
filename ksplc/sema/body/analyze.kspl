@@ -10,7 +10,6 @@ import "ksplc/base/ast_place" as base_ast_place
 import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/core" as base_core
 import "ksplc/base/locate" as base_locate
-import "ksplc/sema/body/coerce" as sema_body_coerce
 import "ksplc/sema/flow/release" as sema_flow_release
 import "ksplc/sema/flow/track" as sema_flow_track
 import "ksplc/sema/session/ctx" { Sema_ctx }
@@ -433,10 +432,10 @@ impl Ast_node
 
     fn is_guaranteed_to_leave(r: Self$@, any_exit: Bool): Bool //<
         //< Whether control cannot fall off the end of `r`
-        //< **Two questions, two sets of exits.** Without `any_exit` (the missing-return check: does
-        //< C get a `return`) only `return`, `throw` and an endless loop count. With it (a catch
-        //< block, and [H0801] of an `if` branch: can control reach what follows) `fallback`,
-        //< `break`, `continue` and a call declared not to return count too.
+        //< **Two questions, two sets of exits.** Without `any_exit` (the missing-return check)
+        //< `return`, `throw`, an endless loop and a `#noreturn` call count; C knows that call
+        //< does not return. With `any_exit` (a catch block, [H0801]: can control reach what
+        //< follows) `fallback`, `break` and `continue` count too.
         // **Control continues after a statement a `break` leaves**, whatever its inside does:
         // `blk: { if c { break blk; } return 1; }` can still reach the end.
         if r == null || r.is_left_by_break()
@@ -451,9 +450,8 @@ impl Ast_node
             // {}` is how a freestanding probe stops), in a function body as in a catch block.
             return r.is_endless_loop()
         case .k_stmt_expr
-            // **A call declared not to return ends the block.** Only `any_exit` asks this; a
-            // function body asks whether C gets a `return`.
-            return any_exit && r.children.len > 0 && r.get_child(0).is_noreturn_call()
+            // **A call declared not to return ends the block**, as [W0201] reads it too.
+            return r.children.len > 0 && r.get_child(0).is_noreturn_call()
         case .k_stmt_block
             for child in r.children
                 if child.is_guaranteed_to_leave(any_exit)

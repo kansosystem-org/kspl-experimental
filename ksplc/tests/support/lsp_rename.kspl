@@ -24,21 +24,18 @@ priv const PICK_SRC: U8[] =
 fn twice(): I32
     return helper() + helper()
 """
-priv const ALIAS_URI: U8[] = "alias.kspl" //< brings `helper` in under a name of its own
-    //< The body names `helper` too, through the file's alias, so a rename of `helper` analyses it
-    //< and sees the uses of `h` resolve to `helper` as well.
-priv const ALIAS_SRC: U8[] =
-    """import "lib" + { helper as h }
-
-fn thrice(): I32
-    return h() + h() + h() + lib.helper()
-"""
 priv const USER_SRC: U8[] =
     """import "std/io"
+import "std/str" { Str_builder }
 import "lib"
 
 fn other(): I32
     return 1
+
+fn built(): Sz
+    defer $sb: = Str_builder.new()
+    sb.s("x")
+    return sb.len
 
 fn use(seed: I32): I32
     total: = seed + lib.hit()
@@ -55,6 +52,23 @@ impl Pair
 impl Pair
     fn second(p: Self@): I32
         return p.a
+"""
+
+priv const TYPE_URI: U8[] = "type_call.kspl"
+priv const TYPE_SRC: U8[] =
+    """struct Cup
+    n: I32
+
+impl Cup
+    fn new(n: I32 = 7): Self
+        return Self::{ .n = n }
+
+    fn again(): Self
+        return Self(2)
+
+fn use(): I32
+    c: = Cup(3)
+    return c.n
 """
 
 priv struct Ask //< one client, and where the probe's names stand in its document
@@ -99,8 +113,8 @@ fn run_rename(exe: U8[], plain_caps: json.Value, arena: Arena$@) //<
         plain_caps.get("renameProvider").as_bool().unwrap_or(false),
         lsp_client.dump(plain_caps, arena))
     dir: = harness.sandbox("lsp_rename")
-    fs.write_tree(dir, U8[][]::{ "lib.kspl", USER_URI, PICK_URI, ALIAS_URI },
-        U8[][]::{ LIB_SRC, USER_SRC, PICK_SRC, ALIAS_SRC }, arena) catch
+    fs.write_tree(dir, U8[][]::{ "lib.kspl", USER_URI, PICK_URI },
+        U8[][]::{ LIB_SRC, USER_SRC, PICK_SRC }, arena) catch
         verdict.check("the rename workspace can be laid out", false, dir)
         return
     $c: =
@@ -130,9 +144,8 @@ fn run_rename(exe: U8[], plain_caps: json.Value, arena: Arena$@) //<
     check_clashes(ask)
     c.notify("textDocument/didOpen", lsp_client.did_open(PICK_URI, PICK_SRC, arena),
         lsp_client.SEND_MS, arena) catch {}
-    c.notify("textDocument/didOpen", lsp_client.did_open(ALIAS_URI, ALIAS_SRC, arena),
-        lsp_client.SEND_MS, arena) catch {}
     check_selected(ask)
+    check_type_calls(ask)
 
 priv fn check_prepare(ask: Ask) //< prepareRename: the name's range here, a refusal on std's
     local: = lsp_client.answer(ask.c, "textDocument/prepareRename",
@@ -163,6 +176,13 @@ priv fn check_names(ask: Ask) //< the new name must be one the grammar reads as 
     edits: = fine.get("result").get("changes").get(USER_URI).arr_list(ask.arena)
     verdict.check("a free new name renames the declaration and its use", edits.len == 2,
         lsp_client.why(ask.c, lsp_client.dump(fine, ask.arena), ask.arena))
+    // **The `sb.free()` made for `defer $sb: = …` is no use**: it stands at the `defer`, where an
+    // edit would overwrite the keyword.
+    deferred: = ask.rename("    defer $sb", "sb", "text")
+    d_edits: = deferred.get("result").get("changes").get(USER_URI).arr_list(ask.arena)
+    verdict.check("a local declared with 'defer' renames its declaration and its two uses alone",
+        d_edits.len == 3,
+        lsp_client.why(ask.c, lsp_client.dump(deferred, ask.arena), ask.arena))
 
 priv fn check_clashes(ask: Ask) //< the new name must not be declared where it would land
     ask.refuses("a local renamed to its function's parameter is refused",
@@ -209,32 +229,54 @@ priv fn places(found: List<|json.Value|>@, arena: Arena$@): U8[] //<
 priv fn check_selected(ask: Ask) //<
     //< A name a selective import brings in is renamed in the import line too
     //< **The import line names it, so a rename that skips the line stops the program compiling.**
-    //< Renaming the declaration changes the left side of an `as` and the uses written by that
-    //< name. Renaming the new name changes the right side and its uses alone.
     by_name: = ask.rename_in(PICK_URI, PICK_SRC, "    return helper()", "helper", "aid")
     pick: = edits_in(by_name, PICK_URI, ask.arena)
     verdict.check("a name a selective import brings in is renamed in the import line too",
         edits_in(by_name, "lib.kspl", ask.arena).len == 1 && pick.len == 3 &&
         starts_at(pick@, 0, col_in_line(PICK_SRC, "import", "helper", ask.arena)),
         lsp_client.why(ask.c, lsp_client.dump(by_name, ask.arena), ask.arena))
-    alias: = edits_in(by_name, ALIAS_URI, ask.arena)
-    verdict.check("renaming it changes the left side of an 'as', not the new name's uses",
-        alias.len == 2 &&
-        starts_at(alias@, 0, col_in_line(ALIAS_SRC, "import", "helper", ask.arena)),
-        lsp_client.why(ask.c, places(alias@, ask.arena), ask.arena))
     refs: = lsp_client.answer(ask.c, "textDocument/references",
         ask.at_in(PICK_URI, PICK_SRC, "    return helper()", "helper"), lsp_client.WALK_MS,
         ask.arena)
     found: = refs.get("result").arr_list(ask.arena)
-    // The declaration, both import lines and the three uses by name; the uses of `h` are its own.
-    verdict.check("the references of a name a selective import brings in count the import lines",
-        found.len == 6,
+    // The declaration, the import line and the two uses.
+    verdict.check("the references of a name a selective import brings in count the import line",
+        found.len == 4,
         lsp_client.why(ask.c, places(found@, ask.arena), ask.arena))
-    renamed: = ask.rename_in(ALIAS_URI, ALIAS_SRC, "    return h()", "h", "k")
-    own: = edits_in(renamed, ALIAS_URI, ask.arena)
-    verdict.check("renaming the new name of an 'as' changes its right side and its uses alone",
-        own.len == 4 &&
-        starts_at(own@, 0, col_in_line(ALIAS_SRC, "import", " h ", ask.arena) + 1) &&
-        edits_in(renamed, "lib.kspl", ask.arena).len == 0 &&
-        edits_in(renamed, PICK_URI, ask.arena).len == 0,
-        lsp_client.why(ask.c, lsp_client.dump(renamed, ask.arena), ask.arena))
+
+priv fn check_type_calls(ask: Ask) //< type calls name the type, not a written `new` member
+    ask.c
+        .notify("textDocument/didOpen", lsp_client.did_open(TYPE_URI, TYPE_SRC, ask.arena),
+        lsp_client.SEND_MS, ask.arena) catch {}
+    defer lsp_client.close(ask.c, TYPE_URI, ask.arena)
+    pos: = ask.at_in(TYPE_URI, TYPE_SRC, "    c: =", "Cup")
+    hover: = lsp_client.answer(ask.c, "textDocument/hover", pos, lsp_client.READ_MS, ask.arena)
+    verdict.check("a type call's written name hovers as its type",
+        lsp_client.hover_text(hover).find_str("struct type_call.Cup").is_some(),
+        lsp_client.dump(hover, ask.arena))
+    jump: = lsp_client.answer(ask.c, "textDocument/definition", pos, lsp_client.READ_MS, ask.arena)
+    verdict.check("a type call's written name goes to the type declaration",
+        jump.get("result").get("range").get("start").get("line").as_int().unwrap_or(-1) == 0,
+        lsp_client.dump(jump, ask.arena))
+    self_pos: = ask.at_in(TYPE_URI, TYPE_SRC, "        return Self(2)", "Self")
+    self_jump: = lsp_client.answer(ask.c, "textDocument/definition", self_pos, lsp_client.READ_MS,
+        ask.arena)
+    verdict.check("a Self type call goes to the enclosing type declaration",
+        self_jump.get("result").get("range").get("start").get("line").as_int().unwrap_or(-1) == 0,
+        lsp_client.dump(self_jump, ask.arena))
+    renamed: = ask.rename_in(TYPE_URI, TYPE_SRC, "    c: =", "Cup", "Mug")
+    edits: = edits_in(renamed, TYPE_URI, ask.arena)
+    verdict.check("renaming a type changes its call and declaration",
+        starts_at(edits@, 0, 7) &&
+        starts_at(edits@, decl_line(TYPE_SRC, "    c: =", ask.arena), 9),
+        lsp_client.dump(renamed, ask.arena))
+    verdict.check("renaming a type keeps Self in its body and type calls",
+        !starts_at(edits@, decl_line(TYPE_SRC, "        return Self(2)", ask.arena), 15) &&
+        !starts_at(edits@, decl_line(TYPE_SRC, "        return Self::{", ask.arena), 15),
+        lsp_client.dump(renamed, ask.arena))
+    ask.refuses("renaming new refuses before it can break an implicit type call",
+        ask.rename_in(TYPE_URI, TYPE_SRC, "    fn new", "new", "make"), "type call")
+    refs: = lsp_client.answer(ask.c, "textDocument/references",
+        ask.at_in(TYPE_URI, TYPE_SRC, "    fn new", "new"), lsp_client.WALK_MS, ask.arena)
+    verdict.check("new's written references do not claim the type call's name",
+        refs.get("result").arr_list(ask.arena).len == 1, lsp_client.dump(refs, ask.arena))

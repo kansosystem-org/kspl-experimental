@@ -10,6 +10,7 @@ import "ksplc/base/core" as base_core
 import "ksplc/sema/body/call" as sema_body_call
 import "ksplc/sema/body/dot" as sema_body_dot
 import "ksplc/sema/body/expr" as sema_body_expr
+import "ksplc/sema/body/type_call" as sema_body_type_call
 import "ksplc/sema/decl/access" as sema_decl_access
 import "ksplc/sema/decl/eval" as sema_decl_eval
 import "ksplc/sema/decl/fold_float" as sema_decl_fold_float
@@ -61,6 +62,13 @@ fn infer(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32!Sema_error
     if op.equals("(") && sema_body_dot.try_rewrite_enum_fmt(node, left, c)!
         return infer(node, c, expected_id)!
 
+    if op.equals("(")
+        if constructor: = sema_body_type_call.self_callee(c, left)
+            node.children.set(0, constructor)
+            result: = infer(node, c, expected_id)!
+            sema_body_type_call.check_receiver(c, constructor)
+            return result
+
     // **A primitive type before a `.` is a namespace, not a value** (`Sz.width()`); asking for its
     // value is what `infer_primitive_type` rejects.
     $target_id: = I32::sema_type_env.Builtin_type_id.unknown
@@ -78,6 +86,11 @@ fn infer(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32!Sema_error
     if op.equals(".")
         return infer_dot_postfix(c, node, left, target_id, expected_id)
     if op.equals("(")
+        if constructor: = sema_body_type_call.callee(c, left)
+            node.children.set(0, constructor)
+            result: = infer(node, c, expected_id)!
+            sema_body_type_call.check_receiver(c, constructor)
+            return result
         return sema_body_call.infer(c, node, left, target_id, expected_id)!
     if op.equals("[")
         recv_id: = c.env.receiver_base_id(target_id)
@@ -306,7 +319,7 @@ priv fn refuse_aggregate_cast(c: Sema_ctx$@, node: Ast_node$@, as_target_id: I32
                 a literal ('\{shown\}::{ … }') or a constructor")
     c.err(node, c.scratch.slice())
 
-priv fn infer_address_postfix(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@, target_id: I32):
+fn infer_address_postfix(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@, target_id: I32):
     I32!Sema_error //<
         //< `place@`: a pointer to the place, immutable where the place must not be written
     // `Index`'s `get` returns a **copy**, so `l[0]@` is a temporary's address, and a write through
@@ -437,7 +450,7 @@ priv fn path_meant(c: Sema_ctx$@, owner: Ast_node$@, is_module: Bool, operand: A
     case .not_a_pointer {}
     default
         return false
-    $dotted: = Str_builder.new()
+    defer $dotted: = Str_builder.new()
     for part in owner.children
         if part.kind_id == .k_identifier
             dotted.s(part.text).c('.')

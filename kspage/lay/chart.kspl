@@ -106,8 +106,7 @@ priv fn values_in(d: Doc$@, b: Block$@, out: List<|Figure|>$@, arena: Arena$@)
     tiles: = table.tiles_of(arena)
     for $r: Sz = span.r0; r <= span.r1; r += 1
         for $c: Sz = span.c0; c <= span.c1; c += 1
-            for $i: Sz = 0; i < tiles.len; i += 1
-                t: = tiles.get(i)
+            for t in tiles
                 if t.row != r || t.column != c || t.block.inlines.len <= 0
                     continue
                 n: = t.block.inlines.get(0)
@@ -122,8 +121,8 @@ priv struct Scale //< the top and bottom that contain the values
 priv fn scale_of(points: List<|Figure|>$@): Scale
     $lo: F64 = 0.0
     $hi: F64 = 0.0
-    for $i: Sz = 0; i < points.len; i += 1
-        v: = points.get(i).value
+    for elem in points
+        v: = elem.value
         if v < lo
             lo = v
         if v > hi
@@ -179,7 +178,7 @@ priv fn place_bars(dst: Page$@, b: Block$@, points: List<|Figure|>$@, s: Scale, 
     slot: = at.w / F32::points.len
     zero: = y_of(0.0, s, at.y, tall)
     label_h: = dst.metrics(look.font).line_height()
-    for $i: Sz = 0; i < points.len; i += 1
+    for i in Range.asc(points.len)
         p: = points.get(i)
         top: = y_of(p.value, s, at.y, tall)
         wide: = slot * BAR_SHARE
@@ -197,7 +196,7 @@ priv fn place_line(dst: Page$@, b: Block$@, points: List<|Figure|>$@, s: Scale, 
         //< the rectangle enclosing the two points, plus which diagonal.
     slot: = at.w / F32::points.len
     label_h: = dst.metrics(look.font).line_height()
-    for $i: Sz = 0; i < points.len; i += 1
+    for i in Range.asc(points.len)
         p: = points.get(i)
         y: = y_of(p.value, s, at.y, tall)
         label(dst, p.label, look, at.x + slot * F32::i, y - label_h, slot, arena)
@@ -227,9 +226,9 @@ fn place(dst: Page$@, b: Block$@, sheet: Sheet$@, at: Rect, look: Look, kind: Co
     paint: = drawn(panel_paint.paint_of(found, .none))
     // **Choose from what was collected** (`collect_figures`).
     points: = List<|Figure|>.create(arena)
-    for $i: Sz = 0; i < dst.figures.len; i += 1
-        if dst.figures.get(i).block == b
-            points.push(dst.figures.get(i))
+    for item in dst.figures
+        if item.block == b
+            points.push(item)
     // One line is left free above the bars for the values' texts.
     label_h: = dst.metrics(look.font).line_height()
     top: = at.y + label_h

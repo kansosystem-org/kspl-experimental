@@ -172,7 +172,7 @@ impl Ast_node
             ctx.hoisted.len = start
 
             // `for item in collection { ... }`, marked by the bare k_identifier normalize_loop
-            // (parse/normalize_stmt.kspl) leaves at for_init. It becomes two statements (the
+            // (parse/normalize_stmt.kspl) leaves in the init's slot. It becomes two statements (the
             // collection's cache plus a C-style for), so it is handled here, where the statement
             // list can be rebuilt.
             if stmt.kind_id == .k_stmt_for
@@ -180,6 +180,13 @@ impl Ast_node
                 if init_node != null && init_node.kind_id == .k_identifier
                     stmt.desugar_for_in_loop(new_children)
                     continue
+
+            // `defer $b: = X` becomes the declaration and the `defer b.free()` it stands for.
+            if decl: = stmt.get_defer_decl()
+                decl.mark_defer_declared()
+                new_children.push(decl)
+                new_children.push(stmt.build_deferred_free(decl))
+                continue
 
             // `if v: = X { … }`: where the condition's position is a k_if_bind it is an Option
             // binding.
@@ -190,25 +197,42 @@ impl Ast_node
             new_children.push(stmt)
         r.children = new_children
 
+    priv fn build_deferred_free(r: Ast_node$@, decl: Ast_node$@): Ast_node$@ //<
+        //< The `defer b.free()` that `defer $b: = X` stands for, marked as made by the compiler
+        //< It sits at the `defer` keyword. An editor's walk skips it (`made_by_compiler`), so the
+        //< name is not coloured, renamed or found twice. Sema checks that the type conforms to
+        //< `Manual_free` at the declaration (`infer_var_decl`).
+        loc: = r.loc
+        name: = decl.get_var_decl_id().text
+        call: = Ast_node.build_method_call(Ast_node.build_ident(name, 0, loc), "free", null, 0, loc)
+        body: = Ast_node.build_block(loc)
+            .add_child(Ast_node.new(.k_stmt_expr, "expr", loc).add_child(call))
+        made: = Ast_node.new(.k_stmt_defer, "defer", loc)
+            .add_child(Ast_node.new(.k_keyword, "defer", loc)).add_child(body)
+        made.place_as_made(loc)
+        return made
+
     priv fn desugar_for_in_loop(r: Ast_node$@, new_children: List<|Ast_node$@|>$@) //<
-        //< It copies a `for … in`'s collection into a temporary and leaves the expansion to sema
+        //< It puts a `for … in`'s collection into a temporary and leaves the expansion to sema
         //< _%for_collN: = collection; for item; _%for_collN; ; { ...the original body... }   <-
-        //< item is the marker; sema expands it
+        //< item is the marker; sema expands it. Sema also decides whether the temporary copies the
+        //< collection or points at it (`ksplc/sema/body/for_in.kspl`).
         loc: = r.loc
         coll_expr: = r.get_loop_cond()
 
         for_in_counter += 1
-        $suffix: = Str_builder.new()
+        defer $suffix: = Str_builder.new()
         suffix.s("\{for_in_counter\}")
         // Caution: build_temp_name's copy into the arena is required: `suffix.slice()` points into
         // the builder's buffer, which is gone after `defer suffix.free()`.
         coll_name: = base_c_name.made_name(build_temp_name("for_coll", suffix.slice()))
 
-        // The collection expression is copied into a temporary.
-        // Caution: **Copy it here**, or an expression with side effects runs again every iteration;
-        // only this layer, which rebuilds the statement list, can insert it.
+        // Caution: **Declare the temporary here**, or an expression with side effects runs again
+        // every iteration; only this layer, which rebuilds the statement list, can insert it.
         coll_id: = Ast_node.build_ident(coll_name, 0, loc)
-        new_children.push(Ast_node.build_inferred_var_decl(coll_id, coll_expr, loc))
+        coll_decl: = Ast_node.build_inferred_var_decl(coll_id, coll_expr, loc)
+        coll_decl.mark_for_in_subject()
+        new_children.push(coll_decl)
 
         // **The loop itself is not expanded here**: an index or `next()` depends on the
         // collection's type, which this layer does not know (`ksplc/sema/body/for_in.kspl` expands
@@ -320,7 +344,6 @@ impl Ast_node
         r.morph(current_recv.kind_id, current_recv.text)
         r.children = current_recv.children
 
-impl Ast_node
     fn desugar_err(r: Ast_node$@, ctx: Desugar_ctx$@, msg: U8[]) //<
         //< It reports an error the desugaring found at the position the user wrote
         //< **It is the only function here that reports.**
@@ -350,7 +373,7 @@ impl Ast_node
             r.format_spec_combo_err(ctx, spec, bad, owner)
             return
         if !parse_format_spec.precision_written(spec)
-            $m: = Str_builder.new()
+            defer $m: = Str_builder.new()
             m
                 .s("format spec ':\{spec\}' asks for more digits after the point than are written \
                     (at ").s("most \{strfmt.FLOAT_MAX_PRECISION\}); write that many or fewer")
@@ -358,7 +381,7 @@ impl Ast_node
 
     fn format_spec_err(r: Ast_node$@, ctx: Desugar_ctx$@, spec: U8[], rest: U8[]) //<
         //< It reports text left over that cannot be read as a format specification
-        $m: = Str_builder.new()
+        defer $m: = Str_builder.new()
         m
             .s("unrecognized format spec ':\{spec\}'; could not read '\{rest\}'. The order is \
                 fixed: zero-pad, width, ',', then '.precision' (for example '08.2')")
@@ -367,11 +390,15 @@ impl Ast_node
     fn format_spec_combo_err(r: Ast_node$@, ctx: Desugar_ctx$@, spec: U8[], bad: U8[],
         owner: U8[]) //<
             //< It reports a format specification whose items cannot be combined
-        $m: = Str_builder.new()
+        defer $m: = Str_builder.new()
         if owner.equals("width")
             m
                 .s("format spec ':\{spec\}' has a zero-pad '0' and no width to pad to; write the \
                     width ").s("after it (for example '05')")
+        else if owner.equals(",")
+            m
+                .s("format spec ':\{spec\}' pads with zeros and groups with ','. Pad with spaces \
+                    (drop the '0'), or drop the ','")
         else
             m
                 .s("format spec ':\{spec\}' combines '\{bad\}' with '\{owner\}', which has nothing \

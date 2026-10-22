@@ -8,8 +8,10 @@ import "ksplc/base/ast_place" as base_ast_place
 import "ksplc/base/core" as base_core
 import "ksplc/base/mangle" as base_mangle
 import "ksplc/sema/body/binary" as sema_body_binary
+import "ksplc/sema/body/defer_decl" as sema_body_defer_decl
 import "ksplc/sema/body/expr" as sema_body_expr
 import "ksplc/sema/body/for_in" as sema_body_for_in
+import "ksplc/sema/body/lint_loop" as sema_body_lint_loop
 import "ksplc/sema/body/lint_stmt" as sema_body_lint_stmt
 import "ksplc/sema/body/literal" as sema_body_literal
 import "ksplc/sema/body/resolve_path" as sema_body_resolve_path
@@ -25,7 +27,6 @@ import "ksplc/sema/decl/name" as _sema_decl_name
 import "ksplc/sema/decl/resolve" as sema_decl_resolve
 import "ksplc/sema/decl/trait_check" as sema_decl_trait_check
 import "ksplc/sema/session/ctx" as sema_session_ctx + { Sema_ctx, Sema_error }
-import "ksplc/sema/type/arc" as sema_type_arc
 import "ksplc/sema/type/display" as sema_type_display
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
@@ -80,6 +81,8 @@ priv fn reject_receiverless_cleanup(c: Sema_ctx$@, block: Ast_node$@): Void!Sema
     c.clear_scratch()
         .s("a 'defer' must name its resource. '.\{method\}()' has no receiver. Write the variable: \
             'defer x.\{method\}()'")
+    if method.equals("free")
+        c.scratch.s(", or put 'defer' in front of its declaration ('defer x: = …')")
     c.err(head, c.scratch.slice())
     throw .analysis_failed
 
@@ -136,8 +139,6 @@ impl Ast_node
             r.infer_stmt_defer(c)!
         case .k_stmt_expr
             r.infer_assign_stmt(c)!
-        case .k_for_init, .k_for_step
-            r.infer_for_init_step(c)!
         case .k_stmt_switch
             r.infer_switch_stmt(c)!
         default
@@ -214,6 +215,8 @@ impl Ast_node
                 expr_id == c.env.generic_fn_value_type_id()
                 expr_id = c.own_type_of_name(expr_node)
                 expr_node.type_id = expr_id
+            if r.is_for_in_subject()
+                expr_id = r.hold_for_in_subject(c, expr_id)!
 
         declared_id = r.resolve_inferred_array(c, declared_id, expr_id, type_node, id_node)
 
@@ -232,6 +235,13 @@ impl Ast_node
             // **Once rejected, make the type Unknown**, or the one mistake is reported again at
             // every use.
             if check_fn_value_binding(c, id_node, expr_node)
+                final_id = I32::sema_type_env.Builtin_type_id.unknown
+            // `null` fits every pointer type, so alone it names none ("2.3 Literals").
+            if expr_node.kind_id == .k_null
+                c.clear_scratch()
+                    .s("cannot infer type for '\{id_node.text\}'. 'null' fits every pointer type. \
+                        Write the type: '\{id_node.text\}: T@ = null'")
+                c.err(id_node, c.scratch.slice())
                 final_id = I32::sema_type_env.Builtin_type_id.unknown
 
         // `_` silences the unread-variable warning, and so would drop the failure with no word.
@@ -260,8 +270,6 @@ impl Ast_node
                     c.err(id_node, c.scratch.slice())
             final_id = I32::sema_type_env.Builtin_type_id.unknown
         is_const: = r.kind_id == .k_decl_const || kw_text.equals("const")
-        if is_const && c.env.type_has_drop(final_id)
-            c.err(id_node, "a constant cannot own automatic cleanup; use a local value binding")
         is_mut: = !is_const && kw_text.is_mut_binding_kw()
         sym_kind: =
             sema_type_scope.Sym_kind.constant if is_const else sema_type_scope.Sym_kind.variable
@@ -343,6 +351,8 @@ impl Ast_node
             throw .analysis_failed
 
     priv fn infer_loop_stmt(r: Self$@, c: Sema_ctx$@): Void!Sema_error
+        // Read before the expansion, which makes a `for x in` look like a counting loop.
+        counting: = sema_body_lint_loop.read_counting_loop(c, r)
         // `for x in` arrives unexpanded; the subject's type decides its form
         // (sema/body/for_in.kspl).
         r.expand_for_in(c)!
@@ -377,6 +387,8 @@ impl Ast_node
 
         sema_body_lint_stmt.lint_loop_stmt(c, block_node, label_name,
             cond_node.kind_id != .k_empty)
+        if shape: = counting
+            sema_body_lint_loop.lint_counting_loop(c, r, shape, block_node)
 
         if has_err
             throw .analysis_failed
@@ -713,6 +725,8 @@ impl Ast_node
 
     priv fn infer_stmt_defer(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error
         $has_err: = false
+        if r.made_by_compiler()
+            sema_body_defer_decl.refuse_unfreeable(c, r)!
         if block_node: = r.get_defer_block()
             if block_node.children.len == 0
                 sema_body_lint_stmt.lint_empty_block(c, r, "defer", "Consider removing it.")
@@ -731,10 +745,6 @@ impl Ast_node
                 has_err = true
         if has_err
             throw .analysis_failed
-
-    priv fn infer_for_init_step(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error
-        for stmt in r.children
-            stmt.infer_stmts(c)!
 
     priv fn infer_unknown_stmt(_r: Ast_node$@, _c: Sema_ctx$@): Void!Sema_error {}
 

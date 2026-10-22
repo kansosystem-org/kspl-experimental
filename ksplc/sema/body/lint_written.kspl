@@ -1,12 +1,14 @@
 //< The lints on how a file writes its declarations, read from the written tree
 //< They find a `lang.` that changes no name ([I0312]), a function of one enum outside the
-//< enum's `impl` ([I0503]) and an arena parameter with a default ([I0702]). **They read the tree
+//< enum's `impl` ([I0503]), an arena parameter with a default ([I0702]) and a type's second plain
+//< `impl` block in one file ([I0801]). **They read the tree
 //< before a template's body is dropped**, so a generic nobody instantiates is read too.
 //< `run` in `infer.kspl` calls `lint_written`, under lint only.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_spell" as _base_ast_spell // `get_decl_id_text`
 import "ksplc/base/core" as base_core
+import "ksplc/sema/decl/name" as _sema_decl_name // `impl_target_fqn`
 import "ksplc/sema/session/ctx" { Sema_ctx }
 import "ksplc/sema/session/import_table" as _sema_session_import_table // `peek_file_alias`
 import "ksplc/sema/type/env" as sema_type_env
@@ -18,8 +20,9 @@ priv const LANG_ALIAS: U8[] = "lang" //< the alias `std/lang` enters every file 
 priv const ARENA_FQN: U8[] = "std.mem.Arena" //< the arena's type, as the analysis names it
 
 fn lint_written(root: Ast_node$@, c: Sema_ctx$@) //<
-    //< Runs the three lints over every file's written declarations
+    //< Runs the four lints over every file's written declarations
     $enums: = Map<|U8[], Bool|>.new(base_core.arena)
+    $plain_impls: = Map<|U8[], Ast_node$@|>.new(base_core.arena)
     for child_node in root.children
         child: = child_node.unwrap_top_level()
         if child.kind_id == .k_decl_enum && !child.is_generic_template()
@@ -30,6 +33,8 @@ fn lint_written(root: Ast_node$@, c: Sema_ctx$@) //<
         c.set_current_file(child.loc.file())
         if child.kind_id == .k_decl_fn
             lint_enum_function(c, child, enums@)
+        else if child.kind_id == .k_decl_impl
+            lint_split_impl(c, child, plain_impls@)
         child.lint_written_under(c, none)
 
 priv fn enum_key(file: U8[], name: U8[]): U8[] //< the key of an enum in `enums`: its file and name
@@ -55,6 +60,33 @@ priv fn lint_enum_function(c: Sema_ctx$@, f: Ast_node$@, enums: Map<|U8[], Bool|
                     place.")
             c.information(f, c.scratch.slice())
         return
+
+priv fn lint_split_impl(c: Sema_ctx$@, impl_node: Ast_node$@,
+    firsts: Map<|U8[], Ast_node$@|>$@) //<
+        //< [I0801] A second plain `impl` block of one type in one file
+        //< The rule is in "5.2 Implementations (`impl`) and receivers" of
+        //< docs/SPEC-programming-language.md.
+        //< **The key is the file, the type's FQN and its written type arguments.** So every
+        //< `impl<|T|> List<|T|>` counts as one, while `impl List<|I32|>` holds what only that
+        //< instance has and stands apart. A block that names a trait is not counted.
+    target: = impl_node.get_decl_type_node()
+    if target == null || impl_node.get_impl_trait_node().is_some() ||
+        impl_node.made_by_compiler()
+        return
+    fqn: = c.impl_target_fqn(impl_node)
+    if fqn.len == 0
+        return
+    defer $spelled: = target.extract_type_name()
+    key: = base_core.arena.text().s(impl_node.loc.file()).s("::").s(fqn)
+        .s(spelled.slice().generic_args_str()).take()
+    if first: = firsts.get(key)
+        c.clear_scratch()
+            .s("[I0801] '\{spelled.slice()\}' already has a plain 'impl' block in this file, at \
+                line \{c.line_of(first.loc)\}. Move these methods into that block, so the type's \
+                methods stand in one place.")
+        c.information(impl_node, c.scratch.slice())
+        return
+    firsts.set(key, impl_node)
 
 impl Ast_node
     priv fn lint_written_under(r: Self$@, c: Sema_ctx$@, shadows: List<|U8[]|>$@) //<
@@ -114,6 +146,16 @@ impl Ast_node
                 return .some(member)
         return .none
 
+    priv fn names_arena(r: Self$@): Bool //< whether a written type names `Arena` anywhere in it
+        if r == null
+            return false
+        if r.kind_id == .k_identifier && r.text.equals("Arena")
+            return true
+        for ch in r.children
+            if ch.names_arena()
+                return true
+        return false
+
 priv fn lint_lang_prefix(c: Sema_ctx$@, at: Ast_node$@, member: Ast_node$@,
     shadows: List<|U8[]|>@) //<
         //< [I0312] A name after `lang.` that, written alone, names the same declaration
@@ -154,14 +196,3 @@ priv fn takes_arena(c: Sema_ctx$@, p: Ast_node$@): Bool //< whether a parameter'
     if id != 0 && !sema_type_env.is_unknown(id)
         return c.env.get_str(c.env.get_clean_real_type(c.env.strip_ptr_full(id))).equals(ARENA_FQN)
     return p.get_decl_type_node().names_arena()
-
-impl Ast_node
-    priv fn names_arena(r: Self$@): Bool //< whether a written type names `Arena` anywhere in it
-        if r == null
-            return false
-        if r.kind_id == .k_identifier && r.text.equals("Arena")
-            return true
-        for ch in r.children
-            if ch.names_arena()
-                return true
-        return false

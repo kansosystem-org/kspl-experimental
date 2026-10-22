@@ -366,7 +366,7 @@ priv fn has_link_on_path(root: U8[], rel: U8[]): Bool //<
     //< **Check the prefixes the OS will open, cut from the path as given**, not segments joined
     //< again. On POSIX `\` is an ordinary byte. So a link named `x\y` re-joined as `x/y` is never
     //< looked at, while the OS opens `x\y` itself.
-    $sb: = Str_builder.new()
+    defer $sb: = Str_builder.new()
     sb.s(root).c('/').s(rel)
     whole: = sb.slice()
     base: = root.len + 1
@@ -428,7 +428,7 @@ pub fn walk_files( //< every file under a path, in one flat list (a narrower Pyt
     // The walk works apart from the result, so a walk that fails leaves the caller nothing to free.
     // It also works apart from `arena`, which takes the result while the work stands
     // (`mem.scratch`).
-    work: = mem.scratch(null)
+    defer $work: = mem.scratch(null)
     $found: = List<|U8[]|>.new(work.arena)
     walk_into(path, skip_dir, work.arena, found@, 0)!
     sorted: = found.order_by(fn(a: U8[]@, b: U8[]@; ): I32 {
@@ -498,7 +498,7 @@ pub fn mkdir_unique( //< creates a directory with a name nobody has used, and re
 ): U8[]!Fs_error //< the new directory's path; fails if it cannot be created
     mkdir_all(base)!
     // Apart from `arena`, which takes the path while the work stands (`mem.scratch`).
-    work: = mem.scratch(null)
+    defer $work: = mem.scratch(null)
     for _try in Range.asc(MAX_UNIQUE_TRIES)
         path: = random_name(base, prefix, "", work.arena)!
         if made(path)
@@ -523,7 +523,7 @@ pub fn write_unique( //< writes a new file under a name nobody has used, readabl
 ): U8[]!Fs_error //< the new file's path; fails if it cannot be created or written
     mkdir_all(base)!
     // Apart from `arena`, which takes the path while the work stands (`mem.scratch`).
-    work: = mem.scratch(null)
+    defer $work: = mem.scratch(null)
     for _try in Range.asc(MAX_UNIQUE_TRIES)
         path: = random_name(base, prefix, suffix, work.arena)!
         check_path(path)!
@@ -555,7 +555,7 @@ pub fn replace_file( //< replaces a file's whole content, so that a power cut ca
     check_path(path)!
     dir: = sys.get_dir_name(path)
     name: = sys.get_file_name(path)
-    work: = mem.scratch(null)
+    defer $work: = mem.scratch(null)
     stem: = work.arena.text().s(name).s(".").take()
     for _try in Range.asc(MAX_UNIQUE_TRIES)
         part_path: = random_name(dir, stem, ".part", work.arena)!
@@ -587,7 +587,7 @@ pub fn write_tree( //< writes files under a directory, creating missing levels
     for rel in rels
         if !is_safe_relative(rel)
             throw .invalid_path
-    work: = mem.scratch(arena)
+    defer $work: = mem.scratch(arena)
     for i in Range.asc(rels.len)
         path: = join(dir, rels[i], work.arena)
         parent: = sys.get_dir_name(path)
@@ -608,7 +608,7 @@ pub fn copy_tree( //< copies every file under one directory to a path that does 
     skip_dir: fn(name: U8[]): Bool, //< true for a directory not to copy; it gets only the name
     arena: Arena$@, //< where the paths go while it works; null works on the heap
 ): Void!Fs_error
-    work: = mem.scratch(arena)
+    defer $work: = mem.scratch(arena)
     parent: = sys.get_dir_name(to)
     if parent.len > 0
         mkdir_all(parent)!
@@ -654,8 +654,8 @@ pub struct File_lock //< a lock on a file; another process that asks for it wait
     //< **The OS releases it when the process ends**, however it ends (flock / LockFileEx). So no
     //< lock outlives its holder, as a hand-made lock file does after a crash. The file serves only
     //< as a name: nothing is written to it, and it stays where it was created. **Within the
-    //< process it releases itself when its owner leaves scope** (`Drop`); `free()` releases it
-    //< sooner.
+    //< process its owner releases it with `free()`**, usually by declaring it with `defer` in
+    //< front.
     priv handle: I64 //< the runtime's handle; 0 once `free()` has released it
 
 impl File_lock
@@ -683,11 +683,9 @@ impl File_lock
         //< first.
         return File_lock.held(File_lock.open(path)!, 0)
 
-    pub fn free(r: Self$@) //< releases the lock before its scope ends, and closes the file
+impl File_lock: Move_only {} //< copying it would release one lock twice
+impl File_lock: Manual_free //< it owns its lock and releases it with `free()`
+    pub fn free(r: Self$@) //< releases the lock and closes the file
         if r.handle != 0
             kspl_lock_close(r.handle)
             r.handle = 0
-
-impl File_lock: Drop //< releases the lock when its owner leaves scope
-    priv fn drop(r: Self$@)
-        r.free()

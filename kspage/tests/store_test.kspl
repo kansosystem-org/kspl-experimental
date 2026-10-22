@@ -172,11 +172,11 @@ fn test_a_document_survives_the_round_trip(arena: Arena$@)
     sheet: = sample_sheet(arena)
     d: = sample_doc(arena)
 
-    $first: = Str_builder.new()
+    defer $first: = Str_builder.new()
     store.save(d, sheet, first@)
     back: = store.load(first.slice(), arena) catch _e
         panic("the text just written cannot be read")
-    $again: = Str_builder.new()
+    defer $again: = Str_builder.new()
     store.save(back.doc, back.sheet, again@)
 
     same: = first.slice().equals(again.slice())
@@ -226,7 +226,7 @@ fn test_the_sample_sets_every_field(arena: Arena$@) //<
 
     names: = field_names(store_source, arena)
     assert(names.len > 40, "the store's field names are read")
-    $sb: = Str_builder.new()
+    defer $sb: = Str_builder.new()
     store.save(sample_doc(arena), sample_sheet(arena), sb@)
     missing: = unwritten(names@, sb.slice(), arena)
     for i in Range.asc(missing.len)
@@ -245,7 +245,7 @@ fn test_the_reloaded_document_lays_out_the_same(arena: Arena$@)
     after: = flow.layout(back.doc, back.sheet, fixed.make(), 200.0, arena)
     assert(before.boxes.len == after.boxes.len, "the count of boxes is the same")
     assert(base.near(before.height, after.height), "the height is the same too")
-    for $i: Sz = 0; i < before.boxes.len; i += 1
+    for i in Range.asc(before.boxes.len)
         a: = before.boxes.get(i)
         b: = after.boxes.get(i)
         assert(a.text.equals(b.text), "the boxes of the same texts come out in the same order")
@@ -357,7 +357,7 @@ fn test_only_the_one_name_opens(arena: Arena$@) //< only the one version field o
     got: = store.load(named, arena) catch _e
         panic("a text naming the version field is to be readable")
     assert(got.doc.blocks.len == 1, "the contents are read too")
-    $out: = Str_builder.new()
+    defer $out: = Str_builder.new()
     store.save(got.doc, got.sheet, out@)
     assert(out.slice().find_str("\"kspage\"").is_some(),
         "what is written back carries the version field")
@@ -416,7 +416,7 @@ fn test_a_number_out_of_range_is_rejected(arena: Arena$@) //<
         "a picture's width past any paper")
     // **Nesting decides work too**: layout descends a call per level, and a deep one ran out of
     // stack after it had replaced the open document.
-    $deep: = Str_builder.new()
+    defer $deep: = Str_builder.new()
     deep.s("{\"kspage\":6,\"sheet\":{},\"blocks\":[")
     for _i in Range.asc(40)
         deep.s("{\"style\":\"body\",\"children\":[")
@@ -452,9 +452,9 @@ fn test_the_saved_text_reads_as_a_diff(arena: Arena$@) //<
     //< and how many differ.
     verdict.start("[kspage/store] the text saved reading as a diff test...")
     sheet: = sample_sheet(arena)
-    $was: = Str_builder.new()
+    defer $was: = Str_builder.new()
     store.save(worded(arena, "the first text"), sheet, was@)
-    $now: = Str_builder.new()
+    defer $now: = Str_builder.new()
     store.save(worded(arena, "the later text"), sheet, now@)
 
     assert(lines_in(was.slice()) > 1, "the text is parted into rows")
@@ -477,7 +477,7 @@ priv fn worded(arena: Arena$@, word: U8[]): Doc$@ //<
 
 priv fn lines_in(text: U8[]): Sz //< the number of lines in a text
     $n: Sz = 1
-    for $i: Sz = 0; i < text.len; i += 1
+    for i in Range.asc(text.len)
         if (text.ptr + i)$ == 0x0aU8
             n += 1
     return n
@@ -508,7 +508,7 @@ fn test_a_note_number_is_not_saved(arena: Arena$@) //<
     //< **The number is counted where notes are listed**; written, one added note would leave every
     //< number after it stale.
     verdict.start("[kspage/store] a note's number staying out of the text test...")
-    $sb: = Str_builder.new()
+    defer $sb: = Str_builder.new()
     store.save(sample_doc(arena), sample_sheet(arena), sb@)
     written: = sb.slice()
     // **The text's packing is not copied** (`SPACING` in `share/store.kspl`).
@@ -607,13 +607,13 @@ fn test_the_manual_is_in_the_saved_form(arena: Arena$@) //<
     verdict.start("[kspage/manual] the manual being in the form kspage writes test...")
     got: = store.load(manual_text, arena) catch _e
         panic("the manual does not read")
-    $again: = Str_builder.new()
+    defer $again: = Str_builder.new()
     store.save(got.doc, got.sheet, again@)
     assert(again.slice().equals(manual_text), "written again, the manual is the same bytes")
     verdict.pass("the manual is in the form kspage writes.")
 
 priv fn reloads(d: Doc$@, sheet: Sheet$@, arena: Arena$@): Bool //< whether d, saved, loads back
-    $sb: = Str_builder.new()
+    defer $sb: = Str_builder.new()
     store.save(d, sheet, sb@)
     _got: = store.load(sb.slice(), arena) catch _e
         return false
@@ -638,7 +638,7 @@ fn test_what_the_editor_makes_always_reloads(arena: Arena$@) //<
         "it takes the largest size a document holds, its proportions kept")
     assert(reloads(d, sheet, arena), "the document holding it loads back")
 
-    $long: = Str_builder.new()
+    defer $long: = Str_builder.new()
     for _i in Range.asc(30000)
         long.c('W')
     t: = d.add_block("table")

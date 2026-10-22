@@ -96,14 +96,13 @@ impl Face
             if r.face == f
                 return r
         base_diag.ice_panic("ksplc: a subcommand has no row in FACES (ksplc/cli.kspl)")
-        return FACES[0]
 
     priv fn check_machine(f: Self) //<
         //< It refuses a machine ksplc has no widths for, or one genllvm cannot lay out
         //< **Refused, never guessed**: a guess folds sizes the C compiler disagrees with.
         //< Caution: **The refusal goes to standard error**, the language server's too. Its
         //< standard output is the protocol, where a line of text reads as a broken message.
-        $said: = Str_builder.new()
+        defer $said: = Str_builder.new()
         machine_refusal_to(f.face_name(), base_core.config.machine, base_target.host_name(), said@)
         if said.len > 0
             usage.error_exit(said.slice())
@@ -122,7 +121,6 @@ priv fn face_named(name: U8[]): Face //< the subcommand argparse chose, by its n
         if row.face.face_name().equals(name)
             return row.face
     base_diag.ice_panic("ksplc: argparse chose a subcommand FACES does not hold")
-    return .compile
 
 enum Mode //< what the tool was asked to do
     compile(in_path: U8[], out_path: U8[], deps_path: U8[], libs_path: U8[]) //<
@@ -483,7 +481,7 @@ impl Mode
         // Caution: **argparse refuses an option on a subcommand it does not take effect on while
         // parsing**, before any option is applied. Checked after, an option that has no effect
         // would still have its side effects (a cfg, a setting).
-        p.parse(sys.args(), base_core.arena) catch e
+        p.parse() catch e
             refuse_command_line(e)
 
         in_files: = p.rest

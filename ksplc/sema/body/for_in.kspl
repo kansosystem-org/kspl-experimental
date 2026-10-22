@@ -3,16 +3,26 @@
 //< syntactic sugar that needs no types" in `ksplc/docs/DESIGN-parse.md`).
 //< Caution: **Keep the index form (a subject with `.len` and `[]`) the default.** Most subjects
 //< are an array, a slice or a `List`, and the `next()` form adds an `Option` per element.
+//< The temporary that holds the subject points at a place the index form reads
+//< (`hold_for_in_subject`), so the loop reads the live place and moves nothing.
 
 // ==========================================
 //   the two forms: by index, and by `next()`
 // ==========================================
 import "ksplc/base/ast" as base_ast + { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_place" as base_ast_place
 import "ksplc/base/c_name" as base_c_name
 import "ksplc/base/core" as base_core
+import "ksplc/sema/body/coerce" as sema_body_coerce
 import "ksplc/sema/body/expr" as sema_body_expr
+import "ksplc/sema/body/postfix" as sema_body_postfix
+import "ksplc/sema/decl/access" as sema_decl_access
+import "ksplc/sema/decl/layout" as sema_decl_layout
+import "ksplc/sema/decl/mono" as sema_decl_mono
 import "ksplc/sema/session/ctx" { Sema_ctx, Sema_error }
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as sema_type_query
 import "std/str" { Str_builder }
 
 priv $for_in_counter: Sz = 0
@@ -21,6 +31,36 @@ priv const ITER_TRAIT_FQN: U8[] = "std.lang.Iter" //<
     //< The trait whose implementers `for x in` loops over with `next()`
 
 impl Ast_node
+    fn hold_for_in_subject(r: Self$@, c: Sema_ctx$@, subject_id: I32): I32!Sema_error //<
+        //< Makes the subject's temporary point at the subject, where the subject is a place
+        //< It returns the temporary's type. A place is a name or a `.field` chain of names. A fixed
+        //< array is held as a slice over it, as no pointer to it carries its length. Anything else
+        //< stays a copy, evaluated once. **An `Iter` is copied too**: `next()` writes its position,
+        //< so each loop starts from the subject's own position, and the subject keeps it.
+        subject: = r.get_var_decl_expr()
+        if !is_named_place(subject) || sema_type_env.is_unknown(subject_id) ||
+            drives_by_next(c, subject_id) || c.packed_place_align(subject) != 0
+            return subject_id
+        if c.env.is_array(subject_id)
+            elem_id: = c.env.strip_array(subject_id)
+            // An array of arrays stays a copy: no slice holds an array as its element.
+            if c.env.is_array(elem_id)
+                return subject_id
+            view_id: = c.slice_type_of(c.env.make_const(elem_id))
+            return subject.wrap_implicit_cast(c, subject_id, view_id)
+        place: = subject.snapshot_for_morph(subject_id)
+        subject.children = base_ast.new_ast_node_list()
+        subject.morph(.k_expr_postfix, "postfix")
+        subject.def_node = null
+        subject.add_child(place).add_child(Ast_node.new(.k_literal, "@", subject.loc))
+        $ptr_id: = sema_body_postfix.infer_address_postfix(c, subject, place, subject_id)!
+        // **The pointer is read-only unless a read needs it writable**, so a spare `$` on the place
+        // is still reported (df_decl_var in `../flow/track.kspl`).
+        if !c.index_read_needs_writable(subject_id)
+            ptr_id = c.env.make_ptr(c.env.make_const(subject_id))
+        subject.type_id = ptr_id
+        return ptr_id
+
     fn expand_for_in(r: Self$@, c: Sema_ctx$@): Void!Sema_error //<
         //< Expands the loop if it carries the mark (a bare identifier at the init position)
         item_id: = r.get_for_init()
@@ -32,7 +72,7 @@ impl Ast_node
         coll_id: = coll_ref.infer_expr(c, 0)!
         // **Check `Iter` first**, or a type that supports both silently loses the `Iter` its writer
         // declared (Principle 5); the index form is for a subject that declares nothing.
-        if c.env.implemented_trait_instance(coll_id, ITER_TRAIT_FQN) != 0
+        if drives_by_next(c, coll_id)
             r.build_step_loop(item_id, coll_ref)
             return
         r.build_index_loop(item_id, coll_ref)
@@ -111,6 +151,20 @@ impl Ast_node
         loop_children.push(step_node)
         loop_children.push(block_node)
         r.children = loop_children
+
+priv fn drives_by_next(c: Sema_ctx$@, subject_id: I32): Bool //< whether `next()` drives the loop
+    return c.env.implemented_trait_instance(subject_id, ITER_TRAIT_FQN) != 0
+
+priv fn is_named_place(e: Ast_node$@): Bool //< whether it is a name or a `.field` chain of names
+    //< A call, an index or a cast is not one: it is evaluated once into a copy.
+    if e == null
+        return false
+    if e.is_path_or_ident()
+        return true
+    if e.kind_id != .k_expr_postfix || !e.postfix_op_text().equals(".") || e.children.len != 3
+        return false
+    return e.get_postfix_member().kind_id == .k_identifier &&
+        is_named_place(e.get_postfix_receiver())
 
 priv fn next_temp_name(prefix: U8[]): U8[] //< the temporary variable's name
     //< Numbered separately from parse's `for_coll`.

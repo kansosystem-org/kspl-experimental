@@ -1,4 +1,4 @@
-//< Classifies shared ownership, automatic cleanup and ownership moves
+//< Classifies shared ownership (ARC), release tracking and ownership moves
 //< An extension to `Env` in `sema/type/env.kspl`; it does not hold the type table itself.
 //< Caution: **The decision here (`type_has_arc_content` / `type_is_managed`) and the emission in
 //< `lower/arc.kspl` (`emit_managed_op`) must always change together.** Fix only one and it breaks
@@ -28,14 +28,13 @@ priv const ARC_TRAIT_FQN: U8[] = "std.lang.Ref_counted" //<
     //< Each means this declaration alone, not a same-named other (see is_arc_type).
 priv const MOVE_ONLY_TRAIT_FQN: U8[] = "std.lang.Move_only"
 priv const MANUAL_FREE_TRAIT_FQN: U8[] = "std.lang.Manual_free"
-priv const DROP_TRAIT_FQN: U8[] = "std.lang.Drop"
 
 fn shadowed_known_trait(trait_fqn: U8[]): U8[] //<
     //< The known trait (listed above) that trait_fqn only shares a name with, or empty
     //< Such a trait is a different declaration with the same name.
-    //< Returns empty if there are none. **Only these four are looked at**: a same-named operator
-    //< trait errors on its own, but these four, matched by FQN, would silently stop working.
-    known: U8[][4] = ::{ ARC_TRAIT_FQN, MOVE_ONLY_TRAIT_FQN, MANUAL_FREE_TRAIT_FQN, DROP_TRAIT_FQN }
+    //< Returns empty if there are none. **Only these three are looked at**: a same-named operator
+    //< trait errors on its own, but these three, matched by FQN, would silently stop working.
+    known: U8[][3] = ::{ ARC_TRAIT_FQN, MOVE_ONLY_TRAIT_FQN, MANUAL_FREE_TRAIT_FQN }
     own_simple: = trait_fqn.fqn_last()
     for k in known
         if trait_fqn.equals(k)
@@ -95,15 +94,13 @@ impl sema_type_env.Env
         //< True if what the type owns as a value holds an ARC-managed type, directly or nested
         //< Only owning positions are walked (`owned_parts`). Miss one and lower/arc.kspl inserts
         //< no retain/release and the value leaks (the rules are named in this file's header).
-        $resolving: = List<|I32|>.new(null)
-        defer resolving.free()
+        defer $resolving: = List<|I32|>.new(null)
         // Caution: **If the shared memo is set, always use it** (when it is set is described on the
         // declaration in sema/type/env.kspl). Lower asks per owning position, so rebuilding it per
         // call is quadratic in the chain's depth.
         if r.arc_content_memo != null
             return r.type_has_arc_content_impl(type_id, r.arc_content_memo, resolving@)
-        $memo: = Map<|I32, I32|>.new(null)
-        defer memo.free()
+        defer $memo: = Map<|I32, I32|>.new(null)
         return r.type_has_arc_content_impl(type_id, memo@, resolving@)
 
     priv fn type_has_arc_content_impl(r: Self$@, type_id: I32, memo: Map<|I32, I32|>$@,
@@ -129,8 +126,7 @@ impl sema_type_env.Env
                 return false
         resolving.push(real_id)
         $found: = false
-        $parts: = List<|I32|>.new(null)
-        defer parts.free()
+        defer $parts: = List<|I32|>.new(null)
         r.owned_parts(real_id, parts@)
         for part in parts
             if r.owns_arc_content_impl(part, memo, resolving)
@@ -147,45 +143,28 @@ impl sema_type_env.Env
             r.type_has_arc_content_impl(type_id, memo, resolving)
 
     fn type_is_managed(r: Self$@, type_id: I32): Bool //<
-        //< Whether its lifetime needs automatic cleanup
-        //< ARC values share ownership; Drop values transfer it. Aggregates own their value fields.
-        return r.is_arc_type(type_id) || r.type_has_drop(type_id) ||
-            r.type_has_arc_content(type_id)
-
-    fn is_drop_type(r: Self$@, type_id: I32): Bool //< whether this value declares automatic cleanup
-        if type_id <= 0 || r.is_pointer(type_id) || r.is_slice(type_id)
-            return false
-        return r.has_implemented_trait_fqn(r.get_clean_real_type(type_id), DROP_TRAIT_FQN)
-
-    fn type_has_drop(r: Self$@, type_id: I32): Bool //< whether this value owns automatic cleanup
-        $memo: = Map<|I32, I32|>.new(null)
-        defer memo.free()
-        $resolving: = List<|I32|>.new(null)
-        defer resolving.free()
-        if r.drop_content_memo != null
-            return r.derives_marker(type_id, r.drop_content_memo, resolving@, false, 0)
-        return r.derives_marker(type_id, memo@, resolving@, false, 0)
+        //< Whether it gets automatic retain/release
+        //< That is an ARC-managed type itself, or an aggregate owning one by value.
+        return r.is_arc_type(type_id) || r.type_has_arc_content(type_id)
 
     fn has_release_contract(r: Self$@, target_id: I32): Bool //<
         //< Whether target_id is a type that owns an instance and releases it with `free()`
-        //< An explicit `Manual_free` or `Drop` supplies this contract. It is not derived from
-        //< fields: an owning part alone does not promise that the containing type has `free()`.
-        bare: = r.strip_ptr_full(target_id)
-        return r.has_implemented_trait_fqn(bare, MANUAL_FREE_TRAIT_FQN) || r.is_drop_type(bare)
+        //< True where there is an explicit impl for `std.lang.Manual_free`. It is **not derived
+        //< from fields**, as Move_only is: an owning part alone does not promise that the
+        //< containing type has `free()` (`Sema_ctx` holds a `Str_builder`).
+        return r.has_implemented_trait_fqn(r.strip_ptr_full(target_id), MANUAL_FREE_TRAIT_FQN)
 
     fn is_move_only(r: Self$@, target_id: I32): Bool //<
         //< Whether target_id is Move_only (implicit copying forbidden)
-        //< Drop supplies this rule too. Otherwise an explicit marker or an owning field supplies
-        //< it.
-        $memo: = Map<|I32, I32|>.new(null)
-        defer memo.free()
-        $resolving: = List<|I32|>.new(null)
-        defer resolving.free()
-        return r.derives_marker(target_id, memo@, resolving@, true, 0)
+        //< True where there is an explicit impl for `std.lang.Move_only`. Where there is none it
+        //< is derived from what the type owns (derives_move_only below).
+        defer $memo: = Map<|I32, I32|>.new(null)
+        defer $resolving: = List<|I32|>.new(null)
+        return r.derives_move_only(target_id, memo@, resolving@, 0)
 
-    priv fn derives_marker(r: Self$@, target_id: I32, memo: Map<|I32, I32|>$@,
-        resolving: List<|I32|>$@, move_only: Bool, depth: Sz): Bool //<
-            //< Whether target_id derives move-only behavior or automatic cleanup from its fields
+    priv fn derives_move_only(r: Self$@, target_id: I32, memo: Map<|I32, I32|>$@,
+        resolving: List<|I32|>$@, depth: Sz): Bool //<
+            //< Whether target_id is Move_only by its own impl or by what it owns
             //< The positions walked are `owned_parts`' ("Worked example: forbidding copies with
             //< `Move_only`" in docs/SPEC-programming-language.md). **Keep the memo and break cycles
             //< with resolving**, as type_has_arc_content_impl does.
@@ -198,21 +177,13 @@ impl sema_type_env.Env
         if r.is_pointer(target_id) || r.is_slice(target_id)
             memo.set(target_id, MEMO_NO)
             return false
-        if !move_only && r.is_raw_value(target_id)
-            memo.set(target_id, MEMO_NO)
-            return false
-        if r.is_drop_type(target_id) ||
-            (move_only && r.has_implemented_trait_fqn(target_id, MOVE_ONLY_TRAIT_FQN))
+        if r.has_implemented_trait_fqn(target_id, MOVE_ONLY_TRAIT_FQN)
             memo.set(target_id, MEMO_YES)
             return true
-        // Explicit owners retain their manual lifetime, including the fields they release.
-        if !move_only && r.has_implemented_trait_fqn(target_id, MANUAL_FREE_TRAIT_FQN)
-            memo.set(target_id, MEMO_NO)
-            return false
         for seen_id in resolving
             if seen_id == target_id
                 return false
-        if move_only && depth >= MAX_MOVE_ONLY_DEPTH
+        if depth >= MAX_MOVE_ONLY_DEPTH
             io.err()
                 .s("\nfatal: value nesting too deep while deriving a structural marker. A recursive \
                     chain of embedded values may be unbounded.\n")
@@ -220,11 +191,10 @@ impl sema_type_env.Env
         resolving.push(target_id)
 
         $derived: = false
-        $parts: = List<|I32|>.new(null)
-        defer parts.free()
+        defer $parts: = List<|I32|>.new(null)
         r.owned_parts(r.get_real_type(target_id), parts@)
         for part in parts
-            if r.derives_marker(part, memo, resolving, move_only, depth + 1)
+            if r.derives_move_only(part, memo, resolving, depth + 1)
                 derived = true
                 break
         resolving.len -= 1

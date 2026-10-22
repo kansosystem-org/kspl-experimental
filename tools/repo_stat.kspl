@@ -58,8 +58,7 @@ priv fn stat_file(path: U8[], marker: U8[], block: Block_marks): Stat //<
     defer dealloc(Void$@::body_bytes.ptr)
     if body_bytes.contains_nul()
         return Stat::{}
-    $ls: = body_bytes.lines(null)
-    defer ls.free()
+    defer $ls: = body_bytes.lines(null)
     $st: = Stat::{ .files = 1, .marked = 1 if marker.len > 0 || block.open.len > 0 else 0,
         .lines = ls.len }
     $open: = false
@@ -133,7 +132,7 @@ priv fn write_files(b: Str_builder$@, exts: List<|Ext_row|>$@, roles: List<|Stat
     tracked: = git_list(U8[][]::{ "ls-files" }, arena)!
     others: = git_list(U8[][]::{ "ls-files", "--others", "--exclude-standard" }, arena)!
     files: = path_kind.listed(tracked, others, arena)
-    $rootb: = Str_builder.new()
+    defer $rootb: = Str_builder.new()
     $sub: = Stat::{}
     $root: = Stat::{}
     $total: = Stat::{}
@@ -212,7 +211,7 @@ priv fn write_roles(b: Str_builder$@, roles: List<|Stat|>$@) //<
     b.c('\n')
 
 priv fn write_stat(out_dir: U8[], arena: Arena$@): Void!fs.Fs_error
-    $b: = Str_builder.new()
+    defer $b: = Str_builder.new()
     $exts: = List<|Ext_row|>.new(arena)
     $roles: = List<|Stat|>.new(arena)
     for _role in path_kind.Role.variants()
@@ -229,14 +228,13 @@ priv fn save(out_dir: U8[], name: U8[], data: U8[], arena: Arena$@): Void!fs.Fs_
     io.out().s("wrote \{path\} (\{data.len\} bytes)\n")
 
 fn main(): I32 //< writes the repository's size on one page of text
-    arena: = Arena.new(64 * 1024 * 1024)
-    defer arena.free()
+    defer arena: = Arena.new(64 * 1024 * 1024)
     // Caution: **Do not parse the arguments by hand.** `std/argparse` refuses an unknown `--name`
     // and an undeclared positional (by hand, `repo_stat --bogus` makes a folder `--bogus/`).
     p: = argparse.Parser
         .create(sys.program_name(), "put the repository's size into one sheet of text", arena)
     p.positional("[output folder] the default is out/")
-    p.parse_or_exit(sys.args(), arena)
+    p.parse_or_exit()
     // Caution: **Do not silently drop an extra positional argument**; argparse does not count them,
     // so the maximum is checked here.
     if p.rest.len > 1

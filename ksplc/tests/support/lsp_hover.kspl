@@ -10,6 +10,7 @@ import "std/jsonrpc"
 import "std/mem" { Arena }
 import "std/str"
 import "std/strfmt" as _strfmt
+import "std/sys"
 import "std/verdict"
 
 // ==========================================
@@ -484,27 +485,27 @@ priv fn check_hover_params(c: jsonrpc_client.Client$@, arena: Arena$@) //<
         m_text.find_str("\n): Sz").is_some() && m_text.find_str("a17").is_none(),
         lsp_client.why(c, arena.text().s("\'").s(m_text).s("\'").take(), arena))
 
-priv fn check_hover_links(c: jsonrpc_client.Client$@, arena: Arena$@) //<
+priv fn check_hover_links(c: jsonrpc_client.Client$@, uri: U8[], arena: Arena$@) //<
     //< A name the description mentions is shown as a link to where it is declared
     //< **It is resolved as `[W0211]` resolves it**, through the description's scope: `Row.put`
     //< links, `r.text` (unknown head) stays text, and so does `io.out` where a parameter `io` hides
     //< the module.
     //< Caution: **Check the line, not just the link**, or one opening the file at its start passes.
-    c.notify("textDocument/didOpen", lsp_client.did_open(DOC_URI, DOC_SRC, arena),
-        lsp_client.SEND_MS, arena) catch {}
-    defer lsp_client.close(c, DOC_URI, arena)
+    c.notify("textDocument/didOpen", lsp_client.did_open(uri, DOC_SRC, arena), lsp_client.SEND_MS,
+        arena) catch {}
+    defer lsp_client.close(c, uri, arena)
     line: = decl_line(DOC_SRC, "fn pointing(): Sz", arena)
     col: = col_in_line(DOC_SRC, "fn pointing(): Sz", "pointing", arena)
     got: =
-        c.request("textDocument/hover", lsp_client.at_pos(DOC_URI, line, col, arena),
+        c.request("textDocument/hover", lsp_client.at_pos(uri, line, col, arena),
         lsp_client.READ_MS, arena) catch e
         verdict.check("a name the description points at becomes a link", false, end_text(e))
         return
     text: = lsp_client.hover_text(got.val)
     put_line: = decl_line(DOC_SRC, "  fn put( //< writes one row out", arena)
-    want: = arena.text().s("doc_probe.kspl#L").s("\{put_line + 1\}").s(")").take()
+    want: = arena.text().s("[`Row.put`](").s(uri).s("#L").s("\{put_line + 1\}").s(")").take()
     verdict.check("a name the description points at becomes a link to its line",
-        text.find_str("[`Row.put`](file://").is_some() && text.find_str(want).is_some(),
+        text.find_str(want).is_some(),
         lsp_client.why(c, arena.text().s("'").s(text).s("'").take(), arena))
     verdict.check("a name the file does not know stays text",
         text.find_str("`r.text` alone").is_some() && text.find_str("[`r.text`]").is_none(),
@@ -514,7 +515,7 @@ priv fn check_hover_links(c: jsonrpc_client.Client$@, arena: Arena$@) //<
         text.find_str("[[`Row.put`]").is_none(), lsp_client.why(c, text, arena))
     q_line: = decl_line(DOC_SRC, "fn quiet(io: Sz): Sz", arena)
     q_col: = col_in_line(DOC_SRC, "fn quiet(io: Sz): Sz", "quiet", arena)
-    q_at: = lsp_client.at_pos(DOC_URI, q_line, q_col, arena)
+    q_at: = lsp_client.at_pos(uri, q_line, q_col, arena)
     got_q: = c.request("textDocument/hover", q_at, lsp_client.READ_MS, arena) catch e
         verdict.check("a parameter hides the module's name in its function", false, end_text(e))
         return
@@ -526,4 +527,8 @@ priv fn check_hover_links(c: jsonrpc_client.Client$@, arena: Arena$@) //<
 fn run_docs(c: jsonrpc_client.Client$@, arena: Arena$@)
     check_hover_doc(c, arena)
     check_hover_params(c, arena)
-    check_hover_links(c, arena)
+    // Literal expectations are independent of the production URI encoder.
+    for uri in(U8[][]::{ "file:///C:/doc_probe.kspl", "file:///C:/hover%20%E3%81%8B%25%23%3F.kspl" }
+        if sys.is_windows()
+        else U8[][]::{ "file:///doc_probe.kspl", "file:///hover%20%E3%81%8B%25%23%3F.kspl" })
+        check_hover_links(c, uri, arena)

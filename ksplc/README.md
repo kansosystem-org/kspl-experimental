@@ -102,7 +102,6 @@ The design is "The Sema layer: it knows the types" in [`ksplc/docs/DESIGN-sema.m
   * [`defer.kspl`](lower/defer.kspl) flattens `defer` and the exits that run it.
   * [`order.kspl`](lower/order.kspl) moves an operand into a temporary where C could run it out of the written order.
   * [`ctx.kspl`](lower/ctx.kspl) holds the walk's state.
-* [`drop.kspl`](lower/drop.kspl) — tracks which automatic owner still needs cleanup after a move or explicit release.
 * [`arc.kspl`](lower/arc.kspl) — inserts ARC's `retain()` / `release()` on the way (ARC: automatic reference counting, where a value is freed when its last holder lets go).
 * [`vtable.kspl`](lower/vtable.kspl) — a trait value's thunks and vtables. These are the go-between functions and the tables of function pointers. They let one call reach whichever type stands behind a trait.
 * [`abi.kspl`](lower/abi.kspl) — the ABI mangling (turning KSPL's names into unique names in the output by a fixed rule), and desugaring the method calls.

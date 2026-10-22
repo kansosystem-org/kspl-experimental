@@ -17,6 +17,39 @@ pub fn spin(): I32
     i += 1
   io.out().s("after\n")
   return i
+// ==== case after_noreturn_call
+//< What follows a call to a `#noreturn` function is unreachable
+//< `sys.exit` never hands control back, so the statement after it gets [W0201]. The function needs
+//< no `return` after it, and a `catch` block ending in one needs no `fallback`.
+// EXPECT: [W0201] Unreachable code detected
+// EXPECT: after_noreturn_call.kspl:16:
+import "std/io"
+import "std/sys"
+
+priv fn read_or_stop(path: U8[]): Sz
+  text: = io.read_file(path, null) catch
+    sys.exit(1)
+  return text.len
+
+priv fn stops(): I32
+  sys.exit(2)
+  return 0
+
+fn main(): I32
+  return I32::read_or_stop("x") + stops()
+// ==== case noreturn_call_ends_a_function
+//< A function returning a value may end in a `#noreturn` call, with nothing after it
+// EXPECT-NOT: [W0201]
+// EXPECT-NOT: error:
+import "std/sys"
+
+priv fn pick(n: I32): I32
+  if n > 0
+    return n
+  sys.exit(3)
+
+fn main(): I32
+  return pick(1)
 // ==== case labelled_branch_left_by_break
 //< What follows a labelled `switch` or `if` that a `break` leaves is reachable
 //< **A `break` to the label carries control past the statement**, so the code after it runs

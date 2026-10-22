@@ -30,10 +30,10 @@ fn exit_unlocated(tool: U8[]) //< it ends a command that finds no folder for its
 
 fn refused_root(root: U8[], arena: Arena$@): U8[] //<
     //< Why the cache folder cannot be used; empty where it can
-    //< **What it holds is built into the user's programs.** A normalized AST can carry inline C,
-    //< and `ksplc run` runs what it finds there. So a folder that another user could write is
-    //< refused, as git refuses a repository another user owns ("A cache folder that others can
-    //< write is refused" in `std/docs/DESIGN-system.md`). This user makes a missing folder here
+    //< **What it holds is built into the user's programs.** A normalized AST can carry inline
+    //< assembly, and `ksplc run` runs what it finds there. So a folder that another user could
+    //< write is refused, as git refuses a repository another user owns ("A cache folder that others
+    //< can write is refused" in `std/docs/DESIGN-system.md`). This user makes a missing folder here
     //< first. If that fails, the caller's own creation reports it.
     fs.mkdir_all(root) catch {}
     switch fs.dir_trust(root)
@@ -86,7 +86,7 @@ fn append_self_identity(out: Str_builder$@): Bool //<
     info: = fs.stat(self_path) catch fs.File_info::{ .size = 0, .kind = .other, .mtime = 0 }
     if info.size <= 0
         return false
-    out.s(self_path).c(0U8).s("\{info.size\}").c(0U8).s("\{info.mtime\}").c(0U8)
+    out.s("\{self_path\}\0\{info.size\}\0\{info.mtime\}\0")
     return true
 
 const HASH_HEX_LEN: Sz = sha256.HEX_LEN //< a sha256 as 64 hexadecimal characters
@@ -204,7 +204,7 @@ fn prune_dirs(base_dir: U8[], name_len: Sz, keep: Sz, spare_secs: I64, live: U8[
     cutoff: = sys.wall_seconds() - spare_secs
     for kept.len > room
         $oldest: Sz = 0
-        for $i: Sz = 1; i < kept.len; i += 1
+        for i in Range.new(1, kept.len, 1)
             if times.get(i) < times.get(oldest)
                 oldest = i
         // Caution: **Stop at the first one used within spare_secs.** It can be another process's,
@@ -220,12 +220,12 @@ fn prune_dirs(base_dir: U8[], name_len: Sz, keep: Sz, spare_secs: I64, live: U8[
 fn append_generation_dir(kind: U8[], out: Str_builder$@, arena: Arena$@): Bool //<
     //< It writes `<cache folder>/<kind>/<generation>` into out and creates that folder
     //< False where no folder is found (then no cache). Old generations go only when one is created.
-    $self_id: = Str_builder.new()
+    defer $self_id: = Str_builder.new()
     if !append_self_identity(self_id@)
         return false
     hex: = hash_hex(self_id.slice())
 
-    $root: = Str_builder.new()
+    defer $root: = Str_builder.new()
     if !append_cache_root(root@)
         return false
     // A refused folder costs only the cache, so the compile goes on without it, said once.

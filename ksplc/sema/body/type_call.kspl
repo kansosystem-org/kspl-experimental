@@ -1,0 +1,70 @@
+//< A type called as `T(...)` uses its named `new` function
+//< Resolve names before rewriting, so a local value keeps its ordinary call behavior.
+import "ksplc/base/ast" { Ast_node, Loc }
+import "ksplc/base/ast_ext" as _ast_ext
+import "ksplc/base/ast_place" as _ast_place
+import "ksplc/base/ast_spell" as _ast_spell
+import "ksplc/sema/decl/name" as _name
+import "ksplc/sema/session/ctx" { Sema_ctx }
+import "ksplc/sema/type/env" as _env
+import "ksplc/sema/type/query" as _query
+import "ksplc/sema/type/scope" as _scope
+import "std/str" as _str
+
+fn self_callee(c: Sema_ctx$@, left: Ast_node$@): Ast_node$@? //<
+    //< Self names the current impl without a symbol; resolve its member as Self.new already does
+    if !left.is_path_or_ident() || !left.get_path_or_ident_name().equals("Self") ||
+        c.fn_ctx.impl_name.len == 0 || c.read_written_name(left).sym != null
+        return .none
+    self_name: = Ast_node.new(.k_identifier, "Self", left.loc)
+    if owner: = c.symtab.resolve(c.fn_ctx.impl_name)
+        self_name.def_node = owner.node
+        self_name.type_id = owner.type_id
+    return .some(Ast_node.new(.k_expr_path, "Self.new", left.loc).add_child(self_name)
+        .add_child(implicit_new(left.loc)))
+
+fn callee(c: Sema_ctx$@, left: Ast_node$@): Ast_node$@? //<
+    //< Builds the associated-function access only when the written callee names a type
+    if left.kind_id != .k_identifier && left.kind_id != .k_expr_path &&
+        !(left.kind_id == .k_expr_postfix && left.get_postfix_op().is_literal("."))
+        return .none
+    named: = c.read_written_name(left)
+    if named.sym != null
+        if !named.sym.kind.is_type()
+            return .none
+    else if named.reach != .instance_type
+        return .none
+    return .some(Ast_node.new(.k_expr_postfix, ".", left.loc).add_child(left)
+        .add_child(Ast_node.new(.k_literal, ".", left.loc)).add_child(implicit_new(left.loc)))
+
+fn check_receiver(c: Sema_ctx$@, constructor: Ast_node$@) //<
+    //< A type call must not stand for a function taking an instance as its first parameter
+    named: = c.read_written_name(constructor)
+    decl: =
+        (constructor.def_node if constructor.def_node != null
+        else (named.sym.node if named.sym != null else null))
+    $owner_id: = named.owner_id
+    if owner_id <= 0
+        if owner: = c.written_type_symbol(c.read_written_type(constructor))
+            owner_id = owner.type_id
+    if owner_id <= 0 && c.read_written_type(constructor).name.equals("Self")
+        owner_id = c.env.type_to_id.get(c.fn_ctx.impl_name).unwrap_or(0)
+    if decl == null || owner_id <= 0
+        return
+    params: = decl.get_fn_params()
+    if params == null
+        return
+    $cursor: = _ast_ext.Param_cursor.new(params, false)
+    if first: = cursor.next()
+        id: = first.param_type_id()
+        if id > 0 &&
+            c.env.get_clean_real_type(c.env.receiver_base_id(id)) == c.env
+            .get_clean_real_type(owner_id)
+            c.err(constructor,
+                "a type call requires a static 'new', not one taking an instance as its first \
+                    parameter")
+
+priv fn implicit_new(loc: Loc): Ast_node$@ //< the member a type call selects, not a written name
+    name: = Ast_node.new(.k_identifier, "new", loc)
+    name.mark_implicit_name()
+    return name

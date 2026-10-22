@@ -64,7 +64,7 @@ priv fn native_answers(holes: List<|Hole|>$@, coder: U8[], weights: U8[], sample
         //< The model stays out of this tool. The holes go out as one file. The answers come back
         //< as another, one line each, in the same order.
     $b: = Json_builder.new(arena)
-    $text: = Str_builder.new()
+    defer $text: = Str_builder.new()
     for h in holes
         b.obj().set("prefix", b.str_val(h.prefix)).set("suffix", b.str_val(h.suffix)).build()
             .dump(text@)
@@ -122,8 +122,7 @@ priv fn pct(n: Sz, t: Sz): F64 //< n out of t, as a percentage
 
 fn main() //< measures the completion's compile-pass and exact-match rates
     began: = sys.mono_us()
-    arena: = Arena.new(512 * 1024 * 1024)
-    defer arena.free()
+    defer arena: = Arena.new(512 * 1024 * 1024)
     $model: U8[] = "oracle"
     $coder: U8[] = "out/fim_coder.exe"
     $weights: U8[] = "out/fim_coder.safetensors"
@@ -135,12 +134,12 @@ fn main() //< measures the completion's compile-pass and exact-match rates
     p.str_opt("--coder", coder@, "native: the fim_coder executable (out/fim_coder.exe)")
     p.str_opt("--weights", weights@, "native: the weights (out/fim_coder.safetensors)")
     p.str_opt("--samples", samples@, "native: candidates per hole, the greedy one first (4)")
-    p.parse_or_exit(sys.args(), arena)
+    p.parse_or_exit()
     if !model.equals("oracle") && !model.equals("empty") && !model.equals("native")
         io.err().s("--model must be oracle, empty or native\n")
         sys.exit(2)
 
-    $val_path: = Str_builder.new()
+    defer $val_path: = Str_builder.new()
     val_path.s(oracle.CORPUS_DIR).s("/val.jsonl")
     recs: = oracle.load_jsonl(val_path.slice(), arena) catch
         io.err().s("[error] cannot read \{val_path.slice()\} (run build_corpus first)\n")

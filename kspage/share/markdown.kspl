@@ -59,7 +59,7 @@ priv fn start_block(s: Sink$@, listing: Sz) //< written at the start of a block
 
 priv fn lead_in(s: Sink$@, depth: Sz) //< turns a list's level into spaces
     //< One level is two spaces (it indents by the width of the marker's text).
-    for $i: Sz = 0; i < depth; i += 1
+    for _i in Range.asc(depth)
         s.out.s("  ")
 
 priv fn always_escaped(c: U8): Bool //<
@@ -100,7 +100,7 @@ priv fn only_digits(text: U8[], at: Sz): Bool //< whether what is before `at` is
     //< That shape reads as a numbered list (`1.` or `1)`).
     if at <= 0
         return false
-    for $i: Sz = 0; i < at; i += 1
+    for i in Range.asc(at)
         if text[i] < '0' || text[i] > '9'
             return false
     return true
@@ -134,7 +134,7 @@ priv fn comment_into(out: Str_builder$@, text: U8[]) //<
     //< Writes a text as the contents of an HTML comment
     //< Caution: **Never let two `-` stand together** (a `-->` closes the comment there). No line
     //< break goes in either (the text would leak outside the comment).
-    for $i: Sz = 0; i < text.len; i += 1
+    for i in Range.asc(text.len)
         c: = text[i]
         if c == '\n' || c == '\r'
             out.c(' ')
@@ -203,19 +203,18 @@ priv fn code_into(out: Str_builder$@, text: U8[]) //< writes inline code
     //< CommonMark drops one space where both ends have one, so the shown text does not grow.
     n: = fence_for(text)
     pad: = text.len > 0 && (text[0] == '`' || text[text.len - 1] == '`')
-    for $k: Sz = 0; k < n; k += 1
+    for _k in Range.asc(n)
         out.c('`')
     if pad
         out.c(' ')
     out.s(text)
     if pad
         out.c(' ')
-    for $k: Sz = 0; k < n; k += 1
+    for _k in Range.asc(n)
         out.c('`')
 
 priv fn tricky_dest(url: U8[]): Bool //< whether the link needs a fence
-    for $i: Sz = 0; i < url.len; i += 1
-        c: = url[i]
+    for c in url
         if c == ' ' || c == '(' || c == ')' || c == '<' || c == '>'
             return true
     return false
@@ -227,8 +226,7 @@ priv fn dest_into(out: Str_builder$@, url: U8[]) //< writes the link's target
         out.s(url)
         return
     out.c('<')
-    for $i: Sz = 0; i < url.len; i += 1
-        c: = url[i]
+    for c in url
         if c == '<' || c == '>' || c == '\\'
             out.c('\\')
         out.c(c)
@@ -359,7 +357,7 @@ priv fn keep_closing(s: Sink$@, from: Sz) //< keeps the `#`s ending a heading's 
     hashes: = end - k
     s.out.len = k
     s.out.c('\\')
-    for $i: Sz = 0; i < tail; i += 1
+    for i in Range.asc(tail)
         s.out.c('#' if i < hashes else ' ')
 
 priv fn write_mark(s: Sink$@, st: Style$@, b: Block$@, ord: Sz, head: Bool): Bool //<
@@ -370,7 +368,7 @@ priv fn write_mark(s: Sink$@, st: Style$@, b: Block$@, ord: Sz, head: Bool): Boo
     //< and a heading's chapter number.
     if st == null
         return false
-    $mk: = Str_builder.new()
+    defer $mk: = Str_builder.new()
     no: = number.serial_number(s.serials, b) if st.marker.serialed() else ord
     if st.marker.outlined()
         marker.mark_outline_into(mk@, st.marker, number.heading_number(s.heads, b))
@@ -435,9 +433,9 @@ priv fn fence_len(blocks: List<|Block$@|>$@, from: Sz, end: Sz): Sz //< the fenc
     $most: Sz = 0
     for $i: Sz = from; i < end; i += 1
         b: = blocks.get(i)
-        for $k: Sz = 0; k < b.inlines.len; k += 1
+        for elem in b.inlines
             $run: Sz = 0
-            for c in b.inlines.get(k).showing()
+            for c in elem.showing()
                 run = run + 1 if c == '`' else 0
                 if run > most
                     most = run
@@ -475,8 +473,7 @@ priv fn write_fence(s: Sink$@, blocks: List<|Block$@|>$@, from: Sz, depth: Sz): 
 priv fn cell_into(s: Sink$@, tiles: List<|Tile|>$@, row: Sz, column: Sz) //<
     //< Writes the cell at row `row`, column `column`
     //< A covered cell is empty (only the top-left cell of a merge holds a text).
-    for $i: Sz = 0; i < tiles.len; i += 1
-        one: = tiles.get(i)
+    for one in tiles
         if one.row == row && one.column == column && one.block != null
             runs_into(s, one.block, false, true)
             return
@@ -491,8 +488,7 @@ priv fn table_notices(s: Sink$@, b: Block$@, tiles: List<|Tile|>$@) //<
         notice(s, "a table's name", b.name)
     $merged: = false
     $nested: = false
-    for $i: Sz = 0; i < tiles.len; i += 1
-        one: = tiles.get(i)
+    for one in tiles
         if one.rows > 1 || one.cols > 1
             merged = true
         if one.block != null && one.block.children.len > 0
@@ -506,8 +502,7 @@ priv fn align_of(s: Sink$@, tiles: List<|Tile|>$@, column: Sz): style.Align //<
     //< That column's alignment
     //< There is one per column, set by the first row's cell ("any row holding one" would let one
     //< added row change the whole column). Left is the default, written `---`.
-    for $i: Sz = 0; i < tiles.len; i += 1
-        one: = tiles.get(i)
+    for one in tiles
         if one.row != 0 || one.column != column || one.block == null
             continue
         if st: = s.sheet.find(one.block.style)
@@ -538,10 +533,10 @@ priv fn write_table(s: Sink$@, b: Block$@, depth: Sz) //< writes one table
     tiles: = b.tiles_of(s.arena)
     table_notices(s, b, tiles)
     start_block(s, 0)
-    for $r: Sz = 0; r < b.children.len; r += 1
+    for r in Range.asc(b.children.len)
         lead_in(s, depth)
         s.out.c('|')
-        for $c: Sz = 0; c < cols; c += 1
+        for c in Range.asc(cols)
             s.out.c(' ')
             cell_into(s, tiles, r, c)
             s.out.s(" |")
@@ -550,7 +545,7 @@ priv fn write_table(s: Sink$@, b: Block$@, depth: Sz) //< writes one table
             continue
         lead_in(s, depth)
         s.out.c('|')
-        for $c: Sz = 0; c < cols; c += 1
+        for c in Range.asc(cols)
             rule_into(s, align_of(s, tiles, c))
         s.out.c('\n')
 
@@ -612,7 +607,7 @@ priv fn write_block(s: Sink$@, b: Block$@, depth: Sz, ord: Sz) //< writes one bl
     if level > 0
         // The depth stops at six (Markdown has nothing deeper).
         hashes: = math.min(level, 6)
-        for $i: Sz = 0; i < hashes; i += 1
+        for _i in Range.asc(hashes)
             s.out.c('#')
         s.out.c(' ')
         titled = s.out.len
@@ -657,8 +652,7 @@ fn write(d: Doc$@, sheet: Sheet$@, out: Str_builder$@) //< writes a document as 
     //< contents are needed too). **What the writing gathers goes in an arena of its own, thrown
     //< away at the end.** In the document's arena, every export would grow it for good. Only a
     //< reference's shown number goes in the document's (`Inline.shown` keeps it).
-    scratch: = Arena.new(16 * 1024)
-    defer scratch.free()
+    defer scratch: = Arena.new(16 * 1024)
     heads: = List<|number.Heading|>.create(scratch)
     notes: = List<|number.Note|>.create(scratch)
     serials: = List<|number.Serial|>.create(scratch)

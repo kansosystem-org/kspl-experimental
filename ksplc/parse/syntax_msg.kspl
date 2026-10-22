@@ -100,8 +100,8 @@ priv fn forbidden_spelling_hint(src: U8[], pos: Sz): U8[] //<
             type. No type name follows it."
     // The range syntax `a..b` / the slice syntax `a[i..j]`: the failure lands on the second `.`.
     if pos >= 1 && pos < src.len && src[pos] == '.' && src[pos - 1] == '.'
-        return "\n  Note: KSPL has no range syntax ('a..b'). Write the bounds in the loop header \
-            ('for $i: = a; i < b; i += 1'). Use 'x.sub(start, len)' for a sub-slice."
+        return "\n  Note: KSPL has no range syntax ('a..b'). Count with 'for i in Range.new(a, b, \
+            1)' ('Range.asc(b)' from 0). Use 'x.sub(start, len)' for a sub-slice."
     prev: = skip_space_back(src, pos)
     // A trailing closure (`count_over(xs) fn(x: I32; ): Bool`, Swift's and Kotlin's shape). Nothing
     // in KSPL puts a `fn` right after a call's `)`, so the failure lands on the `fn`.
@@ -117,6 +117,17 @@ priv fn forbidden_spelling_hint(src: U8[], pos: Sz): U8[] //<
         return "\n  Note: 'if' as an expression needs all three parts ('a if cond else b'). KSPL \
             has no postfix condition ('x if cond'). To branch without a value, write 'if cond { ... \
             }' first."
+    // A second name in one declaration, or a second init or step in a loop's header (C's
+    // `for (i = 0, j = n; …; i++, j--)`). Each part takes one, so the failure lands on the `,`.
+    if pos < src.len && src[pos] == ','
+        if note: = one_per_part_note(src, pos)
+            return note
+    // A rename inside an import's braces (`import "p" { A as B }`), Python's and JS's shape.
+    if src.starts_with("as", pos) && word_end(src, pos) == pos + 2 &&
+        enclosing_block_head(src, pos).equals("import")
+        return "\n  Note: a name in an import's braces keeps its name. To use another name, import \
+            the file under one ('import \"p\" as p') and write 'p.A'. A type can also get a second \
+            name with 'typedef B = A'."
     // An enum's values separated by `,`. **The expected set alone does not make it clear**: its
     // `';'` does not read as "a `;`, not a `,`".
     if pos < src.len && src[pos] == ',' && enclosing_block_head(src, pos).equals("enum")
@@ -124,6 +135,37 @@ priv fn forbidden_spelling_hint(src: U8[], pos: Sz): U8[] //<
             values with ';'. Use ',' only between fields inside a payload ('mid(level: I32, tone: \
             U8)')."
     return ""
+
+priv fn one_per_part_note(src: U8[], comma: Sz): U8[]? //<
+    //< The note for a `,` after a declaration, or in a loop's init or step, or none
+    //< A step is the part after the header's second `;`, so the part before it is looked at too.
+    start: = statement_start(src, comma)
+    if loop_header_at(src, start)
+        return .some("\n  Note: a loop's header takes one declaration and one step. Declare a \
+            second variable before the loop, and change it in the body.")
+    if start >= 1 && src[start - 1] == ';'
+        cond_start: = statement_start(src, start - 1)
+        if cond_start >= 1 && src[cond_start - 1] == ';' &&
+            loop_header_at(src, statement_start(src, cond_start - 1))
+            return .some("\n  Note: a loop's header takes one declaration and one step. Change a \
+                second variable in the body.")
+    if declared_name(src, start).len > 0
+        return .some("\n  Note: a declaration names one variable. Write each one in a declaration \
+            of its own.")
+    return .none
+
+priv fn loop_header_at(src: U8[], at: Sz): Bool //<
+    //< Whether the statement at `at` begins with `for`, a label allowed in front
+    $s: = at
+    for s < src.len &&
+        (src[s] == ' ' || src[s] == '\t' || src[s] == '\n' || src[s] == '\r')
+        s += 1
+    code: = code_line(src, s).code
+    if starts_with_word(code, "for")
+        return true
+    if colon: = code.find_char(':')
+        return starts_with_word(code.sub_from(colon + 1).trim_start(), "for")
+    return false
 
 priv fn is_switch_head(src: U8[], from: Sz, to: Sz): Bool //<
     //< Whether the line's text up to `to` is a `switch` and its subject alone, a label allowed
@@ -278,8 +320,9 @@ priv fn append_split_value_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool //
 
 priv fn append_trailing_defer_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool //<
     //< It writes the sentence saying a `defer` must start its own statement, where it fails on one
-    //< The sentence includes the line to write: the call as written, or, for a bare call, with the
-    //< declared name in front.
+    //< The sentence includes the line to write. A bare `.free()` behind a declaration gets the
+    //< prefix form (`defer buf: = …`). Another call gets the next line, with the declared name in
+    //< front of a bare call.
     //<
     //< A `defer` that starts a statement parses, so failing on one means it follows another
     //< (`buf: = Str_builder.new() defer .free()`, or after the `}` of a `catch` block).
@@ -288,7 +331,9 @@ priv fn append_trailing_defer_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool
     name: = declared_name(src, statement_start(src, pos))
     call: = code_line(src, pos + 5).code
     msg.s("\n  Note: a 'defer' must start a separate statement. ")
-    if name.len > 0 && call.starts_with(".")
+    if name.len > 0 && call.starts_with(".free()")
+        msg.s("Put 'defer' in front of the declaration instead: 'defer ").s(name).s(": = …'.")
+    else if name.len > 0 && call.starts_with(".")
         msg.s("Put 'defer ").s(name).s(call).s("' on the next line.")
     else if call.len > 0 && !call.starts_with(".")
         msg.s("Put 'defer ").s(call).s("' on the next line.")
@@ -434,9 +479,9 @@ priv fn append_unclosed_bracket_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bo
         return false
     closer: = ')' if src[at] == '(' else ']'
     if pos < src.len && (src[pos] == ')' || src[pos] == ']') && src[pos] != closer
-        msg.s("\n  Note: this '").c(src[pos]).s("' cannot close the '").c(src[at]).s("' at ")
+        msg.s("\n  Note: this '\{src[pos]:c\}' cannot close the '\{src[at]:c\}' at ")
         append_place(msg, src, at)
-        msg.s(". Only a '").c(closer).s("' can close it.")
+        msg.s(". Only a '\{closer:c\}' can close it.")
         return true
     $depth: Sz = 0
     $j: = pos
@@ -451,7 +496,7 @@ priv fn append_unclosed_bracket_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bo
                 break
             depth -= 1
         j = text_step(src, j)
-    msg.s("\n  Note: the '").c(src[at]).s("' at ")
+    msg.s("\n  Note: the '\{src[at]:c\}' at ")
     append_place(msg, src, at)
     msg
         .s(" is never closed. What follows it was read as its contents. Close it where its contents \

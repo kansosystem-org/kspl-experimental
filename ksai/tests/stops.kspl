@@ -46,6 +46,19 @@ fn tensor_shape_product_overflow(arena: Arena$@)
     io.out().s("must not get here: size=\{t.size\}\n")
 
 // ==========================================
+// tensor-add-shape-mismatch: `a + b` on tensors of different sizes must stop, not add part of them.
+// The operator is the one way to add tensors, and an operator cannot return an error.
+// ==========================================
+fn tensor_add_shape_mismatch(arena: Arena$@)
+    a_shape: Sz[1] = ::{ 3 }
+    b_shape: Sz[1] = ::{ 5 }
+    a: = Tensor<|F32|>.new(Sz[]::a_shape, arena)
+    b: = Tensor<|F32|>.new(Sz[]::b_shape, arena)
+    io.out().s("about to add \{a.size\} and \{b.size\} elements\n")
+    sum: = a + b
+    io.out().s("must not get here: size=\{sum.size\}\n")
+
+// ==========================================
 // updater-weight-count: a step that gives the Updater fewer weights than the first step must stop.
 // **Otherwise the states shift**: the weights after the missing one would be moved by other
 // weights' states, and training would go on, silently wrong.
@@ -56,8 +69,7 @@ fn updater_weight_count(arena: Arena$@)
     g: = Tensor<|F32|>.new(Sz[]::shape, arena)
     w.fill(1.0)
     g.fill(0.5)
-    $u: = optim.Updater<|F32|>.adam(0.1)
-    defer u.free()
+    defer $u: = optim.Updater<|F32|>.adam(0.1)
     u.begin_step()
     u.update(w, g)
     u.update(w, g)
@@ -101,8 +113,7 @@ fn grad_small_out(arena: Arena$@)
 fn main(): I32
     argv: = sys.args()
     which: = argv.get(1) if argv.len == 2 else ""
-    arena: = Arena.new(1024 * 1024)
-    defer arena.free()
+    defer arena: = Arena.new(1024 * 1024)
     if which.equals("tensor-null-arena")
         shape: Sz[2] = ::{ 1, 1 }
         _t: = Tensor<|F32|>.new(Sz[]::shape, null)
@@ -134,6 +145,8 @@ fn main(): I32
         io.out().s("must not get here: size=\{t.size\}\n")
     else if which.equals("tensor-shape-product-overflow")
         tensor_shape_product_overflow(arena)
+    else if which.equals("tensor-add-shape-mismatch")
+        tensor_add_shape_mismatch(arena)
     else if which.equals("updater-weight-count")
         updater_weight_count(arena)
     else if which.equals("gqa-uneven-heads")
@@ -149,7 +162,7 @@ fn main(): I32
     else
         // **An unknown name must not pass**: it says no reason, so its check fails.
         io.err().s("usage: stops <which>, one of: argmax-empty-logits\n")
-            .s("  tensor-shape-product-overflow updater-weight-count gqa-uneven-heads\n")
-            .s("  gqa-odd-head-dim gqa-several-rows grad-small-out\n")
+            .s("  tensor-shape-product-overflow tensor-add-shape-mismatch updater-weight-count\n")
+            .s("  gqa-uneven-heads\n").s("  gqa-odd-head-dim gqa-several-rows grad-small-out\n")
         return 2
     return 0

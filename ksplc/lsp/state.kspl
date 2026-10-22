@@ -23,13 +23,6 @@ struct Doc_state //< one analysis: a document's own, or the workspace's for one 
     src_perm: U8[]
     mod_name_perm: U8$[]
 
-impl Doc_state
-    fn free(r: Self$@)
-        if r.sema != null
-            r.sema.free()
-        if r.source_map != null
-            r.source_map.free()
-
 struct Doc_cache //< one open document's text
     //< **An entry is not removed even on didClose**, or the store would have to own and free the
     //< uri key itself. is_open says it is closed; the memory is bounded by the distinct uris
@@ -51,12 +44,6 @@ impl Doc_store
     fn new(): Doc_store
         a: = Arena.new(1024 * 1024)
         return Doc_store::{ .map = a.create(Map<|U8[], Doc_cache$@|>.new(a)), .arena = a }
-
-    fn free(r: Self$@)
-        // Caution: Free the buffers before the arena, which holds the entries and their ptr.
-        for e in r.map.items()
-            e.value.text.free()
-        r.arena.free()
 
     fn put(r: Self$@, uri: U8[], text: U8[]) //< it stores `text` as the document's, reopening it
         existing: = r.map.get(uri).unwrap_or(null)
@@ -113,11 +100,6 @@ impl Server
             .base_arena_state = base_core.arena.save() }
         return s
 
-    fn free(r: Self$@)
-        r.docs.free()
-        r.reset_current_state()
-        dealloc(Void$@::r)
-
     fn reset_current_state(r: Self$@)
         if r.latest_state != null
             r.latest_state.free()
@@ -126,6 +108,20 @@ impl Server
 
 // It owns memory and releases it with `free()` (why it must conform: `Manual_free` in
 // std/lang.kspl).
-impl Doc_state: Manual_free {}
-impl Doc_store: Manual_free {}
-impl Server: Manual_free {}
+impl Doc_state: Manual_free
+    fn free(r: Self$@)
+        if r.sema != null
+            r.sema.free()
+        if r.source_map != null
+            r.source_map.free()
+impl Doc_store: Manual_free
+    fn free(r: Self$@)
+        // Caution: Free the buffers before the arena, which holds the entries and their ptr.
+        for e in r.map.items()
+            e.value.text.free()
+        r.arena.free()
+impl Server: Manual_free
+    fn free(r: Self$@)
+        r.docs.free()
+        r.reset_current_state()
+        dealloc(Void$@::r)

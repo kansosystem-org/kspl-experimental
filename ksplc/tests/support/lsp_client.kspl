@@ -13,8 +13,8 @@ import "std/ds" { List }
 import "std/json" + { Json_builder }
 import "std/mem" { Arena }
 import "std/str" + { Str_builder }
-import "std/strfmt"
 import "std/subproc"
+import "std/url"
 
 pub const READ_MS: I32 = 15000 //< how long the answer to a request that walks no files may take
 
@@ -52,17 +52,13 @@ pub fn uri_of(top: U8[], rel: U8[], arena: Arena$@): U8[] //<
 pub fn encoded_uri_of(top: U8[], rel: U8[], arena: Arena$@): U8[] //<
     //< The `file://` URI of `rel` under `top` as an editor writes it: `/` before a drive, a space
     //< and a Japanese letter as `%XX`
-    //< **The server answers in the form it was asked** (`spell_uri_path` in
-    //< `../../base/locate.kspl`), so this escapes what it escapes, and no more.
     path: = arena.text().s(slashed(top, arena)).c('/').s(rel).take()
     out: = arena.text().s("file://")
     if !path.starts_with("/")
         out.c('/')
-    for c in path
-        if c <= ' ' || c >= 0x7F || c == '%' || c == '#' || c == '?'
-            out.c('%').c((c >> 4).to_hex_upper()).c((c & 15U8).to_hex_upper())
-        else
-            out.c(c)
+    // Use the general URL encoder, not a copy of the server's escaping loop.
+    out
+        .s(url.encode(path, arena).replace("%2F", "/", arena).replace("%3A", ":", arena))
     return out.take()
 
 pub fn rel_of(top: U8[], uri: U8[], arena: Arena$@): U8[] //<
@@ -137,7 +133,7 @@ pub fn why(c: jsonrpc_client.Client$@, msg: U8[], arena: Arena$@): U8[] //<
     return arena.text().s(msg).s(" | supervisor: ").s(c.err_tail()).take()
 
 pub fn dump(v: json.Value, arena: Arena$@): U8[] //< `v` as JSON text, cut to 300 bytes
-    $b: = Str_builder.new()
+    defer $b: = Str_builder.new()
     v.dump(b@)
     text: = b.slice()
     keep: = 300

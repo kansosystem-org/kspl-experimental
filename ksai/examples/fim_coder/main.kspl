@@ -91,8 +91,7 @@ priv fn head(text: U8[]): U8[] //< the suffix's start, where the hole ends
 
 priv fn base_vocab(at: Paths): Sz //< how many words the tokenizer has: its highest id, plus one
     //< Read through `Tokenizer.load`, which refuses a broken line rather than reading it as 0.
-    scratch: = Arena.new(1024 * 1024)
-    defer scratch.free()
+    defer scratch: = Arena.new(1024 * 1024)
     tok: = load_tokenizer(at, scratch)
     $top: Sz = 0
     for entry in tok.vocab.items()
@@ -140,8 +139,7 @@ priv fn encode_corpus(corpus: U8[], at: Paths, ids: Fim_ids, keep: Arena$@): Enc
     //< Every training example made a sequence, once
     //< **The tokenizer and every list it encodes live on `scratch`**, freed here: only `out`, on
     //< `keep`, outlives the call.
-    scratch: = Arena.new(64 * 1024 * 1024)
-    defer scratch.free()
+    defer scratch: = Arena.new(64 * 1024 * 1024)
     $tok: = load_tokenizer(at, scratch)
     recs: = read_jsonl(corpus, scratch)
     $out: = Encoded::{ .tokens = List<|I32|>.new(keep), .starts = List<|Sz|>.new(keep) }
@@ -185,8 +183,7 @@ priv fn train(corpus: U8[], at: Paths, plan: Schedule, u: ai_optim.Updater<|F32|
         //< **The thread count changes only the time.** The sequences are drawn on this thread.
         //< Their gradients are summed in the order drawn, whichever thread computed each.
     began: = sys.mono_us()
-    model_arena: = Arena.new(64 * 1024 * 1024)
-    defer model_arena.free()
+    defer model_arena: = Arena.new(64 * 1024 * 1024)
     base: = base_vocab(at)
     ids: = fim_ids(base)
     data: = encode_corpus(corpus, at, ids, model_arena)
@@ -201,8 +198,7 @@ priv fn train(corpus: U8[], at: Paths, plan: Schedule, u: ai_optim.Updater<|F32|
     $model: = new_model(base + FIM_MARKERS, model_arena)
     $rng: = prng.Prng.new(seed)
     model.randomize(rng@)
-    work: = Arena.new(64 * 1024 * 1024)
-    defer work.free()
+    defer work: = Arena.new(64 * 1024 * 1024)
     $batch: = Batch::{ .model = model@ }
     threads: = math.min(plan.threads, plan.batch)
     $workers: = List<|Worker|>.new(model_arena)
@@ -268,8 +264,7 @@ priv fn held_out_loss(corpus: U8[], at: Paths, weights: U8[], most: Sz) //<
     //< **The loss `train` prints is on its own training data.** This one shows whether it learned
     //< the language or just the examples. **Only the middle's loss measures the task.** The whole
     //< is mostly the prefix and the suffix, which a hole filler is given, not asked to write.
-    model_arena: = Arena.new(64 * 1024 * 1024)
-    defer model_arena.free()
+    defer model_arena: = Arena.new(64 * 1024 * 1024)
     base: = base_vocab(at)
     ids: = fim_ids(base)
     $model: = new_model(base + FIM_MARKERS, model_arena)
@@ -281,8 +276,7 @@ priv fn held_out_loss(corpus: U8[], at: Paths, weights: U8[], most: Sz) //<
         io.err().s("[error] \{weights\} does not fit the model's shape\n")
         sys.exit(1)
     data: = encode_corpus(corpus, at, ids, model_arena)
-    work: = Arena.new(64 * 1024 * 1024)
-    defer work.free()
+    defer work: = Arena.new(64 * 1024 * 1024)
     $whole: = 0.0
     $middle: = 0.0
     $count: Sz = 0
@@ -320,7 +314,7 @@ priv fn candidates(model: ai_model.Mini_llama<|F32|>$@, tok: ai_tokenizer.Tokeni
         //< over first.
     $out: = List<|U8[]|>.new(work)
     $last: Tensor<|F32|> = model.forward(prompt[0], 0, work)
-    for $i: Sz = 1; i < prompt.len; i += 1
+    for i in Range.new(1, prompt.len, 1)
         last = model.forward(prompt[i], i, work)
     drawn: = ai_sampler.Sample_config::{ .temperature = 0.8, .top_k = 40, .top_p = 0.95 }
     for s in Range.asc(samples)
@@ -342,8 +336,7 @@ priv fn candidates(model: ai_model.Mini_llama<|F32|>$@, tok: ai_tokenizer.Tokeni
 
 priv fn complete(at: Paths, weights: U8[], in_path: U8[], out_path: U8[], samples: Sz, seed: U64) //<
     //< Answers each hole of `in_path` (`{"prefix", "suffix"}` a line) with `{"candidates": [...]}`
-    model_arena: = Arena.new(64 * 1024 * 1024)
-    defer model_arena.free()
+    defer model_arena: = Arena.new(64 * 1024 * 1024)
     base: = base_vocab(at)
     ids: = fim_ids(base)
     $tok: = load_tokenizer(at, model_arena)
@@ -357,9 +350,8 @@ priv fn complete(at: Paths, weights: U8[], in_path: U8[], out_path: U8[], sample
         sys.exit(1)
     holes: = read_jsonl(in_path, model_arena)
     $rng: = prng.Prng.new(seed)
-    work: = Arena.new(64 * 1024 * 1024)
-    defer work.free()
-    $text: = Str_builder.new()
+    defer work: = Arena.new(64 * 1024 * 1024)
+    defer $text: = Str_builder.new()
     for hole in holes
         pre: = tok.encode(tail(hole.get("prefix").as_str().unwrap_or("")), work)
         suf: = tok.encode(head(hole.get("suffix").as_str().unwrap_or("")), work)
@@ -379,8 +371,7 @@ priv fn complete(at: Paths, weights: U8[], in_path: U8[], out_path: U8[], sample
 fn main()
     // Flush line by line, so a long `train` shows its loss as it goes rather than at the end.
     io.set_line_buffered()
-    arena: = Arena.new(1024 * 1024)
-    defer arena.free()
+    defer arena: = Arena.new(1024 * 1024)
     $steps: I64 = 3000
     $optimizer: U8[] = "adam"
     $lr: U8[] = ""
@@ -413,7 +404,7 @@ fn main()
     p.int_opt("--seed", seed@, "where the randomness starts (1)")
     $most: I64 = 1000
     p.int_opt("--most", most@, "loss: how many examples are measured (1000)")
-    p.parse_or_exit(sys.args(), arena)
+    p.parse_or_exit()
     for n in I64[]::{ steps, batch, threads, samples, seed, most }
         if n < 0
             io.err().s("--steps, --batch, --threads, --samples, --seed, --most: expected no ")

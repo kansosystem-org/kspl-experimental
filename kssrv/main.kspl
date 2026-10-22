@@ -675,7 +675,7 @@ priv fn read_args(o: Options$@, lg: Log$@, arena: Arena$@): I32 //<
     // `../docs/SPEC-local-server.md`).
     cli.int_opt("--idle", idle_s@,
         "stop once no page has held it this many seconds (absent: stay up)")
-    cli.parse_or_exit(sys.args(), arena)
+    cli.parse_or_exit()
     if cli.rest.len != 2
         cli.print_usage(io.err())
         return 2
@@ -748,8 +748,7 @@ fn main(): I32
     // through it. `done` on the way out closes any open line and flushes it.
     $lg: = log_new()
     defer lg.done()
-    arg_arena: = Arena.new(4 * 1024)
-    defer arg_arena.free()
+    defer arg_arena: = Arena.new(4 * 1024)
     $o: Options = ::{}
     failed: = read_args(o@, lg@, arg_arena)
     if failed != 0
@@ -765,16 +764,15 @@ fn main(): I32
         token = U8[]::{ .ptr = token_buf@, .len = TOKEN_BYTES * 2 }
 
     host: = LOCAL_HOST if o.local else ANY_HOST
-    listener: = listen(host, o.port, lg@) catch
+    defer listener: = listen(host, o.port, lg@) catch
         return 1
-    defer listener.free()
     // **Ask the listener for its port**: for a 0, only it knows the one the system chose.
     port: = listener.port() catch e
         if ln: = lg.at(.error)
             ln.s("cannot read the port it listens on: \{e\}")
         return 1
 
-    $r: = reactor.Reactor.new()
+    defer $r: = reactor.Reactor.new()
     // Zero-initialized: a free slot is an ARC handle's zero value, which the release at scope exit
     // treats as owning nothing.
     $table: conn.Conn_table = ::{}

@@ -10,8 +10,10 @@ import "ksplc/base/diag" as base_diag
 import "ksplc/base/literal" as base_literal
 import "ksplc/sema/body/analyze" as sema_body_analyze
 import "ksplc/sema/body/coerce" as _sema_body_coerce
+import "ksplc/sema/body/defer_decl" as sema_body_defer_decl
 import "ksplc/sema/body/expr" as sema_body_expr
 import "ksplc/sema/body/for_in" as sema_body_for_in
+import "ksplc/sema/body/lint_free" as sema_body_lint_free
 import "ksplc/sema/body/lint_stmt" as sema_body_lint_stmt
 import "ksplc/sema/body/lint_written" as sema_body_lint_written
 import "ksplc/sema/body/stmt" as sema_body_stmt
@@ -122,9 +124,8 @@ priv fn implicit_cleanup_method(c: Sema_ctx$@, node: Ast_node$@): Bool //<
     if p: = params.next()
         owner: = c.env.strip_ptr_full(p.param_type_id())
         name: = c.env.source_fn_name(node)
-        return (c.env.is_arc_type(owner) &&
-            (name.equals("retain") || name.equals("release"))) ||
-            (c.env.is_drop_type(owner) && name.equals("drop"))
+        return c.env.is_arc_type(owner) &&
+            (name.equals("retain") || name.equals("release"))
     return false
 
 priv fn infer_pending_bodies(c: Sema_ctx$@, checked: Map<|Sz, Bool|>$@): Bool //<
@@ -274,8 +275,6 @@ fn run(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error
 impl Ast_node
     priv fn infer_global(r: Self$@, c: Sema_ctx$@): Void!Sema_error //<
         //< It checks a file-scope `var` or `const` and its initializer
-        if c.env.type_has_drop(r.type_id)
-            c.err(r, "an automatic owner cannot be a global; keep its lifetime inside a function")
         expr_node: = r.get_var_decl_expr()
         if expr_node == null || expr_node.kind_id == .k_empty
             return
@@ -422,12 +421,12 @@ impl Ast_node
         //< A body whose function returns nothing gets the `return` its writer left out.
         block.infer_stmts(c) catch
             return false
+        // A value that its `defer` frees, handed over all the same.
+        sema_body_defer_decl.refuse_handover(c, block)
         // [W0105] A lock's borrow used outside the lock (lint only).
         sema_body_lint_stmt.lint_lock_escape(c, block)
-        // [W0109] A way out between a `Manual_free` value's binding and the `defer` freeing it.
-        sema_body_lint_stmt.lint_defer_gap(c, block)
-        // [I0311] An explicit free of a local that frees itself, just before its own cleanup.
-        sema_body_lint_stmt.lint_self_free(c, block)
+        // [W0109] A value made here and left unfreed on some way out; [H0303] its two-line free.
+        sema_body_lint_free.lint_unfreed(c, block)
         if r.has_attribute("naked") && !block.holds_only_asm(c)
             return false
         if c.has_error_in_fn()

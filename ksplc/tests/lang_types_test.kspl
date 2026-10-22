@@ -145,7 +145,7 @@ fn test_enum_variant_name()
     assert(b_name.equals("beta"), "variant_name: it returns the name alone with a payload too")
     assert(g.variant_name().equals("gamma"), "variant_name: the third variant")
 
-    $sb: = Str_builder.new()
+    defer $sb: = Str_builder.new()
     sb.s("\{a\}/\{b\}")
     assert(sb.slice().equals("alpha/beta"), "interpolation goes through variant_name")
 
@@ -224,7 +224,7 @@ fn test_alias_element_acts_as_its_base() //<
     //< The interpolation then reports "does not implement 'Formattable'".
     verdict.start("[Alias] an alias read out of an immutable slice acts as its base type test...")
     ms: = Meters[]::{ 3, 4 }
-    $b: = Str_builder.new()
+    defer $b: = Str_builder.new()
     b.s("\{ms[0]\} \{-ms[1]\} \{ms[0] < ms[1]\}")
     assert(b.slice().equals("3 -4 true"), "an element formats, negates and compares as an I32")
     verdict.pass("an alias's element peels to its base however the marks and the alias stack.")
@@ -367,7 +367,7 @@ priv fn defer_sees_value_at_scope_exit(): Sz
 priv fn defer_frees_grown_buffer() //<
     //< It checks a deferred free releases the builder's buffer after it has grown
     //< A frozen copy with `cap == 0` would leak the whole buffer.
-    $b: = Str_builder.new()
+    defer $b: = Str_builder.new()
     for _i in Range.asc(200)
         b.s("0123456789")
     assert(b.slice().len == 2000, "the builder must actually hold the appended bytes")
@@ -415,18 +415,6 @@ impl Up_sq: Up_shape
 priv trait Up_shape
     fn area(r: Self): I32
 
-priv struct Up_bare //<
-    //< The shape with the methods in the inherent impl and the conforming impl left empty
-    //< **A vtable is built from the target type's method table.** Treat an empty conformance as
-    //< unused and the C references a vtable that is never emitted.
-    n: I32
-
-impl Up_bare
-    fn area(r: Self$@): I32
-        return r.n + 1
-
-impl Up_bare: Up_shape {}
-
 priv $up_global: Up_sq = ::{ .n = 3 }
 
 priv fn up_from_global(): Up_shape
@@ -468,22 +456,11 @@ fn test_trait_upcast_lifetimes()
 
     verdict.pass("")
 
-fn test_trait_upcast_from_empty_conformance() //<
+fn test_trait_upcast_ignores_constness() //<
     //< The vtable an upcast names is the same one whatever the receiver's immutable qualifier
     //< Caution: **Always include the `@` of an immutable binding.** It is `T immut@`, so stripping
     //< that leaves one level of qualifier passes the mutable-binding and value-only checks and
     //< fails only here.
-    verdict.start("[trait] an upcast works even with an empty conforming impl test...")
-
-    $b: Up_bare = ::{ .n = 41 }
-    s: Up_shape = b@
-    assert(s.area() == 42, "an empty conformance impl must still produce a vtable")
-
-    verdict
-        .pass("a type satisfying a conformance with inherent methods can be raised to a trait value \
-            too.")
-
-fn test_trait_upcast_ignores_constness()
     verdict.start("[trait] the same vtable is named whatever the immutable qualifier test...")
 
     immut: Up_sq = ::{ .n = 7 }

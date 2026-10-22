@@ -44,8 +44,7 @@ priv fn joined_text(b: Block$@, arena: Arena$@): U8[] //< one block's texts join
 fn collect_notes(b: Block$@, out: List<|Note|>$@) //< collects the notes in document order
     //< Caution: **Walk the nesting too** (a note inside a cell is a note as well).
     //< **The position in the list is the number itself**, so the mark and the list cannot drift.
-    for $i: Sz = 0; i < b.inlines.len; i += 1
-        n: = b.inlines.get(i)
+    for n in b.inlines
         if n.note.len > 0
             out.push(Note::{ .text = n.note, .from = n })
     for $i: Sz = 0; i < b.children.len; i += 1
@@ -54,7 +53,7 @@ fn collect_notes(b: Block$@, out: List<|Note|>$@) //< collects the notes in docu
 fn note_number(notes: List<|Note|>$@, n: Inline$@): Sz //< the number of n's note
     //< **0 where there is none.**
     //< **The counting happens in this one place** (the reason is at `serial_number`).
-    for $i: Sz = 0; i < notes.len; i += 1
+    for i in Range.asc(notes.len)
         if notes.get(i).from == n
             return i + 1
     return 0
@@ -84,8 +83,8 @@ fn number_headings(heads: List<|Heading|>$@, sheet: Sheet$@, arena: Arena$@) //<
     //< no number text (its mark is not `Marker.outline`). Stop counting at the mark, and depth 2
     //< comes out as "2" rather than "1.2".
     $counts: = List<|Sz|>.new(arena)
-    $sb: = Str_builder.new()
-    for $i: Sz = 0; i < heads.len; i += 1
+    defer $sb: = Str_builder.new()
+    for i in Range.asc(heads.len)
         h: = heads.get(i)
         if h.level <= 0
             continue
@@ -110,8 +109,7 @@ fn number_headings(heads: List<|Heading|>$@, sheet: Sheet$@, arena: Arena$@) //<
 fn heading_number(heads: List<|Heading|>$@, b: Block$@): U8[] //<
     //< b's chapter number, among the headings that have one
     //< **Empty where there is none.**
-    for $i: Sz = 0; i < heads.len; i += 1
-        h: = heads.get(i)
+    for h in heads
         if h.block == b
             return h.number
     return ""
@@ -132,8 +130,7 @@ fn serial_number(serials: List<|Serial|>$@, b: Block$@): Sz //<
     //< **The counting happens in this one place**, or a figure's number differs between the screen
     //< and the written Markdown.
     $no: Sz = 0
-    for $i: Sz = 0; i < serials.len; i += 1
-        one: = serials.get(i)
+    for one in serials
         if !one.style.equals(b.style)
             continue
         no += 1
@@ -158,8 +155,7 @@ fn refer_into(out: Str_builder$@, sheet: Sheet$@, serials: List<|Serial|>$@,
         if s: = sheet.find(one.style)
             return marker.refer_into(out, s.marker, no)
         return false
-    for $i: Sz = 0; i < heads.len; i += 1
-        h: = heads.get(i)
+    for h in heads
         if h.block.name.len <= 0 || !h.block.name.equals(name) || h.number.len <= 0
             continue
         out.s(h.number)
@@ -172,9 +168,8 @@ fn number_refs(b: Block$@, sheet: Sheet$@, serials: List<|Serial|>$@, heads: Lis
         //< Caution: **Call it after the formulas are computed and before layout**: called first, a
         //< reference's text is cleared (`show_free` in `expr/calc.kspl`). The text's arena is
         //< `Inline.shown`'s.
-    $sb: = Str_builder.new()
-    for $i: Sz = 0; i < b.inlines.len; i += 1
-        n: = b.inlines.get(i)
+    defer $sb: = Str_builder.new()
+    for n in b.inlines
         if n.refers.len <= 0
             continue
         sb.clear()

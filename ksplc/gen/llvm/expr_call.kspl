@@ -28,8 +28,8 @@ impl Genllvm_ctx
             r.trait_method_idx_cache.set(cache_key, idx_map)
         return idx_map.get(name).unwrap_or(-1)
 
-priv fn emit_llvm_intrinsic_call(cg: Genllvm_ctx$@, call_node: Ast_node$@,
-    intr: sema_body_call.Intrinsic, args_node: Ast_node$@): U8$[] //<
+priv fn emit_llvm_intrinsic_call(cg: Genllvm_ctx$@, intr: sema_body_call.Intrinsic,
+    args_node: Ast_node$@): U8$[] //<
         //< It turns compiler intrinsics, such as a volatile read or write, into LLVM instructions.
     arg1: = args_node.get_arg_at(0).unwrap_or(null) if args_node != null else null
     if intr == .read_volatile
@@ -54,25 +54,21 @@ priv fn emit_llvm_intrinsic_call(cg: Genllvm_ctx$@, call_node: Ast_node$@,
         cg.s("    store volatile ")
         cg.t(val_type).s(" ").s(val_reg).s(", ptr ").s(ptr_reg).s("\n")
         return base_core.arena.dup_str("0")
-    if intr == .asm_volatile
-        // It converts inline asm without operands (hlt / nop / wfi and the like) into an LLVM
-        // inline asm expression. A form with constrained operands cannot be converted mechanically
-        // into LLVM's constraint syntax, so sema rejects it for the LLVM target. Several template
-        // strings are joined with newlines.
-        cg.s("    call void asm sideeffect \"")
-        $first: = true
-        if args_node != null
-            for ch in args_node.children
-                if ch.kind_id != .k_string
-                    continue
-                if !first
-                    cg.s("\\0A")
-                cg.emit_llvm_str_body(ch.text)
-                first = false
-        cg.s("\", \"\"()\n")
-        return base_core.arena.dup_str("0")
-    // __kspl_inline_c embeds C source, which LLVM IR cannot hold: sema refuses it for this target.
-    call_node.ice_panic("Genllvm ICE: __kspl_inline_c reached genllvm")
+    // What is left is asm_volatile. It converts inline asm without operands (hlt / nop / wfi and
+    // the like) into an LLVM inline asm expression. A form with constrained operands cannot be
+    // converted mechanically into LLVM's constraint syntax, so sema rejects it for the LLVM target.
+    // Several template strings are joined with newlines.
+    cg.s("    call void asm sideeffect \"")
+    $first: = true
+    if args_node != null
+        for ch in args_node.children
+            if ch.kind_id != .k_string
+                continue
+            if !first
+                cg.s("\\0A")
+            cg.emit_llvm_str_body(ch.text)
+            first = false
+    cg.s("\", \"\"()\n")
     return base_core.arena.dup_str("0")
 
 // The callee's parameter type IDs in declaration order (receiver included); empty if unresolved.
@@ -155,7 +151,7 @@ impl Ast_node
         if !is_method && recv.kind_id == .k_identifier
             intr: = sema_body_call.intrinsic_of(recv.text)
             if intr != .not_intrinsic
-                return emit_llvm_intrinsic_call(cg, r, intr, args_node)
+                return emit_llvm_intrinsic_call(cg, intr, args_node)
 
         $callee_operand: = ""
         $obj_reg: = ""

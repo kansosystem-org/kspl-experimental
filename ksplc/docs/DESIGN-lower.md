@@ -20,17 +20,11 @@ Lower stands between Sema and the Genc/Genllvm layer. It flattens complex contro
 
 Lower keeps the backends as close to pure emitters as it can. So it also completes the complex transformations as an AST: desugaring a method call, dynamic dispatch, the ABI mangling.
 
-### Automatic owners share the cleanup stack
+### ARC values share the cleanup stack with `defer`
 
-`lower/drop.kspl` records which local slot still owns its value. A live flag belongs to the slot, without changing the resource's layout. Moving clears the source flag. Initialization sets it, and assignment destroys the old owner before restoring it. The cleanup stack tests that flag on every exit.
+**Type analysis and release emission walk the same owning positions.** These include fields, active enum payloads and fixed-length arrays. Pointers and slices borrow their targets. A `defer` and an ARC release are registered on one cleanup stack, so both run on every way out.
 
-An aggregate without a custom hook has flags for its automatic fields too. This permits moving one field while cleaning up the others. A custom hook requires a complete value, so semantic analysis forbids extracting or explicitly releasing its automatic fields. Temporaries inside branches declare their flags outside those branches, initially false.
-
-**Type analysis and cleanup emission walk the same owning positions.** These include fields, active enum payloads and fixed-length arrays. `Manual_free` keeps automatic fields under its manual cleanup contract. Pointers and slices borrow their targets.
-
-`std.mem.Raw_value` is private storage used by the memory helpers. It suppresses cleanup of bytes whose ownership is being transferred. Reading its contained value transfers ownership without an ARC retain. Ordinary live values still receive normal cleanup. Changing either classification requires changing `sema/type/arc.kspl` and `lower/arc.kspl` together.
-
-Explicit releases follow the semantic analyzer's contract. Lower snapshots parameter-release effects before rewriting bodies, so a wrapper's behavior does not depend on declaration order. A release runs before its owner's flag is cleared.
+`std.mem.Raw_value` is private storage used by the memory helpers. It suppresses the release of bytes whose ownership is being transferred. Reading its contained value transfers ownership without an ARC retain. Changing either classification requires changing `sema/type/arc.kspl` and `lower/arc.kspl` together.
 
 ### The internal flow: flatten, add vtables, mangle, prune, verify
 

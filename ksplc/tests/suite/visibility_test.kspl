@@ -53,6 +53,29 @@ priv const PUB_LIB: U8[] = //< a function, a generic type and a plain type, all 
         Plain { pub v: I32; }\n"
 
 priv const CASES: Case[] = Case[]::{
+    Case::{ .name = "a callable value shadowing a type is not a constructor call",
+        .extra_rels = U8[][]::{ "beta/main.kspl" },
+        .extra_bodies = U8[][]::{ "struct Built { n: I32; }\nfn value(): I32 { return 9; }\nfn \
+            main(): I32 { Built: = value; return Built(); }\n" }, .entry = "beta/main.kspl",
+        .expect = "" },
+    Case::{ .name = "pub constructor access is preserved by a type call",
+        .extra_rels = U8[][]::{ "alpha/deep/built.kspl", "beta/main.kspl" },
+        .extra_bodies = U8[][]::{ "pub struct Built { n: I32; }\nimpl Built { pub fn new(): I32 { \
+            return 7; } }\n",
+        "import \"alpha/deep/built\" as built\nfn main(): I32 { return built.Built(); }\n" },
+        .entry = "beta/main.kspl", .expect = "" },
+    Case::{ .name = "priv constructor access is preserved by a type call",
+        .extra_rels = U8[][]::{ "alpha/deep/built.kspl", "beta/main.kspl" },
+        .extra_bodies = U8[][]::{ "pub struct Built { n: I32; }\nimpl Built { priv fn new(): I32 { \
+            return 7; } }\n",
+        "import \"alpha/deep/built\" as built\nfn main(): I32 { return built.Built(); }\n" },
+        .entry = "beta/main.kspl", .expect = "cannot access symbol" },
+    Case::{ .name = "package constructor access is preserved by a type call",
+        .extra_rels = U8[][]::{ "alpha/deep/built.kspl", "beta/main.kspl" },
+        .extra_bodies = U8[][]::{ "pub struct Built { n: I32; }\nimpl Built {  fn new(): I32 { \
+            return 7; } }\n",
+        "import \"alpha/deep/built\" as built\nfn main(): I32 { return built.Built(); }\n" },
+        .entry = "beta/main.kspl", .expect = "cannot access symbol" },
     Case::{ .name = "unspecified is visible from another folder inside the same package",
         .extra_rels = U8[][]::{ "alpha/mid.kspl" },
         .extra_bodies = U8[][]::{ "import \"alpha/deep/lib\" as lib\npub fn touch(): I32 { return \
@@ -105,11 +128,6 @@ priv const CASES: Case[] = Case[]::{
         "pub fn pick<|T|>(a: T): T { return a; }\npub fn g(): I32 { return pick(1); }\n",
         "import \"alpha/deep/gen\" { pick }\nimport \"gamma/other\" as other\nfn main(): I32 { \
             return pick(1, 2) + other.g(); }\n" }, .entry = "beta/main.kspl", .expect = "" },
-    Case::{ .name = "and under the name a selective import gives it",
-        .extra_rels = U8[][]::{ "alpha/deep/gen.kspl", "beta/main.kspl" },
-        .extra_bodies = U8[][]::{ "pub fn pick<|T|>(a: T, b: T): T { return a; }\n",
-        "import \"alpha/deep/gen\" { pick as choose }\nfn main(): I32 { return choose(1, 2); }\n" },
-        .entry = "beta/main.kspl", .expect = "" },
     Case::{ .name = "another file's priv generic type is undefined here, and nothing more",
         .extra_rels = U8[][]::{ "alpha/deep/box.kspl", "alpha/mid.kspl" },
         .extra_bodies = U8[][]::{ BOX_GEN,
@@ -173,7 +191,7 @@ priv const CASES: Case[] = Case[]::{
 
 priv fn prepare(c: Case, index: Sz, arena: Arena$@): Job //<
     //< It makes one case's directory, writes the files, and builds the Job to run there
-    $nb: = Str_builder.new()
+    defer $nb: = Str_builder.new()
     name: = U8[]::arena.dup_str(nb.s("vis_\{index\}").slice())
     dir: = harness.sandbox(name)
     if dir.len == 0
@@ -195,11 +213,11 @@ fn main(): I32
         .s("# the boundary visibility closes at: \{CASES.len\} (\{verdict.jobs()\} in parallel)\n")
 
     jobs: = List<|Job|>.create(arena)
-    for $i: = 0; i < CASES.len; i += 1
+    for i in Range.asc(CASES.len)
         jobs.push(prepare(CASES[i], i, arena))
     outs: = harness.run_all(jobs.slice(), "visibility")
 
-    for $i: = 0; i < CASES.len; i += 1
+    for i in Range.asc(CASES.len)
         c: = CASES[i]
         out: = outs.get(i).out
         if c.expect.len > 0

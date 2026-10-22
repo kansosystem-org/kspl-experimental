@@ -49,17 +49,17 @@ struct Operand_order //< the operands of one expression, in the order the source
     slots: List<|Operand_slot|>
     finished: Bool //< whether finish ran, which an operand taken with a count needs
 
-impl Operand_order: Manual_free {}
-
-impl Operand_order
-    fn new(): Operand_order
-        return Operand_order::{ .slots = List<|Operand_slot|>.new(null), .finished = false }
+impl Operand_order: Manual_free
     fn free(r: Self$@)
         for s in r.slots
             base_diag.ice_assert(r.finished || !s.takes,
                 "Operand_order: an operand taken with a count was never finished, so its retain is \
                     lost")
         r.slots.free()
+
+impl Operand_order
+    fn new(): Operand_order
+        return Operand_order::{ .slots = List<|Operand_slot|>.new(null), .finished = false }
 
     fn add(r: Self$@, parent: Ast_node$@, idx: Sz, by_address: Bool)
         if parent != null && idx < parent.children.len
@@ -92,15 +92,12 @@ impl Operand_order
         //< where `fixed`.
         if !lctx.in_fn_body || r.slots.len < 2
             return
-        $classes: = List<|Order_class|>.new(null)
-        defer classes.free()
+        defer $classes: = List<|Order_class|>.new(null)
         for s in r.slots
             cls: = s.operand_class(lctx)
             classes.push(.reads if s.takes && s.fresh && cls == .fixed else cls)
-        $moves: = List<|Bool|>.new(null)
-        defer moves.free()
-        $holds: = List<|Bool|>.new(null)
-        defer holds.free()
+        defer $moves: = List<|Bool|>.new(null)
+        defer $holds: = List<|Bool|>.new(null)
         $acts_after: = false
         $varies_after: = false
         for $i: = r.slots.len; i > 0; i -= 1
@@ -297,8 +294,7 @@ impl Ast_node
         //< fixed (its address, or the pointer reaching it). The steps from there are `.` and an
         //< array's `[]`. An index among them moves by value, so it runs in order too, and its
         //< bounds check runs where the field is used.
-        $chain: = List<|Ast_node$@|>.new(null)
-        defer chain.free()
+        defer $chain: = List<|Ast_node$@|>.new(null)
         $holder: = r
         for _i in Range.asc(MAX_ORDER_DEPTH)
             if holder == null || lctx.sema.packed_place_align(holder) == 0

@@ -8,6 +8,7 @@ import "ksplc/base/core" as base_core
 import "ksplc/lsp/msg" as lsp_msg
 import "ksplc/lsp/state" { Doc_state }
 import "ksplc/sema/session/ctx" { Sema_ctx }
+import "ksplc/sema/type/scope" { Sema_symbol }
 import "std/chars"
 import "std/ds" { List }
 import "std/json"
@@ -27,6 +28,17 @@ priv fn is_source_text(node: Ast_node$@, src: U8[]): Bool //<
         return false
     return src.sub(node.loc.offset, node.text.len).equals(node.text)
 
+priv fn is_type_copy(node: Ast_node$@): Bool //<
+    //< Whether it is a generic struct's, enum's or trait's instance: a copy of the template's text
+    //< **Such a copy adds nothing the source wrote.** Its declarations repeat the template's with
+    //< the type arguments put in (`get(r: Self, index: Sz): Sz` for `Index<|Sz, Sz|>`). A
+    //< function's instance is not one: its body holds the types a hover inside it reads.
+    if node.sym_ptr == null ||
+        (node.kind_id != .k_decl_struct && node.kind_id != .k_decl_enum &&
+        node.kind_id != .k_decl_trait)
+        return false
+    return (Sema_symbol$@::node.sym_ptr).flags.is_generated_instance
+
 priv struct Pick_walk //< one walk for the node at a position, and the best it has found so far
     offset: Sz //< the position asked about
     target_file: U8[] //< the file it is in
@@ -35,6 +47,7 @@ priv struct Pick_walk //< one walk for the node at a position, and the best it h
     best_path: List<|Ast_node$@|>$@ //< the path to the best node so far: the walk's answer
     best_score: Sz //< the best node's score; lower wins
     best_is_src: Bool //< whether the best node's text is the text on screen
+    in_type_copy: Bool //< whether the node visited is inside a type's instance (`is_type_copy`)
 
 impl Pick_walk
     fn visit(r: Self$@, node: Ast_node$@, depth: Sz) //< walks node and below it
@@ -48,11 +61,13 @@ impl Pick_walk
                 return
 
         r.current_path.push(node)
+        outer_copy: = r.in_type_copy
+        r.in_type_copy = outer_copy || is_type_copy(node)
 
         // A variable or constant declaration is the last resort for a click on the declarator ':',
         // which normalization drops from the AST. Its span is the declarator's (`declarator_span`),
         // since its text.len is the synthesized keyword's. **A declaration the compiler wrote has
-        // no `:`** (`var_synth`, the `_for_coll` a `for … in` copies its collection into): it would
+        // no `:`** (`var_synth`, the `_for_coll` a `for … in` holds its collection in): it would
         // answer on `for w in` with its internal name.
         is_decl_marker: =
             (node.kind_id == .k_decl_var && !node.text.equals("var_synth")) ||
@@ -99,10 +114,10 @@ impl Pick_walk
                     // preference.
                     score = score - 10000 if score >= 10000 else 0
                 // A tie still goes to the later node, except where that one is not the text on
-                // screen.
+                // screen, or is a type's instance copying the template the source wrote.
                 takes_it: =
                     score < r.best_score ||
-                    (score == r.best_score && (here_is_src || !r.best_is_src))
+                    (score == r.best_score && (here_is_src || !r.best_is_src) && !r.in_type_copy)
                 if takes_it
                     r.best_score = score
                     r.best_is_src = here_is_src
@@ -113,6 +128,7 @@ impl Pick_walk
         for child in node.children
             r.visit(child, depth + 1)
 
+        r.in_type_copy = outer_copy
         r.current_path.len -= 1
 
 priv fn declarator_span(decl: Ast_node$@): Sz //<
@@ -147,7 +163,7 @@ fn find_path_at_offset(root_file: Ast_node$@, sema: Sema_ctx$@, offset: Sz, targ
         src = U8[]::{ .ptr = held.ptr, .len = held.len }
     $walk: = Pick_walk::{ .offset = offset, .target_file = target_file, .src = src,
         .current_path = List<|Ast_node$@|>.new(null), .best_path = path, .best_score = 99999999,
-        .best_is_src = false }
+        .best_is_src = false, .in_type_copy = false }
     defer walk.current_path.free()
 
     if root_file != null

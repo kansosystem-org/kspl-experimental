@@ -74,9 +74,7 @@ stateDiagram-v2
 
 ### Memory robustness comes first
 
-Kssrv prefers reference-counted memory to memory it frees by hand. In a long-running server, a leak or a double free is worse than a little hidden work.
-
-`kssrv/ksplc.cfg` sets `I0602 = on`, the lint that points out hand-made ownership (a raw pointer plus one's own `free`). A resident process keeps handling other people's input. For it, avoiding that hand-rolled ownership management ([I0602]) ranks first. Seeing when the hidden `retain`/`release` of ARC runs ([W0601]) ranks below it. W0601 is the lint that a real-time system turns on instead.
+In a long-running server, a leak or a double free is worse than a little hidden work. A connection's memory is reached from the reactor's table and from the code handling it, so `Rc<|Conn|>` holds it (below). The rest is freed by `defer` and arenas, as everywhere in Kanso. Seeing when ARC's hidden `retain`/`release` runs ([W0601]) matters less here, so kssrv leaves it off; a real-time system turns it on.
 
 ### Every socket is non-blocking and multiplexed on one thread
 

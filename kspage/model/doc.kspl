@@ -156,8 +156,8 @@ impl Block
         //< may have no text (a picture), so it returns an `Option`.
         if r.inlines.len > 0
             return .some(r.inlines.get(0))
-        for $i: Sz = 0; i < r.children.len; i += 1
-            if n: = r.children.get(i).first_run()
+        for e in r.children
+            if n: = e.first_run()
                 return .some(n)
         return .none
 
@@ -176,11 +176,11 @@ impl Block
 
     fn holds(r: Self@, n: Inline$@): Bool //< whether n lies inside this block
         //< Caution: **Walk into the children too** (the reason is at `first_run`).
-        for $i: Sz = 0; i < r.inlines.len; i += 1
-            if r.inlines.get(i) == n
+        for entry in r.inlines
+            if entry == n
                 return true
-        for $i: Sz = 0; i < r.children.len; i += 1
-            if r.children.get(i).holds(n)
+        for elem in r.children
+            if elem.holds(n)
                 return true
         return false
 
@@ -201,11 +201,10 @@ impl Block
         // Per column, "how many more rows are taken".
         // Caution: **Subtract one every time a row is laid out.**
         held: = List<|Sz|>.create(arena)
-        for $i: Sz = 0; i < r.children.len; i += 1
+        for i in Range.asc(r.children.len)
             row: = r.children.get(i)
             $c: Sz = 0
-            for $k: Sz = 0; k < row.children.len; k += 1
-                cell: = row.children.get(k)
+            for cell in row.children
                 // Skips the taken columns (a cell reaching down from a row above lies there).
                 for c < held.len && held.get(c) > 0
                     c += 1
@@ -216,7 +215,7 @@ impl Block
                     .block = cell })
                 // Caution: **Store the covered row count as it is.** Subtract one here and the next
                 // row already looks free (a vertical merge would cover one row only).
-                for $n: Sz = 0; n < cols; n += 1
+                for n in Range.asc(cols)
                     for held.len <= c + n
                         held.push(0)
                     held.set(c + n, rows)
@@ -230,8 +229,7 @@ impl Block
         //< **It counts merges** (`line_count` is short by the merged columns).
         tiles: = r.tiles_of(arena)
         $n: Sz = 0
-        for $i: Sz = 0; i < tiles.len; i += 1
-            t: = tiles.get(i)
+        for t in tiles
             right: = t.column + t.cols
             if right > n
                 n = right
@@ -246,8 +244,8 @@ impl Block
             return r.children.len
         case .column
             $n: Sz = 0
-            for $i: Sz = 0; i < r.children.len; i += 1
-                got: = r.children.get(i).children.len
+            for item in r.children
+                got: = item.children.len
                 if got > n
                     n = got
             return n
@@ -269,11 +267,11 @@ impl Block
         switch axis
         case .row
             row: = new_block(style, arena)
-            for $c: Sz = 0; c < cells; c += 1
+            for _c in Range.asc(cells)
                 row.add_child(cell_style).add_text("")
             made.push(row)
         case .column
-            for $i: Sz = 0; i < cells; i += 1
+            for _i in Range.asc(cells)
                 cell: = new_block(cell_style, arena)
                 cell.add_text("")
                 made.push(cell)
@@ -296,7 +294,7 @@ impl Block
             r.children.remove_at(at)
         case .column
             tiles: = r.tiles_of(arena)
-            for $i: Sz = 0; i < r.children.len; i += 1
+            for i in Range.asc(r.children.len)
                 row: = r.children.get(i)
                 slot: = slot_in(tiles, i, at)
                 if spans != null
@@ -326,7 +324,7 @@ impl Block
             tiles: = r.tiles_of(arena)
             fresh: = spans == null || spans.len <= 0
             $k: Sz = 0
-            for $i: Sz = 0; i < r.children.len; i += 1
+            for i in Range.asc(r.children.len)
                 row: = r.children.get(i)
                 slot: = slot_in(tiles, i, at)
                 // A new column widens a merged cell and inserts a cell elsewhere. **Past the row's
@@ -353,7 +351,7 @@ impl Block
         //< the editor can refuse a column that would take a merge past what a document holds.
         tiles: = r.tiles_of(arena)
         $most: Sz = 1
-        for $i: Sz = 0; i < r.children.len; i += 1
+        for i in Range.asc(r.children.len)
             slot: = slot_in(tiles, i, at)
             if widens(slot) && slot.cols + 1 > most
                 most = slot.cols + 1
@@ -363,7 +361,7 @@ impl Block
         //< The block holding n directly, and n's index within it
         //< **Where `found` is false the other fields are not read.** The index is what lets the
         //< second half of a split go in beside the original.
-        for $i: Sz = 0; i < r.inlines.len; i += 1
+        for i in Range.asc(r.inlines.len)
             if r.inlines.get(i) == n
                 return Owner::{ .block = r, .index = i, .found = true }
         for $i: Sz = 0; i < r.children.len; i += 1
@@ -389,8 +387,7 @@ priv fn slot_in(tiles: List<|Tile|>$@, row: Sz, column: Sz): Slot //<
     //< **Merges are read from `tiles_of` and nowhere else.** A row's tiles are in child order, so
     //< counting the ones wholly before it gives the child index.
     $index: Sz = 0
-    for $i: Sz = 0; i < tiles.len; i += 1
-        t: = tiles.get(i)
+    for t in tiles
         if t.row != row
             continue
         if t.column + t.cols <= column
@@ -478,8 +475,7 @@ priv fn new_scan(cur: Inline$@): Scan
 priv fn scan_block(s: Scan$@, b: Block$@)
     // Caution: **Keep the order the same as the layout's** (this block's own inlines first, the
     // child blocks after). Otherwise the ← → direction disagrees with the visible order.
-    for $i: Sz = 0; i < b.inlines.len; i += 1
-        n: = b.inlines.get(i)
+    for n in b.inlines
         if s.found != null && s.next == null
             s.next = n
         if n == s.target

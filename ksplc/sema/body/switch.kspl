@@ -115,8 +115,7 @@ impl Ast_node
             ctx.err(cond_node, ctx.scratch.slice())
             throw .analysis_failed
 
-        $seen_values: = Map<|I64, Ast_node$@|>.new(null)
-        defer seen_values.free()
+        defer $seen_values: = Map<|I64, Ast_node$@|>.new(null)
         $mctx: = Switch_ctx::{ .target_id = target_id, .enum_name = enum_name,
             .is_enum = enum_def != null, .enum_def = enum_def,
             .covered_variants = base_ast.new_ast_node_list(),
@@ -207,29 +206,29 @@ impl Ast_node
         bound_payload: Bool): Bool!Sema_error
         r.ice_assert(r.children.len > 0, "infer_switch_stmt: case_pattern is empty")
         first_child: = r.get_child(0)
-        $processed_as_variant: = false
-        $new_bound_payload: = bound_payload
-
         switch r.extract_case_variant()
         case .variant(v_name_node, p_start_idx)
             if mctx.is_enum
-                new_bound_payload = r.process_enum_variant(c, mctx, v_name_node, p_start_idx,
-                    new_bound_payload)
-                processed_as_variant = true
-            else
-                if first_child.is_literal(".")
-                    c.clear_scratch()
-                        .s("target condition '\{c.env.display(mctx.target_id)\}' is not an enum. A \
-                            variant pattern requires an enum")
-                    c.err(first_child, c.scratch.slice())
-                    mctx.success = false
-                    processed_as_variant = true
-
-            if !processed_as_variant
-                r.process_non_enum_pattern(c, mctx, first_child, v_name_node)!
+                return r.process_enum_variant(c, mctx, v_name_node, p_start_idx, bound_payload)
+            c.clear_scratch()
+                .s("target condition '\{c.env.display(mctx.target_id)\}' is not an enum. A variant \
+                    pattern requires an enum")
+            c.err(first_child, c.scratch.slice())
+            mctx.success = false
         case .not_variant
-            r.process_non_enum_pattern(c, mctx, first_child, null)!
-        return new_bound_payload
+            if mctx.is_enum
+                // One spelling per case (Principle 6): `Event.quit` beside `.quit` would be a
+                // second way to name the same variant.
+                name: = type_name_variant(r)
+                shown: = name if name.len > 0 else "variant"
+                c.clear_scratch()
+                    .s("a 'case' on an enum names its variant without the type. Write 'case \
+                        .\{shown\}'")
+                c.err(first_child, c.scratch.slice())
+                mctx.success = false
+            else
+                r.process_non_enum_pattern(c, mctx, first_child)!
+        return bound_payload
 
     priv fn process_enum_variant(r: Ast_node$@, c: Sema_ctx$@, mctx: Switch_ctx$@,
         v_name_node: Ast_node$@, p_start_idx: Sz, bound_payload: Bool): Bool
@@ -257,7 +256,7 @@ impl Ast_node
 
             if v_name_node != null
                 record_covered_variant(c, mctx, variant_name, v_name_node)
-        else if r.get_child(0).is_literal(".")
+        else
             c.clear_scratch()
                 .s("enum '\{c.env.display(mctx.target_id)\}' has no variant named \
                     '\{variant_name\}'")
@@ -330,7 +329,7 @@ impl Ast_node
             mctx.success = false
 
     priv fn process_non_enum_pattern(r: Ast_node$@, c: Sema_ctx$@, mctx: Switch_ctx$@,
-        first_child: Ast_node$@, v_name_node: Ast_node$@): Void!Sema_error
+        first_child: Ast_node$@): Void!Sema_error
         $pat_expr: Ast_node$@ = null
         switch r.first_expr()
         case .some(pe)
@@ -341,10 +340,6 @@ impl Ast_node
         if !pat_expr.check_case_pattern_type(c, pat_type_id, mctx.target_id) ||
             !pat_expr.record_case_value(c, mctx)
             mctx.success = false
-        else if mctx.is_enum && v_name_node != null
-            v_name: = v_name_node.text
-            if v_name.len > 0
-                record_covered_variant(c, mctx, v_name, v_name_node)
 
     priv fn record_case_value(r: Ast_node$@, c: Sema_ctx$@, mctx: Switch_ctx$@): Bool //<
         //< Whether a non-enum case value is a constant no earlier case names; it reports where not
@@ -433,6 +428,19 @@ impl Ast_node
             c.err(r, c.scratch.slice())
             return false
         return true
+
+priv fn type_name_variant(n: Ast_node$@): U8[] //<
+    //< The variant a pattern in the type-name form names (`quit` in `Event.quit`), or ""
+    //< It is the last name written outside a call's arguments.
+    $found: = ""
+    for ch in n.children
+        if ch.kind_id == .k_identifier
+            found = ch.text
+        else if ch.kind_id != .k_expr_args
+            inner: = type_name_variant(ch)
+            if inner.len > 0
+                found = inner
+    return found
 
 priv fn record_covered_variant(c: Sema_ctx$@, mctx: Switch_ctx$@, variant_name: U8[],
     v_name_node: Ast_node$@)

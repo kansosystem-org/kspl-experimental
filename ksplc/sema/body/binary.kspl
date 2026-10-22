@@ -252,6 +252,8 @@ fn infer_binary_expr(node: Ast_node$@, ctx: Sema_ctx$@, expected_id: I32): I32!S
         case .failed
             return I32::sema_type_env.Builtin_type_id.unknown
         case .builtin {}
+    if refuses_operator_operand(ctx, node, op_text, left_type_id, false)
+        return I32::sema_type_env.Builtin_type_id.unknown
 
     $right_type_id: = right_first_id
     if !right_done
@@ -260,7 +262,8 @@ fn infer_binary_expr(node: Ast_node$@, ctx: Sema_ctx$@, expected_id: I32): I32!S
         right_type_id = right_node.infer_expr(ctx, pass_right_id)!
     if sema_body_resolve_path.refuse_type_name(ctx, right_node)
         return I32::sema_type_env.Builtin_type_id.unknown
-    if refuses_fn_operator(ctx, node, op_text, right_type_id)
+    if refuses_fn_operator(ctx, node, op_text, right_type_id) ||
+        refuses_operator_operand(ctx, node, op_text, right_type_id, false)
         return I32::sema_type_env.Builtin_type_id.unknown
     // A function's name against a value that is no function (`1 == twice`) is reported as a name
     // given a type it does not have.
@@ -389,20 +392,8 @@ priv fn refuses_operand_types(ctx: Sema_ctx$@, node: Ast_node$@, op_text: U8[], 
         //< Whether it reported operand types the operator does not apply to
         //< `written` is the operator as the source spells it, which the message quotes: `+=` for a
         //< compound assignment whose `op_text` is `+`.
-    // Caution: **Do not let a binary operation on a slice pass.** The generated C would operate on
-    // the `ptr`+`len` structs, and the user would get the C compiler's `invalid operands to binary
-    // expression` instead of KSPL's diagnostic (Principle 5). Pointers are excluded: `(p + i)$` and
-    // `q - p` are forms KSPL has.
-    if ctx.env.is_slice(left_type_id) || ctx.env.is_slice(right_type_id)
-        bad_id: = left_type_id if ctx.env.is_slice(left_type_id) else right_type_id
-        // Caution: Show the sugar the user wrote, not the internal name (`U8 immut[]` /
-        // `std_lang_Slice_U8_Const`; `../type/display.kspl`).
-        shown: = ctx.env.display(bad_id)
-        ctx.clear_scratch()
-            .s("Operator '\{written\}' cannot be applied to slice type '\{shown\}'; ")
-            .s("slices have no arithmetic or ordering (compare contents with 'equals', read \
-                elements with '[]')")
-        ctx.err(node, ctx.scratch.slice())
+    if refuses_slice_operand(ctx, node, written, left_type_id) ||
+        refuses_slice_operand(ctx, node, written, right_type_id)
         return true
 
     // Caution: **Do not let arithmetic or shifts on a `Bool` pass.** They become integer operations
@@ -423,6 +414,91 @@ priv fn refuses_operand_types(ctx: Sema_ctx$@, node: Ast_node$@, op_text: U8[], 
         left_type_id if ctx.env.is_float(left_type_id) else right_type_id, written)
         return true
     return false
+
+priv fn refuses_slice_operand(ctx: Sema_ctx$@, node: Ast_node$@, written: U8[], type_id: I32): Bool //<
+    //< Whether it reported an operator on a slice
+    //< Caution: **Do not let one pass.** The generated C would operate on the `ptr`+`len`
+    //< structs, and the user would get the C compiler's `invalid operands` instead of KSPL's
+    //< diagnostic (Principle 5). Pointers are excluded: `(p + i)$` and `q - p` are KSPL's.
+    if !ctx.env.is_slice(type_id)
+        return false
+    // Caution: Show the sugar the user wrote, not the internal name (`U8 immut[]` /
+    // `std_lang_Slice_U8_Const`; `../type/display.kspl`).
+    shown: = ctx.env.display(type_id)
+    ctx.clear_scratch().s("Operator '\{written\}' cannot be applied to slice type '\{shown\}'; ")
+        .s("slices have no arithmetic or ordering (compare contents with 'equals', read elements \
+            with '[]')")
+    ctx.err(node, ctx.scratch.slice())
+    return true
+
+priv const OP_METHODS: U8[][_] = ::{ "%", "rem", "&", "bit_and", "|", "bit_or", "^", "bit_xor",
+    "<<", "shl", ">>", "shr", "~", "bit_not" } //<
+        //< The method an operator with no trait is shown replaced by, in pairs
+        //< Only a suggestion's spelling: no trait in std/lang declares these.
+
+priv fn op_method_name(op: U8[], is_unary: Bool): U8[] //< the method a message suggests for op
+    if is_unary
+        return "neg" if op.equals("-") else "not" if op.equals("!") else "bit_not"
+    traited: = get_op_traits(op).method_name
+    if traited.len > 0
+        return traited
+    for $i: Sz = 0; i + 1 < OP_METHODS.len; i += 2
+        if OP_METHODS[i].equals(op)
+            return OP_METHODS[i + 1]
+    return "apply"
+
+priv fn op_trait_name(op: U8[], is_unary: Bool): U8[] //< the std/lang trait op desugars through
+    if is_unary
+        return "Neg" if op.equals("-") else "Not" if op.equals("!") else ""
+    return get_op_traits(op).trait_name
+
+fn refuses_operator_operand(ctx: Sema_ctx$@, node: Ast_node$@, op: U8[], type_id: I32,
+    is_unary: Bool): Bool //<
+        //< Whether it reported an operand no built-in operator takes, and the operator traits miss
+        //< An operator applies to numbers, `Bool`, simple enums and pointers. A struct, a tagged
+        //< union, an array or a trait value has no C operator, so letting one through gives the C
+        //< compiler's `invalid operands` (Principle 5). The caller asks after an operator trait
+        //< found no implementation, on each operand. A type parameter is not one of these kinds.
+    if refuses_slice_operand(ctx, node, op, type_id)
+        return true
+    $is_array: = false
+    $is_tagged: = false
+    switch ctx.env.get_info(ctx.env.get_clean_real_type(type_id))
+    case .struct_type, .trait_type {}
+    case .array
+        is_array = true
+    case .enum_type(def)
+        if def.is_scalar()
+            return false
+        is_tagged = true
+    default
+        return false
+    shown: = ctx.env.display(type_id)
+    ctx.clear_scratch()
+        .s("operator '\{op\}' does not apply to '\{shown\}'. Operators apply to numbers, 'Bool', \
+            simple enums and pointers")
+    trait_name: = op_trait_name(op, is_unary)
+    method: = op_method_name(op, is_unary)
+    args: = "()" if is_unary else "(b)"
+    if is_array
+        ctx.scratch.s(". Apply it to the elements one at a time ('a[i]')")
+    else if op.equals("&&") || op.equals("||")
+        ctx.scratch
+            .s(". '\{op\}' takes only 'Bool' values, so test the value first, such as with a method \
+                that returns a 'Bool'")
+    else if trait_name.len > 0
+        side: = "an operand" if is_unary else "a left operand"
+        ctx.scratch
+            .s(", and to \{side\} whose type implements '\{trait_name\}' from std/lang. Call a \
+                method instead, such as 'a.\{method\}\{args\}'")
+    else
+        ctx.scratch
+            .s(". '\{op\}' has no operator trait, so call a method instead, such as \
+                'a.\{method\}\{args\}'")
+    if is_tagged
+        ctx.scratch.s(", or take the value apart with 'switch'")
+    ctx.err(node, ctx.scratch.slice())
+    return true
 
 fn compound_right_expected(ctx: Sema_ctx$@, right_node: Ast_node$@, left_type_id: I32,
     op_text: U8[]): I32 //<
@@ -461,6 +537,9 @@ fn refuses_compound_operands(ctx: Sema_ctx$@, node: Ast_node$@, op_text: U8[],
         return refuses_compound_numbers(ctx, o, op_text)
     if ctx.env.is_numeric(left_type_id) || ctx.env.is_bool(left_type_id)
         return false
+    // An array has no `a = a + b` form to point at, so it takes the operators' own message.
+    if ctx.env.is_array(left_type_id)
+        return refuses_operator_operand(ctx, node, op_text, left_type_id, false)
     shown: = ctx.env.display(left_type_id)
     ctx.clear_scratch()
         .s("compound assignment '\{op_text\}' applies to numbers and 'Bool', not to '\{shown\}'; ")

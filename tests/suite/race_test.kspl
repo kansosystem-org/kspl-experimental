@@ -377,10 +377,9 @@ priv fn play_lsp_session(exe: U8[], log_dir: U8[], top: U8[], arena: Arena$@): L
         sanitized(log_dir,
         U8[][]::{ arena.text().s("KSPLC_STD_DIR=").s(ksplc_harness.std_dir()).take() },
         U8[][]::{ exe, "lsp" }, arena)
-    $c: = jsonrpc_client.spawn(argv, top) catch
+    defer $c: = jsonrpc_client.spawn(argv, top) catch
         faults.push("the server cannot be started")
         return faults
-    defer c.free()
     $s: = Lsp_session::{ .c = c@, .top = top, .faults = faults }
     $b: = Json_builder.new(arena)
     _init: =
@@ -476,7 +475,7 @@ fn main(): I32
             lacks)
         return ksplc_harness.finish()
     check_fires(work, arena)
-    $deps: = Str_builder.new()
+    defer $deps: = Str_builder.new()
     $runs: = List<|Raced|>.new(arena)
     race_tests(work, deps@, runs@, arena)
     race_ksai(work, deps@, runs@, arena)

@@ -21,7 +21,7 @@ import "std/verdict"
 // Caution: **Do not drop the level that holds a struct as an element.** With only plain elements
 // (`I32[]`), no path reaching **a field inside** an element (`b.si[0].n`) is taken.
 priv const HEAD: U8[] =
-    "priv struct Cell { n: I32; }
+    """priv struct Cell { n: I32; }
 impl Cell
   fn bumpc(r: Self$@)
     r.n += 1
@@ -57,13 +57,14 @@ impl I32$[]
     return r$
 
 
-"
+"""
 
-priv const TAIL: U8[] = "
+priv const TAIL: U8[] = """
+
 fn main(): I32
   return 0
 
-"
+"""
 
 priv struct Case
     rule: U8[] //< the rule being broken (empty in the control)
@@ -142,12 +143,12 @@ priv struct Verdict //< the result of building one program and only compiling it
     first_error: U8[]
 
 priv fn compile_only(dir: U8[], index: Sz, body: U8[], arena: Arena$@): Verdict
-    $nb: = Str_builder.new()
+    defer $nb: = Str_builder.new()
     nb.s("p\{index\}")
     stem: = nb.slice()
     src: = fs.join(dir, arena.text().s("\{stem\}.kspl").take(), arena)
     gen: = fs.join(dir, arena.text().s("\{stem\}.c").take(), arena)
-    $sb: = Str_builder.new()
+    defer $sb: = Str_builder.new()
     sb.s(HEAD).s(body).s(TAIL)
     io.write_file(src, sb.slice()) catch
         return Verdict::{ .compiled = false, .first_error = "cannot write the material" }
@@ -232,9 +233,6 @@ priv fn roots(arena: Arena$@): List<|Root|>
     out
         .push(Root::{ .slot = "const_slice", .globals = "const RO_SL: U8[] = \"abcd\";",
         .locals = "", .expr = "RO_SL" })
-    out
-        .push(Root::{ .slot = "global_immut_array", .globals = "gl_arr: U8[4] = ::{ 1, 2, 3, 4 };",
-        .locals = "", .expr = "gl_arr" })
     out
         .push(Root::{ .slot = "local_immut_array", .globals = "",
         .locals = "loc_arr: U8[4] = ::{ 1, 2, 3, 4 };", .expr = "loc_arr" })

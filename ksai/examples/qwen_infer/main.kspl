@@ -25,7 +25,7 @@ fn read_tokens(arena: Arena$@): List<|I32|>$@ //<
     //< Reads non-negative integers from standard input into an I32 list; any other byte separates
     //< It is for mode 1. An ID past I32 is dropped with a warning, not cut into another valid ID.
     list: = List<|I32|>.create(arena)
-    $word: = Str_builder.new()
+    defer $word: = Str_builder.new()
     for
         // A failed read ends the list as the end of input does; the warning says which.
         c: = io.getchar() catch
@@ -85,8 +85,7 @@ fn cmd_logits(a: sys.Args, arena: Arena$@): Bool //< prints the logits; false af
 
     $logits: = Tensor<|F32|>.new(Sz$[]::{ .ptr = null, .len = 0 }, arena)
     for i in Range.asc(tokens.len)
-        ca: = Arena.new(1024 * 1024 * 64)
-        defer ca.free()
+        defer ca: = Arena.new(1024 * 1024 * 64)
         logits = m.forward(tokens[i], i, adapters, ca)
         if i == tokens.len - 1
             logits = logits.dup(arena) // copied so it survives ca being freed
@@ -161,8 +160,7 @@ fn cmd_generate(a: sys.Args, arena: Arena$@): Bool //<
     $pos: Sz = 0
     $logits: = Tensor<|F32|>.new(Sz$[]::{ .ptr = null, .len = 0 }, arena)
     for i in Range.asc(ids.len)
-        ca: = Arena.new(1024 * 1024 * 64)
-        defer ca.free()
+        defer ca: = Arena.new(1024 * 1024 * 64)
         logits = m.forward(ids[i], pos, adapters, ca)
         pos += 1
         if i == ids.len - 1
@@ -174,8 +172,7 @@ fn cmd_generate(a: sys.Args, arena: Arena$@): Bool //<
         if next == eos_id || pos >= MAX_SEQ
             break
         gen.push(next)
-        ca: = Arena.new(1024 * 1024 * 64)
-        defer ca.free()
+        defer ca: = Arena.new(1024 * 1024 * 64)
         $step_logits: = m.forward(next, pos, adapters, ca)
         logits = step_logits.dup(arena)
         pos += 1

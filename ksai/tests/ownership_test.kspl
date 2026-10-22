@@ -33,7 +33,7 @@ priv fn weights(arena: Arena$@)
     input.fill(F32::7.0)
     $writer: = Safetensors_writer.new()
     writer.add("w", input)
-    $bytes: = writer.finish()
+    defer $bytes: = writer.finish()
 
     $file: = Safetensors.load_from_bytes(bytes.slice(), arena)
         catch panic("the writer's file parses")
@@ -43,7 +43,7 @@ priv fn weights(arena: Arena$@)
         "aligned weights remain zero-copy")
 
     // Shifting the whole file by one byte makes its aligned payload misaligned.
-    $shifted: = Str_builder.new()
+    defer $shifted: = Str_builder.new()
     shifted.c(0U8).s(bytes.slice())
     $unaligned: =
         Safetensors.load_from_bytes(shifted.slice().sub_from(1), arena)
@@ -66,7 +66,7 @@ priv fn weights(arena: Arena$@)
     assert((fit.data + 5)$ == F32::7.0, "an accepted replacement reads the file")
 
 priv fn refused_header(header: U8[], arena: Arena$@)
-    $bytes: = Str_builder.new()
+    defer $bytes: = Str_builder.new()
     prefix: U8[8] = ::{}
     (U8$[]::prefix).put_u64_le(0, U64::header.len)
     bytes.s(U8[]::prefix).s(header).s("012345678901234567890123")
@@ -89,14 +89,14 @@ priv fn adapters(arena: Arena$@)
         first: = "q" if group.equals("attn") else "fc1"
         for broken in Range.asc(3)
             $writer: = Safetensors_writer.new()
-            $key: = Str_builder.new()
+            defer $key: = Str_builder.new()
             for part in U8[][]::{ "a", "b", "scale" }
                 if broken == 0 && !part.equals("a")
                     continue
                 key.clear().s("blocks.0.\{group\}.\{first\}.lora_\{part\}")
                 t: = empty if broken == 1 && part.equals("scale") else matrix
                 writer.add(key.slice(), t)
-            $bytes: = writer.finish()
+            defer $bytes: = writer.finish()
             file: = Safetensors.load_from_bytes(bytes.slice(), arena)
                 catch panic("the incomplete adapter has a valid file header")
 

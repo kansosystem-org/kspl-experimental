@@ -24,7 +24,7 @@ const BEARER: U8[] = "Bearer " //< the prefix before the token in the `Authoriza
 
 fn queue_json(c: conn.Conn$@, status: I32, val: json.Value, keep: Bool, allow: U8[] = "") //<
     //< Builds one JSON value and queues it as the response; `allow` is a 405's `Allow`
-    $body: = Str_builder.new()
+    defer $body: = Str_builder.new()
     val.dump(body@)
     conn.queue_response(c, status, "application/json", body.slice(), keep, allow)
 
@@ -151,7 +151,7 @@ priv fn check_content(path: U8[], expected: U8[]): I32 //< checks a conditional 
     // FIFO's read waits for ever and holds the server.
     if conn.regular_file_size(path).is_none()
         return 409
-    $file: = io.open(path, "rb") catch
+    defer $file: = io.open(path, "rb") catch
         return 500
     $hash: = Sha256.new()
     buf: U8[8192] = ::{}

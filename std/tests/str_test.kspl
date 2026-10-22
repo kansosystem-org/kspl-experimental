@@ -128,7 +128,7 @@ fn test_str_ops(arena: Arena$@)
     assert(pv.equals("bcd"), "auto-deref: a method can be called on a U8[]@")
 
     // --- drop_prefix: discards only the parsed prefix and moves the rest to the front ---
-    $b: = Str_builder.new()
+    defer $b: = Str_builder.new()
     b.s("msg1|msg2")
     b.drop_prefix(5)
     assert(b.slice().equals("msg2"), "drop_prefix: the rest is packed forward to the head")
@@ -194,23 +194,23 @@ fn test_unescape_and_dedent(arena: Arena$@) //<
         fallback ""
     assert(rejected, "unescape: a `\\` with nothing after it is refused, not kept")
 
-    $d: = "  a\n   \n  b\n".dedent()
-    assert(d.slice().equals("a\n\nb\n"),
+    d: = "  a\n   \n  b\n".dedent(arena)
+    assert(d.equals("a\n\nb\n"),
         "dedent: a line of nothing but spaces becomes empty and does not decide the smallest indent")
-    $d2: = "    x\n  \t\n      y".dedent()
-    assert(d2.slice().equals("x\n\n  y"),
+    d2: = "    x\n  \t\n      y".dedent(arena)
+    assert(d2.equals("x\n\n  y"),
         "dedent: a line of nothing but spaces becomes empty even when longer than the smallest \
             indent")
-    $d3: = "  a\n  b  ".dedent()
-    assert(d3.slice().equals("a\nb  "), "dedent: spaces behind a character stay")
-    $d4: = "  a\r\n   \r\n  b\r\n".dedent()
-    assert(d4.slice().equals("a\r\n\r\nb\r\n"),
+    d3: = "  a\n  b  ".dedent(arena)
+    assert(d3.equals("a\nb  "), "dedent: spaces behind a character stay")
+    d4: = "  a\r\n   \r\n  b\r\n".dedent(arena)
+    assert(d4.equals("a\r\n\r\nb\r\n"),
         "dedent: under CRLF, a line of nothing but spaces becomes `\\r\\n`")
     // The indentation is compared byte by byte: a tab and four spaces share none.
-    $d5: = "\ta\n    b\n".dedent()
-    assert(d5.slice().equals("\ta\n    b\n"), "dedent: a tab and spaces are not one indentation")
-    $d6: = "\t\ta\n\t b\n".dedent()
-    assert(d6.slice().equals("\ta\n b\n"), "dedent: only the bytes every line shares go")
+    d5: = "\ta\n    b\n".dedent(arena)
+    assert(d5.equals("\ta\n    b\n"), "dedent: a tab and spaces are not one indentation")
+    d6: = "\t\ta\n\t b\n".dedent(arena)
+    assert(d6.equals("\ta\n b\n"), "dedent: only the bytes every line shares go")
     verdict
         .pass("An unknown escape is refused, a line of nothing but spaces is made empty, and only \
             the indentation every line shares byte for byte is removed.")
@@ -225,7 +225,7 @@ fn test_strnum_roundtrip() //<
     //< saved setting breaks only at the largest value.
     //< Caution: **Include the refusals too**, or a reader that accepts everything passes.
     verdict.start("[strnum] a number's round trip and refusal test...")
-    $b: = Str_builder.new()
+    defer $b: = Str_builder.new()
 
     vals: I64[_] = ::{ 0I64, 1I64, -1I64, 42I64, -42I64, 2147483647I64, -2147483648I64,
         9223372036854775807I64, -9223372036854775807I64 - 1I64 }
@@ -588,7 +588,7 @@ fn test_text_edges()
 
 fn test_builder_room_and_c_strings()
     verdict.start("[str] reserve, and a C string out and back...")
-    $b: = Str_builder.new()
+    defer $b: = Str_builder.new()
     b.reserve(100)
     assert(b.cap >= 100 && b.len == 0, "reserve: room for 100, nothing written")
     room: = b.cap

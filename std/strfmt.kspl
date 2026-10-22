@@ -15,13 +15,6 @@ import "std/chars"
 #cfg(!freestanding)
 import "std/libc"
 
-impl U8
-    pub fn to_hex_lower(r: Self): U8 //< one nibble as a hex digit, using `a`-`f`
-        return chars.hex_digit(r, 'a')
-
-    pub fn to_hex_upper(r: Self): U8 //< one nibble as a hex digit, using `A`-`F`
-        return chars.hex_digit(r, 'A')
-
 // ==========================================
 // The format wrappers for string interpolation. `\{expr\}` only expands to put(w, expr) ("The
 // expansion specification for string interpolation" in `../docs/SPEC-programming-language.md`). So
@@ -173,6 +166,10 @@ impl U8
     pub fn fmt_hex(r: Self, width: Sz, zero: Bool, upper: Bool): Hex_fmt //<
         //< what `:x` and `:X` in an interpolation desugar to
         return hex_fmt_spec(r, width, zero, upper)
+    pub fn to_hex_lower(r: Self): U8 //< one nibble as a hex digit, using `a`-`f`
+        return chars.hex_digit(r, 'a')
+    pub fn to_hex_upper(r: Self): U8 //< one nibble as a hex digit, using `A`-`F`
+        return chars.hex_digit(r, 'A')
     pub fn fmt_char(r: Self): Char_fmt //< what `:c` desugars to; only `U8` has it
         //< **`U8` is the only type with `fmt_char`.** Nothing else is "a byte as a character", so
         //< `:c` on another type fails at compile time with "no such method".
@@ -334,31 +331,15 @@ priv fn write_magnitude(w: Writer, mag: U64, is_neg: Bool, width: Sz, fill: U8, 
 priv fn write_digits(w: Writer, digits: U8[], is_neg: Bool, width: Sz, fill: U8, comma: Bool):
     Writer //<
         //< Writes a finished string of digits with the alignment and the three-digit grouping
-        //< Only when fill is `'0'` does it pad between the sign and the digits ("-0042"). With
-        //< grouping those zeros are grouped too ("0,001,234"). Any other fill pads before the sign
-        //< (" -42"). It takes a string because an F64's integer part can have 309 digits.
+        //< Only when fill is `'0'` does it pad between the sign and the digits ("-0042"). Any
+        //< other fill pads before the sign (" -42"). A format specifier refuses `0` with `,`;
+        //< called with both, the zeros stand before the first group. It takes a string because an
+        //< F64's integer part can have 309 digits.
     sign_len: Sz = 1 if is_neg else 0
     // width comes straight from the caller (possibly from an application's format specifier),
     // unchecked. A huge width as the loop count would keep the CPU busy for a very long time (a
     // DoS). So it is capped at a limit that is large enough in practice.
     room: Sz = MAX_PAD_LEN if width > MAX_PAD_LEN else width
-    if fill == '0' && comma
-        // The zeros are digits and are grouped too. So the digit count grows until the grouped
-        // number fills the room: n digits take n + (n - 1) / 3 places. A separator never comes
-        // first, so the result can be one place wider than asked.
-        need: = room - sign_len
-        $count: Sz = (3 * need + 4) / 4 if need > 0 else 0
-        if count < digits.len
-            count = digits.len
-        if is_neg
-            w.c('-')
-        for i in Range.asc(count)
-            at: = i - (count - digits.len)
-            w.c(digits[at] if at >= 0 else '0')
-            remain: = count - 1 - i
-            if remain % 3 == 0 && remain > 0
-                w.c(',')
-        return w
     comma_count: Sz = (digits.len - 1) / 3 if comma && digits.len > 0 else 0
     content_len: = sign_len + digits.len + comma_count
     pad_len: Sz = room - content_len if content_len < room else 0

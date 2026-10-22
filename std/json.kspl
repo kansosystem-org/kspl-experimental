@@ -78,12 +78,9 @@ impl Json_builder
         //< With `null` it makes an arena of its own, so `defer b.free()` frees every value it made.
         arena: Arena$@, //< where values go; null means an arena of the builder's own and a `free()`
     ): Json_builder
-        $work: = mem.scratch(arena)
+        defer $work: = mem.scratch(arena)
         at: = work.arena
         return Json_builder::{ .arena = at, .own = work.keep() }
-    pub fn free(r: Self$@) //< lets go every value it made, when it made its own arena
-        //< Given an arena, it frees nothing: that arena does. A second `free()` frees nothing.
-        r.own.free()
     pub fn null_val(_r: Self$@): Value //< JSON's `null`
         return .null_val
     pub fn bool_val(_r: Self$@, b: Bool): Value //< `true` or `false`
@@ -101,7 +98,10 @@ impl Json_builder
     pub fn obj(r: Self$@): Object_builder //< an empty object builder
         return Object_builder::{ .builder = r$, .head = null, .tail = null }
 
-impl Json_builder: Manual_free {} //< `free()` lets go the arena it made for itself
+impl Json_builder: Manual_free //< `free()` lets go the arena it made for itself
+    pub fn free(r: Self$@) //< lets go every value it made, when it made its own arena
+        //< Given an arena, it frees nothing: that arena does. A second `free()` frees nothing.
+        r.own.free()
 
 impl Array_builder
     pub fn push( //< adds one element at the end
@@ -429,12 +429,11 @@ pub struct Doc //< a parsed document: its value, and the arena `parse` built it 
     pub val: Value //< the document's value
     priv own: Own_arena //< the arena `parse` made for it given null, or empty; `free` lets it go
 
-impl Doc
+impl Doc: Manual_free //< `free()` lets go the arena `parse` made for the document
     pub fn free(r: Self) //< lets go all of the value, when `parse` was given null
         //< Parsed into the caller's arena, it frees nothing: that arena does.
         $own: = r.own
         own.free()
-impl Doc: Manual_free {} //< `free()` lets go the arena `parse` made for the document
 
 pub fn parse( //< the whole document; anything left over is refused
     //< Read its value as `doc.val`. With `null`, `defer doc.free()` frees all of it.
@@ -444,7 +443,7 @@ pub fn parse( //< the whole document; anything left over is refused
     arena: Arena$@, //< where the values go; null means the document's own arena and a `free()`
 ): Doc!Json_error //<
     //< the document; fails on bad syntax or on text after it, leaving nothing behind
-    $work: = mem.scratch(arena)
+    defer $work: = mem.scratch(arena)
     $ctx: = Parse_ctx::{ .src = src, .pos = 0, .arena = work.arena, .depth = 0,
         .stack = Stack_limit.later(STACK_MARGIN) }
     v: = parse_value(ctx@)!

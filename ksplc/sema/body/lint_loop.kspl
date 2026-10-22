@@ -1,0 +1,347 @@
+//< [I0314] A counting loop written in three parts, where `for i in Range.asc(n)` says the same
+//< The loop's shape is read before its parts are typed, while the tree still holds what was
+//< written. The body is read after, when each call knows the receiver permission it demands.
+//< **When unsure, say nothing**: a shape this file cannot read, or a body that may write the index
+//< or a name in the bound, is not reported.
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/core" as base_core
+import "ksplc/sema/body/lint_stmt" as sema_body_lint_stmt
+import "ksplc/sema/session/ctx" { Sema_ctx }
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as _sema_type_query // `method_receiver_permission`
+import "std/chars"
+import "std/ds" { List }
+import "std/str"
+
+struct Counting_loop //< what a three-part loop counts, read from its written parts
+    index: U8[] //< the index's name
+    start: U8[] //< the first value, as written
+    bound: U8[] //< the expression the index stays below, as written, or `…` where it wraps
+    bound_len_of: U8[] //< `xs` where the bound is `xs.len`, or empty
+    watched: List<|U8[]|>$@ //< the index and every variable the bound reads
+
+fn read_counting_loop(c: Sema_ctx$@, r: Ast_node$@): Counting_loop? //<
+    //< The shape `for $i: = <integer>; i < <bound>; i += 1`, before the loop is typed
+    //< None for any other loop: a `for x in` (its init is a bare name), one the compiler made, an
+    //< index written with a type other than `Sz`, or a bound that reads a global variable or calls
+    //< a function (either can change between steps).
+    if !base_core.config.run_lint_checks || c.is_instantiating()
+        return .none
+    init: = r.get_for_init()
+    if init == null || init.kind_id != .k_decl_var || init.made_by_compiler() ||
+        !init.has_keyword("var")
+        return .none
+    start: = init.get_var_decl_expr()
+    if start == null || start.kind_id != .k_integer
+        return .none
+    // A `Range` counts in `Sz`, so an index given another type (`$i: I32 = 0`) would change type.
+    written_type: = init.get_var_decl_type_node()
+    if written_type != null && written_type.kind_id != .k_empty &&
+        !written_type.text.equals("Sz")
+        return .none
+    index: = init.get_var_decl_id().text
+    if !is_step_by_one(r.get_for_step(), index)
+        return .none
+    cond: = r.get_loop_cond()
+    if cond == null || cond.kind_id != .k_expr || cond.children.len != 3 ||
+        !cond.get_binary_op().text.equals("<") || !names(cond.get_binary_left(), index)
+        return .none
+    bound: = cond.get_binary_right()
+    watched: = List<|U8[]|>.create(base_core.arena)
+    watched.push(index)
+    if !collect_bound_names(c, bound, watched)
+        return .none
+    return .some(Counting_loop::{ .index = index, .start = start.text,
+        .bound = written(c, bound), .bound_len_of = len_receiver(bound), .watched = watched })
+
+priv fn written(c: Sema_ctx$@, node: Ast_node$@): U8[] //<
+    //< The source text of an expression on one line, or `…` where it cannot be cut out
+    last: = sema_body_lint_stmt.find_last_leaf(node)
+    end: = last.loc.offset + last.text.len
+    if end <= node.loc.offset || end > c.source.len
+        return "…"
+    text: = c.source.sub(node.loc.offset, end - node.loc.offset)
+    return "…" if text.find_char('\n').is_some() else text
+
+priv fn is_step_by_one(step: Ast_node$@, index: U8[]): Bool //< whether it is `index += 1`
+    if step == null || step.kind_id != .k_stmt_expr || step.children.len != 3
+        return false
+    right: = step.get_assign_right()
+    return step.get_assign_op().text.equals("+=") && names(step.get_assign_left(), index) &&
+        right.kind_id == .k_integer && right.text.equals("1")
+
+priv fn names(node: Ast_node$@, name: U8[]): Bool //< whether it is the bare name `name`
+    n: = bare(node)
+    if n == null
+        return false
+    if n.kind_id == .k_expr_path && n.children.len == 1
+        return n.get_child(0).text.equals(name)
+    return n.kind_id == .k_identifier && n.text.equals(name)
+
+priv fn bare(node: Ast_node$@): Ast_node$@ //< the node under brackets and casts
+    //< A typed tree wraps a name in an implicit cast (`i` beside an `Sz` is `i::Sz`).
+    $n: = node
+    for n != null
+        if n.kind_id == .k_expr_primary && n.children.len == 1
+            n = n.get_child(0)
+        else if n.kind_id == .k_expr_postfix && n.postfix_op_text().equals("::")
+            n = n.get_postfix_receiver()
+        else
+            break
+    return n
+
+priv fn collect_bound_names(c: Sema_ctx$@, node: Ast_node$@, out: List<|U8[]|>$@): Bool //<
+    //< It adds to `out` each variable the bound reads, or returns false where it cannot vouch
+    //< A constant is left out: nothing can write it. A global variable, a call or a closure gives
+    //< false, since the body could change what it returns without naming it.
+    n: = bare(node)
+    if n == null
+        return false
+    switch n.kind_id
+    case .k_integer
+        return true
+    case .k_identifier, .k_expr_path
+        return add_root(c, root_name(n), out)
+    case .k_expr
+        return n.children.len == 3 && collect_bound_names(c, n.get_binary_left(), out) &&
+            collect_bound_names(c, n.get_binary_right(), out)
+    case .k_expr_postfix
+        op: = n.postfix_op_text()
+        if op.equals(".")
+            return add_root(c, root_name(n), out)
+        if op.equals("[")
+            return collect_bound_names(c, n.get_postfix_receiver(), out) &&
+                collect_bound_names(c, n.safe_get_child(2), out)
+        if op.equals("::")
+            return collect_bound_names(c, n.get_postfix_receiver(), out)
+        return false
+    default
+        return false
+
+priv fn add_root(c: Sema_ctx$@, name: U8[], out: List<|U8[]|>$@): Bool //<
+    //< It adds a local variable or a parameter to `out`; false for a global variable or no symbol
+    if name.len == 0
+        return false
+    sym: = c.symtab.peek(name) catch
+        return false
+    switch sym.kind
+    case .constant
+        return true
+    case .variable
+        if sym.flags.is_global
+            return false
+        out.push(name)
+        return true
+    default
+        return false
+
+priv fn root_name(node: Ast_node$@): U8[] //<
+    //< The variable a place starts from (`xs` of `xs.items[k].len`), or empty
+    $n: = node
+    for n != null
+        switch n.kind_id
+        case .k_identifier
+            return n.text
+        case .k_expr_path
+            if n.children.len > 0
+                return n.get_child(0).text
+            dot: = n.text.find_char('.') catch
+                return n.text
+            return n.text.sub(0, dot)
+        case .k_expr_postfix, .k_method_access
+            n = n.get_postfix_receiver()
+        case .k_expr_primary
+            n = n.get_primary_inner_expr()
+        default
+            if n.children.len != 1
+                return ""
+            n = n.get_child(0)
+    return ""
+
+priv fn path_text(node: Ast_node$@): U8[] //<
+    //< A place written as names and `.` alone (`xs`, `r.items`), spelt out; empty for another
+    n: = bare(node)
+    if n == null
+        return ""
+    switch n.kind_id
+    case .k_identifier
+        return n.text
+    case .k_expr_path
+        b: = base_core.arena.text()
+        for k in Range.asc(n.children.len)
+            b.s("." if k > 0 else "").s(n.get_child(k).text)
+        return b.take()
+    case .k_expr_postfix
+        if n.postfix_op_text().equals("::")
+            return path_text(n.get_postfix_receiver())
+        if n.postfix_op_text().equals(".") && n.children.len == 3
+            return joined(path_text(n.get_postfix_receiver()), n.get_child(2))
+    case .k_method_access
+        return joined(path_text(n.get_postfix_receiver()), n.get_postfix_member())
+    default {}
+    return ""
+
+priv fn joined(recv: U8[], member: Ast_node$@): U8[] //< `recv.member`, or empty without a receiver
+    if recv.len == 0 || member == null
+        return ""
+    return base_core.arena.text().s(recv).s(".").s(member.text).take()
+
+priv fn len_receiver(bound: Ast_node$@): U8[] //< `xs` where the bound is `xs.len`, or empty
+    p: = path_text(bound)
+    if p.ends_with(".len")
+        return p.sub(0, p.len - 4)
+    return ""
+
+fn lint_counting_loop(c: Sema_ctx$@, r: Ast_node$@, shape: Counting_loop, body: Ast_node$@) //<
+    //< [I0314] Reports the loop where its typed body writes neither the index nor the bound
+    //< The note names `for x in xs` where the body reads the index only as `xs[i]` / `xs.get(i)`.
+    if body == null || !bound_fits_range(c, r.get_loop_cond()) || may_write(c, body, shape)
+        return
+    msg: = base_core.arena.text()
+    msg.s("[I0314] This loop counts '\{shape.index\}' in three parts. Write ")
+    if shape.bound_len_of.len > 0 && shape.start.equals("0") &&
+        reads_index_anywhere(body, shape.index) &&
+        reads_index_as_element(body, shape.index, shape.bound_len_of)
+        msg.s("'for x in \{shape.bound_len_of\}', and read each element as 'x'")
+    else if shape.start.equals("0")
+        msg.s("'for \{shape.index\} in Range.asc(\{shape.bound\})'")
+    else
+        msg.s("'for \{shape.index\} in Range.new(\{shape.start\}, \{shape.bound\}, 1)'")
+    msg.s(". Keep the three parts only where the body changes the index or the bound.")
+    c.information(r, msg.take())
+
+priv fn bound_fits_range(c: Sema_ctx$@, cond: Ast_node$@): Bool //<
+    //< Whether `Range` takes the bound as it is: an integer that widens to `Sz` by itself
+    //< A `U32` or a 64-bit bound would need a cast to `Sz` and the index another back, which says
+    //< less than the three parts.
+    bound: = bare(cond.get_binary_right())
+    if bound == null
+        return false
+    switch sema_type_env.Builtin_type_id::c.env.get_real_type(bound.type_id)
+    case .i8_type, .u8_type, .i16_type, .u16_type, .i32_type, .size_type
+        return true
+    default
+        return false
+
+priv fn watches(shape: Counting_loop, name: U8[]): Bool
+    for w in shape.watched
+        if w.equals(name)
+            return true
+    return false
+
+priv fn may_write(c: Sema_ctx$@, node: Ast_node$@, shape: Counting_loop): Bool //<
+    //< Whether anything under `node` may write the index or a variable the bound reads
+    //< A write is an assignment to a place starting from one, its address (`x@`), a method whose
+    //< receiver is `Self$@` (or unknown) called on one, or one passed where a pointer or a slice
+    //< is taken. A closure counts as a write: what it captures is not followed.
+    if node == null
+        return false
+    switch node.kind_id
+    case .k_expr_fn_lit
+        return true
+    case .k_stmt_expr
+        if node.children.len == 3 && writes_place(node.get_assign_left(), shape)
+            return true
+    case .k_decl_var
+        // A local of the same name hides the watched one; reading the rest is not worth it.
+        if watches(shape, node.get_var_decl_id().text)
+            return true
+    case .k_expr_postfix
+        op: = node.postfix_op_text()
+        if op.equals("@") && watches(shape, root_name(node.get_postfix_receiver()))
+            return true
+        if op.equals("(") && passes_watched(c, node, shape)
+            return true
+    case .k_method_access
+        if watches(shape, root_name(node.get_postfix_receiver())) && method_may_write(c, node)
+            return true
+    default {}
+    for child in node.children
+        if may_write(c, child, shape)
+            return true
+    return false
+
+priv fn writes_place(left: Ast_node$@, shape: Counting_loop): Bool //<
+    //< Whether an assignment to `left` may write a watched variable
+    //< An element written through the bound's own sequence (`xs[k] = v` under `i < xs.len`)
+    //< leaves its length alone.
+    $n: = left
+    for n != null && (n.kind_id == .k_expr_postfix || n.kind_id == .k_method_access)
+        if shape.bound_len_of.len > 0 && n.kind_id == .k_expr_postfix &&
+            n.postfix_op_text().equals("[") &&
+            path_text(n.get_postfix_receiver()).equals(shape.bound_len_of)
+            return false
+        n = n.get_postfix_receiver()
+    return watches(shape, root_name(left))
+
+priv fn passes_watched(c: Sema_ctx$@, call: Ast_node$@, shape: Counting_loop): Bool //<
+    //< Whether a call is handed a watched variable as a pointer or a slice
+    args: = call.safe_get_child(2)
+    if args == null
+        return false
+    for arg in args.children
+        if watches(shape, root_name(arg)) &&
+            (c.env.is_pointer(arg.type_id) || c.env.is_slice(arg.type_id))
+            return true
+    return false
+
+priv fn method_may_write(c: Sema_ctx$@, access: Ast_node$@): Bool //<
+    //< Whether a member reached by `.` may write its receiver
+    //< A field reads it. A method writes it unless its receiver is `Self@` or `Self`.
+    member: = access.get_postfix_member()
+    if member == null || member.def_node == null
+        return true
+    if member.def_node.kind_id == .k_struct_field
+        return false
+    switch c.env.method_receiver_permission(member.def_node)
+    case .some(need)
+        return need.mut_ptr
+    case .none
+        return true
+
+priv fn reads_index_as_element(node: Ast_node$@, index: U8[], seq: U8[]): Bool //<
+    //< Whether every use of the index under `node` is `seq[index]` or `seq.get(index)`, read
+    if node == null
+        return true
+    // A write into the sequence could change an element after `x` took it.
+    if node.kind_id == .k_stmt_expr && node.children.len == 3
+        left: = node.get_assign_left()
+        if reads_index_anywhere(left, index) || root_name(left).equals(seq_root(seq))
+            return false
+    if is_element_read(node, index, seq)
+        return true
+    if names(node, index)
+        return false
+    for child in node.children
+        if !reads_index_as_element(child, index, seq)
+            return false
+    return true
+
+priv fn seq_root(seq: U8[]): U8[] //< `r` of `r.items`
+    dot: = seq.find_char('.') catch
+        return seq
+    return seq.sub(0, dot)
+
+priv fn reads_index_anywhere(node: Ast_node$@, index: U8[]): Bool
+    if names(node, index)
+        return true
+    for child in node.children
+        if reads_index_anywhere(child, index)
+            return true
+    return false
+
+priv fn is_element_read(node: Ast_node$@, index: U8[], seq: U8[]): Bool //<
+    //< Whether `node` is `seq[index]` or `seq.get(index)`
+    if node.kind_id != .k_expr_postfix || node.children.len < 3
+        return false
+    op: = node.postfix_op_text()
+    recv: = node.get_postfix_receiver()
+    arg: = node.get_child(2)
+    if op.equals("[")
+        return path_text(recv).equals(seq) && names(arg, index)
+    if !op.equals("(") || recv.kind_id != .k_method_access ||
+        !recv.get_postfix_member().text.equals("get")
+        return false
+    return path_text(recv.get_postfix_receiver()).equals(seq) && arg.children.len == 1 &&
+        names(arg.get_child(0), index)

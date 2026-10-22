@@ -67,8 +67,7 @@ priv const OVER_OUTWARD_BODY: Sz = 70 * 1024 //< a length over the outward-facin
 
 fn main(): I32
     verdict.begin("kssrv")
-    arena: = Arena.new(256 * 1024 * 1024)
-    defer arena.free()
+    defer arena: = Arena.new(256 * 1024 * 1024)
     argv: = sys.args()
     if argv.len == 2 && argv.get(1).equals("--runs")
         for r in RUNS
@@ -635,8 +634,7 @@ priv fn sends_after_413(port: I32, arena: Arena$@): Bool!client.Http_end //<
     //< Caution: **Send the rest only after reading the 413.** The server has closed its sending
     //< side by then. So this tests what it does with the bytes still coming (`conn.Conn` in
     //< `kssrv/conn.kspl`).
-    $c: = client.Conn.open(port)!
-    defer c.free()
+    defer $c: = client.Conn.open(port)!
     head: = arena.text().s("PUT /api/file?path=sub/big.txt HTTP/1.1\r\nHost: 127.0.0.1\r\n")
         .s("Content-Length: \{OVER_OUTWARD_BODY + REST_OF_BODY\}\r\n\r\n").take()
     c.send(head)!
@@ -696,9 +694,8 @@ priv fn keepalive_cases(port: I32, arena: Arena$@): Void!client.Http_end
 priv fn answer_then(port: I32, first_lines: U8[], arena: Arena$@): U8[] //<
     //< The `Connection` the answer to a request opening with those lines names
     //< ` + closed` follows when the server then closes the connection.
-    $c: = client.Conn.open(port) catch
+    defer $c: = client.Conn.open(port) catch
         return "no connection"
-    defer c.free()
     c.send(arena.text().s(first_lines).s("Host: 127.0.0.1\r\n\r\n").take()) catch
         return "not sent"
     r: = c.next(false, client.DEFAULT_TIMEOUT_MS, arena) catch
@@ -721,9 +718,8 @@ priv const PIPELINED: Sz = 20 //< how many requests go in one write
 priv fn pipelined_answers(port: I32, shut: Bool, arena: Arena$@): Sz //<
     //< How many of `PIPELINED` requests sent in one write come back answered, in order
     //< `shut` closes the sending side once they are sent. It stops at the first that does not come.
-    $c: = client.Conn.open(port) catch
+    defer $c: = client.Conn.open(port) catch
         return 0
-    defer c.free()
     all: = arena.text()
     for _k in Range.asc(PIPELINED)
         all.s(client.raw("GET", "/index.html", "", "", arena))

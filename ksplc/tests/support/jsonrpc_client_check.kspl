@@ -44,11 +44,10 @@ priv fn check_stderr_flood(exe: U8[], dir: U8[], arena: Arena$@) //<
     io.write_file(src, script) catch
         verdict.check(name, false, "the flooding script cannot be written")
         return
-    $c: = jsonrpc_client.spawn(U8[][]::{ exe, "run", src }, "") catch
+    defer $c: = jsonrpc_client.spawn(U8[][]::{ exe, "run", src }, "") catch
         verdict.check(name, false, "the flooding peer does not start")
         return
-    defer c.free()
-    _frame: = c.read_msg(WAIT_MS, null) catch e
+    defer _frame: = c.read_msg(WAIT_MS, null) catch e
         switch e
         case .closed
             kept: = c.err_tail().len
@@ -81,14 +80,13 @@ priv fn check_notification_burst(exe: U8[], dir: U8[], arena: Arena$@) //<
     io.write_file(src, script) catch
         verdict.check(name, false, "the bursting script cannot be written")
         return
-    $c: = jsonrpc_client.spawn(U8[][]::{ exe, "run", src }, "") catch
+    defer $c: = jsonrpc_client.spawn(U8[][]::{ exe, "run", src }, "") catch
         verdict.check(name, false, "the bursting peer does not start")
         return
-    defer c.free()
     $b: = Json_builder.new(arena)
     // Before the peer answers it may already be gone, so a refused write is no failure here.
     c.notify("note", b.obj().build(), WAIT_MS, null) catch {}
-    got: = c.request("probe", b.obj().build(), WAIT_MS, null) catch e
+    defer got: = c.request("probe", b.obj().build(), WAIT_MS, null) catch e
         switch e
         case .broken
             verdict.check(name, false, "the answer was given up on behind the notifications")
@@ -97,6 +95,5 @@ priv fn check_notification_burst(exe: U8[], dir: U8[], arena: Arena$@) //<
         case .closed
             verdict.check(name, false, "the peer closed before answering")
         return
-    defer got.free()
     verdict.check(name,
         got.val.get("result").get("ok").as_int().unwrap_or(0) == 1I64, "")

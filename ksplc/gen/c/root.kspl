@@ -54,7 +54,7 @@ priv fn emit_layout_checks(cg: Genc_ctx$@) //<
     folded: = cg.sema.layout.folded
     if cg.sema.layout.folded_checked >= folded.len
         return
-    $machine: = Str_builder.new()
+    defer $machine: = Str_builder.new()
     for ch in base_target.current().name
         machine.c(ch if ch.is_alnum() else '_')
     for $i: = cg.sema.layout.folded_checked; i < folded.len; i += 1
@@ -121,10 +121,8 @@ impl Ast_node
         if cg.writes_decls()
             r.emit_forward_declarations(cg)
 
-            $pending_ast: = List<|Ast_node$@|>.new(null)
-            defer pending_ast.free()
-            $pending_complex: = List<|I32|>.new(null)
-            defer pending_complex.free()
+            defer $pending_ast: = List<|Ast_node$@|>.new(null)
+            defer $pending_complex: = List<|I32|>.new(null)
 
             r.collect_pending_nodes(cg, pending_ast@, pending_complex@)
             r.resolve_pending_queues(cg, pending_ast@, pending_complex@)
@@ -146,8 +144,7 @@ impl Ast_node
                 if child.is_emittable()
                     pending_ast.push(child)
 
-        $seen: = sema_type_naming.Mangle_seen.new(cg.env)
-        defer seen.free()
+        defer $seen: = sema_type_naming.Mangle_seen.new(cg.env)
         for t_id in cg.env.complex_types
             // A slice needs no forward declaration. **Only what passed the filter is recorded**
             // (`Mangle_seen`).
@@ -169,8 +166,7 @@ impl Ast_node
         pending_ast: List<|Ast_node$@|>$@, pending_complex: List<|I32|>$@)
         if pending_ast.len + pending_complex.len == 0
             return
-        $q: = Decl_queue.new(cg, pending_ast, pending_complex)
-        defer q.free()
+        defer $q: = Decl_queue.new(cg, pending_ast, pending_complex)
         for i in Range.asc(q.done.len)
             q.park(cg, i)
 
@@ -202,10 +198,8 @@ impl Ast_node
         //< initializers require.
         if !cg.writes_bodies()
             return
-        $pending: = List<|Ast_node$@|>.new(null)
-        defer pending.free()
-        $emitted: = List<|Bool|>.new(null)
-        defer emitted.free()
+        defer $pending: = List<|Ast_node$@|>.new(null)
+        defer $emitted: = List<|Bool|>.new(null)
         for child_node in r.children
             child: = child_node.unwrap_top_level()
             k: = child.kind_id
@@ -218,18 +212,14 @@ impl Ast_node
         // Caution: **Do not retry everything left each round** (O(N^2), as for types in
         // resolve_pending_queues). Each item remembers **only the one name it is blocked on** and
         // is retried only when that name is emitted.
-        $waiting: = Map<|U8[], I32|>.new(null)
-        defer waiting.free()
+        defer $waiting: = Map<|U8[], I32|>.new(null)
         for i in Range.asc(pending.len)
             collect_decl_name_counts(pending.get(i), waiting@)
-        $wait_next: = List<|Sz|>.new(null)
-        defer wait_next.free()
+        defer $wait_next: = List<|Sz|>.new(null)
         for _i in Range.asc(pending.len)
             wait_next.push(0)
-        $wait_head: = Map<|U8[], Sz|>.new(null)
-        defer wait_head.free()
-        $ready: = List<|Sz|>.new(null)
-        defer ready.free()
+        defer $wait_head: = Map<|U8[], Sz|>.new(null)
+        defer $ready: = List<|Sz|>.new(null)
         for i in Range.asc(pending.len)
             park_top_level_var(i, pending@, waiting@, wait_next@, wait_head@, ready@)
 
@@ -301,8 +291,7 @@ int main(int _argc, char **_argv) {
         init_node: = r.get_var_decl_expr()
         if init_node == null || init_node.kind_id == .k_empty
             return ""
-        $queue: = List<|Ast_node$@|>.new(null)
-        defer queue.free()
+        defer $queue: = List<|Ast_node$@|>.new(null)
         queue.push(init_node)
         $q_idx: Sz = 0
         for q_idx < queue.len
@@ -319,8 +308,7 @@ int main(int _argc, char **_argv) {
     priv fn decl_block(r: Ast_node$@, cg: Genc_ctx$@, type_pending: Map<|I32, I32|>$@,
         name_pending: Map<|U8[], I32|>$@, self_real_type: I32, self_name: U8[]): Dep_block //<
             //< It returns the key declaration r is blocked on (both empty where it is not blocked).
-        $dep_queue: = List<|Ast_node$@|>.new(null)
-        defer dep_queue.free()
+        defer $dep_queue: = List<|Ast_node$@|>.new(null)
         dep_queue.push(r)
         $q_idx: Sz = 0
 
@@ -375,7 +363,7 @@ priv fn node_block(curr: Ast_node$@, cg: Genc_ctx$@, type_pending: Map<|I32, I32
             dep_ids[0] = t_id
             dep_ids_len = 1
     else
-        $extracted: = curr.extract_type_name()
+        defer $extracted: = curr.extract_type_name()
         t_str: = extracted.slice()
         if t_str.ends_with("]") || t_str.ends_with("@")
             is_value_dep = false
@@ -420,7 +408,15 @@ priv struct Decl_queue //< the declarations not yet emitted, each waiting on one
     wait_name: Map<|U8[], Sz|> //< the first item waiting on a name
     ready: List<|Sz|> //< the items free to emit, in the order they became free
 
-impl Decl_queue: Manual_free {}
+impl Decl_queue: Manual_free
+    fn free(r: Self$@)
+        r.type_pending.free()
+        r.name_pending.free()
+        r.done.free()
+        r.wait_next.free()
+        r.wait_id.free()
+        r.wait_name.free()
+        r.ready.free()
 
 impl Decl_queue
     fn new(cg: Genc_ctx$@, pending_ast: List<|Ast_node$@|>$@, pending_complex: List<|I32|>$@):
@@ -447,15 +443,6 @@ impl Decl_queue
             q.done.push(false)
             q.wait_next.push(0)
         return q
-
-    fn free(r: Self$@)
-        r.type_pending.free()
-        r.name_pending.free()
-        r.done.free()
-        r.wait_next.free()
-        r.wait_id.free()
-        r.wait_name.free()
-        r.ready.free()
 
     fn emit(r: Self$@, cg: Genc_ctx$@, i: Sz) //< emits item i, and marks it done
         r.done.set(i, true)

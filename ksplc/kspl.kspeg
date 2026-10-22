@@ -37,7 +37,7 @@ decl_import = 'import' String ( 'as' Identifier )? ( decl_import_plus? decl_impo
 // Caution: **Not a bare `"+"`**: a separator literal drops in normalization; a rule stays a node.
 decl_import_plus = "+"
 decl_import_selector_list = "{" decl_import_selector ( "," decl_import_selector )* ","? "}"
-decl_import_selector = Identifier ( 'as' Identifier )?
+decl_import_selector = Identifier
 
 decl_embed = 'embed' String 'as' Identifier Stmt_end
 
@@ -65,7 +65,9 @@ lint_setting = Identifier "=" Identifier
 // The type may be omitted **for a local alone**; decl_top and stmt share these rules.
 decl_const = attribute_list? 'const' Identifier ( ":" type_expr )? "=" expr Stmt_end
 
-decl_var = decl_var_item ( "," decl_var_item )*
+// One name per declaration. `decl_var_item` stays a node of its own: it holds the attributes a
+// `#cfg` drops (`elide_node` in `parse/normalize.kspl`).
+decl_var = decl_var_item
 
 decl_var_item = attribute_list? "$"? Identifier ":" type_expr? ( "=" expr )?
 
@@ -142,8 +144,10 @@ stmt_fallback = 'fallback' expr Stmt_end
 stmt_break    = 'break' Identifier? Stmt_end
 stmt_continue = 'continue' Identifier? Stmt_end
 // A statement or a block; the normalizer gives both the block shape
-// (`normalize_defer_stmt` in parse/normalize_stmt.kspl).
-stmt_defer    = 'defer' ( stmt_block | stmt_expr Stmt_end )
+// (`normalize_defer_stmt` in parse/normalize_stmt.kspl). **A declaration is tried before the
+// statement** (`defer $b: = Str_builder.new()`): no expression starts with `name:`. The
+// desugaring splits it into the declaration and its `defer b.free()` (`parse/desugar.kspl`).
+stmt_defer    = 'defer' ( stmt_block | decl_var Stmt_end | stmt_expr Stmt_end )
 
 // A condition is an expression or **an Option binding, tried first** (else `expr` eats the name
 // and sticks at the `:`); the binding is `Option`'s alone (§7.1 of `../docs/SPEC-programming-language.md`).
@@ -155,12 +159,10 @@ label = Identifier ":"
 
 stmt_for = label? 'for' (
     Identifier 'in' expr stmt_block
-    | for_init? ";" expr? ";" for_step? stmt_block
+    | ( decl_var | stmt_expr )? ";" expr? ";" stmt_expr? stmt_block
     | expr stmt_block
     | stmt_block
 )
-for_init = decl_var | stmt_expr
-for_step = stmt_expr ( "," stmt_expr )*
 
 stmt_switch = label? 'switch' expr ( 'case' case_pattern ( "," case_pattern )* stmt_block )+ ( 'default' stmt_block )?
 stmt_labeled_block = label stmt_block

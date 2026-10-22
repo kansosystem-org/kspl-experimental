@@ -55,7 +55,6 @@ impl Ast_node
             subject: = r.get_child(0)
             variant: = cg.env.variant_at(subject.type_id, r.ival) catch
                 r.ice_panic("genllvm: a payload read names no variant")
-                return base_core.arena.dup_str("0")
             return cg.payload_field_ptr(subject.emit_llvm_lvalue(cg), subject.type_id, variant,
                 r.get_child(1).ival)
         case .k_expr_postfix
@@ -175,10 +174,9 @@ impl Ast_node
             cg.op_load(res_reg, r.type_id, ptr_reg)
             return cg.reg_str(res_reg)
         default
-            $msg: = Str_builder.new()
+            defer $msg: = Str_builder.new()
             msg.s("Genllvm ICE: Unhandled expr kind: ").s(r.get_kind_str())
             r.ice_panic(msg.slice())
-            return base_core.arena.dup_str("0")
     fn emit_llvm_integer_literal(r: Ast_node$@, cg: Genllvm_ctx$@): U8$[] //<
         //< It emits an integer literal as decimal (the IR accepts no 0x/0b)
         //< It does not use eval_constexpr, which is limited to I32.
@@ -396,10 +394,9 @@ impl Ast_node
             return r.emit_llvm_cast(cg)
         if op.equals("(")
             return r.emit_llvm_call(cg)
-        $msg: = Str_builder.new()
+        defer $msg: = Str_builder.new()
         msg.s("Genllvm ICE: Unhandled postfix op: ").s(op)
         r.ice_panic(msg.slice())
-        return base_core.arena.dup_str("0")
     fn emit_llvm_cast(r: Ast_node$@, cg: Genllvm_ctx$@): U8$[] //<
         //< The '::' cast: slicing, and conversion between integers, floating points and pointers
         recv: = r.get_postfix_receiver()
@@ -474,7 +471,7 @@ impl Ast_node
         cg.t(target_type).s("\n")
 
         return cg.reg_str(res_reg)
-impl Ast_node
+
     priv fn emit_llvm_float_to_int(r: Ast_node$@, cg: Genllvm_ctx$@, recv_reg: U8$[], src_id: I32,
         dst_id: I32): U8$[] //<
             //< A cast from floating point to an integer: a constant's value, else a saturating one

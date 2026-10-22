@@ -80,7 +80,7 @@ impl Path_parts
 
 priv fn spelled_before_args(parts: Path_parts): U8[] //<
     //< The segments up to the first `<|…|>`, joined by `.` (`m.Plain.gen` of `m.Plain.gen<|U16|>`)
-    $b: = Str_builder.new()
+    defer $b: = Str_builder.new()
     for i in Range.asc(parts.len())
         part: = parts.get(i)
         if part.kind_id == .k_type_args
@@ -199,7 +199,7 @@ priv fn spelled_name(path: Ast_node$@): U8[] //< a path's segments joined by `.`
         return ""
     if path.children.len == 0
         return path.text
-    $b: = Str_builder.new()
+    defer $b: = Str_builder.new()
     $is_first: = true
     for child in path.children
         if child.kind_id == .k_type_args
@@ -461,7 +461,7 @@ impl Sema_ctx
         //< The FQN is the file's path, which no import of this file names as an alias.
         file: =
             named.sym.get_defined_in() if named.sym != null else named.template.loc.file()
-        $dotted: = Str_builder.new()
+        defer $dotted: = Str_builder.new()
         dotted.s_path_as_dots(file).c('.')
         within: =
             (named.spelled.sub_from(dotted.slice().len)
@@ -476,7 +476,7 @@ impl Sema_ctx
         target_node: = impl_node.get_decl_type_node()
         if written: = written_name_of(target_node)
             return r.read_written_type(written).fqn
-        $spelled: = target_node.extract_type_name()
+        defer $spelled: = target_node.extract_type_name()
         return r.resolve_fqn_for_type(spelled.slice().get_generic_base_name())
 
     fn written_type_symbol(r: Self$@, w: Written_type): Sema_symbol$@? //<
@@ -596,15 +596,13 @@ impl Sema_ctx
         head: = path.get_child(0).text
         $file: = r.get_file_alias_target(r.file_name, head)
         $seg_start: Sz = 1
-        $first: = head
         if file.len == 0
             imported: = r.get_import_symbol_target(r.file_name, head)
             if imported.len > 0
                 file = imported
-                first = r.get_import_symbol_original_name(r.file_name, head)
                 seg_start = 0
         if file.len > 0
-            r.read_name_in_file(path, file, first, seg_start, w)
+            r.read_name_in_file(path, file, head, seg_start, w)
             return
         full: = path.get_full_path_str()
         w.sym = r.symtab.resolve(full).unwrap_or(null)
@@ -631,7 +629,7 @@ impl Sema_ctx
             //< Caution: **Check the head segment alone** for whether the file holds the name. The
             //< `new` of `ds.List<|I32|>.new` is not in the table until monomorphization, so
             //< checking the whole path would reject a legitimate name; the head is known now.
-        $b: = Str_builder.new()
+        defer $b: = Str_builder.new()
         $head_name: U8[] = ""
         for $j: = seg_start; j < path.children.len; j += 1
             child: = path.get_child(j)
@@ -682,7 +680,7 @@ impl Sema_ctx
             args: = written.args.build_resolved_type_args(r, tmpl)
                 catch sema_decl_resolve.unknown_args()
             r.suppress_errors = saved_sup
-            $inst: = r.instance_written(written, args, path) catch
+            defer $inst: = r.instance_written(written, args, path) catch
                 return .none
             owner = r.env.get_str(r.env.get_or_add(inst.slice()))
         return r.resolve_type_method_fqn(join_dotted_name(owner, written.member.text))

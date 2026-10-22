@@ -1,0 +1,116 @@
+//< The checks on a local declared with `defer` in front (`defer $b: = Str_builder.new()`)
+//< The desugaring splits that declaration into `$b: = …` and a `defer b.free()` it marks as made
+//< by the compiler (`../../parse/desugar.kspl`). Here sema refuses a type with nothing to free,
+//< and a value handed over while its `defer` still frees it.
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_place" as base_ast_place
+import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/sema/session/ctx" { Sema_ctx, Sema_error }
+import "ksplc/sema/type/arc" as sema_type_arc
+import "ksplc/sema/type/display" as sema_type_display
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as sema_type_query
+import "std/str"
+
+fn refuse_unfreeable(c: Sema_ctx$@, made: Ast_node$@): Void!Sema_error //<
+    //< Refuses the `defer b.free()` made for `defer $b: = X` where b's type has no `Manual_free`
+    //< **The call goes through the trait, matched by its full name**: a method that is only named
+    //< `free` does not count. The report stands at the declaration, and the made call is not typed,
+    //< so its "no method 'free'" does not follow.
+    name: = freed_name(made)
+    sym: = c.symtab.resolve(name).unwrap_or(null)
+    if sym == null || sym.node == null || !sym.node.is_defer_declared()
+        return
+    t_id: = sym.type_id
+    if sema_type_env.is_unknown(t_id)
+        throw .analysis_failed
+    if c.env.has_release_contract(t_id)
+        return
+    shown: = c.env.display(t_id)
+    c.clear_scratch()
+        .s("'\{shown\}' does not conform to 'Manual_free', so 'defer' on the declaration of \
+            '\{name\}' has nothing to call. Declare it without 'defer', and write its cleanup on \
+            the next line")
+    at: = sym.node.get_var_decl_id()
+    c.err(at if at != null else made, c.scratch.slice())
+    throw .analysis_failed
+
+priv fn freed_name(made: Ast_node$@): U8[] //< the `b` of the made `defer b.free()`
+    if block: = made.get_defer_block()
+        stmt: = block.safe_get_child(0)
+        call: = stmt.safe_get_child(0) if stmt != null else null
+        access: = call.safe_get_child(0) if call != null else null
+        recv: = access.safe_get_child(0) if access != null else null
+        if recv != null && recv.kind_id == .k_identifier
+            return recv.text
+    return ""
+
+fn refuse_handover(c: Sema_ctx$@, body: Ast_node$@) //<
+    //< Refuses handing over a value that its `defer` frees when the block ends
+    //< The handovers are a `return` or `throw` carrying the name, a store of the name as a whole
+    //< (into a variable, a field, a struct or an array), and passing it by value where its type is
+    //< `Move_only`. A pointer is handed over only by a `return` or a `throw`. **It reads one
+    //< function's code as written**, not its paths, and stops at a closure, whose names are its
+    //< captures.
+    //< **A generic body is read in each instance used**, and reported once per place.
+    if body == null
+        return
+    walk(c, body, null, null, "")
+
+priv fn walk(c: Sema_ctx$@, node: Ast_node$@, parent: Ast_node$@, grand: Ast_node$@,
+    carried: U8[]) //<
+        //< Checks node and its subtree
+        //< carried is "returned" under a `return`, "thrown" under a `throw`, and empty elsewhere.
+    if node == null || node.kind_id == .k_expr_fn_lit
+        return
+    if node.is_path_or_ident() && node.def_node.is_defer_declared() && parent != null
+        if how: = handover(c, node, parent, grand, carried)
+            report(c, node, how)
+        return
+    $under: = carried
+    if node.kind_id == .k_stmt_return
+        under = "returned"
+    else if node.kind_id == .k_stmt_throw
+        under = "thrown"
+    for child in node.children
+        walk(c, child, node, parent, under)
+
+priv fn handover(c: Sema_ctx$@, name: Ast_node$@, parent: Ast_node$@, grand: Ast_node$@,
+    carried: U8[]): U8[]? //<
+        //< How the name, standing as a whole value under parent, is handed over; `.none` if not
+        //< **A call's argument is passed, not carried**: only a variant's payload (`.some(b)`)
+        //< goes out with a `return` or a `throw`.
+    k: = parent.kind_id
+    if k == .k_stmt_return
+        return .some("returned")
+    if k == .k_stmt_throw
+        return .some("thrown")
+    // **A pointer stored elsewhere lends what it points at**, as `x@` does: only returning or
+    // throwing it hands it over.
+    if c.env.is_pointer(name.type_id) && carried.len == 0
+        return .none
+    // A `for x in xs` holds `xs` in a binding of its own (`var_synth`), which borrows it.
+    if k == .k_decl_var && parent.get_var_decl_expr() == name &&
+        !parent.text.equals("var_synth")
+        return .some("stored")
+    if k == .k_stmt_expr && parent.children.len == 3 && parent.get_child(2) == name &&
+        parent.get_child(1).text.equals("=")
+        return .some("stored")
+    // A value made into a Result's `ok` (`k_result_wrap`) is handed over with it.
+    if k == .k_expr_field_init || k == .k_struct_literal || k == .k_result_wrap
+        return .some(carried if carried.len > 0 else "stored")
+    if k == .k_expr_args
+        if carried.len > 0 && grand != null && grand.kind_id == .k_enum_init_call
+            return .some(carried)
+        if c.env.is_move_only(name.type_id)
+            return .some("moved")
+    return .none
+
+priv fn report(c: Sema_ctx$@, at: Ast_node$@, how: U8[]) //<
+    //< Reports the handover at the name
+    name: = at.get_path_or_ident_name()
+    c.clear_scratch()
+        .s("'\{name\}' is freed when its block ends, so it cannot be \{how\} here. Declare it \
+            without 'defer' to hand it over")
+    c.err(at, c.scratch.slice())

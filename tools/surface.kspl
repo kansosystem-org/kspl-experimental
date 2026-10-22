@@ -66,7 +66,7 @@ priv fn built(pkg: U8[], ksplc: U8[], arena: Arena$@): U8[]!fs.Fs_error //<
     //< so each file is one in turn.
     fs.mkdir_all(WORK_DIR)!
     files: = sources(pkg, arena)!
-    $out: = Str_builder.new()
+    defer $out: = Str_builder.new()
     for src in files
         stem: = stem_of(src, arena)
         tsv: = fs.join(WORK_DIR, arena.text().s(stem).s(".tsv").take(), arena)
@@ -92,8 +92,7 @@ priv fn declarations_only(body: U8[], arena: Arena$@): U8[] //<
     //< **Writing and checking both go through here**; filter only one and every parameter looks
     //< missing to the other.
     out: = arena.text()
-    $ls: = body.lines(null)
-    defer ls.free()
+    defer $ls: = body.lines(null)
     for ln in ls
         if ln.len == 0
             continue
@@ -158,13 +157,13 @@ priv fn do_check(pkg: U8[], ksplc: U8[], arena: Arena$@): Sz!fs.Fs_error
         throw .not_found
     whole: = built(pkg, ksplc, arena)!
     body: = declarations_only(whole, arena)
-    $b: = Str_builder.new()
+    defer $b: = Str_builder.new()
     $was: = rows.rows_of(had, arena)
     $now: = rows.rows_of(body, arena)
     n: = rows.classify(was@, now@, b@)
-    $d: = Str_builder.new()
+    defer $d: = Str_builder.new()
     m: = rows.undocumented(now@, d@)
-    $t: = Str_builder.new()
+    defer $t: = Str_builder.new()
     k: = rows.drifted_twins(now@, t@, arena)
     if n == 0 && m == 0 && k == 0
         io.out().s("\{path\}: the API is as recorded, and every entry says what it is\n")
@@ -183,8 +182,7 @@ priv fn do_check(pkg: U8[], ksplc: U8[], arena: Arena$@): Sz!fs.Fs_error
     return n + m + k
 
 fn main(): I32 //< writes or checks the record of a package's published API
-    arena: = Arena.new(64 * 1024 * 1024)
-    defer arena.free()
+    defer arena: = Arena.new(64 * 1024 * 1024)
     $ksplc: U8[] = ""
     p: = argparse.Parser
         .create(sys.program_name(), "make / match the record of the API a package publishes", arena)
@@ -193,7 +191,7 @@ fn main(): I32 //< writes or checks the record of a package's published API
     p.subcommand("pages", "write the reference to browse under out/docs/ (`ksplc doc`'s answers)")
     p.positional("<package>")
     p.str_opt("--ksplc", ksplc@, "the compiler to use (default out/ksplc_stage1.exe)")
-    p.parse_or_exit(sys.args(), arena)
+    p.parse_or_exit()
     if p.command.is_none() || p.rest.len != 1
         io.err().s("\{sys.program_name()\}: pass write, check or pages, and one package\n")
         return 1

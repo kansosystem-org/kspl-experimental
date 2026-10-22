@@ -125,7 +125,7 @@ priv fn workspace_source(server: Server$@, uri: U8[]): U8[]? //<
     //< The open buffer or saved file, copied onto the analysis arena; none when unreadable
     if text: = server.docs.open_text(uri)
         return .some(base_core.arena.dup_str(text))
-    $file_path: = Str_builder.new()
+    defer $file_path: = Str_builder.new()
     file_path.s(uri.strip_file_uri())
     file_path.ensure_kspl_ext()
     src: = io.read_file(file_path.slice(), null) catch
@@ -394,8 +394,7 @@ impl Server
         sent: = src_val.as_str().unwrap_or("")
         // The indentation problems found while converting are **collected, not reported here** (the
         // reason is at `parse_load.layout_notes`); `pipeline.kspl` reports them once sema starts.
-        scratch: = Arena.new(LAYOUT_SCRATCH_BYTES)
-        defer scratch.free()
+        defer scratch: = Arena.new(LAYOUT_SCRATCH_BYTES)
         $laid_notes: = List<|parse_layout.Note|>.new(scratch)
         if src: = r.store_converted(uri, sent, laid_notes@, scratch)
             // Caution: **Record the notes after the rewind, never before.** `store_converted`
@@ -417,8 +416,7 @@ impl Server
         //< two processes: watcher and analyser" in `../docs/DESIGN-tools.md`). The
         //< conversion's notes are dropped: that didOpen converts again and records them.
         text_doc: = params.get("textDocument")
-        scratch: = Arena.new(LAYOUT_SCRATCH_BYTES)
-        defer scratch.free()
+        defer scratch: = Arena.new(LAYOUT_SCRATCH_BYTES)
         $notes: = List<|parse_layout.Note|>.new(scratch)
         _held: = r.store_converted(text_doc.get("uri").as_str().unwrap_or(""),
             text_doc.get("text").as_str().unwrap_or(""), notes@, scratch)
@@ -504,13 +502,11 @@ fn run_lsp_worker(base_parser: kspeg.Target$@): Void
     // hang by how long silence lasts. Otherwise a heavy didOpen (hundreds of files plus the
     // analysis) is silent throughout. Then a live worker is killed and the document quarantined.
     base_core.progress_hook = lsp_msg.send_worker_alive
-    server: = Server.new(base_parser)
-    defer server.free()
+    defer server: = Server.new(base_parser)
 
-    msg_arena: = Arena.new(8 * 1024 * 1024)
-    defer msg_arena.free()
+    defer msg_arena: = Arena.new(8 * 1024 * 1024)
     init_state: = msg_arena.save()
-    $payload: = Str_builder.new()
+    defer $payload: = Str_builder.new()
 
     for
         msg_arena.restore(init_state)

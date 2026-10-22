@@ -61,7 +61,7 @@ fn write_type_of(c: Sema_ctx$@, type_node: Ast_node$@, own_id: I32, out: Str_bui
     // is this path called", so on a desugared slice it returns only the element and a `U8[][]`
     // comes out as `U8`.
     spelt: = type_node.get_full_path_str()
-    $named: = c.env.display_str_named(spelt)
+    defer $named: = c.env.display_str_named(spelt)
     out.s(named.slice())
 
 priv fn spell_for_editor(c: Sema_ctx$@, part: base_ast_spell.Sig_part, out: Str_builder$@): Bool //<
@@ -91,13 +91,12 @@ fn format_fn_sig(c: Sema_ctx$@, fn_node: Ast_node$@, src: U8[]): Str_builder //<
     //< Caution: **Use one line per parameter where anything in the signature is described.** A
     //< `//<` describes the line it is on, so squeezed onto one line every description runs together
     //< into a sentence that describes nothing.
-    $docs: = List<|base_ast_doc.Param_doc|>.new(null)
-    defer docs.free()
+    defer $docs: = List<|base_ast_doc.Param_doc|>.new(null)
     if src.len > 0 && fn_node.get_fn_params() != null
         base_ast_doc.param_docs(src, fn_node, docs@)
     ret_doc: = base_ast_doc.return_doc(src, fn_node) if src.len > 0 else ""
 
-    $flat: = format_fn_sig_flat(c, fn_node)
+    defer $flat: = format_fn_sig_flat(c, fn_node)
     $described: = ret_doc.len > 0
     for i in Range.asc(docs.len)
         if docs.get(i).doc.len > 0
@@ -109,8 +108,7 @@ fn format_fn_sig(c: Sema_ctx$@, fn_node: Ast_node$@, src: U8[]): Str_builder //<
         res.s(flat.slice())
         return res
 
-    $parts: = List<|base_ast_spell.Sig_part|>.new(null)
-    defer parts.free()
+    defer $parts: = List<|base_ast_spell.Sig_part|>.new(null)
     fn_node.sig_parts(parts@)
     res.s("(\n")
     for i in Range.asc(parts.len)

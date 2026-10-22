@@ -44,7 +44,7 @@ fn net_count_then_answer(listener: net.Tcp_listener$@): Void$@
         if n == 0
             break
         total += n
-    $said: = str.Str_builder.new()
+    defer $said: = str.Str_builder.new()
     said.s("\{total\}")
     conn.write_all(said.slice()) catch panic("server write should succeed")
     conn.free()
@@ -363,7 +363,7 @@ fn test_child_holds_no_socket(ksplc: U8[]) //<
     // **Wait with a bound**: were the connection held by the child, a plain read would never
     // return.
     client.set_nonblocking() catch panic("set_nonblocking should succeed on a connected socket")
-    $r: = reactor.Reactor.new()
+    defer $r: = reactor.Reactor.new()
     r.register(client.raw_handle(), reactor.READABLE, 0)
     $ready: = r.wait(5000) catch panic("wait should succeed")
     seen: = ready.len == 1
@@ -486,7 +486,7 @@ fn test_reactor_multi_connection()
         thread.Thread.spawn<|net.Tcp_listener|>(reactor_multi_echo_server, listener)
         catch panic("thread spawn failed")
 
-    $r: = reactor.Reactor.new()
+    defer $r: = reactor.Reactor.new()
     c0: = net.Tcp_stream.connect("127.0.0.1", port)
         catch panic("connect should succeed once the listener is bound")
     c1: = net.Tcp_stream.connect("127.0.0.1", port)
@@ -583,7 +583,7 @@ fn test_reactor_writable()
         catch panic("connect should succeed once the listener is bound")
     client.set_nonblocking() catch panic("set_nonblocking should succeed on a connected socket")
 
-    $r: = reactor.Reactor.new()
+    defer $r: = reactor.Reactor.new()
     r.register(client.raw_handle(), reactor.WRITABLE, 7)
     $ready: = r.wait(5000) catch panic("wait should succeed on a connected stream")
     ready_token: = ready.get(0).token
@@ -614,7 +614,7 @@ fn test_accept_returns_blocking()
     listener.set_nonblocking() catch panic("set_nonblocking should succeed on a listener")
     client: = net.Tcp_stream.connect("127.0.0.1", port)
         catch panic("connect should succeed once the listener is bound")
-    $r: = reactor.Reactor.new()
+    defer $r: = reactor.Reactor.new()
     r.register(listener.raw_handle(), reactor.READABLE, 0)
     $ready: = r.wait(5000) catch panic("wait should succeed")
     ready.free()

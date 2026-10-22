@@ -69,17 +69,6 @@ struct String_pool
     list: List<|U8$[]|>
 
 impl String_pool
-    fn free(r: Self$@)
-        if r == null
-            return
-        r.map.free()
-        // Free the bytes of every string that intern allocated
-        for $i: = 1; i < r.list.len; i += 1
-            s: = r.list.get(i)
-            dealloc(Void$@::s.ptr)
-        r.list.free()
-        dealloc(Void$@::r)
-
     fn new(): String_pool$@
         p: = mem.alloc_as<|String_pool|>()
         // 512 saves the ast_kinds pool a resize (it has under 256 kinds); for symbol_names it is
@@ -227,7 +216,7 @@ fn is_library(): Bool //< whether a library is built (`--library=`)
 
 fn is_llvm_target(): Bool //< whether the output goes to the LLVM IR backend
     //< The checks whose accepted spelling depends on the backend share it (check_ffi_safety in
-    //< sema/session/ctx.kspl, __kspl_inline_c in sema/body/call.kspl).
+    //< sema/session/ctx.kspl, __kspl_asm_volatile in sema/body/call.kspl).
     switch config.target
     case .llvm
         return true
@@ -277,7 +266,7 @@ fn source_of(map: Map<|U8[], U8$[]|>$@, file: U8[]): U8$[] //<
     got: = map.get(file).unwrap_or("")
     if got.len > 0
         return got
-    $named: = Str_builder.new()
+    defer $named: = Str_builder.new()
     named.s(file).s(SOURCE_EXT)
     return map.get(named.slice()).unwrap_or("")
 
@@ -305,12 +294,6 @@ impl Global_pools
         r.ast_kinds = String_pool.new()
         r.symbol_names = String_pool.new()
         r.source_files = String_pool.new()
-
-    fn free(r: Self$@)
-        r.ast_kinds.free()
-        r.symbol_names.free()
-        r.source_files.free()
-        r$ = ::{}
 
     fn intern_kind(r: Self$@, kind: U8[]): I32
         return r.ast_kinds.intern(kind)
@@ -515,5 +498,20 @@ fn by_descending(a: I64, b: I64): I32 //< an `order_by` result that puts the lar
         return 0
     return -1 if a > b else 1
 
-impl String_pool: Manual_free {}
-impl Global_pools: Manual_free {}
+impl String_pool: Manual_free
+    fn free(r: Self$@)
+        if r == null
+            return
+        r.map.free()
+        // Free the bytes of every string that intern allocated
+        for i in Range.new(1, r.list.len, 1)
+            s: = r.list.get(i)
+            dealloc(Void$@::s.ptr)
+        r.list.free()
+        dealloc(Void$@::r)
+impl Global_pools: Manual_free
+    fn free(r: Self$@)
+        r.ast_kinds.free()
+        r.symbol_names.free()
+        r.source_files.free()
+        r$ = ::{}

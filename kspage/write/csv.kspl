@@ -22,8 +22,7 @@ import "std/str" { Str_builder }
 priv const QUOTE: U8 = '"'
 
 priv fn tricky(text: U8[]): Bool //< whether the text has to be quoted
-    for $i: Sz = 0; i < text.len; i += 1
-        c: = text[i]
+    for c in text
         if c == ',' || c == QUOTE || c == '\n' || c == '\r'
             return true
     return false
@@ -63,7 +62,7 @@ priv fn field_into(out: Str_builder$@, text: U8[]) //< writes one cell to `out`
     //< file. **A bare number is never guarded**, so `-5` stays `-5`.
     //< Caution: **Decide by the text written, not by the value's type.** A number cell's style
     //< puts its prefix in front (`=HYPERLINK(…)+0*`), and a spreadsheet runs what it reads.
-    $sb: = Str_builder.new()
+    defer $sb: = Str_builder.new()
     if formula_like(text) && !plain_figure(text)
         sb.c(GUARD)
     sb.s(text)
@@ -72,10 +71,10 @@ priv fn field_into(out: Str_builder$@, text: U8[]) //< writes one cell to `out`
         out.s(got)
         return
     out.c(QUOTE)
-    for $i: Sz = 0; i < got.len; i += 1
-        if got[i] == QUOTE
+    for elem in got
+        if elem == QUOTE
             out.c(QUOTE)
-        out.c(got[i])
+        out.c(elem)
     out.c(QUOTE)
 
 priv fn unguarded(text: U8[]): U8[] //< a field read with the writer's `'` taken back off
@@ -91,8 +90,8 @@ fn write_table(t: Block$@, out: Str_builder$@, arena: Arena$@) //< writes one ta
         return
     tiles: = t.tiles_of(arena)
     cols: = t.grid_columns(arena)
-    for $r: Sz = 0; r < t.children.len; r += 1
-        for $c: Sz = 0; c < cols; c += 1
+    for r in Range.asc(t.children.len)
+        for c in Range.asc(cols)
             if c > 0
                 out.c(',')
             if n: = cell_inline(tiles, r, c)
@@ -104,8 +103,7 @@ fn write_table(t: Block$@, out: Str_builder$@, arena: Arena$@) //< writes one ta
 priv fn cell_inline(tiles: List<|Tile|>$@, row: Sz, column: Sz): Inline$@? //<
     //< The text of the cell at row `row`, column `column`; none for a covered or empty cell
     //< Its shown text is written, and that text decides the guard (`field_into`).
-    for $i: Sz = 0; i < tiles.len; i += 1
-        one: = tiles.get(i)
+    for one in tiles
         if one.row == row && one.column == column && one.block != null &&
             one.block.inlines.len > 0
             return .some(one.block.inlines.get(0))
@@ -157,7 +155,7 @@ priv fn read_row(c: Reader$@, out: List<|U8[]|>$@, arena: Arena$@): Bool //<
     out.len = 0
     $more: = true
     for more
-        $sb: = Str_builder.new()
+        defer $sb: = Str_builder.new()
         // Caution: **Read on to the separator after a closing quote** (`"q"junk` is `qjunk`).
         // Stopped there, the rest would start a row of its own.
         if c.pos < c.src.len && c.src[c.pos] == QUOTE
@@ -192,10 +190,10 @@ fn read_table(src: U8[], name: U8[], arena: Arena$@): Block$@? //<
     if rows.len <= 0 || wide <= 0
         return .none
     made: = doc.new_block(name, arena)
-    for $r: Sz = 0; r < rows.len; r += 1
+    for item in rows
         row: = made.add_child("")
-        got: = rows.get(r)
-        for $i: Sz = 0; i < wide; i += 1
+        got: = item
+        for i in Range.asc(wide)
             text: = unguarded(got.get(i)) if i < got.len else ""
             row.add_child("").add_text(text)
     return .some(made)

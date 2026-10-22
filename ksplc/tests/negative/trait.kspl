@@ -325,6 +325,69 @@ fn main(): I32
   $p: Pair = ::{ .a = 1, .b = 2 }
   p[0] += 5
   return p.a
+// ==== case trait_method_outside_its_block
+//< A trait's method counts only where it stands in the block that names the trait
+//< Written in the type's plain block, or in the block of another trait, it is refused. The error
+//< names the line to move it from. Let through, the conformance block would not show how the type
+//< meets the trait. The passing side: the method in its own block, and a trait with no methods
+//< under `{}`.
+// EXPECT: 'Plain: Closer' requires 'close'. Move 'fn close' (line
+// EXPECT: 'Twice: Sizer' requires 'size'. Move 'fn size' (line
+// EXPECT: 'Held<|T|>: Sizer' requires 'size'. Move 'fn size' (line
+// EXPECT-NOT: 'Own: Closer' requires
+// EXPECT-NOT: 'Own: Marker' requires
+priv trait Closer
+  fn close(r: Self)
+
+priv trait Sizer
+  fn size(r: Self): Sz
+
+priv trait Shower
+  fn show(r: Self): U8[]
+
+priv trait Marker {}
+
+priv struct Plain
+  v: I32
+
+priv struct Twice
+  v: I32
+
+priv struct Own
+  v: I32
+
+impl Plain
+  fn close(r: Self$@)
+    r.v = 0
+
+impl Plain: Closer {}
+
+impl Twice: Shower
+  fn show(_r: Self@): U8[]
+    return "twice"
+  fn size(_r: Self@): Sz
+    return 2
+
+impl Twice: Sizer {}
+
+priv struct Held<|T|>
+  v: T
+
+impl<|T|> Held<|T|>
+  fn size(_r: Self@): Sz
+    return 1
+
+impl<|T|> Held<|T|>: Sizer {}
+
+impl Own: Closer
+  fn close(r: Self$@)
+    r.v = 0
+
+impl Own: Marker {}
+
+fn main()
+  $o: = Own::{ .v = 1 }
+  o.close()
 // ==== case trait_proto_missing_param_type
 //< A trait method prototype that omits a parameter's type annotation
 //< A prototype holds no body and skips infer_fn, which rejects this in an ordinary function, so

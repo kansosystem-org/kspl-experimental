@@ -159,7 +159,6 @@ enum Reach //< how the program's file names what the library declares
     direct //< by its own name, declared in the same file
     alias //< `m.gf`, through `import "…" as m`
     select //< `gf`, through `import "…" { gf }`
-    rename //< `pick`, through `import "…" { gf as pick }`
     unimported //< `gf` bare, though the file is imported only as `_m`
 
 enum Decoy //< a third file declaring every name of the library again
@@ -206,9 +205,6 @@ const ACCESSES: Access[_] = ::{
         .vis = "pub ", .reach = .alias, .decoy = .none, .via = .name, .refusal = "" },
     Access::{ .name = "ext_select", .what = "pub in another package, selected", .home = .ext,
         .vis = "pub ", .reach = .select, .decoy = .none, .via = .name, .refusal = "" },
-    Access::{ .name = "ext_rename", .what = "pub in another package, selected under another name",
-        .home = .ext, .vis = "pub ", .reach = .rename, .decoy = .none, .via = .name,
-        .refusal = "" },
     // SPEC-language 9.4: unmarked is the package's alone.
     Access::{ .name = "ext_hidden", .what = "unmarked in another package, as m.", .home = .ext,
         .vis = "", .reach = .alias, .decoy = .none, .via = .name,
@@ -259,22 +255,11 @@ impl Owner
         case .plain
             return "Plain"
 
-    fn renamed(r: Self): U8[] //< the name a renaming selective import gives it
-        switch r
-        case .gf
-            return "pick"
-        case .box
-            return "Crate"
-        case .plain
-            return "Flat"
-
 fn base_name(a: Access@, o: Owner, arena: Arena$@): U8[] //<
     //< the library's name as this file spells it
     switch a.reach
     case .alias
         return arena.text().s("m.").s(o.own_name()).take()
-    case .rename
-        return o.renamed()
     default
         return o.own_name()
 
@@ -288,8 +273,6 @@ fn import_lines(a: Access@, s: Shape@, arena: Arena$@): U8[] //< what the progra
             t.s(" as m")
         case .unimported
             t.s(" as _m")
-        case .rename
-            t.s(" { ").s(s.owner.own_name()).s(" as ").s(s.owner.renamed()).s(" }")
         default
             t.s(" { ").s(s.owner.own_name()).s(" }")
         t.s("\n")

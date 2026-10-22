@@ -38,7 +38,7 @@ impl Ast_node
             return
 
         switch r.kind_id
-        case .k_stmt_block, .k_for_init, .k_for_step
+        case .k_stmt_block
             for child in r.children
                 child.emit_llvm_stmt(cg)
         case .k_stmt_return
@@ -62,7 +62,7 @@ impl Ast_node
             r.emit_llvm_assign(cg)
         default
             if r.kind_id != .k_empty && r.kind_id != .k_underscore
-                $msg: = Str_builder.new()
+                defer $msg: = Str_builder.new()
                 msg.s("Genllvm ICE: Unhandled stmt kind: ").s(r.get_kind_str())
                 r.ice_panic(msg.slice())
 
@@ -106,7 +106,7 @@ impl Ast_node
         //< A new error starts the route again; a `!`'s propagation extends it.
         //< The file is the one a `#line` names and the function its C symbol, so the route the
         //< program prints is the same from either backend.
-        $file: = Str_builder.new()
+        defer $file: = Str_builder.new()
         base_locate.recorded_name_to(r.loc.file(), file@)
         file_id: = cg.get_or_add_raw_literal(base_core.arena.dup_str(file.slice()))
         func_id: = cg.get_or_add_raw_literal(cg.current_fn_name)
@@ -364,7 +364,6 @@ priv fn case_value(label: Ast_node$@, subject_id: I32, cg: Genllvm_ctx$@): I64 /
     if label.kind_id == .k_case_pattern
         variant: = cg.env.variant_at(subject_id, label.ival) catch
             label.ice_panic("genllvm: a switch label names no variant")
-            return 0
         return variant.tag_value
     return cg.sema.try_eval_constexpr_wide(label).unwrap_or(0)
 

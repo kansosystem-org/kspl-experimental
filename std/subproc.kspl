@@ -55,7 +55,7 @@ priv fn start(argv: U8[][], cwd: U8[], stdio: I32, out_path: U8[], err_path: U8[
     //< Starts the child; returns 0 on failure
     //< Arguments are packed with NUL separators. An embedded NUL fails the start: the C side
     //< checks the count, so it cannot split an argument in two. An empty argument is allowed.
-    $argv_buf: = Str_builder.new()
+    defer $argv_buf: = Str_builder.new()
     for a in argv
         argv_buf.s(a).c(0U8)
     return kspl_proc_start(argv_buf.ptr, argv_buf.len, I32::argv.len, cwd.ptr, cwd.len, stdio,
@@ -137,8 +137,8 @@ pub fn run_capture( //< runs one child to the end and collects both its outputs
     h: = start(argv, cwd, STDIO_OUT | STDIO_ERR | STDIO_GROUP, "", "")
     if h == 0
         throw .spawn_failed
-    $out: = Str_builder.new()
-    $err: = Str_builder.new()
+    defer $out: = Str_builder.new()
+    defer $err: = Str_builder.new()
     $chunk: U8[4096] = ::{}
     deadline: = sys.deadline_after_ms(timeout_ms)
     $until: = deadline // the deadline, or the end of the grace once the child has ended
@@ -292,7 +292,7 @@ pub fn run_many( //< runs many children, a few at a time, and collects each one'
     $results: = List<|Run_result!Spawn_error|>.new(arena)
     slots: = max_parallel if max_parallel > 0 else 1
     // Apart from `arena`, which takes each result while the work stands (`mem.scratch`).
-    work: = mem.scratch(null)
+    defer $work: = mem.scratch(null)
     $live: = List<|Running_job|>.new(work.arena)
     $running: Sz = 0
     for i in Range.asc(jobs.len)
@@ -377,7 +377,7 @@ pub fn run( //< runs one child and returns its standard output; any failure is t
 ): U8$[]!Run_error //< the standard output, at most `output_cap` bytes
     // Both outputs are collected apart, from `arena` too (`mem.scratch`); only the one handed back
     // is copied to the caller.
-    work: = mem.scratch(null)
+    defer $work: = mem.scratch(null)
     r: = run_capture(argv, cwd, timeout_ms, output_cap, work.arena) catch
         throw .spawn_failed
     switch r.exit_code

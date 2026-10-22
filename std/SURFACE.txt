@@ -26,9 +26,9 @@ std/argparse	Parser.flag	pub fn flag(r: Self$@, name: U8[], out: Bool$@, help: U
 std/argparse	Parser.free	pub fn free(r: Self$@)	lets go the parser and all it holds, when `create` was given null. Made in the caller's arena, it frees nothing: that arena does. The values it stored stay where the caller's variables hold them.
 std/argparse	Parser.int_opt	pub fn int_opt(r: Self$@, name: U8[], out: I64$@, help: U8[])	an integer; a value that cannot be read gives `bad_value`
 std/argparse	Parser.only_for	pub fn only_for(r: Self$@, name: U8[], commands: U8[], file: U8[] = caller_file, line: Sz = caller_line)	limits an option to the commands it takes effect on. **Given with any other command, parsing refuses it** (`not_for_command`). Accepted, it would do nothing. Without this call, an option takes effect on every command. Caution: **Declare the commands first.** A name that is no declared option or command stops the program, as at `saw`. So does a second call for one option.
-std/argparse	Parser.parse	pub fn parse(r: Self$@, a: sys.Args, arena: Arena$@): Void!Argument_error	reads the process's own arguments, skipping the program name at the start
+std/argparse	Parser.parse	pub fn parse(r: Self$@): Void!Argument_error	reads the process's own arguments, skipping the program name at the start. The list it reads them into is work in the parser's own arena. `parse_list` reads arguments from elsewhere.
 std/argparse	Parser.parse_list	pub fn parse_list(r: Self$@, argv: List<|U8[]|>$@): Void!Argument_error	reads an argument list into the declared destinations. Also for arguments from elsewhere, such as a configuration file or a test.
-std/argparse	Parser.parse_or_exit	pub fn parse_or_exit(r: Self$@, a: sys.Args, arena: Arena$@)	reads the arguments, or prints why and ends the process. **It returns only on success.** `--help` prints the usage on standard output and exits 0. An error prints the reason and the usage on standard error and exits 2. So a caller reading the output never takes a refusal for it.
+std/argparse	Parser.parse_or_exit	pub fn parse_or_exit(r: Self$@)	reads the arguments, or prints why and ends the process. **It returns only on success.** `--help` prints the usage on standard output and exits 0. An error prints the reason and the usage on standard error and exits 2. So a caller reading the output never takes a refusal for it.
 std/argparse	Parser.positional	pub fn positional(r: Self$@, usage: U8[])	declares that this CLI takes positional arguments. **A positional argument given to a CLI that declares none is an error**, for the same reason as an unknown `--name`. A path's word-split fragments arrive **as positional arguments**, and dropping them silently hides the cause.
 std/argparse	Parser.print_command_usage	pub fn print_command_usage(r: Self$@, name: U8[], out: Writer, file: U8[] = caller_file, line: Sz = caller_line)	writes one command's usage line, for refusing its arguments. The line is `usage: prog name form`, with the form `command_form` gave. A name declared nowhere stops the program, as at `saw`.
 std/argparse	Parser.print_options	pub fn print_options(r: Self$@, out: Writer)	writes only the commands and options, with no heading. For a CLI that appends **the list built from the declarations** after its own text; a copied list goes stale. Where an option is limited (`only_for`), the options each command takes come first.
@@ -209,7 +209,7 @@ std/ds	List.len	pub len: Sz	how many elements it holds
 std/ds	List.ptr	pub ptr: T$@	the memory holding the elements
 std/ds	List<|T|>.at #inline	pub fn at(r: Self$@, index: Sz, file: U8[], line: Sz): T$@	the element's address, not a copy
 std/ds	List<|T|>.at_ref #inline	pub fn at_ref(r: Self@, index: Sz, file: U8[], line: Sz): T@	the element, read-only
-std/ds	List<|T|>.clear	pub fn clear(r: Self$@)	releases every element, keeping the capacity for reuse; O(n). Drop and ARC values release their resources. Manual resources need their explicit free.
+std/ds	List<|T|>.clear	pub fn clear(r: Self$@)	releases every element, keeping the capacity for reuse; O(n). ARC values release their counts. Manual resources need their explicit free first.
 std/ds	List<|T|>.contains	pub fn contains(r: Self@, want: T): Bool	whether an element equals `want`; O(n)
 std/ds	List<|T|>.create	pub fn create(arena: Arena$@): List<|T|>$@	an empty list stored in the arena itself, to be passed around as a pointer. With `null`, `xs.free()` frees the elements and `mem.dealloc(Void$@::xs)` then the list's own block.
 std/ds	List<|T|>.free	pub fn free(r: Self$@)	frees the elements and the memory. **The list itself stays**: a second `free()` frees nothing, and the block `create(null)` put it in is the caller's to give back with `mem.dealloc`.
@@ -272,11 +272,12 @@ std/fs	File_kind	pub enum File_kind	what stands at a path
 std/fs	File_kind.dir	dir	a directory
 std/fs	File_kind.file	file	a regular file, read through to its end
 std/fs	File_kind.other	other	anything else: a FIFO or a socket, whose read can wait for good, or a device. Caution: **Do not serve or copy one as a file.** A FIFO's read waits for a writer that can never come, and a device's never ends.
-std/fs	File_lock	pub struct File_lock	a lock on a file; another process that asks for it waits. **The OS releases it when the process ends**, however it ends (flock / LockFileEx). So no lock outlives its holder, as a hand-made lock file does after a crash. The file serves only as a name: nothing is written to it, and it stays where it was created. **Within the process it releases itself when its owner leaves scope** (`Drop`); `free()` releases it sooner.
-std/fs	File_lock.free	pub fn free(r: Self$@)	releases the lock before its scope ends, and closes the file
+std/fs	File_lock	pub struct File_lock	a lock on a file; another process that asks for it waits. **The OS releases it when the process ends**, however it ends (flock / LockFileEx). So no lock outlives its holder, as a hand-made lock file does after a crash. The file serves only as a name: nothing is written to it, and it stays where it was created. **Within the process its owner releases it with `free()`**, usually by declaring it with `defer` in front.
+std/fs	File_lock.free	pub fn free(r: Self$@)	releases the lock and closes the file
 std/fs	File_lock.take	pub fn take(path: U8[]): File_lock!Fs_error	takes the lock, waiting while another holds it
 std/fs	File_lock.try_take	pub fn try_take(path: U8[]): File_lock!Fs_error	takes the lock if free, without waiting. If someone else holds it, it throws `held_elsewhere`, so a caller can report the wait first.
-std/fs	File_lock:Drop	impl File_lock: Drop	releases the lock when its owner leaves scope
+std/fs	File_lock:Manual_free	impl File_lock: Manual_free	it owns its lock and releases it with `free()`
+std/fs	File_lock:Move_only	impl File_lock: Move_only	copying it would release one lock twice
 std/fs	Fs_error	pub enum Fs_error	why a filesystem operation failed. Every failure in this file is returned as this type (the same convention as `!Io_error` in `std/io.kspl`). Only the predicates (`exists` / `is_dir`) do not fail, so they return `Bool`. Splitting `operation_failed` further would need errno passed up from the C code (ksplc/gen/runtime/hosted.c). Do not split into variants what the code cannot tell apart.
 std/fs	Fs_error.held_elsewhere	held_elsewhere	another holder has the lock (only `File_lock.try_take`, which does not wait)
 std/fs	Fs_error.invalid_path	invalid_path	a path the OS cannot take, such as one containing a NUL
@@ -431,15 +432,16 @@ std/http	read_response	pub fn read_response(stream: net.Tcp_stream$@, arena: Are
 std/http	reason_phrase	pub fn reason_phrase(status: I32): U8[]?	the standard phrase for a status number, so the two cannot disagree. RFC 9110's "reason-phrase"; none for a number it does not know. The builders below write it from the number, so no caller passes the number and the phrase as a pair (which could say `404 Bad Request`). Caution: **Do not fill in `"unknown"`**: a phrase from nowhere stays in the receiver's log.
 std/http	request_length	pub fn request_length(src: U8[], max_body: Sz, arena: Arena$@): Sz!Http_error	how many bytes the request at the start of the buffer takes in all. **For a reader that waits for the body without parsing again**: once the head has arrived, the rest is a count. It fails as `parse_request` does on the head, `incomplete` included until the head's empty line arrives.
 std/http	write_request	pub fn write_request(stream: net.Tcp_stream$@, method: U8[], target: U8[], head: Headers, body: U8[]): Void!Http_error	sends one whole request: the first line, the headers and the body. It refuses what `format_request` refuses, before anything is written.
-std/io	File_stream	pub struct File_stream	one open file to write to, read from and close. **It closes itself when its owner leaves scope** (`Drop`). Call `sync()!` before that to learn whether the written data arrived, and `free()` to close it sooner.
+std/io	File_stream	pub struct File_stream	one open file to write to, read from and close. **Its owner closes it with `free()`**, usually by declaring it with `defer` in front. Call `sync()!` before that to learn whether the written data arrived.
 std/io	File_stream.c	pub fn c(r: Self$@, val: U8): Self$@	writes one byte and returns the stream
 std/io	File_stream.flush	pub fn flush(r: Self$@): Self$@	flushes buffered data; does not report a failure. A destination that has gone away ends the program quietly, as a refused write does. `sync()` is the flush that reports a failure.
-std/io	File_stream.free	pub fn free(r: Self$@)	closes the file before its scope ends; a closing failure is not reported. Caution: **To know whether the written data arrived, call `sync()!` before freeing it.**
+std/io	File_stream.free	pub fn free(r: Self$@)	closes the handle; a failure while closing is not reported. That is `Manual_free`'s contract. Caution: **To know whether the written data arrived, call `sync()!` before freeing it.**
 std/io	File_stream.read	pub fn read(r: Self$@, buf: U8$[]): Sz!Io_error	fills the buffer; 0 means the end
 std/io	File_stream.s	pub fn s(r: Self$@, val: U8[]): Self$@	writes a string and returns the stream
 std/io	File_stream.stream	pub stream: Void$@	the C `FILE *`; null once `free()` has closed it
 std/io	File_stream.sync	pub fn sync(r: Self$@): Void!Io_error	flushes buffered data and reports a failure. It does not mean the data reached the disk: `fs.replace_file` is what puts a file there. `Writer.flush()` returns `Self$@` for chaining, so only this method can report a failure, **an earlier write's included**. A write the stream refused (a full disk) is kept on it. A flush with nothing left to write would report success.
-std/io	File_stream:Drop	impl File_stream: Drop	closes the file when its owner leaves scope
+std/io	File_stream:Manual_free	impl File_stream: Manual_free	it owns the handle and releases it in `free()`
+std/io	File_stream:Move_only	impl File_stream: Move_only	copying it would close one file twice
 std/io	File_stream:Reader	impl File_stream: Reader	so it can be used wherever a `Reader` is expected
 std/io	File_stream:Writer	impl File_stream: Writer	so it can be used wherever a `Writer` is expected
 std/io	Io_error	pub enum Io_error	why a read, a write or an open failed
@@ -546,8 +548,6 @@ std/lang	Cast	pub trait Cast<|Output|>	what `Output::value` desugars to where C 
 std/lang	Cast.cast	fn cast(r: Self): Output	the value as the other type
 std/lang	Div	pub trait Div<|Rhs, Output|>	what `/` desugars to
 std/lang	Div.div	fn div(r: Self, rhs: Rhs): Output	the quotient
-std/lang	Drop	pub trait Drop	an owner whose cleanup runs automatically when its lifetime ends. Passing it by value transfers ownership. The compiler calls `drop` on the remaining owner on every normal exit, including a propagated error. A panic aborts without cleanup. No separate `Move_only` implementation is needed. The method cannot report failure.
-std/lang	Drop.drop	priv fn drop(r: Self)	releases the owned resource; only the compiler calls it
 std/lang	Eq	pub trait Eq<|Other|>	what `==` and `!=` desugar to
 std/lang	Eq.eq	fn eq(r: Self, other: Other): Bool	whether the two are the same
 std/lang	Eq.ne	fn ne(r: Self, other: Other): Bool	whether they differ
@@ -564,7 +564,7 @@ std/lang	Index_ref.at_ref	fn at_ref(r: Self, index: Idx, file: U8[] = caller_fil
 std/lang	Iter	pub trait Iter<|T|>	a sequence that only yields items in order, with no length or index. A chain of filters or maps implements `Iter`. `for x in` iterates over it through `ksplc/sema/body/for_in.kspl`. The separate `Index` family requires access by position. Caution: **Declare the receiver as `Self`.** An implementation can take `Self$@` to advance its position. A generated adapter converts between the value and pointer receivers.
 std/lang	Iter.count	pub fn count(r: Self): Sz	how many elements it yields; it allocates nothing
 std/lang	Iter.next	fn next(r: Self): T?	the next element, or nothing at the end
-std/lang	Manual_free	pub trait Manual_free	an explicit free ends this value's usable lifetime. Use this for manual cleanup. Use `Drop` for automatic cleanup; it needs neither this trait nor a separate `Move_only`. A `free()` method alone does not enable release tracking. **`free` cannot report failure.** It runs during exit or `defer`, when the caller cannot handle an error. Put cleanup that needs an error check in a separate method, such as `io.File_stream.sync()`.
+std/lang	Manual_free	pub trait Manual_free	an explicit free ends this value's usable lifetime. **`defer` in front of a declaration calls this `free`** (`defer $b: = Str_builder.new()`). A `free()` method alone does not count there, and does not enable release tracking. **`free` cannot report failure.** It runs during exit or `defer`, when the caller cannot handle an error. Put cleanup that needs an error check in a separate method, such as `io.File_stream.sync()`.
 std/lang	Manual_free.free	fn free(r: Self)	releases it, reporting no failure
 std/lang	Move_only	pub trait Move_only	a value that cannot be copied implicitly. The compiler matches the fully qualified name `std.lang.Move_only` exactly. A structure containing a `Move_only` field by value is also `Move_only`.
 std/lang	Mul	pub trait Mul<|Rhs, Output|>	what `*` desugars to
@@ -709,25 +709,25 @@ std/mem	Own_arena	pub struct Own_arena	the arena of its own a value made with a 
 std/mem	Own_arena:Manual_free	impl Own_arena: Manual_free	`free()` releases the arena it holds
 std/mem	Raw_value<|T|>:Move_only	impl<|T|> Raw_value<|T|>: Move_only	transfers stored bytes without copying ownership
 std/mem	SZ_MAX	pub const SZ_MAX: Sz = Sz::((~0U64) >> U64::(65 - sizeof(Sz) * 8))	the largest `Sz`. `Sz` is as wide as a pointer, so its largest value differs by target. The shift keeps all bits but the sign bit, so the value is right on a 32-bit and a 64-bit target alike.
-std/mem	Scratch:Drop	impl Scratch: Drop	gives the work back when its owner leaves scope
+std/mem	Scratch:Manual_free	impl Scratch: Manual_free	`free()` gives the work back
 std/mem	alloc #cfg(!freestanding)	pub fn alloc(size: Sz): Void$@	allocates raw bytes from the global heap
 std/mem	alloc #cfg(freestanding)	pub fn alloc(size: Sz): Void$@	allocates raw bytes from the free-list heap, which must already be set up
 std/mem	alloc_as	pub fn alloc_as<|T|>(): T$@	heap memory for one value, with no `sizeof` written by hand. Caution: Do not write it out as `T$@::alloc(sizeof(T))` in the caller (docs/DESIGN-principles.md's "One means to one purpose"). Nothing catches a mismatch between the two types. `alloc(<byte count>)` remains for raw bytes (`U8$@::alloc(n + 1)`), which no type describes.
 std/mem	copy	pub fn copy(dest: Void$@, src: Void$@, bytes: Sz)	copies a range of bytes; the two ranges must not overlap (`move` where they can)
 std/mem	dealloc #cfg(!freestanding)	pub fn dealloc(ptr: Void$@)	returns bytes to the global heap
 std/mem	dealloc #cfg(freestanding)	pub fn dealloc(ptr: Void$@)	returns bytes to the free-list heap
-std/mem	drop_at #inline	pub fn drop_at<|T|>(src: T$@)	ends an initialized value's lifetime and clears its storage. Drop and ARC cleanup runs here. A manually freed resource still requires its explicit free.
+std/mem	drop_at #inline	pub fn drop_at<|T|>(src: T$@)	ends an initialized value's lifetime and clears its storage. ARC cleanup runs here. A manually freed resource still requires its explicit free.
 std/mem	heap_capacity_bytes #cfg(freestanding)	pub fn heap_capacity_bytes(): Sz	the size of the static buffer the heap uses
 std/mem	heap_peak_used_bytes #cfg(!freestanding)	pub fn heap_peak_used_bytes(): Sz	the most bytes ever allocated at once
 std/mem	heap_peak_used_bytes #cfg(freestanding)	pub fn heap_peak_used_bytes(): Sz	the most bytes ever allocated at once
 std/mem	heap_requested_total_bytes #cfg(!freestanding)	pub fn heap_requested_total_bytes(): Sz	every byte requested since start-up; never decreases
 std/mem	heap_used_bytes #cfg(!freestanding)	pub fn heap_used_bytes(): Sz	the bytes allocated now
 std/mem	heap_used_bytes #cfg(freestanding)	pub fn heap_used_bytes(): Sz	the bytes allocated now; 0 while there is no heap
-std/mem	init_at #inline	pub fn init_at<|T|>(dest: T$@, value: T)	transfers value into uninitialized storage. Caution: **The destination must hold no live value.** Assignment replaces an initialized value and runs its cleanup; this operation initializes storage without reading its old bytes.
+std/mem	init_at #inline	pub fn init_at<|T|>(dest: T$@, value: T)	transfers value into uninitialized storage. Caution: **The destination must hold no live value.** Assignment replaces an initialized value and releases its ARC counts; this operation initializes storage without reading its old bytes.
 std/mem	init_freestanding_heap #cfg(freestanding)	pub fn init_freestanding_heap(buf: U8$[])	makes a static buffer the whole heap
 std/mem	memcmp #cfg(freestanding) #export	pub fn memcmp(a: Void$@, b: Void$@, n: Sz): I32	C's `memcmp`, written here so freestanding needs no libc
 std/mem	move	pub fn move(dest: Void$@, src: Void$@, bytes: Sz)	copies a range of bytes that can overlap the destination. For shifting bytes within one buffer, where `copy` is undefined.
-std/mem	take_at #inline	pub fn take_at<|T|>(src: T$@): T	transfers the initialized value out and zeroes its old storage. Caution: **The slot must hold a live value.** The result owns its cleanup. The source slot becomes uninitialized; initialize it before reading it again. Use ordinary moves for locals, whose compiler-managed lifetime must not be changed through these raw-storage operations.
+std/mem	take_at #inline	pub fn take_at<|T|>(src: T$@): T	transfers the initialized value out and zeroes its old storage. Caution: **The slot must hold a live value.** The result owns its ARC counts. The source slot becomes uninitialized; initialize it before reading it again. Use ordinary moves for locals, whose compiler-managed lifetime must not be changed through these raw-storage operations.
 std/mem	zero	pub fn zero(dest: Void$@, bytes: Sz)	sets a range of bytes to 0
 std/net	ADDR_TEXT_MAX	pub const ADDR_TEXT_MAX: Sz = 46	a buffer size that any address in text form fits in. C's INET6_ADDRSTRLEN. **A buffer that is too small is refused, not truncated**: a truncated `2001:db8::1` reads as another address, `2001:db8:`, in logs and in matching.
 std/net	Net_error	pub enum Net_error	why a socket operation failed
@@ -783,10 +783,11 @@ std/reactor	HANGUP	pub const HANGUP: U8 = 0x8	the peer closed its sending side; 
 std/reactor	READABLE	pub const READABLE: U8 = 0x1	there is data to read, or the peer closed. Caution: **The values must match `kspl_net_poll` in `ksplc/gen/runtime/hosted_net.c`** (`make test-conventions` checks this).
 std/reactor	Reactor	pub struct Reactor	watches many handles at once and reports which became ready
 std/reactor	Reactor.clear	pub fn clear(r: Self$@)	drops every registration but keeps the memory already allocated. Use it to rebuild the set before each `wait()`, so no registration for a closed peer and no stale interest remains.
+std/reactor	Reactor.free	pub fn free(r: Self$@)	frees the registration lists; it owns no socket
 std/reactor	Reactor.new	pub fn new(): Reactor	a reactor with nothing registered yet
 std/reactor	Reactor.register	pub fn register(r: Self$@, handle: I64, interest: U8, token: Sz)	adds one handle to watch
 std/reactor	Reactor.wait	pub fn wait(r: Self$@, timeout_ms: I32): List<|Ready|>!Reactor_error	waits, and returns only the handles something happened on
-std/reactor	Reactor:Drop	impl Reactor: Drop	frees the registration lists when its owner leaves scope; it owns no socket
+std/reactor	Reactor:Manual_free	impl Reactor: Manual_free	it owns its resources and releases them with `free()`
 std/reactor	Reactor_error	pub enum Reactor_error	why a wait failed
 std/reactor	Reactor_error.poll_failed	poll_failed	the OS refused the wait itself, not any one handle
 std/reactor	Ready	pub struct Ready	one watched handle that became ready
@@ -801,7 +802,7 @@ std/refcount	Arc<|T|>.get	pub fn get(r: Self$@): T$@	the value itself, which sta
 std/refcount	Arc<|T|>.is_empty	pub fn is_empty(r: Self$@): Bool	whether this handle owns nothing
 std/refcount	Arc<|T|>.new	pub fn new(value: T): Arc<|T|>	moves a value onto the heap and returns the first owner
 std/refcount	Arc<|T|>:Ref_counted	impl<|T|> Arc<|T|>: Ref_counted	the compiler counts it, so no call is written by hand
-std/refcount	Rc	pub struct Rc<|T|>	a shared owner counted by the compiler, for one thread. **The last release takes the value apart.** ARC and `Drop` values inside `T` are released too, to any depth, as when `T` leaves a scope on the stack. Caution: **That release runs at the line where the last owner goes.** A long chain (`next: Rc<|Node|>` a million deep) recurses once per node there. Walk such a chain in a loop first ("Release takes the value apart" in `std/docs/DESIGN-core.md`). A resource using `Manual_free` (a `List`, a file) still needs its explicit `free()`.
+std/refcount	Rc	pub struct Rc<|T|>	a shared owner counted by the compiler, for one thread. **The last release takes the value apart.** ARC values inside `T` are released too, to any depth, as when `T` leaves a scope on the stack. Caution: **That release runs at the line where the last owner goes.** A long chain (`next: Rc<|Node|>` a million deep) recurses once per node there. Walk such a chain in a loop first ("Release takes the value apart" in `std/docs/DESIGN-core.md`). A resource using `Manual_free` (a `List`, a file) still needs its explicit `free()`.
 std/refcount	Rc<|T|>.clone	pub fn clone(r: Self$@): Rc<|T|>	one more owner of the same value
 std/refcount	Rc<|T|>.downgrade	pub fn downgrade(r: Self$@): Weak_rc<|T|>	a handle that watches without owning
 std/refcount	Rc<|T|>.empty	pub fn empty(): Rc<|T|>	a handle that owns nothing. Caution: `get()` / `clone()` / `downgrade()` on an empty handle are undefined, like a null dereference. It equals `::{}`, an empty slot.
@@ -871,7 +872,7 @@ std/regex	Regex_error.too_many_groups	too_many_groups	there are more capturing g
 std/regex	Regex_error.unmatched_bracket	unmatched_bracket	a `[` has no `]`
 std/regex	Regex_error.unmatched_paren	unmatched_paren	an opening parenthesis has no closing one, or the other way round
 std/regex	Regex_error.unsupported_backreference	unsupported_backreference	`\1`…`\9`, which refer to a captured string inside the pattern
-std/regex	Vm:Drop	impl Vm: Drop	frees its block when its owner leaves scope
+std/regex	Vm:Manual_free	impl Vm: Manual_free	it owns its block and frees it in `free()`
 std/regex_node	MAX_GROUPS	pub const MAX_GROUPS: Sz = 9	how many capturing groups a pattern can have. Caution: **Refuse a pattern that exceeds it** (`too_many_groups`); otherwise the tenth group onward silently comes back empty. 9 matches `\1`…`\9` and sets the size a Match holds.
 std/regex_node	MAX_PROGRAM_SIZE	pub const MAX_PROGRAM_SIZE: Sz = 20000	the most states a compiled pattern can hold. A search's memory and its time per byte grow with them, so a pattern past it is refused (`too_large`). A counted repetition is written out round by round, so `(a{1000}){1000}` would hold a million.
 std/regex_node	MAX_REPEAT_COUNT	pub const MAX_REPEAT_COUNT: Sz = 1000	the largest `{m,n}` count accepted, as in RE2 and Go. Caution: **Refuse a count that exceeds it** (`invalid_repeat`), as a count no engine accepts would make a pattern that works here alone.
@@ -928,7 +929,7 @@ std/str	Arena_text.flush	pub fn flush(r: Self$@): Self$@	does nothing, and is he
 std/str	Arena_text.s	pub fn s(r: Self$@, val: U8[]): Self$@	writes a string and returns the builder
 std/str	Arena_text.take	pub fn take(r: Self$@): U8[]	copies the text into the arena and frees the builder. On the heap, the text is the caller's to free with `dealloc(Void$@::t.ptr)`.
 std/str	Arena_text:Writer	impl Arena_text: Writer	so it can be used anywhere a `Writer` is expected
-std/str	Str_builder	pub struct Str_builder	a growing buffer whose owner releases it automatically
+std/str	Str_builder	pub struct Str_builder	a growing buffer whose owner frees it with `free()`
 std/str	Str_builder.c #inline	pub fn c(r: Self$@, c: U8): Self$@	writes one byte, growing if needed
 std/str	Str_builder.cap	pub cap: Sz	how many bytes fit before it has to grow
 std/str	Str_builder.clear	pub fn clear(r: Self$@): Self$@	empties it, keeping the memory already allocated
@@ -943,13 +944,13 @@ std/str	Str_builder.ptr	pub ptr: U8$@	the memory holding the written bytes
 std/str	Str_builder.reserve	pub fn reserve(r: Self$@, new_cap: Sz)	makes room in advance, so a long write does not grow step by step
 std/str	Str_builder.s #inline	pub fn s(r: Self$@, s: U8[]): Self$@	writes a string, growing if needed. `s` can be a view of this builder's own bytes (`b.s(b.slice())`).
 std/str	Str_builder.slice	pub fn slice(r: Self$@): U8$[]	a view of what has been written, valid until it grows
-std/str	Str_builder:Drop	impl Str_builder: Drop	releases the buffer when its owner leaves scope
 std/str	Str_builder:Formattable	impl Str_builder: Formattable	so it can be used inside an interpolation
+std/str	Str_builder:Manual_free	impl Str_builder: Manual_free	it owns its buffer and frees it with `free()`
 std/str	Str_builder:Writer	impl Str_builder: Writer	so it can be used anywhere a `Writer` is expected
 std/str	Str_error	pub enum Str_error	why a string could not be parsed
 std/str	Str_error.invalid_format	invalid_format	an escape or a form the notation does not allow
 std/str	Str_error.out_of_bounds	out_of_bounds	a position or a value out of range
-std/str	U8[].dedent	pub fn dedent(r: U8[]): Str_builder	the same lines with the common indentation removed
+std/str	U8[].dedent	pub fn dedent(r: U8[], arena: Arena$@): U8[]	the same lines with the common indentation removed
 std/str	U8[].equals	pub fn equals(r: U8[], b: U8[]): Bool	whether the bytes are the same; deliberately not `==`
 std/str	U8[].hash	pub fn hash(r: U8[]): U32	a hash of the contents that spreads keys over the buckets
 std/str	U8[].join	pub fn join(r: U8[], parts: U8[][], arena: Arena$@): U8[]	joins the pieces, with the receiver between each pair
@@ -1141,21 +1142,26 @@ std/thread	Atomic_sz.fetch_add	pub fn fetch_add(r: Self$@, delta: Sz): Sz	adds, 
 std/thread	Atomic_sz.load	pub fn load(r: Self$@): Sz	reads the value without tearing
 std/thread	Atomic_sz.new	pub fn new(initial: Sz): Atomic_sz	creates one holding the initial value
 std/thread	Atomic_sz.store	pub fn store(r: Self$@, new_val: Sz)	writes the value without tearing
-std/thread	Cond_var	pub struct Cond_var	lets a thread wait, together with a lock, until a condition holds. pthread_cond_t / CONDITION_VARIABLE, paired with a `Mutex<|T|>` (a producer-consumer queue, waiting for completion). It is destroyed when its owner leaves scope (`Drop`).
+std/thread	Cond_var	pub struct Cond_var	lets a thread wait, together with a lock, until a condition holds. pthread_cond_t / CONDITION_VARIABLE, paired with a `Mutex<|T|>` (a producer-consumer queue, waiting for completion). Its owner destroys it with `free()`.
 std/thread	Cond_var.broadcast	pub fn broadcast(r: Self$@)	wakes every waiting thread. For a change every waiter must see (a queue closing, a stop): `signal` wakes one, and the others sleep on past it.
+std/thread	Cond_var.free	pub fn free(r: Self$@)	destroys the OS condition variable. As with `Raw_mutex.free`, the value itself has no memory to free.
 std/thread	Cond_var.new	pub fn new(): Cond_var!Thread_error	creates one through the OS
 std/thread	Cond_var.signal	pub fn signal(r: Self$@)	wakes exactly one waiting thread
 std/thread	Cond_var.wait	pub fn wait<|T|>(r: Self$@, m: Mutex<|T|>$@)	releases the lock and waits; returns holding the lock again. Caution: **A spurious wakeup is possible**, so check the condition again in a `for` and wait again if it does not hold. Waiting without holding the lock stops the program.
 std/thread	Cond_var.wait_for	pub fn wait_for<|T|>(r: Self$@, m: Mutex<|T|>$@, timeout_ms: I32): Cond_wait	waits as `wait` does, for no longer than the limit. Caution: **Check the condition again whatever comes back**: `woken` can be spurious, and the condition can come true just as the limit passes. The limit is on the monotonic clock, so setting the date neither stretches nor cuts it.
-std/thread	Cond_var:Drop	impl Cond_var: Drop	destroys the OS condition variable when its owner leaves scope
+std/thread	Cond_var:Manual_free	impl Cond_var: Manual_free	it owns an OS object and releases it with `free()`
+std/thread	Cond_var:Move_only	impl Cond_var: Move_only	copying it would destroy one OS object twice
 std/thread	Cond_wait	pub enum Cond_wait	how a wait with a limit ended
 std/thread	Cond_wait.timed_out	timed_out	the limit passed first
 std/thread	Cond_wait.woken	woken	a signal or a broadcast came, or a spurious wakeup did
-std/thread	Mutex	pub struct Mutex<|T|>	a lock and the data it protects, kept together so neither is forgotten. The data is reachable only through lock(). This is the only public mutex in KSPL. Caution: **It is not re-entrant: locking it again on the thread that holds it stops the program** with a message, on every OS. Unlocking it from a thread that does not hold it does the same ("A mutex is locked once, by one thread" in std/docs/DESIGN-system.md). **Its owner leaving scope destroys the lock and lets the value go** (both held by value).
+std/thread	Mutex	pub struct Mutex<|T|>	a lock and the data it protects, kept together so neither is forgotten. The data is reachable only through lock(). This is the only public mutex in KSPL. Caution: **It is not re-entrant: locking it again on the thread that holds it stops the program** with a message, on every OS. Unlocking it from a thread that does not hold it does the same ("A mutex is locked once, by one thread" in std/docs/DESIGN-system.md). **Its owner destroys the lock with `free()`.** The value is held by value; what it owns is the owner's to free before.
+std/thread	Mutex<|T|>.free	pub fn free(r: Self$@)	destroys the OS lock
 std/thread	Mutex<|T|>.lock	pub fn lock(r: Self$@): T$@	takes the lock and returns a pointer to the data. Caution: Call `unlock()` when you are done with the data.
 std/thread	Mutex<|T|>.new	pub fn new(value: T): Mutex<|T|>!Thread_error	creates a lock around a value
 std/thread	Mutex<|T|>.unlock	pub fn unlock(r: Self$@)	releases the lock
-std/thread	Raw_mutex:Drop	impl Raw_mutex: Drop	destroys the OS mutex when its owner leaves scope
+std/thread	Mutex<|T|>:Manual_free	impl<|T|> Mutex<|T|>: Manual_free	it owns an OS object and releases it with `free()`
+std/thread	Raw_mutex:Manual_free	impl Raw_mutex: Manual_free	it owns an OS object and releases it with `free()`
+std/thread	Raw_mutex:Move_only	impl Raw_mutex: Move_only	copying it would destroy one OS object twice. `Mutex<|T|>` holds a Raw_mutex by value, so it is Move_only too. To borrow one, pass a pointer with `@`.
 std/thread	Thread	pub struct Thread	one running OS thread, joined and freed in one call
 std/thread	Thread.join_and_free	pub fn join_and_free(r: Self$@): Void$@	waits for the thread to end and returns its result. `spawn` / `join_and_free` pair like malloc / free; this call frees `r` itself.
 std/thread	Thread.spawn	pub fn spawn<|T|>(entry: fn(arg: T$@): Void$@, arg: T$@): Thread$@!Thread_error	starts a function on a new OS thread. Caution: **Only the type is checked, not whether the data is safe to share.** Threads that touch what `arg` points at race; wrap a shared value in a `Mutex<|T|>` or an `Arc<|T|>` (the count of an `Rc<|T|>` breaks).

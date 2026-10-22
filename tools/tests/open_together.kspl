@@ -24,8 +24,7 @@ priv const TOOL_WAIT_MS: I32 = 60000 //< how long `--list` and `--stop-all` may 
 priv fn free_port(arena: Arena$@): U8[]!net.Net_error //< a port no one listens on now
     //< Both opens name it, so they still compete for it. **Taken from the system, not fixed**:
     //< two runs on one machine then name different ports and never meet.
-    listener: = net.Tcp_listener.bind("127.0.0.1", 0)!
-    defer listener.free()
+    defer listener: = net.Tcp_listener.bind("127.0.0.1", 0)!
     port: = listener.port()!
     return arena.text().s("\{port\}").take()
 
@@ -41,10 +40,9 @@ priv fn url_of(out_path: U8[]): U8[] //< the URL an opener put out, "" until a w
 priv fn status_of(url: U8[], target: U8[], arena: Arena$@): I32 //<
     //< The status the server behind `url` answers `GET target` with, with the URL's token
     //< 0 where nothing answered.
-    stream: =
+    defer stream: =
         net.Tcp_stream.connect("127.0.0.1", aim.port_num(aim.port_in_url(url))) catch
         return 0
-    defer stream.free()
     bearer: = arena.text().s("Bearer ").s(aim.token_in_url(url)).take()
     head: = http.headers(arena).add("Host", "127.0.0.1").add("Authorization", bearer).build()
     http.write_request(stream, "GET", target, head, "") catch
@@ -94,8 +92,7 @@ fn main(): I32 //< the exit code is the checks' verdict (`verdict.finish`)
     if args.len != 4
         io.err().s("usage: open_together <opener> <kssrv> <work folder>\n")
         return 2
-    arena: = Arena.new(256 * 1024)
-    defer arena.free()
+    defer arena: = Arena.new(256 * 1024)
     work: = fs.absolute(args[3], arena) catch
         return verdict.fatal("the work folder cannot be made absolute")
     opener: = place(work, args[1], args[2], arena) catch

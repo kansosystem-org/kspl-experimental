@@ -45,7 +45,7 @@ impl Json_builder
         return r.range(s.line, s.character, e.line, e.character)
 
     fn location(r: Self$@, uri: U8[], sl: Sz, sc: Sz, el: Sz, ec: Sz): json.Value
-        $safe_uri: = uri.with_forward_slashes()
+        defer $safe_uri: = uri.with_forward_slashes()
 
         return r.obj().set("uri", r.str_val(safe_uri.slice()))
             .set("range", r.range(sl, sc, el, ec)).build()
@@ -141,7 +141,7 @@ fn read_message(out: Str_builder$@): Void!Lsp_error //<
 
 fn read_content_length(): I32!Lsp_error
     $len: I32 = -1
-    $line_buf: = Str_builder.new()
+    defer $line_buf: = Str_builder.new()
     $prev_was_nl: = false
 
     for
@@ -184,7 +184,7 @@ priv fn build_jsonrpc_envelope($b: Json_builder, id_val: json.Value): json.Objec
     return obj
 
 priv fn dump_and_send_val(val: json.Value)
-    $body: = Str_builder.new()
+    defer $body: = Str_builder.new()
     val.dump(body@)
     send_rpc_message(body.slice())
 
@@ -207,11 +207,10 @@ fn send_error_response(id_val: json.Value, code: I32, msg: U8[], arena: Arena$@)
     dump_and_send(obj)
 
 fn send_diagnostics_list(uri: U8[], diags: List<|base_diag.Lsp_diagnostic|>$@)
-    arena: = Arena.new(2 * 1024 * 1024)
-    defer arena.free()
+    defer arena: = Arena.new(2 * 1024 * 1024)
     $b: = Json_builder.new(arena)
 
-    $final_uri: = Str_builder.new()
+    defer $final_uri: = Str_builder.new()
     if !uri.has_kspl_ext()
         final_uri.s(uri).s(base_core.SOURCE_EXT)
     else
@@ -245,7 +244,7 @@ fn send_diagnostics_list(uri: U8[], diags: List<|base_diag.Lsp_diagnostic|>$@)
 
             arr = arr.push(d_obj.build())
 
-    $safe_uri: = final_uri.slice().with_forward_slashes()
+    defer $safe_uri: = final_uri.slice().with_forward_slashes()
 
     params: = b.obj().set("uri", b.str_val(safe_uri.slice())).set("diagnostics", arr.build())
         .build()
@@ -259,7 +258,7 @@ priv fn send_publish_diagnostics($b: Json_builder, params: json.Value)
     dump_and_send_val(msg_obj)
 
 priv fn send_rpc_message(json_body: U8$[])
-    $frame: = Str_builder.new()
+    defer $frame: = Str_builder.new()
     jsonrpc.frame_into(frame@, json_body)
     io.out().s(frame.slice())
     io.out().flush()
@@ -295,7 +294,7 @@ fn marker_at(src: U8[], start: Sz, tag: U8[]): I32 //<
 
 priv fn send_marker(tag: U8[]) //< it writes the marker for `tag`
     //< NUL-separated, it never collides with the JSON output.
-    $m: = Str_builder.new()
+    defer $m: = Str_builder.new()
     m.c(0U8).s(tag).c(0U8)
     io.out().s(m.slice())
     io.out().flush()

@@ -247,7 +247,7 @@ priv fn sample(log: U8[], text: U8[], ended: U8[], arena: Arena$@): Outcome //<
 
 priv fn summarised(outs: List<|Outcome|>@, arena: Arena$@): U8[] //< the screen's summary of them
     j: = ci_gates.Judge::{ .platform = WIN, .relaxed = "" }
-    $b: = Str_builder.new()
+    defer $b: = Str_builder.new()
     ci_gates.digest_plain(outs, 12I64, j@, b@)
     return arena.dup_str(b.slice())
 
@@ -410,7 +410,7 @@ fn test_the_page_lists_what_needs_attention(arena: Arena$@) //<
     outs.push(sample("selfhost", "RESULT: ALL PASS\n", "0 30\n", arena))
     outs.push(sample("link_abi", LOG_ARM, "0 5\n", arena))
     outs.push(sample("debug", LOG_FAIL, "1 7\n", arena))
-    $md: = Str_builder.new()
+    defer $md: = Str_builder.new()
     ci_gates.digest_md(outs@, 4I64, "linux ci-shard-core", md@)
     m: = md.slice()
     assert(m.starts_with("## linux ci-shard-core - 2 PASS / 1 FAIL   (42s, -j4)"),
@@ -462,8 +462,7 @@ fn test_a_switch_turned_off_lets_its_own_skips_through() //<
     node: = "SKIP vscode: the extension's client side: node is not installed"
     assert(!ci_gates.is_expected_skip(node, "linux", "KANSO_REQUIRE_CHOWN KSOS_REQUIRE_ARM"),
         "a tool no switch covers stays required")
-    a: = Arena.new(4096)
-    defer a.free()
+    defer a: = Arena.new(4096)
     assert(ci_gates.unknown_switch("KANSO_REQUIRE_CHOWN KSOS_REQUIRE_ARM", a).is_none(),
         "every switch `mk/test.mk` names has its rows")
     assert(ci_gates.unknown_switch("KANSO_REQUIRE_CHOWN KANSO_REQUIRE_NOPE", a).unwrap_or("")

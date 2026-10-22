@@ -30,7 +30,7 @@ priv fn trip(src: U8[], out: Str_builder$@, arena: Arena$@) //< round-trips a te
 
 priv fn same(src: U8[], arena: Arena$@): Bool //<
     //< Whether one round trip returns the original
-    $out: = Str_builder.new()
+    defer $out: = Str_builder.new()
     trip(src, out@, arena)
     return src.equals(out.slice())
 
@@ -112,8 +112,8 @@ fn test_the_sheet_has_one_role(arena: Arena$@)
     verdict.pass("the part is the one `it does not wrap` and nothing else.")
 priv fn gutter_of(lines: Sz, arena: Arena$@): F32 //<
     //< The width of the line-number gutter after reading a text of `lines` lines
-    $src: = Str_builder.new()
-    for $i: Sz = 0; i < lines; i += 1
+    defer $src: = Str_builder.new()
+    for _i in Range.asc(lines)
         src.s("x\n")
     sheet: = text.sheet_for(base.root_font(), "", arena)
     _d: = text.read(src.slice(), sheet, arena)
@@ -151,8 +151,7 @@ fn test_the_line_numbers_reach_the_screen(arena: Arena$@)
     // One number box per line is laid out before the text's box.
     $marks: Sz = 0
     $first: U8[] = ""
-    for $i: Sz = 0; i < page.boxes.len; i += 1
-        box: = page.boxes.get(i)
+    for box in page.boxes
         if box.inline != null
             continue
         marks += 1
@@ -164,13 +163,11 @@ fn test_the_line_numbers_reach_the_screen(arena: Arena$@)
     assert(first.starts_with("1"), "it counts from 1")
     // **The number must sit inside the gutter.** Sticking out, it overlaps the body.
     $body: F32 = 0.0
-    for $i: Sz = 0; i < page.boxes.len; i += 1
-        box: = page.boxes.get(i)
+    for box in page.boxes
         if box.inline != null
             body = box.rect.x
             break
-    for $i: Sz = 0; i < page.boxes.len; i += 1
-        box: = page.boxes.get(i)
+    for box in page.boxes
         if box.inline == null
             assert(box.rect.x + box.rect.w <= body,
                 "the number ends nearer than the body's left edge")
@@ -188,8 +185,7 @@ fn test_the_lines_are_as_tight_as_a_code_editor(arena: Arena$@)
     // Caution: **Skip the number boxes** (they sit on the same line).
     $first: F32 = -1.0
     $second: F32 = -1.0
-    for $i: Sz = 0; i < page.boxes.len; i += 1
-        box: = page.boxes.get(i)
+    for box in page.boxes
         if box.inline == null
             continue
         if first < 0.0
@@ -269,7 +265,7 @@ fn test_a_remark_stays_out_of_the_flow(arena: Arena$@) //<
     after: = flow.layout(ed.doc, sheet, fixed.make(), 200.0, arena)
     assert(after.boxes.len == before, "putting an annotation on does not grow the boxes")
 
-    $sb: = Str_builder.new()
+    defer $sb: = Str_builder.new()
     markdown.write(ed.doc, sheet, sb@)
     out: = sb.slice()
     assert(!base.has(out, "this is not to come out in the flow"),
@@ -361,7 +357,7 @@ fn test_wrapping_style_still_splits_and_drops_spaces(arena: Arena$@) //<
 
     page: = flow.layout(doc, code_sheet(arena), fixed.make(), 40.0, arena)
     assert(page.boxes.len > 1, "on a wrapping style the boxes grow")
-    $joined: = Str_builder.new()
+    defer $joined: = Str_builder.new()
     for $i: Sz = 0; i < page.boxes.len; i += 1
         joined.s(page.boxes.get(i).text)
     same: = joined.slice().equals(SPACED_LINE)
@@ -433,8 +429,8 @@ fn test_another_style_breaks_the_run(arena: Arena$@) //<
 
     page: = flow.layout(doc, panel_sheet(arena), fixed.make(), 400.0, arena)
     assert(page.panels.len == 3, "the band is another per style")
-    for $i: Sz = 0; i < page.panels.len; i += 1
-        assert(base.near(page.panels.get(i).rect.h, 19.2), "every band is one row high")
+    for panel in page.panels
+        assert(base.near(panel.rect.h, 19.2), "every band is one row high")
     verdict
         .pass("the paragraph that came in between cuts the fenced block, and the bands become \
             three.")

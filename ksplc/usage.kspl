@@ -44,7 +44,7 @@ impl Info_topic
         return t.variant_name().replace("_", "-", base_core.arena)
 
 fn info_topics(): U8[] //< every subject, separated by spaces, in the enum's order
-    $b: = Str_builder.new()
+    defer $b: = Str_builder.new()
     for t in Info_topic.variants()
         if b.len > 0
             b.c(' ')
@@ -118,7 +118,7 @@ fn print_usage(out: Writer) //<
     //< declarations. The text between is ksplc's own.
     if cli == null
         return
-    $about: =
+    about: =
         """
         `run` builds and runs the script. It caches the result in $KSPLC_CACHE_DIR, which defaults
         to the OS's cache directory. Place ksplc's options before the script's path. Arguments
@@ -137,10 +137,9 @@ fn print_usage(out: Writer) //<
         `ksplc info std-dir` reports the selected directory.
 
         """
-        .dedent()
-    about.s("info's subjects: ").s(info_topics())
-    // Caution: **Copy it to the arena**; the parser keeps it past this call.
-    cli.about = base_core.arena.dup_str(about.slice())
+        .dedent(base_core.arena)
+    // The parser keeps it past this call, so it is built in the pipeline's arena.
+    cli.about = base_core.arena.text().s(about).s("info's subjects: ").s(info_topics()).take()
     cli.print_usage(out)
 
 fn command_usage_exit(face: U8[]): Void //<

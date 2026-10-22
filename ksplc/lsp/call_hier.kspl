@@ -68,12 +68,12 @@ priv fn build_call_hier_item(target: Ast_node$@, id_n: Ast_node$@, name: U8[], f
     t_len: = id_n.text.len if id_n != null else 1
     r_val: = b.range_in(src_res, t_off, t_len, starts)
 
-    $safe_uri: = target.loc.file().with_forward_slashes()
+    defer $safe_uri: = target.loc.file().with_forward_slashes()
     full_uri: = style.spell(safe_uri.slice())
 
     // The detail carries the defining file's name: a call hierarchy crosses files, and the function
     // name alone does not say which definition it is.
-    $file_name: = Str_builder.new()
+    defer $file_name: = Str_builder.new()
     file_name.s(sys.get_file_name(target.loc.file()))
     file_name.ensure_kspl_ext()
     // Caution: **It must not look the same as a call.** A function pointer passed along may only be
@@ -174,7 +174,7 @@ priv fn qualified_sym_name(sym: Sema_symbol$@): U8[] //<
     //< is O(1).
     if !sym.flags.is_global
         return sym.name
-    $full: = Str_builder.new()
+    defer $full: = Str_builder.new()
     lsp_nav.write_full_name(sym.name, sym.get_defined_in(), full@)
     return base_core.arena.dup_str(full.slice())
 
@@ -300,8 +300,7 @@ priv fn resolve_def_by_fqn(root: Ast_node$@, c: Sema_ctx$@, idx: Fqn_lookup_idx$
 fn prepare_call_hierarchy(state: Doc_state$@, params: json.Value, id_val: json.Value,
     arena: Arena$@)
     $b: = Json_builder.new(arena)
-    path: = lsp_position.find_path_at_params(state, params)
-    defer path.free()
+    defer path: = lsp_position.find_path_at_params(state, params)
 
     if path.len > 0
         $def_node: Ast_node$@ = null
@@ -346,8 +345,7 @@ priv fn respond_with_call_hier_entries(calls_map: Map<|U8[], Call_hier_entry$@|>
     // `entries()` (the reason is at `entries` in `../../std/ds.kspl`).
     // Caution: **Do not answer in the Map's order.** That order comes from the hash. So the same
     // question gets a different order on every run. A client walking the list loses its place.
-    $calls: = List<|Call_hier_entry$@|>.new(null)
-    defer calls.free()
+    defer $calls: = List<|Call_hier_entry$@|>.new(null)
     for entry in calls_map.items()
         calls.push(entry.value)
     sorted: = calls.order_by(fn(a: Call_hier_entry$@@, b: Call_hier_entry$@@; is_incoming: Bool):
@@ -381,9 +379,8 @@ fn handle_calls(ws_state: Doc_state$@, params: json.Value, id_val: json.Value, i
     if answered_no_workspace(ws_state, id_val, arena)
         return
     target_fqn: = item_fqn(params)
-    calls_map: = base_core.arena
+    defer calls_map: = base_core.arena
         .create(Map<|U8[], Call_hier_entry$@|>.new(base_core.arena))
-    defer calls_map.free()
 
     idx: = build_fqn_lookup_idx(ws_state.sema)
     // The exclusion table is built from **the whole tree**; from the target alone a call's callee

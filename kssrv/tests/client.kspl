@@ -56,7 +56,11 @@ struct Resp //< one response
     head: U8[]
     body: U8[]
 
-impl Conn: Manual_free {}
+impl Conn: Manual_free
+    fn free(r: Self$@)
+        r.sock.free()
+        r.acc.free()
+        dealloc(Void$@::r.buf.ptr)
 
 struct Conn //< one connection
     //< **A response's boundary is not a read's**, so reads are collected and responses cut out.
@@ -86,11 +90,6 @@ impl Conn
         c: = Conn$@::arena.alloc(sizeof(Conn))
         c$ = Conn.open(port)!
         return c
-
-    fn free(r: Self$@)
-        r.sock.free()
-        r.acc.free()
-        dealloc(Void$@::r.buf.ptr)
 
     fn send(r: Self$@, raw: U8[]): Void!Http_end //< sends raw bytes completely
         deadline: = sys.mono_us() + I64::SEND_TIMEOUT_MS * 1000I64
@@ -216,8 +215,7 @@ fn request(port: I32, raw: U8[], expect: Sz, timeout_ms: I32, no_body: Bool, are
     List<|Resp|>!Http_end //<
         //< Sends raw request bytes on one connection and reads `expect` responses.
         //< Several keep-alive responses are read in order too.
-    $conn: = Conn.open(port)!
-    defer conn.free()
+    defer $conn: = Conn.open(port)!
     conn.send(raw)!
     $out: = List<|Resp|>.new(arena)
     for _k in Range.asc(expect)
@@ -251,13 +249,17 @@ fn raw( //< the bytes of one request
 
 fn open_stream(port: I32, target: U8[], extra: U8[], arena: Arena$@): Stream!Http_end
     $conn: = Conn.open(port)!
-    conn.send(raw("GET", target, extra, "", arena))!
+    conn.send(raw("GET", target, extra, "", arena)) catch e
+        conn.free()
+        throw e
     return Stream::{ .conn = conn }
 
 fn head_stream(port: I32, target: U8[], arena: Arena$@): Stream!Http_end //<
     //< Sends one HEAD that closes the connection, so `drain` shows whatever follows the head
     $conn: = Conn.open(port)!
-    conn.send(raw("HEAD", target, "Connection: close\r\n", "", arena))!
+    conn.send(raw("HEAD", target, "Connection: close\r\n", "", arena)) catch e
+        conn.free()
+        throw e
     return Stream::{ .conn = conn }
 
 impl Stream
@@ -310,12 +312,11 @@ impl Stream
             return arena.dup_str(whole.sub(0, at + 2))
         return arena.dup_str(whole)
 
-    fn free(r: Self$@)
-        r.conn.free()
-
 // Declares that this type owns its resources and releases them in `free()` (without it the
 // use-after-free check does not work).
-impl Stream: Manual_free {}
+impl Stream: Manual_free
+    fn free(r: Self$@)
+        r.conn.free()
 
 fn get(port: I32, target: U8[], extra: U8[], arena: Arena$@): Resp!Http_end //<
     //< Sends one GET and returns the response
@@ -348,7 +349,7 @@ fn post_empty(port: I32, target: U8[], arena: Arena$@): Resp!Http_end //<
 
 fn dump_of(v: json.Value, arena: Arena$@): U8[] //<
     //< Turns a JSON value into a string (for display in checks)
-    $out: = Str_builder.new()
+    defer $out: = Str_builder.new()
     v.dump(out@)
     return arena.dup_str(out.slice())
 

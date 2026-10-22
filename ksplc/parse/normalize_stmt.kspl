@@ -61,6 +61,15 @@ impl Ast_node
                 parts.push(c)
         if parts.len == 0 || (parts.len == 1 && parts.get(0).kind_id == .k_stmt_block)
             return
+        // A declaration (`defer $b: = X`) stays one child; the desugaring splits it in two.
+        if parts.len == 1 && parts.get(0).kind_id == .k_decl_var
+            flat: = base_ast.new_ast_node_list()
+            r.push_or_empty(flat, kw)
+            flat.push(parts.get(0))
+            if attrs != null
+                flat.push(attrs)
+            r.children = flat
+            return
         $stmt: = parts.get(0)
         if parts.len > 1 || stmt.kind_id != .k_stmt_expr
             stmt = Ast_node.new(.k_stmt_expr, "expr", parts.get(0).loc)
@@ -132,8 +141,8 @@ impl Ast_node
         else if r.children.len == info.start_idx + 4 &&
             r.get_child(info.start_idx).kind_id == .k_identifier &&
             r.get_child(info.start_idx + 1).is_keyword("in")
-            // `for item in collection { ... }`, not yet expanded: the bare item identifier at
-            // for_init is the marker, kept until sema (an ordinary init is never a bare
+            // `for item in collection { ... }`, not yet expanded: the bare item identifier in
+            // the init's slot is the marker, kept until sema (an ordinary init is never a bare
             // k_identifier).
             r.push_or_empty(flat, r.get_child(info.start_idx))
             r.push_or_empty(flat, r.get_child(info.start_idx + 2))
@@ -178,21 +187,11 @@ impl Ast_node
                 break
             switch phase
             case .init
-                if init_node == null
-                    init_node = Ast_node.new(.k_for_init, "init", c.loc)
-                init_node.add_child(c)
+                init_node = c
             case .cond
                 cond_node = c
             case .step
-                if step_node == null
-                    step_node = Ast_node.new(.k_for_step, "step", c.loc)
-                add_step_parts(step_node, c)
-        // Only a single init loses its for_init wrapper; a multi-variable one, already split by
-        // flatten_var_decl_lists, keeps it for genc / sema.
-        if init_node != null && init_node.children.len == 1
-            init_node = init_node.get_child(0)
-        if step_node != null && step_node.children.len == 1
-            step_node = step_node.get_child(0)
+                step_node = c
         r.push_or_empty(flat, init_node)
         r.push_or_empty(flat, cond_node)
         r.push_or_empty(flat, step_node)
@@ -308,15 +307,3 @@ impl Ast_node
             return 0
         op_node.add_child(next_c).add_child(r.get_child(k + 2))
         return 3
-
-priv fn add_step_parts(step_node: Ast_node$@, c: Ast_node$@) //<
-    //< It adds a loop step's expressions to step_node, without the commas between them
-    //< The grammar's for_step (stmt_expr ("," stmt_expr)*) keeps its commas as children; left in,
-    //< genc writes invalid C such as `i += 1, ,, j -= 1`.
-    if c.kind_id != .k_for_step
-        if !c.is_literal(",")
-            step_node.add_child(c)
-        return
-    for sc in c.children
-        if !sc.is_literal(",")
-            step_node.add_child(sc)

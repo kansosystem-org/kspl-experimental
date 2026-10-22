@@ -1,5 +1,5 @@
 //< The table of import lines, which every pass reads to look up a name's renaming
-//< `import "m" as a;` (an import alias) and `import "m" { A as B };` (a selective import) are kept
+//< `import "m" as a;` (an import alias) and `import "m" { A };` (a selective import) are kept
 //< in one Map keyed `"file name::name"` (import_key). It also registers the `std/lang` every file
 //< imports implicitly, and records which imported names are written.
 // ==========================================
@@ -55,16 +55,11 @@ fn register_implicit_lang_imports(r: Ast_node$@, c: Sema_ctx$@) //<
     //< type nodes, where `Option` or `Range` would be undefined.
     //< Caution: **Do not add them to a file that declares the same name itself**, or the user can
     //< no longer define `Manual_free` there. An implicit name always loses.
-    $lang_names: = List<|U8[]|>.new(null)
-    defer lang_names.free()
-    $files: = List<|U8[]|>.new(null)
-    defer files.free()
-    $seen_file: = Map<|U8[], Bool|>.new(null)
-    defer seen_file.free()
-    $declared: = Map<|U8[], Bool|>.new(null)
-    defer declared.free()
-    $decls: = List<|Ast_node$@|>.new(null)
-    defer decls.free()
+    defer $lang_names: = List<|U8[]|>.new(null)
+    defer $files: = List<|U8[]|>.new(null)
+    defer $seen_file: = Map<|U8[], Bool|>.new(null)
+    defer $declared: = Map<|U8[], Bool|>.new(null)
+    defer $decls: = List<|Ast_node$@|>.new(null)
 
     lang_name: = base_locate.LANG_FILE_PATH
     for top_node in r.children
@@ -105,10 +100,10 @@ impl Alias_info
             .decl_node = decl_node })
 
 impl Import_symbol_info
-    fn new(target_path: U8$[], original_name: U8$[], decl_node: Ast_node$@): Import_symbol_info$@
+    fn new(target_path: U8$[], name: U8$[], decl_node: Ast_node$@): Import_symbol_info$@
         return base_core.arena
-            .create(Import_symbol_info::{ .target_path = target_path,
-            .original_name = original_name, .is_used = false, .decl_node = decl_node })
+            .create(Import_symbol_info::{ .target_path = target_path, .name = name,
+            .is_used = false, .decl_node = decl_node })
 
 impl Sema_ctx
     fn supplies_written_method(r: Self$@, from_file: U8[], provider: U8[]): Bool //<
@@ -256,14 +251,8 @@ impl Sema_ctx
         entry: = r.find_import_symbol(file, local_name).unwrap_or(null)
         return entry.target_path if entry != null else ""
 
-    fn get_import_symbol_original_name(r: Self$@, file: U8[], local_name: U8[]): U8[] //<
-        //< A selectively imported symbol's original name at the import source
-        //< It is the original name even where the import renames it.
-        entry: = r.find_import_symbol(file, local_name).unwrap_or(null)
-        return entry.original_name if entry != null else ""
-
     fn imported_symbol_fqn(r: Self$@, local_name: U8[]): U8[] //<
-        //< Turns a name a selective import brought in (`import "p" { A as B };`) to its FQN (`p.A`)
+        //< Turns a name a selective import brought in (`import "p" { A };`) to its FQN (`p.A`)
         //< Such a name is in no namespace. **Name resolution starts by looking this up.**
         //< Caution: **Look it up before a same-named one outside the file.** That is safe: in one
         //< file a declaration and a selective import never share a name (each rejects the other).
@@ -280,7 +269,7 @@ impl Sema_ctx
             if shadow != null && shadow.node != null &&
                 !shadow.node.loc.file().equals(entry.target_path)
                 return ""
-        return r.build_mod_fqn(entry.target_path, entry.original_name)
+        return r.build_mod_fqn(entry.target_path, entry.name)
 
     fn has_explicit_import_symbol(r: Self$@, file: U8[], local_name: U8[]): Bool //<
         //< Whether that name is taken by "a written selective import"
@@ -302,20 +291,20 @@ impl Sema_ctx
             .set(arena_key, Import_symbol_info.new(arena_target, arena_name, null))
         r.drop_import_reach()
 
-    fn add_import_symbol(r: Self$@, file: U8[], local_name: U8[], target_path: U8[],
-        original_name: U8[], decl_node: Ast_node$@) //<
-            //< Registers one selector of `import "path" { A, B as C };`.
-            //< A local_name already used in the file is an ordinary redefinition error (no
+    fn add_import_symbol(r: Self$@, file: U8[], name: U8[], target_path: U8[],
+        decl_node: Ast_node$@) //<
+            //< Registers one selector of `import "path" { A, B };`.
+            //< A name already used in the file is an ordinary redefinition error (no
             //< first-wins or last-wins).
-        if r.symtab.has_in_current_scope(local_name)
-            r.report_redefinition(decl_node, local_name)
+        if r.symtab.has_in_current_scope(name)
+            r.report_redefinition(decl_node, name)
             return
-        if r.peek_import_symbol(file, local_name) != null
-            r.report_redefinition(decl_node, local_name)
+        if r.peek_import_symbol(file, name) != null
+            r.report_redefinition(decl_node, name)
             return
-        arena_key: = base_core.arena.dup_str(r.import_key(file, local_name))
+        arena_key: = base_core.arena.dup_str(r.import_key(file, name))
         arena_target: = base_core.arena.dup_str(target_path)
-        arena_name: = base_core.arena.dup_str(original_name)
+        arena_name: = base_core.arena.dup_str(name)
         info: = Import_symbol_info.new(arena_target, arena_name, decl_node)
         r.import_symbols.files.set(arena_key, info)
         r.drop_import_reach()
@@ -355,7 +344,7 @@ impl Ast_node
                 "'as' names the file. A selector list with 'as' needs '+': 'import \"p\" as m + { A \
                     }'. To import only the selected names, remove 'as'.")
             return
-        $resolved_sb: = file_name.resolve_import_path(clean_path)
+        defer $resolved_sb: = file_name.resolve_import_path(clean_path)
         target_path: = resolved_sb.slice()
         if selector_list != null
             for selector in selector_list.children
@@ -364,9 +353,7 @@ impl Ast_node
                 name_node: = selector.get_selector_name()
                 if name_node == null
                     continue
-                alias_node: = selector.get_selector_alias()
-                local_name: = alias_node.text if alias_node != null else name_node.text
-                c.add_import_symbol(file_name, local_name, target_path, name_node.text, selector)
+                c.add_import_symbol(file_name, name_node.text, target_path, selector)
         if selector_list != null && !plus
             c.add_withheld_alias(file_name, clean_path.default_import_alias(), clean_path)
             return
