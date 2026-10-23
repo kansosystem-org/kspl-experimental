@@ -57,18 +57,17 @@ impl<|T|> Qwen_model<|T|>
         cfg: = read_cfg(s, arena)!
         eps: = T::cfg.eps
 
-        $tok_embed: = nn.Embedding<|T|>.new(cfg.vocab, cfg.hidden, arena)
+        $tok_embed: = nn.Embedding<|T|>(cfg.vocab, cfg.hidden, arena)
         s.map_into<|F32|>("embed.weight", tok_embed.weight@, arena)!
 
         layers: =
             Qwen_layer<|T|>$@::arena.alloc(cfg.n_layers * sizeof(Qwen_layer<|T|>))
-        defer $b: = Str_builder.new()
+        defer $b: = Str_builder()
         for i in Range.asc(cfg.n_layers)
             // A safetensors key (".attn.wq.weight" and the like) is an external format fixed by
             // export_qwen_to_kspl.py. So it does not follow the field names above.
-            $attention: = nn.Gqa_attention<|T|>
-                .new(cfg.hidden, cfg.n_heads, cfg.n_kv_heads, cfg.head_dim, max_seq_len,
-                cfg.rope_theta, arena)
+            $attention: = nn.Gqa_attention<|T|>(cfg.hidden, cfg.n_heads, cfg.n_kv_heads,
+                cfg.head_dim, max_seq_len, cfg.rope_theta, arena)
             s.map_into<|F32|>(key(b@, i, ".attn.wq.weight"), attention.wq.weights@, arena)!
             s.map_into<|F32|>(key(b@, i, ".attn.wq.bias"), attention.wq.bias@, arena)!
             s.map_into<|F32|>(key(b@, i, ".attn.wk.weight"), attention.wk.weights@, arena)!
@@ -77,20 +76,20 @@ impl<|T|> Qwen_model<|T|>
             s.map_into<|F32|>(key(b@, i, ".attn.wv.bias"), attention.wv.bias@, arena)!
             s.map_into<|F32|>(key(b@, i, ".attn.wo.weight"), attention.wo.weights@, arena)!
 
-            $mlp: = nn.Swiglu_mlp<|T|>.new(cfg.hidden, cfg.intermediate, arena)
+            $mlp: = nn.Swiglu_mlp<|T|>(cfg.hidden, cfg.intermediate, arena)
             s.map_into<|F32|>(key(b@, i, ".mlp.gate.weight"), mlp.gate.weights@, arena)!
             s.map_into<|F32|>(key(b@, i, ".mlp.up.weight"), mlp.up.weights@, arena)!
             s.map_into<|F32|>(key(b@, i, ".mlp.down.weight"), mlp.down.weights@, arena)!
 
-            $attention_norm: = nn.Rms_norm<|T|>.new(cfg.hidden, eps, arena)
+            $attention_norm: = nn.Rms_norm<|T|>(cfg.hidden, eps, arena)
             s.map_into<|F32|>(key(b@, i, ".attn_norm.weight"), attention_norm.weight@, arena)!
-            $ffn_norm: = nn.Rms_norm<|T|>.new(cfg.hidden, eps, arena)
+            $ffn_norm: = nn.Rms_norm<|T|>(cfg.hidden, eps, arena)
             s.map_into<|F32|>(key(b@, i, ".ffn_norm.weight"), ffn_norm.weight@, arena)!
             (layers + i)$ = Qwen_layer<|T|>::{ .attention_norm = attention_norm,
                 .attention = attention, .ffn_norm = ffn_norm, .mlp = mlp }
-        $norm: = nn.Rms_norm<|T|>.new(cfg.hidden, eps, arena)
+        $norm: = nn.Rms_norm<|T|>(cfg.hidden, eps, arena)
         s.map_into<|F32|>("norm.weight", norm.weight@, arena)!
-        $lm_head: = nn.Linear<|T|>.new(cfg.hidden, cfg.vocab, arena)
+        $lm_head: = nn.Linear<|T|>(cfg.hidden, cfg.vocab, arena)
         s.map_into<|F32|>("lm_head.weight", lm_head.weights@, arena)!
 
         return Qwen_model<|T|>::{ .cfg = cfg, .tok_embed = tok_embed, .layers = layers,

@@ -102,15 +102,15 @@ priv fn quantify_group(g: Rx_node$@, min_count: I32, max_count: I32, lazy: Bool)
         // Caution: **Do not add the empty alternative to the group itself.** Then `(ab)?c` matching
         // `c` would fill the group with an empty string. Other implementations answer "it did
         // not take part". So it is wrapped **from outside** in a non-capturing group.
-        $inner: = List<|Rx_node$@|>.new(null)
+        $inner: = List<|Rx_node$@|>(null)
         inner.push(g)
-        $alts: = List<|List<|Rx_node$@|>|>.new(null)
+        $alts: = List<|List<|Rx_node$@|>|>(null)
         if lazy
-            alts.push(List<|Rx_node$@|>.new(null))
+            alts.push(List<|Rx_node$@|>(null))
             alts.push(inner)
         else
             alts.push(inner)
-            alts.push(List<|Rx_node$@|>.new(null))
+            alts.push(List<|Rx_node$@|>(null))
         return new_group_node(alts, -1)
     n: = Rx_kind.group_repeat.new_node()
     n.sub = g
@@ -253,7 +253,7 @@ impl Compiler
                 // Caution: Stop recursing here; only recording the excess still exhausts the stack.
                 r.fail(.too_deep)
                 r.depth -= 1
-                return new_group_node(List<|List<|Rx_node$@|>|>.new(null), -1)
+                return new_group_node(List<|List<|Rx_node$@|>|>(null), -1)
             // `(?:…)` is a non-capturing group.
             // Caution: **Check for it before assigning a number.** Assigning and then discarding
             // shifts later groups by one (`(?:a)(b)`'s `b` becomes number 2).
@@ -354,14 +354,14 @@ impl Compiler
 
     fn parse_seq(r: Self$@): List<|Rx_node$@|> //<
         //< Parses one alternative's run of atoms, up to `|` or `)`
-        $seq: = List<|Rx_node$@|>.new(null)
+        $seq: = List<|Rx_node$@|>(null)
         for !r.failed() && r.pos < r.pat.len && r.peek() != '|' && r.peek() != ')'
             seq.push(r.parse_atom_quant())
         return seq
 
     fn parse_alts(r: Self$@): List<|List<|Rx_node$@|>|> //<
         //< Parses the list of alternatives parted by `|` (a group's contents, or the whole pattern)
-        $alts: = List<|List<|Rx_node$@|>|>.new(null)
+        $alts: = List<|List<|Rx_node$@|>|>(null)
         alts.push(r.parse_seq())
         for !r.failed() && r.peek() == '|'
             r.advance()
@@ -529,7 +529,7 @@ priv fn first_bytes(prog: List<|Inst|>$@, first: Bool$[]): Bool //<
         first[i] = false
     defer $seen: = List<|Bool|>.new_with_cap(prog.len, null)
     seen.len = prog.len
-    defer $todo: = List<|Sz|>.new(null)
+    defer $todo: = List<|Sz|>(null)
     todo.push(0)
     for todo.len > 0
         pc: = todo.get(todo.len - 1)
@@ -579,7 +579,7 @@ impl Match
         line: Sz = caller_line, //< where it was called, for the stop
     ): U8[]?
         if n < 1 || n > r.caps.count
-            $m: = Panic_msg.new()
+            $m: = Panic_msg()
             m.s("Match.group: the pattern has no group ").n(n).s(" (it has ").n(r.caps.count)
                 .s(", counted from 1)")
             panic(m.slice(), file, line)
@@ -630,7 +630,7 @@ impl Regex
         if e: = c.err
             free_rx_alts(alts@)
             throw e
-        $e: = Emitter::{ .prog = List<|Inst|>.new(null), .depth = 0, .states = 0 }
+        $e: = Emitter::{ .prog = List<|Inst|>(null), .depth = 0, .states = 0 }
         e.alts(alts@)
         e.step(.done, null, 0)
         if e.full()
@@ -742,7 +742,7 @@ impl Regex
         text: U8[], //< the text to search
         arena: Arena$@, //< where the list goes; null means the heap and a `free()`
     ): List<|Match|>
-        $out: = List<|Match|>.new(arena)
+        $out: = List<|Match|>(arena)
         defer $vm: = new_vm(r.states, r.width())
         $from: Sz = 0
         for from <= text.len && r.search(text, from, vm@)

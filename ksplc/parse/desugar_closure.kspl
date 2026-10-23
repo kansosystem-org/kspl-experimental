@@ -50,7 +50,7 @@ impl Ast_node
         // this check, the lifted `T` gives the baffling "missing import alias prefix for type 'T'".
         fwd: = forwarded_gen_params(ctx, sig, sig.find_child(.k_param_list), null)
         if fwd.len > 0
-            defer $msg: = Str_builder.new()
+            defer $msg: = Str_builder()
             msg
                 .s("an anonymous function cannot use the enclosing type parameter '\{fwd.get(0)\}'. \
                     It becomes a top-level function passed as a plain function pointer. Add a \
@@ -62,9 +62,9 @@ impl Ast_node
         name: = build_anon_fn_name(next_anon_serial(ctx, loc.file()))
 
         // The shape collect_fn_def reads; it finds every part by find_child, in any order.
-        fn_decl: = Ast_node.new(.k_decl_fn, "fn", loc)
-            .add_child(Ast_node.new(.k_keyword, "priv", loc))
-            .add_child(Ast_node.new(.k_keyword, "fn", loc))
+        fn_decl: = Ast_node(.k_decl_fn, "fn", loc)
+            .add_child(Ast_node(.k_keyword, "priv", loc))
+            .add_child(Ast_node(.k_keyword, "fn", loc))
             .add_child(Ast_node.build_ident(name, 0, loc)).add_child(sig).add_child(body)
         lifted.push(fn_decl)
 
@@ -122,7 +122,7 @@ impl Ast_node
         // not visible. Those the signature uses are copied over (with none, it stays non-generic).
         fwd_params: = forwarded_gen_params(ctx, sig, params, captures)
 
-        defer $src: = Str_builder.new()
+        defer $src: = Str_builder()
         if !r.build_closure_src(ctx, sig, captures, serial, gen_args_text(fwd_params), src@)
             return
 
@@ -148,9 +148,9 @@ impl Ast_node
         // go on with zero captures, and with captures it binds `T` from an immutable binding's `n@`
         // to `I32 const`, a different instantiation from the impl's.
         val_name: = build_anon_env_val_name(serial)
-        ctor_call: = Ast_node.new(.k_expr_postfix, "postfix", loc)
+        ctor_call: = Ast_node(.k_expr_postfix, "postfix", loc)
             .add_child(build_generic_path_ref(build_anon_env_ctor_name(serial), fwd_params, loc))
-            .add_child(Ast_node.new(.k_literal, "(", loc))
+            .add_child(Ast_node(.k_literal, "(", loc))
             .add_child(build_capture_args(captures, loc))
         val_id: = Ast_node.build_ident(val_name, 0, loc)
         ctx.hoisted.push(Ast_node.build_inferred_var_decl(val_id, ctor_call, loc))
@@ -164,7 +164,7 @@ impl Ast_node
         for list in r.children
             if list.kind_id != .k_param_list && list.kind_id != .k_capture_list
                 continue
-            for p in base_ast_ext.Param_cursor.new(list, false)
+            for p in base_ast_ext.Param_cursor(list, false)
                 d: = p.get_param_default()
                 if d != null
                     d.desugar_err(ctx,
@@ -188,7 +188,7 @@ impl Ast_node
         // (Principle 2: not one warning from the generated C either).
         if captures == null
             src.s("  priv \{CLOSURE_EMPTY_FIELD\}: U8;\n")
-        for cap in base_ast_ext.Param_cursor.new(captures, false)
+        for cap in base_ast_ext.Param_cursor(captures, false)
             if !r.append_capture_field(ctx, cap, src)
                 return false
         src.s("}\n")
@@ -197,7 +197,7 @@ impl Ast_node
         // call, rather than a struct literal by hand.
         src.s("priv fn \{ctor_name\}\{gen_args\}(")
         $first: = true
-        for cap in base_ast_ext.Param_cursor.new(captures, false)
+        for cap in base_ast_ext.Param_cursor(captures, false)
             c_name: = cap.find_text(.k_identifier)
             c_ty: = written_type_text(cap.get_decl_type_node())
             if !first
@@ -209,7 +209,7 @@ impl Ast_node
         if captures == null
             src.s(" .\{CLOSURE_EMPTY_FIELD\} = 0")
             first = false
-        for cap in base_ast_ext.Param_cursor.new(captures, false)
+        for cap in base_ast_ext.Param_cursor(captures, false)
             c_name: = cap.find_text(.k_identifier)
             src.s(" " if first else ", ")
             src.s(".\{c_name\} = \{c_name\}")
@@ -220,7 +220,7 @@ impl Ast_node
         ret_node: = sig.find_child(.k_type_expr)
         ret_ty: = "Void" if ret_node == null else written_type_text(ret_node)
         src.s("impl\{gen_args\} \{env_name\}\{gen_args\}: Callable\{arity\}<|")
-        for p in base_ast_ext.Param_cursor.new(params, false)
+        for p in base_ast_ext.Param_cursor(params, false)
             p_ty: = written_type_text(p.get_decl_type_node())
             if p_ty.equals(base_core.UNKNOWN_TYPE_NAME)
                 r.desugar_err(ctx, "a closure parameter must have a type annotation")
@@ -231,13 +231,13 @@ impl Ast_node
         // way ("Traits (`trait`)" in docs/SPEC-programming-language.md).
         // The receiver is spelled `r` only until name_closure_receiver renames it.
         src.s("\{ret_ty\}|> {\n  fn call(r: Self@")
-        for p in base_ast_ext.Param_cursor.new(params, false)
+        for p in base_ast_ext.Param_cursor(params, false)
             p_name: = p.find_text(.k_identifier)
             src.s(", \{p_name\}: \{written_type_text(p.get_decl_type_node())\}")
         src.s("): \{ret_ty\} {\n")
         // It rebinds the captured names, so **the body needs no rewriting**. `n` resolves as an
         // ordinary local. Since it is immutable, the mutability check stops a write to it.
-        for cap in base_ast_ext.Param_cursor.new(captures, false)
+        for cap in base_ast_ext.Param_cursor(captures, false)
             c_name: = cap.find_text(.k_identifier)
             src.s("    \{c_name\}: = r.\{c_name\}$;\n")
         src.s("  }\n}\n")
@@ -260,7 +260,7 @@ impl Ast_node
             return false
         c_ty: = written_type_text(cap.get_decl_type_node())
         if c_ty.len == 0 || c_ty.equals(base_core.UNKNOWN_TYPE_NAME)
-            defer $m: = Str_builder.new()
+            defer $m: = Str_builder()
             m
                 .s("capture '\{c_name\}' needs a type annotation ('\{c_name\}: I32'). Only local \
                     variables can omit their type")
@@ -333,7 +333,7 @@ fn forwarded_gen_params(ctx: Desugar_ctx$@, sig: Ast_node$@, params: Ast_node$@,
     out: = List<|U8[]|>.create(base_core.arena)
     if ctx.gen_params.len == 0
         return out
-    defer $types: = Str_builder.new()
+    defer $types: = Str_builder()
     signature_type_text(sig, params, captures, types@)
     type_text: = types.slice()
     for name in ctx.gen_params
@@ -361,23 +361,23 @@ fn build_generic_path_ref(name: U8[], names: List<|U8[]|>$@, loc: base_ast.Loc):
     if names.len == 0
         return build_path_ref(name, loc)
     args_text: = gen_args_text(names)
-    type_args: = Ast_node.new(.k_type_args, args_text, loc)
+    type_args: = Ast_node(.k_type_args, args_text, loc)
     for n in names
-        type_args.add_child(Ast_node.new(.k_type_atom, n, loc))
+        type_args.add_child(Ast_node(.k_type_atom, n, loc))
     full: = base_core.arena.text().s(name).s(args_text).take()
-    return Ast_node.new(.k_expr_path, full, loc)
-        .add_child(Ast_node.build_ident(name, 0, loc)).add_child(type_args)
+    return Ast_node(.k_expr_path, full, loc).add_child(Ast_node.build_ident(name, 0, loc))
+        .add_child(type_args)
 
 fn build_capture_args(captures: Ast_node$@, loc: base_ast.Loc): Ast_node$@ //<
     //< The arguments `name@`, one per capture (passed to the constructor)
     args: = Ast_node.build_args(loc)
-    for cap in base_ast_ext.Param_cursor.new(captures, false)
+    for cap in base_ast_ext.Param_cursor(captures, false)
         id_node: = cap.find_child(.k_identifier)
         if id_node == null
             continue
-        addr_of: = Ast_node.new(.k_expr_postfix, "postfix", loc)
+        addr_of: = Ast_node(.k_expr_postfix, "postfix", loc)
             .add_child(build_path_ref(id_node.text, loc))
-            .add_child(Ast_node.new(.k_literal, "@", loc))
+            .add_child(Ast_node(.k_literal, "@", loc))
         args.add_child(addr_of)
     return args
 
@@ -393,5 +393,5 @@ fn signature_type_text(sig: Ast_node$@, params: Ast_node$@, captures: Ast_node$@
 
 fn append_param_type_text(list: Ast_node$@, out: Str_builder$@) //<
     //< It adds the parameter type names in a `param_list` / `capture_list`, separated by spaces
-    for p in base_ast_ext.Param_cursor.new(list, false)
+    for p in base_ast_ext.Param_cursor(list, false)
         out.s(written_type_text(p.get_decl_type_node())).s(" ")

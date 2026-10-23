@@ -30,20 +30,20 @@ priv const MAX_SHOWN: Sz = 20 //< the cap on how many are listed in the report
 // `ksos` points at `ksdb` for its append-only record.
 // ==========================================
 priv const LAYER_FROM: U8[][_] = ::{ "docs", "root", "ksplc", "std", "ksai", "kspeg", "ksos",
-    "kssrv", "ksdb", "kspage", "ksbind", "tests", "tools" }
+    "kssrv", "ksdb", "ksbind", "ksmd", "tests", "tools" }
 
 // Caution: **A leaf's row must be "everything upward".** What the table says to a leaf is "upward
 // only", and it does not sort the destinations ("Reference direction between documents" in
 // `docs/SPEC-documents.md`).
 // `make test-conventions` matches only the implementations' directions against each other, so it
 // does not catch this.
-priv const LAYER_TO: U8[][_] = ::{ "docs root ksplc std ksai kspeg ksos kssrv ksdb kspage ksbind \
-    tests tools", "root docs ksplc std ksai kspeg ksos kssrv ksdb kspage ksbind tests tools",
+priv const LAYER_TO: U8[][_] = ::{ "docs root ksplc std ksai kspeg ksos kssrv ksdb ksbind ksmd \
+    tests tools", "root docs ksplc std ksai kspeg ksos kssrv ksdb ksbind ksmd tests tools",
     "ksplc docs std kspeg root", "std docs root", "ksai docs std root", "kspeg docs std root",
     "ksos docs std ksai ksdb root", "kssrv docs std ksai root", "ksdb docs std root",
-    "kspage docs std root", "ksbind docs std root",
-    "tests docs ksplc std ksai kspeg ksos kssrv ksdb kspage ksbind tools root",
-    "tools docs ksplc std ksai kspeg ksos kssrv ksdb kspage ksbind root" }
+    "ksbind docs std root", "ksmd docs std root",
+    "tests docs ksplc std ksai kspeg ksos kssrv ksdb ksbind ksmd tools root",
+    "tools docs ksplc std ksai kspeg ksos kssrv ksdb ksbind ksmd root" }
 
 priv const SPEC_MAY_REACH_UP: U8[][_] = ::{ "docs", "root" } //<
     //< The groups whose specifications another specification may point at
@@ -164,7 +164,7 @@ priv fn doc_dirs(arena: Arena$@): U8[][] //<
     //< the names of the folders whose references are picked up
     //< Caution: **Build it from layer_from.** A copied list misses an added folder, and references
     //< naming it pass without being picked up.
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     for d in LAYER_FROM
         if !d.equals("root")
             out.push(d)
@@ -174,7 +174,7 @@ priv fn doc_bares(arena: Arena$@): U8[][] //<
     //< The names a document is cited by without a folder: every tracked `.md`'s file name, once
     //< Caution: **Build it from what git tracks.** A copied list misses a document added later, and
     //< its section numbers and quoted names pass without being read.
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     for f in harness.tracked()
         if !f.ends_with(".md")
             continue
@@ -186,7 +186,7 @@ priv fn doc_bares(arena: Arena$@): U8[][] //<
 priv fn scanned_files(arena: Arena$@): List<|U8[]|> //< what is scanned
     //< Caution: **Check only what git knows**, or the count depends on whether it was built. The
     //< base layer decides which names are read (`is_scanned`).
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     files: = harness.tracked()
     for f in files
         if refs.is_scanned(f)
@@ -240,7 +240,7 @@ priv fn src_here(rel: U8[], here: U8[], text: U8[], at: Sz, arena: Arena$@): U8[
 priv fn generated_dirs(arena: Arena$@): List<|U8[]|> //< the build output folders
     //< Caution: **Build it from `.gitignore`'s directory entries**, or after `.gitignore` grows,
     //< artefacts are reported as "a reference that does not exist".
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     files: = harness.tracked()
     for f in files
         if !f.ends_with(".gitignore")
@@ -308,7 +308,7 @@ priv fn bare_leader_len(line: U8[], at: Sz): Sz //<
 
 priv fn find_bare_sections(line: U8[], arena: Arena$@): List<|U8[]|> //<
     //< Picks up the bare section numbers (`§12`, `section 1.2`) in one line
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     $i: Sz = 0
     for i < line.len
         lead: = bare_leader_len(line, i)
@@ -337,7 +337,7 @@ priv struct Finding //< where the findings are collected
     bad: List<|U8[]|>
 
 priv fn new_finding(arena: Arena$@): Finding
-    return Finding::{ .seen = 0, .bad = List<|U8[]|>.new(arena) }
+    return Finding::{ .seen = 0, .bad = List<|U8[]|>(arena) }
 
 priv fn report(name: U8[], count: Sz, f: Finding@, tail: U8[], arena: Arena$@)
     b: = arena.text()
@@ -425,11 +425,6 @@ priv fn check_picks_and_names(arena: Arena$@) //<
     report("the pick of a document's links can fire", samples.MD_LINK_SAMPLES.len, md_link_fires@,
         "the table of what hits and what does not is `md_link_samples` in \
             `support/docref_samples.kspl`", arena)
-    kspage_fires: = Finding::{ .seen = samples.KSPAGE_LINK_SAMPLES.len,
-        .bad = samples.kspage_link_defects(arena) }
-    report("the pick of a kspage's `href` can fire", samples.KSPAGE_LINK_SAMPLES.len, kspage_fires@,
-        "the table of what hits and what does not is `kspage_link_samples` in \
-            `support/docref_samples.kspl`", arena)
     names.check(arena)
     make_targets.check(arena)
 
@@ -481,7 +476,7 @@ impl Doc_check
         // The parser's brace fixtures (`.ksplb`, in `ksplc/tests/parse/`) are sources too.
         if rel.ends_with(".kspl") || rel.ends_with(".ksplb")
             d.unit_ref.seen += unit_ref_defects(rel, text, d.unit_ref.bad@, arena)
-        if is_md || rel.ends_with(".kspage")
+        if is_md
             d.check_links(rel, here, text)
         d.check_link_names(rel, text)
         // A heading number depends on Markdown syntax (what is read is the `#` line).
@@ -507,7 +502,7 @@ impl Doc_check
         //< Caution: A link to a heading is not caught by the number check. Rename the heading and
         //< the anchor alone goes stale, jumping to the document's start.
         arena: = d.arena
-        for l in refs.links_of(rel, text, arena)
+        for l in refs.find_links(text, arena)
             // That a link's target exists. **A Markdown link is relative to the file it is written
             // in**, unlike a bare name. `find_src_paths` and `find_doc_paths` pick up **only names
             // starting with a folder's name or `../`** (`doc_dirs`), so a path with a step dropped
@@ -573,7 +568,7 @@ impl Doc_check
                 near: = arena.text()
                 lo: = 0 if i < 2 else i - 2
                 hi: = lines.len if i + 3 > lines.len else i + 3
-                for k in Range.new(lo, hi, 1)
+                for k in Range(lo, hi, 1)
                     near.s(lines.get(k)).s("\n")
                 d.bare_phase.seen += 1
                 if near.take().find_str("README.md").is_none()
@@ -696,7 +691,7 @@ impl Doc_check
             // backticks (`ksplc/docs/DESIGN-compiler.md`), so dropping the code spans first loses
             // the naming.
             if !exempt && !names_a_doc(block.take())
-                for k in Range.new(start, stop, 1)
+                for k in Range(start, stop, 1)
                     d.check_bare_line(rel, lines.get(k), k, own@)
             start = stop + 1
 
@@ -716,7 +711,7 @@ fn main(): I32
     arena: = harness.begin(512 * 1024 * 1024)
     check_spec_refs()
     files: = scanned_files(arena)
-    $d: = Doc_check.new(arena)
+    $d: = Doc_check(arena)
     for rel in files
         d.check_file(rel)
     io.out().s("# references to documents: \{files.len\} files\n")

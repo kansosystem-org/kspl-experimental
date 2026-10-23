@@ -27,7 +27,7 @@ priv fn one_round(a: Arena$@) //< three allocations, each bigger than the chunk 
 
 fn test_arena_reset_keeps_one_chunk()
     verdict.start("[Arena] reset keeps what a round used as one chunk, and the next round fits...")
-    defer a: = Arena.new(1024 * KIB)
+    defer a: = Arena(1024 * KIB)
     one_round(a)
     grown: = a.get_total_allocated()
     a.reset()
@@ -55,7 +55,7 @@ fn test_arena_reset_fixed_buffer()
 // ==========================================
 fn test_arena_restore()
     verdict.start("[Arena] restore rewinds to a mark, across a chunk and more than once...")
-    defer a: = Arena.new(4 * KIB)
+    defer a: = Arena(4 * KIB)
     a.alloc(100)
     mark: = a.save()
     first: = a.alloc(16)
@@ -75,7 +75,7 @@ fn test_arena_restore()
 // ==========================================
 fn test_lent_arena_keeps_the_result_alone()
     verdict.start("[Arena] a lent arena keeps a function's result alone...")
-    defer a: = Arena.new(64 * KIB)
+    defer a: = Arena(64 * KIB)
     whole: = "GET / HTTP/1.1\r\nHost: h\r\nX-A: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\n\r\n"
     part: = "GET / HTTP/1.1\r\nHost: h\r\nX-A: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\n"
     before: = a.get_total_used()
@@ -90,7 +90,7 @@ fn test_lent_arena_keeps_the_result_alone()
     req: = http.parse_request(whole, 0, a) catch panic("a whole request parses")
     assert(req.target.equals("/") && a.get_total_used() > before,
         "Arena: a parse that succeeds leaves its request in the caller's arena")
-    $b: = json.Json_builder.new(a)
+    $b: = json.Json_builder(a)
     body: = jsonrpc.encode("m", b.int_val(1), 3, a)
     assert(body.equals("{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"m\",\"params\":1}"),
         "Arena: an encoded body survives the work behind it")
@@ -100,8 +100,8 @@ priv const RESTORE_FOREIGN_SRC: U8[] = //< a child that rewinds one arena to ano
     """import "std/mem" { Arena }
 
 fn main()
-  a: = Arena.new(4096)
-  b: = Arena.new(4096)
+  a: = Arena(4096)
+  b: = Arena(4096)
   _x: = a.alloc(100)
   mark: = a.save()
   _y: = b.alloc(5000)
@@ -114,7 +114,7 @@ priv const RESTORE_BEFORE_RESET_SRC: U8[] = //< a child that rewinds to a mark f
     """import "std/mem" { Arena }
 
 fn main()
-  a: = Arena.new(4096)
+  a: = Arena(4096)
   _x: = a.alloc(100)
   mark: = a.save()
   a.reset()
@@ -126,7 +126,7 @@ priv const RESTORE_REWOUND_PAST_SRC: U8[] = //< a child that rewinds to a mark i
     """import "std/mem" { Arena }
 
 fn main()
-  a: = Arena.new(4096)
+  a: = Arena(4096)
   _x: = a.alloc(100)
   early: = a.save()
   _y: = a.alloc(100)
@@ -163,7 +163,7 @@ priv const ARENA_ZERO_SRC: U8[] = //< a child that asks for an arena whose chunk
     """import "std/mem" { Arena }
 
 fn main()
-  a: = Arena.new(0)
+  a: = Arena(0)
   _p: = a.alloc(8)
   a.free()
 """
@@ -173,7 +173,7 @@ fn test_arena_new_refuses_zero(ksplc: U8[], arena: Arena$@) //< ksplc runs the c
     // Without the refusal it is taken for a fixed buffer: the first alloc blames `from_buffer`.
     named: = sys_test.child_stops_with(ksplc, "arena_zero", ARENA_ZERO_SRC,
         "Arena.new: chunk_size must be above 0", arena)
-    assert(named, "Arena.new(0) must stop the program, naming itself and the size")
+    assert(named, "Arena(0) must stop the program, naming itself and the size")
     verdict.pass("Arena.new refuses a chunk size of 0 where it is called.")
 
 // ==========================================
@@ -220,7 +220,7 @@ fn test_heap_counters_across_threads()
 // scope ends.
 // ==========================================
 priv fn rc_shared_body()
-    $a: = Rc<|I32|>.new(42)
+    $a: = Rc<|I32|>(42)
     $b: = a // plain assignment -> shared by an automatic retain (count 2)
     assert(a.get()$ == 42 && b.get()$ == 42, "both handles must read the shared value")
     b.get()$ = 100
@@ -245,7 +245,7 @@ fn arc_test_clone_storm(arg: Arc<|I32|>$@): Void$@
     return null
 
 priv fn arc_storm_body()
-    $shared: = Arc<|I32|>.new(7)
+    $shared: = Arc<|I32|>(7)
     t1: = thread.Thread.spawn<|Arc<|I32|>|>(arc_test_clone_storm, shared@)
         catch panic("thread spawn failed")
     t2: = thread.Thread.spawn<|Arc<|I32|>|>(arc_test_clone_storm, shared@)
@@ -275,7 +275,7 @@ fn test_arc_refcount_concurrent()
 // Rc has left its scope. Everything is freed once the weak one is gone too.
 // ==========================================
 priv fn weak_alive_body()
-    $rc: = Rc<|I32|>.new(42)
+    $rc: = Rc<|I32|>(42)
     $w: = rc.downgrade()
     $up: = w.upgrade() catch panic("upgrade() must succeed while a strong Rc<T> is still alive")
     assert(up.get()$ == 42, "upgraded handle must read the shared value")
@@ -284,7 +284,7 @@ priv fn weak_alive_body()
 priv fn make_dropped_weak(): Weak_rc<|I32|> //<
     //< Creates an rc inside the scope and returns a Weak_rc downgraded from it
     //< rc's release takes strong to 0, but the weak remains, so the control block is not freed.
-    $rc: = Rc<|I32|>.new(42)
+    $rc: = Rc<|I32|>(42)
     w: = rc.downgrade()
     return w
 
@@ -293,7 +293,7 @@ priv fn weak_after_drop_body()
     $upgrade_failed: = false
     $ph: = w.upgrade() catch
         upgrade_failed = true
-        fallback Rc<|I32|>.new(0) // an unrelated stand-in, only to satisfy the type (auto-freed)
+        fallback Rc<|I32|>(0) // an unrelated stand-in, only to satisfy the type (auto-freed)
     assert(upgrade_failed, "upgrade() after the last strong owner is gone must fail")
     assert(ph.get()$ == 0, "fallback placeholder must be usable")
     // ph and w are released as the scope ends; everything is freed once weak reaches 0 too.
@@ -320,7 +320,7 @@ fn arc_test_weak_storm(arg: Arc<|I32|>$@): Void$@
     return null
 
 priv fn weak_arc_storm_body()
-    $shared: = Arc<|I32|>.new(7)
+    $shared: = Arc<|I32|>(7)
     t1: = thread.Thread.spawn<|Arc<|I32|>|>(arc_test_weak_storm, shared@)
         catch panic("thread spawn failed")
     t2: = thread.Thread.spawn<|Arc<|I32|>|>(arc_test_weak_storm, shared@)
@@ -336,7 +336,7 @@ priv fn weak_arc_storm_body()
     assert(shared.get()$ == 7, "value must survive the downgrade/upgrade storm intact")
 
 priv fn make_dropped_weak_arc(): Weak_arc<|I32|>
-    $a: = Arc<|I32|>.new(7)
+    $a: = Arc<|I32|>(7)
     w: = a.downgrade()
     return w
 
@@ -345,7 +345,7 @@ priv fn weak_arc_after_drop_body()
     $upgrade_failed: = false
     $ph: = w.upgrade() catch
         upgrade_failed = true
-        fallback Arc<|I32|>.new(0)
+        fallback Arc<|I32|>(0)
     assert(upgrade_failed, "upgrade() after the last Arc<T> owner is gone must fail")
     assert(ph.get()$ == 0, "fallback placeholder must be usable")
 

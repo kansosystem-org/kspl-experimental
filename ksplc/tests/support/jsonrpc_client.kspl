@@ -62,8 +62,7 @@ pub fn spawn( //< starts a child and attaches to its pipes
     cwd: U8[], //< the working directory; empty inherits the parent's
 ): Client!subproc.Spawn_error //< the client, freed by the caller; fails if the child cannot start
     child: = subproc.spawn_piped(argv, cwd)!
-    return Client::{ .child = child, .next_id = 1, .acc = Str_builder.new(),
-        .err = Str_builder.new(),
+    return Client::{ .child = child, .next_id = 1, .acc = Str_builder(), .err = Str_builder(),
         .out_buf = U8$[]::{ .ptr = U8$@::alloc(CHUNK), .len = CHUNK },
         .err_buf = U8$[]::{ .ptr = U8$@::alloc(CHUNK), .len = CHUNK } }
 
@@ -77,7 +76,7 @@ impl Client
 
     fn send_messages(r: Self$@, bodies: U8[][], timeout_ms: I32): Void!jsonrpc.Rpc_end //<
         //< Frames separate messages and sends them in one write, in their given order
-        defer $out: = Str_builder.new()
+        defer $out: = Str_builder()
         for body in bodies
             jsonrpc.frame_into(out@, body)
         r.child.write(out.slice(), timeout_ms) catch e
@@ -94,7 +93,7 @@ impl Client
         timeout_ms: I32, //< how long the server may go without reading it
         arena: Arena$@, //< where the text is built while sending; null builds it on the heap
     ): Void!jsonrpc.Rpc_end //< fails as `send_raw` does
-        defer work: = Arena.new(WORK_CHUNK)
+        defer work: = Arena(WORK_CHUNK)
         r.send_raw(jsonrpc.encode(method, params, -1, arena if arena != null else work), timeout_ms)!
 
     pub fn request( //< sends a request and reads until the response with that id arrives
@@ -112,7 +111,7 @@ impl Client
         r.next_id = id_after(id)
         // The write spends the same budget: the round trip's timeout bounds both halves.
         deadline: = sys.deadline_after_ms(timeout_ms)
-        defer work: = Arena.new(WORK_CHUNK)
+        defer work: = Arena(WORK_CHUNK)
         r.send_raw(jsonrpc.encode(method, params, id, work), timeout_ms)!
         for sys.mono_us() <= deadline
             left_ms: = (deadline - sys.mono_us()) / 1000I64 + 1I64
@@ -131,7 +130,7 @@ impl Client
     ): json.Doc!jsonrpc.Rpc_end //< the message, freed as `json.parse`'s document is
         deadline: = sys.deadline_after_ms(timeout_ms)
         // The frame's text is work: only the value parsed from it is the caller's.
-        defer work: = Arena.new(WORK_CHUNK)
+        defer work: = Arena(WORK_CHUNK)
         for sys.mono_us() <= deadline
             r.drain_err()
             taken: = jsonrpc.take_frame(r.acc@, jsonrpc.MAX_BODY_BYTES, work)!

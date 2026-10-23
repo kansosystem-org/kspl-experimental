@@ -110,7 +110,7 @@ suite_found := $(sort $(subst _,-,$(patsubst tests/suite/%_test.kspl,%, \
 # rest of the packages' (`extract-rest`)**: each runs its packages one after another, so together
 # they would be the longest wait of a half.
 SUITES := lsp-tree extract-ksplc-core extract-ksplc-rest extract-rest extract-std fmt-tree docref c-warnings docsnippet pilot-copy \
-  conventions deps spec-claims textrip vscode link-rules pytools recipe-bytes lint-gate own-machine \
+  conventions deps spec-claims vscode link-rules pytools recipe-bytes lint-gate own-machine \
   $(EXTRA_SUITES)
 
 # Linux's image alone holds their tool (`js-syntax`: node; `race`: clang's ThreadSanitizer;
@@ -222,7 +222,7 @@ test-suites: $(addprefix test-,$(SUITES))
 # answer for its minutes (a Windows minute is billed double): CI runs them on Linux alone, as one
 # set (`test-suites-text`). Caution: **Keep a suite out of here when it builds, links or runs what
 # the platform decides** (`link-rules` reads `ksplc info link-libs`, which is the platform's).
-SUITES_TEXT := fmt-tree conventions docref spec-claims textrip docsnippet vscode recipe-bytes \
+SUITES_TEXT := fmt-tree conventions docref spec-claims docsnippet vscode recipe-bytes \
   lint-gate deps pytools
 
 suites_text_unknown := $(filter-out $(SUITES),$(SUITES_TEXT))

@@ -135,7 +135,7 @@ impl Ast_node
             r.emit_unknown_stmt(c)
 
     priv fn emit_unknown_stmt(r: Ast_node$@, _c: Genc_ctx$@)
-        defer $msg: = Str_builder.new()
+        defer $msg: = Str_builder()
         msg.s("emit_stmt: unhandled AST kind '").s(r.get_kind_str()).s("' reached Genc")
         r.ice_panic(msg.slice())
 
@@ -161,17 +161,15 @@ impl Ast_node
                 return false
         return false
 
-    priv fn dest_has_ordered_subexpr(r: Ast_node$@): Bool //<
-        //< Whether the assignment target holds a subexpression whose evaluation order is visible
-        //< Subscripts and call arguments must be evaluated before the right-hand side ("Evaluation
-        //< order" in docs/SPEC-programming-language.md). A `.` or `$` only moves on to its
-        //< receiver; a plain name has nothing to fix.
+    priv fn dest_runs_code(r: Ast_node$@): Bool //<
+        //< Whether evaluating the assignment target runs code: a subscript's check or a call
+        //< A `.` or `$` only moves on to its receiver; a plain name runs nothing.
         if r == null || r.kind_id != .k_expr_postfix
             return false
         op: = r.get_postfix_op()
         if op != null && (op.text.equals("[") || op.text.equals("("))
             return true
-        return r.get_postfix_receiver().dest_has_ordered_subexpr()
+        return r.get_postfix_receiver().dest_runs_code()
 
     priv fn emit_assign_stmt(r: Ast_node$@, c: Genc_ctx$@)
         left_node: = r.get_assign_left()
@@ -197,11 +195,11 @@ impl Ast_node
         op_node: = r.get_assign_op()
         op_text: = op_node.text if op_node != null else ""
 
-        // Caution: **Evaluate the target's subexpressions before the right-hand side.** C leaves
-        // the order open (clang takes the right first, gcc the left), so `a[i()] = v()` would
-        // depend on the compiler ("Evaluation order" in docs/SPEC-programming-language.md). Taking
-        // the address first fixes the order.
-        if left_node.dest_has_ordered_subexpr()
+        // Caution: **Evaluate a compound assignment's target once.** Its C names the target twice
+        // (`x = (T)((U)(x) + ...)`), so a subscript's check or a call in it would run twice. The
+        // order of the two sides is Lower's (`Operand_order` in lower/order.kspl): where it could
+        // show, the value is already a temporary.
+        if !op_text.equals("=") && left_node.dest_runs_code()
             c.assign_tmp_seq += 1
             seq: = c.assign_tmp_seq
             // Caution: **Do not use clear_scratch to build a name.** scratch is shared, and a
@@ -211,9 +209,11 @@ impl Ast_node
             dst_type: = c.env.strip_const_deep(left_node.type_id)
             $dst: = base_core.arena.text().s("*_kspl_dst_\{seq\}").take()
             // Caution: **A field of a `#packed` struct gets a packed pointer.** A plain `T*` to it
-            // tells C the address is aligned, and the store faults on a Cortex-M0.
+            // tells C the address is aligned, and the store faults on a Cortex-M0. **Mark it
+            // `may_alias` too**: without it, gcc -O2 assumes the wrapper never shares memory with
+            // the struct it points into, and loses the write.
             if c.sema.packed_place_align(left_node) > 0
-                c.s("{ struct __attribute__((packed)) { ").t(dst_type)
+                c.s("{ struct __attribute__((packed, may_alias)) { ").t(dst_type)
                     .s(" v; } *_kspl_dst_\{seq\} = (void *)&(")
                 dst = base_core.arena.text().s("_kspl_dst_\{seq\}->v").take()
             else
@@ -369,7 +369,7 @@ impl Ast_node
         // Caution: **Name the enum by its type's mangled name**, as its declaration and a variant's
         // construction are. Spelled from its canonical string, an instance whose immutability is
         // dropped (`Pick<|I32|>` of an `enum Pick<|$T|>`) names tags C never declared.
-        defer $mangled_enum_name: = Str_builder.new()
+        defer $mangled_enum_name: = Str_builder()
         c.env.mangle_type_id_to(enum_id, mangled_enum_name)
         safe_enum_name: = mangled_enum_name.slice()
 

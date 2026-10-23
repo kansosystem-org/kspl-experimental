@@ -4,11 +4,13 @@ import "ksplc/base/ast" { Ast_node, Loc }
 import "ksplc/base/ast_ext" as _ast_ext
 import "ksplc/base/ast_place" as _ast_place
 import "ksplc/base/ast_spell" as _ast_spell
+import "ksplc/base/core" as base_core
 import "ksplc/sema/decl/name" as _name
 import "ksplc/sema/session/ctx" { Sema_ctx }
 import "ksplc/sema/type/env" as _env
 import "ksplc/sema/type/query" as _query
 import "ksplc/sema/type/scope" as _scope
+import "std/chars" as _chars
 import "std/str" as _str
 
 fn self_callee(c: Sema_ctx$@, left: Ast_node$@): Ast_node$@? //<
@@ -16,11 +18,11 @@ fn self_callee(c: Sema_ctx$@, left: Ast_node$@): Ast_node$@? //<
     if !left.is_path_or_ident() || !left.get_path_or_ident_name().equals("Self") ||
         c.fn_ctx.impl_name.len == 0 || c.read_written_name(left).sym != null
         return .none
-    self_name: = Ast_node.new(.k_identifier, "Self", left.loc)
+    self_name: = Ast_node(.k_identifier, "Self", left.loc)
     if owner: = c.symtab.resolve(c.fn_ctx.impl_name)
         self_name.def_node = owner.node
         self_name.type_id = owner.type_id
-    return .some(Ast_node.new(.k_expr_path, "Self.new", left.loc).add_child(self_name)
+    return .some(Ast_node(.k_expr_path, "Self.new", left.loc).add_child(self_name)
         .add_child(implicit_new(left.loc)))
 
 fn callee(c: Sema_ctx$@, left: Ast_node$@): Ast_node$@? //<
@@ -34,11 +36,53 @@ fn callee(c: Sema_ctx$@, left: Ast_node$@): Ast_node$@? //<
             return .none
     else if named.reach != .instance_type
         return .none
-    return .some(Ast_node.new(.k_expr_postfix, ".", left.loc).add_child(left)
-        .add_child(Ast_node.new(.k_literal, ".", left.loc)).add_child(implicit_new(left.loc)))
+    return .some(Ast_node(.k_expr_postfix, ".", left.loc).add_child(left)
+        .add_child(Ast_node(.k_literal, ".", left.loc)).add_child(implicit_new(left.loc)))
 
 fn check_receiver(c: Sema_ctx$@, constructor: Ast_node$@) //<
     //< A type call must not stand for a function taking an instance as its first parameter
+    if takes_instance(c, constructor)
+        c.err(constructor,
+            "a type call requires a static 'new', not one taking an instance as its first parameter")
+
+fn refuse_written_new(c: Sema_ctx$@, callee: Ast_node$@) //<
+    //< Refuses a type's static `new` called by its name: `T(…)` is the one way to write that call
+    //< The type call's own `new` is implicit, so the mark tells them apart, not the spelling. A
+    //< `new` taking an instance first is a method that no type call selects, so it stays callable.
+    if callee.kind_id != .k_expr_path
+        return
+    parts: = _name.named_fn(callee)
+    if parts.owner == null || parts.own != null || !parts.name.text.equals("new") ||
+        parts.name.is_implicit_name()
+        return
+    written: = c.read_written_type(callee)
+    if written.member != parts.name || !names_type(c, written) || takes_instance(c, callee)
+        return
+    type_text: = written_type_text(c, callee, parts.name)
+    c.clear_scratch()
+        .s("the call names a type's static 'new'. Write the type call '\{type_text\}(…)'")
+    c.err(callee, c.scratch.slice())
+
+priv fn written_type_text(c: Sema_ctx$@, callee: Ast_node$@, name: Ast_node$@): U8[] //<
+    //< The type before `.new` as the source spells it, type arguments and all
+    //< The tree's text drops part of some type arguments (`fn(a: I32): I32` reads `fn`).
+    src: = base_core.source_of(c.source_map, callee.loc.file())
+    start: = Sz::callee.loc.offset
+    end: = Sz::name.loc.offset
+    if callee.loc.file_id == name.loc.file_id && start < end && end <= src.len
+        return src.sub(start, end - start).trim_end().strip_suffix(".").trim_end()
+    return callee.text.strip_suffix(".new")
+
+priv fn names_type(c: Sema_ctx$@, written: _name.Written_type): Bool //<
+    //< Whether a written path begins with a type (`Self` within an impl too), not a value
+    if written.name.equals("Self") && written.alias_file.len == 0
+        return c.fn_ctx.impl_name.len > 0
+    if sym: = c.written_type_symbol(written)
+        return sym.kind.is_type()
+    return false
+
+priv fn takes_instance(c: Sema_ctx$@, constructor: Ast_node$@): Bool //<
+    //< Whether the `new` a path names takes an instance of its own type as its first parameter
     named: = c.read_written_name(constructor)
     decl: =
         (constructor.def_node if constructor.def_node != null
@@ -50,21 +94,19 @@ fn check_receiver(c: Sema_ctx$@, constructor: Ast_node$@) //<
     if owner_id <= 0 && c.read_written_type(constructor).name.equals("Self")
         owner_id = c.env.type_to_id.get(c.fn_ctx.impl_name).unwrap_or(0)
     if decl == null || owner_id <= 0
-        return
+        return false
     params: = decl.get_fn_params()
     if params == null
-        return
-    $cursor: = _ast_ext.Param_cursor.new(params, false)
+        return false
+    $cursor: = _ast_ext.Param_cursor(params, false)
     if first: = cursor.next()
         id: = first.param_type_id()
-        if id > 0 &&
+        return id > 0 &&
             c.env.get_clean_real_type(c.env.receiver_base_id(id)) == c.env
             .get_clean_real_type(owner_id)
-            c.err(constructor,
-                "a type call requires a static 'new', not one taking an instance as its first \
-                    parameter")
+    return false
 
 priv fn implicit_new(loc: Loc): Ast_node$@ //< the member a type call selects, not a written name
-    name: = Ast_node.new(.k_identifier, "new", loc)
+    name: = Ast_node(.k_identifier, "new", loc)
     name.mark_implicit_name()
     return name

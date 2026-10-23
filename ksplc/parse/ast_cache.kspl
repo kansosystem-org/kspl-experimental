@@ -54,7 +54,7 @@ priv fn build_paths(logical_name: U8[], src: U8[], path: Str_builder$@, key: Str
     //< The path is `<cache directory>/ast/<64 hex digits>.ksast`.
     //<
     //< It returns false where the path cannot be determined (the cache is then not used).
-    defer $material: = Str_builder.new()
+    defer $material: = Str_builder()
     material.s("\{MAGIC\}\0\{Sz::FORMAT_VERSION\}\0")
     material.s(logical_name).c(0U8)
     // Caution: **Include the `--define` flags**: `#cfg()` drops declarations during normalization
@@ -139,13 +139,13 @@ fn store(logical_name: U8[], src: U8[], decls: List<|Ast_node$@|>$@) //<
     //< A failure is still a success for the caller: the file is just parsed again next time.
     //< **Every node's `loc.file` must be logical_name** (one per entry, as parse_raw_ast produces);
     //< otherwise nothing is saved, rather than a wrong file name.
-    defer $path: = Str_builder.new()
-    defer $key: = Str_builder.new()
+    defer $path: = Str_builder()
+    defer $key: = Str_builder()
     if !build_paths(logical_name, src, path@, key@)
         return
 
-    tbl: = Str_table.new(base_core.arena)
-    defer $body: = Str_builder.new()
+    tbl: = Str_table(base_core.arena)
+    defer $body: = Str_builder()
     $n_nodes: Sz = 0
     for d in decls
         if !d.loc.file().equals(logical_name) || !write_subtree(d, tbl, body@, n_nodes@)
@@ -156,7 +156,7 @@ fn store(logical_name: U8[], src: U8[], decls: List<|Ast_node$@|>$@) //<
     // Caution: **Store them in the entry.** Otherwise a hit returns only the declarations.
     // Whether a file shows the reason would then depend on whether a build cached it. Their
     // flag's spelling goes into the string table, so collect them before the table is written.
-    defer $regions: = Str_builder.new()
+    defer $regions: = Str_builder()
     $n_regions: Sz = 0
     for region in base_cfg_inactive.cfg_inactive
         if !region.file.equals(logical_name)
@@ -167,7 +167,7 @@ fn store(logical_name: U8[], src: U8[], decls: List<|Ast_node$@|>$@) //<
         put_u32(regions@, 1U32 if region.is_neg else 0U32)
         n_regions += 1
 
-    defer $out: = Str_builder.new()
+    defer $out: = Str_builder()
     out.s(MAGIC)
     put_u32(out@, FORMAT_VERSION)
     out.s(key.slice())
@@ -185,7 +185,7 @@ fn store(logical_name: U8[], src: U8[], decls: List<|Ast_node$@|>$@) //<
     // then rename**, or a reader reads half-written content. The temporary name differs per
     // process; if two clash, the key and length checks discard the entry and the next writer
     // repairs it.
-    defer $tmp: = Str_builder.new()
+    defer $tmp: = Str_builder()
     tmp.s(path.slice()).s(".tmp\{temp_nonce()\}")
     io.write_file(tmp.slice(), out.slice()) catch
         return
@@ -267,8 +267,8 @@ priv fn read_subtree(cur: Cursor$@, strs: List<|U8[]|>$@, logical_name: U8[], bu
 fn load(logical_name: U8[], src: U8[], decls: List<|Ast_node$@|>$@): Bool //<
     //< True where decls could be restored from the cache
     //< Otherwise it adds nothing and returns false (the caller parses as usual).
-    defer $path: = Str_builder.new()
-    defer $key: = Str_builder.new()
+    defer $path: = Str_builder()
+    defer $key: = Str_builder()
     if !build_paths(logical_name, src, path@, key@)
         return false
     data: = io.read_file(path.slice(), null) catch

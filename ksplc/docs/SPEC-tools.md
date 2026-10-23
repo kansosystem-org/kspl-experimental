@@ -554,7 +554,7 @@ pub struct Greet_point
     pub y: I32
 #export
 pub fn greet_hello(times: I32): I32 //< the length of the text `hello <i>` for each i below times
-    defer $b: = Str_builder.new()
+    defer $b: = Str_builder()
     for i in Range.asc(Sz::times)
         b.s("hello \{i\}\n")
     return I32::b.slice().len
@@ -693,11 +693,13 @@ It translates to C and has the C compiler compile and link it, in one step: what
 # put the formatting result out to standard output
 ksplc fmt src/main.kspl
 
-# format by overwriting the file directly (in place)
+# format the file in place
 ksplc fmt --in-place src/main.kspl src/utils.kspl
 ```
 
 Without `--in-place` the output goes to standard output.
+
+**In-place formatting writes a temporary file before replacing the source**, keeping its permission bits. A failed write leaves the original intact. A failure after replacement can leave the complete new text in place. Symbolic links are refused; format the target directly. Replacement changes only the named file, not other hard links to its old content.
 
 **Standard output holds the formatted text alone. Every line about the run goes to standard error**: a file's diagnostics, the list of the files that failed and the closing `fmt/failed: …` line. So `ksplc fmt a.kspl > b.kspl` leaves nothing in `b.kspl` but formatted text, and the exit code says whether every file was formatted.
 
@@ -803,7 +805,7 @@ flowchart LR
 * **Hover**: on a variable or a function, it shows the inferred type, the function's signature and a struct's fields. Below them it shows the declaration's own description. That is the `//<` on its line and the run below it.
   * **A name the description points at links to its declaration** (`` `Map.set` `` opens `std/ds.kspl` at that line). It is resolved as [W0211] resolves it, through the description's scope: a function's parameters and locals before its file's names. So a linked name is never one the compiler calls stale. The completion list's descriptions carry the same links. A link is an absolute `file://` URI with the line after `#L`, whatever spelling the client asked in. The editor's Markdown renderer opens it, not the client's own mapping of document names.
   * **On a literal it shows the literal's type**, the one it takes where it stands: `4` in `size: Sz = 4` shows `Sz`, `'a'` shows `U8`, `null` the pointer or `Option` it fills in. Where the compiler gives that literal no type (an array's length, an enum's tag value) the hover is empty.
-  * **Where a name is bound it shows what a use of it shows**: `words: std.ds.List<|U8[]|>` on `$words: = List<|U8[]|>.new(arena)` as on a later `words`. The same holds for a parameter, a `for`'s item, `if v: = opt`, `catch e` and a pattern's payload.
+  * **Where a name is bound it shows what a use of it shows**: `words: std.ds.List<|U8[]|>` on `$words: = List<|U8[]|>(arena)` as on a later `words`. The same holds for a parameter, a `for`'s item, `if v: = opt`, `catch e` and a pattern's payload.
   * **On a mark it answers nothing.** A bracket, a comma, an operator, `::`, `<|` and `|>`, and a keyword such as `priv` or `fn` name no declaration, so the hover there is empty. A position at a name's end still answers that name: with the caret just past `free`, on the `(` of `free()`, it shows `free`.
 * **Jump to definition**: from a use to its declaration, including a typedef or an enum variant in another file.
   * **Where the server finds nothing, nothing happens.** The VS Code extension does not search the text for a match instead. A search lands on another declaration of the same name, shown as surely as a real answer.

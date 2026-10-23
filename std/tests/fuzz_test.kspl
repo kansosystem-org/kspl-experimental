@@ -19,11 +19,11 @@ priv const WORK_DIR: U8[] = "out/tmp/kspl_test_fuzz"
 
 fn test_fuzz_mutate()
     verdict.start("[fuzz] breaking a copy, the same way from the same seed test...")
-    defer arena: = Arena.new(1024 * 1024)
+    defer arena: = Arena(1024 * 1024)
     src: = "fn main(): I32 { return 0; }"
     keep: = arena.dup_str(src)
-    $a: = Prng.new(7U64)
-    $b: = Prng.new(7U64)
+    $a: = Prng(7U64)
+    $b: = Prng(7U64)
     $changed: Sz = 0
     for _round in Range.asc(200)
         x: = fuzz.mutate(src, a@, arena)
@@ -39,11 +39,11 @@ fn test_fuzz_mutate()
 
 fn test_fuzz_pick()
     verdict.start("[fuzz] a seed picked within its input kind test...")
-    defer arena: = Arena.new(64 * 1024)
-    $all: = List<|fuzz.Sample|>.new(arena)
+    defer arena: = Arena(64 * 1024)
+    $all: = List<|fuzz.Sample|>(arena)
     for k in U8[][]::{ "few", "many", "many", "many" }
         all.push(fuzz.Sample::{ .kind = k, .name = k, .data = "x", .built = false })
-    $r: = Prng.new(1U64)
+    $r: = Prng(1U64)
     $hits: Sz[4] = ::{ 0, 0, 0, 0 }
     for _round in Range.asc(300)
         assert(fuzz.pick(all@, "few", r@) == 0, "a kind holding one seed always gets that one")
@@ -57,7 +57,7 @@ fn test_fuzz_pick()
 
 fn test_fuzz_gather()
     verdict.start("[fuzz] seeds gathered from folders, in the order of their paths test...")
-    defer arena: = Arena.new(256 * 1024)
+    defer arena: = Arena(256 * 1024)
     dir: = fs.mkdir_unique(WORK_DIR, "gather_", arena) catch
         panic("mkdir_unique should make a directory")
     rels: = U8[][]::{ "b.md", "a.md", "sub/c.md", "skip.txt", "out/made.md", ".git/kept.md",
@@ -128,7 +128,7 @@ import "std/verdict"
 
 fn main(): I32
   verdict.begin("probe")
-  arena: = Arena.new(1 << 20)
+  arena: = Arena(1 << 20)
   defer arena.free()
   found: = fuzz.findings_new(arena)
   t: = fuzz.Trial::{ .got = subproc.Run_result::{ .exit_code = .some(139), .stdout_data = "",
@@ -176,13 +176,13 @@ priv const KINDS: fuzz.Input_kind[3] = ::{ fuzz.Input_kind::{ .name = "answer", 
 
 fn main(): I32
   verdict.begin("probe")
-  arena: = Arena.new(1 << 22)
+  arena: = Arena(1 << 22)
   defer arena.free()
   a: = sys.args()
   c: = fuzz.Campaign::{ .subject = "probe", .argv = U8[][]::{ a.get(1), "run", a.get(2) },
     .tell_kind = true, .after = U8[][]::{}, .work = a.get(3), .kinds = fuzz.Input_kind[]::KINDS,
     .in_turn = true, .wait_ms = 300000, .reach_div = 2, .again = "run it" }
-  $all: = List<|fuzz.Sample|>.new(arena)
+  $all: = List<|fuzz.Sample|>(arena)
   all.push(fuzz.Sample::{ .kind = "answer", .name = "made", .data = "x", .built = true })
   all.push(fuzz.Sample::{ .kind = "refuse", .name = "made", .data = "x", .built = true })
   all.push(fuzz.Sample::{ .kind = "refuse", .name = "found", .data = "x", .built = false })
@@ -190,7 +190,7 @@ fn main(): I32
   $live: = fuzz.check_seeds(c@, all@, null)
   fuzz.scatter(c@, live@, "bytes", fuzz.Options::{ .trials = 2I64, .seed = 1I64 }, null) catch why
     return verdict.fatal(why)
-  $refused: = List<|fuzz.Sample|>.new(arena)
+  $refused: = List<|fuzz.Sample|>(arena)
   refused.push(all.get(2))
   fuzz.scatter(c@, refused@, "bytes", fuzz.Options::{ .trials = 2I64, .seed = 1I64 }, arena) catch why
     return verdict.fatal(why)

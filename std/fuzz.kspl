@@ -139,7 +139,7 @@ priv fn setup_in(p: argparse.Parser$@, o: Options$@, run_as: U8[], program: U8[]
         throw "the working place cannot be read"
     fs.mkdir_all(work) catch
         throw "the work folder cannot be made"
-    $dirs: = List<|U8[]|>.new(arena)
+    $dirs: = List<|U8[]|>(arena)
     for i in Range.asc(p.rest.len)
         if i >= 2
             dirs.push(p.rest.get(i))
@@ -185,7 +185,7 @@ pub fn gather( //< collects the files with the given endings under the folders, 
     arena: Arena$@, //< where the list, the names and the bytes go; null means the heap, as below
 ): List<|Sample|> //< the seeds found; a folder that cannot be walked is skipped.
     //< With `null`, free each seed's `name` and `data` with `dealloc`, then the list with `free()`.
-    $out: = List<|Sample|>.new(arena)
+    $out: = List<|Sample|>(arena)
     // The walk's paths are work, kept apart from `arena` (`mem.scratch`): each seed keeps a copy of
     // its name.
     defer $work: = mem.scratch(null)
@@ -343,7 +343,7 @@ priv fn read_once(c: Campaign@, k: Input_kind, data: U8[], arena: Arena$@): Tria
     path: = fs.join(c.work, arena.text().s("mutant").s(k.ext).take(), arena)
     io.write_file(path, data) catch
         throw .unwritten
-    $argv: = List<|U8[]|>.new(arena)
+    $argv: = List<|U8[]|>(arena)
     for a in c.argv
         argv.push(a)
     if c.tell_kind
@@ -364,11 +364,11 @@ pub fn check_seeds( //< has the program read every seed once, and returns those 
     all: List<|Sample|>@, //< every seed; each is of one of the run's kinds
     arena: Arena$@, //< where the list goes; null means the heap and a `free()`
 ): List<|Sample|> //< the seeds the program accepted, each the same as in `all`
-    $live: = List<|Sample|>.new(arena)
+    $live: = List<|Sample|>(arena)
     // The trials and the lines are work, kept apart from `arena`, which takes `live`
     // (`mem.scratch`).
     defer $work: = mem.scratch(null)
-    $bad: = List<|U8[]|>.new(work.arena)
+    $bad: = List<|U8[]|>(work.arena)
     for i in Range.asc(all.len)
         one: = all.get(i)
         at: = work.arena.text().s(one.kind).s(": ").s(one.name)
@@ -416,7 +416,7 @@ pub fn scatter( //< runs the trials, checks that they reached the program, and r
     // The inputs, the outputs and the findings are work, kept apart from `arena`, which takes the
     // line a failure stops on (`mem.scratch`).
     defer $work: = mem.scratch(null)
-    $kinds: = List<|Input_kind|>.new(work.arena)
+    $kinds: = List<|Input_kind|>(work.arena)
     for k in c.kinds
         if count_of(seeds, k.name) > 0
             kinds.push(k)
@@ -428,7 +428,7 @@ pub fn scatter( //< runs the trials, checks that they reached the program, and r
     trials: = Sz::o.trials
     io.out().s("\n# scattering broken ").s(what).s(" (\{trials\} trials, \{seeds.len\} seeds, ")
         .s("rng seed \{o.seed\})\n")
-    $r: = Prng.new(U64::o.seed)
+    $r: = Prng(U64::o.seed)
     found: = findings_new(work.arena)
     $read_ok: Sz = 0
     for trial in Range.asc(trials)

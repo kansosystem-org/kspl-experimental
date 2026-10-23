@@ -152,6 +152,21 @@ ifeq ($(LLVM),1)
 endif
 STAGE2_OUT := $(GEN_DIR)/ksplc_stage2.$(TARGET_EXT)
 STAGE2_EXE := $(OUT_DIR)/ksplc_stage2.exe
+# **The stages' C is split into one translation unit per core**, compiled in parallel (C only, 16 at
+# most). The seed and the shipped build take stage2's C whole: the seed is one file, and `-O2`
+# inlines across what one unit holds. A stage's target is its header, the last file it writes.
+# Split, each stage writes into a folder of its own under one name: a unit names its header, so two
+# names would differ in every unit.
+SPLIT      := $(if $(filter c,$(BACKEND)),$(or $(filter $(HOST_CORES),\
+              2 3 4 5 6 7 8 9 10 11 12 13 14 15 16),$(if $(filter 1,$(HOST_CORES)),1,16)),1)
+ifneq ($(SPLIT),1)
+    STAGE1_OUT := $(GEN_DIR)/stage1/ksplc.c
+    STAGE2_OUT := $(GEN_DIR)/stage2/ksplc.c
+endif
+stage_gen   = $(if $(filter-out 1,$(SPLIT)),$(basename $(1)).h,$(1))
+STAGE1_GEN := $(call stage_gen,$(STAGE1_OUT))
+STAGE2_GEN := $(call stage_gen,$(STAGE2_OUT))
+STAGE2_WHOLE := $(GEN_DIR)/ksplc_stage2_whole.$(TARGET_EXT)
 # One per backend: shared, the other backend's newer file looked up to date and its verdict
 # was read for this one.
 DIFF_TXT   := $(OUT_DIR)/stage_diff_$(BACKEND).txt
@@ -276,28 +291,34 @@ $(SEED_EXE): $(SEED_C) | $(OUT_DIR)
 # **Each step of the chain is ksplc's own** (`ksplc/Makefile`), run from here (`RUN_FROM=..`): a
 # debugger joins `#line`'s `std` to the folder the C compiler ran in, or `std` frames lose source.
 ksplc_step = $(call pkg_make,ksplc) RUN_FROM=.. CC='$(CC)' CFLAGS='$(BOOT_CFLAGS)' \
-  ENTRY_FILE=ksplc/main.kspl FLAGS='$(KSPL_FLAGS) $(TARGET_FLAG)'
+  ENTRY_FILE=ksplc/main.kspl FLAGS='$(KSPL_FLAGS) $(TARGET_FLAG)' SPLIT=$(SPLIT)
 
 # Caution: **Do not tidy this C**: `$(C_FMT)` is slow on it and nobody reads it; the seed is tidied.
-$(STAGE1_OUT): $(SEED_EXE) $(KSPL_SRCS)
+$(STAGE1_GEN): $(SEED_EXE) $(KSPL_SRCS)
 	@echo "# GENERATING STAGE 1 ($(BACKEND))..."
+	@mkdir -p $(dir $(STAGE1_OUT))
 	@$(ksplc_step) translate WITH=$(SEED_EXE) TO=$(STAGE1_OUT) RT=$(STAGE1_RT)
 
-$(STAGE1_EXE): $(STAGE1_OUT)
+$(STAGE1_EXE): $(STAGE1_GEN)
 	@echo "# BUILDING STAGE 1 EXECUTABLE..."
 	@$(ksplc_step) build WITH=$(SEED_EXE) FROM=$(STAGE1_OUT) RT=$(STAGE1_RT) EXE=$(STAGE1_EXE)
 
-$(STAGE2_OUT): $(STAGE1_EXE) $(KSPL_SRCS)
+$(STAGE2_GEN): $(STAGE1_EXE) $(KSPL_SRCS)
 	@echo "# GENERATING STAGE 2 ($(BACKEND))..."
+	@mkdir -p $(dir $(STAGE2_OUT))
 	@$(ksplc_step) translate WITH=$(STAGE1_EXE) TO=$(STAGE2_OUT) RT=$(STAGE2_RT)
 
-$(STAGE2_EXE): $(STAGE2_OUT)
+$(STAGE2_WHOLE): $(STAGE1_EXE) $(KSPL_SRCS)
+	@echo "# GENERATING THE WHOLE C OF STAGE 2 ($(BACKEND)), for the seed and the shipped build..."
+	@$(ksplc_step) translate WITH=$(STAGE1_EXE) TO=$(STAGE2_WHOLE) RT=$(STAGE2_RT) SPLIT=1
+
+$(STAGE2_EXE): $(STAGE2_GEN)
 	@echo "# BUILDING STAGE 2 EXECUTABLE..."
 	@$(ksplc_step) build WITH=$(STAGE1_EXE) FROM=$(STAGE2_OUT) RT=$(STAGE2_RT) EXE=$(STAGE2_EXE)
 
 SHIP_EXE := $(OUT_DIR)/ksplc_ship.exe
 
-$(SHIP_EXE): $(STAGE2_OUT)
+$(SHIP_EXE): $(STAGE2_WHOLE)
 	@echo "# BUILDING THE SHIPPED EXECUTABLE (optimized)..."
 	$(CC) $(SHIP_CFLAGS) $^ $(STAGE2_RT) $(LDLIBS) -o $@
 
@@ -309,19 +330,19 @@ SHIP_DIFF := $(OUT_DIR)/ship_diff.txt
 ## Gates|self-host-ship|See that the optimized ksplc `make install` ships emits stage2's notation to the byte
 self-host-ship: $(SHIP_EXE)
 	@echo "# VERIFYING THE SHIPPED EXECUTABLE"
-	@$(ksplc_step) translate WITH=$(SHIP_EXE) TO=$(SHIP_OUT) RT=$(SHIP_RT)
-	@$(ksplc_step) compare FROM=$(STAGE2_OUT) TO=$(SHIP_OUT) DIFF=$(SHIP_DIFF)
+	@$(ksplc_step) translate WITH=$(SHIP_EXE) TO=$(SHIP_OUT) RT=$(SHIP_RT) SPLIT=1
+	@$(ksplc_step) compare FROM=$(STAGE2_WHOLE) TO=$(SHIP_OUT) DIFF=$(SHIP_DIFF) SPLIT=1
 	@$(ksplc_step) verdict DIFF=$(SHIP_DIFF) LABEL='the shipped executable, $(BACKEND) backend'
 
 # The old $(STAGE2_EXE) goes at the end: stale once stage2's C is remade, yet newer than stage1.exe.
-$(DIFF_TXT): $(STAGE1_OUT) $(STAGE2_OUT)
+$(DIFF_TXT): $(STAGE1_GEN) $(STAGE2_GEN)
 	@echo "# VERIFYING SELF-HOSTING"
 	@$(ksplc_step) compare FROM=$(STAGE1_OUT) TO=$(STAGE2_OUT) DIFF=$(DIFF_TXT)
 	@rm -f $(STAGE2_EXE)
 
-# Strips `#line` from stage2's C into the seed (C backend only): one added source line would shift
+# Strips `#line` from stage2's whole C into the seed (C backend only): one added source line would shift
 # every later one in git's history. **`cmp` compares the stripped side**; then run `make self-host`.
-# Caution: **Read `$(STAGE2_OUT)` by name, not as `$<`** (`tests/suite/recipe_bytes_test.kspl` §4).
+# Caution: **Read `$(STAGE2_WHOLE)` by name, not as `$<`** (`tests/suite/recipe_bytes_test.kspl` §4).
 define seed_fmt_help
 ERROR: make commit-seed needs clang-format, and this machine has none.
   ksplc/seed.c in git is tidied by it, so a seed written untidied would change every line of it.
@@ -330,13 +351,13 @@ endef
 
 commit-seed: export SEED_FMT_HELP := $(seed_fmt_help)
 ## Build-and-install|commit-seed|Re-bake stage2's generated C into `ksplc/seed.c` (needed once a runtime `.c` is touched)
-commit-seed: $(STAGE2_OUT) $(STAGE1_EXE) | $(OUT_DIR)
+commit-seed: $(STAGE2_WHOLE) $(STAGE1_EXE) | $(OUT_DIR)
 	@echo "# UPDATING SEED COMPILER SOURCE..."
 ifeq ($(BACKEND),c)
 # **Tidy first, then strip**: stripped first, `clang-format` joins `else` and `if` into `else if`.
 # Caution: **Exactly one pass, on a copy**: `clang-format` is not idempotent on this C.
 	@command -v $(firstword $(C_FMT)) >/dev/null 2>&1 || { printf '%s\n' "$$SEED_FMT_HELP"; exit 1; }
-	@cp $(STAGE2_OUT) $(TMP_DIR)/seed_fmt.c
+	@cp $(STAGE2_WHOLE) $(TMP_DIR)/seed_fmt.c
 	@$(C_FMT) $(TMP_DIR)/seed_fmt.c
 	@awk '!/^#line /' $(TMP_DIR)/seed_fmt.c > $(TMP_DIR)/seed_stripped.c
 	@cmp -s $(TMP_DIR)/seed_stripped.c $(SEED_C) \
@@ -484,8 +505,8 @@ ksos-%: $(STAGE1_EXE)
 
 .PHONY: ksos ksos-cm ksos-rp2040 test-ksos-link test-ksos-ramtext test-ksos-qemu test-ksos-posix
 
-# --- kspage: the page, the checks on it, and the product assembled around it ---
-include mk/kspage.mk
+# --- ksmd: the editing page and the browser checks on it ---
+include mk/ksmd.mk
 
 # **Last**: `make help` lists the `##` lines read before it (the reason is in mk/help.mk's header).
 include mk/help.mk

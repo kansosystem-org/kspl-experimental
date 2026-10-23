@@ -25,7 +25,7 @@ fn read_tokens(arena: Arena$@): List<|I32|>$@ //<
     //< Reads non-negative integers from standard input into an I32 list; any other byte separates
     //< It is for mode 1. An ID past I32 is dropped with a warning, not cut into another valid ID.
     list: = List<|I32|>.create(arena)
-    defer $word: = Str_builder.new()
+    defer $word: = Str_builder()
     for
         // A failed read ends the list as the end of input does; the warning says which.
         c: = io.getchar() catch
@@ -83,9 +83,9 @@ fn cmd_logits(a: sys.Args, arena: Arena$@): Bool //< prints the logits; false af
     if outside_vocab(tokens, m.cfg.vocab)
         return false
 
-    $logits: = Tensor<|F32|>.new(Sz$[]::{ .ptr = null, .len = 0 }, arena)
+    $logits: = Tensor<|F32|>(Sz$[]::{ .ptr = null, .len = 0 }, arena)
     for i in Range.asc(tokens.len)
-        defer ca: = Arena.new(1024 * 1024 * 64)
+        defer ca: = Arena(1024 * 1024 * 64)
         logits = m.forward(tokens[i], i, adapters, ca)
         if i == tokens.len - 1
             logits = logits.dup(arena) // copied so it survives ca being freed
@@ -131,7 +131,7 @@ fn cmd_generate(a: sys.Args, arena: Arena$@): Bool //<
             return false
         io.err().s("[qwen] LoRA adapter loaded: \{a[6]\}\n")
 
-    $tok: = tokenizer.Tokenizer.new(arena)
+    $tok: = tokenizer.Tokenizer(arena)
     tok.load(vocab_path, merges_path) catch e
         switch e
         case .broken(path, line)
@@ -158,9 +158,9 @@ fn cmd_generate(a: sys.Args, arena: Arena$@): Bool //<
     // Up to here it is cmd_logits' main loop; from here on is the autoregressive generation
     // (argmax → the EOS check → feeding the next token).
     $pos: Sz = 0
-    $logits: = Tensor<|F32|>.new(Sz$[]::{ .ptr = null, .len = 0 }, arena)
+    $logits: = Tensor<|F32|>(Sz$[]::{ .ptr = null, .len = 0 }, arena)
     for i in Range.asc(ids.len)
-        defer ca: = Arena.new(1024 * 1024 * 64)
+        defer ca: = Arena(1024 * 1024 * 64)
         logits = m.forward(ids[i], pos, adapters, ca)
         pos += 1
         if i == ids.len - 1
@@ -172,7 +172,7 @@ fn cmd_generate(a: sys.Args, arena: Arena$@): Bool //<
         if next == eos_id || pos >= MAX_SEQ
             break
         gen.push(next)
-        defer ca: = Arena.new(1024 * 1024 * 64)
+        defer ca: = Arena(1024 * 1024 * 64)
         $step_logits: = m.forward(next, pos, adapters, ca)
         logits = step_logits.dup(arena)
         pos += 1
@@ -187,7 +187,7 @@ fn main() //<
     //< `echo "let n = " | qwen_infer generate <model> <vocab.txt> <merges.txt> <eos_id> [lora]`
     //< generates (for Qwen2.5-Coder-0.5B, eos_id is 151643 = config.json's eos_token_id).
     a: = sys.args()
-    arena: = Arena.new(1024 * 1024 * 64)
+    arena: = Arena(1024 * 1024 * 64)
     // **An error ends the run with 1**, so a script or a test sees it; each command has said why.
     ok: =
         (cmd_generate(a, arena) if a.len >= 2 && a[1].equals("generate")

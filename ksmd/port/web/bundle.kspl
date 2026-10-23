@@ -1,0 +1,86 @@
+//< Builds the page as one file: its style, its scripts and its wasm inside `ksmd.html`
+//< The local server hands out one file for the page and nothing else without the token
+//< (`kssrv --page`), and a browser fetches nothing beside a page opened from a file. So the page
+//< holds everything itself. A line `<script src="NAME"></script>` takes that script, a line
+//< `<link rel="stylesheet" href="NAME">` that style, and `__KSMD_WASM_BASE64__` the wasm.
+
+// ==========================================
+// Usage:
+//     ksplc run ksmd/port/web/bundle.kspl <page.html> <ksmd.wasm> <ksmd.html>
+// ==========================================
+import "std/base64"
+import "std/chars"
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/sys"
+
+priv const SCRIPT_HEAD: U8[] = "<script src=\""
+priv const SCRIPT_TAIL: U8[] = "\"></script>"
+priv const STYLE_HEAD: U8[] = "<link rel=\"stylesheet\" href=\""
+priv const STYLE_TAIL: U8[] = "\">"
+priv const WASM_MARK: U8[] = "__KSMD_WASM_BASE64__"
+
+priv enum Stopped //< the bundle is not written; the reason is printed
+    stopped
+
+fn main(): I32
+    args: = sys.args()
+    if args.len != 4
+        io.err().s("usage: bundle.kspl <page.html> <ksmd.wasm> <ksmd.html>\n")
+        return 1
+    defer arena: = Arena(1024 * 1024)
+    page: = read(args.get(1), arena) catch
+        return 1
+    wasm: = read(args.get(2), arena) catch
+        return 1
+    folder: = sys.get_dir_name(args.get(1))
+    defer $built: = Str_builder()
+    $marks: Sz = 0
+    for line in page.lines(arena)
+        within: = line.trim_spaces()
+        if name: = between(within, SCRIPT_HEAD, SCRIPT_TAIL)
+            inline(built@, "script", folder, name, arena) catch
+                return 1
+        else if name: = between(within, STYLE_HEAD, STYLE_TAIL)
+            inline(built@, "style", folder, name, arena) catch
+                return 1
+        else if at: = line.find_str(WASM_MARK)
+            marks += 1
+            built.s(line.sub(0, at)).s(base64.encode(wasm, arena))
+                .s(line.sub_from(at + WASM_MARK.len)).c('\n')
+        else
+            built.s(line).c('\n')
+    if marks != 1
+        io.err().s("bundle: the page must hold \{WASM_MARK\} once: \{args.get(1)\}\n")
+        return 1
+    io.write_file(args.get(3), built.slice()) catch
+        io.err().s("bundle: cannot write: \{args.get(3)\}\n")
+        return 1
+    return 0
+
+priv fn read(path: U8[], arena: Arena$@): U8[]!Stopped
+    return io.read_file(path, arena) catch
+        io.err().s("bundle: cannot read: \{path\}\n")
+        throw .stopped
+
+priv fn between(line: U8[], head: U8[], tail: U8[]): U8[]? //< what a whole line wraps, if it does
+    if line.len > head.len + tail.len && line.starts_with(head) && line.ends_with(tail)
+        return .some(line.sub(head.len, line.len - head.len - tail.len))
+    return .none
+
+priv fn inline(built: Str_builder$@, tag: U8[], folder: U8[], name: U8[], arena: Arena$@):
+    Void!Stopped //<
+        //< Writes one file of the page's folder inside its tag
+        //< Caution: **Refuse a name with a folder in it, and text that ends the tag early**: the
+        //< page would take a file from elsewhere, or run the rest of a script as HTML.
+    for c in name
+        if !c.is_alnum() && c != '.' && c != '-' || name[0] == '.'
+            io.err().s("bundle: the page names a file outside its folder: \{name\}\n")
+            throw .stopped
+    text: = read(fs.join(folder, name, arena), arena)!
+    if text.find_str(arena.text().s("</").s(tag).take()).is_some()
+        io.err().s("bundle: \{name\} holds the text that would end its <\{tag\}>\n")
+        throw .stopped
+    built.c('<').s(tag).s(">\n").s(text).s("</").s(tag).s(">\n")

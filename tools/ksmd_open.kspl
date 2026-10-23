@@ -1,0 +1,112 @@
+#!/usr/bin/env -S ksplc run
+//< Opens one `.ksmd` document in ksmd, from a double click or a command line
+//< It finds the document's workspace and that workspace's port (`tools/ksmd_aim.kspl`).
+//< `tools/opener.kspl` then reuses the server running for that workspace, or starts
+//< `kssrv --local` on the port or the next free one, and hands the URL to the browser.
+//< `--list`, `--stop=<folder>` and `--stop-all` tend the servers it left.
+import "std/argparse"
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/strfmt" as _strfmt
+import "std/sys"
+import "tools/ksmd_aim"
+import "tools/opener"
+import "tools/opener_aim" as aim
+
+priv fn say(): Writer //< standard error, with this program's name begun on a line
+    return io.err().s(sys.program_name()).s(": ")
+
+priv fn folder_said(said: U8[], arena: Arena$@): U8[] //<
+    //< A folder named on the command line, absolute and `plain`; empty where it holds a `..`
+    return ksmd_aim.plain(opener.full(said, arena), arena)
+
+fn main(): I32 //< opens one document in ksmd, starting the server and the browser as needed
+    io.set_line_buffered()
+    defer arena: = Arena(64 * 1024)
+    $show_only: = false
+    $workspace_said: U8[] = ""
+    $stop_said: U8[] = ""
+    p: = argparse.Parser
+        .create(sys.program_name(),
+        "open a .ksmd document on a local server, or list and stop servers", arena)
+    p.positional("<the document's path>")
+    p.str_opt("--workspace", workspace_said@,
+        "the workspace folder (default: the nearest above holding .ksmd-workspace, else its own)")
+    p.flag("--show", show_only@, "put the URL out and wait (do not start a browser)")
+    opener.tending_options(p, stop_said@)
+    p.parse_or_exit()
+    tending: = opener.tending(p)
+    if !tending && p.rest.len != 1
+        p.print_usage(io.err())
+        return 1
+    where: = opener.where_from(ksmd_aim.KSMD, sys.args().get(0), arena)
+    if where.server.len == 0
+        say().s("kssrv not found (`make ksmd` first)\n")
+        return 1
+    // **The writer creates the folder** (not every run goes through make); the lock stands there.
+    fs.mkdir_all(where.tmp) catch {}
+    if tending
+        // Caution: **Spell the folder as the note holds it** (the reason is at `ksmd_aim.plain`).
+        stop_root: = folder_said(stop_said, arena) if stop_said.len > 0 else ""
+        if stop_said.len > 0 && stop_root.len == 0
+            say().s("name the folder to stop without '..': \{stop_said\}\n")
+            return 1
+        return opener.tend_alone(p, where, stop_root, arena)
+    path: = p.rest.get(0)
+    if !ksmd_aim.is_ksmd(path)
+        say().s("ksmd opens only a file whose name ends in .ksmd: \{path\}\n")
+        return 1
+    // Caution: **Find the workspace from one spelling of the path** (the reason is at `plain`).
+    file: = ksmd_aim.plain(opener.full(path, arena), arena)
+    if file.len == 0
+        say().s("name the document without '..', from its own folder or in full: \{path\}\n")
+        return 1
+    info: = fs.stat(file) catch
+        say().s("there is no such file: \{path\}\n")
+        return 1
+    if info.kind != .file
+        say().s("this is not a file: \{path\}\n")
+        return 1
+    if !fs.exists(where.page)
+        say().s("there is no page: \{where.page\} (`make ksmd` first)\n")
+        return 1
+    root: = root_for(file, workspace_said, arena)
+    if root.len == 0
+        return 1
+    home: = ksmd_aim.home_port(root)
+    opened: = opener.open_or_start(where, root, home, show_only, arena)
+    if opened.url.len == 0
+        return 1
+    on: = aim.port_num(aim.port_in_url(opened.url))
+    if on != home
+        // **Say that drafts stay with the port they were held on**: the page cannot see the
+        // drafts of another port, and would otherwise seem to have lost them. A server reused
+        // here started while that port was taken, so the line holds for it too.
+        io.out()
+            .s("\{sys.program_name()\}: this workspace's server listens on port \{on\}, as its own \
+                port \{home\} was taken. Drafts held on one port do not show on the other.\n")
+    doc: = aim.doc_under(root, file)
+    defer $text: = Str_builder()
+    open_url: = aim.url_for(opened.url, doc, sys.is_windows(), text@)
+    return opener.hand_over(opened, open_url, doc, root, show_only, where, arena)
+
+priv fn root_for(file: U8[], said: U8[], arena: Arena$@): U8[] //<
+    //< The workspace to serve for `file`: the folder named, or `ksmd_aim.workspace_of` its folder
+    //< **Empty, with the reason said, where none can be served.**
+    $root: U8[] = ""
+    if said.len > 0
+        root = folder_said(said, arena)
+        if root.len == 0 || !fs.is_dir(root)
+            say().s("--workspace names no folder, or names one with '..': \{said\}\n")
+            return ""
+        if !ksmd_aim.under(root, file)
+            say().s("the document is outside the workspace \{root\}: \{file\}\n")
+            return ""
+    else
+        root = ksmd_aim.workspace_of(aim.parent_of(file), arena)
+    if !aim.fits_note(root)
+        say().s("a folder whose name holds a line break cannot be served\n")
+        return ""
+    return root

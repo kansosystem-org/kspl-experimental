@@ -70,7 +70,7 @@ priv fn check_notification_burst(exe: U8[], dir: U8[], arena: Arena$@) //<
     src: = fs.join(dir, "burst.kspl", arena)
     script: = arena.text()
         .s("import \"std/io\"\nimport \"std/jsonrpc\"\nimport \"std/str\" { Str_builder }\n\n")
-        .s("priv fn put_frame(body: U8[])\n  $f: = Str_builder.new()\n  defer f.free()\n")
+        .s("priv fn put_frame(body: U8[])\n  $f: = Str_builder()\n  defer f.free()\n")
         .s("  jsonrpc.frame_into(f@, body)\n  io.out().s(f.slice())\n\n")
         .s("fn main(): I32\n  for _k in Range.asc(\{NOTES_BEFORE_ANSWER\})\n")
         .s("    put_frame(\"{\\\"jsonrpc\\\":\\\"2.0\\\",\\\"method\\\":\\\"note\\\"}\")\n")
@@ -83,7 +83,7 @@ priv fn check_notification_burst(exe: U8[], dir: U8[], arena: Arena$@) //<
     defer $c: = jsonrpc_client.spawn(U8[][]::{ exe, "run", src }, "") catch
         verdict.check(name, false, "the bursting peer does not start")
         return
-    $b: = Json_builder.new(arena)
+    $b: = Json_builder(arena)
     // Before the peer answers it may already be gone, so a refused write is no failure here.
     c.notify("note", b.obj().build(), WAIT_MS, null) catch {}
     defer got: = c.request("probe", b.obj().build(), WAIT_MS, null) catch e

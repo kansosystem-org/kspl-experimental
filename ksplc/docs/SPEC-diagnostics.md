@@ -76,11 +76,11 @@ A function makes a value whose type conforms to `Manual_free`, and some path lea
 * **It is not freed on every path**: some paths end it and some reach the block's end with it. The finding sits on the declaration.
 * **A way out leaves before it is ended**: a `!`, `return`, `throw`, or a `break` / `continue` out of its block. The finding sits on the way out. Where a `defer` later in the same block frees it, the message names that line: the way out leaves before the `defer` is registered.
 
-A pointer to such a value (`Arena.new(…)`'s result) is read only up to a `defer` later in its block that frees it. A call does not say whether a pointer it returns owns what it points at (`arena.create(…)`).
+A pointer to such a value (`Arena(…)`'s result) is read only up to a `defer` later in its block that frees it. A call does not say whether a pointer it returns owns what it points at (`arena.create(…)`).
 * **Not reported**:
   * a value declared with `defer` in front, which its block's end frees;
   * a parameter, which the caller made;
-  * a value whose initializer passes an arena other than the literal `null` (`List<|I32|>.new(arena)`): the arena frees it;
+  * a value whose initializer passes an arena other than the literal `null` (`List<|I32|>(arena)`): the arena frees it;
   * a value that keeps its arena in a field (a `List`, a `Map`, a `json.Doc`), made by a call that passes no literal `null`. The callee may have made it in an arena of its own;
   * an arena held by value, which stands over a buffer its caller owns (`Arena.from_buffer`);
   * an element read out of a container that holds such values (`rows.get(i)`);
@@ -88,7 +88,7 @@ A pointer to such a value (`Arena.new(…)`'s result) is read only up to a `defe
   * in a generic body, a value whose type is a type argument itself (`v: T`). In one instance it is an owner, in another it is an `I32`, where `defer` in front would not compile.
 * **A generic body is checked in each instance the program uses**, since only instances are checked. That is a generic's method, a generic function, or a method on a slice such as `impl U8[]`. A finding is printed once, at the line written, whichever instance met it.
 * **What it does not see**: a field or a value reached through a pointer. Nor does it see a generic body that no instance uses, or an arena variable that holds `null` at run time. The check reads one function's code as written, branch by branch, as the language's other lints do.
-* **Fix**: put `defer` in front of the declaration (`defer $b: = Str_builder.new()`), which frees it on every way out. Where the value is handed on along some paths, free it by hand on the others.
+* **Fix**: put `defer` in front of the declaration (`defer $b: = Str_builder()`), which frees it on every way out. Where the value is handed on along some paths, free it by hand on the others.
 
 ### [W0201] Unreachable code
 Code that never runs. It follows a `return`, a `throw`, a `for` that never ends (no condition, and no `break` leaves it), a `#noreturn` call (`sys.exit`, `panic`) or the like. What follows a labelled `switch`, `if` or block that a `break` to its label leaves is reachable, whatever its branches end in.
@@ -256,7 +256,7 @@ A C-style loop only counts (`for $i: = 0; i < xs.len; i += 1`). It starts its in
 * **Fix**: the message names the form to write.
   * Where the body reads the index only as `xs[i]` or `xs.get(i)`, and the bound is `xs.len`: `for x in xs`, and `x` for the element.
   * From 0: `for i in Range.asc(bound)`.
-  * From another constant: `for i in Range.new(start, bound, 1)`.
+  * From another constant: `for i in Range(start, bound, 1)`.
 
   The index of a `Range` is an `Sz`. Where the body needs another type, cast it (`I32::i`).
   An index the body never reads is named with a leading `_` (`for _i in Range.asc(n)`).
@@ -345,7 +345,7 @@ A `catch` that only rethrows the caught error, as in `catch e { throw e; }`.
 
 ### [I0702] An arena parameter with a default
 A parameter that takes an arena has a default (`a: Arena$@ = null`). A call that leaves the argument out does not show where it allocates, nor whether the caller owes a `free()`.
-* **Fix**: remove the default. A caller that wants the global heap passes `null` (`List<|I32|>.new(null)`).
+* **Fix**: remove the default. A caller that wants the global heap passes `null` (`List<|I32|>(null)`).
 * The type is read as the analysis resolved it. So an arena behind a typedef, or behind a pointer of either kind (`Arena@`, `Arena$@`), is found.
 
 ### [I0801] A second plain `impl` block in one file
@@ -372,7 +372,7 @@ A type written where the line, or the place the value goes, already says it. It 
   * a struct literal (`p: Point = Point::{ … }`);
   * a cast (`n: U8 = U8::v`);
   * an enum variant (`k: Kind = Kind.small`);
-  * a call made through the type (`xs: List<|I32|> = List<|I32|>.new(arena)`).
+  * a call made through the type (`xs: List<|I32|> = List<|I32|>(arena)`).
 
   The annotation can also be `Bool` over `true` / `false`. Deleting it leaves the variable's type as it is. **Only a type the text shows is reported.** `count: Sz = items.len` is not reported: there the annotation is the one place a reader without hover sees the type.
 * **An enum's type written at its variant where the place already gives it.** The places are the nine where the type name can be left out ("6.6.2 Where the type may be omitted" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md)):

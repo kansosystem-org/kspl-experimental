@@ -9,6 +9,7 @@ import "ksplc/tests/support/harness"
 import "ksplc/tests/support/jsonrpc_client"
 import "ksplc/tests/support/jsonrpc_client_check"
 import "ksplc/tests/support/lsp_client"
+import "ksplc/tests/support/lsp_fresh"
 import "ksplc/tests/support/lsp_hover"
 import "ksplc/tests/support/lsp_outline" + { HEAVY_MS, incoming, off_words, prepare_fn,
     read_tokens }
@@ -42,7 +43,7 @@ priv const SEMTOK_SRC: U8[] =
 
 
 fn count(): Sz
-  defer $xs: = List<|I32|>.new(null)
+  defer $xs: = List<|I32|>(null)
   xs.push(1)
   return xs.len
 
@@ -219,7 +220,7 @@ priv fn published_for(c: jsonrpc_client.Client$@, tail: U8[], arena: Arena$@): P
             continue
         return Published::{ .found = true,
             .diags = p.get("diagnostics").arr_list(arena) }
-    return Published::{ .found = false, .diags = List<|json.Value|>.new(arena) }
+    return Published::{ .found = false, .diags = List<|json.Value|>(arena) }
 
 priv fn said(got: Published, arena: Arena$@): U8[] //< what a failing check shows of `got`
     if !got.found
@@ -477,7 +478,7 @@ priv fn walk_changes(exe: U8[], dir: U8[], arena: Arena$@): json.Value //<
         lsp_client.start(exe, U8[][]::{ .ptr = null, .len = 0 }, dir, arena) catch
         return .null_val
     defer c.free()
-    $b: = Json_builder.new(arena)
+    $b: = Json_builder(arena)
     _ready: =
         c.request("initialize", b.obj().build(), lsp_client.READ_MS, arena) catch
         return .null_val
@@ -637,9 +638,9 @@ priv fn check_worker_alive(exe: U8[], top: U8[], ch_text: U8[], arena: Arena$@)
             "the worker cannot be started")
         return
     defer w.kill()
-    $b: = Json_builder.new(arena)
+    $b: = Json_builder(arena)
     root: = b.obj().set("rootUri", b.str_val(top)).build()
-    defer $frames: = Str_builder.new()
+    defer $frames: = Str_builder()
     jsonrpc.frame_into(frames@, jsonrpc.encode("initialize", root, 1, arena))
     opened: = jsonrpc.encode("textDocument/didOpen",
         lsp_client.did_open(CH_FILE, ch_text, arena), -1, arena)
@@ -656,7 +657,7 @@ priv fn check_worker_alive(exe: U8[], top: U8[], ch_text: U8[], arena: Arena$@)
             "the worker took no request")
         return
     w.close_stdin() // if not closed, the worker keeps waiting: it answers after reading everything
-    defer $answers: = Str_builder.new()
+    defer $answers: = Str_builder()
     buf: = U8$[]::{ .ptr = U8$@::arena.alloc(64 * 1024), .len = 64 * 1024 }
     for _k in Range.asc(4000)
         got: = w.read(buf, 300000) catch
@@ -810,6 +811,7 @@ fn main(): I32
     check_walk(exe, arena)
     check_spaced_folder(exe, arena)
     lsp_rename.run_rename(exe, init.val.get("result").get("capabilities"), arena)
+    lsp_fresh.run_fresh(exe, arena)
     check_cfg_after_walk(exe, arena)
     lsp_recover.run_package(exe, arena)
     lsp_pick.check_completion(c@, arena)

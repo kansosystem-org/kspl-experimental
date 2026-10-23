@@ -29,13 +29,13 @@ import "std/mem" { Arena }
 import "std/str" { Str_builder }
 
 fn main(): I32
-  arena: = Arena.new(1024)
+  arena: = Arena(1024)
   defer arena.free()
-  folders: = List<|U8[]|>.new(arena)
-  mutbuf: = List<|U8$[]|>.new(arena)
-  table: = Map<|U8[], I32|>.new(arena)
-  nested: = List<|List<|U8[]|>|>.new(arena)
-  ptrs: = List<|Str_builder$@|>.new(arena)
+  folders: = List<|U8[]|>(arena)
+  mutbuf: = List<|U8$[]|>(arena)
+  table: = Map<|U8[], I32|>.new_with_cap(8, arena)
+  nested: = List<|List<|U8[]|>|>(arena)
+  ptrs: = List<|Str_builder$@|>(arena)
   return 0
 
 """
@@ -71,15 +71,15 @@ fn check_hover_types(c: jsonrpc_client.Client$@, arena: Arena$@)
     // non-generic method `<file>.Point.area`). A symbol's `type_id` is **the return type**, useless
     // for the name (`pub fn std.ds.U8[](...): U8[]`), and the symbol's name is internal.
     fname: = "an instantiated function's name comes out spelt, with the owner's type"
-    decl: = "  folders: ="
-    fcol: = col_in_line(TYPES_SRC, decl, ".new(", arena) + 2
+    decl: = "  table: ="
+    fcol: = col_in_line(TYPES_SRC, decl, ".new_with_cap(", arena) + 2
     fpos: = lsp_client.at_pos(TYPES_URI, decl_line(TYPES_SRC, decl, arena), fcol, arena)
     fgot: = c.request("textDocument/hover", fpos, lsp_client.READ_MS, arena) catch e
         verdict.check(fname, false, end_text(e))
         return
     ftext: = lsp_client.hover_text(fgot.val)
     fok: =
-        ftext.find_str("std.ds.List<|U8[]|>.new(").is_some() &&
+        ftext.find_str("std.ds.Map<|U8[], I32|>.new_with_cap(").is_some() &&
         ftext.find_str("std_ds_").is_none()
     verdict.check(fname, fok,
         lsp_client.why(c, arena.text().s("'").s(ftext).s("'").take(), arena))
@@ -97,7 +97,7 @@ import "std/str" { Str_builder }
 import "std/subproc"
 
 fn use_it(j: subproc.Job): Sz
-  $b: = Str_builder.new()
+  $b: = Str_builder()
   _x: = b.s("hi")
   $f: = io.open("x", "rb") catch
     fallback io.File_stream::{ .stream = null }

@@ -1,8 +1,10 @@
-//< Checks that nothing depends on the order of declarations
-//< The type and place rules are in `lang_types_test.kspl`, and the syntax and basic types in
-//< `lang_test.kspl`.
+//< Checks the order of declarations and the order an assignment runs in
+//< Nothing depends on the order of declarations. An assignment runs its value, then its place,
+//< then the write. The type and place rules are in `lang_types_test.kspl`, and the syntax and
+//< basic types in `lang_test.kspl`.
 //< Caution: **Put a use before the declaration.** With only uses after it, it passes, helped by
 //< Pass 3's order.
+import "std/ds" { List }
 import "std/verdict"
 
 priv $sz_before_decl: U8[sizeof(Sz_later)] = ::{}
@@ -165,3 +167,132 @@ fn test_alias_may_reference_later_alias()
     assert(s.n == 4, "the same for an alias pointing at a struct")
 
     verdict.pass("typedef's output order is not bound to the declarations' order.")
+
+// ==========================================
+// Checks that an assignment evaluates its value, then its place, then writes ("Evaluation order"
+// in docs/SPEC-programming-language.md). The calls record the order as digits (21 where 2 came
+// first).
+// Caution: **Put a call with a side effect on both sides.** C leaves the order of an assignment's
+// two sides open, so a shape without them passes under one C compiler and fails under another.
+// ==========================================
+priv $asg_log: I32 = 0
+priv $asg_arr: I32[4] = ::{}
+priv $asg_grid: I32[3][3] = ::{}
+
+priv fn asg_idx(): Sz //< a step of the place, recorded as 1
+    asg_log = asg_log * 10 + 1
+    return 1
+
+priv fn asg_val(): I32 //< the value, recorded as 2
+    asg_log = asg_log * 10 + 2
+    return 5
+
+priv fn asg_col(): Sz //< a later step of the place, recorded as 3
+    asg_log = asg_log * 10 + 3
+    return 2
+
+priv fn asg_move(at: Sz$@, v: I32): I32 //< a value that moves the index the place reads
+    at$ = 2
+    return v
+
+priv fn asg_ptr(): Asg_cell$@ //< a place reached through a pointer, recorded as 1
+    asg_log = asg_log * 10 + 1
+    return asg_cell@
+
+priv struct Asg_cell
+    n: I32
+
+priv $asg_cell: Asg_cell = ::{ .n = 0 }
+
+#packed
+priv struct Asg_packed
+    tag: U8
+    n: I32
+
+priv struct Asg_sink //< `x[i] = v` through `Index_mut.set`, which records the write as 4
+    last: I32
+
+impl Asg_sink: Index_mut<|Sz, I32|>
+    fn set(r: Self$@, index: Sz, val: I32)
+        asg_log = asg_log * 10 + 4
+        r.last = I32::index * 100 + val
+
+fn test_assignment_evaluates_value_first()
+    verdict.start("[order] an assignment evaluates its value, then its place test...")
+
+    asg_log = 0
+    asg_arr[asg_idx()] = asg_val()
+    assert(asg_log == 21 && asg_arr[1] == 5, "`a[i()] = v()` runs v() before i()")
+    asg_log = 0
+    asg_arr[asg_idx()] += asg_val()
+    assert(asg_log == 21 && asg_arr[1] == 10, "a compound assignment runs its value first too")
+    asg_log = 0
+    asg_grid[asg_idx()][asg_col()] = asg_val()
+    assert(asg_log == 213 && asg_grid[1][2] == 5,
+        "the place's own steps run left to right, after the value")
+    asg_log = 0
+    asg_ptr().n = asg_val()
+    assert(asg_log == 21 && asg_cell.n == 5, "a field through a pointer a call returns")
+    $sink: = Asg_sink::{ .last = 0 }
+    asg_log = 0
+    sink[asg_idx()] = asg_val()
+    assert(asg_log == 214 && sink.last == 105,
+        "through `Index_mut.set`: the value, the index, the set")
+    $pk: Asg_packed[3] = ::{}
+    asg_log = 0
+    pk[asg_idx()].n = asg_val()
+    assert(asg_log == 21 && pk[1].n == 5, "a `#packed` field through a subscript")
+    asg_log = 0
+    pk[asg_idx()].n *= asg_val()
+    assert(asg_log == 21 && pk[1].n == 25, "a compound assignment to a `#packed` field")
+
+    verdict.pass("the value runs before every step of the place, on both backends.")
+
+fn test_assignment_reads_its_place_after_the_value()
+    verdict.start("[order] an assignment's place sees what its value changed test...")
+
+    $at: Sz = 0
+    asg_arr = ::{}
+    asg_arr[at] = asg_move(at@, 7)
+    assert(asg_arr[2] == 7 && asg_arr[0] == 0, "the index is read after the value moved it")
+    $n: I32 = 1
+    n += asg_set_to_ten(n@)
+    assert(n == 15, "a compound assignment reads its old value after the value ran")
+
+    verdict.pass("the place, and a compound assignment's old value, are read after the value.")
+
+priv fn asg_set_to_ten(n: I32$@): I32 //< a value that changes the place a `+=` reads
+    n$ = 10
+    return 5
+
+// ==========================================
+// The trap the order prevents: a list's element written with a call that grows the list and moves
+// its elements. A place found before the call would be in the old memory, already freed.
+// Caution: **Keep the list on the heap (`null` arena).** An arena keeps the old memory, so only
+// the value read back would show the stale write; on the heap, `make test-sanitize` reports it.
+// ==========================================
+priv struct Asg_node
+    left: Sz
+    tag: I32
+
+priv struct Asg_tree
+    nodes: List<|Asg_node|>
+
+impl Asg_tree
+    fn grow(r: Self$@): Sz //< pushes enough nodes to move the list, and returns the last one
+        for _i in Range.asc(64)
+            r.nodes.push(Asg_node::{ .left = 0, .tag = 1 })
+        return r.nodes.len - 1
+
+fn test_assignment_into_a_list_its_value_grows()
+    verdict.start("[order] a list's element written with a call that grows the list test...")
+
+    $t: = Asg_tree::{ .nodes = List<|Asg_node|>(null) }
+    t.nodes.push(Asg_node::{ .left = 0, .tag = 0 })
+    t.nodes[0].left = t.grow()
+    assert(t.nodes[0].left == 64, "the write reaches the list's memory after it grew")
+    t.nodes[0].tag += I32::t.grow()
+    assert(t.nodes[0].tag == 128, "a compound assignment reaches it too")
+    t.nodes.free()
+
+    verdict.pass("the place is computed after the call that moved the list.")

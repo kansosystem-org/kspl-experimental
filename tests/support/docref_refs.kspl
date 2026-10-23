@@ -93,7 +93,7 @@ fn find_paths(text: U8[], dirs: U8[][], exts: U8[][], word_end: Bool, bares: U8[
         //< It cuts at the first position ending in one of `exts` (as Python's lazy quantifier
         //< does). With `word_end`, it does not cut where a word character follows (so `.cpp`'s
         //< `.c` is not picked up).
-    $out: = List<|Hit|>.new(arena)
+    $out: = List<|Hit|>(arena)
     opens: = first_bytes_of(dirs, bares)
     $i: Sz = 0
     for i < text.len
@@ -112,7 +112,7 @@ fn find_paths(text: U8[], dirs: U8[][], exts: U8[][], word_end: Bool, bares: U8[
         // `/../ui/app.html` in a test reads as a path in this repo that **does not exist**.
         rel: = after_dots > i && !(i > 0 && text[i - 1] == '/')
         // Caution: **After a path byte, this is the tail of a longer path or word, not a start.**
-        // Else `kspage/tests/all.kspl` reads as the root's `tests/`, `*/tests/all.kspl` as a
+        // Else `ksai/tests/all.kspl` reads as the root's `tests/`, `*/tests/all.kspl` as a
         // missing file, and `onlinedocs/gcc/…` as `docs/`. **A leading `../` is the exception**
         // (the test is on `after_dots`).
         if after_dots == i && i > 0 && is_path_at(text, i - 1)
@@ -158,7 +158,7 @@ const SRC_PATH_EXT: U8[][_] = ::{ "kspl", "ksplb", "py", "c", "h", "S", "mk", "k
 }
 
 fn find_src_paths(text: U8[], dirs: U8[][], arena: Arena$@): List<|Hit|>
-    $all: = List<|U8[]|>.new(arena)
+    $all: = List<|U8[]|>(arena)
     for d in dirs
         all.push(d)
     all.push("mk")
@@ -191,7 +191,7 @@ fn masked_code(text: U8[], arena: Arena$@): U8[] //<
                 b.c('`')
             i += n
             continue
-        for _k in Range.new(i, close, 1)
+        for _k in Range(i, close, 1)
             b.c(0x00U8)
         i = close
     return b.take()
@@ -231,82 +231,10 @@ priv fn paragraph_ends(text: U8[], at: Sz): Bool //<
     rest: = text.sub_from(k)
     return k - at <= 3 && (rest.starts_with("```") || rest.starts_with("~~~"))
 
-fn find_kspage_links(text: U8[], arena: Arena$@): List<|Hit|> //< the links inside a `.kspage`
-    //< Caution: **Do not read the body's text as a path** (`ksplc run hello.kspl` in a monospace
-    //< run is not a naming). **Unescape only three escapes** (`\"` `\\` `\/`): any other keeps its
-    //< `\` and names nothing, which is better than passing as a different name (Principle 8).
-    $out: = List<|Hit|>.new(arena)
-    key: = "\"href\""
-    $i: Sz = 0
-    for i + key.len <= text.len
-        if !text.sub(i, key.len).equals(key)
-            i += 1
-            continue
-        $j: = skip_json_space(text, i + key.len)
-        if j >= text.len || text[j] != ':'
-            i += 1
-            continue
-        j = skip_json_space(text, j + 1)
-        if j >= text.len || text[j] != '"'
-            i += 1
-            continue
-        j += 1
-        val: = arena.text()
-        $closed: = false
-        for j < text.len
-            c: = text[j]
-            if c == '"'
-                j += 1
-                closed = true
-                break
-            if c != '\\' || j + 1 >= text.len
-                val.c(c)
-                j += 1
-                continue
-            esc: = text[j + 1]
-            if esc == '"' || esc == '\\' || esc == '/'
-                val.c(esc)
-            else
-                val.c(c).c(esc)
-            j += 2
-        if !closed
-            i += 1
-            continue
-        raw: = val.take()
-        // **An empty field is a run with no link** (never written, but not relied on).
-        if raw.len == 0
-            i = j
-            continue
-        $path: = raw
-        $anchor: U8[] = ""
-        if hash: = raw.find_char('#')
-            path = raw.sub(0, hash)
-            anchor = raw.sub(hash + 1, raw.len - hash - 1)
-        out.push(Hit::{ .at = i, .end = j, .text = path, .extra = anchor })
-        i = j
-    return out
-
-fn links_of(rel: U8[], text: U8[], arena: Arena$@): List<|Hit|> //<
-    //< The links of a document, by its format
-    //< **How they are picked up differs by format. How they are checked is in one place**: the
-    //< target, relative to the file that writes it, and the existence check.
-    //< Caution: **Do not branch on the format in the caller** (Principle 6). If it is split in two,
-    //< one copy goes stale the day a format is added.
-    if rel.ends_with(".kspage")
-        return find_kspage_links(text, arena)
-    return find_links(text, arena)
-
-priv fn skip_json_space(text: U8[], from: Sz): Sz
-    $i: = from
-    for i < text.len &&
-        (text[i] == ' ' || text[i] == '\t' || text[i] == '\n' || text[i] == '\r')
-        i += 1
-    return i
-
 fn find_links(raw: U8[], arena: Arena$@): List<|Hit|> //< the `](path#anchor)` links
     //< It picks up `](#anchor)` too (the form pointing at a heading in the same document).
     text: = masked_code(raw, arena)
-    $out: = List<|Hit|>.new(arena)
+    $out: = List<|Hit|>(arena)
     $i: Sz = 0
     for i + 2 <= text.len
         if !text.sub(i, 2).equals("](")
@@ -349,7 +277,7 @@ fn is_external(t: U8[]): Bool //< whether a link points outside this repository
 fn normalize(path: U8[], arena: Arena$@): U8[] //< folds `a/../b` into `b`
     //< A `..` left at the start is returned as it is. **The filesystem is not consulted**: a path
     //< that does not exist folds too, so the report can say which one was named.
-    $parts: = List<|U8[]|>.new(arena)
+    $parts: = List<|U8[]|>(arena)
     for seg in path.split('/', arena)
         if seg.len == 0 || seg.equals(".")
             continue
@@ -389,7 +317,7 @@ priv fn linked_target(here: U8[], text: U8[], linked: Bool, arena: Arena$@): U8[
 // **outside the scan**. Its namings stay silent about a deleted or moved target, while `make
 // test-docref` **stays green**. Check here when a new extension is added.
 const SCANNED_EXT: U8[][_] = ::{ ".ksplb", ".kspl", ".c", ".h", ".py", ".S", ".mk", ".kspeg", ".md",
-    ".kspage", ".yml", ".cfg", ".js", ".mjs", ".css", ".html", "Makefile" }
+    ".yml", ".cfg", ".js", ".mjs", ".css", ".html", "Makefile" }
 
 const READ_AS_DATA: U8[][_] = ::{ "ksplc/seed.c", "tests/support/docref_samples.kspl" } //<
     //< The files whose namings are data, not references
@@ -413,7 +341,7 @@ fn find_misnamed_links(text: U8[], arena: Arena$@): List<|Hit|> //<
     //< extension (`` `Row.put` ``, `` `ksai/` ``) names no file and is not read.
     //< Caution: **Do not leave the two apart.** The checks of a citation read the text, the reader
     //< follows the target, so a heading checked in one file is opened in the other.
-    $out: = List<|Hit|>.new(arena)
+    $out: = List<|Hit|>(arena)
     $i: Sz = 0
     for i + 2 <= text.len
         if !text.sub(i, 2).equals("[`")
@@ -466,7 +394,7 @@ fn src_places(here: U8[], raw: U8[], arena: Arena$@): Src_places //<
     //< root, and under `tests/` (where `mk/test.mk`'s `suite_*` points).
     //< Caution: **Check the package's root too**: inside a package, this repository writes paths
     //< that way. **Add the extension too** (`src_place`) for an import path (`std/lang`).
-    $bases: = List<|U8[]|>.new(arena)
+    $bases: = List<|U8[]|>(arena)
     if here.len > 0
         bases.push(arena.text().s("\{here\}/\{raw\}").take())
     cut: = here.find_char('/').unwrap_or(0)

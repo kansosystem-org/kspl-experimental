@@ -64,7 +64,7 @@ Each suite has a make target, `make test-<name>`, and its opening comment says w
 
 **Suites that check only the compiler live in ksplc's folder** ([`ksplc/README.md`](../ksplc/README.md)), and `make test-<name>` runs them from here too. What stays here reads more than one package ("What stays in the root tests folder" in [`tests/docs/DESIGN-suites.md`](docs/DESIGN-suites.md)).
 
-**Fuzzing is each package's own `make test-fuzz`**, run from here as `make test-std-fuzz` / `test-kspage-fuzz` / `test-ksai-fuzz` (ksplc's as `make test-fuzz`), with seeds read from the repository root. *Fuzzing* feeds a program many broken or random inputs to find one that crashes it; the *seeds* are the valid inputs those are made from.
+**Fuzzing is each package's own `make test-fuzz`**, run from here as `make test-std-fuzz` / `test-ksai-fuzz` (ksplc's as `make test-fuzz`), with seeds read from the repository root. *Fuzzing* feeds a program many broken or random inputs to find one that crashes it; the *seeds* are the valid inputs those are made from.
 
 ## The tools in tests/tools
 
@@ -83,7 +83,7 @@ These folders hold material that a package's own checks run against; this table 
 |---|---|
 | `tests/freestanding/` | `make test-freestanding-math`, comparing `#cfg(freestanding)`'s std/math (the build with no operating system under it) against the real libm |
 | `ksos/tests/` | ksos's own tests, run by its own [`ksos/Makefile`](../ksos/Makefile) (`make debug-ksos` from here, `make test-extract` in CI). They are the unit tests, the USB descriptors read as text, and elf2uf2 fed broken ELFs. `make test-ksos-qemu` reads the demos' UART output through `uart_probe.py` |
-| `kspage/tests/wasm/` `kspage/tests/browser/` | kspage's checks on its page, run by its own [`kspage/Makefile`](../kspage/Makefile) (`make test-kspage-wasm` / `test-kspage-served` from here). How their material is kept apart from the sample shown at startup is in "Each browser-check section has its own document" in [`kspage/docs/DESIGN-architecture.md`](../kspage/docs/DESIGN-architecture.md) |
+| `ksmd/tests/browser/` | ksmd's checks on its page in a browser, run by its own [`ksmd/Makefile`](../ksmd/Makefile) (`make test-ksmd-browser` from here) |
 
 ## Files near the limit and how they split
 

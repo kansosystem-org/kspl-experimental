@@ -36,7 +36,7 @@ priv fn shown(e: Line): Bool //< whether the line is an entry of its own, not a 
 // ==========================================
 
 priv fn file_path_of(logical: U8[]): U8[] //< the path a logical name's file is read from
-    defer $out: = Str_builder.new()
+    defer $out: = Str_builder()
     base_locate.append_file_path(logical, out@)
     return base_core.arena.dup_str(out.slice())
 
@@ -55,7 +55,7 @@ priv fn read_lines(path: U8[], logical: U8[], parser: kspeg.Target$@): List<|Lin
         io.err().s("ksplc doc: cannot read \{path\}: \{e\}\n")
         return .none
     defer dealloc(Void$@::raw.ptr)
-    $notes: = List<|parse_layout.Note|>.new(base_core.arena)
+    $notes: = List<|parse_layout.Note|>(base_core.arena)
     src: = base_core.arena.dup_str(parse_load.mend_as_read(raw, logical, notes@).code)
     parse_source_fix.mask_shebang(src)
     root: Ast_node$@ = parse_load.parse_raw_ast(src, logical, parser, true) catch
@@ -94,7 +94,7 @@ priv fn anchor_taken(seen: List<|U8[]|>$@, key: U8[]): U8[] //<
     //< The anchor a heading over `key` gets, counting the ones given out before it
     //< **A repeat is numbered**: the second heading reducing to the same text gets `-1`, the third
     //< `-2` (`#cfg(!freestanding)` and `#cfg(freestanding)` do collide).
-    defer $base: = Str_builder.new()
+    defer $base: = Str_builder()
     anchor_of(key, base@)
     $n: Sz = 0
     for one in seen
@@ -109,8 +109,8 @@ priv fn anchors(rows: List<|Line|>@): List<|U8[]|> //<
     //< The anchor each row's heading gets, one per row (**empty where it gets none**)
     //< Caution: **Count in the order the headings are written**; the contents, written before the
     //< entries, and a link inside a description both read this list.
-    $seen: = List<|U8[]|>.new(base_core.arena)
-    $out: = List<|U8[]|>.new(base_core.arena)
+    $seen: = List<|U8[]|>(base_core.arena)
+    $out: = List<|U8[]|>(base_core.arena)
     for r in rows
         if shown(r)
             out.push(anchor_taken(seen@, r.key))
@@ -312,7 +312,7 @@ priv fn write_folder(name: U8[], dir: U8[], parser: kspeg.Target$@, out: Str_bui
         return false
     out.s("# ").s(name).s(" — the API reference\n\n").s(scope_says())
         .s(" `ksplc doc <file>` shows one file's entries.\n\n")
-    $missed: = List<|U8[]|>.new(base_core.arena)
+    $missed: = List<|U8[]|>(base_core.arena)
     for path in paths
         if !path.has_kspl_ext()
             continue
@@ -357,7 +357,7 @@ fn print_doc(target: U8[], parser: kspeg.Target$@): Bool //<
             cut = after_slash + dot_rel
     name: = target.sub(0, cut)
     key: = "" if cut >= target.len else target.sub_from(cut + 1)
-    defer $out: = Str_builder.new()
+    defer $out: = Str_builder()
     path: = file_path_of(name)
     if !fs.exists(path)
         dir: = folder_path_of(name)

@@ -34,7 +34,7 @@ struct Fixed_points //< the record of the texts this ksplc already formats to th
 
 impl Fixed_points
     fn open(): Fixed_points //< the record this process uses; with no cache folder it records none
-        defer $dir: = Str_builder.new()
+        defer $dir: = Str_builder()
         found: = base_cache.append_generation_dir(base_cache.FMT_KIND, dir@, base_core.arena)
         kept: = base_core.arena.dup_str(dir.slice()) if found else ""
         return Fixed_points::{ .dir = kept, .hits = 0, .misses = 0, .stores = 0 }
@@ -43,7 +43,7 @@ impl Fixed_points
         //< The record's path for these bytes, or empty where there is no record to keep
         if r.dir.len == 0
             return ""
-        defer $material: = Str_builder.new()
+        defer $material: = Str_builder()
         material.s("\{FIXED_MAGIC\}\0\{Sz::FIXED_VERSION\}\0")
         if !base_cache.append_self_identity(material@)
             return ""
@@ -57,9 +57,10 @@ impl Fixed_points
         if base_core.config.enable_stats
             io.err().s("    [Fmt Cache] \{r.hits\} hit / \{r.misses\} miss / \{r.stores\} stored\n")
 
-enum Fmt_error //< why one file was left as it was; its diagnostic is already printed
+enum Fmt_error //< why formatting failed; its diagnostic is already printed
     parse(err: parse_load.Parse_error) //< it could not be read, parsed or written back
     too_deep //< the printer's walk hit its depth limit, so the output is cut short
+    write_refused //< the file could not be replaced safely
     unreadable_output //< the formatted text would not parse again, so it was not written
 
 fn check_reads_back(fmt_out: U8[], in_path: U8[], base_parser: kspeg.Target$@, notes_before: Sz):
@@ -68,7 +69,7 @@ fn check_reads_back(fmt_out: U8[], in_path: U8[], base_parser: kspeg.Target$@, n
         //< The output is read under the name `<in_path> (as formatted)`, so a syntax error it
         //< prints shows the formatted lines, which are on no disk.
     label: = base_core.arena.text().s(in_path).s(" (as formatted)").take()
-    $notes: = List<|parse_layout.Note|>.new(base_core.arena)
+    $notes: = List<|parse_layout.Note|>(base_core.arena)
     code: = parse_load.mend_as_read(fmt_out, label, notes@).code
     $reads: = notes.len <= notes_before
     if reads
@@ -83,6 +84,11 @@ fn check_reads_back(fmt_out: U8[], in_path: U8[], base_parser: kspeg.Target$@, n
 fn format_file(in_path: U8[], base_parser: kspeg.Target$@, config: Config, in_place: Bool,
     fixed: Fixed_points$@): Void!Fmt_error //<
         //< It formats one file, in place (`in_place`) or to standard output
+    if in_place && fs.is_link(in_path)
+        io.err()
+            .s("error: \{in_path\}: in-place formatting refuses a symbolic link. Format its target \
+                directly.\n")
+        throw .write_refused
     raw: = io.read_file(in_path, null) catch e
         io.err().s(base_diag.io_line(e, "fmt/io"))
         throw .parse(.io(e))
@@ -107,7 +113,7 @@ fn format_file(in_path: U8[], base_parser: kspeg.Target$@, config: Config, in_pl
     had_crlf: = parse_source_fix.has_crlf(raw)
     // The layout notes are not reported on this formatting path (the reason is at
     // `parse_load.layout_notes`).
-    $laid_notes: = List<|parse_layout.Note|>.new(base_core.arena)
+    $laid_notes: = List<|parse_layout.Note|>(base_core.arena)
     src: = parse_load.mend_as_read(raw, in_path, laid_notes@).code
     // Formatted as a line comment, the shebang's `#!` becomes `//` and the script no longer starts.
     // So this formats a masked copy and restores the output's first two bytes.
@@ -150,9 +156,12 @@ fn format_file(in_path: U8[], base_parser: kspeg.Target$@, config: Config, in_pl
             fixed.stores += 1
     if in_place
         if !raw.equals(out_bytes)
-            io.write_file(in_path, out_bytes) catch e
-                io.err().s(base_diag.io_line(e, "fmt/io"))
-                throw .parse(.io(e))
+            // Replace only after the whole result is written; keep the source permission bits.
+            fs.replace_file(in_path, out_bytes, .kept) catch
+                io.err()
+                    .s("error: \{in_path\}: formatted output could not be safely replaced. Check \
+                        the file and folder permissions and free disk space.\n")
+                throw .write_refused
             base_diag.log().s("Formatted (in-place): \{in_path\}\n")
     else
         // Caution: **Do not add a newline here.** `end_with_one_nl` already ended the output with

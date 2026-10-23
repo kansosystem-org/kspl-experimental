@@ -48,7 +48,7 @@ priv fn make_files(arena: Arena$@): List<|U8[]|> //<
     //< followed, and a `-include` where its file exists; one naming `$(VAR)` takes the files the
     //< environment holds under that name, as the Makefile exports it. Add another way, and update
     //< this too.
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     out.push("Makefile")
     text: = harness.read_under_root("Makefile")
     if text.len == 0
@@ -234,7 +234,7 @@ priv fn dep_count(deps: U8[]): Sz //< the dependency count
 priv fn scan_first_dep(path: U8[], arena: Arena$@): List<|Hit|> //<
     //< Of the recipes holding a `$<`, collects those that do not have exactly one dependency
     //< Inside a `define` the rule is unknown, so it counts as 0 (write the file by name instead).
-    $out: = List<|Hit|>.new(arena)
+    $out: = List<|Hit|>(arena)
     text: = harness.read_under_root(path)
     if text.len == 0
         return out
@@ -260,7 +260,7 @@ priv fn scan(path: U8[], kind: Sz, arena: Arena$@): List<|Hit|> //<
     //< kind is 0=non-ASCII / 1=a bare `$(CURDIR)` / 2=a pipe that swallows a failure.
     //< A pipe is checked with continued lines joined, so a `set -o pipefail;` two lines above its
     //< pipe is not a false finding.
-    $out: = List<|Hit|>.new(arena)
+    $out: = List<|Hit|>(arena)
     text: = harness.read_under_root(path)
     if text.len == 0
         return out
@@ -368,9 +368,9 @@ priv fn push_phony(list: U8[], path: U8[], start: Sz, said: List<|Said|>$@, aren
 
 priv fn scan_names(arena: Arena$@): Names //<
     //< Collects `.PHONY`'s bare names, the rules' targets and the `##` lines from every file
-    $said: = List<|Said|>.new(arena)
-    $have: = List<|U8[]|>.new(arena)
-    $docs: = List<|Doc|>.new(arena)
+    $said: = List<|Said|>(arena)
+    $have: = List<|U8[]|>(arena)
+    $docs: = List<|Doc|>(arena)
     for path in make_files(arena)
         text: = harness.read_under_root(path)
         if text.len == 0
@@ -400,7 +400,7 @@ priv fn scan_names(arena: Arena$@): Names //<
 
 priv fn check_phony_rules(names: Names@, arena: Arena$@) //<
     //< That a name listed in `.PHONY` has a rule
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     for one in names.said
         if !names.have.contains(one.name)
             bad
@@ -416,7 +416,7 @@ priv fn check_help_docs(names: Names@, arena: Arena$@) //<
     //< (Principle 8: a check that can enforce only half is not made a guarantee).
     //< Caution: **A family line stands in for no name written out in `.PHONY`.** `test-*` matched
     //< every `test-…`, and passed `test-suites-a` with no line of its own.
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     for one in names.said
         $found: = false
         for d in names.docs
@@ -430,7 +430,7 @@ priv fn check_help_docs(names: Names@, arena: Arena$@) //<
         bad@,
         "write one `## <group>|<target>|<explanation>` line above that rule (see `mk/help.mk`)")
 
-    $stale: = List<|U8[]|>.new(arena)
+    $stale: = List<|U8[]|>(arena)
     for d in names.docs
         if d.spec.ends_with("*")
             continue
@@ -442,7 +442,7 @@ priv fn check_help_docs(names: Names@, arena: Arena$@) //<
 
     // **A target `make help` explains is declared `.PHONY`**: a file of that name in the tree
     // would otherwise make it "up to date" and skip its recipe in silence.
-    $not_phony: = List<|U8[]|>.new(arena)
+    $not_phony: = List<|U8[]|>(arena)
     for d in names.docs
         if d.spec.ends_with("*") || said_by_name(names, d.spec)
             continue
@@ -459,7 +459,7 @@ priv fn said_by_name(names: Names@, name: U8[]): Bool //< whether a `.PHONY` lin
 priv fn help_groups(arena: Arena$@): List<|U8[]|> //< the groups `mk/help.mk` lists
     //< **The canonical source is that one line** (no copy is kept). Unreadable, it returns empty
     //< and the caller fails with "not one could be read".
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     text: = harness.read_under_root(HELP_FILE)
     if text.len == 0
         return out
@@ -483,7 +483,7 @@ priv fn check_help_groups(names: Names@, arena: Arena$@) //<
     if !verdict.check("the row of groups can be read from `mk/help.mk`", known.len > 0,
         arena.text().s(HELP_FILE).s("'s `").s(GROUPS_HEAD).s("...` line cannot be read").take())
         return
-    $unknown: = List<|U8[]|>.new(arena)
+    $unknown: = List<|U8[]|>(arena)
     for d in names.docs
         if !known.contains(d.group)
             unknown
@@ -492,7 +492,7 @@ priv fn check_help_groups(names: Names@, arena: Arena$@) //<
         unknown@,
         arena.text().s("mend the writing, or add the group to ").s(HELP_FILE).take())
 
-    $empty: = List<|U8[]|>.new(arena)
+    $empty: = List<|U8[]|>(arena)
     for g in known
         $seen: = false
         for d in names.docs
@@ -597,7 +597,7 @@ priv fn define_name(line: U8[]): U8[] //< the name a `define` line opens, its op
 
 priv fn scan_fns(paths: List<|U8[]|>@, arena: Arena$@): List<|Fn_read|> //<
     //< Every function a run's files define: each `define`, each variable (a call may name either)
-    $out: = List<|Fn_read|>.new(arena)
+    $out: = List<|Fn_read|>(arena)
     for path in paths
         text: = harness.read_under_root(path)
         if text.len == 0
@@ -684,13 +684,12 @@ priv fn check_calls(arena: Arena$@) //<
     //< That a `$(call)` names a function its run defines, and passes it nothing it leaves unread
     //< **A package's `Makefile` is a run of its own**: make reads it alone, so it cannot call the
     //< root's functions.
-    $finds: = Call_finds::{ .nowhere = List<|U8[]|>.new(arena),
-        .unread = List<|U8[]|>.new(arena) }
+    $finds: = Call_finds::{ .nowhere = List<|U8[]|>(arena), .unread = List<|U8[]|>(arena) }
     root: = make_files(arena)
     $seen: = check_run(root@, finds@, arena)
     for path in recipe_files(arena)
         if path.ends_with("/Makefile")
-            $one: = List<|U8[]|>.new(arena)
+            $one: = List<|U8[]|>(arena)
             one.push(path)
             seen += check_run(one@, finds@, arena)
     verdict.check_list("a `$(call)` names a function its run defines", seen, "calls",
@@ -708,7 +707,7 @@ priv const READ_SAMPLES: U8[][_] = ::{ "echo $(1) $(3)", "echo $$(1)", "$$$(2)",
 priv const READ_WANT: Sz[_] = ::{ 3, 0, 2, 0, 2, 0 }
 
 priv fn check_call_fires(arena: Arena$@)
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     for i in Range.asc(CALL_SAMPLES.len)
         got: = args_passed(CALL_SAMPLES[i])
         if got != CALL_WANT[i]

@@ -41,7 +41,7 @@ Caution: **Do not build the suites with the compiler under inspection.** A broke
 **A suite stays in the root `tests/` only when it reads more than one package; a suite about one package lives inside that package.** A suite here checks the compiler against something outside its folder, or it gates the repository itself. "Outside its folder" means, for example:
 
 * the language specification;
-* kspage's highlighter and the editor's grammar;
+* the VS Code extension's grammar;
 * the root `Makefile`'s rebuild list;
 * every package's generated C;
 * the whole tree.
@@ -78,6 +78,6 @@ An *arena* is a block of memory that hands out pieces and frees them all at once
 
 **`harness.*` does not take the arena per call**, because lines that only pass it along would make up a meaningful share of a suite's code.
 
-**This is not a rule that an arena is never passed.** What decides is where the result goes, not where the receiver lives. A list kept only for one function's length is given `null`, the global heap (`List.new(null)`, freed at once with a `defer`). A temporary list in a long-lived arena only grows.
+**This is not a rule that an arena is never passed.** What decides is where the result goes, not where the receiver lives. A list kept only for one function's length is given `null`, the global heap (`List<|T|>(null)`, freed at once with a `defer`). A temporary list in a long-lived arena only grows.
 
 Caution: **Confirm before dropping the arena argument from another function.** Plant a check in harness that fails where the arena passed differs from the main arena, and run every suite.

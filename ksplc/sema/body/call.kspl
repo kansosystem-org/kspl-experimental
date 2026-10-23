@@ -98,16 +98,12 @@ priv fn check_method_receiver_lvalue(c: Sema_ctx$@, left: Ast_node$@, def_node: 
         requires_mut_ptr: = need.mut_ptr
 
         if requires_ptr && recv_node != null
-            recv_id: = recv_node.type_id
-            is_ptr: = c.env.is_pointer(recv_id)
-            is_slice: = c.env.is_slice(recv_id)
-
             // The receiver **implicitly has its address taken**. A call's or a computation's
             // result has no address, so it is stored in a temporary in the frame.
             // Caution: **Writing (`Self$@`) is rejected**: the temporary is a copy, so the
             // caller never sees the write (`make_point().set_n(5)`: "called, nothing
             // happened").
-            needs_hoist: = recv_node.receiver_needs_hoist(is_ptr, is_slice)
+            needs_hoist: = c.env.receiver_needs_hoist(recv_node)
             if needs_hoist && requires_mut_ptr
                 c.clear_scratch()
                     .s("cannot call a method that writes its receiver ('Self$@') on a temporary \
@@ -330,7 +326,7 @@ fn infer(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@, target_id: I32, expe
         return I32::sema_type_env.Builtin_type_id.unknown
     // The name looked up, without any `<|…|>`, and the type arguments written for the function.
     parts: = sema_decl_name.named_fn(left)
-    defer $base_fn_name: = Str_builder.new()
+    defer $base_fn_name: = Str_builder()
     $written: Ast_node$@ = null
     // What the callee's name names, read once (read_written_name in sema/decl/name.kspl).
     $named: = sema_decl_name.Written_name::{ .parts = parts, .spelled = "", .fqn = "",

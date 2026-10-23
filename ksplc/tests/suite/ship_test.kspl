@@ -69,7 +69,7 @@ priv fn link_libs_for(cc: U8[], arena: Arena$@): U8[][] //<
         sys.set_env("CC", before) catch panic("CC could not be set")
     else
         sys.unset_env("CC") catch panic("CC could not be unset")
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     for w in r.out.trim_spaces().split(' ', arena)
         if w.len > 0
             out.push(w)
@@ -81,7 +81,7 @@ priv fn ok_step(name: U8[], argv: U8[][], dir: U8[]): Bool //<
     return verdict.check(name, r.exited_with(0), r.out)
 
 priv fn argv_of(head: U8[][], tail: U8[][], arena: Arena$@): U8[][] //< two runs of words as one
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     for w in head
         out.push(w)
     for w in tail
@@ -101,7 +101,7 @@ priv fn vendor_builds(vendor: U8[], arena: Arena$@): Bool //<
     //< Each vendor's C and interfaces, as the vendor makes them: one compile writes them all
     $all: = true
     for lib in LIBS
-        $argv: = List<|U8[]|>.new(arena)
+        $argv: = List<|U8[]|>(arena)
         argv.push(arena.text().s("--library=\{lib\}.h").take())
         // **greet ships both forms from the one compile**; count ships its C header alone.
         if lib.equals("greet")
@@ -123,7 +123,7 @@ priv fn check_private(vendor: U8[], obj_dir: U8[], arena: Arena$@) //<
     if !harness.has_tool(nm)
         verdict.skip_check(name, "nm is not installed")
         return
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     for lib in LIBS
         r: = harness.run_in(U8[][]::{ nm, "--defined-only", "--extern-only",
             fs.join(obj_dir, arena.text().s("\{lib\}.o").take(), arena) }, vendor)
@@ -171,7 +171,7 @@ priv fn build_shared(tc: Toolchain, vendor: U8[], dir: U8[], arena: Arena$@): Bo
     //< Each library as a shared one in `dir`, with its link libraries named
     $all: = true
     for lib in LIBS
-        $argv: = List<|U8[]|>.new(arena)
+        $argv: = List<|U8[]|>(arena)
         argv.push(tc.cc)
         argv.push("-std=c99")
         argv.push(arena.text().s("\{lib\}.c").take())
@@ -210,7 +210,7 @@ priv fn build_shared(tc: Toolchain, vendor: U8[], dir: U8[], arena: Arena$@): Bo
 priv fn link_main(tc: Toolchain, vendor: U8[], dir: U8[], shared: Bool, arena: Arena$@): U8[] //<
     //< The C customer linked against the libraries in `dir`; the executable's path, or empty
     exe: = fs.join(dir, "main.exe", arena)
-    $argv: = List<|U8[]|>.new(arena)
+    $argv: = List<|U8[]|>(arena)
     argv.push(tc.cc)
     argv.push("-std=c99")
     argv.push("main.c")
@@ -261,7 +261,7 @@ priv fn check_collision(tc: Toolchain, vendor: U8[], dir: U8[], arena: Arena$@) 
             return
         harness.run_in(U8[][]::{ tc.ar, "rcs",
             fs.join(dir, arena.text().s("lib\{lib\}.a").take(), arena), obj }, vendor)
-    $argv: = List<|U8[]|>.new(arena)
+    $argv: = List<|U8[]|>(arena)
     for w in U8[][]::{ tc.cc, "-std=c99", "main.c",
         arena.text().s("-L").s(dir).take(), "-lgreet", "-lcount" }
         argv.push(w)

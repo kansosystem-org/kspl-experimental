@@ -77,7 +77,7 @@ impl Conn
         sock.set_nonblocking() catch
             sock.free()
             throw .connect_failed
-        return Conn::{ .sock = sock, .acc = Str_builder.new(),
+        return Conn::{ .sock = sock, .acc = Str_builder(),
             .buf = U8$[]::{ .ptr = U8$@::alloc(CHUNK), .len = CHUNK } }
 
     fn open_in(port: I32, arena: Arena$@): Conn$@!Http_end //<
@@ -217,7 +217,7 @@ fn request(port: I32, raw: U8[], expect: Sz, timeout_ms: I32, no_body: Bool, are
         //< Several keep-alive responses are read in order too.
     defer $conn: = Conn.open(port)!
     conn.send(raw)!
-    $out: = List<|Resp|>.new(arena)
+    $out: = List<|Resp|>(arena)
     for _k in Range.asc(expect)
         out.push(conn.next(no_body, timeout_ms, arena)!)
     return out
@@ -349,7 +349,7 @@ fn post_empty(port: I32, target: U8[], arena: Arena$@): Resp!Http_end //<
 
 fn dump_of(v: json.Value, arena: Arena$@): U8[] //<
     //< Turns a JSON value into a string (for display in checks)
-    defer $out: = Str_builder.new()
+    defer $out: = Str_builder()
     v.dump(out@)
     return arena.dup_str(out.slice())
 

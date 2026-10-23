@@ -18,10 +18,10 @@ fn ksos_main()
     $arena: = Arena.from_buffer(Void$@::storage@, sizeof(Sz) * 8192)
 
     x_shape: Sz[2] = ::{ 2, 3 }
-    $x: = Tensor<|F32|>.new(Sz[]::x_shape, arena@)
+    $x: = Tensor<|F32|>(Sz[]::x_shape, arena@)
     x.fill(F32::2.0)
     w_shape: Sz[2] = ::{ 3, 2 }
-    w: = Tensor<|F32|>.new(Sz[]::w_shape, arena@)
+    w: = Tensor<|F32|>(Sz[]::w_shape, arena@)
     w.fill(F32::0.5)
     y: = x.matmul(w) catch // expected: each element = Σ_3(2.0*0.5) = 3.0
         panic("matmul shape mismatch")
@@ -32,11 +32,11 @@ fn ksos_main()
     // It checks that the cfg(freestanding) math.sqrt works on real hardware (in software floating
     // point).
     rn_shape: Sz[2] = ::{ 1, 4 }
-    $rn_x: = Tensor<|F32|>.new(Sz[]::rn_shape, arena@)
+    $rn_x: = Tensor<|F32|>(Sz[]::rn_shape, arena@)
     rn_x.fill(F32::0.0)
     (rn_x.data + 3)$ = F32::4.0
     w1_shape: Sz[1] = ::{ 4 }
-    rn_w: = Tensor<|F32|>.new(Sz[]::w1_shape, arena@)
+    rn_w: = Tensor<|F32|>(Sz[]::w1_shape, arena@)
     rn_w.fill(F32::1.0)
     rn_out: = rn_x.rmsnorm(rn_w, F32::0.0) catch panic("rmsnorm shape mismatch")
     con.check("rmsnorm",
@@ -44,7 +44,7 @@ fn ksos_main()
 
     // softmax: all-zero logits give four exp(0)=1 summing to 4, so each element is exactly
     // 1/4=0.25. It checks that the cfg(freestanding) math.exp works on real hardware.
-    $sm_x: = Tensor<|F32|>.new(Sz[]::rn_shape, arena@)
+    $sm_x: = Tensor<|F32|>(Sz[]::rn_shape, arena@)
     sm_x.fill(F32::0.0)
     sm_out: = sm_x.softmax() catch panic("softmax shape mismatch")
     con.check("softmax",
@@ -56,7 +56,7 @@ fn ksos_main()
     // start_pos=5 is non-trivial on purpose: at 0 the rotation angle is always 0 and nothing is
     // checked.
     rp_shape: Sz[2] = ::{ 1, 2 }
-    $rp_x: = Tensor<|F32|>.new(Sz[]::rp_shape, arena@)
+    $rp_x: = Tensor<|F32|>(Sz[]::rp_shape, arena@)
     (rp_x.data + 0)$ = F32::3.0
     (rp_x.data + 1)$ = F32::4.0
     rp_out: = rp_x.apply_rope(5) catch panic("apply_rope shape mismatch")
@@ -71,9 +71,9 @@ fn ksos_main()
     // the MLP → the residual → the LM head). The expected value is the reference from running the
     // same setup on the host build (with the real libm), recorded at F64 precision. It checks that
     // the software maths' errors (sqrt/exp/pow/sin/cos), even accumulated, stay well within bounds.
-    $emb: = nn.Embedding<|F32|>.new(4, 4, arena@)
-    $blk: = nn.Transformer_block<|F32|>.new(4, 8, 4, F32::1.0e-5, arena@)
-    $lm_head: = nn.Linear<|F32|>.new(4, 4, arena@)
+    $emb: = nn.Embedding<|F32|>(4, 4, arena@)
+    $blk: = nn.Transformer_block<|F32|>(4, 8, 4, F32::1.0e-5, arena@)
+    $lm_head: = nn.Linear<|F32|>(4, 4, arena@)
     h0: = emb.forward(0, arena@)
     h1: = blk.forward(h0, 0)
     logits: = lm_head.forward(h1)

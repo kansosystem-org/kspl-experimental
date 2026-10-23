@@ -67,7 +67,7 @@ fn print_stats_report(elapsed_us: I64, arena_used: Sz, arena_cap: Sz, arena_head
     io.err().s("\n[Layer]\n")
     print_layer("Parse", base_stats.stages.parse)
     if sys.timing_available()
-        defer $sb: = Str_builder.new()
+        defer $sb: = Str_builder()
         sb.s("  - File I/O:    \{Sz::(parse_load.prof.io_us / 1000):6,\} ms\n")
             .s("  - KSPEG Parse: \{Sz::(parse_load.prof.kspeg_us / 1000):6,\} ms\n")
             .s("  - AST Conv:    \{Sz::(parse_load.prof.ast_conv_us / 1000):6,\} ms\n")
@@ -81,7 +81,7 @@ fn print_stats_report(elapsed_us: I64, arena_used: Sz, arena_cap: Sz, arena_head
     print_layer("Sema", base_stats.stages.sema)
     sema_session_prof.prof.print_phases()
     print_layer("Lower & ABI", base_stats.stages.lower)
-    defer $pr: = Str_builder.new()
+    defer $pr: = Str_builder()
     pr
         .s("  - Pruned fns:  \{lower_prune.stats.fn_dropped:6,\} of \
             \{lower_prune.stats.fn_defs:,\}\n")
@@ -95,7 +95,7 @@ fn print_stats_report(elapsed_us: I64, arena_used: Sz, arena_cap: Sz, arena_head
         base_stats.Stage::{ .us = elapsed_us - measured.us,
         .bytes = arena_used - measured.bytes })
 
-    defer $tail: = Str_builder.new()
+    defer $tail: = Str_builder()
     tail.s("\n[Overall]\n")
     if sys.timing_available()
         tail.s("Compile time      : \{Sz::(elapsed_us / 1000):,\} ms\n")
@@ -117,7 +117,7 @@ priv fn print_layer(label: U8[], stage: base_stats.Stage) //< one stage's line
     //< the clock is broken it says `N/A`, not a misleading `0 ms`.
     //< Caution: **Print the bytes there too**: the memory allocated is measured the same way on a
     //< target without a clock.
-    defer $sb: = Str_builder.new()
+    defer $sb: = Str_builder()
     if sys.timing_available()
         sb.s("\{label\}: \{Sz::(stage.us / 1000):,\} ms, \{stage.bytes:,\} bytes\n")
     else
@@ -148,7 +148,7 @@ impl Compiler
         source_map: = base_core.arena
             .create(Map<|U8[], U8$[]|>.new_with_cap(128, null))
         loaded_files: = List<|U8$[]|>.create(base_core.arena)
-        root_file: = Ast_node.new(.k_file, "file", base_ast.Loc.at("", 0))
+        root_file: = Ast_node(.k_file, "file", base_ast.Loc.at("", 0))
         return base_core.arena
             .create(Compiler::{
             .base_parser = base_parser,
@@ -222,7 +222,7 @@ impl Compiler
             throw .analysis_failed
         base_stats.stages.desugar = base_stats.end_stage(t1, sys.mono_us())
 
-        env: = sema_type_env.Env.new()
+        env: = sema_type_env.Env()
         // On the global heap.
         scope_map: = Map<|I32, Sema_symbol$@|>.new_with_cap(2048, null)
         global_scope: = base_core.arena.create(scope_map)
@@ -232,7 +232,7 @@ impl Compiler
         entry: = base_package.name_entry(main_file)
         init_src: = r.source_map.get(entry).unwrap_or("")
 
-        ctx: = Sema_ctx.new(init_src, entry, env, global_scope, r.source_map)
+        ctx: = Sema_ctx(init_src, entry, env, global_scope, r.source_map)
         sema: = base_core.arena.create(ctx)
         // The only way decl calls into body (infer_expr_fn in sema/session/ctx.kspl).
         // Caution: Insert it before sema_decl_collect.run, whose constant folding is its first
@@ -310,7 +310,7 @@ impl Compiler
         case .llvm
             defer $out_file: = io.open(out_path, "w") catch e
                 throw .io(e)
-            defer cg: = Genllvm_ctx.new(out_file@, r.sema, r.source_map)
+            defer cg: = Genllvm_ctx(out_file@, r.sema, r.source_map)
             gen_llvm_module.run(r.root_file, cg, r.root_file.loc.file())
             cg.flush()
             codegen_failed = cg.had_error
@@ -326,11 +326,11 @@ impl Compiler
         //< walk. `<stem>.h`     … the shared header every unit `#include`s (types, prototypes,
         //< extern) `<stem>.<i>.c` … unit i's definitions (i from 0 to units-1)
         stem: = sys.strip_last_ext(out_path)
-        defer $path: = Str_builder.new()
+        defer $path: = Str_builder()
         path.s(stem).s(".h")
         // The `#include` names the file, not a path, as it is next to the `.c`; it is copied to
         // another Builder because the loop rebuilds path.
-        defer $header_name: = Str_builder.new()
+        defer $header_name: = Str_builder()
         header_name.s(sys.get_file_name(path.slice()))
 
         shared: = gen_c_ctx.Emit_split::{ .part = .shared_decls, .unit_count = units,
@@ -352,7 +352,7 @@ impl Compiler
         //< It writes one file of the generated C, the part `split` names
         defer $out_file: = io.open(path, "w") catch e
             throw .io(e)
-        defer cg: = Genc_ctx.new(out_file@, r.sema, r.source_map, split)
+        defer cg: = Genc_ctx(out_file@, r.sema, r.source_map, split)
         gen_c_root.run(r.root_file, cg)
         cg.flush()
         failed: = cg.had_error

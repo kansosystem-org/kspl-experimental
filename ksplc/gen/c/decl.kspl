@@ -309,7 +309,7 @@ impl Ast_node
             // byte.
             // A byte's longest C escape is a backslash and three octal digits.
             esc_buf: U8[4] = ::{}
-            $esc: = Buf_writer.new(U8$[]::esc_buf)
+            $esc: = Buf_writer(U8$[]::esc_buf)
             for bi in Range.asc(file_data.len)
                 b: = (file_data.ptr + bi)$
                 if b == '\n'
@@ -435,8 +435,8 @@ impl Ast_node
         //< `typedef A = B;` refers to a `B` defined after it and becomes `unknown type name`, with
         //< no ksplc diagnostic (Principle 2). It uses the same work list as the top-level
         //< definitions (emit_top_level_vars in gen/c/root.kspl).
-        defer $pending: = List<|Ast_node$@|>.new(null)
-        defer $emitted: = List<|Bool|>.new(null)
+        defer $pending: = List<|Ast_node$@|>(null)
+        defer $emitted: = List<|Bool|>(null)
         for raw in r.children
             child: = raw.unwrap_top_level()
             if child.kind_id == .k_decl_typedef && child.is_emittable() && child.type_id != 0 &&
@@ -446,7 +446,7 @@ impl Ast_node
 
         $left: = pending.len
         for left > 0
-            defer $waiting: = Map<|I32, Bool|>.new(null)
+            defer $waiting: = Map<|I32, Bool|>(null)
             for i in Range.asc(pending.len)
                 if !emitted.get(i)
                     waiting.set(pending.get(i).type_id, true)
@@ -484,6 +484,10 @@ impl Ast_node
         // `dllexport` added on a redeclaration (`-Wdll-attribute-on-redeclaration`).
         if r.kind_id == .k_decl_fn && r.has_attribute("export")
             cg.s("KSPL_EXPORT(").s(r.get_decl_id_text()).s(") ")
+        // **Mark `#noreturn` here too.** Under `--split`, a caller in another unit sees only this
+        // prototype. Without the mark, a function that ends in the call warns it returns nothing.
+        if r.has_attribute("noreturn")
+            cg.s("__attribute__((noreturn)) ")
 
         type_node: = r.get_decl_type_node()
         if type_node != null
@@ -531,7 +535,7 @@ fn emit_single_complex_type(cg: Genc_ctx$@, type_id: I32)
     default {}
 
 priv fn emit_complex_types_fwd(cg: Genc_ctx$@)
-    defer $seen: = sema_type_naming.Mangle_seen.new(cg.env)
+    defer $seen: = sema_type_naming.Mangle_seen(cg.env)
 
     // **A type is admitted only once it is to be emitted** (`Mangle_seen.admit`).
     for type_id in cg.env.complex_types
@@ -552,7 +556,7 @@ priv fn emit_array_typedef_fwd(cg: Genc_ctx$@, type_id: I32, m_slice: U8[]) //<
     if plain_arr_id == type_id
         cg.s("typedef struct \{m_slice\} \{m_slice\};\n")
         return
-    defer $plain_arr_b: = Str_builder.new()
+    defer $plain_arr_b: = Str_builder()
     cg.env.mangle_type_id_to(plain_arr_id, plain_arr_b)
     cg.s("typedef struct \{plain_arr_b.slice()\} \{m_slice\};\n")
 
@@ -588,7 +592,7 @@ priv fn alias_refs_waiting(cg: Genc_ctx$@, t_node: Ast_node$@, waiting: Map<|I32
     //< text.
     if t_node == null
         return false
-    defer $queue: = List<|Ast_node$@|>.new(null)
+    defer $queue: = List<|Ast_node$@|>(null)
     queue.push(t_node)
     $q_idx: Sz = 0
     for q_idx < queue.len

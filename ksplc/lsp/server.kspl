@@ -81,7 +81,7 @@ priv fn pump_worker_output(worker: subproc.Piped_child@, arena: Arena$@): Worker
     //< Nothing is relayed before the marker comes, so a partial message never breaks the protocol.
     cap: Sz = 65536
     rbuf: = U8$@::arena.alloc(cap)
-    defer $acc: = Str_builder.new()
+    defer $acc: = Str_builder()
     $ok: = Worker_end.exited
     // Each search resumes marker-length-1 before where the last found none. So a marker crossing a
     // chunk boundary is still found. Re-walking the whole buffer per chunk is quadratic in an
@@ -105,7 +105,7 @@ priv fn pump_worker_output(worker: subproc.Piped_child@, arena: Arena$@): Worker
         idx: = lsp_msg.marker_at(acc.slice(), search_from, tag)
         if idx >= 0
             if idx > 0
-                defer $clean: = Str_builder.new()
+                defer $clean: = Str_builder()
                 relay_stripping_alive(acc.slice().sub(0, idx), clean@)
                 io.out().s(clean.slice())
                 io.out().flush()
@@ -150,9 +150,9 @@ priv struct Lsp_docs //< the open documents' texts, and what the worker has made
 
 impl Lsp_docs
     priv fn new(): Lsp_docs
-        store: = Doc_store.new()
-        quarantine: = store.arena.create(Map<|U8[], I32|>.new(store.arena))
-        unchecked: = store.arena.create(Map<|U8[], I32|>.new(store.arena))
+        store: = Doc_store()
+        quarantine: = store.arena.create(Map<|U8[], I32|>(store.arena))
+        unchecked: = store.arena.create(Map<|U8[], I32|>(store.arena))
         return Lsp_docs::{ .store = store, .quarantine = quarantine, .unchecked = unchecked,
             .first = "" }
 
@@ -216,11 +216,11 @@ impl Lsp_docs: Manual_free
         r.store.free()
 priv fn build_doc_frame(method: U8[], uri: U8[], text: U8[], arena: Arena$@): Str_builder //<
     //< It builds a message (framed) carrying one document's cached text: a didOpen or a restore
-    $b: = Json_builder.new(arena)
+    $b: = Json_builder(arena)
     td: = b.obj().set("uri", b.str_val(uri)).set("languageId", b.str_val("kspl"))
         .set("version", b.int_val(1)).set("text", b.str_val(text)).build()
     params: = b.obj().set("textDocument", td).build()
-    $frame: = Str_builder.new()
+    $frame: = Str_builder()
     jsonrpc.frame_into(frame@, jsonrpc.encode(method, params, -1, arena))
     return frame
 
@@ -346,9 +346,9 @@ fn ksplc_lsp_read_editor(r: Editor_reader$@): Void$@ //<
     //< Caution: **Stop at `exit`, not only at the end of input.** A client can keep the pipe open
     //< after `exit`. A thread left blocked in the C library's read holds standard input's lock. The
     //< C library's exit waits for that lock, so the process would never end.
-    defer arena: = Arena.new(64 * 1024)
+    defer arena: = Arena(64 * 1024)
     base: = arena.save()
-    defer $body: = Str_builder.new()
+    defer $body: = Str_builder()
     for
         arena.restore(base)
         $got: = true
@@ -372,9 +372,9 @@ fn ksplc_lsp_read_editor(r: Editor_reader$@): Void$@ //<
 priv fn start_editor_reader(): Editor_reader$@? //<
     //< It starts the reading thread; none where the OS gives no thread or lock
     $inbox: =
-        thread.Mutex<|Inbox|>.new(Inbox::{ .frames = Str_builder.new(), .ended = false }) catch
+        thread.Mutex<|Inbox|>(Inbox::{ .frames = Str_builder(), .ended = false }) catch
         return .none
-    arrived: = thread.Cond_var.new() catch
+    arrived: = thread.Cond_var() catch
         inbox.free()
         return .none
     r: = mem.alloc_as<|Editor_reader|>()
@@ -438,10 +438,10 @@ priv fn supervise(reader: Editor_reader$@, first_worker: subproc.Piped_child?) /
     //< It relays the editor's messages to the worker until `shutdown` or the end of input
     defer reader.free()
     $worker: = first_worker
-    defer $docs: = Lsp_docs.new()
-    defer arena: = Arena.new(8 * 1024 * 1024)
+    defer $docs: = Lsp_docs()
+    defer arena: = Arena(8 * 1024 * 1024)
     base: = arena.save()
-    defer $taken: = Str_builder.new()
+    defer $taken: = Str_builder()
 
     for
         arena.restore(base)
@@ -469,7 +469,7 @@ priv fn supervise(reader: Editor_reader$@, first_worker: subproc.Piped_child?) /
         if docs.is_unchecked(named)
             worker = check_doc(docs@, worker, named, arena)
         // forward to the worker (rebuilt with a proper header)
-        defer $frame: = Str_builder.new()
+        defer $frame: = Str_builder()
         jsonrpc.frame_into(frame@, msg_body)
         end: = exchange(worker@, frame.slice(), arena)
         $handled: = false
@@ -492,7 +492,7 @@ priv fn supervise(reader: Editor_reader$@, first_worker: subproc.Piped_child?) /
                 has_id = false
             default {}
             if has_id
-                $b: = Json_builder.new(arena)
+                $b: = Json_builder(arena)
                 lsp_msg.send_response(id_val, b.null_val(), arena)
 
         if method.equals("shutdown")

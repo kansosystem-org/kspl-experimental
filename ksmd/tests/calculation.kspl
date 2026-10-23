@@ -1,0 +1,341 @@
+//< Calculating tables: each result is checked against a value worked out by hand
+//< Values are compared exactly; every expected number is one an F64 holds without rounding.
+import "ksmd/calc" { Calc_error, Results, Value_kind }
+import "ksmd/calc"
+import "ksmd/edit"
+import "ksmd/keyed" { Keyed }
+import "ksmd/model" { Document }
+import "ksmd/reader"
+import "ksmd/source" { Source }
+import "ksmd/writer"
+import "std/chars"
+import "std/ds" { List }
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/str"
+import "std/verdict"
+
+priv const HEAD: U8[] = "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" |\n"
+
+fn run()
+    arithmetic()
+    references()
+    functions()
+    errors()
+    propagation()
+    limits()
+    budget()
+    chains()
+    many_names()
+
+priv fn arithmetic()
+    defer arena: = Arena(64 * 1024)
+    r: =
+        results("| =1+2*3 | =(1+2)*3 |\n| =10-4-3 | =24/4/2 |\n| =-2*3 | =2*-3 |\n| =--2 | =-(1+2) \
+            |\n| =1.5e2/3 | =10 - 2 * 3 + 1 |\n| =0.5+0.25 | = 7 |\n:::\n", arena)
+    number("multiplication binds before addition", r@, 0, 0, 0, 7.0)
+    number("brackets group first", r@, 0, 0, 1, 9.0)
+    number("subtraction groups from the left", r@, 0, 1, 0, 3.0)
+    number("division groups from the left", r@, 0, 1, 1, 3.0)
+    number("unary minus before a product", r@, 0, 2, 0, -6.0)
+    number("unary minus after an operator", r@, 0, 2, 1, -6.0)
+    number("two unary minuses", r@, 0, 3, 0, 2.0)
+    number("unary minus before brackets", r@, 0, 3, 1, -3.0)
+    number("an exponent", r@, 0, 4, 0, 50.0)
+    number("spaces between tokens", r@, 0, 4, 1, 5.0)
+    number("fractions", r@, 0, 5, 0, 0.75)
+    number("a number alone", r@, 0, 5, 1, 7.0)
+
+priv fn references()
+    defer arena: = Arena(64 * 1024)
+    r: =
+        results("| | =A1+1 |\n| \"x\" | =A2+1 |\n| \"2026-01-02\" | =A3+1 |\n| 4 | =A5*2 |\n| =A4+5 \
+            | =u.A1*t.A4 |\n:::\n\n:::table name=\"u\"\n| \"x\" |\n| 3 |\n:::\n", arena)
+    number("an empty cell is 0 in arithmetic", r@, 0, 0, 1, 1.0)
+    failure("text in arithmetic is a type error", r@, 0, 1, 1, .text)
+    failure("a date stays text", r@, 0, 2, 1, .text)
+    number("a formula can name a later row", r@, 0, 3, 1, 18.0)
+    number("the later row's formula", r@, 0, 4, 0, 9.0)
+    number("a reference into another table, and into its own by name", r@, 0, 4, 1, 12.0)
+    two: =
+        results("| =u.A1 | |\n:::\n\n:::table name=\"u\"\n| \"x\" |\n| =t.A1 |\n:::\n", arena)
+    failure("a cycle through two tables", two@, 0, 0, 0, .cycle)
+    failure("the same cycle, seen from the other table", two@, 1, 0, 0, .cycle)
+    kind("an empty cell's value is empty", r@, 0, 0, 0, .empty)
+    kind("a text cell's value is text", r@, 0, 1, 0, .text)
+
+priv fn functions()
+    defer arena: = Arena(64 * 1024)
+    r: =
+        results("| 1 | =sum(A1:A4) |\n| | =count(A1:A4) |\n| \"x\" | =min(A1:A4) |\n| 4 | \
+            =max(A1:A4) |\n| =average(A1:A4) | =sum(A1:A2, 10, A4) |\n| =max(0, A1-5) | =sum(A4:A1) \
+            |\n| =sum(A1:B2) | =sum(A3) |\n| =count(5, A3, A2) | =average(A1, A4, 1) |\n:::\n",
+        arena)
+    number("sum leaves out empty cells and text", r@, 0, 0, 1, 5.0)
+    number("count counts numbers", r@, 0, 1, 1, 2.0)
+    number("min", r@, 0, 2, 1, 1.0)
+    number("max", r@, 0, 3, 1, 4.0)
+    number("average divides by the count of numbers", r@, 0, 4, 0, 2.5)
+    number("several arguments: ranges, cells and numbers", r@, 0, 4, 1, 15.0)
+    number("an argument that is arithmetic", r@, 0, 5, 0, 0.0)
+    number("a range's corners in either order", r@, 0, 5, 1, 5.0)
+    number("a range over two columns", r@, 0, 6, 0, 8.0)
+    number("one cell of text as an argument is left out", r@, 0, 6, 1, 0.0)
+    number("count of a number and of cells", r@, 0, 7, 0, 1.0)
+    number("average of cells and a number", r@, 0, 7, 1, 2.0)
+    e: =
+        results("| \"x\" | =sum(A1:A2) |\n| | =count(A1:A2) |\n| =min(A1:A2) | =max(A1:A2) |\n| \
+            =average(A1:A2) | |\n:::\n", arena)
+    number("the sum of no numbers is 0", e@, 0, 0, 1, 0.0)
+    number("the count of no numbers is 0", e@, 0, 1, 1, 0.0)
+    failure("min of no numbers is an error", e@, 0, 2, 0, .no_numbers)
+    failure("max of no numbers is an error", e@, 0, 2, 1, .no_numbers)
+    failure("average of no numbers is an error", e@, 0, 3, 0, .no_numbers)
+
+priv fn errors()
+    defer arena: = Arena(64 * 1024)
+    r: =
+        results("| =1/0 | =0/0 |\n| =1e308*10 | =1e999 |\n| =Z99 | =#REF! |\n| =nope.A1 | =B4 |\n| \
+            =B5 | =A5 |\n| =sum(A6:A6) | =1+ |\n| =foo(1) | =A1:A2 |\n| =sum() | =1 2 |\n| =(1 | \
+            =A01 |\n:::\n", arena)
+    failure("division by zero", r@, 0, 0, 0, .division)
+    failure("zero divided by zero", r@, 0, 0, 1, .division)
+    failure("a result too large", r@, 0, 1, 0, .not_finite)
+    failure("a number too large", r@, 0, 1, 1, .not_finite)
+    failure("a reference outside the table", r@, 0, 2, 0, .reference)
+    failure("#REF! in a formula", r@, 0, 2, 1, .reference)
+    failure("a table that does not exist", r@, 0, 3, 0, .reference)
+    failure("a cell that names itself", r@, 0, 3, 1, .cycle)
+    failure("two cells that name each other", r@, 0, 4, 0, .cycle)
+    failure("the other of the two", r@, 0, 4, 1, .cycle)
+    failure("a range that holds its own cell", r@, 0, 5, 0, .cycle)
+    failure("an operator without its operand", r@, 0, 5, 1, .syntax)
+    failure("an unknown function", r@, 0, 6, 0, .syntax)
+    failure("a range outside a function", r@, 0, 6, 1, .syntax)
+    failure("a function without an argument", r@, 0, 7, 0, .syntax)
+    failure("two numbers without an operator", r@, 0, 7, 1, .syntax)
+    failure("an open bracket", r@, 0, 8, 0, .syntax)
+    failure("a row number with a leading 0", r@, 0, 8, 1, .syntax)
+    marks: =
+        Calc_error.text.mark().equals("#VALUE!") &&
+        Calc_error.division.mark().equals("#DIV/0!") &&
+        Calc_error.not_finite.mark().equals("#NUM!") &&
+        Calc_error.reference.mark().equals("#REF!") &&
+        Calc_error.cycle.mark().equals("#CYCLE!") &&
+        Calc_error.no_numbers.mark().equals("#EMPTY!") &&
+        Calc_error.syntax.mark().equals("#SYNTAX!")
+    verdict.check("each error shows its own mark", marks, "")
+
+priv fn propagation()
+    defer arena: = Arena(64 * 1024)
+    r: =
+        results("| =1/0 | =A1+1 |\n| =sum(A1:B1) | =count(A1) |\n| =A1+Z99 | =Z99+A1 |\n| =-A1 | \
+            =max(Z99, A1) |\n:::\n", arena)
+    failure("an error in a referenced cell carries into arithmetic", r@, 0, 0, 1, .division)
+    failure("an error in a range carries into a sum", r@, 0, 1, 0, .division)
+    failure("an error carries into a count too", r@, 0, 1, 1, .division)
+    failure("the left error comes first", r@, 0, 2, 0, .division)
+    failure("the left error comes first, the other way", r@, 0, 2, 1, .reference)
+    failure("an error carries through unary minus", r@, 0, 3, 0, .division)
+    failure("the first error among the arguments comes first", r@, 0, 3, 1, .reference)
+
+priv fn limits()
+    defer arena: = Arena(64 * 1024)
+    defer $deep: = Str_builder()
+    deep.s(HEAD).s("| =")
+    for _ in Range.asc(63)
+        deep.c('(')
+    deep.c('1')
+    for _ in Range.asc(63)
+        deep.c(')')
+    deep.s(" | =")
+    for _ in Range.asc(64)
+        deep.c('(')
+    deep.c('1')
+    for _ in Range.asc(64)
+        deep.c(')')
+    deep.s(" |\n| =")
+    for _ in Range.asc(63)
+        deep.c('-')
+    deep.s("1 | =sum(sum(1)) |\n:::\n")
+    doc: = read(deep.slice(), arena)
+    r: = calc.calculate(doc@, arena)
+    number("a formula nests 64 levels", r@, 0, 0, 0, 1.0)
+    failure("a formula nested 65 levels does not read", r@, 0, 0, 1, .syntax)
+    number("each unary minus is a level", r@, 0, 1, 0, -1.0)
+    number("a function inside a function", r@, 0, 1, 1, 1.0)
+    defer $long: = Str_builder()
+    long.s(HEAD).s("| 1 | =A1")
+    for _ in Range.asc(2047)
+        long.s("+1")
+    long.s(" |\n:::\n")
+    full: = read(long.slice(), arena)
+    f: = calc.calculate(full@, arena)
+    number("a formula of 4,096 bytes calculates", f@, 0, 0, 1, 2048.0)
+
+priv fn budget()
+    defer arena: = Arena(64 * 1024)
+    bytes: = io.read_file("examples/overview.ksmd", arena) catch
+        verdict.check("the overview example reads", false, "")
+        return
+    $doc: = read(bytes, arena)
+    r: = calc.calculate(doc@, arena)
+    number("budget D1 is 30", r@, 0, 0, 3, 30.0)
+    number("budget D2 is 10", r@, 0, 1, 3, 10.0)
+    number("budget D3 is 40", r@, 0, 2, 3, 40.0)
+    edit.set_cell(doc@, 0, 0, 1, .number, "24", arena) catch
+        panic("setting a quantity")
+    changed: = calc.calculate(doc@, arena)
+    number("a changed quantity changes its total", changed@, 0, 0, 3, 60.0)
+    number("and the sum that depends on it", changed@, 0, 2, 3, 70.0)
+    edit.insert_row(doc@, 0, 1, arena) catch
+        panic("inserting a row")
+    edit.set_cell(doc@, 0, 1, 0, .text, "Ink", arena) catch
+        panic("naming the new row")
+    edit.set_cell(doc@, 0, 1, 1, .number, "1", arena) catch
+        panic("setting its quantity")
+    edit.set_cell(doc@, 0, 1, 2, .number, "8", arena) catch
+        panic("setting its price")
+    edit.copy_cell(doc@, 0, 0, 3, 0, 1, 3, arena) catch
+        panic("copying the total's formula")
+    edit.remove_row(doc@, 0, 2) catch
+        panic("removing the paper row")
+    saved: = written(doc@, arena)
+    expected: =
+        ":::table name=\"budget\"\n| \"Item\" | \"Quantity\" | \"Price\" | \"Total\" |\n| \"Pens\" \
+            | 24 | 2.5 | =B1*C1 |\n| \"Ink\" | 1 | 8 | =B2*C2 |\n| \"Total\" | | | =sum(D1:D2) \
+            |\n:::\n"
+    found: = saved.find_str(expected)
+    verdict.check("the edited budget saves its formulas, not their results", found.is_some(), saved)
+    again: = read(saved, arena)
+    a: = calc.calculate(again@, arena)
+    number("read again, the new row's total is 8", a@, 0, 1, 3, 8.0)
+    number("read again, the sum takes the new row", a@, 0, 2, 3, 68.0)
+    verdict.check("the edited budget saves a second time unchanged",
+        written(again@, arena).equals(saved), "")
+
+priv fn chains()
+    defer arena: = Arena(1024 * 1024)
+    defer $long: = Str_builder()
+    long.s("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n| 1 |\n")
+    for row in Range(2, 10001, 1)
+        long.s("| =A").s("\{row - 1\}").s("+1 |\n")
+    long.s(":::\n")
+    doc: = read(long.slice(), arena)
+    r: = calc.calculate(doc@, arena)
+    number("a running total down 10,000 rows", r@, 0, 9999, 0, 10000.0)
+    defer $ring: = Str_builder()
+    ring.s("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n| =A1000 |\n")
+    for row in Range(2, 1001, 1)
+        ring.s("| =A").s("\{row - 1\}").s(" |\n")
+    ring.s(":::\n")
+    cycle: = read(ring.slice(), arena)
+    c: = calc.calculate(cycle@, arena)
+    failure("a cycle through 1,000 cells", c@, 0, 999, 0, .cycle)
+    failure("every cell of it", c@, 0, 0, 0, .cycle)
+
+priv const NAMES: Sz = 2000 //< the tables named in `many_names`
+priv const SHARED_BITS: U32 = 12 //< the lowest bits of their hash (`hash` in `std/str`), all zero
+
+priv fn many_names() //<
+    //< 2,000 table names that all start at one slot of a `Map` read, calculate and are looked up
+    //< **The work is counted, not timed**: a clock flakes on a loaded machine. A lookup compares
+    //< at most `depth` names, which an AVL tree holds under 1.45 log2(n + 2).
+    defer arena: = Arena(4 * 1024 * 1024)
+    names: = colliding_names(arena)
+    defer $text: = Str_builder()
+    text.s("%ksmd 1\n\n")
+    for i in Range.asc(NAMES) // falling byte order, so each name is the least so far
+        text.s(":::table name=\"").s(names[NAMES - 1 - i]).s("\"\n| \"n\" | \"twice\" |\n")
+        text.s("| 3 | =A1*2 |\n:::\n\n")
+    text.s(":::table name=\"total\"\n| \"first\" | \"last\" |\n| =").s(names[0])
+    text.s(".B1 | =").s(names[NAMES - 1]).s(".B1+1 |\n:::\n")
+    doc: = read(text.slice(), arena)
+    verdict.check("2,000 table names that share a Map's slot read", doc.tables.len == NAMES + 1, "")
+    r: = calc.calculate(doc@, arena)
+    number("a formula finds the first of those tables by name", r@, NAMES, 0, 0, 6.0)
+    number("and the last", r@, NAMES, 0, 1, 7.0)
+    text.s("\n:::table name=\"").s(names[NAMES / 2]).s("\"\n| \"n\" |\n:::\n")
+    refusal: = refusal_at(text.slice(), arena)
+    want: = arena.text().s("another table in this source has this name \{5 * NAMES + 8\}:10").take()
+    verdict.check("one of them repeated is refused, at the repeated name", refusal.equals(want),
+        refusal)
+    $tree: = Keyed<|Bool|>(arena)
+    for i in Range.asc(NAMES)
+        tree.set(names[NAMES - 1 - i], true)
+    $found: Sz = 0
+    for i in Range.asc(NAMES)
+        if tree.get(names[i]).is_some()
+            found += 1
+    $bits: Sz = 0 // the least with 2^bits > NAMES + 2, so above log2(NAMES + 2)
+    for (1 << bits) <= NAMES + 2
+        bits += 1
+    verdict.check("each name is found, and a lookup compares at most 1.45 log2(n + 2) names",
+        found == NAMES && tree.get("t").is_none() && tree.depth() * 100 <= bits * 145,
+        arena.text().s("\{found\} found, \{tree.depth()\} deep").take())
+
+priv fn colliding_names(arena: Arena$@): List<|U8[]|> //<
+    //< `NAMES` names in rising byte order, each one's hash ending in `SHARED_BITS` zeros
+    //< A `Map` takes a key's first slot from its hash's lowest bits. A `Map` of 2,000 pairs has
+    //< at most 4,096 slots, so all these names start at one slot.
+    $out: = List<|U8[]|>(arena)
+    mask: U32 = (U32::1 << SHARED_BITS) - 1
+    defer $name: = Str_builder()
+    $i: Sz = 0
+    for out.len < NAMES
+        name.clear()
+        name.c('t')
+        $place: Sz = 10000000 // eight digits, so byte order is number order
+        for place > 0
+            name.c('0' + U8::((i / place) % 10))
+            place /= 10
+        if (name.slice().hash() & mask) == 0
+            out.push(arena.dup_str(name.slice()))
+        i += 1
+    return out
+
+priv fn refusal_at(bytes: U8[], arena: Arena$@): U8[] //< the reader's message, line and column
+    src: = Source("t.ksmd", arena.dup_str(bytes)) catch e
+        return e.message
+    _doc: = reader.read(src@, arena) catch e
+        return arena.text().s(e.message).s(" \{e.line\}:\{e.column\}").take()
+    return "read"
+
+priv fn number(what: U8[], r: Results@, u: Sz, row: Sz, column: Sz, want: F64) //<
+    //< The cell's value is the number `want`
+    v: = r.at(u, row, column)
+    defer $got: = Str_builder()
+    got.s("\{v.number\} ").s(v.kind.variant_name()).c(' ').s(v.error.variant_name())
+    verdict.check(what, v.kind == .number && v.number == want, got.slice())
+
+priv fn failure(what: U8[], r: Results@, u: Sz, row: Sz, column: Sz, want: Calc_error) //<
+    //< The cell's value is the error `want`
+    v: = r.at(u, row, column)
+    defer $got: = Str_builder()
+    got.s("\{v.number\} ").s(v.kind.variant_name()).c(' ').s(v.error.variant_name())
+    verdict.check(what, v.kind == .error && v.error == want, got.slice())
+
+priv fn kind(what: U8[], r: Results@, u: Sz, row: Sz, column: Sz, want: Value_kind) //<
+    //< The cell's value is of the kind `want`
+    verdict.check(what, r.at(u, row, column).kind == want, "")
+
+priv fn results(rows: U8[], arena: Arena$@): Results //< the values of table `t` with these rows
+    doc: = read(join(HEAD, rows, arena), arena)
+    return calc.calculate(doc@, arena)
+
+priv fn read(bytes: U8[], arena: Arena$@): Document //< the model; a refusal stops the run
+    src: = Source("t.ksmd", arena.dup_str(bytes)) catch e
+        verdict.check("a test source is valid", false, e.message)
+        panic("a test source was refused")
+    return reader.read(src@, arena) catch e
+        verdict.check("a test document reads", false, e.message)
+        panic("a test document was refused")
+
+priv fn written(doc: Document@, arena: Arena$@): U8[] //< the source the writer saves
+    defer $out: = Str_builder()
+    writer.write(doc, out@)
+    return arena.dup_str(out.slice())
+
+priv fn join(a: U8[], b: U8[], arena: Arena$@): U8[]
+    return arena.text().s(a).s(b).take()

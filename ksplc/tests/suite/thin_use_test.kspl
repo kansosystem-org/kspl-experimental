@@ -37,7 +37,7 @@ import "std/mem"
 import "std/io"
 
 fn main(): I32
-  a: = mem.Arena.new(4096)
+  a: = mem.Arena(4096)
   defer a.free()
   entries: = fs.read_dir(".", a) catch
     return 1
@@ -55,7 +55,7 @@ import "std/mem"
 import "std/io"
 
 fn main(): I32
-  a: = mem.Arena.new(4096)
+  a: = mem.Arena(4096)
   defer a.free()
   v: = json.parse("[1, 2]", a) catch
     return 1
@@ -76,9 +76,9 @@ import "std/str" { Str_builder }
 import "std/io"
 
 fn main(): I32
-  a: = Arena.new(4096)
+  a: = Arena(4096)
   defer a.free()
-  $acc: = Str_builder.new()
+  $acc: = Str_builder()
   jsonrpc.frame_into(acc@, "{}")
   got: = jsonrpc.take_frame(acc@, jsonrpc.MAX_BODY_BYTES, a) catch
     return 1
@@ -98,9 +98,9 @@ import "std/mem"
 import "std/io"
 
 fn main(): I32
-  a: = mem.Arena.new(4096)
+  a: = mem.Arena(4096)
   defer a.free()
-  $m: = ds.Map<|I32, I32|>.new(a)
+  $m: = ds.Map<|I32, I32|>(a)
   m.set(1, 10)
   $sum: I32 = 0
   for e in m.items()
@@ -140,7 +140,7 @@ import "std/io"
 import "std/reactor" { Reactor }
 
 fn main(): I32
-  _r: = Reactor.new()
+  _r: = Reactor()
   io.out().s("ok\n")
   return 0
 
@@ -153,9 +153,9 @@ import "std/mem"
 import "std/io"
 
 fn main(): I32
-  a: = mem.Arena.new(4096)
+  a: = mem.Arena(4096)
   defer a.free()
-  $l: = ds.List<|I32|>.new(a)
+  $l: = ds.List<|I32|>(a)
   l.push(1)
   l.push(2)
   io.out().s("\{I64::l.where(fn(x: I32@; ): Bool { return x$ % 2 == 0; }).count()\}\n")
@@ -309,8 +309,8 @@ priv fn collect_std(files: List<|Std_file|>$@, edges: List<|Edge|>$@, arena: Are
 priv fn closure(files: List<|Std_file|>@, edges: List<|Edge|>@, name: U8[], build: Build,
     arena: Arena$@): List<|U8[]|> //<
         //< The names of the std files reached by walking imports from name (name and BASE too).
-    $seen: = List<|U8[]|>.new(arena)
-    $stack: = List<|U8[]|>.new(arena)
+    $seen: = List<|U8[]|>(arena)
+    $stack: = List<|U8[]|>(arena)
     stack.push(name)
     for b in BASE_FILES
         stack.push(b)
@@ -331,7 +331,7 @@ priv fn closure(files: List<|Std_file|>@, edges: List<|Edge|>@, name: U8[], buil
 priv const TIER_HEAD: U8[] = "| What is used |" //< the head of the tier table in std's README.md
 
 priv fn numbers_in(cell: U8[], arena: Arena$@): List<|Sz|> //< each run of digits, in order
-    $out: = List<|Sz|>.new(arena)
+    $out: = List<|Sz|>(arena)
     $cur: Sz = 0
     $inside: = false
     for ch in cell
@@ -354,7 +354,7 @@ priv fn check_tier_table(files: List<|Std_file|>@, edges: List<|Edge|>@,
         //< added, and nothing failed.
     path: = fs.join(harness.std_dir(), "README.md", arena)
     doc: = io.read_file(path, null) catch ""
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     $rows: Sz = 0
     $inside: = false
     for line in doc.lines(arena)
@@ -492,11 +492,11 @@ fn main(): I32
         check_no_unused_stage_types(gen, arena)
 
     // -- how much comes along when one std is imported --
-    $files: = List<|Std_file|>.new(arena)
-    $edges: = List<|Edge|>.new(arena)
+    $files: = List<|Std_file|>(arena)
+    $edges: = List<|Edge|>(arena)
     if !collect_std(files@, edges@, arena)
         return harness.fatal("std's files cannot be gathered")
-    $base_names: = List<|U8[]|>.new(arena)
+    $base_names: = List<|U8[]|>(arena)
     for b in BASE_FILES
         base_names.push(b)
     base_lines: = sum_lines(files@, base_names@)
@@ -507,7 +507,7 @@ fn main(): I32
             avoid")
 
     // The leaves: files that bring nothing but themselves besides BASE.
-    $leaves: = List<|U8[]|>.new(arena)
+    $leaves: = List<|U8[]|>(arena)
     for i in Range.asc(files.len)
         name: = files.get(i).name
         if base_names.contains(name)

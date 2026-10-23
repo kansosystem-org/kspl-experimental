@@ -13,17 +13,17 @@ embed "kspeg/docs/json.kspeg" as json_grammar //< the JSON example
 embed "kspeg/docs/script.kspeg" as script_grammar //< the scripting-language example
 
 priv fn fail(label: U8[], why: U8[]) //< stops the run, naming the case and what it saw
-    defer $b: = Str_builder.new()
+    defer $b: = Str_builder()
     b.s(label).s(" (").s(why).c(')')
     panic(b.slice())
 
 priv fn try_parse(grammar: U8[], input: U8[], rule: U8[], arena: Arena$@): Bool? //<
     //< Reads the grammar and returns whether `rule` parses `input`
     //< If the grammar itself cannot be read, .none.
-    $meta: = kspeg_notation.Meta.new(grammar, arena)
+    $meta: = kspeg_notation.Meta(grammar, arena)
     parser: = meta.parse_grammar() catch
         return .none
-    $t: = kspeg.Target.new(input, arena)
+    $t: = kspeg.Target(input, arena)
     defer t.free_memo()
     t.share_grammar_from(parser)
     node: = t.parse_rule(rule) catch
@@ -50,11 +50,11 @@ priv fn expect_deep_fatal(label: U8[], grammar: U8[], input: U8[], arena: Arena$
     //< Caution: **Do not write it with `expect(..., want=false)`.** That does not tell the two
     //< apart. So it passes even when an alternation, an option or a repetition swallows the stop
     //< and the search goes on at the same depth.
-    $meta: = kspeg_notation.Meta.new(grammar, arena)
+    $meta: = kspeg_notation.Meta(grammar, arena)
     parser: = meta.parse_grammar() catch
         fail(label, "grammar did not load")
         return
-    $t: = kspeg.Target.new(input, arena)
+    $t: = kspeg.Target(input, arena)
     defer t.free_memo()
     t.share_grammar_from(parser)
     $got: U8[] = "parsed"
@@ -82,10 +82,10 @@ priv fn parts_under(grammar: U8[], input: U8[], rule: U8[], arena: Arena$@): U8[
     //< What the node `rule` builds holds directly: each child's kind, or a literal's own text
     //< It shows how a grammar grouped its input. Empty where the grammar does not load or the input
     //< does not parse.
-    $meta: = kspeg_notation.Meta.new(grammar, arena)
+    $meta: = kspeg_notation.Meta(grammar, arena)
     parser: = meta.parse_grammar() catch
         return ""
-    $t: = kspeg.Target.new(input, arena)
+    $t: = kspeg.Target(input, arena)
     defer t.free_memo()
     t.share_grammar_from(parser)
     got: = t.parse_rule(rule) catch
@@ -138,10 +138,10 @@ priv fn profile(grammar: U8[], input: U8[], rule: U8[], want: U8[], stats: Bool,
     none_row: = Prof_row::{ .found = false, .calls = 0, .memo_hits = 0, .parsed_ok = 0,
         .failed = 0 }
     $sum: = Prof_sum::{ .loaded = false, .rows = 0, .row = none_row }
-    $meta: = kspeg_notation.Meta.new(grammar, arena)
+    $meta: = kspeg_notation.Meta(grammar, arena)
     parser: = meta.parse_grammar() catch
         return sum
-    $t: = kspeg.Target.new(input, arena)
+    $t: = kspeg.Target(input, arena)
     defer t.free_memo()
     t.share_grammar_from(parser)
     t.enable_profiling = stats
@@ -196,10 +196,10 @@ priv fn outcome(grammar: U8[], input: U8[], rule: U8[], skips: Bool, arena: Aren
     //< labels are not shown. An empty answer means the grammar did not load. `skips` says whether
     //< a rule that cannot begin with the next byte is skipped (`checks_first_byte` in
     //< kspeg/engine.kspl).
-    $meta: = kspeg_notation.Meta.new(grammar, arena)
+    $meta: = kspeg_notation.Meta(grammar, arena)
     parser: = meta.parse_grammar() catch
         return ""
-    $t: = kspeg.Target.new(input, arena)
+    $t: = kspeg.Target(input, arena)
     defer t.free_memo()
     t.share_grammar_from(parser)
     t.checks_first_byte = skips

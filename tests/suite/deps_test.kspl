@@ -31,7 +31,7 @@ priv fn kspl_srcs(arena: Arena$@): List<|U8[]|> //< asks make itself for `KSPL_S
     //< Caution: **Do not parse the Makefile yourself**; then an imitation of `$(shell find ...)`
     //< decides the answer, not the Makefile. `-p` lists the variables, `-Rr` drops the built-ins,
     //< `-q` runs nothing.
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     r: = harness.make(U8[][]::{ "LOGGING=1", "-pRrq" })
     for line in r.out.lines(arena)
         if !line.starts_with(SRCS_VAR)
@@ -53,7 +53,7 @@ priv fn to_rel(path: U8[], arena: Arena$@): U8[] //<
 
 priv fn deps_of_ksplc(work: U8[], arena: Arena$@): List<|U8[]|> //<
     //< Has ksplc build itself, and returns the list of sources it opened
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     deps: = fs.join(work, "deps.txt", arena)
     r: = ksplc_harness
         .ksplc(U8[][]::{ arena.text().s("--emit-deps=\{deps\}").take(), "ksplc/main.kspl",
@@ -63,7 +63,7 @@ priv fn deps_of_ksplc(work: U8[], arena: Arena$@): List<|U8[]|> //<
     // One line is `<64-digit sha256> <path>` (the format is `--emit-deps` in
     // ksplc/docs/SPEC-tools.md).
     for line in ksplc_harness.read_generated(deps).lines(arena)
-        $w: = List<|U8[]|>.new(arena)
+        $w: = List<|U8[]|>(arena)
         for one in harness_text.words(line, arena)
             w.push(one)
         // A line of dashes names a settings file looked for and not found (`write_deps_file` in
@@ -76,7 +76,7 @@ priv fn embedded_paths(srcs: List<|U8[]|>@, arena: Arena$@): List<|U8[]|> //<
     //< Collects what the `embed`s in the given sources point at
     //< Caution: **Read only the sources in deps.** Scanning all of `ksplc/` reports the test tree's
     //< `embed`s, which are rightly absent from `KSPL_SRCS`.
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     for rel in srcs
         for line in harness.read_under_root(rel).lines(arena)
             if !line.starts_with("embed \"")
@@ -91,7 +91,7 @@ priv fn embedded_paths(srcs: List<|U8[]|>@, arena: Arena$@): List<|U8[]|> //<
 priv fn all_listed(name: U8[], want: List<|U8[]|>@, srcs: List<|U8[]|>@, missed: U8[],
     arena: Arena$@) //<
         //< Every item of `want` is in `srcs`; `missed` says what a missing one costs
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     for i in Range.asc(want.len)
         if !srcs.contains(want.get(i)) && !bad.contains(want.get(i))
             bad.push(want.get(i))

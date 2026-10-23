@@ -48,7 +48,7 @@ priv fn read_json(src: U8[], arena: Arena$@): I32 //<
     //< **Turning the tree back into text and walking it are different code paths.**
     doc: = json.parse(src, arena) catch
         return 1
-    defer $out: = Str_builder.new()
+    defer $out: = Str_builder()
     doc.val.dump(out@, 2)
     use_bytes(out.slice())
     walk_json(doc.val, arena)
@@ -60,12 +60,12 @@ priv fn json_round_trip(v: json.Value, indent: Sz, arena: Arena$@) //<
     //< Checks that the value, written out and read back, is equal, and is then written the same
     //< `equals` holds a decimal to the same F64, bit for bit: the writer's shortest form must read
     //< back as the number it was.
-    defer $once: = Str_builder.new()
+    defer $once: = Str_builder()
     v.dump(once@, indent)
     back: = json.parse(once.slice(), arena) catch
         panic("json: what dump wrote does not parse back")
     assert(back.val.equals(v), "json: the value read back is not the one written")
-    defer $twice: = Str_builder.new()
+    defer $twice: = Str_builder()
     back.val.dump(twice@, indent)
     assert(twice.slice().equals(once.slice()), "json: the value read back is written otherwise")
 
@@ -214,7 +214,7 @@ priv fn read_http_response(src: U8[], arena: Arena$@): I32
     use_headers(res.headers)
     use_bytes(res.body)
     use_len(res.consumed)
-    defer $out: = Str_builder.new()
+    defer $out: = Str_builder()
     // A head the reader takes can still be one the writer refuses (a 204 naming a length).
     http.format_response(out@, res.status, res.headers, res.body) catch
         return 0
@@ -255,7 +255,7 @@ priv fn read_http_written(src: U8[], arena: Arena$@): I32 //<
         from += 2
     head: = hb.build()
     body: = fields.get(from) if from < fields.len else ""
-    defer $out: = Str_builder.new()
+    defer $out: = Str_builder()
     if is_response
         status: =
             (I32::first[0] - 48) * 100 + (I32::first[1] - 48) * 10 + (I32::first[2] - 48)
@@ -272,7 +272,7 @@ priv fn read_http_written(src: U8[], arena: Arena$@): I32 //<
         req.body.equals(body) && req.consumed == out.len,
         "http: a request the writer wrote reads back as another")
     same_headers(req.headers, head, body.len, arena)
-    defer $again: = Str_builder.new()
+    defer $again: = Str_builder()
     http.format_request(again@, req.method, req.target, req.headers, req.body) catch
         panic("http: a request read back is refused by the writer")
     assert(again.slice().equals(out.slice()), "http: a request read back is written otherwise")
@@ -288,7 +288,7 @@ priv fn response_reads_back(written: U8[], status: I32, head: Headers, body: U8[
     // Only a status that can carry a body names its length.
     names_length: = status >= 200 && status != 204 && status != 304
     same_headers(res.headers, head, body.len if names_length else -1, arena)
-    defer $again: = Str_builder.new()
+    defer $again: = Str_builder()
     http.format_response(again@, res.status, res.headers, res.body) catch
         panic("http: a response read back is refused by the writer")
     assert(again.slice().equals(written), "http: a response read back is written otherwise")
@@ -332,7 +332,7 @@ priv fn read_rpc(src: U8[], arena: Arena$@): I32 //<
             same = same && other.bodies.get(i).equals(whole.bodies.get(i))
         assert(same, "jsonrpc: the frames taken depend on where a read ends")
     for body in whole.bodies.slice()
-        defer $again: = Str_builder.new()
+        defer $again: = Str_builder()
         jsonrpc.frame_into(again@, body)
         back: = jsonrpc.take_frame(again@, jsonrpc.MAX_BODY_BYTES, arena) catch
             panic("jsonrpc: a body framed again is broken")
@@ -345,8 +345,8 @@ priv fn read_rpc(src: U8[], arena: Arena$@): I32 //<
 
 priv fn frames_of(src: U8[], run: Sz, arena: Arena$@): Frames //<
     //< The frames taken while the bytes arrive `run` at a time
-    defer $acc: = Str_builder.new()
-    $got: = Frames::{ .bodies = List<|U8[]|>.new(arena), .clean = 0, .broken = false }
+    defer $acc: = Str_builder()
+    $got: = Frames::{ .bodies = List<|U8[]|>(arena), .clean = 0, .broken = false }
     $at: Sz = 0
     for
         taken: = jsonrpc.take_frame(acc@, jsonrpc.MAX_BODY_BYTES, arena) catch
@@ -398,7 +398,7 @@ priv fn read_struct(src: U8[], arena: Arena$@): I32 //<
     $first: Shape = ::{}
     json_struct.into_struct(doc.val, first@, arena) catch
         return 1
-    $b: = json.Json_builder.new(arena)
+    $b: = json.Json_builder(arena)
     once: = json_struct.from_struct(first@, b@) catch
         panic("json_struct: a struct it filled cannot be written")
     $again: Shape = ::{}
@@ -407,7 +407,7 @@ priv fn read_struct(src: U8[], arena: Arena$@): I32 //<
     twice: = json_struct.from_struct(again@, b@) catch
         panic("json_struct: a struct read back cannot be written")
     assert(twice.equals(once), "json_struct: a struct read back is written otherwise")
-    defer $out: = Str_builder.new()
+    defer $out: = Str_builder()
     twice.dump(out@)
     use_bytes(out.slice())
     return 0
@@ -454,7 +454,7 @@ priv fn read_argv(src: U8[], arena: Arena$@): I32 //<
     p.parse_list(args@) catch e
         use_bytes(arena.text().s("\{e\}").take())
         return 1
-    defer $usage: = Str_builder.new()
+    defer $usage: = Str_builder()
     p.print_usage(usage@)
     use_bytes(usage.slice())
     $second: = cli_new(arena)
@@ -506,7 +506,7 @@ priv fn same_list(a: List<|U8[]|>$@, b: List<|U8[]|>$@): Bool
 
 priv fn split_fields(src: U8[], arena: Arena$@): List<|U8[]|> //<
     //< The input cut at each 0 byte; n zeros give n + 1 fields, and empty input none
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     if src.len == 0
         return out
     $start: Sz = 0
@@ -551,7 +551,7 @@ fn main(): I32
         return 2
     // The address sanitizer's leak check counts a buffer still held at the exit as a finding.
     defer dealloc(Void$@::src.ptr)
-    defer arena: = Arena.new(8 * 1024 * 1024)
+    defer arena: = Arena(8 * 1024 * 1024)
     code: = read_one(args[1], src, arena)
     // Caution: **Print the mixed value**, or the reading above could be optimized away entirely.
     io.out().s("used=\{used\}\n")

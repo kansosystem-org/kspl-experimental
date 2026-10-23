@@ -43,8 +43,8 @@ impl Sema_ctx
         //< Fills in every empty `impl X: Reflectable {}`
         //< Caution: **Add the children after the walk**, or the added ones are visited again.
         //< **Return the list of consts it created**: 2a's `declare_var_syms` has already run.
-        made: = base_core.arena.create(List<|Ast_node$@|>.new(null))
-        targets: = base_core.arena.create(List<|Ast_node$@|>.new(null))
+        made: = base_core.arena.create(List<|Ast_node$@|>(null))
+        targets: = base_core.arena.create(List<|Ast_node$@|>(null))
         for top_node in root.children
             child: = top_node.unwrap_top_level()
             if child.kind_id != .k_decl_impl
@@ -54,10 +54,10 @@ impl Sema_ctx
                 targets.push(child)
         // The names of the tables emitted per nested type.
         // Caution: **Keep one per file**, or a type nested in two outer types gets two consts.
-        emitted: = base_core.arena.create(Map<|U8[], U8[]|>.new(base_core.arena))
+        emitted: = base_core.arena.create(Map<|U8[], U8[]|>(base_core.arena))
         for impl_node in targets
             r.set_current_file(impl_node.loc.file())
-            extra: = base_core.arena.create(List<|Ast_node$@|>.new(null))
+            extra: = base_core.arena.create(List<|Ast_node$@|>(null))
             if table: = r.build_field_table(impl_node, emitted, extra, 0)
                 for nested_decl in extra
                     root.add_child(nested_decl)
@@ -103,7 +103,7 @@ impl Sema_ctx
                 "only a struct can derive 'Reflectable'. Its field table requires fields at fixed \
                     offsets, which other type kinds do not provide")
             return .none
-        defer $rows: = List<|Row_spec|>.new(null)
+        defer $rows: = List<|Row_spec|>(null)
         if !r.collect_field_kinds(def_fields, rows@, impl_node, emitted, extra, depth)
             return .none
         prefix: = r.reflect_prefix(impl_node)
@@ -361,23 +361,23 @@ priv fn make_table_decl(impl_node: Ast_node$@, target: Ast_node$@, rows_in: List
         //< Builds the const declaration of `_reflect_fields_X`, one row per field
     loc: = impl_node.loc
     info_spelling: = qualified(prefix, INFO_NAME)
-    defer $name: = Str_builder.new()
+    defer $name: = Str_builder()
     name.s(TABLE_PREFIX).s(flatten_name(target.text))
-    defer $sized: = Str_builder.new()
+    defer $sized: = Str_builder()
     sized.s(info_spelling).s("[\{rows_in.len\}]")
-    mods: = Ast_node.new(.k_attribute_list, "mods", loc)
-    mods.add_child(Ast_node.new(.k_keyword, "priv", loc))
-    rows: = Ast_node.new(.k_struct_literal, "struct_literal", loc)
+    mods: = Ast_node(.k_attribute_list, "mods", loc)
+    mods.add_child(Ast_node(.k_keyword, "priv", loc))
+    rows: = Ast_node(.k_struct_literal, "struct_literal", loc)
     for spec in rows_in
         row: = make_row(spec, target, info_spelling, loc)
-        item: = Ast_node.new(.k_expr_field_init, "expr_field_init", loc)
+        item: = Ast_node(.k_expr_field_init, "expr_field_init", loc)
         item.add_child(row)
         rows.add_child(item)
-    decl: = Ast_node.new(.k_decl_const, "const", loc)
+    decl: = Ast_node(.k_decl_const, "const", loc)
     decl.add_child(mods)
-    decl.add_child(Ast_node.new(.k_keyword, "const", loc))
+    decl.add_child(Ast_node(.k_keyword, "const", loc))
     decl
-        .add_child(Ast_node.new(.k_identifier, base_core.arena.dup_str(name.slice()), loc))
+        .add_child(Ast_node(.k_identifier, base_core.arena.dup_str(name.slice()), loc))
     decl.add_child(make_type_expr(base_core.arena.dup_str(sized.slice()), loc))
     decl.add_child(rows)
     return decl
@@ -404,14 +404,14 @@ priv fn make_row(spec: Row_spec, target: Ast_node$@, info_spelling: U8[], loc: L
     field_name: = spec.field
     sub_name: = spec.sub
     quoted: = base_core.arena.text().c('"').s(field_name).c('"').take()
-    off_node: = Ast_node.new(.k_expr_offsetof, "offsetof", loc)
-    off_node.add_child(Ast_node.new(.k_keyword, "offsetof", loc))
+    off_node: = Ast_node(.k_expr_offsetof, "offsetof", loc)
+    off_node.add_child(Ast_node(.k_keyword, "offsetof", loc))
     off_node.add_child(target.clone())
-    off_node.add_child(Ast_node.new(.k_identifier, field_name, loc))
-    kind_node: = Ast_node.new(.k_expr_implicit_dot, "expr_implicit_dot", loc)
-    kind_node.add_child(Ast_node.new(.k_identifier, spec.kind, loc))
-    name_node: = Ast_node.new(.k_string, quoted, loc)
-    row: = Ast_node.new(.k_struct_literal, "struct_literal", loc)
+    off_node.add_child(Ast_node(.k_identifier, field_name, loc))
+    kind_node: = Ast_node(.k_expr_implicit_dot, "expr_implicit_dot", loc)
+    kind_node.add_child(Ast_node(.k_identifier, spec.kind, loc))
+    name_node: = Ast_node(.k_string, quoted, loc)
+    row: = Ast_node(.k_struct_literal, "struct_literal", loc)
     row.add_child(make_field_init("name", name_node, loc))
     row.add_child(make_field_init("offset", off_node, loc))
     row.add_child(make_field_init("kind", kind_node, loc))
@@ -429,26 +429,26 @@ priv fn make_extra(spec: Row_spec, loc: Loc): Ast_node$@ //< `Field_extra`'s val
     //< Builds `sizeof` nodes for the width and the stride, so they agree with C's own (`Sz` too).
     //< The position and the tags come only from the enumeration's layout (`Field_extra` in
     //< `../../../std/reflect.kspl`).
-    extra: = Ast_node.new(.k_struct_literal, "struct_literal", loc)
+    extra: = Ast_node(.k_struct_literal, "struct_literal", loc)
     if spec.self_type != null
         extra.add_child(make_field_init("width", make_sizeof(spec.self_type, loc), loc))
     // Caution: **Do not write it on a row that has no element kind**: an empty `elem` reads as "an
     // implicit dot with no variant name".
     if spec.elem.len > 0
-        elem_node: = Ast_node.new(.k_expr_implicit_dot, "expr_implicit_dot", loc)
-        elem_node.add_child(Ast_node.new(.k_identifier, spec.elem, loc))
+        elem_node: = Ast_node(.k_expr_implicit_dot, "expr_implicit_dot", loc)
+        elem_node.add_child(Ast_node(.k_identifier, spec.elem, loc))
         extra.add_child(make_field_init("elem", elem_node, loc))
     if spec.elem_type != null
         extra
             .add_child(make_field_init("elem_size", make_sizeof(spec.elem_type, loc), loc))
     if spec.payload_offset > 0
-        off_lit: = Ast_node.new(.k_integer, int_text(spec.payload_offset), loc)
+        off_lit: = Ast_node(.k_integer, int_text(spec.payload_offset), loc)
         extra.add_child(make_field_init("payload_offset", off_lit, loc))
     if spec.some_tag != 0
-        tag_lit: = Ast_node.new(.k_integer, int_text(spec.some_tag), loc)
+        tag_lit: = Ast_node(.k_integer, int_text(spec.some_tag), loc)
         extra.add_child(make_field_init("some_tag", tag_lit, loc))
     if spec.none_tag != 0
-        none_lit: = Ast_node.new(.k_integer, int_text(spec.none_tag), loc)
+        none_lit: = Ast_node(.k_integer, int_text(spec.none_tag), loc)
         extra.add_child(make_field_init("none_tag", none_lit, loc))
     return extra
 
@@ -458,11 +458,11 @@ priv fn int_text(v: Sz): U8[]
 priv fn make_slice_of(name: U8[], info_spelling: U8[], loc: Loc): Ast_node$@ //<
     //< `<info_spelling>[]::<name>` (the form dropping a constant array to a slice of the elements)
     slice_spelling: = base_core.arena.dup_str(join3(info_spelling, "[]", ""))
-    table_ref: = Ast_node.new(.k_expr_path, name, loc)
-    table_ref.add_child(Ast_node.new(.k_identifier, name, loc))
-    cast: = Ast_node.new(.k_expr_postfix, "::", loc)
+    table_ref: = Ast_node(.k_expr_path, name, loc)
+    table_ref.add_child(Ast_node(.k_identifier, name, loc))
+    cast: = Ast_node(.k_expr_postfix, "::", loc)
     cast.add_child(table_ref)
-    cast.add_child(Ast_node.new(.k_literal, "::", loc))
+    cast.add_child(Ast_node(.k_literal, "::", loc))
     cast.add_child(make_type_expr(slice_spelling, loc))
     return cast
 
@@ -472,8 +472,8 @@ priv fn make_nested_holder(site: Ast_node$@, f_type_node: Ast_node$@, outer: Ast
         //< **It lets `build_field_table` be reached one way only**, so the rejection rules exist
         //< once.
     loc: = site.loc
-    holder: = Ast_node.new(.k_decl_impl, "impl", loc)
-    holder.add_child(Ast_node.new(.k_keyword, "impl", loc))
+    holder: = Ast_node(.k_decl_impl, "impl", loc)
+    holder.add_child(Ast_node(.k_keyword, "impl", loc))
     // Copies the field's declared type clause; do not rebuild it (as above).
     holder.add_child(f_type_node.clone())
     // **Copy the trait's name from the outer impl**: reflect_prefix reads it (an alias, a selective
@@ -486,17 +486,17 @@ priv fn make_nested_holder(site: Ast_node$@, f_type_node: Ast_node$@, outer: Ast
 priv fn make_sizeof(type_node: Ast_node$@, loc: Loc): Ast_node$@ //< `sizeof(<type>)`
     //< The children's order follows "The expressions and the types" in
     //< `../../docs/DESIGN-parse.md`.
-    node: = Ast_node.new(.k_expr_sizeof, "sizeof", loc)
-    node.add_child(Ast_node.new(.k_keyword, "sizeof", loc))
+    node: = Ast_node(.k_expr_sizeof, "sizeof", loc)
+    node.add_child(Ast_node(.k_keyword, "sizeof", loc))
     node.add_child(type_node.clone())
     return node
 
 priv fn make_field_init(key: U8[], value: Ast_node$@, loc: Loc): Ast_node$@ //< one `.key = value`
     //< The children's order is `expr_field_init`'s (the document is named at make_sizeof).
-    init: = Ast_node.new(.k_expr_field_init, "expr_field_init", loc)
-    init.add_child(Ast_node.new(.k_literal, ".", loc))
-    init.add_child(Ast_node.new(.k_identifier, key, loc))
-    init.add_child(Ast_node.new(.k_literal, "=", loc))
+    init: = Ast_node(.k_expr_field_init, "expr_field_init", loc)
+    init.add_child(Ast_node(.k_literal, ".", loc))
+    init.add_child(Ast_node(.k_identifier, key, loc))
+    init.add_child(Ast_node(.k_literal, "=", loc))
     init.add_child(value)
     return init
 
@@ -505,27 +505,27 @@ priv fn make_fields_method(impl_node: Ast_node$@, table_name: U8[], prefix: U8[]
     loc: = impl_node.loc
     info_spelling: = qualified(prefix, INFO_NAME)
     slice_spelling: = base_core.arena.dup_str(join3(info_spelling, "[]", ""))
-    param: = Ast_node.new(.k_fn_param, "fn_param", loc)
-    param.add_child(Ast_node.new(.k_identifier, "_r", loc))
+    param: = Ast_node(.k_fn_param, "fn_param", loc)
+    param.add_child(Ast_node(.k_identifier, "_r", loc))
     param.add_child(make_type_expr("Self", loc))
-    params: = Ast_node.new(.k_param_list, "param_list", loc)
+    params: = Ast_node(.k_param_list, "param_list", loc)
     params.add_child(param)
-    sig: = Ast_node.new(.k_type_fn_sig, "type_fn_sig", loc)
-    sig.add_child(Ast_node.new(.k_literal, "(", loc))
+    sig: = Ast_node(.k_type_fn_sig, "type_fn_sig", loc)
+    sig.add_child(Ast_node(.k_literal, "(", loc))
     sig.add_child(params)
-    sig.add_child(Ast_node.new(.k_literal, ")", loc))
-    sig.add_child(Ast_node.new(.k_literal, ":", loc))
+    sig.add_child(Ast_node(.k_literal, ")", loc))
+    sig.add_child(Ast_node(.k_literal, ":", loc))
     sig.add_child(make_type_expr(slice_spelling, loc))
     // `<table>` converted to a slice. **Do not leave it fixed-length**: without `T[]::arr` the
     // length is baked into the type.
-    ret: = Ast_node.new(.k_stmt_return, "return", loc)
-    ret.add_child(Ast_node.new(.k_keyword, "return", loc))
+    ret: = Ast_node(.k_stmt_return, "return", loc)
+    ret.add_child(Ast_node(.k_keyword, "return", loc))
     ret.add_child(make_slice_of(table_name, info_spelling, loc))
     block: = Ast_node.build_block(loc)
     block.add_child(ret)
-    method: = Ast_node.new(.k_decl_fn, "fn", loc)
-    method.add_child(Ast_node.new(.k_keyword, "fn", loc))
-    method.add_child(Ast_node.new(.k_identifier, METHOD_NAME, loc))
+    method: = Ast_node(.k_decl_fn, "fn", loc)
+    method.add_child(Ast_node(.k_keyword, "fn", loc))
+    method.add_child(Ast_node(.k_identifier, METHOD_NAME, loc))
     method.add_child(sig)
     method.add_child(block)
     return method
@@ -540,23 +540,21 @@ priv fn make_type_expr(spelling: U8[], loc: Loc): Ast_node$@ //<
             bracket = i
             break
     base: = spelling.sub(0, bracket)
-    path: = Ast_node.new(.k_expr_path, base, loc)
+    path: = Ast_node(.k_expr_path, base, loc)
     $start: Sz = 0
     for $i: Sz = 0; i <= base.len; i += 1
         if i == base.len || base[i] == '.'
-            path
-                .add_child(Ast_node.new(.k_identifier, base.sub(start, i - start), loc))
+            path.add_child(Ast_node(.k_identifier, base.sub(start, i - start), loc))
             start = i + 1
-    atom: = Ast_node.new(.k_type_atom, base, loc)
+    atom: = Ast_node(.k_type_atom, base, loc)
     atom.add_child(path)
-    node: = Ast_node.new(.k_type_expr, spelling, loc)
+    node: = Ast_node(.k_type_expr, spelling, loc)
     node.add_child(atom)
     if bracket < spelling.len
         suffix: = spelling.sub(bracket, spelling.len - bracket)
-        post: = Ast_node.new(.k_type_postfix, suffix, loc)
+        post: = Ast_node(.k_type_postfix, suffix, loc)
         if suffix.len > 2
-            post
-                .add_child(Ast_node.new(.k_integer, suffix.sub(1, suffix.len - 2), loc))
+            post.add_child(Ast_node(.k_integer, suffix.sub(1, suffix.len - 2), loc))
         node.add_child(post)
     return node
 

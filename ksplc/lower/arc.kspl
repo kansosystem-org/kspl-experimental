@@ -68,7 +68,7 @@ fn synth_arc_stmt(lctx: Lowering_ctx$@, recv: Ast_node$@, type_id: I32, method_n
     real_id: = lctx.sema.env.get_real_type(type_id)
     type_name: = lctx.sema.env.get_str(real_id)
 
-    defer $fqn_b: = Str_builder.new()
+    defer $fqn_b: = Str_builder()
     fqn_b.s(type_name).s(".").s(method_name)
     sym: = lctx.sema.resolve_type_method_fqn(fqn_b.slice()).unwrap_or(null)
     if sym == null || sym.node == null
@@ -77,7 +77,7 @@ fn synth_arc_stmt(lctx: Lowering_ctx$@, recv: Ast_node$@, type_id: I32, method_n
     void_id: = I32::sema_type_env.Builtin_type_id.void_type
     args: = Ast_node.build_args(loc)
     call: = lower_expr.build_linked_method_call(recv, sym.node, args, void_id, loc)
-    stmt: = Ast_node.new(.k_stmt_expr, "expr", loc).add_child(call)
+    stmt: = Ast_node(.k_stmt_expr, "expr", loc).add_child(call)
     return .some(stmt)
 
 priv fn expand_place_index_ops(lctx: Lowering_ctx$@, n: Ast_node$@, depth: Sz) //<
@@ -139,7 +139,7 @@ priv fn get_or_create_arc_helper(lctx: Lowering_ctx$@, type_id: I32, method_name
         //< way out makes add_arc_call_args take the argument and retain it. Then it is counted
         //< twice.
     real_id: = arc_helper_type(lctx, type_id)
-    defer $key_b: = Str_builder.new()
+    defer $key_b: = Str_builder()
     key_b.s(method_name).s(":")
     lctx.sema.env.mangle_type_id_to(real_id, key_b)
     key: = key_b.slice()
@@ -147,7 +147,7 @@ priv fn get_or_create_arc_helper(lctx: Lowering_ctx$@, type_id: I32, method_name
     if existing != null
         return .some(existing)
 
-    defer $name_b: = Str_builder.new()
+    defer $name_b: = Str_builder()
     name_b.s("kspl_arc_").s(method_name).s("_")
     lctx.sema.env.mangle_type_id_to(real_id, name_b)
     helper_name: = base_core.arena.dup_str(name_b.slice())
@@ -173,7 +173,7 @@ priv fn build_arc_helper_signature(lctx: Lowering_ctx$@, helper_name: U8[], ptr_
         //< It builds the helper's signature `fn <name>(p: T@)`, returning the param node too.
     param: = Ast_node.build_synth_param(ARC_HELPER_PARAM_NAME,
         lctx.sema.env.get_str(ptr_id), ptr_id, loc)
-    params: = Ast_node.new(.k_param_list, "params", loc).add_child(param)
+    params: = Ast_node(.k_param_list, "params", loc).add_child(param)
     void_id: = I32::sema_type_env.Builtin_type_id.void_type
     helper_fn: = Ast_node.build_synth_fn(helper_name, params, "Void", void_id, loc)
     lower_ctx.register_synth_symbol(helper_fn, .function(false), helper_name, void_id)
@@ -210,26 +210,26 @@ priv fn build_arc_elem_deref(lctx: Lowering_ctx$@, ptr_expr: Ast_node$@, k: I32,
     size_id: = I32::sema_type_env.Builtin_type_id.size_type
     // The literal needs a type: Sema never sees it, and with type_id 0 genllvm emits invalid IR.
     idx_lit: = Ast_node.build_int_literal(k, loc).with_type(size_id)
-    sum: = Ast_node.new(.k_expr, "+", loc).with_type(lctx.sema.env.make_ptr(elem_id))
-        .add_child(ptr_expr).add_child(Ast_node.new(.k_literal, "+", loc)).add_child(idx_lit)
-    return Ast_node.new(.k_expr_postfix, "$", loc).with_type(elem_id).add_child(sum)
-        .add_child(Ast_node.new(.k_literal, "$", loc))
+    sum: = Ast_node(.k_expr, "+", loc).with_type(lctx.sema.env.make_ptr(elem_id))
+        .add_child(ptr_expr).add_child(Ast_node(.k_literal, "+", loc)).add_child(idx_lit)
+    return Ast_node(.k_expr_postfix, "$", loc).with_type(elem_id).add_child(sum)
+        .add_child(Ast_node(.k_literal, "$", loc))
 
 priv fn build_arc_helper_call(lctx: Lowering_ctx$@, helper: Ast_node$@, recv: Ast_node$@,
     type_id: I32): Ast_node$@ //<
         //< It builds the helper call `<helper>(<recv>@)` as one statement.
     loc: = recv.loc
     void_id: = I32::sema_type_env.Builtin_type_id.void_type
-    addr_of: = Ast_node.new(.k_expr_postfix, "@", loc)
+    addr_of: = Ast_node(.k_expr_postfix, "@", loc)
         .with_type(arc_helper_ptr_type(lctx, arc_helper_type(lctx, type_id))).add_child(recv)
-        .add_child(Ast_node.new(.k_literal, "@", loc))
+        .add_child(Ast_node(.k_literal, "@", loc))
     // def_node on the helper makes genllvm emit a global `@<name>` and the ABI pass keep the name.
-    callee: = Ast_node.new(.k_identifier, helper.get_decl_id_text(), loc).with_type(void_id)
+    callee: = Ast_node(.k_identifier, helper.get_decl_id_text(), loc).with_type(void_id)
     callee.def_node = helper
-    call: = Ast_node.new(.k_expr_postfix, "(", loc).with_type(void_id).add_child(callee)
-        .add_child(Ast_node.new(.k_literal, "(", loc))
+    call: = Ast_node(.k_expr_postfix, "(", loc).with_type(void_id).add_child(callee)
+        .add_child(Ast_node(.k_literal, "(", loc))
         .add_child(Ast_node.build_args(loc).add_child(addr_of))
-    return Ast_node.new(.k_stmt_expr, "expr", loc).add_child(call)
+    return Ast_node(.k_stmt_expr, "expr", loc).add_child(call)
 
 priv fn emit_managed_enum_op(lctx: Lowering_ctx$@, parts: Arc_helper_parts,
     def: sema_type_def.Enum_def$@, method_name: U8[], out: List<|Ast_node$@|>$@, depth: Sz) //<
@@ -241,13 +241,13 @@ priv fn emit_managed_enum_op(lctx: Lowering_ctx$@, parts: Arc_helper_parts,
         //< name.
     loc: = parts.helper_fn.loc
     enum_id: = lctx.sema.env.strip_ptr(parts.ptr_id)
-    switch_node: = Ast_node.new(.k_stmt_switch, "switch", loc)
-        .add_child(Ast_node.build_empty(loc)).add_child(Ast_node.build_empty(loc))
+    switch_node: = Ast_node(.k_stmt_switch, "switch", loc).add_child(Ast_node.build_empty(loc))
+        .add_child(Ast_node.build_empty(loc))
     $case_count: = 0
     for v in def.variants_list
-        pat: = Ast_node.new(.k_case_pattern, "pattern", loc)
-            .add_child(Ast_node.new(.k_literal, ".", loc))
-            .add_child(Ast_node.new(.k_identifier, v.name, loc))
+        pat: = Ast_node(.k_case_pattern, "pattern", loc)
+            .add_child(Ast_node(.k_literal, ".", loc))
+            .add_child(Ast_node(.k_identifier, v.name, loc))
         ops: = List<|Ast_node$@|>.create(base_core.arena)
         // Bindings match the fields by position, so even a field that needs no operation is bound.
         for f in v.payload_fields
@@ -268,15 +268,15 @@ priv fn emit_managed_enum_op(lctx: Lowering_ctx$@, parts: Arc_helper_parts,
         block: = Ast_node.build_block(loc)
         for op in ops
             block.add_child(op)
-        switch_node.add_child(Ast_node.new(.k_keyword, "case", loc)).add_child(pat).add_child(block)
+        switch_node.add_child(Ast_node(.k_keyword, "case", loc)).add_child(pat).add_child(block)
         case_count += 1
     if case_count == 0
         return
     // The default covers the variants that need no operation; without it such a tag goes nowhere.
-    switch_node.add_child(Ast_node.new(.k_keyword, "default", loc))
+    switch_node.add_child(Ast_node(.k_keyword, "default", loc))
         .add_child(Ast_node.build_block(loc))
-    deref: = Ast_node.new(.k_expr_postfix, "$", loc).with_type(enum_id)
-        .add_child(parts.arc_param_ref(loc)).add_child(Ast_node.new(.k_literal, "$", loc))
+    deref: = Ast_node(.k_expr_postfix, "$", loc).with_type(enum_id)
+        .add_child(parts.arc_param_ref(loc)).add_child(Ast_node(.k_literal, "$", loc))
     subject: = lctx.gen_tmp_name()
     out.push(lctx.build_let_decl(subject, enum_id, deref, loc))
     switch_node.set_child(1, Ast_node.build_ident(subject, enum_id, loc))
@@ -313,7 +313,7 @@ impl Lowering_ctx
             return out
         switch pattern.extract_case_variant()
         case .variant(_v, start)
-            for k in Range.new(start, pattern.children.len, 1)
+            for k in Range(start, pattern.children.len, 1)
                 b: = pattern.get_child(k)
                 if b.kind_id != .k_identifier || !r.sema.env.type_is_managed(b.type_id)
                     continue
@@ -331,7 +331,7 @@ impl Lowering_ctx
         params: = fn_node.get_fn_params()
         if params == null
             return
-        for p in base_ast_ext.Param_cursor.new(params, false)
+        for p in base_ast_ext.Param_cursor(params, false)
             pid: = p.param_type_id()
             if !r.sema.env.type_is_managed(pid)
                 continue
@@ -379,7 +379,6 @@ impl Arc_take
 struct Arc_assign //< what an assignment to a managed place owes once its right side is lowered
     dst: Ast_node$@ //< the place whose old value is released, cloned; null when none is owed
     type_id: I32 //< the place's type; 0 when the assignment owes nothing
-    take: Arc_take //< what the right side owes its new owner
 
 priv fn arc_retain_lowered(value: Ast_node$@, lctx: Lowering_ctx$@) //<
     //< The retain for a read only its lowered form can name, once lowering made it a plain place
@@ -657,7 +656,7 @@ impl Ast_node
         //< Each element of a compound literal `S::{ .f = x }` / `::{ x, y }`
         //< A struct and an array are both represented as a list of k_expr_field_init (see
         //< gen/llvm/expr_agg.kspl). Each managed element is taken with a count of its own.
-        defer $ops: = Operand_order.new()
+        defer $ops: = Operand_order()
         for child in r.children
             if child.kind_id == .k_expr_field_init
                 ops.add_value(child, child.children.len - 1,
@@ -668,7 +667,7 @@ impl Ast_node
 
     fn lower_arc_enum_init_call(r: Ast_node$@, lctx: Lowering_ctx$@) //<
         //< An enum's payload construction `E.variant(x)`, each managed payload taken with its count
-        defer $ops: = Operand_order.new()
+        defer $ops: = Operand_order()
         args: = r.find_child(.k_expr_args)
         if args != null
             for i in Range.asc(args.children.len)
@@ -681,12 +680,11 @@ impl Ast_node
 
     fn lower_arc_assign(r: Ast_node$@, lctx: Lowering_ctx$@): Arc_assign //<
         //< What an assignment to an existing binding (`dst = src;`) owes, decided before lowering
-        //< It retains src and releases dst's overwritten value (else it leaks). **The release waits
-        //< until src is lowered and held** (finish_arc_assign). src's own retains are inserted as
-        //< it lowers. Released first, `head = Rc.new(Node::{ .next = head })` freed `head` before
-        //< retaining it, and `head = head.get().next` read a node already freed.
-        $owed: = Arc_assign::{ .dst = null, .type_id = 0,
-            .take = Arc_take::{ .src = null, .once_lowered = false } }
+        //< It releases dst's overwritten value (else it leaks); src's retain is the assignment's
+        //< `Operand_order`'s. **The release waits until src is lowered and held**
+        //< (finish_arc_assign). Released first, `head = Rc<|Node|>(Node::{ .next = head })` freed
+        //< `head` before retaining it, and `head = head.get().next` read a node already freed.
+        $owed: = Arc_assign::{ .dst = null, .type_id = 0 }
         op: = r.get_assign_op()
         if op == null || !op.text.equals("=")
             return owed
@@ -695,7 +693,6 @@ impl Ast_node
         if left == null || right == null || !lctx.sema.env.type_is_managed(left.type_id)
             return owed
         owed.type_id = left.type_id
-        owed.take = Arc_take.decide(right, lctx)
         switch left.arc_bare_copy_source()
         case .some(dst)
             owed.dst = dst.clone()
@@ -712,19 +709,14 @@ impl Ast_node
         return owed
 
     fn finish_arc_assign(r: Ast_node$@, lctx: Lowering_ctx$@, owed: Arc_assign) //<
-        //< What lower_arc_assign decided, once the right side is lowered
-        //< The right side is held in a temporary before the old value goes. So neither its retains
-        //< nor its reads come after the release: `tmp = src; retain; release(dst); dst = tmp`, the
+        //< What lower_arc_assign decided, once the right side is lowered and retained
+        //< The right side is held in a temporary before the old value goes. So neither its retain
+        //< nor its reads come after the release: `retain; tmp = src; release(dst); dst = tmp`, the
         //< order Swift uses.
-        if owed.type_id == 0
+        if owed.type_id == 0 || owed.dst == null
             return
-        $right: = r.get_assign_right()
-        if owed.dst != null
-            right = right.hoist_to_tmp(lctx, r.loc)
-            r.set_child(2, right)
-        owed.take.retain(right, lctx)
-        if owed.dst != null
-            emit_managed_op(lctx, owed.dst, owed.type_id, "release", lctx.pre_stmts, 0)
+        r.set_child(2, r.get_assign_right().hoist_to_tmp(lctx, r.loc))
+        emit_managed_op(lctx, owed.dst, owed.type_id, "release", lctx.pre_stmts, 0)
 
     fn arc_receiver_takes(r: Self$@, lctx: Lowering_ctx$@): Bool //<
         //< Whether the method call `r` passes its receiver by value to a parameter taking a count
@@ -734,7 +726,7 @@ impl Ast_node
         recv: = r.safe_get_child(0)
         if recv == null || recv.kind_id != .k_method_access || recv.def_node == null
             return false
-        $params: = base_ast_ext.Param_cursor.new(recv.def_node.get_fn_params(), false)
+        $params: = base_ast_ext.Param_cursor(recv.def_node.get_fn_params(), false)
         if p: = params.next()
             return lctx.sema.env.type_is_managed(p.param_type_id())
         return false
@@ -751,8 +743,7 @@ impl Ast_node
         $callee: Ast_node$@ = recv.def_node if recv != null else null
         if callee == null
             callee = r.def_node
-        $params: = base_ast_ext.Param_cursor
-            .new(callee.get_fn_params() if callee != null else null,
+        $params: = base_ast_ext.Param_cursor(callee.get_fn_params() if callee != null else null,
             recv != null && recv.kind_id == .k_method_access)
         for i in Range.asc(args.children.len)
             if args.get_child(i).is_literal(",")

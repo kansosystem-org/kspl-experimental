@@ -1,0 +1,447 @@
+// The ksmd page in a headless Chromium: typing, composition, selection, paste, undo, blocks,
+// formatting and tables, each driven through the browser's own input events and checked by the
+// canonical source the page gives back.
+// An input method's composition is driven as one sends it (`Input.imeSetComposition`, then
+// `Input.insertText` to commit); a real input method on a real keyboard is not checked here.
+// Paste is a synthetic `paste` event holding plain text, since a headless browser has no clipboard.
+// Served by the local server, the same page opens and saves files: `served.mjs`.
+// Usage: node tests/browser/main.mjs <chromium> <ksmd.html> <work folder> [<kssrv>]
+// (`make test-browser`). Without a kssrv, the served sections are reported as skipped.
+import fs from "fs";
+import path from "path";
+import { pathToFileURL } from "url";
+import { launch } from "./cdp.mjs";
+import { ALT, CTRL, SHIFT, driver, verdict } from "./drive.mjs";
+import { served } from "./served.mjs";
+
+const [binary, pageFile, work, kssrv] = process.argv.slice(2);
+const check = (ok, what, detail) => verdict.check(ok, what, detail);
+
+const browser = await launch(binary, work);
+const page = browser.page;
+const { js, settle, until, press, type, select, click, clickBelow, drag } = driver(page);
+
+async function load(source) {
+  const r = await js(`ksmd.load(${JSON.stringify(source)})`);
+  if (!r.ok) throw new Error(`the test source was refused: ${r.why}`);
+}
+
+const source = () => js("ksmd.source()");
+
+async function saves(what, want) {
+  await settle();
+  const got = await source();
+  check(got === want, what, JSON.stringify(got));
+}
+
+const H = "%ksmd 1\n\n";
+
+const sections = {
+  // Only the actions the script calls go out of the module, and only one function comes in.
+  async module() {
+    const bytes = fs.readFileSync(path.join(path.dirname(pageFile), "ksmd.wasm"));
+    const mod = new WebAssembly.Module(bytes);
+    const out = WebAssembly.Module.exports(mod).map((e) => e.name);
+    // `memory` is the linker's; `memcmp` is std's, exported for the calls the compiler emits.
+    const stray = out.filter((n) => !n.startsWith("ksmd_web_") && n !== "memory" && n !== "memcmp");
+    check(stray.length === 0, "only the page's actions are exported", stray.join(" "));
+    const into = WebAssembly.Module.imports(mod).map((e) => e.name);
+    check(into.length === 1 && into[0] === "ksmd_js_gave_up", "only the stop call is imported",
+      into.join(" "));
+    check(await until("document.documentElement.dataset.files === 'none'") &&
+      await js("document.querySelector('.files').hidden"),
+    "a page opened from a file offers no file controls; a host gives it a source");
+  },
+
+  async typing() {
+    await load(`${H}Hello\n`);
+    await select(0, 0, 5);
+    await press("!");
+    await saves("one key inserts one character", `${H}Hello!\n`);
+    check(await js("document.querySelector('#doc p').textContent") === "Hello!",
+      "and the page shows it once");
+    await type(" and #1 *x*");
+    await saves("typed '#' and '*' stay text", `${H}Hello! and #1 \\*x\\*\n`);
+    await select(0, 0, 0, 5);
+    await type("Bye");
+    await saves("typing over a selection replaces it", `${H}Bye! and #1 \\*x\\*\n`);
+    await js("window.changes = 0; ksmd.onchange = () => { window.changes += 1; }");
+    await press("?");
+    await clickBelow();
+    check(await js("window.changes") === 1, "the host learns of a change, and not of a caret move");
+    await js("ksmd.onchange = null");
+  },
+
+  async composition() {
+    await load(`${H}Kanso\n`);
+    await select(0, 0, 5);
+    await js("window.composed = document.querySelector('#doc p')");
+    await page("Input.imeSetComposition", { text: "か", selectionStart: 1, selectionEnd: 1 });
+    await page("Input.imeSetComposition", { text: "かん", selectionStart: 2, selectionEnd: 2 });
+    check(await js("window.composed === document.querySelector('#doc p') && " +
+      "window.composed.isConnected"), "the element being composed in is not rebuilt");
+    await page("Input.insertText", { text: "かんそ" });
+    await saves("the committed text is inserted once", `${H}Kansoかんそ\n`);
+    check(await js("document.querySelector('#doc p').textContent") === "Kansoかんそ",
+      "and the page shows it once");
+    await press("!");
+    await saves("typing after it goes on at the caret", `${H}Kansoかんそ!\n`);
+    await press("z", CTRL);
+    await press("z", CTRL);
+    await saves("undo takes the composition back as one step", `${H}Kanso\n`);
+    await load(`${H}`);
+    await clickBelow();
+    await page("Input.imeSetComposition", { text: "日本", selectionStart: 2, selectionEnd: 2 });
+    await page("Input.insertText", { text: "日本語" });
+    await saves("a composition in an empty document makes a paragraph", `${H}日本語\n`);
+  },
+
+  async selection() {
+    await load(`${H}Hello world\n`);
+    await select(0, 0, 6, 11);
+    await type("there");
+    await saves("a selection is replaced by what is typed", `${H}Hello there\n`);
+    await select(0, 0, 0, 6);
+    await press("Backspace");
+    await saves("Backspace removes a selection", `${H}there\n`);
+    await select(0, 0, 5);
+    await js(`(() => {
+      const data = new DataTransfer();
+      data.setData("text/plain", " one\\r\\ntwo");
+      data.setData("text/html", "<b>one</b>");
+      document.getElementById("doc").dispatchEvent(new ClipboardEvent("paste",
+        { clipboardData: data, bubbles: true, cancelable: true }));
+    })()`);
+    await saves("pasted plain text stays text; a line break starts a paragraph",
+      `${H}there one\n\ntwo\n`);
+    check((await js("document.getElementById('status').textContent")).startsWith(
+      "Pasted as plain text"), "a paste that held formatting says it was not kept");
+  },
+
+  async undo() {
+    await load(`${H}Start\n`);
+    await select(0, 0, 5);
+    await type(" more words");
+    await press("z", CTRL);
+    await saves("one undo takes back the last word", `${H}Start more\n`);
+    await press("z", CTRL);
+    await saves("the next takes back the word before it", `${H}Start\n`);
+    await press("y", CTRL);
+    await press("y", CTRL);
+    await saves("redo gives both back", `${H}Start more words\n`);
+    await click('[data-cmd="undo"]');
+    await saves("the toolbar's Undo does the same", `${H}Start more\n`);
+    await click('[data-cmd="redo"]');
+    await saves("and its Redo", `${H}Start more words\n`);
+  },
+
+  async blocks() {
+    await load(`${H}One two\n`);
+    await select(0, 0, 3);
+    await press("Enter");
+    await saves("Enter splits a paragraph; the space starting a line is not saved", `${H}One\n\ntwo\n`);
+    await press("Backspace");
+    await saves("Backspace at a block's start joins it to the one before", `${H}One two\n`);
+    await select(0, 0, 7);
+    await press("Enter");
+    await type("Three");
+    await saves("Enter at the end, then typing, adds a paragraph", `${H}One two\n\nThree\n`);
+    await select(1, 0, 5);
+    await press("Enter", SHIFT);
+    await type("Four");
+    await saves("Shift+Enter breaks the line inside the paragraph", `${H}One two\n\nThree\\\nFour\n`);
+    await select(0, 0, 0, 7);
+    await press("Delete");
+    await type("Zero");
+    await saves("a block emptied and typed into again keeps its place",
+      `${H}Zero\n\nThree\\\nFour\n`);
+  },
+
+  async formatting() {
+    await load(`${H}one two three\n`);
+    await select(0, 0, 4, 7);
+    await press("b", CTRL);
+    await saves("Ctrl+B makes strong emphasis", `${H}one **two** three\n`);
+    await press("i", CTRL);
+    await saves("Ctrl+I adds emphasis inside it", `${H}one ***two*** three\n`);
+    await press("b", CTRL);
+    await press("i", CTRL);
+    await saves("pressed again, each comes off", `${H}one two three\n`);
+    await select(0, 0, 8, 13);
+    await click('[data-cmd="code"]');
+    await saves("the Code button makes inline code", `${H}one two \`three\`\n`);
+    await select(0, 0, 0, 3);
+    browser.answerPrompts("https://kanso.example/one");
+    await press("k", CTRL);
+    await saves("Ctrl+K makes a link to the address given", `${H}[one](https://kanso.example/one) two \`three\`\n`);
+    browser.answerPrompts(null);
+    await select(0, 0, 0);
+    await press("2", CTRL | ALT);
+    await saves("Ctrl+Alt+2 makes a heading", `${H}## [one](https://kanso.example/one) two \`three\`\n`);
+    await js(`(() => {
+      const kind = document.querySelector('[data-cmd="kind"]');
+      kind.value = "p";
+      kind.dispatchEvent(new Event("change"));
+    })()`);
+    await saves("the kind menu makes it a paragraph again", `${H}[one](https://kanso.example/one) two \`three\`\n`);
+    await js(`(() => {
+      const kind = document.querySelector('[data-cmd="kind"]');
+      kind.value = "c";
+      kind.dispatchEvent(new Event("change"));
+    })()`);
+    await saves("and code, which keeps the text and drops the marks", `${H}\`\`\`\none two three\n\`\`\`\n`);
+    await load(`${H}a\n\nb\n`);
+    await select(0, 0, 0);
+    await click('[data-cmd="bullets"]');
+    await saves("the List button makes a list item", `${H}- a\n\nb\n`);
+    await select(1, 0, 0);
+    await click('[data-cmd="bullets"]');
+    await saves("a list item made next to the list joins it", `${H}- a\n- b\n`);
+    await press("Tab");
+    await saves("Tab nests an item", `${H}- a\n  - b\n`);
+    await click('[data-cmd="numbers"]');
+    await press("Tab", SHIFT);
+    await saves("the numbered list and Shift+Tab", `${H}- a\n\n1. b\n`);
+    await select(1, 0, 1);
+    await press("Enter");
+    await type("c");
+    await saves("Enter at an item's end makes the next item", `${H}- a\n\n1. b\n1. c\n`);
+  },
+
+  async tables() {
+    const table = `:::table name="t"\n| "a" |\n| 1 |\n:::\n`;
+    await load(`${H}${table}`);
+    await clickBelow();
+    await type("After");
+    await saves("a press below the last table, then typing, adds prose at the end",
+      `${H}${table}\nAfter\n`);
+    await click('#doc td[data-r="0"][data-c="0"]');
+    await press("ArrowUp");
+    await press("ArrowUp");
+    await type("Before");
+    await saves("leaving the table upward puts the caret before it", `${H}Before\n\n${table}\nAfter\n`);
+    await load(H);
+    await clickBelow();
+    await click('[data-cmd="table"]');
+    await type("Item");
+    await press("Tab");
+    await type("Count");
+    await press("Tab");
+    await type("Total");
+    await press("Enter");
+    await saves("a new table, its names typed in", `${H}:::table name="table1"\n| "Item" | "Count" | ` +
+      `"Total" |\n| | | |\n| | | |\n:::\n`);
+    await click('#doc td[data-r="0"][data-c="0"]');
+    await type("2");
+    await press("Tab");
+    await type("3");
+    await press("Tab");
+    await type("=A1*B1");
+    await press("Enter");
+    check(await js("document.querySelector('#doc td[data-r=\"0\"][data-c=\"2\"]').textContent") === "6",
+      "a formula shows its calculated value");
+    check(await js(`(() => {
+      const td = document.querySelector('#doc td[data-r="0"][data-c="2"]');
+      const r = td.getBoundingClientRect();
+      return document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) === td;
+    })()`), "and nothing on the page covers it");
+    await click('#doc td[data-r="0"][data-c="0"]');
+    await type("5");
+    await press("Enter");
+    check(await js("document.querySelector('#doc td[data-r=\"0\"][data-c=\"2\"]').textContent") === "15",
+      "editing a value calculates the formula again");
+    await click('#doc td[data-r="0"][data-c="2"]');
+    check(await js("document.activeElement.value") === "=A1*B1", "a formula cell edits its formula");
+    await type("=A1+B1");
+    await press("Enter");
+    check(await js("document.querySelector('#doc td[data-r=\"0\"][data-c=\"2\"]').textContent") === "8",
+      "an edited formula shows its new value");
+    await click('[data-cmd="undo"]');
+    check(await js("document.querySelector('#doc td[data-r=\"0\"][data-c=\"2\"]').textContent") === "15",
+      "and undo gives the old formula's value back");
+    await click('#doc td[data-r="0"][data-c="0"]');
+    await click('[data-cmd="row-above"]');
+    await saves("a row inserted above moves the formula's references with it",
+      `${H}:::table name="table1"\n| "Item" | "Count" | "Total" |\n| | | |\n| 5 | 3 | =A2*B2 |\n| | | |\n:::\n`);
+    await click('[data-cmd="undo"]');
+    await saves("undo takes the row back out", `${H}:::table name="table1"\n| "Item" | "Count" | ` +
+      `"Total" |\n| 5 | 3 | =A1*B1 |\n| | | |\n:::\n`);
+    await click('#doc td[data-r="0"][data-c="1"]');
+    await click('[data-cmd="column-remove"]');
+    await saves("removing a column turns its references into #REF!",
+      `${H}:::table name="table1"\n| "Item" | "Total" |\n| 5 | =A1*#REF! |\n| | |\n:::\n`);
+    check(await js("document.querySelector('#doc td[data-r=\"0\"][data-c=\"1\"]').textContent") ===
+      "#REF!", "and the cell shows the error");
+    await click('[data-cmd="undo"]');
+    check(await js("document.querySelector('#doc td[data-r=\"0\"][data-c=\"2\"]').textContent") === "15",
+      "undo brings the column and the value back");
+    await click('#doc td[data-r="0"][data-c="2"]');
+    await click('[data-cmd="column-right"]');
+    await click('#doc td[data-r="1"][data-c="0"]');
+    await click('[data-cmd="row-remove"]');
+    await saves("a column added after the last, and the last row removed",
+      `${H}:::table name="table1"\n| "Item" | "Count" | "Total" | "" |\n| 5 | 3 | =A1*B1 | |\n:::\n`);
+    await click('#doc td[data-r="0"][data-c="0"]');
+    await click('[data-cmd="table-remove"]');
+    await saves("removing the table", "%ksmd 1\n");
+    await click('[data-cmd="undo"]');
+    await saves("and undoing that", `${H}:::table name="table1"\n| "Item" | "Count" | "Total" | "" |` +
+      `\n| 5 | 3 | =A1*B1 | |\n:::\n`);
+  },
+
+  // Column widths: a drag of the edge between two column letters, and Alt+Left and Alt+Right in a
+  // cell. Each is one undo step, and the cells stay as they were.
+  // Caution: **Wait for what each event shows** before the next step: a press can be handled after
+  // the call that sent it returns, and reading the source takes the open cell, as a save does.
+  async widths() {
+    const rows = `| "a" | "b" | "c" |\n| 1 | 2 | =A1+B1 |\n:::\n`;
+    const weighted = `${H}:::table name="t" widths="1,1,2"\n${rows}`;
+    const widths = async () => {
+      const m = (await source()).match(/ widths="([0-9,]+)"/);
+      return m ? m[1].split(",").map(Number) : [];
+    };
+    const shownWidths = "Array.from(document.querySelectorAll('#doc col')).map((c) => c.style.width).join()";
+    // Runs a step, and waits until the widths the page shows differ from those before it.
+    const resized = async (step) => {
+      const was = await js(shownWidths);
+      await step();
+      return until(`${shownWidths} !== ${JSON.stringify(was)}`, 3000);
+    };
+    // Alt+Left outside a cell goes back in the browser's history, so a cell that does not open
+    // stops the section.
+    const openCell = async (column) => {
+      await click(`#doc td[data-r="0"][data-c="${column}"]`);
+      const name = `Cell ${"ABC"[column]}1`;
+      if (!await until(`document.activeElement.getAttribute("aria-label") === "${name}"`, 3000)) {
+        throw new Error(`${name} did not open; the focus is on ${await js("document.activeElement.outerHTML.slice(0, 80)")}`);
+      }
+    };
+    const px = (c) => js(`document.querySelectorAll("#doc th.letter")[${c}].getBoundingClientRect().width`);
+    const cellsKept = async (what) => {
+      const got = await source();
+      check(got.endsWith(`\n${rows}`) &&
+        await js("document.querySelector('#doc td[data-r=\"0\"][data-c=\"2\"]').textContent") === "3",
+      what, got);
+    };
+
+    await load(weighted);
+    const before = await px(0);
+    await resized(() => drag('#doc [data-edge="0"]', 60));
+    const dragged = await widths();
+    check(dragged.length === 3 && dragged[0] > dragged[1] && dragged[0] + dragged[1] === dragged[2],
+      "dragging the edge between A and B gives A width from B, and C keeps its share",
+      JSON.stringify(dragged));
+    const after = await px(0);
+    check(Math.abs(after - before - 60) <= 8, "column A grows by the distance dragged",
+      `${before} -> ${after}`);
+    await cellsKept("the cells and the formula's value stay as they were");
+    await click('[data-cmd="undo"]');
+    await saves("one undo gives the widths before the drag back", weighted);
+    await click('[data-cmd="redo"]');
+    await settle();
+    check((await widths()).join() === dragged.join(), "and redo the dragged ones again");
+    await drag('#doc [data-edge="0"]', 0);
+    await settle();
+    check((await widths()).join() === dragged.join(),
+      "a press on the edge that does not move changes nothing");
+
+    await load(weighted);
+    check(await js("document.getElementById('doc').firstElementChild.classList.contains('gap')"),
+      "an opened document that starts with a table puts the caret on an empty line above it");
+    await openCell(1);
+    check(true, "a press on a cell opens it, although the empty line above the table goes");
+    await resized(() => press("ArrowRight", ALT));
+    check(await until("document.activeElement.getAttribute('aria-label') === 'Cell B1'", 3000),
+      "the cell stays open after Alt+Right");
+    await resized(() => press("ArrowRight", ALT));
+    const more = await widths();
+    check(more.length === 3 && more[1] > more[0] && more[0] * 3 === more[1] + more[2],
+      "Alt+Right in a cell makes its column wider, from the column on its right",
+      JSON.stringify(more));
+    await click('[data-cmd="undo"]');
+    await settle();
+    const wider = await widths();
+    check(wider[1] > wider[0] && more[1] / (more[1] + more[2]) > wider[1] / (wider[1] + wider[2]),
+      "each press is one undo step, and a second press makes it wider again", JSON.stringify(wider));
+    await openCell(1);
+    for (let i = 0; i < 3; i++) await resized(() => press("ArrowLeft", ALT));
+    const narrower = await widths();
+    check(narrower[1] < narrower[0] && narrower[0] * 3 === narrower[1] + narrower[2],
+      "Alt+Left makes it narrower", JSON.stringify(narrower));
+    for (let i = 0; i < 4; i++) await click('[data-cmd="undo"]');
+    await saves("undo goes back one press at a time", weighted);
+    await openCell(2);
+    await resized(() => press("ArrowRight", ALT));
+    const last = await widths();
+    check(last[2] / (last[1] + last[2]) > 2 / 3 && last[0] * 3 === last[1] + last[2],
+      "in the last column, Alt+Right takes the width from the column on its left",
+      JSON.stringify(last));
+    await cellsKept("the cells stay as they were");
+
+    await load(`${H}:::table name="t"\n${rows}`);
+    await resized(() => drag('#doc [data-edge="1"]', -40));
+    const made = await widths();
+    check(made.length === 3 && made[1] < made[2] && made.every((n) => n >= 1 && n <= 10000),
+      "a table without widths takes them at its first resize", JSON.stringify(made));
+    await cellsKept("and its cells stay as they were");
+    const single = `${H}:::table name="t"\n| "a" |\n| 1 |\n:::\n`;
+    await load(single);
+    await openCell(0);
+    await press("ArrowRight", ALT);
+    check(await until("document.getElementById('status').textContent.startsWith('A table with one column')",
+      3000), "a table of one column has no width to share, and the page says so");
+    await saves("and nothing changes", single);
+  },
+
+  async examples() {
+    const overview = `${H}# Office supplies\n\n:::table name="budget"\n| "Item" | "Total" |\n` +
+      `| "Pens" | 30 |\n| "Sum" | =sum(B1:B1) |\n:::\n\n:::include path="notes.ksmd"\n:::\n\n` +
+      `:::image src="cat.png" alt="A cat" caption="Our cat"\n:::\n`;
+    await load(overview);
+    check(await js("document.querySelector('#doc .include').textContent").then((t) =>
+      t.includes("notes.ksmd")), "an include shows as a marked place naming its path");
+    check(await js("document.querySelector('#doc figure').textContent").then((t) =>
+      t.includes("cat.png") && t.includes("Our cat")), "an image shows its path and caption");
+    check(await js("document.querySelector('#doc td[data-r=\"1\"][data-c=\"1\"]').textContent") === "30",
+      "a table shows calculated values");
+    await saves("opening and saving changes nothing", overview);
+    const refused = await js(`ksmd.load("%ksmd 2\\n")`);
+    check(!refused.ok && refused.line === 1, "a source the reader refuses is not opened, and its " +
+      "place is named");
+    await saves("and the open document stays", overview);
+
+    // The examples of the first contract, as they stand in `ksmd/examples/`.
+    const example = (name) => fs.readFileSync(new URL(`../../examples/${name}`, import.meta.url), "utf8");
+    const cell = (r, c) => js(`document.querySelector('#doc td[data-r="${r}"][data-c="${c}"]').textContent`);
+    for (const name of ["overview.ksmd", "notes.ksmd", "literals.ksmd"]) {
+      await load(example(name));
+      await saves(`the example ${name} opens and saves unchanged`, example(name));
+    }
+    await load(example("overview.ksmd"));
+    check([await cell(0, 3), await cell(1, 3), await cell(2, 3)].join() === "30,10,40",
+      "the overview's budget shows D1 30, D2 10 and D3 40");
+    await load(example("literals.ksmd"));
+    check([await cell(0, 1), await cell(2, 1), await cell(3, 1)].join("|") === "left|right|0012|=1+2",
+      "a pipe in quoted text stays in its cell, and 0012 and =1+2 stay text");
+    check(await js("document.querySelector('#doc pre').textContent.startsWith(':::include')"),
+      "the fenced clause stays code");
+  },
+};
+
+try {
+  await page("Page.navigate", { url: pathToFileURL(path.resolve(pageFile)).href });
+  await until("document.documentElement.dataset.ready === '1'");
+  for (const [name, run] of Object.entries(sections)) {
+    verdict.part = name;
+    try {
+      await run();
+    } catch (e) {
+      check(false, "the section ran to its end", e.message);
+    }
+  }
+  await served(browser, pageFile, path.join(work, "served"), kssrv);
+} finally {
+  await browser.close();
+}
+console.log(verdict.failed === 0 ? "RESULT: ALL PASS" : `RESULT: SOME FAILED (${verdict.failed})`);
+process.exit(verdict.failed === 0 ? 0 : 1);

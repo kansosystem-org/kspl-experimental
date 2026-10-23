@@ -80,7 +80,7 @@ priv fn is_section_name(s: U8[]): Bool //< whether it names a linker section as 
 
 struct Param_cursor //< a cursor that returns the parameters one at a time
     //< Caution: **Do not copy this walk elsewhere.** A `k_param_list`'s children include the
-    //< `Literal`s `(` `,` `)`. Use `for p in Param_cursor.new(list, false)`; `skip_receiver` skips
+    //< `Literal`s `(` `,` `)`. Use `for p in Param_cursor(list, false)`; `skip_receiver` skips
     //< a method's receiver.
     list: Ast_node$@
     at: Sz
@@ -94,7 +94,7 @@ impl Param_cursor: Iter<|Ast_node$@|>
 
     fn count(list: Ast_node$@): Sz //< how many formal parameters the list holds
         $n: Sz = 0
-        for _p in Param_cursor.new(list, false)
+        for _p in Param_cursor(list, false)
             n += 1
         return n
 
@@ -121,11 +121,12 @@ impl Ast_node
             (r.kind_id == .k_identifier && r.def_node != null && r.def_node.is_fn_decl()))
 
     fn mark_implicit_name(r: Ast_node$@) //< a member selected by syntax, absent from source text
-        //< Type calls select `new`; the editor must not treat that name as written at the type.
-        //< A function name has no field index. `made_by_compiler` checks the resolved declaration
-        //< too, so index 1 of a field (including a slice's `len`) is not this mark.
+        //< Type calls select `new`. A field index also uses `ival`; readers check `def_node`.
         r.ice_assert(r.kind_id == .k_identifier, "only an identifier can be an implicit name")
         r.ival = COMPILER_MADE
+
+    fn is_implicit_name(r: Ast_node$@): Bool //< a member selected by syntax, resolved or not
+        return r != null && r.kind_id == .k_identifier && r.ival == COMPILER_MADE
 
     fn place_as_made(r: Ast_node$@, origin: Loc) //<
         //< It moves a declaration the compiler made to `origin`, marking it and its methods
@@ -241,17 +242,17 @@ impl Ast_node
             //< crashes.
             //< **`bind` is the name as written, not a copy**, so it keeps its own position: built
             //< at the statement's, the editor found nothing on `v` in `if v: = opt`.
-        some_pat: = Ast_node.new(.k_case_pattern, "case_pattern", loc)
-            .add_child(Ast_node.new(.k_literal, ".", loc))
+        some_pat: = Ast_node(.k_case_pattern, "case_pattern", loc)
+            .add_child(Ast_node(.k_literal, ".", loc))
             .add_child(Ast_node.build_ident("some", 0, loc)).add_child(bind)
-        none_pat: = Ast_node.new(.k_case_pattern, "case_pattern", loc)
-            .add_child(Ast_node.new(.k_literal, ".", loc))
+        none_pat: = Ast_node(.k_case_pattern, "case_pattern", loc)
+            .add_child(Ast_node(.k_literal, ".", loc))
             .add_child(Ast_node.build_ident("none", 0, loc))
-        return Ast_node.new(.k_stmt_switch, mark, loc)
+        return Ast_node(.k_stmt_switch, mark, loc)
             .add_child(label_slot if label_slot != null else Ast_node.build_empty(loc))
-            .add_child(subject).add_child(Ast_node.new(.k_keyword, "case", loc)).add_child(some_pat)
-            .add_child(some_block).add_child(Ast_node.new(.k_keyword, "case", loc))
-            .add_child(none_pat).add_child(none_block)
+            .add_child(subject).add_child(Ast_node(.k_keyword, "case", loc)).add_child(some_pat)
+            .add_child(some_block).add_child(Ast_node(.k_keyword, "case", loc)).add_child(none_pat)
+            .add_child(none_block)
 
     fn synthesized_option_spelling(r: Ast_node$@): U8[] //<
         //< The construct the user wrote, from a synthesized `switch`'s mark
@@ -860,7 +861,7 @@ impl Ast_node
         return .none
     fn push_or_default(r: Self$@, list: List<|Ast_node$@|>$@, node: Ast_node$@,
         def_kind: base_ast_kinds.Ast_kind, def_text: U8[])
-        list.push(node if node != null else Ast_node.new(def_kind, def_text, r.loc))
+        list.push(node if node != null else Ast_node(def_kind, def_text, r.loc))
 
     fn push_or_empty(r: Self$@, list: List<|Ast_node$@|>$@, node: Ast_node$@)
         r.push_or_default(list, node, .k_empty, "")

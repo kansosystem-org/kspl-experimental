@@ -71,14 +71,14 @@ struct Source //< a source with each literal and comment turned to spaces, its n
 
 priv fn blank(b: str.Arena_text$@, src: U8[], from: Sz, to: Sz) //<
     //< Spaces for a span, its newlines kept
-    for i in Range.new(from, to, 1)
+    for i in Range(from, to, 1)
         b.c('\n' if src[i] == '\n' else ' ')
 
 priv fn literal_at(src: U8[], at: Sz, arena: Arena$@): Lit //<
     //< the ordinary literal opening at `at`
     //< `\{…\}` and `\n` cut a part; a `\` before a line's end joins the next line past its indent.
-    $parts: = List<|U8[]|>.new(arena)
-    $holes: = List<|U8[]|>.new(arena)
+    $parts: = List<|U8[]|>(arena)
+    $holes: = List<|U8[]|>(arena)
     $cur: = arena.text()
     $i: = at + 1
     for i < src.len && src[i] != '"'
@@ -130,7 +130,7 @@ priv fn blanked_to(src: U8[], i: Sz): Sz //<
 
 fn read_source(src: U8[], arena: Arena$@): Source //< the source's code, literals and constants
     b: = arena.text()
-    $lits: = List<|Lit|>.new(arena)
+    $lits: = List<|Lit|>(arena)
     $i: Sz = 0
     for i < src.len
         $to: = blanked_to(src, i)
@@ -151,7 +151,7 @@ fn read_source(src: U8[], arena: Arena$@): Source //< the source's code, literal
 
 priv fn consts_of(code: U8[], lits: List<|Lit|>@, arena: Arena$@): List<|U8[]|> //<
     //< Each `const <name>: U8[] = "<text>"` of a file, as `name` then its text
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     for k in Range.asc(lits.len)
         l: = lits.get(k)
         if l.holes.len > 0
@@ -177,7 +177,7 @@ priv fn pieces_of(s: Source@, l: Lit@, arena: Arena$@): List<|U8[]|> //<
     //< A literal's text as the pieces a row may stand whole in
     //< **A constant of the file interpolated is its text** (`\{cross_cc\}`); any other
     //< interpolation could be anything, so it cuts the text there.
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     $cur: = arena.text().s(l.parts.get(0))
     for k in Range.asc(l.holes.len)
         switch const_text(s, l.holes.get(k))
@@ -217,7 +217,7 @@ priv fn word_before(code: U8[], at: Sz): U8[] //< the identifier ending before `
 
 priv fn args_of(code: U8[], open: Sz, arena: Arena$@): List<|Span|> //<
     //< The spans of the arguments of the call whose `(` is at `open`
-    $out: = List<|Span|>.new(arena)
+    $out: = List<|Span|>(arena)
     $depth: Sz = 1
     $from: = open + 1
     for $i: = open + 1; i < code.len && depth > 0; i += 1
@@ -234,7 +234,7 @@ priv fn args_of(code: U8[], open: Sz, arena: Arena$@): List<|Span|> //<
     return out
 
 priv fn pieces_in(s: Source@, sp: Span, arena: Arena$@): List<|U8[]|> //< the literals' pieces
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     for k in Range.asc(s.lits.len)
         l: = s.lits.get(k)
         if l.at >= sp.from && l.end <= sp.to
@@ -305,7 +305,7 @@ priv fn binding_in(code: U8[], top: Sz, to: Sz, name: U8[], arena: Arena$@): Sz?
 
 priv fn returns_of(s: Source@, name: U8[], arena: Arena$@): List<|List<|U8[]|>|> //<
     //< The literal pieces of each `return` line of the file's function `name`
-    $out: = List<|List<|U8[]|>|>.new(arena)
+    $out: = List<|List<|U8[]|>|>(arena)
     code: = s.code
     $ls: Sz = 0
     for ls < code.len && !fn_name_at(code, ls).equals(name)
@@ -328,7 +328,7 @@ priv fn is_relay(path: U8[], fn_name: U8[]): Bool
 
 priv fn read_at(path: U8[], s: Source@, sp: Span, at: Sz, arena: Arena$@): List<|Reason|> //<
     //< The reasons one call's argument at `sp` prints, the call standing at `at`
-    $out: = List<|Reason|>.new(arena)
+    $out: = List<|Reason|>(arena)
     code: = s.code
     $r: = Reason::{ .line = code.sub(0, at).count_str("\n") + 1, .fn_name = "",
         .pieces = pieces_in(s, sp, arena), .relayed = false }
@@ -358,7 +358,7 @@ fn reasons_in(path: U8[], src: U8[], arena: Arena$@): List<|Reason|> //<
     //< The reasons the calls of `FORMS` in one KSPL source print
     s: = read_source(src, arena)
     code: = s.code
-    $out: = List<|Reason|>.new(arena)
+    $out: = List<|Reason|>(arena)
     for f in FORMS
         needle: = arena.text().c('.').s(f.name).c('(').take()
         $at: Sz = 0
@@ -387,7 +387,7 @@ priv const MAKE_MARKS: U8[][_] = ::{ "SKIP ", "SKIP:", "SKIPPED (" } //<
 fn make_reasons(src: U8[], arena: Arena$@): List<|Reason|> //<
     //< The SKIP lines a make file's recipes print: each from its mark to the line's end
     //< A comment line (`#` first) prints nothing.
-    $out: = List<|Reason|>.new(arena)
+    $out: = List<|Reason|>(arena)
     lines: = src.lines(arena)
     for i in Range.asc(lines.len)
         t: = lines.get(i).trim_start()
@@ -396,7 +396,7 @@ fn make_reasons(src: U8[], arena: Arena$@): List<|Reason|> //<
         for m in MAKE_MARKS
             if at: = t.find_str(m)
                 if at == 0 || !t[at - 1].is_alnum()
-                    $p: = List<|U8[]|>.new(arena)
+                    $p: = List<|U8[]|>(arena)
                     p.push(t.sub_from(at))
                     out
                         .push(Reason::{ .line = i + 1, .fn_name = "", .pieces = p,
@@ -423,7 +423,7 @@ fn holder(r: Reason@, rows: U8[][]): U8[] //<
 
 fn unheld(path: U8[], reasons: List<|Reason|>@, rows: U8[][], arena: Arena$@): List<|U8[]|> //<
     //< One finding per reason no row holds, and per reason that cannot be read
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     for i in Range.asc(reasons.len)
         r: = reasons.get(i)
         if r.relayed
@@ -444,7 +444,7 @@ fn unheld(path: U8[], reasons: List<|Reason|>@, rows: U8[][], arena: Arena$@): L
 
 fn rows_of(src: U8[], arena: Arena$@): List<|U8[]|> //< every row's piece, of both tables
     s: = read_source(src, arena)
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     $at: Sz = 0
     for
         hit: = s.code.sub_from(at).find_str(SAYS_HEAD)
@@ -518,15 +518,15 @@ priv fn misses_make(text: U8[], arena: Arena$@): Bool
 priv fn check_reasons_held(arena: Arena$@) //<
     //< Every SKIP reason the tree can print is held by a row, so no platform's round meets it first
     $rows: = rows_of(harness.read_under_root(GATES_SRC), arena)
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     $seen: Sz = 0
-    $used: = List<|U8[]|>.new(arena)
+    $used: = List<|U8[]|>(arena)
     $files: = harness.tracked_matching(U8[][]::scan.KSPL_SPECS)
     for rel in harness.tracked_matching(U8[][]::{ "*.mk", "*Makefile" })
         files.push(rel)
     for rel in files
         src: = harness.read_under_root(rel)
-        $reasons: = List<|Reason|>.new(arena)
+        $reasons: = List<|Reason|>(arena)
         if rel.ends_with("Makefile") || rel.ends_with(".mk")
             reasons = make_reasons(src, arena)
         else

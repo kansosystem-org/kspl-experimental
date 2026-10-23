@@ -77,9 +77,9 @@ The task is *fill-in-the-middle* (FIM): the model sees the code before and after
 
 ## The desktop opener
 
-Double-clicking a `.kspage` document runs `tools/kspage_open.kspl`. It makes sure a local kssrv server is running for the document's folder, then makes the browser open the document's page.
+Double-clicking a `.ksmd` document runs ksmd's opener, [`../ksmd_open.kspl`](../ksmd_open.kspl). The opener makes sure a local kssrv server is running for the document's workspace, then makes the browser open the document's page. It chooses only the folder to serve and the port to start from. The rest is [`../opener.kspl`](../opener.kspl), which an opener for another document type would share.
 
-The steps that tie the file type to it are in "Opening a `.kspage` document on a double-click" in [`docs/HOWTO-set-up-a-project.md`](../../docs/HOWTO-set-up-a-project.md#opening-a-kspage-document-on-a-double-click).
+The steps that tie the file type to it are in "Opening a `.ksmd` document on a double-click" in [`docs/HOWTO-set-up-a-project.md`](../../docs/HOWTO-set-up-a-project.md#opening-a-ksmd-document-on-a-double-click).
 
 This is what one opening does. The sections below give the reason for each step.
 
@@ -90,7 +90,7 @@ sequenceDiagram
     participant R as the saved record
     participant S as kssrv
     participant B as the browser
-    U->>O: double-clicks a .kspage
+    U->>O: double-clicks a .ksmd
     O->>R: take the lock; is a server for this folder listed?
     O->>S: if listed, ask /api/status with its token
     alt no live server for this folder
@@ -106,61 +106,63 @@ sequenceDiagram
 
 ### Where the double-click opener lives
 
-**The opener is a leaf** ([`../kspage_open.kspl`](../kspage_open.kspl)), because only a leaf can know both the server and the page. (A *leaf* is a folder such as `tools/` that can point at every package but that no package points at.) Packages refer to each other only in the direction of import. So `kssrv` knowing the `?doc=` shape, or `kspage` knowing how the server is started, would be a sideways reference ("Reference direction between documents" in [`docs/SPEC-documents.md`](../../docs/SPEC-documents.md)).
+**The opener is a leaf** ([`../opener.kspl`](../opener.kspl)), because only a leaf can know both the server and the page. (A *leaf* is a folder such as `tools/` that can point at every package but that no package points at.) Packages refer to each other only in the direction of import. So `kssrv` knowing the `?doc=` shape, or `ksmd` knowing how the server is started, would be a sideways reference ("Reference direction between documents" in [`docs/SPEC-documents.md`](../../docs/SPEC-documents.md)).
 
 **Which folder is served, and from where the page comes:**
 
 | Decision | Why |
 | :-- | :-- |
 | **The page is served from outside the root** (`kssrv --page=<file>`). Do not copy the page into the user's folder. | The server serves only what is under its root (the folder it serves). Requiring the page there means copying a 2MB page into that folder at every opening, and a read-only folder could not be opened at all. |
-| **For a document inside a KSPL tree, the tree's root is served**; for any other document, its own folder. `std/` marks a tree. | Serving only the document's folder would leave nothing beside it reachable from the page, since the server refuses everything outside its root. |
-| **The served folder is remembered as an absolute path.** | `.` and `/home/me/devel` are one folder but two strings. Remembered as written, they make `make kspage` and the file association start two servers on the same tree. |
+| **The folder served is the document's workspace**, which "Opening a `.ksmd` document" below defines. | Serving only the document's folder would leave the files it includes beside it unreachable from the page, since the server refuses everything outside its root. |
+| **The served folder is remembered as an absolute path.** | `.` and `/home/me/devel` are one folder but two strings. Remembered as written, they make `make ksmd-open` and the file association start two servers on the same folder. |
 
 Why that one named page file gives the client no more reach, and why it is never a folder, is in "Where it listens" in [`docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md).
 
 **Reusing a server:**
 
-* **A running server is reused, but only one serving the same folder, never one picked by its port number.** Do not start a server without looking: one per document multiplies, and their ports collide and are refused. A server for another folder cannot read the document. So the saved record holds a list of servers (`state_text` in `tools/kspage_aim.kspl`). Holding only one, it would lose the first as soon as a second started.
+* **A running server is reused, but only one serving the same folder, never one picked by its port number.** Do not start a server without looking: one per document multiplies, and their ports collide and are refused. A server for another folder cannot read the document. So the saved record holds a list of servers (`state_text` in `tools/opener_aim.kspl`). Holding only one, it would lose the first as soon as a second started.
 * **When the named port is taken, the next one is tried.** Giving up after one would make every document in another folder fail to open. The question is "can I listen", not "is someone listening", and it is tested with the same binding kssrv uses.
 * **A server counts as alive only when it accepts the token.** Do not trust an open port: any program can be listening there. On a local server, `/api/status` needs the token (a secret string the server makes at start-up), so a 200 means the peer is kssrv.
 
 **Several documents opened at once** (several chosen and opened together start one opener each, at the same moment):
 
-* **One lock is held from looking at the record to writing it** (`out/tmp/kspage_open.lock`, `open_or_start` in [`../kspage_open.kspl`](../kspage_open.kspl)), and `--list`, `--stop` and `--stop-all` take it too. Without it, two openers each find no server, and each starts one. Each then rewrites the record from what it read, so one record overwrites the other. The lost record's server holds its port with nobody able to list, stop or reuse it. With it, a second document in the same folder reuses the first's server.
+* **One lock is held from looking at the record to writing it** (`out/tmp/ksmd_open.lock`, `open_or_start` in [`../opener.kspl`](../opener.kspl)), and `--list`, `--stop` and `--stop-all` take it too. Without it, two openers each find no server, and each starts one. Each then rewrites the record from what it read, so one record overwrites the other. The lost record's server holds its port with nobody able to list, stop or reuse it. With it, a second document in the same folder reuses the first's server.
 * **The lock is the operating system's** (`fs.File_lock`), let go however the process ends. A lock file the opener made and removed would outlive a crash and stop every later opening until someone deleted it.
-* **Each server writes its own log, named by its port** (`out/tmp/kspage_open.<port>.log`). One log shared by every opening hands one opener the URL another's server printed. The port is chosen free under the lock and is held by its server from then on. So no two running servers share a log, and the logs number no more than the ports tried.
+* **Each server writes its own log, named by its port** (`out/tmp/ksmd_open.<port>.log`). One log shared by every opening hands one opener the URL another's server printed. The port is chosen free under the lock and is held by its server from then on. So no two running servers share a log, and the logs number no more than the ports tried.
 * **What it gives up**: an opening waits while another starts its server. The wait is a few seconds at most, since a server that exits early ends the wait at once.
 
 **Keeping the token secret:**
 
-* **The token is kept in files that only their owner can read**: the record (`out/tmp/kspage_open.state`), the server's log and the page handed to the browser. Each is created with mode 0600 (`fs.write_unique`). The record and the log replace what stood there with `fs.replace_file`'s owner-only rule (`write_owned` in [`../kspage_aim.kspl`](../kspage_aim.kspl)). So a file written before under another mode does not keep that mode. A crash leaves the old record or the new one, never half of it. On Windows no mode is set, and who can read them is whatever the folder grants, as for the source beside them.
+* **The token is kept in files that only their owner can read**: the record (`out/tmp/ksmd_open.state`), the server's log and the page handed to the browser. Each is created with mode 0600 (`fs.write_unique`). The record and the log replace what stood there with `fs.replace_file`'s owner-only rule (`write_owned` in [`../opener_aim.kspl`](../opener_aim.kspl)). So a file written before under another mode does not keep that mode. A crash leaves the old record or the new one, never half of it. On Windows no mode is set, and who can read them is whatever the folder grants, as for the source beside them.
 * **The token never goes on a command line**, where `ps` shows it to every user on the machine. The opener reads it from the line kssrv prints once at start-up. It hands it to the browser inside a page ("The browser is handed a page, never the URL" below).
 
 **Starting the browser:**
 
-* **The opener tries the environment's tools in turn to start the browser, and always prints the URL on one line.** Do not rely on one tool: where it is absent, nothing happens and nothing says so. The printed line opens the document even where no browser could be started. Each environment has its own list (`OPENERS` / `OPENERS_WIN` in `tools/kspage_open.kspl`).
+* **The opener tries the environment's tools in turn to start the browser, and always prints the URL on one line.** Do not rely on one tool: where it is absent, nothing happens and nothing says so. The printed line opens the document even where no browser could be started. Each environment has its own list (`OPENERS` / `OPENERS_WIN` in `tools/opener.kspl`).
 * **On POSIX, a tool is looked up on the PATH before it is started.** There, starting even a missing tool succeeds in creating the child; the failure shows only inside the child. Judged by that alone, an environment without `xdg-open` "thinks it started one" and stops without trying the next tool. Windows refuses at once, so the lookup is not done there.
 * **Do not mix the environments' tools in one list.** Windows does not look at the PATH, so a tool earlier in the list counts as handed over as soon as it starts. With `xdg-open` first, an environment where MSYS2 installed it reports success without starting any browser.
 * **On Windows, the page goes to `explorer.exe`**, an executable that opens one file with the program the system holds for its type: the default browser for `.html`. Its path is written with `\`, the separator `explorer.exe` reads.
 * **`cmd /c start` cannot be used.** Each argument is passed in its own quotation marks (`kspl_win_build_cmdline` in [`../../ksplc/gen/runtime/hosted_spawn.c`](../../ksplc/gen/runtime/hosted_spawn.c)), so `start` becomes `"start"`. cmd does not recognise an internal command in quotation marks (it says "`'"start"'` is not recognized as an internal or external command..."). Do not fix it by dropping the quoting: that function stops argument injection.
 * **"Handed over" is not reported as "opened".** A tool can start successfully and still show nothing on the screen, like the `cmd` above, whose message reaches only the log. So even after handing the URL over, the opener prints how to open it by hand and where the messages are. Otherwise a run where nothing appeared would leave nothing to read.
-* **The separator inside a URL is `/`.** A path from a double-click on Windows arrives as `out\sample.kspage`, so its `\` becomes `/`. This happens on Windows only. On POSIX, `\` can be part of a file name, and converting it everywhere would make such a document impossible to open.
+* **The separator inside a URL is `/`.** A path from a double-click on Windows arrives with `\` (`parts\notes.ksmd`), so its `\` becomes `/`. This happens on Windows only. On POSIX, `\` can be part of a file name, and converting it everywhere would make such a document impossible to open.
 
 **How it is installed and checked:**
 
-* **The file association points at the built executable** (`out/kspage_open.exe`, built by `make kspage`), which finds kssrv beside itself. Do not point it at `ksplc run ...`: started by a double-click, its working folder is home or `/`, where neither `std/` nor `out/` can be found.
-* **The opener exits once the URL is passed to a browser, and the server stays** for the next opening. Do not keep a process waiting for someone who is not watching a terminal: one would be left per document opened. Only with `--show` does it wait and pass the server's output through (`make kspage` uses that).
-* **The document to double-click is built by `make` too** ([`kspage/content/example.kspl`](../../kspage/content/example.kspl) writes `out/sample.kspage`, and `make kspage` depends on it). Do not write a `.kspage` by hand. Nothing else checks that the association works. With a path one character off, "a double-click does nothing" and "the document is broken" look alike: started by a double-click, the refusal appears nowhere.
-* **It is not the sample shown at start-up.** That one is [`kspage/content/sample.kspl`](../../kspage/content/sample.kspl) (`ensure` in `kspage/port/web/state.kspl`), so with it, a run that read the file and one that did not would look the same. It is the `.kspage` of the fuzzing seed ([`kspage/tests/seeds.kspl`](../../kspage/tests/seeds.kspl)). That document is built to hold one of every shape: a merged table, a heading depth, a column set, a number format. So a path that drops any of them shows it. kspage publishes nothing for this ("What kspage publishes for the opener" in [`kspage/docs/DESIGN-application.md`](../../kspage/docs/DESIGN-application.md)).
+* **The file association points at the built executable** (`out/ksmd_open.exe`, built by `make ksmd`), which finds kssrv beside itself. Do not point it at `ksplc run ...`: started by a double-click, its working folder is home or `/`, where neither `std/` nor `out/` can be found.
+* **The opener exits once the URL is passed to a browser, and the server stays** for the next opening. Do not keep a process waiting for someone who is not watching a terminal: one would be left per document opened. Only with `--show` does it wait and pass the server's output through (`tools/tests/ksmd_launch.kspl` uses that).
+* **The document to double-click is an example the tree keeps**, [`ksmd/examples/overview.ksmd`](../../ksmd/examples/overview.ksmd), which `make ksmd` names. It holds a table that calculates and an include, so the opened page shows both working. Nothing else checks that the association works. Started by a double-click, a refusal appears nowhere, so "a double-click does nothing" and "the document is broken" look alike.
 
 **What it gives up**:
 
 * **Only the servers in the record can be listed and stopped.** One started by hand (`kssrv --local`), one whose record fell past the cap, or one that has stopped answering is not reached. Ending it is left to the operating system's own tools.
-* **Installing the association differs per environment** (the Windows registry, a Linux `.desktop` file, a macOS bundle). `make kspage` can assemble the Linux one and check it with `desktop-file-validate`. Whether a double-click opens the document can be confirmed only on a desktop.
+* **Installing the association differs per environment** (the Windows registry, a Linux `.desktop` file, a macOS bundle). Only the Linux one is automatic: `make install` puts it in, through `make install-desktop`. The gates install it into a scratch folder and check the files there. Whether a double-click opens the document can be confirmed only on a desktop.
+* **On Linux, the files go to the user's data folder**, `$XDG_DATA_HOME` or `~/.local/share`, where the desktop looks for them. A named `PREFIX` puts them under `$PREFIX/share` instead, so nothing reaches a system folder that the person did not name. The entry, the MIME declaration and the icon are copied, and the two caches are rebuilt where their tools exist. A missing tool is a note: the files are in place for the tool's next run.
+* **Only the user's own install sets the default program** (`xdg-mime default`), which records the choice in the user's `mimeapps.list`. Under a named `PREFIX` other users can share the files, and the choice of program stays each user's.
+* **On Windows, make writes no registry entry.** Windows keeps the default program for a file type as a choice that only its own "Open with" dialog sets. So the person ties the type there, once.
 
 ### The browser is handed a page, never the URL
 
-**The URL carries the token, so the opener never puts it on the browser's command line.** **The browser is started on the path of a small page, which moves on to the URL at once** (`page_text` in [`../kspage_aim.kspl`](../kspage_aim.kspl)). The command line that starts a browser is open to every user while the starter runs. A browser started that way keeps it among its own arguments for as long as it runs.
+**The URL carries the token, so the opener never puts it on the browser's command line.** **The browser is started on the path of a small page, which moves on to the URL at once** (`page_text` in [`../opener_aim.kspl`](../opener_aim.kspl)). The command line that starts a browser is open to every user while the starter runs. A browser started that way keeps it among its own arguments for as long as it runs.
 
 The page moves on with a `refresh` (an HTML instruction to load another address). The fragment (the part after `#`) travels with it, so the page reads the token as from a URL typed by hand. The page offers the link too, for a browser that does not follow a `refresh`.
 
@@ -174,11 +176,11 @@ The page moves on with a `refresh` (an HTML instruction to load another address)
 
 ### Listing and stopping the servers it left
 
-**The server stays running after an opening, so the opener can also list those servers and stop them.** `--list` prints each running server's URL and the folder it serves, one per line; `--stop=<folder>` stops the one serving that folder, and `--stop-all` every one (`tend` in [`../kspage_open.kspl`](../kspage_open.kspl)). Without these, the only way to end a server before its idle time is to find its process and kill it.
+**The server stays running after an opening, so the opener can also list those servers and stop them.** `--list` prints each running server's URL and the folder it serves, one per line; `--stop=<folder>` stops the one serving that folder, and `--stop-all` every one (`tend` in [`../opener.kspl`](../opener.kspl)). Without these, the only way to end a server before its idle time is to find its process and kill it.
 
 **A server counts as running only when it answers with its token**, the test the reuse already makes. A record whose server does not answer is dropped from the record and never listed. Do not judge by a process number instead: a number outlives its process and is handed to the next one. A dead server would then be listed as running, and a stop would end an unrelated program.
 
-**A server is picked by the folder it serves, not by its port.** The folder is what the reuse looks a server up by and what a person knows. The port changes from run to run, since a taken one is skipped. The folder is made absolute and loses a trailing separator first (`trim_end_sep` in [`../kspage_aim.kspl`](../kspage_aim.kspl)), so the one typed with tab completion is the one the record holds.
+**A server is picked by the folder it serves, not by its port.** The folder is what the reuse looks a server up by and what a person knows. The port changes from run to run, since a taken one is skipped. The folder is made absolute and loses a trailing separator first (`trim_end_sep` in [`../opener_aim.kspl`](../opener_aim.kspl)), so the one typed with tab completion is the one the record holds.
 
 **A stop is asked of the server itself** (`POST /api/stop`, the rule in "Stopping it when asked" in [`docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md)), with the token from the record. It is reported only once the server no longer answers. A stop that was only answered is not reported as done.
 
@@ -192,6 +194,39 @@ The page moves on with a `refresh` (an HTML instruction to load another address)
 
 **Two executables are ruled out**, because the choice would be made twice. Whoever types the name would make it once. The file association would make it again, and it is set once and never looked at again. The price is that the prompt returns before the last line, since a command processor does not wait for a windowing program. The opener prints a line or two and finishes.
 
-**The server it starts gets no console window either.** A windowing program that starts a console program gets a fresh console window for the child. So hiding only the opener's window would move the black window rather than remove it (`spawn_redirect` in [`../../std/subproc.kspl`](../../std/subproc.kspl)). With no window to close, the server stops itself once no page holds it open: when the last kspage tab closes.
+**The server it starts gets no console window either.** A windowing program that starts a console program gets a fresh console window for the child. So hiding only the opener's window would move the black window rather than remove it (`spawn_redirect` in [`../../std/subproc.kspl`](../../std/subproc.kspl)). With no window to close, the server stops itself once no page holds it open: when the last ksmd tab closes.
 
-Note: The server's output and the browser's are written beside the opener, under the names `log_rel` / `BROWSER_REL` in [`../kspage_open.kspl`](../kspage_open.kspl).
+Note: The server's output and the browser's are written beside the opener, under the names `LOG_EXT` / `Where.browser` in [`../opener.kspl`](../opener.kspl).
+
+### Opening a `.ksmd` document
+
+**ksmd's opener is a program of its own, `tools/ksmd_open.kspl`, built as `out/ksmd_open.exe`.** ksmd has no program to add an `open` command to: it is a library and a page. And only a leaf may know both kssrv and ksmd's page. So it is a program, sharing the opener's code. The file association points at the executable, for the reason given above.
+
+ksmd needs two things beyond the shared code: a workspace that holds the document's includes, and the same port for that workspace on every run. The rules are in [`../ksmd_aim.kspl`](../ksmd_aim.kspl), each checked alone by [`../tests/ksmd_aim_test.kspl`](../tests/ksmd_aim_test.kspl).
+
+**Which folder is the workspace:**
+
+| Decision | Why |
+| :-- | :-- |
+| **The workspace is the nearest folder at or above the document that holds a file named `.ksmd-workspace`.** Without one, it is the document's own folder. `--workspace=<folder>` names it for one run instead | ksmd opens a document inside a folder the person chose. An include that climbs with `../` must stay inside that folder, so the document's folder alone would refuse it. The mark is the person's choice, kept in the folder: it moves with the folder, and no list of known folders goes stale |
+| **Only `.ksmd-workspace` marks a workspace; a `.git` folder does not** | A repository at the home folder would then serve every file there to whoever holds the token. A mark is never set by accident |
+| **`--workspace` exists beside the mark** | A person cannot always write a file into the folder: it can be read-only, or shared with others |
+| **A path holding `..` is refused, not folded away.** `.` and doubled separators drop | The workspace and its port follow from the path's text, so one folder needs one spelling. Behind a link, `a/link/..` is another folder than `a`, so folding would open another file than the one named |
+| **A name not ending in `.ksmd` is refused, in any case** | Windows and the Linux MIME globs both hand `NOTES.KSMD` to the association. Another file reaches the opener only when typed or tied by mistake |
+
+**Which port it gets:**
+
+| Decision | Why |
+| :-- | :-- |
+| **The port is 20000 plus the FNV-1a hash of the workspace's absolute path, modulo 10000** (`home_port`) | The browser keeps drafts per address, the port included ("The file lifecycle" in [`ksmd/docs/DESIGN-ksmd.md`](../../ksmd/docs/DESIGN-ksmd.md)). A port that changed between runs would hide every draft held before |
+| **The port is worked out, never remembered** | A record can be lost with `out/` or another clone. Worked out from the path, the port comes back the same with nothing kept |
+| **Ports 20000 to 29999** | The OS hands out ports for outgoing connections from 32768 on Linux and 49152 on Windows and macOS. Development servers mostly take ports below 10000 |
+| **Do not change the formula** | Every workspace would move, with its drafts. The test pins a few values, so a change fails it |
+| **A running server for the workspace is reused, whatever its port** | As above. A server that started on another port keeps its drafts there until it stops |
+| **A taken port is skipped, and the run says so.** The next free port of the 16 after it is used | Failing would leave the document unopened. The page cannot see another port's drafts, so the line says why they seem gone. Once the port is free again, the next run returns to it |
+
+**What it gives up:**
+
+* **Two workspaces can share a port.** With ten workspaces, the chance is about one in 200. While both run, the second one opened takes the next free port.
+* **One folder spelt two ways is two workspaces**, such as another letter case on Windows or a path through a link. Each gets its own port, its own server and its own drafts.
+* **Each opening shows a new browser tab.** The opener cannot ask a browser to bring forward a tab that another program opened. Two tabs on one document keep two drafts, so nothing is lost.

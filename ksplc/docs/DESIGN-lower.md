@@ -72,7 +72,7 @@ The steps, one by one:
   | file | what it handles |
   | :-- | :-- |
   | `lower/expr.kspl` | hoisting short-circuit evaluation, `!`, `catch` / `fallback` |
-  | `lower/order.kspl` | fixing the order of a call's, an operator's and a compound literal's operands |
+  | `lower/order.kspl` | fixing the order of a call's, an operator's, a compound literal's and an assignment's operands |
   | `lower/defer.kspl` | flattening `defer`, cleaning up after a labelled `break` / `continue` |
 
   They are methods extending the same `impl Ast_node` (`lower_expr_postfix`, `lower_cleanup_stmt`, `lower_loop_jump` and so on). The `Ast_node.lower` dispatch in `lower/root.kspl` calls them, and they recurse back through `r.lower(lctx)`. So the expression hoisting and the defer flattening mix in one walk, node by node; the tree is not walked twice.
@@ -91,7 +91,8 @@ The steps, one by one:
   * A reference takes the same name from its declaration's symbol (`get_c_identifier_for_sym_to`).
   * **A local that hides another of its name takes a made name** (`name_hiding_local`, spelled by `hiding_local_name` in `base/c_name.kspl`), at its declaration and at every reference. C sees a declaration from its own declarator on, so `I32 x = x + 1;` reads the new `x`. In C, a body's local named like a parameter is also a redefinition. In KSPL, the initializer reads the outer one. Sema owns the scopes, so Sema counts how many names a local hides (`Sema_symbol.hidden_count`, set by `define_symbol`). The made name comes from that count. So the nested ones differ, and a node Lower cloned takes the same name.
 * **Desugaring a method call (`obj.method(arg)` → `Struct_method(&obj, arg)`) is done in `lower_abi.run`, the third pass, not in the main walk** (the pruning and the type check follow it). `transform_postfix_call` fires on each postfix call Sema resolved into `.k_method_access` / `.k_generic_method`. The neighbouring code in `lower/expr.kspl` differs. It only assembles the operator-overloading sugar (`a + b`, `a[i]` and so on) into a synthesized method-call node with `build_linked_method_call`. `lower_abi.run` applies the transformation itself: it flattens the receiver to the first argument and swaps in the mangled name. It does so to a `.method()` call the user wrote and to a synthesized node alike.
-* **C leaves the order of a call's arguments, an operator's two sides and a compound literal's fields open, so Lower fixes it** (`Operand_order` in `lower/order.kspl`). gcc takes a call's arguments from the right and clang from the left, while the language evaluates left to right (`docs/SPEC-programming-language.md` §6.5.1).
+* **C leaves the order of an expression's operands open, so Lower fixes it** (`Operand_order` in `lower/order.kspl`). That covers a call's arguments, an operator's two sides, a compound literal's fields and an assignment's two sides. gcc takes a call's arguments from the right and clang from the left, while the language evaluates left to right (`docs/SPEC-programming-language.md` §6.5.1).
+  * **An assignment adds its value first, then its place** (`lower_stmt_expr` in `lower/expr.kspl`), since the language runs the value first. A plain `=` adds its place with `add_target`: the place is only written, so a name or a field of one is `fixed` whatever its type. A compound assignment's place is read too, so it is added as a value. Neither backend then needs an order of its own for the two sides.
   * An operand moves into a temporary (`gen_tmp_name` in `lower/ctx.kspl`) ahead of the statement when C could run it on the wrong side of another. That happens in two cases:
     * It is not `fixed`, and a later operand acts. `fixed` means a literal, a constant, an immutable binding or a fixed address. An operand *acts* when it calls, can stop the program, or is hoisted itself.
     * It acts, and a later operand is not `fixed`.
@@ -197,7 +198,7 @@ Caution: **Call it after the functions have been dropped.** A type named only in
 import "std/refcount"
 
 fn main(): I32
-    a: = refcount.Rc<|I32|>.new(7) // count 1
+    a: = refcount.Rc<|I32|>(7) // count 1
     $b: = a // a copy: retain, count 2
     return b.get()$ - 7 // leaving: b and a released, count 0, freed
 ```
@@ -244,7 +245,7 @@ Copying its conditions out per position makes the same omission recur at the nex
 
 A managed read is classified as an ordinary place copy before asking whether only its lowered form can name the memory. Both `Arc_take.decide` and the freshness check make that distinction first, then ask `arc_read_once_lowered` for the remaining reads. This keeps the managed-type and place checks at the decision boundary, with no second scan inside the helper.
 
-**The retain goes where the copy is made, never earlier.** Emitted when the taker is first looked at, ahead of its operands, `two(a, mk(k)!)` retained `a` before `mk(k)!` could leave, and the exit never gave that count back. The operands of a call, a compound literal and an enum's payload go through `Operand_order` (`lower/order.kspl`), which knows which operand is taken (`add_value`):
+**The retain goes where the copy is made, never earlier.** Emitted when the taker is first looked at, ahead of its operands, `two(a, mk(k)!)` retained `a` before `mk(k)!` could leave, and the exit never gave that count back. The operands of a call, a compound literal, an enum's payload and an assignment go through `Operand_order` (`lower/order.kspl`), which knows which operand is taken (`add_value`):
 
 | The taken operand | Where its count comes in | If a later operand acts (can leave) |
 | :-- | :-- | :-- |
@@ -254,7 +255,7 @@ A managed read is classified as an ordinary place copy before asking whether onl
 
 Caution: **Call `Operand_order.finish` after lowering the consumer.** Without it a taken operand's retain is never placed; `free` stops the compiler with an ICE where one was dropped.
 
-**An assignment also releases**: `dst = x;` needs, besides `retain(x)`, a release of the value being overwritten. **The release waits until the right side is lowered and held in a temporary** (`tmp = x; retain; release(dst); dst = tmp`, the order Swift uses). The right side's own retains are inserted while it lowers. A release emitted before them freed `head` in `head = Rc.new(Node::{ .next = head })` before retaining it. The new node then landed at the freed address and pointed at itself. Held in a temporary, the right side is also read before the old value goes, so `head = head.get().next` does not read a node already freed.
+**An assignment also releases**: `dst = x;` needs, besides `retain(x)`, a release of the value being overwritten. **The release waits until the right side is lowered, retained and held in a temporary** (`retain; tmp = x; release(dst); dst = tmp`, the order Swift uses). `Operand_order` places the retain, as for any taken operand; `finish_arc_assign` then places the release. The right side's own retains are inserted while it lowers. A release emitted before them freed `head` in `head = Rc(Node::{ .next = head })` before retaining it. The new node then landed at the freed address and pointed at itself. Held in a temporary, the right side is also read before the old value goes, so `head = head.get().next` does not read a node already freed.
 
 **It targets reads from a place expression**, one that points at existing memory. A place expression is one of these:
 * an identifier or a path;

@@ -30,7 +30,7 @@ priv fn render(n: kspeg.Node$@, b: Arena_text$@) //<
 
 priv fn tree_text(parser: kspeg.Target$@, input: U8[], arena: Arena$@): U8[] //<
     //< The tree `top` builds from `input` under the grammar `parser` holds, as text
-    $t: = kspeg.Target.new(input, arena)
+    $t: = kspeg.Target(input, arena)
     defer t.free_memo()
     t.share_grammar_from(parser)
     got: = t.parse_rule("top") catch
@@ -43,11 +43,11 @@ priv fn tree_text(parser: kspeg.Target$@, input: U8[], arena: Arena$@): U8[] //<
 priv fn check_later_input(arena: Arena$@) //< a later input reads none of what an earlier one left
     // `pair` is read twice at the start of an input ending in `?`, so the memo answers it there.
     pairs: U8[] = "top = pair \"!\" | pair \"?\"\npair = item item\nitem = \"a\" | \"b\"\n"
-    $meta: = kspeg_notation.Meta.new(pairs, arena)
+    $meta: = kspeg_notation.Meta(pairs, arena)
     lender: = meta.parse_grammar() catch
         panic("the grammar did not load")
     defer lender.free_memo()
-    $first: = kspeg.Target.new("ab?", arena)
+    $first: = kspeg.Target("ab?", arena)
     defer first.free_memo()
     first.share_grammar_from(lender)
     first.enable_profiling = true
@@ -62,7 +62,7 @@ priv fn check_later_input(arena: Arena$@) //< a later input reads none of what a
     assert(answered == 1, "the memo did not answer `pair` on the first input")
     // "ab" was `pair`'s answer at 0; read again for "ba!", it would put `a` before `b`.
     shared: = tree_text(lender, "ba!", arena)
-    $own_meta: = kspeg_notation.Meta.new(pairs, arena)
+    $own_meta: = kspeg_notation.Meta(pairs, arena)
     own: = own_meta.parse_grammar() catch
         panic("the grammar did not load")
     defer own.free_memo()
@@ -71,7 +71,7 @@ priv fn check_later_input(arena: Arena$@) //< a later input reads none of what a
     verdict.pass("a later input reads none of the answers an earlier one left")
 
 priv fn check_grow_past_cap() //< growing past the allocated slots keeps every answer
-    $t: = Memo_table<|I64|>.new()
+    $t: = Memo_table<|I64|>()
     defer t.free()
     t.begin(0)
     for i in Range.asc(17)
@@ -83,7 +83,7 @@ priv fn check_grow_past_cap() //< growing past the allocated slots keeps every a
     verdict.pass("growing past the slots taken keeps every answer")
 
 priv fn check_grow_within_cap() //< growing within the allocated slots revives nothing old
-    $t: = Memo_table<|I64|>.new()
+    $t: = Memo_table<|I64|>()
     defer t.free()
     t.begin(1000)
     for i in Range.asc(300)
@@ -101,7 +101,7 @@ priv fn check_grow_within_cap() //< growing within the allocated slots revives n
     verdict.pass("growing inside the slots taken wakes nothing another parse left")
 
 priv fn check_wrap() //< wrapping the generation counter revives no old answer
-    $t: = Memo_table<|I64|>.new()
+    $t: = Memo_table<|I64|>()
     defer t.free()
     t.begin(0)
     t.set(key(0, 1), 1)

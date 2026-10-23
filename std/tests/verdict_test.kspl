@@ -85,9 +85,9 @@ RESULT: SOME FAILED (1) -> no check ran
 priv const WALKS_MAIN: U8[] =
     """
   verdict.begin("")
-  arena: = Arena.new(4096)
+  arena: = Arena(4096)
   defer arena.free()
-  $found: = List<|U8[]|>.new(arena)
+  $found: = List<|U8[]|>(arena)
   verdict.check_list("a walk of one", 1, "files", found@, "")
   verdict.check_list("a walk of none", 0, "files", found@, "")
   found.push("x.kspl holds it")
@@ -190,10 +190,10 @@ priv fn said(m: Panic_msg$@, want: U8[]): Bool //< whether the message is exactl
 
 fn test_panic_msg_numbers()
     verdict.start("[lang] the stop message writes numbers test...")
-    $a: = Panic_msg.new()
+    $a: = Panic_msg()
     a.n(-9223372036854775807 - 1)
     assert(said(a@, "-9223372036854775808"), "an I64's minimum is written whole")
-    $b: = Panic_msg.new()
+    $b: = Panic_msg()
     b.s("line ").n(0)
     assert(said(b@, "line 0"), "a zero is written as one digit after the text")
     verdict.pass("the stop message spells an integer, its minimum and zero.")
@@ -206,8 +206,8 @@ fn test_panic_msg_numbers()
 fn test_log_keeps_what_is_heavy_enough()
     verdict.start("[Log] a line lighter than the level set being dropped test...")
 
-    defer $out: = Str_builder.new()
-    $lg: = Log.new(out, .information, "t")
+    defer $out: = Str_builder()
+    $lg: = Log(out, .information, "t")
     lg.say(.error, "a")
     lg.say(.warning, "b")
     lg.say(.information, "c")
@@ -217,8 +217,8 @@ fn test_log_keeps_what_is_heavy_enough()
         "Log: down to the level set comes out, and what is lighter does not")
 
     // **The most severe level keeps only its own lines.**
-    defer $only: = Str_builder.new()
-    $strict: = Log.new(only, .error, "t")
+    defer $only: = Str_builder()
+    $strict: = Log(only, .error, "t")
     strict.say(.error, "a")
     strict.say(.warning, "b")
     strict.done()
@@ -229,8 +229,8 @@ fn test_log_keeps_what_is_heavy_enough()
 fn test_log_at_does_not_run_the_body_when_light()
     verdict.start("[Log] the body of a line that is not emitted not running test...")
 
-    defer $out: = Str_builder.new()
-    $lg: = Log.new(out, .information, "")
+    defer $out: = Str_builder()
+    $lg: = Log(out, .information, "")
     // **This is the guarantee the whole design exists for**: if `ran` changed for the dropped line,
     // a body would be built and thrown away.
     $ran: Sz = 0
@@ -250,8 +250,8 @@ fn test_log_closes_the_line_it_opened()
     verdict.start("[Log] the line opened being closed by whatever comes next test...")
 
     // **The next line closes a line left open**, so a caller that writes the body never ends it.
-    defer $out: = Str_builder.new()
-    $lg: = Log.new(out, .hint, "t")
+    defer $out: = Str_builder()
+    $lg: = Log(out, .hint, "t")
     if w: = lg.at(.information)
         w.s("first")
     if w2: = lg.at(.information)
@@ -272,23 +272,23 @@ fn test_log_says_where_it_was_called_from()
 
     // Passed by name, file and line override the default. **The line number is not this call's**,
     // so the check holds however this file is edited.
-    defer $out: = Str_builder.new()
-    $lg: = Log.new(out, .hint, "t", ": ", true)
+    defer $out: = Str_builder()
+    $lg: = Log(out, .hint, "t", ": ", true)
     lg.say(.error, "boom", "a/b.kspl", 42)
     assert(out.slice().equals("t: E: a/b.kspl: 42: boom\n"),
         "Log: the place goes in ahead of the body, parted by the separator")
 
     // With the default it names **this** file, not `std/log`: `say` passes both on to `at`.
-    defer $here: = Str_builder.new()
-    $lg2: = Log.new(here, .hint, "t", ": ", true)
+    defer $here: = Str_builder()
+    $lg2: = Log(here, .hint, "t", ": ", true)
     lg2.say(.error, "boom")
     assert(here.slice().find_str("verdict_test").is_some(),
         "Log: the caller's file is the one named")
     assert(here.slice().find_str("std/log").is_none(), "Log: the library is not the one named")
 
     // **The place is off unless the logger is created with it on**, so a plain logger is unchanged.
-    defer $plain: = Str_builder.new()
-    $lg3: = Log.new(plain, .hint, "t")
+    defer $plain: = Str_builder()
+    $lg3: = Log(plain, .hint, "t")
     lg3.say(.error, "boom")
     assert(plain.slice().equals("t: E: boom\n"), "Log: with place off the line carries no place")
 
@@ -298,8 +298,8 @@ fn test_log_parts_its_fields_with_the_separator_given()
     verdict.start("[Log] the separator handed over parting the fields test...")
 
     // **A comma separator gives rows a spreadsheet can filter**, each with the same field count.
-    defer $out: = Str_builder.new()
-    $csv: = Log.new(out, .hint, "srv", ",", true)
+    defer $out: = Str_builder()
+    $csv: = Log(out, .hint, "srv", ",", true)
     csv.say(.error, "cannot listen", "a/b.kspl", 7)
     csv.say(.hint, "chasing it", "a/b.kspl", 9)
     csv.done()
@@ -307,8 +307,8 @@ fn test_log_parts_its_fields_with_the_separator_given()
         "Log: every row carries the same fields, parted by the separator handed over")
 
     // **The body is written unchanged**, so a caller that wants extra columns writes them itself.
-    defer $raw: = Str_builder.new()
-    $loose: = Log.new(raw, .hint, "t", ",")
+    defer $raw: = Str_builder()
+    $loose: = Log(raw, .hint, "t", ",")
     loose.say(.error, "row 1 value,row 2 value")
     loose.done()
     assert(raw.slice().equals("t,E,row 1 value,row 2 value\n"),
@@ -341,9 +341,9 @@ fn test_log_pushes_a_heavy_line_out_at_once()
     // **A buffering destination loses its last lines when the run is killed**, and those are the
     // lines that say what went wrong. So the two most severe levels are flushed as each line
     // closes.
-    $t: Tally = ::{ .text = Str_builder.new(), .flushes = 0 }
+    $t: Tally = ::{ .text = Str_builder(), .flushes = 0 }
     defer t.text.free()
-    $lg: = Log.new(t@, .hint, "t")
+    $lg: = Log(t@, .hint, "t")
     lg.say(.information, "a")
     lg.say(.hint, "b")
     assert(t.flushes == 0, "Log: a light line is left to pile up")
@@ -377,7 +377,7 @@ import "std/sys"
 fn main()
   _killer: = subproc.spawn_async(U8[][]::{ "/bin/sh", "-c", "sleep 1; kill -9 $PPID" }, "")
     catch panic("the shell must start")
-  $lg: = Log.new(io.out(), .hint, "c")
+  $lg: = Log(io.out(), .hint, "c")
   if w: = lg.at(.warning)
     w.s("last words")
   sys.sleep_ms(30000)

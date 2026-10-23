@@ -1,0 +1,63 @@
+//< Installation failures against the real recipe, with a tiny compiler and library
+//< The shell functions fail one copy or move. Rollback uses the real commands afterwards.
+import "ksplc/tests/support/harness" as compiler_harness
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str"
+import "std/sys"
+import "std/verdict"
+import "tests/support/harness"
+
+priv const PROBE: U8[] =
+    """
+include $(RULES)
+.PHONY: probe
+probe:
+	@cp() { if [ "$(FAIL)" = copy ] && [ "$$1" = -R ]; then return 1; fi; command cp "$$@"; }; \
+	mv() { if [ "$(FAIL)" = move ] && [ "$$2" = "$(PREFIX)/lib/kspl/std" ] && [ ! -f refused ]; then touch refused; return 1; fi; command mv "$$@"; }; \
+	$(install_compiler_and_std)
+"""
+
+priv fn put(path: U8[], text: U8[]) //< places one fixture or stops the test
+    io.write_file(path, text) catch panic("cannot write the installation fixture")
+
+priv fn one(mode: U8[], arena: Arena$@) //< one fresh sandbox per failure point
+    dir: = harness.sandbox(arena.text().s("install_pair_").s(mode).take())
+    prefix: = fs.join(dir, "prefix with spaces", arena)
+    bin: = fs.join(prefix, "bin", arena)
+    lib: = fs.join(prefix, "lib/kspl/std", arena)
+    src: = fs.join(dir, "std", arena)
+    for path in U8[][]::{ bin, lib, src }
+        fs.mkdir_all(path) catch panic("cannot make the installation fixture")
+    name: = "ksplc.exe" if sys.is_windows() else "ksplc"
+    exe: = fs.join(bin, name, arena)
+    put(exe, "old compiler")
+    put(fs.join(lib, "obsolete.kspl", arena), "old library")
+    put(fs.join(src, "current.kspl", arena), "new library")
+    put(fs.join(dir, "compiler", arena), "new compiler")
+    put(fs.join(dir, "probe.mk", arena), PROBE)
+    rules: = fs.join(harness.root(), "mk/install.mk", arena)
+    r: = harness
+        .make(U8[][]::{ "--no-print-directory", "-C", dir, "-f", "probe.mk", "probe",
+        arena.text().s("RULES=").s(rules).take(),
+        arena.text().s("PREFIX=").s(prefix).take(), "SHIP_EXE=compiler",
+        arena.text().s("FAIL=").s(mode).take(),
+        arena.text().s("PLATFORM=").s("win32" if sys.is_windows() else "linux").take() })
+    good: = mode.equals("ok")
+    bytes: = compiler_harness.read_generated(exe)
+    library: = compiler_harness
+        .read_generated(fs.join(lib, "current.kspl" if good else "obsolete.kspl", arena))
+    verdict.check(arena.text().s("install: ").s(mode).s(" keeps a complete compiler and library")
+        .take(),
+        r.exited_with(0) == good && bytes.equals("new compiler" if good else "old compiler") &&
+        library.equals("new library" if good else "old library"), r.out)
+    if good
+        verdict.check("install: an obsolete library file is removed",
+            !fs.exists(fs.join(lib, "obsolete.kspl", arena)), r.out)
+    verdict.check(arena.text().s("install: ").s(mode).s(" releases its lock").take(),
+        !fs.exists(fs.join(prefix, "lib/kspl/.install-lock", arena)), r.out)
+
+fn run(arena: Arena$@) //< success, staging failure, and failure after the compiler moved
+    for mode in U8[][]::{ "ok", "copy", "move" }
+        one(mode, arena)

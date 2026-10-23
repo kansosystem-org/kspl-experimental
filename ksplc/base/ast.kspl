@@ -66,7 +66,7 @@ fn is_anon_env_type(name: U8[]): Bool //<
     //< `.`; a plain substring match would also hit `Foo_anon_env_1`.
     if name.starts_with(ANON_ENV_PREFIX)
         return true
-    defer $sb: = Str_builder.new()
+    defer $sb: = Str_builder()
     sb.c('.').s(ANON_ENV_PREFIX)
     return name.find_str(sb.slice()).is_some()
 
@@ -281,7 +281,7 @@ impl U8[]
         //< What a path written in this file names
         //< It is that package's file where the first segment names a package, and otherwise the
         //< file next to this one.
-        $res: = Str_builder.new()
+        $res: = Str_builder()
         if written.starts_with("std/") ||
             (written.find_char('/').is_some() && !written.starts_with("."))
             res.s(written)
@@ -331,13 +331,13 @@ impl Ast_node
     // --- Fluent Builders ---
 
     fn build_block(loc: Loc): Ast_node$@ //< an empty statement block, to be filled
-        return Ast_node.new(.k_stmt_block, "stmt_block", loc)
+        return Ast_node(.k_stmt_block, "stmt_block", loc)
 
     fn build_args(loc: Loc): Ast_node$@ //< an empty argument list, to be filled
-        return Ast_node.new(.k_expr_args, "args", loc)
+        return Ast_node(.k_expr_args, "args", loc)
 
     fn build_empty(loc: Loc): Ast_node$@ //< a node standing for nothing, such as an absent part
-        return Ast_node.new(.k_empty, "", loc)
+        return Ast_node(.k_empty, "", loc)
 
     fn as_args(args: Ast_node$@, loc: Loc): Ast_node$@ //<
         //< `args` as an argument list: itself if it is one, wrapped if it is one argument
@@ -348,34 +348,32 @@ impl Ast_node
         return Ast_node.build_args(loc).add_child(args)
 
     fn build_ident(name: U8[], type_id: I32, loc: Loc): Ast_node$@
-        return Ast_node.new(.k_identifier, name, loc).with_type(type_id)
+        return Ast_node(.k_identifier, name, loc).with_type(type_id)
 
     fn build_result_ok(result_id: I32, value: Ast_node$@, loc: Loc): Ast_node$@ //<
         //< `.ok(value)` of the Result result_id, as a written `.ok(v)` is after sema
-        return Ast_node.new(.k_empty, "", loc).with_type(result_id).become_result_ok(value)
+        return Ast_node(.k_empty, "", loc).with_type(result_id).become_result_ok(value)
 
     fn become_result_ok(r: Self$@, value: Ast_node$@): Ast_node$@ //<
         //< r, typed as a Result, becomes that Result's `ok` holding value; null holds nothing
         //< **A Void value is no payload** (`Void!E`'s `ok` carries nothing): the caller passes
         //< null, having run the value already. The backends then build it as any enum variant.
         loc: = r.loc
-        variant: = Ast_node.new(.k_identifier, "ok", loc)
+        variant: = Ast_node(.k_identifier, "ok", loc)
         if value == null
             r.morph(.k_enum_init, "enum_init")
             return r.add_child(variant)
-        inner: = Ast_node.new(.k_enum_init, "enum_init", loc).with_type(r.type_id)
-            .add_child(variant)
+        inner: = Ast_node(.k_enum_init, "enum_init", loc).with_type(r.type_id).add_child(variant)
         r.morph(.k_enum_init_call, "enum_init_call")
         return r.add_child(inner).add_child(Ast_node.build_args(loc).add_child(value))
 
     fn build_type_expr(type_name: U8[], type_id: I32, loc: Loc): Ast_node$@
-        return Ast_node.new(.k_type_expr, type_name, loc).with_type(type_id)
-            .add_child(Ast_node.new(.k_type_atom, "Primitive", loc).with_type(type_id))
+        return Ast_node(.k_type_expr, type_name, loc).with_type(type_id)
+            .add_child(Ast_node(.k_type_atom, "Primitive", loc).with_type(type_id))
 
     fn build_var_decl(var_name: U8[], type_name: U8[], type_id: I32, loc: Loc): Ast_node$@
-        return Ast_node.new(.k_decl_var, "var", loc).with_type(type_id)
-            .add_child(Ast_node.build_empty(loc))
-            .add_child(Ast_node.new(.k_keyword, "var", loc))
+        return Ast_node(.k_decl_var, "var", loc).with_type(type_id)
+            .add_child(Ast_node.build_empty(loc)).add_child(Ast_node(.k_keyword, "var", loc))
             .add_child(Ast_node.build_ident(var_name, type_id, loc))
             .add_child(Ast_node.build_type_expr(type_name, type_id, loc))
 
@@ -383,7 +381,7 @@ impl Ast_node
         //< A synthesized function's parameter `name: <type>`
         //< Its identifier's def_node is the parameter itself. A reference to it has to be linked
         //< ("The limits on building an AST" in ksplc/docs/DESIGN-lower.md).
-        param: = Ast_node.new(.k_fn_param, "param", loc).with_type(type_id)
+        param: = Ast_node(.k_fn_param, "param", loc).with_type(type_id)
         id_node: = Ast_node.build_ident(name, type_id, loc)
         id_node.def_node = param
         return param.add_child(id_node)
@@ -391,28 +389,26 @@ impl Ast_node
 
     fn build_synth_fn(name: U8[], params: Ast_node$@, ret_name: U8[], ret_id: I32, loc: Loc):
         Ast_node$@ //< a synthesized function `fn <name>(<params>): <ret>` still without its body
-        sig: = Ast_node.new(.k_type_fn_sig, "sig", loc)
-            .add_child(Ast_node.new(.k_literal, "(", loc)).add_child(params)
-            .add_child(Ast_node.new(.k_literal, ")", loc))
+        sig: = Ast_node(.k_type_fn_sig, "sig", loc).add_child(Ast_node(.k_literal, "(", loc))
+            .add_child(params).add_child(Ast_node(.k_literal, ")", loc))
             .add_child(Ast_node.build_type_expr(ret_name, ret_id, loc))
-        return Ast_node.new(.k_decl_fn, "fn", loc)
-            .add_child(Ast_node.new(.k_keyword, "fn", loc))
-            .add_child(Ast_node.new(.k_identifier, name, loc)).add_child(sig)
+        return Ast_node(.k_decl_fn, "fn", loc).add_child(Ast_node(.k_keyword, "fn", loc))
+            .add_child(Ast_node(.k_identifier, name, loc)).add_child(sig)
 
     fn build_member_access(recv: Ast_node$@, field_name: U8[], field_idx: I32, field_type_id: I32,
         loc: Loc): Ast_node$@ //< `<recv>.<field>`, with the field's index in the member's ival
             //< Sema never sees this node, so the index is set here. Left 0, genllvm reads every
             //< field as the first (genc goes by the name and is unaffected).
-        member: = Ast_node.new(.k_identifier, field_name, loc)
+        member: = Ast_node(.k_identifier, field_name, loc)
         member.ival = field_idx
-        return Ast_node.new(.k_expr_postfix, ".", loc).with_type(field_type_id).add_child(recv)
-            .add_child(Ast_node.new(.k_literal, ".", loc)).add_child(member)
+        return Ast_node(.k_expr_postfix, ".", loc).with_type(field_type_id).add_child(recv)
+            .add_child(Ast_node(.k_literal, ".", loc)).add_child(member)
 
     fn build_switch_arm(is_default: Bool, loc: Loc): Ast_node$@ //<
         //< One arm of a lowered `switch`: its labels, then its block (a `default` arm has no label)
         //< A label is a `case_pattern` naming a variant, its index in `ival`, or else the value.
         //< Lower groups them (`group_switch_arms` in lower/root.kspl); only the backends read them.
-        return Ast_node.new(.k_switch_arm, "default" if is_default else "case", loc)
+        return Ast_node(.k_switch_arm, "default" if is_default else "case", loc)
 
     fn build_payload_access(subject: Ast_node$@, variant_idx: I32, field_name: U8[], field_idx: I32,
         field_type_id: I32, loc: Loc): Ast_node$@ //<
@@ -420,9 +416,9 @@ impl Ast_node
             //< `ival` holds the variant's index in its enum, and the member's `ival` the field's
             //< index in that variant's payload (`variant_at` in sema/type/query.kspl). **No surface
             //< code names it**; a `switch` arm's binding is declared from it.
-        member: = Ast_node.new(.k_identifier, field_name, loc)
+        member: = Ast_node(.k_identifier, field_name, loc)
         member.ival = field_idx
-        access: = Ast_node.new(.k_payload_access, "payload", loc).with_type(field_type_id)
+        access: = Ast_node(.k_payload_access, "payload", loc).with_type(field_type_id)
             .add_child(subject).add_child(member)
         access.ival = variant_idx
         return access
@@ -453,53 +449,53 @@ impl Ast_node
             0, part_type_id, loc)
 
     fn build_assign_stmt(left: Ast_node$@, right: Ast_node$@, loc: Loc): Ast_node$@
-        return Ast_node.new(.k_stmt_expr, "assign", loc).add_child(left)
-            .add_child(Ast_node.new(.k_assign_op, "=", loc)).add_child(right)
+        return Ast_node(.k_stmt_expr, "assign", loc).add_child(left)
+            .add_child(Ast_node(.k_assign_op, "=", loc)).add_child(right)
 
     fn build_if_stmt(cond: Ast_node$@, then_block: Ast_node$@, else_block: Ast_node$@, loc: Loc):
         Ast_node$@
-        if_node: = Ast_node.new(.k_stmt_if, "if", loc).add_child(Ast_node.build_empty(loc))
+        if_node: = Ast_node(.k_stmt_if, "if", loc).add_child(Ast_node.build_empty(loc))
             .add_child(cond).add_child(then_block)
         if_node.add_child(else_block if else_block != null else Ast_node.build_empty(loc))
         return if_node
 
     fn build_method_call(recv: Ast_node$@, method_name: U8[], args: Ast_node$@, res_type_id: I32,
         loc: Loc): Ast_node$@
-        m_acc: = Ast_node.new(.k_method_access, ".", loc).with_type(res_type_id)
+        m_acc: = Ast_node(.k_method_access, ".", loc).with_type(res_type_id)
         if recv != null
             m_acc.add_child(recv)
-        m_acc.add_child(Ast_node.new(.k_identifier, method_name, loc))
+        m_acc.add_child(Ast_node(.k_identifier, method_name, loc))
 
         safe_args: = Ast_node.as_args(args, loc)
-        return Ast_node.new(.k_expr_postfix, "(", loc).with_type(res_type_id).add_child(m_acc)
-            .add_child(Ast_node.new(.k_literal, "(", loc)).add_child(safe_args)
+        return Ast_node(.k_expr_postfix, "(", loc).with_type(res_type_id).add_child(m_acc)
+            .add_child(Ast_node(.k_literal, "(", loc)).add_child(safe_args)
 
     fn build_fn_call(callee_name: U8[], args: Ast_node$@, loc: Loc): Ast_node$@ //<
         //< It builds a free function call node of the shape `name(args…)`
         //< It is build_method_call without a receiver (how desugaring calls a std/lang function).
         safe_args: = Ast_node.as_args(args, loc)
-        return Ast_node.new(.k_expr_postfix, "(", loc)
-            .add_child(Ast_node.new(.k_identifier, callee_name, loc))
-            .add_child(Ast_node.new(.k_literal, "(", loc)).add_child(safe_args)
+        return Ast_node(.k_expr_postfix, "(", loc)
+            .add_child(Ast_node(.k_identifier, callee_name, loc))
+            .add_child(Ast_node(.k_literal, "(", loc)).add_child(safe_args)
 
     fn build_unary_expr(op: U8[], target: Ast_node$@, type_id: I32, loc: Loc): Ast_node$@
-        return Ast_node.new(.k_expr_unary, op, loc).with_type(type_id)
-            .add_child(Ast_node.new(.k_literal, op, loc)).add_child(target)
+        return Ast_node(.k_expr_unary, op, loc).with_type(type_id)
+            .add_child(Ast_node(.k_literal, op, loc)).add_child(target)
 
     fn build_label_stmt(label_name: U8[], loc: Loc): Ast_node$@
-        return Ast_node.new(.k_stmt_label, "label", loc)
-            .add_child(Ast_node.new(.k_identifier, label_name, loc))
+        return Ast_node(.k_stmt_label, "label", loc)
+            .add_child(Ast_node(.k_identifier, label_name, loc))
 
     fn build_goto_stmt(label_name: U8[], loc: Loc): Ast_node$@
-        return Ast_node.new(.k_stmt_goto, "goto", loc)
-            .add_child(Ast_node.new(.k_identifier, label_name, loc))
+        return Ast_node(.k_stmt_goto, "goto", loc)
+            .add_child(Ast_node(.k_identifier, label_name, loc))
 
     fn build_int_literal(val: I64, loc: Loc): Ast_node$@ //<
         //< It synthesizes an integer literal node, shaped like one written in the source
-        return Ast_node.new(.k_integer, base_core.arena.text().s("\{val\}").take(), loc)
+        return Ast_node(.k_integer, base_core.arena.text().s("\{val\}").take(), loc)
 
     fn build_bool_literal(val: Bool, loc: Loc): Ast_node$@
-        return Ast_node.new(.k_bool, "true" if val else "false", loc)
+        return Ast_node(.k_bool, "true" if val else "false", loc)
 
     fn build_inferred_var_decl(name: Ast_node$@, init_expr: Ast_node$@, loc: Loc): Ast_node$@ //<
         //< It synthesizes a decl_var with no type annotation (`name: = init_expr;`)
@@ -507,8 +503,8 @@ impl Ast_node
         //< "var_synth", neither "var" nor "let".
         //< **`name` is the identifier itself.** So a name the user wrote (a `for … in`'s item)
         //< keeps the position it was written at. The editor and a diagnostic find it there.
-        return Ast_node.new(.k_decl_var, "var_synth", loc).add_child(Ast_node.build_empty(loc))
-            .add_child(Ast_node.new(.k_keyword, "var", loc)).add_child(name)
+        return Ast_node(.k_decl_var, "var_synth", loc).add_child(Ast_node.build_empty(loc))
+            .add_child(Ast_node(.k_keyword, "var", loc)).add_child(name)
             .add_child(Ast_node.build_empty(loc)).add_child(init_expr)
     // --- Core Operations ---
 

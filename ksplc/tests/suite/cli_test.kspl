@@ -58,9 +58,9 @@ priv fn parse_help(arena: Arena$@): Help //<
     //< From `--help`'s output it reads the per-subcommand lines and the options that take a value
     //< Caution: **Finding no subcommand line at all is itself a failure**, or a changed list format
     //< lets the checks below pass without testing anything.
-    $out: = List<|Face_flags|>.new(arena)
-    $with_value: = List<|U8[]|>.new(arena)
-    $declared: = List<|U8[]|>.new(arena)
+    $out: = List<|Face_flags|>(arena)
+    $with_value: = List<|U8[]|>(arena)
+    $declared: = List<|U8[]|>(arena)
     $everywhere: U8[] = ""
     r: = cli(U8[][]::{ "--help" })
     if !r.exited_with(0)
@@ -92,7 +92,7 @@ priv fn parse_help(arena: Arena$@): Help //<
             if face.equals("on every subcommand")
                 everywhere = rest
                 continue
-            $fl: = List<|U8[]|>.new(arena)
+            $fl: = List<|U8[]|>(arena)
             if rest.len > 0
                 for w in rest.split(' ', arena)
                     fl.push(w)
@@ -109,14 +109,14 @@ priv fn case_help_matches_behavior(arena: Arena$@) //<
         "not one line could be picked up")
         return
     // Every option in the table (one that no subcommand accepts is on no line).
-    $all: = List<|U8[]|>.new(arena)
+    $all: = List<|U8[]|>(arena)
     for f in h.faces
         for fl in f.flags
             if !all.contains(fl)
                 all.push(fl)
     // Caution: **Every declared option is on some subcommand's line.** One left off is accepted
     // everywhere unchecked, which is how an option comes to be written where it does nothing.
-    defer $rowless: = Str_builder.new()
+    defer $rowless: = Str_builder()
     for d in h.declared
         if !d.equals("--help") && !all.contains(d)
             rowless.s("  ").s(d).s(" is on no subcommand's line\n")
@@ -128,7 +128,7 @@ priv fn case_help_matches_behavior(arena: Arena$@) //<
     verdict.check("only --help takes effect on every subcommand",
         h.everywhere.equals("--help"),
         arena.text().s("the line names: \{h.everywhere\}\n").take())
-    defer $bad: = Str_builder.new()
+    defer $bad: = Str_builder()
     $pairs: Sz = 0
     for f in h.faces
         for fl in all
@@ -350,7 +350,7 @@ priv fn case_explain(arena: Arena$@) //<
         return
     listed: = reg.sub(0, end)
     found: = rx.find_all(listed, arena)
-    defer $bad: = Str_builder.new()
+    defer $bad: = Str_builder()
     $seen: Sz = 0
     for m in found
         code: = m.group(1, listed).unwrap_or("")
@@ -660,7 +660,7 @@ priv fn json_lines(args: U8[][], arena: Arena$@): List<|json.Value|> //<
     r: =
         subproc.run_capture(harness.ksplc_argv(args), "", verdict.DEFAULT_TIMEOUT_MS,
         4 * 1024 * 1024, arena) catch panic("ksplc must start")
-    $rows: = List<|json.Value|>.new(arena)
+    $rows: = List<|json.Value|>(arena)
     for line in r.stderr_data.lines(arena)
         doc: = json.parse(line, arena) catch
             rows.push(.null_val)

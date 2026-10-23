@@ -48,7 +48,7 @@ A `HEAD` request asks for the head of the answer alone, without the file itself.
 | 404 Not Found | not found |
 | 400 Bad Request | a broken request, a broken `%XX` |
 | 413 Content Too Large | a body over the cap (refused as soon as the head names it) |
-| 431 Request Header Fields Too Large | a head past 64 KiB, or more bytes held unanswered on one connection than 64 KiB plus the body cap (64 KiB facing outward, 4 MiB with `--local`) |
+| 431 Request Header Fields Too Large | a head past 64 KiB, or more bytes held unanswered on one connection than 64 KiB plus the body cap (64 KiB facing outward, 8 MiB with `--local`) |
 
 A path's `%XX` is decoded, so a file whose name holds a `%20` can be returned too. (`%XX` writes one byte as `%` and two hex digits: `%20` is a space.) The decoding happens once only.
 

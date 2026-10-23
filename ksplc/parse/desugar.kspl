@@ -50,7 +50,7 @@ struct Desugar_ctx //<
 
 fn run(root: Ast_node$@, parser: kspeg.Target$@, source_map: Map<|U8[], U8$[]|>$@): Bool
     base_diag.ice_assert(root != null, "desugar.run: root is null")
-    serials: = Map<|U8[], Sz|>.new(base_core.arena)
+    serials: = Map<|U8[], Sz|>(base_core.arena)
     cc: = Desugar_ctx::{ .parser = parser, .source_map = source_map,
         .lifted = base_ast.new_ast_node_list(), .hoisted = base_ast.new_ast_node_list(),
         .gen_params = List<|U8[]|>.create(base_core.arena),
@@ -143,12 +143,12 @@ impl Ast_node
         inner_children.push(inner_ty)
         for $i: = 1; i < r.children.len; i += 1
             inner_children.push(r.get_child(i))
-        inner: = Ast_node.new(r.kind_id, r.text, r.loc)
+        inner: = Ast_node(r.kind_id, r.text, r.loc)
         inner.children = inner_children
 
         cast: = base_ast.new_ast_node_list()
         cast.push(inner)
-        cast.push(Ast_node.new(.k_literal, "::", r.loc))
+        cast.push(Ast_node(.k_literal, "::", r.loc))
         cast.push(ty)
         r.morph(.k_expr_postfix, "::")
         r.children = cast
@@ -206,9 +206,9 @@ impl Ast_node
         name: = decl.get_var_decl_id().text
         call: = Ast_node.build_method_call(Ast_node.build_ident(name, 0, loc), "free", null, 0, loc)
         body: = Ast_node.build_block(loc)
-            .add_child(Ast_node.new(.k_stmt_expr, "expr", loc).add_child(call))
-        made: = Ast_node.new(.k_stmt_defer, "defer", loc)
-            .add_child(Ast_node.new(.k_keyword, "defer", loc)).add_child(body)
+            .add_child(Ast_node(.k_stmt_expr, "expr", loc).add_child(call))
+        made: = Ast_node(.k_stmt_defer, "defer", loc)
+            .add_child(Ast_node(.k_keyword, "defer", loc)).add_child(body)
         made.place_as_made(loc)
         return made
 
@@ -221,7 +221,7 @@ impl Ast_node
         coll_expr: = r.get_loop_cond()
 
         for_in_counter += 1
-        defer $suffix: = Str_builder.new()
+        defer $suffix: = Str_builder()
         suffix.s("\{for_in_counter\}")
         // Caution: build_temp_name's copy into the arena is required: `suffix.slice()` points into
         // the builder's buffer, which is gone after `defer suffix.free()`.
@@ -297,20 +297,20 @@ impl Ast_node
         // The chain starts with a `.s(…)` on the receiver, an empty one where the text opens
         // `\{…\}`.
         // Caution: **Do not omit this empty write.** Only a method's receiver takes its address
-        // implicitly, and the receiver can be a value (`$b: = Str_builder.new()`): a `put` at the
+        // implicitly, and the receiver can be a value (`$b: = Str_builder()`): a `put` at the
         // head would write into a copy of `b`.
         $has_parts: = false
         first_part: = string_node.get_child(0) if string_node.children.len > 0 else null
         if first_part != null && first_part.kind_id == .k_string_expr
-            empty_node: = Ast_node.new(.k_string, "\"\"", loc)
+            empty_node: = Ast_node(.k_string, "\"\"", loc)
             current_recv = Ast_node.build_method_call(current_recv, "s", empty_node, 0, loc)
             has_parts = true
         for part in string_node.children
             if part.kind_id == .k_string_content
-                $str_text: = Str_builder.new()
+                $str_text: = Str_builder()
                 str_text.s("\"").s(part.text).s("\"")
                 str_slice: = str_text.slice()
-                str_node: = Ast_node.new(.k_string, base_core.arena.dup_str(str_slice), part.loc)
+                str_node: = Ast_node(.k_string, base_core.arena.dup_str(str_slice), part.loc)
                 str_text.free()
 
                 current_recv = Ast_node.build_method_call(current_recv, "s", str_node, 0, part.loc)
@@ -338,7 +338,7 @@ impl Ast_node
                     has_parts = true
 
         if !has_parts
-            str_node: = Ast_node.new(.k_string, "\"\"", loc)
+            str_node: = Ast_node(.k_string, "\"\"", loc)
             current_recv = Ast_node.build_method_call(current_recv, "s", str_node, 0, loc)
         // It overwrites the original call node with the transformed AST chain.
         r.morph(current_recv.kind_id, current_recv.text)
@@ -373,7 +373,7 @@ impl Ast_node
             r.format_spec_combo_err(ctx, spec, bad, owner)
             return
         if !parse_format_spec.precision_written(spec)
-            defer $m: = Str_builder.new()
+            defer $m: = Str_builder()
             m
                 .s("format spec ':\{spec\}' asks for more digits after the point than are written \
                     (at ").s("most \{strfmt.FLOAT_MAX_PRECISION\}); write that many or fewer")
@@ -381,7 +381,7 @@ impl Ast_node
 
     fn format_spec_err(r: Ast_node$@, ctx: Desugar_ctx$@, spec: U8[], rest: U8[]) //<
         //< It reports text left over that cannot be read as a format specification
-        defer $m: = Str_builder.new()
+        defer $m: = Str_builder()
         m
             .s("unrecognized format spec ':\{spec\}'; could not read '\{rest\}'. The order is \
                 fixed: zero-pad, width, ',', then '.precision' (for example '08.2')")
@@ -390,7 +390,7 @@ impl Ast_node
     fn format_spec_combo_err(r: Ast_node$@, ctx: Desugar_ctx$@, spec: U8[], bad: U8[],
         owner: U8[]) //<
             //< It reports a format specification whose items cannot be combined
-        defer $m: = Str_builder.new()
+        defer $m: = Str_builder()
         if owner.equals("width")
             m
                 .s("format spec ':\{spec\}' has a zero-pad '0' and no width to pad to; write the \
@@ -462,5 +462,4 @@ fn serial_str(serial: Sz): U8[]
 fn build_path_ref(name: U8[], loc: base_ast.Loc): Ast_node$@ //<
     //< A reference to a plain name (one `Identifier` under an `expr_path`)
     //< This is the only shape lower/abi.kspl mangles (the reason is at desugar_fn_lit).
-    return Ast_node.new(.k_expr_path, name, loc)
-        .add_child(Ast_node.build_ident(name, 0, loc))
+    return Ast_node(.k_expr_path, name, loc).add_child(Ast_node.build_ident(name, 0, loc))

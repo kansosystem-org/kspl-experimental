@@ -62,8 +62,8 @@ priv fn check_ht16k33_callers(c: jsonrpc_client.Client$@, item: json.Value, aren
     //< A caller is always inside a file that refers to ht16k33.
     got: = incoming(c, item, arena)
     calls: = got.calls
-    $strays: = List<|U8[]|>.new(arena)
-    $marked: = List<|U8[]|>.new(arena)
+    $strays: = List<|U8[]|>(arena)
+    $marked: = List<|U8[]|>(arena)
     for i in Range.asc(calls.len)
         from: = calls.get(i).get("from")
         rel: = from.get("uri").as_str().unwrap_or("")
@@ -92,7 +92,7 @@ priv fn check_caller_order(calls: List<|json.Value|>@, arena: Arena$@) //<
     //< Caution: **Do not return them in `Map`'s order.** Otherwise **the same question is answered
     //< in a different order every run**, and a reader loses track of how far they read. With over a
     //< hundred callers here, a broken order always shows.
-    $out_of_order: = List<|U8[]|>.new(arena)
+    $out_of_order: = List<|U8[]|>(arena)
     $prev_uri: U8[] = ""
     $prev_line: I64 = -1I64
     for i in Range.asc(calls.len)
@@ -169,7 +169,7 @@ priv const QUERY_ID: I32 = 2 //< the id the workspace query is sent with
 priv fn answers(out: U8[], id: I32, arena: Arena$@): Bool //<
     //< Whether the worker's output holds the response to request `id`, its markers taken out
     //< A marker is its tag between two NULs (`ksplc/lsp/msg.kspl`), which no JSON text holds.
-    defer $acc: = Str_builder.new()
+    defer $acc: = Str_builder()
     $inside: = false
     for c in out
         if c == 0U8
@@ -196,7 +196,7 @@ priv fn check_worker_alive_workspace(exe: U8[], root: U8[], arena: Arena$@)
     $w: = subproc.spawn_piped(U8[][]::{ exe, "lsp-worker" }, "") catch
         verdict.check(name, false, "the worker cannot be started")
         return
-    $b: = Json_builder.new(arena)
+    $b: = Json_builder(arena)
     init: = b.obj().set("rootUri", b.str_val(root)).build()
     // **Only the name's last segment decides the weight**; a common one (`init`) hits an order of
     // magnitude more files than other queries.
@@ -204,7 +204,7 @@ priv fn check_worker_alive_workspace(exe: U8[], root: U8[], arena: Arena$@)
     item: = b.obj().set("uri", b.str_val("ksos/drivers/ht16k33.kspl"))
         .set("data", b.str_val("ksos.drivers.ht16k33.init")).build()
     params: = b.obj().set("item", item).build()
-    defer $frames: = Str_builder.new()
+    defer $frames: = Str_builder()
     jsonrpc.frame_into(frames@, jsonrpc.encode("initialize", init, 1, arena))
     jsonrpc.frame_into(frames@,
         jsonrpc.encode("callHierarchy/incomingCalls", params, QUERY_ID, arena))
@@ -217,7 +217,7 @@ priv fn check_worker_alive_workspace(exe: U8[], root: U8[], arena: Arena$@)
     $last: = sys.mono_us()
     $worst_us: I64 = 0I64
     $seen: Sz = 0
-    defer $out: = Str_builder.new()
+    defer $out: = Str_builder()
     for _k in Range.asc(20000)
         got: = w.read(buf, 300000) catch
             break

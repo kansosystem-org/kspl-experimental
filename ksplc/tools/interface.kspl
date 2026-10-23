@@ -224,7 +224,7 @@ impl Walk
                 out.s("const " if is_const else "").s("void ").s(starred)
             return
         case .fn_type(sig)
-            defer $params: = Str_builder.new()
+            defer $params: = Str_builder()
             for i in Range.asc(sig.params.len)
                 if i > 0
                     params.s(", ")
@@ -315,10 +315,9 @@ fn render(root: Ast_node$@, c: Sema_ctx$@, form: Form, out_path: U8[], parser: k
     U8[] //<
         //< The interface's text, or empty where a refusal was reported (`c.err`)
     $walk: = Walk::{ .c = c,
-        .types = base_core.arena.create(List<|Named|>.new(base_core.arena)),
-        .decl_of = base_core.arena.create(Map<|I32, Ast_node$@|>.new(base_core.arena)),
-        .site = null }
-    $exports: = List<|Export|>.new(base_core.arena)
+        .types = base_core.arena.create(List<|Named|>(base_core.arena)),
+        .decl_of = base_core.arena.create(Map<|I32, Ast_node$@|>(base_core.arena)), .site = null }
+    $exports: = List<|Export|>(base_core.arena)
     for raw in root.children
         n: = raw.unwrap_top_level()
         if (n.kind_id == .k_decl_struct || n.kind_id == .k_decl_enum) && n.type_id != 0
@@ -358,14 +357,14 @@ priv fn ret_id_of(n: Ast_node$@): I32 //< a function's return type; `Void` where
     return type_node.type_id
 
 priv fn params_of(n: Ast_node$@): List<|Ast_node$@|> //< a function's parameters, in order
-    $out: = List<|Ast_node$@|>.new(base_core.arena)
-    for p in base_ast_ext.Param_cursor.new(n.get_fn_params(), false)
+    $out: = List<|Ast_node$@|>(base_core.arena)
+    for p in base_ast_ext.Param_cursor(n.get_fn_params(), false)
         out.push(p)
     return out
 
 priv fn check_names(walk: Walk$@, exports: List<|Export|>$@) //<
     //< It refuses two declarations of one name: C has one space for them all
-    $seen: = Map<|U8[], Bool|>.new(base_core.arena)
+    $seen: = Map<|U8[], Bool|>(base_core.arena)
     for e in exports
         claim(walk, seen@, e.node, e.node.get_decl_id_text())
     for t in walk.types
@@ -416,7 +415,7 @@ priv fn guard_of(out_path: U8[]): U8[] //< the include guard, from the file's na
 
 priv fn render_c(walk: Walk$@, exports: List<|Export|>$@, out_path: U8[]): U8[]
     guard: = guard_of(out_path)
-    defer $out: = Str_builder.new()
+    defer $out: = Str_builder()
     out.s("/* The C interface of a library, written by `ksplc --library`.\n")
     out.s(" * Caution: Do not edit it. The compiler regenerates it with the library. */\n")
     out.s("#ifndef \{guard\}\n#define \{guard\}\n\n")
@@ -448,7 +447,7 @@ priv fn render_c(walk: Walk$@, exports: List<|Export|>$@, out_path: U8[]): U8[]
         out.s("};\n\n")
     for e in exports
         c_doc(e.doc, "", out@)
-        defer $params: = Str_builder.new()
+        defer $params: = Str_builder()
         ps: = params_of(e.node)
         for i in Range.asc(ps.len)
             p: = ps.get(i)
@@ -467,8 +466,8 @@ priv fn render_c(walk: Walk$@, exports: List<|Export|>$@, out_path: U8[]): U8[]
 priv fn bodies_in_order(walk: Walk$@): List<|Named|> //<
     //< The `struct`s whose fields are written, each after those it holds by value
     //< C needs a type complete where a value of it is held.
-    $out: = List<|Named|>.new(base_core.arena)
-    $done: = Map<|I32, Bool|>.new(base_core.arena)
+    $out: = List<|Named|>(base_core.arena)
+    $done: = Map<|I32, Bool|>(base_core.arena)
     for t in walk.types
         if !t.is_enum && t.body
             visit_body(walk, t.type_id, done@, out@, 0)
@@ -519,7 +518,7 @@ priv fn render_c_enum(walk: Walk$@, name: U8[], def: sema_type_def.Enum_def$@, o
 priv fn render_kspl(walk: Walk$@, exports: List<|Export|>$@, root: Ast_node$@, out_path: U8[],
     parser: kspeg.Target$@): U8[] //<
         //< The KSPL form, written in braces, then printed by the formatter in the file's notation
-    defer $out: = Str_builder.new()
+    defer $out: = Str_builder()
     out.s("// The C interface of a library, written by `ksplc --library`.\n")
     out.s("// Caution: Do not edit it. The compiler regenerates it with the library.\n\n")
     for t in walk.types
@@ -545,7 +544,7 @@ priv fn render_kspl(walk: Walk$@, exports: List<|Export|>$@, root: Ast_node$@, o
         default {}
         out.s("}\n\n")
     // The outside libraries the library itself names: a KSPL caller's `--emit-libs` takes them in.
-    $libs: = List<|U8[]|>.new(base_core.arena)
+    $libs: = List<|U8[]|>(base_core.arena)
     tools_libs.append_program_libs(root, libs@)
     for lib in libs
         out.s("#link(\"").s(lib).s("\") ")

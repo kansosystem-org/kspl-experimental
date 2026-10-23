@@ -481,7 +481,7 @@ pub struct Matrix<|T, const ROWS: Sz, const COLS: Sz|>
 
 **A member's visibility cannot be written wider than its enclosing declaration's** (a compile error). This covers a struct's fields, and the methods of an `impl` and a `trait`. Code that cannot name the type cannot reach its members either, so the `pub` in `priv struct S { pub x: I32; }` would widen nothing. Narrower is accepted (a `priv` field inside a `pub struct`).
 
-**A generic type's function without a receiver** (a `new` that builds a value, say) is called as `Type<|type arguments|>.function_name(...)`: `List<|I32|>.new(null)`, `Map<|U8[], V|>.new(arena)`. The type arguments are written on the type, and the call's arguments do not supply them. `List.new(null)` is a compile error that says what to write.
+**A generic type's function without a receiver** is called as `Type<|type arguments|>.function_name(...)`: `Map<|U8[], V|>.new_with_cap(16, arena)`. Its `new` is called as the type: `List<|I32|>(null)` ([5.2](#52-implementations-impl-and-receivers)). The type arguments are written on the type, and the call's arguments do not supply them. `List(null)` is a compile error that says what to write.
 
 **Type arguments after a type that declares none are a compile error**, in a type position and before a member alike (`p: Plain<|I32|>`, `Plain<|I32|>.mk(3)`). They would bind nothing, as after a function that declares none ([8.1](#81-definitions)).
 
@@ -664,7 +664,7 @@ typedef Callback = fn(status: I32): Void
 typedef String_map = Map<|U8[], I32|>
 ```
 
-**A type's members are reached through its typedef as through the type itself**: a variant (`Tone.dark` after `typedef Tone = Shade`), a static function (`Nums.new(null)` after `typedef Nums = List<|I32|>`) and a struct literal (`Pt::{ .x = 1, .y = 2 }`).
+**A type's members are reached through its typedef as through the type itself**: a variant (`Tone.dark` after `typedef Tone = Shade`), a static `new` (`Nums(null)` after `typedef Nums = List<|I32|>`) and a struct literal (`Pt::{ .x = 1, .y = 2 }`).
 
 **Typedefs can be written in any order, and one can name another** ([4.4.1](#441-top-level-variables)): the compiler follows a chain of typedefs to the underlying type.
 
@@ -695,7 +695,7 @@ The destination (the `Writer` from `io.out()`, a `Str_builder`, …) must theref
 
 `put` returns the destination it was given, at its own type. So interpolation on a `Str_builder` keeps the concrete type and can chain `Str_builder`'s own methods (`b.s("n=\{n\}").slice()`). Do not use `Formattable.fmt`'s return value: called through the trait, it has collapsed to `Writer`.
 
-The chain always begins with an `s(...)` on the destination; when `\{…\}` comes first, a step writing the empty string is inserted. Without that step, a destination held by value (the `b` of `$b: = Str_builder.new()`) would reach `put` as a copy, and `b`'s own length would not advance. Only a method's receiver takes an address implicitly.
+The chain always begins with an `s(...)` on the destination; when `\{…\}` comes first, a step writing the empty string is inserted. Without that step, a destination held by value (the `b` of `$b: = Str_builder()`) would reach `put` as a copy, and `b`'s own length would not advance. Only a method's receiver takes an address implicitly.
 
 **Interpolation pours into a Writer; it does not build a value.** It can be written only as an argument in a Writer chain (`io.out().s("...")` / `b.s("...")` / `w.s("...")`). In an assignment to a variable, or as an argument to a plain function, it is a compile error. Where it pours is always written in the source: out to a peer, into the caller's array, or into memory allocated and kept. For the string itself, keep it in an arena (a block of memory freed all at once, [8.4](#84-memory-management)) with `arena.text().s("...").take()`, or write into a `Str_builder` / `Buf_writer` and chain `.slice()`.
 
@@ -708,7 +708,7 @@ priv fn take(s: U8[])
 
 n: = 7
 io.out().s("n=\{n\}\n") // OK: a Writer chain
-defer $b: = Str_builder.new()
+defer $b: = Str_builder()
 take(b.s("n=\{n\}").slice()) // OK: chain a slice when a value is needed
 x: U8[] = "n=\{n\}" // error: it cannot build a value
 take("n=\{n\}") // error: the same reason
@@ -930,6 +930,10 @@ A **place** is an expression referring to where a value is, roughly what C calls
 | `x[i]` | An element inside the receiver's place: a fixed-length array's, or that of a type implementing `Index_place` / `Index_ref`, as `std/lang`'s slice `Slice<\|$T\|>` does (§6.1) |
 | `p$` | What a pointer points at |
 
+**A field, or an element of a fixed-length array, is a place only where the value holding it is a place.** `f().x` is part of the value `f()` returns, so it is not a place: it cannot be assigned, and `f().x@` is refused. Through a pointer, `p.x` is a place wherever the pointer comes from.
+
+**An element that a container owns follows the same rule.** A container owns its elements where its `Index_place.at` takes `Self$@`, as `List<|T|>`'s does ([6.1.2](#612-indexing)). So `make_list()[0]` can be read, but it cannot be assigned, and `make_list()[0]@` is refused.
+
 **Three operations touch a place, and the same three rules decide all three.**
 
 ```mermaid
@@ -1043,7 +1047,7 @@ CS.peek() // OK (peek takes Self@)
 **If the receiver is a value (neither a pointer nor a slice), a `$` is needed before the name.** A `Self$@` call rewrites that value itself: the same rule as `v.f = x` needing a `$v`.
 
 ```kspl
-$b: = Str_builder.new() // ← the '$' is needed
+$b: = Str_builder() // ← the '$' is needed
 b.s("hello") // s() takes Self$@ and rewrites b's contents
 
 p: Builder$@ = b@
@@ -1267,16 +1271,16 @@ These are the two axes of [4.2](#42-the-two-axes-of-mutability), applied as they
 
 | The receiver | A call's result, a literal, a computed value as receiver | Why |
 | :-- | :-- | :-- |
-| `Self@` (reads only) | **Accepted** (`f().m()` / `xs.where(p).to_list(a)`) | The compiler places a copy in an automatic variable in the call's block and passes its address. Its lifetime is the same as writing `x: = f(); x.m();`, and nothing is allocated on the heap |
-| `Self$@` (writes) | **Refused** (`cannot call a method that writes its receiver`) | The write would go to a copy that is thrown away, so `make_point().set_n(5)` would do nothing |
+| `Self@` (reads only) | **Accepted** (`f().m()` / `f().items.get(0)` / `f().items[0]` / `xs.where(p).to_list(a)`) | The compiler places a copy in an automatic variable in the call's block and passes its address. Its lifetime is the same as writing `x: = f(); x.m();`, and nothing is allocated on the heap |
+| `Self$@` (writes) | **Refused** (`cannot call a method that writes its receiver`, and `cannot write to an element of a temporary object` for `f().items[0] = v`) | The write would go to a copy that is thrown away, so `make_point().set_n(5)` would do nothing |
 
 **The dividing line is "does it write the receiver's own memory", not whether `Self` is mutable.** `impl U8$[]`'s `fill(r: Self@, …)` is accepted because its receiver is `Self@`. Its write reaches the bytes the slice points at, not the slice's descriptor (the pointer and length pair). Only the descriptor is copied, so `buf.sub_mut(0, 4).fill(0)` does fill the caller's memory.
 
-A function whose first parameter has nothing to do with its own type takes no receiver. It is a *static function*, called on the type (`Vector.new(1, 2)`).
+A function whose first parameter has nothing to do with its own type takes no receiver. It is a *static function*, called on the type (`Arena.from_buffer(…)`).
 
-**Calling a type selects its static `new` function.** `Vector(1, 2)` calls `Vector.new(1, 2)`. Both spellings are accepted. A qualified name (`geometry.Vector(1, 2)`), a typedef, and `Self(...)` inside an impl follow the same rule. Generic type arguments must be written: `List<|I32|>(arena)`.
+**Calling a type selects its static `new` function.** `Vector(1, 2)` calls `Vector.new`. This is the only way to call a static `new`. The explicit call `Vector.new(1, 2)` is a compile error that names the type call to write. A `new` whose first parameter is its own type is a method, and it is called by its name like any other method. A qualified name (`geometry.Vector(1, 2)`), a typedef, and `Self(...)` inside an impl follow the same rule. Generic type arguments must be written: `List<|I32|>(arena)`.
 
-The call has the constructor's actual result type. That can be a value, a pointer, or a result that needs `!` or `catch`. Argument order, defaults, visibility and error handling are the same as for the explicit member call. A missing `new`, or a `new` whose first parameter is its owning type by value or pointer, is an error. There is no implicit allocation, field initialization or cleanup: write `defer` where cleanup is wanted.
+The call has the constructor's actual result type. That can be a value, a pointer, or a result that needs `!` or `catch`. Argument order, defaults, visibility and error handling are the same as for any other static function call. A missing `new`, or a `new` whose first parameter is its owning type by value or pointer, is an error. There is no implicit allocation, field initialization or cleanup: write `defer` where cleanup is wanted.
 
 Only a name that resolves to a type takes this route. A local value shadowing the type keeps its ordinary call behavior. A bare type name is not a constructor function value; use `Vector.new` for that. Other factories keep their names (`Arena.from_buffer(...)`). Primitive type calls are not casts; write `I32::value` for conversion.
 
@@ -1541,6 +1545,7 @@ Implement a prescribed trait (`Add` or `Eq` in `std/lang`, and so on), and `+` a
   * It takes precedence over `Index`/`Index_mut` on a type implementing both; `at` alone covers reading and writing.
   * In the standard library, `List<|T|>` implements it naming `Self$@`, and `Slice<|$T|>` / `Tensor<|T|>` naming `Self@`.
   * **The receiver shape an implementation declared decides whether it is chosen when the receiver is read-only**. `at(r: Self$@, …)` touches the descriptor itself, so it needs a writable receiver. It is not chosen across a read-only place such as `xs: List<|T|>@`, and the choice goes to the next one, `Index_ref`. `at(r: Self@, …)` only reads the descriptor and returns the mutable pointer inside. So it is chosen across a read-only place too, and the elements can be written. A bare `Self` (received by value) counts as needing a writable receiver.
+  * **A temporary counts as a read-only receiver here**, as it does for any `Self$@` method ([5.2](#52-implementations-impl-and-receivers)). A temporary is a call's result or another value with no variable. `make_list()[0]` therefore reads through `at_ref`. A write to it is refused, because it would change a copy that is then thrown away. Without `Index_ref`, the read is refused too. Bind the value to a name first (`$xs: = make_list();`).
   * **Once it is chosen, the returned pointer's type also decides whether a write is allowed** (the path rule in [4.3](#43-places-and-the-rules-for-when-they-may-be-written)). Through `at(r: Self@, …)`, the returned `Output$@` speaks for the permission, not the path reaching the receiver. That is how a pointer field is already written. Take a read-only `x` (a parameter received by value, or a variable declared without `$`) whose field `p` is a `T$@`. Then `x.p$ = v` is accepted, because the write lands where `p` points, not in `x`. So `p`'s own `$` decides. `x[i] = v` through `at(r: Self@, …)` also lands where a returned pointer points, so it is accepted in the same function on the same terms. With `at(r: Self$@, …)` the same `x[i] = v` is refused, while `x.p$ = v` still passes.
 * **Indexing that returns a read-only place (`Index_ref`)**: a type implements `Index_ref<|Idx, Output|>`, which carries `fn at_ref(r: Self, index: Idx, …): Output@`, with the same two position parameters. Then `a[i]` is a read-only "place". Reading and taking an address are accepted (`a[i]@` is an `Output@`). Assignment and compound assignment are refused because the element type is immutable. The compiler desugars `a[i]` to `a.at_ref(i)$`.
   * **A container whose referent is immutable can implement only this one.** `Index_place.at` promises an `Output$@`, which a type holding only a read-only referent such as `ptr: T@` cannot give. Where the elements' immutability rides on a type argument (`Slice<|T|>`), the declaration does not show it. So it is checked per instantiation and made a compile error. Write a `$` on the `impl`'s target so `Index_place` attaches to the mutable version only ([3.3](#33-structs-struct)).
@@ -1642,9 +1647,9 @@ A type that implements none of `Index`, `Index_place` and `Index_ref` cannot be 
 
 ### 6.3 Method calls and namespaces
 
-**One `.` does both jobs.** It calls a method on a value or a pointer alike (`vec.length_sq()`). It also walks down from a type's name or an import's alias to a name held there (`Vector.new(1, 2)`, `io.out().s("Hi\n")`). The compiler tells which is meant from the left side, so there is no choosing between `::` and `.`.
+**One `.` does both jobs.** It calls a method on a value or a pointer alike (`vec.length_sq()`). It also walks down from a type's name or an import's alias to a name held there (`Sz.width()`, `io.out().s("Hi\n")`). The compiler tells which is meant from the left side, so there is no choosing between `::` and `.`.
 
-**A type's name walks down; on its own it is not a value.** `Vector.new(1, 2)` and `Sz.width()` read a name held on the type. Written where a value goes (`x: = Vector`, `x: = Sz`), it is rejected. A type names a kind of value and holds none, so the declaration has nothing to take its type from. Build a value instead (`Vector.new(...)`, `Vector::{ ... }`), or write the value itself.
+**A type's name walks down; on its own it is not a value.** `Vector.length_sq` and `Sz.width()` read a name held on the type. Written where a value goes (`x: = Vector`, `x: = Sz`), it is rejected. A type names a kind of value and holds none, so the declaration has nothing to take its type from. Build a value instead (`Vector(...)`, `Vector::{ ... }`), or write the value itself.
 
 **The other way round, a value's name is not a type.** Written where a type goes, the name of a function (`x: twice`, `same<|I32|>`), a variable (`y: g`) or a member reached through a type (`Point.x`, `Box<|I32|>.keep`) is a compile error. A pointer to a function has a function type, `fn(x: I32): I32` ([8.1](#81-definitions)).
 
@@ -1794,7 +1799,7 @@ Cast one side to say which reading is meant (`I64::a < I64::b`). A shift is outs
 
 #### 6.5.1 Evaluation order
 
-**Subexpressions are evaluated in the order written in the source (left to right).** This matters when they have side effects, such as printing or changing a variable.
+**Subexpressions are evaluated in the order written in the source (left to right).** This matters when they have side effects, such as printing or changing a variable. **An assignment is the one exception: it evaluates its value first, then its place, then writes.**
 
 | Shape | Order |
 | :-- | :-- |
@@ -1803,8 +1808,12 @@ Cast one side to say which reading is meant (`I64::a < I64::b`). A shift is outs
 | `f(x, g())` / `x + g()` | `x` is read → `g()` (a read is part of the order) |
 | `o.m(a()).m(b())` | `a()` → `b()` (a receiver before the arguments) |
 | `S::{ .p = a(), .q = b() }` | `a()` → `b()` |
-| `place = value` / `place op= value` | **The place's subexpressions** → the value |
-| `a[i()] = v()` | `i()` → `v()` |
+| `place = value` | **The value** → the place's subexpressions, left to right → the write |
+| `place op= value` | The value → the place's subexpressions → the place's old value is read → the write |
+| `a[i()][j()] = v()` | `v()` → `i()` → `j()` |
+| `m[k()] = v()`, through `Index_mut.set` ([6.1.1](#611-operator-overloading)) | `v()` → `m` → `k()` → `set` |
+
+**Why the value comes first**: a place can lie in memory that a call moves. In `nodes[i].left = grow()`, `grow()` can add to the list `nodes` and move its elements to new memory. Had the place been found first, the write would land in the old memory, already freed, and nothing would report it. With the value first, the write follows the place at once. So whatever the value's calls do, the place is found in the memory as it is at the write.
 
 Caution: **KSPL must leave no order to the C implementation.** C leaves the order unspecified for an assignment's two sides, a call's arguments, an operator's operands and a compound literal's fields. From the same generated C, gcc takes a call's arguments from the right and clang from the left. For an assignment, clang evaluates the value first and gcc the destination. So side effects would give an answer that depends on the C compiler. KSPL guarantees that its C and LLVM backends agree, so the language fixes the order.
 
@@ -2136,7 +2145,7 @@ Every loop is written with one keyword, `for`. It has four notations, which cove
 | 3. Infinite | `for` | `for (;;)` |
 | 4. For-in | `for item in sequence` | - (Python's `for item in sequence`) |
 
-**Counting is written with `for … in`**: `for i in Range.asc(n)` from 0, `Range.new(start, stop, step)` otherwise, or `for x in xs` where the index would only read `xs[i]`. The C style is for a loop whose body changes its index or its bound. `ksplc lint` reports a C-style loop that only counts.
+**Counting is written with `for … in`**: `for i in Range.asc(n)` from 0, `Range(start, stop, step)` otherwise, or `for x in xs` where the index would only read `xs[i]`. The C style is for a loop whose body changes its index or its bound. `ksplc lint` reports a C-style loop that only counts.
 
 ```kspl
 // 1. the C style (init; condition; step), for an index the body moves too
@@ -2211,7 +2220,7 @@ for i in Range.asc(n) // equivalent to C's for (i = 0; i < n; i++)
     ...
 for i in Range.desc(n) // equivalent to C's for (i = n-1; i >= 0; i--)
     ...
-for i in Range.new(2, 10, 3) // an arbitrary start, end (exclusive), and step (2,5,8)
+for i in Range(2, 10, 3) // an arbitrary start, end (exclusive), and step (2,5,8)
     ...
 ```
 
@@ -2681,7 +2690,7 @@ There is no garbage collector (a run-time system that finds and frees unused mem
     ```
   * **A capture list (`defer a, b { ... }`) cannot be written** (a compile error).
 
-* **`defer` in front of a declaration frees what it declares** when the block ends: `defer $b: = Str_builder.new()` means `$b: = Str_builder.new()` followed by `defer b.free()`. It takes one name.
+* **`defer` in front of a declaration frees what it declares** when the block ends: `defer $b: = Str_builder()` means `$b: = Str_builder()` followed by `defer b.free()`. It takes one name.
   * **The call goes through `Manual_free`** ([8.4.5](#845-tracking-a-free-with-manual_free)), matched by its full name. A type that does not conform is a compile error, even where it has a method named `free`. There is no way to name another method. A cleanup other than `free()` (`unlock`, a child's `wait`) is a `defer` statement of its own.
   * **Such a value cannot be handed over**, since the block's end frees it. Returning or throwing it is a compile error. So is storing it whole (into a variable, a field, a struct or an array), or moving it where its type is `Move_only`. Declare it without `defer` to hand it over. A pointer declared this way is handed over only by `return` or `throw`; stored elsewhere, it lends what it points at, as `x@` does.
   * A `catch` under the declaration belongs to its initializer. The `free()` is registered after the whole declaration, so a failed initializer frees nothing.
@@ -2694,14 +2703,14 @@ import "std/mem" { Arena }
 import "std/str" { Str_builder }
 
 fn work(): Sz
-    defer arena: = Arena.new(1024) // freed on leaving the scope
+    defer arena: = Arena(1024) // freed on leaving the scope
     _bytes: = arena.alloc(32)
-    defer $msg: = Str_builder.new()
+    defer $msg: = Str_builder()
     msg.s("done")
     return msg.len
 
 fn greeting(name: U8[]): Str_builder
-    $sb: = Str_builder.new() // handed to the caller, so no `defer`
+    $sb: = Str_builder() // handed to the caller, so no `defer`
     sb.s("hello, ").s(name)
     return sb
 ```
@@ -2767,8 +2776,8 @@ enum Wrap
 // a bare block carries a label (with no heading it cannot be told from a continuation of
 // the line above)
 held:
-    w: = Wrap.filled(Rc<|I32|>.new(1)) // filled's payload, and
-    a: Rc<|I32|>[2] = ::{ Rc<|I32|>.new(1), Rc<|I32|>.new(2) }
+    w: = Wrap.filled(Rc<|I32|>(1)) // filled's payload, and
+    a: Rc<|I32|>[2] = ::{ Rc<|I32|>(1), Rc<|I32|>(2) }
 // are release'd in a chain on leaving the scope
 ```
 
@@ -2791,8 +2800,8 @@ import "std/refcount" { Rc }
 priv struct Holder
     field: Rc<|I32|>
 
-$rc: = Rc<|Holder|>.new(Holder::{ .field = Rc<|I32|>.new(1) })
-x: = Rc<|I32|>.new(2)
+$rc: = Rc<|Holder|>(Holder::{ .field = Rc<|I32|>(1) })
+x: = Rc<|I32|>(2)
 rc.get().field = x // error: cannot assign to an ARC-managed location whose left side contains a call
 
 // ✓ take the place first
@@ -2889,7 +2898,7 @@ fn test_text(arena: Arena$@)
     verdict.pass("a copy keeps its length")
 
 fn main(): I32
-    defer arena: = Arena.new(4096)
+    defer arena: = Arena(4096)
     $t: = Tests::{ .arena = arena }
     t.run()
     return verdict.finish()
@@ -3148,8 +3157,8 @@ import "std/ds" as hash_map
 import "std/io"
 
 fn main()
-    defer $m: = hash_map.Map<|U8[], I32|>.new(null)
-    $gen: = Prng.new(10) // exactly the same type as prng.Prng
+    defer $m: = hash_map.Map<|U8[], I32|>(null)
+    $gen: = Prng(10) // exactly the same type as prng.Prng
     io.out().s("Hello \{m.len\} \{gen.below(6)\} \{sqrt(16.0)\}\n")
 ```
 
@@ -3508,9 +3517,9 @@ Many languages have features KSPL leaves out on purpose. The table names each on
 | Feature | The alternative in KSPL |
 | --- | --- |
 | **try-finally** | The `defer` statement, which runs on every way out (`return` / `throw` / `break` / `continue`) ([8.4.1](#841-the-defer-statement)). |
-| **Automatic cleanup** (a destructor, as Rust's `Drop` or C++'s, a method run by itself when a value goes away) | Write `defer` in front of the declaration: `defer $b: = Str_builder.new()` frees `b` when its block ends ([8.4.1](#841-the-defer-statement)). For shared ownership, conform to `Ref_counted` ([8.4.2](#842-automatic-reference-counting-via-ref_counted-conformance)). |
+| **Automatic cleanup** (a destructor, as Rust's `Drop` or C++'s, a method run by itself when a value goes away) | Write `defer` in front of the declaration: `defer $b: = Str_builder()` frees `b` when its block ends ([8.4.1](#841-the-defer-statement)). For shared ownership, conform to `Ref_counted` ([8.4.2](#842-automatic-reference-counting-via-ref_counted-conformance)). |
 | **Garbage collection** (GC: a runtime that finds and frees unused memory by itself) | `defer`, and values kept on the stack. |
-| **A cleanup joined behind its declaration** (Lombok's `@Cleanup` with a named method, GCC's `cleanup` attribute, `buf: = Str_builder.new() defer .free()`) | `defer` in front of the declaration for `free()`: `defer buf: = Str_builder.new()`. Another cleanup is a `defer` of its own on the next line, naming it: `defer g.unlock()` ([8.4.1](#841-the-defer-statement)). |
+| **A cleanup joined behind its declaration** (Lombok's `@Cleanup` with a named method, GCC's `cleanup` attribute, `buf: = Str_builder() defer .free()`) | `defer` in front of the declaration for `free()`: `defer buf: = Str_builder()`. Another cleanup is a `defer` of its own on the next line, naming it: `defer g.unlock()` ([8.4.1](#841-the-defer-statement)). |
 | **Class inheritance** | Hold a struct inside another, and gather common behavior in a `trait`. |
 | **Named actual arguments** (`f(offset = 0)`) | Take the settings as a struct, written `::{ .name = value }` (an omitted field is 0). |
 | **Function overloading** (several functions with one name, told apart by their parameters) | Make it generic, or give each its own name. |
@@ -3520,8 +3529,8 @@ Many languages have features KSPL leaves out on purpose. The table names each on
 | **Several variables in one declaration, and several inits or steps in a loop's header** (`a: = 1, b: = 2`, C's `for (i = 0, j = n; i < j; i++, j--)`) | One declaration for each variable. A second loop variable is declared before the loop and changed in its body ([4.1.1](#411-the-shape-of-a-declaration), [7.2](#72-loops)). The `,` is a syntax error whose note says so. |
 | **The type's name in a `case`** (`case Event.quit`, as Swift also accepts) | `case .quit`; the type's name is an error naming this form ([7.1](#71-branching)). |
 | **Another language's word for a loop or a branch** (`while` in C, Java, Python and Swift; Rust's `loop`; `match` in Rust, Python and Scala) | `for` with a condition alone (`for x > 0`) in place of `while`; a bare `for`, which repeats until a `break` leaves it, in place of `loop`; `switch x case ...` in place of `match` ([7.1](#71-branching), [7.2](#72-loops)). Each is a syntax error whose note writes the KSPL head. The three words stay usable as names. |
-| **`::` as a path separator** (`Arena::new(1024)`, `io::out()`, `Shade::dark`) | `.`, which reaches a module's member, a type's own and a value's alike: `Arena.new(1024)`, `io.out()`, `Shade.dark`. `::` is the cast (`I32::n`) and a literal's type (`T::{ … }`); written as a path, it is an error naming the `.` spelling. A local named like an imported module hides it, and gets a warning at its declaration ([4.5](#45-scope-and-shadowing)). |
-| **Range syntax (`a..b`)** | `for x in` over `std/lang`'s `Range` (`Range.asc(n)` / `Range.desc(n)` / `Range.new(start, stop, step)`; `stop` is exclusive). |
+| **`::` as a path separator** (`Arena::new(1024)`, `io::out()`, `Shade::dark`) | `.`, which reaches a module's member, a type's own and a value's alike: `io.out()`, `Shade.dark`. A type's `new` is called as the type: `Arena(1024)`. `::` is the cast (`I32::n`) and a literal's type (`T::{ … }`); written as a path, it is an error naming the `.` spelling, or the type call for `new`. A local named like an imported module hides it, and gets a warning at its declaration ([4.5](#45-scope-and-shadowing)). |
+| **Range syntax (`a..b`)** | `for x in` over `std/lang`'s `Range` (`Range.asc(n)` / `Range.desc(n)` / `Range(start, stop, step)`; `stop` is exclusive). |
 | **A rename inside an import's braces** (Python's `from p import a as b`, JavaScript's `import { a as b }`) | The file under a name of its own (`import "p" as q`, then `q.a`), or `typedef B = A` for a type ([9.2](#92-which-names-an-import-brings-in)). `{ A as B }` is a syntax error whose note says so. |
 | **`a[i..j]` for cutting out a slice** | `s.sub(start, len)` / `s.sub_from(start)` from `std/chars`, which the calling file imports: a view, not a copy (the writable one is `sub_mut`). It cuts any element type alike ([3.2](#32-derived-types)); `std/seq`'s `take` / `skip` are another entry point, copying into a `List`. |
 | **Tuples** (unnamed groups of values, such as `(1, "a")`) | A struct (`struct`). |

@@ -1,0 +1,89 @@
+//< Source-boundary checks, the reader and writer of every structure, and includes and saves
+import "ksmd/source" { Source, MAX_SOURCE_BYTES }
+import "ksmd/tests/calculation"
+import "ksmd/tests/document"
+import "ksmd/tests/editing"
+import "ksmd/tests/image"
+import "ksmd/tests/include"
+import "ksmd/tests/prose"
+import "ksmd/tests/tables"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/verdict"
+
+fn main(): I32
+    verdict.begin("ksmd source")
+    valid_sources()
+    invalid_sources()
+    document.run()
+    include.run()
+    image.run()
+    editing.run()
+    calculation.run()
+    prose.run()
+    tables.run()
+    return verdict.finish()
+
+priv fn valid_sources()
+    empty: = Source("empty.ksmd", "%ksmd 1") catch
+        panic("a header alone is an empty document")
+    verdict.check("header without a final newline", empty.body == empty.bytes.len, "")
+    lf: = Source("prose.ksmd", "%ksmd 1\n\n日本語\n") catch
+        panic("valid UTF-8 source")
+    first: = lf.line_at(lf.body)
+    second: = lf.line_at(first.next)
+    verdict.check("blank and Unicode lines",
+        first.text.len == 0 && second.text.equals("日本語"), "")
+    crlf: = Source("windows.ksmd", "\uFEFF%ksmd 1\r\n日本語\r\nlast") catch
+        panic("BOM and CRLF source")
+    row: = crlf.line_at(crlf.body)
+    last: = crlf.line_at(row.next)
+    verdict.check("CRLF line views",
+        row.text.equals("日本語") && last.text.equals("last"), "")
+    verdict.check("last line without a newline", last.next == crlf.bytes.len, "")
+    at: = crlf.diagnostic(row.offset + 6, "test")
+    verdict.check("Unicode columns retain original byte offsets",
+        at.line == 2 && at.column == 3 && at.offset == row.offset + 6, "")
+    verdict.check("diagnostic retains source identity", at.path.equals("windows.ksmd"), "")
+    eof: = crlf.diagnostic(crlf.bytes.len, "test")
+    verdict.check("end-of-file location", eof.line == 3 && eof.column == 5, "")
+    defer arena: = Arena(MAX_SOURCE_BYTES + 1024)
+    large: = U8$[]::{ .ptr = U8$@::arena.alloc(MAX_SOURCE_BYTES), .len = MAX_SOURCE_BYTES }
+    for i in Range.asc(large.len)
+        large[i] = 'x'
+    for i in Range.asc(lf.body)
+        large[i] = lf.bytes[i]
+    _accepted: = Source("limit.ksmd", large) catch
+        panic("the exact source limit must be accepted")
+    verdict.check("exact source size limit", true, "")
+
+priv fn invalid_sources()
+    fails("", "expected version header %ksmd 1", 0, 1, 1)
+    fails("%ksmd 2\ninvalid body", "expected version header %ksmd 1", 0, 1, 1)
+    fails("%ksmd 1 \n", "expected version header %ksmd 1", 0, 1, 1)
+    defer $unicode: = Str_builder()
+    unicode.s("%ksmd 1\n日").c(0xFFU8)
+    fails(unicode.slice(), "invalid UTF-8", 11, 2, 2)
+    bad_utf8(U8[]::{ 0xC0U8, 0xAFU8 })
+    bad_utf8(U8[]::{ 0xEDU8, 0xA0U8, 0x80U8 })
+    bad_utf8(U8[]::{ 0xF0U8, 0x9FU8 })
+    fails("%ksmd 1\r", "a carriage return must be followed by a line feed", 7, 1, 8)
+    fails("%ksmd 1\r\na\rb", "a carriage return must be followed by a line feed", 10, 2, 2)
+    defer arena: = Arena(MAX_SOURCE_BYTES + 1024)
+    large: = U8$[]::{ .ptr = U8$@::arena.alloc(MAX_SOURCE_BYTES + 1), .len = MAX_SOURCE_BYTES + 1 }
+    for i in Range.asc(large.len)
+        large[i] = 'x'
+    fails(large, "source exceeds 8 MiB", 0, 1, 1)
+
+priv fn fails(bytes: U8[], message: U8[], offset: Sz, line: Sz, column: Sz)
+    _source: = Source("bad.ksmd", bytes) catch e
+        verdict.check(message,
+            e.message.equals(message) && e.offset == offset && e.line == line &&
+            e.column == column && e.path.equals("bad.ksmd"), "")
+        return
+    verdict.check("invalid source was accepted", false, "")
+
+priv fn bad_utf8(tail: U8[])
+    defer $text: = Str_builder()
+    text.s("%ksmd 1\n").s(tail)
+    fails(text.slice(), "invalid UTF-8", 8, 2, 1)

@@ -24,21 +24,21 @@ const BEARER: U8[] = "Bearer " //< the prefix before the token in the `Authoriza
 
 fn queue_json(c: conn.Conn$@, status: I32, val: json.Value, keep: Bool, allow: U8[] = "") //<
     //< Builds one JSON value and queues it as the response; `allow` is a 405's `Allow`
-    defer $body: = Str_builder.new()
+    defer $body: = Str_builder()
     val.dump(body@)
     conn.queue_response(c, status, "application/json", body.slice(), keep, allow)
 
 fn queue_json_error(c: conn.Conn$@, status: I32, allow: U8[] = "") //<
     //< Queues an error answer in JSON; `allow` is a 405's `Allow`
     reason: = http.reason_phrase(status).unwrap_or("")
-    $b: = Json_builder.new(c.arena)
+    $b: = Json_builder(c.arena)
     val: = b.obj().set("error", b.str_val(reason)).set("status", b.int_val(status)).build()
     // An error response closes (the same reason as `queue_error` on the static side).
     queue_json(c, status, val, false, allow)
 
 fn queue_api_status(c: conn.Conn$@, ctx: conn.Ctx$@, keep: Bool) //<
     //< `GET /api/status`: returns that it is running, and how much it has handled
-    $b: = Json_builder.new(c.arena)
+    $b: = Json_builder(c.arena)
     // The car's steering policy does not change after `build()`, so it is read directly. **For
     // local use there is none**, and `pilot` is null.
     $pilot_val: = b.null_val()
@@ -153,7 +153,7 @@ priv fn check_content(path: U8[], expected: U8[]): I32 //< checks a conditional 
         return 409
     defer $file: = io.open(path, "rb") catch
         return 500
-    $hash: = Sha256.new()
+    $hash: = Sha256()
     buf: U8[8192] = ::{}
     for
         n: = file.read(U8$[]::buf) catch
@@ -174,7 +174,7 @@ fn queue_put_file(c: conn.Conn$@, path: U8[], body: U8[], keep: Bool) //<
         // No folder, or not writable: not a missing name, so not a 404.
         queue_json_error(c, 500)
         return
-    $b: = Json_builder.new(c.arena)
+    $b: = Json_builder(c.arena)
     val: = b.obj().set("wrote", b.int_val(body.len)).build()
     queue_json(c, 200, val, keep)
 
@@ -189,7 +189,7 @@ fn queue_api_stat(c: conn.Conn$@, query: U8[], root: U8[], keep: Bool) //<
     info: = fs.stat(target) catch _e
         queue_json_error(c, 404)
         return
-    $b: = Json_builder.new(c.arena)
+    $b: = Json_builder(c.arena)
     val: = b.obj().set("size", b.int_val(info.size))
         .set("changed_at", b.int_val(info.mtime)).build()
     queue_json(c, 200, val, keep)
@@ -240,7 +240,7 @@ fn queue_api_car(c: conn.Conn$@, req: http.Request$@, p: pilot.Pilot$@, keep: Bo
     act: = pilot.decide(p, obs, c.arena)
     m: = pilot.MANEUVERS[act]
     conn.stats.commands += 1I64
-    $b: = Json_builder.new(c.arena)
+    $b: = Json_builder(c.arena)
     val: = b.obj().set("seq", b.int_val(seq)).set("cmd", b.str_val(m.name))
         .set("lon", b.int_val(m.lon)).set("lat", b.int_val(m.lat))
         .set("rot", b.int_val(m.rot)).set("valid_ms", b.int_val(pilot.COMMAND_VALID_MS)).build()
@@ -280,7 +280,7 @@ priv fn reaches(c: conn.Conn$@, ctx: conn.Ctx$@, r: Reach): Bool //<
 
 priv fn queue_ok(c: conn.Conn$@, keep: Bool) //< returns only "it took effect"
     //< **A response with no content is JSON too**, so the page need not branch on the format.
-    $b: = Json_builder.new(c.arena)
+    $b: = Json_builder(c.arena)
     queue_json(c, 200, b.obj().build(), keep)
 
 fn queue_api_here(c: conn.Conn$@) //<

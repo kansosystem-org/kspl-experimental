@@ -12,7 +12,7 @@ import "std/verdict"
 
 fn test_tokenizer_roundtrip(arena: Arena$@)
     verdict.start("[Tokenizer] decoding is symmetrical with encoding test...")
-    $tok: = ai_tokenizer.Tokenizer.new(arena)
+    $tok: = ai_tokenizer.Tokenizer(arena)
 
     tok.add_token("K", 1)
     tok.add_token("a", 2)
@@ -45,7 +45,7 @@ fn test_tokenizer_cache_follows_additions(arena: Arena$@) //<
     //< Caution: **Encode before the addition too.** The first encoding fills the cache. So a
     //< cache kept past an addition would answer with the IDs from before it.
     verdict.start("[Tokenizer] the cache of merged chunks follows added rules")
-    $tok: = ai_tokenizer.Tokenizer.new(arena)
+    $tok: = ai_tokenizer.Tokenizer(arena)
     tok.add_token("a", 1)
     tok.add_token("b", 2)
     tok.add_token("ab", 3)
@@ -64,14 +64,14 @@ fn test_tokenizer_keeps_its_size() //<
     //< result itself. A server keeps one tokenizer for its lifetime. So anything else it put on its
     //< own arena would grow without limit.
     verdict.start("[Tokenizer] encoding and decoding leave the tokenizer's arena as it was...")
-    defer own: = Arena.new(1024 * 1024)
-    $tok: = ai_tokenizer.Tokenizer.new(own)
+    defer own: = Arena(1024 * 1024)
+    $tok: = ai_tokenizer.Tokenizer(own)
     tok.add_token("a", 1)
     tok.add_token("b", 2)
     tok.add_token("ab", 3)
     tok.add_token(" ", 4)
     tok.add_merge(1, 2, 3)
-    defer work: = Arena.new(64 * 1024)
+    defer work: = Arena(64 * 1024)
     _warm: = tok.encode("ab ab", work)
     held: = own.get_total_used()
     for _i in Range.asc(1000)
@@ -81,7 +81,7 @@ fn test_tokenizer_keeps_its_size() //<
         work.reset()
     assert(own.get_total_used() == held, "a cached text adds nothing to the tokenizer")
     // More distinct words than the cache holds, then new ones once it is full.
-    defer $words: = str.Str_builder.new()
+    defer $words: = str.Str_builder()
     for i in Range.asc(70000)
         words.s(" \{I32::i\}")
     _full: = tok.encode(words.slice(), work)
@@ -97,8 +97,8 @@ priv fn broken_line(vocab: U8[], merges: U8[]): Sz //<
     fs.mkdir_all(dir) catch panic("the work directory must be creatable")
     io.write_file("out/tmp/ksai_tokenizer_load/vocab.txt", vocab) catch panic("vocab must write")
     io.write_file("out/tmp/ksai_tokenizer_load/merges.txt", merges) catch panic("merges must write")
-    defer scratch: = Arena.new(1024 * 1024)
-    $tok: = ai_tokenizer.Tokenizer.new(scratch)
+    defer scratch: = Arena(1024 * 1024)
+    $tok: = ai_tokenizer.Tokenizer(scratch)
     tok.load("out/tmp/ksai_tokenizer_load/vocab.txt", "out/tmp/ksai_tokenizer_load/merges.txt")
         catch e
         switch e
@@ -118,7 +118,7 @@ fn test_tokenizer_load(arena: Arena$@) //<
     fs.mkdir_all(dir) catch panic("the work directory must be creatable")
     io.write_file("out/tmp/ksai_tokenizer_load/vocab.txt", vocab) catch panic("vocab must write")
     io.write_file("out/tmp/ksai_tokenizer_load/merges.txt", merges) catch panic("merges must write")
-    $tok: = ai_tokenizer.Tokenizer.new(arena)
+    $tok: = ai_tokenizer.Tokenizer(arena)
     tok.load("out/tmp/ksai_tokenizer_load/vocab.txt", "out/tmp/ksai_tokenizer_load/merges.txt")
         catch panic("the files train_bpe.kspl would write must load")
     ids: = tok.encode("ab", arena)
@@ -130,7 +130,7 @@ fn test_tokenizer_load(arena: Arena$@) //<
     assert(broken_line("1\t9999999999\n9999999999\t61\n", merges) == 2, "an ID past I32 is refused")
     assert(broken_line(vocab, "\n1 2\n") == 2, "a merge with two IDs is refused")
     assert(broken_line("0\t\r\n1\t61\r\n", "1 1 2\r\n") == 0, "CRLF line ends are taken")
-    $bare: = ai_tokenizer.Tokenizer.new(arena)
+    $bare: = ai_tokenizer.Tokenizer(arena)
     $named: U8[] = ""
     bare.load_text("0\t\n1\t61\n", "1 2\n") catch e
         switch e
@@ -151,7 +151,7 @@ fn test_sampler(arena: Arena$@)
     verdict.start("[Sampler] argmax/temperature/top-k test...")
     // logits = [1.0, 3.0, 2.0, 0.5] → the largest is index 1
     shape: Sz[1] = ::{ 4 }
-    logits: = Tensor<|F32|>.new(Sz[]::shape, arena)
+    logits: = Tensor<|F32|>(Sz[]::shape, arena)
     (logits.data + 0)$ = F32::1.0
     (logits.data + 1)$ = F32::3.0
     (logits.data + 2)$ = F32::2.0
@@ -159,7 +159,7 @@ fn test_sampler(arena: Arena$@)
 
     assert(ai_sampler.argmax(logits) == 1, "Sampler: argmax must pick the max index")
 
-    $rng: = prng.Prng.new(7U64)
+    $rng: = prng.Prng(7U64)
     // A temperature of 0 or below reduces to the greedy method (argmax)
     greedy: = ai_sampler.Sample_config.greedy()
     tok: = ai_sampler.sample(logits, greedy, rng@, arena)
@@ -192,7 +192,7 @@ priv fn insertion_pick(logits: Tensor<|F32|>, cfg: ai_sampler.Sample_config, rng
         (probs + i)$ = (probs + i)$ / sum_exp
     // With neither cut, the candidates are walked unranked, in ID order.
     ranked: Sz = n if cfg.top_k > 0 || cfg.top_p < 1.0 else 0
-    for i in Range.new(1, ranked, 1)
+    for i in Range(1, ranked, 1)
         cur: = (idx + i)$
         $j: = i - 1
         for j >= 0 && (probs + (idx + j)$)$ < (probs + cur)$
@@ -224,30 +224,30 @@ fn test_sampler_keeps_the_rank_order() //<
     //< candidates changes the pick. The large vocabulary is a real model's: ranked by a sort that
     //< costs O(n²), one token takes seconds.
     verdict.start("[Sampler] top-k / top-p pick as a stable sort would, on any vocabulary size...")
-    defer arena: = Arena.new(1024 * 1024)
-    $draw: = prng.Prng.new(11U64)
+    defer arena: = Arena(1024 * 1024)
+    $draw: = prng.Prng(11U64)
     for trial in Range.asc(300)
         mark: = arena.save()
         shape: Sz[1] = ::{ 1 + draw.below(40) }
-        logits: = Tensor<|F32|>.new(Sz[]::shape, arena)
+        logits: = Tensor<|F32|>(Sz[]::shape, arena)
         for i in Range.asc(logits.size)
             (logits.data + i)$ = F32::draw.below(5) * F32::0.75
         cfg: = ai_sampler.Sample_config::{ .temperature = 0.5 + F64::(trial % 3),
             .top_k = draw.below(12), .top_p = 1.0 if trial % 2 == 0 else 0.6 }
-        $want_rng: = prng.Prng.new(U64::trial)
-        $got_rng: = prng.Prng.new(U64::trial)
+        $want_rng: = prng.Prng(U64::trial)
+        $got_rng: = prng.Prng(U64::trial)
         for _round in Range.asc(8)
             want: = insertion_pick(logits, cfg, want_rng@, arena)
             got: = ai_sampler.sample(logits, cfg, got_rng@, arena)
             assert(got == want, "Sampler: top-k / top-p must keep the stable rank order")
         arena.restore(mark)
     vocab_shape: Sz[1] = ::{ 151936 }
-    vocab: = Tensor<|F32|>.new(Sz[]::vocab_shape, arena)
+    vocab: = Tensor<|F32|>(Sz[]::vocab_shape, arena)
     for i in Range.asc(vocab.size)
         (vocab.data + i)$ = F32::draw.below(1000) * F32::0.01
     wide: = ai_sampler.Sample_config::{ .temperature = 0.8, .top_k = 40, .top_p = 0.95 }
     nucleus: = ai_sampler.Sample_config::{ .temperature = 0.8, .top_k = 0, .top_p = 0.95 }
-    $rng: = prng.Prng.new(5U64)
+    $rng: = prng.Prng(5U64)
     for _round in Range.asc(4)
         mark: = arena.save()
         top: = ai_sampler.sample(vocab, wide, rng@, arena)

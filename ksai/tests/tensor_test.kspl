@@ -29,10 +29,10 @@ fn test_arena_from_buffer()
     assert(after_alloc == heap_before, "Arena.from_buffer: alloc must never call libc.malloc")
 
     x_shape: Sz[2] = ::{ 2, 3 }
-    $x: = Tensor<|F32|>.new(Sz[]::x_shape, sa@)
+    $x: = Tensor<|F32|>(Sz[]::x_shape, sa@)
     x.fill(F32::2.0)
     w_shape: Sz[2] = ::{ 3, 2 }
-    w: = Tensor<|F32|>.new(Sz[]::w_shape, sa@)
+    w: = Tensor<|F32|>(Sz[]::w_shape, sa@)
     w.fill(F32::0.5)
     y: = x.matmul(w) catch // [2,2], each element = Σ_3(2.0*0.5) = 3.0
         panic("matmul shape mismatch")
@@ -52,7 +52,7 @@ fn test_arena_from_buffer()
     assert(after_free == heap_before, "Arena.from_buffer: free() must be a no-op")
     // Not built into `sa`: free() was just called on it (the use-after-free check).
     $tail: U8[96] = ::{}
-    $tw: = Buf_writer.new(U8$[]::tail)
+    $tw: = Buf_writer(U8$[]::tail)
     verdict
         .pass(tw.s("(used \{used_bytes\}/\{I32::(sizeof(Sz) * 8192)\} bytes, 0 libc.malloc calls)")
         .slice())
@@ -82,8 +82,8 @@ fn test_tensor_operators(arena: Arena$@)
     // **Do not put a `$` on it.** `Tensor`'s `at` declares its receiver `Self@` (it reads the
     // descriptor and returns the mutable pointer inside). So it needs no writable receiver. With a
     // `$` here, a loosened rule would not make this fail.
-    a: = Tensor<|F32|>.new(Sz[]::shape, arena)
-    b: = Tensor<|F32|>.new(Sz[]::shape, arena)
+    a: = Tensor<|F32|>(Sz[]::shape, arena)
+    b: = Tensor<|F32|>(Sz[]::shape, arena)
     a[0] = F32::2.0
     a[1] = F32::4.0
     a[2] = F32::6.0
@@ -132,8 +132,8 @@ fn test_tensor_error_recoverable(arena: Arena$@)
     // matmul: [2,3] * [4,2] must fail, since the inner dimensions do not match
     a_shape: Sz[2] = ::{ 2, 3 }
     b_shape: Sz[2] = ::{ 4, 2 }
-    $a: = Tensor<|F32|>.new(Sz[]::a_shape, arena)
-    b: = Tensor<|F32|>.new(Sz[]::b_shape, arena)
+    $a: = Tensor<|F32|>(Sz[]::a_shape, arena)
+    b: = Tensor<|F32|>(Sz[]::b_shape, arena)
     a.fill(F32::1.0)
     b.fill(F32::1.0)
 
@@ -144,16 +144,16 @@ fn test_tensor_error_recoverable(arena: Arena$@)
     assert(matmul_caught, "matmul shape mismatch must throw a catchable Tensor_error")
     // Each of these would read or write past a row, or never end, if it were taken.
     row_shape: Sz[2] = ::{ 1, 6 }
-    row: = Tensor<|F32|>.new(Sz[]::row_shape, arena)
+    row: = Tensor<|F32|>(Sz[]::row_shape, arena)
     row.fill(F32::1.0)
     assert(refuses_rope(row, 0), "a RoPE head width of 0 must be refused")
     assert(refuses_rope(row, 4), "a RoPE head width that does not tile the row must be refused")
     assert(!refuses_rope(row, 6), "a RoPE head width that tiles the row is taken")
     cache_shape: Sz[2] = ::{ 4, 3 }
-    $cache: = Tensor<|F32|>.new(Sz[]::cache_shape, arena)
+    $cache: = Tensor<|F32|>(Sz[]::cache_shape, arena)
     two_rows: Sz[2] = ::{ 2, 3 }
     $several: = false
-    cache.update_row(0, Tensor<|F32|>.new(Sz[]::two_rows, arena)) catch
+    cache.update_row(0, Tensor<|F32|>(Sz[]::two_rows, arena)) catch
         several = true
     assert(several, "update_row must refuse a source of several rows, not copy the first")
 
@@ -169,7 +169,7 @@ priv fn refuses_rope(t: Tensor<|F32|>, head_dim: Sz): Bool //< whether RoPE refu
 fn test_view_rows(arena: Arena$@) //< a view of rows from any row, and a rejection past the end
     verdict.start("[Tensor] view_rows sees the rows asked for, from any row, without copying...")
     shape: Sz[2] = ::{ 4, 3 }
-    $t: = Tensor<|F32|>.new(Sz[]::shape, arena)
+    $t: = Tensor<|F32|>(Sz[]::shape, arena)
     for i in Range.asc(t.size)
         (t.data + i)$ = F32::i
     tail: = t.view_rows(1, 3, arena) catch panic("view_rows refused rows that stand")
@@ -193,7 +193,7 @@ fn test_quantize_roundtrip(arena: Arena$@)
     verdict.start("[Quant] int8 quantization of weights per row (quantize/dequantize) test...")
 
     w_shape: Sz[2] = ::{ 2, 4 }
-    $w: = Tensor<|F32|>.new(Sz[]::w_shape, arena)
+    $w: = Tensor<|F32|>(Sz[]::w_shape, arena)
     (w.data + 0)$ = 1.0
     (w.data + 1)$ = -2.0
     (w.data + 2)$ = 0.5
@@ -218,7 +218,7 @@ fn test_quantize_roundtrip(arena: Arena$@)
 
     // A matrix product on weights quantized and expanded back stays close to the unquantized result
     x_shape: Sz[2] = ::{ 1, 2 }
-    $x: = Tensor<|F32|>.new(Sz[]::x_shape, arena)
+    $x: = Tensor<|F32|>(Sz[]::x_shape, arena)
     (x.data + 0)$ = 2.0
     (x.data + 1)$ = 3.0
     y_ref: = x.matmul(w) catch panic("reference matmul failed unexpectedly")
@@ -232,7 +232,7 @@ fn test_quantize_roundtrip(arena: Arena$@)
 
     // A one-dimensional tensor is rejected as rank_mismatch (only two dimensions are supported)
     bad_shape: Sz[1] = ::{ 4 }
-    $bad: = Tensor<|F32|>.new(Sz[]::bad_shape, arena)
+    $bad: = Tensor<|F32|>(Sz[]::bad_shape, arena)
     $caught: = false
     bad.quantize(arena) catch
         caught = true
@@ -250,11 +250,11 @@ fn test_safetensors_roundtrip(arena: Arena$@)
     path: = "out/tmp/kspl_test_debug_roundtrip.safetensors"
 
     w_shape: Sz[2] = ::{ 2, 3 }
-    w: = Tensor<|F32|>.new(Sz[]::w_shape, arena)
+    w: = Tensor<|F32|>(Sz[]::w_shape, arena)
     for i in Range.asc(w.size)
         (w.data + i)$ = F32::i + F32::0.5
 
-    $writer: = ai_st.Safetensors_writer.new()
+    $writer: = ai_st.Safetensors_writer()
     writer.add("w", w)
     ai_file.save_safetensors(writer@, path)
         catch panic("save_safetensors should succeed for a writable out/ path")
@@ -277,10 +277,10 @@ fn test_model_file_leaves_no_heap(arena: Arena$@) //<
     verdict.start("[Safetensors] a model file is read once into its arena, leaving no heap...")
     big_path: = "out/tmp/kspl_test_debug_big.safetensors"
     big_shape: Sz[1] = ::{ 256 * 1024 }
-    scratch: = Arena.new(64 * 1024)
-    big: = Tensor<|F32|>.new(Sz[]::big_shape, scratch)
+    scratch: = Arena(64 * 1024)
+    big: = Tensor<|F32|>(Sz[]::big_shape, scratch)
     big.fill(F32::0.5)
-    $writer: = ai_st.Safetensors_writer.new()
+    $writer: = ai_st.Safetensors_writer()
     writer.add("w", big)
     ai_file.save_safetensors(writer@, big_path)
         catch panic("save_safetensors should succeed for a writable out/ path")
@@ -288,7 +288,7 @@ fn test_model_file_leaves_no_heap(arena: Arena$@) //<
     file_len: = big.size * sizeof(F32)
     heap_before: = mem.heap_used_bytes()
     asked_before: = mem.heap_requested_total_bytes()
-    model: = Arena.new(64 * 1024)
+    model: = Arena(64 * 1024)
     $loaded: = ai_file.load_safetensors(big_path, model)
         catch panic("load_safetensors should read back the file just written")
     asked: = mem.heap_requested_total_bytes() - asked_before
@@ -302,7 +302,7 @@ fn test_model_file_leaves_no_heap(arena: Arena$@) //<
     $bad: U8[64] = ::{}
     bad[0] = 0xffU8 // a header length past the file's end
     io.write_file(bad_path, U8[]::bad) catch panic("the bad file has to be writable under out/")
-    refusing: = Arena.new(4096)
+    refusing: = Arena(4096)
     $refused: = false
     ai_file.load_safetensors(bad_path, refusing) catch
         refused = true
@@ -312,20 +312,20 @@ fn test_model_file_leaves_no_heap(arena: Arena$@) //<
 
     path: = "out/tmp/kspl_test_debug_adapters.safetensors"
     shape: Sz[2] = ::{ 2, 2 }
-    a: = Tensor<|F32|>.new(Sz[]::shape, arena)
+    a: = Tensor<|F32|>(Sz[]::shape, arena)
     a.fill(F32::0.25)
     one: = Lora<|F32|>::{ .a = a, .b = a, .scale = F32::2.0 }
     $set: = Qkv_lora<|F32|>::{ .q = one, .v = one }
     ai_file.save_qkv_lora_set<|F32|>(set@, 1, path, arena)
         catch panic("save_qkv_lora_set should succeed for a writable out/ path")
     fits: = Lora_widths::{ .in_dim = 2, .out_dim = 2 }
-    own: = Arena.new(4096)
+    own: = Arena(4096)
     got: = ai_file.load_qkv_lora_set<|F32|>(path, 1, fits, fits, own) catch
         panic("load_qkv_lora_set should read back the set just written")
     assert(got.q.scale == F32::2.0 && got.v.a.data$ == F32::0.25, "the set reads back as written")
     own.free()
     assert(mem.heap_used_bytes() == heap_before, "freeing the arena frees the whole adapter set")
-    short: = Arena.new(4096)
+    short: = Arena(4096)
     $missing: = false
     _none: = ai_file.load_qkv_lora_set<|F32|>(path, 2, fits, fits, short) catch
         missing = true
@@ -341,7 +341,7 @@ fn test_model_file_leaves_no_heap(arena: Arena$@) //<
             .out_dim = 3 if wrong % 2 == 1 else 2 }
         q: = wide if wrong < 2 else fits
         v: = fits if wrong < 2 else wide
-        foreign: = Arena.new(4096)
+        foreign: = Arena(4096)
         $named: U8[] = ""
         _foreign: = ai_file.load_qkv_lora_set<|F32|>(path, 1, q, v, foreign) catch e
             switch e
@@ -363,7 +363,7 @@ priv fn blob_of(header: U8[], payload_len: Sz, arena: Arena$@, payload: U8[] = "
     //< The data part is `payload` followed by `payload_len` zero bytes.
     //< **Pad with spaces up to an 8-byte boundary** (as the writer does;
     //< `Safetensors_writer.finish`).
-    defer $hdr: = Str_builder.new()
+    defer $hdr: = Str_builder()
     hdr.s(header)
     for (hdr.len + 8) % 8 != 0
         hdr.s(" ")
@@ -418,7 +418,7 @@ fn test_safetensors_refuses_a_bad_range(arena: Arena$@)
         "{\"w\":{\"dtype\":\"Q4_0\",\"shape\":[2,3],\"data_offsets\":[0,24]}}", 24, arena)
     // The case where the header length is longer than the file. **Only this one is built
     // differently** (the length's 8 bytes are written by hand).
-    defer $big_len: = Str_builder.new()
+    defer $big_len: = Str_builder()
     huge: U8[8] = ::{}
     huge_slice: = U8$[]::huge
     huge_slice.put_u64_le(0, 100000U64)
@@ -438,9 +438,9 @@ fn test_safetensors_refuses_a_mismatch(arena: Arena$@) //<
     path: = "out/tmp/kspl_test_debug_mismatch.safetensors"
 
     src_shape: Sz[2] = ::{ 2, 3 }
-    src: = Tensor<|F32|>.new(Sz[]::src_shape, arena)
+    src: = Tensor<|F32|>(Sz[]::src_shape, arena)
     src.fill(F32::1.0)
-    $writer: = ai_st.Safetensors_writer.new()
+    $writer: = ai_st.Safetensors_writer()
     writer.add("w", src)
     ai_file.save_safetensors(writer@, path)
         catch panic("save_safetensors should succeed for a writable out/ path")
@@ -450,7 +450,7 @@ fn test_safetensors_refuses_a_mismatch(arena: Arena$@) //<
     // A shape other than the expected one is rejected. **Do not modify `dst` when rejecting**
     // (half-loaded is harder to trace than not loaded).
     other_shape: Sz[2] = ::{ 3, 2 }
-    $dst: = Tensor<|F32|>.new(Sz[]::other_shape, arena)
+    $dst: = Tensor<|F32|>(Sz[]::other_shape, arena)
     dst.fill(F32::7.0)
     $refused: = false
     loaded.map_into<|F32|>("w", dst@, arena) catch
@@ -459,7 +459,7 @@ fn test_safetensors_refuses_a_mismatch(arena: Arena$@) //<
     assert((dst.data + 0)$ == F32::7.0, "a refused mapping must leave the destination alone")
 
     // The same shape gets through (so the rejection above is not "it always rejects").
-    $ok_dst: = Tensor<|F32|>.new(Sz[]::src_shape, arena)
+    $ok_dst: = Tensor<|F32|>(Sz[]::src_shape, arena)
     loaded.map_into<|F32|>("w", ok_dst@, arena)
         catch panic("map_into must accept a tensor whose shape matches the destination")
     assert((ok_dst.data + 0)$ == F32::1.0, "an accepted mapping must point at the file's data")
@@ -506,7 +506,7 @@ fn test_safetensors_reads_a_file_as_written(arena: Arena$@)
     // keeps its value. The header need not pad the data, and a misaligned load faults on Cortex-M.
     odd: =
         blob_of("{\"w\":{\"dtype\":\"F32\",\"shape\":[1],\"data_offsets\":[1,5]}}", 5, arena)
-    defer $bytes: = Str_builder.new()
+    defer $bytes: = Str_builder()
     bytes.s(odd)
     held: = U8$[]::{ .ptr = bytes.ptr, .len = bytes.len }
     held.put_u32_le(held.len - 4, 0x3F800000U32) // 1.0 in the last four bytes, at data offset 1
@@ -537,7 +537,7 @@ fn test_safetensors_reads_a_file_as_written(arena: Arena$@)
 fn test_empty_tensor_operations(arena: Arena$@)
     verdict.start("[Tensor] empty dimensions give catchable shape errors...")
     dims: Sz[2] = ::{ 1, 0 }
-    $x: = Tensor<|F32|>.new(Sz[]::dims, arena)
+    $x: = Tensor<|F32|>(Sz[]::dims, arena)
     assert(x.size == 0, "empty tensor construction stays valid")
     $caught: I32 = 0
     _soft: = x.softmax() catch e
@@ -553,7 +553,7 @@ fn test_empty_tensor_operations(arena: Arena$@)
         caught += 1
         fallback x
     empty_rows: Sz[2] = ::{ 0, 2 }
-    $rows: = Tensor<|F32|>.new(Sz[]::empty_rows, arena)
+    $rows: = Tensor<|F32|>(Sz[]::empty_rows, arena)
     _rotated: = rows.apply_rope(0) catch e
         assert(e == .shape_mismatch, "RoPE reports an empty sequence")
         caught += 1

@@ -128,7 +128,7 @@ fn test_str_ops(arena: Arena$@)
     assert(pv.equals("bcd"), "auto-deref: a method can be called on a U8[]@")
 
     // --- drop_prefix: discards only the parsed prefix and moves the rest to the front ---
-    defer $b: = Str_builder.new()
+    defer $b: = Str_builder()
     b.s("msg1|msg2")
     b.drop_prefix(5)
     assert(b.slice().equals("msg2"), "drop_prefix: the rest is packed forward to the head")
@@ -225,7 +225,7 @@ fn test_strnum_roundtrip() //<
     //< saved setting breaks only at the largest value.
     //< Caution: **Include the refusals too**, or a reader that accepts everything passes.
     verdict.start("[strnum] a number's round trip and refusal test...")
-    defer $b: = Str_builder.new()
+    defer $b: = Str_builder()
 
     vals: I64[_] = ::{ 0I64, 1I64, -1I64, 42I64, -42I64, 2147483647I64, -2147483648I64,
         9223372036854775807I64, -9223372036854775807I64 - 1I64 }
@@ -383,9 +383,9 @@ fn test_pow10_table() //< every power of ten the float conversions read is exact
     //< moves a float's digits only where that power is used.
     //< `floor_log10_pow2` is checked over every exponent an F64 or an F32 has.
     verdict.start("[bignat] the 128-bit powers of ten test...")
-    for q in Range.new(bignat.POW10_Q_MIN, bignat.POW10_Q_MAX + 1, 1)
+    for q in Range(bignat.POW10_Q_MIN, bignat.POW10_Q_MAX + 1, 1)
         assert(pow10_entry_exact(I32::q), "pow10_128(q) must be 10^q's top 128 bits, truncated")
-    for e in Range.new(-1100, 1101, 1)
+    for e in Range(-1100, 1101, 1)
         for three_quarters in Bool[]::{ false, true }
             k: = strfmt.floor_log10_pow2(I32::e, three_quarters)
             // 10^k <= v < 10^(k + 1), with v = 2^e or 3 x 2^(e - 2), all scaled to integers.
@@ -429,8 +429,8 @@ import "std/io"
 import "std/str" + { Str_builder }
 
 fn main()
-  $b: = Str_builder.new()
-  $want: = Str_builder.new()
+  $b: = Str_builder()
+  $want: = Str_builder()
   for _i in Range.asc(256)
     b.s("abcdefgh")
   want.s(b.slice()).s(b.slice())
@@ -443,7 +443,7 @@ fn main()
   w: = b.slice()
   b.clear().s("--").s(w.sub(0, 6))
   assert(b.slice().equals("----xycd"), "s: a view overlapping where its bytes land")
-  $e: = Str_builder.new()
+  $e: = Str_builder()
   want.clear()
   for _i in Range.asc(512)
     e.s("a\"")
@@ -487,7 +487,7 @@ fn test_buf_writer() //<
     // The buffer needs `$`; without it the C declaration gains a `const`, and the write goes to
     // read-only memory.
     $buf: U8[32] = ::{}
-    $w: = Buf_writer.new(U8$[]::buf)
+    $w: = Buf_writer(U8$[]::buf)
     written: = w.s("n=\{n\}").slice()
     assert(written.equals("n=7"),
         "slice() can be called at the end of a chain with interpolation in it")
@@ -496,7 +496,7 @@ fn test_buf_writer() //<
 
     // A string longer than the buffer writes what fits and drops the rest.
     $small: U8[4] = ::{}
-    $v: = Buf_writer.new(U8$[]::small)
+    $v: = Buf_writer(U8$[]::small)
     assert(v.s("0123456789").slice().equals("0123"), "it writes what fits")
     assert(v.overflowed(), "it is known when something was dropped")
     // The one-byte-at-a-time method counts the same way.
@@ -505,7 +505,7 @@ fn test_buf_writer() //<
     assert(v.slice().equals("abcd") && v.overflowed(), "c() counts an overflow too")
     // The source can be a view of bytes that this write is about to overwrite.
     $overlap: U8[8] = ::{ 97, 98, 99, 100, 101, 102, 103, 104 }
-    $same: = Buf_writer.new(U8$[]::overlap)
+    $same: = Buf_writer(U8$[]::overlap)
     same.s("ab").s((U8[]::overlap).sub(0, 6))
     assert(same.slice().equals("ababcdef") && !same.overflowed(),
         "overlapping bytes must be copied before the destination overwrites them")
@@ -588,7 +588,7 @@ fn test_text_edges()
 
 fn test_builder_room_and_c_strings()
     verdict.start("[str] reserve, and a C string out and back...")
-    defer $b: = Str_builder.new()
+    defer $b: = Str_builder()
     b.reserve(100)
     assert(b.cap >= 100 && b.len == 0, "reserve: room for 100, nothing written")
     room: = b.cap

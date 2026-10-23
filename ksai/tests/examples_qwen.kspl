@@ -59,13 +59,13 @@ priv fn fill(t: Tensor<|F32|>$@, step: Sz) //< fills the weights with a fixed fo
 
 priv fn made2(d0: Sz, d1: Sz, step: Sz, arena: Arena$@): Tensor<|F32|>
     shape: Sz[2] = ::{ d0, d1 }
-    $t: = Tensor<|F32|>.new(Sz[]::shape, arena)
+    $t: = Tensor<|F32|>(Sz[]::shape, arena)
     fill(t@, step)
     return t
 
 priv fn made1(d0: Sz, step: Sz, arena: Arena$@): Tensor<|F32|>
     shape: Sz[1] = ::{ d0 }
-    $t: = Tensor<|F32|>.new(Sz[]::shape, arena)
+    $t: = Tensor<|F32|>(Sz[]::shape, arena)
     fill(t@, step)
     return t
 
@@ -75,7 +75,7 @@ priv fn made_norm(step: Sz, arena: Arena$@): Tensor<|F32|> //< the normalisation
     //< same, **a swap of the two would not show in the answer.** Swapping `attention_norm` for
     //< `ffn_norm` would then leave this gate green.
     shape: Sz[1] = ::{ HIDDEN }
-    t: = Tensor<|F32|>.new(Sz[]::shape, arena)
+    t: = Tensor<|F32|>(Sz[]::shape, arena)
     for i in Range.asc(t.size)
         (t.data + i)$ = F32::1.0 + (F32::0.01) * (F32::((i * step + 3) % 7))
     return t
@@ -84,7 +84,7 @@ priv fn made_cfg(arena: Arena$@): Tensor<|F32|> //< the config tensor
     //< **`read_cfg` in `ksai/examples/qwen_infer/model.kspl` decides the layout** (the order of
     //< the 9 elements).
     shape: Sz[1] = ::{ 9 }
-    t: = Tensor<|F32|>.new(Sz[]::shape, arena)
+    t: = Tensor<|F32|>(Sz[]::shape, arena)
     (t.data + 0)$ = F32::N_LAYERS
     (t.data + 1)$ = F32::HIDDEN
     (t.data + 2)$ = F32::N_HEADS
@@ -99,10 +99,10 @@ priv fn made_cfg(arena: Arena$@): Tensor<|F32|> //< the config tensor
 priv fn write_weights(path: U8[], arena: Arena$@): Bool //< writes one small weights file
     //< Caution: **Vary the formula per layer** (with one formula, mixing layers up would not show
     //< in the answer).
-    $w: = st.Safetensors_writer.new()
+    $w: = st.Safetensors_writer()
     w.add("cfg", made_cfg(arena))
     w.add("embed.weight", made2(VOCAB, HIDDEN, 3, arena))
-    defer $b: = Str_builder.new()
+    defer $b: = Str_builder()
     for i in Range.asc(N_LAYERS)
         q: = N_HEADS * HEAD_DIM
         kv: = N_KV_HEADS * HEAD_DIM
@@ -199,7 +199,7 @@ priv const LOGITS_HEAD: U8[] = "LOGITS[0:10]"
 priv fn logits_of(out: U8[], arena: Arena$@): List<|F64|> //< the logits listed in the output
     //< A value that cannot be read is not skipped: the list stops there (and the short list shows
     //< as a failure).
-    $got: = List<|F64|>.new(arena)
+    $got: = List<|F64|>(arena)
     for w in after(out, LOGITS_HEAD, arena).split(' ', arena)
         if w.len == 0
             continue

@@ -49,7 +49,7 @@ impl Sema_ctx
             //< Builds the symbol for a trait method's prototype and registers it in trait_def
             //< It also resolves the prototype's types. registry and mono read the result.
         m_kind: = sema_type_scope.Sym_kind.function(false)
-        m_sym: = Sema_symbol.new(m_kind, m_name, m_node)
+        m_sym: = Sema_symbol(m_kind, m_name, m_node)
         m_sym.flags.is_method = true
         // A method inherits the trait's visibility unless it states its own
         // (`priv fn release(...);`, the grammar rule decl_trait). Ignoring that would let it be
@@ -64,7 +64,7 @@ impl Sema_ctx
         param_list: = m_node.get_fn_params()
         if param_list != null
             $param_ordinal: Sz = 0
-            for param in base_ast_ext.Param_cursor.new(param_list, false)
+            for param in base_ast_ext.Param_cursor(param_list, false)
                 p_type: = param.get_decl_type_node()
                 // `Self` cannot be written on a formal parameter other than the receiver. A thunk
                 // passes the fat pointer into a concrete-type position, and C fails with KSPL
@@ -113,7 +113,7 @@ impl Sema_ctx
             //< kind is "argument N" or "return".
         trait_type_str: = r.env.display(r.env.get_real_type(trait_tid))
         impl_type_str: = r.env.display(r.env.get_real_type(impl_tid))
-        defer $e: = Str_builder.new()
+        defer $e: = Str_builder()
         e
             .s("method '\{m_name\}': \{kind\} type mismatch. The interface expects \
                 '\{trait_type_str\}'. The impl has '\{impl_type_str\}'")
@@ -131,7 +131,7 @@ impl Sema_ctx
         // **A default value belongs only to the trait's declaration.** A second one on the impl
         // would make a call's value depend on the path, invisible in the text (C++'s inherited
         // defaults).
-        for ip in base_ast_ext.Param_cursor.new(impl_params, false)
+        for ip in base_ast_ext.Param_cursor(impl_params, false)
             d: = ip.get_param_default()
             // **Skip the copied defaults** (`trait_default.kspl`); the flag is `ival`, 0 where
             // written.
@@ -143,8 +143,8 @@ impl Sema_ctx
         unknown: = I32::sema_type_env.Builtin_type_id.unknown
         $ok: = true
         $param_ordinal: Sz = 0
-        $impl_cur: = base_ast_ext.Param_cursor.new(impl_params, false)
-        for rp in base_ast_ext.Param_cursor.new(req_params, false)
+        $impl_cur: = base_ast_ext.Param_cursor(impl_params, false)
+        for rp in base_ast_ext.Param_cursor(req_params, false)
             ip: = impl_cur.next().unwrap_or(null)
             if ip == null
                 break
@@ -155,7 +155,7 @@ impl Sema_ctx
                 if bi != unknown && bp != unknown &&
                     (bi != bp ||
                     r.env.is_pointer(rp.type_id) != r.env.is_pointer(ip.type_id))
-                    defer $kind: = Str_builder.new()
+                    defer $kind: = Str_builder()
                     kind.s("argument \{param_ordinal\}")
                     kind_slice: = kind.slice()
                     r.report_sig_mismatch(req_m.name, kind_slice, rp.type_id, ip.type_id, err_node)
@@ -220,7 +220,7 @@ impl Sema_ctx
         case .trait_type(d)
             trait_def = d
         default
-            defer $sb: = Str_builder.new()
+            defer $sb: = Str_builder()
             sb.s("'\{r.env.display(trait_id)\}' is not an interface")
             r.err(err_node, sb.slice())
             return false
@@ -241,7 +241,7 @@ impl Sema_ctx
                 // Caution: **Show the trait as written** (`std.lang.Eq<|S|>`), not its instance's
                 // mangled name (`std_lang_Eq_S`).
                 trait_shown: = r.env.display(trait_id)
-                defer $err_sb: = Str_builder.new()
+                defer $err_sb: = Str_builder()
                 err_sb
                     .s("Type '\{target_str\}' does not implement required method '\{req_m.name\}' \
                         of interface '\{trait_shown\}'")
@@ -260,7 +260,7 @@ impl Sema_ctx
                 if impl_params != null
                     impl_count = impl_params.children.len
                 if req_count != impl_count
-                    $err_sb: = Str_builder.new()
+                    $err_sb: = Str_builder()
                     err_sb
                         .s("method '\{req_m.name\}' argument count mismatch in interface \
                             implementation. Expected \{req_count\}, got \{impl_count\}")
@@ -342,15 +342,6 @@ impl Sema_ctx
                 not be resolved")
         r.err(err_node, r.scratch.slice())
 
-    fn index_param_id_for(r: Self$@, recv_type_id: I32, method_name: U8[]): I32 //<
-        //< Looks up the index operator's method from the receiver's type and returns its index type
-        //< `Sz` if it cannot be found.
-        switch r.resolve_operator_method(recv_type_id, method_name)
-        case .some(sym)
-            return r.operator_index_param_id(sym)
-        case .none
-            return I32::sema_type_env.Builtin_type_id.size_type
-
     fn operator_index_param_id(r: Self$@, method_sym: Sema_symbol$@): I32 //<
         //< The index type of an index operator (`Index_place.at` / `Index.get` / `Index_mut.set`)
         //< Caution: **Do not hard-code the index type as `Sz`**, or `Map<|U8[], I32|>`'s `m["k"]`
@@ -363,7 +354,7 @@ impl Sema_ctx
         if p_list == null
             return fallback_id
         $seen: Sz = 0
-        for ch in base_ast_ext.Param_cursor.new(p_list, false)
+        for ch in base_ast_ext.Param_cursor(p_list, false)
             seen += 1
             if seen == 2 // the first is the receiver
                 return r.index_param_type_of(ch, fallback_id)

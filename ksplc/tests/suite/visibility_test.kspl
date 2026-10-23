@@ -69,7 +69,8 @@ priv const CASES: Case[] = Case[]::{
         .extra_bodies = U8[][]::{ "pub struct Built { n: I32; }\nimpl Built { priv fn new(): I32 { \
             return 7; } }\n",
         "import \"alpha/deep/built\" as built\nfn main(): I32 { return built.Built(); }\n" },
-        .entry = "beta/main.kspl", .expect = "cannot access symbol" },
+        .entry = "beta/main.kspl",
+        .expect = "the type call 'built.Built(…)' calls 'built.Built.new'. It is not visible" },
     Case::{ .name = "package constructor access is preserved by a type call",
         .extra_rels = U8[][]::{ "alpha/deep/built.kspl", "beta/main.kspl" },
         .extra_bodies = U8[][]::{ "pub struct Built { n: I32; }\nimpl Built {  fn new(): I32 { \
@@ -191,7 +192,7 @@ priv const CASES: Case[] = Case[]::{
 
 priv fn prepare(c: Case, index: Sz, arena: Arena$@): Job //<
     //< It makes one case's directory, writes the files, and builds the Job to run there
-    defer $nb: = Str_builder.new()
+    defer $nb: = Str_builder()
     name: = U8[]::arena.dup_str(nb.s("vis_\{index\}").slice())
     dir: = harness.sandbox(name)
     if dir.len == 0
@@ -263,7 +264,7 @@ priv fn check_main_case(slot: U8[], name: U8[], lib_src: U8[], expect: U8[][], d
     fs.write_tree(dir, names, U8[][]::{ lib_src, ENTRY_SRC }, arena) catch
         verdict.check(name, false, "cannot place the material")
         return
-    $args: = List<|U8[]|>.new(arena)
+    $args: = List<|U8[]|>(arena)
     args.push("main.kspl")
     args.push("main.c")
     r: = harness.run_in(harness.ksplc_argv(args.slice()), dir)

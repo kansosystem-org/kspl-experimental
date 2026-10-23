@@ -43,7 +43,7 @@ priv fn sources(pkg: U8[], arena: Arena$@): List<|U8[]|>!fs.Fs_error //<
     //< Caution: **Fix the order.** A directory's read order is the file system's, so unsorted, the
     //< same tree gives a different record (`walk_files` sorts it).
     paths: = fs.walk_files(pkg, skip_dir, arena)!
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     for p in paths
         if p.ends_with(".kspl")
             out.push(p)
@@ -66,7 +66,7 @@ priv fn built(pkg: U8[], ksplc: U8[], arena: Arena$@): U8[]!fs.Fs_error //<
     //< so each file is one in turn.
     fs.mkdir_all(WORK_DIR)!
     files: = sources(pkg, arena)!
-    defer $out: = Str_builder.new()
+    defer $out: = Str_builder()
     for src in files
         stem: = stem_of(src, arena)
         tsv: = fs.join(WORK_DIR, arena.text().s(stem).s(".tsv").take(), arena)
@@ -157,13 +157,13 @@ priv fn do_check(pkg: U8[], ksplc: U8[], arena: Arena$@): Sz!fs.Fs_error
         throw .not_found
     whole: = built(pkg, ksplc, arena)!
     body: = declarations_only(whole, arena)
-    defer $b: = Str_builder.new()
+    defer $b: = Str_builder()
     $was: = rows.rows_of(had, arena)
     $now: = rows.rows_of(body, arena)
     n: = rows.classify(was@, now@, b@)
-    defer $d: = Str_builder.new()
+    defer $d: = Str_builder()
     m: = rows.undocumented(now@, d@)
-    defer $t: = Str_builder.new()
+    defer $t: = Str_builder()
     k: = rows.drifted_twins(now@, t@, arena)
     if n == 0 && m == 0 && k == 0
         io.out().s("\{path\}: the API is as recorded, and every entry says what it is\n")
@@ -182,7 +182,7 @@ priv fn do_check(pkg: U8[], ksplc: U8[], arena: Arena$@): Sz!fs.Fs_error
     return n + m + k
 
 fn main(): I32 //< writes or checks the record of a package's published API
-    defer arena: = Arena.new(64 * 1024 * 1024)
+    defer arena: = Arena(64 * 1024 * 1024)
     $ksplc: U8[] = ""
     p: = argparse.Parser
         .create(sys.program_name(), "make / match the record of the API a package publishes", arena)

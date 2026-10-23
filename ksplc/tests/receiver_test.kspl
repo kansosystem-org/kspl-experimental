@@ -1,0 +1,196 @@
+//< A receiver taken by its address where the receiver is not a plain variable
+//< **A field of a call's result has no address of its own**, so Lower copies it into a slot
+//< first; the C `&f().items` is refused by the C compiler. **An address Lower fixes before a later
+//< operand keeps the place's `const`**, or the C warns that the temporary drops it. `make debug`
+//< runs these on both backends, and `make test-c-warnings` compiles their C with every warning on.
+//< **An element of a call's result is read through a slot too**, as `make_list()[0]` and
+//< `make_box().items[0]`; Sema refuses a write there (`ksplc/tests/suite/place_test.kspl`).
+//< **A pointer a method returns is written through**, as `h.list()[0] = 1`: the assignment infers
+//< the subscript's receiver once.
+import "std/ds" { List, Map }
+import "std/mem" { Arena }
+import "std/verdict"
+
+priv struct Rv_inner
+    v: I32
+
+impl Rv_inner
+    fn peek(r: Self@): I32
+        return r.v
+
+priv struct Rv_box
+    items: List<|Sz|>
+    inner: Rv_inner
+    nums: I32[3]
+
+priv fn make_box(arena: Arena$@): Rv_box //< a fresh value: `make_box(a).items` has no address
+    $b: = Rv_box::{ .items = List<|Sz|>(arena), .inner = Rv_inner::{ .v = 3 },
+        .nums = ::{ 5, 6, 7 } }
+    b.items.push(7)
+    return b
+
+fn test_receiver_inside_a_call_result(arena: Arena$@)
+    verdict.start("[Receiver] a method on a field of a call's result test...")
+    assert(make_box(arena).items.get(0) == 7, "a field of a call's result is a reading receiver")
+    assert(make_box(arena).inner.peek() == 3, "a struct field of a call's result is one too")
+    assert(make_box(arena).items.get(make_box(arena).items.get(0) - 7) == 7,
+        "a receiver and an argument each come from their own call")
+    assert(make_box(arena).nums[2] == 7, "an array element of a call's result is read")
+    verdict.pass("a reading method takes a field of a call's result through a slot of its own.")
+
+priv struct Rv_pair
+    a: List<|Sz|>
+    b: List<|Sz|>
+    nums: I32[3]
+
+impl Rv_pair
+    fn pick(r: Self@, i: Sz): Sz //< `r.a`'s address is fixed before `r.b.get(i)` runs
+        return r.a.get(r.b.get(i))
+
+    fn pick_index(r: Self@, i: Sz): Sz //< the same through two subscripts
+        return r.a[r.b[i]]
+
+    fn pick_num(r: Self@, i: Sz): I32 //< no pointer holds an array itself, so `r` is fixed
+        return r.nums[r.b.get(i)]
+
+priv fn first_pick(ps: Rv_pair[]): Sz //< the place lies in a slice of read-only elements
+    return ps[0].a.get(ps[0].b.get(0))
+
+priv fn bump_num(p: Rv_pair$@, i: Sz) //< through a writable pointer, the element is written
+    p.nums[p.b.get(i)] += 10
+
+fn test_address_fixed_early_keeps_const(arena: Arena$@)
+    verdict.start("[Receiver] an address fixed before a later operand test...")
+    $p: = Rv_pair::{ .a = List<|Sz|>(arena), .b = List<|Sz|>(arena), .nums = ::{ 4, 5, 6 } }
+    p.a.push(20)
+    p.a.push(21)
+    p.b.push(1)
+    p.b.push(0)
+    assert(p.pick(0) == 21, "a call's receiver reached through a read-only pointer")
+    assert(p.pick_index(1) == 20, "a subscript's receiver reached through a read-only pointer")
+    assert(p.pick_num(0) == 5, "an array reached through a read-only pointer")
+    ps: Rv_pair[1] = ::{ p }
+    assert(first_pick(Rv_pair[]::ps) == 21, "a receiver inside a read-only element")
+    bump_num(p@, 1)
+    assert(p.nums[0] == 14 && p.nums[1] == 5, "an array element written through a pointer")
+    verdict.pass("an address fixed early is read-only where the place is, and reads the same.")
+
+priv fn make_list(arena: Arena$@): List<|Sz|> //< a fresh list: `make_list(a)[0]` has no address
+    $xs: = List<|Sz|>(arena)
+    xs.push(7)
+    xs.push(8)
+    return xs
+
+priv fn make_lists(arena: Arena$@): List<|List<|Sz|>|>
+    $xss: = List<|List<|Sz|>|>(arena)
+    xss.push(make_list(arena))
+    xss.push(make_list(arena))
+    xss[1][0] = 9
+    return xss
+
+priv fn make_inners(arena: Arena$@): List<|Rv_inner|>
+    $xs: = List<|Rv_inner|>(arena)
+    xs.push(Rv_inner::{ .v = 4 })
+    return xs
+
+priv fn twice(n: Sz): Sz
+    return n * 2
+
+fn test_element_of_a_call_result(arena: Arena$@)
+    verdict.start("[Receiver] an element of a call's result test...")
+    n: = make_list(arena)[0]
+    assert(n == 7, "an element of a returned list is read")
+    m: = make_box(arena).items[0]
+    assert(m == 7, "an element of a list in a returned struct is read")
+    assert(make_list(arena)[1] + make_box(arena).items[0] == 15, "two in one expression")
+    assert(twice(make_list(arena)[1]) == 16, "one as a call's argument")
+    assert(make_lists(arena)[1][0] == 9 && make_lists(arena)[0][1] == 8,
+        "an element of an element of a returned list")
+    assert(make_inners(arena)[0].v == 4, "a field of an element of a returned list")
+    assert(make_inners(arena)[0].peek() == 4, "a reading method on such an element")
+    verdict.pass("an element of a call's result is read through a slot of its own.")
+
+priv struct Rv_view //< a borrowed view: `at` reads only the descriptor, the elements lie elsewhere
+    p: Sz$[]
+
+impl Rv_view: Index_place<|Sz, Sz|>
+    fn at(r: Self@, index: Sz, _file: U8[], _line: Sz): Sz$@
+        return r.p[index]@
+
+priv struct Rv_setter //< `set` takes `Self@`: it too writes the memory the descriptor points at
+    p: Sz$[]
+
+impl Rv_setter: Index_mut<|Sz, Sz|>
+    fn set(r: Self@, index: Sz, v: Sz)
+        r.p[index] = v
+
+impl Rv_setter: Index<|Sz, Sz|>
+    fn get(r: Self@, index: Sz): Sz
+        return r.p[index]
+
+priv fn view(p: Sz$[]): Rv_view
+    return Rv_view::{ .p = p }
+
+priv fn setter(p: Sz$[]): Rv_setter
+    return Rv_setter::{ .p = p }
+
+priv fn make_map(arena: Arena$@): Map<|Sz, Sz|>
+    $m: = Map<|Sz, Sz|>(arena)
+    m[1] = 11
+    return m
+
+fn test_view_of_a_call_result(arena: Arena$@)
+    verdict.start("[Receiver] a subscript on a view or a value a call returns test...")
+    $buf: Sz[3] = ::{ 1, 2, 3 }
+    view(Sz$[]::buf)[0] = 10
+    setter(Sz$[]::buf)[1] = 20
+    assert(buf[0] == 10 && buf[1] == 20, "a write through a returned view reaches its memory")
+    assert(view(Sz$[]::buf)[0] + setter(Sz$[]::buf)[1] == 30, "a read through each")
+    assert(make_map(arena)[1].unwrap_or(0) == 11, "a map's read on a returned map")
+    assert(Range.asc(5)[2] == 2, "a computed value's read on a returned range")
+    verdict.pass("a subscript on a returned view writes where it points, and others read.")
+
+priv struct Rv_holder //< what methods hand out: a list, a slice, a field and itself, by pointer
+    xs: List<|Sz|>
+    view: Sz$[]
+    inner: Rv_inner
+    nums: I32[3]
+    m: Map<|Sz, Sz|>
+
+impl Rv_holder
+    fn list(r: Self$@): List<|Sz|>$@
+        return r.xs@
+
+    fn slice(r: Self@): Sz$[]
+        return r.view
+
+    fn map(r: Self$@): Map<|Sz, Sz|>$@
+        return r.m@
+
+    fn inner_of(r: Self$@): Rv_inner$@
+        return r.inner@
+
+    fn me(r: Self$@): Self$@
+        return r
+
+fn test_write_through_a_method_result(arena: Arena$@)
+    verdict.start("[Receiver] a write through a subscript on a method's result test...")
+    $buf: Sz[2] = ::{ 0, 0 }
+    $h: = Rv_holder::{ .xs = List<|Sz|>(arena), .view = Sz$[]::buf, .inner = Rv_inner::{ .v = 0 },
+        .nums = ::{ 0, 0, 0 }, .m = Map<|Sz, Sz|>(arena) }
+    h.xs.push(0)
+    h.list()[0] = 1
+    h.list()[0] += 2
+    assert(h.xs[0] == 3, "an element of a returned list is written, then compound-assigned")
+    h.slice()[1] = 4
+    h.slice()[1] *= 2
+    assert(buf[1] == 8, "an element of a returned slice is written")
+    h.map()[1] = 5
+    assert(h.m[1].unwrap_or(0) == 5, "a returned map is written through its 'set'")
+    h.inner_of().v = 6
+    assert(h.inner.v == 6, "a field through a returned pointer is written")
+    h.me().list()[0] += 10
+    h.me().xs[0] += 100
+    h.me().nums[2] = 7
+    assert(h.xs[0] == 113 && h.nums[2] == 7, "the same through two calls in a row")
+    verdict.pass("a write through a method's result reaches the place it returns.")

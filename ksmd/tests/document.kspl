@@ -1,0 +1,465 @@
+//< Reader and writer checks for every block, inline markup and clause, and the examples
+//< Each model is checked against expected blocks, and each save against expected text.
+import "ksmd/model" { Block_kind, Cell_kind, Document, Inline, Inline_kind, Piece_kind }
+import "ksmd/reader"
+import "ksmd/source" { Source }
+import "ksmd/writer"
+import "std/chars"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/verdict"
+
+fn run()
+    models()
+    canonical_saves()
+    fences()
+    lists()
+    inline_models()
+    inline_saves()
+    inline_refusals()
+    clause_models()
+    clause_saves()
+    clause_refusals()
+    examples()
+    refusals()
+
+priv fn models()
+    defer arena: = Arena(64 * 1024)
+    doc: =
+        read_ok("%ksmd 1\n\n# Title\n\nOne\ntwo.\\\nThree.\n\n```text\n:::include\n```\n", arena)
+    verdict.check("three blocks in order", doc.blocks.len == 3, "")
+    h: = doc.blocks.get(0)
+    verdict.check("heading level and text",
+        h.kind == Block_kind.heading && h.level == 1 &&
+        shape(doc, h.first, h.count, arena).equals("Title") && h.offset == 9, "")
+    p: = doc.blocks.get(1)
+    verdict.check("a source newline is a space, an escaped one a hard break",
+        p.kind == Block_kind.paragraph &&
+        shape(doc, p.first, p.count, arena).equals("One two.|Three."), "")
+    c: = doc.blocks.get(2)
+    verdict.check("a fence keeps its label and literal lines",
+        c.kind == Block_kind.code && c.label.equals("text") && c.text.equals(":::include\n"), "")
+    empty: = read_ok("%ksmd 1", arena)
+    verdict.check("a header alone has no blocks", empty.blocks.len == 0, "")
+    escaped: = read_ok("%ksmd 1\n\n\\# Not a heading\n", arena)
+    verdict.check("an escaped marker starts a paragraph",
+        escaped.blocks.get(0).kind == Block_kind.paragraph &&
+        first_shape(escaped, arena).equals("# Not a heading"), "")
+    literal: = read_ok("%ksmd 1\n\nends in \\\\\nnext\n", arena)
+    verdict.check("an even run of backslashes is literal, not a hard break",
+        first_shape(literal, arena).equals("ends in \\ next"), "")
+
+priv fn canonical_saves()
+    canonical("an empty document", "%ksmd 1", "%ksmd 1\n")
+    canonical("CRLF, a BOM and extra blank lines",
+        "﻿%ksmd 1\r\n\r\n\r\n#  Title  \r\n\r\n\r\nOne\r\n   two\r\n",
+        "%ksmd 1\n\n# Title\n\nOne two\n")
+    canonical("a hard break stays a hard break", "%ksmd 1\n\na  \\\n  b\n", "%ksmd 1\n\na\\\nb\n")
+    canonical("headings keep their level", "%ksmd 1\n\n###### Six\n", "%ksmd 1\n\n###### Six\n")
+    small_diff()
+    canonical("a whitespace-only line separates blocks", "%ksmd 1\n\nA\n \t\nB\n",
+        "%ksmd 1\n\nA\n\nB\n")
+
+priv fn small_diff() //< changing one word of the model changes one line of the save
+    defer arena: = Arena(64 * 1024)
+    doc: =
+        read_ok("%ksmd 1\n\nFirst\nparagraph.\n\nSecond paragraph.\n\nThird paragraph.\n", arena)
+    defer $before: = Str_builder()
+    writer.write(doc@, before@)
+    $edited: = doc
+    node: = edited.inlines.get(1)
+    edited.inlines
+        .set(1,
+        Inline::{ .kind = node.kind, .text = "Second, edited, paragraph.",
+        .offset = node.offset })
+    defer $after: = Str_builder()
+    writer.write(edited@, after@)
+    verdict.check("an edit to one paragraph changes only its line",
+        changed_lines(before.slice(), after.slice()) == 1, after.slice())
+
+priv fn changed_lines(a: U8[], b: U8[]): Sz //< how many lines differ, for texts of equal line count
+    $count: Sz = 0
+    $i: Sz = 0
+    $j: Sz = 0
+    for i < a.len && j < b.len
+        $ei: = i
+        for ei < a.len && a[ei] != '\n'
+            ei += 1
+        $ej: = j
+        for ej < b.len && b[ej] != '\n'
+            ej += 1
+        if !a.sub(i, ei - i).equals(b.sub(j, ej - j))
+            count += 1
+        i = ei + 1
+        j = ej + 1
+    return count
+
+priv fn fences()
+    canonical("an empty code block", "%ksmd 1\n\n```\n```\n", "%ksmd 1\n\n```\n```\n")
+    canonical("a blank line inside code is kept", "%ksmd 1\n\n```\n\n```\n",
+        "%ksmd 1\n\n```\n\n```\n")
+    canonical("a longer fence shortens when the text allows", "%ksmd 1\n\n``````kspl\nx\n``````\n",
+        "%ksmd 1\n\n```kspl\nx\n```\n")
+    canonical("a fence lengthens past a line of three backticks", "%ksmd 1\n\n````\n```\n````\n",
+        "%ksmd 1\n\n````\n```\n````\n")
+    canonical("a fence lengthens past lines of three and four",
+        "%ksmd 1\n\n``````\n```\n````\n``````\n", "%ksmd 1\n\n`````\n```\n````\n`````\n")
+    canonical("a backtick line with more text is content", "%ksmd 1\n\n```\n``` \n````x\n```\n",
+        "%ksmd 1\n\n```\n``` \n````x\n```\n")
+    canonical("the version marker inside code is literal", "%ksmd 1\n\n```\n%ksmd 1\n```\n",
+        "%ksmd 1\n\n```\n%ksmd 1\n```\n")
+
+priv fn lists()
+    defer arena: = Arena(64 * 1024)
+    doc: =
+        read_ok("%ksmd 1\n\n- one\n  3. two\n  1. three\n    - four\n- five\n\nAfter\n", arena)
+    verdict.check("a list is one block, and the paragraph after it another",
+        doc.blocks.len == 2 && doc.blocks.get(0).kind == Block_kind.list &&
+        doc.blocks.get(0).first == 0 && doc.blocks.get(0).count == 5 && doc.items.len == 5, "")
+    two: = doc.items.get(1)
+    verdict.check("an item keeps its depth, its kind and its text",
+        two.depth == 1 && two.ordered &&
+        shape(doc, two.first, two.count, arena).equals("two") && two.offset == 15, "")
+    verdict.check("a level that ends lets its parent's items go on",
+        doc.items.get(3).depth == 2 && !doc.items.get(4).ordered &&
+        doc.items.get(4).depth == 0, "")
+    canonical("ordered items are numbered 1. and items are trimmed",
+        "%ksmd 1\n\n7.  first  \n12. second\n", "%ksmd 1\n\n1. first\n1. second\n")
+    canonical("a nested list round-trips", "%ksmd 1\n\n- a\n  1. b\n    - c\n- d\n",
+        "%ksmd 1\n\n- a\n  1. b\n    - c\n- d\n")
+    canonical("a blank line splits two lists", "%ksmd 1\n\n- a\n\n1. b\n",
+        "%ksmd 1\n\n- a\n\n1. b\n")
+    canonical("an item keeps its inline source", "%ksmd 1\n\n- *a* \\\\ [b](#c)\n",
+        "%ksmd 1\n\n- *a* \\\\ [b](#c)\n")
+    refused("%ksmd 1\n\n- a\n    - b\n",
+        "an item is nested at most one level deeper than the item before it", 4, 5)
+    refused("%ksmd 1\n\n- a\n1. b\n",
+        "the items of one list share one marker. Put a blank line between two lists", 4, 1)
+    refused("%ksmd 1\n\n- a\n  - b\n  1. c\n",
+        "the items of one list share one marker. Put a blank line between two lists", 5, 3)
+    refused("%ksmd 1\n\n- a\ncontinued\n",
+        "a list item takes one line. Put a blank line before a paragraph", 4, 1)
+    refused("%ksmd 1\n\n- a\n - b\n", "a nested item is indented two spaces per level", 4, 1)
+    refused("%ksmd 1\n\n- \n", "this list item has no text", 3, 1)
+    refused("%ksmd 1\n\n1.\n", "this list item has no text", 3, 1)
+    refused("%ksmd 1\n\n- a\\\n",
+        "a list item takes one line and has no hard break. Write '\\\\' for a literal backslash", 3,
+        4)
+    defer $deep: = Str_builder()
+    deep.s("%ksmd 1\n\n")
+    for depth in Range.asc(17)
+        for _ in Range.asc(depth)
+            deep.s("  ")
+        deep.s("- x\n")
+    refused(deep.slice(), "a list nests at most 16 levels", 19, 33)
+
+priv fn inline_models()
+    inline("each kind of node", "a *b* **c** `d` [e](https://x.org) f",
+        "a <e>b</e> <s>c</s> {d} <a https://x.org>e</a> f")
+    inline("three '*' open strong emphasis outside emphasis", "***a***", "<s><e>a</e></s>")
+    inline("three '*' open emphasis outside when '**' closes first", "***a** b*",
+        "<e><s>a</s> b</e>")
+    inline("three '*' open strong emphasis outside when '*' closes first", "***a* b**",
+        "<s><e>a</e> b</s>")
+    inline("'**' inside emphasis opens strong emphasis", "*a**b**c*", "<e>a<s>b</s>c</e>")
+    inline("one run closes emphasis and opens strong emphasis", "*a***b**", "<e>a</e><s>b</s>")
+    inline("one run closes both marks, innermost first", "**a *b***", "<s>a <e>b</e></s>")
+    inline("a link label holds marks and code", "[*a* `b`](#c)", "<a #c><e>a</e> {b}</a>")
+    inline("a code span with a backtick inside", "`` a`b ``", "{a`b}")
+    inline("escaped punctuation is text", "\\*not\\* \\[x\\] \\\\", "*not* [x] \\")
+    inline("text joins across a source newline", "a\n*b*\nc", "a <e>b</e> c")
+    inline("a code span keeps '*' and '\\' literal", "`*a\\`", "{*a\\}")
+    defer arena: = Arena(64 * 1024)
+    doc: = read_ok("%ksmd 1\n\nx *y*\n", arena)
+    verdict.check("a mark's node keeps its place in the source",
+        doc.inlines.get(1).kind == Inline_kind.emphasis_start &&
+        doc.inlines.get(1).offset == 11, "")
+
+priv fn inline_saves()
+    canonical("a needless escape is dropped", "%ksmd 1\n\na\\.b\n", "%ksmd 1\n\na.b\n")
+    canonical("an escaped list marker stays escaped", "%ksmd 1\n\n\\- not a list\n",
+        "%ksmd 1\n\n\\- not a list\n")
+    canonical("an escaped number marker stays escaped", "%ksmd 1\n\n12\\. not a list\n",
+        "%ksmd 1\n\n12\\. not a list\n")
+    canonical("an escaped pipe and clause stay escaped", "%ksmd 1\n\n\\| a\n\n\\::: b\n",
+        "%ksmd 1\n\n\\| a\n\n\\::: b\n")
+    canonical("a marker after a hard break stays escaped", "%ksmd 1\n\na\\\n\\# b\n",
+        "%ksmd 1\n\na\\\n\\# b\n")
+    canonical("a code span loses needless padding", "%ksmd 1\n\n` a `\n", "%ksmd 1\n\n`a`\n")
+    canonical("a code span keeps the padding a backtick needs", "%ksmd 1\n\n`` `x ``\n",
+        "%ksmd 1\n\n`` `x ``\n")
+    canonical("marks, a link and code in a heading", "%ksmd 1\n\n## *a* [b](#c) `d`\n",
+        "%ksmd 1\n\n## *a* [b](#c) `d`\n")
+    canonical("three '*' in each reading", "%ksmd 1\n\n***a** b* ***c* d** ***e***\n",
+        "%ksmd 1\n\n***a** b* ***c* d** ***e***\n")
+    canonical("literal markup characters are escaped", "%ksmd 1\n\n\\*a\\* \\`b\\` \\[c\\]\n",
+        "%ksmd 1\n\n\\*a\\* \\`b\\` \\[c\\]\n")
+
+priv fn inline_refusals()
+    refused("%ksmd 1\n\na \\q\n",
+        "a backslash escapes only ASCII punctuation. Write '\\\\' for a literal backslash", 3, 3)
+    refused("%ksmd 1\n\n# a \\\n",
+        "a backslash escapes only ASCII punctuation. Write '\\\\' for a literal backslash", 3, 5)
+    refused("%ksmd 1\n\n*a\n",
+        "this '*' is not closed on its line. Close it there, or write '\\*' for a literal '*'", 3,
+        1)
+    refused("%ksmd 1\n\nx **a\n",
+        "this '**' is not closed on its line. Close it there, or write '\\*\\*' for literal \
+            asterisks", 3, 3)
+    refused("%ksmd 1\n\n*a\nb*\n",
+        "this '*' is not closed on its line. Close it there, or write '\\*' for a literal '*'", 3,
+        1)
+    refused("%ksmd 1\n\n- [a\n",
+        "this '[' is not closed on its line. Close it there, or write '\\[' for a literal '['", 3,
+        3)
+    refused("%ksmd 1\n\na]\n", "this ']' ends no link. Write '\\]' for a literal ']'", 3, 2)
+    refused("%ksmd 1\n\n[a] b\n", "a link's label is followed by its destination in '(' and ')'", 3,
+        3)
+    refused("%ksmd 1\n\n[a](ftp://x)\n",
+        "a link goes to an https:, http: or mailto: address, or to a '#' fragment", 3, 5)
+    refused("%ksmd 1\n\n[a](https://x y)\n",
+        "a link's destination holds no spaces or parentheses. Write them as %20, %28 and %29", 3,
+        14)
+    refused("%ksmd 1\n\n[a](#b\n", "this link's destination has no ')'", 3, 4)
+    refused("%ksmd 1\n\n[](#b)\n", "this link has no label", 3, 1)
+    refused("%ksmd 1\n\n[a [b](#c)](#d)\n",
+        "a link holds no other link. Write '\\[' for a literal '['", 3, 4)
+    refused("%ksmd 1\n\n[a *b](#c)*\n", "close this mark before the ']' that ends its link", 3, 4)
+    refused("%ksmd 1\n\n*a **b* c**\n",
+        "this run of '*' can neither close the innermost mark nor open one. Write '\\*' for a \
+            literal '*'", 3, 7)
+    refused("%ksmd 1\n\n****a\n",
+        "this run of '*' can neither close the innermost mark nor open one. Write '\\*' for a \
+            literal '*'", 3, 1)
+    refused("%ksmd 1\n\nx `a\n",
+        "this code span is not closed on its line. Close it with a run of as many backticks", 3, 3)
+
+priv fn clause_models()
+    defer arena: = Arena(64 * 1024)
+    doc: =
+        read_ok("%ksmd 1\n\n:::table name=\"budget\" widths=\"2,1\"\n| \"Item\" | \"Cost\" |\n| \
+            \"Pens\" | =B1*2 |\n| \"a|b\\n\" | |\n:::\n\n:::include \
+            path=\"notes.ksmd\"\n:::\n\n:::image src=\"cat.png\" alt=\"\"\n:::\n", arena)
+    verdict.check("a table, an include and an image are three blocks",
+        doc.blocks.len == 3 && doc.blocks.get(0).kind == Block_kind.table &&
+        doc.blocks.get(1).kind == Block_kind.include &&
+        doc.blocks.get(2).kind == Block_kind.image, "")
+    t: = doc.tables[0]@
+    verdict.check("a table keeps its name, its size and its weights",
+        t.name.equals("budget") && t.columns.len == 2 && t.rows.len == 2 && t.weights.len == 2 &&
+        t.weights[0] == 2 && t.weights[1] == 1, "")
+    verdict.check("a header cell is text",
+        t.cells[0].kind == Cell_kind.text && t.cells[0].text.equals("Item"), "")
+    formula_at: = t.at(0, 1)
+    formula: = t.cells[formula_at]
+    reference: = t.pieces[formula.first]
+    rest: = t.pieces[formula.first + 1]
+    verdict.check("a formula keeps its place, and its reference attaches to a cell",
+        formula.kind == Cell_kind.formula && formula.offset == 76 && formula.count == 2 &&
+        reference.kind == Piece_kind.cell && reference.from.row == t.rows[0] &&
+        reference.from.column == t.columns[1] && rest.text.equals("*2"), "")
+    quoted: = t.at(1, 0)
+    verdict.check("a pipe and an escape inside quoted text stay in one cell",
+        t.cells[quoted].text.equals("a|b\n") && t.cells[quoted + 1].kind == Cell_kind.empty, "")
+    verdict.check("an include keeps its path",
+        doc.blocks.get(1).text.equals("notes.ksmd"), "")
+    image: = doc.images.get(0)
+    verdict.check("an image may have empty alternate text and no caption",
+        image.src.equals("cat.png") && image.alt.len == 0 && image.caption.len == 0, "")
+
+priv fn clause_saves()
+    canonical("attributes take their fixed order and one space",
+        "%ksmd 1\n\n:::image  caption=\"c\"   alt=\"b\" src=\"a.png\"\n:::\n",
+        "%ksmd 1\n\n:::image src=\"a.png\" alt=\"b\" caption=\"c\"\n:::\n")
+    canonical("weights are divided by their greatest common divisor",
+        "%ksmd 1\n\n:::table name=\"t\" widths=\"20,40\"\n| \"a\" | \"b\" |\n:::\n",
+        "%ksmd 1\n\n:::table name=\"t\" widths=\"1,2\"\n| \"a\" | \"b\" |\n:::\n")
+    canonical("cells take one space on each side, and an empty cell one in all",
+        "%ksmd 1\n\n:::table name=\"t\"\n|\"a\"|\"b\"|\"c\"|\"d\"|\n|\"x\"|  -1.5e3|=A1 + 1  \
+            ||\n:::\n",
+        "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"c\" | \"d\" |\n| \"x\" | -1.5e3 | =A1 \
+            + 1 | |\n:::\n")
+    canonical("quoted text takes the shortest JSON escapes",
+        "%ksmd 1\n\n:::table name=\"t\"\n| \"\\u0041\\/\\t\" |\n:::\n",
+        "%ksmd 1\n\n:::table name=\"t\"\n| \"A/\\t\" |\n:::\n")
+    canonical("a table with only its header", "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n:::\n",
+        "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n:::\n")
+
+priv fn clause_refusals()
+    refused("%ksmd 1\n\n:::chart\n:::\n", "a clause is ':::table', ':::include' or ':::image'", 3,
+        4)
+    refused("%ksmd 1\n\n:::table\n| \"a\" |\n:::\n",
+        "':::table' needs a name, as in name=\"budget\"", 3, 1)
+    refused("%ksmd 1\n\n:::table name=\"Budget\"\n| \"a\" |\n:::\n",
+        "a table name is a lowercase letter, then lowercase letters, digits and '_'", 3, 10)
+    refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n:::\n\n:::table name=\"t\"\n| \"a\" \
+        |\n:::\n", "another table in this source has this name", 7, 10)
+    refused("%ksmd 1\n\n:::table name=\"t\" size=\"2\"\n| \"a\" |\n:::\n",
+        "':::table' takes only name and widths", 3, 19)
+    refused("%ksmd 1\n\n:::table name=\"t\" name=\"u\"\n| \"a\" |\n:::\n",
+        "this attribute is given twice", 3, 19)
+    refused("%ksmd 1\n\n:::table name=t\n| \"a\" |\n:::\n",
+        "a value is a quoted string or a decimal number", 3, 15)
+    refused("%ksmd 1\n\n:::table name=3\n| \"a\" |\n:::\n", "this attribute takes a quoted string",
+        3, 10)
+    refused("%ksmd 1\n\n:::table name\n",
+        "an attribute is a name, '=' and a value, as in name=\"budget\"", 3, 10)
+    refused("%ksmd 1\n\n:::table name=\"t\"x\n", "put a space between two attributes", 3, 18)
+    refused("%ksmd 1\n\n:::table name=\"t\n", "this quoted value has no closing '\"'", 3, 15)
+    refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n", "this clause has no closing ':::' line",
+        3, 1)
+    refused("%ksmd 1\n\n:::table name=\"t\"\n:::\n", "a table has a header row of quoted names", 3,
+        1)
+    refused("%ksmd 1\n\n:::table name=\"t\"\n| 1 |\n:::\n", "a header cell is a quoted name", 4, 3)
+    refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" |\n| 1 |\n:::\n",
+        "every row has as many cells as the header", 5, 1)
+    refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\nx\n:::\n",
+        "a table row starts and ends with '|'", 5, 1)
+    refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n| \"b\" | x\n:::\n",
+        "a table row starts and ends with '|'", 5, 1)
+    refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n| abc |\n:::\n",
+        "a cell holds one value: quoted text, a number, a formula after '=', or nothing", 5, 3)
+    refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n| 0012 |\n:::\n",
+        "a cell holds one value: quoted text, a number, a formula after '=', or nothing", 5, 3)
+    refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n| \"b\" \"c\" |\n:::\n",
+        "a cell holds one value: quoted text, a number, a formula after '=', or nothing", 5, 3)
+    refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n| 1e999 |\n:::\n",
+        "this number is too large for a cell", 5, 3)
+    refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a\\q\" |\n:::\n",
+        "quoted text uses JSON quoting and escapes", 4, 3)
+    refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a |\n:::\n", "this quoted text has no closing '\"'",
+        4, 3)
+    refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n| = |\n:::\n", "this formula is empty", 5,
+        3)
+    refused("%ksmd 1\n\n:::table name=\"t\" widths=\"1\"\n| \"a\" | \"b\" |\n:::\n",
+        "widths has one weight per column", 3, 19)
+    refused("%ksmd 1\n\n:::table name=\"t\" widths=\"0,1\"\n| \"a\" | \"b\" |\n:::\n",
+        "widths is a list of whole numbers from 1 to 10,000, separated by ','", 3, 19)
+    refused("%ksmd 1\n\n:::table name=\"t\" widths=\"1,,2\"\n| \"a\" | \"b\" |\n:::\n",
+        "widths is a list of whole numbers from 1 to 10,000, separated by ','", 3, 19)
+    refused("%ksmd 1\n\n:::include path=\"a.ksmd\"\nx\n:::\n",
+        "':::include' has no body. Close it on the next line", 4, 1)
+    refused("%ksmd 1\n\n:::include\n:::\n", "':::include' needs a path, as in path=\"notes.ksmd\"",
+        3, 1)
+    refused("%ksmd 1\n\n:::include path=\"\"\n:::\n", "this attribute is not empty", 3, 12)
+    refused("%ksmd 1\n\n:::image src=\"a.png\"\n:::\n", "':::image' needs src and alt", 3, 1)
+    refused("%ksmd 1\n\n:::image src=\"a.png\" alt=\"\" caption=\"\"\n:::\n",
+        "leave out an empty caption", 3, 29)
+    defer $wide: = Str_builder()
+    wide.s("%ksmd 1\n\n:::table name=\"t\"\n")
+    for _ in Range.asc(257)
+        wide.s("| \"a\" ")
+    wide.s("|\n:::\n")
+    refused(wide.slice(), "a table holds at most 256 columns", 4, 6 * 257 + 1)
+
+priv fn examples() //< each example reads, and its first save is the file itself
+    paths: U8[][3] = ::{ "examples/overview.ksmd", "examples/notes.ksmd", "examples/literals.ksmd" }
+    for i in Range.asc(3)
+        defer arena: = Arena(64 * 1024)
+        path: = paths[i]
+        bytes: = io.read_file(path, arena) catch
+            verdict.check(path, false, "the example could not be read")
+            continue
+        canonical(path, bytes, bytes)
+
+priv fn refusals()
+    refused("%ksmd 1\n\n```\nnever closed\n",
+        "this code fence has no closing line. Close it with a line of 3 backticks", 3, 1)
+    refused("%ksmd 1\n\n```c#\n```\n",
+        "a code fence's label holds only letters, digits and '_' '-' '+' '.'", 3, 5)
+    refused("%ksmd 1\n\n####### Seven\n",
+        "a heading is one to six '#', a space and its text. Write '\\#' for a literal '#'", 3, 1)
+    refused("%ksmd 1\n\n#tag\n",
+        "a heading is one to six '#', a space and its text. Write '\\#' for a literal '#'", 3, 1)
+    refused("%ksmd 1\n\n#   \n", "this heading has no text", 3, 1)
+    refused("%ksmd 1\n\n| \"a\" |\n", "a table row stands only inside a ':::table' clause", 3, 1)
+    refused("%ksmd 1\n\n  indented\n", "a block starts at column one", 3, 1)
+    refused("%ksmd 1\n\nprose\n# heading\n",
+        "put a blank line before this block. To keep it in the paragraph, escape its first \
+            character", 4, 1)
+    refused("%ksmd 1\n\nprose\n  - item\n",
+        "put a blank line before this block. To keep it in the paragraph, escape its first \
+            character", 4, 1)
+    refused("%ksmd 1\n\nlast line\\\n",
+        "a hard break ends this paragraph. Delete the '\\', or write '\\\\' for a literal backslash",
+        3, 10)
+    verdict.check("prose that only looks like a marker stays prose",
+        read_count("%ksmd 1\n\n-5 degrees\n\n1.5 metres\n") == 2, "")
+
+priv fn read_ok(bytes: U8[], arena: Arena$@): Document //< the model; a refusal stops the run
+    src: = Source("t.ksmd", bytes) catch e
+        verdict.check("a valid source was refused", false, e.message)
+        panic("a valid source was refused")
+    return reader.read(src@, arena) catch e
+        verdict.check("a valid document was refused", false, e.message)
+        panic("a valid document was refused")
+
+priv fn inline(what: U8[], text: U8[], expected: U8[]) //<
+    //< The paragraph `text` reads as the nodes `expected` describes (`shape`)
+    defer arena: = Arena(64 * 1024)
+    bytes: = arena.text().s("%ksmd 1\n\n").s(text).c('\n').take()
+    doc: = read_ok(bytes, arena)
+    got: = first_shape(doc, arena)
+    verdict.check(what, got.equals(expected), got)
+
+priv fn first_shape(doc: Document, arena: Arena$@): U8[] //<
+    //< the first block's nodes, as `shape` describes them
+    b: = doc.blocks.get(0)
+    return shape(doc, b.first, b.count, arena)
+
+priv fn shape(doc: Document, first: Sz, count: Sz, arena: Arena$@): U8[] //<
+    //< Nodes as text: a mark as `<e>` `<s>` `<a destination>` and their ends, code in braces,
+    //< a hard break as `|`
+    defer $b: = Str_builder()
+    for i in Range.asc(count)
+        node: = doc.inlines.get(first + i)
+        switch node.kind
+        case .text
+            b.s(node.text)
+        case .code
+            b.c('{').s(node.text).c('}')
+        case .hard_break
+            b.c('|')
+        case .emphasis_start
+            b.s("<e>")
+        case .emphasis_end
+            b.s("</e>")
+        case .strong_start
+            b.s("<s>")
+        case .strong_end
+            b.s("</s>")
+        case .link_start
+            b.s("<a ").s(node.text).c('>')
+        case .link_end
+            b.s("</a>")
+    return arena.dup_str(b.slice())
+
+priv fn read_count(bytes: U8[]): Sz
+    defer arena: = Arena(64 * 1024)
+    return read_ok(bytes, arena).blocks.len
+
+priv fn canonical(what: U8[], bytes: U8[], expected: U8[]) //<
+    //< The first save gives `expected`, and reading and saving that again changes nothing
+    defer arena: = Arena(64 * 1024)
+    defer $first: = Str_builder()
+    doc: = read_ok(bytes, arena)
+    writer.write(doc@, first@)
+    defer $second: = Str_builder()
+    again: = read_ok(first.slice(), arena)
+    writer.write(again@, second@)
+    verdict.check(what, first.slice().equals(expected), first.slice())
+    verdict.check(what, second.slice().equals(first.slice()), "a second save changed")
+
+priv fn refused(bytes: U8[], message: U8[], line: Sz, column: Sz) //<
+    //< The reader refuses the source with this message at this place
+    defer arena: = Arena(64 * 1024)
+    src: = Source("bad.ksmd", bytes) catch e
+        verdict.check(message, false, e.message)
+        return
+    _doc: = reader.read(src@, arena) catch e
+        verdict.check(message,
+            e.message.equals(message) && e.line == line && e.column == column &&
+            e.path.equals("bad.ksmd"), e.message)
+        return
+    verdict.check(message, false, "the source was read")

@@ -1,0 +1,299 @@
+//< Editor actions on tables: adding and removing one, row and column edits, cell values, names and
+//< column widths
+//< Each check compares the saved source, and undo and redo give back the source before and after.
+//< Values are checked through calculation, so a reference left on the wrong cell shows.
+import "ksmd/calc"
+import "ksmd/editor" { Editor, Refused, Table_edit }
+import "ksmd/editor"
+import "ksmd/reader"
+import "ksmd/region" { gap_spot, text_spot }
+import "ksmd/source" { Source }
+import "ksmd/writer"
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/strnum"
+import "std/verdict"
+
+priv const T1: U8[] = ":::table name=\"table1\"\n| \"\" | \"\" |\n| | |\n:::\n"
+
+fn run()
+    inserting()
+    cells()
+    rows_and_columns()
+    removing()
+    naming()
+    widths()
+
+priv fn inserting()
+    defer arena: = Arena(64 * 1024)
+    $ed: = opened("%ksmd 1\n\nAbcd\n", arena)
+    p: = text_spot(0, 0, 2)
+    ed.select(p, p)
+    inserted(ed@, 2, 1)
+    saves("a table put in the middle of a paragraph splits it", ed@, arena,
+        join3("%ksmd 1\n\nAb\n\n", T1, "\ncd\n", arena))
+    end: = gap_spot(3)
+    ed.select(end, end)
+    inserted(ed@, 1, 0)
+    saves("a table at the end takes the next free name, with a header alone", ed@, arena,
+        join3("%ksmd 1\n\nAb\n\n", T1, "\ncd\n\n:::table name=\"table2\"\n| \"\" |\n:::\n", arena))
+    ed.undo()
+    saves("undo takes the new table back out", ed@, arena,
+        join3("%ksmd 1\n\nAb\n\n", T1, "\ncd\n", arena))
+    ed.redo()
+    redone: = source_of(ed@, arena)
+    verdict.check("redo puts it back with its name",
+        redone.ends_with("\n:::table name=\"table2\"\n| \"\" |\n:::\n"), redone)
+    $loose: =
+        opened("%ksmd 1\n\n:::table name=\"t\"\n| \"x\" |\n| =table1.A1*2 |\n:::\n", arena)
+    at_end: = gap_spot(1)
+    loose.select(at_end, at_end)
+    inserted(loose@, 1, 1)
+    set(loose@, 1, 0, 0, "21")
+    verdict.check("a reference to a table not there yet attaches when the table is added",
+        value(loose@, 0, 0, 0, arena) == 42.0, "")
+
+priv fn cells()
+    defer arena: = Arena(64 * 1024)
+    $ed: = opened("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" |\n| 1 | 2 |\n:::\n", arena)
+    set(ed@, 0, -1, 0, "Count")
+    set(ed@, 0, 0, 0, "12")
+    set(ed@, 0, 0, 1, "=A1*3")
+    saves("a name, a number and a formula as typed", ed@, arena,
+        "%ksmd 1\n\n:::table name=\"t\"\n| \"Count\" | \"b\" |\n| 12 | =A1*3 |\n:::\n")
+    verdict.check("the formula calculates", value(ed@, 0, 0, 1, arena) == 36.0, "")
+    set(ed@, 0, 0, 0, "\"12\"")
+    saves("a quoted number is text", ed@, arena,
+        "%ksmd 1\n\n:::table name=\"t\"\n| \"Count\" | \"b\" |\n| \"12\" | =A1*3 |\n:::\n")
+    shown(ed@, 0, 0, "\"12\"", "text that would read as a number shows quoted", arena)
+    shown(ed@, 0, 1, "=A1*3", "a formula shows with its '='", arena)
+    set(ed@, 0, 0, 0, "Pens")
+    shown(ed@, 0, 0, "Pens", "other text shows as it is", arena)
+    set(ed@, 0, 0, 0, "")
+    saves("nothing makes the cell empty", ed@, arena,
+        "%ksmd 1\n\n:::table name=\"t\"\n| \"Count\" | \"b\" |\n| | =A1*3 |\n:::\n")
+    ed.undo()
+    ed.undo()
+    ed.undo()
+    saves("undo gives each cell's value back, one step at a time", ed@, arena,
+        "%ksmd 1\n\n:::table name=\"t\"\n| \"Count\" | \"b\" |\n| 12 | =A1*3 |\n:::\n")
+    ed.redo()
+    saves("redo sets the value again", ed@, arena,
+        "%ksmd 1\n\n:::table name=\"t\"\n| \"Count\" | \"b\" |\n| \"12\" | =A1*3 |\n:::\n")
+    refused(ed@, "a formula with a '|' outside quotes is refused", .pipe, "one cell")
+
+priv fn rows_and_columns()
+    defer arena: = Arena(64 * 1024)
+    before: =
+        "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" |\n| 1 | =A1+A2 |\n| 2 | =sum(A1:A2) \
+            |\n:::\n"
+    $ed: = opened(before, arena)
+    changed(ed@, 0, .insert_row, 1)
+    set(ed@, 0, 1, 0, "4")
+    saves("a row inserted inside a range joins it", ed@, arena,
+        "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" |\n| 1 | =A1+A3 |\n| 4 | |\n| 2 | \
+            =sum(A1:A3) |\n:::\n")
+    verdict.check("and the sum takes the new row", value(ed@, 0, 2, 1, arena) == 7.0, "")
+    changed(ed@, 0, .remove_column, 0)
+    saves("removing a column turns references to it into #REF!", ed@, arena,
+        "%ksmd 1\n\n:::table name=\"t\"\n| \"b\" |\n| =#REF!+#REF! |\n| |\n| =sum(#REF!) |\n:::\n")
+    ed.undo()
+    verdict.check("undo brings the column and its references back",
+        value(ed@, 0, 2, 1, arena) == 7.0, "")
+    ed.undo()
+    ed.undo()
+    saves("undo takes the row back out", ed@, arena, before)
+    changed(ed@, 0, .insert_column, 2)
+    saves("a column added after the last", ed@, arena,
+        "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"\" |\n| 1 | =A1+A2 | |\n| 2 | \
+            =sum(A1:A2) | |\n:::\n")
+    refused(ed@, "a row outside the table is refused", .row, "No table")
+
+priv fn removing()
+    defer arena: = Arena(64 * 1024)
+    before: =
+        "%ksmd 1\n\nText\n\n:::table name=\"a\"\n| \"x\" |\n| 5 |\n:::\n\n:::table name=\"b\"\n| \
+            \"y\" |\n| =a.A1*2 |\n:::\n"
+    $ed: = opened(before, arena)
+    ed.remove_table(1) catch e
+        verdict.check("removing a table", false, e.message())
+    saves("a removed table's references from another table stay as written", ed@, arena,
+        "%ksmd 1\n\nText\n\n:::table name=\"b\"\n| \"y\" |\n| =a.A1*2 |\n:::\n")
+    verdict.check("and calculate as #REF!", is_error(ed@, 1, 0, 0, arena), "")
+    verdict.check("the caret takes the gap the table left",
+        ed.focus.place == .block_gap && ed.focus.block == 1, "")
+    inserted(ed@, 1, 1)
+    verdict.check("a new table takes the free name, and no removed table answers to it",
+        source_of(ed@, arena).find_str("name=\"table1\"").is_some(), "")
+    ed.undo()
+    ed.undo()
+    saves("undo brings the table back", ed@, arena, before)
+    verdict.check("with the reference attached again", value(ed@, 1, 0, 0, arena) == 10.0, "")
+    span: = text_spot(0, 0, 2)
+    ed.select(span, gap_spot(2))
+    ed.erase(true) catch e
+        verdict.check("deleting across a table", false, e.message())
+    saves("deleting a selection that holds a table removes it", ed@, arena,
+        "%ksmd 1\n\nTe\n\n:::table name=\"b\"\n| \"y\" |\n| =a.A1*2 |\n:::\n")
+    verdict.check("and its references calculate as #REF!", is_error(ed@, 1, 0, 0, arena), "")
+    ed.undo()
+    verdict.check("undo brings it back attached", value(ed@, 1, 0, 0, arena) == 10.0, "")
+
+priv fn naming()
+    defer arena: = Arena(64 * 1024)
+    $ed: =
+        opened("%ksmd 1\n\n:::table name=\"a\"\n| \"x\" |\n| 3 |\n:::\n\n:::table name=\"b\"\n| \
+            \"y\" | \"z\" |\n| =a.A1 | =c.A1 |\n:::\n", arena)
+    ed.rename_table(0, "c") catch e
+        verdict.check("renaming a table", false, e.message())
+    saves("a renamed table's references follow it, and text naming it attaches", ed@, arena,
+        "%ksmd 1\n\n:::table name=\"c\"\n| \"x\" |\n| 3 |\n:::\n\n:::table name=\"b\"\n| \"y\" | \
+            \"z\" |\n| =c.A1 | =c.A1 |\n:::\n")
+    verdict.check("both now calculate", value(ed@, 1, 0, 1, arena) == 3.0, "")
+    refused(ed@, "a name another table has is refused", .taken, "Another table")
+    refused(ed@, "a name the reader refuses is refused", .bad_name, "lowercase")
+    ed.undo()
+    verdict.check("undo gives the old name back",
+        source_of(ed@, arena).find_str("name=\"a\"").is_some(), "")
+
+priv fn widths()
+    defer arena: = Arena(64 * 1024)
+    before: = "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"c\" |\n| 1 | 2 | =A1+B1 |\n:::\n"
+    $ed: = opened(before, arena)
+    resized(ed@, "300,450,750", arena)
+    saves("widths are saved divided by their greatest common divisor", ed@, arena,
+        "%ksmd 1\n\n:::table name=\"t\" widths=\"2,3,5\"\n| \"a\" | \"b\" | \"c\" |\n| 1 | 2 | \
+            =A1+B1 |\n:::\n")
+    verdict.check("the cells and their values stay", value(ed@, 0, 0, 2, arena) == 3.0, "")
+    last: = ed.history.done[ed.history.done.len - 1]@
+    verdict.check("the step records the widths alone, and no copy of the table",
+        last.widths.len == 1 && last.tables.len == 0 && last.cells.len == 0, "")
+    resized(ed@, "1,1,2", arena)
+    ed.undo()
+    saves("undo gives the widths before back", ed@, arena,
+        "%ksmd 1\n\n:::table name=\"t\" widths=\"2,3,5\"\n| \"a\" | \"b\" | \"c\" |\n| 1 | 2 | \
+            =A1+B1 |\n:::\n")
+    ed.undo()
+    saves("and the table that had none", ed@, arena, before)
+    ed.redo()
+    ed.redo()
+    saves("redo sets them again", ed@, arena,
+        "%ksmd 1\n\n:::table name=\"t\" widths=\"1,1,2\"\n| \"a\" | \"b\" | \"c\" |\n| 1 | 2 | \
+            =A1+B1 |\n:::\n")
+    changed(ed@, 0, .remove_column, 0)
+    changed(ed@, 0, .insert_column, 2)
+    saves("a column's width goes with it, and a new last column takes the width before it", ed@,
+        arena,
+        "%ksmd 1\n\n:::table name=\"t\" widths=\"1,2,2\"\n| \"b\" | \"c\" | \"\" |\n| 2 | =#REF!+A1 \
+            | |\n:::\n")
+    wrong_widths(ed@, "two widths for three columns are refused", "1,2", arena)
+    wrong_widths(ed@, "a width over 10,000 is refused", "1,10001,1", arena)
+    wrong_widths(ed@, "a width of 0 is refused", "1,0,1", arena)
+
+priv fn wrong_widths(ed: Editor$@, what: U8[], weights: U8[], arena: Arena$@) //<
+    //< Giving block 0's table these widths is refused, and changes nothing
+    before: = source_of(ed, arena)
+    list: = weights_of(weights, arena)
+    ed.set_widths(0, list@) catch e
+        verdict.check(what,
+            e.message().find_str("whole number").is_some() &&
+            source_of(ed, arena).equals(before), e.message())
+        return
+    verdict.check(what, false, "the action was taken")
+
+priv fn resized(ed: Editor$@, weights: U8[], arena: Arena$@) //< gives block 0's table these widths
+    list: = weights_of(weights, arena)
+    ed.set_widths(0, list@) catch e
+        verdict.check(weights, false, e.message())
+
+priv fn weights_of(text: U8[], arena: Arena$@): List<|Sz|> //< the weights `1,2,1` names
+    $list: = List<|Sz|>(arena)
+    for part in text.split(',', arena)
+        list.push(part.to_count(100000) catch 0)
+    return list
+
+priv enum Wrong //< an action a check expects to be refused
+    pipe //< a formula with a '|' outside quotes, in cell B1 of block 0
+    row //< removing row 6 of block 0
+    taken //< naming block 0's table `b`
+    bad_name //< naming it `Bad`
+
+priv fn refused(ed: Editor$@, what: U8[], action: Wrong, says: U8[]) //<
+    //< The action is refused with a message that holds `says`
+    _took: = attempt(ed, action) catch e
+        verdict.check(what, e.message().find_str(says).is_some(), e.message())
+        return
+    verdict.check(what, false, "the action was taken")
+
+priv fn attempt(ed: Editor$@, action: Wrong): Bool!Refused
+    switch action
+    case .pipe
+        ed.set_cell(0, 0, 1, "=A1 | B1")!
+    case .row
+        ed.edit_table(0, .remove_row, 5)!
+    case .taken
+        ed.rename_table(0, "b")!
+    case .bad_name
+        ed.rename_table(0, "Bad")!
+    return true
+
+// ---- Helpers ----
+
+priv fn opened(bytes: U8[], arena: Arena$@): Editor
+    src: = Source("t.ksmd", arena.dup_str(bytes)) catch e
+        verdict.check("a test source is valid", false, e.message)
+        panic("a test source was refused")
+    doc: = reader.read(src@, arena) catch e
+        verdict.check("a test document reads", false, e.message)
+        panic("a test document was refused")
+    return editor.open(doc, arena)
+
+priv fn inserted(ed: Editor$@, columns: Sz, rows: Sz)
+    ed.insert_table(columns, rows) catch e
+        verdict.check("inserting a table", false, e.message())
+
+priv fn set(ed: Editor$@, block: Sz, row: Sz, column: Sz, text: U8[])
+    ed.set_cell(block, row, column, text) catch e
+        verdict.check(text, false, e.message())
+
+priv fn changed(ed: Editor$@, block: Sz, what: Table_edit, at: Sz)
+    ed.edit_table(block, what, at) catch e
+        verdict.check("a row or column edit", false, e.message())
+
+priv fn shown(ed: Editor@, row: Sz, column: Sz, want: U8[], what: U8[], arena: Arena$@) //<
+    //< What a cell of table 0 shows to edit, which sets the same value again
+    got: = ed.cell_text(0, row, column, arena)
+    verdict.check(what, got.equals(want), got)
+
+priv fn value(ed: Editor@, u: Sz, row: Sz, column: Sz, arena: Arena$@): F64 //< a number, or -1
+    r: = calc.calculate(ed.doc@, arena)
+    v: = r.at(u, row, column)
+    return v.number if v.kind == .number else -1.0
+
+priv fn is_error(ed: Editor@, u: Sz, row: Sz, column: Sz, arena: Arena$@): Bool
+    r: = calc.calculate(ed.doc@, arena)
+    return r.at(u, row, column).kind == .error
+
+priv fn source_of(ed: Editor@, arena: Arena$@): U8[]
+    defer $out: = Str_builder()
+    writer.write(ed.doc@, out@)
+    return arena.dup_str(out.slice())
+
+priv fn join3(a: U8[], b: U8[], c: U8[], arena: Arena$@): U8[]
+    return arena.text().s(a).s(b).s(c).take()
+
+priv fn saves(what: U8[], ed: Editor@, arena: Arena$@, expected: U8[]) //<
+    //< The document saves as `expected`, and that source reads and saves again unchanged
+    got: = source_of(ed, arena)
+    verdict.check(what, got.equals(expected), got)
+    src: = Source("again.ksmd", got) catch e
+        verdict.check(what, false, e.message)
+        return
+    again: = reader.read(src@, arena) catch e
+        verdict.check(what, false, e.message)
+        return
+    defer $second: = Str_builder()
+    writer.write(again@, second@)
+    verdict.check(what, second.slice().equals(got), "a second save changed")

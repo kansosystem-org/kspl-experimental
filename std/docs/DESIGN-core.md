@@ -132,10 +132,10 @@ KSPL has no garbage collector. Memory that `std` hands you lives in one of four 
 
 | Where it lives | How you ask for it | Who frees it, and when |
 | :-- | :-- | :-- |
-| The global heap | Pass `null` as the arena: `List.new(null)` | You, with `defer` in front of the declaration: `defer $xs: = List<\|I32\|>.new(null)` |
-| An arena | Pass the arena: `List.new(arena)` | The arena, all at once |
-| Your own buffer | `Buf_writer.new(U8$[]::buf)`, `Arena.from_buffer(…)` | Nothing is allocated, and the buffer stays yours |
-| Shared by several owners | `Rc<\|T\|>.new(v)` / `Arc<\|T\|>.new(v)` (ARC) | The compiler, when the last owner lets go |
+| The global heap | Pass `null` as the arena: `List<\|I32\|>(null)` | You, with `defer` in front of the declaration: `defer $xs: = List<\|I32\|>(null)` |
+| An arena | Pass the arena: `List<\|I32\|>(arena)` | The arena, all at once |
+| Your own buffer | `Buf_writer(U8$[]::buf)`, `Arena.from_buffer(…)` | Nothing is allocated, and the buffer stays yours |
+| Shared by several owners | `Rc<\|T\|>(v)` / `Arc<\|T\|>(v)` (ARC) | The compiler, when the last owner lets go |
 
 **Choose an arena first, and the heap only when no arena fits.** A value made in an arena needs no `free()`, so it cannot leak. A forgotten free is the commonest mistake that manual cleanup allows.
 
@@ -151,12 +151,12 @@ import "std/mem" { Arena }
 
 fn main()
     // On the heap: this function owes a free(), which `defer` in front says.
-    defer $on_heap: = List<|I32|>.new(null)
+    defer $on_heap: = List<|I32|>(null)
     on_heap.push(1)
 
     // In an arena: freed with the arena, all at once.
-    defer arena: = Arena.new(4096)
-    $in_arena: = List<|I32|>.new(arena)
+    defer arena: = Arena(4096)
+    $in_arena: = List<|I32|>(arena)
     in_arena.push(2)
 ```
 
@@ -272,9 +272,9 @@ The caller cannot reach the storage. So anything that the container fails to rel
 
 The table of the three names is "Pitfalls" in [std](../README.md). This section holds the rules that come with it.
 
-**The arena that `new` receives is where the content goes.** `List.new(a)` returns a `List` value whose elements go in `a`. To place the `List` itself in the arena, carried as a pointer, use `create(a)`. To put an arena in the caller's variable (for a configuration with no malloc), use `Arena.from_buffer`, which returns a value.
+**The arena that `new` receives is where the content goes.** `List<|T|>(a)` returns a `List` value whose elements go in `a`. To place the `List` itself in the arena, carried as a pointer, use `create(a)`. To put an arena in the caller's variable (for a configuration with no malloc), use `Arena.from_buffer`, which returns a value.
 
-**An arena is always the last parameter, and it has no default.** The global heap is `null`, written at the call (`List.new(arena)` against `List.new(null)`). So the call shows where the content goes, and whether a `free()` is owed. Why a default is refused is "A default argument is allowed only for a foldable constant" in [`../../docs/DESIGN-principles.md`](../../docs/DESIGN-principles.md). The signature says whether a function takes one, so the name does not say it again.
+**An arena is always the last parameter, and it has no default.** The global heap is `null`, written at the call (`List<|T|>(arena)` against `List<|T|>(null)`). So the call shows where the content goes, and whether a `free()` is owed. Why a default is refused is "A default argument is allowed only for a foldable constant" in [`../../docs/DESIGN-principles.md`](../../docs/DESIGN-principles.md). The signature says whether a function takes one, so the name does not say it again.
 
 Caution: **Do not mark an arena parameter with a suffix**, least of all `_in`. `_in` also means "in that place" (`harness.run_in(argv, cwd)`) and "inside a thing" (`index_in(row, cell)`). So a reader cannot take it as pointing at an arena.
 
@@ -376,7 +376,7 @@ The rule is `docs/SPEC-programming-language.md` 7.2, the reasoning `docs/DESIGN-
 
 **`order_by` is the one sort, and it is stable.** Its algorithm is described at `order_by` in `std/seq.kspl`. *Stable* means that equal keys keep their order. So an answer built from a sorted list (completions, references) is the same on every run. And a sort by a second key after a first gives the expected listing. There is no unstable variant. Its one gain is a sort in place without a second buffer. That is not what `std/seq`'s eager operations are for, since they return a new list anyway.
 
-**What eagerness costs** is the list's own storage (16 bytes per element), allocated up front. The elements are not copied. A caller that streams a huge input must allow for it. These functions take an `arena`. With `null`, they allocate from the global heap (as `List.new(null)` does), and the caller frees the result with a `defer`. So `for x in s.split(…)` can be written directly only when an arena is passed. With `null`, nothing could free the temporary that the loop uses.
+**What eagerness costs** is the list's own storage (16 bytes per element), allocated up front. The elements are not copied. A caller that streams a huge input must allow for it. These functions take an `arena`. With `null`, they allocate from the global heap (as `List<|T|>(null)` does), and the caller frees the result with a `defer`. So `for x in s.split(…)` can be written directly only when an arena is passed. With `null`, nothing could free the temporary that the loop uses.
 
 ### Why the chain's stages cannot be folded
 
@@ -539,14 +539,14 @@ String interpolation (`"n=\{n\}"`, which puts the value of `n` into the text) al
 | What is wanted | The notation | Where the memory is |
 | :-- | :-- | :-- |
 | Stream it | `w.s("n=\{n\}")` | The destination `w` holds it |
-| Write into the caller's array | `Buf_writer.new(U8$[]::buf).s("n=\{n\}").slice()` | The caller's array; nothing is allocated |
+| Write into the caller's array | `Buf_writer(U8$[]::buf).s("n=\{n\}").slice()` | The caller's array; nothing is allocated |
 | Allocate and keep it | `arena.text().s("n=\{n\}").take()` | The arena (`take` lets the builder go) |
 
 It is Zig's three-way split (`w.print` / `bufPrint` / `allocPrint`) without the allocator argument. A `Str_builder` allocates on its own.
 
 **Interpolation that yields a value is not taken.** Examples are Python's f-string, Go's `Sprintf` and C++'s `std::format`. That notation returns a new string whose memory something else frees. In Python and Go, that is the garbage collector; in C++, it is `std::string`'s destructor. An automatic owner could release that memory, but the notation would still hide its allocation and lifetime. That goes against `docs/DESIGN-programming-language.md`'s "Responsibility can only be assigned for what the writer can see". Before you add a fourth shape, confirm that it cannot be written with the three.
 
-**Why two writers?** `std/str` has the growing `Str_builder`. `std/buf` has `Buf_writer`, which writes into the caller's array and never allocates. Some places cannot allocate (freestanding). Some must not allocate inside a loop. A `Str_builder.new()` in a control loop costs a malloc/free every round. Yet output of unpredictable length, forced into a fixed buffer, spreads the decision to truncate across its callers. Both are `Writer`s, so interpolation works with either. **The choice is "can it allocate" and nothing else.** A split by speed or by an upper bound would make two ways to one purpose.
+**Why two writers?** `std/str` has the growing `Str_builder`. `std/buf` has `Buf_writer`, which writes into the caller's array and never allocates. Some places cannot allocate (freestanding). Some must not allocate inside a loop. A `Str_builder()` in a control loop costs a malloc/free every round. Yet output of unpredictable length, forced into a fixed buffer, spreads the decision to truncate across its callers. Both are `Writer`s, so interpolation works with either. **The choice is "can it allocate" and nothing else.** A split by speed or by an upper bound would make two ways to one purpose.
 
 **Why an overflow is not a panic**: the length is unknown until the text is assembled. A stop of a program because a display string outgrew its buffer is out of proportion. `Buf_writer` counts what it dropped, and reports it through `overflowed()`. That serves the purpose of C's `snprintf`, which returns the length it could have written. The count is held in the writer instead. Partway along a chain of calls, no return value can be checked.
 

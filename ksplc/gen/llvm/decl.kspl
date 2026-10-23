@@ -206,7 +206,7 @@ impl Ast_node
             // gen_llvm_ctx.format_f32_hex_literal).
             cg.s(gen_llvm_ctx.format_f32_hex_literal(r.text))
             return
-        defer $clean_str: = Str_builder.new()
+        defer $clean_str: = Str_builder()
         r.text.append_clean_number(clean_str@, "Ff")
         cg.s(clean_str.slice())
 
@@ -377,7 +377,7 @@ impl Ast_node
     priv fn const_array_slots(r: Ast_node$@, cg: Genllvm_ctx$@, size: I32): List<|Ast_node$@|> //<
         //< An array literal's element initializers by index, null where none is written
         //< The caller frees the list.
-        $slots: = List<|Ast_node$@|>.new(null)
+        $slots: = List<|Ast_node$@|>(null)
         for _i in Range.asc(size)
             slots.push(null)
         if r == null || r.kind_id != .k_struct_literal
@@ -412,7 +412,7 @@ impl Ast_node
             //< A struct literal's field initializers in declaration order, null where none is given
             //< The caller frees the list.
         n: = s_def.fields_list.len
-        $slots: = List<|Ast_node$@|>.new(null)
+        $slots: = List<|Ast_node$@|>(null)
         for _i in Range.asc(n)
             slots.push(null)
         if r == null || r.kind_id != .k_struct_literal
@@ -461,7 +461,7 @@ impl Ast_node
             return
         real_id: = cg.env.get_clean_real_type(type_id)
         lay: = cg.sema.type_layout(real_id)
-        $parts: = Laid_parts.new(cg, as_type)
+        $parts: = Laid_parts(cg, as_type)
         switch cg.env.get_info(real_id)
         case .array(elem_id, size)
             $slots: = r.const_array_slots(cg, size)
@@ -596,7 +596,7 @@ impl Ast_node
         // A naked function's arguments stay in their registers for the assembly to read; a spill
         // would be the very prologue it has none of.
         if !r.has_attribute("naked")
-            for param in base_ast_ext.Param_cursor.new(params, false)
+            for param in base_ast_ext.Param_cursor(params, false)
                 param.spill_llvm_param(cg, use_kspl_abi)
         block.emit_llvm_stmt(cg)
         if !cg.is_terminated

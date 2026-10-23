@@ -105,7 +105,7 @@ Note: **A library can also be handed over without its KSPL source.** Build it wi
 
 ### The `.kspl` file icon outside VS Code
 
-**Inside VS Code, the extension gives each `.kspl` file its icon**: the KSPL ensō and K on a white page. A `.kspage` document's icon has a larger K and no ring, so the two differ even at their smallest. File managers need the steps below, run once from this folder.
+**Inside VS Code, the extension gives each `.kspl` file its icon**: the KSPL ensō and K on a white page. A `.ksmd` document's icon has a larger K and no ring, so the two icons differ even at their smallest. File managers need the steps below, run once from this folder.
 
 **Linux:**
 
@@ -142,121 +142,113 @@ ie4uinit.exe -show
 * **The icon is read from this folder.** After moving or cloning it again, run the lines again.
 * VS Code installed for all users sits under `C:\Program Files\Microsoft VS Code\`; change `$code` to match.
 
-## Opening a `.kspage` document on a double-click
+## Opening a `.ksmd` document on a double-click
 
-**This section makes a `.kspage` document open in your browser when you double-click it in the file manager.** It needs a clone of this repository that builds from source ([`HOWTO-build.md`](HOWTO-build.md)), not only the unpacked folder. `make kspage` builds the three programs it uses: the opener, the server and the page ("Where the double-click opener lives" in [`tools/docs/DESIGN-tools.md`](../tools/docs/DESIGN-tools.md)).
+**This section makes a `.ksmd` document open in ksmd, in your browser, when you double-click it.** ksmd is the document editor of this repository ([ksmd](../ksmd/README.md)). This section needs a clone that builds from source ([`HOWTO-build.md`](HOWTO-build.md)). `make ksmd` builds the three programs it uses: the launcher `out/ksmd_open.exe`, the server and the page.
 
-The diagram shows what happens on a double-click.
+**The launcher starts the local server on the document's workspace, or reuses the server already running there.** It then passes the document's address to the browser, and exits. Its decisions are "Opening a `.ksmd` document" in [`tools/docs/DESIGN-tools.md`](../tools/docs/DESIGN-tools.md).
 
-```mermaid
-flowchart LR
-    Click[Double-click a .kspage file] --> Opener[out/kspage_open.exe]
-    Opener -->|starts, or reuses| Server[kssrv, the local server]
-    Opener -->|passes the URL| Browser
-    Browser -->|loads the page from| Server
-```
+### Choose the workspace
 
-A `.kspage` file double-clicked in a file manager opens in a browser through `out/kspage_open.exe`, built from [`tools/kspage_open.kspl`](../tools/kspage_open.kspl) (what `make kspage-open FILE=…` runs). It starts the local server, or reuses the one serving the same folder, and passes the URL to a browser.
+**The workspace is the folder that ksmd reads and writes.** Every include and image of a document must stand inside it.
 
-**The server stays up for the next document**, and stops by itself once no kspage tab has held it for a while.
+* **By default, the workspace is the document's own folder.** An include that climbs with `../` then reaches outside it, and the page refuses it.
+* **To make a larger folder the workspace, put an empty file named `.ksmd-workspace` in it.** Every document below that folder then opens in that workspace. The nearest such folder above a document wins.
 
-| Command | What it does |
-| :-- | :-- |
-| `out/kspage_open.exe --list` | Shows the servers running, with the folder each serves |
-| `out/kspage_open.exe --stop=<folder>` | Stops one |
-| `out/kspage_open.exe --stop-all` | Stops every one |
+  ```sh
+  touch ~/notes/.ksmd-workspace
+  ```
+
+  On Windows, run `New-Item $HOME\notes\.ksmd-workspace` in PowerShell.
+* **From a terminal, `--workspace=<folder>` names the workspace for one run**: `out/ksmd_open.exe --workspace=$HOME/notes $HOME/notes/a/b.ksmd`. Use it for a folder you cannot write the file into.
+
+**Each workspace keeps its own port, a number from 20000 to 29999 worked out from its path.** The browser keeps unsaved drafts per address, port included, so the same port brings the drafts back. If another program holds that port, the launcher takes the next free one and says so. Drafts held on one port do not show on the other. They show again once the usual port is free.
 
 ### Linux (a desktop environment)
 
-1. **Build everything:**
+**On Linux, `make install` ties `.ksmd` to the launcher for your user.** It needs clang's wasm32 tools to build the page, and prints a note where they are missing. `make install-desktop` does that step alone, without installing `ksplc`.
+
+1. **Build everything and tie it:**
 
   ```sh
-  make kspage
+  make install-desktop
   ```
 
-  It builds the page, the server, the opener and `out/sample.kspage` to double-click. It writes `out/kspage.desktop` (checked by `desktop-file-validate` where installed) and prints the six lines below.
+  It builds the page, the server and the launcher. It writes `out/ksmd.desktop` and `out/ksmd-mime.xml`, checks them, and puts them in with the icon.
 
-2. **Run the six lines yourself.** `make` does not write under your home directory.
+2. **Double-click `ksmd/examples/overview.ksmd`.** The browser shows "Office supplies", with its table calculated and its note included.
 
-  ```sh
-  xdg-mime install --novendor out/kspage-mime.xml
-  mkdir -p ~/.local/share/icons/hicolor/scalable/mimetypes
-  cp kspage/port/desktop/kspage.svg ~/.local/share/icons/hicolor/scalable/mimetypes/application-x-kspage.svg
-  cp out/kspage.desktop ~/.local/share/applications/
-  update-desktop-database ~/.local/share/applications
-  xdg-mime default kspage.desktop application/x-kspage
-  ```
+**It writes only to your data folder**, `$XDG_DATA_HOME`, or `~/.local/share` where that is not set:
 
-3. **Double-click `out/sample.kspage`**, the one way to confirm the association works. It holds [`kspage/content/example.kspl`](../kspage/content/example.kspl)'s content. Its title is "Sample document".
+| What | Where |
+| :-- | :-- |
+| The launcher's entry, `ksmd.desktop` | `applications/` |
+| The type declaration, `ksmd-mime.xml` | `mime/packages/` |
+| The icon, `application-x-ksmd.svg` | `icons/hicolor/scalable/mimetypes/` |
 
-**Do not skip the first of the six lines.** Linux ties an application to a MIME type (a name for a kind of file), not to an extension. Undeclared, `.kspage` reads as `application/octet-stream`, which the last line cannot tie.
+* **It then rebuilds the desktop's caches**, with `update-mime-database` and `update-desktop-database`. Where a tool is missing, it prints a note and goes on. Install `shared-mime-info` or `desktop-file-utils`, then run `make install-desktop` again.
+* **It makes ksmd the default program for `.ksmd` files** with `xdg-mime default`. That writes your choice to `~/.config/mimeapps.list`. Without `xdg-utils`, it prints a note, and the file manager's "Open with" offers ksmd.
+* **`make install PREFIX=<folder>` writes under `<folder>/share` instead**, and sets no default program. Each user then runs `xdg-mime default ksmd.desktop application/x-ksmd` for themselves. Writing to a system folder such as `/usr/local/share` needs `sudo`.
+* **The entry holds the path of this folder**, where `out/ksmd_open.exe` stands. After you move or clone the repository again, run `make install-desktop` again.
 
-**The second and third lines give each `.kspage` file its icon**, a white page with the KSPL K. A file manager may show it only after you log in again.
+**Each `.ksmd` file shows its icon**, a white page with the vermilion KSPL K. A file manager may show the icon only after you log in again.
 
-**Do not edit `Path=` or `%f` in the `.desktop` file.** A double-click starts in the home directory, hence `Path=`, and opens one file, hence `%f`, not `%F`.
+### Windows
 
-To tie `.md` or `.txt` to kspage instead, swap the last line's type for `text/markdown` / `text/plain`; that sends **every** `.md` or `.txt` on the machine to kspage.
+**On Windows the tie is made by hand, once.** `make install` changes no registry entry: Windows lets only its own "Open with" dialog choose the default program.
 
-### Windows and macOS
+1. **Build everything** in the MSYS2 UCRT64 shell: `make ksmd`. The build puts the icon inside `out\ksmd_open.exe`.
+2. **Open one document by hand first**: `out/ksmd_open.exe ksmd/examples/overview.ksmd`. Check that the browser shows it.
+   * Caution: **A double-click shows a refusal nowhere.** This run shows it in the terminal.
+3. **Right-click a `.ksmd` file**, and choose "Open with ▸ Choose another app ▸ Look for another app on this PC".
+4. **Pick `out\ksmd_open.exe`**, and tick "Always use this app". The `.ksmd` files then show the launcher's icon, the page with the K.
 
-**`make kspage` builds the same four** and prints this environment's association steps. The server and the page also have targets of their own:
+**No gate runs these steps on Windows.** They were checked once by hand on a Windows PC, and only a Windows PC shows whether they still work.
 
-    make kssrv             # the server it starts  -> out/kssrv.exe
-    make kspage-web        # the page it serves    -> out/kspage_web/kspage.html
+**macOS**, by hand as well: make an Automator "Application" that runs `out/ksmd_open.exe "$1"`, and tie `.ksmd` to it with Finder's "Get Info ▸ Open with ▸ Change All".
 
-**All three programs are needed**: the opener looks for `kssrv.exe` and `kspage_web/kspage.html` beside itself, and stops with "kssrv not found" if either is missing.
+### Listing and stopping the servers
 
-Caution: **A double-click shows that refusal nowhere.** Run the opener once by hand first (`make kspage-open FILE=out/sample.kspage`) to see the page open.
+**A server stays up for the next document**, and stops by itself five minutes after its last ksmd tab closes.
 
-Each association below runs `out/kspage_open.exe` with one file's path. **No gate runs either of them**, so only your environment can say whether it works.
+| Command | What it does |
+| :-- | :-- |
+| `out/ksmd_open.exe --list` | Shows the servers running, with the workspace each serves |
+| `out/ksmd_open.exe --stop=<folder>` | Stops the server of that workspace |
+| `out/ksmd_open.exe --stop-all` | Stops every one |
 
-* **Windows**:
-  1. Right-click a `.kspage` file.
-  2. Choose "Open with ▸ Choose another app ▸ Look for another app on this PC".
-  3. Pick `out\kspage_open.exe`, and tick "Always use this app". The files then show the opener's icon, a white page with the KSPL K, which the build puts inside it.
-  * **Do not tie `.json` to it.** Every settings and data file on the machine would open in kspage ("The extension is kspage's own and names no format inside" in [`kspage/docs/DESIGN-application.md`](../kspage/docs/DESIGN-application.md)).
-* **macOS** — Finder's "Get Info ▸ Open with" needs an application bundle (`.app`). Make one in Automator's "Application" running `out/kspage_open.exe "$1"`, and tie that.
+### Resetting the `.ksmd` association
 
-### Resetting the association
-
-**Do this when a `.kspage` file shows the wrong icon or opens the wrong program.** This happens after a rebuild in another folder, or after a fresh clone. The system then remembers an old opener, or two of them.
+**Do this when a `.ksmd` file shows the wrong icon or opens the wrong program.** This happens after a rebuild in another folder, or a fresh clone.
 
 **Windows** (PowerShell, as yourself; no administrator needed):
 
-1. **Rebuild the opener, so it holds the icon.** In the MSYS2 UCRT64 shell, run `pacman -S --needed mingw-w64-ucrt-x86_64-binutils` once, then `make kspage`. In Explorer, `out\kspage_open.exe` itself now shows the washi page. If it still shows a plain program icon, the rebuild did not happen.
+1. **Rebuild the launcher**: `make ksmd`. In Explorer, `out\ksmd_open.exe` now shows the page with the K.
 2. **Make Windows forget the old choices.** An error saying a key does not exist only means there was nothing to forget.
 
   ```powershell
-  reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.kspage" /f
-  reg delete "HKCU\Software\Classes\Applications\kspage_open.exe" /f
-  reg delete "HKCU\Software\Classes\.kspage" /f
+  reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.ksmd" /f
+  reg delete "HKCU\Software\Classes\Applications\ksmd_open.exe" /f
+  reg delete "HKCU\Software\Classes\.ksmd" /f
   ```
 
-  * The first line removes the program chosen for `.kspage`, and the "Open with" list.
-  * The second removes where Windows remembers `kspage_open.exe` to be. A stale path there is why the menu can list it twice.
-  * The third removes any other tie to `.kspage`.
 3. **Clear the icon cache:** run `ie4uinit.exe -show`, or sign out and in again.
-4. **Tie it again**, as in the steps above. In step 3 there, pick the `out\kspage_open.exe` of the folder you now work in. Do not pick an entry already in the list.
+4. **Tie it again**, as in the steps above. Pick the `out\ksmd_open.exe` of the folder you work in now, not an entry already in the list.
 
-If a `reg delete` line says access is denied, sign out and in, then run it again. Explorer may hold the key open.
-
-**Linux:**
+**Linux:** run `make install-desktop` from the folder you work in now. It replaces `ksmd.desktop`, which holds that folder's path, and ties `.ksmd` to it again. To remove the tie and the type altogether:
 
 ```sh
-rm -f ~/.local/share/applications/kspage.desktop
-sed -i '/application\/x-kspage/d' ~/.config/mimeapps.list
+rm -f ~/.local/share/applications/ksmd.desktop ~/.local/share/mime/packages/ksmd-mime.xml
+rm -f ~/.local/share/icons/hicolor/scalable/mimetypes/application-x-ksmd.svg
+sed -i '/application\/x-ksmd/d' ~/.config/mimeapps.list
+update-mime-database ~/.local/share/mime
 update-desktop-database ~/.local/share/applications
 ```
 
-Then run `make kspage` and its six lines again. The new `kspage.desktop` holds the path of the folder you ran it in.
-
-**macOS:** delete the Automator application, make it again for the current `out/kspage_open.exe`, and tie that.
-
-### When a double-click shows nothing
-
-**The server can start while the hand-over to the browser fails**, leaving nothing on the screen.
+### When a `.ksmd` double-click shows nothing
 
 | Look at | What it tells you |
 | :-- | :-- |
-| **`out/tmp/kspage_open.browser.log` first** | What the browser printed (the opener's last line names this file) |
-| **The URL printed on the terminal** | Paste the whole of it, with the token after `#`, into a browser. If the page opens, the server works and only the hand-over failed |
+| **A run from a terminal** | `out/ksmd_open.exe <document>` prints why it refuses a document, such as a name not ending in `.ksmd` |
+| **`out/tmp/ksmd_open.browser.log`** | What the browser printed when the launcher started it |
+| **The URL printed on the terminal** | Paste the whole of it, with the token after `#`, into a browser. If the page opens, only the hand-over to the browser failed |

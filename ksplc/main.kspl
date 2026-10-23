@@ -75,8 +75,8 @@ impl cli.Mode
         case .info(topic)
             answer_info(topic)!
         case .clean
-            defer arena: = Arena.new(8 * 1024)
-            defer $dir: = Str_builder.new()
+            defer arena: = Arena(8 * 1024)
+            defer $dir: = Str_builder()
             if !base_cache.clear_all(dir@, arena)
                 base_cache.exit_unlocated("ksplc")
             io.err().s("ksplc: cleared ").s(dir.slice()).c('\n')
@@ -100,7 +100,7 @@ impl cli.Mode
             // unformatted, the tree formatted partway without anyone seeing it, and a retry
             // stopping at the same place. format_file has printed each file's diagnostics; the
             // failed names go last.
-            defer $failed: = List<|U8[]|>.new(null)
+            defer $failed: = List<|U8[]|>(null)
             $fixed: = fmt_file.Fixed_points.open()
             for f_path in fmt_files
                 fmt_file.format_file(f_path, parser, config, in_place, fixed@) catch _e
@@ -129,7 +129,7 @@ impl cli.Mode
 
 priv fn kspl_parser(): kspeg.Target$@!pipeline.Compile_error //<
     //< The parser the embedded grammar builds; the caller frees its memo (`free_memo`)
-    $meta: = kspeg_notation.Meta.new(kspl_grammar, base_core.arena)
+    $meta: = kspeg_notation.Meta(kspl_grammar, base_core.arena)
     return meta.parse_grammar() catch e
         throw .parse(.kspeg(e))
 
@@ -142,7 +142,7 @@ priv fn answer_info(topic: usage.Info_topic): Void!pipeline.Compile_error //< it
     case .exe_flags
         print_flag_words(tools_run.append_exe_flags)
     case .cache_dir
-        defer $dir: = Str_builder.new()
+        defer $dir: = Str_builder()
         if !base_cache.append_cache_root(dir@)
             base_cache.exit_unlocated("ksplc")
         io.out().s(dir.slice()).c('\n')
@@ -160,8 +160,8 @@ priv fn answer_info(topic: usage.Info_topic): Void!pipeline.Compile_error //< it
 
 priv fn print_flag_words(append: fn(list: List<|U8[]|>$@, arena: Arena$@)) //<
     //< The words `append` gives (`tools_run.append_link_libs` and its like), as a query answers
-    defer arena: = Arena.new(8 * 1024)
-    $words: = List<|U8[]|>.new(arena)
+    defer arena: = Arena(8 * 1024)
+    $words: = List<|U8[]|>(arena)
     defer words.free()
     append(words@, arena)
     usage.print_words(words@)
@@ -223,14 +223,14 @@ priv fn run_compiler(in_path: U8[], out_path: U8[], deps_path: U8[], libs_path: 
 
     t0: = sys.mono_us()
     base_stats.reset_bytes()
-    defer compiler: = pipeline.Compiler.new(parser)
+    defer compiler: = pipeline.Compiler(parser)
     compiler.parse_file(mod_name, read_supplied(mod_name), false)!
 
     expected_max: = I32::base_ast_kinds.Ast_kind.k_max
     current_size: = base_core.pools.get_kind_pool_size()
     if current_size > expected_max
         unknown_name: = base_core.pools.get_kind_str(expected_max, "Unknown")
-        defer $err_msg: = Str_builder.new()
+        defer $err_msg: = Str_builder()
         err_msg
             .s("Grammar sync error: Rule '\{unknown_name\}' is defined in kspl.kspeg but missing \
                 from Ast_kind enum.")
@@ -260,7 +260,7 @@ priv fn run_compiler(in_path: U8[], out_path: U8[], deps_path: U8[], libs_path: 
 
     // Caution: **Write the interfaces before lower**, which rewrites the names they read. **Stop
     // at the first refused**: the next form would report the same refusal again.
-    $interface_texts: = List<|U8[]|>.new(base_core.arena)
+    $interface_texts: = List<|U8[]|>(base_core.arena)
     for path in base_core.config.interface_paths
         text: = tools_interface.render(compiler.root_file, compiler.sema,
             tools_interface.form_of(path), path, compiler.base_parser)
@@ -328,7 +328,7 @@ impl pipeline.Compile_error
         //< The part before the colon (`parse/syntax_error`, or a bare `codegen`) is the error's
         //< identifier unchanged. Every line goes to standard error. **A line closing a compile
         //< whose diagnostics are printed** becomes the closing object under json (`end_compile`).
-        defer $msg: = Str_builder.new()
+        defer $msg: = Str_builder()
         $closes: = false
         switch r$
         case .parse(p_err)
@@ -404,14 +404,14 @@ fn main(): Void!I32
 
         fmt_printer.init()
 
-        mode: = cli.Mode.new()
+        mode: = cli.Mode()
         mode.dispatch() catch e
             print_internal_trace()
             e.report_and_exit()
 
     heap_used: = mem.heap_used_bytes()
     if heap_used != 0
-        defer $final_msg: = Str_builder.new()
+        defer $final_msg: = Str_builder()
         final_msg
             .s("Final Global Heap : \{heap_used:,\} bytes (Expected 0. A nonzero value indicates a \
                 memory leak)\n")

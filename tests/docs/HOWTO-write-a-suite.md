@@ -107,7 +107,7 @@ Caution: **Give each suite its own workspace name.** Suites themselves run in pa
 
 ## The arena is held by harness
 
-`harness.begin()` makes the suite's arena and hands it back, and `ksplc_harness.finish()` frees it. An *arena* is one block of memory that many allocations share and that is freed all at once. The suite can use it directly for its own allocations, so `List.new(arena)` and the like read as usual. Why the harness's helpers do not take the arena per call is in "Why harness holds the arena" in [`tests/docs/DESIGN-suites.md`](DESIGN-suites.md).
+`harness.begin()` makes the suite's arena and hands it back, and `ksplc_harness.finish()` frees it. An *arena* is one block of memory that many allocations share and that is freed all at once. The suite can use it directly for its own allocations, so `List<|T|>(arena)` and the like read as usual. Why the harness's helpers do not take the arena per call is in "Why harness holds the arena" in [`tests/docs/DESIGN-suites.md`](DESIGN-suites.md).
 
 Caution: **Do not free it with a `defer`.** `finish` / `fatal` free it, so a `defer arena.free()` frees it twice.
 

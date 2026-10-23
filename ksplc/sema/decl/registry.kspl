@@ -48,7 +48,7 @@ impl Ast_node
         if has_gen
             sym_kind = sym_kind_gen
 
-        sym: = Sema_symbol.new(sym_kind, name, r)
+        sym: = Sema_symbol(sym_kind, name, r)
         sym.vis = top_vis
         sym.type_id = c.env.get_or_add(fqn)
         r.type_id = sym.type_id
@@ -143,7 +143,7 @@ impl Ast_node
             struct_def.align_attr = align_val
 
         // This map finds duplicates: get_field per field is O(n^2) and hangs on a huge struct.
-        defer $seen_fields: = Map<|U8[], Bool|>.new(null)
+        defer $seen_fields: = Map<|U8[], Bool|>(null)
 
         struct_vis: = r.get_visibility()
 
@@ -181,7 +181,7 @@ impl Ast_node
             eff_f_type: = c.binding_value_type(f_type_id, true)
             f_type_node.type_id = eff_f_type
 
-            field_def: = sema_type_def.Struct_field.new(f_name, eff_f_type, f_vis, c_node)
+            field_def: = sema_type_def.Struct_field(f_name, eff_f_type, f_vis, c_node)
 
             is_dup: = seen_fields.get(f_name).unwrap_or(false)
             if is_dup
@@ -228,7 +228,7 @@ impl Ast_node
                 if c.env.get_clean_real_type(f_type_id) == I32::sema_type_env.Builtin_type_id
                     .void_type
                     continue
-                field_def: = sema_type_def.Struct_field.new(f_name, f_type_id, .public, f_node)
+                field_def: = sema_type_def.Struct_field(f_name, f_type_id, .public, f_node)
                 variant_def.payload_fields.push(field_def)
 
     fn build_enum_registry(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error
@@ -266,8 +266,8 @@ impl Ast_node
         enum_fqn: = c.make_fqn(enum_name) if declare_syms else ""
 
         // A local map, for the same reason as fill_struct_fields's.
-        defer $seen_variants: = Map<|U8[], Bool|>.new(null)
-        defer $seen_tags: = Map<|I64, U8[]|>.new(null)
+        defer $seen_variants: = Map<|U8[], Bool|>(null)
+        defer $seen_tags: = Map<|I64, U8[]|>(null)
 
         for v_node in r.children
             if v_node.kind_id != .k_enum_variant
@@ -280,7 +280,7 @@ impl Ast_node
             v_node.type_id = type_id
             c.check_snake_case(v_name, v_id_node, "Enum variant")
 
-            variant_def: = sema_type_def.Enum_variant.new(v_name, current_tag, v_node)
+            variant_def: = sema_type_def.Enum_variant(v_name, current_tag, v_node)
             tag_node: = v_node.get_enum_variant_tag()
             $foldable: = tag_node != null
             if bare: = r.bare_sibling_variant(c, tag_node)
@@ -309,7 +309,7 @@ impl Ast_node
             if declare_syms
                 arena_full_name: = join_dotted_name(enum_name, v_name)
                 v_kind: = sema_type_scope.Sym_kind.enum_variant(variant_def.tag_value)
-                v_sym: = Sema_symbol.new(v_kind, arena_full_name, v_node)
+                v_sym: = Sema_symbol(v_kind, arena_full_name, v_node)
                 v_sym.type_id = type_id
                 v_sym.vis = enum_vis
                 c.declare_symbol_with_fqn(arena_full_name, join_dotted_name(enum_fqn, v_name), v_sym)

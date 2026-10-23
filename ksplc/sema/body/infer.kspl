@@ -77,12 +77,12 @@ priv fn push_generic_fns(decl: Ast_node$@, out: List<|Ast_node$@|>$@) //<
 
 priv fn wanted_names(r: Ast_node$@, name: U8[]): Map<|U8[], Bool|>$@ //<
     //< `name`, and the names of the generic functions that use it, directly or through another
-    names: = base_core.arena.create(Map<|U8[], Bool|>.new(base_core.arena))
+    names: = base_core.arena.create(Map<|U8[], Bool|>(base_core.arena))
     names.set(name, true)
-    $fns: = List<|Ast_node$@|>.new(base_core.arena)
+    $fns: = List<|Ast_node$@|>(base_core.arena)
     for child_node in r.children
         push_generic_fns(child_node.unwrap_top_level(), fns@)
-    $taken: = List<|Bool|>.new(base_core.arena)
+    $taken: = List<|Bool|>(base_core.arena)
     for _f in fns
         taken.push(false)
     $grew: = true
@@ -120,7 +120,7 @@ priv fn wants_body(c: Sema_ctx$@, decl: Ast_node$@): Bool //< whether `c.bodies`
 
 priv fn implicit_cleanup_method(c: Sema_ctx$@, node: Ast_node$@): Bool //<
     //< cleanup is a use without a source call
-    $params: = base_ast_ext.Param_cursor.new(node.get_fn_params(), false)
+    $params: = base_ast_ext.Param_cursor(node.get_fn_params(), false)
     if p: = params.next()
         owner: = c.env.strip_ptr_full(p.param_type_id())
         name: = c.env.source_fn_name(node)
@@ -224,7 +224,7 @@ fn run(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error
     // From here on the bodies are monomorphized templates.
     c.set_in_generic_instance(true)
     defer c.set_in_generic_instance(false)
-    $checked: = Map<|Sz, Bool|>.new(base_core.arena)
+    $checked: = Map<|Sz, Bool|>(base_core.arena)
     if infer_pending_bodies(c, checked@)
         has_err = true
 
@@ -360,7 +360,7 @@ impl Ast_node
             if prev_file.len > 0
                 c.set_current_file(prev_file)
         if param_list != null
-            for item in base_ast_ext.Param_cursor.new(param_list, false)
+            for item in base_ast_ext.Param_cursor(param_list, false)
                 item.declare_param(c, is_export)!
 
         block: = r.find_child(.k_stmt_block)
@@ -374,7 +374,7 @@ impl Ast_node
         //< It declares one parameter in the function's scope, with its written type
         p_name: = r.find_text(.k_identifier)
         r.ice_assert(p_name.len > 0, "Function parameter is missing an identifier")
-        sym: = Sema_symbol.new(.variable, p_name, r)
+        sym: = Sema_symbol(.variable, p_name, r)
         // A parameter without `$` cannot be reassigned, as with `x: = ...`; a field write on a
         // by-value receiver (`r: Self`) is rejected by enforce_mutability walking the `.`.
         if !r.has_mut_binding_marker()
@@ -451,8 +451,8 @@ impl Ast_node
             if last.kind_id == .k_stmt_return || last.kind_id == .k_stmt_throw ||
                 last.kind_id == .k_stmt_fallback
                 return
-        implicit_ret: = Ast_node.new(.k_stmt_return, "return", block.loc)
-        implicit_ret.add_child(Ast_node.new(.k_keyword, "return", block.loc))
+        implicit_ret: = Ast_node(.k_stmt_return, "return", block.loc)
+        implicit_ret.add_child(Ast_node(.k_keyword, "return", block.loc))
         block.add_child(implicit_ret)
 
     priv fn holds_only_asm(r: Self$@, c: Sema_ctx$@): Bool //<

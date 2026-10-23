@@ -44,7 +44,7 @@ fn net_count_then_answer(listener: net.Tcp_listener$@): Void$@
         if n == 0
             break
         total += n
-    defer $said: = str.Str_builder.new()
+    defer $said: = str.Str_builder()
     said.s("\{total\}")
     conn.write_all(said.slice()) catch panic("server write should succeed")
     conn.free()
@@ -232,7 +232,7 @@ fn test_tcp_connect_wait() //< a candidate that never answers ends the connect a
     // More than the backlog (128), none accepted, so the queue stays full.
     // The runtime's own non-blocking connect returns at once, where `connect` would wait.
     host: = "127.0.0.1"
-    $held: = List<|I64|>.new(null)
+    $held: = List<|I64|>(null)
     for _i in Range.asc(300)
         h: = net.kspl_tcp_connect_nonblocking(host.ptr, host.len, port)
         assert(h > 0, "a connect starts")
@@ -248,7 +248,7 @@ fn test_tcp_connect_wait() //< a candidate that never answers ends the connect a
     held.free()
     l.free()
     assert(timed_out, "a connect that hears nothing fails as timed_out")
-    $m: = Panic_msg.new()
+    $m: = Panic_msg()
     assert(took_ms < 10000I64,
         m.s("it gives up near its wait, not at the OS's own limit (took ").n(took_ms).s(" ms)")
         .slice())
@@ -363,7 +363,7 @@ fn test_child_holds_no_socket(ksplc: U8[]) //<
     // **Wait with a bound**: were the connection held by the child, a plain read would never
     // return.
     client.set_nonblocking() catch panic("set_nonblocking should succeed on a connected socket")
-    defer $r: = reactor.Reactor.new()
+    defer $r: = reactor.Reactor()
     r.register(client.raw_handle(), reactor.READABLE, 0)
     $ready: = r.wait(5000) catch panic("wait should succeed")
     seen: = ready.len == 1
@@ -486,7 +486,7 @@ fn test_reactor_multi_connection()
         thread.Thread.spawn<|net.Tcp_listener|>(reactor_multi_echo_server, listener)
         catch panic("thread spawn failed")
 
-    defer $r: = reactor.Reactor.new()
+    defer $r: = reactor.Reactor()
     c0: = net.Tcp_stream.connect("127.0.0.1", port)
         catch panic("connect should succeed once the listener is bound")
     c1: = net.Tcp_stream.connect("127.0.0.1", port)
@@ -583,7 +583,7 @@ fn test_reactor_writable()
         catch panic("connect should succeed once the listener is bound")
     client.set_nonblocking() catch panic("set_nonblocking should succeed on a connected socket")
 
-    defer $r: = reactor.Reactor.new()
+    defer $r: = reactor.Reactor()
     r.register(client.raw_handle(), reactor.WRITABLE, 7)
     $ready: = r.wait(5000) catch panic("wait should succeed on a connected stream")
     ready_token: = ready.get(0).token
@@ -614,7 +614,7 @@ fn test_accept_returns_blocking()
     listener.set_nonblocking() catch panic("set_nonblocking should succeed on a listener")
     client: = net.Tcp_stream.connect("127.0.0.1", port)
         catch panic("connect should succeed once the listener is bound")
-    defer $r: = reactor.Reactor.new()
+    defer $r: = reactor.Reactor()
     r.register(listener.raw_handle(), reactor.READABLE, 0)
     $ready: = r.wait(5000) catch panic("wait should succeed")
     ready.free()

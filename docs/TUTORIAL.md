@@ -101,7 +101,7 @@ priv struct Point
 
 ## Methods of one's own
 
-**The receiver (the value a method is called on) is written out as the first parameter.** So whether a method can change the value is read off its signature. `Self@` is a pointer that only reads, `Self$@` one that can write. `p.moved(2)` passes `p` as `r`. A type's own function is reached with the same `.` as a module's (`Arena.new(…)`, `io.out()`). **`::` is never a path** to a name, as it is in C++ and Rust. It builds a value (`Point::{ … }`) or casts one (`I32::n`).
+**The receiver (the value a method is called on) is written out as the first parameter.** So whether a method can change the value is read off its signature. `Self@` is a pointer that only reads, `Self$@` one that can write. `p.moved(2)` passes `p` as `r`. A type's own function is reached with the same `.` as a module's (`Arena.from_buffer(…)`, `io.out()`). Its `new` is called only as the type itself (`Arena(…)`). **`::` is never a path** to a name, as it is in C++ and Rust. It builds a value (`Point::{ … }`) or casts one (`I32::n`).
 
 ```kspl
 impl Point
@@ -214,7 +214,7 @@ priv fn step_twice(n: I32): I32!Step_error
 priv fn pick_builder(ok: Bool): Str_builder!Step_error
     if !ok
         throw .too_far
-    return Str_builder.new()
+    return Str_builder()
 ```
 
 ## Leaving early
@@ -258,7 +258,7 @@ priv $seen: Sz = 0
 
 ```kspl
 priv fn gather(arena: Arena$@): List<|U8[]|>
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     for w in U8[][]::{ "a", "b", "c" }
         out.push(w)
         seen += 1
@@ -275,7 +275,7 @@ priv fn gather(arena: Arena$@): List<|U8[]|>
 
 ```kspl
 fn main(): I32
-    defer arena: = Arena.new(1024 * 1024)
+    defer arena: = Arena(1024 * 1024)
     greet("Kanso")
     p: Point = ::{ .x = 3, .y = 4 }
     span: Span = ::{ .from = 2, .to = 5 }
@@ -296,7 +296,7 @@ fn main(): I32
         fallback -2
     defer $b: = pick_builder(true) catch
         io.out().s("the place to assemble into could not be taken.\n")
-        fallback Str_builder.new()
+        fallback Str_builder()
     b.s("held")
     note(true)
     note(false)

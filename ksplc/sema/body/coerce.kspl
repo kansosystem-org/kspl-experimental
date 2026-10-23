@@ -4,7 +4,6 @@
 //< mismatch. [I0301] reports a written `::` that does no more than that.
 import "ksplc/base/ast" as base_ast + { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
-import "ksplc/base/ast_place" as base_ast_place
 import "ksplc/base/core" as base_core
 import "ksplc/sema/body/literal" as sema_body_literal
 import "ksplc/sema/decl/mono_queue" as sema_decl_mono_queue
@@ -73,8 +72,8 @@ impl Ast_node
 
     fn build_implicit_cast(r: Ast_node$@, c: Sema_ctx$@, type_id: I32, expected_id: I32)
         clone: = r.snapshot_for_morph(type_id)
-        kw_node: = Ast_node.new(.k_literal, "::", r.loc)
-        type_node: = Ast_node.new(.k_type_expr, c.env.get_str(expected_id), r.loc)
+        kw_node: = Ast_node(.k_literal, "::", r.loc)
+        type_node: = Ast_node(.k_type_expr, c.env.get_str(expected_id), r.loc)
         type_node.type_id = expected_id
         r.children = base_ast.new_ast_node_list()
         r.morph(.k_expr_postfix, "::")
@@ -178,7 +177,8 @@ impl Ast_node
             // test is ksplc/tests/trait_test.kspl).
             c.ensure_instance_methods(type_id) catch {}
             if c.check_trait_implementation(type_id, clean_expected_id, r)
-                if !c.env.is_pointer(type_id) && !c.env.is_slice(type_id) && !r.is_place_expr()
+                if !c.env.is_pointer(type_id) && !c.env.is_slice(type_id) &&
+                    !c.env.is_place_expr(r)
                     // Advising a binding is right only where it outlives the call. At a return it
                     // dies with the frame (check_frame_escape in sema/body/stmt_escape.kspl rejects
                     // that).

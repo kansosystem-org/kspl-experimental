@@ -28,7 +28,7 @@ import "std/verdict"
 priv fn sample_stems(arena: Arena$@): List<|U8[]|> //< it collects the samples' names
     //< Caution: **Do not keep a list of names** — a sample added later would be missed. The folder
     //< is the list.
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     names: = fs.read_dir(notation_crlf.SAMPLE_DIR, arena) catch
         return out
     for leaf in names
@@ -344,9 +344,9 @@ priv fn split_rules(src: U8[], arena: Arena$@): List<|Rule|> //<
     //< It splits the grammar into "name -> body"
     //< Caution: **Do not split by line** — a body runs to the next heading or a blank line
     //< (`decl_trait` spans two lines).
-    $out: = List<|Rule|>.new(arena)
+    $out: = List<|Rule|>(arena)
     $name: U8[] = ""
-    defer $body: = Str_builder.new()
+    defer $body: = Str_builder()
     for line in src.lines(arena)
         head: = rule_head(line)
         if head.len > 0
@@ -370,8 +370,8 @@ priv fn split_rules(src: U8[], arena: Arena$@): List<|Rule|> //<
 
 priv fn marker_names(src: U8[], tag: U8[], arena: Arena$@): List<|U8[]|> //<
     //< It collects the `// [mark] name name ...` lines of the grammar's header, merging equal marks
-    $out: = List<|U8[]|>.new(arena)
-    defer $lead: = Str_builder.new()
+    $out: = List<|U8[]|>(arena)
+    defer $lead: = Str_builder()
     lead.s("// [").s(tag).s("] ")
     for line in src.lines(arena)
         if !line.starts_with(lead.slice())
@@ -383,7 +383,7 @@ priv fn marker_names(src: U8[], tag: U8[], arena: Arena$@): List<|U8[]|> //<
 
 priv fn quoted_words(body: U8[], arena: Arena$@): List<|U8[]|> //<
     //< It collects the `'word'` appearing in a body
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     $i: Sz = 0
     for i < body.len
         if body[i] == '"'
@@ -429,11 +429,11 @@ priv fn check_grammar_link(arena: Arena$@)
         verdict.check("the grammar can be read", false, GRAMMAR_FILE)
         return
     rules: = split_rules(grammar, arena)
-    $opens: = List<|U8[]|>.new(arena)
-    $values: = List<|U8[]|>.new(arena)
-    $uses: = List<|U8[]|>.new(arena)
-    $terms: = List<|U8[]|>.new(arena)
-    $keeps: = List<|U8[]|>.new(arena)
+    $opens: = List<|U8[]|>(arena)
+    $values: = List<|U8[]|>(arena)
+    $uses: = List<|U8[]|>(arena)
+    $terms: = List<|U8[]|>(arena)
+    $keeps: = List<|U8[]|>(arena)
     for one in rules
         if (U8[][]::ROLE_RULES).contains(one.name)
             continue
@@ -448,7 +448,7 @@ priv fn check_grammar_link(arena: Arena$@)
         if one.body.find_str("\";\"").is_some()
             keeps.push(one.name)
 
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     want_opens: = marker_names(grammar, "opens", arena)
     want_values: = marker_names(grammar, "value", arena)
     want_uses: = marker_names(grammar, "uses", arena)
@@ -471,7 +471,7 @@ priv fn check_head_words(arena: Arena$@)
     uses: = marker_names(grammar, "uses", arena)
     for one in uses
         named.push(one)
-    $from_grammar: = List<|U8[]|>.new(arena)
+    $from_grammar: = List<|U8[]|>(arena)
     for one in rules
         if !named.contains(one.name)
             continue
@@ -479,7 +479,7 @@ priv fn check_head_words(arena: Arena$@)
             from_grammar.push(word)
     heads: = U8[][]::parse_layout.BLOCK_HEADS
 
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     for word in heads
         if word.equals(LABEL_MARK)
             continue

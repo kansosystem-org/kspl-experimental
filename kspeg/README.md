@@ -23,11 +23,11 @@ It is for whoever writes a grammar for a format or a language, and for whoever c
 import "kspeg/engine" as kspeg
 import "kspeg/notation" as kspeg_notation
 
-$meta: = kspeg_notation.Meta.new(grammar_text, arena)
+$meta: = kspeg_notation.Meta(grammar_text, arena)
 parser: = meta.parse_grammar()!
 defer parser.free_memo()
 
-$t: = kspeg.Target.new(source, arena)
+$t: = kspeg.Target(source, arena)
 defer t.free_memo()
 t.share_grammar_from(parser)
 node: = t.parse_rule("program")!

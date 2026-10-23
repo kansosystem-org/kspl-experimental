@@ -79,7 +79,7 @@ priv fn init_doc_compiler(server: Server$@, ptr: Doc_state$@, src: U8[]?): pipel
     // the editor shows nothing.
     ptr.mod_name_perm = base_core.arena.dup_str(doc_name(ptr.uri_perm).strip_kspl_ext())
 
-    compiler: = pipeline.Compiler.new(server.base_parser)
+    compiler: = pipeline.Compiler(server.base_parser)
     populate_source_map_from_store(server, compiler.source_map)
     compiler.parse_file(doc_path(ptr.uri_perm), src, false) catch {}
     return compiler
@@ -118,14 +118,14 @@ priv fn mended_from_disk(raw: U8[]): U8[] //<
     //< opened). So a path skipping this parses nothing, or reads a Windows checkout's files as
     //< another program. The conversion's notes are dropped: a file's indentation problems are
     //< reported through its own entry point (`record_layout_notes`).
-    $notes: = List<|parse_layout.Note|>.new(base_core.arena)
+    $notes: = List<|parse_layout.Note|>(base_core.arena)
     return parse_layout.mend(raw, notes@, base_core.arena).code
 
 priv fn workspace_source(server: Server$@, uri: U8[]): U8[]? //<
     //< The open buffer or saved file, copied onto the analysis arena; none when unreadable
     if text: = server.docs.open_text(uri)
         return .some(base_core.arena.dup_str(text))
-    defer $file_path: = Str_builder.new()
+    defer $file_path: = Str_builder()
     file_path.s(uri.strip_file_uri())
     file_path.ensure_kspl_ext()
     src: = io.read_file(file_path.slice(), null) catch
@@ -145,7 +145,7 @@ priv fn build_workspace_state(server: Server$@, target_uri: U8[], search_hint: U
     // The "already loaded" check reads a local Map kept in sync with `compiler.loaded_files` (one
     // load can add several entries through imports). The check is amortized O(1). Walking the
     // list per file would be O(N*M).
-    loaded_set: = base_core.arena.create(Map<|U8[], I32|>.new(base_core.arena))
+    loaded_set: = base_core.arena.create(Map<|U8[], I32|>(base_core.arena))
     $synced_len: Sz = 0
 
     // **Every source under the root is read once, matched or not**, since the filter looks at the
@@ -165,6 +165,15 @@ priv fn build_workspace_state(server: Server$@, target_uri: U8[], search_hint: U
         already_loaded: = loaded_set.get(logical).unwrap_or(0) != 0
 
         if !already_loaded
+            // Caution: **Read an open document from its buffer, not from the disk.** The editor
+            // applies the edits to the buffer, so positions read from the saved file land on the
+            // wrong lines where it holds unsaved typing. A file not loaded yet has an entry in
+            // `source_map` only where it is open (`populate_source_map_from_store`), and the parse
+            // takes that entry when given no text.
+            if buffer: = compiler.source_map.get(logical)
+                if base_ast_spell.mentions_ident(buffer, old_name)
+                    compiler.parse_file(doc_path(file_path), .none, false) catch {}
+                continue
             src_text: = io.read_file(file_path, null) catch U8$[]::{ .ptr = null, .len = 0 }
             if src_text.ptr != null
                 // **Narrow by the whole identifier, not by a substring.** `at` occurs inside
@@ -172,11 +181,9 @@ priv fn build_workspace_state(server: Server$@, target_uri: U8[], search_hint: U
                 // for nothing. It is the compiler's own rule (`mentions_ident` in
                 // `../base/ast_spell.kspl`).
                 if base_ast_spell.mentions_ident(src_text, old_name)
-                    // Caution: **Pass the text read here.** `source_map` already holds the open
-                    // documents' buffers. For a file the walk only passes through, one can be
-                    // stale: the editor can save the file without saying so. The disk is newer,
-                    // and a stale text puts the positions on the wrong lines. Read here, so
-                    // converted here (`mended_from_disk`).
+                    // Caution: **Pass the text read here.** A second read can find the file changed
+                    // after the filter looked at it. Read here, so converted here
+                    // (`mended_from_disk`).
                     perm_src: = base_core.arena.dup_str(mended_from_disk(src_text))
                     compiler.parse_file(doc_path(file_path), .some(perm_src), true) catch {}
                 dealloc(Void$@::src_text.ptr)
@@ -394,8 +401,8 @@ impl Server
         sent: = src_val.as_str().unwrap_or("")
         // The indentation problems found while converting are **collected, not reported here** (the
         // reason is at `parse_load.layout_notes`); `pipeline.kspl` reports them once sema starts.
-        defer scratch: = Arena.new(LAYOUT_SCRATCH_BYTES)
-        $laid_notes: = List<|parse_layout.Note|>.new(scratch)
+        defer scratch: = Arena(LAYOUT_SCRATCH_BYTES)
+        $laid_notes: = List<|parse_layout.Note|>(scratch)
         if src: = r.store_converted(uri, sent, laid_notes@, scratch)
             // Caution: **Record the notes after the rewind, never before.** `store_converted`
             // rewinds `base_core.arena` and clears the pool with it (`wind_back` in
@@ -416,8 +423,8 @@ impl Server
         //< two processes: watcher and analyser" in `../docs/DESIGN-tools.md`). The
         //< conversion's notes are dropped: that didOpen converts again and records them.
         text_doc: = params.get("textDocument")
-        defer scratch: = Arena.new(LAYOUT_SCRATCH_BYTES)
-        $notes: = List<|parse_layout.Note|>.new(scratch)
+        defer scratch: = Arena(LAYOUT_SCRATCH_BYTES)
+        $notes: = List<|parse_layout.Note|>(scratch)
         _held: = r.store_converted(text_doc.get("uri").as_str().unwrap_or(""),
             text_doc.get("text").as_str().unwrap_or(""), notes@, scratch)
 
@@ -446,7 +453,7 @@ impl Server
                 r.reset_current_state()
 
 priv fn answer_initialize(params: json.Value, id_val: json.Value, arena: Arena$@)
-    $b: = Json_builder.new(arena)
+    $b: = Json_builder(arena)
     // For stability CodeAction and InlayHint are disabled.
     // textDocumentSync=1 (Full): didChange's contentChanges[0].text is the whole document, so
     // handle_did_open_change looks only at index 0.
@@ -502,11 +509,11 @@ fn run_lsp_worker(base_parser: kspeg.Target$@): Void
     // hang by how long silence lasts. Otherwise a heavy didOpen (hundreds of files plus the
     // analysis) is silent throughout. Then a live worker is killed and the document quarantined.
     base_core.progress_hook = lsp_msg.send_worker_alive
-    defer server: = Server.new(base_parser)
+    defer server: = Server(base_parser)
 
-    defer msg_arena: = Arena.new(8 * 1024 * 1024)
+    defer msg_arena: = Arena(8 * 1024 * 1024)
     init_state: = msg_arena.save()
-    defer $payload: = Str_builder.new()
+    defer $payload: = Str_builder()
 
     for
         msg_arena.restore(init_state)

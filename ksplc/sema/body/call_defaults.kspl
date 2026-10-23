@@ -15,7 +15,7 @@ fn trailing_default_count(param_list: Ast_node$@): Sz //<
     //< Caution: **Count from the end.** A default in the middle alone is rejected at the
     //< declaration (sema/decl/resolve.kspl), so the defaults are contiguous.
     $n: Sz = 0
-    for p in base_ast_ext.Param_cursor.new(param_list, false)
+    for p in base_ast_ext.Param_cursor(param_list, false)
         n = n + 1 if p.get_param_default() != null else 0
     return n
 
@@ -26,12 +26,12 @@ priv fn make_caller_loc(c: Sema_ctx$@, kind: U8[], loc: Loc): Ast_node$@ //<
     // **Set the type here too.** Nothing types the operator desugaring's nodes later, and LLVM
     // would emit the `Sz` argument as `ptr` (C passes; only `make test-llvm-abi` catches it).
     if kind.equals("caller_line")
-        lit: = Ast_node.new(.k_integer,
+        lit: = Ast_node(.k_integer,
             base_core.arena.text().s("\{c.line_of(loc)\}").take(), loc)
         lit.type_id = I32::sema_type_env.Builtin_type_id.size_type
         return lit
     // Caution: Include the quotation marks. A `String` node holds the literal as written in source.
-    str_lit: = Ast_node.new(.k_string,
+    str_lit: = Ast_node(.k_string,
         base_core.arena.text().c('"').s(loc.file()).c('"').take(), loc)
     u8_id: = I32::sema_type_env.Builtin_type_id.u8_type
     str_lit.type_id = c.slice_type_of(c.env.make_const(u8_id))
@@ -45,7 +45,7 @@ fn fill_default_args(c: Sema_ctx$@, args_node: Ast_node$@, param_list: Ast_node$
     //< none.
     total: = base_ast_ext.Param_cursor.count(param_list)
     $seen: Sz = 0
-    for p in base_ast_ext.Param_cursor.new(param_list, false)
+    for p in base_ast_ext.Param_cursor(param_list, false)
         seen += 1
         if seen <= total - missing
             continue

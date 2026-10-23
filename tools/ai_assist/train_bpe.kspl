@@ -51,7 +51,7 @@ priv fn load_text(path: U8[], arena: Arena$@): U8[] //<
     recs: = oracle.load_jsonl(path, arena) catch
         io.err().s("\{sys.program_name()\}: cannot read \{path\}\n")
         sys.exit(1)
-    defer $b: = Str_builder.new()
+    defer $b: = Str_builder()
     for i in Range.asc(recs.len)
         if i > 0
             b.c('\n')
@@ -84,9 +84,9 @@ priv fn build_corpus(words: Map<|U8[], Sz|>$@, arena: Arena$@): List<|Word|> //<
     //< Turns the word table into "a list of byte ids plus the occurrence count"
     //< Words that give the same list are not combined: it would only save time, the answer
     //< unchanged.
-    $out: = List<|Word|>.new(arena)
+    $out: = List<|Word|>(arena)
     for e in words.items()
-        $ids: = List<|I32|>.new(arena)
+        $ids: = List<|I32|>(arena)
         w: = e.key
         for j in Range.asc(w.len)
             ids.push(w[j] + 1)
@@ -138,7 +138,7 @@ priv fn apply_merge(corpus: List<|Word|>$@, a: I32, b: I32, new_id: I32) //<
 priv fn init_expand(arena: Arena$@): List<|U8[]|> //< id -> a byte sequence
     //< 0 is <unk> and empty, 1..256 are the individual bytes, and 257 and above are the merged
     //< words.
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     out.push("")
     for b in Range.asc(256)
         p: = U8$@::arena.alloc(1)
@@ -159,7 +159,7 @@ priv fn concat_bytes(x: U8[], y: U8[], arena: Arena$@): U8[] //<
 priv fn write_vocab(expand: List<|U8[]|>$@)
     path: = VOCAB_OUT
     $f: = io.open(path, "w") catch panic("cannot write vocab.txt")
-    defer $b: = Str_builder.new()
+    defer $b: = Str_builder()
     for i in Range.asc(expand.len)
         bytes: = expand.get(i)
         b.clear().s("\{i\}\t")
@@ -172,7 +172,7 @@ priv fn write_vocab(expand: List<|U8[]|>$@)
 priv fn write_merges(merges: List<|Merge|>$@)
     path: = MERGES_OUT
     $f: = io.open(path, "w") catch panic("cannot write merges.txt")
-    defer $b: = Str_builder.new()
+    defer $b: = Str_builder()
     for m in merges
         b.clear().s("\{m.a\} \{m.b\} \{m.id\}\n")
         f.s(b.slice())
@@ -193,7 +193,7 @@ priv fn count_tokens(text: U8[], merges: List<|Merge|>$@, arena: Arena$@): Sz //
     words: = count_words(text, arena)
     $total: Sz = 0
     for e in words.items()
-        $ids: = List<|I32|>.new(arena)
+        $ids: = List<|I32|>(arena)
         w: = e.key
         for j in Range.asc(w.len)
             ids.push(w[j] + 1)
@@ -217,7 +217,7 @@ priv fn count_tokens(text: U8[], merges: List<|Merge|>$@, arena: Arena$@): Sz //
     return total
 
 fn main() //< derives the BPE vocabulary and merges from the corpus
-    defer arena: = Arena.new(512 * 1024 * 1024)
+    defer arena: = Arena(512 * 1024 * 1024)
     $target_vocab: I64 = 2000
     p: = argparse.Parser
         .create(sys.program_name(), "train BPE's vocabulary and merges from the corpus", arena)
@@ -230,7 +230,7 @@ fn main() //< derives the BPE vocabulary and merges from the corpus
     words: = count_words(text, arena)
     $corpus: = build_corpus(words, arena)
     $expand: = init_expand(arena)
-    $merges: = List<|Merge|>.new(arena)
+    $merges: = List<|Merge|>(arena)
 
     for expand.len < Sz::target_vocab
         m: = best_pair(corpus@, arena)

@@ -36,7 +36,7 @@ priv fn args_at(text: U8[], open: Sz, arena: Arena$@): List<|U8[]|> //<
     //< The arguments of the call whose `(` stands at open, split at the commas outside brackets
     //< A quoted string or character is stepped over whole, so a comma or a bracket in it does not
     //< count. A call left open gives what it read.
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     $depth: Sz = 0
     $start: = open + 1
     $i: = open + 1
@@ -62,7 +62,7 @@ priv fn args_at(text: U8[], open: Sz, arena: Arena$@): List<|U8[]|> //<
     return out
 
 priv fn word_before(text: U8[], dot: Sz): U8[] //<
-    //< The name right before the `.` at dot, past one `<|…|>`: `List` for `List<|I32|>.new`
+    //< The name right before the `.` at dot, past one `<|…|>`: `Map` for `Map<|U8[], I32|>.get`
     $e: = dot
     if e >= 2 && text[e - 1] == '>' && text[e - 2] == '|'
         $depth: Sz = 0
@@ -82,9 +82,47 @@ priv fn word_before(text: U8[], dot: Sz): U8[] //<
         s -= 1
     return text.sub(s, e - s)
 
+priv fn past_type_args(text: U8[], open: Sz): Sz //< the place after the `|>` closing `<|` at open
+    $depth: Sz = 0
+    $i: = open
+    for i + 1 < text.len
+        if text[i] == '<' && text[i + 1] == '|'
+            depth += 1
+            i += 2
+        else if text[i] == '|' && text[i + 1] == '>'
+            depth -= 1
+            i += 2
+            if depth == 0
+                return i
+        else
+            i += 1
+    return text.len
+
+priv fn has_null_type_call(text: U8[], c: Arena_call, arena: Arena$@): Bool //<
+    //< Whether text calls the type's `new` as the type (`List<|I32|>(null)`), with `null`
+    $from: Sz = 0
+    for
+        switch text.sub_from(from).find_str(c.before)
+        case .none
+            return false
+        case .some(off)
+            at: = from + off
+            from = at + 1
+            $e: = at + c.before.len
+            if e + 1 < text.len && text[e] == '<' && text[e + 1] == '|'
+                e = past_type_args(text, e)
+            starts_name: = at == 0 || !(text[at - 1].is_alnum() || text[at - 1] == '_')
+            if starts_name && e < text.len && text[e] == '('
+                args: = args_at(text, e, arena)
+                if c.at < args.len && args.get(c.at).equals("null")
+                    return true
+
 priv fn has_null_call(text: U8[], c: Arena_call, modules: U8[][], arena: Arena$@): Bool //<
     //< Whether text calls the function with `null` where the arena goes
     //< A method's receiver may be anything but a module, so `json.parse(…)` is not `Parser.parse`.
+    //< A type's `new` is called as the type itself (has_null_type_call), never by its name.
+    if c.name.equals("new") && c.before.len > 0
+        return has_null_type_call(text, c, arena)
     want: = arena.text().c('.').s(c.name).c('(').take()
     $from: Sz = 0
     for
@@ -135,8 +173,8 @@ priv fn arena_call_of(file: U8[], key: U8[], sig: U8[], arena: Arena$@): Arena_c
     return .none
 
 priv fn check_null_arena_calls(arena: Arena$@)
-    $calls: = List<|Arena_call|>.new(arena)
-    $modules: = List<|U8[]|>.new(arena)
+    $calls: = List<|Arena_call|>(arena)
+    $modules: = List<|U8[]|>(arena)
     for line in harness.read_under_root(STD_RECORD).lines(arena)
         cols: = line.split('\t', arena)
         if cols.len < 3 || !cols.get(0).starts_with("std/") ||
@@ -145,10 +183,10 @@ priv fn check_null_arena_calls(arena: Arena$@)
         scan.push_unique(modules@, cols.get(0).sub_from(4))
         if c: = arena_call_of(cols.get(0), cols.get(1), cols.get(2), arena)
             calls.push(c)
-    defer $tests: = str.Str_builder.new()
+    defer $tests: = str.Str_builder()
     for rel in harness.tracked_matching(U8[][]::{ "std/tests/*.kspl" })
         tests.s(harness.read_under_root(rel)).c('\n')
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     for c in calls
         if !has_null_call(tests.slice(), c, modules.slice(), arena)
             bad.push(c.label)
@@ -184,10 +222,11 @@ priv const FS_JOIN_SAMPLES: Sample[_] = ::{ Sample::{ .text = "fs.join(\"a\", \"
 priv const TEXT_JOIN_SAMPLES: Sample[_] = ::{ Sample::{ .text = "\"-\".join(parts, null)",
     .hits = true }, Sample::{ .text = "fs.join(parts, null)", .hits = false },
     Sample::{ .text = "s.join(parts, arena)", .hits = false } }
-priv const LIST_NEW_SAMPLES: Sample[_] = ::{ Sample::{ .text = "List<|I32|>.new(null)",
-    .hits = true }, Sample::{ .text = "List<|Map<|I32, I32|>|>.new(null)", .hits = true },
-    Sample::{ .text = "Map<|I32, I32|>.new(null)", .hits = false },
-    Sample::{ .text = "List<|I32|>.new(arena)", .hits = false } }
+priv const LIST_NEW_SAMPLES: Sample[_] = ::{ Sample::{ .text = "List<|I32|>(null)", .hits = true },
+    Sample::{ .text = "ds.List<|List<|I32|>|>(null)", .hits = true },
+    Sample::{ .text = "Map<|I32, I32|>(null)", .hits = false },
+    Sample::{ .text = "List<|I32|>(arena)", .hits = false },
+    Sample::{ .text = "My_List<|I32|>(null)", .hits = false } }
 
 priv fn check_null_arena_fires(arena: Arena$@)
     scan.check_samples("the reading of a module function's null arena can fire",

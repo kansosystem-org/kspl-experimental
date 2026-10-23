@@ -50,7 +50,7 @@ priv fn add_call_entry(idx: Fqn_lookup_idx$@, caller: Ast_node$@, callee: Ast_no
     $entry: = map.get(fqn).unwrap_or(null)
     if entry == null
         // On the arena, rewound with the request: nothing frees the entries one by one.
-        ranges: = base_core.arena.create(List<|Ast_node$@|>.new(base_core.arena))
+        ranges: = base_core.arena.create(List<|Ast_node$@|>(base_core.arena))
         entry = base_core.arena
             .create(Call_hier_entry::{ .caller_def = caller, .callee_def = callee,
             .ranges = ranges })
@@ -73,7 +73,7 @@ priv fn build_call_hier_item(target: Ast_node$@, id_n: Ast_node$@, name: U8[], f
 
     // The detail carries the defining file's name: a call hierarchy crosses files, and the function
     // name alone does not say which definition it is.
-    defer $file_name: = Str_builder.new()
+    defer $file_name: = Str_builder()
     file_name.s(sys.get_file_name(target.loc.file()))
     file_name.ensure_kspl_ext()
     // Caution: **It must not look the same as a call.** A function pointer passed along may only be
@@ -148,7 +148,7 @@ priv fn node_loc_key(node: Ast_node$@): U8[] //<
     return base_core.arena.text().s(node.loc.file()).c(0U8).s("\{node.loc.offset\}").take()
 
 priv fn build_fqn_lookup_idx(sema: Sema_ctx$@): Fqn_lookup_idx$@
-    inst_names: = base_core.arena.create(Map<|U8[], U8[]|>.new(base_core.arena))
+    inst_names: = base_core.arena.create(Map<|U8[], U8[]|>(base_core.arena))
     // The list is taken from the heap, once per request.
     for entry in sema.env.instantiated_nodes.items()
         if entry.value != null
@@ -156,7 +156,7 @@ priv fn build_fqn_lookup_idx(sema: Sema_ctx$@): Fqn_lookup_idx$@
             if id_node != null
                 inst_names.set(id_node.text, entry.key)
 
-    template_locs: = base_core.arena.create(Map<|U8[], U8[]|>.new(base_core.arena))
+    template_locs: = base_core.arena.create(Map<|U8[], U8[]|>(base_core.arena))
     for e in sema.generics.templates.items()
         template_locs.set(node_loc_key(e.value), e.key)
 
@@ -174,7 +174,7 @@ priv fn qualified_sym_name(sym: Sema_symbol$@): U8[] //<
     //< is O(1).
     if !sym.flags.is_global
         return sym.name
-    defer $full: = Str_builder.new()
+    defer $full: = Str_builder()
     lsp_nav.write_full_name(sym.name, sym.get_defined_in(), full@)
     return base_core.arena.dup_str(full.slice())
 
@@ -196,7 +196,7 @@ priv fn build_callee_id_set(root: Ast_node$@): Map<|U8[], I32|>$@ //<
     //< Caution: **It is not a call and must not be treated as one.** It is still an edge because
     //< **much code is reachable only through a function pointer** (task entry points, bio
     //< callbacks). Shown with "no caller", it looks unused and is mistaken for removable.
-    set: = base_core.arena.create(Map<|U8[], I32|>.new(base_core.arena))
+    set: = base_core.arena.create(Map<|U8[], I32|>(base_core.arena))
     collect_callee_ids(root, set, 0)
     return set
 
@@ -299,7 +299,7 @@ priv fn resolve_def_by_fqn(root: Ast_node$@, c: Sema_ctx$@, idx: Fqn_lookup_idx$
 
 fn prepare_call_hierarchy(state: Doc_state$@, params: json.Value, id_val: json.Value,
     arena: Arena$@)
-    $b: = Json_builder.new(arena)
+    $b: = Json_builder(arena)
     defer path: = lsp_position.find_path_at_params(state, params)
 
     if path.len > 0
@@ -345,7 +345,7 @@ priv fn respond_with_call_hier_entries(calls_map: Map<|U8[], Call_hier_entry$@|>
     // `entries()` (the reason is at `entries` in `../../std/ds.kspl`).
     // Caution: **Do not answer in the Map's order.** That order comes from the hash. So the same
     // question gets a different order on every run. A client walking the list loses its place.
-    defer $calls: = List<|Call_hier_entry$@|>.new(null)
+    defer $calls: = List<|Call_hier_entry$@|>(null)
     for entry in calls_map.items()
         calls.push(entry.value)
     sorted: = calls.order_by(fn(a: Call_hier_entry$@@, b: Call_hier_entry$@@; is_incoming: Bool):
@@ -380,7 +380,7 @@ fn handle_calls(ws_state: Doc_state$@, params: json.Value, id_val: json.Value, i
         return
     target_fqn: = item_fqn(params)
     defer calls_map: = base_core.arena
-        .create(Map<|U8[], Call_hier_entry$@|>.new(base_core.arena))
+        .create(Map<|U8[], Call_hier_entry$@|>(base_core.arena))
 
     idx: = build_fqn_lookup_idx(ws_state.sema)
     // The exclusion table is built from **the whole tree**; from the target alone a call's callee
@@ -395,4 +395,4 @@ fn handle_calls(ws_state: Doc_state$@, params: json.Value, id_val: json.Value, i
         if target_def != null
             find_outgoing_calls(search, target_def, 0)
     respond_with_call_hier_entries(calls_map, ws_state.sema, idx, is_incoming,
-        base_locate.uri_style_of(ws_state.uri_perm), Json_builder.new(arena), id_val, arena)
+        base_locate.uri_style_of(ws_state.uri_perm), Json_builder(arena), id_val, arena)

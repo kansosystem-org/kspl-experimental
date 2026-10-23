@@ -181,7 +181,7 @@ So the file would only repeat them, in two files if both the convention and GitH
 
 ### A test of a unit's inside goes inside that unit
 
-**A test that looks at a package's private parts (the inside of a unit) lives in a `tests/` folder under that package.** (A *unit* here is a package: the extent a name with no visibility mark is visible in.) There it is the same unit, so it reaches what it inspects with unspecified visibility, without making one name `pub`. It also stays out of the shipped artifact, since a file nobody imports is not compiled. The language needs no change: `package_of` in `ksplc/base/locate.kspl` takes a file's unit from the first separator of its logical path, so `kspage/tests/flow_test.kspl` is in unit `kspage`. From the root's `tests/`, a package of its own, the same test would need its target `pub`, and nothing would tell that `pub` from an unnecessary one. [I0402] (the lint for an unneeded `pub`) sees only the references in one compilation, and the entry point that builds the product uses nothing in `tests/`.
+**A test that looks at a package's private parts (the inside of a unit) lives in a `tests/` folder under that package.** (A *unit* here is a package: the extent a name with no visibility mark is visible in.) There it is the same unit, so it reaches what it inspects with unspecified visibility, without making one name `pub`. It also stays out of the shipped artifact, since a file nobody imports is not compiled. The language needs no change: `package_of` in `ksplc/base/locate.kspl` takes a file's unit from the first separator of its logical path, so `ksmd/tests/tables.kspl` is in unit `ksmd`. From the root's `tests/`, a package of its own, the same test would need its target `pub`, and nothing would tell that `pub` from an unnecessary one. [I0402] (the lint for an unneeded `pub`) sees only the references in one compilation, and the entry point that builds the product uses nothing in `tests/`.
 
 | The test | Where it goes | Why |
 | :-- | :-- | :-- |
@@ -208,13 +208,13 @@ So the file would only repeat them, in two files if both the convention and GitH
 
 **Each package's entry point is `<package>/tests/all.kspl`, and its opening comment says what the package's tests inspect.** It holds the package's suite and imports the package's files of tests. The suite runs every function named `test_…` in those files. So a test is written once, as its own declaration ("8.5 Tests: functions named `test_`, run by a suite" in [`SPEC-programming-language.md`](SPEC-programming-language.md)). Adding a test touches no list. Adding a file of tests adds one import line.
 
-**The remaining boundary is closed by opening exactly one entry point as `pub`**: one function that runs everything, like `run_kspage` in `kspage/tests/all.kspl`.
+**The remaining boundary is closed by opening exactly one entry point as `pub`**: one function that runs everything, like `run_ksos` in `ksos/tests/all.kspl`.
 
 * **Do not add inspection interfaces here.** Each is one more contract put outside the unit.
 
 #### Where an unneeded `pub` is reported
 
-**[I0402] can be enabled for `kspage/`, `ksos/` and `tools/` as well as `ksplc/` and `kssrv/`, but not for the units distributed and used elsewhere (`std/`, `ksdb/`, `ksai/`, `ksbind/`).** Their `pub` is a contract with outside users that references inside the repository cannot judge. So keeping to one entry point there is a matter of form, and adding more brings no diagnostic. Read the header of `all.kspl` before adding.
+**[I0402] can be enabled for `ksmd/`, `ksos/` and `tools/` as well as `ksplc/` and `kssrv/`, but not for the units distributed and used elsewhere (`std/`, `ksdb/`, `ksai/`, `ksbind/`).** Their `pub` is a contract with outside users that references inside the repository cannot judge. So keeping to one entry point there is a matter of form, and adding more brings no diagnostic. Read the header of `all.kspl` before adding.
 
 **The diagnostic is turned off in two files, each with its reason beside the switch.** In `tools/ai_assist/ksplc_oracle.kspl`, `compiles` is a `pub` that the tools' tests use (`tools/ai_assist/tests/ai_assist_test.kspl`), invisible from the entry point building the tool. In `ksplc/tests/prog/equiv.kspl`, `main`'s error type is seen from outside as the entry point's, so it cannot be narrowed. Closed to one file each, the switch leaves the unit's other `pub` count at zero.
 
@@ -359,7 +359,7 @@ Kanso holds no hidden work at build time, any more than at run time.
 
 ### A page asks the local machine through one protocol
 
-**A page open in your browser (`kspage`) reads and writes files on your computer by asking a small local server (`kssrv --local`).** It asks through one protocol, written in a document of its own ([`SPEC-local-server.md`](SPEC-local-server.md)). A secret token keeps other pages and programs out. The page asks and the server answers, so the protocol belongs to neither package. A seam between packages gets its own document ("A document's name says what it is for" above). The server is meant to be replaceable, so the document holds only the rules, and their grounds stand here.
+**A page open in your browser (`ksmd`) reads and writes files on your computer by asking a small local server (`kssrv --local`).** It asks through one protocol, written in a document of its own ([`SPEC-local-server.md`](SPEC-local-server.md)). A secret token keeps other pages and programs out. The page asks and the server answers, so the protocol belongs to neither package. A seam between packages gets its own document ("A document's name says what it is for" above). The server is meant to be replaceable, so the document holds only the rules, and their grounds stand here.
 
 The picture below shows one session from start to end.
 
@@ -367,7 +367,7 @@ The picture below shows one session from start to end.
 sequenceDiagram
     participant U as the person
     participant S as kssrv --local
-    participant P as the page (kspage)
+    participant P as the page (ksmd)
     U->>S: start it
     S-->>U: one URL, the token as its fragment
     U->>P: open the URL
@@ -440,7 +440,7 @@ sequenceDiagram
 
 ## Why one repository
 
-Kanso holds nine packages (`ksai` / `ksbind` / `ksdb` / `kspage` / `ksos` / `kspeg` / `ksplc` / `kssrv` / `std`) in one repository. **This is not "not split yet" but the decision not to split.** In short, most changes touch more than one package. The compiler cannot be built without the standard library. So separate repositories would make ordinary work slower and easier to break.
+Kanso holds nine packages (`ksai` / `ksbind` / `ksdb` / `ksmd` / `ksos` / `kspeg` / `ksplc` / `kssrv` / `std`) in one repository. **This is not "not split yet" but the decision not to split.** In short, most changes touch more than one package. The compiler cannot be built without the standard library. So separate repositories would make ordinary work slower and easier to break.
 
 ### What happens if it is split
 

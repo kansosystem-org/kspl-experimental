@@ -9,7 +9,6 @@ import "std/libc"
 // `dealloc` is reported as unused on the freestanding build ([I0401]).
 #cfg(!freestanding)
 import "std/mem" { dealloc }
-#cfg(!freestanding)
 import "std/str"
 
 // ==========================================
@@ -295,6 +294,76 @@ pub fn last_ext(path: U8[]): U8[] //< the last extension with its dot, or empty 
     if dot: = ext_dot(path)
         return path.sub_from(dot)
     return ""
+
+// ==========================================
+// Whether a path's text stays under a root
+// ==========================================
+
+pub fn is_safe_relative(path: U8[]): Bool //< whether the path's text alone cannot climb out
+    //< Caution: **This alone does not keep a path under the root.** It checks only the text, so
+    //< **it cannot stop a way out through a link inside the root**. It checks segment by segment
+    //< (matching `..` as a substring would also refuse `..foo`).
+    //< **Do not make the answer depend on `is_windows()`**, or a path that is safe on Linux
+    //< becomes a hole on Windows only.
+    if path.len == 0
+        return false
+    if is_path_sep(path[0])
+        return false
+    $start: Sz = 0
+    for start <= path.len
+        end: = segment_end(path, start)
+        if !is_safe_segment(path.sub(start, end - start))
+            return false
+        start = end + 1
+    return true
+
+pub fn segment_end(path: U8[], from: Sz): Sz //< where the path's segment starting at `from` ends
+    //< The next separator at or after `from`, or the path's length; every walk over a path's
+    //< segments steps by this, so all of them split alike.
+    $i: = from
+    for i < path.len && !is_path_sep(path[i])
+        i += 1
+    return i
+
+priv fn is_dos_device(seg: U8[]): Bool //< whether it is a name Windows opens as a device
+    //< It is a device even with an extension, and case does not matter.
+    //< **It is a device at any level**: `www/CON` opens the console, and a read or write on an
+    //< unconnected `COM1` never returns, stalling a single-loop server.
+    //< Caution: **Windows trims spaces before the extension** (`CON .txt` is `CON`), and counts
+    //< `CONIN$`, `CONOUT$` and the superscript `COM¹²³` / `LPT¹²³` among the names too.
+    base: = seg.sub(0, seg.find_char('.').unwrap_or(seg.len)).trim_end()
+    if base.equals_ignore_case("con") || base.equals_ignore_case("prn") ||
+        base.equals_ignore_case("aux") || base.equals_ignore_case("nul") ||
+        base.equals_ignore_case("conin$") || base.equals_ignore_case("conout$")
+        return true
+    port: =
+        base.len >= 3 &&
+        (base.sub(0, 3).equals_ignore_case("com") ||
+        base.sub(0, 3).equals_ignore_case("lpt"))
+    if !port
+        return false
+    if base.len == 4 && base[3].is_digit()
+        return true
+    // ¹ ² ³ in UTF-8.
+    return base.len == 5 && base[3] == 0xC2U8 &&
+        (base[4] == 0xB9U8 || base[4] == 0xB2U8 || base[4] == 0xB3U8)
+
+priv fn is_safe_segment(seg: U8[]): Bool //<
+    //< Whether one segment of a path is safe as a name under the root
+    //< Caution: **Do not let through a path the OS reinterprets.** Windows drops a trailing `.` and
+    //< space (`secret.key.` is `secret.key`), and a `:` starts an NTFS stream name
+    //< (`secret.key::$DATA` gives the contents). A lone `.` is also caught by this rule, as `..`
+    //< is.
+    if seg.len == 0
+        return true // a repeated separator (`a//b`)
+    if seg.equals("..") || seg[seg.len - 1] == '.' || seg[seg.len - 1] == ' '
+        return false
+    for i in Range.asc(seg.len)
+        // A control character breaks the display of a log or terminal; `:` marks a drive or a
+        // stream.
+        if seg[i] == ':' || seg[i] < ' '
+            return false
+    return !is_dos_device(seg)
 
 extern "C"
     fn kspl_mono_us(): I64

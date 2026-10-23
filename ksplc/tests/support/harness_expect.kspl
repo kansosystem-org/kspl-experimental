@@ -45,7 +45,7 @@ struct Fixture //< one source as it is compiled
     body: U8[]
 
 priv fn case_starts(body: U8[], arena: Arena$@): List<|Sz|> //< where each case's head begins
-    $at: = List<|Sz|>.new(arena)
+    $at: = List<|Sz|>(arena)
     $p: Sz = 0
     for p < body.len
         if body.sub_from(p).starts_with(CASE_HEAD)
@@ -117,9 +117,9 @@ priv fn gather(name: U8[], path: U8[], body: U8[], work: U8[], into: List<|Fixtu
 priv fn fixtures(subdir: U8[], arena: Arena$@): List<|U8[]|> //<
     //< Gathers the sources under a folder of this package, in lexicographic order
     dir: = fs.absolute(subdir, arena) catch
-        return List<|U8[]|>.new(arena)
+        return List<|U8[]|>(arena)
     files: = fs.walk_files(dir, fs.skip_none, arena) catch
-        return List<|U8[]|>.new(arena)
+        return List<|U8[]|>(arena)
     return files.where(fn(f: U8[]@; ): Bool {
         return strip_fixture_ext(f$).len < f.len;
     }).to_list(arena)
@@ -175,7 +175,7 @@ priv fn unforeseen_errors(out: U8[], expect: U8[][], arena: Arena$@): U8[] //<
 priv fn fixture_argv(path: U8[], out_c: U8[], args: U8[][], lint_mode: Bool, arena: Arena$@,
     parser_exe: U8[]): U8[][] //<
         //< One fixture's argv. The lint suite prefixes `lint` and does not write the generated C.
-    $list: = List<|U8[]|>.new(arena)
+    $list: = List<|U8[]|>(arena)
     if parser_exe.len > 0
         list.push(parser_exe)
         list.push(path)
@@ -193,8 +193,8 @@ fn gather_files(name: U8[], files: U8[][], work: U8[], arena: Arena$@): List<|Fi
     //< Every case of the files, each where it is compiled
     //< A file that cannot be read or split is reported as a failure under its own name. It is left
     //< out, so its cases are never counted as passing.
-    $all: = List<|Fixture|>.new(arena)
-    $taken: = List<|U8[]|>.new(arena)
+    $all: = List<|Fixture|>(arena)
+    $taken: = List<|U8[]|>(arena)
     for path in files
         label: = arena.text().s("\{name\}/\{sys.get_file_name(path)\}").take()
         body: = io.read_file(path, null) catch
@@ -227,9 +227,9 @@ fn run_suite(name: U8[], subdir: U8[], want_failure: Bool, lint_mode: Bool, grow
             files.push(path)
     $all: = gather_files(name, files.slice(), work, arena)
     io.out().s("# \{name\}: \{all.len\} items (parallelism \{verdict.jobs()\})\n")
-    $cases: = List<|U8[]|>.new(arena)
-    $marks: = List<|harness_markers.Markers|>.new(arena)
-    $jobs: = List<|subproc.Job|>.new(arena)
+    $cases: = List<|U8[]|>(arena)
+    $marks: = List<|harness_markers.Markers|>(arena)
+    $jobs: = List<|subproc.Job|>(arena)
     for f in all.slice()
         $m: = harness_markers.markers(f.body)
         out_c: = fs.join(work, arena.text().s("\{f.stem\}.c").take(), arena)

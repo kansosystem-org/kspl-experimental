@@ -56,7 +56,7 @@ priv fn read_driver(arena: Arena$@): U8[]
     return arena.dup_str(body)
 
 priv fn desc(name: U8[], bytes: U8[], arena: Arena$@): Desc //< one array, its bytes widened
-    $vals: = List<|Sz|>.new(arena)
+    $vals: = List<|Sz|>(arena)
     for b in bytes
         vals.push(b)
     return Desc::{ .name = name, .vals = vals }
@@ -69,11 +69,11 @@ priv fn check( //< one check: a line if it holds, and the run stopped if it does
     file: U8[] = caller_file,
     line: Sz = caller_line,
 )
-    defer $head: = Str_builder.new()
+    defer $head: = Str_builder()
     head.s("[ksos/usb] ").s(name)
     verdict.start(head.slice())
     if !ok
-        defer $why: = Str_builder.new()
+        defer $why: = Str_builder()
         why.s(name).s(": ").s(detail)
         panic(why.slice(), file, line)
     verdict.pass("")
@@ -152,7 +152,7 @@ priv fn nums_text(xs: List<|Sz|>@, arena: Arena$@): U8[]
 
 priv fn iface_nums(cfg: List<|Sz|>@, items: List<|Item|>@, arena: Arena$@): List<|Sz|> //<
     //< The list of interface numbers (ascending, no duplicates)
-    $out: = List<|Sz|>.new(arena)
+    $out: = List<|Sz|>(arena)
     for it in items
         if it.kind != T_IFACE
             continue
@@ -186,7 +186,7 @@ priv fn check_config_shape(cfg: List<|Sz|>@, items: List<|Item|>@, nums: List<|S
 
 priv fn check_ep_counts(cfg: List<|Sz|>@, items: List<|Item|>@, arena: Arena$@) //<
     //< Checks that each interface's bNumEndpoints equals the number of endpoints that follow it
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     $num: Sz = 0
     $alt: Sz = 0
     $declared: Sz = 0
@@ -212,7 +212,7 @@ priv fn check_ep_counts(cfg: List<|Sz|>@, items: List<|Item|>@, arena: Arena$@) 
 
 priv fn check_union(cfg: List<|Sz|>@, items: List<|Item|>@, nums: List<|Sz|>@, arena: Arena$@) //<
     //< Checks that what a Union functional descriptor (subtype 0x06) points at exists
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     for it in items
         if it.kind != T_CS_IFACE || cfg.get(it.at + 2) != SUB_UNION
             continue
@@ -225,7 +225,7 @@ priv fn check_union(cfg: List<|Sz|>@, items: List<|Item|>@, nums: List<|Sz|>@, a
 
 priv fn check_iad(cfg: List<|Sz|>@, items: List<|Item|>@, nums: List<|Sz|>@, arena: Arena$@) //<
     //< Checks that the range an IAD covers exists
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     for it in items
         if it.kind != T_IAD
             continue
@@ -256,7 +256,7 @@ priv fn ep_text(keys: List<|Sz|>@, arena: Arena$@): U8[]
 
 priv fn desc_eps(cfg: List<|Sz|>@, items: List<|Item|>@, arena: Arena$@): List<|Sz|> //<
     //< The descriptor's view: bit7 of bEndpointAddress is the direction, the low 4 bits the number
-    $out: = List<|Sz|>.new(arena)
+    $out: = List<|Sz|>(arena)
     for it in items
         if it.kind != T_ENDPOINT
             continue
@@ -266,7 +266,7 @@ priv fn desc_eps(cfg: List<|Sz|>@, items: List<|Item|>@, arena: Arena$@): List<|
 
 priv fn enabled_eps(src: U8[], arena: Arena$@): List<|Sz|> //<
     //< The implementation's view: finds `enable_ep(<number>, <true|false>,`
-    $out: = List<|Sz|>.new(arena)
+    $out: = List<|Sz|>(arena)
     $i: Sz = 0
     for i < src.len
         at: Sz = src.sub_from(i).find_str("enable_ep(") catch
@@ -299,7 +299,7 @@ priv fn same_nums(a: List<|Sz|>@, b: List<|Sz|>@): Bool
 // CDC-NCM's own checks
 // ==========================================
 priv fn check_ncm(cfg: List<|Sz|>@, items: List<|Item|>@, arena: Arena$@)
-    $comm: = List<|Sz|>.new(arena)
+    $comm: = List<|Sz|>(arena)
     for it in items
         if it.kind == T_IFACE && cfg.get(it.at + 5) == 0x02 &&
             cfg.get(it.at + 6) == NCM_SUBCLASS
@@ -322,9 +322,9 @@ priv fn check_ncm(cfg: List<|Sz|>@, items: List<|Item|>@, arena: Arena$@)
 
 priv fn check_ncm_data(cfg: List<|Sz|>@, items: List<|Item|>@, data: Sz, arena: Arena$@) //<
     //< The data interface's alt / protocol / class
-    $alt_list: = List<|Sz|>.new(arena)
-    $proto_set: = List<|Sz|>.new(arena)
-    $class_set: = List<|Sz|>.new(arena)
+    $alt_list: = List<|Sz|>(arena)
+    $proto_set: = List<|Sz|>(arena)
+    $class_set: = List<|Sz|>(arena)
     for it in items
         if it.kind != T_IFACE || cfg.get(it.at + 2) != data
             continue
@@ -355,7 +355,7 @@ priv fn alt_text(alts: List<|Sz|>@, arena: Arena$@): U8[]
 
 priv fn check_ethernet(cfg: List<|Sz|>@, items: List<|Item|>@, arena: Arena$@) //<
     //< The Ethernet Networking functional descriptor (subtype 0x0f)
-    $eth: = List<|Sz|>.new(arena)
+    $eth: = List<|Sz|>(arena)
     for it in items
         if it.kind == T_CS_IFACE && cfg.get(it.at + 2) == SUB_ETHERNET
             eth.push(it.at)
@@ -414,7 +414,7 @@ fn test_usb_descriptors(arena: Arena$@) //<
             .take())
 
 priv fn check_config(cfg: List<|Sz|>@, src: U8[], arena: Arena$@)
-    $items: = List<|Item|>.new(arena)
+    $items: = List<|Item|>(arena)
     broken: = walk(cfg, items@, arena)
     check("configuration descriptor: following bLength arrives exactly at the end",
         broken.len == 0, broken)

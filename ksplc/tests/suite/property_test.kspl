@@ -245,7 +245,7 @@ priv fn float_edge_items(out: List<|Item|>$@, arena: Arena$@) //<
         one: = flit(1I64, k, arena)
         two: = flit(2I64, k, arena)
         half: = paren(one, "/", two, arena)
-        $forms: = List<|Fexpr|>.new(arena)
+        $forms: = List<|Fexpr|>(arena)
         forms.push(big)
         forms.push(tiny)
         forms.push(sub)
@@ -313,7 +313,7 @@ priv const F2I_SHIFTS: Sz[4] = ::{ 0, 1, 1, 0 }
 priv fn cast_items(r: Prng$@, decls: List<|U8[]|>$@, out: List<|Item|>$@, arena: Arena$@)
     for si in Range.asc(8)
         k: = INT_KINDS[si]@
-        $vals: = List<|I64|>.new(arena)
+        $vals: = List<|I64|>(arena)
         src_values(r, k, vals@)
         for j in Range.asc(vals.len)
             v: = vals.get(j)
@@ -402,7 +402,7 @@ priv fn build_arith_program(decls: List<|U8[]|>@, items: List<|Item|>@, arena: A
     //< propagates into the literals, evaluating at another width; go through a typed local
     //< variable. Integers and Bool are printed by string interpolation, which prints even a top-bit
     //< `U64` correctly, so no cast is needed.
-    defer $b: = Str_builder.new()
+    defer $b: = Str_builder()
     b.s("import \"std/io\" as io\n\n")
     for ki in Range.asc(2)
         append_show(b@, FLOAT_KINDS[ki]@)
@@ -433,7 +433,7 @@ priv fn build_side(src: U8[], llvm: Bool, work: U8[], tag: U8[], opt: U8[], aren
     exe_name: = wrapped(tag, ".exe", "", arena)
     gen: = fs.join(work, gen_name, arena)
     exe: = fs.join(work, exe_name, arena)
-    $args: = List<|U8[]|>.new(arena)
+    $args: = List<|U8[]|>(arena)
     if llvm
         args.push("--to=llvm")
     args.push(src)
@@ -612,7 +612,7 @@ fn main(): I32
     p: = argparse.Parser.create("property_test", "expressions agree across the backends", arena)
     p.int_opt("--n", n_arg@, "how many expressions to draw")
     p.int_opt("--seed", seed_arg@, "where the generator starts; the same seed gives the same draw")
-    $more: = List<|U8[]|>.new(arena)
+    $more: = List<|U8[]|>(arena)
     for a in harness.more_args()
         more.push(a)
     p.parse_list(more@) catch e
@@ -621,12 +621,12 @@ fn main(): I32
     seed: = U64::seed_arg
     dir: = harness.sandbox("property")
     work: = dir
-    $r: = Prng.new(seed)
+    $r: = Prng(seed)
     io.out().s("# the property-based check (count \{n\}, seed \{seed\})\n")
     // Caution: **Put the exhaustive casts and the random arithmetic into one program.** The time is
     // the number of compiles and links, so splitting doubles it.
-    $decls: = List<|U8[]|>.new(arena)
-    $items: = List<|Item|>.new(arena)
+    $decls: = List<|U8[]|>(arena)
+    $items: = List<|Item|>(arena)
     cast_items(r@, decls@, items@, arena)
     float_items(items@, arena)
     for _i in Range.asc(n)
@@ -647,7 +647,7 @@ fn main(): I32
         verdict.check(name, diff.len == 0, diff)
     // The string round trip.
     // Caution: Randomise the length too, or the handling of the end is not exercised.
-    $strings: = List<|U8[]|>.new(arena)
+    $strings: = List<|U8[]|>(arena)
     for _i in Range.asc(n)
         strings.push(gen_bytes(r@, 1 + r.below(12), arena))
     str_src: = fs.join(work, "strescape.kspl", arena)
@@ -659,7 +659,7 @@ fn main(): I32
         verdict.check("a string literal's byte sequence round-trips", false,
             sc.why if !sc.ok else sl.why)
     else
-        $want: = List<|Item|>.new(arena)
+        $want: = List<|Item|>(arena)
         for s in strings
             w: = bytes_want(s, arena)
             want.push(Item::{ .ty = "U8[]", .text = "a string literal", .want = w })

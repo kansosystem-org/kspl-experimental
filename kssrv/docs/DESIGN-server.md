@@ -219,7 +219,7 @@ Kssrv serves files from under its root and answers JSON under `/api/`. Every pat
 
 Caution: **Decode a path with `decode_component`, which keeps a `+`.** `+` means a space only in a query or a form (`parse_query` reads it so). In a URI's path it is just a `+`, and mistaking one for the other makes a file with `+` in its name unreachable.
 
-**A refused path returns 403, not 404.** What was refused is the path's shape; whether a file of that name exists was never checked. `fs.is_safe_relative` also refuses spellings the OS reads specially, Windows device names among them. A read or write of `COM1` never returns when nothing is attached, so one request would stop this single-loop server.
+**A refused path returns 403, not 404.** What was refused is the path's shape; whether a file of that name exists was never checked. `sys.is_safe_relative` also refuses spellings the OS reads specially, Windows device names among them. A read or write of `COM1` never returns when nothing is attached, so one request would stop this single-loop server.
 
 ### `/api/` does not go through static serving
 
@@ -233,7 +233,7 @@ Everything under `/api/` is dispatched by the routing table alone, so the API ta
 | A `Host` that does not name the server (`--local`) | a JSON 403 there |
 | A request that cannot be read at all | text, since its path is not known yet |
 
-Caution: **Do not check only one of the two.** An API taking a path in the query, such as `?path=`, goes through the same `fs.is_safe_relative` as static serving. It is a different entry point, but pointing outside the root is the same hole.
+Caution: **Do not check only one of the two.** An API taking a path in the query, such as `?path=`, goes through the same `sys.is_safe_relative` as static serving. It is a different entry point, but pointing outside the root is the same hole.
 
 ### The counters are held in plain global variables
 
@@ -254,7 +254,7 @@ Every log line goes through one buffered logger on the server's one thread. The 
 
 `stdout` stays buffered and is flushed just before `wait()`, **once `FLUSH_GAP_US` has passed since the last flush** (`kssrv/main.kspl`).
 
-* **Only the start-up lines are written at once**, before the loop, because whoever waits for the server watches for them (`kssrv/tests/start.kspl` for `kssrv: I: listening on`, `kspage/Makefile` for `kssrv: I: open `).
+* **Only the start-up lines are written at once**, before the loop, because whoever waits for the server watches for them. `kssrv/tests/start.kspl` waits for `kssrv: I: listening on`, and an opener that starts the server for `kssrv: I: open `.
 * **An idle server still flushes a new line in the same round**, since an arriving connection makes `wait()` return at once.
 * **A busy one is limited by the interval.**
 

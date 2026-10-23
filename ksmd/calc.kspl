@@ -1,0 +1,425 @@
+//< Calculates every table of a document: the value of each data cell, kept apart from the document
+//< A formula is read from its pieces and calculated in the same pass; nothing is saved. Cells are
+//< calculated in the order they depend on each other, so a formula can name a later row.
+//< Caution: **Calculate again after every edit.** `Results` holds the values of one moment, and
+//< places that an edit has moved point at other cells.
+import "ksmd/formula" { Cursor, Positions, Token, Token_kind, next }
+import "ksmd/model" { Cell, Document, Table }
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/strnum"
+
+const MAX_LEVELS: Sz = 64 //< how deeply one formula nests: brackets, functions and unary minus
+
+priv const MAX_DEPTH: Sz = 256 //< the cells and levels one calculation passes through at a time
+    //< A deeper chain is set aside and its deepest cell calculated first (`settle`), so a running
+    //< total down 10,000 rows calculates without running out of stack.
+priv const UNVISITED: U8 = 0U8
+priv const WORKING: U8 = 1U8 //< being calculated; reaching it again is a cycle
+priv const SETTLED: U8 = 2U8
+
+enum Calc_error //< why a cell has no value; each is fixed differently
+    text //< text where arithmetic needs a number: `#VALUE!`
+    division //< a division by zero: `#DIV/0!`
+    not_finite //< a result too large for a number: `#NUM!`
+    reference //< a reference to no cell: `#REF!`
+    cycle //< the cell depends on itself: `#CYCLE!`
+    no_numbers //< `min`, `max` or `average` of no numbers: `#EMPTY!`
+    syntax //< the formula does not read: `#SYNTAX!`
+
+impl Calc_error
+    fn mark(e: Self): U8[] //< what the cell shows
+        switch e
+        case .text
+            return "#VALUE!"
+        case .division
+            return "#DIV/0!"
+        case .not_finite
+            return "#NUM!"
+        case .reference
+            return "#REF!"
+        case .cycle
+            return "#CYCLE!"
+        case .no_numbers
+            return "#EMPTY!"
+        case .syntax
+            return "#SYNTAX!"
+
+enum Value_kind
+    empty
+    number
+    text //< a text cell; its text is the cell's
+    error
+
+struct Value
+    kind: Value_kind
+    number: F64 //< a number's value; 0 for the other kinds
+    error: Calc_error //< an error's reason; `.syntax` for the other kinds
+
+impl Value
+    fn failed(e: Calc_error): Value //< the value of a cell that has none, for this reason
+        return Value::{ .kind = .error, .number = 0.0, .error = e }
+
+struct Results //< the value of every data cell of every table, at one moment
+    values: List<|Value|> //< each table's data cells from `starts`, row by row
+    starts: List<|Sz|>
+    columns: List<|Sz|> //< each table's count of columns
+
+impl Results
+    fn at(r: Self@, u: Sz, row: Sz, column: Sz): Value //< the value of a data cell of table `u`
+        index: = r.starts[u] + row * r.columns[u] + column
+        return r.values[index]
+
+fn calculate(doc: Document@, arena: Arena$@): Results //<
+    //< Calculates every data cell; the results live in `arena`
+    $c: = Calc::{ .doc = doc, .at = Positions(doc, arena),
+        .results = Results::{ .values = List<|Value|>(arena), .starts = List<|Sz|>(arena),
+        .columns = List<|Sz|>(arena) }, .states = List<|U8|>(arena), .depth = 0, .deferring = false,
+        .deferred = Spot::{ .table = 0, .row = 0, .column = 0 },
+        .todo = List<|Spot|>(arena) }
+    for u in Range.asc(doc.tables.len)
+        t: = doc.tables[u]@
+        c.results.starts.push(c.results.values.len)
+        c.results.columns.push(t.columns.len)
+        for _ in Range.asc(t.rows.len * t.columns.len)
+            c.results.values.push(Value.failed(.syntax))
+            c.states.push(UNVISITED)
+    for u in Range.asc(doc.tables.len)
+        for row in Range.asc(doc.tables[u].rows.len)
+            for column in Range.asc(doc.tables[u].columns.len)
+                settle(c@, Spot::{ .table = u, .row = row, .column = column })
+    return c.results
+
+priv struct Spot //< a data cell, by its table and place
+    table: Sz
+    row: Sz
+    column: Sz
+
+priv struct Calc //< the state of one calculation
+    doc: Document@
+    at: Positions
+    results: Results
+    states: List<|U8|> //< each cell's progress, in the order of `results.values`
+    depth: Sz //< how far the calculation under way has gone (`MAX_DEPTH`)
+    deferring: Bool //< a chain went past `MAX_DEPTH` at `deferred`; what it found is dropped
+    deferred: Spot
+    todo: List<|Spot|> //< the cells `settle` has set aside, the last one calculated next
+
+priv fn settle(c: Calc$@, spot: Spot) //<
+    //< Calculates a cell, setting aside each chain too deep to follow at once
+    //< The cell a chain was set aside at is calculated first, and the chain is tried again. A cell
+    //< set aside while it already waits depends on itself: it is a cycle.
+    c.todo.clear()
+    c.todo.push(spot)
+    for c.todo.len > 0
+        top: = c.todo[c.todo.len - 1]
+        c.deferring = false
+        c.depth = 0
+        _value: = value_at(c, top)
+        if !c.deferring
+            _done: = c.todo.pop()
+            continue
+        d: = c.deferred
+        if waits(c.todo@, d)
+            index: = slot(c, d)
+            c.results.values[index] = Value.failed(.cycle)
+            c.states[index] = SETTLED
+            continue
+        c.todo.push(d)
+    c.deferring = false
+    c.depth = 0
+
+priv fn waits(todo: List<|Spot|>@, d: Spot): Bool //< whether a cell is already set aside
+    for s in todo
+        if s.table == d.table && s.row == d.row && s.column == d.column
+            return true
+    return false
+
+priv fn slot(c: Calc@, s: Spot): Sz //< where a cell's value and state stand
+    return c.results.starts[s.table] + s.row * c.results.columns[s.table] + s.column
+
+priv fn value_at(c: Calc$@, s: Spot): Value //< a cell's value, calculated once
+    index: = slot(c, s)
+    state: = c.states[index]
+    if state == SETTLED
+        return c.results.values[index]
+    if state == WORKING
+        return Value.failed(.cycle)
+    // Caution: **Once a chain is set aside, calculate nothing more in this pass.** Nothing it
+    // finds is kept, and a range would calculate each later cell again.
+    if c.deferring
+        return Value.failed(.cycle)
+    if c.depth >= MAX_DEPTH
+        c.deferring = true
+        c.deferred = s
+        return Value.failed(.cycle)
+    c.states[index] = WORKING
+    c.depth += 1
+    v: = cell_value(c, s)
+    c.depth -= 1
+    if c.deferring
+        c.states[index] = UNVISITED
+        return v
+    c.results.values[index] = v
+    c.states[index] = SETTLED
+    return v
+
+priv fn cell_value(c: Calc$@, s: Spot): Value //< what a cell holds, a formula calculated
+    t: = c.doc.tables[s.table]@
+    index: = t.at(s.row, s.column)
+    cell: = t.cells[index]
+    switch cell.kind
+    case .empty
+        return Value::{ .kind = .empty, .number = 0.0, .error = .syntax }
+    case .text
+        return Value::{ .kind = .text, .number = 0.0, .error = .syntax }
+    case .number
+        return number_of(cell.text)
+    case .formula
+        $p: = Parser::{ .c = c, .t = t, .cell = cell, .cur = Cursor::{ .piece = 0, .at = 0 },
+            .tok = Token(.end, 0, 0), .levels = 1, .wrong = false }
+        p.advance()
+        v: = p.sum()
+        if p.wrong || p.tok.kind != .end
+            return Value.failed(.syntax)
+        return v
+
+priv struct Parser //< reads one formula's tokens and calculates as it reads
+    c: Calc$@
+    t: Table@ //< the table that holds the formula
+    cell: Cell
+    cur: Cursor
+    tok: Token //< the next token, not yet taken
+    levels: Sz //< how deeply the formula nests where it is read now (`MAX_LEVELS`)
+    wrong: Bool //< the formula does not read; its value is `#SYNTAX!`
+
+enum Fold_kind //< what a function makes of its numbers
+    sum
+    min
+    max
+    count
+    average
+
+priv struct Fold //< a function's numbers so far
+    kind: Fold_kind
+    total: F64 //< the sum, or the least or greatest number
+    numbers: Sz
+    error: Calc_error
+    broken: Bool //< an error was taken; the first one is the result
+
+impl Parser
+    priv fn advance(p: Self$@)
+        p.tok = next(p.t, p.cell, p.cur@)
+
+    priv fn enter(p: Self$@): Bool //< goes one level deeper; false past `MAX_LEVELS`
+        if p.levels == MAX_LEVELS
+            p.wrong = true
+            return false
+        p.levels += 1
+        p.c.depth += 1
+        return true
+
+    priv fn leave(p: Self$@)
+        p.levels -= 1
+        p.c.depth -= 1
+
+    priv fn sum(p: Self$@): Value //< terms joined by `+` and `-`, from the left
+        $left: = p.product()
+        for p.tok.kind == .plus || p.tok.kind == .minus
+            plus: = p.tok.kind == .plus
+            p.advance()
+            right: = p.product()
+            left = arithmetic(left, right, .plus if plus else .minus)
+        return left
+
+    priv fn product(p: Self$@): Value //< factors joined by `*` and `/`, from the left
+        $left: = p.unary()
+        for p.tok.kind == .times || p.tok.kind == .divide
+            kind: = p.tok.kind
+            p.advance()
+            right: = p.unary()
+            left = arithmetic(left, right, kind)
+        return left
+
+    priv fn unary(p: Self$@): Value //< `-` before a factor, or a factor
+        if p.tok.kind != .minus
+            return p.primary()
+        p.advance()
+        if !p.enter()
+            return Value.failed(.syntax)
+        v: = p.unary()
+        p.leave()
+        return arithmetic(number(0.0), v, .minus)
+
+    priv fn primary(p: Self$@): Value //< a number, a cell, a bracket or a function
+        tok: = p.tok
+        switch tok.kind
+        case .number
+            p.advance()
+            return number_of(tok.text)
+        case .reference
+            p.advance()
+            if tok.range
+                p.wrong = true
+                return Value.failed(.syntax)
+            return scalar(p.cell_of(tok))
+        case .broken
+            p.advance()
+            return Value.failed(.reference)
+        case .open
+            p.advance()
+            if !p.enter()
+                return Value.failed(.syntax)
+            v: = p.sum()
+            p.leave()
+            p.expect(.close)
+            return v
+        case .name
+            return p.function()
+        case .plus, .minus, .times, .divide, .close, .comma, .bad, .end
+            p.wrong = true
+            return Value.failed(.syntax)
+
+    priv fn function(p: Self$@): Value //< `sum(...)`: one or more arguments, separated by `,`
+        $fold: = Fold::{ .kind = .sum, .total = 0.0, .numbers = 0, .error = .syntax,
+            .broken = false }
+        if kind: = Fold_kind.from_variant_name(p.tok.text)
+            fold.kind = kind
+        else
+            p.wrong = true
+        p.advance()
+        p.expect(.open)
+        if !p.enter()
+            return Value.failed(.syntax)
+        for
+            p.argument(fold@)
+            if p.tok.kind != .comma
+                break
+            p.advance()
+        p.leave()
+        p.expect(.close)
+        return fold.result()
+
+    priv fn argument(p: Self$@, fold: Fold$@) //<
+        //< A reference alone is a set of cells, whose empty cells and text are left out. Any
+        //< other argument is a number calculated as arithmetic is.
+        if p.tok.kind == .reference || p.tok.kind == .broken
+            cur: = p.cur
+            tok: = p.tok
+            p.advance()
+            if p.tok.kind == .comma || p.tok.kind == .close
+                p.take_cells(fold, tok)
+                return
+            p.cur = cur
+            p.tok = tok
+        fold.take(p.sum())
+
+    priv fn take_cells(p: Self$@, fold: Fold$@, tok: Token) //< every cell a reference names
+        if tok.kind == .broken || tok.piece < 0
+            fold.take(Value.failed(.reference))
+            return
+        piece: = p.t.pieces[tok.piece]
+        u: = piece.table
+        at: = p.c.at@
+        rows: = ordered(at.of(u, piece.from.row), at.of(u, piece.to.row))
+        columns: =
+            ordered(at.of(u, piece.from.column), at.of(u, piece.to.column))
+        for row in Range(rows.low, rows.high + 1, 1)
+            for column in Range(columns.low, columns.high + 1, 1)
+                v: = value_at(p.c, Spot::{ .table = u, .row = row, .column = column })
+                if v.kind == .number || v.kind == .error
+                    fold.take(v)
+
+    priv fn cell_of(p: Self$@, tok: Token): Value //< the value of the one cell a reference names
+        if tok.piece < 0
+            return Value.failed(.reference)
+        piece: = p.t.pieces[tok.piece]
+        u: = piece.table
+        row: = p.c.at.of(u, piece.from.row)
+        column: = p.c.at.of(u, piece.from.column)
+        return value_at(p.c, Spot::{ .table = u, .row = row, .column = column })
+
+    priv fn expect(p: Self$@, kind: Token_kind) //< takes a token of this kind, or marks it wrong
+        if p.tok.kind != kind
+            p.wrong = true
+            return
+        p.advance()
+
+impl Fold
+    priv fn take(f: Self$@, v: Value) //< one number or error; the first error is kept
+        if f.broken
+            return
+        if v.kind == .error
+            f.broken = true
+            f.error = v.error
+            return
+        f.numbers += 1
+        switch f.kind
+        case .sum, .average
+            f.total += v.number
+        case .min
+            if f.numbers == 1 || v.number < f.total
+                f.total = v.number
+        case .max
+            if f.numbers == 1 || v.number > f.total
+                f.total = v.number
+        case .count {}
+
+    priv fn result(f: Self@): Value //< `sum` and `count` of nothing are 0; the others are errors
+        if f.broken
+            return Value.failed(f.error)
+        switch f.kind
+        case .count
+            return number(F64::f.numbers)
+        case .sum
+            return number(f.total)
+        case .min, .max, .average
+            if f.numbers == 0
+                return Value.failed(.no_numbers)
+        if f.kind == .average
+            return number(f.total / F64::f.numbers)
+        return number(f.total)
+
+priv struct Span //< two places in order
+    low: Sz
+    high: Sz
+
+priv fn ordered(a: Sz, b: Sz): Span
+    return Span::{ .low = a, .high = b } if a <= b else Span::{ .low = b, .high = a }
+
+priv fn arithmetic(a: Value, b: Value, op: Token_kind): Value //<
+    //< Two numbers joined by an operator; the left error comes first
+    if a.kind == .error
+        return a
+    if b.kind == .error
+        return b
+    switch op
+    case .plus
+        return number(a.number + b.number)
+    case .minus
+        return number(a.number - b.number)
+    case .times
+        return number(a.number * b.number)
+    default {}
+    if b.number == 0.0
+        return Value.failed(.division)
+    return number(a.number / b.number)
+
+priv fn scalar(v: Value): Value //< a cell's value in arithmetic: empty is 0, text an error
+    switch v.kind
+    case .empty
+        return number(0.0)
+    case .text
+        return Value.failed(.text)
+    case .number, .error
+        return v
+
+priv fn number_of(text: U8[]): Value //< a number written in decimal; one too large is an error
+    n: = text.to_f64() catch
+        return Value.failed(.not_finite)
+    return number(n)
+
+priv fn number(n: F64): Value //< a number; an infinity or a NaN is an error
+    if n - n != 0.0
+        return Value.failed(.not_finite)
+    return Value::{ .kind = .number, .number = n, .error = .syntax }

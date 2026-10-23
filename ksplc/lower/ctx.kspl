@@ -79,8 +79,7 @@ impl Lowering_ctx
         cleanup_stack: = List<|List<|Ast_node$@|>$@|>.create(base_core.arena)
         jump_stack: = List<|Jump_ctx|>.create(base_core.arena)
         arc_scope_pending: = base_ast.new_ast_node_list()
-        arc_helpers: = base_core.arena
-            .create(Map<|U8[], Ast_node$@|>.new(base_core.arena))
+        arc_helpers: = base_core.arena.create(Map<|U8[], Ast_node$@|>(base_core.arena))
         arc_helper_decls: = base_ast.new_ast_node_list()
         stmt_decls: = base_ast.new_ast_node_list()
         fb: = Fallback_ctx::{ .target = "", .label = "", .label_used = false, .depth = 0 }
@@ -98,7 +97,7 @@ impl Lowering_ctx
     fn push_jump_ctx(r: Self$@, cont_label: U8[], brk_label: U8[], user_label: U8[], is_loop: Bool) //<
         //< The jump-target registration shared by if / for / switch / labeled_block
         //< cleanup_depth is always the current cleanup_stack depth.
-        jc: = Jump_ctx.new(r.cleanup_stack.len, cont_label, brk_label, user_label, is_loop)
+        jc: = Jump_ctx(r.cleanup_stack.len, cont_label, brk_label, user_label, is_loop)
         r.jump_stack.push(jc)
 
     fn pop_jump_ctx(r: Self$@): Jump_ctx //< the pop matching push_jump_ctx
@@ -123,7 +122,7 @@ impl Lowering_ctx
         //< prefix is only read, so it is a `U8[]`; as `U8$[]` a `.rodata` string could not be
         //< passed.
         r.tmp_counter += 1
-        defer $s: = Str_builder.new()
+        defer $s: = Str_builder()
         c: = r.tmp_counter
         pad: = "00" if c < 10 else ("0" if c < 100 else "")
         s.s(prefix).s(pad).s("\{c\}")
@@ -150,7 +149,7 @@ fn register_synth_symbol(decl: Ast_node$@, kind: Sym_kind, name: U8[], type_id: 
     //< The name is already the C one. is_premangled says so, and keeps genc and genllvm from
     //< putting a second prefix on. It is not is_export, since only KSPL calls these, under the
     //< internal ABI (see is_premangled in sema/decl/scope.kspl).
-    sym: = Sema_symbol.new(kind, name, decl)
+    sym: = Sema_symbol(kind, name, decl)
     sym.type_id = type_id
     sym.flags.is_premangled = true
     decl.sym_ptr = Void$@::sym

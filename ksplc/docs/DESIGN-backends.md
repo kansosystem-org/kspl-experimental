@@ -545,7 +545,7 @@ Caution: **Do not write a figure here.** It depends on the core count, `CFLAGS` 
 
 **For small generated C, splitting by the core count is a loss, and that is accepted (a decision).** A script whose `import` closure is a dozen files puts nearly everything into unit 0. Unit 0 also takes the definitions of unknown origin and the runtime's body half. It pays the fixed cost N times with nothing to run in parallel. The only symptom is slowness, so no gate fails. `ksplc run` chooses `--split=N` before generation (`pick_unit_count` in `ksplc/tools/run.kspl`), so it does not know the size. The loss on a small program is small and the gain on a large one orders of magnitude larger, so one rule serves both (Principle 6).
 
-**The self-host build does not split.** `$(STAGE1_OUT)` / `$(STAGE2_OUT)` in the `Makefile` are single files. The self-host check compares the generated C file by file, byte for byte, and N+1 files would change the comparison.
+**The self-host build splits, one unit per core.** Each stage's C is compiled in parallel, which the build of ksplc itself pays for at every change. Each stage writes into a folder of its own under one name (`out/gen/stage1/ksplc.*`, `out/gen/stage2/ksplc.*`), since every unit names its header. The self-host check compares the two stages unit by unit, and the header too, byte for byte. **The seed and the shipped build take stage2's C whole.** The seed is one file. The shipped build's `-O2` inlines only within one unit.
 
 **Only the C backend splits.** genllvm has no forward-declaration phase ("Genllvm (LLVM IR): why the structure differs, and managing SSA"). It writes the string pool in one piece at the end. So its output cannot be split into translation units.
 

@@ -1,4 +1,4 @@
-//< Kspage's look: colours kept as roles, and style names that hold no whitespace (not the suite)
+//< The pages' look: colours kept as roles, each pair of them readable (not the suite)
 //< Caution: **Do not write a colour directly into a rule.** Each one escapes the roles, and only
 //< that place keeps the old colour when the screen turns light or dark.
 import "std/chars"
@@ -37,7 +37,7 @@ priv fn holds_color(code: U8[], _arena: Arena$@): Bool
 
 priv fn check_theme_roles(arena: Arena$@)
     $seen: Sz = 0
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     for rel in harness.tracked_matching(U8[][]::{ "*.css" })
         $in_root: = false
         $i: Sz = 0
@@ -58,14 +58,13 @@ priv fn check_theme_roles(arena: Arena$@)
                     .push(arena.text().s(rel).s(":\{i\}: ").s(line.trim_spaces()).take())
     verdict.check_list("the look's colours are held by the roles alone (no colour outside `:root`)",
         seen, "lines", bad@,
-        "add one more role and point at it with `var(--…)` (kspage/port/web/page.css)")
+        "add one more role and point at it with `var(--…)` (ksmd/port/web/page.css)")
 
 priv const LUM_WEIGHT: F64[_] = ::{ 0.2126, 0.7152, 0.0722 } //< the contrast's luminance weights
     //< **A pair is measured only where both roles hold a written colour.** A role set from the
     //< environment (`CanvasText` and the like) follows the screen's light or dark. The
     //< browser keeps that readable.
-    //< Note: The threshold is 4.5:1, the same as WCAG 2.2's 1.4.3 (the decision is in
-    //< `kspage/docs/DESIGN-architecture.md`).
+    //< Note: The threshold is 4.5:1, the same as WCAG 2.2's 1.4.3 for text of an ordinary size.
 
 priv fn srgb_part(v: F64): F64
     return v / 12.92 if v <= 0.03928 else math.pow((v + 0.055) / 1.055, 2.4)
@@ -102,10 +101,8 @@ priv fn is_hex6(v: U8[]): Bool
 // Caution: **List only pairs that really overlap** (a pair that never meets adds a finding
 // nobody can fix).
 // **List them two at a time, the foreground colour then the background's.**
-priv const THEME_PAIR: U8[][_] = ::{ "--ink", "--panel", "--ink", "--paper", "--ink", "--field",
-    "--ink", "--raised", "--ink-dim", "--panel", "--ink-dim", "--paper", "--ink-dim", "--field",
-    "--ink-dim", "--raised", "--accent", "--panel", "--accent", "--raised", "--accent-ink",
-    "--accent", "--warn-ink", "--warn" }
+priv const THEME_PAIR: U8[][_] = ::{ "--ink", "--paper", "--ink", "--soft", "--ink", "--notice",
+    "--muted", "--paper", "--muted", "--soft", "--error", "--paper" }
 
 priv fn value_of(names: List<|U8[]|>@, vals: List<|U8[]|>@, want: U8[]): U8[]
     for k in Range.asc(names.len)
@@ -140,11 +137,11 @@ priv fn check_theme_contrast(arena: Arena$@) //<
     //< colours leave a check that passes with nothing measured.
     $seen: Sz = 0
     $measured: Sz = 0
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     for rel in harness.tracked_matching(U8[][]::{ "*.css" })
         $inside: = false
-        $names: = List<|U8[]|>.new(arena)
-        $vals: = List<|U8[]|>.new(arena)
+        $names: = List<|U8[]|>(arena)
+        $vals: = List<|U8[]|>(arena)
         for line in harness.read_under_root(rel).lines(arena)
             code: = line.sub(0, line.find_str("/*").unwrap_or(line.len))
             t: = code.trim_spaces()
@@ -169,9 +166,9 @@ priv fn check_theme_contrast(arena: Arena$@) //<
     if measured == 0
         bad
             .push("not one pair of written colours was measured (`:root {` in \
-                kspage/port/web/page.css)")
+                ksmd/port/web/page.css)")
     verdict.check_list("the letters against the ground are 4.5:1 or more", seen, "colours", bad@,
-        "deepen the role's colour (`:root` in kspage/port/web/page.css)")
+        "deepen the role's colour (`:root` in ksmd/port/web/page.css)")
 
 // The samples for the judgment of whether a line holds a colour.
 // Caution: **Include both a role's name and a selector that looks like hex but is not.** Otherwise
@@ -204,27 +201,11 @@ priv const CONTRAST_WANT: I64[_] = ::{ 2100, 2100, 100, 454 } //<
     //< In order: black on white (21.00:1) / the same swapped / one colour against itself (1.00:1) /
     //< just above the threshold
 
-// The samples for reading a style's name off a line.
-// Caution: **Include both a name written with a mark and a name in prose**; the second makes
-// explicit that prose is not read here.
-priv const STYLE_SAMPLES: Sample[_] = ::{
-    Sample::{ .text = "  sheet.add(\"page break\", paint.inherit_all());", .hits = true },
-    Sample::{ .text = "  sheet.add(\"page-break\", paint.inherit_all());", .hits = false },
-    Sample::{ .text = "priv const LINE_NAME: U8[] = \"code line\";", .hits = true },
-    Sample::{ .text = "const GRID_NAME: U8[] = \"table\";", .hits = false },
-    // A name passed as a value: there is no literal to read.
-    Sample::{ .text = "  cell: = sheet.add(name, paint.inherit_all());", .hits = false },
-    // Two on one line, the second one bad.
-    Sample::{ .text = "sheet.add(\"body\"); sheet.add(\"page break\");", .hits = true },
-    // Prose. **Not read** (the limit above).
-    Sample::{ .text = "// make a style named \"page break\" and hang it on", .hits = false },
-}
-
 priv fn check_theme_fires(arena: Arena$@)
     scan.check_samples("the judgment of whether it holds a colour can fire",
         Sample[]::COLOR_SAMPLES, "color_samples", holds_color, arena)
 
-    $b: = List<|U8[]|>.new(arena)
+    $b: = List<|U8[]|>(arena)
     for i in Range.asc(HEX6_SAMPLES.len)
         got: = is_hex6(HEX6_SAMPLES[i])
         if got != HEX6_WANT[i]
@@ -233,7 +214,7 @@ priv fn check_theme_fires(arena: Arena$@)
     verdict.check_list("the judgment of whether it is six hex digits can fire", HEX6_SAMPLES.len,
         "samples", b@, "the judgment misreads its own samples: mend the judgment, not the table")
 
-    $c: = List<|U8[]|>.new(arena)
+    $c: = List<|U8[]|>(arena)
     for i in Range.asc(CONTRAST_WANT.len)
         fg: = CONTRAST_PAIR[i * 2]
         bg: = CONTRAST_PAIR[i * 2 + 1]
@@ -245,89 +226,7 @@ priv fn check_theme_fires(arena: Arena$@)
     verdict.check_list("the contrast's reckoning can fire", CONTRAST_WANT.len, "pairs", c@,
         "the judgment misreads its own samples: mend the judgment, not the table")
 
-    scan.check_samples("the reading of a style's name written down can fire",
-        Sample[]::STYLE_SAMPLES, "style_samples", spaced_style_name, arena)
-
-// ---- A style's name holds no whitespace ----
-
-// The marks with which the product writes a style's name.
-// Caution: **Do not search for the names themselves.** A table of names needs a fix for each name
-// added. **A name added in the wrong form is exactly the case that must fail**. `sheet.add`
-// makes every product name; the `…_name` constants are the ones code uses.
-priv const STYLE_MARKS: U8[][_] = ::{ "sheet.add(\"", "_NAME: U8[] = \"" }
-
-priv const STYLE_WHERE: U8[][_] = ::{ "kspage/*.kspl", ":!kspage/tests/" } //<
-    //< Where the product's names are written
-    //< **`kspage/tests/` is left out**: a check there makes a name holding a space on purpose
-    //< (`style_test.kspl`'s refusal), and others hold one as a fixture.
-
-priv fn name_at(line: U8[], from: Sz): Sz? //<
-    //< The position of the first byte of a style's name written at or after from, or none.
-    //< **All marks are searched and the nearest one wins**, so a line writing two names is read to
-    //< the end.
-    $best: Sz? = .none
-    for mark in STYLE_MARKS
-        if at: = line.sub_from(from).find_str(mark)
-            got: = from + at + mark.len
-            if best.is_none() || got < best.unwrap_or(got)
-                best = .some(got)
-    return best
-
-priv fn spaced_style_name(line: U8[], _arena: Arena$@): Bool //<
-    //< Whether that line writes a style's name that holds whitespace
-    //< **The screen refuses such a name** (`name_plain` in `kspage/model/style.kspl` says why), so
-    //< the product writing one would make a style nobody could type. **A name in prose is not read
-    //< here.**
-    $i: Sz = 0
-    for i < line.len
-        if at: = name_at(line, i)
-            $k: = at
-            for k < line.len && line[k] != '"'
-                if line[k] == ' ' || line[k] == '\t'
-                    return true
-                k += 1
-            i = k + 1
-        else
-            break
-    return false
-
-priv fn names_on(line: U8[]): Sz //< how many style names that line writes
-    $n: Sz = 0
-    $i: Sz = 0
-    for i < line.len
-        if at: = name_at(line, i)
-            n += 1
-            i = at + 1
-        else
-            break
-    return n
-
-priv const STYLE_NAMES_FLOOR: Sz = 20 //<
-    //< The fewest style names the reader may find
-    //< **It is a floor, not a count.** Adding a name never changes it, and a reader that finds
-    //< nothing (a mark changed on one side only) fails. The manual's names are not among them: it
-    //< is a saved document (`kspage/content/manual.kspage`), whose names are data as a user's are.
-
-priv fn check_style_names(arena: Arena$@)
-    $seen: Sz = 0
-    $bad: = List<|U8[]|>.new(arena)
-    for rel in harness.tracked_matching(U8[][]::STYLE_WHERE)
-        $i: Sz = 0
-        for line in harness.read_under_root(rel).lines(arena)
-            i += 1
-            seen += names_on(line)
-            if spaced_style_name(line, arena)
-                bad
-                    .push(arena.text().s(rel).s(":\{i\}: ").s(line.trim_spaces()).take())
-    verdict.check_list("a style's name written down holds no whitespace", seen, "names", bad@,
-        "join the words with a hyphen (`kspage/docs/DESIGN-architecture.md`'s \"A style name holds \
-            no whitespace\")")
-    verdict.check("the reading of the names written down still finds them",
-        seen >= STYLE_NAMES_FLOOR,
-        arena.text().s("read \{seen\} (the floor is \{STYLE_NAMES_FLOOR\})").take())
-
 fn run(arena: Arena$@)
     check_theme_roles(arena)
     check_theme_contrast(arena)
-    check_style_names(arena)
     check_theme_fires(arena)

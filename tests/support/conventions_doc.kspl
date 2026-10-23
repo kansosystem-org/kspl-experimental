@@ -1,4 +1,4 @@
-//< The documents' own checks: their kinds, the Principles' numbering, tables, and the manual
+//< The documents' own checks: their kinds, the Principles' numbering and tables
 //< Not the suite; `../suite/conventions_test.kspl` runs each part.
 import "std/chars" // `ends_with`
 import "std/ds" { List }
@@ -59,7 +59,7 @@ priv const NAME_SAMPLES: Sample[_] = ::{
 }
 
 priv fn check_names(arena: Arena$@)
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     $seen: Sz = 0
     // A clone's own documents are left out of the published copy and name themselves, so the
     // published copy's kinds do not apply to them.
@@ -105,7 +105,7 @@ priv const CITE_WORD: U8[] = "Principle " //< the form of a citation
 
 priv fn numbers_in_doc(arena: Arena$@): List<|U8[]|> //<
     //< Picks the principles' numbers out of `docs/DESIGN-principles.md`
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     $inside: = false
     for line in harness.read_under_root(RULE_DOC).lines(arena)
         if line.starts_with("## ")
@@ -126,7 +126,7 @@ priv fn cited(line: U8[], arena: Arena$@): List<|U8[]|> //<
     //< Picks the numbers of the principles cited in one line
     //< **Two are always written in full, as `Principle 1 and Principle 6`**, so reading one at a
     //< time is enough. The word with no number after it (`Principle compliance`) yields nothing.
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     $at: Sz = 0
     for at < line.len
         if hit: = line.sub_from(at).find_str(CITE_WORD)
@@ -149,7 +149,7 @@ priv fn take_numbers(line: U8[], from: Sz, out: List<|U8[]|>$@) //<
 priv fn check_cites(arena: Arena$@)
     numbers: = numbers_in_doc(arena)
     $seen: Sz = 0
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     specs: = scan.kspl_specs_with(U8[][]::{ "*.md", "*.py", "*.mk" }, arena)
     for rel in harness.tracked_matching(specs)
         $i: Sz = 0
@@ -220,8 +220,8 @@ priv fn is_table_rule(body: U8[]): Bool //< whether it is the separator row (`|-
     return true
 
 priv fn check_md_tables(arena: Arena$@)
-    $escape: = List<|U8[]|>.new(arena)
-    $ragged: = List<|U8[]|>.new(arena)
+    $escape: = List<|U8[]|>(arena)
+    $ragged: = List<|U8[]|>(arena)
     $seen: Sz = 0
     for rel in harness.tracked_matching(U8[][]::{ "*.md" })
         seen += 1
@@ -267,7 +267,7 @@ priv const CELL_SAMPLES: U8[][_] = ::{ "| a | b |", "| a \\| b |", "> | a | b | 
 priv const CELL_WANT: Sz[_] = ::{ 2, 1, 3, 2, 2 }
 
 priv fn check_cell_fires(arena: Arena$@)
-    $c: = List<|U8[]|>.new(arena)
+    $c: = List<|U8[]|>(arena)
     for i in Range.asc(CELL_SAMPLES.len)
         got: = cell_count(CELL_SAMPLES[i], arena)
         if got != CELL_WANT[i]
@@ -291,7 +291,7 @@ fn run_prose(arena: Arena$@)
 // ==========================================
 priv fn carried_names(rel: U8[], from: U8[], to: U8[], arena: Arena$@): List<|U8[]|> //<
     //< The bold names that open the table rows between two marks of one document
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     $inside: = false
     for line in harness.read_under_root(rel).lines(arena)
         if line.starts_with(from)
@@ -310,7 +310,7 @@ priv fn check_not_carried(arena: Arena$@) //< both tables name the same features
         "**Withdrawing a notation", arena)
     what: =
         carried_names("docs/SPEC-programming-language.md", "## Appendix A", "## Appendix B", arena)
-    defer $bad: = str.Str_builder.new()
+    defer $bad: = str.Str_builder()
     for n in why
         if !what.contains(n)
             bad.s("  only in docs/DESIGN-principles.md: \{n\}\n")
@@ -321,127 +321,3 @@ priv fn check_not_carried(arena: Arena$@) //< both tables name the same features
         .s("the \{what.len\} features not carried are named alike in the specification and the \
             principles").take()
     verdict.check(name, what.len > 0 && bad.slice().len == 0, bad.slice())
-
-// ==========================================
-// Checks that the manual matches what the screen shows
-// Caution: **The day a label is added, the manual goes stale silently.** Neither the count nor
-// the names are generated from the implementation. **The wording is not checked** (a machine
-// cannot tell whether "press it and it opens" is right). Only the count, the names and the order
-// are. The page's colours are checked in `conventions_theme.kspl`.
-// ==========================================
-priv fn tab_names(text: U8[], arena: Arena$@): List<|U8[]|> //<
-    //< The navigation labels' names (they appear as `>name<span class="tally">`)
-    //< Caution: **Take the name from the `>` just before**: searched for by its text, this would
-    //< need a fix for every label added. Only a label carries `tally`, so that mark is enough.
-    $out: = List<|U8[]|>.new(arena)
-    mark: = "<span class=\"tally\">"
-    $i: Sz = 0
-    for i < text.len
-        if at: = text.sub_from(i).find_str(mark)
-            shut: = i + at
-            $from: Sz = shut
-            for from > 0 && text[from - 1] != '>'
-                from -= 1
-            if from < shut
-                out.push(text.sub(from, shut - from))
-            i = shut + mark.len
-        else
-            break
-    return out
-
-priv fn joined(names: List<|U8[]|>@, arena: Arena$@): U8[] //<
-    //< Joins the names the way the manual writes them (`the 3 tabs A, B and C`)
-    //< **The last one is joined by `and`**, as in English lists; commas alone would fail on correct
-    //< prose.
-    want: = arena.text()
-    want.s("the \{names.len\} tabs ")
-    for i in Range.asc(names.len)
-        join: = "" if i == 0 else " and " if i + 1 == names.len else ", "
-        want.s(join).s(names.get(i))
-    return want.take()
-
-priv fn count_after_digit(text: U8[], needle: U8[]): Sz //<
-    //< How many times the needle appears with a digit in front of it, no two overlapping
-    //< **Anchor a needle that is ordinary English to something that is not.** `" tabs "` alone
-    //< catches "the tab characters" or "the tabs and a run of empty lines". It then counts a
-    //< place not about the navigation as written wrong.
-    $n: Sz = 0
-    $i: Sz = 0
-    for i < text.len
-        if at: = text.sub_from(i).find_str(needle)
-            spot: = i + at
-            if spot > 0 && text[spot - 1] >= '0' && text[spot - 1] <= '9'
-                n += 1
-            i = spot + needle.len
-        else
-            break
-    return n
-
-priv fn check_manual_tabs(arena: Arena$@) //<
-    //< That the manual counts the navigation's labels correctly and lists their names
-    //< Caution: **Do not search for a name in the whole text**: "Slides" and "Headings" appear
-    //< anywhere, making **a check that cannot fail**. The form "`the N tabs` and the names" is
-    //< matched, so the count, names and order are checked at once. **Check every place it is
-    //< written**, and **fail when there is none**, or a deleted sentence goes green.
-    $bad: = List<|U8[]|>.new(arena)
-    names: = tab_names(harness.read_under_root("kspage/port/web/page.html"), arena)
-    said: = harness.read_under_root("kspage/content/manual.kspage")
-    told: = joined(names@, arena)
-    tail: = " tabs "
-    seen: = count_after_digit(said, tail)
-    fit: = said.count_str(told)
-    if seen == 0
-        bad
-            .push(arena.text().s("the manual does not touch the navigation's labels").take())
-    if seen != fit
-        bad
-            .push(arena.text().s("a place is not written in the shape \"").s(told)
-            .s("\" (\{fit\} agree)").take())
-    verdict.check_list("the manual counts the navigation's labels rightly and lists their names",
-        seen, "places", bad@,
-        "keep kspage/content/manual.kspage and kspage/port/web/page.html in step")
-
-// The sample screen.
-// Caution: **Keep it at 3 labels** (the list of names and the count both appear in one form).
-// **Mix in one label with no `tally`**: a reader that ignores the mark would list buttons that are
-// not labels (the real screen has a `push` set).
-priv const TAB_SAMPLE: U8[][] = U8[][]::{ "<div id=\"side-tabs\">",
-    "<button>Alpha<span class=\"tally\">2</span></button>",
-    "<button>Beta<span class=\"tally\">0</span></button>",
-    "<button>Elsewhere<span class=\"push\">Ctrl+B</span></button>",
-    "<button>Gamma<span class=\"tally\">7</span></button></div>" }
-priv const TAB_TOLD: U8[] = "the 3 tabs Alpha, Beta and Gamma"
-
-priv const COUNT_TEXT: U8[] = "the 2 tabs and 13 tabs , not the tabs; x1111" //<
-    //< the sample for counting with a digit in front
-    //< Caution: **Include an overlapping case** — get the advance wrong and `11` counts as 2.
-priv const COUNT_NEEDLE: U8[][_] = ::{ " tabs ", "11", "absent" }
-priv const COUNT_WANT: Sz[_] = ::{ 2, 1, 0 }
-
-priv fn check_manual_fires(arena: Arena$@)
-    $a: = List<|U8[]|>.new(arena)
-    page: = arena.text()
-    for part in TAB_SAMPLE
-        page.s(part)
-    names: = tab_names(page.take(), arena)
-    got: = joined(names@, arena)
-    if !got.equals(TAB_TOLD)
-        a
-            .push(arena.text().s("read \"").s(got).s("\" from the sample screen (should be \"")
-            .s(TAB_TOLD).s("\")").take())
-    verdict.check_list("the reading of the labels' names can fire", TAB_SAMPLE.len, "lines", a@,
-        "the judgment misreads its own samples: mend the judgment, not the table")
-
-    $b: = List<|U8[]|>.new(arena)
-    for i in Range.asc(COUNT_WANT.len)
-        n: = count_after_digit(COUNT_TEXT, COUNT_NEEDLE[i])
-        if n != COUNT_WANT[i]
-            b
-                .push(arena.text().s("counted \"").s(COUNT_NEEDLE[i]).s("\" as \{n\}")
-                .s(" (should be \{COUNT_WANT[i]\})").take())
-    verdict.check_list("the counting verdict can fire", COUNT_WANT.len, "samples", b@,
-        "the judgment misreads its own samples: mend the judgment, not the table")
-
-fn run_manual(arena: Arena$@)
-    check_manual_tabs(arena)
-    check_manual_fires(arena)

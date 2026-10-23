@@ -48,7 +48,7 @@ impl<|T|> Tensor<|T|>
     fn grad_matmul_input(r: Self$@, w: Tensor<|T|>): Tensor<|T|> //<
         //< The "allocate and return" version (a thin wrapper over `_into`), on `r.arena`
         $out_shape: Sz[2] = ::{ r.shape[0], w.shape[0] }
-        dx: = Tensor<|T|>.new(Sz$[]::out_shape, r.arena)
+        dx: = Tensor<|T|>(Sz$[]::out_shape, r.arena)
         r.grad_matmul_input_into(w, dx)
         return dx
     // dW = X^T @ dY   (self=X:[m,k], dy=dY:[m,n] → out:[k,n])
@@ -97,14 +97,14 @@ impl<|T|> Tensor<|T|>
         dy: Tensor<|T|>, //< the gradient of the product's output, [m,n]
     ): Tensor<|T|>
         $out_shape: Sz[2] = ::{ r.shape[1], dy.shape[1] }
-        dw: = Tensor<|T|>.new(Sz$[]::out_shape, r.arena)
+        dw: = Tensor<|T|>(Sz$[]::out_shape, r.arena)
         r.grad_matmul_weight_into(dy, dw)
         return dw
     // --- The backward pass of the activation functions -----------
     fn grad_silu(r: Self$@, dy: Tensor<|T|>): Tensor<|T|> //<
         //< SiLU:  dX = dY * (s + x*s*(1-s)),  s = sigmoid(x)   (self=X, dy=dY)
         assert(r.size == dy.size, "grad_silu size mismatch")
-        dx: = Tensor<|T|>.new(r.shape, r.arena)
+        dx: = Tensor<|T|>(r.shape, r.arena)
         for i in Range.asc(r.size)
             xv: = (r.data + i)$
             s: = 1.0 / (1.0 + math.exp(-xv))
@@ -145,7 +145,7 @@ impl<|T|> Tensor<|T|>
         assert(target >= 0 && (target) < n, "grad_softmax_cross_entropy target out of range")
 
         st: = r.softmax_reduce(offset, n)
-        dlogits: = Tensor<|T|>.new(r.shape, r.arena)
+        dlogits: = Tensor<|T|>(r.shape, r.arena)
         // Fills the leading `offset` elements with 0 and writes the gradient into the trailing n
         for i in Range.asc(offset)
             (dlogits.data + i)$ = 0.0
@@ -180,7 +180,7 @@ impl<|T|> Tensor<|T|>
         n: = r.shape[r.shape.len - 1]
         rows: = r.size / n
         assert(targets.len == rows, "grad_softmax_cross_entropy_seq row/target mismatch")
-        dlogits: = Tensor<|T|>.new(r.shape, r.arena)
+        dlogits: = Tensor<|T|>(r.shape, r.arena)
         scale: = T::(1.0 / (F64::rows))
         for t in Range.asc(rows)
             // As in `cross_entropy_loss_seq`: unchecked, the write below can overrun

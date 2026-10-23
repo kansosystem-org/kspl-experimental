@@ -15,9 +15,9 @@ RUN echo 'Acquire::ForceIPv4 "true";' > /etc/apt/apt.conf.d/99force-ipv4
 #   test-ship's Windows half: gcc-mingw-w64-x86-64-win32 (the x86_64 cross compiler alone, the
 #   one `x86_64-w64-mingw32-gcc` names; Wine, which would run its output, is left out for its size)
 #   BLAS=1: libopenblas-dev · test-ksos-qemu: qemu-system-arm · bare metal: gcc-arm-none-eabi
-#   ksbind's own test (test-extract): libssl-dev, libsqlite3-dev · test-kspage-wasm: nodejs
+#   ksbind's own test (test-extract): libssl-dev, libsqlite3-dev · test-ksmd-browser: nodejs
 #   test-pytools: python3-numpy (without it, the Linux round fails)
-#   test-kspage-desktop: desktop-file-utils
+#   test-ksmd-desktop: desktop-file-utils, shared-mime-info
 #   the HTTPS download below (Chromium): ca-certificates
 # No pip: nothing here installs from it (the AI helpers' own venv brings its own).
 RUN apt-get update && apt-get install -y \
@@ -36,6 +36,7 @@ RUN apt-get update && apt-get install -y \
     qemu-system-arm \
     gcc-arm-none-eabi \
     desktop-file-utils \
+    shared-mime-info \
     gcc-mingw-w64-x86-64-win32 \
     && rm -rf /var/lib/apt/lists/*
 
@@ -57,7 +58,7 @@ ENV LC_ALL=en_US.UTF-8
 # The packages: clang-22, lldb-22, lld-22 and clangd-22, then clang-format-22 (the Makefile's
 # `C_FMT`, which `make commit-seed` requires), llvm-22 (OBJDUMP / OBJCOPY / NM) and
 # libclang-rt-22-dev (the sanitizers `make test-ksai-fuzz` and `make test-race` build with), and
-# libclang-rt-22-dev-wasm32 (clang's builtins a wasm32 module links: kspage's page, layout-targets).
+# libclang-rt-22-dev-wasm32 (clang's builtins a wasm32 module links: ksmd's page, layout-targets).
 RUN apt-get update && \
     apt-get install -y clang-22 lldb-22 lld-22 clangd-22 clang-format-22 llvm-22 \
         libclang-rt-22-dev libclang-rt-22-dev-wasm32 && \
@@ -72,13 +73,13 @@ RUN update-alternatives --install /usr/bin/clang clang /usr/bin/clang-22 100 && 
     update-alternatives --install /usr/bin/wasm-ld wasm-ld /usr/bin/wasm-ld-22 100 && \
     update-alternatives --install /usr/bin/llvm-objdump llvm-objdump /usr/bin/llvm-objdump-22 100
 
-# --- A real browser (`make test-kspage-served` uses it) ---
+# --- A real browser (`make test-ksmd-browser` uses it) ---
 # Focus, visibility and repeated keystrokes break only in a real browser. Ubuntu's `chromium`
 # is a snap stub that does not run in a container, so the Chromium project's zip (BSD) goes in
 # instead; **amd64 only** (elsewhere the target emits SKIPPED).
 # Caution: **Pin the revision, and take the build that has a head**: options, window size and
-# the permission to open a window move within weeks, and headless lacks that permission (the
-# caution in `kspage/Makefile`). The zip resolves no dependencies, so the libraries are listed.
+# the permission to open a window move within weeks, and headless lacks that permission. The zip
+# resolves no dependencies, so the libraries are listed.
 ARG CHROMIUM_REVISION=1680435
 # The zip's SHA-256 at that revision. **Change the two together**: the download is checked against
 # it before it is unpacked, so a zip altered where it is stored does not go into the image.

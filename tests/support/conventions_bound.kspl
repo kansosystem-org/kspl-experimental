@@ -1,7 +1,7 @@
 //< Keeps the boundaries of packages and folders from widening unnoticed
 //< It is not a suite of its own; it is a part of conventions.
-//< **Each of these builds either way**: an upward import, a page's list of names drifting, an entry
-//< point nobody calls. So the check reads the text to check the boundaries.
+//< **Each of these builds either way**: an upward import, an entry point nobody calls, a list that
+//< dropped a file. So the check reads the text to check the boundaries.
 //< `tests/support/conventions_match.kspl` checks the implementation against the documents, the
 //< grammar and the colouring.
 import "std/chars"
@@ -34,7 +34,7 @@ priv fn hook_name(line: U8[]): U8[] //< whether the field has the form `name: fn
     return ""
 
 priv fn import_paths(rel: U8[], arena: Arena$@): List<|U8[]|> //< the paths rel's imports name
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     for line in harness.read_under_root(rel).lines(arena)
         t: = line.trim_start()
         if !t.starts_with("import \"")
@@ -56,7 +56,7 @@ priv const SIDEWAYS_ALLOWED: U8[][_] = ::{ "ksplc/sema/flow/stmt.kspl -> ksplc/s
     //< branches of a condition folded to a constant.
 
 priv fn check_sema_layers(arena: Arena$@)
-    $hooks: = List<|U8[]|>.new(arena)
+    $hooks: = List<|U8[]|>(arena)
     for line in harness.read_under_root(SEMA_CTX).lines(arena)
         h: = hook_name(line)
         if h.len > 0
@@ -69,7 +69,7 @@ priv fn check_sema_layers(arena: Arena$@)
         .s("the way round from decl to body is infer_expr_fn alone (\{SEMA_CTX\})").take(), ok,
         why.take())
 
-    $up: = List<|U8[]|>.new(arena)
+    $up: = List<|U8[]|>(arena)
     $seen: Sz = 0
     for rel in harness.tracked_matching(U8[][]::{ "ksplc/sema/decl/*.kspl" })
         seen += 1
@@ -79,7 +79,7 @@ priv fn check_sema_layers(arena: Arena$@)
 
     // session is the base that decl / flow / body all depend on, so even one upward import merges
     // the three layers into one.
-    $up_ctx: = List<|U8[]|>.new(arena)
+    $up_ctx: = List<|U8[]|>(arena)
     $ctx_seen: Sz = 0
     for rel in harness.tracked_matching(U8[][]::{ "ksplc/sema/session/*.kspl" })
         ctx_seen += 1
@@ -88,7 +88,7 @@ priv fn check_sema_layers(arena: Arena$@)
     verdict.check_list("ksplc/sema/session does not import decl / flow / body", ctx_seen, "files",
         up_ctx@, "session sits below decl / flow / body: move the shared part down into session")
 
-    $sideways: = List<|U8[]|>.new(arena)
+    $sideways: = List<|U8[]|>(arena)
     for pair in U8[][]::{ "decl flow", "flow decl" }
         group: = pair.sub(0, 4)
         other: = pair.sub_from(5)
@@ -96,7 +96,7 @@ priv fn check_sema_layers(arena: Arena$@)
         pre: = arena.text().s("ksplc/sema/").s(other).s("/").take()
         for rel in harness.tracked_matching(U8[][]::{ pat })
             imports_from(rel, pre, sideways@, arena)
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     for i in Range.asc(sideways.len)
         $allowed: = false
         for a in SIDEWAYS_ALLOWED
@@ -115,37 +115,6 @@ priv fn check_sema_layers(arena: Arena$@)
         "cut the new edge, or add it to `sideways_allowed` with the reason")
 
 // ==========================================
-// kspage's layers do not import upward **It cannot be left to the compiler alone.** An upward edge
-// closes a cycle only where the other side already imports this one. So `expr -> share` builds
-// with no diagnostic. The list goes from the bottom up.
-// ==========================================
-
-// `content` (the shipped documents) imports only `model` and only `port` imports it, so it is one
-// layer below that.
-// **`test` is at the very top** (otherwise the test code goes into what is shipped).
-priv const KSPAGE_LAYERS: U8[][_] = ::{ "model", "expr", "lay", "share", "write", "content", "port",
-    "test" }
-
-priv fn check_kspage_layers(arena: Arena$@)
-    $up: = List<|U8[]|>.new(arena)
-    $seen: Sz = 0
-    for i in Range.asc(KSPAGE_LAYERS.len)
-        $pats: = List<|U8[]|>.new(arena)
-        pats
-            .push(arena.text().s("kspage/").s(KSPAGE_LAYERS[i]).s("/*.kspl").take())
-        pats
-            .push(arena.text().s("kspage/").s(KSPAGE_LAYERS[i]).s("/*/*.kspl").take())
-        for rel in harness.tracked_matching(pats.slice())
-            seen += 1
-            for j in Range.asc(KSPAGE_LAYERS.len)
-                if j <= i
-                    continue
-                pre: = arena.text().s("kspage/").s(KSPAGE_LAYERS[j]).s("/").take()
-                imports_from(rel, pre, up@, arena)
-    verdict.check_list("a kspage folder does not import one above itself", seen, "files", up@,
-        "the run is the table in kspage/README.md (model < expr < lay < share < write < content)")
-
-// ==========================================
 // ksos's folders import only those below them **The compiler does not see an upward edge** that
 // closes no cycle: a driver importing a board builds, and then serves that board alone.
 // ==========================================
@@ -156,9 +125,9 @@ priv const KSOS_LAYERS: U8[][_] = ::{ "kernel", "kernel", "net", "net", "drivers
     "boards", "kernel drivers boards", "demo", "kernel net drivers boards demo", "port", "" }
 
 priv fn check_ksos_layers(arena: Arena$@)
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     $seen: Sz = 0
-    for i in Range.new(0, KSOS_LAYERS.len, 2)
+    for i in Range(0, KSOS_LAYERS.len, 2)
         folder: = arena.text().s("ksos/").s(KSOS_LAYERS[i]).s("/").take()
         allowed: = KSOS_LAYERS[i + 1].split(' ', arena)
         for rel in harness
@@ -190,7 +159,7 @@ priv fn units_of(md: U8[], row: U8[], arena: Arena$@): List<|U8[]|> //<
     //< Picks up the packages' names (`` `x/` ``) in that tier's row of the table
     //< **Other rows start with the same words** (a tier's name heads another table's column too).
     //< So the answer is **the row in which at least one package can be picked up**.
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     for line in md.lines(arena)
         if !line.starts_with(row)
             continue
@@ -205,7 +174,7 @@ priv fn arrows_of(md: U8[], arena: Arena$@): List<|U8[]|> //<
     //< It may be in the table's row or the note below it. **A direction the tiers decide is not
     //< written as an arrow**; only "is it somewhere in the document" is checked.
     //< Caution: **Do not read it as guaranteeing "it is in the table".**
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     for w in scan.find_all(md, "`", "`", arena)
         if w.find_str("→").unwrap_or(0) > 0
             scan.push_unique(out@, w)
@@ -214,7 +183,7 @@ priv fn arrows_of(md: U8[], arena: Arena$@): List<|U8[]|> //<
 priv fn copy_targets(src: U8[], unit: U8[], arena: Arena$@): List<|U8[]|> //<
     //< The targets of one `layer_to` line the check holds, without its first word
     //< The line has the form `"ksplc docs std root"`.
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     head: = arena.text().s("\"").s(unit).s(" ").take()
     if at: = src.find_str(head)
         rest: = src.sub_from(at + head.len)
@@ -230,7 +199,7 @@ priv fn check_reference_arrows(arena: Arena$@)
     units: = units_of(md, "| implementation ", arena)
     leaves: = units_of(md, "| leaf ", arena)
     arrows: = arrows_of(md, arena)
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     if units.len <= 0 || leaves.len <= 0 || arrows.len <= 0
         bad.push("the table's tier rows cannot be read")
     for from in units
@@ -270,189 +239,6 @@ priv fn check_reference_arrows(arena: Arena$@)
         "drifting makes the shape \"the documents forbid it and the check lets it through\"")
 
 // ==========================================
-// The page's lists of the core's names **An enum crosses the boundary as its variant name**, so a
-// list on the page holds the names of the core's enum. **A name it does not know reads as the
-// kind's default**, so a stale page shows only as "it was chosen and something different comes
-// out", and a reason with no words shows only as its bare name.
-// ==========================================
-
-priv const MENU_FLY: U8[] = "kspage/port/web/command.js" //< the choices for inserting
-priv const MENU_FORM: U8[] = "kspage/port/web/form.js" //< the choices in the style form
-priv const NAME_WORDS: U8[] = "kspage/port/web/draw.js" //< the words for a name the core passes
-
-// A list of four (the name of where the choices live / the enum's file / the enum / the file
-// holding the choices). `page.html` holds only where the set is placed.
-// Caution: **Do not return to a `<select>`** (the check is "no `<select>` is left in a menu" in
-// `kspage/tests/browser/menu.js`).
-priv const MENU_PAIRS: U8[][_] = ::{ "DATED_PICKS", "kspage/model/day.kspl", "Dating", MENU_FORM,
-    "ALIGN_PICKS", "kspage/model/style.kspl", "Align", MENU_FORM, "MARK_PICKS",
-    "kspage/model/marker.kspl", "Marker", MENU_FORM, "COLLECT_PICKS", "kspage/model/collect.kspl",
-    "Collect", MENU_FORM, "WHEN_PICKS", "kspage/model/style_when.kspl", "Compare", MENU_FORM,
-    "SKETCH_PICKS", "kspage/write/insert.kspl", "Sketch", MENU_FLY, "SHAPE_PICKS",
-    "kspage/model/style.kspl", "Shape", MENU_FLY, "KEEP_PICKS", "kspage/model/filter.kspl", "Keep",
-    MENU_FLY }
-
-priv const OWN_DOOR: U8[][_] = ::{ "one_of" } //<
-    //< The kinds that correctly stay out of the choices
-    //< Caution: **Write the reason.**
-    //< `one_of` keeps a set of values ticked one by one, so it has a panel of its own
-    //< (`narrow.js`).
-
-priv fn js_list_of(src: U8[], name: U8[], head_mark: U8[], arena: Arena$@): List<|U8[]|> //<
-    //< The list of a `const <name> = ["a", "b", …];`
-    //< Caution: **Pick it up in order** (drop the repeats and the order drifts).
-    $out: = List<|U8[]|>.new(arena)
-    head: = arena.text().s("const ").s(name).s(" = [").take()
-    if at: = src.find_str(head)
-        rest: = src.sub_from(at + head.len)
-        if end: = rest.find_str("];")
-            for w in scan.find_all(rest.sub(0, end), head_mark, "\"", arena)
-                out.push(w)
-    return out
-
-priv fn choices_of(id: U8[], where: U8[], arena: Arena$@): List<|U8[]|> //<
-    //< The list of strings the page sends
-    //< **It lives in one place**: the `const <name> = [["text", "label"], …]` in the JS that builds
-    //< the set.
-    return js_list_of(harness.read_under_root(where), id, "[\"", arena)
-
-priv fn check_menu_choices(arena: Arena$@)
-    $bad: = List<|U8[]|>.new(arena)
-    $seen: Sz = 0
-    for i in Range.asc(MENU_PAIRS.len)
-        if i % 4 != 0
-            continue
-        id: = MENU_PAIRS[i]
-        core: =
-            enum_order(harness.read_under_root(MENU_PAIRS[i + 1]), MENU_PAIRS[i + 2], arena)
-        ui: = choices_of(id, MENU_PAIRS[i + 3], arena)
-        if core.len <= 0 || ui.len <= 0
-            bad.push(arena.text().s(id).s(": the run cannot be read").take())
-            continue
-        seen += ui.len
-        for k in Range.asc(ui.len)
-            if !core.contains(ui.get(k))
-                bad
-                    .push(arena.text().s(id).s(" puts ").s(ui.get(k)).s(" out and ")
-                    .s(MENU_PAIRS[i + 2]).s(" does not know it").take())
-        for k in Range.asc(core.len)
-            if ui.contains(core.get(k))
-                continue
-            $excused: = false
-            for j in Range.asc(OWN_DOOR.len)
-                if OWN_DOOR[j].equals(core.get(k))
-                    excused = true
-            if !excused
-                bad
-                    .push(arena.text().s(core.get(k)).s(" cannot be chosen from ").s(id)
-                    .s(" (where it holds an entry point of its own,")
-                    .s(" add it to own_door with its reason)").take())
-    verdict.check_list("the menu's choices line up with the core's names", seen, "entries", bad@,
-        "a name it does not know reads as the kind's default (something different comes out)")
-
-priv const RIBBON_SCREEN: U8[] = "kspage/port/web/ribbon.js" //<
-    //< The shapes the ribbon can choose are `Shape`'s names and no others
-    //< The choices may be a strict subset (the ribbon holds a shortcut, not the list).
-
-priv fn check_ribbon_shapes(arena: Arena$@)
-    known: =
-        enum_order(harness.read_under_root("kspage/model/style.kspl"), "Shape", arena)
-    $bad: = List<|U8[]|>.new(arena)
-    picked: =
-        js_list_of(harness.read_under_root(RIBBON_SCREEN), "SHAPES", "shape: \"", arena)
-    for i in Range.asc(picked.len)
-        if !known.contains(picked.get(i))
-            bad
-                .push(arena.text().s(picked.get(i)).s(": ").s(RIBBON_SCREEN)
-                .s(" lets it be chosen and Shape does not know it").take())
-    verdict.check_list("the shapes the ribbon chooses are the core's", picked.len, "shapes", bad@,
-        "a name it does not know reads as a box (a rectangle comes out when pressed)")
-
-priv fn enum_order(src: U8[], name: U8[], arena: Arena$@): List<|U8[]|> //< a text enum's list
-    //< Caution: **Read it with the `priv` / `pub` stripped off.**
-    $out: = List<|U8[]|>.new(arena)
-    // **Do not require a `{`**: the default notation opens the block by indentation, so the list
-    // would read empty. The block ends at the next line at column 0 (a brace's `}` included).
-    head: = arena.text().s("enum ").s(name).take()
-    lines: = src.lines(arena)
-    $start: Sz = 0
-    $found: = false
-    for i in Range.asc(lines.len)
-        one: = lines.get(i)
-        if !one.starts_with(head)
-            continue
-        // **The name must end here.** Without this, `enum Marker` finds `enum Marker_kind` first.
-        rest: = one.sub_from(head.len)
-        if rest.len > 0 && (rest[0].is_alnum() || rest[0] == '_')
-            continue
-        start = i + 1
-        found = true
-        break
-    if !found
-        return out
-    for i in Range.asc(lines.len)
-        if i < start
-            continue
-        line: = lines.get(i)
-        if line.len > 0 && line[0] != ' ' && line[0] != '\t'
-            return out
-        t: = line.trim_start()
-        if t.len <= 0 || t.starts_with("//")
-            continue
-        // With a `name,` and a `name(payload: T),` alike, the name cuts at the same place.
-        $k: Sz = 0
-        for k < t.len && (t[k].is_alnum() || t[k] == '_')
-            k += 1
-        if k > 0
-            out.push(t.sub(0, k))
-    return out
-
-// The names the core passes out that the page puts into words. A list of three (the enum's file /
-// the enum / the page's list in `draw.js`). **Every name must have its words, and every word must
-// belong to a name**: one with none shows as its bare name, and a word for a name that is gone
-// stays behind unseen. `done` and `none` are no refusal, so they need none.
-priv const WORD_PAIRS: U8[][_] = ::{ "kspage/model/style.kspl", "Arrange", "REGIONS",
-    "kspage/write/cells.kspl", "Line_end", "REFUSALS", "kspage/write/cells.kspl", "Merge_end",
-    "REFUSALS", "kspage/write/cells.kspl", "Sort_end", "REFUSALS", "kspage/write/insert.kspl",
-    "Surface_end", "REFUSALS", "kspage/write/block.kspl", "Block_style_end", "REFUSALS",
-    "kspage/expr/calc.kspl", "Name_fault", "REFUSALS" }
-
-priv fn check_name_words(arena: Arena$@)
-    screen: = harness.read_under_root(NAME_WORDS)
-    $bad: = List<|U8[]|>.new(arena)
-    $seen: Sz = 0
-    $named: = List<|U8[]|>.new(arena)
-    for i in Range.asc(WORD_PAIRS.len)
-        if i % 3 != 0
-            continue
-        core: =
-            enum_order(harness.read_under_root(WORD_PAIRS[i]), WORD_PAIRS[i + 1], arena)
-        words: = js_list_of(screen, WORD_PAIRS[i + 2], "[\"", arena)
-        if core.len <= 0 || words.len <= 0
-            bad
-                .push(arena.text().s(WORD_PAIRS[i + 1]).s(": the run cannot be read").take())
-            continue
-        seen += core.len
-        for k in Range.asc(core.len)
-            name: = core.get(k)
-            if name.equals("done") || name.equals("none")
-                continue
-            scan.push_unique(named@,
-                arena.text().s(WORD_PAIRS[i + 2]).s(" ").s(name).take())
-            if !words.contains(name)
-                bad
-                    .push(arena.text().s(WORD_PAIRS[i + 1]).s(".").s(name).s(" has no words in ")
-                    .s(NAME_WORDS).s("'s ").s(WORD_PAIRS[i + 2]).take())
-    for list in U8[][]::{ "REGIONS", "REFUSALS" }
-        for word in js_list_of(screen, list, "[\"", arena)
-            if !named.contains(arena.text().s(list).s(" ").s(word).take())
-                bad
-                    .push(arena.text().s(NAME_WORDS).s("'s ").s(list).s(" holds ").s(word)
-                    .s(", which no enum it lists names").take())
-    verdict.check_list("every name the core passes out has the page's words", seen, "names", bad@,
-        "a name with no words shows on the screen as it is spelt in the code")
-
-// ==========================================
 // No `pub` builds up under an entry point **[I0402] cannot check it.** It uses the setting found
 // from the entry point's file. So at a demo's entry point it names the kernel's and drivers' `pub`
 // too (those stay, as a promise to their users).
@@ -460,10 +246,10 @@ priv fn check_name_words(arena: Arena$@)
 priv const ENTRY_TREES: U8[][_] = ::{ "ksos/demo" }
 
 priv fn check_no_pub_in_entries(arena: Arena$@)
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     $seen: Sz = 0
     for i in Range.asc(ENTRY_TREES.len)
-        $pats: = List<|U8[]|>.new(arena)
+        $pats: = List<|U8[]|>(arena)
         pats.push(arena.text().s(ENTRY_TREES[i]).s("/*.kspl").take())
         pats.push(arena.text().s(ENTRY_TREES[i]).s("/*/*.kspl").take())
         pats.push(arena.text().s(ENTRY_TREES[i]).s("/*/*/*.kspl").take())
@@ -482,12 +268,12 @@ priv fn check_no_pub_in_entries(arena: Arena$@)
 // Caution: **Both directions break silently.** The link passes though the JS calls a name that is
 // not in the text, and "there is no such function" first shows up in the browser.
 // ==========================================
-priv const WEB_PREFIX: U8[] = "kspage_web_"
-priv const WEB_KSPL: U8[] = "kspage/port/web/*.kspl"
-priv const WEB_JS: U8[] = "kspage/port/web/*.js"
+priv const WEB_PREFIX: U8[] = "ksmd_web_"
+priv const WEB_KSPL: U8[] = "ksmd/port/web/*.kspl"
+priv const WEB_JS: U8[] = "ksmd/port/web/*.js"
 
 priv fn web_names_in(src: U8[], out: List<|U8[]|>$@) //<
-    //< Picks up the names starting with `kspage_web_`
+    //< Picks up the names starting with `ksmd_web_`
     //< Caution: **Read to the end of the name**, or a name mentioned mid-sentence picks up
     //< everything after it.
     $rest: U8[] = src
@@ -505,32 +291,31 @@ priv fn web_names_in(src: U8[], out: List<|U8[]|>$@) //<
 priv fn web_exports(arena: Arena$@): List<|U8[]|> //< the exported entry points
     //< Caution: **Check only a `fn` at the start of a line** (count the places that mention a name
     //< mid-sentence and the entry points multiply).
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     $marks: Sz = 0
     for rel in harness.tracked_matching(U8[][]::{ WEB_KSPL })
         for line in harness.read_under_root(rel).lines(arena)
             if line.equals("#export")
                 marks += 1
-            if line.starts_with("fn kspage_web_")
+            if line.starts_with("fn ksmd_web_")
                 rest: = line.sub_from(3 + WEB_PREFIX.len)
                 at: = rest.find_str("(").unwrap_or(0)
                 if at > 0
                     scan.push_unique(out@, rest.sub(0, at))
-    // Caution: **Check the count too.** An entry point not starting with `kspage_web_` widens the
-    // boundary unseen by the walk above (naming: `kspage/docs/DESIGN-architecture.md`). **Two
-    // counts of 0 are not an agreement** (the case `verdict.check_list`'s floor refuses; this
-    // passes a verdict itself).
-    verdict.check("every wasm entry point that goes out begins kspage_web_",
+    // Caution: **Check the count too.** An entry point not starting with `ksmd_web_` widens the
+    // boundary unseen by the walk above. **Two counts of 0 are not an agreement** (the case
+    // `verdict.check_list`'s floor refuses; this passes a verdict itself).
+    verdict.check("every wasm entry point that goes out begins ksmd_web_",
         marks == out.len && out.len > 0,
-        arena.text().s("\{marks\} #export, \{out.len\} fn beginning kspage_web_").take())
+        arena.text().s("\{marks\} #export, \{out.len\} fn beginning ksmd_web_").take())
     return out
 
 priv fn check_wasm_boundary(arena: Arena$@)
     $out: = web_exports(arena)
-    $used: = List<|U8[]|>.new(arena)
+    $used: = List<|U8[]|>(arena)
     for rel in harness.tracked_matching(U8[][]::{ WEB_JS })
         web_names_in(harness.read_under_root(rel), used@)
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     scan.diff_into(out@, used@, "the text's #export", WEB_JS, bad@, arena)
     scan.diff_into(used@, out@, WEB_JS, "the text's #export", bad@, arena)
     verdict.check_list("the wasm's boundary agrees on both sides", out.len, "entry points", bad@,
@@ -539,75 +324,60 @@ priv fn check_wasm_boundary(arena: Arena$@)
 
 // ==========================================
 // A list written by hand has not dropped one of the folder's real files
-// kspage keeps three lists **by hand**, and the compiler's README names each layer folder's
-// files. Each list's own header says why it cannot include a whole folder at once.
+// The compiler's README names each layer folder's files, and each package's README its documents.
+// Each list's own header says why it cannot include a whole folder at once.
 // ==========================================
 
-priv const SPELL_STEM: U8[] = "stem" //<
-    //< The form that matches stems; an entry is heading, holder, text, form, prefix to skip
-    //< Caution: **Keep the matching form per list** (`KSPAGE_PROBE` lists stems; the others file
-    //< names). **The holder itself is not required to be listed**: `page.html` would have to name
-    //< itself. The prefix leaves out a folder whose own guide holds its list (`tools/ai_assist/`),
-    //< since a `*` crosses a `/`.
+// An entry is the list's heading, the file holding it, the files it must name, and a folder to
+// skip. **The holder itself is not required to be listed**: a README would have to name itself.
+// The folder to skip leaves out one whose own guide holds its list (`tools/ai_assist/`), since a
+// `*` crosses a `/`.
 priv const SKIP_NONE: U8[] = ""
-priv const HAND_LISTS: U8[][_] = ::{ "the list of make's checks", "kspage/Makefile",
-    "kspage/tests/browser/*.js", SPELL_STEM, SKIP_NONE, "the text the page binds in",
-    "kspage/port/web/page.html", "kspage/port/web/*.js", "name", SKIP_NONE,
-    "the text the page binds in", "kspage/port/web/page.html", "kspage/port/web/*.html", "name",
-    SKIP_NONE, "the text the page binds in", "kspage/port/web/page.html", "kspage/port/web/*.css",
-    "name", SKIP_NONE, "kspage's guide (port/web's JS)", "kspage/README.md", "kspage/port/web/*.js",
-    "name", SKIP_NONE, "kspage's guide (port/web's KSPL side)", "kspage/README.md",
-    "kspage/port/web/*.kspl", "name", SKIP_NONE, "kspage's guide (the template's fragments)",
-    "kspage/README.md", "kspage/port/web/*.html", "name", SKIP_NONE, "kspage's guide (the look)",
-    "kspage/README.md", "kspage/port/web/*.css", "name", SKIP_NONE, "the parse layer's guide",
-    "ksplc/README.md", "ksplc/parse/*.kspl", "name", SKIP_NONE, "the lower layer's guide",
-    "ksplc/README.md", "ksplc/lower/*.kspl", "name", SKIP_NONE,
-    "the guide to what the backends share", "ksplc/README.md", "ksplc/gen/*.kspl", "name",
-    SKIP_NONE, "the gen/c layer's guide", "ksplc/README.md", "ksplc/gen/c/*.kspl", "name",
-    SKIP_NONE, "the gen/llvm layer's guide", "ksplc/README.md", "ksplc/gen/llvm/*.kspl", "name",
-    SKIP_NONE, "the lsp layer's guide", "ksplc/README.md", "ksplc/lsp/*.kspl", "name", SKIP_NONE,
-    "the formatter's guide", "ksplc/README.md", "ksplc/fmt/*.kspl", "name", SKIP_NONE,
-    "the tools layer's guide", "ksplc/README.md", "ksplc/tools/*.kspl", "name", SKIP_NONE,
-    "the base layer's guide", "ksplc/README.md", "ksplc/base/*.kspl", "name", SKIP_NONE,
-    "the tools' guide", "tools/README.md", "tools/*.kspl", "name", "tools/ai_assist/",
-    "ksos's table of documents", "ksos/README.md", "ksos/docs/*.md", "name", SKIP_NONE,
-    "std's table of documents", "std/README.md", "std/docs/*.md", "name", SKIP_NONE,
-    "ksplc's table of documents", "ksplc/README.md", "ksplc/docs/*.md", "name", SKIP_NONE,
-    "kspeg's table of documents", "kspeg/README.md", "kspeg/docs/*.md", "name", SKIP_NONE,
-    "ksai's table of documents", "ksai/README.md", "ksai/docs/*.md", "name", SKIP_NONE,
-    "ksdb's table of documents", "ksdb/README.md", "ksdb/docs/*.md", "name", SKIP_NONE,
-    "ksbind's table of documents", "ksbind/README.md", "ksbind/docs/*.md", "name", SKIP_NONE,
-    "kssrv's table of documents", "kssrv/README.md", "kssrv/docs/*.md", "name", SKIP_NONE,
-    "kspage's table of documents", "kspage/README.md", "kspage/docs/*.md", "name", SKIP_NONE,
-    "tools's table of documents", "tools/README.md", "tools/*.md", "name", SKIP_NONE,
-    "tests's table of documents", "tests/README.md", "tests/*.md", "name", SKIP_NONE,
-    "tests/docs's table of documents", "tests/README.md", "tests/docs/*.md", "name", SKIP_NONE,
-    "ai_assist's guide", "tools/ai_assist/README.md", "tools/ai_assist/*.kspl", "name", SKIP_NONE,
-    "docs's table of documents", "docs/README.md", "docs/*.md", "name", SKIP_NONE,
-    "tools/docs's table of documents", "tools/README.md", "tools/docs/*.md", "name", SKIP_NONE }
+priv const HAND_LISTS: U8[][_] = ::{ "the parse layer's guide", "ksplc/README.md",
+    "ksplc/parse/*.kspl", SKIP_NONE, "the lower layer's guide", "ksplc/README.md",
+    "ksplc/lower/*.kspl", SKIP_NONE, "the guide to what the backends share", "ksplc/README.md",
+    "ksplc/gen/*.kspl", SKIP_NONE, "the gen/c layer's guide", "ksplc/README.md",
+    "ksplc/gen/c/*.kspl", SKIP_NONE, "the gen/llvm layer's guide", "ksplc/README.md",
+    "ksplc/gen/llvm/*.kspl", SKIP_NONE, "the lsp layer's guide", "ksplc/README.md",
+    "ksplc/lsp/*.kspl", SKIP_NONE, "the formatter's guide", "ksplc/README.md", "ksplc/fmt/*.kspl",
+    SKIP_NONE, "the tools layer's guide", "ksplc/README.md", "ksplc/tools/*.kspl", SKIP_NONE,
+    "the base layer's guide", "ksplc/README.md", "ksplc/base/*.kspl", SKIP_NONE, "the tools' guide",
+    "tools/README.md", "tools/*.kspl", "tools/ai_assist/", "ksos's table of documents",
+    "ksos/README.md", "ksos/docs/*.md", SKIP_NONE, "std's table of documents", "std/README.md",
+    "std/docs/*.md", SKIP_NONE, "ksplc's table of documents", "ksplc/README.md", "ksplc/docs/*.md",
+    SKIP_NONE, "kspeg's table of documents", "kspeg/README.md", "kspeg/docs/*.md", SKIP_NONE,
+    "ksai's table of documents", "ksai/README.md", "ksai/docs/*.md", SKIP_NONE,
+    "ksdb's table of documents", "ksdb/README.md", "ksdb/docs/*.md", SKIP_NONE,
+    "ksbind's table of documents", "ksbind/README.md", "ksbind/docs/*.md", SKIP_NONE,
+    "kssrv's table of documents", "kssrv/README.md", "kssrv/docs/*.md", SKIP_NONE,
+    "ksmd's table of documents", "ksmd/README.md", "ksmd/docs/*.md", SKIP_NONE,
+    "tools's table of documents", "tools/README.md", "tools/*.md", SKIP_NONE,
+    "tests's table of documents", "tests/README.md", "tests/*.md", SKIP_NONE,
+    "tests/docs's table of documents", "tests/README.md", "tests/docs/*.md", SKIP_NONE,
+    "ai_assist's guide", "tools/ai_assist/README.md", "tools/ai_assist/*.kspl", SKIP_NONE,
+    "docs's table of documents", "docs/README.md", "docs/*.md", SKIP_NONE,
+    "tools/docs's table of documents", "tools/README.md", "tools/docs/*.md", SKIP_NONE }
 
 priv fn check_hand_lists(arena: Arena$@) //<
     //< Whether the body of the file holding the list names that folder's real files one by one
-    //< Caution: **Check only whether it is in the body.** The three lists are written differently
-    //< (a make variable, a `__KSPAGE_FILE:` mark, a Markdown link). A check that relies on the
-    //< format goes silent the day a list is rewritten.
-    $bad: = List<|U8[]|>.new(arena)
+    //< Caution: **Check only whether it is in the body.** The lists are written differently (a
+    //< table row, a link, a name in backquotes). A check that relies on the format goes silent the
+    //< day a list is rewritten.
+    $bad: = List<|U8[]|>(arena)
     $seen: Sz = 0
     for i in Range.asc(HAND_LISTS.len)
-        if i % 5 != 0
+        if i % 4 != 0
             continue
         what: = HAND_LISTS[i]
         holder: = harness.read_under_root(HAND_LISTS[i + 1])
-        stem: = HAND_LISTS[i + 3].equals(SPELL_STEM)
-        skip: = HAND_LISTS[i + 4]
+        skip: = HAND_LISTS[i + 3]
         for rel in harness.tracked_matching(U8[][]::{ HAND_LISTS[i + 2] })
             said: = sys.get_file_name(rel)
             if said.equals(sys.get_file_name(HAND_LISTS[i + 1])) ||
                 skip.len > 0 && rel.starts_with(skip)
                 continue
             seen += 1
-            name: = sys.strip_last_ext(said) if stem else said
-            if holder.find_str(name).is_none()
+            if holder.find_str(said).is_none()
                 bad
                     .push(arena.text().s(what).s(" (").s(HAND_LISTS[i + 1]).s(") does not name ")
                     .s(rel).take())
@@ -617,11 +387,7 @@ priv fn check_hand_lists(arena: Arena$@) //<
 
 fn run(arena: Arena$@)
     check_sema_layers(arena)
-    check_name_words(arena)
-    check_ribbon_shapes(arena)
-    check_menu_choices(arena)
     check_reference_arrows(arena)
-    check_kspage_layers(arena)
     check_ksos_layers(arena)
     check_no_pub_in_entries(arena)
     check_wasm_boundary(arena)

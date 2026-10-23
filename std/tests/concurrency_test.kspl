@@ -53,7 +53,7 @@ fn test_thread_spawn_join()
     assert(echoed == Void$@::marker@, "join() must return exactly what entry() returned")
 
     // 2. Two threads each add 1000 times while protecting the counter with the same Mutex<I32>
-    defer $mx: = thread.Mutex<|I32|>.new(0) catch panic("mutex create failed")
+    defer $mx: = thread.Mutex<|I32|>(0) catch panic("mutex create failed")
     t1: =
         thread.Thread.spawn<|thread.Mutex<|I32|>|>(thread_test_increment, mx@)
         catch panic("thread spawn failed")
@@ -69,8 +69,7 @@ fn test_thread_spawn_join()
     mx.unlock()
 
     // 3. Even a single-thread Rc<|I32|> is safe to use when wrapped in a Mutex
-    defer $g_rc: = thread.Mutex<|Rc<|I32|>|>.new(Rc<|I32|>.new(7))
-        catch panic("mutex<rc> create failed")
+    defer $g_rc: = thread.Mutex<|Rc<|I32|>|>(Rc<|I32|>(7)) catch panic("mutex<rc> create failed")
     t3: =
         thread.Thread
         .spawn<|thread.Mutex<|Rc<|I32|>|>|>(thread_test_touch_mutex_rc, g_rc@)
@@ -101,7 +100,7 @@ fn test_atomic_and_cond_var()
     verdict.start("[Thread] Atomic_sz (lock-free addition) + Cond_var (signal/wait) test...")
 
     // 1. Atomic_sz's basic operations
-    $a: = thread.Atomic_sz.new(5)
+    $a: = thread.Atomic_sz(5)
     assert(a.load() == 5, "Atomic_sz.load() must return the initial value")
     old: = a.fetch_add(3)
     assert(old == 5 && a.load() == 8, "fetch_add must return the pre-add value")
@@ -115,7 +114,7 @@ fn test_atomic_and_cond_var()
 
     // 2. Two threads add 20000 times in total to the same counter, with no lock
     ctx: = mem.alloc_as<|Atomic_test_ctx|>()
-    ctx.counter = thread.Atomic_sz.new(0)
+    ctx.counter = thread.Atomic_sz(0)
     t1: = thread.Thread.spawn<|Atomic_test_ctx|>(atomic_test_worker, ctx)
         catch panic("thread spawn failed")
     t2: = thread.Thread.spawn<|Atomic_test_ctx|>(atomic_test_worker, ctx)
@@ -127,8 +126,8 @@ fn test_atomic_and_cond_var()
     dealloc(Void$@::ctx)
 
     // 3. Cond_var: wait wakes after a signal (on a Mutex<|Sz|>; Raw_mutex is priv).
-    defer $mx: = thread.Mutex<|Sz|>.new(0) catch panic("mutex create failed")
-    defer $cv: = thread.Cond_var.new() catch panic("cond create failed")
+    defer $mx: = thread.Mutex<|Sz|>(0) catch panic("mutex create failed")
+    defer $cv: = thread.Cond_var() catch panic("cond create failed")
 
     ready: = mx.lock()
     ready$ = 1
@@ -175,8 +174,8 @@ priv const GATE_WAITERS: Sz = 3
 
 fn test_cond_var_broadcast_and_wait_for()
     verdict.start("[Thread] Cond_var's broadcast and wait_for test...")
-    mx: = thread.Mutex<|Gate|>.new(Gate::{}) catch panic("mutex create failed")
-    cv: = thread.Cond_var.new() catch panic("cond create failed")
+    mx: = thread.Mutex<|Gate|>(Gate::{}) catch panic("mutex create failed")
+    cv: = thread.Cond_var() catch panic("cond create failed")
     $ctx: = Gate_ctx::{ .mx = mx, .cv = cv }
     defer ctx.mx.free()
     defer ctx.cv.free()
@@ -191,7 +190,7 @@ fn test_cond_var_broadcast_and_wait_for()
         "wait_for with nobody to wake it times out, after its limit")
     assert(at_once == .timed_out, "wait_for with a limit already up looks once")
     // Every waiter wakes on one broadcast.
-    defer $ts: = List<|thread.Thread$@|>.new(null)
+    defer $ts: = List<|thread.Thread$@|>(null)
     for _i in Range.asc(GATE_WAITERS)
         ts.push(thread.Thread.spawn<|Gate_ctx|>(gate_waiter, ctx@) catch panic("spawn failed"))
     for
@@ -254,8 +253,8 @@ fn test_spawn_from_threads(ksplc: U8[]) //<
             own reader...")
     ctx: = mem.alloc_as<|Lingering_ctx|>()
     ctx.ksplc = ksplc
-    ctx.asked = thread.Atomic_sz.new(0)
-    ctx.stop = thread.Atomic_sz.new(0)
+    ctx.asked = thread.Atomic_sz(0)
+    ctx.stop = thread.Atomic_sz(0)
     t: =
         thread.Thread.spawn<|Lingering_ctx|>(concurrency_start_lingering, ctx)
         catch panic("thread spawn failed")
@@ -320,7 +319,7 @@ fn lock_test_hold(h: Holder$@): Void$@ //< takes the lock, holds it a while, and
 
 fn test_file_lock()
     verdict.start("[Fs] a file lock refuses a second holder, and take waits for the first...")
-    defer arena: = Arena.new(64 * 1024)
+    defer arena: = Arena(64 * 1024)
     dir: = fs.mkdir_unique(BASE, "lock_", arena) catch panic("cannot create the working directory")
     path: = fs.join(dir, "lock", arena)
     $first: = fs.File_lock.take(path) catch panic("a lock nobody holds must be taken")
@@ -328,8 +327,8 @@ fn test_file_lock()
     first.free()
     $again: = fs.File_lock.try_take(path) catch panic("a lock let go must be free again")
     again.free()
-    $h: = Holder::{ .path = path, .holding = thread.Atomic_sz.new(0),
-        .let_go = thread.Atomic_sz.new(0) }
+    $h: = Holder::{ .path = path, .holding = thread.Atomic_sz(0),
+        .let_go = thread.Atomic_sz(0) }
     t: = thread.Thread.spawn<|Holder|>(lock_test_hold, h@) catch panic("the holder must start")
     for h.holding.load() == 0
         sys.sleep_ms(5)
@@ -350,7 +349,7 @@ priv const RELOCK_SRC: U8[] = //< a child that locks one mutex twice on one thre
 import "std/thread"
 
 fn main()
-  $m: = thread.Mutex<|I32|>.new(0) catch panic("the mutex must be created")
+  $m: = thread.Mutex<|I32|>(0) catch panic("the mutex must be created")
   _first: = m.lock()
   _second: = m.lock()
   io.out().s("the second lock returned\n")
@@ -365,7 +364,7 @@ fn foreign_unlock(m: thread.Mutex<|I32|>$@): Void$@
   return null
 
 fn main()
-  $m: = thread.Mutex<|I32|>.new(0) catch panic("the mutex must be created")
+  $m: = thread.Mutex<|I32|>(0) catch panic("the mutex must be created")
   _v: = m.lock()
   t: = thread.Thread.spawn<|thread.Mutex<|I32|>|>(foreign_unlock, m@) catch panic("must start")
   t.join_and_free()
@@ -418,7 +417,7 @@ priv const FLOOR_LEVELS: Sz = 1000 //< the walk must get at least this deep
 
 fn test_stack_limit_on_main()
     verdict.start("[Stack] a walk that looks stops before the main thread's stack runs out...")
-    $limit: = Stack_limit.new(TEST_MARGIN)
+    $limit: = Stack_limit(TEST_MARGIN)
     assert(!limit.near(), "at a test's head the stack is not near its end")
     $seed: U8[1] = ::{}
     levels: = dig(limit@, 0, U8$[]::seed)
@@ -427,7 +426,7 @@ fn test_stack_limit_on_main()
 
 #export
 fn stack_test_walk(arg: Sz$@): Void$@
-    $limit: = Stack_limit.new(TEST_MARGIN)
+    $limit: = Stack_limit(TEST_MARGIN)
     $seed: U8[1] = ::{}
     arg$ = dig(limit@, 0, U8$[]::seed)
     return null
@@ -447,7 +446,7 @@ priv const CLOSE_MARGIN: Sz = 4 * 1024 //< a margin smaller than the pages Windo
 
 fn test_stack_limit_close_to_the_end()
     verdict.start("[Stack] a walk with a margin of a page stops before the stack's real end...")
-    $limit: = Stack_limit.new(CLOSE_MARGIN)
+    $limit: = Stack_limit(CLOSE_MARGIN)
     $seed: U8[1] = ::{}
     levels: = dig(limit@, 0, U8$[]::seed)
     assert(levels > FLOOR_LEVELS, "a small margin still lets the walk go deep, and stops it alive")
@@ -485,7 +484,7 @@ priv fn on_short_stack( //< runs `job` with about `SHORT_ROOM` of the stack left
     return ok && pad[0] <= 1U8
 
 priv fn json_refuses(arena: Arena$@): Bool //< 400 levels, within `max_nesting_depth`
-    defer $doc: = Str_builder.new()
+    defer $doc: = Str_builder()
     for _i in Range.asc(400)
         doc.c('[')
     for _i in Range.asc(400)
@@ -501,7 +500,7 @@ priv fn json_refuses(arena: Arena$@): Bool //< 400 levels, within `max_nesting_d
 priv fn regex_refuses(_arena: Arena$@): Bool //< 400 nested `(?:`, within `max_nesting_depth`
     //< **Compiling is the walk that recurses**, once per group level. Matching follows its ways
     //< through a list on the heap, so only the pattern's nesting can reach the stack.
-    defer $pattern: = Str_builder.new()
+    defer $pattern: = Str_builder()
     for _i in Range.asc(400)
         pattern.s("(?:")
     pattern.c('a')
@@ -520,7 +519,7 @@ priv fn regex_refuses(_arena: Arena$@): Bool //< 400 nested `(?:`, within `max_n
 fn test_walks_stop_on_a_short_stack(arena: Arena$@)
     verdict
         .start("[Stack] JSON and regex refuse, rather than crash, on a stack shorter than kept...")
-    $limit: = Stack_limit.new(SHORT_ROOM)
+    $limit: = Stack_limit(SHORT_ROOM)
     $seed: U8[1] = ::{}
     assert(on_short_stack(limit@, 0, U8$[]::seed, json_refuses, arena),
         "json.parse refuses nesting the stack left cannot hold, as too_deep")

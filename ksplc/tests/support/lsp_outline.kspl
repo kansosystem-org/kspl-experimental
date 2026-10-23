@@ -96,7 +96,7 @@ fn run_outline(c: jsonrpc_client.Client$@, caps: json.Value, arena: Arena$@) //<
 
     got: = ask(c, OUTLINE_URI, OUTLINE_SRC, arena)
     d: = lsp_client.dump(got, arena)
-    $seen: = List<|Seen|>.new(arena)
+    $seen: = List<|Seen|>(arena)
     collect(got.get("result"), 0, seen@, arena)
     // The protocol's numbers: Constant 14, Struct 23, Field 8, Enum 10, EnumMember 22,
     // Interface 11, Method 6, Function 12.
@@ -121,7 +121,7 @@ fn run_outline(c: jsonrpc_client.Client$@, caps: json.Value, arena: Arena$@) //<
 
     // **A document that fails to parse gets what parsed around the error**, as its colouring does.
     bad: = ask(c, BROKEN_URI, BROKEN_SRC, arena)
-    $bad_seen: = List<|Seen|>.new(arena)
+    $bad_seen: = List<|Seen|>(arena)
     collect(bad.get("result"), 0, bad_seen@, arena)
     verdict.check("a source that does not parse still lists what parsed",
         !is_missing(bad.get("result")) && found(bad_seen@, "Kept", 23I32, 0),
@@ -261,9 +261,9 @@ pub struct Incoming //< the result of incomingCalls: the array of callers
 pub fn incoming(c: jsonrpc_client.Client$@, item: json.Value, arena: Arena$@): Incoming //<
     //< who calls `item`
     //< **It walks the workspace**, as references does, so it waits as long (`walk_ms`).
-    $b: = Json_builder.new(arena)
+    $b: = Json_builder(arena)
     params: = b.obj().set("item", item).build()
     msg: =
         c.request("callHierarchy/incomingCalls", params, lsp_client.WALK_MS, arena) catch
-        return Incoming::{ .calls = List<|json.Value|>.new(arena), .timed_out = true }
+        return Incoming::{ .calls = List<|json.Value|>(arena), .timed_out = true }
     return Incoming::{ .calls = msg.val.get("result").arr_list(arena), .timed_out = false }

@@ -62,7 +62,7 @@ impl Ast_node
             r.emit_llvm_assign(cg)
         default
             if r.kind_id != .k_empty && r.kind_id != .k_underscore
-                defer $msg: = Str_builder.new()
+                defer $msg: = Str_builder()
                 msg.s("Genllvm ICE: Unhandled stmt kind: ").s(r.get_kind_str())
                 r.ice_panic(msg.slice())
 
@@ -106,7 +106,7 @@ impl Ast_node
         //< A new error starts the route again; a `!`'s propagation extends it.
         //< The file is the one a `#line` names and the function its C symbol, so the route the
         //< program prints is the same from either backend.
-        defer $file: = Str_builder.new()
+        defer $file: = Str_builder()
         base_locate.recorded_name_to(r.loc.file(), file@)
         file_id: = cg.get_or_add_raw_literal(base_core.arena.dup_str(file.slice()))
         func_id: = cg.get_or_add_raw_literal(cg.current_fn_name)
@@ -273,7 +273,7 @@ impl Ast_node
         // Several values in one case clause share the same block_lbl, so a duplicate label must be
         // stopped here. A linear walk of the list each time is O(N^2) on a pathological switch with
         // many case clauses, and the compile effectively hangs. A Map makes the check O(1).
-        emitted_lbls: = base_core.arena.create(Map<|I32, Bool|>.new(base_core.arena))
+        emitted_lbls: = base_core.arena.create(Map<|I32, Bool|>(base_core.arena))
 
         for ci in cases
             already_emitted: = emitted_lbls.get(ci.lbl).unwrap_or(false)
@@ -377,7 +377,7 @@ priv fn collect_switch_cases(r: Ast_node$@, cg: Genllvm_ctx$@, cases: List<|Case
     // time. That is O(N^2) on a pathological switch with many case values (N comma-separated
     // values in one case clause, say, or N case clauses). The compile could then effectively
     // hang. A Map of the values already seen makes the check O(1).
-    seen_vals: = base_core.arena.create(Map<|I64, Bool|>.new(base_core.arena))
+    seen_vals: = base_core.arena.create(Map<|I64, Bool|>(base_core.arena))
     subject_id: = r.get_switch_cond().type_id
 
     for $i: Sz = 2; i < r.children.len; i += 1

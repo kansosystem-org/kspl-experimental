@@ -43,7 +43,7 @@ priv struct Mention //< one `make` line of a document
 fn rules_of(dir: U8[], arena: Arena$@): Rules //< what make reads in `dir` (empty: the root)
     out: = Rules::{ .targets = List<|U8[]|>.create(arena),
         .patterns = List<|U8[]|>.create(arena), .suites = List<|U8[]|>.create(arena) }
-    $args: = List<|U8[]|>.new(arena)
+    $args: = List<|U8[]|>(arena)
     if dir.len > 0
         args.push("-C")
         args.push(dir)
@@ -82,7 +82,7 @@ fn rules_of(dir: U8[], arena: Arena$@): Rules //< what make reads in `dir` (empt
 
 priv fn mention_of(text: U8[], arena: Arena$@): List<|Mention|> //<
     //< The targets a `make` command line names, `-C`'s folder with them; empty for no command
-    $out: = List<|Mention|>.new(arena)
+    $out: = List<|Mention|>(arena)
     t: = text.trim_spaces().strip_prefix("$ ")
     if !t.starts_with("make ")
         return out
@@ -205,12 +205,12 @@ fn check(arena: Arena$@) //< this check's entry point, called from `suite/docref
     scan.check_samples("the reading of a CI section's target can fire",
         scan.Sample[]::shard_samples, "shard_samples", shard_target, arena)
     tracked: = harness.tracked()
-    $dirs: = List<|U8[]|>.new(arena)
+    $dirs: = List<|U8[]|>(arena)
     for rel in tracked
         if rel.ends_with("/Makefile") && rel.count_str("/") == 1
             dirs.push(rel.sub(0, rel.len - 9))
     root: = rules_of("", arena)
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     for p in root.patterns
         $known: = false
         for f in FORWARDS
@@ -220,14 +220,14 @@ fn check(arena: Arena$@) //< this check's entry point, called from `suite/docref
                 .push(arena.text().s("Makefile: the pattern ").s(p)
                 .s(" forwards to nothing `FORWARDS` in tests/support/docref_make.kspl holds").take())
     private: = harness.private_docs()
-    $mentions: = List<|Mention|>.new(arena)
+    $mentions: = List<|Mention|>(arena)
     for rel in tracked
         if rel.ends_with(".md") && !harness.is_private_doc(rel, private@)
             read_mentions(rel, harness.read_under_root(rel), mentions@, arena)
-    $seen_dirs: = List<|U8[]|>.new(arena)
-    $seen_rules: = List<|Rules|>.new(arena)
+    $seen_dirs: = List<|U8[]|>(arena)
+    $seen_rules: = List<|Rules|>(arena)
     for m in mentions
-        $places: = List<|U8[]|>.new(arena)
+        $places: = List<|U8[]|>(arena)
         places.push(m.dir)
         own: = package_of(m.rel, dirs@)
         if m.dir.len == 0 && own.len > 0

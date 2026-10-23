@@ -32,7 +32,7 @@ struct Df_set //< the "set of local declaration nodes" the dataflow tracks
 
 impl Df_set
     fn new(merge_is_intersect: Bool): Df_set
-        return Df_set::{ .items = List<|Ast_node$@|>.new(base_core.arena),
+        return Df_set::{ .items = List<|Ast_node$@|>(base_core.arena),
             .merge_is_intersect = merge_is_intersect }
 
     fn contains(r: Self$@, v: Ast_node$@): Bool //< whether v is held (null never is)
@@ -93,13 +93,12 @@ struct Df_state
 impl Df_state
     fn new(): Df_state$@
         return base_core.arena
-            .create(Df_state::{ .init_vars = Df_set.new(true), .freed_vars = Df_set.new(false),
-            .gone_vars = Df_set.new(false), .moved_vars = Df_set.new(false),
-            .carried_vars = Df_set.new(false), .moved_fields = Df_set.new(false),
-            .reachable = true })
+            .create(Df_state::{ .init_vars = Df_set(true), .freed_vars = Df_set(false),
+            .gone_vars = Df_set(false), .moved_vars = Df_set(false),
+            .carried_vars = Df_set(false), .moved_fields = Df_set(false), .reachable = true })
 
     fn clone(r: Self$@): Df_state$@
-        ns: = Df_state.new()
+        ns: = Df_state()
         ns.reachable = r.reachable
         ns.init_vars.copy_from(r.init_vars@)
         ns.freed_vars.copy_from(r.freed_vars@)
@@ -612,7 +611,7 @@ impl Ast_node
         //< [W0104] Warns when a pointer an arena handed out is passed to a call that releases it
         //< **Only for the free-function form (`dealloc(x)`).** `x.free()` releases `x`'s
         //< **contents**, which is correct for an arena's container
-        //< (`m: = arena.create(Map.new(null))` + `defer m.free()`).
+        //< (`m: = arena.create(Map<|K, V|>(null))` + `defer m.free()`).
         //< The origin is decided by type; by name alone, another type with that method would be
         //< caught.
         if def.kind_id != .k_decl_var
@@ -646,7 +645,7 @@ impl Ast_node
             return
         is_method: = callee.kind_id == .k_method_access
         $param_idx: Sz = 0
-        for p in base_ast_ext.Param_cursor.new(param_list, false)
+        for p in base_ast_ext.Param_cursor(param_list, false)
             $arg: Ast_node$@ = null
             if given: = sema_flow_release.call_arg_for_param(callee, args_node, param_idx, is_method)
                 arg = given
@@ -754,7 +753,7 @@ fn intersect_states(s1: Df_state$@, s2: Df_state$@): Df_state$@
         return s2.clone()
     if !s2.reachable
         return s1.clone()
-    ns: = Df_state.new()
+    ns: = Df_state()
     ns.reachable = true
     ns.init_vars.fill_merged(s1.init_vars@, s2.init_vars@)
     ns.freed_vars.fill_merged(s1.freed_vars@, s2.freed_vars@)
@@ -832,12 +831,12 @@ fn analyze_definite_initialization(c: Sema_ctx$@, fn_node: Ast_node$@, block: As
         .has_error = false, .has_reported_unreachable = false, .suppress_move = false,
         .pending_defers = List<|Ast_node$@|>.create(base_core.arena),
         .exit_targets = List<|Df_exit_target|>.create(base_core.arena), .exit_from = null,
-        .reported_in_defers = Df_set.new(false), .in_field_path = false }
-    state: = Df_state.new()
+        .reported_in_defers = Df_set(false), .in_field_path = false }
+    state: = Df_state()
 
     param_list: = fn_node.get_fn_params()
     if param_list != null
-        for p in base_ast_ext.Param_cursor.new(param_list, false)
+        for p in base_ast_ext.Param_cursor(param_list, false)
             ctx.add_local(p)
             state.add(p)
 

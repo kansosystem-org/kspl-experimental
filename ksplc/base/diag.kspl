@@ -34,7 +34,7 @@ fn code_of(msg: U8[]): U8[] //<
     //< Extracts CODE from a diagnostic's leading "[CODE] ..." (empty if it does not start with "[")
     if msg.len < 3 || (msg.ptr + 0)$ != '['
         return ""
-    for i in Range.new(1, msg.len, 1)
+    for i in Range(1, msg.len, 1)
         if (msg.ptr + i)$ == ']'
             return U8[]::{ .ptr = msg.ptr + 1, .len = i - 1 }
     return ""
@@ -61,7 +61,7 @@ impl Lsp_diag_manager
         r.list.clear()
         // A Map cannot be emptied, so it is created again; its keys live as long as list.
         r.seen.free()
-        r.seen = Map<|U8[], Bool|>.new(null)
+        r.seen = Map<|U8[], Bool|>(null)
 
 fn log(): Writer
     return io.err()
@@ -98,8 +98,8 @@ fn ice_assert(cond: Bool, msg: U8$[])
 // settings file gives only a line, and some errors have no place at all.
 priv fn print_json(file: U8[], line: Sz, column: Sz, end_column: Sz, msg: U8[],
     severity: Diagnostic_severity, is_syntax: Bool)
-    defer arena: = Arena.new(4096)
-    $b: = Json_builder.new(arena)
+    defer arena: = Arena(4096)
+    $b: = Json_builder(arena)
     code: = code_of(msg)
     // The code has its own key, so the message drops its leading `[CODE] `.
     text: = msg.sub_from(code.len + 2).trim_start() if code.len > 0 else msg
@@ -122,7 +122,7 @@ priv fn print_json(file: U8[], line: Sz, column: Sz, end_column: Sz, msg: U8[],
     print_json_row(row)
 
 priv fn print_json_row(row: json.Value) //< one object as one line of stderr
-    defer $out: = Str_builder.new()
+    defer $out: = Str_builder()
     row.dump(out@)
     log().s(out.slice()).c('\n')
 
@@ -138,8 +138,8 @@ fn print_json_closing(succeeded: Bool) //<
     //< **It counts the objects written above it**, not the analysis's tally. So a reader that
     //< counts the lines itself always gets the same numbers (an error the parse stopped on is in no
     //< tally).
-    defer arena: = Arena.new(4096)
-    $b: = Json_builder.new(arena)
+    defer arena: = Arena(4096)
+    $b: = Json_builder(arena)
     row: = b.obj().set("result", b.str_val("succeeded" if succeeded else "failed"))
         .set("errors", b.int_val(json_written.errors))
         .set("warnings", b.int_val(json_written.warnings))
@@ -207,7 +207,7 @@ priv fn print_placed(file_name: U8[], source: U8[], offset: Sz, length: Sz, msg:
 
     if base_core.config.is_lsp
         if base_core.arena != null
-            defer $key_b: = Str_builder.new()
+            defer $key_b: = Str_builder()
             key_b.s("\{out_file\}:\{line\}:\{column\}:\{severity.to_lsp_severity()\}:\{msg\}")
             key: = key_b.slice()
             if lsp_diags.seen@.get(key).unwrap_or(false)

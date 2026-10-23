@@ -36,7 +36,7 @@ priv fn is_code(s: U8[], _arena: Arena$@): Bool //< whether it is one of `EWIH` 
         return false
     if s[0] != 'E' && s[0] != 'W' && s[0] != 'I' && s[0] != 'H'
         return false
-    for i in Range.new(1, 5, 1)
+    for i in Range(1, 5, 1)
         if !s[i].is_digit()
             return false
     return true
@@ -62,7 +62,7 @@ priv fn check_code_fires(arena: Arena$@)
         Sample[]::CODE_SAMPLES, "code_samples", is_code, arena)
 
 priv fn codes_only(xs: List<|U8[]|>@, arena: Arena$@): List<|U8[]|>
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     for i in Range.asc(xs.len)
         if is_code(xs.get(i), arena)
             scan.push_unique(out@, xs.get(i))
@@ -75,7 +75,7 @@ priv fn check_codes(arena: Arena$@): List<|U8[]|>
     $raw_detail: = scan.find_line_starts(spec, "### [", "]", arena)
     $codes: = codes_only(raw_impl@, arena)
     $detail: = codes_only(raw_detail@, arena)
-    $gaps: = List<|U8[]|>.new(arena)
+    $gaps: = List<|U8[]|>(arena)
     detail_name: = arena.text().s("\{SPEC_DIAGNOSTICS\}'s sections").take()
     scan.diff_into(codes@, detail@, REGISTRY, detail_name, gaps@, arena)
     scan.diff_into(detail@, codes@, detail_name, REGISTRY, gaps@, arena)
@@ -89,7 +89,7 @@ priv fn check_emitted_codes(codes: List<|U8[]|>@, arena: Arena$@) //<
     //< Checks that every `[CODE]` the compiler's own source writes is in the registry
     //< **An unregistered code still prints**, but `##lint` and `ksplc.cfg` cannot set its level,
     //< and the summary leaves it out of the codes it tells the reader to `ksplc explain`.
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     $seen: Sz = 0
     for rel in harness.tracked_matching(U8[][]::{ "ksplc/*.kspl", ":!ksplc/tests/*" })
         for word in scan.find_all(harness.read_under_root(rel), "[", "]", arena)
@@ -110,7 +110,7 @@ priv const LIMITS_SUITE: U8[] = "ksplc/tests/suite/limits_test.kspl"
 priv const LIMITS_HEAD: U8[] = "| What is nested |"
 
 priv fn table_depths(spec: U8[], arena: Arena$@): List<|U8[]|> //< the second column, row by row
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     $inside: = false
     for line in spec.lines(arena)
         if !inside
@@ -124,7 +124,7 @@ priv fn table_depths(spec: U8[], arena: Arena$@): List<|U8[]|> //< the second co
     return out
 
 priv fn suite_depths(src: U8[], arena: Arena$@): List<|U8[]|> //< each `priv const <name>: Sz = N`
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     for line in src.lines(arena)
         if line.starts_with("priv const ") && line.find_str(": Sz = ").is_some()
             rest: = line.sub_from(line.find_str(": Sz = ").unwrap_or(0) + 7)
@@ -134,7 +134,7 @@ priv fn suite_depths(src: U8[], arena: Arena$@): List<|U8[]|> //< each `priv con
 priv fn check_limits_table(arena: Arena$@)
     table: = table_depths(harness.read_under_root(SPEC_LANG), arena)
     suite: = suite_depths(harness.read_under_root(LIMITS_SUITE), arena)
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     if table.len == 0 || table.len != suite.len
         bad
             .push(arena.text().s(SPEC_LANG).s(" has \{table.len\} rows, ").s(LIMITS_SUITE)
@@ -199,7 +199,7 @@ priv fn const_value(src: U8[], name: U8[], arena: Arena$@): Sz //<
 
 priv fn check_kssrv_promises(arena: Arena$@)
     spec: = harness.read_under_root(KSSRV_SPEC)
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     for p in PROMISES
         v: = const_value(harness.read_under_root(p.file), p.name, arena)
         said: = arena.text().s(p.before).s("\{v / p.unit\}").s(p.after).take()
@@ -215,7 +215,7 @@ priv fn check_fixtures(codes: List<|U8[]|>@, arena: Arena$@) //<
     //< The list and the specification alone cannot notice it stopped firing (Principle 5).
     //<
     //< The input is in `ksplc/tests/lint/` (it is reported) or `ksplc/tests/negative/` (it fails).
-    defer $all: = Str_builder.new()
+    defer $all: = Str_builder()
     for rel in harness
         .tracked_matching(U8[][]::{ "ksplc/tests/lint", "ksplc/tests/negative" })
         // Caution: **Read the indentation notation too** — some diagnostics are reported only in a
@@ -223,7 +223,7 @@ priv fn check_fixtures(codes: List<|U8[]|>@, arena: Arena$@) //<
         if rel.ends_with(".kspl") || rel.ends_with(".ksplb")
             all.s(harness.read_under_root(rel))
     text: = all.slice()
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     for i in Range.asc(codes.len)
         if text.find_str(codes.get(i)).is_none()
             bad.push(codes.get(i))
@@ -240,7 +240,7 @@ priv const KSPEG: U8[] = "ksplc/kspl.kspeg"
 
 priv fn check_ast_kinds(arena: Arena$@)
     src: = harness.read_under_root(AST_KINDS)
-    $members: = List<|U8[]|>.new(arena)
+    $members: = List<|U8[]|>(arena)
     for line in src.lines(arena)
         // **A member is any indented line opening with `k_`**, whatever the indent width.
         t: = line.trim_start()
@@ -254,8 +254,8 @@ priv fn check_ast_kinds(arena: Arena$@)
         members.push(n)
     // The string `builtin_name` returns is the value compared with a grammar rule's name. It is a
     // case's own string, or the variant's name past `k_` for a kind with no case (its `default`).
-    $kinds: = List<|U8[]|>.new(arena)
-    $names: = List<|U8[]|>.new(arena)
+    $kinds: = List<|U8[]|>(arena)
+    $names: = List<|U8[]|>(arena)
     lines: = src.lines(arena)
     for i in Range.asc(lines.len)
         t: = lines.get(i).trim_spaces()
@@ -274,7 +274,7 @@ priv fn check_ast_kinds(arena: Arena$@)
             kinds.push(kind)
             names.push(spelled.sub(0, end))
     // A grammar rule's name (`name = …`). The line comments are dropped.
-    $rules: = List<|U8[]|>.new(arena)
+    $rules: = List<|U8[]|>(arena)
     for line in harness.read_under_root(KSPEG).lines(arena)
         if line.starts_with("//")
             continue
@@ -290,11 +290,11 @@ priv fn check_ast_kinds(arena: Arena$@)
                 ok = false
         if ok
             rules.push(head)
-    defer $sources: = Str_builder.new()
+    defer $sources: = Str_builder()
     for rel in harness.tracked_matching(U8[][]::{ "ksplc/**/*.kspl", "ksplc/*.kspl" })
         sources.s(harness.read_under_root(rel))
     all: = sources.slice()
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     for k in members
         if k.equals("k_unknown") || k.equals("k_max")
             continue
@@ -350,7 +350,7 @@ priv fn names_in(src: U8[], head: U8[], arena: Arena$@): List<|U8[]|> //<
     //< The names the function that `head` opens in src compares against, each once
     //< Caution: **Search only inside the function**: `attrs.kspl` holds the directives' list too,
     //< and mixing the two passes neither check.
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     if at: = src.find_str(head)
         rest: = src.sub_from(at)
         body: = rest.sub(0, body_end(rest))
@@ -386,7 +386,7 @@ priv fn check_attrs(arena: Arena$@)
     src: = harness.read_under_root(ATTRS_FILE)
     $canon: = names_in(src, "fn is_known_attribute(", arena)
     tm: = harness.read_under_root(TM_LANGUAGE)
-    $listed: = List<|U8[]|>.new(arena)
+    $listed: = List<|U8[]|>(arena)
     // The colouring's list is one `"match": "#(align|cfg|…)\\b"` line; a directive (`##`) is not
     // hit, as no `(` follows its `"#`.
     for group in scan.find_all(tm, "\"match\": \"#(", ")\\\\b\"", arena)
@@ -394,7 +394,7 @@ priv fn check_attrs(arena: Arena$@)
             scan.push_unique(listed@, w)
     // The `#name` at the start of a table's row; a directive (`##error`) is not included, since its
     // second character is `#`.
-    $spec: = List<|U8[]|>.new(arena)
+    $spec: = List<|U8[]|>(arena)
     for line in harness.read_under_root(SPEC_LANG).lines(arena)
         if !line.starts_with("| `#")
             continue
@@ -404,13 +404,13 @@ priv fn check_attrs(arena: Arena$@)
             i += 1
         if i > 0
             scan.push_unique(spec@, rest.sub(0, i))
-    $bad_tm: = List<|U8[]|>.new(arena)
+    $bad_tm: = List<|U8[]|>(arena)
     scan.diff_into(canon@, listed@, ATTRS_FILE, TM_LANGUAGE, bad_tm@, arena)
     scan.diff_into(listed@, canon@, TM_LANGUAGE, ATTRS_FILE, bad_tm@, arena)
     verdict.check_list("the attributes' list agrees between the code and the colouring", canon.len,
         "attributes", bad_tm@,
         "an attribute must be coloured by the editor's grammar as the compiler knows it")
-    $bad_spec: = List<|U8[]|>.new(arena)
+    $bad_spec: = List<|U8[]|>(arena)
     scan.diff_into(canon@, spec@, ATTRS_FILE, SPEC_LANG, bad_spec@, arena)
     scan.diff_into(spec@, canon@, SPEC_LANG, ATTRS_FILE, bad_spec@, arena)
     verdict.check_list("the attributes' list agrees between the code and the spec", canon.len,
@@ -426,23 +426,23 @@ priv const DIR_LIST_HEAD: U8[] = "DIRECTIVE_NAMES: U8[] = \"" //<
 
 priv fn check_directives(src: U8[], arena: Arena$@)
     $canon: = names_in(src, "fn directive_shape(", arena)
-    $tm: = List<|U8[]|>.new(arena)
+    $tm: = List<|U8[]|>(arena)
     for group in scan.find_all(harness.read_under_root(TM_LANGUAGE), "\"match\": \"##(", ")\\\\b\"",
         arena)
         for w in group.split('|', arena)
             scan.push_unique(tm@, w)
-    $spec: = List<|U8[]|>.new(arena)
+    $spec: = List<|U8[]|>(arena)
     for w in scan.find_all(harness.read_under_root(SPEC_LANG), "| `##", "(", arena)
         scan.push_unique(spec@, w)
     // The list carried with a diagnostic is the same string (`##error ##warning ##lint`).
-    $msg: = List<|U8[]|>.new(arena)
+    $msg: = List<|U8[]|>(arena)
     if at: = src.find_str(DIR_LIST_HEAD)
         rest: = src.sub_from(at + DIR_LIST_HEAD.len)
         list: = rest.sub(0, rest.find_char('"').unwrap_or(rest.len))
         for w in list.split(' ', arena)
             if w.starts_with("##")
                 scan.push_unique(msg@, w.sub_from(2))
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     scan.diff_into(canon@, tm@, ATTRS_FILE, TM_LANGUAGE, bad@, arena)
     scan.diff_into(tm@, canon@, TM_LANGUAGE, ATTRS_FILE, bad@, arena)
     scan.diff_into(canon@, spec@, ATTRS_FILE, SPEC_LANG, bad@, arena)
@@ -455,53 +455,6 @@ priv fn check_directives(src: U8[], arena: Arena$@)
             list")
 
 // ==========================================
-// The page prints its marks with the name the gate cuts on. **The page prints every mark on
-// `console`**. The gate cuts them out of the browser's stderr by that leading name alone. If one
-// side changes it, the gate says "the page said nothing" on the very run the trace was needed.
-// ==========================================
-priv const SAID_PAGE: U8[] = "kspage/tests/browser/probe.js"
-priv const SAID_GATE: U8[] = "kspage/Makefile"
-// Each side sets the name in one place, so the two are read and compared.
-// Caution: **Do not merely check whether the gate holds the name somewhere.** The name appears in
-// three other places that read it, so breaking the place that cuts stays green.
-priv const SAID_PAGE_MARK: U8[] = "console.log(\""
-priv const SAID_GATE_MARK: U8[] = "KSPAGE_SAID := "
-priv const SAID_FLAG: U8[] = "--enable-logging=stderr" //<
-    //< Without this nothing the page prints is seen at all, so it is the agreement's other half
-
-priv fn word_after(text: U8[], mark: U8[], arena: Arena$@): U8[] //<
-    //< The text from `mark` to the end of its line, the spaces cut
-    //< Empty where there is none.
-    for line in text.lines(arena)
-        if at: = line.find_str(mark)
-            return line.sub_from(at + mark.len).trim_spaces()
-    return ""
-
-priv fn check_the_name_it_speaks_with(arena: Arena$@)
-    page: = harness.read_under_root(SAID_PAGE)
-    gate: = harness.read_under_root(SAID_GATE)
-    // The page starts with `<name>: `, so it is cut at the closing quote, not at the line end.
-    said: = scan.find_all(page, SAID_PAGE_MARK, "\"", arena)
-    spoken: = said[0] if said.len > 0 else ""
-    cut: = word_after(gate, SAID_GATE_MARK, arena)
-    $bad: = List<|U8[]|>.new(arena)
-    if spoken.len == 0 || cut.len == 0
-        bad
-            .push(arena.text().s("the name cannot be picked up (page `").s(spoken).s("`, gate `")
-            .s(cut).s("`)").take())
-    else if !spoken.equals(arena.text().s(cut).s(": ").take())
-        bad
-            .push(arena.text().s("the page opens `").s(spoken).s("` and the gate cuts on `").s(cut)
-            .s(": `").take())
-    if gate.find_str(SAID_FLAG).is_none()
-        bad
-            .push(arena.text().s(SAID_GATE).s(" does not hand `").s(SAID_FLAG)
-            .s("` over, so nothing the page says is heard").take())
-    verdict.check_list("the page speaks its marks with the name the gate cuts on", 1, "openings",
-        bad@,
-        "each side decides it once (`tests/support/conventions_match.kspl` names both places)")
-
-// ==========================================
 // Every package that fuzzes a program it builds builds it with the address sanitizer, one way
 // **Each `Makefile` stands alone, so the recipe is written once per package.** One that drifts (a
 // flag dropped, the requirement not handed on) fuzzes a plain build. Its gate stays green.
@@ -511,6 +464,14 @@ priv const ASAN_FLAGS_MARK: U8[] = "ASAN_BUILD := "
 priv const ASAN_MARKS: U8[][_] = ::{ "ASAN_BUILD := --sanitize=address ",
     "$(call fuzz_build,$(ASAN_BUILD))", "$(if $(filter 1,$(KANSO_REQUIRE_ASAN)),--require-asan)" } //<
         //< The sanitizer asked for, the build with it, and the requirement handed to the driver
+
+priv fn word_after(text: U8[], mark: U8[], arena: Arena$@): U8[] //<
+    //< The text from `mark` to the end of its line, the spaces cut
+    //< Empty where there is none.
+    for line in text.lines(arena)
+        if at: = line.find_str(mark)
+            return line.sub_from(at + mark.len).trim_spaces()
+    return ""
 
 priv fn fuzzes_sanitized(text: U8[], _arena: Arena$@): Bool //<
     //< Whether a `Makefile` builds what it fuzzes with the sanitizer and hands the requirement on
@@ -562,7 +523,6 @@ priv fn check_fuzz_sanitized(arena: Arena$@)
 
 fn run(arena: Arena$@) //< runs every check that "two things written apart agree"
     check_fuzz_sanitized(arena)
-    check_the_name_it_speaks_with(arena)
     check_code_fires(arena)
     $codes: = check_codes(arena)
     check_emitted_codes(codes@, arena)

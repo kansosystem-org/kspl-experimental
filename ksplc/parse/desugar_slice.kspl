@@ -17,7 +17,7 @@ fn wrap_type_expr(base: Ast_node$@, posts: List<|Ast_node$@|>$@, loc: base_ast.L
     //< Where there is no postfix, it returns the base unchanged.
     if posts.len == 0
         return base
-    node: = Ast_node.new(.k_type_expr, "", loc)
+    node: = Ast_node(.k_type_expr, "", loc)
     node.add_child(base)
     for p in posts
         node.add_child(p)
@@ -52,8 +52,8 @@ fn make_generic_atom_of(ident: U8[], args_raw: List<|Ast_node$@|>$@, first_mut: 
         //< The first argument is `$`-marked if asked.
         //< Caution: **Set the `type_args` text here**: normalization (`normalize_type_args_text`)
         //< runs before desugar, and `get_full_path_str_to` (`../base/ast_spell.kspl`) reads it.
-    args: = Ast_node.new(.k_type_args, "", loc)
-    defer $t: = Str_builder.new()
+    args: = Ast_node(.k_type_args, "", loc)
+    defer $t: = Str_builder()
     t.s("<|")
     for i in Range.asc(args_raw.len)
         // **Wrap a type argument in a `type_expr`.** strip_arg_mut_mark
@@ -61,15 +61,15 @@ fn make_generic_atom_of(ident: U8[], args_raw: List<|Ast_node$@|>$@, first_mut: 
         // `type_atom`, the mark alone is resolved as a type named `$`.
         $inner: Ast_node$@ = args_raw.get(i)
         if inner.kind_id != .k_type_expr
-            wrapped: = Ast_node.new(.k_type_expr, "", loc)
+            wrapped: = Ast_node(.k_type_expr, "", loc)
             wrapped.add_child(inner)
             wrapped.text = base_core.arena.dup_str(spell_type_expr(wrapped))
             inner = wrapped
         is_mut: = first_mut && i == 0
         $arg: Ast_node$@ = inner
         if is_mut
-            arg = Ast_node.new(.k_type_arg, "type_arg", loc)
-            arg.add_child(Ast_node.new(.k_literal, "$", loc))
+            arg = Ast_node(.k_type_arg, "type_arg", loc)
+            arg.add_child(Ast_node(.k_literal, "$", loc))
             arg.add_child(inner)
         args.add_child(arg)
         if i > 0
@@ -79,13 +79,13 @@ fn make_generic_atom_of(ident: U8[], args_raw: List<|Ast_node$@|>$@, first_mut: 
         t.s(inner.text)
     t.s("|>")
     args.text = base_core.arena.dup_str(t.slice())
-    path: = Ast_node.new(.k_type_path, "", loc)
+    path: = Ast_node(.k_type_path, "", loc)
     // Caution: Do not write the name inline (its canonical sources are `base_core.slice_ident`,
     // `base_core.option_ident` and `base_core.result_ident`).
-    path.add_child(Ast_node.new(.k_identifier, ident, loc))
+    path.add_child(Ast_node(.k_identifier, ident, loc))
     path.add_child(args)
     path.mark_sugar_made()
-    atom: = Ast_node.new(.k_type_atom, "", loc)
+    atom: = Ast_node(.k_type_atom, "", loc)
     atom.add_child(path)
     return atom
 
@@ -152,7 +152,7 @@ priv fn is_result_atom(node: Ast_node$@): Bool //< whether it is a `T!E` folded 
 
 fn spell_atom(node: Ast_node$@): U8[] //< a `type_atom`'s name
     //< It reads the child path, for an atom whose text is empty.
-    defer $b: = Str_builder.new()
+    defer $b: = Str_builder()
     for c in node.children
         c.get_full_path_str_to(b)
     return base_core.arena.dup_str(b.slice())

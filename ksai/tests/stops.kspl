@@ -26,7 +26,7 @@ fn argmax_empty_logits(arena: Arena$@)
     // The arguments are the executable's name and the stop's, so this is 0.
     $shape: Sz[1] = ::{ 0 }
     shape[0] = sys.args().len - 2
-    t: = Tensor<|F32|>.new(Sz[]::shape, arena)
+    t: = Tensor<|F32|>(Sz[]::shape, arena)
     io.out().s("about to pick from \{t.shape[0]\} candidates\n")
     picked: = sampler.argmax(t)
     io.out().s("must not get here: \{picked\}\n")
@@ -42,7 +42,7 @@ fn tensor_shape_product_overflow(arena: Arena$@)
     $shape: Sz[2] = ::{ 0, 100000000 }
     shape[0] = wrapping
     io.out().s("about to build a tensor of shape[0]=\{shape[0]\}\n")
-    t: = Tensor<|F32|>.new(Sz[]::shape, arena)
+    t: = Tensor<|F32|>(Sz[]::shape, arena)
     io.out().s("must not get here: size=\{t.size\}\n")
 
 // ==========================================
@@ -52,8 +52,8 @@ fn tensor_shape_product_overflow(arena: Arena$@)
 fn tensor_add_shape_mismatch(arena: Arena$@)
     a_shape: Sz[1] = ::{ 3 }
     b_shape: Sz[1] = ::{ 5 }
-    a: = Tensor<|F32|>.new(Sz[]::a_shape, arena)
-    b: = Tensor<|F32|>.new(Sz[]::b_shape, arena)
+    a: = Tensor<|F32|>(Sz[]::a_shape, arena)
+    b: = Tensor<|F32|>(Sz[]::b_shape, arena)
     io.out().s("about to add \{a.size\} and \{b.size\} elements\n")
     sum: = a + b
     io.out().s("must not get here: size=\{sum.size\}\n")
@@ -65,8 +65,8 @@ fn tensor_add_shape_mismatch(arena: Arena$@)
 // ==========================================
 fn updater_weight_count(arena: Arena$@)
     shape: Sz[1] = ::{ 2 }
-    w: = Tensor<|F32|>.new(Sz[]::shape, arena)
-    g: = Tensor<|F32|>.new(Sz[]::shape, arena)
+    w: = Tensor<|F32|>(Sz[]::shape, arena)
+    g: = Tensor<|F32|>(Sz[]::shape, arena)
     w.fill(1.0)
     g.fill(0.5)
     defer $u: = optim.Updater<|F32|>.adam(0.1)
@@ -86,12 +86,12 @@ fn updater_weight_count(arena: Arena$@)
 fn gqa_new(n_heads: Sz, n_kv_heads: Sz, head_dim: Sz, arena: Arena$@): nn.Gqa_attention<|F32|> //<
     //< An attention of those heads, 8 wide, with a cache of 4 positions
     io.out().s("about to make \{n_heads\} heads over \{n_kv_heads\}, \{head_dim\} wide\n")
-    return nn.Gqa_attention<|F32|>.new(8, n_heads, n_kv_heads, head_dim, 4, 10000.0, arena)
+    return nn.Gqa_attention<|F32|>(8, n_heads, n_kv_heads, head_dim, 4, 10000.0, arena)
 
 fn gqa_several_rows(arena: Arena$@)
     $attn: = gqa_new(4, 2, 2, arena)
     shape: Sz[2] = ::{ 2, 8 }
-    x: = Tensor<|F32|>.new(Sz[]::shape, arena)
+    x: = Tensor<|F32|>(Sz[]::shape, arena)
     x.fill(0.5)
     _out: = attn.forward(x, 0)
     io.out().s("must not get here\n")
@@ -104,19 +104,19 @@ fn grad_small_out(arena: Arena$@)
     dy_shape: Sz[2] = ::{ 2, 3 }
     w_shape: Sz[2] = ::{ 4, 3 }
     out_shape: Sz[2] = ::{ 1, 4 } // the result is [2, 4]
-    $dy: = Tensor<|F32|>.new(Sz[]::dy_shape, arena)
-    w: = Tensor<|F32|>.new(Sz[]::w_shape, arena)
-    out: = Tensor<|F32|>.new(Sz[]::out_shape, arena)
+    $dy: = Tensor<|F32|>(Sz[]::dy_shape, arena)
+    w: = Tensor<|F32|>(Sz[]::w_shape, arena)
+    out: = Tensor<|F32|>(Sz[]::out_shape, arena)
     dy.grad_matmul_input_into(w, out)
     io.out().s("must not get here\n")
 
 fn main(): I32
     argv: = sys.args()
     which: = argv.get(1) if argv.len == 2 else ""
-    defer arena: = Arena.new(1024 * 1024)
+    defer arena: = Arena(1024 * 1024)
     if which.equals("tensor-null-arena")
         shape: Sz[2] = ::{ 1, 1 }
-        _t: = Tensor<|F32|>.new(Sz[]::shape, null)
+        _t: = Tensor<|F32|>(Sz[]::shape, null)
         io.out().s("must not get here\n")
     else if which.equals("header-null-arena")
         Safetensors.load_from_bytes("", null) catch {}
@@ -129,7 +129,7 @@ fn main(): I32
         io.out().s("must not get here\n")
     else if which.equals("view-null-arena") || which.equals("quant-null-arena")
         shape: Sz[2] = ::{ 1, 1 }
-        $t: = Tensor<|F32|>.new(Sz[]::shape, arena)
+        $t: = Tensor<|F32|>(Sz[]::shape, arena)
         if which.equals("view-null-arena")
             t.view_rows(0, 1, null) catch {}
         else
@@ -141,7 +141,7 @@ fn main(): I32
         $shape: Sz[2] = ::{ -2, -3 }
         if which.equals("tensor-negative-zero")
             shape[1] = 0
-        t: = Tensor<|F32|>.new(Sz[]::shape, arena)
+        t: = Tensor<|F32|>(Sz[]::shape, arena)
         io.out().s("must not get here: size=\{t.size\}\n")
     else if which.equals("tensor-shape-product-overflow")
         tensor_shape_product_overflow(arena)

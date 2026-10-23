@@ -47,7 +47,7 @@ priv fn collect_upcast_keys(r: Ast_node$@, c: Sema_ctx$@, out: Map<|U8[], Bool|>
 fn generate_trait_thunks(root: Ast_node$@, c: Sema_ctx$@)
     base_diag.ice_assert(root != null, "lower_root.generate_trait_thunks: root is null")
     new_decls: = base_ast.new_ast_node_list()
-    $needed: = Map<|U8[], Bool|>.new(base_core.arena)
+    $needed: = Map<|U8[], Bool|>(base_core.arena)
     collect_upcast_keys(root, c, needed@)
     // Caution: **Do not filter by whether it has a live method.** An `impl P: Trait {}` conforms
     // with inherent methods (found by `resolve_impl_target`), and `is_alive_for_backend` needs a
@@ -81,14 +81,14 @@ priv struct Impl_target //< the resolved callee (the implementing method)
 priv fn build_thunk_signature(c: Sema_ctx$@, req_m: Sema_symbol$@, perm_thunk_name: U8[],
     loc: base_ast.Loc): Thunk_parts //<
         //< Step 1: it builds the thunk function's signature fn <name>(r: Void@, ...): Ret.
-    params: = Ast_node.new(.k_param_list, "params", loc)
+    params: = Ast_node(.k_param_list, "params", loc)
     void_ptr_id: = I32::sema_type_env.Builtin_type_id.void_ptr
     p0: = Ast_node.build_synth_param("r", c.env.get_str(void_ptr_id), void_ptr_id, loc)
     params.add_child(p0)
 
     p_nodes: = List<|Ast_node$@|>.create(base_core.arena)
-    for rp in base_ast_ext.Param_cursor.new(req_m.node.get_fn_params(), true)
-        params.add_child(Ast_node.new(.k_literal, ",", loc))
+    for rp in base_ast_ext.Param_cursor(req_m.node.get_fn_params(), true)
+        params.add_child(Ast_node(.k_literal, ",", loc))
         p_node: = Ast_node.build_synth_param(rp.get_decl_id_text(),
             c.env.get_str(rp.type_id), rp.type_id, loc)
         params.add_child(p_node)
@@ -130,57 +130,57 @@ priv fn build_thunk_body(c: Sema_ctx$@, parts: Thunk_parts, target: Impl_target,
         //< A return of the trait itself is upcast. A Void one is a statement plus an empty return.
     block: = Ast_node.build_block(loc)
 
-    call_node: = Ast_node.new(.k_expr_postfix, "(", loc)
+    call_node: = Ast_node(.k_expr_postfix, "(", loc)
     call_node.type_id = target.ret_id if target.ret_id != 0 else req_m.type_id
-    ident_node: = Ast_node.new(.k_identifier, target.name, loc)
+    ident_node: = Ast_node(.k_identifier, target.name, loc)
     ident_node.def_node = target.def_node
     call_node.add_child(ident_node)
-    call_node.add_child(Ast_node.new(.k_literal, "(", loc))
+    call_node.add_child(Ast_node(.k_literal, "(", loc))
 
     args: = Ast_node.build_args(loc)
 
     ptr_target_id: = c.env.make_ptr(clean_t_id)
-    cast_node: = Ast_node.new(.k_expr_postfix, "::", loc)
+    cast_node: = Ast_node(.k_expr_postfix, "::", loc)
     cast_node.type_id = ptr_target_id
-    ref_r: = Ast_node.new(.k_identifier, "r", loc)
+    ref_r: = Ast_node(.k_identifier, "r", loc)
         .with_type(I32::sema_type_env.Builtin_type_id.void_ptr)
     ref_r.def_node = parts.p0 // as build_synth_param links it (ksplc/base/ast.kspl)
     cast_node.add_child(ref_r)
-    cast_node.add_child(Ast_node.new(.k_literal, "::", loc))
+    cast_node.add_child(Ast_node(.k_literal, "::", loc))
     ptr_type_expr: = Ast_node.build_type_expr(c.env.get_str(ptr_target_id), ptr_target_id, loc)
     cast_node.add_child(ptr_type_expr)
 
     $final_arg0: = cast_node
     if !target.is_self_ptr
         // Where it is passed by value, it adds a `$` node for the dereference (*(T*)r).
-        deref_node: = Ast_node.new(.k_expr_postfix, "$", loc)
+        deref_node: = Ast_node(.k_expr_postfix, "$", loc)
         deref_node.type_id = clean_t_id
         deref_node.add_child(cast_node)
-        deref_node.add_child(Ast_node.new(.k_literal, "$", loc))
+        deref_node.add_child(Ast_node(.k_literal, "$", loc))
         final_arg0 = deref_node
     args.add_child(final_arg0)
 
     $param_idx: Sz = 0
-    for rp in base_ast_ext.Param_cursor.new(req_m.node.get_fn_params(), true)
-        args.add_child(Ast_node.new(.k_literal, ",", loc))
-        ref_p: = Ast_node.new(.k_identifier, rp.get_decl_id_text(), loc).with_type(rp.type_id)
+    for rp in base_ast_ext.Param_cursor(req_m.node.get_fn_params(), true)
+        args.add_child(Ast_node(.k_literal, ",", loc))
+        ref_p: = Ast_node(.k_identifier, rp.get_decl_id_text(), loc).with_type(rp.type_id)
         ref_p.def_node = parts.p_nodes.get(param_idx) // as for ref_r above
         args.add_child(ref_p)
         param_idx += 1
     call_node.add_child(args)
 
     is_void: = sema_type_env.is_void(req_m.type_id)
-    stmt_ret: = Ast_node.new(.k_stmt_return, "return", loc)
-    stmt_ret.add_child(Ast_node.new(.k_keyword, "return", loc))
+    stmt_ret: = Ast_node(.k_stmt_return, "return", loc)
+    stmt_ret.add_child(Ast_node(.k_keyword, "return", loc))
     if req_m.type_id == i_id
-        upcast_node: = Ast_node.new(.k_expr_upcast, "upcast", loc)
+        upcast_node: = Ast_node(.k_expr_upcast, "upcast", loc)
         upcast_node.type_id = i_id
         upcast_node.add_child(call_node)
         stmt_ret.add_child(upcast_node)
     else if !is_void
         stmt_ret.add_child(call_node)
     else
-        block.add_child(Ast_node.new(.k_stmt_expr, "expr", loc).add_child(call_node))
+        block.add_child(Ast_node(.k_stmt_expr, "expr", loc).add_child(call_node))
     block.add_child(stmt_ret)
     return block
 
@@ -213,7 +213,7 @@ priv fn emit_trait_vtable(c: Sema_ctx$@, t_id: I32, i_id: I32, loc: base_ast.Loc
 
     i_mangled: = base_core.arena.dup_str(c.mangled_in_scratch(i_id))
 
-    vtable_init: = Ast_node.new(.k_struct_literal, "struct_literal", loc)
+    vtable_init: = Ast_node(.k_struct_literal, "struct_literal", loc)
     vtable_type_name: = c.clear_scratch().s("kspl_vtable_").s(i_mangled).slice()
     vtable_type_id: = c.env.get_or_add(vtable_type_name)
     vtable_init.type_id = vtable_type_id
@@ -241,16 +241,16 @@ priv fn emit_trait_vtable(c: Sema_ctx$@, t_id: I32, i_id: I32, loc: base_ast.Loc
 
         // Caution: **Put the separator in front**, or each one skipped leaves an extra `,`.
         if wrote_one
-            vtable_init.add_child(Ast_node.new(.k_literal, ",", loc))
+            vtable_init.add_child(Ast_node(.k_literal, ",", loc))
         wrote_one = true
-        field_init: = Ast_node.new(.k_expr_field_init, "=", loc)
-        field_init.add_child(Ast_node.new(.k_literal, ".", loc))
-        field_init.add_child(Ast_node.new(.k_identifier, req_m.name, loc))
-        field_init.add_child(Ast_node.new(.k_literal, "=", loc))
+        field_init: = Ast_node(.k_expr_field_init, "=", loc)
+        field_init.add_child(Ast_node(.k_literal, ".", loc))
+        field_init.add_child(Ast_node(.k_identifier, req_m.name, loc))
+        field_init.add_child(Ast_node(.k_literal, "=", loc))
         // Caution: **Set def_node** ("The limits on building an AST" in
         // ksplc/docs/DESIGN-lower.md). A vtable is the only place that names a thunk, **as
         // data** and never as a call; without it prune_unreachable_fns drops every thunk.
-        thunk_ref: = Ast_node.new(.k_identifier, perm_thunk_name, loc)
+        thunk_ref: = Ast_node(.k_identifier, perm_thunk_name, loc)
         thunk_ref.def_node = parts.thunk_fn
         field_init.add_child(thunk_ref)
         vtable_init.add_child(field_init)
@@ -258,10 +258,10 @@ priv fn emit_trait_vtable(c: Sema_ctx$@, t_id: I32, i_id: I32, loc: base_ast.Loc
     const_name: = c.clear_scratch().s("kspl_vtable_impl_").s(t_mangled).s("_").s(i_mangled).slice()
     perm_const_name: = base_core.arena.dup_str(const_name)
 
-    vtable_const: = Ast_node.new(.k_decl_const, "const", loc)
+    vtable_const: = Ast_node(.k_decl_const, "const", loc)
     vtable_const.add_child(Ast_node.build_empty(loc))
-    vtable_const.add_child(Ast_node.new(.k_keyword, "const", loc))
-    vtable_const.add_child(Ast_node.new(.k_identifier, perm_const_name, loc))
+    vtable_const.add_child(Ast_node(.k_keyword, "const", loc))
+    vtable_const.add_child(Ast_node(.k_identifier, perm_const_name, loc))
     vtable_const.add_child(Ast_node.build_type_expr(vtable_type_name, vtable_type_id, loc))
     vtable_const.add_child(vtable_init)
     vtable_const.type_id = vtable_type_id

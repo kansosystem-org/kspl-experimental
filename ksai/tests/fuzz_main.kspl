@@ -44,7 +44,7 @@ priv fn filled(shape: Sz[], base: F64, arena: Arena$@): Tensor<|F32|> //<
     //< A tensor filled with fixed values
     //< **Do not fill it with 0**: then a trial that was read and one that was not would give the
     //< same values.
-    t: = Tensor<|F32|>.new(shape, arena)
+    t: = Tensor<|F32|>(shape, arena)
     for i in Range.asc(t.size)
         (t.data + i)$ = F32::(base + 0.25 * (F64::i))
     return t
@@ -54,7 +54,7 @@ priv fn built_weights(arena: Arena$@): U8[] //<
     w_shape: Sz[2] = ::{ 2, 3 }
     b_shape: Sz[1] = ::{ 3 }
     big_shape: Sz[2] = ::{ 4, 4 }
-    $w: = st.Safetensors_writer.new()
+    $w: = st.Safetensors_writer()
     w.set_meta("format", "kspl")
     w.add("w", filled(Sz[]::w_shape, 1.0, arena))
     w.add("b", filled(Sz[]::b_shape, -2.0, arena))
@@ -69,7 +69,7 @@ priv fn built_vocab(arena: Arena$@): U8[] //< one assembled vocabulary
         .s("8\t4b61\n9\t6e73\n10\t6e736f\n").s("\n").s("1 2 8\n3 4 9\n9 5 10\n").take()
 
 priv fn collect_seeds(arena: Arena$@): List<|fuzz.Sample|>
-    $out: = List<|fuzz.Sample|>.new(arena)
+    $out: = List<|fuzz.Sample|>(arena)
     out
         .push(fuzz.Sample::{ .kind = "safetensors", .name = "built weights",
         .data = built_weights(arena), .built = true })
@@ -80,7 +80,7 @@ priv fn collect_seeds(arena: Arena$@): List<|fuzz.Sample|>
 
 fn main(): I32
     verdict.begin("fuzz")
-    defer arena: = Arena.new(256 * 1024 * 1024)
+    defer arena: = Arena(256 * 1024 * 1024)
     $o: = fuzz.Options::{ .trials = DEFAULT_TRIALS, .seed = DEFAULT_SEED }
     $a: = fuzz.Sanitized::{ .asan = false, .required = false }
     p: = argparse.Parser.create("fuzz_main", "scatters broken input at ksai's readers", arena)

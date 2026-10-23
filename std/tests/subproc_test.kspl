@@ -55,11 +55,11 @@ fn test_child_waits_bounded(ksplc: U8[], arena: Arena$@) //< ksplc runs the chil
     neg_ms: = (sys.mono_us() - t_neg) / 1000I64
     idle.kill()
     assert(timed_out, "a write to a child that reads nothing fails as timed_out")
-    $m: = Panic_msg.new()
+    $m: = Panic_msg()
     assert(took_ms < 15000I64,
         m.s("the write returns near its timeout, not when the child ends (took ").n(took_ms)
         .s(" ms)").slice())
-    $n: = Panic_msg.new()
+    $n: = Panic_msg()
     assert(read_up && write_up && neg_ms < 5000I64,
         n.s("a negative wait looks once and returns timed_out, on a read and a write (took ")
         .n(neg_ms).s(" ms)").slice())
@@ -85,7 +85,7 @@ fn test_child_waits_bounded(ksplc: U8[], arena: Arena$@) //< ksplc runs the chil
             1024, arena) catch panic("the child must start")
         waited_ms: = (sys.mono_us() - t1) / 1000I64
         assert(r.exit_code.is_none(), "a child that closed its outputs and runs on times out")
-        $said: = Panic_msg.new()
+        $said: = Panic_msg()
         assert(waited_ms < 15000I64,
             said.s("run_capture returns near its timeout after the pipes close (took ").n(waited_ms)
             .s(" ms)").slice())
@@ -145,7 +145,7 @@ fn test_async_child_and_stdin(ksplc: U8[], arena: Arena$@) //< ksplc runs the ch
     $c: =
         subproc.spawn_piped(sys_test.child_argv(ksplc, "counter", COUNTER_SRC, arena), "") catch
         panic("the counting child must start")
-    defer $input: = str.Str_builder.new()
+    defer $input: = str.Str_builder()
     for _i in Range.asc(10000)
         input.s("0123456789")
     c.write(input.slice(), 300000) catch panic("the child must take its input")
@@ -222,7 +222,7 @@ fn test_time_limit_ends_the_whole_run(arena: Arena$@) //<
         "a child that ended in time gives its own code, though its outputs stay open")
     assert(left.stdout_data.trim_end().equals("before"),
         "what the child wrote before its end is kept")
-    $m: = Panic_msg.new()
+    $m: = Panic_msg()
     assert(took_ms < 5000I64,
         m.s("run_capture returns soon after the child's end, not at the limit (took ").n(took_ms)
         .s(" ms)").slice())
@@ -274,7 +274,7 @@ fn test_limited_child(ksplc: U8[], arena: Arena$@) //< ksplc runs the child writ
         catch panic("the child reading its input must start")
     assert(said(reads.wait(30000)).equals("ended 5"), "a child ending in time gives its own code")
     assert(reads.wait(0).is_none(), "a second wait answers none at once, the child reaped")
-    $m: = Panic_msg.new()
+    $m: = Panic_msg()
     took_ms: = (sys.mono_us() - t0) / 1000I64
     assert(took_ms < 10000I64,
         m.s("its standard input is at its end at once (took ").n(took_ms).s(" ms)").slice())
@@ -322,7 +322,7 @@ fn main(): I32
 
 fn test_spawn_feed(ksplc: U8[], arena: Arena$@) //< ksplc runs the children
     verdict.start("[Sys] a child handed its input, and one that takes none of it...")
-    defer $input: = str.Str_builder.new()
+    defer $input: = str.Str_builder()
     for _i in Range.asc(10000)
         input.s("0123456789")
     taker: = sys_test.child_argv(ksplc, "taker", TAKER_SRC, arena)
@@ -346,7 +346,7 @@ priv const NESTED_HEAD: U8[] = //< a starter whose own child leads a group of it
 import "std/subproc"
 
 fn main(): I32
-  arena: = Arena.new(4096)
+  arena: = Arena(4096)
   sh: = "echo $$ > '"""
 priv const NESTED_TAIL: U8[] = //< the rest: the child writes its pid, then sleeps past any limit
     """'; exec sleep 30"

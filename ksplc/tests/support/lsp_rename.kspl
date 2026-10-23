@@ -33,7 +33,7 @@ fn other(): I32
     return 1
 
 fn built(): Sz
-    defer $sb: = Str_builder.new()
+    defer $sb: = Str_builder()
     sb.s("x")
     return sb.len
 
@@ -93,7 +93,7 @@ impl Ask
     priv fn rename_in(r: Self, uri: U8[], src: U8[], line_head: U8[], word: U8[], new_name: U8[]):
         json.Value //<
             //< The whole response to renaming `word` to `new_name` in the document `uri`
-        $b: = Json_builder.new(r.arena)
+        $b: = Json_builder(r.arena)
         pos: = r.at_in(uri, src, line_head, word)
         params: = b.obj().set("textDocument", pos.get("textDocument"))
             .set("position", pos.get("position")).set("newName", b.str_val(new_name)).build()
@@ -122,7 +122,7 @@ fn run_rename(exe: U8[], plain_caps: json.Value, arena: Arena$@) //<
         verdict.check("the rename workspace's server starts", false, dir)
         return
     defer c.free()
-    $b: = Json_builder.new(arena)
+    $b: = Json_builder(arena)
     asks: = b.obj()
         .set("textDocument",
         b.obj()
@@ -201,7 +201,7 @@ priv fn check_clashes(ask: Ask) //< the new name must not be declared where it w
         member.get("result").get("changes").get(USER_URI).arr_list(ask.arena).len == 3,
         lsp_client.why(ask.c, lsp_client.dump(member, ask.arena), ask.arena))
 
-priv fn edits_in(got: json.Value, uri: U8[], arena: Arena$@): List<|json.Value|> //<
+fn edits_in(got: json.Value, uri: U8[], arena: Arena$@): List<|json.Value|> //<
     //< the edits a rename's answer makes in `uri`; none where it names no such file
     return got.get("result").get("changes").get(uri).arr_list(arena)
 
@@ -214,7 +214,7 @@ priv fn starts_at(edits: List<|json.Value|>@, line: Sz, character: Sz): Bool //<
             return true
     return false
 
-priv fn places(found: List<|json.Value|>@, arena: Arena$@): U8[] //<
+fn places(found: List<|json.Value|>@, arena: Arena$@): U8[] //<
     //< where each of a list of locations or edits starts, as `[<file>:]<line>:<column>`
     out: = arena.text()
     for i in Range.asc(found.len)

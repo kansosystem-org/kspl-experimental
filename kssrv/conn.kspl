@@ -155,13 +155,13 @@ fn regular_file_size(path: U8[]): Sz? //<
 fn conn_new(stream: net.Tcp_stream$@, serial: I64): Rc<|Conn|>
     fresh: Conn = ::{
         .stream = stream,
-        .arena = Arena.new(CONN_ARENA_CHUNK),
-        .inbuf = Str_builder.new(),
-        .outbuf = Str_builder.new(),
+        .arena = Arena(CONN_ARENA_CHUNK),
+        .inbuf = Str_builder(),
+        .outbuf = Str_builder(),
         .serial = serial,
         .moved_us = sys.mono_us(),
     }
-    return Rc<|Conn|>.new(fresh)
+    return Rc<|Conn|>(fresh)
 
 fn conn_close(c: Conn$@) //< frees a connection's resources
     //< Caution: Call it before emptying the slot, or the socket and the buffers leak.
@@ -296,7 +296,7 @@ fn queue_stream_head(c: Conn$@) //<
 
 fn queue_error(c: Conn$@, status: I32, allow: U8[] = "") //<
     //< Queues an error answer in plain text; `allow` is a 405's `Allow`
-    defer $b: = Str_builder.new()
+    defer $b: = Str_builder()
     b.s("\{status\} ").s(http.reason_phrase(status).unwrap_or("")).s("\n")
     // An error response always closes: after a broken request, there is no telling where the next
     // one starts in the remaining bytes.

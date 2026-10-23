@@ -11,12 +11,12 @@ import "std/ds" { List }
 import "std/io"
 
 fn main()
-    defer $nums: = List<|I32|>.new(null)
+    defer $nums: = List<|I32|>(null)
     nums.push(42)
     io.out().s("first = \{nums[0]\}\n")
 ```
 
-`List.new(null)` puts the list's storage on the heap, so `defer nums.free()` frees it when `main` returns.
+`List<|I32|>(null)` puts the list's storage on the heap, so `defer nums.free()` frees it when `main` returns.
 
 ---
 
@@ -79,10 +79,10 @@ import "std/io"
 import "std/mem" { Arena }
 
 fn main()
-    defer arena: = Arena.new(4096)
+    defer arena: = Arena(4096)
 
     // new: the list is the value in your variable; it keeps its items in the arena.
-    $mine: = List<|I32|>.new(arena)
+    $mine: = List<|I32|>(arena)
     mine.push(1)
 
     // create: the list itself is placed in the arena, and you get a pointer to it.

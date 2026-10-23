@@ -107,8 +107,8 @@ priv fn write_unit(dir: U8[], runs: Bool, idx: List<|Sz|>, cells: List<|Cell|>@,
     s: = generic_matrix_table.SHAPES[first.s]@
     a: = generic_matrix_table.ACCESSES[first.a]@
     in_impl: = a.via == generic_matrix_table.Via.self_type
-    $f: = Lines::{ .all = List<|U8[]|>.new(arena), .mark = 0 }
-    $marks: = List<|Sz|>.new(arena)
+    $f: = Lines::{ .all = List<|U8[]|>(arena), .mark = 0 }
+    $marks: = List<|Sz|>(arena)
     add(f@, "import \"std/io\"", arena)
     add(f@, generic_matrix_table.import_lines(a, s, arena), arena)
     if a.home == generic_matrix_table.Home.here
@@ -142,13 +142,13 @@ priv fn write_unit(dir: U8[], runs: Bool, idx: List<|Sz|>, cells: List<|Cell|>@,
             arena.text().s("  io.out().s(\"").s(name).s("=\\{").s(caller).s("probe_").s(name)
             .s("()\\}\\n\")").take(), arena)
     // The lines writing the library's name, where a refusal of the way reaching it may point.
-    $named: = List<|Sz|>.new(arena)
+    $named: = List<|Sz|>(arena)
     spelt: = generic_matrix_table.base_name(a, s.owner, arena)
     for n in Range.asc(f.all.len)
         if f.all.get(n).find_str(spelt).is_some()
             named.push(n + 1)
-    $rels: = List<|U8[]|>.new(arena)
-    $bodies: = List<|U8[]|>.new(arena)
+    $rels: = List<|U8[]|>(arena)
+    $bodies: = List<|U8[]|>(arena)
     rels.push(MAIN_REL)
     bodies
         .push(arena.text().s("\n".join(f.all.slice(), arena)).s("\n").take())
@@ -175,14 +175,14 @@ priv fn write_unit(dir: U8[], runs: Bool, idx: List<|Sz|>, cells: List<|Cell|>@,
 priv fn job(argv: U8[][], cwd: U8[], arena: Arena$@): subproc.Job //< a child to run later
     //< Caution: **The argv is copied into the arena**: a literal's array lives in the caller's
     //< frame, and every job kept would see the last one's.
-    $kept: = List<|U8[]|>.new(arena)
+    $kept: = List<|U8[]|>(arena)
     for w in argv
         kept.push(w)
     return subproc.Job::{ .argv = kept.slice(), .cwd = cwd }
 
 priv fn run_units(units: List<|Unit|>@, round: U8[], arena: Arena$@): List<|Ran|> //<
     //< Runs every program, and returns what each came to, in order
-    $jobs: = List<|subproc.Job|>.new(arena)
+    $jobs: = List<|subproc.Job|>(arena)
     for q in Range.asc(units.len)
         u: = units.get(q)
         jobs
@@ -191,8 +191,8 @@ priv fn run_units(units: List<|Unit|>@, round: U8[], arena: Arena$@): List<|Ran|
             llvm: = harness.ksplc_argv(U8[][]::{ "--to=llvm", MAIN_REL, "l.ll" })
             jobs.push(job(llvm, u.dir, arena))
     gen: = harness.run_all(jobs.slice(), arena.text().s("gen_\{round\}").take())
-    $ran: = List<|Ran|>.new(arena)
-    $builds: = List<|subproc.Job|>.new(arena)
+    $ran: = List<|Ran|>(arena)
+    $builds: = List<|subproc.Job|>(arena)
     $k: Sz = 0
     for q in Range.asc(units.len)
         u: = units.get(q)
@@ -222,7 +222,7 @@ priv fn run_units(units: List<|Unit|>@, round: U8[], arena: Arena$@): List<|Ran|
                     builds.push(bl.job)
         ran.push(r)
     built: = harness.run_all(builds.slice(), arena.text().s("cc_\{round\}").take())
-    $runs: = List<|subproc.Job|>.new(arena)
+    $runs: = List<|subproc.Job|>(arena)
     k = 0
     for i in Range.asc(units.len)
         if !units.get(i).runs || ran.get(i).stage.len > 0
@@ -369,14 +369,14 @@ priv fn refused_here(ci: Sz, units: List<|Unit|>@, ran: List<|Ran|>@): Bool //<
 fn main(): I32
     arena: = harness.begin(512 * 1024 * 1024)
     work: = harness.sandbox("generic_matrix")
-    $cells: = List<|Cell|>.new(arena)
-    $units: = List<|Unit|>.new(arena)
+    $cells: = List<|Cell|>(arena)
+    $units: = List<|Unit|>(arena)
     $ran_cells: Sz = 0
-    $open_cells: = List<|Sz|>.new(arena) //< the cells the language leaves open, each alone
+    $open_cells: = List<|Sz|>(arena) //< the cells the language leaves open, each alone
     for si in Range.asc(generic_matrix_table.SHAPES.len)
         for ai in Range.asc(generic_matrix_table.ACCESSES.len)
-            $runs: = List<|Sz|>.new(arena)
-            $refused: = List<|Sz|>.new(arena)
+            $runs: = List<|Sz|>(arena)
+            $refused: = List<|Sz|>(arena)
             for pi in Range.asc(generic_matrix_table.POSITIONS.len)
                 o: = generic_matrix_table.outcome(generic_matrix_table.SHAPES[si]@,
                     generic_matrix_table.ACCESSES[ai]@, generic_matrix_table.POSITIONS[pi]@)
@@ -398,7 +398,7 @@ fn main(): I32
                 units.push(write_unit(dir, false, refused, cells@, arena))
     // A cell left open may run or be refused, so it is built alone, as a running one.
     for q in Range.asc(open_cells.len)
-        $one: = List<|Sz|>.new(arena)
+        $one: = List<|Sz|>(arena)
         one.push(open_cells.get(q))
         dir: = fs.join(work, arena.text().s("b\{units.len\}").take(), arena)
         units.push(write_unit(dir, true, one, cells@, arena))
@@ -410,14 +410,14 @@ fn main(): I32
         .s("left open) in \{units.len\} programs, ").s("\{verdict.jobs()\} in parallel\n")
     ran: = run_units(units@, "batch", arena)
     // A cell's verdict, empty where it holds; a batch that does not hold is taken apart.
-    $why: = List<|U8[]|>.new(arena)
-    $where: = List<|U8[]|>.new(arena)
+    $why: = List<|U8[]|>(arena)
+    $where: = List<|U8[]|>(arena)
     for _i in Range.asc(cells.len)
         why.push("")
         where.push("")
     // A running batch that built and ran names each cell's value on its own line, so its verdicts
     // stand. A refused cell is judged alone unless its batch already shows its refusal.
-    $alone: = List<|Unit|>.new(arena)
+    $alone: = List<|Unit|>(arena)
     for ui in Range.asc(units.len)
         u: = units.get(ui)
         r: = ran.get(ui)
@@ -430,7 +430,7 @@ fn main(): I32
                     why.set(ci, bad)
                     where.set(ci, u.dir)
                     continue
-            $one: = List<|Sz|>.new(arena)
+            $one: = List<|Sz|>(arena)
             one.push(ci)
             dir: = fs.join(work, arena.text().s("c\{ci\}").take(), arena)
             alone.push(write_unit(dir, u.runs, one, cells@, arena))
@@ -446,7 +446,7 @@ fn main(): I32
             where.set(ci, u.dir)
     // What the language leaves open is listed for a decision, each question once, with what this
     // compiler does.
-    $asked: = List<|U8[]|>.new(arena)
+    $asked: = List<|U8[]|>(arena)
     for q in Range.asc(open_cells.len)
         c: = cells.get(open_cells.get(q))
         $seen: = false

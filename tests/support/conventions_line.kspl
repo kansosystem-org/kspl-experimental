@@ -26,8 +26,8 @@ priv const MARK_SKIP: U8[] = "SKIP"
 
 // Where a line is built, and the text each place must hold.
 // **One place per file** (this table itself keeps them from spreading).
-priv const LINE_FILES: U8[][_] = ::{ "kspage/tests/browser/probe.js", "kspage/tests/wasm/shell.mjs",
-    "kspage/Makefile", "tools/kspl_lldb.py", "std/verdict.kspl" }
+priv const LINE_FILES: U8[][_] = ::{ "tools/kspl_lldb.py", "std/verdict.kspl",
+    "ksmd/tests/browser/drive.mjs" }
 
 priv const LINE_READERS: U8[][_] = ::{ "tools/ci_gates.kspl", "tests/suite/pytools_test.kspl" } //<
     //< Where a mark is **read**
@@ -35,10 +35,9 @@ priv const LINE_READERS: U8[][_] = ::{ "tools/ci_gates.kspl", "tests/suite/pytoo
     //< the mark changes, with the false reason "not one ran".
 
 // Of those, the places that also have a failure path.
-// Caution: **A failure's mark must be `FAIL`** (the reason is in the header). `kspage/Makefile`
-// only prints the mark, so it is not listed here.
-priv const LINE_REPORTERS: U8[][_] = ::{ "std/verdict.kspl", "kspage/tests/browser/probe.js",
-    "kspage/tests/wasm/shell.mjs", "tools/kspl_lldb.py" }
+// Caution: **A failure's mark must be `FAIL`** (the reason is in the header).
+priv const LINE_REPORTERS: U8[][_] = ::{ "std/verdict.kspl", "tools/kspl_lldb.py",
+    "ksmd/tests/browser/drive.mjs" }
 
 priv const LINE_SHAPES: U8[][_] = ::{ "\"pass ", "'pass " } //<
     //< The forms that build a pass mark, allowed only in the table above
@@ -57,7 +56,7 @@ priv const LINE_BANNED: U8[][_] = ::{ "\"NG ", "`NG ", "\"OK ", "'OK ", "`OK " }
 priv fn check_one_place(arena: Arena$@) //<
     //< The places building a mark are the ones in the table and no others
     $seen: Sz = 0
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     specs: = scan.kspl_specs_with(U8[][]::{ "*.py", "*.js", "*.mjs", "*.mk" }, arena)
     for rel in harness.tracked_matching(specs)
         seen += 1
@@ -76,7 +75,7 @@ priv const HERE: U8[] = "tests/support/conventions_line.kspl"
 
 priv fn check_marks(arena: Arena$@)
     $seen: Sz = 0
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     for rel in LINE_FILES
         src: = harness.read_under_root(rel)
         seen += 1
@@ -116,7 +115,7 @@ priv fn check_tag_reaches(arena: Arena$@) //<
 priv fn check_readers(arena: Arena$@) //<
     //< the readers wait for the current marks
     $seen: Sz = 0
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     for rel in LINE_READERS
         src: = harness.read_under_root(rel)
         seen += 1
@@ -144,7 +143,7 @@ priv const FLUSH_MARK: U8[] = "set_line_buffered" //< the call that sets it, in 
 
 priv fn check_line_flush(arena: Arena$@)
     $seen: Sz = 0
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     for rel in FLUSH_FILES
         src: = harness.read_under_root(rel)
         seen += 1
@@ -165,7 +164,7 @@ priv const VERDICT_WANT: Bool[_] = ::{ true, false, false, false } //<
     //< walked nothing and found 3 (fails)
 
 priv fn check_verdict_fires(arena: Arena$@)
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     for i in Range.asc(VERDICT_SEEN.len)
         got: = verdict.list_verdict(VERDICT_SEEN[i], VERDICT_BAD[i])
         if got != VERDICT_WANT[i]

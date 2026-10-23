@@ -46,7 +46,7 @@ fn test_url_codec()
         bad_decode_ok = false
     assert(!bad_decode_ok, "decode must reject a malformed percent-escape")
 
-    defer arena: = Arena.new(4096)
+    defer arena: = Arena(4096)
     params: = url.parse_query("?a=1&b=hello%20world&c", arena)
         catch panic("parse_query should succeed for well-formed input")
     assert(pairs_text(params, arena).equals("a=1|b=hello world|c=|"),
@@ -90,7 +90,7 @@ fn test_url_codec()
 fn test_http_parse_buffered()
     verdict.start("[Http] buffered parsing (parse_request/parse_response) test...")
 
-    defer arena: = Arena.new(4096)
+    defer arena: = Arena(4096)
 
     req: =
         http.parse_request("POST /echo?x=1 HTTP/1.1\r\nHost: example.com\r\nContent-Length: \
@@ -148,7 +148,7 @@ fn test_http_parse_buffered()
     assert(second.target.equals("/b"), "consumed must land on the start of the next message")
 
     // format_response builds the whole message, leaving the sending to the caller.
-    defer $out: = Str_builder.new()
+    defer $out: = Str_builder()
     head: = http.headers(arena).add("Content-Type", "text/plain").build()
     http.format_response(out@, 200, head, "hi")
         catch panic("format_response should succeed for well-formed arguments")
@@ -184,7 +184,7 @@ priv fn parse_error(src: U8[], max_body: Sz, arena: Arena$@): U8[] //<
 // proxy) reads. So "it can be interpreted somehow" is itself the hole.
 // ==========================================
 priv fn reject(label: U8$[], src: U8[])
-    defer arena: = Arena.new(1024)
+    defer arena: = Arena(1024)
     $accepted: = true
     _r: = http.parse_request(src, http.DEFAULT_MAX_BODY_BYTES, arena) catch
         accepted = false
@@ -195,7 +195,7 @@ fn test_http_headers_list() //<
     //< Caution: **Test the empty list and a message with no header.** That is the case the list
     //< type exists for: nothing is reached through a pointer that can be null.
     verdict.start("[HTTP] the header list test...")
-    defer arena: = Arena.new(64 * 1024)
+    defer arena: = Arena(64 * 1024)
     none: = http.headers(arena).build()
     assert(none.is_empty(), "a list nothing was added to is empty")
     assert(none.find("Host").is_none(), "an empty list finds nothing")
@@ -263,7 +263,7 @@ fn test_http_reject_smuggling()
     // Empty input, and input with no line at all, must not crash.
     // **A request names its host once** (RFC 9112 §3.2). A proxy in front can take another `Host`
     // than the server. It then routes the request by a name the server never checked.
-    defer arena_h: = Arena.new(1024)
+    defer arena_h: = Arena(1024)
     for twice in U8[][]::{ "GET / HTTP/1.1\r\nHost: a\r\nHost: b\r\n\r\n",
         "GET / HTTP/1.1\r\nHost: a\r\nhost: a\r\n\r\n",
         "GET / HTTP/1.0\r\nHost: a\r\nHost: b\r\n\r\n" }
@@ -284,7 +284,7 @@ fn test_http_reject_smuggling()
     reject("an empty header name must be rejected", "GET / HTTP/1.1\r\n: v\r\n\r\n")
 
     // A status not 3 digits would be silently truncated by I32:: into a different number.
-    defer arena: = Arena.new(1024)
+    defer arena: = Arena(1024)
     $status_ok: = true
     _resp: = http.parse_response("HTTP/1.1 4294967496 x\r\n\r\n", arena) catch
         status_ok = false
@@ -296,7 +296,7 @@ fn test_http_reject_smuggling()
         "a status above 599 must be rejected")
 
     // The builder goes through the same checks, so a value from outside cannot splice in a header.
-    defer $out: = Str_builder.new()
+    defer $out: = Str_builder()
     bad_head: = http.headers(arena).add("X", "a\r\nInjected: 1").build()
     $inject_ok: = true
     out.s("an answer queued before\n")
@@ -336,7 +336,7 @@ fn test_http_reject_smuggling()
 // ==========================================
 fn test_http_host_value()
     verdict.start("[Http] the Host value test...")
-    defer arena: = Arena.new(4096)
+    defer arena: = Arena(4096)
     for good in U8[][]::{ "example.com", "example.com:8080", "127.0.0.1:80", "[::1]:8080",
         "[v1.fe]", "ex%41mple", "a-b_c.~!$&'()*+,;=", "host:", "" }
         req: = arena.text().s("GET / HTTP/1.1\r\nHost: ").s(good).s("\r\n\r\n").take()
@@ -373,7 +373,7 @@ priv fn closes(head: U8[], arena: Arena$@): Bool //< whether the request with th
 
 fn test_http_connection_tokens() //< `Connection` is a list of tokens, possibly in several headers
     verdict.start("[Http] the tokens a Connection header lists test...")
-    defer arena: = Arena.new(4096)
+    defer arena: = Arena(4096)
     assert(http.lists_token("close", "close") &&
         http.lists_token("keep-alive , CLOSE", "close"),
         "lists_token: a token is found among others, in any case and with spaces around it")
@@ -386,7 +386,7 @@ fn test_http_connection_tokens() //< `Connection` is a list of tokens, possibly 
     assert(closes("GET / HTTP/1.1\r\nConnection: TE\r\nConnection: keep-alive, close\r\n", arena),
         "wants_close: a close in a later Connection header closes")
     // **The streamed head finds `close` the way a reader does**, among other tokens.
-    defer $out: = Str_builder.new()
+    defer $out: = Str_builder()
     listed: = http.headers(arena).add("Connection", "TE").add("Connection", "upgrade, close")
         .build()
     http.format_response_head(out@, 200, listed)
@@ -398,7 +398,7 @@ fn test_http_connection_tokens() //< `Connection` is a list of tokens, possibly 
 
 fn test_http_write_length()
     verdict.start("[Http] the length the builder writes test...")
-    defer arena: = Arena.new(4096)
+    defer arena: = Arena(4096)
 
     // **A length the body does not have splits the message in two** for the reader. The rest of the
     // body is read as the next response.
@@ -428,7 +428,7 @@ fn test_http_write_length()
         "a length on a 304 must be refused")
 
     // **The answer to a HEAD names the length of a body it does not carry**, its own way in.
-    defer $out: = Str_builder.new()
+    defer $out: = Str_builder()
     http.format_response_to_head(out@, 200, http.headers(arena).build(), 10)
         catch panic("format_response_to_head should succeed for a 200")
     assert(out.slice().equals("HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\n"),
@@ -456,14 +456,14 @@ fn test_http_write_length()
 
 priv fn built(status: I32, head: http.Headers, body: U8[], arena: Arena$@): U8[] //<
     //< The bytes `format_response` builds, or a panic where it refuses
-    defer $out: = Str_builder.new()
+    defer $out: = Str_builder()
     http.format_response(out@, status, head, body)
         catch panic("format_response should succeed here")
     return arena.dup_str(out.slice())
 
 priv fn build_error(status: I32, head: http.Headers, body: U8[], arena: Arena$@): U8[] //<
     //< How `format_response` refuses: the error's name, or `accepted`
-    defer $out: = Str_builder.new()
+    defer $out: = Str_builder()
     http.format_response(out@, status, head, body) catch e
         switch e
         case .length_mismatch
@@ -479,11 +479,11 @@ priv fn build_error(status: I32, head: http.Headers, body: U8[], arena: Arena$@)
 // ==========================================
 fn test_http_response_length()
     verdict.start("[Http] the length of a response's body test...")
-    defer arena: = Arena.new(4096)
+    defer arena: = Arena(4096)
 
     // **A body that runs to the close is refused, not read as empty**: success with no body would
     // drop it silently. These are the bytes `format_response_head` builds, and a body after them.
-    defer $streamed: = Str_builder.new()
+    defer $streamed: = Str_builder()
     http.format_response_head(streamed@, 200,
         http.headers(arena).add("Connection", "close").build())
         catch panic("format_response_head should succeed with Connection: close")
@@ -521,10 +521,10 @@ priv fn response_error(src: U8[], arena: Arena$@): U8[] //<
 // ==========================================
 #export
 fn http_echo_server(listener: net.Tcp_listener$@): Void$@
-    defer server_arena: = Arena.new(64 * 1024)
+    defer server_arena: = Arena(64 * 1024)
     conn: = listener.accept() catch panic("accept should succeed once the client connects")
     // A server parses what has arrived so far, and reads more while the request is incomplete.
-    defer $got: = Str_builder.new()
+    defer $got: = Str_builder()
     $req: http.Request$@ = null
     for req == null
         $chunk: U8[256] = ::{}
@@ -543,8 +543,8 @@ fn http_echo_server(listener: net.Tcp_listener$@): Void$@
     assert(req_ok, "server must parse the client's request correctly")
 
     resp_headers: = http.headers(server_arena).add("Content-Type", "text/plain").build()
-    defer $out: = Str_builder.new()
-    defer $body: = Str_builder.new()
+    defer $out: = Str_builder()
+    defer $body: = Str_builder()
     for _i in Range.asc(4096)
         body.s("pong")
     http.format_response(out@, 200, resp_headers, body.slice())
@@ -558,7 +558,7 @@ fn test_http_socket_roundtrip()
         .start("[Http] parse_request/format_response/write_request/read_response test (real \
             loopback traffic)...")
 
-    defer arena: = Arena.new(64 * 1024)
+    defer arena: = Arena(64 * 1024)
     listener: = net.Tcp_listener.bind("127.0.0.1", 0)
         catch panic("bind should succeed on a free port")
     port: = listener.port() catch panic("a bound socket knows its port")
@@ -643,8 +643,8 @@ priv fn length_or(head: U8[]): Sz //<
 
 fn test_jsonrpc_take_frame()
     verdict.start("[Jsonrpc] cutting a frame out test...")
-    defer arena: = Arena.new(64 * 1024)
-    defer $acc: = Str_builder.new()
+    defer arena: = Arena(64 * 1024)
+    defer $acc: = Str_builder()
 
     // With only the header in, no frame can be extracted.
     acc.s("Content-Length: 5\r\n\r\n")
@@ -686,8 +686,8 @@ fn test_jsonrpc_take_frame()
 
 fn test_jsonrpc_broken_frame()
     verdict.start("[Jsonrpc] a broken frame test...")
-    defer arena: = Arena.new(64 * 1024)
-    defer $acc: = Str_builder.new()
+    defer arena: = Arena(64 * 1024)
+    defer $acc: = Str_builder()
 
     // A header that gives no length is broken; the next frame must still be readable.
     acc.s("Content-Type: application/json\r\n\r\nContent-Length: 4\r\n\r\nnext")
@@ -695,7 +695,7 @@ fn test_jsonrpc_broken_frame()
     assert(taken_or(acc@, arena).equals("next"), "the next frame must still be readable")
 
     // A length above the cap is broken.
-    defer $huge: = Str_builder.new()
+    defer $huge: = Str_builder()
     huge.s("Content-Length: \{jsonrpc.MAX_BODY_BYTES + 1\}\r\n\r\n")
     acc.s(huge.slice())
     assert(taken_or(acc@, arena).equals("(broken)"), "a length above the cap is broken")
@@ -722,7 +722,7 @@ fn test_jsonrpc_broken_frame()
 
     // **The reader's own limit decides.** A body past the default, under a reader's larger limit,
     // is taken whole. The frame after it is read where it starts.
-    defer $wide: = Str_builder.new()
+    defer $wide: = Str_builder()
     wide.s("Content-Length: 150\r\n\r\n")
     for _i in Range.asc(150)
         wide.c('x')
@@ -738,8 +738,8 @@ fn test_jsonrpc_broken_frame()
 
 fn test_jsonrpc_encode()
     verdict.start("[Jsonrpc] building a body test...")
-    defer arena: = Arena.new(64 * 1024)
-    $b: = Json_builder.new(arena)
+    defer arena: = Arena(64 * 1024)
+    $b: = Json_builder(arena)
     params: = b.obj().set("n", b.int_val(7I64)).build()
 
     // With an id (a request).
@@ -753,7 +753,7 @@ fn test_jsonrpc_encode()
     assert(note.find_str("\"id\"").is_none(), "a notification must not carry an id")
 
     // A built frame can be extracted again (the round trip).
-    defer $out: = Str_builder.new()
+    defer $out: = Str_builder()
     jsonrpc.frame_into(out@, req)
     body: = jsonrpc.take_frame(out@, jsonrpc.MAX_BODY_BYTES, arena)
         catch panic("a freshly framed body must be takeable")

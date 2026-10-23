@@ -21,17 +21,17 @@ import "std/strfmt"
 import "std/sys"
 
 priv fn sum_of(paths: U8[][], arena: Arena$@): U8[] //< the record: the digest in hex and a newline
-    $h: = Sha256.new()
+    $h: = Sha256()
     for p in paths
         raw: = io.read_file(p, null) catch e
             io.err().s("seed_sum: cannot read \{p\}: \{e\}\n")
             sys.exit(2)
         defer dealloc(Void$@::raw.ptr)
-        defer $body: = Str_builder.new()
+        defer $body: = Str_builder()
         for i in Range.asc(raw.len)
             if !(raw[i] == '\r' && i + 1 < raw.len && raw[i + 1] == '\n')
                 body.c(raw[i])
-        defer $head: = Str_builder.new()
+        defer $head: = Str_builder()
         head.s("\{p\}\n\{body.slice().len\}\n")
         h.update(head.slice())
         h.update(body.slice())
@@ -47,9 +47,9 @@ fn main(): I32
     if a.len < 4 || !(a[1].equals("write") || a[1].equals("check"))
         io.err().s("usage: seed_sum.kspl write|check <record> <file>...\n")
         return 2
-    defer arena: = Arena.new(1024 * 1024)
-    $paths: = List<|U8[]|>.new(arena)
-    for i in Range.new(3, a.len, 1)
+    defer arena: = Arena(1024 * 1024)
+    $paths: = List<|U8[]|>(arena)
+    for i in Range(3, a.len, 1)
         paths.push(a[i])
     sum: = sum_of(paths.slice(), arena)
     record: = a[2]

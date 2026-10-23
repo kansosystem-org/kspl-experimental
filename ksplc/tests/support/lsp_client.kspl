@@ -31,7 +31,7 @@ pub fn start(exe: U8[], extra: U8[][], cwd: U8[], arena: Arena$@):
         //< It starts `ksplc lsp`, with `extra` after the subcommand (empty for none)
         //< **`cwd` is the workspace**: imports, the walk and the paths returned are relative to it.
         //< Empty inherits the caller's working directory.
-    $argv: = List<|U8[]|>.new(arena)
+    $argv: = List<|U8[]|>(arena)
     argv.push(exe)
     argv.push("lsp")
     for a in extra
@@ -76,7 +76,7 @@ pub fn did_open(uri: U8[], text: U8[], arena: Arena$@): json.Value //<
     //< The params of `textDocument/didOpen`
     //< The `languageId` is the one an editor sends for a `.kspl` (`kspl`, the extension's
     //< language).
-    $b: = Json_builder.new(arena)
+    $b: = Json_builder(arena)
     lang: = "kspl"
     doc: = b.obj().set("uri", b.str_val(uri)).set("languageId", b.str_val(lang))
         .set("version", b.int_val(1I64)).set("text", b.str_val(text)).build()
@@ -93,19 +93,19 @@ pub fn close(c: jsonrpc_client.Client$@, uri: U8[], arena: Arena$@) //<
 fn at_doc(uri: U8[], arena: Arena$@): json.Value //<
     //< The params pointing at only the document (`textDocument`)
     //< For a query that needs no position (`semanticTokens/full` and the like).
-    $b: = Json_builder.new(arena)
+    $b: = Json_builder(arena)
     return b.obj()
         .set("textDocument", b.obj().set("uri", b.str_val(uri)).build()).build()
 
 pub fn at_pos(uri: U8[], line: Sz, character: Sz, arena: Arena$@): json.Value //<
     //< The params pointing at a position (`textDocument` + `position`)
-    $b: = Json_builder.new(arena)
+    $b: = Json_builder(arena)
     doc: = b.obj().set("uri", b.str_val(uri)).build()
     pos: = b.obj().set("line", b.int_val(line)).set("character", b.int_val(character)).build()
     return b.obj().set("textDocument", doc).set("position", pos).build()
 
 pub fn empty_obj(arena: Arena$@): json.Value //< `{}`, the params of a request that takes none
-    $b: = Json_builder.new(arena)
+    $b: = Json_builder(arena)
     return b.obj().build()
 
 pub fn answer( //< the reply to a request; `null` when none comes, so the check reading it fails
@@ -133,7 +133,7 @@ pub fn why(c: jsonrpc_client.Client$@, msg: U8[], arena: Arena$@): U8[] //<
     return arena.text().s(msg).s(" | supervisor: ").s(c.err_tail()).take()
 
 pub fn dump(v: json.Value, arena: Arena$@): U8[] //< `v` as JSON text, cut to 300 bytes
-    defer $b: = Str_builder.new()
+    defer $b: = Str_builder()
     v.dump(b@)
     text: = b.slice()
     keep: = 300

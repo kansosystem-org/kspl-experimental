@@ -22,7 +22,7 @@ priv $start_dir: U8[] = "" //< where `run` starts a child; empty is where the su
 priv fn open_suite(chunk_size: Sz) //<
     //< the verdict's label and the suite's arena, as a suite begins
     verdict.begin(sys.get_env("KANSO_SUITE").unwrap_or(""))
-    suite_arena = Arena.new(chunk_size)
+    suite_arena = Arena(chunk_size)
 
 fn begin(chunk_size: Sz): Arena$@ //< starts a suite, and returns the arena it allocates from
     //< Caution: **Call it once, at the start of `main`, and do not free what it returns** —
@@ -39,7 +39,7 @@ fn begin(chunk_size: Sz): Arena$@ //< starts a suite, and returns the arena it a
         fallback ""
     if under.len == 0 || scratch.len == 0
         panic("the working directory cannot be read, so the two arguments cannot be made absolute")
-    $rest: = List<|U8[]|>.new(suite_arena)
+    $rest: = List<|U8[]|>(suite_arena)
     for i in Range.asc(argv.len)
         if i >= 3
             rest.push(suite_arena.dup_str(argv.get(i)))
@@ -154,7 +154,7 @@ priv fn settle_std_dir(): U8[] //<
 pub fn ksplc_argv(args: U8[][]): U8[][] //<
     //< the compiler under inspection's argv, `--std-dir=` first
     //< For a `subproc.Job` run side by side; for one run, call `ksplc`.
-    $argv: = List<|U8[]|>.new(suite_arena)
+    $argv: = List<|U8[]|>(suite_arena)
     argv.push(under)
     argv.push(suite_arena.text().s("--std-dir=\{std_dir()\}").take())
     for a in args
@@ -167,7 +167,7 @@ pub fn ksplc(args: U8[][]): verdict.Run_out //< runs the compiler under inspecti
 pub fn ksplc_bare(args: U8[][]): verdict.Run_out //< runs it once without `--std-dir=` in front
     //< Caution: **Call `fmt`, `clean` and `emit-runtime` with this one.** They read no standard
     //< library and so take no `--std-dir`, which they reject.
-    $argv: = List<|U8[]|>.new(suite_arena)
+    $argv: = List<|U8[]|>(suite_arena)
     argv.push(under)
     for a in args
         argv.push(a)

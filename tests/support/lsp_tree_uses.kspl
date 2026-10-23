@@ -30,7 +30,7 @@ priv const RENAME_OLD: U8[] = "draw"
 priv fn refs_at(c: jsonrpc_client.Client$@, with_decl: Bool, arena: Arena$@):
     List<|json.Value|> //<
         //< Asks for the places that use the name at that position
-    $b: = Json_builder.new(arena)
+    $b: = Json_builder(arena)
     $pos: = json.Value.null_val
     switch draw_pos(b@, arena)
     case .some(v)
@@ -38,7 +38,7 @@ priv fn refs_at(c: jsonrpc_client.Client$@, with_decl: Bool, arena: Arena$@):
     case .none
         verdict.check("the place `fn draw` stands can be found", false,
             arena.text().s(RENAME_FILE).s(" holds no \"fn draw(\" line").take())
-        return List<|json.Value|>.new(arena)
+        return List<|json.Value|>(arena)
     doc: = b.obj()
         .set("uri", b.str_val(lsp_client.uri_of(harness.root(), RENAME_FILE, arena))).build()
     ctx: = b.obj().set("includeDeclaration", b.bool_val(with_decl)).build()
@@ -55,7 +55,7 @@ fn check_references(c: jsonrpc_client.Client$@, arena: Arena$@) //<
 
     // Caution: **The range must land exactly on the original name**: an off-by-one column passes
     // when only the name is compared.
-    $off: = List<|U8[]|>.new(arena)
+    $off: = List<|U8[]|>(arena)
     for i in Range.asc(with_decl.len)
         one: = with_decl.get(i)
         spot_uri: = one.get("uri").as_str().unwrap_or("")
@@ -73,7 +73,7 @@ fn check_references(c: jsonrpc_client.Client$@, arena: Arena$@) //<
     // Caution: **The order must be fixed**, or the same question's answer looks shuffled on the
     // screen.
     $sorted: = true
-    for i in Range.new(1, with_decl.len, 1)
+    for i in Range(1, with_decl.len, 1)
         if !ahead(with_decl.get(i - 1), with_decl.get(i))
             sorted = false
     verdict.check("references line up in path and position order", sorted,
@@ -89,7 +89,7 @@ fn check_references(c: jsonrpc_client.Client$@, arena: Arena$@) //<
 
 priv fn spread(list: List<|json.Value|>@, arena: Arena$@): List<|U8[]|> //<
     //< The distinct URIs in the list
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     for i in Range.asc(list.len)
         rel: = list.get(i).get("uri").as_str().unwrap_or("")
         $seen: = false
@@ -150,7 +150,7 @@ priv fn span_at(uri: U8[], line: Sz, from: Sz, to: Sz, arena: Arena$@): U8[]
     return ""
 
 fn check_rename(c: jsonrpc_client.Client$@, arena: Arena$@)
-    $b: = Json_builder.new(arena)
+    $b: = Json_builder(arena)
     $pos: = json.Value.null_val
     switch draw_pos(b@, arena)
     case .some(v)
@@ -168,8 +168,8 @@ fn check_rename(c: jsonrpc_client.Client$@, arena: Arena$@)
             lsp_client.why(c, "could not wait it out", arena))
         return
     changes: = msg.val.get("result").get("changes")
-    $files: = List<|U8[]|>.new(arena)
-    $off: = List<|U8[]|>.new(arena)
+    $files: = List<|U8[]|>(arena)
+    $off: = List<|U8[]|>(arena)
     $spots: Sz = 0
     // Caution: **Walk the tracked files and look each key up as it was sent.** `std/json` cannot
     // list an object's keys, so the tracked file list is used, and a key comes back spelt as sent.

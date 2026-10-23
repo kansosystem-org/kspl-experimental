@@ -1,8 +1,8 @@
 #!/usr/bin/env -S ksplc run
 //< Checks that the page's JS **parses as syntax**
-//< Caution: **Do not drop the second tier.** The page and the checks both run **concatenated into
-//< one `<script>`** (see `kspage/port/web/page.html` and `KSPAGE_PROBE` in `kspage/Makefile`).
-//< node is already required (`make test-kspage-wasm`). **Only syntax is checked.**
+//< Caution: **Do not drop the second tier.** The page's scripts run **concatenated into one
+//< `<script>`** (see `ksmd/port/web/bundle.kspl`). node is already required (`make
+//< test-ksmd-browser`). **Only syntax is checked.**
 
 // ==========================================
 //   1. **one file at a time** ... reports the name and line of the broken file.
@@ -64,7 +64,7 @@ priv fn check_joined(what: U8[], slug: U8[], files: List<|U8[]|>@, arena: Arena$
     //< Concatenates the files and puts the result through `node --check`
     //< **Sorting by name is fine**: a collision does not depend on order (a copy of the page's load
     //< order would drift).
-    defer $body: = Str_builder.new()
+    defer $body: = Str_builder()
     for i in Range.asc(files.len)
         text: = io.read_file(files.get(i), null) catch
             ksplc_harness
@@ -79,7 +79,7 @@ priv fn check_joined(what: U8[], slug: U8[], files: List<|U8[]|>@, arena: Arena$
         ksplc_harness.fatal(arena.text().s("cannot write: ").s(joined).take())
         return
     said: = check_one(joined, arena)
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     if said.len > 0
         bad.push(said)
     verdict.check_list(arena.text().s(what).s(" parses as syntax when concatenated too").take(),
@@ -89,17 +89,14 @@ priv fn check_joined(what: U8[], slug: U8[], files: List<|U8[]|>@, arena: Arena$
 fn main(): I32
     arena: = harness.begin(64 * 1024 * 1024)
     all: = harness.tracked_matching(U8[][]::{ "*.js", "*.mjs" })
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     for i in Range.asc(all.len)
         said: = check_one(all.get(i), arena)
         if said.len > 0
             bad.push(said)
     verdict.check_list("the JS parses as syntax", all.len, "files", bad@, "`node --check` failed")
 
-    // The two groups that run concatenated. **Both are `*.js` only** (`.mjs` files are joined by
-    // import).
-    page: = harness.tracked_matching(U8[][]::{ "kspage/port/web/*.js" })
+    // The group that runs concatenated. **It is `*.js` only** (`.mjs` files are joined by import).
+    page: = harness.tracked_matching(U8[][]::{ "ksmd/port/web/*.js" })
     check_joined("the page's JS", "page_js", page@, arena)
-    probe: = harness.tracked_matching(U8[][]::{ "kspage/tests/browser/*.js" })
-    check_joined("the browser checks' JS", "probe_js", probe@, arena)
     return ksplc_harness.finish()

@@ -22,9 +22,9 @@ fn main()
     io.out().s(" Kanso AI Engine - Text Generation\n")
     io.out().s("=========================================\n")
 
-    defer model_arena: = Arena.new(1024 * 1024 * 100)
+    defer model_arena: = Arena(1024 * 1024 * 100)
 
-    $tok: = ai_tokenizer.Tokenizer.new(model_arena)
+    $tok: = ai_tokenizer.Tokenizer(model_arena)
     tok.add_token("<unk>", 0)
     tok.add_token("K", 1)
     tok.add_token("a", 2)
@@ -45,7 +45,7 @@ fn main()
 
     // Caution: vocab_size (12) has to agree with the tokenizer's 12 token IDs above (embed's and
     // lm_head's dimensions follow it). dim, hidden and n_layers are the minimum for a fast demo.
-    $llama: = ai_model.Mini_llama<|F32|>.new(12, 4, 8, 2, 128, model_arena)
+    $llama: = ai_model.Mini_llama<|F32|>(12, 4, 8, 2, 128, model_arena)
     // **It trains a copy.** The weights are views into the bytes they are read from. Training
     // writes them in place. The embedded bytes are read-only, so the first step would fault.
     weights: = model_arena.dup_str(model_bytes)
@@ -69,12 +69,12 @@ fn main()
     assert(tokens.len == 1,
         "prompt must encode to exactly 1 token (see comment above the generation loop)")
     // Top-p sampling with a temperature; the fixed seed makes it reproducible.
-    $rng: = prng.Prng.new(42U64)
+    $rng: = prng.Prng(42U64)
     cfg: = ai_sampler.Sample_config::{ .temperature = 0.8, .top_k = 0, .top_p = 0.9 }
 
     max_gen_steps: = 5
     for step in Range.asc(max_gen_steps)
-        defer step_arena: = Arena.new(1024 * 1024 * 10)
+        defer step_arena: = Arena(1024 * 1024 * 10)
 
         current_token: = tokens[tokens.len - 1]
         logits: = llama.forward(current_token, step, step_arena)
@@ -106,7 +106,7 @@ priv fn full_finetune_demo(llama: ai_model.Mini_llama<|F32|>$@, tok: ai_tokenize
     $loss0: = 0.0
     $loss_final: = 0.0
     for step in Range.asc(50)
-        defer sa: = Arena.new(1024 * 1024 * 4)
+        defer sa: = Arena(1024 * 1024 * 4)
         loss: = llama.train_step(tokens, target, 0.05, sa)
         if step == 0
             loss0 = loss
@@ -130,17 +130,17 @@ priv fn lora_finetune_demo(llama: ai_model.Mini_llama<|F32|>$@, tok: ai_tokenize
 
     ctx_token: I32 = 10 // "Kanso"
     target_token: I32 = 11 // "AI" is the token that must come next
-    defer probe: = Arena.new(1024 * 1024)
+    defer probe: = Arena(1024 * 1024)
     h0: = llama.forward_hidden(ctx_token, 0, probe)
     before_pred: = ai_sampler.argmax(llama.lm_head.forward(h0))
 
     // A rank=2 LoRA adapter against the LM head (dim=4 -> vocab=12)
-    $rng: = prng.Prng.new(7U64)
-    $lora: = ai_lora.Lora<|F32|>.new(4, 12, 2, 4.0, rng@, model_arena)
+    $rng: = prng.Prng(7U64)
+    $lora: = ai_lora.Lora<|F32|>(4, 12, 2, 4.0, rng@, model_arena)
 
     $loss0: = 0.0
     for step in Range.asc(200)
-        defer sa: = Arena.new(1024 * 1024)
+        defer sa: = Arena(1024 * 1024)
         h: = llama.forward_hidden(ctx_token, 0, sa)
         base: = llama.lm_head.forward(h) // the frozen base's output
         $logits: = base + lora.forward(h)
@@ -174,9 +174,9 @@ priv fn lora_continual_stream_demo(llama: ai_model.Mini_llama<|F32|>$@,
     target_stream: I32[3] = ::{ 11, 6, 9 }
     n_examples: Sz = 3
 
-    $rng: = prng.Prng.new(11U64)
-    $lora: = ai_lora.Lora<|F32|>.new(4, 12, 2, 4.0, rng@, model_arena)
-    defer probe: = Arena.new(1024 * 1024)
+    $rng: = prng.Prng(11U64)
+    $lora: = ai_lora.Lora<|F32|>(4, 12, 2, 4.0, rng@, model_arena)
+    defer probe: = Arena(1024 * 1024)
 
     steps_per_example: Sz = 150 // enough rounds to converge on every example, replay included
     for idx in Range.asc(n_examples)
@@ -184,7 +184,7 @@ priv fn lora_continual_stream_demo(llama: ai_model.Mini_llama<|F32|>$@,
             // Replay: every example observed so far (0..idx), not only this one, is trained again
             // on each step.
             for j in Range.asc(idx + 1)
-                defer sa: = Arena.new(1024 * 1024)
+                defer sa: = Arena(1024 * 1024)
                 h: = llama.forward_hidden(ctx_stream[j], 0, sa)
                 base: = llama.lm_head.forward(h) // the frozen base's output
                 $logits: = base + lora.forward(h) // the same adapter is reused

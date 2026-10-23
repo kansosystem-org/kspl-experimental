@@ -85,7 +85,7 @@ priv fn doc_line(c: Case@, at: Sz): Sz //< the document's line of the fragment's
 
 priv fn kept(c: Case@, mark_at: Sz, arena: Arena$@): List<|Bool|> //<
     //< Which lines a run leaves out: every covered line but the mark kept's
-    $out: = List<|Bool|>.new(arena)
+    $out: = List<|Bool|>(arena)
     for i in Range.asc(c.lines.len)
         $drop: = c.covered.get(i) && mark_at != ALL_MARKS
         if drop && mark_at >= 0
@@ -117,14 +117,14 @@ priv fn argv_of(j: Job_at@, arena: Arena$@): U8[][] //<
         arena.text().s(j.rel).s(".c").take() })
 
 priv fn run_jobs(at: List<|Job_at|>@, sandbox: U8[], arena: Arena$@): List<|verdict.Run_out|>
-    $jobs: = List<|subproc.Job|>.new(arena)
+    $jobs: = List<|subproc.Job|>(arena)
     for j in at
         jobs.push(subproc.Job::{ .argv = argv_of(j@, arena), .cwd = sandbox })
     return ksplc_harness.run_all(jobs.slice(), "docsnippet")
 
 priv fn said_lines(out: U8[], rel: U8[], word: U8[], arena: Arena$@): List<|Sz|> //<
     //< The lines of `rel` the compiler names with `word` (`error` / `warning`), 1-based
-    $got: = List<|Sz|>.new(arena)
+    $got: = List<|Sz|>(arena)
     head: = arena.text().s(rel).c(':').take()
     tail: = arena.text().s(": ").s(word).c(':').take()
     for ln in out.lines(arena)
@@ -184,14 +184,14 @@ priv fn mark_judged(c: Case@, j: Job_at@, out: verdict.Run_out@, arena: Arena$@)
 fn run(snippets: List<|shape.Snippet|>@, sandbox: U8[], arena: Arena$@) //<
     //< Compiles every fragment and reports what disagrees with its marks, as one check
     tracked: = harness.tracked()
-    $marked: = List<|U8[]|>.new(arena)
+    $marked: = List<|U8[]|>(arena)
     for rel in tracked
         if rel.ends_with(PACKAGE_MARK) && rel.count_str("/") == 1
             marked.push(rel.sub(0, rel.len - PACKAGE_MARK.len - 1))
     own: = harness.private_docs()
-    $bad: = List<|U8[]|>.new(arena)
-    $cases: = List<|Case|>.new(arena)
-    $copied: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
+    $cases: = List<|Case|>(arena)
+    $copied: = List<|U8[]|>(arena)
     for s in snippets
         if sys.get_file_name(s.doc).equals(TUTORIAL_NAME) ||
             harness.is_private_doc(s.doc, own@)
@@ -214,7 +214,7 @@ fn run(snippets: List<|shape.Snippet|>@, sandbox: U8[], arena: Arena$@) //<
         cases.push(c)
 
     // The first round: every shape with its marked lines left out.
-    $base: = List<|Job_at|>.new(arena)
+    $base: = List<|Job_at|>(arena)
     for k in Range.asc(cases.len)
         c: = cases.get(k)
         for si in Range.asc(c.shapes.len)
@@ -233,7 +233,7 @@ fn run(snippets: List<|shape.Snippet|>@, sandbox: U8[], arena: Arena$@) //<
             c.fit_run = b
     $compiled: Sz = 0
     $leaning: Sz = 0
-    $marks: = List<|Job_at|>.new(arena)
+    $marks: = List<|Job_at|>(arena)
     for k in Range.asc(cases.len)
         c: = cases.get(k)
         where: = arena.text().s(c.s.doc).c(':').s("\{c.s.line\}").take()

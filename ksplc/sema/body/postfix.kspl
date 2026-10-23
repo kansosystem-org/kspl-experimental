@@ -29,13 +29,28 @@ import "ksplc/sema/type/query" as sema_type_query
 import "ksplc/sema/type/scope" { Sema_symbol }
 import "std/str" { Str_builder }
 
-fn infer(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32!Sema_error
-    node.ice_assert(node.children.len >= 2, "expr_postfix must have at least 2 children (expr, op)")
-    left: = node.get_postfix_receiver()
+priv fn lint_receiver_parens(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@) //<
+    //< [H0301] Parentheses around a receiver that need none
     if base_core.config.run_lint_checks &&
         ((left.was_parenthesized() && left.is_postfix_safe_kind() &&
         !left.is_prefix_cast_result()) || left.has_redundant_extra_parens())
         c.hint(node, "[H0301] Unnecessary parentheses around receiver expression.")
+
+fn infer_subscript_of(node: Ast_node$@, c: Sema_ctx$@, target_id: I32): I32!Sema_error //<
+    //< Infers a subscript `a[i]` whose receiver `a` is inferred already, as `target_id`
+    //< An assignment infers the receiver first to choose the route (`infer_index_write` in
+    //< `stmt.kspl`). Caution: **Do not infer the receiver again.** A method call is rewritten by
+    //< its first inference, so a second one reads 'Unknown'.
+    lint_receiver_parens(c, node, node.get_postfix_receiver())
+    unknown: = I32::sema_type_env.Builtin_type_id.unknown
+    type_id: =
+        infer_postfix_array(c, node, target_id, c.env.receiver_base_id(target_id), unknown)!
+    return node.settle_expected(c, type_id, unknown)!
+
+fn infer(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32!Sema_error
+    node.ice_assert(node.children.len >= 2, "expr_postfix must have at least 2 children (expr, op)")
+    left: = node.get_postfix_receiver()
+    lint_receiver_parens(c, node, left)
     $op: = node.postfix_op_text()
     if op.equals("method_access") || op.equals("generic_method")
         op = "."
@@ -86,12 +101,18 @@ fn infer(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32!Sema_error
     if op.equals(".")
         return infer_dot_postfix(c, node, left, target_id, expected_id)
     if op.equals("(")
+        // **A primitive type has no function to call.** Inferring it as a value already refused it
+        // (`I32(3)`); a call lookup would report an empty name as a second error.
+        if left.kind_id == .k_primitive_type
+            return I32::sema_type_env.Builtin_type_id.unknown
         if constructor: = sema_body_type_call.callee(c, left)
             node.children.set(0, constructor)
             result: = infer(node, c, expected_id)!
             sema_body_type_call.check_receiver(c, constructor)
             return result
-        return sema_body_call.infer(c, node, left, target_id, expected_id)!
+        result: = sema_body_call.infer(c, node, left, target_id, expected_id)!
+        sema_body_type_call.refuse_written_new(c, left)
+        return result
     if op.equals("[")
         recv_id: = c.env.receiver_base_id(target_id)
         return infer_postfix_array(c, node, target_id, recv_id, expected_id)!
@@ -331,7 +352,7 @@ fn infer_address_postfix(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@, targ
         throw .analysis_failed
     // The general form: `@` on a non-place (a return value, a literal, a computed result) becomes
     // `&temporary` in C. The user then gets a **raw C compiler error** instead of KSPL's.
-    if left.is_unaddressable_value()
+    if c.env.is_unaddressable_value(left)
         c.err(node,
             "cannot take the address of a call result, literal, or computed value; '@' would yield \
                 the address of a temporary. Bind it first (`x: = ...;`) and take the address of \
@@ -342,14 +363,10 @@ fn infer_address_postfix(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@, targ
     $pointee_id: = target_id
     if c.env.is_array(target_id)
         pointee_id = c.env.strip_array(target_id)
-    // The pointer is immutable where the place must not be written. One case is a path that crossed
-    // a read-only pointer (`hp.buf[0]@` on an `hp: Holder@`); a `U8[4]` field there stays
-    // immutable. Another is a path that crossed a slice or array with immutable elements
-    // (`b.imm[0].v@`). The last is a root that is a `const` or an immutable binding. `cs.buf[0]@`
-    // on a `const CS: Holder` writes ROM. `n@` on `n: Sz = 0;` rewrites an immutable binding
-    // through an output argument.
-    if c.place_denies_write(left) || c.place_crosses_const_elem(left) ||
-        c.root_binding_is_immutable(left, false)
+    // The pointer is immutable where the place must not be written: `hp.buf[0]@` on an `hp:
+    // Holder@`, `b.imm[0].v@` past immutable elements, `cs.buf[0]@` on a `const CS: Holder` (ROM),
+    // and `n@` on `n: Sz = 0;`, which an output argument would otherwise rewrite.
+    if c.address_is_readonly(left)
         pointee_id = c.env.make_const(pointee_id)
     return c.env.make_ptr(pointee_id)
 
@@ -413,13 +430,23 @@ priv fn read_as_path(c: Sema_ctx$@, node: Ast_node$@, operand: Ast_node$@, type_
                 owner.get_child(0).text, type_node)
         return false
 
-    c.clear_scratch()
-        .s("'::' is not a path separator in KSPL; write '\{owner.text\}.\{name.text\}'\n  Note: a \
-            member of a type or a module is reached with '.'; '::' is the cast ('I32::x') and the \
-            typed literal ('Point::{ .x = 1 }')")
+    // **A call of a type's `new` is written as the type call** (`Arena(1024)`), so the advice
+    // names that form, and the call goes on as one: `Arena.new(…)` would be refused too.
+    is_type_call: =
+        !is_module && parent != null && parent.get_postfix_op().is_literal("(") &&
+        name.kind_id == .k_identifier && name.text.equals("new")
+    c.clear_scratch().s("'::' is not a path separator in KSPL; write '\{owner.text\}")
+    if is_type_call
+        name.mark_implicit_name()
+        c.scratch.s("(…)'")
+    else
+        c.scratch.s(".\{name.text\}'")
+    c.scratch
+        .s("\n  Note: a member of a type or a module is reached with '.'; '::' is the cast \
+            ('I32::x') and the typed literal ('Point::{ .x = 1 }')")
     c.err(op_node, c.scratch.slice())
-    dot: = Ast_node.new(.k_expr_postfix, "postfix", owner.loc).add_child(owner)
-        .add_child(Ast_node.new(.k_literal, ".", op_node.loc)).add_child(name)
+    dot: = Ast_node(.k_expr_postfix, "postfix", owner.loc).add_child(owner)
+        .add_child(Ast_node(.k_literal, ".", op_node.loc)).add_child(name)
     if parent == null
         node.morph(dot.kind_id, dot.text)
         node.children = dot.children
@@ -450,7 +477,7 @@ priv fn path_meant(c: Sema_ctx$@, owner: Ast_node$@, is_module: Bool, operand: A
     case .not_a_pointer {}
     default
         return false
-    defer $dotted: = Str_builder.new()
+    defer $dotted: = Str_builder()
     for part in owner.children
         if part.kind_id == .k_identifier
             dotted.s(part.text).c('.')
@@ -644,13 +671,35 @@ priv fn lint_index_out_of_bounds(c: Sema_ctx$@, index: Ast_node$@, recv_id: I32)
                 c.warn(index, c.scratch.slice())
     default {}
 
+priv fn refuse_read_needing_writable(c: Sema_ctx$@, node: Ast_node$@, recv_id: I32) //<
+    //< Reports `a[i]` where only `at(r: Self$@, …)` reads and `a` may not be written
+    //< That is a temporary (a copy, as for any `Self$@` method) or a read-only location. "The
+    //< type needs 'Index'" would name a fix that is not the cause.
+    shown: = c.env.display(c.env.strip_ptr(recv_id))
+    c.clear_scratch()
+    if c.env.receiver_needs_hoist(node.get_postfix_receiver())
+        c.scratch
+            .s("cannot read an element of a temporary object here. '[]' on '\{shown\}' reads only \
+                through 'at', which takes its receiver as 'Self$@', and a temporary is a copy that \
+                is then discarded. Bind the object first (`$x: = ...;`), or implement 'Index_ref' \
+                for '\{shown\}'")
+    else
+        c.scratch
+            .s("cannot read an element through a read-only location. '[]' on '\{shown\}' reads only \
+                through 'at', which takes its receiver as 'Self$@'. Make the binding mutable \
+                ('$x'), or implement 'Index_ref' for '\{shown\}'")
+    c.err(node, c.scratch.slice())
+
 priv fn infer_postfix_array(c: Sema_ctx$@, node: Ast_node$@, target_id: I32, recv_id: I32,
     expected_id: I32): I32!Sema_error
     // Only `index_route` decides the route (sema/decl/access.kspl); decided apart from the
     // assignment side, the two could resolve differently.
     route: = c.index_route(node.get_postfix_receiver(), recv_id)
     switch route
-    case .by_value {}
+    case .by_value
+        if c.index_read_needs_writable(recv_id)
+            refuse_read_needing_writable(c, node, recv_id)
+            return I32::sema_type_env.Builtin_type_id.unknown
     default
         place_method: = route.index_route_method()
         next_op: = node.get_postfix_member()

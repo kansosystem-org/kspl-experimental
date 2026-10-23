@@ -1,0 +1,193 @@
+//< Reads a validated source into a Document: its blocks, their inline markup, and its clauses
+//< A refused source must not be saved: a partial model would lose what it did not read.
+import "ksmd/clause" { read_clause }
+import "ksmd/formula"
+import "ksmd/inline" { Inline_reader }
+import "ksmd/keyed" { Keyed }
+import "ksmd/marker" { is_list_marker, leading, run_of, run_of_digits, starts_block }
+import "ksmd/model" { Block, Document, Item, MAX_BLOCKS, MAX_NESTING }
+import "ksmd/source" { Diagnostic, Line, Source }
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+
+priv const MAX_HEADING_LEVEL: Sz = 6
+priv const MIN_FENCE: Sz = 3
+
+fn read(src: Source@, arena: Arena$@): Document!Diagnostic //<
+    //< The source's blocks in reading order; the arena holds the text that is not a plain view
+    $doc: = Document(arena)
+    $names: = Keyed<|Bool|>(arena)
+    $at: = src.body
+    for at < src.bytes.len
+        line: = src.line_at(at)
+        if is_blank(line.text)
+            at = line.next
+            continue
+        if doc.blocks.len == MAX_BLOCKS
+            throw src.diagnostic(line.offset, "a source holds at most 100,000 blocks")
+        at = read_block(src, line, doc@, names@, arena)!
+    formula.bind_all(doc@, arena)
+    return doc
+
+priv fn read_block(src: Source@, first: Line, doc: Document$@, names: Keyed<|Bool|>$@,
+    arena: Arena$@): Sz!Diagnostic //<
+        //< Reads the block that starts at `first`, and returns where the next one may start
+    if first.text.starts_with("```")
+        return read_fence(src, first, doc.blocks@, arena)
+    if first.text.starts_with("#")
+        doc.blocks.push(read_heading(src, first, doc, arena)!)
+        return first.next
+    if first.text.starts_with(":::")
+        return read_clause(src, first, doc, names, arena)
+    refuse_unmodelled(src, first)!
+    if is_list_marker(first.text)
+        return read_list(src, first, doc, arena)
+    return read_paragraph(src, first, doc, arena)
+
+priv fn read_fence(src: Source@, first: Line, blocks: List<|Block|>$@, arena: Arena$@):
+    Sz!Diagnostic //<
+        //< A code block: everything up to a line of the same backticks and nothing else is literal
+    ticks: = run_of(first.text, '`')
+    label: = first.text.sub_from(ticks)
+    for i in Range.asc(label.len)
+        c: = label[i]
+        if !c.is_alnum() && c != '-' && c != '+' && c != '.'
+            throw src.diagnostic(first.offset + ticks + i,
+                "a code fence's label holds only letters, digits and '_' '-' '+' '.'")
+    fence: = first.text.sub(0, ticks)
+    defer $body: = Str_builder()
+    $at: = first.next
+    for at < src.bytes.len
+        line: = src.line_at(at)
+        if line.text.equals(fence)
+            blocks
+                .push(Block::{ .kind = .code, .level = 0, .label = label,
+                .text = arena.dup_str(body.slice()), .first = 0, .count = 0,
+                .offset = first.offset })
+            return line.next
+        body.s(line.text).c('\n')
+        at = line.next
+    throw src.diagnostic(first.offset,
+        arena.text()
+        .s("this code fence has no closing line. Close it with a line of \{ticks\} backticks")
+        .take())
+
+priv fn read_heading(src: Source@, line: Line, doc: Document$@, arena: Arena$@): Block!Diagnostic //<
+    //< One line: the level, a space and inline text
+    level: = run_of(line.text, '#')
+    if level > MAX_HEADING_LEVEL || level == line.text.len || line.text[level] != ' '
+        throw src.diagnostic(line.offset,
+            "a heading is one to six '#', a space and its text. Write '\\#' for a literal '#'")
+    after: = line.text.sub_from(level + 1)
+    text: = after.trim_spaces()
+    if text.len == 0
+        throw src.diagnostic(line.offset, "this heading has no text")
+    defer $inlines: = Inline_reader(doc)
+    inlines.line(src, text, line.offset + level + 1 + leading(after), doc, arena)!
+    return Block::{ .kind = .heading, .level = level, .label = "", .text = "",
+        .first = inlines.first, .count = inlines.finish(doc, arena), .offset = line.offset }
+
+priv fn read_paragraph(src: Source@, first: Line, doc: Document$@, arena: Arena$@): Sz!Diagnostic //<
+    //< Prose up to a blank line: a source newline becomes a space, an escaped one a hard break
+    defer $inlines: = Inline_reader(doc)
+    $line: = first
+    for
+        $part: = line.text.trim_spaces()
+        at: = line.offset + leading(line.text)
+        hard: = ends_in_hard_break(part)
+        if hard
+            part = part.sub(0, part.len - 1).trim_end()
+        inlines.line(src, part, at, doc, arena)!
+        ends: =
+            line.next >= src.bytes.len || is_blank(src.line_at(line.next).text)
+        if ends
+            if hard
+                throw src.diagnostic(line.offset + line.text.trim_end().len - 1,
+                    "a hard break ends this paragraph. Delete the '\\', or write '\\\\' for a \
+                        literal backslash")
+            break
+        next: = src.line_at(line.next)
+        if starts_block(next.text.trim_start())
+            throw src.diagnostic(next.offset,
+                "put a blank line before this block. To keep it in the paragraph, escape its first \
+                    character")
+        if hard
+            inlines.hard_break(line.offset + line.text.trim_end().len - 1, doc, arena)
+        else
+            inlines.soft_break(at + part.len)
+        line = next
+    doc.blocks
+        .push(Block::{ .kind = .paragraph, .level = 0, .label = "", .text = "",
+        .first = inlines.first, .count = inlines.finish(doc, arena), .offset = first.offset })
+    return line.next
+
+priv fn read_list(src: Source@, first: Line, doc: Document$@, arena: Arena$@): Sz!Diagnostic //<
+    //< Items, one per line, up to a blank line. Each level's items share one marker.
+    start: = doc.items.len
+    $ordered_at: Bool[MAX_NESTING] = ::{}
+    $line: = first
+    for
+        item: = read_item(src, line, doc, arena)!
+        count: = doc.items.len - start
+        marker: = line.offset + item.depth * 2
+        if count == 0 || item.depth > doc.items.get(doc.items.len - 1).depth
+            if count > 0 && item.depth > doc.items.get(doc.items.len - 1).depth + 1
+                throw src.diagnostic(marker,
+                    "an item is nested at most one level deeper than the item before it")
+            ordered_at[item.depth] = item.ordered
+        else if ordered_at[item.depth] != item.ordered
+            throw src.diagnostic(marker,
+                "the items of one list share one marker. Put a blank line between two lists")
+        doc.items.push(item)
+        if line.next >= src.bytes.len || is_blank(src.line_at(line.next).text)
+            break
+        line = src.line_at(line.next)
+    doc.blocks
+        .push(Block::{ .kind = .list, .level = 0, .label = "", .text = "", .first = start,
+        .count = doc.items.len - start, .offset = first.offset })
+    return line.next
+
+priv fn read_item(src: Source@, line: Line, doc: Document$@, arena: Arena$@): Item!Diagnostic //<
+    //< One item: two spaces per level, a marker, a space and its text
+    spaces: = run_of(line.text, ' ')
+    body: = line.text.sub_from(spaces)
+    if !is_list_marker(body)
+        throw src.diagnostic(line.offset + spaces,
+            "a list item takes one line. Put a blank line before a paragraph")
+    if spaces % 2 == 1
+        throw src.diagnostic(line.offset, "a nested item is indented two spaces per level")
+    depth: = spaces / 2
+    if depth >= MAX_NESTING
+        throw src.diagnostic(line.offset + spaces, "a list nests at most 16 levels")
+    ordered: = body[0] != '-'
+    mark: = 1 if !ordered else run_of_digits(body) + 1
+    after: = body.sub_from(mark)
+    text: = after.trim_spaces()
+    if text.len == 0
+        throw src.diagnostic(line.offset + spaces, "this list item has no text")
+    if ends_in_hard_break(text)
+        throw src.diagnostic(line.offset + line.text.trim_end().len - 1,
+            "a list item takes one line and has no hard break. Write '\\\\' for a literal backslash")
+    defer $inlines: = Inline_reader(doc)
+    inlines.line(src, text, line.offset + spaces + mark + leading(after), doc, arena)!
+    return Item::{ .depth = depth, .ordered = ordered, .first = inlines.first,
+        .count = inlines.finish(doc, arena), .offset = line.offset }
+
+priv fn refuse_unmodelled(src: Source@, line: Line): Void!Diagnostic //<
+    //< Refuses a block this reader does not model, rather than reading it as prose
+    text: = line.text
+    if text[0] == ' ' || text[0] == '\t'
+        throw src.diagnostic(line.offset, "a block starts at column one")
+    if text[0] == '|'
+        throw src.diagnostic(line.offset, "a table row stands only inside a ':::table' clause")
+
+priv fn ends_in_hard_break(text: U8[]): Bool //< an odd run of final backslashes escapes the newline
+    $n: Sz = 0
+    for n < text.len && text[text.len - 1 - n] == '\\'
+        n += 1
+    return n % 2 == 1
+
+priv fn is_blank(text: U8[]): Bool //< empty, or spaces and tabs only
+    return text.trim_spaces().len == 0

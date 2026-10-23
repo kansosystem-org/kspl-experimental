@@ -1,0 +1,171 @@
+//< The `lsp` suite's check that a workspace request reads each file as it stands now
+//< Not a suite; `../suite/lsp_test.kspl` calls `run_fresh`. A rename and the references read every
+//< file of the workspace ("The workspace walk reads through the AST cache" in
+//< `../../docs/DESIGN-tools.md`). **A file open in the editor is read from its buffer, and every
+//< other file from the disk, on each request.** An answer built from an older copy puts its
+//< positions on the wrong lines.
+//< Each answer is checked against the bytes the editor applies it to. So a server that answers
+//< from an older copy cannot pass, and one that answers nothing cannot either.
+import "ksplc/tests/support/harness"
+import "ksplc/tests/support/jsonrpc_client"
+import "ksplc/tests/support/lsp_client"
+import "ksplc/tests/support/lsp_read" { col_in_line, decl_line }
+import "ksplc/tests/support/lsp_rename" { edits_in, places }
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/json" + { Json_builder }
+import "std/mem" { Arena }
+import "std/str"
+import "std/verdict"
+
+priv const WORD: U8[] = "helper" //< the function renamed; no other text in the files holds it
+priv const NEW_NAME: U8[] = "aid"
+priv const LIB_REL: U8[] = "lib.kspl"
+priv const USER_REL: U8[] = "user.kspl" //< uses `lib.helper`; `lib` does not import it
+
+priv const LIB_OLD: U8[] = "fn helper(): I32\n    return 2\n"
+priv const LIB_NEW: U8[] = //< `LIB_OLD` with a function above the declaration
+    "fn first(): I32\n    return 1\n\nfn helper(): I32\n    return 2\n"
+
+priv const USER_OLD: U8[] =
+    """import "lib"
+
+fn twice(): I32
+    return lib.helper() + lib.helper()
+"""
+
+priv const USER_NEW: U8[] = //< saved over `USER_OLD`: lines above the uses, and other columns
+    """import "lib"
+
+fn one(): I32
+    return 1
+
+fn two(): I32
+    return 2
+
+fn twice(): I32
+    total: = lib.helper()
+    return total + lib.helper()
+"""
+
+priv const USER_TYPED: U8[] = //< the unsaved buffer; it differs from both saved texts
+    """import "lib"
+
+fn three(): I32
+    return 3
+
+fn twice(): I32
+    return 1 + lib.helper() + lib.helper()
+"""
+
+priv struct Ask //< one client on the workspace `dir`
+    c: jsonrpc_client.Client$@
+    dir: U8[]
+    arena: Arena$@
+
+impl Ask
+    priv fn at(r: Self, rel: U8[], src: U8[], line_head: U8[]): json.Value //<
+        //< the position of `WORD` on the line of `rel` that starts with `line_head`, in `src`
+        line: = decl_line(src, line_head, r.arena)
+        return lsp_client.at_pos(rel, line, col_in_line(src, line_head, WORD, r.arena) + 1,
+            r.arena)
+
+    priv fn rename(r: Self, rel: U8[], src: U8[], line_head: U8[]): json.Value //<
+        //< the whole answer to renaming `WORD` to `NEW_NAME` from that position
+        $b: = Json_builder(r.arena)
+        pos: = r.at(rel, src, line_head)
+        params: = b.obj().set("textDocument", pos.get("textDocument"))
+            .set("position", pos.get("position")).set("newName", b.str_val(NEW_NAME)).build()
+        return lsp_client.answer(r.c, "textDocument/rename", params, lsp_client.WALK_MS, r.arena)
+
+    priv fn save(r: Self, rel: U8[], text: U8[]) //< it writes a file and tells the server nothing
+        fs.write_tree(r.dir, U8[][]::{ rel }, U8[][]::{ text }, r.arena) catch
+            verdict.check("the fresh-bytes workspace can be written again", false, rel)
+
+    priv fn open(r: Self, rel: U8[], text: U8[])
+        r.c
+            .notify("textDocument/didOpen", lsp_client.did_open(rel, text, r.arena),
+            lsp_client.SEND_MS, r.arena) catch {}
+
+    priv fn renames_on(r: Self, label: U8[], got: json.Value, lib: U8[], user: U8[]) //<
+        //< Checks that a rename's edits land on `WORD` in both texts given, and on nothing else
+        lib_edits: = edits_in(got, LIB_REL, r.arena)
+        user_edits: = edits_in(got, USER_REL, r.arena)
+        why: = r.arena.text().s(LIB_REL).s(": ").s(places(lib_edits@, r.arena)).s(USER_REL).s(": ")
+            .s(places(user_edits@, r.arena)).take()
+        verdict.check(label,
+            all_on(lib_edits@, lib, r.arena) && all_on(user_edits@, user, r.arena),
+            lsp_client.why(r.c, why, r.arena))
+
+fn run_fresh(exe: U8[], arena: Arena$@) //<
+    //< Starts a server on a workspace of its own and changes the files under it between requests
+    dir: = harness.sandbox("lsp_fresh")
+    fs.write_tree(dir, U8[][]::{ LIB_REL, USER_REL }, U8[][]::{ LIB_OLD, USER_OLD }, arena) catch
+        verdict.check("the fresh-bytes workspace can be laid out", false, dir)
+        return
+    $c: =
+        lsp_client.start(exe, U8[][]::{ .ptr = null, .len = 0 }, dir, arena) catch
+        verdict.check("the fresh-bytes workspace's server starts", false, dir)
+        return
+    defer c.free()
+    _init: =
+        c.request("initialize", lsp_client.empty_obj(arena), lsp_client.READ_MS, arena) catch {}
+    ask: = Ask::{ .c = c@, .dir = dir, .arena = arena }
+    check_saved(ask)
+    check_typed(ask)
+
+priv fn check_saved(ask: Ask) //<
+    //< A file the editor does not have open is read from the disk on each request
+    //< The first request reads `USER_OLD`. Then the file is saved with no notification, as another
+    //< program or the editor itself can do.
+    ask.open(LIB_REL, LIB_OLD)
+    ask.renames_on("a rename reaches the uses in a file nobody opened",
+        ask.rename(LIB_REL, LIB_OLD, "fn helper"), LIB_OLD, USER_OLD)
+    ask.save(USER_REL, USER_NEW)
+    ask.renames_on("a rename after a save with no notification lands on the saved bytes",
+        ask.rename(LIB_REL, LIB_OLD, "fn helper"), LIB_OLD, USER_NEW)
+    // The references come from the same list of uses as the rename. Both are checked, so a change
+    // that reaches only one shows.
+    refs: = lsp_client.answer(ask.c, "textDocument/references",
+        ask.at(LIB_REL, LIB_OLD, "fn helper"), lsp_client.WALK_MS, ask.arena)
+    found: = refs.get("result").arr_list(ask.arena)
+    $in_user: = List<|json.Value|>(ask.arena)
+    for i in Range.asc(found.len)
+        if found.get(i).get("uri").as_str().unwrap_or("").equals(USER_REL)
+            in_user.push(found.get(i))
+    verdict.check("the references after a save with no notification are on the saved bytes",
+        all_on(in_user@, USER_NEW, ask.arena),
+        lsp_client.why(ask.c, places(found@, ask.arena), ask.arena))
+
+priv fn check_typed(ask: Ask) //<
+    //< A file the editor has open is read from its buffer, whatever the disk holds
+    //< The editor applies the edits to the buffer, so positions read from the disk land on the
+    //< wrong lines there. The request is made from each file in turn: one that only the walk
+    //< reaches, and the one the cursor is in.
+    ask.open(USER_REL, USER_TYPED)
+    ask.renames_on("a rename reaches an open file's unsaved typing, not its saved bytes",
+        ask.rename(LIB_REL, LIB_OLD, "fn helper"), LIB_OLD, USER_TYPED)
+    // **The other way round**: `lib` is closed and saved with no notification.
+    lsp_client.close(ask.c, LIB_REL, ask.arena)
+    ask.save(LIB_REL, LIB_NEW)
+    ask.renames_on("a rename made in unsaved typing lands on it, and on the saved bytes elsewhere",
+        ask.rename(USER_REL, USER_TYPED, "    return 1 + lib"), LIB_NEW, USER_TYPED)
+
+priv fn all_on(edits: List<|json.Value|>@, text: U8[], arena: Arena$@): Bool //<
+    //< Whether each range covers exactly `WORD` in `text`, and there is one per `WORD`
+    //< **None at all fails**: a server that answers nothing must not pass.
+    if edits.len == 0 || edits.len != text.count_str(WORD)
+        return false
+    lines: = text.lines(arena)
+    for i in Range.asc(edits.len)
+        range: = edits.get(i).get("range")
+        line: = range.get("start").get("line").as_int().unwrap_or(-1)
+        from: = range.get("start").get("character").as_int().unwrap_or(-1)
+        to: = range.get("end").get("character").as_int().unwrap_or(-1)
+        if line < 0 || from < 0 || to < from || Sz::line >= lines.len ||
+            range.get("end").get("line").as_int().unwrap_or(-1) != line
+            return false
+        if !lines.get(line).sub(from, to - from).equals(WORD)
+            return false
+    return true

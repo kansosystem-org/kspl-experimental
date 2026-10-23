@@ -21,8 +21,8 @@ priv const ARENA_FQN: U8[] = "std.mem.Arena" //< the arena's type, as the analys
 
 fn lint_written(root: Ast_node$@, c: Sema_ctx$@) //<
     //< Runs the four lints over every file's written declarations
-    $enums: = Map<|U8[], Bool|>.new(base_core.arena)
-    $plain_impls: = Map<|U8[], Ast_node$@|>.new(base_core.arena)
+    $enums: = Map<|U8[], Bool|>(base_core.arena)
+    $plain_impls: = Map<|U8[], Ast_node$@|>(base_core.arena)
     for child_node in root.children
         child: = child_node.unwrap_top_level()
         if child.kind_id == .k_decl_enum && !child.is_generic_template()
@@ -47,7 +47,7 @@ priv fn lint_enum_function(c: Sema_ctx$@, f: Ast_node$@, enums: Map<|U8[], Bool|
     //< generic function, one C calls (`#export`) and one the compiler made are left out too.
     if f.is_generic_template() || f.has_attribute("export") || f.made_by_compiler()
         return
-    for p in base_ast_ext.Param_cursor.new(f.get_fn_params(), false)
+    for p in base_ast_ext.Param_cursor(f.get_fn_params(), false)
         // **The name written alone is the enum by value**: `State@`, `State[]` and `m.State` name
         // other types, and give no bare name.
         name: = p.get_decl_type_node().bare_written_name()
@@ -183,7 +183,7 @@ priv fn lint_arena_defaults(c: Sema_ctx$@, f: Ast_node$@) //<
     //< `docs/DESIGN-principles.md`. **The type is read as the analysis resolved it**, so an arena
     //< behind a typedef or a pointer is found. A template's parameter has no resolved type, so its
     //< written name is read instead.
-    for p in base_ast_ext.Param_cursor.new(f.get_fn_params(), false)
+    for p in base_ast_ext.Param_cursor(f.get_fn_params(), false)
         if p.get_param_default() == null || !takes_arena(c, p)
             continue
         c.information(p,

@@ -1,0 +1,127 @@
+//< The blocks and inline nodes a ksmd source holds, as the reader builds them and the writer saves
+//< them
+//< Text views borrow the source bytes or the arena that built the document. Keep both alive.
+//< A table's rows and columns carry identities that the source does not show, and a formula's
+//< references attach to them: an edit moves a row, and the references move with it.
+import "std/ds" { List }
+import "std/mem" { Arena }
+
+const MAX_BLOCKS: Sz = 100000 //< the most blocks one source holds
+const MAX_NESTING: Sz = 16 //< the most levels a list nests
+const MAX_COLUMNS: Sz = 256 //< the columns of one table
+const MAX_ROWS: Sz = 10000 //< the data rows of one table
+const MAX_CELLS: Sz = 100000 //< the cells of one table, the header's included
+const MAX_FORMULA: Sz = 4096 //< the bytes of one formula as written, after its `=`
+const MAX_WEIGHT: Sz = 10000 //< the largest relative width of one column
+
+enum Block_kind //< what one block is
+    paragraph //< inline nodes, where a hard break is a node of its own
+    heading //< one line of inline nodes, at `level` 1 to 6
+    code //< literal lines in `text`, each ending in a newline; `label` names its language
+    list //< the items `Document.items` holds from `first`, `count` of them
+    table //< the table `Document.tables` holds at `first`
+    include //< another source, whose path relative to this one is `text`
+    image //< the image `Document.images` holds at `first`
+
+struct Block
+    kind: Block_kind
+    level: Sz //< a heading's level, 1 to 6; 0 for any other block
+    label: U8[] //< a code block's language label, or empty
+    text: U8[] //< a code block's lines, or an include's path; empty for any other block
+    first: Sz //< a list's first item, a paragraph's or heading's first inline node, or the index
+        //< of a table or an image; 0 for code and includes
+    count: Sz //< how many items or inline nodes it holds; 1 for a table or an image
+    offset: Sz //< where the block starts in the original bytes
+
+struct Item //< one list item, on one source line
+    depth: Sz //< 0 at the top; one more per nesting level
+    ordered: Bool //< numbered rather than bulleted; the number is generated
+    first: Sz //< its first inline node in `Document.inlines`
+    count: Sz //< how many inline nodes it holds
+    offset: Sz //< where its line starts in the original bytes
+
+enum Inline_kind //< what one inline node is
+    //< A mark is a start node and an end node, with what it marks between them. Marks nest.
+    text //< literal text in `text`, with its escapes resolved
+    code //< literal code in `text`
+    hard_break //< a line break inside a paragraph
+    emphasis_start
+    emphasis_end
+    strong_start
+    strong_end
+    link_start //< `text` is the destination; the nodes up to `link_end` are its label
+    link_end
+
+struct Inline
+    kind: Inline_kind
+    text: U8[] //< what `Inline_kind` names; empty for the other kinds
+    offset: Sz //< where the node starts in the original bytes
+
+struct Table //< a calculating table: a header row of names, then rows of cells
+    name: U8[] //< unique among the tables of one source
+    cells: List<|Cell|> //< the header's cells, then each data row's, left to right
+    rows: List<|Sz|> //< each data row's identity, from the top
+    columns: List<|Sz|> //< each column's identity, from the left
+    next_id: Sz //< the identity the next new row or column takes; no two share one
+    pieces: List<|Piece|> //< the pieces of every formula in this table, each formula's in one run
+    weights: List<|Sz|> //< one relative width per column, or none when the source gave none
+
+enum Cell_kind //< what one table cell holds
+    empty
+    text //< `text` is the decoded string; every header cell is text
+    number //< a finite decimal number, as written in `text`
+    formula //< the pieces from `first` in `Table.pieces`; it is kept, never its result
+
+struct Cell
+    kind: Cell_kind
+    text: U8[] //< a text's decoded string or a number as written; empty for the other kinds
+    first: Sz //< a formula's first piece; 0 for the other kinds
+    count: Sz //< how many pieces a formula holds; 0 for the other kinds
+    offset: Sz //< where the cell's value starts in the original bytes; 0 for an edited cell
+
+enum Piece_kind //< what one piece of a formula is
+    text //< bytes kept as written, a reference that names no cell and `#REF!` among them
+    cell //< a reference to the cell at `from`
+    range //< a reference to the rectangle between `from` and `to`, corners in either order
+
+struct Corner //< a cell a reference attaches to, by the identities of its row and column
+    row: Sz
+    column: Sz
+    fixed_row: Bool //< written `$` before the row number: a copy keeps this row
+    fixed_column: Bool //< written `$` before the column letters: a copy keeps this column
+
+struct Piece //< one piece of a formula's source
+    kind: Piece_kind
+    text: U8[] //< a text piece's bytes; empty for the other kinds
+    table: Sz //< the table a reference points into, by its place in `Document.tables`
+    named: Bool //< written with the table's name, as in `budget.D1`
+    from: Corner
+    to: Corner //< a range's other corner; the same as `from` for one cell
+
+struct Image //< an image in the document flow
+    src: U8[] //< its path relative to this source
+    alt: U8[] //< the alternate text; empty for a decorative image
+    caption: U8[] //< empty when it has none
+
+struct Document
+    blocks: List<|Block|>
+    items: List<|Item|> //< every list's items, each list's in one run
+    inlines: List<|Inline|> //< every block's and item's inline nodes, each one's in one run
+    tables: List<|Table|> //< a table keeps its place here, which its block and references name
+        //< A removed table stays as an empty table with no name, so the others keep their places.
+    images: List<|Image|>
+
+impl Document
+    fn new(arena: Arena$@): Document //< an empty document, whose lists grow in `arena`
+        return Document::{ .blocks = List<|Block|>(arena), .items = List<|Item|>(arena),
+            .inlines = List<|Inline|>(arena), .tables = List<|Table|>(arena),
+            .images = List<|Image|>(arena) }
+
+impl Table
+    fn new(name: U8[], arena: Arena$@): Table //< a table with no cells, rows or columns yet
+        return Table::{ .name = name, .cells = List<|Cell|>(arena), .rows = List<|Sz|>(arena),
+            .columns = List<|Sz|>(arena), .next_id = 0, .pieces = List<|Piece|>(arena),
+            .weights = List<|Sz|>(arena) }
+
+    fn at(t: Self@, row: Sz, column: Sz): Sz //< where a data cell stands in `cells`
+        return (row + 1) * t.columns.len + column

@@ -122,7 +122,7 @@ const GATES: Gate[_] = ::{
         .shard = .none, .macos = true, .stops = false },
     // Each needs a tool only the devcontainer image holds: `<ucontext.h>`, `qemu-system-arm`, node,
     // wasm-ld and a browser, `desktop-file-validate`, libopenblas, ThreadSanitizer, the address and
-    // leak sanitizers. **A browser and the validator are required here** (`KSPAGE_REQUIRE_*`): the
+    // leak sanitizers. **A browser and the validator are required here** (`KSMD_REQUIRE_*`): the
     // image bundles them, so their absence is a fault, not the place.
     Gate::{ .log = "ksos_posix", .args = "test-ksos-posix", .par = .serial, .verdict = false,
         .shard = .linux, .macos = false, .stops = false },
@@ -130,15 +130,15 @@ const GATES: Gate[_] = ::{
         .shard = .linux, .macos = false, .stops = false },
     Gate::{ .log = "js_syntax", .args = "test-js-syntax", .par = .serial, .verdict = true,
         .shard = .linux, .macos = false, .stops = false },
-    Gate::{ .log = "kspage_wasm", .args = "test-kspage-wasm", .par = .serial, .verdict = true,
-        .shard = .linux, .macos = false, .stops = false },
-    Gate::{ .log = "kspage_served", .args = "test-kspage-served KSPAGE_REQUIRE_BROWSER=1",
+    // ksmd's page in Chromium, driven by real input events (`ksmd/tests/browser/main.mjs`).
+    Gate::{ .log = "ksmd_browser", .args = "test-ksmd-browser KSMD_REQUIRE_BROWSER=1",
         .par = .serial, .verdict = true, .shard = .linux, .macos = false, .stops = false },
-    Gate::{ .log = "kspage_desktop", .args = "test-kspage-desktop KSPAGE_REQUIRE_DESKTOP=1",
+    Gate::{ .log = "ksmd_desktop", .args = "test-ksmd-desktop KSMD_REQUIRE_DESKTOP=1",
         .par = .serial, .verdict = true, .shard = .linux, .macos = false, .stops = false },
-    // Two opens at once (`tools/tests/open_together.kspl`). **Linux alone**, so the opener's lock
-    // on Windows goes unchecked ("What each platform runs" in `docs/SPEC-gates.md`).
-    Gate::{ .log = "kspage_open", .args = "test-kspage-open", .par = .serial, .verdict = true,
+    // ksmd's launcher run as a double-click runs it, two opens at once included
+    // (`tools/tests/ksmd_launch.kspl`). **Linux alone**, so the launcher's lock on Windows goes
+    // unchecked ("What each platform runs" in `docs/SPEC-gates.md`).
+    Gate::{ .log = "ksmd_open", .args = "test-ksmd-open", .par = .serial, .verdict = true,
         .shard = .linux, .macos = false, .stops = false },
     // Caution: **Build and run the BLAS backend for real.** `lint-cfg` reads its branch, but only
     // a link shows whether the FFI is right.
@@ -249,13 +249,15 @@ const EXPECTED_SKIPS: Expected_skip[_] = ::{
     Expected_skip::{ .on = "darwin", .says = "no browser" },
     Expected_skip::{ .on = "darwin", .says = "no util-linux `script`" },
     Expected_skip::{ .on = "darwin", .says = "desktop-file-validate is not installed" },
+    Expected_skip::{ .on = "darwin", .says = "update-mime-database is not installed" },
+    Expected_skip::{ .on = "darwin", .says = "update-desktop-database is not installed" },
 }
 
 fn skip_lines(text: U8[], arena: Arena$@): List<|U8[]|> //< a log's lines that say a check skipped
     //< **A line skips when it opens with the mark**, past any `#` and spaces before it: `SKIP …`,
     //< `#   SKIP: …` or `RESULT: SKIPPED …`. A line that only names the word, as a check's label
     //< can (`pass conventions: every SKIP reason …`), is no skip.
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     for line in text.lines(arena)
         if is_skip_line(line)
             out.push(line)
@@ -367,7 +369,7 @@ fn outcomes(j: Judge@, arena: Arena$@): List<|Outcome|> //<
     //< What the gates left, in the table's order
     //< **A gate with no log did not run** and is left out; one with a log and no `.end` was cut
     //< short, and counts as fallen.
-    $out: = List<|Outcome|>.new(arena)
+    $out: = List<|Outcome|>(arena)
     for g in GATES
         log: = log_path(g.log, arena)
         if !fs.exists(log)
@@ -392,7 +394,7 @@ fn outcome_of(g: Gate, text: U8[], ended: U8[], j: Judge@, arena: Arena$@): Outc
     for line in skips
         if judge.unexpected(line)
             odd += 1
-    $why: = List<|Cause|>.new(arena)
+    $why: = List<|Cause|>(arena)
     if !ok
         why = causes(text, g.log, g.verdict, judge@, arena)
     return Outcome::{ .log = g.log, .ok = ok, .sec = sec, .skips = skips.len, .unexpected = odd,
@@ -430,7 +432,7 @@ fn run_capped(argv: U8[][], name: U8[], log: U8[], cap_s: I64, started: I64): I3
                     .flush()
                 next = now + NOTICE_US
         case .timed_out
-            defer $line: = Str_builder.new()
+            defer $line: = Str_builder()
             line.s(OVER_CAP_HEAD).s(name).s(OVER_CAP_MID).s("\{cap_s\}").s(OVER_CAP_TAIL).c('\n')
             io.out().s(line.slice()).flush()
             defer $f: = io.open(log, "ab") catch
@@ -499,7 +501,7 @@ fn causes(text: U8[], log: U8[], verdict: Bool, j: Judge@, arena: Arena$@): List
     //< **The log's last lines stand in where no line of the gate's own names a cause** (a C
     //< compiler's error, a crash). Make's line names only the target that stopped.
     lines: = text.lines(arena)
-    $out: = List<|Cause|>.new(arena)
+    $out: = List<|Cause|>(arena)
     $own: = false
     $passed: = false
     for line in lines
@@ -521,7 +523,7 @@ fn causes(text: U8[], log: U8[], verdict: Bool, j: Judge@, arena: Arena$@): List
         from -= 1
         if lines.get(from).trim_spaces().len > 0
             kept += 1
-    for i in Range.new(from, lines.len, 1)
+    for i in Range(from, lines.len, 1)
         if lines.get(i).trim_spaces().len > 0 &&
             !holds(out@, lines.get(i).trim_spaces())
             out.push(Cause::{ .kind = .tail, .line = lines.get(i).trim_end() })
@@ -579,7 +581,7 @@ fn digest_plain(outs: List<|Outcome|>@, jobs: I64, j: Judge@, b: Str_builder$@) 
         .s(LOG_DIR).s("/<gate>.log)\n")
     for i in Range.asc(outs.len)
         o: = outs.get(i)
-        defer $row: = Str_builder.new()
+        defer $row: = Str_builder()
         row.s("#   ").s(o.log)
         for $k: Sz = o.log.len; k < 15; k += 1
             row.c(' ')

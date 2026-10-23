@@ -36,9 +36,8 @@ TOOL_MAINS := $(shell grep -lE '^(pub )?fn main\b' tools/*.kspl)
 # Entries called from outside their I0402 package: linted with it off, their callers with it on.
 # Every ksplc suite stands on its harness, which the root's suites call too.
 LINT_SUITES_OWN := $(wildcard ksplc/tests/suite/*.kspl)
-LINT_TARGETS_OWN := ksplc/tests/main.kspl kspage/tests/main.kspl ksos/tests/main.kspl \
-	tools/tests/main.kspl \
-	kspage/tests/fuzz_main.kspl tools/repo_stat.kspl tools/seed_sum.kspl $(LINT_SUITES_OWN)
+LINT_TARGETS_OWN := ksplc/tests/main.kspl ksos/tests/main.kspl tools/tests/main.kspl \
+	tools/repo_stat.kspl tools/seed_sum.kspl $(LINT_SUITES_OWN)
 
 # Caution: **Keep tests/debug/main.kspl**: some code (std/regex, generics) is reached only from it.
 # **Suites, `ksplc/tests/prog/` and the POSIX demos come by wildcard**: nothing else lints their
@@ -50,11 +49,12 @@ LINT_TARGETS := ksplc/main.kspl tests/debug/main.kspl ksai/examples/llama_engine
 	tools/ai_assist/build_corpus.kspl tools/ai_assist/eval_fim.kspl tools/ai_assist/make_fim.kspl \
 	tools/ai_assist/train_bpe.kspl \
 	ksos/port/rp2040/pad_checksum.kspl ksos/port/rp2040/elf2uf2.kspl \
-	$(filter-out $(LINT_TARGETS_OWN),$(TOOL_MAINS)) tools/kspage_aim.kspl tools/tests/open_together.kspl \
+	$(filter-out $(LINT_TARGETS_OWN),$(TOOL_MAINS)) tools/opener_aim.kspl tools/opener.kspl \
+	tools/tests/ksmd_launch.kspl \
 	ksai/benches/run_bench.kspl \
-	kspage/port/web/bundle.kspl kspage/content/example.kspl kspage/tests/open_prog.kspl ksai/tests/read_prog.kspl \
+	ksai/tests/read_prog.kspl ksmd/port/web/bundle.kspl ksmd/tests/measure.kspl \
 	std/tests/read_prog.kspl $(filter-out $(LINT_TARGETS_OWN),$(wildcard */tests/fuzz_main.kspl)) \
-	ksai/tests/main.kspl ksbind/tests/main.kspl ksdb/tests/main.kspl kspeg/tests/main.kspl \
+	ksai/tests/main.kspl ksbind/tests/main.kspl ksdb/tests/main.kspl kspeg/tests/main.kspl ksmd/tests/main.kspl \
 	kssrv/tests/main.kspl \
 	std/tests/main.kspl \
 	kssrv/tests/copy.kspl ksai/tests/examples_main.kspl \
@@ -68,7 +68,7 @@ LINT_TARGETS := ksplc/main.kspl tests/debug/main.kspl ksai/examples/llama_engine
 
 LINT_TARGETS_FREE := $(wildcard ksos/demo/cortex_m/*.kspl) \
 	$(wildcard ksos/demo/rp2040/*.kspl) $(wildcard ksos/demo/nrf51/*.kspl) \
-	kspage/port/web/bridge.kspl
+	ksmd/port/web/bridge.kspl
 
 # $(call lint_clean,<log>,<what was linted>,<ksplc's exit status>): passes where ksplc ended with 0
 # and the log's whole tally line counts nothing down to Hint, and otherwise shows it and fails.

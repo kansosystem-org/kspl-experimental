@@ -53,7 +53,7 @@ priv fn reports_of(text: U8[], arena: Arena$@): List<|U8[]|> //<
     //< One line per report in a sanitizer's log: its summary, or its first line where none came
     //< **A report cut short still counts** (a process killed part way). **A pure function of one
     //< text** (`REPORT_SAMPLES`).
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     $open: U8[] = ""
     for line in text.lines(arena)
         if opens_report(line)
@@ -107,7 +107,7 @@ priv fn sanitized_argv(run: Sanitized, arena: Arena$@): U8[][] //<
     //< argv as a sanitized run starts it: its logs in its own folder, `env` set
     //< **Each process writes its own log** (`asan.<pid>`, `ubsan.<pid>`), so a child the program
     //< starts is heard too.
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     out.push("env")
     out
         .push(arena.text().s(ASAN_OPTIONS).s(":log_path=")
@@ -123,7 +123,7 @@ priv fn sanitized_argv(run: Sanitized, arena: Arena$@): U8[][] //<
 
 priv fn run_all(runs: List<|Sanitized|>@, work: U8[], arena: Arena$@): List<|verdict.Run_out|> //<
     //< Runs every run side by side, each logging into a fresh folder of its own
-    $jobs: = List<|subproc.Job|>.new(arena)
+    $jobs: = List<|subproc.Job|>(arena)
     for r in runs
         fs.mkdir_all(r.log_dir) catch {}
         jobs.push(subproc.Job::{ .argv = sanitized_argv(r, arena), .cwd = r.dir })
@@ -216,9 +216,9 @@ priv fn backend_name(llvm: Bool): U8[] //< the backend, in a check's words
 
 priv fn check_fires(work: U8[], arena: Arena$@) //<
     //< Each fault written on purpose is reported, through the same build and run as the tests
-    $runs: = List<|Sanitized|>.new(arena)
-    $names: = List<|U8[]|>.new(arena)
-    $wants: = List<|U8[]|>.new(arena)
+    $runs: = List<|Sanitized|>(arena)
+    $names: = List<|U8[]|>(arena)
+    $wants: = List<|U8[]|>(arena)
     for k in Range.asc(PLANTED.len)
         p: = PLANTED[k]
         src: = fs.join(work, arena.text().s("planted\{k\}.kspl").take(), arena)
@@ -282,13 +282,13 @@ priv const PKG_TESTS: Pkg_tests[_] = ::{
         .own_folder = false },
     Pkg_tests::{ .pkg = "std", .entry = "std/tests/main.kspl", .takes_ksplc = true,
         .own_folder = true },
-    Pkg_tests::{ .pkg = "kspage", .entry = "kspage/tests/main.kspl", .takes_ksplc = false,
+    Pkg_tests::{ .pkg = "ksmd", .entry = "ksmd/tests/main.kspl", .takes_ksplc = false,
         .own_folder = false },
 }
 
 priv fn sanitize_pkg_tests(work: U8[], arena: Arena$@) //<
     //< Each package's own tests (`make test` in its folder), built through each backend
-    $runs: = List<|Sanitized|>.new(arena)
+    $runs: = List<|Sanitized|>(arena)
     for t in PKG_TESTS
         dir: = fs.join(harness.root(), t.pkg, arena)
         entry: = fs.join(harness.root(), t.entry, arena)
@@ -301,7 +301,7 @@ priv fn sanitize_pkg_tests(work: U8[], arena: Arena$@) //<
             if b.exe.len == 0
                 verdict.check(name, false, b.why)
                 continue
-            $argv: = List<|U8[]|>.new(arena)
+            $argv: = List<|U8[]|>(arena)
             argv.push(b.exe)
             if t.takes_ksplc
                 argv.push(ksplc_harness.ksplc_exe())

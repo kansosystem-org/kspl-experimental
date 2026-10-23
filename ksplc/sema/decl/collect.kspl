@@ -140,7 +140,7 @@ priv fn register_type_symbols(r: Ast_node$@, c: Sema_ctx$@) //<
             struct_reg: = child.register_type_sym(c, top_vis, .struct_def, .generic_struct)
             switch struct_reg
             case .ok(_n, _f, type_id)
-                struct_def: = sema_type_def.Struct_def.new()
+                struct_def: = sema_type_def.Struct_def()
                 struct_def.pending_decl = null if is_generic_decl else child
                 c.env.id_to_type.get(type_id).info = .struct_type(struct_def)
             default {}
@@ -149,7 +149,7 @@ priv fn register_type_symbols(r: Ast_node$@, c: Sema_ctx$@) //<
             switch enum_reg
             case .ok(_n, _f, type_id)
                 i32_id: = I32::sema_type_env.Builtin_type_id.i32_type
-                enum_def: = sema_type_def.Enum_def.new(i32_id)
+                enum_def: = sema_type_def.Enum_def(i32_id)
                 enum_def.pending_decl = null if is_generic_decl else child
                 c.env.id_to_type.get(type_id).info = .enum_type(enum_def)
             default {}
@@ -157,14 +157,13 @@ priv fn register_type_symbols(r: Ast_node$@, c: Sema_ctx$@) //<
             trait_reg: = child.register_type_sym(c, top_vis, .trait_def, .generic_trait)
             switch trait_reg
             case .ok(_n, _f, type_id)
-                c.env.id_to_type.get(type_id).info =
-                    .trait_type(sema_type_def.Trait_def.new())
+                c.env.id_to_type.get(type_id).info = .trait_type(sema_type_def.Trait_def())
             default {}
         case .k_decl_typedef
             name: = child.get_decl_id_text()
             if name.len > 0
                 fqn: = c.make_fqn(name)
-                sym: = Sema_symbol.new(.alias_def, name, child)
+                sym: = Sema_symbol(.alias_def, name, child)
                 sym.vis = top_vis
                 c.declare_symbol_with_fqn(name, fqn, sym)
         default {}
@@ -218,7 +217,7 @@ priv fn register_value_symbols(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error //
             id_node: = child.get_embed_id()
             child.ice_assert(id_node != null, "AST Access Error: embed missing identifier")
             name: = id_node.text
-            sym: = Sema_symbol.new(.constant, name, child)
+            sym: = Sema_symbol(.constant, name, child)
             sym.vis = top_vis
             // An embed is "a slice of immutable elements" (`U8[]`): make_const goes on the element,
             // not on the slice (that is "an immutable slice descriptor").
@@ -242,7 +241,7 @@ priv fn build_registries(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error //<
     // Caution: **Finish this before the registries are built**: a struct field of an instantiated
     // type needs that type's conformance.
     c.drain_pending_instances()!
-    defer gen_params: = base_core.arena.create(List<|Ast_node$@|>.new(null))
+    defer gen_params: = base_core.arena.create(List<|Ast_node$@|>(null))
 
     for top_node in r.children
         child: = top_node.unwrap_top_level()
@@ -362,7 +361,7 @@ impl Ast_node
         if has_gen
             sym_kind = .generic_fn
 
-        sym: = Sema_symbol.new(sym_kind, name, r)
+        sym: = Sema_symbol(sym_kind, name, r)
         sym.vis = top_vis
         // Caution: A generic function template's own return type must not be resolved here. T is
         // bound to nothing yet, so resolve_type would take `T?`'s T for a real type. An
@@ -409,7 +408,7 @@ impl Ast_node
             // Marked as a template with no type arguments (`impl<||> Slice<|U8|>`).
             // Caution: **Mark both the impl and the methods.** is_generic_template in
             // base/ast_ext.kspl cannot walk to the parent.
-            gen_params_node = Ast_node.new(.k_type_gen_params, "", r.loc)
+            gen_params_node = Ast_node(.k_type_gen_params, "", r.loc)
             r.insert_child(0, gen_params_node)
             c.generics.impls.push(r)
 
@@ -509,7 +508,7 @@ impl Ast_node
             return
 
         m_kind: = sema_type_scope.Sym_kind.function(false)
-        sym: = Sema_symbol.new(m_kind, arena_full_name, m)
+        sym: = Sema_symbol(m_kind, arena_full_name, m)
         sym.vis = m.get_visibility()
         sym.flags.is_method = true
 
@@ -547,7 +546,7 @@ impl Ast_node
         is_variadic: = item.has_variadic_param()
 
         sym_kind: = sema_type_scope.Sym_kind.function(is_variadic)
-        sym: = Sema_symbol.new(sym_kind, name, item)
+        sym: = Sema_symbol(sym_kind, name, item)
         sym.vis = item.get_visibility()
         sym.flags.is_ext = true
 
@@ -560,7 +559,7 @@ impl Ast_node
         params: = item.get_fn_params()
         if params == null
             return
-        for p_node in base_ast_ext.Param_cursor.new(params, false)
+        for p_node in base_ast_ext.Param_cursor(params, false)
             pt_node: = p_node.get_decl_type_node()
             if pt_node != null
                 pt_id: = pt_node.resolve_type(c)!
@@ -587,7 +586,7 @@ impl Ast_node
         if id_node == null
             return
         sym_kind: = sema_type_scope.Sym_kind.variable
-        sym: = Sema_symbol.new(sym_kind, id_node.text, item)
+        sym: = Sema_symbol(sym_kind, id_node.text, item)
         sym.vis = item.get_visibility()
         sym.flags.is_ext = true
         sym.type_id = t_id
@@ -604,7 +603,7 @@ impl Ast_node
         if id_node == null
             return
         name: = id_node.text
-        sym: = Sema_symbol.new(.struct_def, name, item)
+        sym: = Sema_symbol(.struct_def, name, item)
         sym.vis = item.get_visibility()
         sym.flags.is_ext = true
         sym.type_id = c.env.get_or_add(name)
@@ -613,7 +612,7 @@ impl Ast_node
             c.declare_symbol(qualified, sym, true)
             c.env.type_to_id.set(qualified, sym.type_id)
 
-        struct_def: = sema_type_def.Struct_def.new()
+        struct_def: = sema_type_def.Struct_def()
         entry: = c.env.id_to_type.get(c.env.get_real_type(sym.type_id))
         if entry != null
             entry.info = .struct_type(struct_def)
@@ -630,7 +629,7 @@ impl Ast_node
                 sym_kind: =
                     (sema_type_scope.Sym_kind.constant if is_const
                     else sema_type_scope.Sym_kind.variable)
-                sym: = Sema_symbol.new(sym_kind, c_child.text, r)
+                sym: = Sema_symbol(sym_kind, c_child.text, r)
                 sym.vis = top_vis
                 sym.flags.is_mut = !is_const && r.text.is_mut_binding_kw()
                 sym.apply_attributes()
@@ -659,7 +658,7 @@ impl Ast_node
             shared_type_id = type_node.resolve_type(c)!
             c.check_type_vis_leak(type_node, top_vis, "declared type", "declaration")
 
-        for k in Range.new(1, children_len, 1)
+        for k in Range(1, children_len, 1)
             c_child: = r.get_child(k)
             if c_child.kind_id == .k_identifier
                 name: = c_child.text

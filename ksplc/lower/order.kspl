@@ -1,8 +1,9 @@
 //< Fixes the order in which an expression's operands run, where C would leave it open
-//< C evaluates a call's arguments, an operator's two sides and a compound literal's fields in an
-//< order of its own choosing. gcc takes a call's arguments from the right, clang from the left.
-//< KSPL evaluates them left to right ("Evaluation order" in docs/SPEC-programming-language.md). So
-//< an operand that a later operand could disturb is moved into a temporary ahead of the statement.
+//< C evaluates a call's arguments, an operator's two sides, a compound literal's fields and an
+//< assignment's two sides in an order of its own choosing. gcc takes a call's arguments from the
+//< right, clang from the left. KSPL evaluates them left to right, but an assignment's value before
+//< its place ("Evaluation order" in docs/SPEC-programming-language.md). So an operand that a later
+//< operand could disturb is moved into a temporary ahead of the statement.
 //< It also places the retain that an operand taken with a count owes, so a later operand's `!`
 //< never leaves that count behind. See "The rules for implementing ARC" in
 //< ksplc/docs/DESIGN-lower.md.
@@ -15,6 +16,7 @@ import "ksplc/lower/arc" { Arc_take }
 import "ksplc/lower/arc" as lower_arc
 import "ksplc/lower/ctx" { Lowering_ctx }
 import "ksplc/lower/root" as lower_root
+import "ksplc/sema/decl/access" as _sema_decl_access // `address_is_readonly`
 import "ksplc/sema/decl/layout" as sema_decl_layout
 import "ksplc/sema/type/query" as sema_type_query
 import "ksplc/sema/type/scope" { Sema_symbol }
@@ -39,6 +41,7 @@ struct Operand_slot //< one operand, named by its parent and its position there
     parent: Ast_node$@
     idx: Sz
     by_address: Bool //< whether it is a place the consumer reads through its address
+    writes: Bool //< whether it is the place a plain `=` writes, which is never read
     takes: Bool //< whether the consumer takes it as a managed value with a count of its own
     take: Arc_take //< the retain that count owes, decided before anything is lowered
     fresh: Bool //< whether it brings that count itself (a new value), decided with take
@@ -59,14 +62,27 @@ impl Operand_order: Manual_free
 
 impl Operand_order
     fn new(): Operand_order
-        return Operand_order::{ .slots = List<|Operand_slot|>.new(null), .finished = false }
+        return Operand_order::{ .slots = List<|Operand_slot|>(null), .finished = false }
 
     fn add(r: Self$@, parent: Ast_node$@, idx: Sz, by_address: Bool)
         if parent != null && idx < parent.children.len
             r.slots
                 .push(Operand_slot::{ .parent = parent, .idx = idx, .by_address = by_address,
-                .takes = false, .take = Arc_take::{ .src = null, .once_lowered = false },
-                .fresh = false, .retained = false, .live_name = "" })
+                .writes = false, .takes = false,
+                .take = Arc_take::{ .src = null, .once_lowered = false }, .fresh = false,
+                .retained = false, .live_name = "" })
+
+    fn add_target(r: Self$@, parent: Ast_node$@, idx: Sz) //<
+        //< The place a plain `=` writes, added after its value: only its address matters
+        //< A name, or a field of one, is then `fixed` whatever its type. As the last operand, it
+        //< never moves. A compound assignment's place is read too, so it is added with `add`.
+        before: = r.slots.len
+        r.add(parent, idx, true)
+        if r.slots.len == before
+            return
+        $s: = r.slots.get(before)
+        s.writes = true
+        r.slots.set(before, s)
 
     fn add_value(r: Self$@, parent: Ast_node$@, idx: Sz, takes: Bool, lctx: Lowering_ctx$@) //<
         //< An operand passed by value; `takes` where the consumer takes it with a count of its own
@@ -92,12 +108,12 @@ impl Operand_order
         //< where `fixed`.
         if !lctx.in_fn_body || r.slots.len < 2
             return
-        defer $classes: = List<|Order_class|>.new(null)
+        defer $classes: = List<|Order_class|>(null)
         for s in r.slots
             cls: = s.operand_class(lctx)
             classes.push(.reads if s.takes && s.fresh && cls == .fixed else cls)
-        defer $moves: = List<|Bool|>.new(null)
-        defer $holds: = List<|Bool|>.new(null)
+        defer $moves: = List<|Bool|>(null)
+        defer $holds: = List<|Bool|>(null)
         $acts_after: = false
         $varies_after: = false
         for $i: = r.slots.len; i > 0; i -= 1
@@ -144,12 +160,12 @@ impl Operand_slot
         //< Whether the operand is a place its consumer reaches through its address
         //< Then only the address is fixed early; what lies there is read when the consumer runs.
         node: = r.parent.get_child(r.idx)
-        return r.by_address && node.is_place_expr() &&
+        return r.by_address && lctx.sema.env.is_place_expr(node) &&
             !lctx.sema.env.is_pointer(node.type_id)
 
     fn operand_class(r: Self, lctx: Lowering_ctx$@): Order_class
         node: = r.parent.get_child(r.idx)
-        if r.reads_address(lctx) && node.has_fixed_address(lctx, 0)
+        if (r.writes || r.reads_address(lctx)) && node.has_fixed_address(lctx, 0)
             return .fixed
         return node.order_class(lctx, 0)
 
@@ -278,39 +294,53 @@ impl Ast_node
     priv fn hoist_address(r: Self$@, lctx: Lowering_ctx$@): Ast_node$@ //<
         //< It takes the place's address into a temporary and returns `<temporary>$` in its stead
         //< The place is still read or written where it stands; only the address is fixed earlier.
-        if lctx.sema.packed_place_align(r) > 0
-            return r.hoist_packed_holder(lctx)
+        //< The pointer is read-only where `place@` is (`address_is_readonly`): the place `r.a` of
+        //< an `r: Self@` is `const` in C, and a temporary without it would drop the `const`.
+        if r.needs_holder(lctx)
+            return r.hoist_holder(lctx)
         loc: = r.loc
-        ptr_id: = lctx.sema.env.make_ptr(r.type_id)
-        addr: = Ast_node.new(.k_expr_postfix, "@", loc).with_type(ptr_id).add_child(r)
-            .add_child(Ast_node.new(.k_literal, "@", loc))
+        env: = lctx.sema.env
+        pointee_id: =
+            env.make_const(r.type_id) if lctx.sema.address_is_readonly(r) else r.type_id
+        addr: = Ast_node(.k_expr_postfix, "@", loc).with_type(env.make_ptr(pointee_id)).add_child(r)
+            .add_child(Ast_node(.k_literal, "@", loc))
         tmp: = addr.hoist_complex_expr(lctx, true)
-        return Ast_node.new(.k_expr_postfix, "$", loc).with_type(r.type_id).add_child(tmp)
-            .add_child(Ast_node.new(.k_literal, "$", loc))
+        return Ast_node(.k_expr_postfix, "$", loc).with_type(r.type_id).add_child(tmp)
+            .add_child(Ast_node(.k_literal, "$", loc))
 
-    priv fn hoist_packed_holder(r: Self$@, lctx: Lowering_ctx$@): Ast_node$@ //<
-        //< hoist_address for a field `#packed` leaves under-aligned: the holder is fixed instead
-        //< A pointer to the field would claim its type's alignment. So the struct holding it is
-        //< fixed (its address, or the pointer reaching it). The steps from there are `.` and an
-        //< array's `[]`. An index among them moves by value, so it runs in order too, and its
-        //< bounds check runs where the field is used.
-        defer $chain: = List<|Ast_node$@|>.new(null)
+    priv fn needs_holder(r: Self$@, lctx: Lowering_ctx$@): Bool //<
+        //< Whether no pointer of the place's own type can hold its address
+        //< A fixed-length array has none: `a@` is its first element's address, and no `T[N]@`
+        //< exists. A field `#packed` leaves under-aligned has one, but it would claim its type's
+        //< alignment.
+        return lctx.sema.packed_place_align(r) > 0 || lctx.sema.env.is_array(r.type_id)
+
+    priv fn hoist_holder(r: Self$@, lctx: Lowering_ctx$@): Ast_node$@ //<
+        //< hoist_address for a place that `needs_holder`: the place holding it is fixed instead
+        //< That is the struct, slice or pointer it lies in: its address, or the pointer's value.
+        //< The steps from there are `.` and `[]`. An index among them moves by value, so it runs
+        //< in order too, and its bounds check runs where the place is used.
+        defer $chain: = List<|Ast_node$@|>(null)
         $holder: = r
         for _i in Range.asc(MAX_ORDER_DEPTH)
-            if holder == null || lctx.sema.packed_place_align(holder) == 0
+            if holder == null || holder.is_path_or_ident() || !holder.needs_holder(lctx)
                 break
             chain.push(holder)
             holder =
                 (holder.get_primary_inner_expr() if holder.kind_id == .k_expr_primary
                 else holder.get_postfix_receiver())
         if holder == null || chain.len == 0
-            r.ice_panic("Lower ICE: a field under-aligned by '#packed' has no holder to fix")
-        last: = chain.get(chain.len - 1)
-        holder_at: = 1 if last.kind_id == .k_expr_primary && last.has_parentheses() else 0
-        last.set_child(holder_at,
-            (holder.hoist_address(lctx)
-            if holder.is_place_expr() && !lctx.sema.env.is_pointer(holder.type_id)
-            else holder.hoist_complex_expr(lctx, true)))
+            r.ice_panic("Lower ICE: a place no pointer can hold has no holder to fix")
+        // A name that holds the place itself has a fixed address; a pointer's value is copied.
+        if !holder.is_path_or_ident() || lctx.sema.env.is_pointer(holder.type_id)
+            last: = chain.get(chain.len - 1)
+            holder_at: =
+                1 if last.kind_id == .k_expr_primary && last.has_parentheses() else 0
+            last.set_child(holder_at,
+                (holder.hoist_address(lctx)
+                if lctx.sema.env.is_place_expr(holder) &&
+                !lctx.sema.env.is_pointer(holder.type_id)
+                else holder.hoist_complex_expr(lctx, true)))
         for $i: = chain.len; i > 0; i -= 1
             step: = chain.get(i - 1)
             if step.kind_id == .k_expr_postfix && step.postfix_op_text().equals("[") &&

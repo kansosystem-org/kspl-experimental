@@ -63,9 +63,9 @@ fn test_the_block_marks() //< a block comment's ends are per extension, empty wh
     verdict.start("[tools/repo_stat] the block-comment ends test...")
     c: = path_kind.block_marks("a/b.c")
     assert(c.open.equals("/*") && c.close.equals("*/"), ".c's block is /* */")
-    css: = path_kind.block_marks("kspage/port/web/page.css")
+    css: = path_kind.block_marks("ksmd/port/web/page.css")
     assert(css.open.equals("/*") && css.close.equals("*/"), ".css's block is /* */")
-    html: = path_kind.block_marks("kspage/port/web/page.html")
+    html: = path_kind.block_marks("ksmd/port/web/page.html")
     assert(html.open.equals("<!--") && html.close.equals("-->"), ".html's block is <!-- -->")
     // **KSPL has no block comment** ("Comments" in `../../docs/SPEC-programming-language.md`).
     assert(path_kind.block_marks("a/b.kspl").open.len == 0, ".kspl holds no block")
@@ -115,7 +115,7 @@ fn test_the_extension_and_the_top_folder() //< the extension, and the top tier's
 fn test_the_role_of_a_file() //< functional, test, tooling or prose, from the path alone
     verdict.start("[tools/repo_stat] the role of a file test...")
     assert(path_kind.role_of("ksplc/sema/body/stmt.kspl") == .functional, "a compiler file ships")
-    assert(path_kind.role_of("kspage/port/web/page.css") == .functional,
+    assert(path_kind.role_of("ksmd/port/web/page.css") == .functional,
         "a stylesheet with only a block mark ships")
     assert(path_kind.role_of("std/tests/io_test.kspl") == .test, "a file under tests/ is a test")
     assert(path_kind.role_of("tests/support/harness.kspl") == .test, "the top tests/ is a test")
@@ -127,7 +127,7 @@ fn test_the_role_of_a_file() //< functional, test, tooling or prose, from the pa
     assert(path_kind.role_of("ksos/Makefile") == .tooling, "a package's Makefile is tooling")
     assert(path_kind.role_of(".gitignore") == .tooling, "a file at the root is tooling")
     assert(path_kind.role_of("docs/SPEC-gates.md") == .prose, "a document is prose")
-    assert(path_kind.role_of("kspage/content/manual.kspage") == .prose, "data with no mark is prose")
+    assert(path_kind.role_of("ksmd/examples/notes.ksmd") == .prose, "data with no mark is prose")
     verdict.pass("each file's role is read from its path: tests first, then the folder.")
 
 // ==========================================
@@ -247,7 +247,7 @@ priv fn sample(log: U8[], text: U8[], ended: U8[], arena: Arena$@): Outcome //<
 
 priv fn summarised(outs: List<|Outcome|>@, arena: Arena$@): U8[] //< the screen's summary of them
     j: = ci_gates.Judge::{ .platform = WIN, .relaxed = "" }
-    defer $b: = Str_builder.new()
+    defer $b: = Str_builder()
     ci_gates.digest_plain(outs, 12I64, j@, b@)
     return arena.dup_str(b.slice())
 
@@ -261,7 +261,7 @@ priv fn after(text: U8[], first: U8[], then: U8[]): Bool //< whether `then` foll
 fn test_a_green_round_stays_short(arena: Arena$@) //<
     //< a green round names no cause, counts its skips
     verdict.start("[tools/ci_gates] the summary of a green round test...")
-    $outs: = List<|Outcome|>.new(arena)
+    $outs: = List<|Outcome|>(arena)
     outs
         .push(sample("selfhost", "RESULT: ALL PASS (self-hosting, c backend)\n", "0 30\n", arena))
     outs.push(sample("link_abi", LOG_ARM, "0 5\n", arena))
@@ -294,7 +294,7 @@ fn test_a_container_log_keeps_its_platform(arena: Arena$@) //<
 fn test_an_unexpected_skip_is_named_last(arena: Arena$@) //<
     //< The SKIP that failed a gate is the summary's last word, marked apart from the expected ones
     verdict.start("[tools/ci_gates] a gate failing on a SKIP no row holds test...")
-    $outs: = List<|Outcome|>.new(arena)
+    $outs: = List<|Outcome|>(arena)
     outs.push(sample("suites_a", LOG_UNEXPECTED_SKIP, "1 270\n", arena))
     outs.push(sample("link_abi", LOG_ARM, "0 9\n", arena))
     p: = summarised(outs@, arena)
@@ -315,7 +315,7 @@ fn test_an_unexpected_skip_is_named_last(arena: Arena$@) //<
 fn test_a_fail_line_is_named_last(arena: Arena$@) //<
     //< A FAIL line comes first among a gate's causes
     verdict.start("[tools/ci_gates] a gate failing on a FAIL line test...")
-    $outs: = List<|Outcome|>.new(arena)
+    $outs: = List<|Outcome|>(arena)
     outs.push(sample("suites_a", LOG_FAIL, "2 418\n", arena))
     p: = summarised(outs@, arena)
     first: =
@@ -334,7 +334,7 @@ fn test_a_fail_line_is_named_last(arena: Arena$@) //<
 
 fn test_a_panic_is_named_last(arena: Arena$@) //< a panic inside a quoted tail is found
     verdict.start("[tools/ci_gates] a gate failing on a panic test...")
-    $outs: = List<|Outcome|>.new(arena)
+    $outs: = List<|Outcome|>(arena)
     outs.push(sample("suites_a", LOG_PANIC, "2 134\n", arena))
     p: = summarised(outs@, arena)
     first: =
@@ -348,7 +348,7 @@ fn test_a_panic_is_named_last(arena: Arena$@) //< a panic inside a quoted tail i
 fn test_a_log_saying_nothing_shows_its_tail(arena: Arena$@) //<
     //< Where no line of the gate's own names a cause, its last lines stand in
     verdict.start("[tools/ci_gates] a gate failing with nothing recognisable test...")
-    $outs: = List<|Outcome|>.new(arena)
+    $outs: = List<|Outcome|>(arena)
     outs.push(sample("selfhost", LOG_UNREAD, "2 13\n", arena))
     outs.push(sample("lint", "", "", arena))
     p: = summarised(outs@, arena)
@@ -384,7 +384,7 @@ fn test_a_gate_past_its_cap_is_stopped_and_named(arena: Arena$@) //<
     took_ms: = (sys.mono_us() - t0) / 1000I64
     sys.sleep_ms(2500)
     assert(rc != 0, "a gate stopped at its cap fails")
-    $m: = Panic_msg.new()
+    $m: = Panic_msg()
     assert(took_ms < 2800I64,
         m.s("it is stopped at its cap, before its child's end (took ").n(took_ms).s(" ms)").slice())
     assert(!fs.exists(mark), "the gate's own child is stopped with it")
@@ -406,11 +406,11 @@ fn test_a_gate_past_its_cap_is_stopped_and_named(arena: Arena$@) //<
 fn test_the_page_lists_what_needs_attention(arena: Arena$@) //<
     //< The job's page marks a fall and lists a skipping gate, with no line of a log
     verdict.start("[tools/ci_gates] the summary page test...")
-    $outs: = List<|Outcome|>.new(arena)
+    $outs: = List<|Outcome|>(arena)
     outs.push(sample("selfhost", "RESULT: ALL PASS\n", "0 30\n", arena))
     outs.push(sample("link_abi", LOG_ARM, "0 5\n", arena))
     outs.push(sample("debug", LOG_FAIL, "1 7\n", arena))
-    defer $md: = Str_builder.new()
+    defer $md: = Str_builder()
     ci_gates.digest_md(outs@, 4I64, "linux ci-shard-core", md@)
     m: = md.slice()
     assert(m.starts_with("## linux ci-shard-core - 2 PASS / 1 FAIL   (42s, -j4)"),
@@ -462,7 +462,7 @@ fn test_a_switch_turned_off_lets_its_own_skips_through() //<
     node: = "SKIP vscode: the extension's client side: node is not installed"
     assert(!ci_gates.is_expected_skip(node, "linux", "KANSO_REQUIRE_CHOWN KSOS_REQUIRE_ARM"),
         "a tool no switch covers stays required")
-    defer a: = Arena.new(4096)
+    defer a: = Arena(4096)
     assert(ci_gates.unknown_switch("KANSO_REQUIRE_CHOWN KSOS_REQUIRE_ARM", a).is_none(),
         "every switch `mk/test.mk` names has its rows")
     assert(ci_gates.unknown_switch("KANSO_REQUIRE_CHOWN KANSO_REQUIRE_NOPE", a).unwrap_or("")

@@ -46,9 +46,9 @@ impl Point //< Methods of one's own
     //< **The receiver (the value a method is called on) is written out as the first parameter.**
     //< So whether a method can change the value is read off its signature. `Self@` is a pointer
     //< that only reads, `Self$@` one that can write. `p.moved(2)` passes `p` as `r`. A type's own
-    //< function is reached with the same `.` as a module's (`Arena.new(…)`, `io.out()`). **`::` is
-    //< never a path** to a name, as it is in C++ and Rust. It builds a value (`Point::{ … }`) or
-    //< casts one (`I32::n`).
+    //< function is reached with the same `.` as a module's (`Arena.from_buffer(…)`, `io.out()`).
+    //< Its `new` is called only as the type itself (`Arena(…)`). **`::` is never a path** to a
+    //< name, as it is in C++ and Rust. It builds a value (`Point::{ … }`) or casts one (`I32::n`).
     fn moved(r: Self@, by: I32): Point
         return Point::{ .x = r.x + by, .y = r.y + by }
 
@@ -134,7 +134,7 @@ priv fn pick_builder(ok: Bool): Str_builder!Step_error //< `defer`, in front of 
     //< `defer` statement on the next line, naming what it cleans up.
     if !ok
         throw .too_far
-    return Str_builder.new()
+    return Str_builder()
 
 priv fn note(on: Bool) //< Leaving early
     //< **A line holding `return` alone ends the function.** A returned value always starts on the
@@ -167,7 +167,7 @@ priv fn gather(arena: Arena$@): List<|U8[]|> //< Where memory comes from, and le
     //< **An arena hands out memory and takes it all back at once.** So a `List` (a list that
     //< grows) built on one is let go with it, and nothing is freed one by one. A label on a `for`
     //< (`outer:`) lets `break` name which loop it leaves.
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     for w in U8[][]::{ "a", "b", "c" }
         out.push(w)
         seen += 1
@@ -181,7 +181,7 @@ fn main(): I32 //< Putting it together
     //< **`main` is where a program starts, and what it returns is the exit code.** `catch` handles
     //< the failure a call can return. With a value after it, that value is used instead; with a
     //< block, the block runs and `fallback` gives the value. `\{…\}` puts a value into a string.
-    defer arena: = Arena.new(1024 * 1024)
+    defer arena: = Arena(1024 * 1024)
     greet("Kanso")
     p: Point = ::{ .x = 3, .y = 4 }
     span: Span = ::{ .from = 2, .to = 5 }
@@ -202,7 +202,7 @@ fn main(): I32 //< Putting it together
         fallback -2
     defer $b: = pick_builder(true) catch
         io.out().s("the place to assemble into could not be taken.\n")
-        fallback Str_builder.new()
+        fallback Str_builder()
     b.s("held")
     note(true)
     note(false)

@@ -21,8 +21,8 @@ impl<|T|> Linear<|T|>
     ): Linear<|T|>
         w_shape: Sz[2] = ::{ in_features, out_features }
         b_shape: Sz[1] = ::{ out_features }
-        w: = Tensor<|T|>.new(Sz[]::w_shape, arena)
-        b: = Tensor<|T|>.new(Sz[]::b_shape, arena)
+        w: = Tensor<|T|>(Sz[]::w_shape, arena)
+        b: = Tensor<|T|>(Sz[]::b_shape, arena)
         w.fill(0.1) // sets dummy weights, for the tests
         b.fill(0.0)
         return Linear<|T|>::{ .weights = w, .bias = b }
@@ -58,7 +58,7 @@ impl<|T|> Rms_norm<|T|>
         arena: Arena$@, //< the arena the gain is allocated from
     ): Rms_norm<|T|>
         $shape: Sz[1] = ::{ dim }
-        w: = Tensor<|T|>.new(Sz$[]::{ .ptr = shape@, .len = 1 }, arena)
+        w: = Tensor<|T|>(Sz$[]::{ .ptr = shape@, .len = 1 }, arena)
         w.fill(1.0)
         return Rms_norm<|T|>::{ .weight = w, .eps = eps }
 
@@ -81,8 +81,8 @@ impl<|T|> Mlp<|T|>
         out_dim: Sz, //< how many outputs
         arena: Arena$@, //< the arena the weights are allocated from
     ): Mlp<|T|>
-        return Mlp<|T|>::{ .fc1 = Linear<|T|>.new(in_dim, hidden_dim, arena),
-            .fc2 = Linear<|T|>.new(hidden_dim, out_dim, arena) }
+        return Mlp<|T|>::{ .fc1 = Linear<|T|>(in_dim, hidden_dim, arena),
+            .fc2 = Linear<|T|>(hidden_dim, out_dim, arena) }
 
     pub fn init_uniform( //< initializes both layers for training
         r: Self$@,
@@ -137,13 +137,12 @@ impl<|T|> Self_attention<|T|>
             "Self_attention.new: dim has to be even (because RoPE rotates adjacent pairs)")
         // Allocates cache space for the maximum sequence length on the persistent arena
         cache_shape: Sz[2] = ::{ max_seq_len, dim }
-        k_cache: = Tensor<|T|>.new(Sz[]::cache_shape, arena)
-        v_cache: = Tensor<|T|>.new(Sz[]::cache_shape, arena)
+        k_cache: = Tensor<|T|>(Sz[]::cache_shape, arena)
+        v_cache: = Tensor<|T|>(Sz[]::cache_shape, arena)
 
-        return Self_attention<|T|>::{ .wq = Linear<|T|>.new(dim, dim, arena),
-            .wk = Linear<|T|>.new(dim, dim, arena),
-            .wv = Linear<|T|>.new(dim, dim, arena),
-            .wo = Linear<|T|>.new(dim, dim, arena), .dim = dim, .k_cache = k_cache,
+        return Self_attention<|T|>::{ .wq = Linear<|T|>(dim, dim, arena),
+            .wk = Linear<|T|>(dim, dim, arena), .wv = Linear<|T|>(dim, dim, arena),
+            .wo = Linear<|T|>(dim, dim, arena), .dim = dim, .k_cache = k_cache,
             .v_cache = v_cache }
 
     pub fn init_uniform( //< initializes all four projections for training
@@ -214,10 +213,10 @@ impl<|T|> Transformer_block<|T|>
         eps: T, //< what the normalizations add under the square root
         arena: Arena$@, //< the arena the weights and the cache are allocated from
     ): Transformer_block<|T|>
-        return Transformer_block<|T|>::{ .attention_norm = Rms_norm<|T|>.new(dim, eps, arena),
-            .attention = Self_attention<|T|>.new(dim, max_seq_len, arena),
-            .ffn_norm = Rms_norm<|T|>.new(dim, eps, arena),
-            .ffn = Mlp<|T|>.new(dim, hidden_dim, dim, arena) }
+        return Transformer_block<|T|>::{ .attention_norm = Rms_norm<|T|>(dim, eps, arena),
+            .attention = Self_attention<|T|>(dim, max_seq_len, arena),
+            .ffn_norm = Rms_norm<|T|>(dim, eps, arena),
+            .ffn = Mlp<|T|>(dim, hidden_dim, dim, arena) }
 
     pub fn init_uniform( //< initializes the attention and the feed-forward part for training
         //< The reason is at `Linear.init_uniform`. The normalization weights stay at
@@ -262,7 +261,7 @@ impl<|T|> Embedding<|T|>
         arena: Arena$@, //< the arena the table is allocated from
     ): Embedding<|T|>
         $shape: Sz[2] = ::{ vocab_size, dim }
-        w: = Tensor<|T|>.new(Sz$[]::{ .ptr = shape@, .len = 2 }, arena)
+        w: = Tensor<|T|>(Sz$[]::{ .ptr = shape@, .len = 2 }, arena)
         w.fill(T::0.01)
         return Embedding<|T|>::{ .weight = w }
     pub fn init_uniform( //< initializes the table for training
@@ -285,7 +284,7 @@ impl<|T|> Embedding<|T|>
             panic("Embedding.forward: token_id out of bounds")
         dim: = r.weight.shape[1]
         out_shape: Sz[2] = ::{ 1, dim }
-        out: = Tensor<|T|>.new(Sz[]::out_shape, compute_arena)
+        out: = Tensor<|T|>(Sz[]::out_shape, compute_arena)
 
         offset: = Sz::token_id * dim
         for i in Range.asc(dim)
@@ -306,9 +305,9 @@ impl<|T|> Swiglu_mlp<|T|>
         hidden: Sz, //< the hidden width in between
         arena: Arena$@, //< the arena the weights are allocated from
     ): Swiglu_mlp<|T|>
-        return Swiglu_mlp<|T|>::{ .gate = Linear<|T|>.new(dim, hidden, arena),
-            .up = Linear<|T|>.new(dim, hidden, arena),
-            .down = Linear<|T|>.new(hidden, dim, arena) }
+        return Swiglu_mlp<|T|>::{ .gate = Linear<|T|>(dim, hidden, arena),
+            .up = Linear<|T|>(dim, hidden, arena),
+            .down = Linear<|T|>(hidden, dim, arena) }
 
     pub fn forward( //< `down(silu(gate(x)) * up(x))`
         r: Self$@,
@@ -355,12 +354,11 @@ impl<|T|> Gqa_attention<|T|>
         q_dim: = n_heads * head_dim
         kv_dim: = n_kv_heads * head_dim
         cache_shape: Sz[2] = ::{ max_seq_len, kv_dim }
-        k_cache: = Tensor<|T|>.new(Sz[]::cache_shape, arena)
-        v_cache: = Tensor<|T|>.new(Sz[]::cache_shape, arena)
-        return Gqa_attention<|T|>::{ .wq = Linear<|T|>.new(dim, q_dim, arena),
-            .wk = Linear<|T|>.new(dim, kv_dim, arena),
-            .wv = Linear<|T|>.new(dim, kv_dim, arena),
-            .wo = Linear<|T|>.new(q_dim, dim, arena), .n_heads = n_heads, .n_kv_heads = n_kv_heads,
+        k_cache: = Tensor<|T|>(Sz[]::cache_shape, arena)
+        v_cache: = Tensor<|T|>(Sz[]::cache_shape, arena)
+        return Gqa_attention<|T|>::{ .wq = Linear<|T|>(dim, q_dim, arena),
+            .wk = Linear<|T|>(dim, kv_dim, arena), .wv = Linear<|T|>(dim, kv_dim, arena),
+            .wo = Linear<|T|>(q_dim, dim, arena), .n_heads = n_heads, .n_kv_heads = n_kv_heads,
             .head_dim = head_dim, .rope_theta = rope_theta, .k_cache = k_cache,
             .v_cache = v_cache }
 
@@ -402,13 +400,13 @@ impl<|T|> Gqa_attention<|T|>
         groups: = r.n_heads / r.n_kv_heads // how many Q heads share one KV head
         scale: = T::(1.0 / math.sqrt(F64::r.head_dim))
         out_shape: Sz[2] = ::{ 1, q_dim }
-        out: = Tensor<|T|>.new(Sz[]::out_shape, compute_arena)
+        out: = Tensor<|T|>(Sz[]::out_shape, compute_arena)
 
         for h in Range.asc(r.n_heads)
             qo: = h * r.head_dim // this head's Q offset
             ko: = (h / groups) * r.head_dim // the corresponding KV head's offset
             sc_shape: Sz[2] = ::{ 1, seq_len }
-            $sc: = Tensor<|T|>.new(Sz[]::sc_shape, compute_arena)
+            $sc: = Tensor<|T|>(Sz[]::sc_shape, compute_arena)
             for t in Range.asc(seq_len)
                 $dot: = T::0.0
                 for d in Range.asc(r.head_dim)

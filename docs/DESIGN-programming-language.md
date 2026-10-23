@@ -85,7 +85,7 @@ Note: `type_args` in `ksplc/kspl.kspeg` fails at once unless it sees `"<|"`, so 
 
 #### Why `::` stays the cast, and what it costs to parse
 
-`::` means a cast (`I64::x`), and a path to a module's member uses `.` (`Arena.new`). The cast makes the parser a little slower, and that time is won back elsewhere. A Rust-style `Arena::new` gets one error that names the fix.
+`::` means a cast (`I64::x`), and a path to a module's member uses `.` (`io.out`). The cast makes the parser a little slower, and that time is won back elsewhere. A Rust-style `Arena::new` gets one error that names the fix.
 
 **The parser still pays for the prefix cast.** KSPL's parser is a PEG parser: at each point it tries the grammar's alternatives in order and backs out of one that fails. A type and a value begin alike (`Arena` can be either). So at every operand the parser tries `type_expr "::"` and backs out, and does the same for the type in front of a literal (`T::{ … }`). Few of those operands are casts. Taking the forms out of the grammar gives the figures below, on files that hold neither form. They count the PEG parse alone, built at `-O2`; `ksplc --stats` counts the rule calls (how often a grammar rule is tried).
 
@@ -101,7 +101,7 @@ Guards gain little. A lookahead before both tries cuts the calls, and the time, 
 
 **The parse time is saved in the memo table instead.** The memo table is where the parser remembers each rule's result at each position, so no text is parsed twice. One table serves every file of a run: a generation stamp empties it, and it is sized from one slot per byte ([`../kspeg/memo.kspl`](../kspeg/memo.kspl)). It takes clearly fewer instructions and less time than a table zeroed per file. That saves more than taking the cast out would, with no change to the language. Parsing dominates a cold self-compile, and takes milliseconds once the syntax-tree cache is warm.
 
-**What keeping `::` costs the writer, and the answer**: a Rust or C++ writer's `Arena::new(1024)`, read as a cast, gives three errors, none naming the fix. So where `T` is a module, or a type holding `name`, and `name` is nothing in scope, `T::name` is read as the path meant. It is reported as one error naming `Arena.new`. A cast of a value in scope (`I32::count`) is left alone.
+**What keeping `::` costs the writer, and the answer**: a Rust or C++ writer's `Arena::new(1024)`, read as a cast, gives three errors, none naming the fix. So where `T` is a module, or a type holding `name`, and `name` is nothing in scope, `T::name` is read as the path meant. It is reported as one error naming the fix. For a type's `new`, the fix is the type call `Arena(1024)`; for any other name, the `.` spelling. A cast of a value in scope (`I32::count`) is left alone.
 
 **The one weakness of `.` everywhere** is that a local named like an imported module hides the module: below `io: = 5`, `io.out()` reads the local. Such a local or parameter is a warning at its declaration (`[W0502]` in [`../ksplc/docs/SPEC-diagnostics.md`](../ksplc/docs/SPEC-diagnostics.md)), not an error, since shadowing stays legal ("4.5 Scope and shadowing" in [`SPEC-programming-language.md`](SPEC-programming-language.md)). A second separator for modules (Swift 6.3's `Module::name`) would collide with the cast. `json::Value` and `Sz::n` have one shape, and only name resolution could tell them apart.
 
@@ -151,7 +151,7 @@ Top-level declarations (`const`, variables, `extern` variables: everything decla
 
 | The line | Reported? | Why |
 | :-- | :-- | :-- |
-| `p: Point = Point::{ … }`, `n: U8 = U8::v`, `k: Kind = Kind.small`, `xs: List<\|I32\|> = List<\|I32\|>.new(arena)` | Yes | The type is written twice |
+| `p: Point = Point::{ … }`, `n: U8 = U8::v`, `k: Kind = Kind.small`, `xs: List<\|I32\|> = List<\|I32\|>(arena)` | Yes | The type is written twice |
 | `count: Sz = items.len` | No | The annotation is the one place the type stands in the text |
 | `$i: Sz = 0` | No | Deleting it changes the type: the literal would be `I32` |
 | `wide: I64 = small` | No | The conversion follows the annotation |
@@ -347,7 +347,7 @@ The design already infers what is determined and asks for the rest. Where `T` is
 
 **The type a call's result is given does not fix a type argument**: `y: U8 = zero(5)` is refused, as `x: = zero(5)` is, and asks for `zero<|U8|>(5)`. Inference runs one way, from the arguments to the call. It runs so for a function named as a value too ("A generic function used as a value names its specialization"). Run the other way too, the same `zero(5)` would build a different copy depending on where it stands. The call itself does not show that. And it would still need the type arguments written wherever nothing fixes a type. Examples are a declaration with no type, and an argument of another generic. Written once at the call, they read the same everywhere.
 
-**What is inferred is a function's own type arguments, however the function is reached**: `f(x)`, `h.to(x)` and `Holder<|I32|>.to(h, x)` alike. **A generic type's are not inferred from a call through it**: `Holder.mk(1)` is a compile error that says to write `Holder<|I32|>.mk(1)`. The type written before the `.` is what chooses the instance. It is so for a variable's type or a field's too ("An impl's mutability marker, and a call's type argument"). Many of a type's functions take nothing that would fix it (`List<|I32|>.new(null)`). So inferring it would add a second form that works for only some of them (Principle 6).
+**What is inferred is a function's own type arguments, however the function is reached**: `f(x)`, `h.to(x)` and `Holder<|I32|>.to(h, x)` alike. **A generic type's are not inferred from a call through it**: `Holder.mk(1)` is a compile error that says to write `Holder<|I32|>.mk(1)`. The type written before the `.` is what chooses the instance. It is so for a variable's type or a field's too ("An impl's mutability marker, and a call's type argument"). Many of a type's functions take nothing that would fix it (`List<|I32|>(null)`). So inferring it would add a second form that works for only some of them (Principle 6).
 
 **The price is that instantiation comes after the arguments' inference.** Right after instantiating, the compiler must check the actual arguments again against the substituted parameter types. Skip that, and broken C comes out with zero diagnostics. The check is in [`../ksplc/docs/DESIGN-diagnostics.md`](../ksplc/docs/DESIGN-diagnostics.md), under this heading:
 
@@ -629,7 +629,7 @@ The rule is docs/SPEC-programming-language.md §5.2:
 
 **Operators and casts use the same slot**: `a + b` desugars to `a.add(b)` and `Dest::x` to `x.cast()`, whose receivers can be temporaries too.
 
-**Do not split the decision across the three notations**, or `P.new(1) + P.new(2)` could pass while `P.new(1).get()` is rejected (Principle 6). It lives in one place, `receiver_needs_hoist` in `ksplc/base/ast_place.kspl`.
+**Do not split the decision across the three notations**, or `P(1) + P(2)` could pass while `P(1).get()` is rejected (Principle 6). It lives in one place, `receiver_needs_hoist` in `ksplc/sema/type/query.kspl`.
 
 Rust extends the temporary's lifetime to the end of the statement and accepts the call; its borrow checker does not stop the write being discarded. C++ binds a temporary to `const&` but not to a non-`const` lvalue reference, which is in effect KSPL's line. Swift, Java and Python have reference semantics, so the question does not arise.
 
@@ -975,7 +975,9 @@ The rules are "8.1 Definitions" in [`SPEC-programming-language.md`](SPEC-program
 
 **The function decides what it returns and where it allocates.** The call notation promises neither a value of exactly `T` nor a heap allocation. An arena argument stays explicit, and cleanup still needs `defer`. A function taking an instance as its first parameter is a method, not a constructor for this notation.
 
-Type arguments remain explicit, and names resolve before the call is interpreted. A local function value named like a type is still that value. A bare type does not become a function value; `T.new` names that function. Named factories and casts retain their own purposes. Both `T(...)` and the explicit `T.new(...)` call are accepted.
+Type arguments remain explicit, and names resolve before the call is interpreted. A local function value named like a type is still that value. A bare type does not become a function value; `T.new` names that function. Named factories and casts retain their own purposes.
+
+**`T(...)` is the only way to call a static `new`.** The explicit call `T.new(...)` is a compile error, and the error names the type call to write. One spelling keeps the code uniform, so a reader does not have to ask why two calls differ. The type call is also the shorter one. It is an error rather than a lint, so no build accepts the second spelling. `T.new` without a call is still the function value, and a `new` that takes an instance first is a method called by its name.
 
 ### A function's name has no size
 
@@ -1015,7 +1017,7 @@ Type arguments remain explicit, and names resolve before the call is interpreted
 
 ### Every cleanup stands in the source
 
-**No type frees itself.** A value that owns something is freed where the source says so. That is `defer` in front of its declaration (`defer $b: = Str_builder.new()`), a `defer` statement, or a `free()` call. A reader sees on the page when each resource goes, and needs no list of the types that free themselves.
+**No type frees itself.** A value that owns something is freed where the source says so. That is `defer` in front of its declaration (`defer $b: = Str_builder()`), a `defer` statement, or a `free()` call. A reader sees on the page when each resource goes, and needs no list of the types that free themselves.
 
 | Contract | What the compiler supplies | Where it belongs |
 | :-- | :-- | :-- |
@@ -1054,7 +1056,7 @@ Conformance to `Move_only` forbids implicitly copying an owning handle, such as 
 
 **Why no borrow checker**: Rust's borrow checker proves that no reference outlives the data it points at. It also proves that no two places change the same data at once. That proof tracks an order of magnitude more. It infers the region of code each reference is valid in. It excludes aliases (two live references to one place where one writes). It would also reject the raw pointers (`T@`) KSPL code uses routinely. Move-only tracks one thing, "this binding can no longer be read", and local data flow suffices for that.
 
-**Why a move rather than a ban on copying**: a ban makes construction impossible. `Mutex<|T|>::{ .mutex = m, … }` copies `m`, and so does binding the result of `Raw_mutex.new()`. Ownership passes there and leaves no duplicate, so what fits is a move invalidating the original.
+**Why a move rather than a ban on copying**: a ban makes construction impossible. `Mutex<|T|>::{ .mutex = m, … }` copies `m`, and so does binding the result of `Raw_mutex()`. Ownership passes there and leaves no duplicate, so what fits is a move invalidating the original.
 
 **Which reads are moves**: the rule (docs/SPEC-programming-language.md §5.4) lists the reads that do not duplicate. They are a method's or field's receiver, and the target of `@` / `$` / `[`. Every other read as a value is a move. Listing the moves instead (assignment, arguments, struct literals, `return`) would be longer, and a position added later would be easy to miss.
 
@@ -1063,6 +1065,16 @@ Conformance to `Move_only` forbids implicitly copying an owning handle, such as 
 **Why a loop's body is followed until nothing changes**: the body's end leads back to its start. So a move on one pass meets the next pass's read. Following the body once, from the state before the loop, can never see that. The analysis walks the body again from the state its end leaves, until the state at its start stops changing. Moves and releases only accumulate, so this ends, mostly after one walk. The report on a move found that way says it came from an earlier pass. The line that moved the value stands below the use, where a reader would not look.
 
 **What is given up**: duplication through a pointer goes undetected. So the check is not sound, meaning it does not catch every case. The limit is stated in docs/SPEC-programming-language.md §5.4.
+
+### Why an assignment evaluates its value before its place
+
+**An assignment runs its value, then finds its place, then writes** ("Evaluation order" in [`SPEC-programming-language.md`](SPEC-programming-language.md)). Everything else runs left to right.
+
+**Why**: a place is an address, and with no borrow checker nothing stops a call from moving the memory it points into. In `nodes[i].left = put(...)`, `put` can add to `nodes`, and growing a list moves its elements. Had the place been found first, the write would go to freed memory. The program then corrupts memory silently, with no diagnostic and no check at run time. With the value first, no call of the value runs between finding the place and the write. So a call in the value can no longer leave the place stale. A call inside the place itself still can: `xs[0].items[grow()]` reads `xs[0]` before `grow()` runs, as the left-to-right order inside the place shows. Detecting the shape instead would need to know which calls can move which memory, which is the borrow checker's work.
+
+**A compound assignment takes the same order**: the value, then the place, then a read of the place's old value, then the write. A place found before the value would be as stale for `+=` as for `=`. Reading the old value last also means a value that changes the place is seen: in `n += f()`, a change `f` makes to `n` counts. A compound assignment takes only numbers, `Bool` and pointers, never a type of one's own. So no user-written method takes the place before the value, and one order covers every compound assignment.
+
+**What is given up**: the source reads left to right, and an assignment runs its right side first. A program that relies on the place's side effects running before the value's must split the statement. Such a program is rare, and split, it says what it relies on.
 
 ### Why `defer` has no capture list
 
@@ -1073,7 +1085,7 @@ A `defer` carries only its body, which reads outer variables **on leaving the sc
 **Freezing at registration would be wrong**: for a value struct, freeing the frozen copy does not free the real thing.
 
 ```kspl
-b: = Str_builder.new() // at this point ptr = null, cap = 0
+b: = Str_builder() // at this point ptr = null, cap = 0
 defer b                // <- frozen, this captures a copy with cap = 0
     b.free()
 b.s("...")             // allocates and grows the internal buffer (the original b is updated)

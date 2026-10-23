@@ -129,6 +129,15 @@ impl Sema_ctx
             return true // `$` on a non-pointer: the type could not be followed
         return r.place_denies_write(recv)
 
+    fn address_is_readonly(r: Self$@, place: Ast_node$@): Bool //<
+        //< Whether `place@` is a read-only pointer: the place must not be written through it
+        //< That is so where the path crosses a read-only pointer, or an array or slice of immutable
+        //< elements, or where the root binding is immutable. `place@` (sema/body/postfix.kspl) and
+        //< an address Lower fixes early (`hoist_address` in lower/order.kspl) both ask it, so the
+        //< C compiler sees one pointer type for both.
+        return r.place_denies_write(place) || r.place_crosses_const_elem(place) ||
+            r.root_binding_is_immutable(place, false)
+
     fn place_crosses_const_elem(r: Self$@, node: Ast_node$@): Bool //<
         //< Whether an **array/slice of immutable elements** is crossed anywhere on the path
         //< Not only the outermost postfix counts.
@@ -173,9 +182,14 @@ impl Sema_ctx
         // The table first: a slice made in this statement (`I32[]::{ 1, 2 }[i]`) is still queued.
         r.ensure_instance_methods(recv_id) catch {}
         base_id: = r.env.strip_ptr(recv_id)
-        writable: = recv_node == null || !r.place_is_readonly(recv_node)
+        // **A temporary is not writable either**: `at(r: Self$@, …)` would write a copy that is
+        // then discarded, as any `Self$@` method on it would ("Implementations (`impl`) and
+        // receivers" in docs/SPEC-programming-language.md). A read takes `at_ref` instead.
+        writable: =
+            recv_node == null ||
+            (!r.place_is_readonly(recv_node) && !r.env.receiver_needs_hoist(recv_node))
         if r.env.has_implemented_operator_trait(base_id, "Index_place") &&
-            (writable || !r.index_place_wants_writable(base_id))
+            (writable || !r.env.index_owns_elements(base_id))
             return .place
         if r.env.has_implemented_operator_trait(base_id, "Index_ref")
             return .ref_place
@@ -186,8 +200,7 @@ impl Sema_ctx
         //< That is so where `index_route` gives `.place` alone, from an `at(r: Self$@, …)`.
         r.ensure_instance_methods(recv_id) catch {}
         base_id: = r.env.strip_ptr(recv_id)
-        return r.env.has_implemented_operator_trait(base_id, "Index_place") &&
-            r.index_place_wants_writable(base_id) &&
+        return r.env.index_owns_elements(base_id) &&
             !r.env.has_implemented_operator_trait(base_id, "Index_ref") &&
             !r.env.has_implemented_operator_trait(base_id, "Index")
 
@@ -226,28 +239,14 @@ impl Sema_ctx
                     'Index_ref' instead, or put 'Index_place' on the mutable spelling only. For the \
                     mutable spelling, write the impl target as 'Name<|$T|>'")
 
-    priv fn index_place_wants_writable(r: Self$@, base_id: I32): Bool //<
-        //< Whether an `Index_place` implementation wants **a writable receiver**
-        //< Only `at(r: Self@, …)` does not: it merely reads the descriptor and returns the pointer
-        //< inside (a borrowed view). `at(r: Self$@, …)` modifies it (a container it owns).
-        if sym: = r.resolve_operator_method(base_id, "at")
-            if sym.node == null
-                return true
-            p_list: = sym.node.get_fn_params()
-            if p_list == null
-                return true
-            for p in base_ast_ext.Param_cursor.new(p_list, false)
-                return !p.get_decl_type_node().spells_readonly_ptr()
-        return true
-
     fn index_stops_permission_walk(r: Self$@, recv_id: I32): Bool //<
         //< Whether the subscript **ends the permission walk there**
         //< Caution: **Both places that walk the path must call this** (place_denies_write below,
         //< and enforce_mutability in `../body/write_perm.kspl`).
+        r.ensure_instance_methods(recv_id) catch {}
         base_id: = r.env.strip_ptr(recv_id)
-        if !r.env.has_implemented_operator_trait(base_id, "Index_place")
-            return false
-        return !r.index_place_wants_writable(base_id)
+        return r.env.has_implemented_operator_trait(base_id, "Index_place") &&
+            !r.env.index_owns_elements(base_id)
 
     fn place_is_readonly(r: Self$@, node: Ast_node$@): Bool //<
         //< True where that place cannot be written to
@@ -326,7 +325,7 @@ impl Sema_ctx
         //< elements can write nothing (Principle 5). If allowed, C fails to compile the generated
         //< code and LLVM fails at run time. It descends into neither **a struct's fields** nor a
         //< pointer, whose target can be in RAM (`const P: I32$@ = ram@;` is legitimate).
-        defer $seen: = List<|I32|>.new(null)
+        defer $seen: = List<|I32|>(null)
         if !r.find_mut_in_const_storage(type_id, seen@)
             return
         // The `$` is always on a slice level: a fixed-length array cannot have one on its element
@@ -375,7 +374,7 @@ impl Sema_ctx
         owner_rank: = vis_rank(owner_vis)
         if owner_rank == 0
             return // there is no visibility narrower than file_private
-        defer $seen: = List<|Ast_node$@|>.new(null)
+        defer $seen: = List<|Ast_node$@|>(null)
         r.check_type_node_vis(node, owner_rank, position, owner, seen@)
 
     fn is_bound_generic_type(r: Self$@, sym: Sema_symbol$@): Bool //<
@@ -408,7 +407,7 @@ impl Sema_ctx
                 // Keep function and field names out of the message: a generic reaches here once per
                 // instance. Differing internal names slip past report_diagnostic's de-duplication
                 // (the file:offset:msg key), and give N entries for one line.
-                defer $shown: = Str_builder.new()
+                defer $shown: = Str_builder()
                 r.write_shown_name(sym, node, shown@)
                 r.clear_scratch()
                     .s("\{position\} '\{shown.slice()\}' is less visible than the \{owner\} \
@@ -566,15 +565,23 @@ impl Sema_ctx
             // An instance's own name is mangled (`app_lib_kspl_Box_I64`), so it is shown as the
             // source spells the type. See "A diagnostic points at 'the position the user wrote'" in
             // ksplc/docs/DESIGN-diagnostics.md.
-            defer $shown: = Str_builder.new()
+            defer $shown: = Str_builder()
             r.write_shown_name(sym, loc, shown@)
             r.clear_scratch()
                 .s("cannot access symbol '\{shown.slice()\}'\n(defined in \{defined_in\})")
+            // A type call (`Cup()`) selects `new` without writing it, so the message says why.
+            if loc != null && loc.is_path_or_ident() && loc.children.len > 0 &&
+                loc.get_child(loc.children.len - 1).made_by_compiler() &&
+                shown.slice().ends_with(".new")
+                callee: = shown.slice().sub(0, shown.slice().len - ".new".len)
+                r.scratch
+                    .s("\n  Hint: the type call '\{callee\}(…)' calls '\{shown.slice()\}'. It is \
+                        not visible here.")
             r.err(loc, r.scratch.slice())
 
 priv fn field_symbol(field: Struct_field$@): Sema_symbol$@ //<
     //< A struct field seen as a symbol, so the visibility rules read it as they read a declaration
-    sym: = Sema_symbol.new(.variable, field.name, field.node)
+    sym: = Sema_symbol(.variable, field.name, field.node)
     sym.vis = field.vis
     return sym
 

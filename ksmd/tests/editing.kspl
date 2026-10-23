@@ -1,0 +1,259 @@
+//< Row and column identities: how references attach, and what each table edit writes
+//< Each edit is checked against the source it saves, and that source must save again unchanged.
+import "ksmd/edit"
+import "ksmd/edit" { Edit_error }
+import "ksmd/model" { Cell_kind, Document, Piece_kind }
+import "ksmd/reader"
+import "ksmd/source" { Source }
+import "ksmd/writer"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/verdict"
+
+priv const HEAD: U8[] = "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" |\n"
+priv const ROWS: U8[] = "| 1 | =A1 |\n| 2 | =A1+A2 |\n| 3 | =sum(A1:A3) |\n:::\n"
+priv const START: U8[] = "%ksmd 1\n\n"
+priv const ABC: U8[] =
+    ":::table name=\"t\" widths=\"1,2,3\"\n| \"a\" | \"b\" | \"c\" |\n| 1 | 2 | =A1+B1+sum(A1:B1) \
+        |\n:::\n"
+priv const U: U8[] = "\n:::table name=\"u\"\n| \"x\" |\n"
+
+fn run()
+    attachments()
+    rows()
+    removed_rows()
+    columns()
+    copies()
+    cells()
+    refusals()
+
+priv enum Change //< the edit a check makes to table 0
+    none //< no edit: the source is only read and saved
+    insert_row
+    remove_row
+    move_row //< moves the row at the place to the end
+    insert_column
+    remove_column
+    move_column //< moves the column at the place to the end
+
+priv fn attachments()
+    defer arena: = Arena(64 * 1024)
+    doc: =
+        read("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n| =u.A1 + Z9 + nope.A1 + 1A1 \
+            |\n:::\n\n:::table name=\"u\"\n| \"x\" |\n| 5 |\n:::\n", arena)
+    t: = doc.tables[0]@
+    cell: = t.cells[1]
+    first: = t.pieces[cell.first]
+    rest: = t.pieces[cell.first + 1]
+    verdict.check("a reference into a later table attaches; one to no cell stays text",
+        cell.count == 2 && first.kind == Piece_kind.cell && first.table == 1 && first.named &&
+        rest.kind == Piece_kind.text && rest.text.equals(" + Z9 + nope.A1 + 1A1"), "")
+    edited("a range is written from its upper left corner, and `$` stays with its line", HEAD,
+        "| 1 | =sum(B2:A1) + sum(A$2:B1) |\n| 2 | =t.B$1:$A2 |\n:::\n", .none, 0,
+        "| 1 | =sum(A1:B2) + sum(A1:B$2) |\n| 2 | =t.$A$1:B2 |\n:::\n")
+    edited("#REF! is kept as written", HEAD, "| 1 | =#REF! + 1 |\n:::\n", .none, 0,
+        "| 1 | =#REF! + 1 |\n:::\n")
+
+priv fn rows()
+    edited("inserting a row above moves every reference down", HEAD, ROWS, .insert_row, 0,
+        "| | |\n| 1 | =A2 |\n| 2 | =A2+A3 |\n| 3 | =sum(A2:A4) |\n:::\n")
+    edited("a row inserted inside a range joins it", HEAD, ROWS, .insert_row, 1,
+        "| 1 | =A1 |\n| | |\n| 2 | =A1+A3 |\n| 3 | =sum(A1:A4) |\n:::\n")
+    edited("a row inserted after a range stays outside it", HEAD, ROWS, .insert_row, 3,
+        "| 1 | =A1 |\n| 2 | =A1+A2 |\n| 3 | =sum(A1:A3) |\n| | |\n:::\n")
+    edited("a moved row takes its references along, and a range's corner too", HEAD, ROWS,
+        .move_row, 0, "| 2 | =A3+A1 |\n| 3 | =sum(A2:A3) |\n| 1 | =A3 |\n:::\n")
+    edited("a range grows when its corner row moves away from the other corner", HEAD,
+        "| 1 | |\n| 2 | |\n| 3 | =sum(A1:A2) |\n:::\n", .move_row, 1,
+        "| 1 | |\n| 3 | =sum(A1:A3) |\n| 2 | |\n:::\n")
+
+priv fn removed_rows()
+    edited("removing a row turns a reference to it into #REF!", HEAD, ROWS, .remove_row, 0,
+        "| 2 | =#REF!+A1 |\n| 3 | =sum(A1:A2) |\n:::\n")
+    edited("removing a range's last row pulls its corner up", HEAD, ROWS, .remove_row, 2,
+        "| 1 | =A1 |\n| 2 | =A1+A2 |\n:::\n")
+    edited("removing a row inside a range shrinks it", HEAD, ROWS, .remove_row, 1,
+        "| 1 | =A1 |\n| 3 | =sum(A1:A2) |\n:::\n")
+    edited("a range that loses its only row becomes #REF!", HEAD,
+        "| 1 | |\n| 2 | =sum(A1:A1) |\n:::\n", .remove_row, 0, "| 2 | =sum(#REF!) |\n:::\n")
+    edited("removing a row also rewrites a reference from another table", HEAD,
+        "| 1 | |\n| 2 | |\n| 3 | |\n:::\n\n:::table name=\"u\"\n| \"x\" |\n| =t.A2 + t.$A$3 \
+            |\n:::\n", .remove_row, 0,
+        "| 2 | |\n| 3 | |\n:::\n\n:::table name=\"u\"\n| \"x\" |\n| =t.A1 + t.$A$2 |\n:::\n")
+
+priv fn columns()
+    edited("inserting a column takes the width of the one it stands before", START, ABC,
+        .insert_column, 1,
+        ":::table name=\"t\" widths=\"1,2,2,3\"\n| \"a\" | \"\" | \"b\" | \"c\" |\n| 1 | | 2 | \
+            =A1+C1+sum(A1:C1) |\n:::\n")
+    edited("a column added after the last takes its width", START, ABC, .insert_column, 3,
+        ":::table name=\"t\" widths=\"1,2,3,3\"\n| \"a\" | \"b\" | \"c\" | \"\" |\n| 1 | 2 | \
+            =A1+B1+sum(A1:B1) | |\n:::\n")
+    edited("removing a column removes its name and width", START, ABC, .remove_column, 0,
+        ":::table name=\"t\" widths=\"2,3\"\n| \"b\" | \"c\" |\n| 2 | =#REF!+A1+sum(A1:A1) |\n:::\n")
+    edited("a moved column takes its name, width and references along", START, ABC, .move_column, 0,
+        ":::table name=\"t\" widths=\"2,3,1\"\n| \"b\" | \"c\" | \"a\" |\n| 2 | =C1+A1+sum(A1:C1) | \
+            1 |\n:::\n")
+    defer arena: = Arena(64 * 1024)
+    $doc: = read("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n| =B1 |\n:::\n", arena)
+    edit.insert_column(doc@, 0, 1, arena) catch
+        panic("inserting a column")
+    edit.insert_column(doc@, 0, 0, arena) catch
+        panic("inserting a column")
+    saved: = written(doc@, arena)
+    verdict.check("a reference to no cell attaches once its cell exists, then moves",
+        saved.equals("%ksmd 1\n\n:::table name=\"t\"\n| \"\" | \"a\" | \"\" |\n| | =C1 | |\n:::\n"),
+        saved)
+
+priv fn copies()
+    defer arena: = Arena(64 * 1024)
+    before: = join(HEAD, "| 1 | =A1+$A$1+$A1+A$1 |\n| 2 | |\n:::\n", arena)
+    $doc: = read(join(before, join(U, "| 7 |\n:::\n", arena), arena), arena)
+    edit.copy_cell(doc@, 0, 0, 1, 0, 1, 1, arena) catch
+        panic("copying a cell down")
+    edit.copy_cell(doc@, 0, 0, 1, 0, 0, 0, arena) catch
+        panic("copying a cell left")
+    edit.copy_cell(doc@, 0, 1, 0, 1, 0, 0, arena) catch
+        panic("copying a number to another table")
+    copied: = "| =#REF!+$A$1+$A1+#REF! | =A1+$A$1+$A1+A$1 |\n| 2 | =A2+$A$1+$A2+A$1 |\n:::\n"
+    expected: =
+        join(join(HEAD, copied, arena), join(U, "| 2 |\n:::\n", arena), arena)
+    saved: = written(doc@, arena)
+    verdict.check("a copy shifts the axes without $, and a shift outside the table is #REF!",
+        saved.equals(expected), saved)
+    edit.insert_row(doc@, 0, 0, arena) catch
+        panic("inserting a row")
+    moved: = "| | |\n| =#REF!+$A$2+$A2+#REF! | =A2+$A$2+$A2+A$2 |\n| 2 | =A3+$A$2+$A3+A$2 |\n:::\n"
+    expected_moved: =
+        join(join(HEAD, moved, arena), join(U, "| 2 |\n:::\n", arena), arena)
+    saved_moved: = written(doc@, arena)
+    verdict.check("a copied formula's references stay attached, `$` or not",
+        saved_moved.equals(expected_moved), saved_moved)
+
+priv fn cells()
+    defer arena: = Arena(64 * 1024)
+    $doc: = read(join(HEAD, "| 1 | 2 |\n:::\n", arena), arena)
+    edit.set_cell(doc@, 0, 0, 0, .text, "Pens", arena) catch
+        panic("setting text")
+    edit.set_cell(doc@, 0, 0, 1, .formula, "  A1 + t.A1  ", arena) catch
+        panic("setting a formula")
+    saved: = written(doc@, arena)
+    verdict.check("set text and a formula are saved, the formula without outer spaces",
+        saved.equals(join(HEAD, "| \"Pens\" | =A1 + t.A1 |\n:::\n", arena)), saved)
+    refused_set("a number keeps JSON's shape", doc@, .number, "012", arena)
+    refused_set("a number is finite", doc@, .number, "1e999", arena)
+    refused_set("a formula's '|' stands inside quotes", doc@, .formula, "A1 | B1", arena)
+    refused_set("a formula's quotes close", doc@, .formula, "\"a", arena)
+    refused_set("a formula takes one line", doc@, .formula, "A1\nB1", arena)
+    refused_set("a formula takes one line, inside quotes too", doc@, .formula, "\"a\nb\"", arena)
+    refused_set("text is UTF-8", doc@, .text, U8[]::{ 0xFFU8 }, arena)
+    refused_set("an empty cell takes no text", doc@, .empty, "x", arena)
+    edit.set_cell(doc@, 0, 0, 1, .formula, "\"a|b\" + 1", arena) catch
+        panic("a quoted pipe is one cell")
+    quoted: = written(doc@, arena)
+    verdict.check("a formula holding a quoted pipe saves as one cell",
+        quoted.equals(join(HEAD, "| \"Pens\" | =\"a|b\" + 1 |\n:::\n", arena)), quoted)
+
+priv fn refusals()
+    defer arena: = Arena(256 * 1024)
+    defer $long: = Str_builder()
+    long.s(HEAD).s("| | =A9")
+    for _ in Range.asc(2047)
+        long.s("+1")
+    long.s(" |\n")
+    for _ in Range.asc(8)
+        long.s("| | |\n")
+    long.s(":::\n")
+    $doc: = read(long.slice(), arena)
+    refused("a row that would write a formula past 4,096 bytes is refused", doc@, .insert_row, 0,
+        .too_long, arena)
+    refused("a removal that would write #REF! past 4,096 bytes is refused", doc@, .remove_row, 8,
+        .too_long, arena)
+    refused("a row outside the table is refused", doc@, .insert_row, 10, .outside, arena)
+    refused("a move outside the table is refused", doc@, .move_row, 9, .outside, arena)
+    before: = written(doc@, arena)
+    edit.insert_row(doc@, 1, 0, arena) catch e
+        verdict.check("a table outside the document is refused",
+            e == .outside && written(doc@, arena).equals(before), "")
+    $one: = read("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n:::\n", arena)
+    refused("a table keeps its last column", one@, .remove_column, 0, .last_column, arena)
+    defer $wide: = Str_builder()
+    wide.s("%ksmd 1\n\n:::table name=\"t\"\n")
+    for _ in Range.asc(256)
+        wide.s("| \"a\" ")
+    wide.s("|\n:::\n")
+    $columns: = read(wide.slice(), arena)
+    refused("a table holds at most 256 columns", columns@, .insert_column, 0, .too_many_columns,
+        arena)
+    defer $tall: = Str_builder()
+    tall.s("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n")
+    for _ in Range.asc(10000)
+        tall.s("| |\n")
+    tall.s(":::\n")
+    $rows: = read(tall.slice(), arena)
+    refused("a table holds at most 10,000 data rows", rows@, .insert_row, 0, .too_many_rows, arena)
+
+priv fn edited(what: U8[], head: U8[], before: U8[], change: Change, at: Sz, after: U8[]) //<
+    //< Table 0 of `head` and `before`, so changed at `at`, saves as `head` and `after`
+    //< That save must save again unchanged.
+    defer arena: = Arena(64 * 1024)
+    $doc: = read(join(head, before, arena), arena)
+    apply(doc@, change, at, arena) catch
+        verdict.check(what, false, "the edit was refused")
+        return
+    saved: = written(doc@, arena)
+    verdict.check(what, saved.equals(join(head, after, arena)), saved)
+    again: = read(saved, arena)
+    verdict.check(what, written(again@, arena).equals(saved), "a second save changed")
+
+priv fn refused(what: U8[], doc: Document$@, change: Change, at: Sz, want: Edit_error,
+    arena: Arena$@) //<
+        //< The edit is refused for the reason `want`, and the source saves as before
+    before: = written(doc, arena)
+    apply(doc, change, at, arena) catch e
+        verdict.check(what, e == want && written(doc, arena).equals(before), "")
+        return
+    verdict.check(what, false, "the edit was made")
+
+priv fn apply(doc: Document$@, change: Change, at: Sz, arena: Arena$@): Void!Edit_error
+    last_row: = doc.tables[0].rows.len - 1
+    last_column: = doc.tables[0].columns.len - 1
+    switch change
+    case .none {}
+    case .insert_row
+        edit.insert_row(doc, 0, at, arena)!
+    case .remove_row
+        edit.remove_row(doc, 0, at)!
+    case .move_row
+        edit.move_row(doc, 0, at, last_row)!
+    case .insert_column
+        edit.insert_column(doc, 0, at, arena)!
+    case .remove_column
+        edit.remove_column(doc, 0, at)!
+    case .move_column
+        edit.move_column(doc, 0, at, last_column)!
+
+priv fn refused_set(what: U8[], doc: Document$@, kind: Cell_kind, text: U8[], arena: Arena$@) //<
+    //< Setting cell A1 of table 0 to `text` is refused as no value, and changes nothing
+    before: = written(doc, arena)
+    edit.set_cell(doc, 0, 0, 0, kind, text, arena) catch e
+        verdict.check(what,
+            e == Edit_error.not_a_value && written(doc, arena).equals(before), "")
+        return
+    verdict.check(what, false, "the value was set")
+
+priv fn read(bytes: U8[], arena: Arena$@): Document //< the model; a refusal stops the run
+    src: = Source("t.ksmd", arena.dup_str(bytes)) catch e
+        verdict.check("a test source is valid", false, e.message)
+        panic("a test source was refused")
+    return reader.read(src@, arena) catch e
+        verdict.check("a test document reads", false, e.message)
+        panic("a test document was refused")
+
+priv fn written(doc: Document@, arena: Arena$@): U8[] //< the source the writer saves
+    defer $out: = Str_builder()
+    writer.write(doc, out@)
+    return arena.dup_str(out.slice())
+
+priv fn join(a: U8[], b: U8[], arena: Arena$@): U8[]
+    return arena.text().s(a).s(b).take()

@@ -128,7 +128,7 @@ impl Ast_node
         //< …` and the C compiler's `expression is not assignable` (Principle 2).
         //< Caution: **Point out a mix-up of `@` and `$`.** The writer of `p@ = v` believes it
         //< writes through the pointer.
-        if r == null || r.is_place_expr()
+        if r == null || c.env.is_place_expr(r)
             return
         c.clear_scratch()
             .s("cannot assign to this expression. It is a value, not a place. Only a variable, a \
@@ -138,6 +138,11 @@ impl Ast_node
             c.scratch
                 .s("\n  Hint: '@' takes an address. '$' reads through a pointer. To write through \
                     'p', use 'p$ = …'.")
+        else if c.env.is_unaddressable_value(r)
+            c.scratch
+                .s("\n  Hint: it is part of a temporary object, so the write would affect a copy \
+                    that is then discarded. Bind the object first (`$x: = ...;`) and write to the \
+                    binding.")
         c.err(r, c.scratch.slice())
         throw .analysis_failed
 

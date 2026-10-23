@@ -33,7 +33,7 @@ fn in_part(index: Sz, part: Part): Bool //< each suite belongs to exactly one ha
     return part == .all || (core if part == .core else !core)
 
 priv fn packages_with_make(arena: Arena$@): List<|U8[]|> //< the top folders carrying a `Makefile`
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     for rel in harness.tracked_matching(U8[][]::{ "*/Makefile" })
         dir: = sys.get_dir_name(rel)
         if dir.find_char('/').is_none()
@@ -45,7 +45,7 @@ priv fn declared(dir: U8[], arena: Arena$@): List<|U8[]|> //<
     //< **The compiler answers**, so this suite cannot disagree with it. Empty: no package is named.
     r: = ksplc_harness.run_in(U8[][]::{ ksplc_harness.ksplc_exe(), "info", "package" },
         fs.join(harness.root(), dir, arena))
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     lines: = r.out.lines(arena)
     if !r.exited_with(0) || lines.len == 0 || lines.get(0).trim_spaces().len == 0
         return out
@@ -74,7 +74,7 @@ priv fn make_args(copy: U8[], deps: U8[], target: U8[], more: U8[][], arena: Are
     else
         sys.unset_env("KSPLC_PKG_SRC_DIR") catch panic("KSPLC_PKG_SRC_DIR could not be unset")
     scratch: = fs.join(sys.get_dir_name(copy), "scratch", arena)
-    $args: = List<|U8[]|>.new(arena)
+    $args: = List<|U8[]|>(arena)
     // `--no-print-directory`: make's "Entering directory" line would be the first of a failed
     // run's output, the line its FAIL and the CI's mark quote.
     for a in U8[][]::{ "-C", copy, "--no-print-directory", target }
@@ -92,7 +92,7 @@ priv fn suites_of(copy: U8[], arena: Arena$@): List<|U8[]|> //<
     //< The suites the copy's `Makefile` names in `SUITES`; empty where it names none
     //< **make answers**, reading a second makefile placed beside the copy (one inside it would
     //< belong to the package).
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     mk: = fs.join(sys.get_dir_name(copy), "suites.mk", arena)
     io.write_file(mk, SUITES_MK) catch
         return out
@@ -124,7 +124,7 @@ priv fn digest(what: U8[], out: U8[], arena: Arena$@): U8[] //<
             b.s(line).c('\n')
     from: = lines.len - TAIL_LINES if lines.len > TAIL_LINES else 0
     b.s("--- its last \{lines.len - from\} lines ---\n")
-    for i in Range.new(from, lines.len, 1)
+    for i in Range(from, lines.len, 1)
         b.s(lines.get(i)).c('\n')
     dir: = fs.join(harness.root(), LOG_DIR, arena)
     path: = fs.join(dir, arena.text().s(what).s(".log").take(), arena)
@@ -189,7 +189,7 @@ priv fn case_alone(dir: U8[], part: Part, arena: Arena$@) //<
         r: = make_in(copy, uses, "test", U8[][]::{ jobs, "SUITES=" }, arena)
         if check_run(name, arena.text().s("\{label\}_test").take(), r, arena)
             relay_skips(dir, r.out, arena)
-    $suites: = List<|U8[]|>.new(arena)
+    $suites: = List<|U8[]|>(arena)
     all: = suites_of(copy, arena)
     for i in Range.asc(all.len)
         if in_part(i, part)
@@ -197,7 +197,7 @@ priv fn case_alone(dir: U8[], part: Part, arena: Arena$@) //<
     if part != .all
         verdict.check("the compiler's suite share is not empty", suites.len > 0,
             "the copy must expose its SUITES list")
-    $items: = List<|subproc.Job|>.new(arena)
+    $items: = List<|subproc.Job|>(arena)
     for s in suites
         target: = arena.text().s("test-\{s\}").take()
         items
@@ -234,7 +234,7 @@ priv fn case_alone(dir: U8[], part: Part, arena: Arena$@) //<
 fn run(only: U8[], except: U8[][], part: Part): I32 //<
     //< Every package with its own `Makefile`, or only `only`, minus `except`; the suite's exit code
     arena: = harness.begin(64 * 1024 * 1024)
-    $pkgs: = List<|U8[]|>.new(arena)
+    $pkgs: = List<|U8[]|>(arena)
     for dir in packages_with_make(arena)
         $left_out: = false
         for e in except

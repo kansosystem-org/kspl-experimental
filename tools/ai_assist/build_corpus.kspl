@@ -125,7 +125,7 @@ priv fn normalize_all(files: List<|U8[]|>$@, use_fmt: Bool, arena: Arena$@): Lis
         wa.use_fmt = use_fmt
         wa.worker_id = w
         wa.num_workers = num_workers
-        wa.worker_arena = Arena.new(64 * 1024 * 1024)
+        wa.worker_arena = Arena(64 * 1024 * 1024)
         wa.results = results
         worker_arenas.push(wa.worker_arena)
 
@@ -146,7 +146,7 @@ priv fn normalize_all(files: List<|U8[]|>$@, use_fmt: Bool, arena: Arena$@): Lis
 
 priv fn write_records(path: U8[], recs: List<|Rec|>$@)
     $f: = io.open(path, "w") catch panic("cannot open output file for writing")
-    defer $b: = Str_builder.new()
+    defer $b: = Str_builder()
     for rec in recs
         b.clear()
         b.s("{\"path\":\"").escape_and_append(rec.path).s("\",\"code\":\"")
@@ -183,7 +183,7 @@ priv fn write_stats(use_fmt: Bool, dups: Sz, total: Agg, train: Agg, val: Agg)
 // main
 // ==========================================
 fn main() //< collects the repository's sources into the train/val corpus
-    defer arena: = Arena.new(512 * 1024 * 1024)
+    defer arena: = Arena(512 * 1024 * 1024)
     $use_fmt: = false
     p: = argparse.Parser
         .create(sys.program_name(), "make a training corpus from the repository's sources", arena)
@@ -201,7 +201,7 @@ fn main() //< collects the repository's sources into the train/val corpus
     files: = find_kspl_files(arena)
     normalized: = normalize_all(files, use_fmt, arena)
 
-    $seen_hashes: = Map<|U8[], Bool|>.new(arena)
+    $seen_hashes: = Map<|U8[], Bool|>(arena)
     records: = List<|Rec|>.create(arena)
     $dups: Sz = 0
     for rec in normalized

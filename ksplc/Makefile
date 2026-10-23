@@ -85,15 +85,35 @@ ENTRY_FILE ?= main.kspl
 # What the compiler is handed besides the entry file.
 FLAGS ?= $(if $(filter llvm,$(TARGET)),--to=llvm)
 
+# How many translation units the C is written in (`--split`; C backend only). Above 1, `<to>.c`
+# becomes `<to>.0.c` … and the header `<to>.h`, compiled in parallel. 16 at most.
+SPLIT ?= 1
+split_ids := $(wordlist 1,$(SPLIT),0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15)
+split_on := $(filter-out 1,$(SPLIT))
+# $(call split_files,<to>): every file one translation writes, the header last
+split_files = $(if $(split_on),$(foreach i,$(split_ids),$(basename $(1)).$(i).c) \
+  $(basename $(1)).h,$(1))
+
 # $(call translate_cmd,<compiler>,<to>,<runtime or empty>)
-translate_cmd = cd "$(RUN_FROM)" && "$(1)" $(FLAGS) "$(ENTRY_FILE)" "$(2)" \
-  $(if $(3),&& "$(1)" emit-runtime "$(3)")
+translate_cmd = cd "$(RUN_FROM)" && "$(1)" $(FLAGS) $(if $(split_on),--split=$(SPLIT)) \
+  "$(ENTRY_FILE)" "$(2)" $(if $(3),&& "$(1)" emit-runtime "$(3)")
 # $(call build_cmd,<compiler that made the code>,<from>,<runtime or empty>,<exe>)
-build_cmd = cd "$(RUN_FROM)" && "$(CC)" $(CFLAGS) $$("$(1)" info exe-flags) "$(2)" $(3) \
-  $$("$(1)" info link-libs) -o "$(4)"
+build_cmd = cd "$(RUN_FROM)" && $(if $(split_on),$(call split_build,$(1),$(2),$(4)),"$(CC)" \
+  $(CFLAGS) $$("$(1)" info exe-flags) "$(2)" $(3) $$("$(1)" info link-libs) -o "$(4)")
+# Each unit compiles at once, without the linker's flags (`-Wl,…` warns there); then one link.
+# Caution: **Wait for every unit, then fail on any**: a bare `wait` passes a unit that failed.
+split_build = flags=$$("$(1)" info exe-flags) && cflags= && for f in $$flags; do \
+  case "$$f" in -Wl,*) ;; *) cflags="$$cflags $$f" ;; esac; done && pids= && \
+  for i in $(split_ids); do "$(CC)" $(CFLAGS) $$cflags -c "$(basename $(2)).$$i.c" \
+  -o "$(basename $(2)).$$i.o" & pids="$$pids $$!"; done && failed=0 && \
+  for p in $$pids; do wait $$p || failed=1; done && [ $$failed -eq 0 ] && "$(CC)" $(CFLAGS) \
+  $$flags $(foreach i,$(split_ids),"$(basename $(2)).$(i).o") $$("$(1)" info link-libs) -o "$(3)"
 # $(call compare_cmd,<one>,<the other>,<diff>): byte for byte, so `diff` takes no option that
 # ignores some (`-w` passes a space added inside a string literal); a file that cannot be read fails.
-compare_cmd = cd "$(RUN_FROM)" && { diff "$(1)" "$(2)" > "$(3)"; [ $$? -le 1 ]; }
+# Split, it compares unit by unit and the header, into one diff.
+compare_cmd = cd "$(RUN_FROM)" && { : > "$(3)"; for s in $(patsubst $(basename $(1))%,%, \
+  $(call split_files,$(1))); do diff "$(basename $(1))$$s" "$(basename $(2))$$s" >> "$(3)"; \
+  [ $$? -le 1 ] || exit 1; done; }
 # $(call verdict_cmd,<diff>,<what was compared>)
 verdict_cmd = cd "$(RUN_FROM)" && if [ -s "$(1)" ]; then \
   echo "RESULT: SOME FAILED (1) -> $(2): the two outputs differ. See $(1) for full details."; \

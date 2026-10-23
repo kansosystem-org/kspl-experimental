@@ -95,15 +95,15 @@ priv fn collect_dash_words(text: U8[], out: List<|U8[]|>$@) //<
 
 priv fn check_cli(arena: Arena$@)
     spec: = harness.read_under_root(SPEC_TOOLS)
-    $impl_cli: = List<|U8[]|>.new(arena)
+    $impl_cli: = List<|U8[]|>(arena)
     collect_impl_cli(impl_cli@, arena)
-    $mentioned: = List<|U8[]|>.new(arena)
+    $mentioned: = List<|U8[]|>(arena)
     collect_dash_words(spec, mentioned@)
     for w in scan.find_all(spec, "ksplc ", " ", arena)
         scan.push_unique(mentioned@, w)
     for w in scan.find_all(spec, "ksplc ", "`", arena)
         scan.push_unique(mentioned@, w)
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     for w in impl_cli
         if mentioned.contains(w)
             continue
@@ -137,10 +137,10 @@ priv fn check_cli(arena: Arena$@)
     // The above checks only the specification's table. **An entry point written in a design
     // document must be usable too** (Principle 5 turned round). Only `ksplc/*.md` is checked;
     // other folders name the linker's and other tools' options.
-    $doc_bad: = List<|U8[]|>.new(arena)
+    $doc_bad: = List<|U8[]|>(arena)
     $doc_seen: Sz = 0
     for rel in harness.tracked_matching(U8[][]::{ "ksplc/*.md" })
-        $words: = List<|U8[]|>.new(arena)
+        $words: = List<|U8[]|>(arena)
         collect_dash_words(harness.read_under_root(rel), words@)
         for w in words
             doc_seen += 1
@@ -193,7 +193,7 @@ priv fn check_style(arena: Arena$@)
     read: = harness.read_under_root(READ_SRC)
     $spec_keys: = scan.find_all(spec, "| **`", "`** |", arena)
     $impl_keys: = scan.find_all(src, "_KEY: U8[] = \"", "\"", arena)
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     scan.diff_into(spec_keys@, impl_keys@,
         arena.text().s("\{SPEC_TOOLS\}'s table").take(), STYLE_SRC, bad@, arena)
     scan.diff_into(impl_keys@, spec_keys@, STYLE_SRC,
@@ -235,11 +235,11 @@ priv fn is_ksos_helper(target: U8[]): Bool
     return false
 
 priv fn check_ksos_targets(arena: Arena$@)
-    $targets: = List<|U8[]|>.new(arena)
+    $targets: = List<|U8[]|>(arena)
     for t in make_targets.rules_of("ksos", arena).targets
         if t.starts_with("ksos") && !is_ksos_helper(t)
             scan.push_unique(targets@, t)
-    $runnable: = List<|U8[]|>.new(arena)
+    $runnable: = List<|U8[]|>(arena)
     for rel in harness.tracked_matching(U8[][]::{ "*.md" })
         text: = harness.read_under_root(rel)
         $i: Sz = 0
@@ -254,7 +254,7 @@ priv fn check_ksos_targets(arena: Arena$@)
                 i = k
             else
                 break
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     if targets.len == 0
         bad
             .push(arena.text().s("make names no ksos target in ").s(KSOS_MK).take())
@@ -273,17 +273,17 @@ priv const STD_RECORD: U8[] = "std/SURFACE.txt" //<
     //< **`std/tests/` is not counted**: std's users do not choose from it.
 
 priv fn check_std_list(arena: Arena$@)
-    $files: = List<|U8[]|>.new(arena)
+    $files: = List<|U8[]|>(arena)
     for rel in harness.tracked_matching(U8[][]::{ "std/*.kspl" })
         if rel.starts_with("std/tests/")
             continue
         files.push(rel.sub_from(4).strip_suffix(".kspl"))
-    $recorded: = List<|U8[]|>.new(arena)
+    $recorded: = List<|U8[]|>(arena)
     for line in harness.read_under_root(STD_RECORD).lines(arena)
         tab: = line.find_char('\t').unwrap_or(0)
         if line.starts_with("std/") && tab > 4
             scan.push_unique(recorded@, line.sub(4, tab - 4))
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     scan.diff_into(files@, recorded@, "what is really there", STD_RECORD, bad@, arena)
     scan.diff_into(recorded@, files@, STD_RECORD, "what is really there", bad@, arena)
     verdict.check_list("every std file publishes something, and the record names no other",

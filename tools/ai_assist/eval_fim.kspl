@@ -43,7 +43,7 @@ priv fn holes_of(code: U8[], arena: Arena$@): List<|Hole|> //<
     //< tell a model from nothing. Use `split('\n')`, not `lines` (the reason is at `fim_examples`
     //< in `make_fim.kspl`).
     lines: = arena.create(code.split('\n', arena))
-    $out: = List<|Hole|>.new(arena)
+    $out: = List<|Hole|>(arena)
     $seen: Sz = 0
     for $i: Sz = 1; i + 1 < lines.len && out.len < HOLES_PER_FILE; i += 1
         if lines[i].trim_spaces().len == 0
@@ -63,8 +63,8 @@ priv fn native_answers(holes: List<|Hole|>$@, coder: U8[], weights: U8[], sample
         //< Every hole's candidates from `fim_coder complete`, **run as its own process**
         //< The model stays out of this tool. The holes go out as one file. The answers come back
         //< as another, one line each, in the same order.
-    $b: = Json_builder.new(arena)
-    defer $text: = Str_builder.new()
+    $b: = Json_builder(arena)
+    defer $text: = Str_builder()
     for h in holes
         b.obj().set("prefix", b.str_val(h.prefix)).set("suffix", b.str_val(h.suffix)).build()
             .dump(text@)
@@ -91,9 +91,9 @@ priv fn native_answers(holes: List<|Hole|>$@, coder: U8[], weights: U8[], sample
     if recs.len != holes.len
         io.err().s("[error] \{holes.len\} holes went out, \{recs.len\} answers came back\n")
         sys.exit(1)
-    $out: = List<|List<|U8[]|>|>.new(arena)
+    $out: = List<|List<|U8[]|>|>(arena)
     for rec in recs
-        $one: = List<|U8[]|>.new(arena)
+        $one: = List<|U8[]|>(arena)
         for c in rec.get("candidates").arr_list(arena)
             one.push(c.as_str().unwrap_or(""))
         out.push(one)
@@ -122,7 +122,7 @@ priv fn pct(n: Sz, t: Sz): F64 //< n out of t, as a percentage
 
 fn main() //< measures the completion's compile-pass and exact-match rates
     began: = sys.mono_us()
-    defer arena: = Arena.new(512 * 1024 * 1024)
+    defer arena: = Arena(512 * 1024 * 1024)
     $model: U8[] = "oracle"
     $coder: U8[] = "out/fim_coder.exe"
     $weights: U8[] = "out/fim_coder.safetensors"
@@ -139,14 +139,14 @@ fn main() //< measures the completion's compile-pass and exact-match rates
         io.err().s("--model must be oracle, empty or native\n")
         sys.exit(2)
 
-    defer $val_path: = Str_builder.new()
+    defer $val_path: = Str_builder()
     val_path.s(oracle.CORPUS_DIR).s("/val.jsonl")
     recs: = oracle.load_jsonl(val_path.slice(), arena) catch
         io.err().s("[error] cannot read \{val_path.slice()\} (run build_corpus first)\n")
         sys.exit(1)
 
     // Only a file that compiles cleanly on its own gives holes (for a fair comparison).
-    $holes: = List<|Hole|>.new(arena)
+    $holes: = List<|Hole|>(arena)
     $files: Sz = 0
     $skipped: Sz = 0
     for rec in recs
@@ -158,12 +158,12 @@ fn main() //< measures the completion's compile-pass and exact-match rates
         for h in holes_of(code, arena)
             holes.push(h)
 
-    $answers: = List<|List<|U8[]|>|>.new(arena)
+    $answers: = List<|List<|U8[]|>|>(arena)
     if model.equals("native")
         answers = native_answers(holes@, coder, weights, samples, arena)
     else
         for h in holes
-            $one: = List<|U8[]|>.new(arena)
+            $one: = List<|U8[]|>(arena)
             one.push(h.middle if model.equals("oracle") else "")
             answers.push(one)
 

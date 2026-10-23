@@ -195,7 +195,7 @@ fn infer_namespace_access(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@,
             owner_id = c.env.type_to_id.get(c.fn_ctx.impl_name).unwrap_or(0)
     is_value: = c.fn_ctx.callee != node
 
-    $new_path: = Str_builder.new()
+    $new_path: = Str_builder()
     new_path.s(left.text).s(".").s(member_name)
     if type_args_node != null
         new_path.s(type_args_node.text)
@@ -288,7 +288,7 @@ fn check_builtin_dot_access(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@, r
                 c.warn(left,
                     "[W0102] Expression has side effects. Compile-time array length evaluation \
                         discards the expression.")
-            defer $sb: = Str_builder.new()
+            defer $sb: = Str_builder()
             sb.s("\{arr_size\}")
             node.morph(.k_integer, sb.slice())
             return .some(I32::sema_type_env.Builtin_type_id.size_type)
@@ -324,9 +324,9 @@ priv fn reject_unimported_spec(c: Sema_ctx$@, member_node: Ast_node$@, spec_item
     c.err(member_node, c.scratch.slice())
 
 priv fn reject_slotless_trait_call(c: Sema_ctx$@, recv_id: I32, member_name_raw: U8[],
-    base_type_str: U8[], member_node: Ast_node$@) //<
+    target_id: I32, member_node: Ast_node$@) //<
         //< Rejects a call through an interface value to a method that has no vtable slot
-        //< base_type_str is the type as the user wrote it (for the diagnostic). recv_id is the
+        //< target_id is the type as the user wrote it (for the diagnostic). recv_id is the
         //< receiver type stripped of pointers and immutability (for the lookup).
         //< Caution: **Do not let a method with no slot pass.** A method with a default body is not
         //< in the vtable (has_vtable_slot in `../../base/ast_ext.kspl`). **Call this on both the
@@ -335,6 +335,7 @@ priv fn reject_slotless_trait_call(c: Sema_ctx$@, recv_id: I32, member_name_raw:
     case .trait_type(slot_def)
         for m_sym in slot_def.methods_list
             if m_sym.name.equals(member_name_raw) && !m_sym.node.has_vtable_slot()
+                base_type_str: = c.env.display(target_id)
                 c.clear_scratch()
                     .s("method '\{member_name_raw\}' of interface '\{base_type_str\}' has a default \
                         body. It has no vtable slot, so it cannot be called through an interface \
@@ -357,13 +358,9 @@ fn infer_dot_access(c: Sema_ctx$@, node: Ast_node$@, _left: Ast_node$@, target_i
     if fast_out: = check_builtin_dot_access(c, node, _left, recv_id, member_node)
         return fast_out
 
-    // The type as the user wrote it, for the diagnostic.
-    // Caution: **Show the sugar**: the registered name of `T[]` is `Slice<|T|>`, which the user did
-    // not write (`../type/display.kspl`).
-    base_type_str: = c.env.display(target_id)
     $found: = false
     $type_id: = I32::sema_type_env.Builtin_type_id.unknown
-    defer $search_types: = List<|U8[]|>.new(null)
+    defer $search_types: = List<|U8[]|>(null)
 
     // Two candidates suffice: with pointers stripped, only immutability differs.
     search_types.push(c.env.get_str(recv_id))
@@ -403,16 +400,15 @@ fn infer_dot_access(c: Sema_ctx$@, node: Ast_node$@, _left: Ast_node$@, target_i
             check_method_import(c, member_node, hit.sym, recv_id)
             c.check_visibility_and_mark_used(hit.sym, node)
         type_id = hit.type_id
-        reject_slotless_trait_call(c, recv_id, member_name_raw, base_type_str, member_node)
+        reject_slotless_trait_call(c, recv_id, member_name_raw, target_id, member_node)
         node.set_kind(.k_method_access)
         member_node.type_id = c.env.get_or_add(current_search_type)
         break
 
     if !found
         if target_id != 0 && !sema_type_env.is_unknown(target_id)
-            report_missing_member(c, member_node, recv_id, base_type_str,
-                c.fn_ctx.callee == node)
-        reject_slotless_trait_call(c, recv_id, member_name_raw, base_type_str, member_node)
+            report_missing_member(c, member_node, recv_id, target_id, c.fn_ctx.callee == node)
+        reject_slotless_trait_call(c, recv_id, member_name_raw, target_id, member_node)
         node.set_kind(.k_method_access)
         if !sema_type_env.is_unknown(expected_id)
             type_id = expected_id
@@ -464,7 +460,7 @@ priv fn find_method(c: Sema_ctx$@, s_entry: sema_type_def.Entry$@, s_id: I32, se
             hit = Method_hit::{ .def = sym.node, .sym = sym, .type_id = sym.type_id }
             if hit.def != null
                 return hit
-    defer $full_name: = Str_builder.new()
+    defer $full_name: = Str_builder()
     full_m_name: = full_name.s(search_type).c('.').s(name).slice()
     if tmpl: = sema_decl_mono_name.lookup_method_template(c, s_id, name)
         if tmpl.node != null
@@ -474,7 +470,7 @@ priv fn find_method(c: Sema_ctx$@, s_entry: sema_type_def.Entry$@, s_id: I32, se
             // declare.kspl).
             // Caution: Create one here, or the visibility and import checks are skipped entirely
             // (a `priv` generic method becomes callable from another file).
-            hit.sym = Sema_symbol.new(.generic_fn, base_core.arena.dup_str(full_m_name),
+            hit.sym = Sema_symbol(.generic_fn, base_core.arena.dup_str(full_m_name),
                 generic_fn_node)
             hit.sym.vis = generic_fn_node.get_visibility()
             hit.sym.flags.is_method = true
@@ -526,12 +522,16 @@ priv fn check_method_import(c: Sema_ctx$@, member_node: Ast_node$@, found_sym: S
             \"\{method_file\}\"' to this file")
     c.err(member_node, c.scratch.slice())
 
-priv fn report_missing_member(c: Sema_ctx$@, member_node: Ast_node$@, recv_id: I32,
-    base_type_str: U8[], is_call: Bool) //<
+priv fn report_missing_member(c: Sema_ctx$@, member_node: Ast_node$@, recv_id: I32, target_id: I32,
+    is_call: Bool) //<
         //< Explains why the receiver's type has no member of that name, the one reason that applies
         //< is_call says whether the access is a call's callee; only a call can reach an extension
-        //< method another file declares.
+        //< method another file declares. target_id is the type as the user wrote it.
     member_name_raw: = member_node.text
+    // Caution: **Show the sugar**: the registered name of `T[]` is `Slice<|T|>`, which the user did
+    // not write (`../type/display.kspl`). It is built here, on the error path alone: the found path
+    // runs at every member access.
+    base_type_str: = c.env.display(target_id)
     // A trait's methods are looked up only through symtab.resolve, which filters by visibility, so
     // a `priv` one ends up here. Report the access violation, as for an impl's priv method, not a
     // false "no such method".

@@ -444,7 +444,7 @@ A *constraint* (`<|K: some.Trait|>`) limits which types can fill a type paramete
 
 * `bind_generic_args` checks a type-argument constraint only at the type's first instantiation.
 * That can happen inside a speculative inference, one that raises `suppress_errors`, such as an attempt to constant-fold an `if`. `report_diagnostic` discards the diagnostic there, later inference hits the instantiation cache, and the check never runs again.
-* So `m: Map<|Point, I32|> = …;` (a type annotation) catches the violation, while `m: = Map<|Point, I32|>.new(null);` (a static generic method call with an inferred declaration) passes silently. A check that holds on some paths alone leaves a hole for whoever trusts it (Principle 5).
+* So `m: Map<|Point, I32|> = …;` (a type annotation) catches the violation, while `m: = Map<|Point, I32|>(null);` (a type call, which reaches the static generic `new`, with an inferred declaration) passes silently. A check that holds on some paths alone leaves a hole for whoever trusts it (Principle 5).
 
 **So `check_type_constraint` in `sema/decl/resolve.kspl` records and returns without deciding** (`Pending_constraint`, recorded by `put_off_constraint` in `sema/decl/mono_queue.kspl`). `drain_pending_constraints` decides them at the same boundary as the instantiation queue ("Where the instantiation queue is drained"). The check consults `env.implements_trait`, which step 3 of the drain fills. Deferring only one of the two judges against an empty conformance table, and rejects a correct type ("`Slice<|U8 const|>` does not implement `Hashable`"). For the same reason, ahead of an instantiation only its own share is decided (`drain_pending_constraints_for`). Deciding the share of an instantiation not yet made rejects a correct type while its table is still empty.
 
@@ -471,7 +471,7 @@ Caution: **Do not re-check a type-argument constraint where the bindings are onl
 
 Caution: **For 3, call `drain_pending_constraints` before each body is checked** (at the head of `infer.kspl`'s body loop), not once outside the loop. The violation of an instantiation made inside a body is known only after that instantiation's method bodies are checked. So the derived errors would come before the one that matters (the regression test: the case `generic_constraint_in_template_body` in `tests/negative/generic.kspl`). It returns at once on an empty queue, so it can be called every round. The drain in `pipeline.kspl` handles what the last body queued.
 
-With this, `m: = Map<|Point, I32|>.new(null);` gets **one diagnostic, at the user's line**. The case `generic_constraint_via_static_call` in `tests/negative/generic.kspl` also checks that no derived errors appear, with `EXPECT-NOT`.
+With this, `m: = Map<|Point, I32|>(null);` gets **one diagnostic, at the user's line**. The case `generic_constraint_via_static_call` in `tests/negative/generic.kspl` also checks that no derived errors appear, with `EXPECT-NOT`.
 
 #### Impls of generic types
 

@@ -23,7 +23,7 @@ priv fn check_host_spellings(arena: Arena$@)
     c: = harness.read_under_root(HOST_C)
     archs: = scan.find_all(c, "#define KSPL_HOST_ARCH \"", "\"", arena)
     oses: = scan.find_all(c, "#define KSPL_HOST_OS \"", "\"", arena)
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     $seen: Sz = 0
     if archs.len == 0 || oses.len == 0
         bad
@@ -155,14 +155,14 @@ priv fn push_unheld(put_out: List<|U8[]|>@, verb: U8[], std_declared: List<|U8[]
                 .s(LLVM_CTX).s("'s preamble_fns does not hold it without a .ret").take())
 
 priv fn check_facade(arena: Arena$@)
-    $std_declared: = List<|U8[]|>.new(arena)
-    $defined: = List<|U8[]|>.new(arena)
-    $declared: = List<|U8[]|>.new(arena)
+    $std_declared: = List<|U8[]|>(arena)
+    $defined: = List<|U8[]|>(arena)
+    $declared: = List<|U8[]|>(arena)
     collect_declared(std_declared@, arena)
     collect_module_symbols(defined@, declared@, arena)
 
     // (1) The only `kspl_*` bodies in the IR are the ones that are `static inline` on the C side.
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     for n in defined
         if n.starts_with("kspl_") && !is_inline_ok(n)
             bad
@@ -176,15 +176,15 @@ priv fn check_facade(arena: Arena$@)
     // alone is an `invalid redefinition` or an unresolved symbol, **failing far from the cause**
     // (assembling the `.ll`, unseen until `make LLVM=1`). The table's own `declare`s and the
     // skipping come from one list and need no matching.
-    $named: = List<|U8[]|>.new(arena)
-    $by_hand: = List<|U8[]|>.new(arena)
+    $named: = List<|U8[]|>(arena)
+    $by_hand: = List<|U8[]|>(arena)
     // Caution: **Fail where it is not found.** Continue with an empty list and the check goes green
     // having checked nothing.
     if !collect_preamble(named@, by_hand@, arena)
         verdict.check(arena.text().s("\{LLVM_CTX\}'s preamble_fns can be read").take(), false,
             "the table is not found")
         return
-    $bad2: = List<|U8[]|>.new(arena)
+    $bad2: = List<|U8[]|>(arena)
     push_unheld(defined@, "defines", std_declared@, by_hand@, bad2@, arena)
     push_unheld(declared@, "declares", std_declared@, by_hand@, bad2@, arena)
     for n in by_hand
@@ -211,7 +211,7 @@ priv const REACTOR_C_MARK: U8[] = "rv |= 0x"
 
 priv fn bits_after(text: U8[], mark: U8[], arena: Arena$@): List<|U8[]|> //<
     //< Pushes the one digit right after `mark`
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     for line in text.lines(arena)
         if at: = line.find_str(mark)
             rest: = line.sub_from(at + mark.len)
@@ -222,7 +222,7 @@ priv fn bits_after(text: U8[], mark: U8[], arena: Arena$@): List<|U8[]|> //<
 priv fn check_reactor_bits(arena: Arena$@)
     $ours: = bits_after(harness.read_under_root(REACTOR_KSPL), REACTOR_KSPL_MARK, arena)
     $theirs: = bits_after(harness.read_under_root(REACTOR_C), REACTOR_C_MARK, arena)
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     for b in ours.slice()
         if !theirs.contains(b)
             bad
@@ -250,17 +250,17 @@ priv const STDIO_KSPL: U8[] = "std/subproc.kspl"
 priv const STDIO_C: U8[] = "ksplc/gen/runtime/hosted_spawn.c"
 
 priv fn check_stdio_bits(arena: Arena$@)
-    $ours: = List<|U8[]|>.new(arena)
+    $ours: = List<|U8[]|>(arena)
     for line in harness.read_under_root(STDIO_KSPL).lines(arena)
         if line.starts_with("priv const STDIO_")
             if at: = line.find_str("= ")
                 rest: = line.sub_from(at + 2)
                 scan.push_unique(ours@,
                     rest.sub(0, rest.find_char(' ').unwrap_or(rest.len)))
-    $theirs: = List<|U8[]|>.new(arena)
+    $theirs: = List<|U8[]|>(arena)
     for b in scan.find_all(harness.read_under_root(STDIO_C), "(stdio & ", ")", arena)
         scan.push_unique(theirs@, b)
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     scan.diff_into(ours@, theirs@, STDIO_KSPL, STDIO_C, bad@, arena)
     scan.diff_into(theirs@, ours@, STDIO_C, STDIO_KSPL, bad@, arena)
     verdict.check_list("the child's stdio bits agree between the KSPL side and the C side",
@@ -279,11 +279,11 @@ priv fn c_status_rows(text: U8[], arena: Arena$@): List<|U8[]|> //<
     //< The `NAME=code` pairs of `kspl_proc_status_code`
     //< Each `case` line names an NTSTATUS in a `/* STATUS_... */` comment, and the next `return`
     //< gives the code of every name before it.
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     if at: = text.find_str(STATUS_C_HEAD)
         body: = text.sub_from(at)
         if end: = body.find_str("default:")
-            $pending: = List<|U8[]|>.new(arena)
+            $pending: = List<|U8[]|>(arena)
             for line in body.sub(0, end).lines(arena)
                 names: = scan.find_all(line, "/* ", " */", arena)
                 name: = names.get(0).trim_spaces() if names.len == 1 else ""
@@ -295,13 +295,13 @@ priv fn c_status_rows(text: U8[], arena: Arena$@): List<|U8[]|> //<
                         out
                             .push(arena.text().s(pending.get(i)).c('=')
                             .s(codes.get(0).trim_spaces()).take())
-                    pending = List<|U8[]|>.new(arena)
+                    pending = List<|U8[]|>(arena)
     return out
 
 priv fn doc_status_rows(text: U8[], arena: Arena$@): List<|U8[]|> //<
     //< The `NAME=code` pairs of the DESIGN-system.md table
     //< Every `` `STATUS_...` `` in a row's first cell is paired with the row's last cell.
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     if at: = text.find_str(STATUS_DOC_HEAD)
         after: = text.sub_from(at + STATUS_DOC_HEAD.len)
         section: = after.sub(0, after.find_str("\n### ").unwrap_or(after.len))
@@ -375,7 +375,7 @@ priv fn check_status_table(arena: Arena$@)
         Sample[]::STATUS_SAMPLES, "status_samples", status_tables_disagree, arena)
     c: = c_status_rows(harness.read_under_root(STATUS_C), arena)
     doc: = doc_status_rows(harness.read_under_root(STATUS_DOC), arena)
-    $gaps: = List<|U8[]|>.new(arena)
+    $gaps: = List<|U8[]|>(arena)
     if c.len == 0
         gaps
             .push(arena.text().s(STATUS_C).s(": no `case` rows found in kspl_proc_status_code")

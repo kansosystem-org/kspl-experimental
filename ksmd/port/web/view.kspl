@@ -1,0 +1,263 @@
+//< What the page shows of a document, written as JSON for the page's script to build HTML from
+//< A block is an object with a kind letter `k`: `p` paragraph, `h` heading, `c` code, `l` list,
+//< `t` table, `i` image and `n` include. Text is a list of segments: `{"t":…,"m":…,"l":…}`, where
+//< `m` adds 1 for emphasis, 2 for strong emphasis and 4 for inline code, and `l` is a link's
+//< destination; a hard break is `{"br":1}`. A table cell is `[kind]` or `[kind, value]`: 0 empty,
+//< 1 a number, 2 text, 3 an error's mark. A spot is `[place, block, item, offset]`, where place 0
+//< is text, 1 the gap before a block and 2 the gap before a list item. Where files are fetched,
+//< an include and an image add where their path leads (`to`) and any problem (`why`), and an
+//< include the blocks of its file (`inside`), shown in place and edited on their own.
+//< Caution: **Change this and `ksmd/port/web/view.js` together**; the script reads these shapes.
+import "ksmd/assemble" { Assembly, NONE }
+import "ksmd/calc" { Results, Value }
+import "ksmd/calc"
+import "ksmd/editor" { Editor }
+import "ksmd/keyed" { Keyed }
+import "ksmd/model" { Block_kind, Document }
+import "ksmd/region" { Spot, Style, Unit, gather }
+import "ksmd/styled" { Seg }
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+
+struct Inside //< what includes and images show: the view assembled from the files fetched
+    a: Assembly
+    top: List<|Sz|> //< the entry of each block of the open document
+    values: List<|Results?|> //< each source's values by its index, calculated when first shown
+    waiting: Keyed<|Bool|> //< the paths not fetched yet; their clauses show no problem
+    arena: Arena$@
+
+impl Inside
+    fn new(a: Assembly, waiting: Keyed<|Bool|>, arena: Arena$@): Inside //<
+        //< The open document is the view's first source
+        $top: = List<|Sz|>(arena)
+        for e in Range.asc(a.entries.len)
+            if a.entries.get(e).instance == 0
+                top.push(e)
+        $values: = List<|Results?|>(arena)
+        for _ in Range.asc(a.sources.len)
+            values.push(.none)
+        return Inside::{ .a = a, .top = top, .values = values, .waiting = waiting, .arena = arena }
+
+    priv fn values_of(r: Self$@, source: Sz): Results
+        if found: = r.values.get(source)
+            return found
+        src: = r.a.sources.get(source)
+        got: = calc.calculate(src.doc@, r.arena)
+        r.values.set(source, .some(got))
+        return got
+
+fn blocks(ed: Editor@, from: Sz, to: Sz, values: Results@, inside: Inside$@, out: Str_builder$@) //<
+    //< The blocks from `from` to `to`, as a JSON list; `inside` is null where no file is fetched
+    defer scratch: = Arena(16 * 1024)
+    out.c('[')
+    for b in Range(from, to, 1)
+        if b > from
+            out.c(',')
+        entry: = inside.top.get(b) if inside != null && b < inside.top.len else NONE
+        block(ed.doc@, b, values, out, scratch, inside, entry)
+    out.c(']')
+
+fn tables(ed: Editor@, from: Sz, to: Sz, values: Results@, out: Str_builder$@) //<
+    //< Each table block outside `from` to `to`, as a JSON list of `[block, table]`
+    defer scratch: = Arena(16 * 1024)
+    out.c('[')
+    $first: = true
+    for b in Range.asc(ed.doc.blocks.len)
+        if b >= from && b < to || ed.doc.blocks.get(b).kind != .table
+            continue
+        if !first
+            out.c(',')
+        first = false
+        out.s("[\{b\},")
+        block(ed.doc@, b, values, out, scratch, null, NONE)
+        out.c(']')
+    out.c(']')
+
+fn selection(ed: Editor@, out: Str_builder$@) //< `{"a":spot,"f":spot,"g":style}`
+    out.s("{\"a\":")
+    spot(ed.anchor, out)
+    out.s(",\"f\":")
+    spot(ed.focus, out)
+    out.s(",\"g\":")
+    style(ed.gap, out)
+    out.c('}')
+
+priv fn spot(p: Spot, out: Str_builder$@)
+    place: = 0 if p.place == .text else 1 if p.place == .block_gap else 2
+    out.s("[\{place\},\{p.block\},\{p.item\},\{p.offset\}]")
+
+priv fn style(s: Style, out: Str_builder$@) //< `{"k":kind,"n":level,"d":depth,"o":0 or 1}`
+    out.s("{\"k\":\"").s(kind_letter(s.kind)).s("\",\"n\":\{s.level\},\"d\":\{s.depth\},\"o\":")
+    out.s("1}" if s.ordered else "0}")
+
+priv fn kind_letter(kind: Block_kind): U8[]
+    switch kind
+    case .paragraph
+        return "p"
+    case .heading
+        return "h"
+    case .code
+        return "c"
+    case .list
+        return "l"
+    case .table
+        return "t"
+    case .image
+        return "i"
+    case .include
+        return "n"
+
+priv fn block(doc: Document@, b: Sz, values: Results@, out: Str_builder$@, scratch: Arena$@,
+    inside: Inside$@, entry: Sz) //<
+        //< One block; `entry` is its entry in `inside`'s view, or `NONE`
+    x: = doc.blocks.get(b)
+    out.s("{\"k\":\"").s(kind_letter(x.kind)).c('"')
+    switch x.kind
+    case .paragraph, .heading, .code, .list
+        $units: = List<|Unit|>(scratch)
+        gather(doc, b, b + 1, units@, scratch)
+        if x.kind == .heading
+            out.s(",\"n\":\{x.level\}")
+        if x.kind == .code
+            out.s(",\"label\":")
+            text(x.label, out)
+            out.s(",\"t\":")
+            text(units[0].segs[0].text, out)
+        else if x.kind == .list
+            out.s(",\"items\":[")
+            for i in Range.asc(units.len)
+                if i > 0
+                    out.c(',')
+                u: = units[i]@
+                out.s("{\"d\":\{u.style.depth\},\"o\":").s("1" if u.style.ordered else "0")
+                out.s(",\"s\":")
+                segs(u.segs@, out)
+                out.c('}')
+            out.c(']')
+        else
+            out.s(",\"s\":")
+            segs(units[0].segs@, out)
+    case .table
+        table(doc, x.first, values, out)
+    case .image
+        image: = doc.images.get(x.first)
+        out.s(",\"src\":")
+        text(image.src, out)
+        out.s(",\"alt\":")
+        text(image.alt, out)
+        out.s(",\"cap\":")
+        text(image.caption, out)
+        if entry != NONE
+            aim(inside, entry, out)
+    case .include
+        out.s(",\"path\":")
+        text(x.text, out)
+        if entry != NONE
+            aim(inside, entry, out)
+            included(inside, entry, out, scratch)
+    out.c('}')
+
+priv fn aim(inside: Inside$@, entry: Sz, out: Str_builder$@) //<
+    //< `"to"`, where a clause's path leads, and `"why"` with its place where it is refused. The
+    //< place is named only inside another file than the clause's. A file not fetched yet waits.
+    target: = inside.a.entries.get(entry).target
+    out.s(",\"to\":")
+    text(target, out)
+    if inside.waiting.get(target).is_some()
+        out.s(",\"wait\":1")
+        return
+    if p: = inside.a.problem_at(entry)
+        at: = inside.a.problems.get(p).at
+        out.s(",\"why\":")
+        text(at.message, out)
+        if !at.path.equals(inside.a.source_of(entry).path)
+            out.s(",\"in\":")
+            text(at.path, out)
+            out.s(",\"line\":\{at.line\},\"column\":\{at.column\}")
+
+priv fn included(inside: Inside$@, entry: Sz, out: Str_builder$@, scratch: Arena$@) //<
+    //< `"inside"`: the blocks of the instance an include opens, each nested include in turn
+    opens: = inside.a.entries.get(entry).opens
+    if opens == NONE
+        return
+    child: = inside.a.instances.get(opens)
+    source: = inside.a.sources.get(child.source)
+    values: = inside.values_of(child.source)
+    out.s(",\"inside\":[")
+    $first: = true
+    for k in Range(child.first, child.first + child.count, 1)
+        e: = inside.a.entries.get(k)
+        if e.instance != opens
+            continue
+        if !first
+            out.c(',')
+        first = false
+        block(source.doc@, e.block, values@, out, scratch, inside, k)
+    out.c(']')
+
+priv fn segs(list: List<|Seg|>@, out: Str_builder$@)
+    out.c('[')
+    for i in Range.asc(list.len)
+        if i > 0
+            out.c(',')
+        s: = list[i]
+        if s.hard
+            out.s("{\"br\":1}")
+            continue
+        m: Sz =
+            (1 if s.marks.emphasis else 0) + (2 if s.marks.strong else 0) + (4 if s.marks.code
+            else 0)
+        out.s("{\"t\":")
+        text(s.text, out)
+        out.s(",\"m\":\{m\}")
+        if s.marks.link.len > 0
+            out.s(",\"l\":")
+            text(s.marks.link, out)
+        out.c('}')
+    out.c(']')
+
+priv fn table(doc: Document@, u: Sz, values: Results@, out: Str_builder$@) //<
+    //< `"name"`, the column weights `"w"`, the column names and each data row's values
+    t: = doc.tables[u]@
+    out.s(",\"u\":\{u\},\"name\":")
+    text(t.name, out)
+    out.s(",\"w\":[")
+    for i in Range.asc(t.weights.len)
+        if i > 0
+            out.c(',')
+        out.s("\{t.weights[i]\}")
+    out.s("],\"names\":[")
+    for c in Range.asc(t.columns.len)
+        if c > 0
+            out.c(',')
+        text(t.cells[c].text, out)
+    out.s("],\"rows\":[")
+    for r in Range.asc(t.rows.len)
+        if r > 0
+            out.c(',')
+        out.c('[')
+        for c in Range.asc(t.columns.len)
+            if c > 0
+                out.c(',')
+            cell(t.cells[t.at(r, c)].text, values.at(u, r, c), out)
+        out.c(']')
+    out.s("]")
+
+priv fn cell(written: U8[], v: Value, out: Str_builder$@)
+    switch v.kind
+    case .empty
+        out.s("[0]")
+    case .number
+        out.s("[1,\{v.number\}]")
+    case .text
+        out.s("[2,")
+        text(written, out)
+        out.c(']')
+    case .error
+        out.s("[3,")
+        text(v.error.mark(), out)
+        out.c(']')
+
+priv fn text(s: U8[], out: Str_builder$@) //< a JSON string
+    out.c('"').escape_and_append(s).c('"')

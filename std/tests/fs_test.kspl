@@ -6,6 +6,7 @@ import "std/io"
 import "std/mem" { Arena }
 import "std/mem" { dealloc }
 import "std/str" { Str_builder }
+import "std/sys"
 import "std/thread"
 import "std/verdict"
 
@@ -57,7 +58,7 @@ fn test_fs_ops()
     assert(replaced.equals("again"), "the destination should hold the new bytes")
     dealloc(Void$@::replaced.ptr)
 
-    defer dir_arena: = Arena.new(4096)
+    defer dir_arena: = Arena(4096)
     entries: = fs.read_dir(tmp_dir, dir_arena)
         catch panic("read_dir should succeed for an existing directory")
     assert(entries.len == 1, "directory should contain exactly one entry")
@@ -78,7 +79,7 @@ fn test_fs_wide_path() //<
     //< This test checks the functions themselves. The compiler's own suites test a program run
     //< through `ksplc run` from such a folder.
     verdict.start("[Fs] file operations in a place holding a space and non-ASCII...")
-    defer arena: = Arena.new(4096)
+    defer arena: = Arena(4096)
     // **Delete by name, deepest first** (a folder with contents cannot be deleted).
     root: = "out/tmp/kspl_test 場所 と 空白"
     deep: = "out/tmp/kspl_test 場所 と 空白/深い 所"
@@ -135,11 +136,11 @@ fn test_fs_past_max_path() //<
     //< `ksplc/gen/runtime/hosted_fs.c`). The tree is built through a relative path, which is
     //< resolved before the long-path prefix is added. It is read back through the absolute one.
     verdict.start("[Fs] file operations on a path longer than Windows's 260 characters...")
-    defer arena: = Arena.new(8192)
+    defer arena: = Arena(8192)
     root: = "out/tmp/kspl_test_past_max_path"
     // Five levels of 58 characters put the relative path alone past 300, wherever the tests
     // run.
-    $levels: = List<|U8[]|>.new(arena)
+    $levels: = List<|U8[]|>(arena)
     $at: = root
     for i in Range.asc(5)
         at = fs.join(at, arena.text().s("level_\{i\}_").s(LEVEL_FILLER).take(), arena)
@@ -199,7 +200,7 @@ priv const WALK_ROOT: U8[] = "out/tmp/kspl_test_debug_walk"
 // ==========================================
 fn test_fs_walk()
     verdict.start("[Fs] mkdir_all/walk_files...")
-    defer arena: = Arena.new(64 * 1024)
+    defer arena: = Arena(64 * 1024)
     remove_walk_tree()
 
     fs.mkdir_all("out/tmp/kspl_test_debug_walk/z/deep")
@@ -272,18 +273,18 @@ priv fn race_entry(c: Race_ctx$@): Void$@
 
 fn test_fs_mkdir_all_race()
     verdict.start("[Fs] mkdir_all creating the same tree at once...")
-    defer arena: = Arena.new(64 * 1024)
+    defer arena: = Arena(64 * 1024)
     root: = "out/tmp/kspl_test_debug_mkdir_race"
     clear_tree_best_effort(root, arena)
     deep: = "out/tmp/kspl_test_debug_mkdir_race/a/b/c/d"
-    $fails: = thread.Atomic_sz.new(0)
-    $go: = thread.Atomic_sz.new(0)
-    $ctxs: = List<|Race_ctx$@|>.new(arena)
+    $fails: = thread.Atomic_sz(0)
+    $go: = thread.Atomic_sz(0)
+    $ctxs: = List<|Race_ctx$@|>(arena)
     for _k in Range.asc(RACE_DIRS)
         c: = Race_ctx$@::arena.alloc(sizeof(Race_ctx))
         c$ = Race_ctx::{ .path = deep, .fails = fails@, .go = go@ }
         ctxs.push(c)
-    $threads: = List<|thread.Thread$@|>.new(arena)
+    $threads: = List<|thread.Thread$@|>(arena)
     for c in ctxs.slice()
         t: = thread.Thread.spawn<|Race_ctx|>(race_entry, c) catch
             break
@@ -311,49 +312,50 @@ fn clear_tree_best_effort(root: U8[], arena: Arena$@) //< deletes a test's scrat
     fs.remove_path(root) catch {}
 
 // ==========================================
-// std/fs: path safety decided by the text alone (is_safe_relative), and walk_files's depth limit.
+// std/sys: path safety decided by the text alone (is_safe_relative), and walk_files's depth limit.
 // ==========================================
 fn test_fs_path_guard()
     verdict.start("[Fs] is_safe_relative and walk's depth limit...")
-    assert(fs.is_safe_relative("a/b.txt"), "an ordinary relative path goes through")
-    assert(fs.is_safe_relative("a..b.txt"), "a '..' inside a segment is a legitimate name")
-    assert(fs.is_safe_relative("..foo/bar"),
+    assert(sys.is_safe_relative("a/b.txt"), "an ordinary relative path goes through")
+    assert(sys.is_safe_relative("a..b.txt"), "a '..' inside a segment is a legitimate name")
+    assert(sys.is_safe_relative("..foo/bar"),
         "starting with '..' goes through unless it is the whole segment")
-    assert(!fs.is_safe_relative(""), "empty does not go through")
-    assert(!fs.is_safe_relative("/etc/passwd"), "an absolute path does not go through")
-    assert(!fs.is_safe_relative("\\etc\\passwd"), "a Windows-style absolute path does not either")
-    assert(!fs.is_safe_relative("C:/tmp/x"), "a drive letter does not go through")
-    assert(!fs.is_safe_relative("../x"), "a leading '..' segment does not go through")
-    assert(!fs.is_safe_relative("a/../../x"), "an intermediate '..' segment does not either")
-    assert(!fs.is_safe_relative("a/.."), "a trailing '..' segment does not either")
+    assert(!sys.is_safe_relative(""), "empty does not go through")
+    assert(!sys.is_safe_relative("/etc/passwd"), "an absolute path does not go through")
+    assert(!sys.is_safe_relative("\\etc\\passwd"), "a Windows-style absolute path does not either")
+    assert(!sys.is_safe_relative("C:/tmp/x"), "a drive letter does not go through")
+    assert(!sys.is_safe_relative("../x"), "a leading '..' segment does not go through")
+    assert(!sys.is_safe_relative("a/../../x"), "an intermediate '..' segment does not either")
+    assert(!sys.is_safe_relative("a/.."), "a trailing '..' segment does not either")
 
     // A path the OS reinterprets slips past every caller-side check deciding by name; the answer is
     // the same on every platform (see is_safe_relative).
-    assert(!fs.is_safe_relative("secret.key\0.html"), "everything after a NUL never reaches the OS")
-    assert(!fs.is_safe_relative("secret.key."), "Windows drops a segment's trailing '.'")
-    assert(!fs.is_safe_relative("secret.key "), "Windows drops a segment's trailing ' '")
-    assert(!fs.is_safe_relative("a/b./c"),
+    assert(!sys.is_safe_relative("secret.key\0.html"), "everything after a NUL never reaches the OS")
+    assert(!sys.is_safe_relative("secret.key."), "Windows drops a segment's trailing '.'")
+    assert(!sys.is_safe_relative("secret.key "), "Windows drops a segment's trailing ' '")
+    assert(!sys.is_safe_relative("a/b./c"),
         "an intermediate segment's trailing '.' does not go through either")
-    assert(!fs.is_safe_relative("secret.key::$DATA"),
+    assert(!sys.is_safe_relative("secret.key::$DATA"),
         "an NTFS alternate stream name does not go through")
-    assert(!fs.is_safe_relative("a/x:y"), "a ':' inside a segment does not either")
-    assert(!fs.is_safe_relative("a/./b"), "a '.' segment does not go through, in step with '..'")
-    assert(!fs.is_safe_relative("x\ny"), "a control character does not go through")
+    assert(!sys.is_safe_relative("a/x:y"), "a ':' inside a segment does not either")
+    assert(!sys.is_safe_relative("a/./b"), "a '.' segment does not go through, in step with '..'")
+    assert(!sys.is_safe_relative("x\ny"), "a control character does not go through")
     // A device name is a device at any level; a read on COM1/LPT1 with nothing there never returns.
-    assert(!fs.is_safe_relative("CON"), "a Windows device name does not go through")
-    assert(!fs.is_safe_relative("www/con.txt"), "a device name is a device even with an extension")
-    assert(!fs.is_safe_relative("CoM1"), "a device name does not care about case")
-    assert(!fs.is_safe_relative("a/LPT9/b"), "an intermediate segment's device name does not either")
-    assert(!fs.is_safe_relative("CON .txt"), "Windows trims the spaces before an extension")
-    assert(!fs.is_safe_relative("conin$"), "the console's input is a device too")
-    assert(!fs.is_safe_relative("www/CONOUT$.log"), "and so is its output")
-    assert(!fs.is_safe_relative("COM\u00b9"), "a superscript port number is a device too")
-    assert(!fs.is_safe_relative("lpt\u00b3.txt"), "on either kind of port")
-    assert(fs.is_safe_relative("COM\u00b4"), "a character past the three superscripts is a name")
-    assert(fs.is_safe_relative("console.js"),
+    assert(!sys.is_safe_relative("CON"), "a Windows device name does not go through")
+    assert(!sys.is_safe_relative("www/con.txt"), "a device name is a device even with an extension")
+    assert(!sys.is_safe_relative("CoM1"), "a device name does not care about case")
+    assert(!sys.is_safe_relative("a/LPT9/b"),
+        "an intermediate segment's device name does not either")
+    assert(!sys.is_safe_relative("CON .txt"), "Windows trims the spaces before an extension")
+    assert(!sys.is_safe_relative("conin$"), "the console's input is a device too")
+    assert(!sys.is_safe_relative("www/CONOUT$.log"), "and so is its output")
+    assert(!sys.is_safe_relative("COM\u00b9"), "a superscript port number is a device too")
+    assert(!sys.is_safe_relative("lpt\u00b3.txt"), "on either kind of port")
+    assert(sys.is_safe_relative("COM\u00b4"), "a character past the three superscripts is a name")
+    assert(sys.is_safe_relative("console.js"),
         "an ordinary name merely starting with a device name goes through")
-    assert(fs.is_safe_relative("com12"), "a name longer than a device name goes through")
-    assert(fs.is_safe_relative("a//b.txt"), "a repeated separator points at the same place")
+    assert(sys.is_safe_relative("com12"), "a name longer than a device name goes through")
+    assert(sys.is_safe_relative("a//b.txt"), "a repeated separator points at the same place")
 
     // stays_under keeps paths under the root (is_safe_relative is its text-only half).
     // Caution: **Do not count an absent path as "a link".** If it counted, code writing a file
@@ -373,7 +375,7 @@ fn test_fs_path_guard()
     fs.remove_path("out/tmp/kspl_test_path_guard/present.txt") catch {}
 
     // Over the limit, walk must return too_deep rather than crash, so the caller can report it.
-    defer arena: = Arena.new(1024 * 1024)
+    defer arena: = Arena(1024 * 1024)
     defer $deep: = build_deep_tree(520)
     // **Where the OS path-length limit is hit first, the tree cannot be created** (Windows, macOS).
     // There mkdir_all rightly fails, and the test stops after the text checks. Linux verifies
@@ -405,7 +407,7 @@ fn test_fs_long_path()
     verdict.start("[Fs] a path too long to hand to the OS...")
     // **A path exceeding max_path_len is refused with invalid_path**, not operation_failed, which
     // would not tell the caller the length was the cause.
-    defer $b: = Str_builder.new()
+    defer $b: = Str_builder()
     for $i: Sz = 0; i <= fs.MAX_PATH_LEN; i += 1
         b.c('x')
     long_path: = b.slice()
@@ -449,7 +451,7 @@ fn test_fs_inner_nul()
     // before it: here, create `dir`.
     dir: = "out/tmp/kspl_test_debug_nul"
     fs.remove_path(dir) catch {}
-    defer $b: = Str_builder.new()
+    defer $b: = Str_builder()
     b.s(dir).c(0U8).s("tail")
     $saw_invalid: = false
     fs.mkdir(b.slice()) catch e
@@ -460,7 +462,7 @@ fn test_fs_inner_nul()
     assert(saw_invalid, "an mkdir on a path holding a NUL is refused with invalid_path")
     assert(!fs.exists(dir), "the part before the NUL is not created")
     // The runtime refuses it too, so a call std/fs does not check is not cut either.
-    defer $sh: = Str_builder.new()
+    defer $sh: = Str_builder()
     sh.s("/bin/sh").c(0U8).s("x")
     assert(!fs.is_executable(sh.slice()), "the runtime refuses a path holding a NUL")
     verdict.pass("a path holding a NUL is refused, both by std/fs and by the runtime.")
@@ -468,7 +470,7 @@ fn test_fs_inner_nul()
 priv const DEEP_ROOT: U8[] = "out/tmp/kspl_test_debug_deep"
 
 priv fn build_deep_tree(levels: Sz): Str_builder
-    $b: = Str_builder.new()
+    $b: = Str_builder()
     b.s(DEEP_ROOT)
     for _i in Range.asc(levels)
         b.s("/d")

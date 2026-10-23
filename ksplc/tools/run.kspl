@@ -68,7 +68,7 @@ priv fn append_compile_flags(list: List<|U8[]|>$@) //< the flags every unit is c
 
 priv fn append_flags_key(h: Str_builder$@) //< the compile flags as the cache keys spell them
     //< One space between flags: another separator would name every cached slot and object anew.
-    defer $flags: = List<|U8[]|>.new(null)
+    defer $flags: = List<|U8[]|>(null)
     append_compile_flags(flags@)
     for i in Range.asc(flags.len)
         h.s(" " if i > 0 else "").s(flags.get(i))
@@ -226,7 +226,7 @@ fn write_deps_file(deps_path: U8[], loaded_files: List<|U8$[]|>$@) //<
     //< It writes the list of the files read into the deps file (`--emit-deps=`)
     //< The reader is deps_are_fresh above; change both when changing the format. A failure still
     //< leaves the compile a success: without the deps, the next run is just "stale" and rebuilds.
-    defer $out: = Str_builder.new()
+    defer $out: = Str_builder()
     for import_path in loaded_files
         // **A program with no file has no line**: it has no digest to check, and its run's slot is
         // keyed by its text (`append_slot_key`).
@@ -234,7 +234,7 @@ fn write_deps_file(deps_path: U8[], loaded_files: List<|U8$[]|>$@) //<
             continue
         // A name in `loaded_files` is a logical name, so each has one path
         // (`append_file_path` in `../base/locate.kspl`).
-        defer $file_path: = Str_builder.new()
+        defer $file_path: = Str_builder()
         base_locate.append_file_path(import_path, file_path@)
         if !append_dep_line(file_path.slice(), out@)
             return // where a file cannot be read, no deps file is written (an incomplete list is a lie)
@@ -269,7 +269,7 @@ priv fn exit_mkdir_failed(what: U8[], path: U8[], e: fs.Fs_error) //<
     //< It reports and exits where the directory could not be created
     //< It names the one level that could not be created (`fs.Fs_error.mkdir_failed`); the whole
     //< path alone does not tell a name problem from a permission problem.
-    defer $at: = Str_builder.new()
+    defer $at: = Str_builder()
     switch e
     case .mkdir_failed(part)
         at.s("\n  failed at: ").s(part)
@@ -283,7 +283,7 @@ priv fn append_slot_key(script: U8[], given: U8[]?, out: Str_builder$@): Bool //
     //< identified (argv[0] cannot be stat'd) it returns cacheable=false: slower beats an old
     //< binary. **A program with no file adds its text**: its path (`-` in the current folder) is
     //< the same for every program.
-    defer $h: = Str_builder.new()
+    defer $h: = Str_builder()
     // Caution: **Key the script by its absolute path, not as it was typed.** `tests/main.kspl`
     // names a different file in every folder it is run from. Keyed by the text, two packages' tests
     // would share one slot. Two such runs at once would sweep away each other's objects before
@@ -344,7 +344,7 @@ priv fn object_key(unit_src: U8[], header: U8[]): Hash_hex!io.Io_error //<
     //< Caution: Always include the shared header where there is one: a changed type or prototype
     //< changes the code with the `.c` unchanged. Include the C compiler's name and flags too, or
     //< switching CC links the previous compiler's objects.
-    defer $h: = Str_builder.new()
+    defer $h: = Str_builder()
     h.s(cc_name()).c(0U8)
     append_flags_key(h@)
     h.c(0U8)
@@ -397,7 +397,7 @@ priv fn compile_units(units: List<|Unit|>$@, slot: U8[], arena: Arena$@): Bool /
         u: = units.get(i)
         if fs.exists(u.obj)
             continue // the same contents as the last run; it is not rebuilt
-        $argv: = List<|U8[]|>.new(arena)
+        $argv: = List<|U8[]|>(arena)
         argv.push(cc_name())
         append_compile_flags(argv@)
         argv.push("-c")
@@ -457,12 +457,12 @@ priv fn exec_program(script: U8[], exe: U8[], script_args: List<|U8[]|>$@, arena
     //< The script's own path goes in an environment variable (script_env_name in std/sys.kspl;
     //< Python's `__file__`), so the arguments the script receives stay unchanged.
     //< Caution: **Write the path of the executable being started alongside it** in the value.
-    defer $env_val: = Str_builder.new()
+    defer $env_val: = Str_builder()
     env_val.s(exe).c('\n').s(script)
     sys.set_env(sys.SCRIPT_ENV_NAME, env_val.slice()) catch
         io.err()
             .s("ksplc run: cannot set \{sys.SCRIPT_ENV_NAME\}. script_path() will report none\n")
-    $argv: = List<|U8[]|>.new(arena)
+    $argv: = List<|U8[]|>(arena)
     argv.push(exe)
     for a in script_args
         argv.push(a)
@@ -477,7 +477,7 @@ priv fn commit_path(from: U8[], to: U8[]): Bool //<
     fs.rename_path(from, to) catch
         if !fs.exists(to)
             return false
-        defer $aside: = Str_builder.new()
+        defer $aside: = Str_builder()
         fs.rename_path(to, aside_name(to, aside@)) catch
             return false
         fs.rename_path(from, to) catch
@@ -548,7 +548,7 @@ priv fn run_program(script: U8[], given: U8[]?, script_args: List<|U8[]|>$@) //<
     //< `given` is the program's text where it has no file. Runs of one program share its slot. The
     //< build is one at a time (`hold_slot`). The program runs outside the lock, so a long run
     //< blocks no other.
-    defer arena: = Arena.new(64 * 1024)
+    defer arena: = Arena(64 * 1024)
     slot: = open_run_slot(script, given, arena)
     // The lock covers the check below and the build; a run waiting here finds the build done.
     $lock: = hold_slot(fs.join(slot.dir, "lock", arena))
@@ -578,14 +578,14 @@ priv struct Run_slot //< a script's place in the run cache, and the paths a buil
 
 priv fn open_run_slot(script: U8[], given: U8[]?, arena: Arena$@): Run_slot //<
     //< The script's slot in the run cache, made where it is new and marked used
-    defer $root: = Str_builder.new()
+    defer $root: = Str_builder()
     if !base_cache.append_cache_root(root@)
         base_cache.exit_unlocated("ksplc run")
     refusal: = base_cache.refused_root(root.slice(), arena)
     if refusal.len > 0
         base_cache.exit_refused("ksplc run", refusal)
     runs_dir: = fs.join(root.slice(), base_cache.RUN_KIND, arena)
-    defer $slot_key: = Str_builder.new()
+    defer $slot_key: = Str_builder()
     cacheable: = append_slot_key(script, given, slot_key@)
     dir: = fs.join(runs_dir, slot_key.slice(), arena)
     is_new_slot: = !fs.is_dir(dir)
@@ -611,17 +611,17 @@ priv fn rebuild_in_slot(slot: Run_slot@, script: U8[], given: U8[]?, arena: Aren
     //< Each step that fails exits with its code, leaving the previous build in place.
     sweep_aside(slot.exe, arena)
     units_n: = generate_c(slot, script, given, arena)
-    $named_libs: = List<|U8[]|>.new(arena)
+    $named_libs: = List<|U8[]|>(arena)
     if !tools_libs.append_named_libs(slot.libs, named_libs@, arena)
         io.err().s("ksplc run: the compile left no list of libraries (\{slot.libs\})\n")
         fs.remove_path(slot.new_deps) catch {}
         sys.exit(1)
     // --- tier 2: per unit, an object whose contents match the last run is not rebuilt ---
-    $units: = List<|Unit|>.new(arena)
+    $units: = List<|Unit|>(arena)
     all_cached: = plan_units(slot, units_n, units@, arena)
     // Caution: **The libraries go into the record too.** Adding only a `#link` leaves every object
     // unchanged, so the link would be skipped and the executable would lack the library.
-    defer $want_objs: = Str_builder.new()
+    defer $want_objs: = Str_builder()
     for u in units
         want_objs.s(sys.get_file_name(u.obj)).c('\n')
     for lib in named_libs
@@ -642,7 +642,7 @@ priv fn generate_c(slot: Run_slot@, script: U8[], given: U8[]?, arena: Arena$@):
     //< It calls ksplc itself to translate the script to C, and returns how many units it split into
     //< Calling itself avoids copying the pipeline. **A program with no file goes to it on standard
     //< input**, under the input `-`, so it is not limited by a command line's length.
-    $ksplc_argv: = List<|U8[]|>.new(arena)
+    $ksplc_argv: = List<|U8[]|>(arena)
     append_child_ksplc(ksplc_argv@, arena)
     ksplc_argv.push(arena.text().s("--emit-deps=").s(slot.new_deps).take())
     ksplc_argv.push(arena.text().s("--emit-libs=").s(slot.libs).take())
@@ -680,12 +680,12 @@ priv fn plan_units(slot: Run_slot@, units_n: Sz, units: List<|Unit|>$@, arena: A
     obj_dir: = fs.join(slot.dir, "obj", arena)
     fs.mkdir_all(obj_dir) catch e
         exit_mkdir_failed("object directory", obj_dir, e)
-    defer $header_path: = Str_builder.new()
+    defer $header_path: = Str_builder()
     if units_n > 1
         header_path.s(sys.strip_last_ext(slot.new_c)).s(".h")
     $all_cached: = true
     for i in Range.asc(units_n)
-        defer $src: = Str_builder.new()
+        defer $src: = Str_builder()
         if units_n > 1
             append_unit_path(sys.strip_last_ext(slot.new_c), i, src@)
         else
@@ -715,7 +715,7 @@ priv fn build_and_link(slot: Run_slot@, units: List<|Unit|>$@, named_libs: List<
                 (\{sys.strip_last_ext(slot.new_c)\}*.c)\n")
         fs.remove_path(slot.new_deps) catch {}
         sys.exit(1)
-    $link_argv: = List<|U8[]|>.new(arena)
+    $link_argv: = List<|U8[]|>(arena)
     link_argv.push(cc_name())
     for u in units
         link_argv.push(under_slot(u.obj, slot.dir))
@@ -756,7 +756,7 @@ priv const BUILD_OPT_FLAGS: U8[][2] = ::{ "-O2", "-g" } //<
 fn build_program(input: U8[], output: U8[], cflags: U8[]) //<
     //< It translates input to C beside output, then compiles and links output
     //< **This function does not return**: it exits with 0, or with the failing step's code.
-    defer arena: = Arena.new(64 * 1024)
+    defer arena: = Arena(64 * 1024)
     if !fs.exists(input)
         io.err().s("ksplc build: no such file: \{input\}\n")
         sys.exit(1)
@@ -773,7 +773,7 @@ fn build_program(input: U8[], output: U8[], cflags: U8[]) //<
         fs.mkdir_all(dir) catch e
             io.err().s("ksplc build: cannot make the folder \{dir\}: \{e\}\n")
             sys.exit(1)
-    $gen: = List<|U8[]|>.new(arena)
+    $gen: = List<|U8[]|>(arena)
     append_child_ksplc(gen@, arena)
     gen.push(arena.text().s("--emit-libs=").s(libs_path).take())
     gen.push(input)
@@ -781,13 +781,13 @@ fn build_program(input: U8[], output: U8[], cflags: U8[]) //<
     code: = spawn_or_exit(gen@, "ksplc", "")
     if code != 0
         sys.exit(code)
-    $named_libs: = List<|U8[]|>.new(arena)
+    $named_libs: = List<|U8[]|>(arena)
     if !tools_libs.append_named_libs(libs_path, named_libs@, arena)
         io.err().s("ksplc build: the compile left no list of libraries (\{libs_path\})\n")
         sys.exit(1)
     // The order the link needs: the C first, the program's libraries before the common ones (they
     // can need `-lm`), as `ksplc run` links. GNU ld resolves from the left only.
-    $cc: = List<|U8[]|>.new(arena)
+    $cc: = List<|U8[]|>(arena)
     cc.push(cc_name())
     cc.push(RUN_CFLAGS)
     for f in BUILD_OPT_FLAGS

@@ -11,7 +11,7 @@ import "std/verdict"
 
 priv fn tensors(arena: Arena$@)
     dims: Sz[2] = ::{ 2, 3 }
-    $owner: = Tensor<|F32|>.new(Sz[]::dims, arena)
+    $owner: = Tensor<|F32|>(Sz[]::dims, arena)
     owner.fill(F32::7.0)
     view: = owner.view_rows(1, 1, arena) catch panic("a row inside the tensor exists")
     assert((view.data + 0)$ == F32::7.0, "a view reads its owner's elements")
@@ -20,18 +20,18 @@ priv fn tensors(arena: Arena$@)
     assert((view.data + 0)$ == F32::11.0, "the owner and its view share their elements")
 
     empty_dims: Sz[2] = ::{ 0, 3 }
-    empty: = Tensor<|F32|>.new(Sz[]::empty_dims, arena)
+    empty: = Tensor<|F32|>(Sz[]::empty_dims, arena)
     assert(empty.size == 0 && empty.shape[1] == 3, "an empty tensor retains its shape")
 
     scalar_dims: Sz[] = ::{ .ptr = null, .len = 0 }
-    scalar: = Tensor<|F32|>.new(scalar_dims, arena)
+    scalar: = Tensor<|F32|>(scalar_dims, arena)
     assert(scalar.size == 1, "a scalar has one element")
 
 priv fn weights(arena: Arena$@)
     dims: Sz[2] = ::{ 2, 3 }
-    input: = Tensor<|F32|>.new(Sz[]::dims, arena)
+    input: = Tensor<|F32|>(Sz[]::dims, arena)
     input.fill(F32::7.0)
-    $writer: = Safetensors_writer.new()
+    $writer: = Safetensors_writer()
     writer.add("w", input)
     defer $bytes: = writer.finish()
 
@@ -43,7 +43,7 @@ priv fn weights(arena: Arena$@)
         "aligned weights remain zero-copy")
 
     // Shifting the whole file by one byte makes its aligned payload misaligned.
-    defer $shifted: = Str_builder.new()
+    defer $shifted: = Str_builder()
     shifted.c(0U8).s(bytes.slice())
     $unaligned: =
         Safetensors.load_from_bytes(shifted.slice().sub_from(1), arena)
@@ -54,19 +54,19 @@ priv fn weights(arena: Arena$@)
         "a misaligned weight has aligned, intact elements")
 
     wrong_dims: Sz[2] = ::{ 3, 2 }
-    $dst: = Tensor<|F32|>.new(Sz[]::wrong_dims, arena)
+    $dst: = Tensor<|F32|>(Sz[]::wrong_dims, arena)
     dst.fill(F32::9.0)
     $refused: = false
     file.map_into<|F32|>("w", dst@, arena) catch
         refused = true
     assert(refused && (dst.data + 0)$ == F32::9.0, "a refused replacement preserves its destination")
 
-    $fit: = Tensor<|F32|>.new(Sz[]::dims, arena)
+    $fit: = Tensor<|F32|>(Sz[]::dims, arena)
     file.map_into<|F32|>("w", fit@, arena) catch panic("the matching shape is accepted")
     assert((fit.data + 5)$ == F32::7.0, "an accepted replacement reads the file")
 
 priv fn refused_header(header: U8[], arena: Arena$@)
-    defer $bytes: = Str_builder.new()
+    defer $bytes: = Str_builder()
     prefix: U8[8] = ::{}
     (U8$[]::prefix).put_u64_le(0, U64::header.len)
     bytes.s(U8[]::prefix).s(header).s("012345678901234567890123")
@@ -79,17 +79,17 @@ priv fn refused_header(header: U8[], arena: Arena$@)
 
 priv fn adapters(arena: Arena$@)
     dims: Sz[2] = ::{ 1, 1 }
-    matrix: = Tensor<|F32|>.new(Sz[]::dims, arena)
+    matrix: = Tensor<|F32|>(Sz[]::dims, arena)
 
     matrix.fill(F32::2.0)
     empty_dims: Sz[1] = ::{ 0 }
-    empty: = Tensor<|F32|>.new(Sz[]::empty_dims, arena)
+    empty: = Tensor<|F32|>(Sz[]::empty_dims, arena)
 
     for group in U8[][]::{ "attn", "mlp" }
         first: = "q" if group.equals("attn") else "fc1"
         for broken in Range.asc(3)
-            $writer: = Safetensors_writer.new()
-            defer $key: = Str_builder.new()
+            $writer: = Safetensors_writer()
+            defer $key: = Str_builder()
             for part in U8[][]::{ "a", "b", "scale" }
                 if broken == 0 && !part.equals("a")
                     continue
@@ -113,7 +113,7 @@ priv fn adapters(arena: Arena$@)
 fn test_ownership()
     verdict.start("[Ownership] tensors and headers share an explicit arena lifetime...")
     before: = mem.heap_used_bytes()
-    arena: = Arena.new(4096)
+    arena: = Arena(4096)
     tensors(arena)
     weights(arena)
     adapters(arena)

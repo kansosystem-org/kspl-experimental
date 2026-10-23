@@ -123,14 +123,13 @@ impl Tokenizer
     pub fn new( //< an empty tokenizer, to be filled by `load` or by `add_token` / `add_merge`
         arena: Arena$@, //< the arena for the four maps and everything put into them
     ): Tokenizer
-        vocab: = arena.create(Map<|U8[], I32|>.new(arena))
-        vocab_rev: = arena.create(Map<|Token_key, U8[]|>.new(arena))
-        merges: = arena.create(Map<|Bpe_key, I32|>.new(arena))
-        merge_rank: = arena.create(Map<|Bpe_key, I32|>.new(arena))
+        vocab: = arena.create(Map<|U8[], I32|>(arena))
+        vocab_rev: = arena.create(Map<|Token_key, U8[]|>(arena))
+        merges: = arena.create(Map<|Bpe_key, I32|>(arena))
+        merge_rank: = arena.create(Map<|Bpe_key, I32|>(arena))
         return Tokenizer::{ .vocab = vocab, .vocab_rev = vocab_rev, .merges = merges,
             .merge_rank = merge_rank, .next_rank = 0, .arena = arena,
-            .chunk_cache = arena.create(Map<|U8[], I32$[]|>.new(arena)), .edits = 0,
-            .cache_edits = 0 }
+            .chunk_cache = arena.create(Map<|U8[], I32$[]|>(arena)), .edits = 0, .cache_edits = 0 }
 
     pub fn add_token( //< adds one word to the vocabulary, looked up in both directions from then on
         r: Self$@,
@@ -195,7 +194,7 @@ impl Tokenizer
             case .some(tab)
                 id: = parse_token_id(line.sub(0, tab))
                 hex: = line.sub_from(tab + 1)
-                defer $b: = Str_builder.new()
+                defer $b: = Str_builder()
                 if !hex_bytes(hex, b@)
                     throw .broken(name, i + 1)
                 if got: = id
@@ -242,7 +241,7 @@ impl Tokenizer
         //< allocates nothing on the tokenizer's arena unless the cache keeps it.
         // Otherwise a word or rule added since the cache started could merge a cached chunk anew.
         if r.cache_edits != r.edits
-            r.chunk_cache = r.arena.create(Map<|U8[], I32$[]|>.new(r.arena))
+            r.chunk_cache = r.arena.create(Map<|U8[], I32$[]|>(r.arena))
             r.cache_edits = r.edits
         // A chunk is never empty, so its IDs never are: an empty answer is a miss.
         seen: = r.chunk_cache.get(chunk).unwrap_or(I32$[]::{ .ptr = null, .len = 0 })

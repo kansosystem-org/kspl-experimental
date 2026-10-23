@@ -174,7 +174,7 @@ priv fn train(mlp: nn.Mlp<|F32|>$@, compute: Arena$@): F64 //< the start-up trai
     for _epoch in Range.asc(TRAIN_EPOCHS)
         // The distances are the same every epoch (the generator is re-seeded), or a falling loss
         // could come from an easier set rather than from training.
-        $rng: = prng.Prng.new(TRAIN_DIST_SEED)
+        $rng: = prng.Prng(TRAIN_DIST_SEED)
         $loss_sum: F64 = 0.0
         $seen: Sz = 0
         for d in Range.asc(TRAIN_DISTS)
@@ -195,13 +195,13 @@ priv fn train(mlp: nn.Mlp<|F32|>$@, compute: Arena$@): F64 //< the start-up trai
 
 fn build(compute: Arena$@): Pilot$@ //< makes one steering policy
     //< `compute` is working space, no longer used once this returns.
-    arena: = Arena.new(64 * 1024)
+    arena: = Arena(64 * 1024)
     p: = mem.alloc_as<|Pilot|>()
     p.arena = arena
-    p.mlp = nn.Mlp<|F32|>.new(encoding.FEATURE_COUNT, HIDDEN, ACTION_COUNT, arena)
+    p.mlp = nn.Mlp<|F32|>(encoding.FEATURE_COUNT, HIDDEN, ACTION_COUNT, arena)
     // Caution: Initialize them with uniform random values (the reason is at `Linear.init_uniform`
     // in `ksai/nn.kspl`).
-    $rng: = prng.Prng.new(WEIGHT_SEED)
+    $rng: = prng.Prng(WEIGHT_SEED)
     p.mlp.init_uniform(rng@, 0.5)
 
     t0: = sys.mono_us()
@@ -230,7 +230,7 @@ priv fn maneuver_tensor(arena: Arena$@): Tensor<|F32|> //<
     //< **The integers are stored as F32**, the only dtype that can be written here. F32 holds these
     //< small integers exactly, and the reader converts them back.
     shape: Sz[2] = ::{ ACTION_COUNT, encoding.DRIVE_FIELDS }
-    t: = Tensor<|F32|>.new(Sz[]::shape, arena)
+    t: = Tensor<|F32|>(Sz[]::shape, arena)
     for a in Range.asc(ACTION_COUNT)
         m: = MANEUVERS[a]
         row: = a * encoding.DRIVE_FIELDS
@@ -244,14 +244,14 @@ fn export(p: Pilot$@, arena: Arena$@): Str_builder //<
     //< Caution: **Make the file enough on its own to reproduce `decide` and the manoeuvres'
     //< meaning.** With the weights alone, the reader must copy the features (`FAR_MM`) and the
     //< table, and cannot notice when the server changes them.
-    $w: = st.Safetensors_writer.new()
+    $w: = st.Safetensors_writer()
     w.add("fc1.weight", p.mlp.fc1.weights)
     w.add("fc1.bias", p.mlp.fc1.bias)
     w.add("fc2.weight", p.mlp.fc2.weights)
     w.add("fc2.bias", p.mlp.fc2.bias)
     w.add("maneuvers", maneuver_tensor(arena))
     w.set_meta("kspl_pilot", encoding.FORMAT_VERSION)
-    defer $num: = Str_builder.new()
+    defer $num: = Str_builder()
     w.set_meta("far_mm", num.s("\{FAR_MM\}").slice())
     return w.finish()
 

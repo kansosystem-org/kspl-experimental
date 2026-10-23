@@ -65,7 +65,7 @@ impl<|T|> Tensor<|T|>
                 // tell the cause apart: a bug in the caller or in code generation. The intent is
                 // that of "A program keeps its own output on an abnormal exit" in
                 // std/docs/DESIGN-system.md.
-                defer $b: = Str_builder.new()
+                defer $b: = Str_builder()
                 b
                     .s("Tensor shape product overflow (shape too large): ndim=\{ndim\} \
                         shape[\{i\}]=\{s\} product_before=\{size\} shape.ptr=")
@@ -95,7 +95,7 @@ impl<|T|> Tensor<|T|>
         arena: Arena$@, //< the arena the copy is allocated from
     ): Tensor<|T|>
         shape: Sz[1] = ::{ r.size }
-        out: = Tensor<|T|>.new(Sz[]::shape, arena)
+        out: = Tensor<|T|>(Sz[]::shape, arena)
         for i in Range.asc(r.size)
             (out.data + i)$ = (r.data + i)$
         return out
@@ -120,7 +120,7 @@ impl<|T|> Tensor<|T|>
         // Check the shape before reserving result memory on the arena.
         r.check_matmul(rhs)!
         out_shape: Sz[2] = ::{ r.shape[0], rhs.shape[1] }
-        out: = Tensor<|T|>.new(Sz[]::out_shape, r.arena)
+        out: = Tensor<|T|>(Sz[]::out_shape, r.arena)
         r.matmul_into(rhs, out)!
         return out
     priv fn check_matmul(r: Self$@, rhs: Tensor<|T|>): Void!Tensor_error //<
@@ -157,7 +157,7 @@ impl<|T|> Tensor<|T|>
         if bias.size != n
             throw .shape_mismatch
 
-        out: = Tensor<|T|>.new(r.shape, r.arena)
+        out: = Tensor<|T|>(r.shape, r.arena)
         rows: = r.size / n
         // Nested per row, so the inner loop is a plain contiguous access with no division (i % n),
         // which favours auto-vectorization (as in matmul_kernel).
@@ -178,7 +178,7 @@ impl<|T|> Tensor<|T|>
         if n == 0 || weight.size != n
             throw .shape_mismatch
 
-        out: = Tensor<|T|>.new(r.shape, r.arena)
+        out: = Tensor<|T|>(r.shape, r.arena)
         rows: = r.size / n
 
         for i in Range.asc(rows)
@@ -200,7 +200,7 @@ impl<|T|> Tensor<|T|>
         r: Self$@,
         factor: T, //< what each element is multiplied by
     ): Tensor<|T|>
-        out: = Tensor<|T|>.new(r.shape, r.arena)
+        out: = Tensor<|T|>(r.shape, r.arena)
         for i in Range.asc(r.size)
             (out.data + i)$ = (r.data + i)$ * factor
         return out
@@ -215,7 +215,7 @@ impl<|T|> Tensor<|T|>
             throw .shape_mismatch
 
         out_shape: Sz[2] = ::{ m, n }
-        out: = Tensor<|T|>.new(Sz[]::out_shape, r.arena)
+        out: = Tensor<|T|>(Sz[]::out_shape, r.arena)
         transb_kernel<|T|>(out.data, r.data, rhs.data, m, k, n)
         return out
     pub fn softmax(r: Self$@): Tensor<|T|>!Tensor_error //<
@@ -227,7 +227,7 @@ impl<|T|> Tensor<|T|>
         if n == 0
             throw .shape_mismatch
         rows: = r.size / n
-        out: = Tensor<|T|>.new(r.shape, r.arena)
+        out: = Tensor<|T|>(r.shape, r.arena)
 
         for i in Range.asc(rows)
             $max_val: = (r.data + i * n)$
@@ -266,7 +266,7 @@ impl<|T|> Tensor<|T|>
         seq_len: = r.shape[r.shape.len - 2]
         dim: = r.shape[r.shape.len - 1]
 
-        out: = Tensor<|T|>.new(r.shape, r.arena)
+        out: = Tensor<|T|>(r.shape, r.arena)
         rows: = r.size / (seq_len * dim)
 
         for b in Range.asc(rows)
@@ -303,7 +303,7 @@ impl<|T|> Tensor<|T|>
         if head_dim <= 0 || head_dim % 2 != 0 || width % head_dim != 0
             throw .shape_mismatch
         half: = head_dim / 2
-        out: = Tensor<|T|>.new(r.shape, r.arena)
+        out: = Tensor<|T|>(r.shape, r.arena)
         for s in Range.asc(seq)
             pos: = F64::(start_pos + s)
             for $base: Sz = 0; base < width; base += head_dim // per head boundary
@@ -364,7 +364,7 @@ impl<|T|> Tensor<|T|>
     priv fn elementwise_out(r: Self$@, rhs: Tensor<|T|>): Tensor<|T|>!Tensor_error
         if r.size != rhs.size
             throw .shape_mismatch
-        return Tensor<|T|>.new(r.shape, r.arena)
+        return Tensor<|T|>(r.shape, r.arena)
 
     priv fn checked_add( //< element-wise sum; rejects shapes that do not match
         //< **Do not merge the three loops below into one.** Passing the operation as a function
@@ -401,7 +401,7 @@ impl<|T|> Tensor<|T|>
     // ---------------------------------------------------------
 
     pub fn silu(r: Self$@): Tensor<|T|> //< the SiLU (Swish) activation, element by element
-        out: = Tensor<|T|>.new(r.shape, r.arena)
+        out: = Tensor<|T|>(r.shape, r.arena)
         for i in Range.asc(r.size)
             val: = (r.data + i)$
             // math.exp takes F64

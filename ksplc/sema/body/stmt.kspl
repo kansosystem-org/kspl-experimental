@@ -14,6 +14,7 @@ import "ksplc/sema/body/for_in" as sema_body_for_in
 import "ksplc/sema/body/lint_loop" as sema_body_lint_loop
 import "ksplc/sema/body/lint_stmt" as sema_body_lint_stmt
 import "ksplc/sema/body/literal" as sema_body_literal
+import "ksplc/sema/body/postfix" as sema_body_postfix
 import "ksplc/sema/body/resolve_path" as sema_body_resolve_path
 import "ksplc/sema/body/stmt_escape" { check_frame_escape, check_frame_store,
     check_fn_value_binding, note_frame_pointer }
@@ -106,6 +107,11 @@ priv fn refuse_dropped_result(c: Sema_ctx$@, node: Ast_node$@, result_id: I32) /
         .s("a result of type '\{shown\}' is dropped. Handle it with '!' to propagate failure, or \
             with 'catch'. Write 'catch {}' to drop a failure on purpose")
     c.err(node, c.scratch.slice())
+
+priv enum Index_write //< what `infer_index_write` did with an assignment's left-hand side
+    not_index //< not a subscript: the statement infers the left-hand side itself
+    by_set //< a write through `Index_mut`'s `set`, which the statement has become
+    inferred //< a subscript, inferred in full (its type is the left-hand side's `type_id`)
 
 impl Ast_node
     fn infer_stmts(r: Self$@, c: Sema_ctx$@): Void!Sema_error
@@ -285,7 +291,7 @@ impl Ast_node
             type_node.type_id = final_id
         if is_const
             c.check_const_decl_storage(final_id, id_node.text, id_node)
-        sym: = Sema_symbol.new(sym_kind, id_node.text, r)
+        sym: = Sema_symbol(sym_kind, id_node.text, r)
         sym.type_id = final_id
         sym.flags.is_mut = is_mut
         c.declare_symbol(id_node.text, sym, false)
@@ -413,22 +419,25 @@ impl Ast_node
             c.warn(r, c.scratch.slice())
 
     priv fn infer_index_write(r: Self$@, c: Sema_ctx$@, left: Ast_node$@, right: Ast_node$@,
-        is_simple_assign: Bool): Bool!Sema_error //<
-            //< It checks a write through a subscript (`xs[i] = v`); true where that was all of it
-            //< That is a write through `Index_mut`'s `set`, which the statement becomes. Elsewhere
-            //< the index is inferred, and the statement goes on as an ordinary assignment.
+        is_simple_assign: Bool): Index_write!Sema_error //<
+            //< It checks a write through a subscript (`xs[i] = v`), and says what it did
+            //< A write through `Index_mut`'s `set` becomes that call. Elsewhere the subscript is
+            //< inferred in full, and the statement goes on as an ordinary assignment.
+            //< Caution: **Infer the receiver once.** It is inferred here to choose the route, so
+            //< the subscript is finished from its type (`infer_subscript_of`). Inferred again, a
+            //< method call is found already rewritten, and `b.lst()[0] = 1` reads 'Unknown'.
         if left == null || left.kind_id != .k_expr_postfix
-            return false
+            return .not_index
         $op: = left.text
         if op.equals("postfix")
             p_op_node: = left.get_postfix_op()
             if p_op_node != null
                 op = p_op_node.text
         if !op.equals("[")
-            return false
+            return .not_index
         index_node: = left.get_postfix_member()
         if index_node == null || index_node.text.equals("]")
-            return false
+            return .not_index
         recv_node: = left.get_postfix_receiver()
         recv_type_id: = recv_node.infer_expr(c, I32::sema_type_env.Builtin_type_id.unknown)!
 
@@ -438,9 +447,14 @@ impl Ast_node
         route: = c.index_route(recv_node, recv_type_id)
         switch route
         case .place
-            index_node.infer_expr(c, c.index_param_id_for(recv_type_id, "at"))!
-            return false
+            sema_body_postfix.infer_subscript_of(left, c, recv_type_id)!
+            return .inferred
         default {}
+        // A temporary that owns its elements took `at_ref` for the read, so the cause is the
+        // temporary, not a read-only location.
+        if c.env.receiver_needs_hoist(recv_node) && c.env.index_owns_elements(recv_type_id)
+            refuse_temporary_index_write(c, left, "at")
+            throw .analysis_failed
         if c.index_only_reads(route, recv_type_id)
             refuse_read_only_element_write(c, left, recv_type_id)
             throw .analysis_failed
@@ -452,11 +466,12 @@ impl Ast_node
         switch set_op
         case .user(method_sym)
             infer_index_set(c, left, right, recv_node, index_node, method_sym, is_simple_assign)!
-            return true
+            return .by_set
         case .failed
             throw .analysis_failed
         case .builtin {}
-        return false
+        sema_body_postfix.infer_subscript_of(left, c, recv_type_id)!
+        return .inferred
 
     priv fn infer_assign_stmt(r: Self$@, c: Sema_ctx$@): Void!Sema_error
         left: = r.get_assign_left()
@@ -468,9 +483,8 @@ impl Ast_node
                 left.infer_discarded_value(c)!
             return
 
-        // Caution: **Check that it is a place before checking mutability.** A non-place has no root
-        // name, so the checks below would let it through.
-        left.enforce_assignable_place(c)!
+        // A non-place has no root name, so this lets it through; `enforce_assignable_place` below
+        // refuses it once the types are known.
         left.enforce_mutability(c)!
 
         is_simple_assign: = op_node != null && op_node.text.equals("=")
@@ -485,15 +499,21 @@ impl Ast_node
         // Check an index write for **both** `=` and compound assignment, or `s[0] += 1` writes a
         // read-only slice's element. C's const applies only to the slice descriptor, so C misses
         // it.
-        if r.infer_index_write(c, left, right, is_simple_assign)!
+        write: = r.infer_index_write(c, left, right, is_simple_assign)!
+        if write == .by_set
             return
 
         $type_id: = I32::sema_type_env.Builtin_type_id.unknown
         if left != null
-            type_id = left.infer_expr(c, I32::sema_type_env.Builtin_type_id.unknown)!
-            // Caution: Call it **after** the inference. A path cannot be followed without the
-            // types, and a path that cannot be followed is allowed (what enforce_mutability above
-            // misses).
+            type_id =
+                (left.type_id if write == .inferred
+                else left.infer_expr(c, I32::sema_type_env.Builtin_type_id.unknown)!)
+            // Caution: Call both **after** the inference. Whether a field is a place depends on a
+            // pointer on its path (`p().x` through a returned pointer is one, `f().x` of a returned
+            // value is not). A path that cannot be followed is allowed (what enforce_mutability
+            // above misses). A left side whose inference failed has its error already.
+            if !sema_type_env.is_unknown(type_id)
+                left.enforce_assignable_place(c)!
             left.check_write_path(c)!
 
         // A pointer accepts only `p += i` and `p -= i` (as `p = p + i`, counting **elements**).
@@ -775,6 +795,16 @@ priv fn refuse_read_only_element_write(c: Sema_ctx$@, left: Ast_node$@, recv_typ
             If the element mutability is a type argument, write the mutable spelling (for example \
             'Slice<|$T|>' instead of 'Slice<|T|>')")
 
+priv fn refuse_temporary_index_write(c: Sema_ctx$@, left: Ast_node$@, method: U8[]) //<
+    //< Reports a write to an element of a temporary through a method that writes its receiver
+    //< It is the rule a `Self$@` method call on a temporary follows (check_method_receiver_lvalue
+    //< in `call.kspl`), said in the terms of the `[]` the writer wrote.
+    c.clear_scratch()
+        .s("cannot write to an element of a temporary object. The subscript writes through \
+            '\{method\}', which takes its receiver as 'Self$@', so the write would affect a copy \
+            that is then discarded. Bind the object first (`$x: = ...;`) and write to 'x[i]'")
+    c.err(left, c.scratch.slice())
+
 priv fn infer_index_set(c: Sema_ctx$@, left: Ast_node$@, right: Ast_node$@, recv_node: Ast_node$@,
     index_node: Ast_node$@, method_sym: Sema_symbol$@, is_simple_assign: Bool): Void!Sema_error //<
         //< `xs[i] = v` through `Index_mut`'s `set`: the call's operands, checked as `set`'s
@@ -788,6 +818,14 @@ priv fn infer_index_set(c: Sema_ctx$@, left: Ast_node$@, right: Ast_node$@, recv
     // Caution: Check the receiver's write permission here. The `set` call skips the receiver check
     // that an ordinary call goes through (infer_call_args in sema/body/call.kspl). So `xs[i] = v`
     // on `xs: List<|T|>@` would pass with zero diagnostics, and the C discards const (Principle 2).
+    // A temporary receiver gets the method call's rule: `set(r: Self$@, …)` would write a copy.
+    if c.env.receiver_needs_hoist(recv_node)
+        switch c.env.method_receiver_permission(method_sym.node)
+        case .some(need)
+            if need.mut_ptr
+                refuse_temporary_index_write(c, left, "set")
+                throw .analysis_failed
+        case .none {}
     if c.place_is_readonly(recv_node)
         refuse_read_only_receiver(c, recv_node)
     left.def_node = method_sym.node

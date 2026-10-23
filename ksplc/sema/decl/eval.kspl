@@ -133,7 +133,7 @@ fn int_suffix_type_id(txt: U8[]): I32 //<
     //< on the suffix.
     // The integer types are the ids from `I8` to `Sz`. No suffix ends another, so order is free.
     first: = Sz::sema_type_env.Builtin_type_id.i8_type
-    for id in Range.new(first, Sz::sema_type_env.Builtin_type_id.size_type + 1, 1)
+    for id in Range(first, Sz::sema_type_env.Builtin_type_id.size_type + 1, 1)
         if txt.ends_with(sema_type_env.BUILTIN_TYPES[id].name)
             return I32::id
     return I32::sema_type_env.Builtin_type_id.unknown
@@ -474,7 +474,7 @@ impl Ast_node
         //< Where the first name is a variable or a constant in scope, the path reads as that value.
         //< C reads a name the same way when a local variable hides a typedef with it
         //< (sizeof_path_names has the shapes).
-        defer $names: = List<|Ast_node$@|>.new(null)
+        defer $names: = List<|Ast_node$@|>(null)
         r.sizeof_path_names(names@)
         if names.len == 0
             return .none
@@ -489,11 +489,10 @@ impl Ast_node
         for p in r.children
             if p.kind_id != .k_type_postfix
                 continue
-            post: = Ast_node.new(.k_expr_postfix, p.text.sub(0, 1), p.loc).add_child(expr)
-                .add_child(Ast_node.new(.k_literal, p.text.sub(0, 1), p.loc))
+            post: = Ast_node(.k_expr_postfix, p.text.sub(0, 1), p.loc).add_child(expr)
+                .add_child(Ast_node(.k_literal, p.text.sub(0, 1), p.loc))
             if p.text.starts_with("[")
-                post.add_child(p.get_child(0))
-                    .add_child(Ast_node.new(.k_literal, "]", p.loc))
+                post.add_child(p.get_child(0)).add_child(Ast_node(.k_literal, "]", p.loc))
             expr = post
         return .some(expr)
 
@@ -778,11 +777,11 @@ impl Ast_node
         // Caution: **Track the path (seen) and the finished declarations (clean) with a Map**
         // (keyed by the declaration node's address). A List goes cubic and **never finishes**. An
         // empty Map takes no memory (Map.new in std/ds.kspl).
-        defer $seen: = Map<|Sz, Bool|>.new(null)
+        defer $seen: = Map<|Sz, Bool|>(null)
         // Caution: **Use clean only inside this one walk.** Across declarations it would remember
         // "clean" before `def_node` is linked and let a cycle by
         // (the case const_cycle in tests/negative/const.kspl).
-        defer $clean: = Map<|Sz, Bool|>.new(null)
+        defer $clean: = Map<|Sz, Bool|>(null)
         if bad: = r.find_bad_init_expr(c, seen@, clean@)
             switch bad.why
             case .cycle

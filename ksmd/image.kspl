@@ -1,0 +1,120 @@
+//< An image's format and size, read from its file's header before anything decodes it
+//< Version 1 shows PNG and JPEG only, and an image of at most 16 million pixels. The bytes say
+//< which format a file holds; its name does not. The header is read in windows of the file, so a
+//< caller never holds a large file whole in a small memory: a JPEG names its size after segments
+//< of any length, and `more` asks for the bytes where the next one starts.
+import "std/chars"
+import "std/str"
+
+const MAX_PIXELS: Sz = 16000000 //< the most pixels one decoded image may hold
+
+enum Format
+    png
+    jpeg
+
+impl Format
+    fn mime(r: Self): U8[] //< the media type a browser decodes the bytes as
+        switch r
+        case .png
+            return "image/png"
+        case .jpeg
+            return "image/jpeg"
+
+    priv fn sized(r: Self, width: I64, height: I64): Measure //<
+        //< an image of this size, if it may be shown
+        if width == 0I64 || height == 0I64
+            return .refused(.damaged)
+        if width > I64::MAX_PIXELS / height
+            return .refused(.too_large)
+        return .size(Size::{ .format = r, .width = Sz::width, .height = Sz::height })
+
+struct Size
+    format: Format
+    width: Sz
+    height: Sz
+
+enum Image_refusal //< why an image is not shown
+    format //< neither PNG nor JPEG
+    damaged //< the header ends early, or does not read
+    too_large //< more than 16 million pixels
+
+impl Image_refusal
+    fn message(r: Self): U8[] //< what the page says at the image's clause
+        switch r
+        case .format
+            return "this file is not a PNG or JPEG image. Save the image as PNG or JPEG"
+        case .damaged
+            return "this image's header cannot be read. Save the image again"
+        case .too_large
+            return "this image holds more than 16 million pixels. Save a smaller copy of it"
+
+enum Measure //< what a window of the file tells
+    size(s: Size) //< the image may be shown
+    refused(why: Image_refusal)
+    more(at: Sz) //< reading goes on at this byte of the file: pass a window that starts there
+
+priv const PNG_SIGNATURE: U8[8] = ::{ 0x89U8, 'P', 'N', 'G', '\r', '\n', 0x1AU8, '\n' }
+priv const PNG_HEADER: Sz = 24 //< the signature, then the `IHDR` chunk up to its height
+
+fn measure(window: U8[], at: Sz, total: Sz): Measure //<
+    //< The format and size of an image of `total` bytes, from `window`, the bytes from `at`. `at`
+    //< is 0, or the place a `more` named, where a JPEG segment starts.
+    if at > 0
+        return jpeg(window, at, at, total)
+    if window.starts_with(U8[]::PNG_SIGNATURE)
+        return png(window, total)
+    if window.len >= 2 && window[0] == 0xFFU8 && window[1] == 0xD8U8
+        return jpeg(window, 0, 2, total)
+    if window.len < 8 && window.len < total
+        return .more(0)
+    return .refused(.format)
+
+priv fn png(window: U8[], total: Sz): Measure //< the size the `IHDR` chunk names
+    if window.len < PNG_HEADER
+        return .refused(.damaged) if total < PNG_HEADER else .more(0)
+    if word(window, 8) != 13I64 || !window.sub(12, 4).equals("IHDR")
+        return .refused(.damaged)
+    return Format.png.sized(word(window, 16), word(window, 20))
+
+priv fn jpeg(window: U8[], at: Sz, from: Sz, total: Sz): Measure //<
+    //< Walks the segments from byte `from` to the frame header (an SOF marker), which names the
+    //< size; `window` holds the bytes from `at`
+    $p: = from
+    for
+        if p + 2 > total
+            return .refused(.damaged)
+        if p + 2 > at + window.len
+            return .more(p)
+        if window[p - at] != 0xFFU8
+            return .refused(.damaged)
+        marker: = window[p + 1 - at]
+        // A fill byte before a marker, and the markers that hold no segment.
+        if marker == 0xFFU8
+            p += 1
+            continue
+        if marker == 0x01U8 || marker >= 0xD0U8 && marker <= 0xD7U8
+            p += 2
+            continue
+        // The image data, or its end, before any frame header.
+        if marker == 0xD8U8 || marker == 0xD9U8 || marker == 0xDAU8
+            return .refused(.damaged)
+        frame: =
+            marker >= 0xC0U8 && marker <= 0xCFU8 && marker != 0xC4U8 && marker != 0xC8U8 &&
+            marker != 0xCCU8
+        need: = 9 if frame else 4
+        if p + need > total
+            return .refused(.damaged)
+        if p + need > at + window.len
+            return .more(p)
+        if frame
+            return Format.jpeg.sized(half(window, p + 7 - at), half(window, p + 5 - at))
+        length: = Sz::half(window, p + 2 - at)
+        if length < 2
+            return .refused(.damaged)
+        p += 2 + length
+
+priv fn word(b: U8[], i: Sz): I64 //< four bytes, most significant first
+    return (half(b, i) << 16I64) | half(b, i + 2)
+
+priv fn half(b: U8[], i: Sz): I64 //< two bytes, most significant first
+    return (I64::b[i] << 8I64) | I64::b[i + 1]

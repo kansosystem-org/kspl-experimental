@@ -1,0 +1,301 @@
+//< Starts the ksmd launcher as a double-click does, on scratch workspaces, and asks each server
+//< Usage: `ksmd_launch <launcher> <kssrv> <work folder>` (`make test-ksmd-open`). It copies both
+//< programs into the work folder with a stand-in page beside them, and opens with `--show`, so no
+//< browser starts. It checks the workspace served, its port, the document's URL, the reuse of a
+//< running server, a taken port, two documents opened at once and the refusals. **Every server it
+//< started is stopped at the end** (`--stop-all`), whatever the checks found.
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/http"
+import "std/io"
+import "std/mem" { Arena }
+import "std/net"
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/subproc"
+import "std/sys"
+import "std/verdict"
+import "tools/ksmd_aim"
+import "tools/opener_aim" as aim
+
+priv const URL_WAIT_STEPS: Sz = 300 //< how many times, 100ms apart, an open's output is read
+priv const ANSWER_WAIT_MS: I32 = 10000 //< how long a server may take to answer one request
+priv const TOOL_WAIT_MS: I32 = 60000 //< how long a run that does not wait on its server may take
+priv const PAGE: U8[] = "a stand-in for the ksmd page\n" //< what the server answers `/` with
+priv const DOC: U8[] = "%ksmd 1\n\n:::include path=\"../top.ksmd\"\n:::\n" //<
+    //< A document two folders down, whose include climbs to the workspace's top
+
+struct Run //< one launcher run that waits on the server it started
+    kid: subproc.Child
+    out: U8[] //< the file its output goes to
+    url: U8[] //< the URL it put out; empty where none came
+
+priv fn first_free(from: I32): I32 //< the first port from `from` that can be listened on now
+    //< The launcher asks the same question the same way (`free_port` in `tools/opener.kspl`).
+    for $at: I32 = from; at < from + 16; at += 1
+        probe: = net.Tcp_listener.bind("127.0.0.1", at) catch
+            continue
+        probe.free()
+        return at
+    return 0
+
+priv fn url_of(out_path: U8[]): U8[] //< the URL a launcher put out, "" until a whole line of it
+    body: = io.read_file(out_path, null) catch
+        return ""
+    if at: = body.find_str("http://")
+        rest: = body.sub_from(at)
+        if end: = rest.find_char('\n')
+            return rest.sub(0, end)
+    return ""
+
+priv fn ask(url: U8[], target: U8[], arena: Arena$@): http.Response$@? //<
+    //< The answer the server behind `url` gives `GET target`, with the URL's token
+    defer stream: =
+        net.Tcp_stream.connect("127.0.0.1", aim.port_num(aim.port_in_url(url))) catch
+        return .none
+    bearer: = arena.text().s("Bearer ").s(aim.token_in_url(url)).take()
+    head: = http.headers(arena).add("Host", "127.0.0.1").add("Authorization", bearer).build()
+    http.write_request(stream, "GET", target, head, "") catch
+        return .none
+    answer: =
+        http.read_response(stream, arena, http.DEFAULT_MAX_BODY_BYTES, ANSWER_WAIT_MS) catch
+        return .none
+    return .some(answer)
+
+priv fn body_of(url: U8[], target: U8[], arena: Arena$@): U8[] //<
+    //< The body of a 200 answer to `GET target`; "(status N)" or "(no answer)" otherwise
+    if got: = ask(url, target, arena)
+        if got.status == 200
+            return arena.dup_str(got.body)
+        return arena.text().s("(status \{got.status\})").take()
+    return "(no answer)"
+
+priv fn start(argv: U8[][], out: U8[]): Run //< starts a run that waits, and reads its URL
+    kid: = subproc.spawn_redirect(argv, "", out, out) catch
+        panic("the launcher must start")
+    $url: U8[] = ""
+    for _step in Range.asc(URL_WAIT_STEPS)
+        url = url_of(out)
+        if url.len > 0 || !kid.alive()
+            break
+        sys.sleep_ms(100)
+    return Run::{ .kid = kid, .out = out, .url = url }
+
+priv fn reap(kid: subproc.Child$@) //< waits for a run to end, and kills one that does not
+    for _step in Range.asc(URL_WAIT_STEPS)
+        if !kid.alive()
+            _code: = kid.wait()
+            return
+        sys.sleep_ms(100)
+    kid.kill()
+
+priv fn output(run: Run@, arena: Arena$@): U8[] //< what a run put out so far
+    return arena.dup_str(io.read_file(run.out, null) catch "(no output)")
+
+priv fn check_port(what: U8[], run: Run@, want: I32, arena: Arena$@) //<
+    //< That the run came up, and its server listens on `want`
+    on: = aim.port_num(aim.port_in_url(run.url))
+    verdict.check(what, run.url.len > 0 && on == want,
+        arena.text().s("wanted port \{want\}; the run put out: ").s(output(run, arena)).take())
+
+priv fn refused(launcher: U8[], args: U8[][], says: U8[], arena: Arena$@) //<
+    //< That the launcher refuses `args` with exit code 1, saying `says`
+    got: =
+        subproc.run_capture(argv_of(launcher, args, arena), "", TOOL_WAIT_MS, 64 * 1024, arena)
+        catch panic("the launcher must start")
+    text: = got.text(arena)
+    verdict.check(arena.text().s("it refuses, saying: ").s(says).take(),
+        got.exited_with(1) && text.find_str(says).is_some() &&
+        text.find_str("http://").is_none(), text)
+
+priv fn argv_of(launcher: U8[], args: U8[][], arena: Arena$@): U8[][] //<
+    //< The launcher followed by `args`, as one argument vector
+    all: = List<|U8[]|>.create(arena)
+    all.push(launcher)
+    for one in args
+        all.push(one)
+    return all.slice()
+
+priv fn url_of_text(text: U8[]): U8[] //< the first URL in a run's output, "" where there is none
+    if at: = text.find_str("http://")
+        rest: = text.sub_from(at)
+        return rest.sub(0, rest.find_char('\n').unwrap_or(rest.len))
+    return ""
+
+priv fn place(work: U8[], launcher: U8[], server: U8[], arena: Arena$@): U8[]!fs.Fs_error //<
+    //< Copies the launcher and the server into `<work>/bin` with a stand-in page beside them
+    //< Returns the launcher's copy. The page is served for `/` alone, so any text stands in for it.
+    bin: = fs.join(work, "bin", arena)
+    fs.write_tree(fs.join(bin, ksmd_aim.KSMD.built, arena), U8[][]::{ ksmd_aim.KSMD.page },
+        U8[][]::{ PAGE }, arena)!
+    at: = fs.join(bin, "ksmd_open.exe", arena)
+    fs.copy_file(launcher, at)!
+    fs.copy_file(server, fs.join(bin, "kssrv.exe", arena))!
+    return at
+
+priv fn write_workspaces(work: U8[], arena: Arena$@): Void!fs.Fs_error //<
+    //< `ws/`, marked as a workspace and holding two documents, and `loose/`, holding one unmarked
+    fs.write_tree(fs.join(work, "ws", arena),
+        U8[][]::{ ksmd_aim.MARK, "top.ksmd", "parts/doc.ksmd", "notes.txt" },
+        U8[][]::{ "", "%ksmd 1\n\nTop.\n", DOC, "not a document\n" }, arena)!
+    fs.write_tree(fs.join(work, "loose", arena), U8[][]::{ "a.ksmd" },
+        U8[][]::{ "%ksmd 1\n\nLoose.\n" }, arena)!
+
+priv fn check_marked(launcher: U8[], ws: U8[], work: U8[], arena: Arena$@): Run //<
+    //< A document two folders under the mark opens on the marked folder, on that folder's port
+    doc: = fs.join(ws, "parts/doc.ksmd", arena)
+    // **Find the free port before the run**: once its server listens, the port is no longer free.
+    want: = first_free(ksmd_aim.home_port(ws))
+    first: =
+        start(U8[][]::{ launcher, doc, "--show" }, fs.join(work, "first.out", arena))
+    check_port("the marked folder's server listens on its own port", first@, want, arena)
+    verdict.check("the URL opens the document by its path from the workspace",
+        first.url.find_str("/?doc=parts/doc.ksmd#t=").is_some(), first.url)
+    status: = body_of(first.url, "/api/status", arena)
+    verdict.check("the server serves the marked folder", status.find_str(ws).is_some(), status)
+    verdict.check("the page answers", body_of(first.url, "/", arena).equals(PAGE), first.url)
+    verdict.check("the server reads the document",
+        body_of(first.url, "/api/file?path=parts/doc.ksmd", arena).equals(DOC), first.url)
+    // **An include that climbs with `../` stays inside the workspace**, so its file is served.
+    verdict.check("the file its include climbs to is served",
+        body_of(first.url, "/api/stat?path=top.ksmd", arena).starts_with("{"), first.url)
+    // A second document of the same workspace reuses the server, port and all.
+    again: =
+        subproc.run_capture(U8[][]::{ launcher, fs.join(ws, "top.ksmd", arena), "--show" }, "",
+        TOOL_WAIT_MS, 64 * 1024, arena) catch panic("the launcher must start")
+    said: = again.text(arena)
+    verdict.check("a second document of the workspace reuses its server",
+        again.exited_with(0) && said.find_str("used a running server").is_some() &&
+        aim.port_in_url(url_of_text(said)).equals(aim.port_in_url(first.url)), said)
+    return first
+
+priv fn check_taken(launcher: U8[], loose: U8[], work: U8[], arena: Arena$@): Run //<
+    //< A port another program holds is skipped, and the run says that drafts stay with a port
+    home: = ksmd_aim.home_port(loose)
+    // **Held here, or by some other program already**: either way the launcher must skip it.
+    held: = net.Tcp_listener.bind("127.0.0.1", home) catch
+        fallback null
+    want: = first_free(home + 1)
+    taken: =
+        start(U8[][]::{ launcher, fs.join(loose, "a.ksmd", arena), "--show" },
+        fs.join(work, "taken.out", arena))
+    check_port("past a taken port, an unmarked document's folder is served on the next free one",
+        taken@, want, arena)
+    verdict.check("the run says the workspace's own port is taken",
+        output(taken@, arena).find_str("was taken").is_some(), output(taken@, arena))
+    verdict.check("the unmarked document's own folder is served",
+        body_of(taken.url, "/api/stat?path=a.ksmd", arena).starts_with("{"), taken.url)
+    if held != null
+        held.free()
+    return taken
+
+priv fn same_port_pair(work: U8[], arena: Arena$@): U8[][2] //<
+    //< Two folders under `work` whose workspaces get the same port, so two runs compete for it
+    //< They are found by name, as the port comes from the folder's path. Among 4,000 names over
+    //< 10,000 ports, two share one all but certainly.
+    seen: = List<|U8[]|>.create(arena)
+    for i in Range.asc(4000)
+        name: = fs.join(work, arena.text().s("pair\{i\}").take(), arena)
+        for other in seen
+            if ksmd_aim.home_port(other) == ksmd_aim.home_port(name)
+                return U8[][2]::{ other, name }
+        seen.push(name)
+    return U8[][2]::{ "", "" }
+
+priv fn check_together(launcher: U8[], pair: U8[][2], work: U8[], arena: Arena$@): Run[2] //<
+    //< Two workspaces with the same port, each opened at once, as choosing two documents does
+    //< Each must get a server of its own for its own folder. The launcher holds a lock while it
+    //< looks for a server and writes the note (`open_or_start` in `tools/opener.kspl`).
+    $runs: = Run[2]::{}
+    if pair[0].len == 0
+        verdict.check("two workspaces with the same port are found", false, work)
+        return runs
+    for k in Range.asc(2)
+        fs.write_tree(pair[k], U8[][]::{ "doc.ksmd" }, U8[][]::{ "%ksmd 1\n\nOne of two.\n" },
+            arena) catch panic("a document of the pair must be writable")
+    // Caution: **Start both before waiting on either**: one after the other, the second finds the
+    // first's server in the note and never meets the race.
+    for k in Range.asc(2)
+        out: = fs.join(work, arena.text().s("together\{k\}.out").take(), arena)
+        kid: =
+            subproc.spawn_redirect(U8[][]::{ launcher, fs.join(pair[k], "doc.ksmd", arena),
+            "--show" }, "", out, out) catch panic("the launcher must start")
+        runs[k] = Run::{ .kid = kid, .out = out, .url = "" }
+    for _step in Range.asc(URL_WAIT_STEPS)
+        for k in Range.asc(2)
+            runs[k].url = url_of(runs[k].out)
+        if runs[0].url.len > 0 && runs[1].url.len > 0 ||
+            !runs[0].kid.alive() && !runs[1].kid.alive()
+            break
+        sys.sleep_ms(100)
+    came: = runs[0].url.len > 0 && runs[1].url.len > 0
+    verdict.check("two documents opened at once each put out a URL", came,
+        arena.text().s(output(runs[0]@, arena)).c('\n').s(output(runs[1]@, arena)).take())
+    if came
+        verdict.check("each has a server of its own, although both wanted one port",
+            !aim.port_in_url(runs[0].url).equals(aim.port_in_url(runs[1].url)),
+            arena.text().s(runs[0].url).c(' ').s(runs[1].url).take())
+        for k in Range.asc(2)
+            status: = body_of(runs[k].url, "/api/status", arena)
+            quoted: = arena.text().c('"').s(pair[k]).c('"').take()
+            verdict.check("each server serves its own document's folder",
+                status.find_str(quoted).is_some(), status)
+    return runs
+
+fn main(): I32 //< the exit code is the checks' verdict (`verdict.finish`)
+    verdict.begin("ksmd_open")
+    args: = sys.args()
+    if args.len != 4
+        io.err().s("usage: ksmd_launch <launcher> <kssrv> <work folder>\n")
+        return 2
+    defer arena: = Arena(256 * 1024)
+    work: = fs.absolute(args[3], arena) catch
+        return verdict.fatal("the work folder cannot be made absolute")
+    launcher: = place(work, args[1], args[2], arena) catch
+        return verdict.fatal("the launcher and the server cannot be copied into the work folder")
+    write_workspaces(work, arena) catch
+        return verdict.fatal("the workspaces cannot be written")
+    ws: = fs.join(work, "ws", arena)
+    loose: = fs.join(work, "loose", arena)
+    $first: = check_marked(launcher, ws, work, arena)
+    $taken: = check_taken(launcher, loose, work, arena)
+    // `--workspace` serves the folder named, here one holding both workspaces.
+    want: = first_free(ksmd_aim.home_port(work))
+    $wide: =
+        start(U8[][]::{ launcher, fs.join(ws, "top.ksmd", arena),
+        arena.text().s("--workspace=").s(work).take(), "--show" },
+        fs.join(work, "wide.out", arena))
+    check_port("the folder --workspace names is served on its own port", wide@, want, arena)
+    verdict.check("the document opens by its path from that folder",
+        wide.url.find_str("/?doc=ws/top.ksmd#t=").is_some(), wide.url)
+    pair: = same_port_pair(work, arena)
+    $together: = check_together(launcher, pair, work, arena)
+    refused(launcher, U8[][]::{ fs.join(ws, "notes.txt", arena) }, "ends in .ksmd", arena)
+    refused(launcher,
+        U8[][]::{ fs.join(ws, "top.ksmd", arena),
+        arena.text().s("--workspace=").s(loose).take() }, "outside the workspace", arena)
+    refused(launcher, U8[][]::{ fs.join(ws, "parts/../top.ksmd", arena) }, "without '..'", arena)
+    refused(launcher, U8[][]::{ fs.join(ws, "none.ksmd", arena) }, "no such file", arena)
+    listed: =
+        subproc.run_capture(U8[][]::{ launcher, "--list" }, "", TOOL_WAIT_MS, 64 * 1024, arena)
+        catch panic("the launcher must start")
+    for folder in U8[][]::{ ws, loose, work, pair[0], pair[1] }
+        $found: = false
+        for line in listed.stdout_data.lines(arena)
+            found =
+                found || line.ends_with(arena.text().s(" ").s(folder).take())
+        verdict.check(arena.text().s("--list names the server for ").s(folder).take(), found,
+            listed.text(arena))
+    stopped: =
+        subproc.run_capture(U8[][]::{ launcher, "--stop-all" }, "", TOOL_WAIT_MS, 64 * 1024, arena)
+        catch panic("the launcher must start")
+    verdict.check("--stop-all stops what was started", stopped.exited_with(0),
+        stopped.text(arena))
+    reap(first.kid@)
+    reap(taken.kid@)
+    reap(wide.kid@)
+    for k in Range.asc(2)
+        if together[k].out.len > 0
+            reap(together[k].kid@)
+    return verdict.finish()

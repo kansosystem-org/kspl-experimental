@@ -184,6 +184,8 @@ A notation is judged by three questions, in this order. *Sugar* means a short sp
 * the block form and the expression form of `catch`;
 * the named and positional forms of a struct literal.
 
+**A pair kept for a transition goes when the transition ends.** The type call `T(...)` once stood beside the explicit `T.new(...)`. The tree moved to `T(...)`, and then the explicit call became a compile error. A static `new` now has one spelling ("A type call selects its existing constructor" in [`DESIGN-programming-language.md`](DESIGN-programming-language.md)).
+
 **Symmetry does not save a form nobody uses.** Two forms were once kept together. One declared several variables at once (`a: I32 = 1, b: I32 = 2;`). The other gave a C-style loop several inits and steps (`for $i: = 0, $j: = 100; …; i += 1, j -= 1`). Narrowing only the init would have made the two halves of one loop differ. The tree then held no use of either outside the compiler's own tests. Each was a second way to write what two declarations, or a variable declared before the loop and changed in its body, already write. So both went at once, and the two halves keep one rule. **A declaration names one variable, and a loop's header holds one init and one step.**
 
 **What is given up: the code does not get shorter.** With little sugar, the same work takes more lines than in a language with shorter forms. In return, only what is written happens. The extra lines have three sources.
@@ -278,7 +280,7 @@ What KSPL leaves out, and what to write instead, is "Appendix A: Features not ca
 
 #### A declaration takes `defer` in front, and only to free
 
-A value that is freed when its block ends is declared with `defer` in front: `defer $buf: = List<|I32|>.new(null)`. It means the declaration followed by `defer buf.free()`. A cleanup other than `free()` is a `defer` statement of its own, on the next line, naming what it cleans up.
+A value that is freed when its block ends is declared with `defer` in front: `defer $buf: = List<|I32|>(null)`. It means the declaration followed by `defer buf.free()`. A cleanup other than `free()` is a `defer` statement of its own, on the next line, naming what it cleans up.
 
 `defer` runs a statement when the enclosing block exits; it is how a file is closed or memory freed on every way out.
 
@@ -287,7 +289,7 @@ import "std/ds" { List }
 import "std/thread"
 
 priv fn greet()
-    defer $buf: = List<|I32|>.new(null)
+    defer $buf: = List<|I32|>(null)
     buf.push(1)
 
 priv fn count(m: thread.Mutex<|I32|>$@)
@@ -441,7 +443,7 @@ There are two grounds for allowing it.
 
 **"Is it a foldable constant" is the condition for entry, not the reason to enter.** The second test is whether the shorter call lies to the reader. `null` is a constant. But take an arena parameter with `= null`. Behind the shorter call, it would hide "omit it and it allocates on the global heap, and the caller owns the free". (An *arena* is a block of memory that many allocations share and that is freed all at once.)
 
-**An arena parameter carries no default. Where an API supports heap allocation, a caller requests it explicitly with `null`.** Compare `List<|I32|>.new(null)` with `List<|I32|>.new(arena)`; `base64.encode(data, null)`, `fs.read_dir(path, null)` and `json.parse(text, null)` read the same way. Where the elements go, and whether a `free()` is owed, is then on the call's line. The other shapes are not taken:
+**An arena parameter carries no default. Where an API supports heap allocation, a caller requests it explicitly with `null`.** Compare `List<|I32|>(null)` with `List<|I32|>(arena)`; `base64.encode(data, null)`, `fs.read_dir(path, null)` and `json.parse(text, null)` read the same way. Where the elements go, and whether a `free()` is owed, is then on the call's line. The other shapes are not taken:
 
 | Shape not taken | Why not |
 | :-- | :-- |

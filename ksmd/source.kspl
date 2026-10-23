@@ -1,0 +1,74 @@
+//< Validated source bytes and locations for the native document reader
+//< Views borrow the input and path. Keep both alive while using a Source or Diagnostic.
+import "std/chars"
+import "std/str"
+
+const MAX_SOURCE_BYTES: Sz = 8 * 1024 * 1024
+priv const HEADER: U8[] = "%ksmd 1"
+priv const BOM: U8[] = "\uFEFF"
+
+struct Diagnostic
+    path: U8[]
+    offset: Sz //< byte offset in the original input, including a BOM
+    line: Sz //< one-based line
+    column: Sz //< one-based Unicode-scalar column; a BOM is not displayed
+    message: U8[]
+
+struct Source
+    path: U8[]
+    bytes: U8[]
+    body: Sz //< first byte after the version line
+
+struct Line
+    text: U8[] //< excludes LF and the CR of a CRLF ending
+    offset: Sz
+    next: Sz //< first byte after the line ending, or the input length
+
+impl Source
+    fn new(path: U8[], bytes: U8[]): Source!Diagnostic
+        start: Sz = BOM.len if bytes.starts_with(BOM) else 0
+        src: = Source::{ .path = path, .bytes = bytes, .body = start }
+        if bytes.len > MAX_SOURCE_BYTES
+            throw src.diagnostic(0, "source exceeds 8 MiB")
+        first: = src.line_at(start)
+        if !first.text.equals(HEADER)
+            throw src.diagnostic(start, "expected version header %ksmd 1")
+        src.validate()!
+        return Source::{ .path = path, .bytes = bytes, .body = first.next }
+
+    fn line_at(r: Self@, offset: Sz): Line //< offset must be a line boundary in this source
+        $end: = offset
+        for end < r.bytes.len && r.bytes[end] != '\n'
+            end += 1
+        $text_end: = end
+        if text_end > offset && r.bytes[text_end - 1] == '\r'
+            text_end -= 1
+        return Line::{ .text = r.bytes.sub(offset, text_end - offset), .offset = offset,
+            .next = end + 1 if end < r.bytes.len else end }
+
+    fn diagnostic(r: Self@, offset: Sz, message: U8[]): Diagnostic //< offset is in original bytes
+        $line: Sz = 1
+        $column: Sz = 1
+        $i: Sz = BOM.len if r.bytes.starts_with(BOM) else 0
+        for i < offset
+            if r.bytes[i] == '\n'
+                line += 1
+                column = 1
+                i += 1
+            else if r.bytes[i] == '\r' && i + 1 < r.bytes.len && r.bytes[i + 1] == '\n'
+                i += 1
+            else
+                i += r.bytes.next_codepoint(i)
+                column += 1
+        return Diagnostic::{ .path = r.path, .offset = offset, .line = line, .column = column,
+            .message = message }
+
+    priv fn validate(r: Self@): Void!Diagnostic
+        $i: Sz = 0
+        for i < r.bytes.len
+            if width: = r.bytes.utf8_seq_len(i)
+                if r.bytes[i] == '\r' && (i + 1 == r.bytes.len || r.bytes[i + 1] != '\n')
+                    throw r.diagnostic(i, "a carriage return must be followed by a line feed")
+                i += width
+            else
+                throw r.diagnostic(i, "invalid UTF-8")

@@ -164,7 +164,7 @@ priv fn send_picks(state: Doc_state$@, out: List<|Pick|>$@, id_val: json.Value, 
     //< It sends the candidates as the answer, **an empty array where there is none** (not `null`)
     //< **Each carries its declaration's description** (`documentation`), read as the hover reads
     //< it: the list is where the user looks first, before choosing.
-    $b: = Json_builder.new(arena)
+    $b: = Json_builder(arena)
     $arr: = b.arr()
     for i in Range.asc(out.len)
         p: = out.get(i)
@@ -172,7 +172,7 @@ priv fn send_picks(state: Doc_state$@, out: List<|Pick|>$@, id_val: json.Value, 
         order: = arena.text().s("\{i / 1000 % 10\}\{i / 100 % 10\}\{i / 10 % 10\}\{i % 10\}")
         $item: = b.obj().set("label", b.str_val(p.name)).set("kind", b.int_val(p.kind))
             .set("sortText", b.str_val(order.take())).set("filterText", b.str_val(p.name))
-        defer $detail: = Str_builder.new()
+        defer $detail: = Str_builder()
         detail_of(state.sema, p, detail@)
         if detail.len > 0
             item = item.set("detail", b.str_val(arena.dup_str(detail.slice())))
@@ -234,7 +234,7 @@ priv fn alias_module_of(state: Doc_state$@, head: U8[], arena: Arena$@): U8[] //
 fn send_none(id_val: json.Value, arena: Arena$@) //< it answers that there is no candidate
     //< Caution: **Return an empty array rather than `null`.** `null` means "no answer" and an empty
     //< array means "it looked and found none". **Whether to show it is the client's decision.**
-    $b: = Json_builder.new(arena)
+    $b: = Json_builder(arena)
     arr: = b.arr()
     lsp_msg.send_response(id_val, arr.build(), arena)
 
@@ -252,12 +252,12 @@ fn handle_completion(state: Doc_state$@, swapped: Swapped, id_val: json.Value, a
     default
         send_none(id_val, arena)
         return
-    defer path: = base_core.arena.create(List<|Ast_node$@|>.new(null))
+    defer path: = base_core.arena.create(List<|Ast_node$@|>(null))
     // Caution: **Free the list's buffer**, which is on the heap though the list is on the arena
     // (`find_path_at_params`'s contract); otherwise each request leaks one.
     lsp_position.find_path_at_offset(state.root_file, state.sema, swapped.offset,
         state.mod_name_perm, path)
-    $out: = List<|Pick|>.new(arena)
+    $out: = List<|Pick|>(arena)
     recv: = lsp_nav.dot_receiver_of(state.sema, path, mark)
     head: = qualifier_of(path, mark)
     if recv.node != null

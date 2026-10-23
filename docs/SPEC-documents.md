@@ -63,7 +63,7 @@ Four words name the units that code is organized in. Every document and source c
 | :-- | :-- |
 | file | One `.kspl` source file. It is what `import` names, and `priv` keeps a name visible inside it only |
 | folder | One directory. Inside one folder, files can import each other in a circle |
-| package | Each of `ksplc/` `std/` … listed under "implementation" in the layer table below. It is the unit that is distributed, and a name with no visibility keyword is visible inside its package. **Packages do not nest**: only a top-level folder is one, and `kspage/lay/` is a folder (Java's and Python's packages nest; that is the one difference) |
+| package | Each of `ksplc/` `std/` … listed under "implementation" in the layer table below. It is the unit that is distributed, and a name with no visibility keyword is visible inside its package. **Packages do not nest**: only a top-level folder is one, and `ksmd/port/` is a folder (Java's and Python's packages nest; that is the one difference) |
 | all | Everywhere: what `pub` opens a name to |
 
 **When you name another product's unit, name its owner too** (`MSYS2's package` / `Java's package` / `an ES module`). A bare `package` is always KSPL's.
@@ -319,7 +319,7 @@ The repository has three layers. From the top:
 | Layer | Contents | Role |
 | :-- | :-- | :-- |
 | index | The root `README.md`, `docs/` | Shows where everything is. **May point downward** |
-| implementation | `ksplc/` / `std/` / `ksai/` / `kspeg/` / `ksos/` / `kssrv/` / `ksdb/` / `kspage/` / `ksbind/` | References among them go **only in the direction of import** (`ksplc→std`, `ksai→std`, `kspeg→std`, `ksos→std`, `kssrv→std`, `ksdb→std`, `kspage→std`, `ksbind→std`, `ksplc→kspeg`, `ksos→ksai`, `kssrv→ksai`, `ksos→ksdb`) |
+| implementation | `ksplc/` / `std/` / `ksai/` / `kspeg/` / `ksos/` / `kssrv/` / `ksdb/` / `ksbind/` / `ksmd/` | References among them go **only in the direction of import** (`ksplc→std`, `ksai→std`, `kspeg→std`, `ksos→std`, `kssrv→std`, `ksdb→std`, `ksbind→std`, `ksmd→std`, `ksplc→kspeg`, `ksos→ksai`, `kssrv→ksai`, `ksos→ksdb`) |
 | leaf | `tests/` / `tools/` | Point upward only |
 
 The chart shows the shape with a few of the packages; the table above is the full list of directions.
@@ -358,7 +358,7 @@ Note: **The code is read against the same table.** `embed` (baking a file's cont
 | May be named | Example | What happens if it is not written |
 | :-- | :-- | :-- |
 | **One half of an implementation** | The bodies behind `std`'s `extern` are in `ksplc/gen/runtime/`, and the region holding the panic record is defined by `ksos/port/*/link.ld` | If a name drifts, it breaks silently. Whoever fixes one half cannot fix the other |
-| **A premise behind a rule** | `Map`'s hashing is not randomized because `kssrv/`, `ksdb/`, and `kspage/` do not use `Map` | When the premise changes, the rule stays with nothing to show why |
+| **A premise behind a rule** | `Map`'s hashing is not randomized because `kssrv/` and `ksdb/` do not use `Map` | When the premise changes, the rule stays with nothing to show why |
 
 **Anything whose name one package alone cannot fix is also "one half of an implementation".** `ksplc/` matches names written in `std` (trait and operator names), turns syntax into calls on `std` (string interpolation, `for..in`, inserting `retain`/`release`), and rejects certain forms on sight (deciding use-after-free). In each case the pair is split across two packages, and when one half is renamed the other silently comes loose.
 
@@ -403,7 +403,7 @@ Note: `make test-docref` checks that what is named exists, so a deleted name can
 
 **There are gaps.** A paragraph that names document A is exempt as a whole, so a section number from document B written there escapes the check. A form that escapes still breaks the rule.
 
-**A link's destination is relative to the file it is written in.** The bare form (`kspage/README.md`) can also count from the repository root, but the destination of `[…](…)` counts from that file's folder, as Markdown defines it. `make test-docref` checks that it exists.
+**A link's destination is relative to the file it is written in.** The bare form (`ksmd/README.md`) can also count from the repository root, but the destination of `[…](…)` counts from that file's folder, as Markdown defines it. `make test-docref` checks that it exists.
 
 **A link whose text is a file's name points at that file.** In `` [`X`](Y) ``, the file name that ends X is the one that ends Y; the folders can differ, since each is written from its own place. The check reads a citation's name in the file that the text names, while the reader opens the target. So a link naming one file and pointing at another sends the two to different places. `make test-docref` refuses it, in documents and comments alike.
 

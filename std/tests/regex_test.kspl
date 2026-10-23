@@ -100,7 +100,7 @@ fn test_regex_match()
     back_to(heap_before, "Regex.free() must recursively free the node tree (no leak)")
 
     // Deep nesting `(((...` must be refused as an error, not exhaust the stack at compile time.
-    defer $deep_pattern: = Str_builder.new()
+    defer $deep_pattern: = Str_builder()
     for _i in Range.asc(600)
         deep_pattern.c('(')
     deep_rejected: = compile_is_rejected(deep_pattern.slice())
@@ -239,7 +239,7 @@ fn test_regex_find_all() //<
     verdict.start("[Regex] collecting every match test...")
     heap_before: = mem.heap_used_bytes()
     // Caution: **Free the arena only after the comparisons.** The returned strings live in it.
-    arena: = Arena.new(64 * 1024)
+    arena: = Arena(64 * 1024)
 
     // The expected values come from Python's `finditer`.
     star: = spans_of("a*", "baa", arena)
@@ -318,7 +318,7 @@ priv fn late_match_start(): Sz //< whether a match further back can be found
     //< **The test checks the answer, not the speed.** A repetition that matches empty, not cut off,
     //< loops at each start, and the real match further back is never reached. The regex is freed
     //< inside, since the caller compares the heap.
-    defer $long_text: = Str_builder.new()
+    defer $long_text: = Str_builder()
     for _i in Range.asc(800)
         long_text.c('c')
     long_text.s("ab")
@@ -451,7 +451,7 @@ fn test_regex_long_text() //< a search through a long text is no ReDoS, and is a
     //< **Each start fails at once**, but there are 1.5 million of them. A search whose work is
     //< capped by a fixed amount, rather than by the text, refuses it.
     verdict.start("[Regex] a plain search through a long text test...")
-    defer $text: = Str_builder.new()
+    defer $text: = Str_builder()
     for _i in Range.asc(1500000)
         text.c('a')
     text.s("xyz")
@@ -461,14 +461,14 @@ fn test_regex_long_text() //< a search through a long text is no ReDoS, and is a
 
 priv fn work_of(r: regex.Regex$@, n: Sz): Sz //<
     //< the states one search visits over n `a`s, then `!`
-    defer $text: = Str_builder.new()
+    defer $text: = Str_builder()
     for _i in Range.asc(n)
         text.c('a')
     text.c('!')
     return r.visits(text.slice())
 
 priv fn answered_no(r: regex.Regex$@, n: Sz): Bool //< whether n `a`s, then `!`, gets "no match"
-    defer $text: = Str_builder.new()
+    defer $text: = Str_builder()
     for _i in Range.asc(n)
         text.c('a')
     text.c('!')
@@ -498,7 +498,7 @@ fn test_regex_many_rounds() //< a repeated group over a long text is matched, no
     //< Caution: **Test a text that only is long.** A matcher spending a native call or a kept
     //< entry per round of `(ab)*` refuses, or exhausts its stack on, a text that plainly matches.
     verdict.start("[Regex] a repeated group over many rounds test...")
-    defer $text: = Str_builder.new()
+    defer $text: = Str_builder()
     for _i in Range.asc(20000)
         text.s("ab")
     text.c('c')

@@ -18,9 +18,9 @@ priv const PUT_BODY: U8[] = "かんそ\nwritten\n" //< the body written back
     //< **Include something outside ASCII.** If anything on the way treats the bytes as a string,
     //< only this shows it.
 
-priv const LOCAL_BODY: Sz = 200 * 1024 //< the length used to test the body's cap
-    //< Caution: **Do not copy the cap's value** (fitting under it is enough). It is a length the
-    //< outward-facing server refuses and the local one accepts.
+priv const CEILING: Sz = 8 * 1024 * 1024 //< the protocol's ceiling on a written file
+    //< It is the number "Files" in `docs/SPEC-local-server.md` sets, which a page relies on, so
+    //< the check holds the server to the protocol rather than to its own constant.
 
 fn make_link(root: U8[], name: U8[], target: U8[], arena: Arena$@): Bool //<
     //< A link inside the root pointing outside
@@ -301,15 +301,21 @@ priv fn write_cases(port: I32, auth: U8[], root: U8[], arena: Arena$@): Void!cli
     client.expect_status("PUT refuses outside the root too", out, 403, arena)
 
 priv fn cap_cases(port: I32, auth: U8[], arena: Arena$@): Void!client.Http_end //< the cap on a body
-    // **Check that the local cap is higher.** Without that, a single document cannot be written
-    // back (it does not fit the outward-facing cap).
-    big: = client.filler(LOCAL_BODY, arena)
-    wide: = client.put_file(port, "/api/file?path=sub/big.txt", auth, big, arena)!
+    // **Check both sides of the ceiling.** Below it, a document cannot be written back whole;
+    // without it, one client fills the memory.
+    base: = arena.save()
+    big: = client.filler(CEILING, arena)
+    whole: = client.put_file(port, "/api/file?path=sub/big.txt", auth, big, arena)!
     ok7: =
-        wide.status == 200 &&
-        client.doc_of(wide, arena).get("wrote").as_int().unwrap_or(-1) == LOCAL_BODY
-    verdict.check("--local takes a body larger than the outward-facing one", ok7,
-        client.shown(wide, arena))
+        whole.status == 200 &&
+        client.doc_of(whole, arena).get("wrote").as_int().unwrap_or(-1) == CEILING
+    verdict.check("--local writes a body of exactly the protocol's 8 MiB", ok7,
+        client.shown(whole, arena))
+    arena.restore(base)
+    past: = client.filler(CEILING + 1, arena)
+    over: = client.put_file(port, "/api/file?path=sub/over.txt", auth, past, arena)!
+    client.expect_status("--local refuses one byte past 8 MiB with a 413", over, 413, arena)
+    arena.restore(base)
 
 priv fn files_only_cases(port: I32, auth: U8[], arena: Arena$@): Void!client.Http_end //<
     //< files, and nothing else

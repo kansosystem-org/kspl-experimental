@@ -98,8 +98,13 @@ It ends by printing where it installed, in lines that start `# installed ->`. Th
 That last part is `make install-check` (with the same `PREFIX=`). You can run it again after changing PATH. It searches PATH as a shebang does (through `env`), and compares files, not names. On Windows it reads the UCRT64 shell's PATH. cmd and PowerShell keep their own PATH; there, `where ksplc` names the one they start.
 
 * `make install PREFIX=/usr/local` installs elsewhere (writing there needs `sudo`). **Pass `PREFIX` as an absolute path.** A relative one is refused: it would land inside the repository, and the only sign would be a PATH that does not work. Where MSYS2 gives `HOME` in Windows form (`C:\msys64\home\<user>`), `make` converts it to `/` separators.
+* **On Linux it then makes `.ksmd` files open on a double-click**, with their icon (`make install-desktop`). It writes to your data folder, `~/.local/share`, or under `$PREFIX/share` for a named `PREFIX`. That step builds ksmd's page, which needs clang's wasm32 tools. Where they are missing, it prints a note naming them, and `ksplc` is installed all the same. "Opening a `.ksmd` document on a double-click" in [`HOWTO-set-up-a-project.md`](HOWTO-set-up-a-project.md) lists each file it writes.
 * **It installs only a compiler that reproduces itself.** It first runs `make self-host` and `make self-host-ship`, and stops where either differs. It changes no file in the tree: it neither formats nor re-bakes the seed. After a change to how ksplc generates code, the seed still generates the old way. So it stops there until `make commit-seed` has run. The message says so.
 * **Do not put `out/ksplc_seed.exe` on the PATH.** The seed is the compiler from the last time it was re-taken. It lacks every later feature. It is built with `-O0 -g` (no optimization, with debug information). `make install` installs Stage2 instead. Stage2 is the self-hosting fixed point (the compiler that reproduces itself), rebuilt with optimization ("A shipped executable is optimized; the development cycle is not" in [`DESIGN-repository.md`](DESIGN-repository.md)).
+
+**Installation prepares both copies before replacing the compiler or library.** A failed copy leaves the installed pair alone. A failed replacement tries to restore both backups. Wait until installation ends before compiling: the two paths cannot switch together.
+
+**If rollback fails, the error names the backup folders.** Keep them until the old compiler and library are restored. A killed process or power loss can also leave `.kspl-install.*` folders and `$PREFIX/lib/kspl/.install-lock`. After checking that no installer runs, recover any `old` library and `old` compiler (`old.exe` on Windows) from those folders. Then remove the empty lock directory and retry. Close programs using the installed compiler if Windows refuses a move.
 
 **If it goes wrong, there are four ways, each with its own sign.**
 
@@ -193,7 +198,7 @@ pacman -S --needed \
   mingw-w64-ucrt-x86_64-arm-none-eabi-gcc
 ```
 
-**To assemble kspage for the browser (`make kspage-web` / `make test-kspage-wasm`)**, install the LLVM tools and clang's wasm32 builtins:
+**To build ksmd's page for the browser (`make ksmd-web` / `make test-ksmd-browser`)**, install the LLVM tools and clang's wasm32 builtins:
 
 ```sh
 pacman -S --needed \
@@ -207,9 +212,8 @@ pacman -S --needed \
 | The command or library needed | What it is for | Without it |
 |---|---|---|
 | `wasm-ld` | The wasm32 final link (`-lld`) | `wasm-ld: command not found` |
-| `llvm-nm` | Confirming the functions called from JS are all assembled (`-llvm`) | `llvm-nm: command not found` |
 | Clang's wasm32 builtins archive | Arithmetic helpers (`-wasi-compiler-rt`) | The build reports that wasm32 builtins are not installed |
-| `node` | Running the assembled wasm / checking the JS syntax (`make test-js-syntax`) | `node: command not found` |
+| `node` | Driving the page in a browser (`make test-ksmd-browser`) / checking the JS syntax (`make test-js-syntax`) | `node: command not found` |
 
 For `node`, the Windows build of Node.js on the PATH is quicker than an MSYS2 package. Node is needed for the tests.
 
@@ -239,5 +243,5 @@ The `Makefile` finds `ld.lld` / `llvm-objdump` / `llvm-objcopy` under the plain 
 | What you see | Why | The fix |
 | :-- | :-- | :-- |
 | **A link fails with `Permission denied`** | `make ci` rebuilds the same `.exe` many times in a short span. A program that watches new files can briefly lock one just written. A real-time scan such as Windows Defender's does it, and so does a sync agent such as OneDrive's | Re-running often fixes it. Where it recurs, exclude this repository's `out/` (or the whole repository) from the scan. Keep the repository outside a synced folder (for example `C:\dev\kspl`), as "[Building and testing](#building-and-testing)" says |
-| `make ci` ends `ALL GREEN`, yet its digest lists `SKIP` lines: `node`, Wine, the MinGW cross compiler, an ARM toolchain and others | Those gates need a tool the package list leaves out, or one that has no place on Windows (Wine runs Windows programs on Linux). `EXPECTED_SKIPS` in `tools/ci_gates.kspl` names each such line for `win32`. A `SKIP` that it does not name fails its gate. So a green round has skipped only those | Nothing to fix. What each skip leaves unchecked is "Gates that pass silently where a tool is missing" in [`SPEC-gates.md`](SPEC-gates.md). "Install the packages" lists the tools for Kanso OS and kspage (`llvm`, `lld`, the ARM toolchain, `node`). Installing them turns their skips into real runs |
+| `make ci` ends `ALL GREEN`, yet its digest lists `SKIP` lines: `node`, Wine, the MinGW cross compiler, an ARM toolchain and others | Those gates need a tool the package list leaves out, or one that has no place on Windows (Wine runs Windows programs on Linux). `EXPECTED_SKIPS` in `tools/ci_gates.kspl` names each such line for `win32`. A `SKIP` that it does not name fails its gate. So a green round has skipped only those | Nothing to fix. What each skip leaves unchecked is "Gates that pass silently where a tool is missing" in [`SPEC-gates.md`](SPEC-gates.md). "Install the packages" lists the tools for Kanso OS and ksmd (`llvm`, `lld`, the ARM toolchain, `node`). Installing them turns their skips into real runs |
 | Part of `std/tests/sys_test.kspl` skips itself | It needs POSIX paths such as `/bin/echo`, so it skips itself on native Windows (`sys.is_windows()`) | Nothing to fix. Subprocesses themselves (`run_capture`, through `CreateProcess`) work there, and the `windows-ucrt64` job in `.github/workflows/ci.yml` runs them on real hardware |

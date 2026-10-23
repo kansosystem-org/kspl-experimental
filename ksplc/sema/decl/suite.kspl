@@ -44,7 +44,7 @@ impl Sema_ctx
         //< Caution: **Collect the tests in one walk before any suite is written**, or a suite
         //< met before its tests' file finds none.
         tests: = base_core.arena
-            .create(Map<|U8[], List<|Ast_node$@|>$@|>.new(base_core.arena))
+            .create(Map<|U8[], List<|Ast_node$@|>$@|>(base_core.arena))
         $has_main: = false
         for top_node in root.children
             d: = top_node.unwrap_top_level()
@@ -57,12 +57,11 @@ impl Sema_ctx
             if name.starts_with(TEST_PREFIX)
                 $list: = tests.get(file).unwrap_or(null)
                 if list == null
-                    list = base_core.arena
-                        .create(List<|Ast_node$@|>.new(base_core.arena))
+                    list = base_core.arena.create(List<|Ast_node$@|>(base_core.arena))
                     tests.set(file, list)
                 list.push(d)
-        run_by: = base_core.arena.create(Map<|U8[], Bool|>.new(base_core.arena))
-        reached_files: = base_core.arena.create(Map<|U8[], Bool|>.new(base_core.arena))
+        run_by: = base_core.arena.create(Map<|U8[], Bool|>(base_core.arena))
+        reached_files: = base_core.arena.create(Map<|U8[], Bool|>(base_core.arena))
         for top_node in root.children
             child: = top_node.unwrap_top_level()
             if child.kind_id != .k_decl_impl
@@ -151,7 +150,7 @@ impl Sema_ctx
             return
         file: = impl_node.loc.file()
         reached_files.set(file, true)
-        defer $reached: = List<|Reached|>.new(null)
+        defer $reached: = List<|Reached|>(null)
         if own: = tests.get(file)
             for d in own
                 reached.push(Reached::{ .decl = d, .prefix = "" })
@@ -159,7 +158,7 @@ impl Sema_ctx
             imp: = top_node.unwrap_top_level()
             if imp.kind_id == .k_decl_import && imp.loc.file().equals(file)
                 r.add_imported_tests(imp, tests, reached@, reached_files)
-        defer $src: = Str_builder.new()
+        defer $src: = Str_builder()
         src.s("impl ").s(impl_node.find_text(.k_type_expr)).s(" {\n  fn ").s(RUN_NAME)
             .s("(r: Self$@) {\n")
         $ok: = true
@@ -170,7 +169,7 @@ impl Sema_ctx
         src.s("  }\n}\n")
         if !ok
             return
-        defer made: = base_core.arena.create(List<|Ast_node$@|>.new(null))
+        defer made: = base_core.arena.create(List<|Ast_node$@|>(null))
         parse_load.parse_synth_decls(src.slice(), file, parser, made) catch
             base_diag.ice_panic("suite: the synthesized 'run' failed to parse")
         base_diag.ice_assert(made.len == 1 && made.get(0).kind_id == .k_decl_impl,
@@ -199,7 +198,7 @@ impl Sema_ctx
                 return .some(sd.fields_list)
         if _ed: = r.env.get_enum_def(r.env.base_type_name(real_id))
             return .some(base_core.arena
-                .create(List<|sema_type_def.Struct_field$@|>.new(base_core.arena)))
+                .create(List<|sema_type_def.Struct_field$@|>(base_core.arena)))
         r.err(impl_node,
             "a suite is a struct, whose fields are the values its tests take, or an enum, whose \
                 tests take nothing")
@@ -269,8 +268,8 @@ impl Sema_ctx
                         'panic')")
                 r.err(ret, r.scratch.slice())
                 ok = false
-        defer $args: = Str_builder.new()
-        for p in base_ast_ext.Param_cursor.new(d.get_fn_params(), false)
+        defer $args: = Str_builder()
+        for p in base_ast_ext.Param_cursor(d.get_fn_params(), false)
             p_name: = p.find_text(.k_identifier)
             if !r.check_test_param(p, p_name, name, fields, suite)
                 ok = false

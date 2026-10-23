@@ -18,7 +18,7 @@ import "tests/support/harness"
 
 priv fn fmt_job(rel: U8[], style: U8[], arena: Arena$@): subproc.Job //<
     //< The child that formats `rel` to its output, under `style` (`--style=`) unless it is empty
-    $argv: = List<|U8[]|>.new(arena)
+    $argv: = List<|U8[]|>(arena)
     argv.push(ksplc_harness.ksplc_exe())
     argv.push("fmt")
     if style.len > 0
@@ -61,7 +61,7 @@ priv const PARTINGS: Parting[_] = ::{
 }
 
 priv fn check_parting(arena: Arena$@)
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     for p in PARTINGS
         got: = first_difference(p.a, p.b)
         if got != p.line
@@ -80,8 +80,8 @@ priv const FMT_SPECS: U8[][_] = ::{ "*.kspl", ":!ksplc/tests/negative/", ":!kspl
     //< does in `mk/lint.mk`.
 
 priv fn check_formatted(rels: List<|U8[]|>@, arena: Arena$@)
-    $bad: = List<|U8[]|>.new(arena)
-    $jobs: = List<|subproc.Job|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
+    $jobs: = List<|subproc.Job|>(arena)
     for rel in rels
         jobs.push(fmt_job(rel, "", arena))
     rs: = ksplc_harness.run_all(jobs.slice(), "fmt_tree")
@@ -122,16 +122,16 @@ priv fn narrow_name(rels: List<|U8[]|>@, k: Sz, arena: Arena$@): U8[] //<
     return arena.text().s(rels.get(k)).s(" at `").s(narrow_style(k, arena)).s("`").take()
 
 priv fn check_narrow(rels: List<|U8[]|>@, arena: Arena$@)
-    $bad: = List<|U8[]|>.new(arena)
-    $jobs: = List<|subproc.Job|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
+    $jobs: = List<|subproc.Job|>(arena)
     for k in Range.asc(rels.len)
         jobs.push(fmt_job(rels.get(k), narrow_style(k, arena), arena))
     firsts: = ksplc_harness.run_all(jobs.slice(), "fmt_narrow")
     // **The output is formatted again from a file**, which also reads it as a source. This gate
     // does not trust the formatter's own read-back check.
     dir: = harness.sandbox("fmt_narrow")
-    $again: = List<|subproc.Job|>.new(arena)
-    $which: = List<|Sz|>.new(arena) // the source each second formatting started from
+    $again: = List<|subproc.Job|>(arena)
+    $which: = List<|Sz|>(arena) // the source each second formatting started from
     for k in Range.asc(rels.len)
         first: = firsts.get(k)
         said: = narrow_name(rels, k, arena)

@@ -193,7 +193,7 @@ impl Sema_ctx
         fqn: = r.make_fqn(name)
         fqn_dup: = base_core.arena.dup_str(fqn)
         alias_id: = I32::r.env.id_to_type.len
-        entry: = sema_type_def.Entry.new(.alias_type(target_id), fqn_dup)
+        entry: = sema_type_def.Entry(.alias_type(target_id), fqn_dup)
         r.env.id_to_type.push(entry)
 
         // Caution: **Register it under its FQN alone**, as a generic type's template is. The type
@@ -268,7 +268,7 @@ impl Sema_ctx
                 if declared.kind.is_type()
                     return r.env.get_or_add(w.fqn)
         args: = w.args.build_resolved_type_args(r, tmpl) catch unknown_args()
-        defer $final_name: = Str_builder.new()
+        defer $final_name: = Str_builder()
         if tmpl != null
             sema_decl_mono.check_written_generic_arity(r, tmpl, args.len, type_node)
             defer $inst_name: = r.instance_written(w, args, type_node)
@@ -378,7 +378,7 @@ impl Ast_node
         param_list: = r.get_fn_params()
         if param_list == null
             return
-        for item in base_ast_ext.Param_cursor.new(param_list, false)
+        for item in base_ast_ext.Param_cursor(param_list, false)
             t_node: = item.find_child(.k_type_expr)
             if t_node != null
                 item.type_id = t_node.resolve_type(c)!
@@ -457,7 +457,7 @@ impl Ast_node
             //< Caution: **Pass `decl`.** Where it declares a `$` (`struct Slice<|$T|>`), **an
             //< unmarked actual argument is wrapped as immutable** (`Slice<|U8|>` vs
             //< `Slice<|$U8|>`).
-        $args: = List<|I32|>.new(base_core.arena)
+        $args: = List<|I32|>(base_core.arena)
         unknown: = I32::sema_type_env.Builtin_type_id.unknown
         params: = decl.find_child(.k_type_gen_params) if decl != null else null
         $pos: Sz = 0
@@ -473,7 +473,7 @@ impl Ast_node
                 pos += 1
                 continue
             if v: = const_type_arg_value(arg, c)
-                defer $value: = Str_builder.new()
+                defer $value: = Str_builder()
                 value.s("\{v\}")
                 args.push(c.env.get_or_add(value.slice()))
                 pos += 1
@@ -498,7 +498,7 @@ impl Ast_node
         return args.slice()
 
 fn unknown_args(): I32[] //< the arguments of a list that could not be read: one unknown type
-    $args: = List<|I32|>.new(base_core.arena)
+    $args: = List<|I32|>(base_core.arena)
     args.push(I32::sema_type_env.Builtin_type_id.unknown)
     return args.slice()
 
@@ -676,13 +676,13 @@ fn fn_signature_type_id(node: Ast_node$@, c: Sema_ctx$@): I32!Sema_error //<
     //< Builds the type ID of a function pointer's canonical type "fn(T1,T2):Ret"
     //< node is a k_type_fn_sig or a k_decl_fn. **Build both through this one function**, or the
     //< names drift and the comparison always fails (or always succeeds).
-    defer $tname: = Str_builder.new()
+    defer $tname: = Str_builder()
     tname.s("fn(")
 
     param_list: = node.get_fn_params()
     $is_first: = true
     if param_list != null
-        for p in base_ast_ext.Param_cursor.new(param_list, false)
+        for p in base_ast_ext.Param_cursor(param_list, false)
             if !is_first
                 tname.s(",")
             is_first = false

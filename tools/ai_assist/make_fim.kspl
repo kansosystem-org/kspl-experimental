@@ -66,7 +66,7 @@ priv struct Build_stats
     examples: Sz
 
 priv fn build(split_name: U8[], arena: Arena$@): Build_stats
-    defer $in_path: = Str_builder.new()
+    defer $in_path: = Str_builder()
     in_path.s(oracle.CORPUS_DIR).c('/').s(split_name).s(".jsonl")
     recs: = oracle.load_jsonl(in_path.slice(), arena) catch
         io.err().s("[error] cannot read \{in_path.slice()\} (run build_corpus first)\n")
@@ -77,10 +77,10 @@ priv fn build(split_name: U8[], arena: Arena$@): Build_stats
         fim_examples(rec.get("path").as_str().unwrap_or(""),
             rec.get("code").as_str().unwrap_or(""), examples, arena)
 
-    defer $out_path: = Str_builder.new()
+    defer $out_path: = Str_builder()
     out_path.s(oracle.CORPUS_DIR).c('/').s("fim_").s(split_name).s(".jsonl")
     $f: = io.open(out_path.slice(), "w") catch panic("cannot open output file for writing")
-    defer $b: = Str_builder.new()
+    defer $b: = Str_builder()
     for ex in examples
         b.clear()
         b.s("{\"path\":\"").escape_and_append(ex.path).s("\",\"prefix\":\"")
@@ -92,11 +92,11 @@ priv fn build(split_name: U8[], arena: Arena$@): Build_stats
     return Build_stats::{ .files = recs.len, .examples = examples.len }
 
 fn main() //< cuts the fill-in-the-middle examples out of the corpus
-    defer arena: = Arena.new(512 * 1024 * 1024)
+    defer arena: = Arena(512 * 1024 * 1024)
     train_stats: = build("train", arena)
     val_stats: = build("val", arena)
 
-    defer $stats_path: = Str_builder.new()
+    defer $stats_path: = Str_builder()
     stats_path.s(oracle.CORPUS_DIR).s("/fim_stats.json")
     $f: = io.open(stats_path.slice(), "w") catch panic("cannot open fim_stats.json for writing")
     f

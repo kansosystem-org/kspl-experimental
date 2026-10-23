@@ -376,6 +376,6 @@ The run does not restate the file's name. `ksplc doc` titles the file's referenc
 
 **Take a function whose first parameter is an enum declared in the same file. It is written as that enum's method, in its `impl` and taking `Self`.** So you call `state.text()` or `a.same_role(b)`, not `state_text(state)`. What an enum does is found where the enum is. The name need not repeat the type (as 11.1 asks of any name). And the call reads in the order the value flows.
 
-**An enum of another file or package is left out.** Its `impl` would hold another package's reading of it, against the reference direction. (kspage's readers of std's `json.Value` stay in kspage.) The direction is the chapter "What crosses a package boundary" in [`DESIGN-repository.md`](DESIGN-repository.md).
+**An enum of another file or package is left out.** Its `impl` would hold another package's reading of it, against the reference direction. (ksai's readers of std's `json.Value` stay in ksai.) The direction is the chapter "What crosses a package boundary" in [`DESIGN-repository.md`](DESIGN-repository.md).
 
 **The language allows both shapes; the linter reports the free function** (`[I0503]`, in [`../ksplc/docs/SPEC-diagnostics.md`](../ksplc/docs/SPEC-diagnostics.md)). It reads the declaration as the compiler parsed it, so a signature wrapped over several lines is found too. It reports only an enum taken by value as the first parameter. Review judges a function over a pointer to the enum, or over a slice of it (Principle 8).

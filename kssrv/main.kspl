@@ -40,7 +40,7 @@ priv const NAME: U8[] = "kssrv"
 // Caution: **Do not hold it as a file-level variable.** It could only be a null pointer filled in
 // later: a server that is up but cannot always speak. `main` makes it once.
 priv fn log_new(): Log //< makes the run's logger: the standard output, down to information
-    return Log.new(io.out(), .information, NAME)
+    return Log(io.out(), .information, NAME)
 
 priv const LISTENER_TOKEN: Sz = conn.MAX_CONNS //< the token given to the listening socket
     //< It cannot collide with a slot number (0..max_conns-1).
@@ -48,7 +48,10 @@ priv const LISTENER_TOKEN: Sz = conn.MAX_CONNS //< the token given to the listen
 priv const MAX_REQUEST_BODY: Sz = 64 * 1024 //< the cap allowed on one request's body
     //< **Only local use accepts a large one**, for writing a document back. The outward-facing cap
     //< stays small because each connection holds its partial read.
-priv const MAX_LOCAL_BODY: Sz = 4 * 1024 * 1024
+priv const MAX_LOCAL_BODY: Sz = 8 * 1024 * 1024 //< the cap on a body in local use
+    //< It is the protocol's ceiling on a written file ("Files" in `docs/SPEC-local-server.md`), so
+    //< a page writes back any file up to 8 MiB.
+    //< Caution: **Keep it a bound.** A connection holds its body in memory until it is whole.
 
 priv fn body_limit(ctx: conn.Ctx$@): Sz //< the body cap for this mode
     return MAX_LOCAL_BODY if ctx.is_local() else MAX_REQUEST_BODY
@@ -102,8 +105,7 @@ priv fn content_type_for(path: U8[]): U8[] //< looks the Content-Type up from th
         return "text/css; charset=utf-8"
     if path.ends_with(".js")
         return "text/javascript; charset=utf-8"
-    // **`.kspage` is JSON too** (a kspage document's JSON); the same content gets the same type.
-    if path.ends_with(".json") || path.ends_with(".kspage")
+    if path.ends_with(".json")
         return "application/json"
     if path.ends_with(".txt") || path.ends_with(".md")
         return "text/plain; charset=utf-8"
@@ -120,7 +122,7 @@ priv fn content_type_for(path: U8[]): U8[] //< looks the Content-Type up from th
     return "application/octet-stream"
 
 priv enum Rel_path //< makes a relative path under the root from a percent-decoded path
-    //< Caution: **Pass the root.** A check on the path string alone (`fs.is_safe_relative`) leaves
+    //< Caution: **Pass the root.** A check on the path string alone (`sys.is_safe_relative`) leaves
     //< a way out through a link inside the root.
     ok(rel: U8[]) //< the path under the root, on the arena
     // A path not accepted as a name under the root (`..` steps, a NUL, a Windows device name, a
@@ -740,7 +742,7 @@ priv fn announce(o: Options@, host: U8[], port: I32, token: U8[], lg: Log$@) //<
             ln.s("open http://\{host\}:\{port\}/#t=\{token\}")
     // Caution: **Do not enter the loop with the lines the waiters read still buffered.** The
     // waiters for `kssrv: I: listening on` (`kssrv/tests/start.kspl`) and for `kssrv: I: open `
-    // (`kspage/Makefile`) would both fail, never seeing them.
+    // (an opener that starts the server) would both fail, never seeing them.
     lg.done()
 
 fn main(): I32
@@ -748,7 +750,7 @@ fn main(): I32
     // through it. `done` on the way out closes any open line and flushes it.
     $lg: = log_new()
     defer lg.done()
-    defer arg_arena: = Arena.new(4 * 1024)
+    defer arg_arena: = Arena(4 * 1024)
     $o: Options = ::{}
     failed: = read_args(o@, lg@, arg_arena)
     if failed != 0
@@ -772,7 +774,7 @@ fn main(): I32
             ln.s("cannot read the port it listens on: \{e\}")
         return 1
 
-    defer $r: = reactor.Reactor.new()
+    defer $r: = reactor.Reactor()
     // Zero-initialized: a free slot is an ARC handle's zero value, which the release at scope exit
     // treats as owning nothing.
     $table: conn.Conn_table = ::{}
@@ -788,7 +790,7 @@ fn main(): I32
     // page opening a document should not wait on it.
     $p: pilot.Pilot$@ = null
     if !o.local
-        build_arena: = Arena.new(1024 * 1024)
+        build_arena: = Arena(1024 * 1024)
         p = pilot.build(build_arena)
         build_arena.free()
         pilot.print_summary(p, lg@)

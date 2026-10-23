@@ -21,7 +21,9 @@ import "std/verdict"
 // Caution: **Do not drop the level that holds a struct as an element.** With only plain elements
 // (`I32[]`), no path reaching **a field inside** an element (`b.si[0].n`) is taken.
 priv const HEAD: U8[] =
-    """priv struct Cell { n: I32; }
+    """import "std/ds" { List, Map }
+
+priv struct Cell { n: I32; }
 impl Cell
   fn bumpc(r: Self$@)
     r.n += 1
@@ -32,7 +34,7 @@ impl I32
     r$ += 1
 
 
-priv struct Box { n: I32; imm: I32[]; mut: I32$[]; si: Cell[]; sm: Cell$[]; }
+priv struct Box { n: I32; imm: I32[]; mut: I32$[]; si: Cell[]; sm: Cell$[]; arr: I32[2]; }
 impl Box
   fn bump(r: Self$@)
     r.n += 1
@@ -46,6 +48,16 @@ priv fn takes_mut(p: I32$@)
 
 priv fn make_box(): Box
   return Box::{}
+
+priv struct Bag { items: List<|I32|>; }
+priv fn make_cells(): List<|Cell|>
+  return List<|Cell|>(null)
+
+priv fn make_bag(): Bag
+  return Bag::{ .items = List<|I32|>(null) }
+
+priv fn make_map(): Map<|I32, I32|>
+  return Map<|I32, I32|>(null)
 
 impl I32$[]
   fn zero_all(r: Self@)
@@ -101,6 +113,46 @@ priv const DENY: Case[] = Case[]::{ //< every one is a shape that **should be re
     // rejected (the reading one passes under allow below).
     Case::{ .rule = "a temporary", .op = "mutable receiver",
         .body = "priv fn t() { make_box().bump(); }" },
+    // A field or an array element of a temporary is part of it, so it is no place either; its
+    // address in C would be `&f().n`.
+    Case::{ .rule = "a temporary's field", .op = "write",
+        .body = "priv fn t() { make_box().n = 1; }" },
+    Case::{ .rule = "a temporary's field", .op = "address",
+        .body = "priv fn t() { takes_mut(make_box().n@); }" },
+    Case::{ .rule = "a temporary's field", .op = "mutable receiver",
+        .body = "priv fn t() { make_box().n.bump32(); }" },
+    Case::{ .rule = "a temporary's array element", .op = "write",
+        .body = "priv fn t() { make_box().arr[0] = 1; }" },
+    // An element a container owns (its `at` takes `Self$@`) is part of it as a field is, so all
+    // three operations are refused; a write through `at` would change a copy.
+    Case::{ .rule = "a temporary's owned element", .op = "write",
+        .body = "priv fn t() { make_bag().items[0] = 1; }" },
+    Case::{ .rule = "a temporary's owned element", .op = "compound write",
+        .body = "priv fn t() { make_bag().items[0] += 1; }" },
+    Case::{ .rule = "a temporary's owned element", .op = "address",
+        .body = "priv fn t() { takes_mut(make_bag().items[0]@); }" },
+    Case::{ .rule = "a temporary's owned element", .op = "mutable receiver",
+        .body = "priv fn t() { make_cells()[0].bumpc(); }" },
+    Case::{ .rule = "a temporary's owned element", .op = "write inside it",
+        .body = "priv fn t() { make_cells()[0].n = 1; }" },
+    // `Index_mut`'s `set(r: Self$@, …)` follows the method call's rule on a temporary.
+    Case::{ .rule = "a temporary", .op = "write through 'set'",
+        .body = "priv fn t() { make_map()[1] = 2; }" },
+    // Where only a writing `at` reads, a temporary has no way to read.
+    Case::{ .rule = "a temporary", .op = "read through a writing 'at' alone",
+        .body =
+        "priv struct Own { a: I32[2]; }\nimpl Own: Index_place<|Sz, I32|>\n  fn at(r: Self$@, i: \
+            Sz, _file: U8[], _line: Sz): I32$@\n    return r.a[i]@\n\n\npriv fn t(): I32 { return \
+            Own::{}[0]; }" },
+    // A method's call gets the same rules as a function's: a value it returns is a temporary.
+    Case::{ .rule = "a temporary a method returns", .op = "write to an owned element",
+        .body =
+        "impl Bag\n  fn copy(r: Self@): List<|I32|>\n    return r.items\n\n\npriv fn t(g: Bag@) { \
+            g.copy()[0] = 1; }" },
+    Case::{ .rule = "a temporary a method returns", .op = "write to an array element",
+        .body =
+        "impl Box\n  fn val(r: Self@): Box\n    return r$\n\n\npriv fn t(b: Box@) { b.val().arr[0] \
+            = 1; }" },
 }
 
 // Shapes that break none of the rules, so rejecting everything is not green.
@@ -135,6 +187,28 @@ priv const ALLOW: Case[] = Case[]::{
     // `Self@` and the write reaches **what the descriptor points at**: the caller's memory changes.
     Case::{ .rule = "", .op = "a write to a temporary's slice",
         .body = "priv fn t() { $b: Box = ::{}; b.mut.same().zero_all(); }" },
+    // **A pointer a call returns leads to a place**, so its fields take all three operations.
+    Case::{ .rule = "", .op = "the three operations through a returned pointer",
+        .body =
+        "priv fn on(p: Box$@): Box$@ { return p; }\npriv fn t(p: Box$@) { on(p).n = 1; \
+            on(p).bump(); takes_mut(on(p).n@); on(p).arr[0] = 2; }" },
+    // **An element of a temporary is read** through a copy of the container in a slot.
+    Case::{ .rule = "", .op = "a read of a temporary's owned element",
+        .body =
+        "priv fn t(): I32 { return make_bag().items[0] + make_cells()[0].n + \
+            make_map()[1].unwrap_or(0); }" },
+    // **A pointer or a slice a method returns leads to a place**, as a function's does; the
+    // subscript's receiver is inferred once, so the method call is not read twice.
+    Case::{ .rule = "", .op = "writes through subscripts on a method's result",
+        .body =
+        "impl Bag\n  fn lst(r: Self$@): List<|I32|>$@\n    return r.items@\n\n\nimpl Box\n  fn \
+            me(r: Self$@): Box$@\n    return r\n\n\npriv fn t(g: Bag$@, b: Box$@) { g.lst()[0] = 1; \
+            g.lst()[0] += 1; b.me().mut[0] = 2; b.me().arr[1] *= 3; b.me().me().n = 4; }" },
+    // A temporary slice's element lies in memory the slice points at, so it is written.
+    Case::{ .rule = "", .op = "a write to a temporary slice's element",
+        .body =
+        "priv fn on(s: I32$[]): I32$[] { return s; }\npriv fn t() { $b: Box = ::{}; on(b.mut)[0] = \
+            1; }" },
 }
 
 priv struct Verdict //< the result of building one program and only compiling it
@@ -143,12 +217,12 @@ priv struct Verdict //< the result of building one program and only compiling it
     first_error: U8[]
 
 priv fn compile_only(dir: U8[], index: Sz, body: U8[], arena: Arena$@): Verdict
-    defer $nb: = Str_builder.new()
+    defer $nb: = Str_builder()
     nb.s("p\{index\}")
     stem: = nb.slice()
     src: = fs.join(dir, arena.text().s("\{stem\}.kspl").take(), arena)
     gen: = fs.join(dir, arena.text().s("\{stem\}.c").take(), arena)
-    defer $sb: = Str_builder.new()
+    defer $sb: = Str_builder()
     sb.s(HEAD).s(body).s(TAIL)
     io.write_file(src, sb.slice()) catch
         return Verdict::{ .compiled = false, .first_error = "cannot write the material" }
@@ -226,7 +300,7 @@ priv const NESTED_RO_LOCALS: U8[] =
   nested_ro: U8[]$[] = U8[]$[]::sl_b;"""
 
 priv fn roots(arena: Arena$@): List<|Root|>
-    $out: = List<|Root|>.new(arena)
+    $out: = List<|Root|>(arena)
     out
         .push(Root::{ .slot = "const_array", .globals = "const RO_ARR: U8[4] = ::{ 1, 2, 3, 4 };",
         .locals = "", .expr = "RO_ARR" })
@@ -272,7 +346,7 @@ priv fn roots(arena: Arena$@): List<|Root|>
     return out
 
 priv fn writes(arena: Arena$@): List<|Write|>
-    $out: = List<|Write|>.new(arena)
+    $out: = List<|Write|>(arena)
     out.push(Write::{ .slot = "index", .body = "<e>[0] = 9;" })
     out.push(Write::{ .slot = "index_compound", .body = "<e>[0] += 1;" })
     out.push(Write::{ .slot = "deref", .body = "<e>$ = 9;" })
@@ -436,10 +510,10 @@ priv fn run_write_perm(arena: Arena$@) //< what passes ksplc passes C without a 
     // --- the combinations ---
     rs: = roots(arena)
     ws: = writes(arena)
-    $names: = List<|U8[]|>.new(arena)
-    $srcs: = List<|U8[]|>.new(arena)
-    $gens: = List<|U8[]|>.new(arena)
-    $jobs: = List<|subproc.Job|>.new(arena)
+    $names: = List<|U8[]|>(arena)
+    $srcs: = List<|U8[]|>(arena)
+    $gens: = List<|U8[]|>(arena)
+    $jobs: = List<|subproc.Job|>(arena)
     for ri in Range.asc(rs.len)
         for wi in Range.asc(ws.len)
             r: = rs.get(ri)
@@ -459,8 +533,8 @@ priv fn run_write_perm(arena: Arena$@) //< what passes ksplc passes C without a 
     gen_outs: = harness.run_all(jobs.slice(), "write_perm_gen")
 
     // Only what ksplc accepted is passed on to C.
-    $cc_jobs: = List<|subproc.Job|>.new(arena)
-    $cc_index: = List<|Sz|>.new(arena)
+    $cc_jobs: = List<|subproc.Job|>(arena)
+    $cc_index: = List<|Sz|>(arena)
     $rejected: Sz = 0
     for i in Range.asc(jobs.len)
         if !gen_outs.get(i).exited_with(0)

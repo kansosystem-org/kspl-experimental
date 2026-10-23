@@ -216,7 +216,7 @@ pub fn read_dir( //< one directory's entries, without descending
     if h == 0
         throw .not_found
     defer kspl_dir_close(h)
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     for
         $name_buf: U8[MAX_ENTRY_NAME_LEN] = ::{}
         n: = kspl_dir_read(h, name_buf@, MAX_ENTRY_NAME_LEN)
@@ -274,46 +274,6 @@ priv fn without_trailing_seps(path: U8[]): U8[] //< the path with its trailing s
         left = left.sub(0, left.len - 1)
     return left
 
-priv fn is_dos_device(seg: U8[]): Bool //< whether it is a name Windows opens as a device
-    //< It is a device even with an extension, and case does not matter.
-    //< **It is a device at any level**: `www/CON` opens the console, and a read or write on an
-    //< unconnected `COM1` never returns, stalling a single-loop server.
-    //< Caution: **Windows trims spaces before the extension** (`CON .txt` is `CON`), and counts
-    //< `CONIN$`, `CONOUT$` and the superscript `COM¹²³` / `LPT¹²³` among the names too.
-    base: = seg.sub(0, seg.find_char('.').unwrap_or(seg.len)).trim_end()
-    if base.equals_ignore_case("con") || base.equals_ignore_case("prn") ||
-        base.equals_ignore_case("aux") || base.equals_ignore_case("nul") ||
-        base.equals_ignore_case("conin$") || base.equals_ignore_case("conout$")
-        return true
-    port: =
-        base.len >= 3 &&
-        (base.sub(0, 3).equals_ignore_case("com") ||
-        base.sub(0, 3).equals_ignore_case("lpt"))
-    if !port
-        return false
-    if base.len == 4 && base[3].is_digit()
-        return true
-    // ¹ ² ³ in UTF-8.
-    return base.len == 5 && base[3] == 0xC2U8 &&
-        (base[4] == 0xB9U8 || base[4] == 0xB2U8 || base[4] == 0xB3U8)
-
-priv fn is_safe_segment(seg: U8[]): Bool //<
-    //< Whether one segment of a path is safe as a name under the root
-    //< Caution: **Do not let through a path the OS reinterprets.** Windows drops a trailing `.` and
-    //< space (`secret.key.` is `secret.key`), and a `:` starts an NTFS stream name
-    //< (`secret.key::$DATA` gives the contents). A lone `.` is also caught by this rule, as `..`
-    //< is.
-    if seg.len == 0
-        return true // a repeated separator (`a//b`)
-    if seg.equals("..") || seg[seg.len - 1] == '.' || seg[seg.len - 1] == ' '
-        return false
-    for i in Range.asc(seg.len)
-        // A control character breaks the display of a log or terminal; `:` marks a drive or a
-        // stream.
-        if seg[i] == ':' || seg[i] < ' '
-            return false
-    return !is_dos_device(seg)
-
 pub fn absolute( //< the full path from the root: a relative path joined to the working directory
     //< **Only the text is joined.** `..` and links stay. Folding `a/link/..` into `a` names a
     //< different place when `link` points elsewhere (Rust's `std::path::absolute` keeps them
@@ -332,32 +292,6 @@ pub fn absolute( //< the full path from the root: a relative path joined to the 
         return arena.dup_str(here)
     return join(here, path, arena)
 
-pub fn is_safe_relative(path: U8[]): Bool //< whether the path's text alone cannot climb out
-    //< Caution: **This alone does not keep a path under the root.** It checks only the text, so
-    //< **it cannot stop a way out through a link inside the root**. It checks segment by segment
-    //< (matching `..` as a substring would also refuse `..foo`).
-    //< **Do not make the answer depend on `sys.is_windows()`**, or a path that is safe on Linux
-    //< becomes a hole on Windows only.
-    if path.len == 0
-        return false
-    if sys.is_path_sep(path[0])
-        return false
-    $start: Sz = 0
-    for start <= path.len
-        end: = segment_end(path, start)
-        if !is_safe_segment(path.sub(start, end - start))
-            return false
-        start = end + 1
-    return true
-
-priv fn segment_end(path: U8[], from: Sz): Sz //< where the segment starting at `from` ends
-    //< The next separator at or after `from`, or the path's length; every walk over a path's
-    //< segments steps by this, so all of them split alike.
-    $i: = from
-    for i < path.len && !sys.is_path_sep(path[i])
-        i += 1
-    return i
-
 priv fn has_link_on_path(root: U8[], rel: U8[]): Bool //<
     //< Whether any segment along `root/rel` is a link
     //< A segment it cannot check counts as a link. **The root itself is not checked**: a root that
@@ -366,13 +300,13 @@ priv fn has_link_on_path(root: U8[], rel: U8[]): Bool //<
     //< **Check the prefixes the OS will open, cut from the path as given**, not segments joined
     //< again. On POSIX `\` is an ordinary byte. So a link named `x\y` re-joined as `x/y` is never
     //< looked at, while the OS opens `x\y` itself.
-    defer $sb: = Str_builder.new()
+    defer $sb: = Str_builder()
     sb.s(root).c('/').s(rel)
     whole: = sb.slice()
     base: = root.len + 1
     $start: Sz = 0
     for start <= rel.len
-        end: = segment_end(rel, start)
+        end: = sys.segment_end(rel, start)
         empty: = end == start
         start = end + 1
         if !empty && is_link(whole.sub(0, base + end))
@@ -380,14 +314,14 @@ priv fn has_link_on_path(root: U8[], rel: U8[]): Bool //<
     return false
 
 pub fn stays_under( //< whether a relative path really stays inside the root, links included
-    //< **Pass untrusted input through this.** It does both the text check (`is_safe_relative`)
+    //< **Pass untrusted input through this.** It does both the text check (`sys.is_safe_relative`)
     //< and the check that no segment along the way is a link.
     //< Caution: **Do not make callers call the two checks separately.** If each caller decides
     //< which one it needs, the next caller added forgets one.
     root: U8[], //< the directory the path must not climb out of
     rel: U8[], //< the given path, which can come from anyone
 ): Bool //< true only when neither the text nor a link climbs out
-    return is_safe_relative(rel) && !has_link_on_path(root, rel)
+    return sys.is_safe_relative(rel) && !has_link_on_path(root, rel)
 
 pub fn mkdir_all(path: U8[]): Void!Fs_error //< creates every missing level (`mkdir -p`)
     //< A level that already exists counts as success. On a failure part way, it **stops there and
@@ -398,7 +332,7 @@ pub fn mkdir_all(path: U8[]): Void!Fs_error //< creates every missing level (`mk
     $from: = sys.root_len(path)
     for from <= path.len
         // At each separator, take the prefix up to it; the last prefix is the whole path.
-        end: = segment_end(path, from)
+        end: = sys.segment_end(path, from)
         from = end + 1
         prefix: = path.sub(0, end)
         if is_dir(prefix)
@@ -429,12 +363,12 @@ pub fn walk_files( //< every file under a path, in one flat list (a narrower Pyt
     // It also works apart from `arena`, which takes the result while the work stands
     // (`mem.scratch`).
     defer $work: = mem.scratch(null)
-    $found: = List<|U8[]|>.new(work.arena)
+    $found: = List<|U8[]|>(work.arena)
     walk_into(path, skip_dir, work.arena, found@, 0)!
     sorted: = found.order_by(fn(a: U8[]@, b: U8[]@; ): I32 {
         return a.compare(b$);
     }, work.arena)
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     for p in sorted
         out.push(arena.dup_str(p))
     return out
@@ -576,7 +510,7 @@ pub fn replace_file( //< replaces a file's whole content, so that a power cut ca
 pub fn write_tree( //< writes files under a directory, creating missing levels
     //< `rels[i]` gets the contents `bodies[i]`; an existing file at that name is overwritten.
     //< Caution: **A name that climbs out fails before anything is written**
-    //< (`is_safe_relative`). A link inside the tree is still followed.
+    //< (`sys.is_safe_relative`). A link inside the tree is still followed.
     dir: U8[], //< the top of the tree
     rels: U8[][], //< each file's name under `dir`, with `/` between its levels
     bodies: U8[][], //< each file's contents, in the same order
@@ -585,7 +519,7 @@ pub fn write_tree( //< writes files under a directory, creating missing levels
     if rels.len != bodies.len
         throw .invalid_path
     for rel in rels
-        if !is_safe_relative(rel)
+        if !sys.is_safe_relative(rel)
             throw .invalid_path
     defer $work: = mem.scratch(arena)
     for i in Range.asc(rels.len)

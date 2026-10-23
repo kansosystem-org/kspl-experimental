@@ -1,8 +1,7 @@
 //< Checks that the editor's client and the language server fit together (not the suite)
-//< **Nothing fails when this drifts.** **Nobody reads the VS Code extension**, the only client
-//< ("kspage starts no program" in `kspage/docs/DESIGN-application.md`). Two things
-//< are checked: ① the entry points declared and the ones that can answer agree. ② The server can
-//< handle the names the client sends.
+//< **Nothing fails when this drifts.** **Nobody reads the VS Code extension**, the only client.
+//< Two things are checked: ① the entry points declared and the ones that can answer agree. ② The
+//< server can handle the names the client sends.
 //< Caution: **Do not put a table of copied names in here.** The canonical source is the
 //< implementation, and this file **only compares the two**.
 import "ksplc/tests/support/harness" as ksplc_harness
@@ -34,7 +33,7 @@ priv const CAP_METHODS: U8[][_] = ::{ "textDocument/hover", "textDocument/defini
 priv fn served(arena: Arena$@): List<|U8[]|> //< the methods the server handles
     //< **The ones starting with `$/` are not counted**: only the tests send them, and a real client
     //< sends none (the test hooks in `run_lsp_worker`, `ksplc/lsp/worker.kspl`).
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     for rel in harness.tracked_matching(U8[][]::{ "ksplc/lsp/*.kspl" })
         for m in scan.find_all(harness.read_under_root(rel), "method.equals(\"", "\")", arena)
             if !m.starts_with("$/")
@@ -63,7 +62,7 @@ priv const CAP_SAYS_WANT: I32[_] = ::{ 1, 0, 1, -1, -1 } //<
     //< declaration)
 
 priv fn check_cap_says_fires(arena: Arena$@)
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     for i in Range.asc(CAP_SAYS_SAMPLES.len)
         $got: I32 = -1
         switch cap_says(CAP_SAYS_SAMPLES[i], "hoverProvider", arena)
@@ -83,7 +82,7 @@ priv fn check_caps(arena: Arena$@) //<
     src: = harness.read_under_root(CAPS_FILE)
     can: = served(arena)
     asked: = asked_by_any(arena)
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
 
     // Caution: **Do not let a declaration missing from the table pass.**
     for got in scan.find_all(src, ".set(\"", "\"", arena)
@@ -135,7 +134,7 @@ priv fn sent_by(rel: U8[], heads: U8[][], arena: Arena$@): List<|U8[]|> //<
     //< Caution: **Read a client added later through here too**, or a wrong name in it passes. Each
     //< client writes its requests its own way (the extension's `sendRequest("…"`), so `heads` names
     //< the form.
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     src: = harness.read_under_root(rel)
     for head in heads
         for m in scan.find_all(src, head, "\"", arena)
@@ -151,7 +150,7 @@ priv fn ignorable(m: U8[]): Bool //< the names this check skips
 
 priv fn asked_by_any(arena: Arena$@): List<|U8[]|> //< the names the client sends
     //< **There is one client now** (this file's header).
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     vs: =
         sent_by(VSCODE_CLIENT, U8[][]::{ "sendRequest(\"", "sendNotification(\"" }, arena)
     for i in Range.asc(vs.len)
@@ -160,7 +159,7 @@ priv fn asked_by_any(arena: Arena$@): List<|U8[]|> //< the names the client send
 
 priv fn check_sent(arena: Arena$@) //< ② The server can handle the names a client sends
     can: = served(arena)
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     vs: =
         sent_by(VSCODE_CLIENT, U8[][]::{ "sendRequest(\"", "sendNotification(\"" }, arena)
     for i in Range.asc(vs.len)
@@ -188,7 +187,7 @@ priv fn check_body_views(arena: Arena$@) //<
     //< Caution: **Read both lines, not one.** If only the narrow one is checked, the day the wide
     //< one is narrowed too the editor goes quiet with nothing saying why.
     src: = harness.read_under_root(SERVER_FILE)
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     if src.find_str(DOC_VIEW).is_none()
         bad
             .push(arena.text().s(SERVER_FILE)
@@ -218,7 +217,7 @@ priv fn check_recovery_wake(arena: Arena$@) //<
     //< Checks that the recovering branches are turned on from one place only
     //< Caution: **Count them across the whole of `ksplc/`, not in one file**, or a second one
     //< elsewhere goes unseen.
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     $seen: Sz = 0
     for rel in harness.tracked_matching(U8[][]::{ "ksplc/*.kspl" })
         for line in harness.read_under_root(rel).lines(arena)
@@ -247,7 +246,7 @@ priv const IGNORE_FILE: U8[] = ".gitignore"
 
 priv fn ignored_dirs(arena: Arena$@): List<|U8[]|> //<
     //< The names `.gitignore` names as a folder (`out/` -> `out`)
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     for line in harness.read_under_root(IGNORE_FILE).lines(arena)
         $t: = line.trim_spaces()
         if t.len < 2 || t[0] == '#' || t[0] == '!' || t[t.len - 1] != '/'
@@ -261,7 +260,7 @@ priv fn ignored_dirs(arena: Arena$@): List<|U8[]|> //<
 
 priv fn check_exclude(arena: Arena$@)
     told: = ignored_dirs(arena)
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     $seen: Sz = 0
     for got in scan.find_all(harness.read_under_root(VSCODE_CLIENT), "findFiles(", ")", arena)
         // Caution: **Check the second argument.** The first is the pattern searched for
@@ -387,7 +386,7 @@ priv fn ksplc_globals(arena: Arena$@): List<|U8[]|> //<
     //< The `$` globals ksplc declares, as `<path>:<name>`
     //< **A `$` at the start of a line, after any visibility word, is a global.** A mutable local is
     //< always indented, so no check of the body is needed.
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     for rel in harness.tracked_matching(U8[][]::GLOBAL_SPECS)
         for text in harness.read_under_root(rel).lines(arena)
             // Caution: **Strip the visibility prefix first**: `priv $dir_cache` is as much a global
@@ -415,7 +414,7 @@ priv fn row_named(list: U8[][], want: U8[]): Bool //< whether any row of list na
 priv fn check_wind_back(arena: Arena$@)
     body: = wind_body()
     seen: = ksplc_globals(arena)
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
 
     // ① The arena is rewound from one place.
     $calls: Sz = 0
@@ -483,7 +482,7 @@ priv const TM_GRAMMAR: U8[] = ".vscode/extensions/kspl/tmLanguage.json"
 priv fn ksplc_keywords(arena: Arena$@): List<|U8[]|> //<
     //< The words `ksplc info keywords` lists (each on a line of its own, indented under a group)
     r: = ksplc_harness.ksplc_bare(U8[][]::{ "info", "keywords" })
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     for ln in r.out.lines(arena)
         if ln.starts_with("  ") && ln.trim_spaces().len > 0
             scan.push_unique(out@, ln.trim_spaces())
@@ -493,7 +492,7 @@ priv fn grammar_keywords(src: U8[], arena: Arena$@): List<|U8[]|> //<
     //< The words the grammar names in the form `\b(a|b|c)\b`
     //< **Only this form counts**, and only whole words: a numeric suffix or a run of symbols
     //< inside the brackets is no keyword.
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     for body in scan.find_all(src, "\\\\b(", ")\\\\b", arena)
         for w in body.split('|', arena)
             if w.len > 0 && word_only(w)
@@ -527,7 +526,7 @@ priv fn check_keywords(arena: Arena$@)
     $mine: = ksplc_keywords(arena)
     src: = harness.read_under_root(TM_GRAMMAR)
     $told: = grammar_keywords(src, arena)
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     for w in told.slice()
         if !mine.contains(w)
             bad

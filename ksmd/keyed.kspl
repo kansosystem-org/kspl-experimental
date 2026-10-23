@@ -1,0 +1,100 @@
+//< Values by a text key, in a balanced tree that compares keys byte by byte
+//< ksmd keeps each key from a document here, never in std's `Map`. `Map` hashes with a fixed
+//< seed, so a document could hold many keys that start at one slot, and each lookup would pass
+//< them all. In this AVL tree, a lookup or an insertion compares at most about 1.44 log2(n) keys,
+//< whatever the keys are. Nothing is removed, so a node stays at its index in `nodes`.
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+
+priv const NO_NODE: Sz = -1
+
+priv struct Node<|V|> //< one pair, and the subtrees of smaller and larger keys
+    key: U8[]
+    value: V
+    left: Sz //< `NO_NODE` where no key is smaller
+    right: Sz //< `NO_NODE` where no key is larger
+    height: Sz //< the nodes on the longest path down, this one counted
+
+struct Keyed<|V|> //< values by a text key; a key is kept as passed, not copied
+    priv nodes: List<|Node<|V|>|>
+    priv root: Sz
+
+impl<|V|> Keyed<|V|>
+    fn new(arena: Arena$@): Keyed<|V|> //< empty, with its nodes in `arena`
+        return Keyed<|V|>::{ .nodes = List<|Node<|V|>|>(arena), .root = NO_NODE }
+
+    fn get(r: Self@, key: U8[]): V? //< the value for the key, or none if it is absent
+        $at: = r.root
+        for at != NO_NODE
+            n: = r.nodes[at]@
+            order: = key.compare(n.key)
+            if order == 0
+                return .some(n.value)
+            at = n.left if order < 0 else n.right
+        return .none
+
+    fn depth(r: Self@): Sz //< the most keys a lookup compares: the nodes on the longest path down
+        return r.height(r.root)
+
+    fn set(r: Self$@, key: U8[], value: V) //< stores a pair, replacing any old value for the key
+        r.root = r.put(r.root, key, value)
+
+    priv fn put(r: Self$@, at: Sz, key: U8[], value: V): Sz //< the subtree's root after the change
+        if at == NO_NODE
+            r.nodes
+                .push(Node<|V|>::{ .key = key, .value = value, .left = NO_NODE, .right = NO_NODE,
+                .height = 1 })
+            return r.nodes.len - 1
+        order: = key.compare(r.nodes[at].key)
+        if order == 0
+            r.nodes[at].value = value
+            return at
+        // An insertion below can grow `nodes` and move them. An assignment runs its value first,
+        // so the place in `nodes` is taken after the call.
+        if order < 0
+            r.nodes[at].left = r.put(r.nodes[at].left, key, value)
+        else
+            r.nodes[at].right = r.put(r.nodes[at].right, key, value)
+        return r.balance(at)
+
+    priv fn balance(r: Self$@, at: Sz): Sz //<
+        //< The subtree's root once its two sides differ in height by at most one
+        //< An insertion leaves a difference of at most two, which one or two rotations remove.
+        r.measure(at)
+        lean: = r.height(r.nodes[at].left) - r.height(r.nodes[at].right)
+        if lean > 1
+            l: = r.nodes[at].left
+            if r.height(r.nodes[l].left) < r.height(r.nodes[l].right)
+                r.nodes[at].left = r.lift_right(l)
+            return r.lift_left(at)
+        if lean < -1
+            h: = r.nodes[at].right
+            if r.height(r.nodes[h].right) < r.height(r.nodes[h].left)
+                r.nodes[at].right = r.lift_left(h)
+            return r.lift_right(at)
+        return at
+
+    priv fn lift_left(r: Self$@, at: Sz): Sz //< the left child, lifted into `at`'s place
+        up: = r.nodes[at].left
+        r.nodes[at].left = r.nodes[up].right
+        r.nodes[up].right = at
+        r.measure(at)
+        r.measure(up)
+        return up
+
+    priv fn lift_right(r: Self$@, at: Sz): Sz //< the right child, lifted into `at`'s place
+        up: = r.nodes[at].right
+        r.nodes[at].right = r.nodes[up].left
+        r.nodes[up].left = at
+        r.measure(at)
+        r.measure(up)
+        return up
+
+    priv fn measure(r: Self$@, at: Sz) //< sets a node's height from its children's
+        l: = r.height(r.nodes[at].left)
+        h: = r.height(r.nodes[at].right)
+        r.nodes[at].height = (l if l > h else h) + 1
+
+    priv fn height(r: Self@, at: Sz): Sz
+        return 0 if at == NO_NODE else r.nodes[at].height

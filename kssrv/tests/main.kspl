@@ -67,7 +67,7 @@ priv const OVER_OUTWARD_BODY: Sz = 70 * 1024 //< a length over the outward-facin
 
 fn main(): I32
     verdict.begin("kssrv")
-    defer arena: = Arena.new(256 * 1024 * 1024)
+    defer arena: = Arena(256 * 1024 * 1024)
     argv: = sys.args()
     if argv.len == 2 && argv.get(1).equals("--runs")
         for r in RUNS
@@ -161,13 +161,13 @@ priv fn fifo_save_case(port: I32, token: U8[], root: U8[], arena: Arena$@): Void
     //< Checks that a save checked against a FIFO is refused (409), not read
     //< **Comparing the file's bytes reads it**, so a server that opens a FIFO stops answering.
     name: = "a save checked against a FIFO is refused, not read"
-    fifo: = fs.join(root, "pipe.kspage", arena)
+    fifo: = fs.join(root, "pipe.ksmd", arena)
     if !make_fifo(fifo, arena)
         verdict.skip_check(name, "a FIFO cannot be made with `mkfifo` in this environment")
         return
     heads: = arena.text().s(client.bearer_head(token, arena)).s("X-Kanso-If-Content: ")
         .s("0000000000000000000000000000000000000000000000000000000000000000").s("\r\n").take()
-    r: = client.put_file(port, "/api/file?path=pipe.kspage", heads, "new", arena)!
+    r: = client.put_file(port, "/api/file?path=pipe.ksmd", heads, "new", arena)!
     fs.remove_path(fifo) catch {}
     client.expect_status(name, r, 409, arena)
     alive: = client.get(port, "/api/status", client.bearer_head(token, arena), arena)!
@@ -219,7 +219,7 @@ priv fn bring_up_local( //< starts kssrv with `--local`, and checks that it put 
     said: U8[], //< the check that it put the token out
     arena: Arena$@,
 ): Local_run? //< the server and its token, or none once a check has failed
-    $all: = List<|U8[]|>.new(arena)
+    $all: = List<|U8[]|>(arena)
     all.push("--local")
     for f in flags
         all.push(f)

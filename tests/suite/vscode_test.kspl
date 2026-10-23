@@ -37,7 +37,7 @@ fn main(): I32
 priv fn strip_line_comments(text: U8[], arena: Arena$@): U8$[] //<
     //< VS Code's configuration allows JSON with line comments, so they are dropped before reading
     //< Caution: **Do not drop a `//` inside a string literal** (`problemMatcher`'s regex has one).
-    defer $b: = Str_builder.new()
+    defer $b: = Str_builder()
     for raw in text.lines(arena)
         $in_str: = false
         $cut: Sz = raw.len
@@ -84,9 +84,8 @@ priv struct Make_cmd //<
 priv fn parse_make_cmd(cmd: U8[], arena: Arena$@): Make_cmd
     t: = cmd.trim_spaces()
     if !t.starts_with("make ")
-        return Make_cmd::{ .found = false, .target = "",
-            .vars = List<|U8[]|>.new(arena) }
-    $vars: = List<|U8[]|>.new(arena)
+        return Make_cmd::{ .found = false, .target = "", .vars = List<|U8[]|>(arena) }
+    $vars: = List<|U8[]|>(arena)
     words: = t.sub_from(5).trim_spaces().split(' ', arena)
     $target: U8[] = ""
     for w in words
@@ -116,7 +115,7 @@ priv fn workspace_rel(text: U8[], from: Sz): U8[] //<
         return rest.sub(0, end)
 
 priv fn labels_of(tasks: json.Value, arena: Arena$@): List<|U8[]|>
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     for t in tasks.get("tasks").arr_list(arena)
         out.push(t.get("label").as_str().unwrap_or(""))
     return out
@@ -131,7 +130,7 @@ priv const SUITE_LISTS: U8[][_] = ::{ "mk/test.mk", "ksplc/Makefile" } //<
 priv fn typable(arena: Arena$@): List<|U8[]|> //<
     //< What can be typed after `make`: `make help`'s listing, and one suite's `test-<name>`
     //< **Not `make -n <target>`**: the catch-all rules (`%:`, `test-%`) answer 0 for any name.
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     help: = harness.make(U8[][]::{ "LOGGING=1", "--no-print-directory", "help" })
     for line in help.out.lines(arena)
         if !line.starts_with("  make ")
@@ -213,7 +212,7 @@ priv fn check_debug_file(root: U8[], fmt: U8[], arena: Arena$@) //<
         fs.remove_path(gen) catch {}
 
     src_arg: = arena.text().s("SRC_KSPL=\{rel\}").take()
-    $args: = List<|U8[]|>.new(arena)
+    $args: = List<|U8[]|>(arena)
     args.push("LOGGING=1")
     args.push("debug-file")
     args.push(src_arg)
@@ -318,7 +317,7 @@ priv fn check_extension(root: U8[], arena: Arena$@) //<
     pkg: = load_jsonc(fs.join(dir, "package.json", arena), arena)
     if !verdict.check("extension: package.json can be read", is_obj(pkg), "")
         return
-    $missing: = List<|U8[]|>.new(arena)
+    $missing: = List<|U8[]|>(arena)
     langs: = pkg.get("contributes").get("languages").arr_list(arena)
     $opens_source: = false
     for one in langs
@@ -376,7 +375,7 @@ priv fn check_client(root: U8[], arena: Arena$@) //<
         verdict.skip_check("extension client: the lifecycle it sends", "node is not installed")
         return
     got: = sent_by_client(root, arena)
-    $msgs: = List<|Sent|>.new(arena)
+    $msgs: = List<|Sent|>(arena)
     for m in got.get("sent").arr_list(arena)
         msgs
             .push(Sent::{ .method = m.get("method").as_str().unwrap_or(""),

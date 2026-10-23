@@ -1,0 +1,609 @@
+//< Include, workspace and save checks, each in a folder of its own that it removes at the end
+//< A view is checked as one text that names each entry (`view_of`), and a problem as its place and
+//< the include clauses that lead to it (`problem_of`). Links are made with `ln -s`; where that
+//< fails, those checks are reported as skipped.
+import "ksmd/assemble" { Assembly, NONE, assemble, assemble_loaded }
+import "ksmd/fetched" { Fetched, Held }
+import "ksmd/files" { Loaded, Refusal, load, resolve_text }
+import "ksmd/model" { Block_kind, Inline }
+import "ksmd/source" { Diagnostic, MAX_SOURCE_BYTES }
+import "ksmd/workspace" { Workspace }
+import "std/chars"
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/subproc"
+import "std/sys"
+import "std/verdict"
+
+priv const BASE: U8[] = "out/tmp/ksmd_tests" //< where each check makes its workspace
+
+fn run()
+    nested_and_repeated()
+    chains()
+    cycles()
+    path_refusals()
+    links()
+    depth_limit()
+    block_limit()
+    byte_limit()
+    examples()
+    saves()
+    top_failures()
+    tables_per_source()
+    text_rules()
+    fetched_rounds()
+    leftover_part()
+
+priv fn nested_and_repeated() //< a file included twice, `..` from a subfolder, an image beside it
+    defer arena: = Arena(64 * 1024)
+    root: = workspace(arena)
+    make_file(root, "top.ksmd",
+        "%ksmd 1\n\n# Top\n\n:::include path=\"parts/one.ksmd\"\n:::\n\n:::include \
+            path=\"parts/one.ksmd\"\n:::\n", arena)
+    make_file(root, "parts/one.ksmd",
+        "%ksmd 1\n\nOne.\n\n:::include path=\"two.ksmd\"\n:::\n\n:::image src=\"cat.png\" alt=\"A \
+            cat\"\n:::\n", arena)
+    make_file(root, "parts/two.ksmd", "%ksmd 1\n\nTwo.\n\n:::include path=\"../shared.ksmd\"\n:::\n",
+        arena)
+    make_file(root, "shared.ksmd", "%ksmd 1\n\nShared.\n", arena)
+    make_file(root, "parts/cat.png", "not decoded at this stage", arena)
+    before: = snapshot(root, arena)
+    a: = assembled(root, "top.ksmd", arena)
+    one: =
+        "parts/one.ksmd:9 parts/one.ksmd:15>two parts/two.ksmd:9 parts/two.ksmd:15>shared \
+            shared.ksmd:9 parts/one.ksmd:47=parts/cat.png"
+    want: = arena.text().s("top.ksmd:9 top.ksmd:16>one ").s(one).s(" top.ksmd:54>one ").s(one)
+        .take()
+    got: = view_of(a@, arena)
+    verdict.check("a repeated include is a second instance, not a cycle", got.equals(want), got)
+    verdict.check("each source is read once, and each include makes an instance",
+        a.sources.len == 4 && a.instances.len == 7 && a.problems.len == 0, "")
+    second: = a.instances.get(4)
+    verdict.check("an instance spans its own blocks and those it includes",
+        second.first == 9 && second.count == 6 && second.clause == 8 && second.parent == 0, "")
+    verdict.check("a block keeps the file and offset it came from",
+        a.source_of(6).path.equals("shared.ksmd") && a.block_of(6).offset == 9 &&
+        a.entries.get(13).instance != a.entries.get(6).instance, "")
+    verdict.check("viewing an assembled document writes no file",
+        snapshot(root, arena).equals(before), "")
+    remove_tree(root, arena)
+
+priv fn chains() //< a problem names its place and every include clause on the way to it
+    defer arena: = Arena(64 * 1024)
+    root: = workspace(arena)
+    make_file(root, "top.ksmd",
+        "%ksmd 1\n\n:::include path=\"a.ksmd\"\n:::\n\n:::include path=\"bad.ksmd\"\n:::\n", arena)
+    make_file(root, "a.ksmd", "%ksmd 1\n\n:::include path=\"sub/b.ksmd\"\n:::\n", arena)
+    make_file(root, "sub/b.ksmd",
+        "%ksmd 1\n\n:::include path=\"gone.ksmd\"\n:::\n\n:::image src=\"../pics/none.png\" \
+            alt=\"\"\n:::\n", arena)
+    make_file(root, "bad.ksmd", "%ksmd 1\n\n#bad\n", arena)
+    a: = assembled(root, "top.ksmd", arena)
+    gone: = problem_of(a@, 0, arena)
+    verdict.check("a missing include is a problem at its clause, after the clauses leading there",
+        a.problems.len == 3 && gone.equals("sub/b.ksmd:3:1 < a.ksmd:3:1 < top.ksmd:3:1") &&
+        a.problems.get(0).at.message.equals(Refusal.missing.message()), gone)
+    verdict.check("a missing include keeps where its path leads, and opens nothing",
+        a.entries.get(a.problems.get(0).entry).target.equals("sub/gone.ksmd") &&
+        a.entries.get(a.problems.get(0).entry).opens == NONE, "")
+    image: = problem_of(a@, 1, arena)
+    verdict.check("an image path is read from its own source's folder",
+        image.equals("sub/b.ksmd:6:1 < a.ksmd:3:1 < top.ksmd:3:1") &&
+        a.entries.get(a.problems.get(1).entry).target.equals("pics/none.png"), image)
+    heading: = "a heading is one to six '#', a space and its text. Write '\\#' for a literal '#'"
+    inside: = problem_of(a@, 2, arena)
+    verdict.check("a refusal inside an included source names its place there",
+        inside.equals("bad.ksmd:3:1 < top.ksmd:6:1") &&
+        a.problems.get(2).at.message.equals(heading), inside)
+    remove_tree(root, arena)
+
+priv fn cycles()
+    defer arena: = Arena(64 * 1024)
+    root: = workspace(arena)
+    make_file(root, "top.ksmd", "%ksmd 1\n\n:::include path=\"a.ksmd\"\n:::\n", arena)
+    make_file(root, "a.ksmd", "%ksmd 1\n\n:::include path=\"b.ksmd\"\n:::\n", arena)
+    make_file(root, "b.ksmd", "%ksmd 1\n\n:::include path=\"a.ksmd\"\n:::\n", arena)
+    make_file(root, "self.ksmd", "%ksmd 1\n\n:::include path=\"self.ksmd\"\n:::\n", arena)
+    a: = assembled(root, "top.ksmd", arena)
+    cycle: =
+        "this include closes a cycle: its file is already being included above it. Remove one \
+            include of the cycle"
+    closed: = problem_of(a@, 0, arena)
+    verdict.check("an include back to a file on the stack is a cycle, reported where it closes",
+        a.problems.len == 1 && closed.equals("b.ksmd:3:1 < a.ksmd:3:1 < top.ksmd:3:1") &&
+        a.problems.get(0).at.message.equals(cycle) && a.instances.len == 3, closed)
+    own: = assembled(root, "self.ksmd", arena)
+    itself: = problem_of(own@, 0, arena)
+    verdict.check("a file that includes itself is a cycle",
+        own.problems.len == 1 && itself.equals("self.ksmd:3:1") &&
+        own.problems.get(0).at.message.equals(cycle), itself)
+    remove_tree(root, arena)
+
+priv fn path_refusals() //< each written path names its refusal; `..` may climb inside the root
+    defer arena: = Arena(64 * 1024)
+    root: = workspace(arena)
+    paths: U8[][14] = ::{ "/etc/passwd", "C:/x.ksmd", "https://example.org/a.ksmd",
+        "//server/share/a.ksmd", "a\\\\b.ksmd", "./ok.ksmd", "a//ok.ksmd", "x/../ok.ksmd", "..",
+        "../ok.ksmd", "ok.ksmd.", "sub", "missing.ksmd", "sub/inner.ksmd" }
+    want: Refusal[13] = ::{ .absolute, .absolute, .address, .address, .backslash, .spelling,
+        .spelling, .spelling, .spelling, .outside, .name, .not_file, .missing }
+    defer $top: = Str_builder()
+    top.s("%ksmd 1\n")
+    for p in paths
+        top.s("\n:::include path=\"").s(p).s("\"\n:::\n")
+    make_file(root, "top.ksmd", top.slice(), arena)
+    make_file(root, "ok.ksmd", "%ksmd 1\n", arena)
+    make_file(root, "sub/inner.ksmd",
+        "%ksmd 1\n\n:::include path=\"../ok.ksmd\"\n:::\n\n:::include path=\"../../ok.ksmd\"\n:::\n",
+        arena)
+    a: = assembled(root, "top.ksmd", arena)
+    $wrong: U8[] = "" if a.problems.len == want.len + 1 else "another count of problems"
+    for i in Range.asc(want.len)
+        if wrong.len == 0 &&
+            !a.problems.get(i).at.message.equals(want[i].message())
+            wrong = paths[i]
+    verdict.check("a rooted, network, '\\', '.', '..' and device path each name their refusal",
+        wrong.len == 0, wrong)
+    verdict.check("a '..' that stays inside the root opens its file; one past the root is refused",
+        a.problems.get(want.len).at.message.equals(Refusal.outside.message()) &&
+        a.entries.get(a.entries.len - 2).target.equals("ok.ksmd") &&
+        a.entries.get(a.entries.len - 2).opens != NONE, view_of(a@, arena))
+    remove_tree(root, arena)
+
+priv fn links() //< a link along a path is refused, whether it leads out of the root or not
+    defer arena: = Arena(64 * 1024)
+    root: = workspace(arena)
+    outside: = workspace(arena)
+    make_file(outside, "secret.ksmd", "%ksmd 1\n\nSecret.\n", arena)
+    make_file(root, "ok.ksmd", "%ksmd 1\n\nInside.\n", arena)
+    make_file(root, "top.ksmd",
+        "%ksmd 1\n\n:::include path=\"leak.ksmd\"\n:::\n\n:::include \
+            path=\"away/secret.ksmd\"\n:::\n\n:::include path=\"alias.ksmd\"\n:::\n\n:::image \
+            src=\"away/pic.png\" alt=\"\"\n:::\n", arena)
+    away: = absolute(outside, arena)
+    secret: = fs.join(away, "secret.ksmd", arena)
+    inside: = fs.join(absolute(root, arena), "ok.ksmd", arena)
+    made: =
+        made_link(secret, fs.join(root, "leak.ksmd", arena), arena) &&
+        made_link(away, fs.join(root, "away", arena), arena) &&
+        made_link(inside, fs.join(root, "alias.ksmd", arena), arena)
+    if !made
+        verdict.skip_check("a link along an include or image path is refused",
+            "a link cannot be made with `ln -s` in this environment")
+    else
+        a: = assembled(root, "top.ksmd", arena)
+        $ok: = a.problems.len == 4 && a.instances.len == 1
+        for i in Range.asc(a.problems.len)
+            ok =
+                ok &&
+                a.problems.get(i).at.message.equals(Refusal.link.message())
+        verdict.check("a link along an include or image path is refused", ok,
+            view_of(a@, arena))
+    remove_tree(root, arena)
+    remove_tree(outside, arena)
+
+priv fn depth_limit() //< sixteen files on the stack open; a seventeenth is refused at its clause
+    defer arena: = Arena(64 * 1024)
+    root: = workspace(arena)
+    for i in Range.asc(17)
+        name: = arena.text().s("d\{i + 1\}.ksmd").take()
+        if i == 16
+            make_file(root, name, "%ksmd 1\n\nLast.\n", arena)
+        else
+            make_file(root, name,
+                arena.text().s("%ksmd 1\n\n:::include path=\"d\{i + 2\}.ksmd\"\n:::\n").take(),
+                arena)
+    full: = assembled(root, "d2.ksmd", arena)
+    verdict.check("includes nest sixteen files deep",
+        full.problems.len == 0 && full.instances.len == 16, view_of(full@, arena))
+    over: = assembled(root, "d1.ksmd", arena)
+    verdict.check("a seventeenth file on the stack is refused at the include that opens it",
+        over.problems.len == 1 && over.instances.len == 16 &&
+        over.problems.get(0).at.path.equals("d16.ksmd") &&
+        over.problems.get(0).chain.len == 15 &&
+        over.problems.get(0).at.message
+        .equals("includes nest at most 16 files deep. Include this file from a file higher up"),
+        problem_of(over@, 0, arena))
+    remove_tree(root, arena)
+
+priv fn block_limit() //< 200,000 blocks with repeats counted; the include past it is refused
+    defer arena: = Arena(1024 * 1024)
+    root: = workspace(arena)
+    defer $many: = Str_builder()
+    many.s("%ksmd 1\n")
+    for _ in Range.asc(99999)
+        many.s("\na\n")
+    make_file(root, "many.ksmd", many.slice(), arena)
+    twice: = "\n:::include path=\"many.ksmd\"\n:::\n\n:::include path=\"many.ksmd\"\n:::\n"
+    make_file(root, "exact.ksmd", arena.text().s("%ksmd 1\n").s(twice).take(), arena)
+    make_file(root, "over.ksmd",
+        arena.text().s("%ksmd 1\n\nOne more.\n").s(twice).take(), arena)
+    exact: = assembled(root, "exact.ksmd", arena)
+    verdict.check("a view of exactly 200,000 blocks, repeats counted, opens whole",
+        exact.problems.len == 0 && exact.entries.len == 200000, "")
+    over: = assembled(root, "over.ksmd", arena)
+    verdict.check("the include that would pass 200,000 blocks is refused before its blocks are \
+        added",
+        over.problems.len == 1 && over.entries.len == 100002 &&
+        problem_of(over@, 0, arena).equals("over.ksmd:8:1") &&
+        over.problems.get(0).at.message.starts_with("the assembled document exceeds 200,000 blocks"),
+        problem_of(over@, 0, arena))
+    remove_tree(root, arena)
+
+priv fn byte_limit() //< 64 MiB of source text with repeats counted, on a new file and a repeat
+    defer arena: = Arena(1024 * 1024)
+    root: = workspace(arena)
+    make_file(root, "big.ksmd", sized(MAX_SOURCE_BYTES, arena), arena)
+    defer $seven: = Str_builder()
+    seven.s("%ksmd 1\n")
+    for _ in Range.asc(7)
+        seven.s("\n:::include path=\"big.ksmd\"\n:::\n")
+    top: = arena.text().s(seven.slice()).s("\n:::include path=\"fill.ksmd\"\n:::\n").take()
+    make_file(root, "top.ksmd", top, arena)
+    room: = 64 * 1024 * 1024 - top.len - 7 * MAX_SOURCE_BYTES
+    make_file(root, "fill.ksmd", sized(room, arena), arena)
+    exact: = outcome(root, "top.ksmd", arena)
+    verdict.check("a view of exactly 64 MiB of source text, repeats counted, opens whole",
+        exact.equals("9 instances"), exact)
+    limit: =
+        "the assembled document exceeds 64 MiB of source text, each repeated include counted. Split \
+            it into documents opened apart"
+    make_file(root, "fill.ksmd", sized(room + 1, arena), arena)
+    over: = outcome(root, "top.ksmd", arena)
+    verdict.check("a new file that would pass 64 MiB is refused at its include",
+        over
+        .equals(arena.text().s("8 instances | top.ksmd:24:1 ").s(limit).take()), over)
+    make_file(root, "eight.ksmd",
+        arena.text().s(seven.slice()).s("\n:::include path=\"big.ksmd\"\n:::\n").take(), arena)
+    repeat: = outcome(root, "eight.ksmd", arena)
+    verdict.check("a repeat that would pass 64 MiB is refused at its include",
+        repeat
+        .equals(arena.text().s("8 instances | eight.ksmd:24:1 ").s(limit).take()), repeat)
+    remove_tree(root, arena)
+
+priv fn outcome(root: U8[], top: U8[], arena: Arena$@): U8[] //<
+    //< How many instances a view holds, then each problem's place and message, as `arena`'s text.
+    //< The view itself goes in an arena of its own, freed here.
+    defer view: = Arena(1024 * 1024)
+    a: = assembled(root, top, view)
+    defer $b: = Str_builder()
+    b.s("\{a.instances.len\} instances")
+    for i in Range.asc(a.problems.len)
+        b.s(" | ").s(problem_of(a@, i, view)).c(' ').s(a.problems.get(i).at.message)
+    return arena.dup_str(b.slice())
+
+priv fn examples() //< the stage 1 example assembles in place, and nothing in its folder changes
+    defer arena: = Arena(64 * 1024)
+    a: = assembled("examples", "overview.ksmd", arena)
+    verdict.check("the overview example holds its note after the include clause",
+        a.problems.len == 0 && a.sources.len == 2 && a.instances.len == 2 &&
+        a.source_of(a.entries.len - 1).path.equals("notes.ksmd") &&
+        a.entries.get(a.instances.get(1).clause).target.equals("notes.ksmd"),
+        view_of(a@, arena))
+
+priv fn saves() //< a save writes its own source alone, and the next view shows it
+    defer arena: = Arena(64 * 1024)
+    root: = workspace(arena)
+    names: U8[][2] = ::{ "overview.ksmd", "notes.ksmd" }
+    for name in names
+        make_file(root, name, read(fs.join("examples", name, arena), arena), arena)
+    ws: = Workspace.open(root).unwrap_or(Workspace::{ .root = "" })
+    parent: = read(fs.join(root, "overview.ksmd", arena), arena)
+    notes: = loaded(ws@, "notes.ksmd", arena)
+    edit_text(notes, 1, "Changed text.")
+    ws.save("notes.ksmd", notes.doc@, arena) catch
+        verdict.check("an included source saves alone", false, "the save was refused")
+    edited: =
+        "%ksmd 1\n\n## Purchasing note\n\nChanged text.\n\nContact \
+            [purchasing](mailto:purchasing@example.org) before ordering.\n"
+    notes_now: = read(fs.join(root, "notes.ksmd", arena), arena)
+    parent_now: = read(fs.join(root, "overview.ksmd", arena), arena)
+    verdict.check("saving an included source changes that file and not its parent",
+        notes_now.equals(edited) && parent_now.equals(parent), notes_now)
+    a: = assembled(root, "overview.ksmd", arena)
+    shown: = a.instances.get(1).first + 1
+    holder: = a.source_of(shown)
+    node: = holder.doc.inlines.get(a.block_of(shown).first)
+    verdict.check("the next view shows the saved text",
+        holder.path.equals("notes.ksmd") && node.text.equals("Changed text."),
+        view_of(a@, arena))
+    top: = loaded(ws@, "overview.ksmd", arena)
+    edit_text(top, top.doc.blocks.get(4).first, "Totals are calculated above.")
+    ws.save("overview.ksmd", top.doc@, arena) catch
+        verdict.check("a parent saves alone", false, "the save was refused")
+    saved: = read(fs.join(root, "overview.ksmd", arena), arena)
+    verdict.check("a parent's save keeps its include as a clause and leaves the included file",
+        saved.ends_with("\nTotals are calculated above.\n\n:::include path=\"notes.ksmd\"\n:::\n")
+        && !saved.find_str("Changed text.").is_some() &&
+        read(fs.join(root, "notes.ksmd", arena), arena).ends_with("before ordering.\n"), saved)
+    names_now: = snapshot_names(root, arena)
+    verdict.check("a save leaves no other file in the folder",
+        names_now.equals("notes.ksmd overview.ksmd"), names_now)
+    $refused: = false
+    ws.save("../escape.ksmd", top.doc@, arena) catch why
+        refused = why == Refusal.outside
+    verdict.check("a save to a path outside the workspace is refused",
+        refused && !fs.exists(fs.join(root, "../escape.ksmd", arena)), "")
+    remove_tree(root, arena)
+
+priv fn top_failures() //< only the opened document's own failure fails the assembly
+    defer arena: = Arena(64 * 1024)
+    root: = workspace(arena)
+    make_file(root, "bad.ksmd", "%ksmd 2\n", arena)
+    ws: = Workspace.open(root).unwrap_or(Workspace::{ .root = "" })
+    verdict.check("a missing document is refused",
+        refused_with(ws@, "missing.ksmd", .missing, arena), "")
+    verdict.check("a document outside the workspace is refused",
+        refused_with(ws@, "../x.ksmd", .outside, arena), "")
+    _view: = assemble(ws@, "bad.ksmd", arena) catch e
+        $where: = ""
+        switch e
+        case .invalid(at)
+            where = arena.text().s(at.path).s(":\{at.line\}:\{at.column\}").take()
+        default {}
+        verdict.check("a document refused by its reader is refused at its place",
+            where.equals("bad.ksmd:1:1"), where)
+        remove_tree(root, arena)
+        return
+    verdict.check("a document refused by its reader is refused at its place", false, "")
+    remove_tree(root, arena)
+
+priv fn tables_per_source() //< a table name belongs to its file, so repeats declare nothing twice
+    defer arena: = Arena(64 * 1024)
+    root: = workspace(arena)
+    table: = ":::table name=\"budget\"\n| \"Item\" |\n| \"Pens\" |\n:::\n"
+    make_file(root, "part.ksmd", arena.text().s("%ksmd 1\n\n").s(table).take(), arena)
+    make_file(root, "top.ksmd",
+        arena.text().s("%ksmd 1\n\n").s(table)
+        .s("\n:::include path=\"part.ksmd\"\n:::\n\n:::include path=\"part.ksmd\"\n:::\n").take(),
+        arena)
+    a: = assembled(root, "top.ksmd", arena)
+    part: = a.sources.get(1)
+    verdict.check("two files and a repeat may each hold a table of one name",
+        a.problems.len == 0 && a.instances.len == 3 &&
+        part.doc.tables.get(0).name.equals("budget"), view_of(a@, arena))
+    remove_tree(root, arena)
+
+priv fn text_rules() //< the rules a page applies by text agree with a folder's, links aside
+    defer arena: = Arena(64 * 1024)
+    root: = workspace(arena)
+    make_file(root, "ok.ksmd", "%ksmd 1\n", arena)
+    make_file(root, "sub/inner.ksmd", "%ksmd 1\n", arena)
+    ws: = Workspace.open(root).unwrap_or(Workspace::{ .root = "" })
+    written: U8[][15] = ::{ "/etc/passwd", "C:/x.ksmd", "https://example.org/a.ksmd",
+        "//server/share/a.ksmd", "a\\b.ksmd", "./ok.ksmd", "a//ok.ksmd", "x/../ok.ksmd", "..",
+        "../../ok.ksmd", "ok.ksmd.", "CON.ksmd", "a:b.ksmd", "../ok.ksmd", "inner.ksmd" }
+    $differs: U8[] = ""
+    for w in written
+        by_text: = by_text_from("sub", w, arena)
+        on_disk: = on_disk_from(ws@, "sub", w, arena)
+        if differs.len == 0 && !by_text.equals(on_disk)
+            differs = arena.text().s(w).s(": ").s(by_text).s(" against ").s(on_disk).take()
+    verdict.check("every refusal a path's text earns is the same in a page and on disk",
+        differs.len == 0, differs)
+    verdict.check("a '..' climbs from the holding file's folder, by text alone",
+        by_text_from("a/b", "../c.ksmd", arena).equals("a/c.ksmd") &&
+        by_text_from("", "x/y.ksmd", arena).equals("x/y.ksmd"), "")
+    remove_tree(root, arena)
+
+priv fn by_text_from(folder: U8[], written: U8[], arena: Arena$@): U8[] //<
+    //< The path `resolve_text` gives, or its refusal's message
+    path: = resolve_text(folder, written, arena) catch why
+        return arena.text().s("refused: ").s(why.message()).take()
+    return path
+
+priv fn on_disk_from(ws: Workspace@, folder: U8[], written: U8[], arena: Arena$@): U8[] //<
+    //< The path a folder on disk gives, or its refusal's message
+    path: = ws.resolve(folder, written, arena) catch why
+        return arena.text().s("refused: ").s(why.message()).take()
+    return path
+
+priv fn fetched_rounds() //< a page that fetches what each round lacks ends with the disk's view
+    //< One round per level of includes; a refusal the server gives is held as the file's.
+    defer arena: = Arena(256 * 1024)
+    root: = workspace(arena)
+    make_file(root, "top.ksmd",
+        "%ksmd 1\n\n:::include path=\"parts/one.ksmd\"\n:::\n\n:::include \
+            path=\"parts/one.ksmd\"\n:::\n\n:::include path=\"missing.ksmd\"\n:::\n", arena)
+    make_file(root, "parts/one.ksmd",
+        "%ksmd 1\n\nOne.\n\n:::include path=\"two.ksmd\"\n:::\n\n:::image src=\"cat.png\" \
+            alt=\"\"\n:::\n\n:::image src=\"gone.png\" alt=\"\"\n:::\n", arena)
+    make_file(root, "parts/two.ksmd", "%ksmd 1\n\n:::include path=\"../shared.ksmd\"\n:::\n", arena)
+    make_file(root, "shared.ksmd", "%ksmd 1\n\nShared.\n", arena)
+    make_file(root, "parts/cat.png", "only whether it stands is asked", arena)
+    ws: = Workspace.open(root).unwrap_or(Workspace::{ .root = "" })
+    disk: = assembled(root, "top.ksmd", arena)
+    top: = loaded(ws@, "top.ksmd", arena)
+    $f: = Fetched(arena)
+    $rounds: Sz = 0
+    $asked: Sz = 0
+    $view: U8[] = ""
+    $problems: U8[] = ""
+    for rounds < 10
+        rounds += 1
+        f.ask(arena)
+        a: = assemble_loaded(f@, top, arena)
+        if f.wanted.len == 0
+            view = view_of(a@, arena)
+            problems = problems_of(a@, arena)
+            break
+        for i in Range.asc(f.wanted.len)
+            asked += 1
+            answer(ws@, f@, f.wanted.get(i).path, f.wanted.get(i).image, arena)
+    verdict.check("a page's rounds of fetching end with the view the folder gives",
+        view.equals(view_of(disk@, arena)) && problems.equals(problems_of(disk@, arena)), view)
+    verdict.check("one round per level of includes, each file asked for once",
+        rounds == 4 && asked == 6,
+        arena.text().s("\{rounds\} rounds, \{asked\} asked").take())
+    remove_tree(root, arena)
+
+priv fn answer(ws: Workspace@, f: Fetched$@, path: U8[], image: Bool, arena: Arena$@) //<
+    //< What the local server answers for one path, held as the page holds it
+    if image
+        ws.check(path, arena) catch why
+            f.hold(path, Held::{ .found = false, .why = why, .bytes = "" })
+            return
+        f.hold(path, Held::{ .found = true, .why = .missing, .bytes = "" })
+        return
+    bytes: = ws.read(path, MAX_SOURCE_BYTES, arena) catch why
+        f.hold(path, Held::{ .found = false, .why = why, .bytes = "" })
+        return
+    f.hold(path, Held::{ .found = true, .why = .missing, .bytes = bytes })
+
+priv fn problems_of(a: Assembly@, arena: Arena$@): U8[] //< each problem's place and message
+    defer $b: = Str_builder()
+    for i in Range.asc(a.problems.len)
+        b.s(problem_of(a, i, arena)).c(' ').s(a.problems.get(i).at.message).c('\n')
+    return arena.dup_str(b.slice())
+
+priv fn leftover_part() //< a part left by an interrupted save is neither read nor removed
+    defer arena: = Arena(64 * 1024)
+    root: = workspace(arena)
+    part: = "notes.ksmd.0123456789abcdef.part"
+    make_file(root, "top.ksmd", "%ksmd 1\n\n:::include path=\"notes.ksmd\"\n:::\n", arena)
+    make_file(root, "notes.ksmd", "%ksmd 1\n\nOld text.\n", arena)
+    make_file(root, part, "%ksmd 1\n\nNew text, cut sh", arena)
+    a: = assembled(root, "top.ksmd", arena)
+    verdict.check("a leftover part beside a source changes nothing in the view",
+        a.problems.len == 0 && a.sources.len == 2 &&
+        view_of(a@, arena).equals("top.ksmd:9>notes notes.ksmd:9"), view_of(a@, arena))
+    ws: = Workspace.open(root).unwrap_or(Workspace::{ .root = "" })
+    notes: = loaded(ws@, "notes.ksmd", arena)
+    edit_text(notes, 0, "Saved text.")
+    ws.save("notes.ksmd", notes.doc@, arena) catch
+        verdict.check("a source beside a leftover part saves", false, "the save was refused")
+    verdict.check("a save replaces its source and leaves the leftover part as it was",
+        read(fs.join(root, "notes.ksmd", arena), arena).equals("%ksmd 1\n\nSaved text.\n") &&
+        read(fs.join(root, part, arena), arena).equals("%ksmd 1\n\nNew text, cut sh"),
+        snapshot_names(root, arena))
+    remove_tree(root, arena)
+
+// ==========================================
+// What the checks share: making and removing workspaces, and describing a view
+// ==========================================
+
+priv fn workspace(arena: Arena$@): U8[] //< a new empty folder; the check removes it at the end
+    return fs.mkdir_unique(BASE, "ws_", arena) catch
+        panic("a scratch workspace cannot be made")
+
+priv fn make_file(root: U8[], path: U8[], text: U8[], arena: Arena$@) //<
+    //< writes a file, making folders
+    full: = fs.join(root, path, arena)
+    fs.mkdir_all(sys.get_dir_name(full)) catch
+        panic("a scratch folder cannot be made")
+    io.write_file(full, text) catch
+        panic("a scratch file cannot be written")
+
+priv fn read(path: U8[], arena: Arena$@): U8[] //< a file's bytes; empty where it cannot be read
+    return io.read_file(path, arena) catch
+        return ""
+
+priv fn remove_tree(root: U8[], arena: Arena$@) //< removes a check's folder, entering no link
+    entries: = fs.read_dir(root, arena) catch
+        return
+    for name in entries
+        full: = fs.join(root, name, arena)
+        if fs.is_dir(full) && !fs.is_link(full)
+            remove_tree(full, arena)
+        else
+            fs.remove_path(full) catch {}
+    fs.remove_path(root) catch {}
+
+priv fn absolute(path: U8[], arena: Arena$@): U8[]
+    return fs.absolute(path, arena) catch
+        panic("the working folder cannot be read")
+
+priv fn made_link(target: U8[], at: U8[], arena: Arena$@): Bool //< `ln -s`; false where none
+    r: =
+        subproc.run_capture(U8[][]::{ "ln", "-s", target, at }, "", 60000, 4096, arena) catch
+        return false
+    return r.exited_with(0) && fs.is_link(at)
+
+priv fn sized(bytes: Sz, arena: Arena$@): U8[] //< a valid source of exactly that many bytes
+    //< One code block, its lines at most 1,000 bytes long
+    defer $b: = Str_builder()
+    b.s("%ksmd 1\n\n```\n")
+    $left: = bytes - 17
+    for left > 0
+        line: = left if left < 1000 else 1000
+        for _ in Range.asc(line - 1)
+            b.c('x')
+        b.c('\n')
+        left -= line
+    b.s("```\n")
+    return arena.dup_str(b.slice())
+
+priv fn assembled(root: U8[], top: U8[], arena: Arena$@): Assembly //< a refusal stops the run
+    ws: = Workspace.open(root).unwrap_or(Workspace::{ .root = "" })
+    return assemble(ws@, top, arena) catch
+        panic("the opened document itself was refused")
+
+priv fn loaded(ws: Workspace@, path: U8[], arena: Arena$@): Loaded //< a refusal stops the run
+    return load(ws, path, arena) catch
+        panic("a source to edit was refused")
+
+priv fn refused_with(ws: Workspace@, path: U8[], want: Refusal, arena: Arena$@): Bool //<
+    //< Whether opening the document fails with that refusal
+    _view: = assemble(ws, path, arena) catch e
+        switch e
+        case .refused(why)
+            return why == want
+        default {}
+        return false
+    return false
+
+priv fn edit_text(source: Loaded, node: Sz, text: U8[]) //< replaces one text node, as an edit does
+    $doc: = source.doc
+    old: = doc.inlines.get(node)
+    doc.inlines
+        .set(node, Inline::{ .kind = old.kind, .text = text, .offset = old.offset })
+
+priv fn view_of(a: Assembly@, arena: Arena$@): U8[] //<
+    //< Each entry as `path:offset`; an include adds `>` and the name of the file it opens, an image
+    //< `=` and where its path leads
+    defer $b: = Str_builder()
+    for i in Range.asc(a.entries.len)
+        e: = a.entries.get(i)
+        if i > 0
+            b.c(' ')
+        b.s(a.source_of(i).path).s(":\{a.block_of(i).offset\}")
+        if e.opens != NONE
+            b.c('>').s(sys.strip_last_ext(sys.get_file_name(e.target)))
+        else if a.block_of(i).kind == Block_kind.image
+            b.c('=').s(e.target)
+    return arena.dup_str(b.slice())
+
+priv fn problem_of(a: Assembly@, index: Sz, arena: Arena$@): U8[] //<
+    //< A problem's place, then each include clause on the way to it: `b.ksmd:3:1 < a.ksmd:3:1`
+    if index >= a.problems.len
+        return "no such problem"
+    p: = a.problems.get(index)
+    defer $b: = Str_builder()
+    place(p.at, b@)
+    for i in Range.asc(p.chain.len)
+        b.s(" < ")
+        place(p.chain.get(i), b@)
+    return arena.dup_str(b.slice())
+
+priv fn place(d: Diagnostic, out: Str_builder$@)
+    out.s(d.path).s(":\{d.line\}:\{d.column\}")
+
+priv fn snapshot(root: U8[], arena: Arena$@): U8[] //< every file's path and bytes, in order
+    defer $b: = Str_builder()
+    files: = fs.walk_files(root, fs.skip_none, arena) catch
+        return ""
+    for path in files
+        b.s(path).c('\n').s(read(path, arena)).c('\n')
+    return arena.dup_str(b.slice())
+
+priv fn snapshot_names(root: U8[], arena: Arena$@): U8[] //< every file's name, in order
+    defer $b: = Str_builder()
+    files: = fs.walk_files(root, fs.skip_none, arena) catch
+        return ""
+    for i in Range.asc(files.len)
+        if i > 0
+            b.c(' ')
+        b.s(sys.get_file_name(files.get(i)))
+    return arena.dup_str(b.slice())

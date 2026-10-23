@@ -83,7 +83,7 @@ fn mend_as_read(raw: U8[], file: U8[], notes: List<|parse_layout.Note|>$@): pars
 
 fn layout_noted_files(arena: Arena$@): List<|U8[]|> //<
     //< it returns the recorded file names in name order
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     if layout_notes == null
         return out
     for e in layout_notes.items()
@@ -120,7 +120,7 @@ impl Profiler
     fn init(r: Self$@)
         r.kspeg_map.free()
         r.kspeg_list.clear()
-        r$ = Profiler::{ .kspeg_map = Map<|U8[], Kspeg_prof_entry$@|>.new(base_core.arena),
+        r$ = Profiler::{ .kspeg_map = Map<|U8[], Kspeg_prof_entry$@|>(base_core.arena),
             .kspeg_list = r.kspeg_list }
 
     fn print_kspeg(r: Self$@)
@@ -145,7 +145,7 @@ impl Profiler
             total_memo += p.memo_hits
             if p.memo_off
                 memo_off += 1
-        defer $head: = Str_builder.new()
+        defer $head: = Str_builder()
         head.s("\n[KSPEG Rule] \{Sz::total:,\} rule invocations, ")
             .s("\{Sz::total_memo:,\} from memo, \{memo_off:,\} rules left it (Top 20 by calls)\n")
         io.err().s(head.slice())
@@ -156,7 +156,7 @@ impl Profiler
         for i in Range.asc(limit)
             p: = ranked.get(i)
             failed: = p.calls - p.memo_hits - p.parsed_ok
-            defer $sb: = Str_builder.new()
+            defer $sb: = Str_builder()
             sb.s("      \{Sz::p.calls:7,\}\{Sz::p.memo_hits:11,\}\{Sz::p.parsed_ok:11,\}")
                 .s("\{Sz::failed:11,\}  \{p.name\}\n")
             io.err().s(sb.slice())
@@ -195,7 +195,8 @@ fn to_ast_node(knode: kspeg.Node$@, file_name: U8[], depth: Sz): Ast_node$@?
     kind_id: = rule_kind(knode.kind)
     if knode.children.len == 1 && parse_normalize.is_expr_wrapper_kind(kind_id)
         return to_ast_node(knode.children.get(0), file_name, depth + 1)
-    anode: = Ast_node.new(kind_id, knode.text, base_ast.Loc.at(file_name, knode.offset))
+    anode: =
+        Ast_node(kind_id, knode.text, base_ast.Loc.at(file_name, knode.offset))
     for raw_child in knode.children
         if child: = to_ast_node(raw_child, file_name, depth + 1)
             anode.add_child(child)
@@ -233,7 +234,7 @@ impl Parse_error
             //< a full-text search. On true the caller throws `syntax_error`, the signal for
             //< "already reported" (as parse_raw_ast does) that outer stages pass along, so it is
             //< reported once.
-        defer $why: = Str_builder.new()
+        defer $why: = Str_builder()
         switch e
         case .io(io_err)
             // Caution: **Print the absolute name.** Some import names are looked up from the
@@ -262,7 +263,7 @@ fn parse_raw_ast(src: U8[], file_path: U8[], parser: kspeg.Target$@, laid_out: B
     // grammar reads bytes, so a stray byte in a string or a comment would pass on to C.
     bad: = parse_source_fix.first_bad_utf8(src)
     if bad >= 0
-        defer $msg: = Str_builder.new()
+        defer $msg: = Str_builder()
         msg
             .s("this byte (0x\{src[bad]:02X\}) does not begin a valid UTF-8 sequence. KSPL source \
                 is UTF-8 throughout, including comments and strings. Save the file as UTF-8. Write \
@@ -343,13 +344,13 @@ priv fn save_kspeg_arena(): Arena_state //< the KSPEG arena's mark to rewind to,
     //< **The KSPEG arena is reused and rewound**: one request to the OS, and each parse's garbage
     //< is gone.
     if kspeg_arena == null
-        kspeg_arena = Arena.new(1024 * 1024 * 16)
+        kspeg_arena = Arena(1024 * 1024 * 16)
     return kspeg_arena.save()
 
 priv fn sharing_target(text: U8[], parser: kspeg.Target$@): kspeg.Target //<
     //< A parse of `text` in the KSPEG arena, with the grammar `parser` built
     //< The caller frees its memo (`free_memo`).
-    $target: = kspeg.Target.new(text, kspeg_arena)
+    $target: = kspeg.Target(text, kspeg_arena)
     target.share_grammar_from(parser)
     return target
 
@@ -518,7 +519,7 @@ priv fn read_mended(import_path: U8[], path_key: U8[]): U8$[]!Parse_error //<
     //< The file import_path names, read from disk and mended, in the arena
     //< The logical name (import_path) and the path read from are different things. A `std/...`
     //< resolves pinned to base_locate.std_dir() (see base/locate.kspl).
-    defer $file_path: = Str_builder.new()
+    defer $file_path: = Str_builder()
     base_locate.append_file_path(import_path, file_path@)
     raw: = read_source(file_path.slice())!
     // The notes are only collected (the reason is at `layout_notes` above).
@@ -581,10 +582,10 @@ priv fn append_enum_members(decls: List<|Ast_node$@|>$@, file_path: U8[],
         //< constant array that `variants()` returns.
         //< Caution: **Keep the return value at U8[] and do not use a Writer.** Making every enum
         //< depend on std/io would pull all of the trait's thunks into a freestanding build.
-    defer $src: = Str_builder.new()
+    defer $src: = Str_builder()
     // Where each generated declaration goes (`place_as_made` in `../base/ast_ext.kspl`): the enum's
     // name, in the order the declarations are written into `src`.
-    defer $origins: = List<|base_ast.Loc|>.new(null)
+    defer $origins: = List<|base_ast.Loc|>(null)
     // **Push after finishing the walk** (the synthesis results are added to the same decls).
     for decl in decls
         if decl.kind_id != .k_decl_enum
@@ -593,15 +594,15 @@ priv fn append_enum_members(decls: List<|Ast_node$@|>$@, file_path: U8[],
         name: = decl.find_text(.k_identifier)
         if name_node == null || name.len == 0
             continue
-        defer $params: = Str_builder.new()
+        defer $params: = Str_builder()
         if !append_gen_params(decl, params@)
             continue // a const generic is out of scope for the synthesis
         // **Each enum's declarations are built separately** and added only once a member was
         // written. Built and cleared in `src`, one enum with nothing to add would discard the
         // declarations of the enums before it.
-        defer $fns: = Str_builder.new()
+        defer $fns: = Str_builder()
         write_variant_name(decls, decl, name, params.slice(), fns@)
-        defer $list: = Str_builder.new()
+        defer $list: = Str_builder()
         if params.len == 0 && write_variant_list(decls, decl, name, list@, fns@)
             src.s(list.slice())
             origins.push(name_node.loc)
@@ -628,7 +629,7 @@ priv fn write_variant_name(decls: List<|Ast_node$@|>$@, decl: Ast_node$@, name: 
         //< Nothing is written when no variant could be read.
     if has_user_method(decls, name, "variant_name")
         return
-    defer $one: = Str_builder.new()
+    defer $one: = Str_builder()
     one.s("  ").s(enum_vis(decl)).s("fn variant_name(r: ").s(name).s(p).s("): U8[] {\n    switch r")
     $any: = false
     for v in decl.children
@@ -647,7 +648,7 @@ priv fn write_variant_list(decls: List<|Ast_node$@|>$@, decl: Ast_node$@, name: 
         //< is to be made. **A name the file already uses is left to it**: its own method of that
         //< name, or a variant of that name. The array is a constant, so `variants()` allocates
         //< nothing; its name opens with `_`, which the unused-name and naming checks pass over.
-    defer $items: = Str_builder.new()
+    defer $items: = Str_builder()
     $count: Sz = 0
     for v in decl.children
         if v.kind_id != .k_enum_variant || v.children.len == 0
@@ -714,7 +715,7 @@ priv fn append_gen_params(decl: Ast_node$@, out: Str_builder$@): Bool //<
     gp: = decl.find_child(.k_type_gen_params)
     if gp == null
         return true
-    defer $names: = List<|U8[]|>.new(null)
+    defer $names: = List<|U8[]|>(null)
     for p in gp.children
         if p.is_const_gen_param()
             return false

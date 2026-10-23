@@ -157,7 +157,7 @@ impl Sema_ctx
 
     fn new(source: U8$[], file_name: U8[], env: sema_type_env.Env$@,
         global_scope: Map<|I32, Sema_symbol$@|>$@, source_map: Map<|U8[], U8$[]|>$@): Sema_ctx
-        symtab: = sema_type_scope.Symbol_table.new(global_scope)
+        symtab: = sema_type_scope.Symbol_table(global_scope)
         symtab.current_file = env.file_env_for(file_name)
 
         return Sema_ctx::{
@@ -170,21 +170,21 @@ impl Sema_ctx
             .generics = Generic_state::{
                 .templates = base_core.arena
                     .create(Map<|U8[], Ast_node$@|>.new_with_cap(256, null)),
-                .impls = base_core.arena.create(List<|Ast_node$@|>.new(null)),
+                .impls = base_core.arena.create(List<|Ast_node$@|>(null)),
                 .trait_insts = List<|Trait_inst|>.create(base_core.arena),
-                .args = base_core.arena.create(List<|Generic_arg|>.new(null)),
+                .args = base_core.arena.create(List<|Generic_arg|>(null)),
                 .pending = List<|Pending_inst|>.create(base_core.arena),
                 .analysing = -1,
             },
             .mono = Mono_state::{
                 .trait_inst_seen = base_core.arena
-                    .create(Map<|U8[], Bool|>.new(base_core.arena)),
+                    .create(Map<|U8[], Bool|>(base_core.arena)),
                 .pending_methods = List<|Pending_methods|>.create(base_core.arena),
                 .pending_constraints = List<|Pending_constraint|>.create(base_core.arena),
                 .deferred_methods = base_core.arena
-                    .create(Map<|I32, Pending_methods|>.new(base_core.arena)),
+                    .create(Map<|I32, Pending_methods|>(base_core.arena)),
                 .constraint_failed = base_core.arena
-                    .create(Map<|U8[], Bool|>.new(base_core.arena)),
+                    .create(Map<|U8[], Bool|>(base_core.arena)),
                 .current_inst_name = "",
             },
             .aliases = Alias_state::{
@@ -192,7 +192,7 @@ impl Sema_ctx
                     .create(Map<|U8[], Alias_info$@|>.new_with_cap(64, null)),
                 .withheld = base_core.arena
                     .create(Map<|U8[], U8[]|>.new_with_cap(16, null)),
-                .written_methods = base_core.arena.create(Map<|U8[], Bool|>.new(null)),
+                .written_methods = base_core.arena.create(Map<|U8[], Bool|>(null)),
             },
             .import_symbols = Import_symbol_state::{
                 .files = base_core.arena
@@ -206,28 +206,26 @@ impl Sema_ctx
                     .create(Map<|U8[], Bool|>.new_with_cap(16, null)),
                 .lint_settings = List<|Lint_setting_entry|>.create(base_core.arena),
                 .line_starts = base_core.arena
-                    .create(Map<|U8[], List<|Sz|>$@|>.new(base_core.arena)),
+                    .create(Map<|U8[], List<|Sz|>$@|>(base_core.arena)),
             },
             .suppress_errors = false,
             // Every caller but the editor wants every body; the editor narrows it per request.
             .bodies = .everywhere,
             .body_names = null,
             .source_map = source_map,
-            .jump_stack = base_core.arena.create(List<|Jump_label|>.new(null)),
-            .scratch = Str_builder.new(),
+            .jump_stack = base_core.arena.create(List<|Jump_label|>(null)),
+            .scratch = Str_builder(),
             .layout = Layout_state::{
                 .memo = base_core.arena
                     .create(Map<|I32, Type_layout|>.new_with_cap(64, null)),
                 .folded = List<|Folded_layout|>.create(base_core.arena),
-                .folded_keys = base_core.arena
-                    .create(Map<|U8[], Bool|>.new(base_core.arena)),
+                .folded_keys = base_core.arena.create(Map<|U8[], Bool|>(base_core.arena)),
             },
             .resolving = Resolving_state::{
-                .aliases = base_core.arena.create(List<|U8[]|>.new(null)),
-                .consts = base_core.arena.create(Map<|Sz, Bool|>.new(null)),
+                .aliases = base_core.arena.create(List<|U8[]|>(null)),
+                .consts = base_core.arena.create(Map<|Sz, Bool|>(null)),
                 .cut_path = List<|Sz|>.create(base_core.arena),
-                .cut_reported = base_core.arena
-                    .create(Map<|Sz, Bool|>.new(base_core.arena)),
+                .cut_reported = base_core.arena.create(Map<|Sz, Bool|>(base_core.arena)),
                 .registries = List<|I32|>.create(base_core.arena),
             },
         }
@@ -314,7 +312,7 @@ impl Sema_ctx
         //< **The caller keeps it as it is**, with no copy: it is the one copy name_text in
         //< ksplc/base/core.kspl holds. It is built in a builder of its own, so a name held in
         //< the context's scratch is read intact.
-        defer $b: = Str_builder.new()
+        defer $b: = Str_builder()
         b.s_path_as_dots(file_path).c('.').s(name)
         return base_core.pools.name_text(b.slice())
 
@@ -418,7 +416,7 @@ impl Sema_ctx
             return
         if eff_sev == base_diag.Diagnostic_severity.error
             r.diags.errors_met += 1
-        defer $key_sb: = Str_builder.new()
+        defer $key_sb: = Str_builder()
         if has_pos
             key_sb.s("\{file\}:\{offset\}:")
         // **One error per place in a generic's body**, whichever instance found it. Each instance
@@ -441,7 +439,7 @@ impl Sema_ctx
             r.diags.counts.errors >= MAX_ERRORS - 1
             if r.diags.counts.errors == MAX_ERRORS - 1
                 starts: = r.line_starts_for(file, src)
-                defer $cap: = Str_builder.new()
+                defer $cap: = Str_builder()
                 cap.s("Too many errors (>= \{MAX_ERRORS\}). Further errors are suppressed.")
                 base_diag.print_diagnostic(file, src, offset, span, cap.slice(), eff_sev, starts)
                 r.diags.counts.errors += 1
@@ -568,13 +566,13 @@ impl Sema_ctx
         //< records where an undefined name was reported
         //< A call's callee is resolved as a name before the call is. So its undefined head is
         //< reported there first, and the call's own report is skipped (`undefined_reported_at`).
-        defer $key: = Str_builder.new()
+        defer $key: = Str_builder()
         r.offset_key(node, key@)
         r.diags.undefined_at.set(base_core.arena.dup_str(key.slice()), true)
 
     fn undefined_reported_at(r: Self$@, node: Ast_node$@): Bool //<
         //< whether one was reported where node starts
-        defer $key: = Str_builder.new()
+        defer $key: = Str_builder()
         r.offset_key(node, key@)
         return r.diags.undefined_at.get(key.slice()).unwrap_or(false)
 
@@ -596,7 +594,7 @@ impl Sema_ctx
         //< Caution: Keep the wording in this one place. Name resolution has two failure points, an
         //< undefined identifier and an undefined callee. With a copy, only one of them gets each
         //< fix.
-        defer $key: = Str_builder.new()
+        defer $key: = Str_builder()
         key.s(r.file_name).s("::").s(name)
         path: = r.aliases.withheld.get(key.slice()).unwrap_or("")
         if path.len == 0
@@ -789,7 +787,7 @@ impl Sema_ctx: Manual_free
 
 fn join_dotted_name(base_name: U8[], sub_name: U8[]): U8[] //<
     //< `base_name.sub_name`, a member's name under its owner's (`Enum.variant`), kept by name_text
-    defer $b: = Str_builder.new()
+    defer $b: = Str_builder()
     b.s(base_name).c('.').s(sub_name)
     return base_core.pools.name_text(b.slice())
 
@@ -845,7 +843,7 @@ priv fn is_initial_upper_snake(name: U8[]): Bool //<
     //< whether only the first letter of name is uppercase
     if name.len == 0 || !(name.ptr + 0).is_upper()
         return false
-    for i in Range.new(1, name.len, 1)
+    for i in Range(1, name.len, 1)
         if (name.ptr + i).is_upper()
             return false
     return true

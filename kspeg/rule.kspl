@@ -32,7 +32,7 @@ fn walk_limit(): Stack_limit //<
     //< too deep" instead of crashing. Create it on the thread where the walk runs.
     //< Caution: **Keep the margin wide.** One level's calls, and the throw with its message, still
     //< run below the point that checked.
-    return Stack_limit.new(256 * 1024)
+    return Stack_limit(256 * 1024)
 
 struct Rule_entry //< one rule of the grammar: its name and its tree
     name: U8[] //< the name the grammar gives it
@@ -169,7 +169,7 @@ fn collect_keywords( //< every keyword the rule matches, in the order the gramma
     case .keyword_literal(text)
         push_keyword(keywords, text)
     default {}
-    defer $kids: = List<|Rule$@|>.new(null)
+    defer $kids: = List<|Rule$@|>(null)
     sub_rules(rule, kids@)
     for kid in kids
         collect_keywords(kid, keywords)
@@ -185,7 +185,7 @@ fn collect_references( //< every place where this rule refers to another rule by
     case .reference(name)
         names.push(name)
     default {}
-    defer $kids: = List<|Rule$@|>.new(null)
+    defer $kids: = List<|Rule$@|>(null)
     sub_rules(rule, kids@)
     for kid in kids
         collect_references(kid, names)
@@ -197,7 +197,7 @@ fn keyword_set_rule( //< one rule matching any of these keywords with a single l
     ranges: U8[], //< what keyword_set_boundary answered for them
     arena: Arena$@,
 ): Rule$@
-    words: = arena.create(Map<|U8[], Sz|>.new(arena))
+    words: = arena.create(Map<|U8[], Sz|>(arena))
     for i in Range.asc(keywords.len)
         words.set(keywords.get(i), i)
     set: = arena
@@ -216,7 +216,7 @@ fn fold_keyword_choices( //< turns each run of keywords inside a choice into one
 )
     if rule == null
         return
-    defer $kids: = List<|Rule$@|>.new(null)
+    defer $kids: = List<|Rule$@|>(null)
     sub_rules(rule, kids@)
     for kid in kids
         fold_keyword_choices(kid, boundary, arena)
@@ -363,10 +363,10 @@ fn left_recursive_rule( //< a rule that can enter itself before reading a byte, 
     entries: List<|Rule_entry$@|>$@,
 ): U8[]? //< the first such rule in the grammar's order
     for i in Range.asc(entries.len)
-        defer $seen: = List<|Bool|>.new(null)
+        defer $seen: = List<|Bool|>(null)
         for _ in Range.asc(entries.len)
             seen.push(false)
-        defer $todo: = List<|I32|>.new(null)
+        defer $todo: = List<|I32|>(null)
         left_refs(entries.get(i).rule, entries, entries.get(i).skips_space, todo@)
         // A queue read from the front; each rule is looked into once.
         for $k: Sz = 0; k < todo.len; k += 1

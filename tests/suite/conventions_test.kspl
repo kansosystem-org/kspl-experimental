@@ -14,7 +14,6 @@ import "std/verdict"
 import "tests/support/conventions_arena" as carena
 import "tests/support/conventions_bound" as cbound
 import "tests/support/conventions_doc" as cdoc
-import "tests/support/conventions_hand" as chand
 import "tests/support/conventions_iface" as ciface
 import "tests/support/conventions_line" as cline
 import "tests/support/conventions_match" as cmatch
@@ -154,10 +153,10 @@ priv const DESCRIPTOR_WANT: Bool[_] = ::{ true, false, true, false, false, false
     //< stops at the first
 
 priv fn check_descriptor_fires(arena: Arena$@)
-    $names: = List<|U8[]|>.new(arena)
-    $sizes: = List<|Sz|>.new(arena)
+    $names: = List<|U8[]|>(arena)
+    $sizes: = List<|Sz|>(arena)
     array_sizes(DESCRIPTOR_SRC, names@, sizes@, arena)
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     for i in Range.asc(DESCRIPTOR_SAMPLES.len)
         got: = hand_descriptor(DESCRIPTOR_SAMPLES[i], names@, sizes@, arena)
         if got != DESCRIPTOR_WANT[i]
@@ -170,7 +169,7 @@ priv fn check_descriptor_fires(arena: Arena$@)
 
 priv fn check_descriptors(arena: Arena$@)
     $seen: Sz = 0
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     for rel in harness.tracked_matching(U8[][]::scan.KSPL_SPECS)
         seen += 1
         $skip: = false
@@ -180,8 +179,8 @@ priv fn check_descriptors(arena: Arena$@)
         if skip
             continue
         src: = harness.read_under_root(rel)
-        $names: = List<|U8[]|>.new(arena)
-        $sizes: = List<|Sz|>.new(arena)
+        $names: = List<|U8[]|>(arena)
+        $sizes: = List<|Sz|>(arena)
         array_sizes(src, names@, sizes@, arena)
         $i: Sz = 0
         for line in src.lines(arena)
@@ -198,11 +197,11 @@ priv fn check_descriptors(arena: Arena$@)
 // Note: If it fails, do not stop using `Map` — design the seed in the form
 // `std/docs/DESIGN-core.md` decides.
 // ==========================================
-priv const UNTRUSTED_KEY_DIRS: U8[][_] = ::{ "kssrv/", "ksdb/", "kspage/" }
+priv const UNTRUSTED_KEY_DIRS: U8[][_] = ::{ "kssrv/", "ksdb/", "ksmd/" }
 
 priv fn check_map_at_boundary(arena: Arena$@)
     $seen: Sz = 0
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     for rel in harness.tracked_matching(U8[][]::scan.KSPL_SPECS)
         $inside: = false
         for d in UNTRUSTED_KEY_DIRS
@@ -218,8 +217,8 @@ priv fn check_map_at_boundary(arena: Arena$@)
                 if at == 0 || !htext.is_word_before(line, at)
                     bad
                         .push(arena.text().s(rel).s(":\{i\}: ").s(line.trim_spaces()).take())
-    verdict.check_list("a folder taking keys from outside does not use Map (kssrv/ksdb/kspage)",
-        seen, "lines", bad@,
+    verdict.check_list("a folder taking keys from outside does not use Map (kssrv/ksdb/ksmd)", seen,
+        "lines", bad@,
         "design the seed before putting it in (the Map line under std/docs/DESIGN-core.md's 'Known \
             holes')")
 
@@ -231,7 +230,7 @@ priv fn check_map_at_boundary(arena: Arena$@)
 // ==========================================
 priv fn check_compiler_named_std(arena: Arena$@)
     $seen: Sz = 0
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     // Only the compiler: its tests quote editor text (`std.lang.Manual_free.free`) naming no
     // declaration.
     for rel in harness.tracked_matching(U8[][]::{ "ksplc/*.kspl", ":!ksplc/tests/" })
@@ -264,7 +263,7 @@ priv fn check_compiler_named_std(arena: Arena$@)
 priv fn std_fqns_in(line: U8[], arena: Arena$@): List<|U8[]|>$@ //<
     //< Picks up the `std.<lower>.<Upper-first>` strings in one line
     //< A generic (`std.lang.Add<|...|>`) is cut before the `<`.
-    found: = arena.create(List<|U8[]|>.new(arena))
+    found: = arena.create(List<|U8[]|>(arena))
     $at: Sz = 0
     for at < line.len
         switch line.sub_from(at).find_str("\"std.")
@@ -313,7 +312,7 @@ priv fn check_runtime_check_location(arena: Arena$@) //<
     //< first. An offset is correct only when passed to a diagnostic (`print_diagnostic` counts the
     //< lines).
     $seen: Sz = 0
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     for rel in harness
         .tracked_matching(U8[][]::{ "ksplc/gen/c/*.kspl", "ksplc/gen/llvm/*.kspl" })
         $i: Sz = 0
@@ -346,7 +345,7 @@ priv fn check_panic_spelling(arena: Arena$@) //<
     //< `ksplc/tests/runtime/`'s EXPECT sees only checks that have a test, so a new check is caught
     //< here.
     $seen: Sz = 0
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     for rel in harness
         .tracked_matching(U8[][]::{ "ksplc/gen/runtime/*", "ksplc/gen/llvm/*.kspl",
         "std/lang.kspl" })
@@ -454,7 +453,7 @@ priv fn check_named_std_fires(arena: Arena$@)
     scan.check_samples("the verdict on the letter when it stops can fire",
         Sample[]::PANIC_SAMPLES, "panic_samples", panic_off, arena)
 
-    $b: = List<|U8[]|>.new(arena)
+    $b: = List<|U8[]|>(arena)
     for i in Range.asc(FQN_SAMPLES.len)
         got: = std_fqns_in(FQN_SAMPLES[i], arena).len
         if got != FQN_WANT[i]
@@ -464,7 +463,7 @@ priv fn check_named_std_fires(arena: Arena$@)
     verdict.check_list("the place picking a std FQN out of a letter can fire", FQN_SAMPLES.len,
         "samples", b@, "the judgment misreads its own samples: mend the judgment, not the table")
 
-    $c: = List<|U8[]|>.new(arena)
+    $c: = List<|U8[]|>(arena)
     for i in Range.asc(DECLARES_NAMES.len)
         got: = declares_name(DECLARES_SRC, DECLARES_NAMES[i], arena)
         if got != DECLARES_WANT[i]
@@ -501,7 +500,7 @@ priv fn check_result_fires(arena: Arena$@)
 
 priv fn check_result_line(arena: Arena$@)
     $seen: Sz = 0
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     for rel in harness.tracked_matching(U8[][]::scan.BUILD_EXT)
         $i: Sz = 0
         for line in harness.read_under_root(rel).lines(arena)
@@ -522,13 +521,13 @@ priv fn check_result_line(arena: Arena$@)
 // `-> Passed!`, `-> Skipped` or the three-line `"\n[..."` comes back.
 // Caution: **Having added a package, add it here too.**
 priv const CASE_LINE_GLOBS: U8[][_] = ::{ "ksai/tests/*.kspl", "ksbind/tests/*.kspl",
-    "ksdb/tests/*.kspl", "kspage/tests/*.kspl", "kspeg/tests/*.kspl", "ksos/tests/*.kspl",
+    "ksdb/tests/*.kspl", "ksmd/tests/*.kspl", "kspeg/tests/*.kspl", "ksos/tests/*.kspl",
     "ksplc/tests/*.kspl", "kssrv/tests/*.kspl", "std/tests/*.kspl", "tools/ai_assist/tests/*.kspl",
     "tools/tests/*.kspl" }
 
 priv fn check_case_line(arena: Arena$@)
     $seen: Sz = 0
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     for rel in harness.tracked_matching(U8[][]::CASE_LINE_GLOBS)
         $i: Sz = 0
         for line in harness.read_under_root(rel).lines(arena)
@@ -547,7 +546,7 @@ priv fn check_case_line(arena: Arena$@)
 // Only the source itself is left out (this check is in `tests/`, out of scope).
 priv fn check_slice_name(arena: Arena$@)
     $seen: Sz = 0
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     for rel in harness.tracked_matching(U8[][]::{ "ksplc/*.kspl" })
         if rel.equals("ksplc/base/core.kspl")
             continue
@@ -578,8 +577,8 @@ priv fn check_folder_names(arena: Arena$@) //<
     //< A folder holding many of a kind is named in the plural
     //< Caution: **It reads the folders git knows, not the disk**; `out/` holds names nobody wrote.
     $seen: Sz = 0
-    $bad: = List<|U8[]|>.new(arena)
-    $said: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
+    $said: = List<|U8[]|>(arena)
     files: = harness.tracked()
     for rel in files
         $at: Sz = 0
@@ -611,9 +610,9 @@ priv const FIXTURE_FOLDERS: U8[][2] = ::{ "ksplc/tests/negative/", "ksplc/tests/
 
 priv fn check_test_files_imported(arena: Arena$@)
     files: = harness.tracked_matching(U8[][]::scan.KSPL_SPECS)
-    $imported: = List<|U8[]|>.new(arena) // every path an import line names
-    $marked: = List<|U8[]|>.new(arena) // every file holding a `test_…` function
-    $own: = List<|U8[]|>.new(arena) // every file holding a suite, which runs its own tests
+    $imported: = List<|U8[]|>(arena) // every path an import line names
+    $marked: = List<|U8[]|>(arena) // every file holding a `test_…` function
+    $own: = List<|U8[]|>(arena) // every file holding a suite, which runs its own tests
     for rel in files
         for line in harness.read_under_root(rel).lines(arena)
             if line.starts_with("impl ") && line.ends_with(": suite.Suite {}") ||
@@ -626,7 +625,7 @@ priv fn check_test_files_imported(arena: Arena$@)
             else if (line.starts_with("fn test_") || line.starts_with("pub fn test_") ||
                 line.starts_with("priv fn test_")) && !marked.contains(rel)
                 marked.push(rel)
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     for rel in marked
         $fixture: = false
         for folder in FIXTURE_FOLDERS
@@ -651,7 +650,6 @@ fn main(): I32
     check_compiler_named_std(arena)
     csize.run(arena)
     ctheme.run(arena)
-    cdoc.run_manual(arena)
     check_folder_names(arena)
     check_test_files_imported(arena)
     cnotice.run_notices(arena)
@@ -660,7 +658,6 @@ fn main(): I32
     cdoc.run_kind(arena)
     cmatch.run(arena)
     cbound.run(arena)
-    chand.run(arena)
     ciface.run(arena)
     carena.run(arena)
     check_descriptors(arena)

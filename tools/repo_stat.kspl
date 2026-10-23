@@ -113,7 +113,7 @@ priv const GIT_LIST_CAP: Sz = 1 << 24 //< the most of a list kept; the repositor
 
 priv fn git_list(args: U8[][], arena: Arena$@): U8[]!fs.Fs_error //< what `git <args>` prints
     //< A git that is missing or refuses is an error, never an empty count.
-    $argv: = List<|U8[]|>.new(arena)
+    $argv: = List<|U8[]|>(arena)
     argv.push("git")
     for a in args
         argv.push(a)
@@ -132,7 +132,7 @@ priv fn write_files(b: Str_builder$@, exts: List<|Ext_row|>$@, roles: List<|Stat
     tracked: = git_list(U8[][]::{ "ls-files" }, arena)!
     others: = git_list(U8[][]::{ "ls-files", "--others", "--exclude-standard" }, arena)!
     files: = path_kind.listed(tracked, others, arena)
-    defer $rootb: = Str_builder.new()
+    defer $rootb: = Str_builder()
     $sub: = Stat::{}
     $root: = Stat::{}
     $total: = Stat::{}
@@ -211,9 +211,9 @@ priv fn write_roles(b: Str_builder$@, roles: List<|Stat|>$@) //<
     b.c('\n')
 
 priv fn write_stat(out_dir: U8[], arena: Arena$@): Void!fs.Fs_error
-    defer $b: = Str_builder.new()
-    $exts: = List<|Ext_row|>.new(arena)
-    $roles: = List<|Stat|>.new(arena)
+    defer $b: = Str_builder()
+    $exts: = List<|Ext_row|>(arena)
+    $roles: = List<|Stat|>(arena)
     for _role in path_kind.Role.variants()
         roles.push(Stat::{})
     write_files(b@, exts@, roles@, arena)!
@@ -228,7 +228,7 @@ priv fn save(out_dir: U8[], name: U8[], data: U8[], arena: Arena$@): Void!fs.Fs_
     io.out().s("wrote \{path\} (\{data.len\} bytes)\n")
 
 fn main(): I32 //< writes the repository's size on one page of text
-    defer arena: = Arena.new(64 * 1024 * 1024)
+    defer arena: = Arena(64 * 1024 * 1024)
     // Caution: **Do not parse the arguments by hand.** `std/argparse` refuses an unknown `--name`
     // and an undeclared positional (by hand, `repo_stat --bogus` makes a folder `--bogus/`).
     p: = argparse.Parser

@@ -1,0 +1,338 @@
+//< Editor actions on prose: what each saves, and what undo and redo give back
+//< Each check opens a source, sets the selection as model spots, runs actions, and compares the
+//< canonical source with the expected one. That source must read and save again unchanged.
+import "ksmd/editor" { Editor, Refused }
+import "ksmd/editor"
+import "ksmd/reader"
+import "ksmd/region" { Spot, Style, gap_spot, paragraph_style, text_spot }
+import "ksmd/source" { Source }
+import "ksmd/styled" { Mark }
+import "ksmd/writer"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/verdict"
+
+priv const H: U8[] = "%ksmd 1\n\n"
+
+fn run()
+    typing()
+    composing_and_pasting()
+    deleting()
+    entering()
+    kinds()
+    marks()
+    undoing()
+    refusals()
+
+priv fn typing()
+    defer arena: = Arena(64 * 1024)
+    $ed: = opened("%ksmd 1\n\nOne two.\n", arena)
+    at(ed@, 0, 0, 3)
+    typed(ed@, " and a half")
+    saves("typing inserts at the caret", ed@, "%ksmd 1\n\nOne and a half two.\n")
+    at(ed@, 0, 0, 0)
+    typed(ed@, "*#")
+    saves("typed '*' and '#' stay text", ed@, "%ksmd 1\n\n\\*#One and a half two.\n")
+    $tail: = opened("%ksmd 1\n\nEnd\n", arena)
+    at(tail@, 0, 0, 3)
+    typed(tail@, " ")
+    saves("a space at a line's end is kept out of the source", tail@, "%ksmd 1\n\nEnd\n")
+    typed(tail@, "s")
+    saves("and the next word follows it", tail@, "%ksmd 1\n\nEnd s\n")
+    $after: = opened("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n:::\n", arena)
+    gap(after@, 1)
+    typed(after@, "After")
+    saves("typing in the gap after a table at the end adds a paragraph", after@,
+        "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n:::\n\nAfter\n")
+    gap(after@, 0)
+    typed(after@, "Before")
+    saves("and in the gap before it at the start", after@,
+        "%ksmd 1\n\nBefore\n\n:::table name=\"t\"\n| \"a\" |\n:::\n\nAfter\n")
+    $small: = opened("%ksmd 1\n\nFirst.\n\nSecond.\n\nThird.\n", arena)
+    at(small@, 1, 0, 6)
+    typed(small@, " More")
+    saves("an edit to one paragraph changes only its line", small@,
+        "%ksmd 1\n\nFirst.\n\nSecond More.\n\nThird.\n")
+
+priv fn composing_and_pasting()
+    defer arena: = Arena(64 * 1024)
+    $ed: = opened("%ksmd 1\n\n- one\n", arena)
+    at(ed@, 0, 0, 3)
+    ed.type_text("かんそ", .composition) catch
+        verdict.check("committed text is taken", false, "refused")
+    saves("committed composition text is inserted once", ed@, "%ksmd 1\n\n- oneかんそ\n")
+    $p: = opened("%ksmd 1\n\nStart end\n", arena)
+    at(p@, 0, 0, 6)
+    p.type_text("a\r\n\r\nb\nc ", .paste) catch
+        verdict.check("pasted text is taken", false, "refused")
+    saves("pasted lines become paragraphs of the caret's kind, and blank lines go", p@,
+        "%ksmd 1\n\nStart a\n\nb\n\nc end\n")
+    $code: = opened("%ksmd 1\n\n```\nx\n```\n", arena)
+    at(code@, 0, 0, 1)
+    code.type_text("\ny\nz", .paste) catch
+        verdict.check("pasted code is taken", false, "refused")
+    saves("text pasted into code keeps its lines", code@, "%ksmd 1\n\n```\nx\ny\nz\n```\n")
+
+priv fn deleting()
+    defer arena: = Arena(64 * 1024)
+    $ed: = opened("%ksmd 1\n\nAbc\n\n## Def\n", arena)
+    at(ed@, 0, 0, 2)
+    removed(ed@, true)
+    saves("Backspace removes the character before the caret", ed@, "%ksmd 1\n\nAc\n\n## Def\n")
+    at(ed@, 1, 0, 0)
+    removed(ed@, true)
+    saves("Backspace at a block's start joins it to the block before", ed@, "%ksmd 1\n\nAcDef\n")
+    $fwd: = opened("%ksmd 1\n\nAb\n\nCd\n", arena)
+    at(fwd@, 0, 0, 2)
+    removed(fwd@, false)
+    saves("Delete at a block's end joins the next block to it", fwd@, "%ksmd 1\n\nAbCd\n")
+    $wide: =
+        opened("%ksmd 1\n\nKeep this\n\n:::table name=\"t\"\n| \"a\" |\n:::\n\nand that\n", arena)
+    span(wide@, text_spot(0, 0, 4), text_spot(2, 0, 3))
+    removed(wide@, true)
+    saves("a selection across a table removes the table and joins the text", wide@,
+        "%ksmd 1\n\nKeep that\n")
+    $item: = opened("%ksmd 1\n\n- a\n  - b\n", arena)
+    at(item@, 0, 1, 0)
+    removed(item@, true)
+    saves("Backspace at a nested item's start moves it one level out", item@,
+        "%ksmd 1\n\n- a\n- b\n")
+    removed(item@, true)
+    saves("and at the top it leaves the list as a paragraph", item@, "%ksmd 1\n\n- a\n\nb\n")
+    $all: = opened("%ksmd 1\n\n# Title\n\nText\n", arena)
+    span(all@, text_spot(0, 0, 0), text_spot(0, 0, 5))
+    removed(all@, true)
+    saves("a block left with no text goes", all@, "%ksmd 1\n\nText\n")
+    typed(all@, "New")
+    saves("and typing where it stood makes a block of its kind again", all@,
+        "%ksmd 1\n\n# New\n\nText\n")
+
+priv fn entering()
+    defer arena: = Arena(64 * 1024)
+    $ed: = opened("%ksmd 1\n\nOne two\n", arena)
+    at(ed@, 0, 0, 3)
+    entered(ed@, false)
+    saves("Enter in a paragraph splits it", ed@, "%ksmd 1\n\nOne\n\ntwo\n")
+    at(ed@, 1, 0, 4)
+    entered(ed@, false)
+    verdict.check("Enter at a block's end leaves the caret in a gap after it",
+        ed.focus.place == .block_gap && ed.focus.block == 2, "")
+    typed(ed@, "three")
+    saves("and typing there adds a paragraph", ed@, "%ksmd 1\n\nOne\n\ntwo\n\nthree\n")
+    $head: = opened("%ksmd 1\n\n# Title\n", arena)
+    at(head@, 0, 0, 5)
+    entered(head@, false)
+    typed(head@, "Body")
+    saves("after a heading's end, the new block is a paragraph", head@,
+        "%ksmd 1\n\n# Title\n\nBody\n")
+    $list: = opened("%ksmd 1\n\n- a\n- b\n", arena)
+    at(list@, 0, 0, 1)
+    entered(list@, false)
+    typed(list@, "c")
+    saves("Enter at an item's end makes the next item", list@, "%ksmd 1\n\n- a\n- c\n- b\n")
+    at(list@, 0, 2, 1)
+    entered(list@, false)
+    entered(list@, false)
+    typed(list@, "After")
+    saves("Enter in an empty item leaves the list", list@, "%ksmd 1\n\n- a\n- c\n- b\n\nAfter\n")
+    $hard: = opened("%ksmd 1\n\nOne\n", arena)
+    at(hard@, 0, 0, 3)
+    entered(hard@, true)
+    saves("a hard break at a paragraph's end is kept out of the source", hard@, "%ksmd 1\n\nOne\n")
+    typed(hard@, "Two")
+    saves("until text follows it", hard@, "%ksmd 1\n\nOne\\\nTwo\n")
+    $code: = opened("%ksmd 1\n\n```\nx\n```\n", arena)
+    at(code@, 0, 0, 1)
+    entered(code@, false)
+    saves("Enter in code adds a line", code@, "%ksmd 1\n\n```\nx\n\n```\n")
+    entered(code@, false)
+    typed(code@, "Text")
+    saves("Enter on code's empty last line leaves the code", code@,
+        "%ksmd 1\n\n```\nx\n```\n\nText\n")
+    $start: = opened("%ksmd 1\n\nOne\n", arena)
+    at(start@, 0, 0, 0)
+    entered(start@, false)
+    typed(start@, "Zero")
+    saves("Enter at a block's start opens a gap before it", start@, "%ksmd 1\n\nZero\n\nOne\n")
+
+priv fn kinds()
+    defer arena: = Arena(64 * 1024)
+    $ed: = opened("%ksmd 1\n\nA\n\nB\nwith\\\nbreak\n\nC\n", arena)
+    at(ed@, 0, 0, 0)
+    kind(ed@, heading(2))
+    saves("a paragraph becomes a heading", ed@, "%ksmd 1\n\n## A\n\nB with\\\nbreak\n\nC\n")
+    span(ed@, text_spot(1, 0, 0), text_spot(2, 0, 1))
+    kind(ed@, item(false))
+    saves("paragraphs become one list; a hard break becomes a space", ed@,
+        "%ksmd 1\n\n## A\n\n- B with break\n- C\n")
+    at(ed@, 1, 1, 0)
+    ed.indent(true) catch
+        verdict.check("indenting is taken", false, "refused")
+    saves("an item nests one level deeper", ed@, "%ksmd 1\n\n## A\n\n- B with break\n  - C\n")
+    at(ed@, 1, 0, 0)
+    kind(ed@, paragraph_style())
+    saves("an item made a paragraph splits the list, and the next item moves to the top", ed@,
+        "%ksmd 1\n\n## A\n\nB with break\n\n- C\n")
+    at(ed@, 1, 0, 0)
+    kind(ed@, item(false))
+    saves("an item made next to a list with its marker joins it", ed@,
+        "%ksmd 1\n\n## A\n\n- B with break\n- C\n")
+    at(ed@, 1, 1, 0)
+    kind(ed@, item(true))
+    saves("another marker starts a list of its own", ed@,
+        "%ksmd 1\n\n## A\n\n- B with break\n\n1. C\n")
+    at(ed@, 0, 0, 0)
+    $code: = paragraph_style()
+    code.kind = .code
+    kind(ed@, code)
+    saves("a heading becomes code", ed@, "%ksmd 1\n\n```\nA\n```\n\n- B with break\n\n1. C\n")
+
+priv fn marks()
+    defer arena: = Arena(64 * 1024)
+    $ed: = opened("%ksmd 1\n\nabcdef\n", arena)
+    span(ed@, text_spot(0, 0, 1), text_spot(0, 0, 4))
+    marked(ed@, .emphasis, "")
+    saves("emphasis over a range", ed@, "%ksmd 1\n\na*bcd*ef\n")
+    span(ed@, text_spot(0, 0, 3), text_spot(0, 0, 5))
+    marked(ed@, .strong, "")
+    saves("strong emphasis over a range that overlaps it", ed@, "%ksmd 1\n\na*bc**d*****e**f\n")
+    span(ed@, text_spot(0, 0, 0), text_spot(0, 0, 6))
+    marked(ed@, .emphasis, "")
+    saves("emphasis over all of it, where part had it", ed@, "%ksmd 1\n\n*abc**de**f*\n")
+    marked(ed@, .emphasis, "")
+    saves("and off again where all had it", ed@, "%ksmd 1\n\nabc**de**f\n")
+    span(ed@, text_spot(0, 0, 0), text_spot(0, 0, 2))
+    marked(ed@, .code, "")
+    saves("inline code over a range", ed@, "%ksmd 1\n\n`ab`c**de**f\n")
+    span(ed@, text_spot(0, 0, 2), text_spot(0, 0, 6))
+    marked(ed@, .link, "https://kanso.example/a")
+    saves("a link over a range holds its marks", ed@,
+        "%ksmd 1\n\n`ab`[c**de**f](https://kanso.example/a)\n")
+    marked(ed@, .link, "")
+    saves("an empty destination removes the link", ed@, "%ksmd 1\n\n`ab`c**de**f\n")
+    refused_link(ed@)
+    $typing: = opened("%ksmd 1\n\nab\n", arena)
+    at(typing@, 0, 0, 1)
+    marked(typing@, .strong, "")
+    typed(typing@, "X")
+    saves("a mark with nothing selected applies to the text typed next", typing@,
+        "%ksmd 1\n\na**X**b\n")
+    typed(typing@, "Y")
+    saves("and typing goes on in it", typing@, "%ksmd 1\n\na**XY**b\n")
+
+priv fn undoing()
+    defer arena: = Arena(64 * 1024)
+    $ed: = opened("%ksmd 1\n\nSay\n", arena)
+    at(ed@, 0, 0, 3)
+    for word in U8[][]::{ " ", "h", "e", "l", "l", "o", " ", "w", "o", "r", "l", "d" }
+        typed(ed@, word)
+    saves("typed letters land one by one", ed@, "%ksmd 1\n\nSay hello world\n")
+    ed.undo()
+    saves("one undo takes back the last word", ed@, "%ksmd 1\n\nSay hello\n")
+    ed.undo()
+    saves("the next takes back the word before it", ed@, "%ksmd 1\n\nSay\n")
+    verdict.check("undo puts the caret back where the step started", ed.focus.offset == 4, "")
+    ed.redo()
+    ed.redo()
+    saves("redo gives both words back", ed@, "%ksmd 1\n\nSay hello world\n")
+    at(ed@, 0, 0, 0)
+    entered(ed@, false)
+    typed(ed@, "Top")
+    ed.undo()
+    ed.undo()
+    saves("undo takes back a split block", ed@, "%ksmd 1\n\nSay hello world\n")
+    verdict.check("redo is possible after undo", ed.can_redo(), "")
+    typed(ed@, "!")
+    verdict.check("a new action drops what was undone", !ed.can_redo(), "")
+
+priv fn refusals()
+    defer arena: = Arena(64 * 1024)
+    $ed: = opened("%ksmd 1\n\nText\n", arena)
+    at(ed@, 0, 0, 4)
+    refused_bytes(ed@)
+    saves("and changes nothing", ed@, "%ksmd 1\n\nText\n")
+    verdict.check("a refused action leaves nothing to undo", !ed.can_undo(), "")
+
+priv fn refused_link(ed: Editor$@)
+    what: = "a link to a destination the reader refuses is refused"
+    ed.toggle_mark(.link, "ftp://x") catch e
+        verdict.check(what, e.message().equals(Refused.link.message()), e.message())
+        return
+    verdict.check(what, false, "the link was made")
+
+priv fn refused_bytes(ed: Editor$@)
+    what: = "text that is not UTF-8 is refused"
+    ed.type_text(U8[]::{ 0xFFU8 }, .typing) catch e
+        verdict.check(what, e.message().equals(Refused.no_read_back.message()), e.message())
+        return
+    verdict.check(what, false, "the text was typed")
+
+// ---- Helpers ----
+
+priv fn opened(bytes: U8[], arena: Arena$@): Editor //< an editor on the source
+    src: = Source("t.ksmd", arena.dup_str(bytes)) catch e
+        verdict.check("a test source is valid", false, e.message)
+        panic("a test source was refused")
+    doc: = reader.read(src@, arena) catch e
+        verdict.check("a test document reads", false, e.message)
+        panic("a test document was refused")
+    return editor.open(doc, arena)
+
+priv fn at(ed: Editor$@, block: Sz, item: Sz, offset: Sz) //< puts the caret in text
+    p: = text_spot(block, item, offset)
+    ed.select(p, p)
+
+priv fn gap(ed: Editor$@, block: Sz) //< puts the caret in the gap before a block
+    p: = gap_spot(block)
+    ed.select(p, p)
+
+priv fn span(ed: Editor$@, a: Spot, f: Spot)
+    ed.select(a, f)
+
+priv fn typed(ed: Editor$@, text: U8[])
+    ed.type_text(text, .typing) catch e
+        verdict.check(text, false, e.message())
+
+priv fn removed(ed: Editor$@, backward: Bool)
+    ed.erase(backward) catch e
+        verdict.check("deleting", false, e.message())
+
+priv fn entered(ed: Editor$@, hard: Bool)
+    ed.enter(hard) catch e
+        verdict.check("Enter", false, e.message())
+
+priv fn kind(ed: Editor$@, style: Style)
+    ed.set_kind(style) catch e
+        verdict.check("changing kind", false, e.message())
+
+priv fn marked(ed: Editor$@, which: Mark, link: U8[])
+    ed.toggle_mark(which, link) catch e
+        verdict.check("a mark", false, e.message())
+
+priv fn heading(level: Sz): Style
+    $s: = paragraph_style()
+    s.kind = .heading
+    s.level = level
+    return s
+
+priv fn item(ordered: Bool): Style
+    $s: = paragraph_style()
+    s.kind = .list
+    s.ordered = ordered
+    return s
+
+priv fn saves(what: U8[], ed: Editor@, expected: U8[]) //<
+    //< The editor's document saves as `expected`, and that source reads and saves again unchanged
+    defer arena: = Arena(16 * 1024)
+    defer $out: = Str_builder()
+    writer.write(ed.doc@, out@)
+    verdict.check(what, out.slice().equals(expected), out.slice())
+    src: = Source("again.ksmd", arena.dup_str(out.slice())) catch e
+        verdict.check(what, false, e.message)
+        return
+    again: = reader.read(src@, arena) catch e
+        verdict.check(what, false, e.message)
+        return
+    defer $second: = Str_builder()
+    writer.write(again@, second@)
+    verdict.check(what, second.slice().equals(out.slice()), "a second save changed")

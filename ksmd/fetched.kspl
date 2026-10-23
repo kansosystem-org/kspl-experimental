@@ -1,0 +1,66 @@
+//< What a page fetched through the local server, read as a document's files
+//< A page cannot read a folder itself. It asks the local server for each file a view names, and
+//< hands each answer in here. An assembly over what is held so far names the files still lacking
+//< (`wanted`). The page fetches them and assembles again, until nothing is lacking: one round per
+//< level of includes. The server refuses a link along a path, so that refusal is held here.
+import "ksmd/files" { Files, Refusal, resolve_text }
+import "ksmd/keyed" { Keyed }
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+
+struct Held //< the server's answer for one path
+    found: Bool
+    why: Refusal //< what stands at the path, when it was not found
+    bytes: U8[] //< a source's bytes; an image's bytes stay with the page
+
+struct Want //< a file an assembly asked for and nothing held
+    path: U8[] //< from the root
+    image: Bool //< true where only whether a file stands there was asked
+
+struct Fetched
+    held: Keyed<|Held|> //< by path, in `arena`
+    wanted: List<|Want|> //< in the order asked, each path once; `ask` empties it
+    asked: Keyed<|Bool|> //< the paths in `wanted`
+    arena: Arena$@ //< holds the answers and their paths
+
+impl Fetched
+    fn new(arena: Arena$@): Fetched //< nothing held, nothing wanted
+        return Fetched::{ .held = Keyed<|Held|>(arena), .wanted = List<|Want|>(arena),
+            .asked = Keyed<|Bool|>(arena), .arena = arena }
+
+    fn hold(r: Self$@, path: U8[], held: Held) //< keeps the server's answer for `path`, copied
+        r.held
+            .set(r.arena.dup_str(path),
+            Held::{ .found = held.found, .why = held.why,
+            .bytes = r.arena.dup_str(held.bytes) })
+
+    fn ask(r: Self$@, arena: Arena$@) //< empties `wanted`, before an assembly; its lists go there
+        r.wanted = List<|Want|>(arena)
+        r.asked = Keyed<|Bool|>(arena)
+
+    priv fn lacks(r: Self$@, path: U8[], image: Bool): Refusal //< records a path nothing held
+        if !r.asked.get(path).is_some()
+            r.asked.set(path, true)
+            r.wanted.push(Want::{ .path = path, .image = image })
+        return .missing
+
+impl Fetched: Files
+    fn resolve(_r: Self$@, folder: U8[], written: U8[], arena: Arena$@): U8[]!Refusal //<
+        //< `resolve_text`; the server refuses a link when the file is fetched
+        return resolve_text(folder, written, arena)
+
+    fn check(r: Self$@, path: U8[], _arena: Arena$@): Void!Refusal
+        if held: = r.held.get(path)
+            if !held.found
+                throw held.why
+            return
+        throw r.lacks(path, true)
+
+    fn read(r: Self$@, path: U8[], limit: Sz, _arena: Arena$@): U8[]!Refusal
+        if held: = r.held.get(path)
+            if !held.found
+                throw held.why
+            return held.bytes
+                .sub(0, held.bytes.len if held.bytes.len <= limit else limit + 1)
+        throw r.lacks(path, false)

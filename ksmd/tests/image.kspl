@@ -1,0 +1,155 @@
+//< Image header checks: the format and size read from the bytes, the pixel limit, damaged headers,
+//< and a JPEG header read in windows, as the page passes a large file
+import "ksmd/image" { Image_refusal, Measure, measure }
+import "std/chars"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/verdict"
+
+fn run()
+    formats()
+    limits()
+    damage()
+    windows()
+
+priv fn formats() //< the bytes decide the format, whatever the file is named
+    defer arena: = Arena(16 * 1024)
+    verdict.check("a PNG's size comes from its IHDR chunk",
+        shows(png(640I64, 480I64, arena), "png 640x480"),
+        said(png(640I64, 480I64, arena), arena))
+    small: = jpeg(0, 300, 200, arena)
+    verdict.check("a JPEG's size comes from its frame header", shows(small, "jpeg 300x200"),
+        said(small, arena))
+    gif: = "GIF89a, a header that names no size here"
+    verdict.check("a GIF is refused as another format", refused(gif, .format), said(gif, arena))
+    svg: = "<svg xmlns=\"http://www.w3.org/2000/svg\"/>"
+    verdict.check("an SVG is refused as another format", refused(svg, .format), said(svg, arena))
+    verdict.check("an empty file is refused as another format", refused("", .format), "")
+
+priv fn limits() //< 16 million pixels is the most an image may hold
+    defer arena: = Arena(16 * 1024)
+    verdict.check("an image of exactly 16 million pixels is shown",
+        shows(jpeg(0, 4000, 4000, arena), "jpeg 4000x4000"), "")
+    verdict.check("one more column is refused as too large",
+        refused(jpeg(0, 4001, 4000, arena), .too_large), "")
+    verdict.check("a PNG past the limit is refused before anything decodes it",
+        refused(png(65535I64, 65535I64, arena), .too_large), "")
+    verdict.check("a size of 4 billion each way is refused, not wrapped around",
+        refused(png(-1I64, -1I64, arena), .too_large),
+        said(png(-1I64, -1I64, arena), arena))
+
+priv fn damage() //< a header that ends early or does not read is refused as damaged
+    defer arena: = Arena(16 * 1024)
+    whole: = png(10I64, 10I64, arena)
+    verdict.check("a PNG cut inside its header is damaged",
+        refused(whole.sub(0, 20), .damaged), "")
+    verdict.check("a PNG of no width is damaged",
+        refused(png(0I64, 10I64, arena), .damaged), "")
+    bad: = chunk("IEND", 10I64, 10I64, arena)
+    verdict.check("a PNG whose first chunk is not IHDR is damaged", refused(bad, .damaged), "")
+    frame: = jpeg(0, 30, 20, arena)
+    verdict.check("a JPEG cut before its frame header is damaged",
+        refused(frame.sub(0, frame.len - 6), .damaged), "")
+    scan_first: = U8[]::{ 0xFFU8, 0xD8U8, 0xFFU8, 0xDAU8, 0x00U8, 0x02U8 }
+    verdict.check("a JPEG whose image data comes before a frame header is damaged",
+        refused(scan_first, .damaged), "")
+    short_length: = U8[]::{ 0xFFU8, 0xD8U8, 0xFFU8, 0xE0U8, 0x00U8, 0x01U8, 0xFFU8, 0xC0U8 }
+    verdict.check("a JPEG segment shorter than its own length field is damaged",
+        refused(short_length, .damaged), "")
+
+priv fn windows() //< a JPEG with a long segment first is read in windows, as the page passes it
+    defer arena: = Arena(256 * 1024)
+    big: = jpeg(100000, 1024, 768, arena)
+    $at: Sz = 0
+    $steps: Sz = 0
+    $result: Measure = .more(0)
+    $going: = true
+    for going && steps < 10
+        steps += 1
+        end: = at + 4096 if at + 4096 < big.len else big.len
+        result = measure(big.sub(at, end - at), at, big.len)
+        switch result
+        case .more(next)
+            at = next
+        default
+            going = false
+    verdict.check("a frame header after 100,000 bytes of segments is found window by window",
+        describe(result, arena).equals("jpeg 1024x768") && steps == 3, describe(result, arena))
+    first: = measure(big.sub(0, 4096), 0, big.len)
+    $asked: Sz = 0
+    switch first
+    case .more(next)
+        asked = next
+    default {}
+    verdict.check("a window ending inside a segment asks for the bytes where the next one starts",
+        asked == 2 + 2 + 60002, describe(first, arena))
+
+// ==========================================
+// Building headers, and describing what `measure` says
+// ==========================================
+
+priv fn png(width: I64, height: I64, arena: Arena$@): U8[] //< a PNG's signature and IHDR chunk
+    return chunk("IHDR", width, height, arena)
+
+priv fn chunk(name: U8[], width: I64, height: I64, arena: Arena$@): U8[] //<
+    //< A PNG's signature and a first chunk of that name, laid out as IHDR is
+    defer $b: = Str_builder()
+    b.s(U8[]::{ 0x89U8, 'P', 'N', 'G', '\r', '\n', 0x1AU8, '\n' })
+    word(b@, 13I64)
+    b.s(name)
+    word(b@, width)
+    word(b@, height)
+    b.s(U8[]::{ 8U8, 2U8, 0U8, 0U8, 0U8 })
+    return arena.dup_str(b.slice())
+
+priv fn jpeg(padding: Sz, width: Sz, height: Sz, arena: Arena$@): U8[] //<
+    //< A JPEG's start, application segments holding `padding` bytes in all, then a frame header
+    defer $b: = Str_builder()
+    b.s(U8[]::{ 0xFFU8, 0xD8U8 })
+    $left: = padding
+    for left > 0
+        part: = left if left < 60000 else 60000
+        b.s(U8[]::{ 0xFFU8, 0xE1U8 })
+        half(b@, part + 2)
+        for _ in Range.asc(part)
+            b.c('x')
+        left -= part
+    b.s(U8[]::{ 0xFFU8, 0xFFU8, 0xC0U8 })
+    half(b@, 11)
+    b.c(8U8)
+    half(b@, height)
+    half(b@, width)
+    b.s(U8[]::{ 3U8, 1U8, 0x22U8, 0U8 })
+    return arena.dup_str(b.slice())
+
+priv fn word(b: Str_builder$@, v: I64)
+    for shift in U8[]::{ 24U8, 16U8, 8U8, 0U8 }
+        b.c(U8::((v >> I64::shift) & 255I64))
+
+priv fn half(b: Str_builder$@, v: Sz)
+    b.c(U8::((v >> 8) & 255))
+    b.c(U8::(v & 255))
+
+priv fn shows(bytes: U8[], want: U8[]): Bool
+    defer arena: = Arena(1024)
+    return describe(measure(bytes, 0, bytes.len), arena).equals(want)
+
+priv fn refused(bytes: U8[], want: Image_refusal): Bool
+    switch measure(bytes, 0, bytes.len)
+    case .refused(why)
+        return why == want
+    default
+        return false
+
+priv fn said(bytes: U8[], arena: Arena$@): U8[] //< what `measure` says of a whole file
+    return describe(measure(bytes, 0, bytes.len), arena)
+
+priv fn describe(m: Measure, arena: Arena$@): U8[] //< `png 640x480`, `refused: …` or `more at N`
+    switch m
+    case .size(s)
+        return arena.text().s("png" if s.format == .png else "jpeg").s(" \{s.width\}x\{s.height\}")
+            .take()
+    case .refused(why)
+        return arena.text().s("refused: ").s(why.message()).take()
+    case .more(at)
+        return arena.text().s("more at \{at\}").take()

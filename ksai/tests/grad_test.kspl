@@ -46,7 +46,7 @@ fn max_gap<|T|>( //< the largest gap between an analytic gradient and a central 
 
 priv fn make_logits(a: F32, b: F32, c: F32, d: F32, arena: Arena$@): Tensor<|F32|>
     shape: Sz[1] = ::{ 4 }
-    t: = Tensor<|F32|>.new(Sz[]::shape, arena)
+    t: = Tensor<|F32|>(Sz[]::shape, arena)
     (t.data + 0)$ = a
     (t.data + 1)$ = b
     (t.data + 2)$ = c
@@ -82,7 +82,7 @@ fn test_grad_numeric_seq(arena: Arena$@)
     rows: Sz = 3
     n: Sz = 4
     shape: Sz[2] = ::{ rows, n }
-    $logits: = Tensor<|F64|>.new(Sz[]::shape, arena)
+    $logits: = Tensor<|F64|>(Sz[]::shape, arena)
     for i in Range.asc(logits.size)
         (logits.data + i)$ = 0.31 * (F64::((i * 5) % 7)) - 0.9
     targets: I32[3] = ::{ 2, 0, 3 }
@@ -106,13 +106,13 @@ fn test_grad_training(arena: Arena$@)
     vocab: Sz = 4
     target: I32 = 2
     x_shape: Sz[2] = ::{ 1, in_dim }
-    $x: = Tensor<|F32|>.new(Sz[]::x_shape, arena)
+    $x: = Tensor<|F32|>(Sz[]::x_shape, arena)
     (x.data + 0)$ = F32::0.5
     (x.data + 1)$ = -(F32::0.2)
     (x.data + 2)$ = F32::0.8
     // initializes the weights W:[3,4] to 0 (deterministic)
     w_shape: Sz[2] = ::{ in_dim, vocab }
-    $w: = Tensor<|F32|>.new(Sz[]::w_shape, arena)
+    $w: = Tensor<|F32|>(Sz[]::w_shape, arena)
     w.fill(F32::0.0)
 
     $loss0: = 0.0
@@ -145,12 +145,12 @@ fn test_nn_training(arena: Arena$@)
     out_dim: Sz = 4
     target: I32 = 3
     x_shape: Sz[2] = ::{ 1, in_dim }
-    x: = Tensor<|F32|>.new(Sz[]::x_shape, arena)
+    x: = Tensor<|F32|>(Sz[]::x_shape, arena)
     (x.data + 0)$ = F32::0.6
     (x.data + 1)$ = -(F32::0.4)
     (x.data + 2)$ = F32::0.9
 
-    $mlp: = ai_nn.Mlp<|F32|>.new(in_dim, hidden, out_dim, arena)
+    $mlp: = ai_nn.Mlp<|F32|>(in_dim, hidden, out_dim, arena)
 
     $loss0: = 0.0
     for step in Range.asc(200)
@@ -182,20 +182,20 @@ priv fn rmsnorm_sum(rn: ai_nn.Rms_norm<|F32|>$@, x: Tensor<|F32|>): F64
 fn test_rmsnorm_grad(arena: Arena$@)
     verdict.start("[NN] RMSNorm backward numerical gradient check...")
     n: Sz = 4
-    $rn: = ai_nn.Rms_norm<|F32|>.new(n, F32::1.0e-5, arena)
+    $rn: = ai_nn.Rms_norm<|F32|>(n, F32::1.0e-5, arena)
     // Non-uniform weights make the test stricter
     (rn.weight.data + 0)$ = F32::1.0
     (rn.weight.data + 1)$ = F32::0.5
     (rn.weight.data + 2)$ = F32::1.5
     (rn.weight.data + 3)$ = F32::0.8
     x_shape: Sz[2] = ::{ 1, n }
-    x: = Tensor<|F32|>.new(Sz[]::x_shape, arena)
+    x: = Tensor<|F32|>(Sz[]::x_shape, arena)
     (x.data + 0)$ = F32::0.5
     (x.data + 1)$ = -(F32::1.2)
     (x.data + 2)$ = F32::0.9
     (x.data + 3)$ = F32::0.3
     // dy = 1 (L = Σ y)
-    dy: = Tensor<|F32|>.new(Sz[]::x_shape, arena)
+    dy: = Tensor<|F32|>(Sz[]::x_shape, arena)
     dy.fill(F32::1.0)
     // lr=0 leaves the weights frozen and gives dX
     dx: = rn.backward(x, dy, 0.0)
@@ -217,12 +217,12 @@ fn test_adam(arena: Arena$@)
     vocab: Sz = 4
     target: I32 = 1
     x_shape: Sz[2] = ::{ 1, in_dim }
-    $x: = Tensor<|F32|>.new(Sz[]::x_shape, arena)
+    $x: = Tensor<|F32|>(Sz[]::x_shape, arena)
     (x.data + 0)$ = F32::0.3
     (x.data + 1)$ = F32::0.9
     (x.data + 2)$ = -(F32::0.6)
     w_shape: Sz[2] = ::{ in_dim, vocab }
-    w: = Tensor<|F32|>.new(Sz[]::w_shape, arena)
+    w: = Tensor<|F32|>(Sz[]::w_shape, arena)
     w.fill(F32::0.0)
 
     $opt: = ai_optim.Adam<|F32|>.new_default(w)
@@ -251,14 +251,14 @@ fn test_attention_grad(arena: Arena$@)
     verdict.start("[Attn] Self-Attention backward numerical gradient check (F64)...")
     seqn: Sz = 3
     d: Sz = 4
-    $att: = ai_nn.Self_attention<|F64|>.new(d, seqn, arena)
+    $att: = ai_nn.Self_attention<|F64|>(d, seqn, arena)
     x_shape: Sz[2] = ::{ seqn, d }
-    x: = Tensor<|F64|>.new(Sz[]::x_shape, arena)
+    x: = Tensor<|F64|>(Sz[]::x_shape, arena)
     for i in Range.asc(x.size)
         (x.data + i)$ = 0.1 * (F64::i) - 0.5 // a deterministic input that varies
     // the analytic gradient (lr=0 freezes the weights)
     $c: = att.train_forward(x)
-    dout: = Tensor<|F64|>.new(c.out.shape, arena)
+    dout: = Tensor<|F64|>(c.out.shape, arena)
     dout.fill(1.0)
     dx: = att.backward(c@, dout, 0.0)
 
@@ -273,7 +273,7 @@ fn test_attention_grad(arena: Arena$@)
     before: = tsum_f64(att.train_forward(x).out)
     for _step in Range.asc(20)
         $cc: = att.train_forward(x)
-        d1: = Tensor<|F64|>.new(cc.out.shape, arena)
+        d1: = Tensor<|F64|>(cc.out.shape, arena)
         d1.fill(1.0)
         att.backward(cc@, d1, 0.01)
     after: = tsum_f64(att.train_forward(x).out)
@@ -291,14 +291,14 @@ fn test_block_grad(arena: Arena$@)
     seqn: Sz = 3
     d: Sz = 4
     hidden: Sz = 8
-    $blk: = ai_nn.Transformer_block<|F64|>.new(d, hidden, seqn, 1.0e-5, arena)
+    $blk: = ai_nn.Transformer_block<|F64|>(d, hidden, seqn, 1.0e-5, arena)
     x_shape: Sz[2] = ::{ seqn, d }
-    x: = Tensor<|F64|>.new(Sz[]::x_shape, arena)
+    x: = Tensor<|F64|>(Sz[]::x_shape, arena)
     for i in Range.asc(x.size)
         (x.data + i)$ = 0.07 * (F64::i) - 0.4
     // the analytic gradient (lr=0 freezes every layer)
     $c: = blk.train_forward(x)
-    dout: = Tensor<|F64|>.new(c.out.shape, arena)
+    dout: = Tensor<|F64|>(c.out.shape, arena)
     dout.fill(1.0)
     dx: = blk.backward(c@, dout, 0.0)
 
@@ -313,7 +313,7 @@ fn test_block_grad(arena: Arena$@)
     before: = tsum_f64(blk.train_forward(x).out)
     for _step in Range.asc(20)
         $cc: = blk.train_forward(x)
-        d1: = Tensor<|F64|>.new(cc.out.shape, arena)
+        d1: = Tensor<|F64|>(cc.out.shape, arena)
         d1.fill(1.0)
         blk.backward(cc@, d1, 0.01)
     after: = tsum_f64(blk.train_forward(x).out)
@@ -342,8 +342,8 @@ priv fn all_same(t: Tensor<|F64|>): Bool //< is every element the same value?
 
 fn test_init_breaks_symmetry()
     verdict.start("[NN] init_uniform spreads every last weight in a layer...")
-    defer work: = Arena.new(1024 * 1024)
-    $blk: = ai_nn.Transformer_block<|F64|>.new(4, 8, 2, 1.0e-5, work)
+    defer work: = Arena(1024 * 1024)
+    $blk: = ai_nn.Transformer_block<|F64|>(4, 8, 2, 1.0e-5, work)
     // First pins that the default is one repeated value. If that breaks, the checks below pass
     // without proving anything.
     assert(all_same(blk.attention.wq.weights),
@@ -351,7 +351,7 @@ fn test_init_breaks_symmetry()
     assert(all_same(blk.ffn.fc1.weights),
         "NN: new's default has to be the same value in every element")
 
-    $rng: = prng.Prng.new(7U64)
+    $rng: = prng.Prng(7U64)
     blk.init_uniform(rng@, 0.1)
     assert(!all_same(blk.attention.wq.weights), "NN: init_uniform has to spread wq")
     assert(!all_same(blk.attention.wk.weights), "NN: init_uniform has to spread wk")
@@ -367,7 +367,7 @@ fn test_init_breaks_symmetry()
     assert(all_same(blk.ffn_norm.weight) && (blk.ffn_norm.weight.data + 0)$ == 1.0,
         "NN: init_uniform must not touch the normalization's weights")
 
-    $emb: = ai_nn.Embedding<|F64|>.new(6, 4, work)
+    $emb: = ai_nn.Embedding<|F64|>(6, 4, work)
     assert(all_same(emb.weight), "NN: Embedding's default is the same value in every element too")
     emb.init_uniform(rng@, 0.1)
     assert(!all_same(emb.weight), "NN: init_uniform has to spread the embedding")
@@ -380,7 +380,7 @@ fn test_init_breaks_symmetry()
 // ==========================================
 priv fn filled(n: Sz, v: F32, arena: Arena$@): Tensor<|F32|> //< a vector of n, every element v
     shape: Sz[1] = ::{ n }
-    t: = Tensor<|F32|>.new(Sz[]::shape, arena)
+    t: = Tensor<|F32|>(Sz[]::shape, arena)
     t.fill(v)
     return t
 

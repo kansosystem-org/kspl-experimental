@@ -65,14 +65,13 @@ impl<|T|> Mini_llama<|T|>
             ai_nn.Transformer_block<|T|>$@::model_arena
             .alloc(n_layers * sizeof(ai_nn.Transformer_block<|T|>))
         for i in Range.asc(n_layers)
-            (blocks_ptr + i)$ = ai_nn.Transformer_block<|T|>
-                .new(dim, hidden, max_seq_len, T::1.0e-5, model_arena)
+            (blocks_ptr + i)$ = ai_nn.Transformer_block<|T|>(dim, hidden, max_seq_len, T::1.0e-5,
+                model_arena)
 
-        return Mini_llama<|T|>::{ .token_embed = ai_nn.Embedding<|T|>
-            .new(vocab_size, dim, model_arena),
+        return Mini_llama<|T|>::{ .token_embed = ai_nn.Embedding<|T|>(vocab_size, dim, model_arena),
             .blocks = ai_nn.Transformer_block<|T|>$[]::{ .ptr = blocks_ptr, .len = n_layers },
-            .norm = ai_nn.Rms_norm<|T|>.new(dim, T::1.0e-5, model_arena),
-            .lm_head = ai_nn.Linear<|T|>.new(dim, vocab_size, model_arena) }
+            .norm = ai_nn.Rms_norm<|T|>(dim, T::1.0e-5, model_arena),
+            .lm_head = ai_nn.Linear<|T|>(dim, vocab_size, model_arena) }
     fn randomize(r: Self$@, rng: prng.Prng$@) //<
         //< The random initialization for training from scratch (breaking the symmetry)
         //< Matrix weights get uniform random values and the normalization weights 1.0, for training
@@ -95,7 +94,7 @@ impl<|T|> Mini_llama<|T|>
         st.map_into<|F32|>("model.norm.weight", r.norm.weight@, arena)!
         st.map_into<|F32|>("lm_head.weight", r.lm_head.weights@, arena)!
 
-        defer $b: = Str_builder.new()
+        defer $b: = Str_builder()
 
         for i in Range.asc(r.blocks.len)
             ws: = r.block_weights(i)
@@ -104,11 +103,11 @@ impl<|T|> Mini_llama<|T|>
         io.err().s("[Model] Weight mapping completed successfully!\n\n")
     fn save(r: Self$@, path: U8[]): Void!ai_safetensors.Safetensors_error //<
         //< Writes the trained weights to a safetensors file (the same naming as load_weights)
-        $w: = ai_safetensors.Safetensors_writer.new()
+        $w: = ai_safetensors.Safetensors_writer()
         w.add("model.embed_tokens.weight", r.token_embed.weight)
         w.add("model.norm.weight", r.norm.weight)
         w.add("lm_head.weight", r.lm_head.weights)
-        defer $b: = Str_builder.new()
+        defer $b: = Str_builder()
         for i in Range.asc(r.blocks.len)
             ws: = r.block_weights(i)
             for k in Range.asc(BLOCK_WEIGHT_KEYS.len)
@@ -137,7 +136,7 @@ impl<|T|> Mini_llama<|T|>
         dim: = r.token_embed.weight.shape[1]
         n: = tokens.len
         shp: Sz[2] = ::{ n, dim }
-        x: = Tensor<|T|>.new(Sz[]::shp, arena)
+        x: = Tensor<|T|>(Sz[]::shp, arena)
         for i in Range.asc(n)
             e: = r.token_embed.forward(tokens[i], arena) // [1, dim]
             for j in Range.asc(dim)

@@ -1,6 +1,9 @@
 //< Type calls reuse associated-function errors and never become casts or field constructors
 // ==== case type_call_without_new
-// EXPECT: new
+// EXPECT: error: type 'Empty' has no static 'new', so it cannot be called
+// EXPECT: Hint: declare a static 'fn new(…)' in the type's 'impl'
+// EXPECT: write 'Empty::{ … }'
+// EXPECT-NOT: undefined path or identifier
 struct Empty
     n: I32
 fn main()
@@ -36,7 +39,9 @@ fn main()
     Shadowed: = 3
     _x: = Shadowed()
 // ==== case type_call_is_not_a_cast
-// EXPECT: error:
+// EXPECT: error: 'I32' names a type. A type is not a value
+// EXPECT: a cast ('I32::x')
+// EXPECT: Finished with 1 error(s)
 fn main()
     _x: = I32(3)
 // ==== case type_call_wrong_arity
@@ -65,3 +70,70 @@ impl Existing
 fn main()
     before: = Existing::{ .n = 1 }
     _after: = Renamed(before@)
+// ==== case type_call_generic_without_new
+// EXPECT: error: type 'Bare<|I32|>' has no static 'new', so it cannot be called
+// EXPECT-NOT: undefined path or identifier
+struct Bare<|T|>
+    v: T
+fn main()
+    _x: = Bare<|I32|>(3)
+// ==== case static_member_missing_names_the_type
+// EXPECT: error: undefined path or identifier 'Plain.make'
+// EXPECT: Hint: type 'Plain' exists. It has no static member 'make'
+// EXPECT-NOT: neither a known import alias nor a type
+struct Plain
+    n: I32
+fn main()
+    _x: = Plain.make()
+// ==== case explicit_new_refused
+// EXPECT: explicit_new_refused.kspl:9:11: error: the call names a type's static 'new'. Write the type call 'Cup(…)'
+// EXPECT: Finished with 1 error(s)
+struct Cup
+    n: I32
+impl Cup
+    fn new(n: I32): Self
+        return Self::{ .n = n }
+fn main()
+    _x: = Cup.new(1)
+// ==== case explicit_new_refused_generic
+// EXPECT: error: the call names a type's static 'new'. Write the type call 'List<|I32|>(…)'
+// EXPECT: Finished with 1 error(s)
+import "std/ds" { List }
+fn main()
+    defer $_xs: = List<|I32|>.new(null)
+// ==== case explicit_new_refused_spells_arguments
+//< The fix spells the type arguments as written, a function type's parameters included
+// EXPECT: Write the type call 'List<|fn(a: I32): I32|>(…)'
+// EXPECT: Finished with 1 error(s)
+import "std/ds" { List }
+fn main()
+    defer $_fs: = List<|fn(a: I32): I32|>.new(null)
+// ==== case explicit_new_refused_qualified
+// EXPECT: error: the call names a type's static 'new'. Write the type call 'mem.Arena(…)'
+// EXPECT: Finished with 1 error(s)
+import "std/mem"
+fn main()
+    defer _a: = mem.Arena.new(64)
+// ==== case explicit_new_refused_typedef
+// EXPECT: error: the call names a type's static 'new'. Write the type call 'Renamed(…)'
+// EXPECT: Finished with 1 error(s)
+struct Cup
+    n: I32
+typedef Renamed = Cup
+impl Cup
+    fn new(n: I32): Self
+        return Self::{ .n = n }
+fn main()
+    _x: = Renamed.new(1)
+// ==== case explicit_new_refused_self
+// EXPECT: error: the call names a type's static 'new'. Write the type call 'Self(…)'
+// EXPECT: Finished with 1 error(s)
+struct Cup
+    n: I32
+impl Cup
+    fn new(n: I32): Self
+        return Self::{ .n = n }
+    fn one(): Self
+        return Self.new(1)
+fn main()
+    _x: = Cup.one()

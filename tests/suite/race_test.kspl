@@ -83,7 +83,7 @@ priv fn races_in(text: U8[], arena: Arena$@): List<|U8[]|> //<
     //< One line per report in a sanitizer's log: its summary, and the global it names
     //< **The global goes with it**: an error's trace records at a `!`, so a summary alone points
     //< at the `!` and not at what raced. **A pure function of one text** (`REPORT_SAMPLES`).
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     $open: = false
     $on: U8[] = ""
     for line in text.lines(arena)
@@ -110,8 +110,8 @@ priv fn races_in(text: U8[], arena: Arena$@): List<|U8[]|> //<
 
 priv fn tallied(races: List<|U8[]|>@, arena: Arena$@): U8[] //<
     //< Each distinct report once, with how many times it came
-    $seen: = List<|U8[]|>.new(arena)
-    $counts: = List<|Sz|>.new(arena)
+    $seen: = List<|U8[]|>(arena)
+    $counts: = List<|Sz|>(arena)
     for k in Range.asc(races.len)
         short: = races.get(k)
         $at: Sz = -1
@@ -144,7 +144,7 @@ priv const REPORT_SAMPLES: Sample[_] = ::{
 priv fn build(dir: U8[], entry: U8[], exe: U8[], opt: U8[], arena: Arena$@): Built //<
     //< Compiles entry (from the folder dir) to C and links it with the sanitizer into exe
     //< `opt` is `opt_for_run` or `opt_for_build`.
-    $flags: = List<|U8[]|>.new(arena)
+    $flags: = List<|U8[]|>(arena)
     for f in TSAN_CFLAGS
         flags.push(f)
     flags.push(opt)
@@ -163,7 +163,7 @@ struct Raced //< one sanitized run: the check it reports to, where it runs, and 
 
 priv fn sanitized(log_dir: U8[], env: U8[][], argv: U8[][], arena: Arena$@): U8[][] //<
     //< argv as a raced run starts it: under `RACE_STACK_KIB`, its logs in log_dir, env set
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     for w in U8[][]::{ "sh", "-c", "ulimit -s \"$0\" && exec \"$@\"", RACE_STACK_KIB, "env" }
         out.push(w)
     out
@@ -182,7 +182,7 @@ priv fn run_all_raced(runs: List<|Raced|>@, work: U8[], arena: Arena$@) //<
     //< per run through `env`, so a report lands on the check whose run made it. A run also fails on
     //< its exit code: the sanitizer exits 66 on a report.
     //< Caution: **Give each run that writes files a folder of its own**: they run at once.
-    $jobs: = List<|subproc.Job|>.new(arena)
+    $jobs: = List<|subproc.Job|>(arena)
     for i in Range.asc(runs.len)
         r: = runs.get(i)
         fs.mkdir_all(r.log_dir) catch {}
@@ -258,7 +258,7 @@ priv fn race_tests(work: U8[], deps: Str_builder$@, runs: List<|Raced|>$@, arena
 priv fn build_all(name: U8[], pkg: U8[], entries: U8[][], work: U8[], deps: Str_builder$@,
     arena: Arena$@): List<|U8[]|> //<
         //< Builds each entry (named from the root) in the package's folder; empty where one fails
-    $exes: = List<|U8[]|>.new(arena)
+    $exes: = List<|U8[]|>(arena)
     dir: = fs.join(harness.root(), pkg, arena)
     for i in Range.asc(entries.len)
         stem: = arena.text().s(pkg).s("_\{i\}.exe").take()
@@ -267,7 +267,7 @@ priv fn build_all(name: U8[], pkg: U8[], entries: U8[][], work: U8[], deps: Str_
             OPT_FOR_RUN, arena)
         if b.exe.len == 0
             verdict.check(name, false, b.why)
-            return List<|U8[]|>.new(arena)
+            return List<|U8[]|>(arena)
         deps.s(b.deps)
         exes.push(b.exe)
     return exes
@@ -343,7 +343,7 @@ impl Lsp_session
 
     priv fn change(r: Self$@, k: Sz, fn_name: U8[], arena: Arena$@) //<
         //< a didChange of the whole text
-        $b: = Json_builder.new(arena)
+        $b: = Json_builder(arena)
         td: = b.obj().set("uri", b.str_val(r.uri(k, arena))).set("version", b.int_val(2I64)).build()
         change: = b.obj().set("text", b.str_val(lsp_text(fn_name, k, arena))).build()
         params: = b.obj().set("textDocument", td)
@@ -362,7 +362,7 @@ impl Lsp_session
             r.faults.push(lsp_client.why(r.c, said, arena))
 
     priv fn crash(r: Self$@, arena: Arena$@) //< the worker's crash hook (`$/ksplTestCrash`)
-        $b: = Json_builder.new(arena)
+        $b: = Json_builder(arena)
         r.c.notify("$/ksplTestCrash", b.obj().build(), lsp_client.SEND_MS, arena) catch {}
 
 priv fn play_lsp_session(exe: U8[], log_dir: U8[], top: U8[], arena: Arena$@): List<|U8[]|> //<
@@ -372,7 +372,7 @@ priv fn play_lsp_session(exe: U8[], log_dir: U8[], top: U8[], arena: Arena$@): L
     //< In a pause, the main loop analyses the documents nobody asked for while the thread waits on
     //< the input. On `exit` with the input still open, the thread
     //< must stop by itself.
-    $faults: = List<|U8[]|>.new(arena)
+    $faults: = List<|U8[]|>(arena)
     argv: =
         sanitized(log_dir,
         U8[][]::{ arena.text().s("KSPLC_STD_DIR=").s(ksplc_harness.std_dir()).take() },
@@ -381,7 +381,7 @@ priv fn play_lsp_session(exe: U8[], log_dir: U8[], top: U8[], arena: Arena$@): L
         faults.push("the server cannot be started")
         return faults
     $s: = Lsp_session::{ .c = c@, .top = top, .faults = faults }
-    $b: = Json_builder.new(arena)
+    $b: = Json_builder(arena)
     _init: =
         s.c.request("initialize", b.obj().build(), LSP_WAIT_MS, arena) catch {}
     s.c.notify("initialized", b.obj().build(), lsp_client.SEND_MS, arena) catch {}
@@ -443,7 +443,7 @@ priv fn check_covered(deps: U8[], arena: Arena$@) //<
     //< Every tracked source that starts a thread is compiled into a program above, or left out
     read: = deps.lines(arena)
     $seen: Sz = 0
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     for rel in harness.tracked_matching(U8[][]::{ "*.kspl" })
         text: = harness.read_under_root(rel)
         // This file's own spawn is the race written on purpose, raced by `check_fires`.
@@ -475,8 +475,8 @@ fn main(): I32
             lacks)
         return ksplc_harness.finish()
     check_fires(work, arena)
-    defer $deps: = Str_builder.new()
-    $runs: = List<|Raced|>.new(arena)
+    defer $deps: = Str_builder()
+    $runs: = List<|Raced|>(arena)
     race_tests(work, deps@, runs@, arena)
     race_ksai(work, deps@, runs@, arena)
     race_ksbind(work, deps@, runs@, arena)

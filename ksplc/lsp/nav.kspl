@@ -90,7 +90,7 @@ fn handle_definition(state: Doc_state$@, params: json.Value, id_val: json.Value,
             state.sema.line_starts_for(def_file, def_src))
         line = pos.line
         col = pos.character
-    $b: = Json_builder.new(arena)
+    $b: = Json_builder(arena)
     style: = base_locate.uri_style_of(state.uri_perm)
     lsp_msg.send_response(id_val,
         b.location(style.spell(def_file), line, col, line, col + text_len), arena)
@@ -411,7 +411,7 @@ priv fn member_of(c: Sema_ctx$@, raw_type: U8[], name: U8[]): Ast_node$@? //<
     case .some(f)
         return .some(f)
     case .none {}
-    defer $method_prefix: = Str_builder.new()
+    defer $method_prefix: = Str_builder()
     method_prefix.s(base_type_only).s(".").s(name)
     full_m_name: = method_prefix.slice()
 
@@ -437,7 +437,7 @@ priv fn resolve_dot_access_def(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, target
             return .some(m)
         case .none {}
     if recv_node.kind_id == .k_identifier
-        defer $mod_m_name: = Str_builder.new()
+        defer $mod_m_name: = Str_builder()
         mod_m_name.s(recv_node.text).s(".").s(target_text)
         mod_sym: = c.symtab.resolve(mod_m_name.slice()).unwrap_or(null)
         if mod_sym != null && mod_sym.node != null
@@ -493,7 +493,7 @@ priv fn type_param_named(decl: Ast_node$@, name: U8[]): Ast_node$@? //<
 
 priv fn fn_param_named(decl: Ast_node$@, name: U8[]): Ast_node$@? //<
     //< The function's parameter called name
-    for param in base_ast_ext.Param_cursor.new(decl.get_fn_params(), false)
+    for param in base_ast_ext.Param_cursor(decl.get_fn_params(), false)
         id_n: = param.find_child(.k_identifier)
         if (id_n != null && id_n.text.equals(name)) || param.text.equals(name)
             return .some(param)
@@ -502,7 +502,7 @@ priv fn fn_param_named(decl: Ast_node$@, name: U8[]): Ast_node$@? //<
 fn get_definition_node(c: Sema_ctx$@, path: List<|Ast_node$@|>$@): Ast_node$@? //<
     //< The declaration the path's last node stands for; on a declared name, that declaration
     //< Caution: **Not the declared type's.** The hover, references and renaming all start here, so
-    //< on `$words: = List<|U8[]|>.new(arena)` they showed, listed and renamed `List`.
+    //< on `$words: = List<|U8[]|>(arena)` they showed, listed and renamed `List`.
     if c == null || path.len == 0
         return .none
     target_node: = path.get(path.len - 1)
@@ -539,7 +539,7 @@ fn get_definition_node(c: Sema_ctx$@, path: List<|Ast_node$@|>$@): Ast_node$@? /
     if path.len >= 2
         p: = path.get(path.len - 2)
         if p.kind_id == .k_type_path || p.kind_id == .k_expr_path
-            defer $sb: = Str_builder.new()
+            defer $sb: = Str_builder()
             p.get_full_path_str_to(sb)
             full_str: = sb.slice().get_generic_base_name()
             if full_str.len > 0 && !full_str.equals(target_text)

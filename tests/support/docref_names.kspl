@@ -29,7 +29,7 @@ priv const FILE_WORDS: U8[][_] = ::{ "in `", "of `", "inside `" }
 
 // The endings that make a name a file's name (`edit.kspl`, `ci.yml`).
 priv const FILE_EXTS: U8[][_] = ::{ "kspl", "ksplb", "md", "c", "h", "txt", "cfg", "json", "html",
-    "js", "css", "mk", "py", "ll", "sh", "exe", "yml", "ld", "kspeg", "toml", "kspage", "uf2", "elf",
+    "js", "css", "mk", "py", "ll", "sh", "exe", "yml", "ld", "kspeg", "toml", "ksmd", "uf2", "elf",
     "o", "a", "so", "dll", "wasm", "svg" }
 
 priv struct Use //< one dotted name a document writes
@@ -72,12 +72,12 @@ priv fn is_word_byte(c: U8): Bool
 fn dotted(span: U8[], arena: Arena$@): List<|U8[]|> //<
     //< The parts of a span holding a dotted name and nothing else (call brackets may close it)
     //< Empty where the span holds anything more: `io.out().s("x")` is a fragment of code.
-    $parts: = List<|U8[]|>.new(arena)
+    $parts: = List<|U8[]|>(arena)
     $i: Sz = 0
     for
         start: = i
         if i >= span.len || !span[i].is_alpha()
-            return List<|U8[]|>.new(arena)
+            return List<|U8[]|>(arena)
         for i < span.len && is_word_byte(span[i])
             i += 1
         parts.push(span.sub(start, i - start))
@@ -96,7 +96,7 @@ fn dotted(span: U8[], arena: Arena$@): List<|U8[]|> //<
             if depth == 0
                 break
     if i != span.len || parts.len < 2
-        return List<|U8[]|>.new(arena)
+        return List<|U8[]|>(arena)
     return parts
 
 fn is_foreign(before: U8[]): Bool //<
@@ -265,11 +265,11 @@ priv fn build_index(uses: List<|Use|>@, arena: Arena$@): Index //<
     //< Asks `ksplc doc` for each source that declares a head the documents name
     //< **Only those sources are asked**, so the cost follows the names written, not the tree's
     //< size.
-    ix: = Index::{ .members = arena.create(Map<|U8[], List<|U8[]|>$@|>.new(arena)),
-        .modules = arena.create(Map<|U8[], List<|U8[]|>$@|>.new(arena)) }
+    ix: = Index::{ .members = arena.create(Map<|U8[], List<|U8[]|>$@|>(arena)),
+        .modules = arena.create(Map<|U8[], List<|U8[]|>$@|>(arena)) }
     // The types named, and the lower-case heads, which only a std file's alias answers.
-    $heads: = Map<|U8[], Bool|>.new(arena)
-    $lower: = Map<|U8[], Bool|>.new(arena)
+    $heads: = Map<|U8[], Bool|>(arena)
+    $lower: = Map<|U8[], Bool|>(arena)
     for u in uses
         head: = u.parts.get(0)
         if head[0].is_upper()
@@ -277,7 +277,7 @@ priv fn build_index(uses: List<|Use|>@, arena: Arena$@): Index //<
         else
             lower.set(head, true)
     tracked: = harness.tracked()
-    $stems: = List<|U8[]|>.new(arena)
+    $stems: = List<|U8[]|>(arena)
     for rel in tracked
         if !rel.ends_with(".kspl") && !rel.ends_with(".ksplb")
             continue
@@ -293,7 +293,7 @@ priv fn build_index(uses: List<|Use|>@, arena: Arena$@): Index //<
             add_externs(alias, src, ix@, arena)
         if named || declares_one(src, heads@, arena)
             stems.push(rel.sub(0, rel.rfind_char('.').unwrap_or(rel.len)))
-    $jobs: = List<|subproc.Job|>.new(arena)
+    $jobs: = List<|subproc.Job|>(arena)
     for stem in stems
         argv: = ksplc_harness.ksplc_argv(U8[][]::{ "doc", "--surface-scope=all", stem })
         jobs.push(subproc.Job::{ .argv = argv, .cwd = harness.root() })
@@ -309,9 +309,9 @@ priv fn build_index(uses: List<|Use|>@, arena: Arena$@): Index //<
 
 priv fn fence_words(text: U8[], arena: Arena$@): Map<|U8[], Bool|>$@ //<
     //< The words inside a document's KSPL fences: what its own examples declare (`Event.click`)
-    $snippets: = List<|shape.Snippet|>.new(arena)
+    $snippets: = List<|shape.Snippet|>(arena)
     shape.collect("", text, snippets@, arena)
-    out: = arena.create(Map<|U8[], Bool|>.new(arena))
+    out: = arena.create(Map<|U8[], Bool|>(arena))
     for s in snippets
         $i: Sz = 0
         for i < s.body.len
@@ -366,8 +366,8 @@ priv fn left_alone(text: U8[], arena: Arena$@): Bool
 fn check(arena: Arena$@) //< this check's entry point, called from `suite/docref_test.kspl`
     tracked: = harness.tracked()
     private: = harness.private_docs()
-    $uses: = List<|Use|>.new(arena)
-    $owns: = Map<|U8[], Map<|U8[], Bool|>$@|>.new(arena)
+    $uses: = List<|Use|>(arena)
+    $owns: = Map<|U8[], Map<|U8[], Bool|>$@|>(arena)
     for rel in tracked
         if !rel.ends_with(".md") || harness.is_private_doc(rel, private@)
             continue
@@ -377,7 +377,7 @@ fn check(arena: Arena$@) //< this check's entry point, called from `suite/docref
         read_uses(rel, text, uses@, arena)
         owns.set(rel, fence_words(text, arena))
     ix: = build_index(uses@, arena)
-    $bad: = List<|U8[]|>.new(arena)
+    $bad: = List<|U8[]|>(arena)
     for u in uses
         own: = owns.get(u.rel).unwrap_or(null)
         if own != null && wrong_name(ix@, u@, own)

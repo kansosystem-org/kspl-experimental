@@ -1,0 +1,226 @@
+//< Writes a Document as canonical ksmd source
+//< LF endings, one blank line between blocks, one newline at the end. A paragraph takes one line
+//< except at a hard break. A code fence is the shortest run of backticks, at least three, that no
+//< line of its text equals. A list item takes one line, two spaces per level, and every ordered
+//< item is written `1.`, so inserting an item changes one line.
+//< Text escapes only what would otherwise be markup: `\`, `*`, backticks, `[` and `]`, and a block
+//< marker that starts a paragraph's line.
+//< A clause writes its attributes in a fixed order, its quoted values with JSON escapes, and a
+//< table's column weights divided by their greatest common divisor. A formula's references take
+//< the coordinates their rows and columns have now.
+import "ksmd/formula" { Positions, write_formula }
+import "ksmd/marker" { is_list_marker, run_of, run_of_digits, starts_block }
+import "ksmd/model" { Block, Cell, Document, Inline, Table }
+import "std/chars"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+
+priv const MIN_FENCE: Sz = 3
+
+fn write(doc: Document@, out: Str_builder$@) //< appends the whole source to `out`
+    defer scratch: = Arena(16 * 1024)
+    at: = Positions(doc, scratch)
+    out.s("%ksmd 1\n")
+    for i in Range.asc(doc.blocks.len)
+        out.c('\n')
+        write_block(doc, doc.blocks.get(i), at@, out)
+
+priv fn write_block(doc: Document@, b: Block, at: Positions@, out: Str_builder$@)
+    switch b.kind
+    case .paragraph
+        write_inlines(doc, b.first, b.count, true, out)
+        out.c('\n')
+    case .heading
+        for _ in Range.asc(b.level)
+            out.c('#')
+        out.c(' ')
+        write_inlines(doc, b.first, b.count, false, out)
+        out.c('\n')
+    case .code
+        ticks: = fence_length(b.text)
+        for _ in Range.asc(ticks)
+            out.c('`')
+        out.s(b.label).c('\n').s(b.text)
+        for _ in Range.asc(ticks)
+            out.c('`')
+        out.c('\n')
+    case .list
+        for i in Range.asc(b.count)
+            item: = doc.items.get(b.first + i)
+            for _ in Range.asc(item.depth)
+                out.s("  ")
+            out.s("1. " if item.ordered else "- ")
+            write_inlines(doc, item.first, item.count, false, out)
+            out.c('\n')
+    case .table
+        write_table(doc, doc.tables[b.first]@, at, out)
+    case .include
+        out.s(":::include")
+        write_attribute("path", b.text, out)
+        out.s("\n:::\n")
+    case .image
+        image: = doc.images.get(b.first)
+        out.s(":::image")
+        write_attribute("src", image.src, out)
+        write_attribute("alt", image.alt, out)
+        if image.caption.len > 0
+            write_attribute("caption", image.caption, out)
+        out.s("\n:::\n")
+
+priv fn write_table(doc: Document@, t: Table@, at: Positions@, out: Str_builder$@) //<
+    //< The opening line, the header and each data row, then the closing line
+    out.s(":::table")
+    write_attribute("name", t.name, out)
+    if t.weights.len > 0
+        $divisor: Sz = 0
+        for weight in t.weights
+            divisor = gcd(divisor, weight)
+        out.s(" widths=\"")
+        for c in Range.asc(t.weights.len)
+            if c > 0
+                out.c(',')
+            out.s("\{t.weights[c] / divisor\}")
+        out.c('"')
+    out.c('\n')
+    for r in Range.asc(t.rows.len + 1)
+        out.c('|')
+        for c in Range.asc(t.columns.len)
+            write_cell(doc, t, t.cells[r * t.columns.len + c], at, out)
+        out.c('\n')
+    out.s(":::\n")
+
+priv fn write_cell(doc: Document@, t: Table@, cell: Cell, at: Positions@, out: Str_builder$@) //<
+    //< One cell and the '|' after it; a formula's references take the coordinates they have now
+    switch cell.kind
+    case .empty
+        out.s(" |")
+    case .text
+        out.s(" \"").escape_and_append(cell.text).s("\" |")
+    case .number
+        out.c(' ').s(cell.text).s(" |")
+    case .formula
+        out.s(" =")
+        write_formula(doc, t, cell, at, 0, 0, out)
+        out.s(" |")
+
+priv fn write_attribute(name: U8[], value: U8[], out: Str_builder$@) //< ` name="value"`
+    out.c(' ').s(name).s("=\"").escape_and_append(value).c('"')
+
+priv fn gcd(a: Sz, b: Sz): Sz
+    return a if b == 0 else gcd(b, a % b)
+
+priv fn write_inlines(doc: Document@, first: Sz, $count: Sz, paragraph: Bool, out: Str_builder$@) //<
+    //< In a paragraph, a text that starts a line is kept from reading as a block marker
+    //< What the format cannot hold at a line's edge is left out: spaces and tabs at either end
+    //< of a line, and hard breaks at a paragraph's end. An editor's model can hold them while
+    //< text is typed, and the reader would drop or refuse them.
+    for count > 0 && is_blank_end(doc.inlines.get(first + count - 1))
+        count -= 1
+    $line_start: = true
+    for i in Range.asc(count)
+        node: = doc.inlines.get(first + i)
+        switch node.kind
+        case .text
+            $text: = node.text.trim_start() if line_start else node.text
+            if i + 1 == count || doc.inlines.get(first + i + 1).kind == .hard_break
+                text = text.trim_end()
+            if text.len == 0
+                continue
+            write_text(text, line_start && paragraph, out)
+        case .code
+            write_code(node.text, out)
+        case .hard_break
+            out.s("\\\n")
+        case .emphasis_start, .emphasis_end
+            out.c('*')
+        case .strong_start, .strong_end
+            out.s("**")
+        case .link_start
+            out.c('[')
+        case .link_end
+            out.s("](").s(link_destination(doc, first, i)).c(')')
+        line_start = node.kind == .hard_break
+
+priv fn is_blank_end(node: Inline): Bool //< a hard break, or text of spaces alone
+    return node.kind == .hard_break ||
+        node.kind == .text && node.text.trim_spaces().len == 0
+
+priv fn write_text(text: U8[], line_start: Bool, out: Str_builder$@) //<
+    //< Literal text, with the escapes that keep it literal
+    $from: Sz = 0
+    if line_start && starts_block(text)
+        if is_list_marker(text) && text[0] != '-'
+            digits: = run_of_digits(text)
+            out.s(text.sub(0, digits)).s("\\.")
+            from = digits + 1
+        else
+            out.c('\\').c(text[0])
+            from = 1
+    for i in Range.asc(text.len - from)
+        c: = text[from + i]
+        if c == '\\' || c == '*' || c == '`' || c == '[' || c == ']'
+            out.c('\\')
+        out.c(c)
+
+priv fn write_code(code: U8[], out: Str_builder$@) //<
+    //< The shortest run of backticks that no run inside the code equals. A space pads each end
+    //< where the code starts or ends with a backtick, or has a space at both ends.
+    $ticks: Sz = 1
+    for has_tick_run(code, ticks)
+        ticks += 1
+    padded: =
+        code.len > 0 &&
+        (code[0] == '`' || code[code.len - 1] == '`' ||
+        code[0] == ' ' && code[code.len - 1] == ' ' && code.trim_spaces().len > 0)
+    for _ in Range.asc(ticks)
+        out.c('`')
+    if padded
+        out.c(' ')
+    out.s(code)
+    if padded
+        out.c(' ')
+    for _ in Range.asc(ticks)
+        out.c('`')
+
+priv fn has_tick_run(code: U8[], ticks: Sz): Bool //<
+    //< whether a run of exactly that many backticks stands in it
+    $i: Sz = 0
+    for i < code.len
+        if code[i] != '`'
+            i += 1
+            continue
+        run: = run_of(code.sub_from(i), '`')
+        if run == ticks
+            return true
+        i += run
+    return false
+
+priv fn link_destination(doc: Document@, first: Sz, end: Sz): U8[] //<
+    //< The destination its `link_start` holds, for the `link_end` at `end`
+    $i: = end
+    for doc.inlines.get(first + i).kind != .link_start
+        i -= 1
+    return doc.inlines.get(first + i).text
+
+priv fn fence_length(text: U8[]): Sz //< the shortest fence, at least three, that no line equals
+    $ticks: = MIN_FENCE
+    for has_tick_line(text, ticks)
+        ticks += 1
+    return ticks
+
+priv fn has_tick_line(text: U8[], ticks: Sz): Bool //< whether a line is exactly that many backticks
+    $start: Sz = 0
+    for start < text.len
+        $end: = start
+        for end < text.len && text[end] != '\n'
+            end += 1
+        if end - start == ticks && is_all_ticks(text.sub(start, ticks))
+            return true
+        start = end + 1
+    return false
+
+priv fn is_all_ticks(text: U8[]): Bool
+    for i in Range.asc(text.len)
+        if text[i] != '`'
+            return false
+    return true

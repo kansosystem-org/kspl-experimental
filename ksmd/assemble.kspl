@@ -1,0 +1,253 @@
+//< The assembled view of a document: its blocks in reading order, each include clause followed by
+//< the blocks of the source it names
+//< Each source is read once into its own model, which keeps its include clauses. The view only
+//< refers to blocks, so it has nothing to save: a save writes one source's model. A table belongs
+//< to its source, so a repeated include repeats its tables without declaring them twice.
+import "ksmd/files" { Files, Load_error, Loaded, folder_of, load, parse }
+import "ksmd/keyed" { Keyed }
+import "ksmd/model" { Block }
+import "ksmd/source" { Diagnostic, MAX_SOURCE_BYTES }
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str"
+
+const MAX_DEPTH: Sz = 16 //< the most files on the include stack, the top document's included
+const MAX_VIEW_BYTES: Sz = 64 * 1024 * 1024 //< the most source text a view reads
+    //< Each source counts when it is read, refused or not, and again at each later include of it.
+const MAX_VIEW_BLOCKS: Sz = 200000 //< the most blocks in a view, each instance's counted
+const NONE: Sz = -1 //< no instance, or no entry
+
+struct Instance //< one appearance of a source in the view; each include of it makes another
+    source: Sz //< its source in `Assembly.sources`
+    parent: Sz //< the instance whose include clause opens it; `NONE` for the top document
+    clause: Sz //< that clause's entry in `Assembly.entries`; `NONE` for the top document
+    first: Sz //< its first entry
+    count: Sz //< its entries, with those of the instances it opens
+
+struct Entry //< one block of the view
+    instance: Sz //< the instance whose source holds the block
+    block: Sz //< the block's index in that source's `Document.blocks`
+    opens: Sz //< the instance an include opens; `NONE` for another block, or an include refused
+    target: U8[] //< where an include's or an image's path leads, from the root; empty when the
+        //< path itself is refused
+
+struct Problem //< an include or an image the view cannot show, reported at its clause
+    entry: Sz //< the clause's entry
+    at: Diagnostic //< what is wrong: at the clause, or inside the source it includes
+    chain: List<|Diagnostic|> //< the include clauses that lead to `at`'s source, innermost first
+
+priv enum Failure //< why an include clause opens no instance
+    load(e: Load_error)
+    cycle
+    depth
+    bytes
+    blocks
+
+struct Assembly
+    sources: List<|Loaded|> //< every source read, once however often it is included
+    instances: List<|Instance|> //< the top document's first
+    entries: List<|Entry|> //< in reading order
+    problems: List<|Problem|> //< in reading order of their clauses, at most one per clause
+    priv bytes: Sz //< the source text counted against `MAX_VIEW_BYTES`
+    priv blocks: Sz //< the blocks of every instance
+    priv found: Keyed<|Sz|> //< each source's index in `sources`, by its path
+    priv refused: Keyed<|Failure|> //< why each source that could not be read failed
+
+fn assemble(files: Files, written: U8[], arena: Arena$@): Assembly!Load_error //<
+    //< The view of the document `written` names from the root. Only that document's own failure
+    //< fails it; an include or an image that fails is a `Problem`, and the rest of the view stands.
+    return assemble_loaded(files, load(files, written, arena)!, arena)
+
+fn assemble_loaded(files: Files, top: Loaded, arena: Arena$@): Assembly //<
+    //< The view of a document already read, such as the one an editor holds; it cannot fail
+    $a: = Assembly::{ .sources = List<|Loaded|>(arena), .instances = List<|Instance|>(arena),
+        .entries = List<|Entry|>(arena), .problems = List<|Problem|>(arena),
+        .bytes = top.source.bytes.len, .blocks = top.doc.blocks.len,
+        .found = Keyed<|Sz|>(arena), .refused = Keyed<|Failure|>(arena) }
+    a.keep(top)
+    a.instances
+        .push(Instance::{ .source = 0, .parent = NONE, .clause = NONE, .first = 0, .count = 0 })
+    a.expand(files, 0, 1, arena)
+    return a
+
+impl Assembly
+    fn source_of(r: Self@, entry: Sz): Loaded //< the source that holds an entry's block
+        e: = r.entries.get(entry)
+        return r.source_of_instance(e.instance)
+
+    fn block_of(r: Self@, entry: Sz): Block //< an entry's block, as its source's model holds it
+        src: = r.source_of(entry)
+        e: = r.entries.get(entry)
+        return src.doc.blocks.get(e.block)
+
+    fn problem_at(r: Self@, entry: Sz): Sz? //< the problem at an entry's clause, by its index
+        //< A binary search: `problems` stand in the order of their entries, each entry once.
+        $low: Sz = 0
+        $high: = r.problems.len
+        for low < high
+            mid: = low + (high - low) / 2
+            at: = r.problems[mid].entry
+            if at == entry
+                return .some(mid)
+            if at < entry
+                low = mid + 1
+            else
+                high = mid
+        return .none
+
+    priv fn expand(r: Self$@, files: Files, instance: Sz, depth: Sz, arena: Arena$@) //<
+        //< Adds one instance's entries, opening each include it holds; `depth` counts its file
+        src: = r.source_of_instance(instance)
+        folder: = folder_of(src.path)
+        first: = r.entries.len
+        for b in Range.asc(src.doc.blocks.len)
+            block: = src.doc.blocks.get(b)
+            entry: = r.entries.len
+            r.entries
+                .push(Entry::{ .instance = instance, .block = b, .opens = NONE, .target = "" })
+            if block.kind == .include
+                r.include(files, entry, folder, block.text, depth, arena)
+            else if block.kind == .image
+                r.image(files, entry, folder, src.doc.images.get(block.first).src, arena)
+        inst: = r.instances.get(instance)
+        r.instances
+            .set(instance,
+            Instance::{ .source = inst.source, .parent = inst.parent, .clause = inst.clause,
+            .first = first, .count = r.entries.len - first })
+
+    priv fn include(r: Self$@, files: Files, entry: Sz, folder: U8[], written: U8[], depth: Sz,
+        arena: Arena$@) //<
+            //< Opens the source an include clause names as a new instance, or records why not.
+            //< Each check comes before the instance's entries are made.
+        path: = files.resolve(folder, written, arena) catch why
+            r.fail(entry, .load(.refused(why)), arena)
+            return
+        r.aim(entry, path, NONE)
+        if r.on_stack(r.entries.get(entry).instance, path)
+            r.fail(entry, .cycle, arena)
+            return
+        if depth == MAX_DEPTH
+            r.fail(entry, .depth, arena)
+            return
+        known: = r.sources.len
+        index: = r.source(files, path, arena) catch failure
+            r.fail(entry, failure, arena)
+            return
+        loaded: = r.sources.get(index)
+        if r.blocks + loaded.doc.blocks.len > MAX_VIEW_BLOCKS
+            r.fail(entry, .blocks, arena)
+            return
+        if index < known // read before, so this include counts its text again
+            if r.bytes + loaded.source.bytes.len > MAX_VIEW_BYTES
+                r.fail(entry, .bytes, arena)
+                return
+            r.bytes += loaded.source.bytes.len
+        r.blocks += loaded.doc.blocks.len
+        child: = r.instances.len
+        r.instances
+            .push(Instance::{ .source = index, .parent = r.entries.get(entry).instance,
+            .clause = entry, .first = 0, .count = 0 })
+        r.aim(entry, path, child)
+        r.expand(files, child, depth + 1, arena)
+
+    priv fn image(r: Self$@, files: Files, entry: Sz, folder: U8[], written: U8[], arena: Arena$@) //<
+        //< Resolves an image's path from its own source's folder; its pixels are read later
+        path: = files.resolve(folder, written, arena) catch why
+            r.fail(entry, .load(.refused(why)), arena)
+            return
+        r.aim(entry, path, NONE)
+        files.check(path, arena) catch why
+            r.fail(entry, .load(.refused(why)), arena)
+
+    priv fn source(r: Self$@, files: Files, path: U8[], arena: Arena$@): Sz!Failure //<
+        //< The source at `path`, read the first time it is asked for
+        if index: = r.found.get(path)
+            return index
+        if failure: = r.refused.get(path)
+            throw failure
+        room: = MAX_VIEW_BYTES - r.bytes if r.bytes < MAX_VIEW_BYTES else 0
+        limit: = room if room < MAX_SOURCE_BYTES else MAX_SOURCE_BYTES
+        bytes: = files.read(path, limit, arena) catch why
+            r.refused.set(path, .load(.refused(why)))
+            throw .load(.refused(why))
+        r.bytes += bytes.len
+        if bytes.len > room
+            r.refused.set(path, .bytes)
+            throw .bytes
+        loaded: = parse(path, bytes, arena) catch at
+            r.refused.set(path, .load(.invalid(at)))
+            throw .load(.invalid(at))
+        r.keep(loaded)
+        return r.sources.len - 1
+
+    priv fn keep(r: Self$@, loaded: Loaded) //< adds a source read, under its path
+        r.found.set(loaded.path, r.sources.len)
+        r.sources.push(loaded)
+
+    priv fn source_of_instance(r: Self@, instance: Sz): Loaded
+        inst: = r.instances.get(instance)
+        return r.sources.get(inst.source)
+
+    priv fn on_stack(r: Self@, instance: Sz, path: U8[]): Bool //<
+        //< Whether `path` is the source of `instance` or of an instance that opens it
+        $i: = instance
+        for i != NONE
+            src: = r.source_of_instance(i)
+            if src.path.equals(path)
+                return true
+            i = r.instances.get(i).parent
+        return false
+
+    priv fn aim(r: Self$@, entry: Sz, target: U8[], opens: Sz) //< records where a clause leads
+        e: = r.entries.get(entry)
+        r.entries
+            .set(entry,
+            Entry::{ .instance = e.instance, .block = e.block, .opens = opens, .target = target })
+
+    priv fn fail(r: Self$@, entry: Sz, failure: Failure, arena: Arena$@) //<
+        //< Records why a clause cannot be shown, with the include clauses that lead to it
+        $chain: = List<|Diagnostic|>(arena)
+        $at: = r.located(entry, failure.describe())
+        if inside: = failure.within()
+            chain.push(r.located(entry, "included here"))
+            at = inside
+        $i: = r.entries.get(entry).instance
+        for r.instances.get(i).clause != NONE
+            chain.push(r.located(r.instances.get(i).clause, "included here"))
+            i = r.instances.get(i).parent
+        r.problems.push(Problem::{ .entry = entry, .at = at, .chain = chain })
+
+    priv fn located(r: Self@, entry: Sz, message: U8[]): Diagnostic //< at an entry's block
+        src: = r.source_of(entry)
+        return src.source.diagnostic(r.block_of(entry).offset, message)
+
+impl Failure
+    fn within(r: Self): Diagnostic? //< where the included source itself is refused
+        switch r
+        case .load(e)
+            switch e
+            case .invalid(at)
+                return .some(at)
+            default {}
+        default {}
+        return .none
+
+    fn describe(r: Self): U8[] //< what a diagnostic at the clause says
+        switch r
+        case .load(e)
+            switch e
+            case .refused(why)
+                return why.message()
+            case .invalid(at)
+                return at.message
+        case .cycle
+            return "this include closes a cycle: its file is already being included above it. \
+                Remove one include of the cycle"
+        case .depth
+            return "includes nest at most 16 files deep. Include this file from a file higher up"
+        case .bytes
+            return "the assembled document exceeds 64 MiB of source text, each repeated include \
+                counted. Split it into documents opened apart"
+        case .blocks
+            return "the assembled document exceeds 200,000 blocks, each repeated include counted. \
+                Split it into documents opened apart"

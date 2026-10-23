@@ -106,7 +106,9 @@ The check and replacement run together before this server handles another reques
 
 Caution: **Do not let a write that dies halfway corrupt the original.** Write to another name, then replace. **That other name goes through the same two refusals**: a link already standing there would take the write outside the root.
 
-**Set a ceiling.** A request over it is refused with 413, not silently cut short.
+**The ceiling on a PUT body is 8 MiB (8,388,608 bytes), included.** A body of exactly that length is written. One byte more is refused with 413, not silently cut short. A page can rely on writing back any file up to that size.
+
+Caution: **Do not lift the ceiling, nor make it unlimited.** The server holds each body in memory until the body is whole, so the ceiling bounds what a token holder can make it hold.
 
 ### Watching
 
@@ -175,4 +177,5 @@ A client that requires file access stops startup and tells the user to open the 
 
 * [`README.md`](README.md) — which reader each document here is for.
 * [kssrv](../kssrv/README.md) — the server that answers.
-* [kspage](../kspage/README.md) — the editing system that is the client.
+* [ksmd](../ksmd/README.md) — the editing system that is the client.
+* [ksmd](../ksmd/README.md) — the document editor, whose page is a client too.

@@ -22,7 +22,7 @@ fn begin(chunk_size: Sz): Arena$@ //< starts a suite on the repository's paths
     //< They go to `ksplc_harness.begin_at`, whose `finish` / `fatal` end the suite;
     //< children start in the root. Caution: **Call it once, at the start of `main`.** **Do not
     //< free what it returns with a `defer`** (a double free).
-    defer found: = Arena.new(64 * 1024)
+    defer found: = Arena(64 * 1024)
     top: = find_root(found)
     arena: = ksplc_harness.begin_at(chunk_size, compiler_under_test(top, found),
         fs.join(top, "std", found), fs.join(top, "out/tmp", found), top)
@@ -85,7 +85,7 @@ fn ksplc_argv_anywhere(args: U8[][]): U8[][] //<
     //< `ksplc_harness.ksplc_argv` with `--pkg-src-dir=` the root, for a run in another folder
     //< From the root a package is found by its folder; elsewhere, only by the option.
     arena: = ksplc_harness.arena()
-    $all: = List<|U8[]|>.new(arena)
+    $all: = List<|U8[]|>(arena)
     all.push(arena.text().s("--pkg-src-dir=").s(root_dir).take())
     for a in args
         all.push(a)
@@ -96,7 +96,7 @@ fn private_docs(): List<|U8[]|> //< the documents a clone carries beyond the pub
     //< list is empty. An entry is a file name, or a folder from the top ending in `/`. A check that
     //< names documents takes these as the clone's own (`is_private_doc`).
     arena: = ksplc_harness.arena()
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     given: = arena.dup_str(sys.get_env("KANSO_PRIVATE_DOCS").unwrap_or(""))
     for w in given.split(' ', arena)
         if w.len > 0
@@ -129,7 +129,7 @@ fn make_argv(args: U8[][]): U8[][] //<
     sys.unset_env("MAKEFLAGS") catch panic("MAKEFLAGS could not be unset")
     sys.unset_env("MFLAGS") catch panic("MFLAGS could not be unset")
     sys.unset_env("MAKELEVEL") catch panic("MAKELEVEL could not be unset")
-    $argv: = List<|U8[]|>.new(arena)
+    $argv: = List<|U8[]|>(arena)
     argv.push(arena.dup_str(sys.get_env("KANSO_MAKE").unwrap_or("make")))
     argv.push("-o")
     argv.push(arena.dup_str(STAGE1_REL))
@@ -178,7 +178,7 @@ priv const MAX_CLEAR_DEPTH: Sz = 32 //< how deep deleting a workspace this run m
 priv fn clear_tree(dir: U8[], depth: Sz)
     if depth >= MAX_CLEAR_DEPTH || !fs.is_dir(dir)
         return
-    defer scratch: = Arena.new(1024 * 1024)
+    defer scratch: = Arena(1024 * 1024)
     entries: = fs.read_dir(dir, scratch) catch
         return
     for name in entries
@@ -224,7 +224,7 @@ fn read_under_root(rel: U8[]): U8[] //<
     //< after the first read is not seen**: the text is the one read first.
     arena: = ksplc_harness.arena()
     if texts == null
-        texts = arena.create(Map<|U8[], U8[]|>.new(arena))
+        texts = arena.create(Map<|U8[], U8[]|>(arena))
     if known: = texts.get(rel)
         return known
     body: = io.read_file(fs.join(root_dir, rel, arena), arena) catch ""
@@ -235,8 +235,8 @@ fn copy_tracked(dir: U8[], to: U8[], keep_prefix: Bool): Bool //<
     //< Copies the files `tracked` lists under the folder dir into to; false where none is copied
     //< keep_prefix keeps `dir/` in each copy's path; otherwise each lands right under to.
     arena: = ksplc_harness.arena()
-    $rels: = List<|U8[]|>.new(arena)
-    $bodies: = List<|U8[]|>.new(arena)
+    $rels: = List<|U8[]|>(arena)
+    $bodies: = List<|U8[]|>(arena)
     for rel in tracked_matching(U8[][]::{ dir })
         rels.push(rel if keep_prefix else rel.sub_from(dir.len + 1))
         bodies.push(read_under_root(rel))
@@ -278,7 +278,7 @@ fn tracked_matching(patterns: U8[][]): List<|U8[]|> //<
     //< pass a pathspec to `git ls-files`.** On Windows a `git.exe` on MSYS2's runtime **expands the
     //< wildcards itself**. So `*.md` shrinks to the top level and goes green unseen.
     arena: = ksplc_harness.arena()
-    $out: = List<|U8[]|>.new(arena)
+    $out: = List<|U8[]|>(arena)
     files: = tracked()
     for f in files
         $keep: = false
