@@ -154,7 +154,10 @@ impl Ast_node
             val_node: = child_node.get_field_init_expr()
             child_node.ice_assert(val_node != null, "emit_struct_literal: field missing value node")
             if !slice_ptr_field
-                c.brace_init = as_init
+                // At the top level a member is plain braces even inside a compound literal (the
+                // array under `T[]::{ … }`). The literal is still part of a file-scope initializer
+                // there, where C99 takes no compound literal as a member.
+                c.brace_init = as_init || c.top_level_var
                 val_node.emit_expr(c)
                 continue
             // An immutable slice's C type is the alias `Const_T_Slice = T_Slice`, and its `ptr` is

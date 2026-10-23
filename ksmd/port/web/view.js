@@ -44,6 +44,16 @@ function ksmdView(ks) {
           node = wrap;
         }
       }
+      if (s.k) {
+        // A span's look: [colour, fill, size in half points].
+        const span = document.createElement("span");
+        span.className = "look";
+        if (s.k[0]) span.style.color = s.k[0];
+        if (s.k[1]) span.style.backgroundColor = s.k[1];
+        if (s.k[2]) span.style.fontSize = `${s.k[2] / 2}pt`;
+        span.appendChild(node);
+        node = span;
+      }
       if (s.l) {
         const a = document.createElement("a");
         a.href = s.l;
@@ -86,11 +96,13 @@ function ksmdView(ks) {
     switch (b.k) {
       case "p": {
         const el = unit("p", "b u");
+        if (b.a) el.style.textAlign = b.a;
         segsInto(el, b.s);
         return el;
       }
       case "h": {
         const el = unit(`h${b.n}`, "b u");
+        if (b.a) el.style.textAlign = b.a;
         segsInto(el, b.s);
         return el;
       }
@@ -152,6 +164,7 @@ function ksmdView(ks) {
   function include(b) {
     const el = unit("div", "b include");
     el.contentEditable = "false";
+    el.dataset.path = b.path;
     el.setAttribute("role", "note");
     const head = unit("div", "include-head");
     head.textContent = `Included from ${b.path}.`;
@@ -282,8 +295,21 @@ function ksmdView(ks) {
     return pointIn(u || b, spot[3]);
   }
 
-  // Shows the model's selection on the page.
+  // Draws no caret while the person works in a table: no gap, and no selection in the text.
+  function hideCaret() {
+    removeGap();
+    const s = window.getSelection();
+    if (s.rangeCount > 0 && ks.root.contains(s.focusNode) && !closest(s.focusNode, ".table")) {
+      s.removeAllRanges();
+    }
+  }
+  ks.placeHooks.push(() => {
+    if (ks.where === "cell") hideCaret();
+  });
+
+  // Shows the model's selection on the page, or no caret while the person works in a table.
   function showSelection(sel) {
+    if (ks.inTable()) return hideCaret();
     removeGap();
     const s = window.getSelection();
     if (sel.f[0] !== 0) {
@@ -296,7 +322,8 @@ function ksmdView(ks) {
     s.setBaseAndExtent(a.node, a.offset, f.node, f.offset);
   }
 
-  // Puts an action's result on the page: the changed blocks, the other tables, the selection.
+  // Puts an action's result on the page: the changed blocks and the other tables. The selection
+  // follows once the page has found the chosen cell again (`ks.act`).
   function apply(r) {
     removeGap();
     const all = blocks();
@@ -308,8 +335,8 @@ function ksmdView(ks) {
       const old = blocks()[i];
       if (old) old.replaceWith(render(b));
     }
-    showSelection(r.sel);
   }
 
-  ks.view = { apply, showSelection, spotAt, unitText, blocks, items, closest, u8len, removeGap };
+  ks.view = { apply, showSelection, spotAt, pointIn, unitText, blocks, items, closest, u8len,
+    removeGap };
 }

@@ -3,6 +3,7 @@
 //< canonical source with the expected one. That source must read and save again unchanged.
 import "ksmd/editor" { Editor, Refused }
 import "ksmd/editor"
+import "ksmd/look" { Look_part }
 import "ksmd/reader"
 import "ksmd/region" { Spot, Style, gap_spot, paragraph_style, text_spot }
 import "ksmd/source" { Source }
@@ -21,6 +22,7 @@ fn run()
     entering()
     kinds()
     marks()
+    looks()
     undoing()
     refusals()
 
@@ -220,6 +222,60 @@ priv fn marks()
     typed(typing@, "Y")
     saves("and typing goes on in it", typing@, "%ksmd 1\n\na**XY**b\n")
 
+priv fn looks()
+    defer arena: = Arena(64 * 1024)
+    $ed: = opened("%ksmd 1\n\nabcdef\n", arena)
+    span(ed@, text_spot(0, 0, 1), text_spot(0, 0, 4))
+    looked(ed@, .color, "#C00000")
+    saves("a colour over a range is a span with a look", ed@,
+        "%ksmd 1\n\na[bcd]{color=\"#c00000\"}ef\n")
+    span(ed@, text_spot(0, 0, 3), text_spot(0, 0, 5))
+    looked(ed@, .size, "14")
+    saves("a size over a range that overlaps it splits the spans", ed@,
+        "%ksmd 1\n\na[bc]{color=\"#c00000\"}[d]{color=\"#c00000\" size=14}[e]{size=14}f\n")
+    span(ed@, text_spot(0, 0, 0), text_spot(0, 0, 6))
+    looked(ed@, .color, "")
+    looked(ed@, .size, "")
+    saves("clearing each part takes the spans away", ed@, "%ksmd 1\n\nabcdef\n")
+    span(ed@, text_spot(0, 0, 0), text_spot(0, 0, 3))
+    marked(ed@, .link, "https://kanso.example/a")
+    span(ed@, text_spot(0, 0, 1), text_spot(0, 0, 2))
+    looked(ed@, .fill, "#fff2cc")
+    saves("a look inside a link stands on the link's own brackets", ed@,
+        "%ksmd \
+            1\n\n[a](https://kanso.example/a)[b](https://kanso.example/a){fill=\"#fff2cc\"}[c](https://kanso.example/a)def\n")
+    $outside: = false
+    ed.set_text_look(.align, "center") catch
+        outside = true
+    verdict.check("text takes no alignment of its own", outside, "")
+    $aligned: = opened("%ksmd 1\n\nOne\n\n# Two\n\n- three\n", arena)
+    span(aligned@, text_spot(0, 0, 0), text_spot(2, 0, 2))
+    aligned.set_align("center") catch e
+        verdict.check("aligning", false, e.message())
+    saves("paragraphs and headings take the alignment, list items do not", aligned@,
+        "%ksmd 1\n\n{align=\"center\"}\nOne\n\n{align=\"center\"}\n# Two\n\n- three\n")
+    at(aligned@, 0, 0, 3)
+    entered(aligned@, false)
+    typed(aligned@, "Next")
+    saves("a paragraph split by Enter keeps its alignment", aligned@,
+        "%ksmd 1\n\n{align=\"center\"}\nOne\n\n{align=\"center\"}\nNext\n\n{align=\"center\"}\n# \
+            Two\n\n- three\n")
+    at(aligned@, 2, 0, 0)
+    kind(aligned@, heading(2))
+    saves("a heading made another level keeps its alignment", aligned@,
+        "%ksmd 1\n\n{align=\"center\"}\nOne\n\n{align=\"center\"}\nNext\n\n{align=\"center\"}\n## \
+            Two\n\n- three\n")
+    $typing: = opened("%ksmd 1\n\nab\n", arena)
+    at(typing@, 0, 0, 1)
+    looked(typing@, .color, "#0000ff")
+    typed(typing@, "X")
+    saves("a look with nothing selected applies to the text typed next", typing@,
+        "%ksmd 1\n\na[X]{color=\"#0000ff\"}b\n")
+
+priv fn looked(ed: Editor$@, part: Look_part, value: U8[])
+    ed.set_text_look(part, value) catch e
+        verdict.check("a look", false, e.message())
+
 priv fn undoing()
     defer arena: = Arena(64 * 1024)
     $ed: = opened("%ksmd 1\n\nSay\n", arena)
@@ -276,7 +332,7 @@ priv fn opened(bytes: U8[], arena: Arena$@): Editor //< an editor on the source
     doc: = reader.read(src@, arena) catch e
         verdict.check("a test document reads", false, e.message)
         panic("a test document was refused")
-    return editor.open(doc, arena)
+    return editor.open(doc, "2026-10-23", arena)
 
 priv fn at(ed: Editor$@, block: Sz, item: Sz, offset: Sz) //< puts the caret in text
     p: = text_spot(block, item, offset)

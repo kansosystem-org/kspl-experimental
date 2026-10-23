@@ -114,9 +114,6 @@ const REQUEST_FAILED: I32 = -32803I32
 const MAX_CONTENT_LENGTH: I32 = 128 * 1024 * 1024 //<
     //< The limit on a Content-Length, which prevents memory exhaustion and digit overflow
     //< It leaves ample room for an ordinary LSP message.
-priv const MAX_HEADER_LINE_LEN: Sz = 8192 //< the limit on one header line
-    //< A real header fits in a few dozen bytes; this stops line_buf growing without limit when a
-    //< peer never sends a newline.
 
 fn offset_at(src: U8[], params: json.Value): Sz //<
     //< The offset in `src` of the position a request names (`params.position`)
@@ -140,39 +137,26 @@ fn read_message(out: Str_builder$@): Void!Lsp_error //<
             break
 
 fn read_content_length(): I32!Lsp_error
-    $len: I32 = -1
-    defer $line_buf: = Str_builder()
-    $prev_was_nl: = false
-
-    for
+    defer $head: = Str_builder()
+    // Read the whole bounded header so duplicate lengths are checked together. Count CR bytes
+    // too: a peer must not bypass the bound by sending only carriage returns or short lines.
+    for head.len < jsonrpc.MAX_HEAD_BYTES
         c: = io.getchar() catch
             throw .io_error
-        $ch: U8 = 0
-        if got: = c
-            ch = got
+        if ch: = c
+            head.c(ch)
         else
             throw .io_error
-        if ch == '\r'
+        text: = head.slice()
+        if !text.ends_with("\r\n\r\n") && !text.ends_with("\n\n")
             continue
-
-        if ch == '\n'
-            if prev_was_nl
-                if len >= 0
-                    return len
-                throw .format_error
-            prev_was_nl = true
-            declared: =
-                jsonrpc.content_length(line_buf.slice(), MAX_CONTENT_LENGTH) catch
-                throw .format_error
-            if n: = declared
-                len = I32::n
-            line_buf.len = 0
-            continue
-
-        prev_was_nl = false
-        if line_buf.len >= MAX_HEADER_LINE_LEN
+        declared: = jsonrpc.content_length(text, MAX_CONTENT_LENGTH) catch
             throw .format_error
-        line_buf.c(ch)
+        if n: = declared
+            if n > 0
+                return I32::n
+        throw .format_error
+    throw .format_error
 
 priv fn build_jsonrpc_envelope($b: Json_builder, id_val: json.Value): json.Object_builder
     $obj: = b.obj().set("jsonrpc", b.str_val(jsonrpc.VERSION))

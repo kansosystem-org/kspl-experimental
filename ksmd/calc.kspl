@@ -1,15 +1,24 @@
 //< Calculates every table of a document: the value of each data cell, kept apart from the document
 //< A formula is read from its pieces and calculated in the same pass; nothing is saved. Cells are
 //< calculated in the order they depend on each other, so a formula can name a later row.
+//< Calculation reads the model and one input, the date the document was opened, which `today()`
+//< gives. It reads no clock, so the same model and date always give the same values.
 //< Caution: **Calculate again after every edit.** `Results` holds the values of one moment, and
 //< places that an edit has moved point at other cells.
-import "ksmd/formula" { Cursor, Positions, Token, Token_kind, next }
+import "ksmd/format" { round_places }
+import "ksmd/formula" { Cursor, Positions, Token, Token_kind, next, unquoted }
+import "ksmd/marker" { compare_text }
 import "ksmd/model" { Cell, Document, Table }
 import "std/ds" { List }
 import "std/mem" { Arena }
+import "std/str"
 import "std/strnum"
 
-const MAX_LEVELS: Sz = 64 //< how deeply one formula nests: brackets, functions and unary minus
+const MAX_LEVELS: Sz = 64 //< how deeply one formula nests: brackets, functions, unary minus and
+    //< `not`
+
+const MAX_ROUND: Sz = 15 //< the most places `round` takes, either way
+    //< An F64 holds at most 17 significant digits, so a carry past them cannot overflow.
 
 priv const MAX_DEPTH: Sz = 256 //< the cells and levels one calculation passes through at a time
     //< A deeper chain is set aside and its deepest cell calculated first (`settle`), so a running
@@ -19,18 +28,19 @@ priv const WORKING: U8 = 1U8 //< being calculated; reaching it again is a cycle
 priv const SETTLED: U8 = 2U8
 
 enum Calc_error //< why a cell has no value; each is fixed differently
-    text //< text where arithmetic needs a number: `#VALUE!`
+    wrong_kind //< text or true and false in arithmetic, or two kinds ordered: `#VALUE!`
     division //< a division by zero: `#DIV/0!`
     not_finite //< a result too large for a number: `#NUM!`
     reference //< a reference to no cell: `#REF!`
     cycle //< the cell depends on itself: `#CYCLE!`
     no_numbers //< `min`, `max` or `average` of no numbers: `#EMPTY!`
+    shape //< a condition's range not as tall as its values, or a condition with no range: `#SHAPE!`
     syntax //< the formula does not read: `#SYNTAX!`
 
 impl Calc_error
     fn mark(e: Self): U8[] //< what the cell shows
         switch e
-        case .text
+        case .wrong_kind
             return "#VALUE!"
         case .division
             return "#DIV/0!"
@@ -42,23 +52,28 @@ impl Calc_error
             return "#CYCLE!"
         case .no_numbers
             return "#EMPTY!"
+        case .shape
+            return "#SHAPE!"
         case .syntax
             return "#SYNTAX!"
 
-enum Value_kind
+enum Value_kind //< a formula's value is never empty: an empty cell's value as a formula's is 0
     empty
     number
-    text //< a text cell; its text is the cell's
+    text //< a text cell's text, or text a formula gives
+    boolean //< `true` or `false`
     error
 
-struct Value
+struct Value //< the small fields first, so they share one word
     kind: Value_kind
-    number: F64 //< a number's value; 0 for the other kinds
+    boolean: Bool //< true for `true`; false for the other kinds
     error: Calc_error //< an error's reason; `.syntax` for the other kinds
+    number: F64 //< a number's value; 0 for the other kinds
+    text: U8[] //< a text's bytes; empty for the other kinds
 
 impl Value
     fn failed(e: Calc_error): Value //< the value of a cell that has none, for this reason
-        return Value::{ .kind = .error, .number = 0.0, .error = e }
+        return Value::{ .kind = .error, .number = 0.0, .text = "", .boolean = false, .error = e }
 
 struct Results //< the value of every data cell of every table, at one moment
     values: List<|Value|> //< each table's data cells from `starts`, row by row
@@ -70,11 +85,17 @@ impl Results
         index: = r.starts[u] + row * r.columns[u] + column
         return r.values[index]
 
-fn calculate(doc: Document@, arena: Arena$@): Results //<
+fn calculate(doc: Document@, today: U8[], arena: Arena$@): Results //<
     //< Calculates every data cell; the results live in `arena`
-    $c: = Calc::{ .doc = doc, .at = Positions(doc, arena),
-        .results = Results::{ .values = List<|Value|>(arena), .starts = List<|Sz|>(arena),
-        .columns = List<|Sz|>(arena) }, .states = List<|U8|>(arena), .depth = 0, .deferring = false,
+    //< `today` is the date the document was opened, written `2026-10-23`.
+    //< The lists are made at their full size at once, so no cell's value is copied as they grow.
+    $cells: Sz = 0
+    for u in Range.asc(doc.tables.len)
+        cells += doc.tables[u].rows.len * doc.tables[u].columns.len
+    $c: = Calc::{ .doc = doc, .today = today, .arena = arena, .at = Positions(doc, arena),
+        .results = Results::{ .values = List<|Value|>.new_with_cap(cells, arena),
+        .starts = List<|Sz|>(arena), .columns = List<|Sz|>(arena) },
+        .states = List<|U8|>.new_with_cap(cells, arena), .depth = 0, .deferring = false,
         .deferred = Spot::{ .table = 0, .row = 0, .column = 0 },
         .todo = List<|Spot|>(arena) }
     for u in Range.asc(doc.tables.len)
@@ -97,6 +118,8 @@ priv struct Spot //< a data cell, by its table and place
 
 priv struct Calc //< the state of one calculation
     doc: Document@
+    today: U8[] //< what `today()` gives
+    arena: Arena$@ //< holds the results, and text a formula's quotes hold with an escape
     at: Positions
     results: Results
     states: List<|U8|> //< each cell's progress, in the order of `results.values`
@@ -170,19 +193,20 @@ priv fn cell_value(c: Calc$@, s: Spot): Value //< what a cell holds, a formula c
     cell: = t.cells[index]
     switch cell.kind
     case .empty
-        return Value::{ .kind = .empty, .number = 0.0, .error = .syntax }
+        return empty()
     case .text
-        return Value::{ .kind = .text, .number = 0.0, .error = .syntax }
+        return text(cell.text)
     case .number
         return number_of(cell.text)
     case .formula
         $p: = Parser::{ .c = c, .t = t, .cell = cell, .cur = Cursor::{ .piece = 0, .at = 0 },
-            .tok = Token(.end, 0, 0), .levels = 1, .wrong = false }
+            .tok = Token(.end, 0, 0), .levels = 1, .wrong = false, .skipping = 0,
+            .rows = Row_reading::{ .count = 0, .row = 0, .ranged = false, .shaped = true } }
         p.advance()
-        v: = p.sum()
+        v: = p.expression()
         if p.wrong || p.tok.kind != .end
             return Value.failed(.syntax)
-        return v
+        return number(0.0) if v.kind == .empty else v
 
 priv struct Parser //< reads one formula's tokens and calculates as it reads
     c: Calc$@
@@ -192,6 +216,16 @@ priv struct Parser //< reads one formula's tokens and calculates as it reads
     tok: Token //< the next token, not yet taken
     levels: Sz //< how deeply the formula nests where it is read now (`MAX_LEVELS`)
     wrong: Bool //< the formula does not read; its value is `#SYNTAX!`
+    skipping: Sz //< above 0 while a part is read but not calculated; no cell is read then
+        //< `and` and `or` skip their right side when the left one decides, and `if` the branch
+        //< it does not take.
+    rows: Row_reading //< how a range in a condition of `sum_if` is read; count 0 elsewhere
+
+priv struct Row_reading //< a condition of `sum_if`, read once for each row of its values
+    count: Sz //< the rows of the values; every range in the condition must be that tall
+    row: Sz //< the row read now, counted from each range's top
+    ranged: Bool //< a range was read in the condition
+    shaped: Bool //< every range read was one column wide and `count` rows tall
 
 enum Fold_kind //< what a function makes of its numbers
     sum
@@ -223,6 +257,65 @@ impl Parser
         p.levels -= 1
         p.c.depth -= 1
 
+    priv fn expression(p: Self$@): Value //< conditions joined by `and` and `or`; `and` binds first
+        //< The right side of `or` is calculated only when the left one is false. Most formulas
+        //< hold no word, so a comparison is read first, without the steps for `not` and `and`.
+        $left: = p.negation() if p.is_word("not") else p.comparison()
+        if p.tok.kind != .name
+            return left
+        left = p.conjunction(left)
+        for p.is_word("or")
+            p.advance()
+            l: = truth(left)
+            if l.kind == .error || l.boolean
+                p.skipping += 1
+                _right: = p.conjunction(p.negation())
+                p.skipping -= 1
+                left = l
+            else
+                left = truth(p.conjunction(p.negation()))
+        return left
+
+    priv fn conjunction(p: Self$@, first: Value): Value //< `first` and conditions joined by `and`
+        //< The right side is calculated only when the left one is true.
+        $left: = first
+        for p.is_word("and")
+            p.advance()
+            l: = truth(left)
+            if l.kind == .error || !l.boolean
+                p.skipping += 1
+                _right: = p.negation()
+                p.skipping -= 1
+                left = l
+            else
+                left = truth(p.negation())
+        return left
+
+    priv fn negation(p: Self$@): Value //< `not` before a condition, or a comparison
+        if !p.is_word("not")
+            return p.comparison()
+        p.advance()
+        if !p.enter()
+            return Value.failed(.syntax)
+        v: = truth(p.negation())
+        p.leave()
+        return v if v.kind == .error else boolean(!v.boolean)
+
+    priv fn comparison(p: Self$@): Value //< two sums compared, or one sum
+        //< A second comparison does not read: `a < b < c` would compare `true` with `c`.
+        left: = p.sum()
+        op: = p.tok.kind
+        if !is_comparison(op)
+            return left
+        p.advance()
+        right: = p.sum()
+        if is_comparison(p.tok.kind)
+            p.wrong = true
+        return compare(left, right, op)
+
+    priv fn is_word(p: Self@, word: U8[]): Bool //< whether the next token is this word
+        return p.tok.kind == .name && p.tok.text.equals(word)
+
     priv fn sum(p: Self$@): Value //< terms joined by `+` and `-`, from the left
         $left: = p.product()
         for p.tok.kind == .plus || p.tok.kind == .minus
@@ -251,18 +344,31 @@ impl Parser
         p.leave()
         return arithmetic(number(0.0), v, .minus)
 
-    priv fn primary(p: Self$@): Value //< a number, a cell, a bracket or a function
-        tok: = p.tok
-        switch tok.kind
+    priv fn primary(p: Self$@): Value //< a number, text, a word, a cell, a bracket or a function
+        //< Only the fields needed are taken from the token: a whole token is large to copy.
+        switch p.tok.kind
         case .number
+            n: = number_of(p.tok.text)
             p.advance()
-            return number_of(tok.text)
+            return n
+        case .text
+            quoted: = p.tok.text
+            p.advance()
+            if p.skipping > 0
+                return empty()
+            return text(unquoted(quoted, p.c.arena).unwrap_or(""))
         case .reference
+            range: = p.tok.range
+            piece: = p.tok.piece
             p.advance()
-            if tok.range
-                p.wrong = true
-                return Value.failed(.syntax)
-            return scalar(p.cell_of(tok))
+            if range
+                if p.rows.count == 0
+                    p.wrong = true
+                    return Value.failed(.syntax)
+                return p.row_of(piece)
+            if p.skipping > 0
+                return empty()
+            return p.cell_of(piece)
         case .broken
             p.advance()
             return Value.failed(.reference)
@@ -270,70 +376,206 @@ impl Parser
             p.advance()
             if !p.enter()
                 return Value.failed(.syntax)
-            v: = p.sum()
+            v: = p.expression()
             p.leave()
             p.expect(.close)
             return v
         case .name
+            if p.is_word("true") || p.is_word("false")
+                yes: = p.is_word("true")
+                p.advance()
+                return boolean(yes)
             return p.function()
-        case .plus, .minus, .times, .divide, .close, .comma, .bad, .end
+        case .plus, .minus, .times, .divide, .equal, .unequal, .less, .less_equal, .greater,
+            .greater_equal, .close, .comma, .bad, .end
             p.wrong = true
             return Value.failed(.syntax)
 
-    priv fn function(p: Self$@): Value //< `sum(...)`: one or more arguments, separated by `,`
-        $fold: = Fold::{ .kind = .sum, .total = 0.0, .numbers = 0, .error = .syntax,
-            .broken = false }
-        if kind: = Fold_kind.from_variant_name(p.tok.text)
-            fold.kind = kind
-        else
-            p.wrong = true
+    priv fn function(p: Self$@): Value //< a function's name, then its arguments in brackets
+        name: = p.tok.text
         p.advance()
         p.expect(.open)
         if !p.enter()
             return Value.failed(.syntax)
+        $v: = Value.failed(.syntax)
+        if name.equals("today")
+            v = text(p.c.today)
+        else if name.equals("if")
+            v = p.choice()
+        else if name.equals("round")
+            v = p.rounding()
+        else if name.equals("sum_if")
+            v = p.conditional(.sum)
+        else if name.equals("count_if")
+            v = p.conditional(.count)
+        else if name.equals("average_if")
+            v = p.conditional(.average)
+        else
+            v = p.fold(name)
+        p.leave()
+        p.expect(.close)
+        return v
+
+    priv fn choice(p: Self$@): Value //< `if(condition, then, else)`, after its `(`
+        //< Only the branch taken is calculated, so an error or a cycle in the other never shows.
+        //< An error in the condition is the result, and neither branch is calculated.
+        c: = truth(p.expression())
+        p.expect(.comma)
+        then: = p.branch(c.kind == .boolean && c.boolean)
+        p.expect(.comma)
+        otherwise: = p.branch(c.kind == .boolean && !c.boolean)
+        if c.kind == .error
+            return c
+        return then if c.boolean else otherwise
+
+    priv fn branch(p: Self$@, taken: Bool): Value //< an argument, calculated only when taken
+        if taken
+            return p.expression()
+        p.skipping += 1
+        _skipped: = p.expression()
+        p.skipping -= 1
+        return empty()
+
+    priv fn rounding(p: Self$@): Value //< `round(x, places)` after its `(`
+        //< `places` is a whole number from -15 to 15. The digits a person reads are rounded, half
+        //< away from zero, as a number format rounds them.
+        x: = operand(p.expression())
+        p.expect(.comma)
+        places: = operand(p.expression())
+        if x.kind == .error
+            return x
+        if places.kind == .error
+            return places
+        n: = places.number
+        if n < -F64::MAX_ROUND || n > F64::MAX_ROUND || F64::(Sz::n) != n
+            return Value.failed(.not_finite)
+        rounded: = round_places(x.number, Sz::n) catch
+            return Value.failed(.not_finite)
+        return number(rounded)
+
+    priv fn conditional(p: Self$@, kind: Fold_kind): Value //<
+        //< `sum_if(values, condition)` after its `(`, or `count_if` or `average_if`
+        //< The values are a cell or a range. The condition is calculated once for each of their
+        //< rows, with each range in it read as its cell on that row. The values on a row are read
+        //< only where the condition is `true`, as `if` reads only the branch it takes.
+        if p.tok.kind != .reference && p.tok.kind != .broken
+            p.wrong = true
+            return Value.failed(.syntax)
+        values: = p.tok.piece
+        p.advance()
+        p.expect(.comma)
+        $fold: = Fold::{ .kind = kind, .total = 0.0, .numbers = 0, .error = .syntax,
+            .broken = false }
+        $area: = Area::{ .table = 0, .rows = Span::{ .low = 0, .high = 0 },
+            .columns = Span::{ .low = 0, .high = 0 } }
+        if found: = p.area_of(values)
+            area = found
+        else
+            fold.take(Value.failed(.reference))
+        outer: = p.rows
+        p.rows = Row_reading::{ .count = area.rows.high - area.rows.low + 1, .row = 0,
+            .ranged = false, .shaped = true }
+        cur: = p.cur
+        tok: = p.tok
+        // Read once without calculating, to check every range's shape first.
+        p.skipping += 1
+        _shape: = p.expression()
+        p.skipping -= 1
+        if !fold.broken && !(p.rows.ranged && p.rows.shaped)
+            fold.take(Value.failed(.shape))
+        if p.skipping == 0
+            for row in Range.asc(p.rows.count)
+                if fold.broken || p.wrong || p.c.deferring
+                    break
+                p.cur = cur
+                p.tok = tok
+                p.rows.row = row
+                holds: = truth(p.expression())
+                if holds.kind == .error
+                    fold.take(holds)
+                else if holds.boolean
+                    p.take_row(fold@, area, area.rows.low + row)
+        p.rows = outer
+        return fold.result()
+
+    priv fn area_of(p: Self@, index: Sz): Area? //<
+        //< The cells a reference's piece names; none for -1, a reference to no cell or `#REF!`
+        if index < 0
+            return .none
+        piece: = p.t.pieces[index]
+        u: = piece.table
+        at: = p.c.at@
+        return .some(Area::{ .table = u,
+            .rows =
+            ordered(at.of(u, piece.from.row), at.of(u, piece.to.row)),
+            .columns =
+            ordered(at.of(u, piece.from.column), at.of(u, piece.to.column)) })
+
+    priv fn take_row(p: Self$@, fold: Fold$@, area: Area, row: Sz) //<
+        //< The numbers and errors of the area's cells on one row, from the left
+        for column in Range(area.columns.low, area.columns.high + 1, 1)
+            v: =
+                value_at(p.c, Spot::{ .table = area.table, .row = row, .column = column })
+            if v.kind == .number || v.kind == .error
+                fold.take(v)
+
+    priv fn row_of(p: Self$@, piece: Sz): Value //<
+        //< A range in a condition, by its piece: its cell on the row read now
+        //< It must be one column wide and as tall as the values; else the result is `#SHAPE!`.
+        p.rows.ranged = true
+        area: = p.area_of(piece) catch
+            return Value.failed(.reference)
+        if area.columns.low != area.columns.high ||
+            area.rows.high - area.rows.low + 1 != p.rows.count
+            p.rows.shaped = false
+            return Value.failed(.shape)
+        if p.skipping > 0
+            return empty()
+        return value_at(p.c,
+            Spot::{ .table = area.table, .row = area.rows.low + p.rows.row,
+            .column = area.columns.low })
+
+    priv fn fold(p: Self$@, name: U8[]): Value //< `sum(...)` after its `(`: one or more arguments
+        $fold: = Fold::{ .kind = .sum, .total = 0.0, .numbers = 0, .error = .syntax,
+            .broken = false }
+        if kind: = Fold_kind.from_variant_name(name)
+            fold.kind = kind
+        else
+            p.wrong = true
         for
             p.argument(fold@)
             if p.tok.kind != .comma
                 break
             p.advance()
-        p.leave()
-        p.expect(.close)
         return fold.result()
 
     priv fn argument(p: Self$@, fold: Fold$@) //<
-        //< A reference alone is a set of cells, whose empty cells and text are left out. Any
-        //< other argument is a number calculated as arithmetic is.
+        //< A reference alone is a set of cells, whose empty cells, text, and true and false are
+        //< left out. Any other argument is a number, as arithmetic takes one.
         if p.tok.kind == .reference || p.tok.kind == .broken
             cur: = p.cur
             tok: = p.tok
             p.advance()
             if p.tok.kind == .comma || p.tok.kind == .close
-                p.take_cells(fold, tok)
+                p.take_cells(fold, tok.piece)
                 return
             p.cur = cur
             p.tok = tok
-        fold.take(p.sum())
+        fold.take(operand(p.expression()))
 
-    priv fn take_cells(p: Self$@, fold: Fold$@, tok: Token) //< every cell a reference names
-        if tok.kind == .broken || tok.piece < 0
+    priv fn take_cells(p: Self$@, fold: Fold$@, piece: Sz) //< every cell a reference's piece names
+        if p.skipping > 0
+            return
+        area: = p.area_of(piece) catch
             fold.take(Value.failed(.reference))
             return
-        piece: = p.t.pieces[tok.piece]
-        u: = piece.table
-        at: = p.c.at@
-        rows: = ordered(at.of(u, piece.from.row), at.of(u, piece.to.row))
-        columns: =
-            ordered(at.of(u, piece.from.column), at.of(u, piece.to.column))
-        for row in Range(rows.low, rows.high + 1, 1)
-            for column in Range(columns.low, columns.high + 1, 1)
-                v: = value_at(p.c, Spot::{ .table = u, .row = row, .column = column })
-                if v.kind == .number || v.kind == .error
-                    fold.take(v)
+        for row in Range(area.rows.low, area.rows.high + 1, 1)
+            p.take_row(fold, area, row)
 
-    priv fn cell_of(p: Self$@, tok: Token): Value //< the value of the one cell a reference names
-        if tok.piece < 0
+    priv fn cell_of(p: Self$@, index: Sz): Value //< the value of the one cell a piece names
+        if index < 0
             return Value.failed(.reference)
-        piece: = p.t.pieces[tok.piece]
+        piece: = p.t.pieces[index]
         u: = piece.table
         row: = p.c.at.of(u, piece.from.row)
         column: = p.c.at.of(u, piece.from.column)
@@ -384,13 +626,20 @@ priv struct Span //< two places in order
     low: Sz
     high: Sz
 
+priv struct Area //< the rectangle of cells a reference names, by their places
+    table: Sz
+    rows: Span
+    columns: Span
+
 priv fn ordered(a: Sz, b: Sz): Span
     return Span::{ .low = a, .high = b } if a <= b else Span::{ .low = b, .high = a }
 
-priv fn arithmetic(a: Value, b: Value, op: Token_kind): Value //<
+priv fn arithmetic(x: Value, y: Value, op: Token_kind): Value //<
     //< Two numbers joined by an operator; the left error comes first
+    a: = operand(x)
     if a.kind == .error
         return a
+    b: = operand(y)
     if b.kind == .error
         return b
     switch op
@@ -405,14 +654,78 @@ priv fn arithmetic(a: Value, b: Value, op: Token_kind): Value //<
         return Value.failed(.division)
     return number(a.number / b.number)
 
-priv fn scalar(v: Value): Value //< a cell's value in arithmetic: empty is 0, text an error
+priv fn operand(v: Value): Value //< a value in arithmetic: empty is 0, text or true and false
+    //< an error
     switch v.kind
     case .empty
         return number(0.0)
-    case .text
-        return Value.failed(.text)
+    case .text, .boolean
+        return Value.failed(.wrong_kind)
     case .number, .error
         return v
+
+priv fn truth(v: Value): Value //< a value as a condition: empty is false, a number or text an error
+    switch v.kind
+    case .empty
+        return boolean(false)
+    case .number, .text
+        return Value.failed(.wrong_kind)
+    case .boolean, .error
+        return v
+
+priv fn is_comparison(k: Token_kind): Bool
+    return k == .equal || k == .unequal || k == .less || k == .less_equal || k == .greater ||
+        k == .greater_equal
+
+priv fn compare(x: Value, y: Value, op: Token_kind): Value //<
+    //< Two values compared; the left error comes first
+    //< An empty value takes the other side's kind: 0, empty text or false. Values of two kinds
+    //< are unequal, and ordering them is an error. Text compares without regard to case.
+    if x.kind == .error
+        return x
+    if y.kind == .error
+        return y
+    a: = like(x, y)
+    b: = like(y, x)
+    if a.kind != b.kind
+        if op == .equal || op == .unequal
+            return boolean(op == .unequal)
+        return Value.failed(.wrong_kind)
+    $order: I32 = 0
+    switch a.kind
+    case .number
+        order = -1 if a.number < b.number else 1 if a.number > b.number else 0
+    case .text
+        order = compare_text(a.text, b.text)
+    case .boolean
+        order = 0 if a.boolean == b.boolean else 1 if a.boolean else -1
+    case .empty, .error {}
+    switch op
+    case .equal
+        return boolean(order == 0)
+    case .unequal
+        return boolean(order != 0)
+    case .less
+        return boolean(order < 0)
+    case .less_equal
+        return boolean(order <= 0)
+    case .greater
+        return boolean(order > 0)
+    default {}
+    return boolean(order >= 0)
+
+priv fn like(v: Value, other: Value): Value //< an empty value as the zero of the other's kind
+    if v.kind != .empty
+        return v
+    switch other.kind
+    case .number
+        return number(0.0)
+    case .text
+        return text("")
+    case .boolean
+        return boolean(false)
+    case .empty, .error {}
+    return v
 
 priv fn number_of(text: U8[]): Value //< a number written in decimal; one too large is an error
     n: = text.to_f64() catch
@@ -422,4 +735,14 @@ priv fn number_of(text: U8[]): Value //< a number written in decimal; one too la
 priv fn number(n: F64): Value //< a number; an infinity or a NaN is an error
     if n - n != 0.0
         return Value.failed(.not_finite)
-    return Value::{ .kind = .number, .number = n, .error = .syntax }
+    return Value::{ .kind = .number, .number = n, .text = "", .boolean = false, .error = .syntax }
+
+priv fn text(s: U8[]): Value
+    return Value::{ .kind = .text, .number = 0.0, .text = s, .boolean = false, .error = .syntax }
+
+priv fn boolean(b: Bool): Value
+    return Value::{ .kind = .boolean, .number = 0.0, .text = "", .boolean = b, .error = .syntax }
+
+priv fn empty(): Value
+    return Value::{ .kind = .empty, .number = 0.0, .text = "", .boolean = false,
+        .error = .syntax }

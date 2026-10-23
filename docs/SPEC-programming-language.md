@@ -841,7 +841,7 @@ Where the value is placed depends on where the `const` is declared:
 
 | Declared | Placed in |
 | :-- | :-- |
-| At the top level (a string slice's contents included) | Memory that cannot be written: ROM, such as the `.rodata` section of the program file |
+| At the top level (the elements a slice points at included) | Memory that cannot be written: ROM, such as the `.rodata` section of the program file |
 | Inside a function | The value itself goes on the stack (RAM) |
 
 To decide the placement yourself, add the `#section` attribute ([10](#10-compiler-directives-and-attributes)).
@@ -853,7 +853,7 @@ const OK: U8[] = "abc" // OK
 const BAD: U8$[] = "abc" // error: const 'BAD' declares writable elements, ...
 ```
 
-A `const` slice can be initialized only from a string literal, whose data is read-only too.
+A `const` slice's elements are read-only too. At the top level they sit in read-only memory as well. They can come from a string literal, a run of elements (`F64[]::{ 1.5, 2.5 }`) or a `const` array.
 
 This check walks the `const`'s type, step by step, looking for a `$`:
 

@@ -1,0 +1,124 @@
+//< The editor's replace action: text in prose and cells replaced as one step, and its refusals
+//< Each check compares the saved source, and one undo gives back the source before the replace.
+import "ksmd/editor" { Editor, Refused }
+import "ksmd/editor"
+import "ksmd/editor_replace" { Cell_text, Span }
+import "ksmd/reader"
+import "ksmd/source" { Source }
+import "ksmd/writer"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/verdict"
+
+fn run()
+    in_prose()
+    across_blocks()
+    in_cells()
+    refusals()
+
+priv fn in_prose()
+    defer arena: = Arena(64 * 1024)
+    before: = "%ksmd 1\n\nSome **bold**words here, words.\n"
+    $ed: = opened(before, arena)
+    $spans: = List<|Span|>(arena)
+    // The visible text is "Some boldwords here, words.".
+    spans.push(span(0, 0, 9, 14))
+    spans.push(span(0, 0, 21, 26))
+    replaced(ed@, spans@, "terms", arena)
+    saves("every span takes the new text, each with the marks of its first character", ed@,
+        "%ksmd 1\n\nSome **bold**terms here, terms.\n")
+    ed.undo()
+    saves("one undo takes every replacement back", ed@, before)
+    $across: = List<|Span|>(arena)
+    across.push(span(0, 0, 5, 14))
+    replaced(ed@, across@, "X", arena)
+    saves("a match across a mark takes the mark its first character has", ed@,
+        "%ksmd 1\n\nSome **X** here, words.\n")
+    $linked: = opened("%ksmd 1\n\n[click here](https://x.example) now\n", arena)
+    $inside: = List<|Span|>(arena)
+    inside.push(span(0, 0, 6, 10))
+    replaced(linked@, inside@, "there", arena)
+    saves("text replaced inside a link stays in the link", linked@,
+        "%ksmd 1\n\n[click there](https://x.example) now\n")
+
+priv fn across_blocks()
+    defer arena: = Arena(64 * 1024)
+    before: = "%ksmd 1\n\n# Title word\n\n- word one\n- two word\n\nword\n\nEnd\n"
+    $ed: = opened(before, arena)
+    $spans: = List<|Span|>(arena)
+    spans.push(span(0, 0, 6, 10))
+    spans.push(span(1, 0, 0, 4))
+    spans.push(span(1, 1, 4, 8))
+    spans.push(span(2, 0, 0, 4))
+    replaced(ed@, spans@, "", arena)
+    saves("a heading, list items and a paragraph change together; an emptied paragraph goes", ed@,
+        "%ksmd 1\n\n# Title\n\n- one\n- two\n\nEnd\n")
+    ed.undo()
+    saves("and one undo puts every block back", ed@, before)
+
+priv fn in_cells()
+    defer arena: = Arena(64 * 1024)
+    before: =
+        "%ksmd 1\n\nA total\n\n:::table name=\"t\"\n| \"total\" | \"n\" |\n| 2 | =A1*2 |\n:::\n"
+    $ed: = opened(before, arena)
+    $spans: = List<|Span|>(arena)
+    spans.push(span(0, 0, 2, 7))
+    $cells: = List<|Cell_text|>(arena)
+    cells.push(Cell_text::{ .block = 1, .row = -1, .column = 0, .text = "sum" })
+    cells.push(Cell_text::{ .block = 1, .row = 0, .column = 1, .text = "=A1*3" })
+    ed.replace_found(spans@, "sum", cells@) catch e
+        verdict.check("replacing in text and cells", false, e.message())
+    saves("text, a name and a formula's source change as one step", ed@,
+        "%ksmd 1\n\nA sum\n\n:::table name=\"t\"\n| \"sum\" | \"n\" |\n| 2 | =A1*3 |\n:::\n")
+    ed.undo()
+    saves("and one undo takes them all back", ed@, before)
+
+priv fn refusals()
+    defer arena: = Arena(64 * 1024)
+    before: = "%ksmd 1\n\nOne two\n\n:::table name=\"t\"\n| \"a\" |\n| 1 |\n:::\n"
+    $ed: = opened(before, arena)
+    $spans: = List<|Span|>(arena)
+    spans.push(span(0, 0, 0, 3))
+    $cells: = List<|Cell_text|>(arena)
+    cells.push(Cell_text::{ .block = 1, .row = 0, .column = 0, .text = "=A1 | B1" })
+    $refused: = false
+    ed.replace_found(spans@, "Three", cells@) catch
+        refused = true
+    verdict.check("a cell text the file cannot hold refuses the whole replace", refused, "")
+    saves("and the text replaced before it is put back", ed@, before)
+    verdict.check("nothing is left to undo", !ed.can_undo(), "")
+    $stale: = List<|Span|>(arena)
+    stale.push(span(0, 0, 4, 40))
+    $none: = List<|Cell_text|>(arena)
+    $said: U8[] = ""
+    ed.replace_found(stale@, "x", none@) catch e
+        said = e.message()
+    verdict.check("a span past its text's end is refused as found before a change",
+        said.equals(Refused.stale.message()), said)
+    saves("and changes nothing", ed@, before)
+
+// ---- Helpers ----
+
+priv fn span(block: Sz, item: Sz, from: Sz, to: Sz): Span
+    return Span::{ .block = block, .item = item, .from = from, .to = to }
+
+priv fn replaced(ed: Editor$@, spans: List<|Span|>@, text: U8[], arena: Arena$@)
+    none: = List<|Cell_text|>(arena)
+    ed.replace_found(spans, text, none@) catch e
+        verdict.check("a replace", false, e.message())
+
+priv fn opened(bytes: U8[], arena: Arena$@): Editor //< an editor on the source
+    src: = Source("t.ksmd", arena.dup_str(bytes)) catch e
+        verdict.check("a test source is valid", false, e.message)
+        panic("a test source was refused")
+    doc: = reader.read(src@, arena) catch e
+        verdict.check("a test document reads", false, e.message)
+        panic("a test document was refused")
+    return editor.open(doc, "2026-10-23", arena)
+
+priv fn saves(what: U8[], ed: Editor@, expected: U8[]) //<
+    //< The editor's document saves as `expected`
+    defer $out: = Str_builder()
+    writer.write(ed.doc@, out@)
+    verdict.check(what, out.slice().equals(expected), out.slice())

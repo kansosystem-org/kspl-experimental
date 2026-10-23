@@ -61,6 +61,11 @@ struct Genllvm_ctx
     local_var_ids: Map<|Sz, I32|>$@
     var_counter: I32
     str_pool: Str_pool
+    const_arrays: List<|Ast_node$@|>$@ //<
+        //< The array literals global slices point at, in order of appearance
+        //< Entry N is written later as the private constant `@.arr.N` (emit_llvm_const_arrays in
+        //< gen/llvm/decl.kspl). An LLVM global's initializer cannot build an array in place, as
+        //< C's file-scope compound literal does.
     current_ret_id: I32
     current_fn_name: U8[] //< the symbol of the function being emitted, as a trace frame names it
     current_ret_is_sret: Bool //<
@@ -91,6 +96,7 @@ impl Genllvm_ctx
         str_pool_list: = List<|U8[]|>.create(base_core.arena)
         str_pool_map: = base_core.arena
             .create(Map<|U8[], I32|>.new_with_cap(2048, null))
+        const_arrays: = List<|Ast_node$@|>.create(base_core.arena)
         alloca_out: = Str_builder()
         body_out: = Str_builder()
         trait_method_idx_cache: = base_core.arena
@@ -101,8 +107,8 @@ impl Genllvm_ctx
             .source_map = source_map, .scratch = scratch, .reg_counter = 1, .label_counter = 1,
             .local_var_ids = local_var_ids, .var_counter = 1,
             .str_pool = Str_pool::{ .list = str_pool_list, .map = str_pool_map },
-            .current_ret_id = 0, .current_fn_name = "", .current_ret_is_sret = false,
-            .is_terminated = false,
+            .const_arrays = const_arrays, .current_ret_id = 0, .current_fn_name = "",
+            .current_ret_is_sret = false, .is_terminated = false,
             .emit = Emit_state::{ .alloca_out = alloca_out, .body_out = body_out,
             .target = .direct }, .had_error = false,
             .trait_method_idx_cache = trait_method_idx_cache, .extern_declared = extern_declared })
@@ -125,6 +131,10 @@ impl Genllvm_ctx
         r.str_pool.list.push(perm_text)
         r.str_pool.map.set(perm_text, id)
         return id
+
+    fn add_const_array(r: Self$@, init: Ast_node$@): Sz //< enters init; returns its N in `@.arr.N`
+        r.const_arrays.push(init)
+        return r.const_arrays.len - 1
 
     fn clear_scratch(r: Self$@): Str_builder$@
         return r.scratch.clear()

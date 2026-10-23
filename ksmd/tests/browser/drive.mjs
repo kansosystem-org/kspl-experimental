@@ -20,6 +20,7 @@ export const verdict = {
 const KEYS = {
   Enter: [13, "\r"], Backspace: [8, ""], Delete: [46, ""], Tab: [9, ""], Escape: [27, ""],
   ArrowUp: [38, ""], ArrowDown: [40, ""], ArrowLeft: [37, ""], ArrowRight: [39, ""], End: [35, ""],
+  Home: [36, ""], F10: [121, ""],
 };
 export const CTRL = 2;
 export const SHIFT = 8;
@@ -101,18 +102,59 @@ export function driver(page) {
     })()`);
   }
 
-  async function clickAt(x, y) {
+  async function clickAt(x, y, modifiers = 0) {
     for (const type of ["mousePressed", "mouseReleased"]) {
-      await page("Input.dispatchMouseEvent", { type, x, y, button: "left", clickCount: 1 });
+      await page("Input.dispatchMouseEvent", { type, x, y, button: "left", clickCount: 1, modifiers });
     }
   }
 
-  async function click(selector) {
+  async function click(selector, modifiers = 0) {
     const box = await js(`(() => {
       const r = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();
       return [r.left + r.width / 2, r.top + r.height / 2];
     })()`);
-    await clickAt(box[0], box[1]);
+    await clickAt(box[0], box[1], modifiers);
+  }
+
+  // Where an element's middle stands on the page.
+  const middle = (selector) => js(`(() => {
+    const r = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();
+    return [r.left + r.width / 2, r.top + r.height / 2];
+  })()`);
+
+  // Moves the pointer over the middle of an element, with no button down.
+  async function point(selector) {
+    const [x, y] = await middle(selector);
+    await page("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+  }
+
+  // Two presses at one place, as a double-click sends them.
+  async function doubleClickAt(x, y) {
+    for (const clickCount of [1, 2]) {
+      for (const type of ["mousePressed", "mouseReleased"]) {
+        await page("Input.dispatchMouseEvent", { type, x, y, button: "left", clickCount });
+      }
+    }
+  }
+
+  // A press of the right button at an element's middle, which opens a context menu.
+  async function rightClick(selector) {
+    const [x, y] = await middle(selector);
+    for (const type of ["mousePressed", "mouseReleased"]) {
+      await page("Input.dispatchMouseEvent", { type, x, y, button: "right", clickCount: 1 });
+    }
+  }
+
+  // Presses a command in the menu bar as a person does: the menu's name, the flyout's name where
+  // the command stands in one, then the command.
+  async function menu(cmd) {
+    const own = `[data-cmd="${cmd}"]`;
+    const item = `.menubar ${own}`;
+    await click(`.top-menu:has(${own}) > .menu-name`);
+    if (await js(`!!document.querySelector('${item}').closest(".sub")`)) {
+      await click(`.menubar .sub:has(${own}) > .sub-name`);
+    }
+    await click(item);
   }
 
   // A press at the middle of an element, a move to the right by `dx` pixels in two steps, and a
@@ -134,11 +176,14 @@ export function driver(page) {
   // A press in the document below its last block.
   async function clickBelow() {
     const at = await js(`(() => {
+      // The page's bottom can stand below the window under a tall header; it is scrolled in.
+      window.scrollTo(0, document.documentElement.scrollHeight);
       const r = document.getElementById("doc").getBoundingClientRect();
-      return [r.left + r.width / 2, r.bottom - 8];
+      return [r.left + r.width / 2, Math.min(r.bottom, window.innerHeight - 40) - 8];
     })()`);
     await clickAt(at[0], at[1]);
   }
 
-  return { page, js, settle, until, press, type, select, click, clickAt, clickBelow, drag };
+  return { page, js, settle, until, press, type, select, click, clickAt, clickBelow, drag, menu, point,
+    doubleClickAt, rightClick };
 }

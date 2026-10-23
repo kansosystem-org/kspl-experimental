@@ -8,19 +8,17 @@
 //< in it, and nothing in it is freed before the editor goes.
 import "ksmd/edit"
 import "ksmd/edit" { Edit_error }
-import "ksmd/formula" { Positions, write_formula }
 import "ksmd/history" { Change, History, Selection, Step_kind, Transaction, begin, capture,
     is_empty, new_history, record_tables, replace_blocks, swap }
 import "ksmd/inline" { is_destination }
-import "ksmd/marker" { is_decimal }
-import "ksmd/model" { Block, Cell_kind, Document, MAX_NESTING, Table }
+import "ksmd/look" { Look_part, plain_look, with_part }
+import "ksmd/model" { Block, Document, MAX_NESTING }
 import "ksmd/region" { Settled, Spot, Style, Unit, blank_unit, fit, gap_spot, gather, is_text_block,
-    paragraph_style, same_spot, settle, text_spot, whole_unit }
-import "ksmd/styled" { Mark, Marks, Seg, cut, has_mark, hard_break, length, marks_before, plain,
-    set_mark, text_seg, visible }
+    paragraph_style, same_spot, settle, text_spot }
+import "ksmd/styled" { Mark, Marks, Seg, cut, hard_break, has_mark, length, marks_before, plain,
+    set_look_part, set_mark, text_seg, visible }
 import "std/chars"
 import "std/ds" { List }
-import "std/json"
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
 
@@ -28,6 +26,8 @@ enum Refused //< why an action changed nothing
     no_read_back //< the result would not read back as the same text
     link //< the link's destination is not one a ksmd file holds
     table(why: Edit_error) //< a table edit was refused
+    look //< a colour, a size or an alignment the format does not hold
+    stale //< the text or the cells to replace are no longer where they were found
 
 impl Refused
     fn message(r: Self): U8[] //< what the page says: the problem, then what to do
@@ -39,6 +39,11 @@ impl Refused
                 spaces and brackets from it."
         case .table(why)
             return why.message()
+        case .look
+            return "This look cannot be saved. A colour is '#' and six hex digits, a size 6 to 72 \
+                points, and alignment left, center or right."
+        case .stale
+            return "The document changed after the search. Search again, then replace."
 
 enum Input //< how text arrived
     typing //< typed keys, which join one undo step
@@ -56,41 +61,38 @@ struct Editor
     marked: Bool //< a mark command ran with nothing selected; cleared when the caret moves
     joinable: Bool //< the caret stands where the last typing or deleting left it
     change: Change //< what the actions since the caller last cleared it changed
+    today: U8[] //< the date the document was opened, `2026-10-23`: what `today()` gives
+        //< It stays while the editor is open, so a value does not change while a person works.
 
-priv struct Pos //< a place in a work's units
+struct Pos //< a place in a work's units
     unit: Sz
     offset: Sz
 
-priv struct Work //< blocks `from` to `to` taken apart, and where the selection's ends stand
+struct Work //< blocks `from` to `to` taken apart, and where the selection's ends stand
     from: Sz
     to: Sz
     units: List<|Unit|>
     start: Pos
     end: Pos
 
-priv struct Replaced //< where a replacement put its units
+struct Replaced //< where a replacement put its units
     first: Sz
     last: Sz
     caret: Pos //< the end of the inserted text
     head: Sz //< the bytes kept before the replaced range
     tail: Sz //< the bytes kept after it
 
-fn open(doc: Document, arena: Arena$@): Editor //< an editor on `doc`, its caret at the start
+fn open(doc: Document, today: U8[], arena: Arena$@): Editor //<
+    //< An editor on `doc`, its caret at the start, opened on the date `today`
     start: = first_spot(doc@)
     return Editor::{ .doc = doc, .arena = arena, .history = new_history(arena), .anchor = start,
         .focus = start, .gap = paragraph_style(), .typing = plain(), .marked = false,
-        .joinable = false, .change = Change.none(doc@) }
+        .joinable = false, .change = Change.none(doc@), .today = today }
 
 priv fn first_spot(doc: Document@): Spot //< the start of the first text, or the gap before all
     if doc.blocks.len > 0 && is_text_block(doc.blocks.get(0).kind)
         return text_spot(0, 0, 0)
     return gap_spot(0)
-
-enum Table_edit //< a row or column edit a page asks for, at a row or column of the table
-    insert_row //< an empty row before row `at`; at the count of rows, after the last
-    remove_row
-    insert_column //< an empty column before column `at`; at the count, after the last
-    remove_column
 
 impl Editor
     fn selection(ed: Self@): Selection
@@ -238,6 +240,9 @@ impl Editor
                 style.depth = u.style.depth
             if target.kind == .code && u.style.kind == .code
                 style.label = u.style.label
+            // A paragraph made a heading, or a heading another level, keeps its alignment.
+            aligns: = style.kind == .paragraph || style.kind == .heading
+            style.align = u.style.align if aligns else .none
             u.style = style
             u.edited = true
             fit(u, scratch)
@@ -308,6 +313,54 @@ impl Editor
             u.edited = true
         ed.restyle(w@, scratch)!
 
+    fn set_text_look(ed: Self$@, part: Look_part, value: U8[]): Void!Refused //<
+        //< Sets or clears one part of the look over the selected text: colour, fill or size
+        //< An empty value clears that part, and `.all` with it clears every part. With nothing
+        //< selected, it applies to the text typed next. Code blocks, tables, images and includes
+        //< are left as they are.
+        if part == .align || with_part(plain_look(), part, value).is_none()
+            throw .look
+        kept: = ed.arena.dup_str(value)
+        s: = ed.start_spot()
+        e: = ed.end_spot()
+        defer scratch: = Arena(16 * 1024)
+        $w: = ed.work(s, e, s.block, end_block(e), scratch)
+        if same_spot(s, e)
+            unit: = w.units[w.start.unit]@
+            $m: =
+                ed.typing if ed.marked else marks_before(unit.segs@, w.start.offset)
+            m.look = with_part(m.look, part, kept).unwrap_or(m.look)
+            ed.typing = m
+            ed.marked = true
+            return
+        for i in Range(w.start.unit, w.end.unit + 1, 1)
+            u: = w.units[i]@
+            if u.whole || u.style.kind == .code
+                continue
+            from: = w.start.offset if i == w.start.unit else 0
+            to: = w.end.offset if i == w.end.unit else length(u.segs@)
+            set_look_part(u.segs@, from, to, part, kept, scratch)
+            u.edited = true
+        ed.restyle(w@, scratch)!
+
+    fn set_align(ed: Self$@, value: U8[]): Void!Refused //<
+        //< Aligns each paragraph and heading of the selection: left, center, right, or empty for
+        //< none. List items and other blocks are left as they are.
+        $probe: = plain_look()
+        probe = with_part(probe, .align, value) catch
+            throw .look
+        s: = ed.start_spot()
+        e: = ed.end_spot()
+        defer scratch: = Arena(16 * 1024)
+        $w: = ed.work(s, e, s.block, end_block(e), scratch)
+        for i in Range(w.start.unit, w.end.unit + 1, 1)
+            u: = w.units[i]@
+            if u.whole || u.style.kind != .paragraph && u.style.kind != .heading
+                continue
+            u.style.align = probe.align
+            u.edited = true
+        ed.restyle(w@, scratch)!
+
     fn undo(ed: Self$@) //< swaps the last action's changes back out; nothing if none is left
         if ed.history.done.len == 0
             return
@@ -375,7 +428,7 @@ impl Editor
         ed.change.tables = true
         ed.change.any = true
 
-    priv fn apply(ed: Self$@, w: Work$@, tx: Transaction$@, got: Settled@, anchor: Pos, focus: Pos) //<
+    fn apply(ed: Self$@, w: Work$@, tx: Transaction$@, got: Settled@, anchor: Pos, focus: Pos) //<
         //< Puts settled blocks in the document and moves the caret
         if w.to > w.from || got.blocks.len > 0
             replace_blocks(ed.doc@, tx, w.from, w.to - w.from, got.blocks@, ed.change@, ed.arena)
@@ -391,7 +444,7 @@ impl Editor
             return false
         last: = ed.history.done[ed.history.done.len - 1]@
         return last.kind == kind && last.blocks.len == 1 && last.tables.len == 0 &&
-            last.cells.len == 0 && last.pieces.len == 0 && last.widths.len == 0 &&
+            last.cells.len == 0 && last.pieces.len == 0 && last.columns.len == 0 &&
             last.blocks[0].at == at && last.blocks[0].count == removed
 
     priv fn restore(ed: Self$@, s: Selection) //< the selection an undo or a redo returns to
@@ -427,7 +480,7 @@ impl Editor
         ed.commit(w, tx@, caret, caret, scratch)!
         ed.finish(tx, .other, false)
 
-    priv fn delete_range(ed: Self$@, s: Spot, e: Spot, kind: Step_kind): Void!Refused //<
+    fn delete_range(ed: Self$@, s: Spot, e: Spot, kind: Step_kind): Void!Refused //<
         //< Removes everything between two spots, joining the text on either side
         defer scratch: = Arena(16 * 1024)
         $w: = ed.work(s, e, s.block, end_block(e), scratch)
@@ -530,7 +583,7 @@ impl Editor
             return style
         return paragraph_style()
 
-    priv fn work(ed: Self$@, s: Spot, e: Spot, from: Sz, $to: Sz, scratch: Arena$@): Work //<
+    fn work(ed: Self$@, s: Spot, e: Spot, from: Sz, $to: Sz, scratch: Arena$@): Work //<
         //< Blocks `from` to `to` as units, with an empty unit standing in each gap the selection's
         //< ends are in
         if to < from
@@ -561,128 +614,6 @@ impl Editor
         if same_spot(p, ed.focus)
             return ed.gap
         return ed.gap_style(p)
-
-    fn insert_table(ed: Self$@, columns: Sz, rows: Sz): Void!Refused //<
-        //< Puts a new table in place of the selection, splitting the text the caret stands in
-        s: = ed.start_spot()
-        e: = ed.end_spot()
-        defer scratch: = Arena(16 * 1024)
-        before: = capture(ed.doc@, scratch)
-        $w: = ed.work(s, e, s.block, end_block(e), scratch)
-        table: = Block::{ .kind = .table, .level = 0, .label = "", .text = "",
-            .first = ed.doc.tables.len, .count = 1, .offset = 0 }
-        $frag: = List<|Unit|>(scratch)
-        frag.push(blank_unit(paragraph_style(), scratch))
-        frag.push(whole_unit(table, scratch))
-        frag.push(blank_unit(paragraph_style(), scratch))
-        r: = replace(w@, frag@, scratch)
-        got: = settle(ed.doc@, w.units@, w.from, ed.arena, scratch) catch
-            throw .no_read_back
-        _u: = edit.new_table(ed.doc@, columns, rows, ed.arena) catch why
-            throw .table(why)
-        $tx: = begin(ed.selection(), ed.arena)
-        caret: = Pos::{ .unit = r.last, .offset = 0 }
-        ed.apply(w@, tx@, got@, caret, caret)
-        ed.close_table_step(before@, tx)
-
-    fn remove_table(ed: Self$@, block: Sz): Void!Refused //<
-        //< Removes a table block and empties its table; the caret takes the gap it leaves
-        _u: = ed.table_of(block)!
-        ed.delete_range(gap_spot(block), gap_spot(block + 1), .other)!
-
-    fn edit_table(ed: Self$@, block: Sz, what: Table_edit, at: Sz): Void!Refused //<
-        //< Inserts or removes a row or a column of the table a block shows
-        u: = ed.table_of(block)!
-        defer scratch: = Arena(16 * 1024)
-        before: = capture(ed.doc@, scratch)
-        switch what
-        case .insert_row
-            edit.insert_row(ed.doc@, u, at, ed.arena) catch why
-                throw .table(why)
-        case .remove_row
-            edit.remove_row(ed.doc@, u, at) catch why
-                throw .table(why)
-        case .insert_column
-            edit.insert_column(ed.doc@, u, at, ed.arena) catch why
-                throw .table(why)
-        case .remove_column
-            edit.remove_column(ed.doc@, u, at) catch why
-                throw .table(why)
-        ed.close_table_step(before@, begin(ed.selection(), ed.arena))
-
-    fn set_cell(ed: Self$@, block: Sz, row: Sz, column: Sz, text: U8[]): Void!Refused //<
-        //< Puts what a person typed in a cell; row -1 is the names above the data rows
-        //< Text after `=` is a formula, a number as JSON writes one is a number, and nothing is an
-        //< empty cell. Quoted text is text, so `"12"` is the text 12. Anything else is text as
-        //< typed.
-        u: = ed.table_of(block)!
-        defer scratch: = Arena(16 * 1024)
-        before: = capture(ed.doc@, scratch)
-        if row < 0
-            edit.set_name(ed.doc@, u, column, text, ed.arena) catch why
-                throw .table(why)
-        else
-            value: = value_of(text, scratch)
-            edit.set_cell(ed.doc@, u, row, column, value.kind, value.text, ed.arena) catch why
-                throw .table(why)
-        ed.close_table_step(before@, begin(ed.selection(), ed.arena))
-
-    fn set_widths(ed: Self$@, block: Sz, weights: List<|Sz|>@): Void!Refused //<
-        //< Gives the columns of the table a block shows their relative widths, as one step
-        u: = ed.table_of(block)!
-        defer scratch: = Arena(16 * 1024)
-        before: = capture(ed.doc@, scratch)
-        edit.set_widths(ed.doc@, u, weights) catch why
-            throw .table(why)
-        ed.close_table_step(before@, begin(ed.selection(), ed.arena))
-
-    fn rename_table(ed: Self$@, block: Sz, name: U8[]): Void!Refused //<
-        //< names the table a block shows
-        u: = ed.table_of(block)!
-        defer scratch: = Arena(16 * 1024)
-        before: = capture(ed.doc@, scratch)
-        edit.rename_table(ed.doc@, u, name, ed.arena) catch why
-            throw .table(why)
-        ed.close_table_step(before@, begin(ed.selection(), ed.arena))
-
-    fn cell_text(ed: Self@, u: Sz, row: Sz, column: Sz, arena: Arena$@): U8[] //<
-        //< What a person edits in a cell, which `set_cell` reads back as the same value
-        //< Text that would read as another kind is shown quoted, as the source writes it.
-        t: = ed.doc.tables[u]@
-        if row < 0
-            return t.cells[column].text
-        cell: = t.cells[t.at(row, column)]
-        switch cell.kind
-        case .empty
-            return ""
-        case .number
-            return cell.text
-        case .text
-            if value_of(cell.text, arena).kind == .text && !cell.text.starts_with("\"")
-                return cell.text
-            defer $out: = Str_builder()
-            out.c('"').escape_and_append(cell.text).c('"')
-            return arena.dup_str(out.slice())
-        case .formula
-            defer $out: = Str_builder()
-            defer scratch: = Arena(16 * 1024)
-            at: = Positions(ed.doc@, scratch)
-            out.c('=')
-            write_formula(ed.doc@, t, cell, at@, 0, 0, out@)
-            return arena.dup_str(out.slice())
-
-    priv fn table_of(ed: Self@, block: Sz): Sz!Refused //< the table a block shows
-        if block < 0 || block >= ed.doc.blocks.len ||
-            ed.doc.blocks.get(block).kind != .table
-            throw .table(.outside)
-        return ed.doc.blocks.get(block).first
-
-    priv fn close_table_step(ed: Self$@, before: List<|Table|>@, $tx: Transaction) //<
-        //< Records how the tables differ from their copies, and the step
-        record_tables(ed.doc@, before, tx@, ed.arena)
-        ed.change.tables = true
-        ed.change.any = ed.change.any || !is_empty(tx@)
-        ed.finish(tx, .other, false)
 
 fn later(a: Spot, b: Spot): Bool //< whether `a` stands after `b` in the document
     if a.block != b.block
@@ -725,7 +656,7 @@ priv fn top_marker(doc: Document@, b: Sz, ordered: Bool): Bool //<
     block: = doc.blocks.get(b)
     return block.kind == .list && doc.items.get(block.first).ordered == ordered
 
-priv fn replace(w: Work$@, frag: List<|Unit|>$@, scratch: Arena$@): Replaced //<
+fn replace(w: Work$@, frag: List<|Unit|>$@, scratch: Arena$@): Replaced //<
     //< Puts the fragment's units in place of everything from the work's start to its end
     //< The first unit takes the text before the start, and the kind of the start's unit. The last
     //< takes the text after the end; with two or more, it takes the kind of the end's unit.
@@ -787,27 +718,6 @@ priv fn next_char(text: U8[], offset: Sz): Sz //< where the character after `off
     for i < text.len && (text[i] & 0xC0U8) == 0x80U8
         i += 1
     return i
-
-struct Value //< what typed text puts in a cell
-    kind: Cell_kind
-    text: U8[] //< a formula without its `=`, a number as written, or the text
-
-fn value_of(typed: U8[], arena: Arena$@): Value //< how `set_cell` reads typed text
-    if typed.len == 0
-        return Value::{ .kind = .empty, .text = "" }
-    if typed[0] == '='
-        return Value::{ .kind = .formula, .text = typed.sub_from(1) }
-    if typed[0] == '"'
-        if text: = quoted(typed, arena)
-            return Value::{ .kind = .text, .text = text }
-    if is_decimal(typed)
-        return Value::{ .kind = .number, .text = typed }
-    return Value::{ .kind = .text, .text = typed }
-
-priv fn quoted(typed: U8[], arena: Arena$@): U8[]? //< the text a JSON string means, if it is one
-    parsed: = json.parse(typed, arena) catch
-        return .none
-    return parsed.val.as_str()
 
 priv fn shows_table(blocks: List<|Block|>@, u: Sz): Bool //< whether a block shows table `u`
     for b in blocks

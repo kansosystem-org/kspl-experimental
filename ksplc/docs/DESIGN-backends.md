@@ -434,11 +434,12 @@ There are two countermeasures:
 
 Caution: If the FQN constants in `sema/type/arc.kspl` are hit, every ARC-related verdict silently compares unequal.
 
-There are three requirements:
+There are four requirements:
 
 1. Handle an initializer the same way for `const` and `$var`.
 2. Put a string literal in the string pool, emitted as `{ ptr, len }` for a slice type and as an address for a pointer type.
 3. Reorder a compound literal into declaration order (LLVM requires every element, in order).
+4. Write the array under a slice literal (`T[]::{ … }`) as a private constant `@.arr.N`, and point the slice at it. C builds that array in place as a file-scope compound literal. genc writes its members as plain braces, since C99 takes no compound literal as a member there. An LLVM initializer cannot hold one, and code built for a function body there does not assemble.
 
 **A shape that cannot be lowered is an ICE.**
 

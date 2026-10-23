@@ -3,16 +3,19 @@
 //< `t` table, `i` image and `n` include. Text is a list of segments: `{"t":…,"m":…,"l":…}`, where
 //< `m` adds 1 for emphasis, 2 for strong emphasis and 4 for inline code, and `l` is a link's
 //< destination; a hard break is `{"br":1}`. A table cell is `[kind]` or `[kind, value]`: 0 empty,
-//< 1 a number, 2 text, 3 an error's mark. A spot is `[place, block, item, offset]`, where place 0
-//< is text, 1 the gap before a block and 2 the gap before a list item. Where files are fetched,
-//< an include and an image add where their path leads (`to`) and any problem (`why`), and an
-//< include the blocks of its file (`inside`), shown in place and edited on their own.
+//< 1 a number, 2 text, 3 an error's mark, 4 `true` or `false`. A spot is `[place, block, item,
+//< offset]`, where place 0 is text, 1 the gap before a block and 2 the gap before a list item.
+//< Where files are fetched, an include and an image add where their path leads (`to`) and any
+//< problem (`why`), and an include the blocks of its file (`inside`), shown in place and edited
+//< on their own.
 //< Caution: **Change this and `ksmd/port/web/view.js` together**; the script reads these shapes.
 import "ksmd/assemble" { Assembly, NONE }
 import "ksmd/calc" { Results, Value }
 import "ksmd/calc"
 import "ksmd/editor" { Editor }
+import "ksmd/format" { Number_format, no_format, show }
 import "ksmd/keyed" { Keyed }
+import "ksmd/look" { is_plain }
 import "ksmd/model" { Block_kind, Document }
 import "ksmd/region" { Spot, Style, Unit, gather }
 import "ksmd/styled" { Seg }
@@ -25,10 +28,11 @@ struct Inside //< what includes and images show: the view assembled from the fil
     top: List<|Sz|> //< the entry of each block of the open document
     values: List<|Results?|> //< each source's values by its index, calculated when first shown
     waiting: Keyed<|Bool|> //< the paths not fetched yet; their clauses show no problem
+    today: U8[] //< the date the open document was opened, which its included sources take too
     arena: Arena$@
 
 impl Inside
-    fn new(a: Assembly, waiting: Keyed<|Bool|>, arena: Arena$@): Inside //<
+    fn new(a: Assembly, waiting: Keyed<|Bool|>, today: U8[], arena: Arena$@): Inside //<
         //< The open document is the view's first source
         $top: = List<|Sz|>(arena)
         for e in Range.asc(a.entries.len)
@@ -37,13 +41,14 @@ impl Inside
         $values: = List<|Results?|>(arena)
         for _ in Range.asc(a.sources.len)
             values.push(.none)
-        return Inside::{ .a = a, .top = top, .values = values, .waiting = waiting, .arena = arena }
+        return Inside::{ .a = a, .top = top, .values = values, .waiting = waiting, .today = today,
+            .arena = arena }
 
     priv fn values_of(r: Self$@, source: Sz): Results
         if found: = r.values.get(source)
             return found
         src: = r.a.sources.get(source)
-        got: = calc.calculate(src.doc@, r.arena)
+        got: = calc.calculate(src.doc@, r.today, r.arena)
         r.values.set(source, .some(got))
         return got
 
@@ -119,6 +124,9 @@ priv fn block(doc: Document@, b: Sz, values: Results@, out: Str_builder$@, scrat
         gather(doc, b, b + 1, units@, scratch)
         if x.kind == .heading
             out.s(",\"n\":\{x.level\}")
+        if x.align != .none
+            out.s(",\"a\":")
+            text(x.align.name(), out)
         if x.kind == .code
             out.s(",\"label\":")
             text(x.label, out)
@@ -214,11 +222,20 @@ priv fn segs(list: List<|Seg|>@, out: Str_builder$@)
         if s.marks.link.len > 0
             out.s(",\"l\":")
             text(s.marks.link, out)
+        l: = s.marks.look
+        if !is_plain(l)
+            // [colour, fill, size in half points]
+            out.s(",\"k\":[")
+            text(l.color, out)
+            out.c(',')
+            text(l.fill, out)
+            out.s(",\{l.size\}]")
         out.c('}')
     out.c(']')
 
 priv fn table(doc: Document@, u: Sz, values: Results@, out: Str_builder$@) //<
-    //< `"name"`, the column weights `"w"`, the column names and each data row's values
+    //< `"name"`, the column weights `"w"`, the column names, the identities of the rows (`"ri"`)
+    //< and columns (`"ci"`), and each data row's values
     t: = doc.tables[u]@
     out.s(",\"u\":\{u\},\"name\":")
     text(t.name, out)
@@ -232,6 +249,28 @@ priv fn table(doc: Document@, u: Sz, values: Results@, out: Str_builder$@) //<
         if c > 0
             out.c(',')
         text(t.cells[c].text, out)
+    out.s("],\"looks\":[")
+    $any: = false
+    for i in Range.asc(t.cells.len)
+        l: = t.cells[i].look
+        if is_plain(l)
+            continue
+        if any
+            out.c(',')
+        any = true
+        // [row, column, colour, fill, size in half points, alignment]; row -1 is the names.
+        out.s("[\{i / t.columns.len - 1\},\{i % t.columns.len\},")
+        text(l.color, out)
+        out.c(',')
+        text(l.fill, out)
+        out.s(",\{l.size\},")
+        text(l.align.name(), out)
+        out.c(']')
+    // The identities of the rows and columns, which a range of chosen cells keeps to.
+    out.s("],\"ri\":[")
+    ids(t.rows@, out)
+    out.s("],\"ci\":[")
+    ids(t.columns@, out)
     out.s("],\"rows\":[")
     for r in Range.asc(t.rows.len)
         if r > 0
@@ -240,20 +279,35 @@ priv fn table(doc: Document@, u: Sz, values: Results@, out: Str_builder$@) //<
         for c in Range.asc(t.columns.len)
             if c > 0
                 out.c(',')
-            cell(t.cells[t.at(r, c)].text, values.at(u, r, c), out)
+            cell(values.at(u, r, c), t.formats[c] if t.formats.len > 0 else no_format(), out)
         out.c(']')
     out.s("]")
 
-priv fn cell(written: U8[], v: Value, out: Str_builder$@)
+priv fn ids(list: List<|Sz|>@, out: Str_builder$@) //< numbers separated by commas
+    for i in Range.asc(list.len)
+        if i > 0
+            out.c(',')
+        out.s("\{list[i]\}")
+
+priv fn cell(v: Value, f: Number_format, out: Str_builder$@) //<
+    //< `[kind, value]`; a number in a column with a format adds the text the format shows
     switch v.kind
     case .empty
         out.s("[0]")
     case .number
-        out.s("[1,\{v.number\}]")
+        out.s("[1,\{v.number\}")
+        if f.kind != .none
+            out.s(",\"")
+            show(v.number, f, out)
+            out.c('"')
+        out.c(']')
     case .text
         out.s("[2,")
-        text(written, out)
+        text(v.text, out)
         out.c(']')
+    case .boolean
+        out.s("[4,\"true\"]" if v.boolean else "[4,\"false\"]")
+
     case .error
         out.s("[3,")
         text(v.error.mark(), out)

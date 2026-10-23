@@ -78,38 +78,43 @@ impl Ast_node
         c_type: = " = constant " if is_const else " = global "
 
         cg.s("@").s(name).s(c_type)
-        // A tagged union's LLVM type is a tag and raw words, which no constant can fill field by
-        // field. A value holding one is written as packed bytes at ksplc's own layout instead.
-        laid: =
-            type_node != null && init_expr != null && init_expr.kind_id != .k_empty &&
-            cg.holds_laid_value(type_node.type_id, 0)
-        if laid
-            init_expr.emit_llvm_laid_const(cg, type_node.type_id, true)
-            cg.s(" ")
-            init_expr.emit_llvm_laid_const(cg, type_node.type_id, false)
-            if align_val == 0
-                cg.s(", align \{cg.sema.type_layout(type_node.type_id).align\}")
-            cg.s("\n")
-            return
-        if type_node != null
-            cg.t(type_node.type_id)
-        else
-            cg.s("i32")
-
         // A const and a `$var` both get the initializer (a mutable `global` takes one too; without
         // it, `$n: I32 = 42;` would start at 0).
-        if init_expr != null && init_expr.kind_id != .k_empty
-            init_type_id: = type_node.type_id if type_node != null else init_expr.type_id
-            cg.s(" ")
-            init_expr.emit_llvm_const_init(cg, init_type_id)
+        has_init: = init_expr != null && init_expr.kind_id != .k_empty
+        if type_node != null && has_init
+            if init_expr.emit_llvm_typed_const(cg, type_node.type_id)
+                if align_val == 0
+                    cg.s(", align \{cg.sema.type_layout(type_node.type_id).align\}")
+                cg.s("\n")
+                return
+        else if type_node != null
+            cg.t(type_node.type_id).s(" zeroinitializer")
         else
-            cg.s(" zeroinitializer")
+            cg.s("i32 ")
+            if has_init
+                init_expr.emit_llvm_const_init(cg, init_expr.type_id)
+            else
+                cg.s("zeroinitializer")
         // The LangRef's order is initializer -> section -> align; otherwise llvm-as rejects it.
         if section_attr: = r.get_attribute("section")
             cg.s(", section \"").s(section_attr.section_name()).s("\"")
         if align_val > 0
             cg.s(", align \{align_val\}")
         cg.s("\n")
+
+    priv fn emit_llvm_typed_const(r: Ast_node$@, cg: Genllvm_ctx$@, type_id: I32): Bool //<
+        //< Writes the initializer r as `<type> <value>`, and returns whether it went as packed bytes
+        //< A tagged union's LLVM type is a tag and raw words, which no constant can fill field by
+        //< field. A value holding one is written as packed bytes at ksplc's own layout instead.
+        //< Packed bytes have alignment 1, so the caller then adds the type's own alignment.
+        if cg.holds_laid_value(type_id, 0)
+            r.emit_llvm_laid_const(cg, type_id, true)
+            cg.s(" ")
+            r.emit_llvm_laid_const(cg, type_id, false)
+            return true
+        cg.t(type_id).s(" ")
+        r.emit_llvm_const_init(cg, type_id)
+        return false
 
     priv fn emit_llvm_fn_attributes(r: Ast_node$@, cg: Genllvm_ctx$@) //<
         //< It lowers a function's attributes to LLVM function attributes
@@ -225,8 +230,8 @@ impl Ast_node
 
     priv fn emit_llvm_const_postfix(r: Ast_node$@, cg: Genllvm_ctx$@, type_id: I32) //<
         //< A postfix expression appearing in a constant's initializer
-        //< Only a global's address and `T[]::<constant array>` are lowered here; the rest goes to
-        //< integer folding.
+        //< Only a global's address and a slice over an array are lowered here; the rest goes to
+        //< integer folding. The array is a global's place, or an array literal (`T[]::{ … }`).
         //< Caution: **Build the descriptor.** Folded, the array's name gives `0` and reports "not a
         //< constant". Take the length **from the type**.
         op: = r.get_postfix_op()
@@ -247,8 +252,16 @@ impl Ast_node
         src_id: = cg.env.get_clean_real_type(target.type_id)
         switch cg.env.get_info(src_id)
         case .array(_base_id, size)
-            cg.s("{ ptr ").s(target.emit_llvm_lvalue(cg)).s(", i64 \{size\} }")
-            return
+            if target.is_const_place(cg)
+                cg.s("{ ptr ")
+                target.emit_const_place_addr(cg)
+                cg.s(", i64 \{size\} }")
+                return
+            if target.kind_id == .k_struct_literal
+                // `T[]::{ … }`: the literal becomes a constant of its own. A run of elements
+                // makes only read-only slices, so the array can sit in ROM, as a string's bytes.
+                cg.s("{ ptr @.arr.\{cg.add_const_array(target)\}, i64 \{size\} }")
+                return
         default {}
         r.emit_llvm_const_scalar_expr(cg)
 
@@ -633,6 +646,19 @@ impl Ast_node
             cg.s("    %\{load_reg\} = load ").t(p_type_id).s(", ptr ").s(src_reg).s("\n")
             src_reg = cg.reg_str(load_reg)
         cg.s("    store ").t(p_type_id).s(" ").s(src_reg).s(", ptr ").s(slot).s("\n")
+
+fn emit_llvm_const_arrays(cg: Genllvm_ctx$@) //<
+    //< Writes each array literal a global slice points at (`const_arrays` in gen/llvm/ctx.kspl)
+    //< An array can hold a slice literal of its own and add an entry, so the list may grow here.
+    $n: Sz = 0
+    for n < cg.const_arrays.len
+        init: = cg.const_arrays.get(n)
+        type_id: = cg.env.get_clean_real_type(init.type_id)
+        cg.s("@.arr.\{n\} = private unnamed_addr constant ")
+        if init.emit_llvm_typed_const(cg, type_id)
+            cg.s(", align \{cg.sema.type_layout(type_id).align\}")
+        cg.s("\n")
+        n += 1
 
 priv fn emit_in_chunks(cg: Genllvm_ctx$@, data: U8[]) //<
     //< It copies alloca_out / body_out to the output in 4096-byte pieces, not one huge cg.s()

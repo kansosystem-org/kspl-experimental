@@ -1,0 +1,63 @@
+//< The real language server's header reader: duplicate lengths and a bound on all header bytes
+import "ksplc/tests/support/jsonrpc_client"
+import "std/jsonrpc"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/verdict"
+
+priv const BODY: U8[] = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}"
+priv const WAIT_MS: I32 = 15000
+
+priv fn check(exe: U8[], name: U8[], head: U8[], accepted: Bool, arena: Arena$@) //<
+    //< Leave stdin open: an excessive or broken header must end without waiting for EOF.
+    defer $c: = jsonrpc_client.spawn(U8[][]::{ exe, "lsp" }, "") catch
+        verdict.check(name, false, "the server could not start")
+        return
+    defer $frame: = Str_builder()
+    frame.s(head)
+    if accepted
+        frame.s(BODY)
+    c.child.write(frame.slice(), WAIT_MS) catch
+        verdict.check(name, false, "the header could not be sent")
+        return
+    reply: = c.read_msg(WAIT_MS, arena) catch e
+        switch e
+        case .closed
+            verdict.check(name, !accepted, c.err_tail())
+        default
+            verdict.check(name, false, "the server timed out or sent a broken reply")
+        return
+    verdict.check(name, accepted && reply.val.get("id").as_int().unwrap_or(-1) == 1,
+        "the response differs from the expected acceptance")
+
+fn run(exe: U8[], arena: Arena$@) //< one short server round per header shape
+    defer $head: = Str_builder()
+    head.s(jsonrpc.LENGTH_TAG).s(" \{BODY.len\}\r\n")
+    line: = arena.dup_str(head.slice())
+    head.s("\r\n")
+    check(exe, "LSP accepts a normal header", head.slice(), true, arena)
+    head.len = 0
+    head.s(line).s(line).s("\r\n")
+    check(exe, "LSP accepts equal duplicate lengths", head.slice(), true, arena)
+    head.len = 0
+    head.s(line).s("content-length: 1\r\n\r\n")
+    check(exe, "LSP refuses conflicting lengths", head.slice(), false, arena)
+    check(exe, "LSP refuses zero length", "Content-Length: 0\r\n\r\n", false, arena)
+    check(exe, "LSP refuses a missing length", "Other: value\r\n\r\n", false, arena)
+    head.len = 0
+    head.s("content-length: \{BODY.len\}\n\n")
+    check(exe, "LSP accepts LF and a lowercase length", head.slice(), true, arena)
+    head.len = 0
+    head.s(line).s("X: ")
+    for head.len < jsonrpc.MAX_HEAD_BYTES - 4
+        head.c('x')
+    head.s("\r\n\r\n")
+    check(exe, "LSP accepts a header at the byte bound", head.slice(), true, arena)
+    head.len = 0
+    for head.len < jsonrpc.MAX_HEAD_BYTES
+        head.s("X:\r\n")
+    check(exe, "LSP bounds many short header lines", head.slice(), false, arena)
+    head.len = 0
+    for head.len < jsonrpc.MAX_HEAD_BYTES
+        head.c('\r')
+    check(exe, "LSP counts carriage returns toward its bound", head.slice(), false, arena)

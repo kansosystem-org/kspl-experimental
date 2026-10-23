@@ -150,6 +150,8 @@ function ksmdInput(ks) {
       else if (key === "i") name = "emphasis";
       else if (key === "e") name = "code";
       else if (key === "k") name = "link";
+      else if (e.key === ";") name = "date";
+      else if (e.key === ":") name = "time";
     } else if (mod && e.altKey && /^[0-6]$/.test(e.code.replace("Digit", ""))) {
       const n = e.code.replace("Digit", "");
       name = n === "0" ? "p" : `h${n}`;
@@ -173,6 +175,15 @@ function ksmdInput(ks) {
     flush();
     const data = e.clipboardData;
     const text = data ? data.getData("text/plain") : "";
+    // Cells copied from a spreadsheet: at a chosen cell they fill the table from there, and in
+    // text they make a new table, whose first row gives the names.
+    if (ks.where === "cell" && ks.cell && ks.range.pasteGrid(text, false)) return;
+    const g = ks.range.grid(text);
+    if (g && text.includes("\t")) {
+      ks.sync();
+      ks.act("ksmd_web_paste_table", ks.put(JSON.stringify(g)));
+      return;
+    }
     ks.sync();
     if (text) ks.act("ksmd_web_type", ks.put(text), 1);
     if (data && Array.from(data.types).includes("text/html")) {
@@ -183,6 +194,14 @@ function ksmdInput(ks) {
   root.addEventListener("drop", (e) => {
     if (!ks.table.owns(e.target)) e.preventDefault();
   });
+
+  // A press or a key in the text makes the text the place a look acts on. The page's own
+  // selection changes after each action do not.
+  for (const type of ["mousedown", "keydown"]) {
+    root.addEventListener(type, (e) => {
+      if (!ks.table.owns(e.target)) ks.setPlace("text");
+    }, true);
+  }
 
   // A press between blocks, or after the last, puts the caret in the gap there.
   root.addEventListener("mousedown", (e) => {
@@ -202,7 +221,9 @@ function ksmdInput(ks) {
     ks.place([1, b, 0, 0]);
   });
 
-  // A gap stands only while the caret is in it.
+  // A gap stands only while the caret is in it. The blocks after a gap move up when it goes.
+  // A table that is chosen or opened takes the gap away itself, at once (`hideCaret` in
+  // `view.js`).
   document.addEventListener("selectionchange", () => {
     const s = window.getSelection();
     const gap = root.querySelector(".gap");

@@ -1,18 +1,22 @@
-//< Editing a table: inserting, removing and moving a row or a column, setting and copying a cell
+//< Editing a table: inserting, removing, moving and sorting rows and columns, setting and copying
+//< a cell
 //< A reference stays attached to its row and column, so an insertion or a move changes only where
 //< the reference is written. Removing a row or a column turns a reference to it into `#REF!`, and
 //< moves a range's corner on it one line inward.
 //< Caution: **An edit that would write a formula longer than 4,096 bytes is undone and refused.**
 //< The reader refuses such a formula, so the saved source could not be opened again.
 import "ksmd/clause" { is_table_name }
+import "ksmd/format" { MAX_PLACES, Number_format, no_format }
 import "ksmd/formula" { BROKEN, Positions, bind, find_table, has_attachable, text_piece,
     write_formula }
-import "ksmd/marker" { is_decimal, quoted_end }
+import "ksmd/look" { Look_part, plain_look, with_part }
+import "ksmd/marker" { compare_text, is_decimal, quoted_end }
 import "ksmd/model" { Cell, Cell_kind, Corner, Document, MAX_CELLS, MAX_COLUMNS, MAX_FORMULA,
     MAX_ROWS, MAX_WEIGHT, Piece, Table }
 import "std/chars"
 import "std/ds" { List }
 import "std/mem" { Arena }
+import "std/seq"
 import "std/str" { Str_builder }
 import "std/strnum"
 
@@ -24,9 +28,13 @@ enum Edit_error //< why an edit was refused; a refused edit changes nothing
     last_column //< a table keeps at least one column
     too_long //< a formula would be written longer than 4,096 bytes
     not_a_value //< the text is not a value of that kind, or would not read back as one cell
-    not_a_name //< a table name is a lowercase letter, then lowercase letters, digits and `_`
+    not_a_name //< a table name is 1 to 255 bytes of text, with no control character
     name_taken //< another table of this source has the name
     not_widths //< a table takes one width per column, each a whole number from 1 to 10,000
+    not_a_look //< a colour is `#rrggbb`, a size 6 to 72 points, an alignment left, center or right
+    not_a_format //< a number format the `formats` attribute does not hold
+    no_format //< the columns have no number format whose places could change
+    places //< a number format shows 0 to 9 decimal places
 
 impl Edit_error
     fn message(e: Self): U8[] //< what the editor says: the problem, then what to do
@@ -47,12 +55,23 @@ impl Edit_error
             return "This value cannot be saved in one cell. Put a '|' or a line break inside \
                 quotes."
         case .not_a_name
-            return "A table name is a lowercase letter, then lowercase letters, digits and '_'."
+            return "A table name is 1 to 255 bytes of text, with no line breaks or other control \
+                characters."
         case .name_taken
             return "Another table in this file has this name. Choose another name."
+        case .not_a_look
+            return "This look cannot be saved. A colour is '#' and six hex digits, a size 6 to 72 \
+                points, and alignment left, center or right."
         case .not_widths
             return "These column widths cannot be saved. Give each column one whole number from 1 \
                 to 10,000."
+        case .not_a_format
+            return "This number format cannot be saved. A currency is three capital letters, as USD \
+                or JPY."
+        case .no_format
+            return "This column has no number format. Choose a number format first."
+        case .places
+            return "A number format shows 0 to 9 decimal places."
 
 priv struct Saved //< a piece an edit changed, kept to undo the edit
     table: Sz
@@ -92,6 +111,8 @@ fn insert_column(doc: Document$@, u: Sz, at: Sz, arena: Arena$@): Void!Edit_erro
         throw .too_many_cells
     if t.weights.len > 0
         t.weights.insert(at, t.weights[at if at < t.weights.len else at - 1])
+    if t.formats.len > 0
+        t.formats.insert(at, no_format())
     t.columns.insert(at, t.next_id)
     t.next_id += 1
     columns: = t.columns.len
@@ -106,6 +127,8 @@ fn insert_column(doc: Document$@, u: Sz, at: Sz, arena: Arena$@): Void!Edit_erro
         t.next_id -= 1
         if t.weights.len > 0
             t.weights.remove_at(at)
+        if t.formats.len > 0
+            t.formats.remove_at(at)
         throw .too_long
     attach_loose(doc, arena)
 
@@ -131,7 +154,7 @@ fn remove_row(doc: Document$@, u: Sz, at: Sz): Void!Edit_error //<
         throw .too_long
 
 fn remove_column(doc: Document$@, u: Sz, at: Sz): Void!Edit_error //<
-    //< Removes a column, its name and its width; a reference to it becomes `#REF!`
+    //< Removes a column, its name, width and format; a reference to it becomes `#REF!`
     t: = table_at(doc, u)!
     if at < 0 || at >= t.columns.len
         throw .outside
@@ -148,6 +171,10 @@ fn remove_column(doc: Document$@, u: Sz, at: Sz): Void!Edit_error //<
     if t.weights.len > 0
         weight = t.weights[at]
         t.weights.remove_at(at)
+    $format: = no_format()
+    if t.formats.len > 0
+        format = t.formats[at]
+        t.formats.remove_at(at)
     remove_cells(t, at, false)
     t.columns.remove_at(at)
     fits(doc) catch
@@ -157,6 +184,8 @@ fn remove_column(doc: Document$@, u: Sz, at: Sz): Void!Edit_error //<
             t.cells.insert(r * columns + at, cells[r])
         if t.weights.len > 0
             t.weights.insert(at, weight)
+        if t.formats.len > 0
+            t.formats.insert(at, format)
         restore(doc, saved@)
         throw .too_long
 
@@ -169,6 +198,60 @@ fn move_row(doc: Document$@, u: Sz, from: Sz, to: Sz): Void!Edit_error //<
     fits(doc) catch
         shift_row(t, to, from)
         throw .too_long
+
+struct Sort_key //< where one data row sorts, by the value of its cell in the sorted column
+    group: Sz //< 0 a number, 1 text, 2 true or false, 3 an error, 4 an empty cell
+    number: F64 //< a number's value; 0 for false and 1 for true
+    text: U8[] //< a text's bytes; an error's mark, so equal errors stay together
+    row: Sz //< the row's place before the sort
+
+fn sort_rows(doc: Document$@, u: Sz, keys: List<|Sort_key|>@, descending: Bool, arena: Arena$@):
+    Void!Edit_error //<
+        //< Orders the data rows by their keys, one key per row; rows with equal keys keep their order
+        //< Ascending puts numbers first, smallest first, then text from A to Z, then false and
+        //< true, then errors.
+        //< Descending reverses that order. Empty cells stand last either way, as spreadsheets put
+        //< them. Text compares letters A to Z without regard to case, then by the bytes of other
+        //< characters. Each row moves with its identity, so a reference stays on the cell it named.
+    t: = table_at(doc, u)!
+    if keys.len != t.rows.len
+        throw .outside
+    sorted: = keys.order_by(fn(a: Sort_key@, b: Sort_key@; descending: Bool): I32 {
+        return compare_keys(a, b, descending);
+    }, arena)
+    columns: = t.columns.len
+    $rows: = List<|Sz|>(arena)
+    $cells: = List<|Cell|>(arena)
+    for i in Range.asc(t.rows.len)
+        rows.push(t.rows[i])
+        for c in Range.asc(columns)
+            cells.push(t.cells[t.at(i, c)])
+    for i in Range.asc(sorted.len)
+        from: = sorted[i].row
+        t.rows[i] = rows[from]
+        for c in Range.asc(columns)
+            t.cells[t.at(i, c)] = cells[from * columns + c]
+    fits(doc) catch
+        for i in Range.asc(rows.len)
+            t.rows[i] = rows[i]
+            for c in Range.asc(columns)
+                t.cells[t.at(i, c)] = cells[i * columns + c]
+        throw .too_long
+
+priv fn compare_keys(a: Sort_key@, b: Sort_key@, descending: Bool): I32 //<
+    //< Below zero when `a` sorts first; empty cells sort last in either direction
+    if a.group == b.group
+        within: = compare_within(a, b)
+        return -within if descending else within
+    if a.group == 4 || b.group == 4
+        return -1 if b.group == 4 else 1
+    first: = a.group > b.group if descending else a.group < b.group
+    return -1 if first else 1
+
+priv fn compare_within(a: Sort_key@, b: Sort_key@): I32 //< two keys of one group
+    if a.group == 0 || a.group == 2
+        return -1 if a.number < b.number else 1 if a.number > b.number else 0
+    return compare_text(a.text, b.text)
 
 fn move_column(doc: Document$@, u: Sz, from: Sz, to: Sz): Void!Edit_error //<
     //< Moves the column at `from` so that it stands at `to`, with its name and width
@@ -213,6 +296,8 @@ fn set_cell(doc: Document$@, u: Sz, row: Sz, column: Sz, kind: Cell_kind, text: 
         cell.first = t.pieces.len
         cell.count = bind(doc, u, arena.dup_str(formula), t.pieces@)
     index: = t.at(row, column)
+    // A new value keeps the cell's look, as a spreadsheet's cell keeps its format.
+    cell.look = t.cells[index].look
     t.cells[index] = cell
 
 fn copy_cell(doc: Document$@, from: Sz, row: Sz, column: Sz, to: Sz, to_row: Sz, to_column: Sz,
@@ -238,6 +323,20 @@ fn copy_cell(doc: Document$@, from: Sz, row: Sz, column: Sz, to: Sz, to_row: Sz,
     defer $out: = Str_builder()
     write_formula(doc, source, cell, at@, to_row - row, to_column - column, out@)
     set_cell(doc, to, to_row, to_column, .formula, out.slice(), arena)!
+    target.cells[target.at(to_row, to_column)].look = cell.look
+
+fn set_look(doc: Document$@, u: Sz, row: Sz, column: Sz, part: Look_part, value: U8[],
+    arena: Arena$@): Void!Edit_error //<
+        //< Sets or clears one part of a cell's look; row -1 is the names above the data rows
+        //< A colour is `#rrggbb`, a size a number of points from 6 to 72, whole or ending in .5,
+        //< and an alignment `left`, `center` or `right`. An empty value clears that part.
+    t: = table_at(doc, u)!
+    if row < -1 || row >= t.rows.len || column < 0 || column >= t.columns.len
+        throw .outside
+    index: = column if row < 0 else t.at(row, column)
+    look: = with_part(t.cells[index].look, part, arena.dup_str(value)) catch
+        throw .not_a_look
+    t.cells[index].look = look
 
 fn set_widths(doc: Document$@, u: Sz, weights: List<|Sz|>@): Void!Edit_error //<
     //< Gives each column a relative width: its weight divided by the sum of the weights
@@ -251,6 +350,48 @@ fn set_widths(doc: Document$@, u: Sz, weights: List<|Sz|>@): Void!Edit_error //<
     for weight in weights
         t.weights.push(weight)
 
+fn set_format(doc: Document$@, u: Sz, first: Sz, last: Sz, f: Number_format, arena: Arena$@):
+    Void!Edit_error //<
+        //< Gives columns `first` to `last` one number format; no format clears theirs
+    t: = table_at(doc, u)!
+    if first < 0 || last < first || last >= t.columns.len
+        throw .outside
+    if t.formats.len == 0
+        for _ in Range.asc(t.columns.len)
+            t.formats.push(no_format())
+    $kept: = f
+    kept.code = arena.dup_str(f.code)
+    for c in Range(first, last + 1, 1)
+        t.formats[c] = kept
+    for g in t.formats
+        if g.kind != .none
+            return
+    t.formats.clear()
+
+fn step_places(doc: Document$@, u: Sz, first: Sz, last: Sz, more: Bool): Void!Edit_error //<
+    //< Shows one more, or one fewer, decimal place in each column from `first` to `last` that
+    //< has a number format
+    t: = table_at(doc, u)!
+    if first < 0 || last < first || last >= t.columns.len
+        throw .outside
+    $formatted: = false
+    $changed: = false
+    for c in Range(first, last + 1, 1)
+        if t.formats.len == 0 || t.formats[c].kind == .none
+            continue
+        formatted = true
+        places: = t.formats[c].places
+        if more && places < MAX_PLACES
+            t.formats[c].places = places + 1
+            changed = true
+        else if !more && places > 0
+            t.formats[c].places = places - 1
+            changed = true
+    if !formatted
+        throw .no_format
+    if !changed
+        throw .places
+
 fn set_name(doc: Document$@, u: Sz, column: Sz, text: U8[], arena: Arena$@): Void!Edit_error //<
     //< Gives a column the name its header shows
     t: = table_at(doc, u)!
@@ -261,6 +402,7 @@ fn set_name(doc: Document$@, u: Sz, column: Sz, text: U8[], arena: Arena$@): Voi
     $cell: = empty_cell()
     cell.kind = .text
     cell.text = arena.dup_str(text)
+    cell.look = t.cells[column].look
     t.cells[column] = cell
 
 fn new_table(doc: Document$@, columns: Sz, rows: Sz, arena: Arena$@): Sz!Edit_error //<
@@ -334,7 +476,7 @@ fn rename_table(doc: Document$@, u: Sz, name: U8[], arena: Arena$@): Void!Edit_e
     t: = table_at(doc, u)!
     if t.name.len == 0
         throw .outside
-    if !is_table_name(name)
+    if !is_table_name(name) || !is_utf8(name)
         throw .not_a_name
     if found: = find_table(doc, name)
         if found != u
@@ -442,7 +584,8 @@ priv fn shift_row(t: Table$@, from: Sz, to: Sz) //< moves a row's identity and i
     for c in Range.asc(t.columns.len)
         t.cells.insert(t.at(to, c), cells[c])
 
-priv fn shift_column(t: Table$@, from: Sz, to: Sz) //< moves a column's identity, cells and width
+priv fn shift_column(t: Table$@, from: Sz, to: Sz) //<
+    //< Moves a column's identity, cells, width and number format
     columns: = t.columns.len
     for r in Range.asc(t.rows.len + 1)
         cell: = t.cells[r * columns + from]
@@ -455,6 +598,10 @@ priv fn shift_column(t: Table$@, from: Sz, to: Sz) //< moves a column's identity
         weight: = t.weights[from]
         t.weights.remove_at(from)
         t.weights.insert(to, weight)
+    if t.formats.len > 0
+        format: = t.formats[from]
+        t.formats.remove_at(from)
+        t.formats.insert(to, format)
 
 priv fn remove_cells(t: Table$@, at: Sz, row: Bool) //<
     //< Removes the cells of data row `at`, or of column `at` with its name
@@ -507,4 +654,5 @@ priv fn is_utf8(text: U8[]): Bool //< whether the text is well-formed UTF-8, as 
     return true
 
 priv fn empty_cell(): Cell
-    return Cell::{ .kind = .empty, .text = "", .first = 0, .count = 0, .offset = 0 }
+    return Cell::{ .kind = .empty, .text = "", .first = 0, .count = 0, .offset = 0,
+        .look = plain_look() }

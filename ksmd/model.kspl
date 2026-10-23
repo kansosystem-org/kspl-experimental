@@ -3,6 +3,8 @@
 //< Text views borrow the source bytes or the arena that built the document. Keep both alive.
 //< A table's rows and columns carry identities that the source does not show, and a formula's
 //< references attach to them: an edit moves a row, and the references move with it.
+import "ksmd/format" { Number_format }
+import "ksmd/look" { Align, Look }
 import "std/ds" { List }
 import "std/mem" { Arena }
 
@@ -13,6 +15,7 @@ const MAX_ROWS: Sz = 10000 //< the data rows of one table
 const MAX_CELLS: Sz = 100000 //< the cells of one table, the header's included
 const MAX_FORMULA: Sz = 4096 //< the bytes of one formula as written, after its `=`
 const MAX_WEIGHT: Sz = 10000 //< the largest relative width of one column
+const MAX_NAME: Sz = 255 //< the bytes of one table's name
 
 enum Block_kind //< what one block is
     paragraph //< inline nodes, where a hard break is a node of its own
@@ -32,6 +35,7 @@ struct Block
         //< of a table or an image; 0 for code and includes
     count: Sz //< how many items or inline nodes it holds; 1 for a table or an image
     offset: Sz //< where the block starts in the original bytes
+    align: Align //< a paragraph's or a heading's alignment; none for any other block
 
 struct Item //< one list item, on one source line
     depth: Sz //< 0 at the top; one more per nesting level
@@ -49,13 +53,15 @@ enum Inline_kind //< what one inline node is
     emphasis_end
     strong_start
     strong_end
-    link_start //< `text` is the destination; the nodes up to `link_end` are its label
+    link_start //< brackets: `text` is a link's destination, or empty for a span with a look alone
+        //< The nodes up to `link_end` are the label. `look` is the look over them, or plain.
     link_end
 
 struct Inline
     kind: Inline_kind
     text: U8[] //< what `Inline_kind` names; empty for the other kinds
     offset: Sz //< where the node starts in the original bytes
+    look: Look //< a `link_start`'s look; plain for every other node
 
 struct Table //< a calculating table: a header row of names, then rows of cells
     name: U8[] //< unique among the tables of one source
@@ -65,6 +71,7 @@ struct Table //< a calculating table: a header row of names, then rows of cells
     next_id: Sz //< the identity the next new row or column takes; no two share one
     pieces: List<|Piece|> //< the pieces of every formula in this table, each formula's in one run
     weights: List<|Sz|> //< one relative width per column, or none when the source gave none
+    formats: List<|Number_format|> //< one number format per column, or none when no column has one
 
 enum Cell_kind //< what one table cell holds
     empty
@@ -78,6 +85,7 @@ struct Cell
     first: Sz //< a formula's first piece; 0 for the other kinds
     count: Sz //< how many pieces a formula holds; 0 for the other kinds
     offset: Sz //< where the cell's value starts in the original bytes; 0 for an edited cell
+    look: Look //< its colours, font size and alignment; plain for none
 
 enum Piece_kind //< what one piece of a formula is
     text //< bytes kept as written, a reference that names no cell and `#REF!` among them
@@ -121,7 +129,7 @@ impl Table
     fn new(name: U8[], arena: Arena$@): Table //< a table with no cells, rows or columns yet
         return Table::{ .name = name, .cells = List<|Cell|>(arena), .rows = List<|Sz|>(arena),
             .columns = List<|Sz|>(arena), .next_id = 0, .pieces = List<|Piece|>(arena),
-            .weights = List<|Sz|>(arena) }
+            .weights = List<|Sz|>(arena), .formats = List<|Number_format|>(arena) }
 
     fn at(t: Self@, row: Sz, column: Sz): Sz //< where a data cell stands in `cells`
         return (row + 1) * t.columns.len + column

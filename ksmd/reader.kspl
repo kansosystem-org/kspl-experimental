@@ -1,9 +1,11 @@
 //< Reads a validated source into a Document: its blocks, their inline markup, and its clauses
 //< A refused source must not be saved: a partial model would lose what it did not read.
+import "ksmd/attribute" { read_attributes }
 import "ksmd/clause" { read_clause }
 import "ksmd/formula"
 import "ksmd/inline" { Inline_reader }
 import "ksmd/keyed" { Keyed }
+import "ksmd/look" { look_of }
 import "ksmd/marker" { is_list_marker, leading, run_of, run_of_digits, starts_block }
 import "ksmd/model" { Block, Document, Item, MAX_BLOCKS, MAX_NESTING }
 import "ksmd/source" { Diagnostic, Line, Source }
@@ -34,6 +36,8 @@ fn read(src: Source@, arena: Arena$@): Document!Diagnostic //<
 priv fn read_block(src: Source@, first: Line, doc: Document$@, names: Keyed<|Bool|>$@,
     arena: Arena$@): Sz!Diagnostic //<
         //< Reads the block that starts at `first`, and returns where the next one may start
+    if first.text.starts_with("{")
+        return read_aligned(src, first, doc, names, arena)
     if first.text.starts_with("```")
         return read_fence(src, first, doc.blocks@, arena)
     if first.text.starts_with("#")
@@ -45,6 +49,32 @@ priv fn read_block(src: Source@, first: Line, doc: Document$@, names: Keyed<|Boo
     if is_list_marker(first.text)
         return read_list(src, first, doc, arena)
     return read_paragraph(src, first, doc, arena)
+
+priv fn read_aligned(src: Source@, first: Line, doc: Document$@, names: Keyed<|Bool|>$@,
+    arena: Arena$@): Sz!Diagnostic //<
+        //< A line of braces, `{align="center"}`, then the paragraph or heading it aligns
+    text: = first.text.trim_end()
+    if !text.ends_with("}")
+        throw src.diagnostic(first.offset + text.len,
+            "a line of braces before a paragraph ends with '}'. Write '\\{' for a literal '{'")
+    attributes: = read_attributes(src, text, 1, text.len - 1, first.offset, arena)!
+    look: = look_of(src, attributes@, first.offset, true)!
+    if look.color.len > 0 || look.fill.len > 0 || look.size > 0
+        throw src.diagnostic(first.offset,
+            "a paragraph's line of braces holds only align. Colour text with [text]{color=...}")
+    if first.next >= src.bytes.len || is_blank(src.line_at(first.next).text)
+        throw src.diagnostic(first.offset,
+            "put the paragraph or heading on the line right after its braces")
+    next: = src.line_at(first.next)
+    if next.text.starts_with("{")
+        throw src.diagnostic(next.offset, "a paragraph takes one line of braces")
+    at: = read_block(src, next, doc, names, arena)!
+    last: = doc.blocks.len - 1
+    kind: = doc.blocks.get(last).kind
+    if kind != .paragraph && kind != .heading
+        throw src.diagnostic(first.offset, "a line of braces stands before a paragraph or a heading")
+    doc.blocks[last].align = look.align
+    return at
 
 priv fn read_fence(src: Source@, first: Line, blocks: List<|Block|>$@, arena: Arena$@):
     Sz!Diagnostic //<
@@ -65,7 +95,7 @@ priv fn read_fence(src: Source@, first: Line, blocks: List<|Block|>$@, arena: Ar
             blocks
                 .push(Block::{ .kind = .code, .level = 0, .label = label,
                 .text = arena.dup_str(body.slice()), .first = 0, .count = 0,
-                .offset = first.offset })
+                .offset = first.offset, .align = .none })
             return line.next
         body.s(line.text).c('\n')
         at = line.next
@@ -87,7 +117,8 @@ priv fn read_heading(src: Source@, line: Line, doc: Document$@, arena: Arena$@):
     defer $inlines: = Inline_reader(doc)
     inlines.line(src, text, line.offset + level + 1 + leading(after), doc, arena)!
     return Block::{ .kind = .heading, .level = level, .label = "", .text = "",
-        .first = inlines.first, .count = inlines.finish(doc, arena), .offset = line.offset }
+        .first = inlines.first, .count = inlines.finish(doc, arena), .offset = line.offset,
+        .align = .none }
 
 priv fn read_paragraph(src: Source@, first: Line, doc: Document$@, arena: Arena$@): Sz!Diagnostic //<
     //< Prose up to a blank line: a source newline becomes a space, an escaped one a hard break
@@ -120,7 +151,8 @@ priv fn read_paragraph(src: Source@, first: Line, doc: Document$@, arena: Arena$
         line = next
     doc.blocks
         .push(Block::{ .kind = .paragraph, .level = 0, .label = "", .text = "",
-        .first = inlines.first, .count = inlines.finish(doc, arena), .offset = first.offset })
+        .first = inlines.first, .count = inlines.finish(doc, arena), .offset = first.offset,
+        .align = .none })
     return line.next
 
 priv fn read_list(src: Source@, first: Line, doc: Document$@, arena: Arena$@): Sz!Diagnostic //<
@@ -146,7 +178,7 @@ priv fn read_list(src: Source@, first: Line, doc: Document$@, arena: Arena$@): S
         line = src.line_at(line.next)
     doc.blocks
         .push(Block::{ .kind = .list, .level = 0, .label = "", .text = "", .first = start,
-        .count = doc.items.len - start, .offset = first.offset })
+        .count = doc.items.len - start, .offset = first.offset, .align = .none })
     return line.next
 
 priv fn read_item(src: Source@, line: Line, doc: Document$@, arena: Arena$@): Item!Diagnostic //<

@@ -1,7 +1,9 @@
 //< Reads the inline markup of a paragraph, a heading or a list item into inline nodes
 //< Every mark opens and closes on one source line. `*` marks emphasis and `**` strong emphasis;
 //< a run of `*` closes and opens them as `star_plans` decides.
-import "ksmd/marker" { is_punctuation, run_of }
+import "ksmd/attribute" { read_attributes }
+import "ksmd/look" { is_plain, look_of, plain_look }
+import "ksmd/marker" { is_punctuation, quoted_end, run_of }
 import "ksmd/model" { Document, Inline, Inline_kind }
 import "ksmd/source" { Diagnostic, Source }
 import "std/chars"
@@ -45,7 +47,8 @@ impl Inline_reader
                 r.flush(doc, arena)
                 marks.push(.link_start, offset + i, doc.inlines.len)
                 doc.inlines
-                    .push(Inline::{ .kind = .link_start, .text = "", .offset = offset + i })
+                    .push(Inline::{ .kind = .link_start, .text = "", .offset = offset + i,
+                    .look = plain_look() })
                 i += 1
             else if c == ']'
                 i = r.link_end(src, text, i, offset, marks@, doc, arena)!
@@ -60,7 +63,8 @@ impl Inline_reader
 
     fn hard_break(r: Self$@, at: Sz, doc: Document$@, arena: Arena$@) //< an escaped newline
         r.flush(doc, arena)
-        doc.inlines.push(Inline::{ .kind = .hard_break, .text = "", .offset = at })
+        doc.inlines
+            .push(Inline::{ .kind = .hard_break, .text = "", .offset = at, .look = plain_look() })
 
     fn finish(r: Self$@, doc: Document$@, arena: Arena$@): Sz //< how many nodes were collected
         r.flush(doc, arena)
@@ -76,7 +80,7 @@ impl Inline_reader
             return
         doc.inlines
             .push(Inline::{ .kind = .text, .text = arena.dup_str(r.pending.slice()),
-            .offset = r.pending_at })
+            .offset = r.pending_at, .look = plain_look() })
         r.pending.clear()
 
     priv fn code(r: Self$@, src: Source@, text: U8[], i: Sz, offset: Sz, doc: Document$@,
@@ -88,7 +92,8 @@ impl Inline_reader
             r.flush(doc, arena)
             doc.inlines
                 .push(Inline::{ .kind = .code,
-                .text = unpadded(text.sub(i + ticks, j - i - ticks)), .offset = offset + i })
+                .text = unpadded(text.sub(i + ticks, j - i - ticks)), .offset = offset + i,
+                .look = plain_look() })
             return j + ticks
         throw src.diagnostic(offset + i,
             "this code span is not closed on its line. Close it with a run of as many backticks")
@@ -107,19 +112,25 @@ impl Inline_reader
         $at: = offset + i
         for _ in Range.asc(plan.closes)
             kind: = marks.pop()
-            doc.inlines.push(Inline::{ .kind = end_of(kind), .text = "", .offset = at })
+            doc.inlines
+                .push(Inline::{ .kind = end_of(kind), .text = "", .offset = at,
+                .look = plain_look() })
             at += mark_width(kind)
         if plan.opens >= 1
             marks.push(plan.outer, at, doc.inlines.len)
-            doc.inlines.push(Inline::{ .kind = plan.outer, .text = "", .offset = at })
+            doc.inlines
+                .push(Inline::{ .kind = plan.outer, .text = "", .offset = at,
+                .look = plain_look() })
             at += mark_width(plan.outer)
         if plan.opens == 2
             marks.push(plan.inner, at, doc.inlines.len)
-            doc.inlines.push(Inline::{ .kind = plan.inner, .text = "", .offset = at })
+            doc.inlines
+                .push(Inline::{ .kind = plan.inner, .text = "", .offset = at,
+                .look = plain_look() })
 
     priv fn link_end(r: Self$@, src: Source@, text: U8[], i: Sz, offset: Sz, marks: Marks$@,
         doc: Document$@, arena: Arena$@): Sz!Diagnostic //<
-            //< The `]` at `i`, and the destination in parentheses after it
+            //< The `]` at `i`, then a destination in parentheses, a look in braces, or both
         if !marks.has(.link_start)
             throw src.diagnostic(offset + i, "this ']' ends no link. Write '\\]' for a literal ']'")
         top: = marks.depth - 1
@@ -127,30 +138,47 @@ impl Inline_reader
             throw src.diagnostic(marks.at[top], "close this mark before the ']' that ends its link")
         r.flush(doc, arena)
         start: = marks.node[top]
-        if doc.inlines.len == start + 1
-            throw src.diagnostic(marks.at[top], "this link has no label")
-        if i + 1 == text.len || text[i + 1] != '('
-            throw src.diagnostic(offset + i,
-                "a link's label is followed by its destination in '(' and ')'")
-        $j: = i + 2
-        for j < text.len && text[j] != ')'
-            if text[j] == ' ' || text[j] == '\t' || text[j] == '('
-                throw src.diagnostic(offset + j,
-                    "a link's destination holds no spaces or parentheses. Write them as %20, %28 \
-                        and %29")
+        $j: = i + 1
+        $destination: U8[] = ""
+        if j < text.len && text[j] == '('
             j += 1
-        if j == text.len
-            throw src.diagnostic(offset + i + 1, "this link's destination has no ')'")
-        destination: = text.sub(i + 2, j - i - 2)
-        if !is_allowed_destination(destination)
-            throw src.diagnostic(offset + i + 2,
-                "a link goes to an https:, http: or mailto: address, or to a '#' fragment")
+            for j < text.len && text[j] != ')'
+                if text[j] == ' ' || text[j] == '\t' || text[j] == '('
+                    throw src.diagnostic(offset + j,
+                        "a link's destination holds no spaces or parentheses. Write them as %20, \
+                            %28 and %29")
+                j += 1
+            if j == text.len
+                throw src.diagnostic(offset + i + 1, "this link's destination has no ')'")
+            destination = text.sub(i + 2, j - i - 2)
+            if !is_allowed_destination(destination)
+                throw src.diagnostic(offset + i + 2,
+                    "a link goes to an https:, http: or mailto: address, or to a '#' fragment")
+            j += 1
+        $look: = plain_look()
+        if j < text.len && text[j] == '{'
+            close: = brace_end(text, j)
+            if close == text.len
+                throw src.diagnostic(offset + j, "this look has no closing '}' on its line")
+            attributes: = read_attributes(src, text, j + 1, close, offset, arena)!
+            look = look_of(src, attributes@, offset + j, false)!
+            j = close + 1
+        if destination.len == 0 && is_plain(look)
+            throw src.diagnostic(offset + i,
+                "a label in brackets is followed by a destination in '(' and ')', or a look in '{' \
+                    and '}'")
+        if doc.inlines.len == start + 1
+            throw src.diagnostic(marks.at[top],
+                "this link has no label" if destination.len > 0 else "these brackets hold no text")
         doc.inlines
             .set(start,
-            Inline::{ .kind = .link_start, .text = destination, .offset = marks.at[top] })
+            Inline::{ .kind = .link_start, .text = destination, .offset = marks.at[top],
+            .look = look })
         _link: = marks.pop()
-        doc.inlines.push(Inline::{ .kind = .link_end, .text = "", .offset = offset + i })
-        return j + 1
+        doc.inlines
+            .push(Inline::{ .kind = .link_end, .text = "", .offset = offset + i,
+            .look = plain_look() })
+        return j
 
 impl Inline_reader: Manual_free //< `free()` lets go the pending text's buffer
     fn free(r: Self$@)
@@ -322,3 +350,9 @@ priv fn is_allowed_destination(destination: U8[]): Bool //< https, http, mailto,
         destination.len > "http:".len && destination.starts_with("http:") ||
         destination.len > "mailto:".len && destination.starts_with("mailto:") ||
         destination.len > 1 && destination.starts_with("#")
+
+priv fn brace_end(text: U8[], from: Sz): Sz //< the `}` closing the brace at `from`, or the length
+    $i: = from + 1
+    for i < text.len && text[i] != '}'
+        i = quoted_end(text, i) + 1 if text[i] == '"' else i + 1
+    return i if i < text.len else text.len

@@ -4,9 +4,11 @@
 //< only ever added, so a block swapped back still names valid nodes.
 //< A table edit is recorded by comparing each table with a copy made before the edit: cell by
 //< cell and piece by piece where the table keeps its shape, or the whole table otherwise. Column
-//< widths changed alone are recorded alone, so resizing a large table copies none of its cells.
+//< widths and formats changed alone are recorded alone, so a large table's cells are not copied.
 //< Caution: **Undo and redo strictly in order.** A swap restores the exact state its action started
 //< from only when every later action has been undone first.
+import "ksmd/format" { Number_format, same_format }
+import "ksmd/look" { same_look }
 import "ksmd/model" { Block, Cell, Corner, Document, Piece, Table }
 import "ksmd/region" { Spot, Style }
 import "std/ds" { List }
@@ -42,16 +44,17 @@ struct Piece_swap //< another version of piece `index` of the table at `table`
     index: Sz
     piece: Piece
 
-struct Widths_swap //< another version of the column weights of the table at `table`
+struct Columns_swap //< another version of the column weights and formats of the table at `table`
     table: Sz
     weights: List<|Sz|>
+    formats: List<|Number_format|>
 
 struct Transaction //< what one action changed, and the selection before and after it
     blocks: List<|Blocks_swap|> //< in the order they were made
     tables: List<|Table_swap|>
     cells: List<|Cell_swap|>
     pieces: List<|Piece_swap|>
-    widths: List<|Widths_swap|>
+    columns: List<|Columns_swap|>
     before: Selection
     after: Selection
     kind: Step_kind
@@ -87,12 +90,12 @@ fn new_history(arena: Arena$@): History
 fn begin(before: Selection, arena: Arena$@): Transaction //< a transaction that has changed nothing
     return Transaction::{ .blocks = List<|Blocks_swap|>(arena),
         .tables = List<|Table_swap|>(arena), .cells = List<|Cell_swap|>(arena),
-        .pieces = List<|Piece_swap|>(arena), .widths = List<|Widths_swap|>(arena), .before = before,
-        .after = before, .kind = .other, .word_ended = false }
+        .pieces = List<|Piece_swap|>(arena), .columns = List<|Columns_swap|>(arena),
+        .before = before, .after = before, .kind = .other, .word_ended = false }
 
 fn is_empty(tx: Transaction@): Bool //< whether it changed nothing
     return tx.blocks.len == 0 && tx.tables.len == 0 && tx.cells.len == 0 && tx.pieces.len == 0 &&
-        tx.widths.len == 0
+        tx.columns.len == 0
 
 fn replace_blocks(doc: Document$@, tx: Transaction$@, at: Sz, removed: Sz,
     blocks: List<|Block|>@, change: Change$@, arena: Arena$@) //<
@@ -134,12 +137,15 @@ fn swap(doc: Document$@, tx: Transaction$@, undo: Bool, change: Change$@, scratc
         here: = doc.tables[s.table].pieces[s.index]
         doc.tables[s.table].pieces[s.index] = s.piece
         s.piece = here
-    for i in Range.asc(tx.widths.len)
-        s: = tx.widths[i]@
-        here: = doc.tables[s.table].weights
+    for i in Range.asc(tx.columns.len)
+        s: = tx.columns[i]@
+        weights: = doc.tables[s.table].weights
+        formats: = doc.tables[s.table].formats
         doc.tables[s.table].weights = s.weights
-        s.weights = here
-    if tx.tables.len + tx.cells.len + tx.pieces.len + tx.widths.len > 0
+        doc.tables[s.table].formats = s.formats
+        s.weights = weights
+        s.formats = formats
+    if tx.tables.len + tx.cells.len + tx.pieces.len + tx.columns.len > 0
         change.tables = true
         change.any = true
 
@@ -180,9 +186,10 @@ fn record_tables(doc: Document@, before: List<|Table|>@, tx: Transaction$@, aren
             if !same_piece(t.pieces[i]@, b.pieces[i]@)
                 tx.pieces
                     .push(Piece_swap::{ .table = u, .index = i, .piece = b.pieces[i] })
-        if !same_ids(t.weights@, b.weights@)
-            tx.widths
-                .push(Widths_swap::{ .table = u, .weights = copied_ids(b.weights@, arena) })
+        if !same_ids(t.weights@, b.weights@) || !same_formats(t.formats@, b.formats@)
+            tx.columns
+                .push(Columns_swap::{ .table = u, .weights = copied_ids(b.weights@, arena),
+                .formats = copied_formats(b.formats@, arena) })
 
 priv fn copied(t: Table@, arena: Arena$@): Table //< the table with its lists copied into `arena`
     $c: = Table(t.name, arena)
@@ -196,7 +203,23 @@ priv fn copied(t: Table@, arena: Arena$@): Table //< the table with its lists co
     for p in t.pieces
         c.pieces.push(p)
     c.weights = copied_ids(t.weights@, arena)
+    c.formats = copied_formats(t.formats@, arena)
     return c
+
+priv fn copied_formats(formats: List<|Number_format|>@, arena: Arena$@): List<|Number_format|> //<
+    //< The list copied into `arena`; a currency's code stays where it was, since none changes
+    $c: = List<|Number_format|>(arena)
+    for f in formats
+        c.push(f)
+    return c
+
+priv fn same_formats(a: List<|Number_format|>@, b: List<|Number_format|>@): Bool
+    if a.len != b.len
+        return false
+    for i in Range.asc(a.len)
+        if !same_format(a[i], b[i])
+            return false
+    return true
 
 priv fn copied_ids(ids: List<|Sz|>@, arena: Arena$@): List<|Sz|> //< the list copied into `arena`
     $c: = List<|Sz|>(arena)
@@ -206,7 +229,7 @@ priv fn copied_ids(ids: List<|Sz|>@, arena: Arena$@): List<|Sz|> //< the list co
 
 priv fn keeps_shape(t: Table@, b: Table@): Bool //<
     //< Whether a table has the rows, columns, name and cell count of its copy, and kept every piece
-    //< Its column weights can differ: `Widths_swap` records them.
+    //< Its column weights and formats can differ: `Columns_swap` records them.
     return t.name.equals(b.name) && t.next_id == b.next_id && t.cells.len == b.cells.len &&
         t.pieces.len >= b.pieces.len && same_ids(t.rows@, b.rows@) &&
         same_ids(t.columns@, b.columns@)
@@ -220,7 +243,8 @@ priv fn same_ids(a: List<|Sz|>@, b: List<|Sz|>@): Bool
     return true
 
 priv fn same_cell(a: Cell, b: Cell): Bool
-    return a.kind == b.kind && a.text.equals(b.text) && a.first == b.first && a.count == b.count
+    return a.kind == b.kind && a.text.equals(b.text) && a.first == b.first && a.count == b.count &&
+        same_look(a.look, b.look)
 
 priv fn same_piece(a: Piece@, b: Piece@): Bool
     return a.kind == b.kind && a.text.equals(b.text) && a.table == b.table && a.named == b.named &&

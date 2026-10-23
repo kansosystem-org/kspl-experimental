@@ -29,7 +29,7 @@ So macOS has the shortest wall clock but costs the most. A green run with a job 
 
 Caution: **When adding a job, give it `timeout-minutes:` too.** One left out falls back to the 360 minutes silently.
 
-**Every gate has a time cap of its own, inside the job's** (`CI_GATE_CAP` in `mk/ci.mk`, in seconds; its comment gives its value and why). A cancelled job names no gate, and a local `make ci` has no job limit at all. A gate past its cap is stopped with every process it started. The line `# gate <gate> ran over <N> s and was stopped` ends its log and the screen's output. The summary names that line first among the gate's causes. The round goes on with the next gate. On a slow machine, raise it on the command line (`make ci CI_GATE_CAP=3600`).
+**Every gate has a time cap of its own, inside the job's** (`CI_GATE_CAP` in `mk/ci.mk`, in seconds; its comment gives its value and why). A cancelled job names no gate, and a local `make ci` has no job limit at all. A gate past its cap is stopped with every process it started. The line `# gate <gate> ran over <N> s and was stopped` ends its log and the screen's output. The summary names that line first among the gate's causes. The round goes on with the next gate, unless `STOP=1` ends it ("Ending a round at the first fall" below). On a slow machine, raise it on the command line (`make ci CI_GATE_CAP=3600`).
 
 Caution: **When adding a job, add an input of the same name and an `if:` that reads it.** Either one alone breaks silently: the input alone is a checkbox with no effect, and the job alone runs whatever is ticked. `make test-conventions` checks that they match.
 
@@ -76,6 +76,37 @@ Caution: **When adding a gate, make it print one line in this notation.** A nota
 
 **Where none of the first five is found, the log's last lines follow**, each after `| `. A gate that must print `RESULT: ALL PASS` and printed none says `NO VERDICT` first. On GitHub, the first cause is also the gate's error mark on the run's page.
 
+### Ending a round at the first fall
+
+**`make ci STOP=1` ends the round at the first gate that fails.** It gives a quicker answer while you work. It is not the verdict for a push: run the full `make ci` for that. By default, a fallen gate does not stop the round, so one round names every gate that fails. Only a gate with `stops` in `tools/ci_gates.kspl` (the self-host) ends it, because the later gates build on what it builds. The switch works on every set (`ci`, `ci-macos`, `ci-shard-*`). CI's jobs never set it, so CI still runs every gate.
+
+**With `STOP=1`, the gates that fail most often for their time run first.** The gates with `stops` run first, then the gates with `early`, then the rest. Each part keeps the table's order, and without `STOP=1` the order is the table's alone. `early` marks `lint`, `surface` and `suites_text`. In 59 recorded rounds, `suites_text` failed 10 times and `lint` 7 times, more than any other gate. `surface` failed 3 times and takes about 13 seconds. In the table's order, `suites_text` comes after `suites_a`, the longest gate.
+
+**A round that ends early says so in its last two lines**, after the list of the gates that ran:
+
+```
+# not run (24): debug_tools, lint_cfg, suites_a, …
+# ended early at lint: STOP=1 ends the round at the first gate that fails, so this round is not a full verdict
+```
+
+The list above them holds only the gates that ran, so a gate that did not run is never shown as `PASS`. The round returns failure. A round that the self-host's fall ended prints the same two lines, with its own reason. A fall at the set's last gate leaves nothing out, so that round prints neither line.
+
+### Two gates side by side
+
+**`race` and `selfhost_ship` start at the same time** (`Gate.beside` in `tools/ci_gates.kspl`). Each keeps about one core busy for about two minutes, and the two write to different files. So a round on four cores ends about two minutes sooner. Every other gate runs alone.
+
+**Each gate of the pair is still judged alone.** It has its own log, its own time cap and its own line in the summary, in the table's order. Its time is counted from the common start to its own end. The rules for its verdict and its SKIP lines are the same as for a gate that runs alone.
+
+**While the two run, their output goes only to their logs.** So the lines of one gate never mix with the other's on the screen. The screen shows a line for each gate as the pair starts. When both have ended, it shows each log in turn.
+
+**The pair runs together only where the set runs both gates.** Both are in the Linux section alone, so `make ci` on Linux and `make ci-shard-linux` start them together. A set that runs only one of them runs it alone.
+
+**With `STOP=1`, a fall in the pair ends the round after both gates end.** The round names the gate that fell, and the gates after the pair are listed as not run. Its partner has run, so it keeps its own verdict.
+
+**`make ci CI_SERIAL=1` runs each gate alone**, the pair included, in the table's order. Use it when a gate of the pair fails only while the other runs. If the fall goes away with the switch, the load is the cause. CI's jobs do not set it.
+
+To add a pair, put the two rows next to each other and let each name the other in `beside`. Do this only for two gates that share no file, including what the gates before them have built. The runner refuses a pair whose rows are apart, do not name each other, or differ in `stops` or `early`.
+
 ## How the gates are arranged
 
 **Which gates run, and in which job, is one table: `GATES` in `tools/ci_gates.kspl`.** Each row is a gate, what `make` is asked for, and which job runs it. Each make target below only names its set, and the seed runs the table. (The seed is the compiler's frozen copy in C, `ksplc/seed.c`, which every build starts from.) So a compiler that the round is still checking never decides what is checked.
@@ -103,7 +134,7 @@ flowchart TD
     LX --> T["the seed reads the table<br/>gates in tools/ci_gates.kspl"]
     WN --> T
     MC --> T
-    T --> G["the gates run one after another;<br/>each ends with one RESULT line"]
+    T --> G["the gates run one after another, one pair side by side;<br/>each ends with one RESULT line"]
     G --> O["each gate's log, out/log/ci/name.log,<br/>uploaded to the run's Artifacts"]
 ```
 
@@ -119,7 +150,7 @@ flowchart TD
 
 **Do not remove `fail-fast: false`**: without it the first failing job cancels the rest, and their results are lost.
 
-**The gates run one after another, in the table's order. A gate that fails does not stop the set**, so one round names every gate that falls. Only the self-host stops it (`Gate.stops` in `tools/ci_gates.kspl`). The gates after it build on what it built, so what falls after it is noise. Inside a gate whose `par` in `tools/ci_gates.kspl` is `parallel` or `synced`, the items run in parallel (`-j<jobs>`). `lint` / `test-suites` / `test-ksos-link` / `test-ksos-posix` / `test-ksos-qemu` are each split into one target per item. So a failing item is named by its target.
+**The gates run one after another, in the table's order**, except one pair that runs side by side ("Two gates side by side" above). **A gate that fails does not stop the set**, so one round names every gate that falls. Only the self-host stops it (`Gate.stops` in `tools/ci_gates.kspl`). The gates after it build on what it built, so what falls after it is noise. Inside a gate whose `par` in `tools/ci_gates.kspl` is `parallel` or `synced`, the items run in parallel (`-j<jobs>`). `lint` / `test-suites` / `test-ksos-link` / `test-ksos-posix` / `test-ksos-qemu` are each split into one target per item. So a failing item is named by its target.
 
 **Every demo `test-ksos-posix` and `test-ksos-qemu` run has a time cap** (`KSOS_RUN_CAP` in `ksos/Makefile`). A run that hangs fails its item with a `[FAIL] … it hung` line instead of stalling the set. `test-ksos-posix` first checks that a run spinning for ever is stopped that way.
 

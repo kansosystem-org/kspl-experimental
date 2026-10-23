@@ -1,0 +1,123 @@
+//< The editor's replace action: text found in prose and in cells, replaced as one step
+//< The page finds the matches itself, in the text it shows and in the cells' text as a person
+//< edits it, and names each one by its place. The model checks every place, and a refusal changes
+//< nothing, prose and cells alike.
+import "ksmd/edit"
+import "ksmd/editor" { Editor, Pos, Refused, Work }
+import "ksmd/editor_tables" { value_of }
+import "ksmd/history" { Change, Transaction, begin, capture, is_empty, record_tables, swap }
+import "ksmd/region" { Unit, fit, gather, is_text_block }
+import "ksmd/styled" { Seg, cut, length, plain, text_seg }
+import "std/ds" { List }
+import "std/mem" { Arena }
+
+struct Span //< text to replace: bytes `from` to `to` of a unit's visible text
+    block: Sz
+    item: Sz //< a list's item; 0 in another block
+    from: Sz
+    to: Sz
+
+struct Cell_text //< a cell's whole new text, read as typed text is; row -1 is the names
+    block: Sz
+    row: Sz
+    column: Sz
+    text: U8[]
+
+impl Editor
+    fn replace_found(ed: Self$@, spans: List<|Span|>@, text: U8[], cells: List<|Cell_text|>@):
+        Void!Refused //<
+            //< Puts `text` in place of each span, and each cell's new text in its cell, as one step
+            //< Spans stand in the document's order and do not overlap. The text takes the marks of
+            //< the first character it replaces, so a bold word stays bold. The caret ends after
+            //< the first replaced span.
+        was: = ed.change
+        defer scratch: = Arena(64 * 1024)
+        $tx: = begin(ed.selection(), ed.arena)
+        ed.replace_spans(spans, text, tx@, scratch) catch why
+            ed.take_back(tx@, was)
+            throw why
+        if cells.len > 0
+            before: = capture(ed.doc@, scratch)
+            ed.replace_cells(cells, scratch) catch why
+                record_tables(ed.doc@, before@, tx@, ed.arena)
+                ed.take_back(tx@, was)
+                throw why
+            record_tables(ed.doc@, before@, tx@, ed.arena)
+            ed.change.tables = true
+        ed.change.any = ed.change.any || !is_empty(tx@)
+        ed.finish(tx, .other, false)
+
+    priv fn take_back(ed: Self$@, tx: Transaction$@, was: Change) //<
+        //< Undoes what a refused replace changed so far, and records nothing
+        defer scratch: = Arena(16 * 1024)
+        swap(ed.doc@, tx, true, ed.change@, scratch)
+        ed.anchor = tx.before.anchor
+        ed.focus = tx.before.focus
+        ed.gap = tx.before.gap
+        ed.change = was
+
+    priv fn replace_spans(ed: Self$@, spans: List<|Span|>@, text: U8[], tx: Transaction$@,
+        scratch: Arena$@): Void!Refused //<
+            //< Each block's spans, from the last block back, so earlier blocks keep their places
+            //< A block left with no text goes, as a deleted block's last character takes it.
+        $end: = spans.len
+        for end > 0
+            block: = spans[end - 1].block
+            $start: = end - 1
+            for start > 0 && spans[start - 1].block == block
+                start -= 1
+            if start > 0 && spans[start - 1].block > block
+                throw .stale
+            ed.replace_in_block(block, spans, start, end, text, tx, scratch)!
+            end = start
+
+    priv fn replace_in_block(ed: Self$@, block: Sz, spans: List<|Span|>@, start: Sz, end: Sz,
+        text: U8[], tx: Transaction$@, scratch: Arena$@): Void!Refused //<
+            //< Replaces spans `start` to `end`, all in one block, from the last one back
+        if block < 0 || block >= ed.doc.blocks.len ||
+            !is_text_block(ed.doc.blocks.get(block).kind)
+            throw .stale
+        $units: = List<|Unit|>(scratch)
+        gather(ed.doc@, block, block + 1, units@, scratch)
+        $caret: = Pos::{ .unit = 0, .offset = 0 }
+        $limit: Sz = -1
+        for k in Range.desc(end - start)
+            s: = spans[start + k]
+            if s.item < 0 || s.item >= units.len
+                throw .stale
+            u: = units[s.item]@
+            n: = length(u.segs@)
+            // Within a unit, each span ends before the next one starts.
+            if s.from < 0 || s.from >= s.to || s.to > n ||
+                limit >= 0 && caret.unit == s.item && s.to > limit
+                throw .stale
+            $first: = List<|Seg|>(scratch)
+            cut(u.segs@, s.from, s.from + 1, first@)
+            marks: = first[0].marks if first.len > 0 && !first[0].hard else plain()
+            $out: = List<|Seg|>(scratch)
+            cut(u.segs@, 0, s.from, out@)
+            if text.len > 0
+                out.push(text_seg(text, marks))
+            cut(u.segs@, s.to, n, out@)
+            u.segs = out
+            u.edited = true
+            fit(u, scratch)
+            caret = Pos::{ .unit = s.item, .offset = s.from + text.len }
+            limit = s.from
+        $w: = Work::{ .from = block, .to = block + 1, .units = units, .start = caret,
+            .end = caret }
+        ed.commit(w@, tx, caret, caret, scratch)!
+
+    priv fn replace_cells(ed: Self$@, cells: List<|Cell_text|>@, scratch: Arena$@): Void!Refused
+        for c in cells
+            if c.block < 0 || c.block >= ed.doc.blocks.len ||
+                ed.doc.blocks.get(c.block).kind != .table
+                throw .stale
+            u: = ed.doc.blocks.get(c.block).first
+            if c.row < 0
+                edit.set_name(ed.doc@, u, c.column, c.text, ed.arena) catch why
+                    throw .table(why)
+                continue
+            value: = value_of(c.text, scratch)
+            edit.set_cell(ed.doc@, u, c.row, c.column, value.kind, value.text, ed.arena) catch why
+                throw .table(why)

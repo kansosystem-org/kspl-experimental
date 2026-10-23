@@ -5,16 +5,20 @@
 //< asks it for the summary the workflow shows.
 //< **A fallen gate does not stop the set**, so one round names every gate that falls. Only a gate
 //< the later ones build on (`Gate.stops`, the self-host) stops it: what fails after it is noise.
+//< `--stop-at-first` (`make ci STOP=1`) stops it at any fallen gate, for a quicker answer.
+//< **A pair the table marks (`Gate.beside`) starts at once**, each gate still judged alone;
+//< `--serial` (`make ci CI_SERIAL=1`) runs the two one after the other.
 
 // ==========================================
 // Usage:
 //     ksplc run tools/ci.kspl ci|ci-macos|ci-shard-<shard>
 //         [--make=<make>] [--jobs=<n>] [--platform=<linux|darwin|win32>] [--relaxed=<switches>]
-//         --cap=<seconds>
+//         --cap=<seconds> [--stop-at-first] [--serial]
 //     ksplc run tools/ci.kspl summary [--jobs=<n>] [--title=<text>]
 // ==========================================
 import "std/argparse"
 import "std/chars"
+import "std/ds" { List }
 import "std/fs"
 import "std/io"
 import "std/mem" { Arena }
@@ -34,6 +38,8 @@ fn main(): I32
     $platform: U8[] = ""
     $relaxed: U8[] = ""
     $cap: I64 = 0I64
+    $stop: = false
+    $serial: = false
     p: = argparse.Parser
         .create(sys.program_name(), "run a set of CI gates, or print the summary", arena)
     p.positional("<set> | summary")
@@ -43,6 +49,8 @@ fn main(): I32
     p.str_opt("--platform", platform@, "make's PLATFORM: a SKIP its rows do not expect fails")
     p.str_opt("--relaxed", relaxed@, "the switches turned off, space-separated: their SKIPs pass")
     p.int_opt("--cap", cap@, "the seconds a gate may run before it is stopped (`CI_GATE_CAP`)")
+    p.flag("--stop-at-first", stop@, "end the set at the first gate that falls (`make ci STOP=1`)")
+    p.flag("--serial", serial@, "run each gate alone, the pairs too (`make ci CI_SERIAL=1`)")
     p.parse_or_exit()
     if platform.len == 0
         if sys.is_windows()
@@ -75,7 +83,7 @@ fn main(): I32
     case .some(s)
         return run_set(name, s,
             Round::{ .make = make, .jobs = jobs, .platform = platform, .relaxed = relaxed,
-            .cap_s = cap }, arena)
+            .cap_s = cap, .stop = stop, .serial = serial }, arena)
     case .none
         io.err().s("ci: no set is named '\{name\}'\n")
         p.print_usage(io.err())
@@ -87,6 +95,8 @@ priv struct Round //< how this round runs each gate: the command line's settings
     platform: U8[]
     relaxed: U8[] //< the switches turned off, space-separated (`--relaxed`)
     cap_s: I64 //< the seconds one gate may run before it is stopped (`--cap`)
+    stop: Bool //< any fallen gate ends the set, not only one with `Gate.stops` (`--stop-at-first`)
+    serial: Bool //< every gate runs alone, a pair with `Gate.beside` included (`--serial`)
 
 priv const CAP_MAX_S: I64 = 2000000I64 //< the longest cap a child's limit in milliseconds holds
 
@@ -120,16 +130,28 @@ priv fn run_set(name: U8[], s: Set, r: Round, arena: Arena$@): I32 //<
             io.err()
                 .s("ci: macOS runs the gate '\{g.log\}', and its make 3.81 has no --output-sync\n")
             return 1
+    if fault: = ci_gates.pair_fault(arena)
+        io.err().s("ci: a pair of gates run side by side is wrong: ").s(fault).c('\n')
+        return 1
     $count: Sz = 0
     $fallen: Sz = 0
-    for g in ci_gates.GATES
-        if !s.runs(g, r.platform)
+    $ended_at: U8[]? = .none
+    $by_switch: = false
+    $not_run: = List<|U8[]|>(arena)
+    order: = ci_gates.run_order(r.stop, arena)
+    for st in ci_gates.steps(order@, s, r.platform, r.serial, arena)
+        if ended_at.is_some()
+            for g in st.gates
+                not_run.push(g.log)
             continue
-        count += 1
-        if !run_gate(g, r, arena)
-            fallen += 1
-            if g.stops
-                break
+        count += st.gates.len
+        passed: = run_step(st, r, arena)
+        for ok in passed
+            if !ok
+                fallen += 1
+        if g: = ci_gates.ends_round(st@, passed@, r.stop)
+            ended_at = .some(g.log)
+            by_switch = !g.stops
     // **A set that runs nothing has gone wrong**: a gate moved to a shard no job runs.
     if count == 0
         io.err().s("ci: the set '\{name\}' holds no gate\n")
@@ -140,6 +162,14 @@ priv fn run_set(name: U8[], s: Set, r: Round, arena: Arena$@): I32 //<
         io.out().s("# turned off here: ").s(r.relaxed)
             .s(" (=0), so their gates may skip; CI's Linux job requires every one, and this round ")
             .s("is not its verdict\n")
+    // **A round that ended early says so last**, naming what did not run: it is no full verdict.
+    // A fall at the set's last gate left nothing out, so that round ended in full.
+    if at: = ended_at
+        if not_run.len == 0
+            return 1
+        defer $b: = Str_builder()
+        ci_gates.early_end(at, by_switch, not_run@, b@)
+        io.out().s(b.slice())
     if fallen > 0
         return 1
     io.out().s("# \{name\}: ALL GREEN\n")
@@ -151,24 +181,53 @@ priv fn run_anywhere(g: Gate): Bool //< whether some set runs the gate
             return true
     return false
 
-priv fn run_gate(g: Gate, r: Round, arena: Arena$@): Bool //<
-    //< Runs one gate through `make`, its output on the screen and in its log; true when it passed
+priv fn run_step(st: ci_gates.Step, r: Round, arena: Arena$@): List<|Bool|> //<
+    //< Runs one step's gates through `make`, all started at once; whether each passed, in order
+    //< **A gate alone writes to the screen and its log as it goes.** Gates side by side write
+    //< only to their logs, so their lines never mix; each log is shown once both have ended.
     //< **`bash -o pipefail`**, or the pipe answers with `tee`'s status and a fallen gate passes.
+    beside: = st.gates.len > 1
+    $runs: = List<|ci_gates.Capped|>(arena)
+    for g in st.gates
+        log: = ci_gates.log_path(g.log, arena)
+        cmd: = arena.text()
+        cmd.c('\'').s(r.make).c('\'')
+        if g.par != ci_gates.Par.serial
+            cmd.s(" -j\{r.jobs\}")
+        if g.par == ci_gates.Par.synced
+            cmd.s(" --output-sync=target")
+        cmd.c(' ').s(g.args).s(" > " if beside else " 2>&1 | tee ").s(log)
+        if beside
+            cmd.s(" 2>&1")
+        io.out().s("# --- ").s(g.log).s(": make ").s(g.args)
+        if beside
+            other: = st.gates.get(1 if st.gates.get(0).log.equals(g.log) else 0).log
+            io.out().s(", side by side with ").s(other).s("; its log follows when both end")
+        io.out().s(" ---\n").flush()
+        // 127, the shell's "not found", where bash itself cannot start. Caution: **The words go on
+        // the arena**: a literal list would be one slot of this loop's frame, shared by both gates.
+        $argv: = List<|U8[]|>(arena)
+        for w in U8[][]::{ "bash", "-o", "pipefail", "-c", cmd.take() }
+            argv.push(w)
+        runs
+            .push(ci_gates.Capped::{ .argv = argv.slice(), .name = g.log, .log = log, .rc = 0,
+            .took_us = 0I64 })
+    ci_gates.run_capped_all(runs.slice(), r.cap_s, sys.mono_us())
+    $passed: = List<|Bool|>(arena)
+    for i in Range.asc(st.gates.len)
+        c: = runs.get(i)
+        if beside
+            io.out().s("# --- ").s(c.name).s("'s log, \{c.took_us / 1000000I64\}s ---\n")
+                .s(io.read_file(c.log, arena) catch "")
+            io.out().flush()
+        passed
+            .push(judge_gate(st.gates.get(i), r, c.rc, c.took_us / 1000000I64, arena))
+    return passed
+
+priv fn judge_gate(g: Gate, r: Round, exit: I32, sec: I64, arena: Arena$@): Bool //<
+    //< Judges one gate that has ended by its exit code and its log, and writes its `.end`
     log: = ci_gates.log_path(g.log, arena)
-    defer $cmd: = Str_builder()
-    cmd.c('\'').s(r.make).c('\'')
-    if g.par != ci_gates.Par.serial
-        cmd.s(" -j\{r.jobs\}")
-    if g.par == ci_gates.Par.synced
-        cmd.s(" --output-sync=target")
-    cmd.c(' ').s(g.args).s(" 2>&1 | tee ").s(log)
-    io.out().s("# --- ").s(g.log).s(": make ").s(g.args).s(" ---\n")
-    io.out().flush()
-    t0: = sys.mono_us()
-    // 127, the shell's "not found", where bash itself cannot start.
-    $rc: = ci_gates.run_capped(U8[][]::{ "bash", "-o", "pipefail", "-c", cmd.slice() }, g.log, log,
-        r.cap_s, t0)
-    sec: = (sys.mono_us() - t0) / 1000000I64
+    $rc: = exit
     said: = io.read_file(log, arena) catch ""
     j: = ci_gates.Judge::{ .platform = r.platform, .relaxed = r.relaxed }
     if rc == 0 && g.verdict && !said_verdict(said, arena)

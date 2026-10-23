@@ -9,10 +9,13 @@
 // OpenSSL's own C API, called directly; `#link` names its libraries, so no build file does. No
 // OpenSSL header is in any translation unit, so these declarations are the only ones C sees.
 // ==========================================
+import "std/chars"
 import "std/math"
 import "std/mem" + { dealloc }
 import "std/net"
+import "std/reactor" { Reactor, READABLE, WRITABLE }
 import "std/str" // `to_cstr`
+import "std/sys"
 
 // The contents only OpenSSL reads. Unmarked, so the package's tests can reach them.
 extern "C"
@@ -78,6 +81,7 @@ priv const IO_CHUNK: Sz = 16 * 1024 //< the most one move between the socket and
 
 pub enum Tls_error //< why a secure connection could not be opened or used
     connect_failed //< the underlying TCP connection failed
+    handshake_timed_out //< the handshake did not finish within its deadline
     ctx_failed //< OpenSSL setup failed (SSL_CTX_new, SSL_new and similar)
     handshake_failed //< SSL_connect (the handshake) failed for a reason other than the next one
     cert_verify_failed //<
@@ -130,7 +134,32 @@ priv fn client_ssl(ctx: SSL_CTX$@, host: U8[]): SSL$@!Tls_error //<
         throw .ctx_failed
     return ssl
 
-priv fn send_queued(tcp: net.Tcp_stream$@, ssl: SSL$@): Bool //<
+priv fn wait_before(tcp: net.Tcp_stream$@, interest: U8, deadline: I64): Bool
+    left: = deadline - sys.mono_us()
+    if left <= 0
+        return false
+    defer $watch: = Reactor()
+    watch.register(tcp.raw_handle(), interest, 0)
+    defer $ready: = watch.wait(I32::((left + 999I64) / 1000I64)) catch
+        return false
+    return ready.len > 0 && sys.mono_us() < deadline
+
+fn send_before(tcp: net.Tcp_stream$@, bytes: U8[], deadline: I64): Bool //<
+    //< Sends before an absolute mono_us deadline; tcp must already be non-blocking
+    $sent: Sz = 0
+    for sent < bytes.len
+        if sys.mono_us() >= deadline
+            return false
+        n: = tcp.write(bytes.sub_from(sent)) catch e
+            if e == net.Net_error.would_block && wait_before(tcp, WRITABLE, deadline)
+                continue
+            return false
+        if n == 0
+            return false
+        sent += n
+    return true
+
+priv fn send_queued(tcp: net.Tcp_stream$@, ssl: SSL$@, deadline: I64 = 0): Bool //<
     //< Sends what OpenSSL has queued for the peer; false where the socket failed
     wbio: = SSL_get_wbio(ssl)
     $chunk: U8[IO_CHUNK] = ::{}
@@ -138,25 +167,38 @@ priv fn send_queued(tcp: net.Tcp_stream$@, ssl: SSL$@): Bool //<
         n: = BIO_read(wbio, Void$@::chunk@, I32::IO_CHUNK)
         if n <= 0
             return false
-        tcp.write_all(U8[]::{ .ptr = chunk@, .len = n }) catch
+        bytes: = U8[]::{ .ptr = chunk@, .len = n }
+        if deadline == 0
+            tcp.write_all(bytes) catch
+                return false
+        else if !send_before(tcp, bytes, deadline)
             return false
     return true
 
-priv fn take_more(tcp: net.Tcp_stream$@, ssl: SSL$@): Bool //<
+priv fn take_more(tcp: net.Tcp_stream$@, ssl: SSL$@, deadline: I64 = 0): Bool //<
     //< Hands OpenSSL what the peer sent next; false where the peer closed or the socket failed
     $chunk: U8[IO_CHUNK] = ::{}
-    n: = tcp.read(U8$[]::chunk) catch
-        return false
+    $n: Sz = 0
+    for
+        if deadline != 0 && sys.mono_us() >= deadline
+            return false
+        n = tcp.read(U8$[]::chunk) catch e
+            if e == net.Net_error.would_block && deadline != 0 &&
+                wait_before(tcp, READABLE, deadline)
+                continue
+            return false
+        break
     if n == 0
         return false
     return BIO_write(SSL_get_rbio(ssl), Void@::chunk@, I32::n) == I32::n
 
-priv fn go_on(tcp: net.Tcp_stream$@, ssl: SSL$@, rc: I32): Bool //<
+priv fn go_on(tcp: net.Tcp_stream$@, ssl: SSL$@, rc: I32, deadline: I64 = 0): Bool //<
     //< After an OpenSSL call that returned `rc` without finishing: whether to call it again
     //< It sends what the call queued (an alert included), and reads more where the call waits for
     //< the peer. Any other answer is an end: OpenSSL writes into memory, so it never waits to send.
     err: = SSL_get_error(ssl, rc)
-    return send_queued(tcp, ssl) && err == SSL_ERROR_WANT_READ && take_more(tcp, ssl)
+    return send_queued(tcp, ssl, deadline) && err == SSL_ERROR_WANT_READ &&
+        take_more(tcp, ssl, deadline)
 
 priv fn close_ssl(tcp: net.Tcp_stream$@, ssl: SSL$@) //<
     //< Shuts down (trying to send a close_notify) and frees the SSL
@@ -168,6 +210,7 @@ impl Tls_stream
     pub fn connect( //< connects, then does the TLS handshake, verifying the certificate
         host: U8[], //< the host name to connect to; SNI and the certificate check also use it
         port: I32, //< the port on that host
+        handshake_ms: I32 = 10000, //< positive budget; non-positive expires immediately
     ): Tls_stream$@!Tls_error
         tcp: = net.Tcp_stream.connect(host, port) catch
             throw .connect_failed
@@ -178,23 +221,38 @@ impl Tls_stream
             SSL_CTX_free(ctx)
             tcp.free()
             throw e
+        tcp.set_nonblocking() catch
+            SSL_free(ssl)
+            SSL_CTX_free(ctx)
+            tcp.free()
+            throw .handshake_failed
+        deadline: = sys.deadline_after_ms(handshake_ms)
         $rc: I32 = 0
-        for
+        for sys.mono_us() < deadline
             ERR_clear_error()
             rc = SSL_connect(ssl)
-            if rc == 1 || !go_on(tcp, ssl, rc)
+            if rc == 1 || !go_on(tcp, ssl, rc, deadline)
                 break
         // The client's last handshake message is still queued when `SSL_connect` returns 1.
-        shook: = rc == 1 && send_queued(tcp, ssl)
+        shook: = rc == 1 && send_queued(tcp, ssl, deadline) && sys.mono_us() < deadline
         // **The verification's own answer decides the error.** With `SSL_VERIFY_PEER` a certificate
         // that does not verify stops the handshake. Only this tells it from a peer speaking no
         // TLS.
         verified: = SSL_get_verify_result(ssl) == X509_V_OK
         if !shook || !verified
-            close_ssl(tcp, ssl)
+            expired: = sys.mono_us() >= deadline
+            // No shutdown exchange on a failed handshake: cleanup must not wait for the peer.
+            SSL_free(ssl)
             SSL_CTX_free(ctx)
             tcp.free()
+            if expired
+                throw .handshake_timed_out
             throw .handshake_failed if verified else .cert_verify_failed
+        tcp.set_blocking() catch
+            SSL_free(ssl)
+            SSL_CTX_free(ctx)
+            tcp.free()
+            throw .handshake_failed
 
         s: = mem.alloc_as<|Tls_stream|>()
         s.tcp = tcp

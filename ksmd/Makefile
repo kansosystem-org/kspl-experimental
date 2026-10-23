@@ -71,10 +71,14 @@ web: web-tools
 # Typing, composition, selection, undo and tables, driven through the browser's own input events
 # (`tests/browser/main.mjs`). It wants `node` and a Chromium; the image's pinned build is taken first.
 # Caution: **Not `BROWSER`**: VS Code and desktops set it to a script that opens a URL elsewhere.
-KSMD_BROWSER := $(firstword \
-    $(shell command -v chromium 2>/dev/null || command -v google-chrome-stable 2>/dev/null || \
-        command -v google-chrome 2>/dev/null) \
-    $(wildcard /opt/pw-browsers/chromium-*/chrome-linux/chrome))
+# Caution: **Skip a snap.** Ubuntu's `chromium` runs confined and cannot read a page outside the
+# home folder, so every check of a page opened from a file fails while the served ones pass.
+KSMD_BROWSER := $(firstword $(wildcard /opt/chrome-linux/chrome) \
+    $(wildcard /opt/pw-browsers/chromium-*/chrome-linux/chrome) \
+    $(shell for b in chromium google-chrome-stable google-chrome; do \
+        p=$$(command -v $$b 2>/dev/null) || continue; \
+        case "$$(readlink -f "$$p")" in (/snap/*) continue;; esac; \
+        grep -qs snap "$$p" && continue; echo "$$p"; break; done))
 # Where it is 1, finding no browser is a failure rather than a SKIP: an image that holds a browser
 # sets it, so a round that lost the tool does not stay green.
 KSMD_REQUIRE_BROWSER ?=

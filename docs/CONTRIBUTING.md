@@ -23,7 +23,7 @@ make ci          # every gate this machine runs: run it before you propose a cha
 
 Caution: **Do not copy the list into this document.** Adding a target would make the copy outdated (Principle 4 in [`DESIGN-principles.md`](DESIGN-principles.md)).
 
-The list names targets only. A variable is a setting passed as `NAME=value`. Each task describes its variables: `LLVM=1`, `PREFIX=`, `FMT_JOBS=`, `SRC_KSPL=` in [`HOWTO-build.md`](HOWTO-build.md), and `FILE=` in [`HOWTO-set-up-a-project.md`](HOWTO-set-up-a-project.md).
+The list names targets only. A variable is a setting passed as `NAME=value`. Each task describes its variables: `LLVM=1`, `PREFIX=`, `FMT_JOBS=`, `SRC_KSPL=` in [`HOWTO-build.md`](HOWTO-build.md), `STOP=1` and `CI_GATE_CAP=` in [`SPEC-gates.md`](SPEC-gates.md), and `FILE=` in [`HOWTO-set-up-a-project.md`](HOWTO-set-up-a-project.md).
 
 ## Setting your git identity
 

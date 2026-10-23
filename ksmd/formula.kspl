@@ -4,10 +4,11 @@
 //< identities back into the coordinates the rows and columns have now.
 //< Caution: **Read a formula only through `token_at` and `next`.** Binding, writing and
 //< calculating then agree on where each reference starts and ends.
-import "ksmd/marker" { is_decimal }
+import "ksmd/marker" { is_decimal, quoted_end }
 import "ksmd/model" { Cell, Corner, Document, Piece, Table }
 import "std/chars"
 import "std/ds" { List }
+import "std/json"
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
 
@@ -22,13 +23,20 @@ struct Address //< a cell by its place, counted from 0: `A1` is row 0, column 0
 
 enum Token_kind
     number
-    name //< a lowercase name not followed by `.` and a cell address: a function's name
-    reference //< a cell or a range, `D1`, `budget.D1`, `D1:D3`
+    name //< a lowercase name not followed by `.` and a cell address: a function's name or a word
+    reference //< a cell or a range: `D1`, `budget.D1`, `"Q1 sales".D1`, `D1:D3`
+    text //< text in JSON quotes not followed by `.` and a cell address: `"Pens"`
     broken //< `#REF!`
     plus
     minus
     times
     divide
+    equal //< `=`
+    unequal //< `<>`
+    less //< `<`
+    less_equal //< `<=`
+    greater //< `>`
+    greater_equal //< `>=`
     open
     close
     comma
@@ -39,9 +47,9 @@ struct Token
     kind: Token_kind
     start: Sz //< where it starts in its text piece
     end: Sz //< where it ends in its text piece
-    text: U8[] //< a number's bytes
+    text: U8[] //< a number's or a name's bytes, or quoted text with its quotes
     piece: Sz //< a bound reference's piece in `Table.pieces`; -1 for a reference in a text piece
-    table: U8[] //< the table's name written before a reference, or empty
+    table: U8[] //< the table's name as written before a reference, quotes included; or empty
     range: Bool //< whether a reference names a rectangle
     from: Address
     to: Address //< a range's other corner
@@ -87,10 +95,34 @@ fn token_at(text: U8[], from: Sz): Token //< the token after any spaces and tabs
         t.end = j
         t.text = text.sub(i, j - i)
         return t
+    if c == '"'
+        // A table's name before `.` and a cell, as any name that is not plain is written; or else
+        // text. Text never stands before `.`, so the two cannot be confused.
+        close: = quoted_end(text, i)
+        if close == text.len
+            return Token(.bad, i, text.len)
+        if close + 1 < text.len && text[close + 1] == '.'
+            if spot: = address_at(text, close + 2)
+                t = reference_from(text, i, spot)
+                t.table = text.sub(i, close + 1 - i)
+                return t
+        t.kind = .text
+        t.end = close + 1
+        t.text = text.sub(i, close + 1 - i)
+        return t
     if spot: = address_at(text, i)
         return reference_from(text, i, spot)
     if text.starts_with(BROKEN, i)
         return Token(.broken, i, i + BROKEN.len)
+    if (c == '<' || c == '>') && i + 1 < text.len &&
+        (text[i + 1] == '=' || text[i + 1] == '>')
+        two: = text.sub(i, 2)
+        if two.equals("<=")
+            return Token(.less_equal, i, i + 2)
+        if two.equals(">=")
+            return Token(.greater_equal, i, i + 2)
+        if two.equals("<>")
+            return Token(.unequal, i, i + 2)
     return Token(operator(c), i, i + 1)
 
 fn next(t: Table@, cell: Cell, cur: Cursor$@): Token //<
@@ -203,7 +235,8 @@ priv fn write_reference(doc: Document@, p: Piece@, at: Positions@, rows: Sz, col
         out.s(BROKEN)
         return
     if p.named
-        out.s(doc.tables[p.table].name).c('.')
+        write_table_name(doc.tables[p.table].name, out)
+        out.c('.')
     if p.kind == .cell
         write_address(a, out)
         return
@@ -298,13 +331,46 @@ priv fn attach(doc: Document@, home: Sz, tok: Token): Piece? //<
     //< The piece of a reference that names a cell in this source, or none
     $u: = home
     if tok.table.len > 0
-        u = find_table(doc, tok.table) catch
+        u = find_written(doc, tok.table) catch
             return .none
     t: = doc.tables[u]@
     if !inside(t, tok.from) || tok.range && !inside(t, tok.to)
         return .none
     return .some(Piece::{ .kind = .range if tok.range else .cell, .text = "", .table = u,
         .named = tok.table.len > 0, .from = corner(t, tok.from), .to = corner(t, tok.to) })
+
+fn write_table_name(name: U8[], out: Str_builder$@) //<
+    //< A table's name as a reference writes it: plain, or in JSON quotes
+    if is_plain_name(name)
+        out.s(name)
+    else
+        out.c('"').escape_and_append(name).c('"')
+
+fn is_plain_name(name: U8[]): Bool //< `[a-z][a-z0-9_]*`, which a formula writes without quotes
+    if name.len == 0 || !name[0].is_lower()
+        return false
+    for c in name
+        if !c.is_lower() && !c.is_digit() && c != '_'
+            return false
+    return true
+
+priv fn find_written(doc: Document@, written: U8[]): Sz? //< the table a reference's name names
+    if !written.starts_with("\"")
+        return find_table(doc, written)
+    defer scratch: = Arena(4096)
+    name: = unquoted(written, scratch) catch
+        return .none
+    return find_table(doc, name)
+
+fn unquoted(quoted: U8[], arena: Arena$@): U8[]? //<
+    //< The text a JSON string means, its quotes included in `quoted`; without an escape, a view of
+    //< `quoted` itself
+    inner: = quoted.sub(1, quoted.len - 2)
+    if inner.find_str("\\").is_none()
+        return .some(inner)
+    decoded: = json.parse(quoted, arena) catch
+        return .none
+    return decoded.val.as_str()
 
 fn find_table(doc: Document@, name: U8[]): Sz? //< the table of this name in this source
     for u in Range.asc(doc.tables.len)
@@ -393,6 +459,12 @@ priv fn operator(c: U8): Token_kind
         return .times
     case '/'
         return .divide
+    case '='
+        return .equal
+    case '<'
+        return .less
+    case '>'
+        return .greater
     case '('
         return .open
     case ')'

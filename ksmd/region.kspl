@@ -5,6 +5,7 @@
 //< A prose unit left with no text becomes a gap: a place where typing makes a new block or item.
 //< Caution: **Settle only through `settle`, which checks the result.** It writes the new blocks,
 //< reads them back, and gives none where the reader would not read the same text.
+import "ksmd/look" { Align }
 import "ksmd/model" { Block, Block_kind, Document, Item, MAX_NESTING }
 import "ksmd/reader"
 import "ksmd/source" { Source }
@@ -22,9 +23,11 @@ struct Style //< what kind of text a unit is
     depth: Sz //< a list item's nesting, from 0
     ordered: Bool //< a numbered list item
     label: U8[] //< a code block's language label
+    align: Align //< a paragraph's or a heading's alignment
 
 fn paragraph_style(): Style
-    return Style::{ .kind = .paragraph, .level = 0, .depth = 0, .ordered = false, .label = "" }
+    return Style::{ .kind = .paragraph, .level = 0, .depth = 0, .ordered = false, .label = "",
+        .align = .none }
 
 struct Unit //< one paragraph, heading, code block or list item, or a whole other block
     style: Style
@@ -70,6 +73,7 @@ fn gather(doc: Document@, from: Sz, to: Sz, units: List<|Unit|>$@, arena: Arena$
         case .paragraph, .heading
             u.style.kind = block.kind
             u.style.level = block.level
+            u.style.align = block.align
             flatten(doc, block.first, block.count, u.segs@)
             units.push(u)
         case .code
@@ -100,7 +104,8 @@ fn gather(doc: Document@, from: Sz, to: Sz, units: List<|Unit|>$@, arena: Arena$
 fn blank_unit(style: Style, arena: Arena$@): Unit //< an edited unit with no text yet
     return Unit::{ .style = style, .segs = List<|Seg|>(arena), .whole = false,
         .block = Block::{ .kind = style.kind, .level = 0, .label = "", .text = "", .first = 0,
-        .count = 0, .offset = 0 }, .first = 0, .count = 0, .code = "", .edited = true }
+        .count = 0, .offset = 0, .align = .none }, .first = 0, .count = 0, .code = "",
+        .edited = true }
 
 fn whole_unit(block: Block, arena: Arena$@): Unit //< a table, an image or an include
     $u: = blank_unit(paragraph_style(), arena)
@@ -220,12 +225,12 @@ impl Settler
             s.doc.items.push(item)
         s.out.blocks
             .push(Block::{ .kind = .list, .level = 0, .label = "", .text = "", .first = first,
-            .count = s.items.len, .offset = 0 })
+            .count = s.items.len, .offset = 0, .align = .none })
         s.items.clear()
 
     priv fn block_of(s: Self$@, u: Unit@): Block //< a paragraph, a heading or a code block
         $b: = Block::{ .kind = u.style.kind, .level = 0, .label = "", .text = "", .first = 0,
-            .count = 0, .offset = 0 }
+            .count = 0, .offset = 0, .align = .none }
         switch u.style.kind
         case .code
             b.label = u.style.label
@@ -234,6 +239,7 @@ impl Settler
                 else s.arena.text().s(visible(u.segs@, s.arena)).c('\n').take())
         default
             b.level = u.style.level if u.style.kind == .heading else 0
+            b.align = u.style.align
             s.run(u, b.first@, b.count@)
         return b
 
@@ -293,7 +299,7 @@ priv fn reads_back(doc: Document@, blocks: List<|Block|>@, scratch: Arena$@): Bo
     return true
 
 priv fn same_block(a: Document@, x: Block, b: Document@, y: Block, scratch: Arena$@): Bool
-    if x.kind != y.kind || x.level != y.level
+    if x.kind != y.kind || x.level != y.level || x.align != y.align
         return false
     switch x.kind
     case .code

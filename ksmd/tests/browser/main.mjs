@@ -1,6 +1,7 @@
 // The ksmd page in a headless Chromium: typing, composition, selection, paste, undo, blocks,
-// formatting and tables, each driven through the browser's own input events and checked by the
-// canonical source the page gives back.
+// formatting, the menus, tables, sorting and filtering, each driven through the browser's own input events and checked by the
+// canonical source the page gives back. The tools over a whole document or a range of cells are
+// `tools.mjs`.
 // An input method's composition is driven as one sends it (`Input.imeSetComposition`, then
 // `Input.insertText` to commit); a real input method on a real keyboard is not checked here.
 // Paste is a synthetic `paste` event holding plain text, since a headless browser has no clipboard.
@@ -13,13 +14,15 @@ import { pathToFileURL } from "url";
 import { launch } from "./cdp.mjs";
 import { ALT, CTRL, SHIFT, driver, verdict } from "./drive.mjs";
 import { served } from "./served.mjs";
+import { tools } from "./tools.mjs";
 
 const [binary, pageFile, work, kssrv] = process.argv.slice(2);
 const check = (ok, what, detail) => verdict.check(ok, what, detail);
 
 const browser = await launch(binary, work);
 const page = browser.page;
-const { js, settle, until, press, type, select, click, clickBelow, drag } = driver(page);
+const { js, settle, until, press, type, select, click, clickBelow, drag, menu, point, doubleClickAt,
+  rightClick } = driver(page);
 
 async function load(source) {
   const r = await js(`ksmd.load(${JSON.stringify(source)})`);
@@ -129,9 +132,9 @@ const sections = {
     await press("y", CTRL);
     await press("y", CTRL);
     await saves("redo gives both back", `${H}Start more words\n`);
-    await click('[data-cmd="undo"]');
+    await menu("undo");
     await saves("the toolbar's Undo does the same", `${H}Start more\n`);
-    await click('[data-cmd="redo"]');
+    await menu("redo");
     await saves("and its Redo", `${H}Start more words\n`);
   },
 
@@ -168,7 +171,7 @@ const sections = {
     await press("i", CTRL);
     await saves("pressed again, each comes off", `${H}one two three\n`);
     await select(0, 0, 8, 13);
-    await click('[data-cmd="code"]');
+    await menu("code");
     await saves("the Code button makes inline code", `${H}one two \`three\`\n`);
     await select(0, 0, 0, 3);
     browser.answerPrompts("https://kanso.example/one");
@@ -178,28 +181,20 @@ const sections = {
     await select(0, 0, 0);
     await press("2", CTRL | ALT);
     await saves("Ctrl+Alt+2 makes a heading", `${H}## [one](https://kanso.example/one) two \`three\`\n`);
-    await js(`(() => {
-      const kind = document.querySelector('[data-cmd="kind"]');
-      kind.value = "p";
-      kind.dispatchEvent(new Event("change"));
-    })()`);
-    await saves("the kind menu makes it a paragraph again", `${H}[one](https://kanso.example/one) two \`three\`\n`);
-    await js(`(() => {
-      const kind = document.querySelector('[data-cmd="kind"]');
-      kind.value = "c";
-      kind.dispatchEvent(new Event("change"));
-    })()`);
+    await menu("p");
+    await saves("Format, Kind of block, Paragraph makes it a paragraph again", `${H}[one](https://kanso.example/one) two \`three\`\n`);
+    await menu("c");
     await saves("and code, which keeps the text and drops the marks", `${H}\`\`\`\none two three\n\`\`\`\n`);
     await load(`${H}a\n\nb\n`);
     await select(0, 0, 0);
-    await click('[data-cmd="bullets"]');
-    await saves("the List button makes a list item", `${H}- a\n\nb\n`);
+    await menu("bullets");
+    await saves("Format, List, Bulleted list makes a list item", `${H}- a\n\nb\n`);
     await select(1, 0, 0);
-    await click('[data-cmd="bullets"]');
+    await menu("bullets");
     await saves("a list item made next to the list joins it", `${H}- a\n- b\n`);
     await press("Tab");
     await saves("Tab nests an item", `${H}- a\n  - b\n`);
-    await click('[data-cmd="numbers"]');
+    await menu("numbers");
     await press("Tab", SHIFT);
     await saves("the numbered list and Shift+Tab", `${H}- a\n\n1. b\n`);
     await select(1, 0, 1);
@@ -222,7 +217,7 @@ const sections = {
     await saves("leaving the table upward puts the caret before it", `${H}Before\n\n${table}\nAfter\n`);
     await load(H);
     await clickBelow();
-    await click('[data-cmd="table"]');
+    await menu("table");
     await type("Item");
     await press("Tab");
     await type("Count");
@@ -256,37 +251,421 @@ const sections = {
     await press("Enter");
     check(await js("document.querySelector('#doc td[data-r=\"0\"][data-c=\"2\"]').textContent") === "8",
       "an edited formula shows its new value");
-    await click('[data-cmd="undo"]');
+    await menu("undo");
     check(await js("document.querySelector('#doc td[data-r=\"0\"][data-c=\"2\"]').textContent") === "15",
       "and undo gives the old formula's value back");
     await click('#doc td[data-r="0"][data-c="0"]');
-    await click('[data-cmd="row-above"]');
+    await menu("row-above");
     await saves("a row inserted above moves the formula's references with it",
       `${H}:::table name="table1"\n| "Item" | "Count" | "Total" |\n| | | |\n| 5 | 3 | =A2*B2 |\n| | | |\n:::\n`);
-    await click('[data-cmd="undo"]');
+    await menu("undo");
     await saves("undo takes the row back out", `${H}:::table name="table1"\n| "Item" | "Count" | ` +
       `"Total" |\n| 5 | 3 | =A1*B1 |\n| | | |\n:::\n`);
     await click('#doc td[data-r="0"][data-c="1"]');
-    await click('[data-cmd="column-remove"]');
+    await menu("column-remove");
     await saves("removing a column turns its references into #REF!",
       `${H}:::table name="table1"\n| "Item" | "Total" |\n| 5 | =A1*#REF! |\n| | |\n:::\n`);
     check(await js("document.querySelector('#doc td[data-r=\"0\"][data-c=\"1\"]').textContent") ===
       "#REF!", "and the cell shows the error");
-    await click('[data-cmd="undo"]');
+    await menu("undo");
     check(await js("document.querySelector('#doc td[data-r=\"0\"][data-c=\"2\"]').textContent") === "15",
       "undo brings the column and the value back");
     await click('#doc td[data-r="0"][data-c="2"]');
-    await click('[data-cmd="column-right"]');
+    await menu("column-right");
     await click('#doc td[data-r="1"][data-c="0"]');
-    await click('[data-cmd="row-remove"]');
+    await menu("row-remove");
     await saves("a column added after the last, and the last row removed",
       `${H}:::table name="table1"\n| "Item" | "Count" | "Total" | "" |\n| 5 | 3 | =A1*B1 | |\n:::\n`);
     await click('#doc td[data-r="0"][data-c="0"]');
-    await click('[data-cmd="table-remove"]');
+    await menu("table-remove");
     await saves("removing the table", "%ksmd 1\n");
-    await click('[data-cmd="undo"]');
+    await menu("undo");
     await saves("and undoing that", `${H}:::table name="table1"\n| "Item" | "Count" | "Total" | "" |` +
       `\n| 5 | 3 | =A1*B1 | |\n:::\n`);
+  },
+
+  // While a person works in a table, the page draws no caret in the text. No empty line then opens
+  // above the table, so the table stays where it is after each action, and the keys act on it.
+  async tableCaret() {
+    const rows = `| "a" | "b" |\n| 1 | =A1*2 |\n| 2 | |\n| 3 | |\n:::\n\nAfter.\n`;
+    const top = () => js("document.querySelector('#doc .table table').getBoundingClientRect().top");
+    const cell = (r, c) => js(`document.querySelector('#doc td[data-r="${r}"][data-c="${c}"]').textContent`);
+    // Where the keys go: the chosen cell as "row:column", an open cell by its name, or "doc".
+    const focus = () => js(`(() => {
+      const a = document.activeElement;
+      if (a.id === "doc") return "doc";
+      if (a.matches("#doc td.chosen")) return a.dataset.r + ":" + a.dataset.c;
+      return a.getAttribute("aria-label") || a.tagName;
+    })()`);
+    // No empty line stands, and the table has not moved.
+    const stays = async (what, at) => {
+      await settle();
+      const now = await top();
+      check(await js("!document.querySelector('#doc .gap')") && now === at, what, `${at} -> ${now}`);
+    };
+    await load(`${H}:::table name="t"\n${rows}`);
+    await click('#doc td[data-r="0"][data-c="1"]');
+    const at = await top();
+    await press("ArrowDown", SHIFT);
+    await press("ArrowDown", SHIFT);
+    await stays("Shift and an arrow key choose a range, and the table stays where it is", at);
+    await press("d", CTRL);
+    await stays("a fill down opens no empty line above the table", at);
+    check(await cell(2, 1) === "6" && await focus() === "0:1", "and the keys still go to the chosen cell",
+      await focus());
+    await press("z", CTRL);
+    await stays("Ctrl+Z on the chosen cell undoes the fill, and the table stays", at);
+    check(await cell(2, 1) === "" && await focus() === "0:1", "and the cell stays chosen", await focus());
+    await press("Delete");
+    await stays("Delete on a range clears it, and the table stays", at);
+    check(await cell(0, 1) === "" && await focus() === "0:1", "and the cell stays chosen", await focus());
+    await menu("undo");
+    await stays("an undo from the menu leaves the table where it is", at);
+    check(await cell(0, 1) === "2" && await focus() === "0:1", "and gives the keys back to the chosen cell",
+      await focus());
+    await click("#doc tbody tr:nth-child(2) th.row-number");
+    await stays("a press on a row number chooses the row, and the table stays", at);
+    check(await focus() === "1:0", "and the keys go to its first cell", await focus());
+    await press("ArrowDown");
+    check(await focus() === "Cell A3", "an arrow key on the chosen cell opens the next one", await focus());
+    await press("Escape");
+    check(await focus() === "2:0", "Esc in an open cell leaves it chosen", await focus());
+    await press("Enter");
+    check(await focus() === "Cell A3", "Enter on the chosen cell opens it", await focus());
+    await press("Escape");
+    await press("7");
+    await press("Tab");
+    check(await cell(2, 0) === "7", "typing on the chosen cell opens it with that character");
+    await stays("and the table stays where it is", at);
+    await click('#doc td[data-r="0"][data-c="0"]');
+    await type("9");
+    await press("Enter");
+    await menu("undo");
+    await stays("an undo of a cell's edit leaves the table where it is", at);
+    check(await cell(0, 0) === "1" && await focus() === "1:0", "and the cell the edit went on to stays chosen",
+      await focus());
+    await press("Escape");
+    check(await focus() === "doc" && await js("!document.querySelector('#doc .chosen')"),
+      "Esc on a chosen cell leaves the table for the text", await focus());
+    check(await js("!!document.querySelector('#doc .gap') && getSelection().focusNode.closest('.gap') !== null"),
+      "and the caret comes back where it stood, on the empty line above the table");
+    await click('#doc td[data-r="0"][data-c="0"]');
+    await press("Escape");
+    await click("#doc p");
+    await press("End");
+    check(await focus() === "doc" && await js("getSelection().focusNode.parentElement.matches('#doc p')"),
+      "a press in the text below takes the caret there", await focus());
+    await type("!");
+    await saves("and typing goes into the text",
+      `${H}:::table name="t"\n${rows.replace("After.", "After.!").replace("| 3 |", "| 7 |")}`);
+  },
+
+  // Formulas that choose and total by a condition, typed into cells as a person types them.
+  async formulas() {
+    await load(`${H}:::table name="t"\n| "item" | "n" | "x" |\n| "Pens" | 2 | |\n| "Ink" | 0 | |\n` +
+      `| "pens" | 3 | |\n:::\n`);
+    const shown = (r, c) => js(`document.querySelector('#doc td[data-r="${r}"][data-c="${c}"]').textContent`);
+    const enter = async (r, c, text) => {
+      await click(`#doc td[data-r="${r}"][data-c="${c}"]`);
+      await type(text);
+      await press("Enter");
+    };
+    await enter(0, 2, '=if(B1 = 0, "none", 6 / B1)');
+    check(await shown(0, 2) === "3", "if takes the branch its condition chooses", await shown(0, 2));
+    await enter(1, 2, '=if(B2 = 0, "none", 6 / B2)');
+    check(await shown(1, 2) === "none", "and shows its text, not #DIV/0!, when B2 is 0", await shown(1, 2));
+    await enter(2, 2, '=sum_if(B1:B3, A1:A3 = "Pens")');
+    check(await shown(2, 2) === "5", "sum_if adds the rows whose item is Pens, in any case", await shown(2, 2));
+    await enter(1, 1, "4");
+    check(await shown(1, 2) === "1.5" && await shown(2, 2) === "5",
+      "a changed count takes the other branch, and the total keeps to its rows");
+    await enter(1, 2, "=B2 > 3 and A2 <> \"Pens\"");
+    check(await shown(1, 2) === "true", "a condition shows true or false", await shown(1, 2));
+    await saves("the formulas save as they were typed", `${H}:::table name="t"\n| "item" | "n" | "x" |\n` +
+      `| "Pens" | 2 | =if(B1 = 0, "none", 6 / B1) |\n| "Ink" | 4 | =B2 > 3 and A2 <> "Pens" |\n` +
+      `| "pens" | 3 | =sum_if(B1:B3, A1:A3 = "Pens") |\n:::\n`);
+
+    // today() is the date the page opened the document. A stand-in clock gives the page its date.
+    const clock = (y, m, d) => js(`(() => {
+      const Real = window.RealDate || Date;
+      window.RealDate = Real;
+      const at = () => new Real(${y}, ${m - 1}, ${d}, 12);
+      window.Date = class extends Real {
+        constructor(...a) { if (a.length) super(...a); else super(at().getTime()); }
+        static now() { return at().getTime(); }
+      };
+    })()`);
+    const due = `${H}:::table name="t"\n| "due" | "state" |\n| "2031-02-01" | =if(A1 < today(), "late", "") |` +
+      `\n| | =today() |\n:::\n`;
+    try {
+      await clock(2031, 2, 3);
+      await load(due);
+      check(await shown(1, 1) === "2031-02-03", "today() shows the date the page opened the document",
+        await shown(1, 1));
+      check(await shown(0, 1) === "late", "and compares with a date typed as text");
+      await clock(2031, 2, 4);
+      await enter(1, 0, "x");
+      check(await shown(1, 1) === "2031-02-03", "it stays the same while the document is open, after an edit",
+        await shown(1, 1));
+      await load(due);
+      check(await shown(1, 1) === "2031-02-04", "and moves at the next opening", await shown(1, 1));
+    } finally {
+      await js("if (window.RealDate) window.Date = window.RealDate");
+    }
+  },
+
+  // The menu bar: a press opens a menu, pointing switches while one is open, a flyout opens on
+  // pointing, and Esc, a press outside and a chosen command close it. The keys work it too.
+  async menus() {
+    await load(`${H}one\n`);
+    const shown = (sel) => js(`(() => {
+      const el = document.querySelector(${JSON.stringify(sel)});
+      return !!el && !el.hidden && el.getBoundingClientRect().height > 0;
+    })()`);
+    const format = '.top-menu:has([data-cmd="strong"])';
+    const insert = '.top-menu:has([data-cmd="table"])';
+    await click(`${format} > .menu-name`);
+    check(await shown(`${format} > .menu`), "a press on a menu's name opens its drop-down menu");
+    await point(`${insert} > .menu-name`);
+    check(await shown(`${insert} > .menu`) && !await shown(`${format} > .menu`),
+      "pointing at another name while a menu is open opens that one instead");
+    await press("Escape");
+    check(!await shown(`${insert} > .menu`) && await js("document.activeElement.id === 'doc'"),
+      "Esc closes it, and the focus is back in the document");
+    await click(`${format} > .menu-name`);
+    await point(`${format} .sub:has([data-cmd="h2"]) > .sub-name`);
+    check(await shown(`${format} .sub:has([data-cmd="h2"]) > .menu`),
+      "pointing at a flyout's name opens the flyout beside it");
+    const right = await js(`(() => {
+      const fly = document.querySelector('${format} .sub:has([data-cmd="h2"]) > .menu').getBoundingClientRect();
+      const menu = document.querySelector('${format} > .menu').getBoundingClientRect();
+      return fly.left >= menu.right - 2;
+    })()`);
+    check(right, "and the flyout stands to the right of its menu");
+    await clickBelow();
+    check(!await shown(`${format} > .menu`), "a press outside closes every menu");
+    await select(0, 0, 0, 3);
+    await js(`document.querySelector('${format} > .menu-name').focus()`);
+    await press("ArrowDown");
+    check(await js("document.activeElement.classList.contains('sub-name')"),
+      "Down on a menu's name opens it and takes the first item");
+    await press("ArrowRight");
+    check(await js("document.activeElement.dataset.cmd === 'p'"), "Right opens the flyout and takes its first item");
+    await press("ArrowDown");
+    await press("ArrowDown");
+    await press("Enter");
+    await saves("Enter presses the item, on the selection the document had", `${H}## one\n`);
+    check(!await shown(`${format} > .menu`), "and the menu closes");
+    await click(".top-menu:has([data-cmd='sort-up']) > .menu-name");
+    check(await js("document.querySelector('.menubar [data-cmd=\"sort-up\"]').disabled"),
+      "with no cell chosen, the table commands cannot be pressed");
+    await press("Escape");
+  },
+
+  // Moving between cells, sorting and filtering, the right-click menu, and fitting a column.
+  async tableTools() {
+    const table = (rows) => `${H}:::table name="t"\n| "fruit" | "n" |\n${rows}:::\n`;
+    const start = table(`| "pear" | 3 |\n| "fig" | 1 |\n| "apple" | 2 |\n`);
+    await load(start);
+    const label = () => js("document.activeElement.getAttribute('aria-label')");
+    await click('#doc td[data-r="0"][data-c="0"]');
+    await press("ArrowRight");
+    check(await label() === "Cell B1", "Right moves to the next cell, as Down moves to the next row");
+    await press("ArrowLeft");
+    check(await label() === "Cell A1", "and Left moves back");
+    await type("x");
+    await press("ArrowLeft");
+    check(await label() === "Cell A1", "after typing, Left moves the caret inside the text first");
+    await press("Escape");
+    await click('#doc td[data-r="0"][data-c="1"]');
+    await menu("sort-up");
+    await saves("Table, Sort, ascending orders the rows by the chosen column",
+      table(`| "fig" | 1 |\n| "apple" | 2 |\n| "pear" | 3 |\n`));
+    await menu("undo");
+    await saves("and undo puts them back", start);
+    await rightClick('#doc td[data-r="1"][data-c="0"]');
+    check(await js("!document.querySelector('.menu.context').hidden"),
+      "a right-click on a cell opens the table menu");
+    await click('.menu.context [data-cmd="sort-down"]');
+    await saves("its Sort descending orders by that cell's column, Z to A",
+      table(`| "pear" | 3 |\n| "fig" | 1 |\n| "apple" | 2 |\n`));
+    check(await js("document.querySelector('.menu.context').hidden"), "and the menu closes");
+    await rightClick('#doc td[data-r="1"][data-c="0"]');
+    await click('.menu.context [data-cmd="filter-value"]');
+    const visible = () => js("Array.from(document.querySelectorAll('#doc tbody tr')).filter((r) => !r.hidden).length");
+    check(await visible() === 1, "Show only rows with this value hides the other rows");
+    check(await js("document.querySelector('.filter-note').textContent.startsWith('Showing 1 of 3 rows')"),
+      "and a line above the table says how many rows are shown");
+    await saves("and the file still holds every row", table(`| "pear" | 3 |\n| "fig" | 1 |\n| "apple" | 2 |\n`));
+    await click(".filter-note .filter-clear");
+    check(await visible() === 3, "Show all rows shows them again");
+    // The column's own panel, as Excel's filter: untick a value and press OK.
+    await click('#doc th.name[data-c="0"] .filter-arrow');
+    check(await js("!!document.querySelector('.filter-panel') && document.activeElement.type === 'search'"),
+      "the arrow in a heading cell opens its column's panel, with the search box ready");
+    check(await js("Array.from(document.querySelectorAll('.filter-values label')).map((l) => l.textContent.trim()).join()") ===
+      "(Select all),apple,fig,pear", "the panel lists the column's values in sorted order");
+    await type("i");
+    check(await js("Array.from(document.querySelectorAll('.filter-values label')).filter((l) => !l.hidden).map((l) => l.textContent.trim()).join()") ===
+      "(Select all),fig", "typing in the search box narrows the list shown");
+    await click(".filter-values label:not([hidden]) input[value='fig']");
+    await click(".filter-panel .filter-ok");
+    check(await visible() === 2, "unticking fig and pressing OK hides the fig row");
+    check(await js("document.querySelector('#doc th.name[data-c=\"0\"] .filter-arrow').classList.contains('on')"),
+      "and the column's arrow shows that it is narrowed");
+    await click('#doc td[data-r="0"][data-c="0"]');
+    await press("ArrowDown");
+    check(await label() === "Cell A3", "Down passes over a row the filter hides");
+    await press("Escape");
+    await click('#doc th.name[data-c="1"] .filter-arrow');
+    await click(".filter-panel summary");
+    await js(`(() => {
+      const op = document.querySelector(".filter-panel select");
+      op.value = "above";
+      document.querySelector(".filter-panel details input").value = "2";
+    })()`);
+    await click(".filter-panel .filter-ok");
+    check(await visible() === 1, "a condition on a second column narrows further: n is greater than 2");
+    await click('#doc th.name[data-c="1"] .filter-arrow');
+    await press("Escape");
+    check(await js("!document.querySelector('.filter-panel')"), "Esc closes the panel and changes nothing");
+    check(await visible() === 1, "so the rows stay as they were");
+    await click('#doc td[data-r="0"][data-c="0"]');
+    await press("Escape");
+    await menu("row-below");
+    check(await visible() === 4, "a new row shows every row again, so the new row can be seen");
+    await menu("undo");
+    await click('#doc td[data-r="0"][data-c="1"]');
+    await press("Escape");
+    await click('#doc td[data-r="0"][data-c="1"]');
+    await press(";", CTRL);
+    await press("Enter");
+    check(/^\d{4}-\d{2}-\d{2}$/.test(await js("document.querySelector('#doc td[data-r=\"0\"][data-c=\"1\"]').textContent")),
+      "Ctrl+; in a cell types today's date");
+    await click('#doc td[data-r="0"][data-c="1"]');
+    await press(":", CTRL | SHIFT);
+    await press("Enter");
+    check(/^\d{2}:\d{2}$/.test(await js("document.querySelector('#doc td[data-r=\"0\"][data-c=\"1\"]').textContent")),
+      "and Ctrl+: the time");
+    browser.answerPrompts("Q1 sales");
+    await menu("table-rename");
+    browser.answerPrompts(null);
+    check((await source()).includes(':::table name="Q1 sales"'), "a table can be named with capitals and spaces");
+    const narrow = await js("document.querySelector('#doc th.row-number').getBoundingClientRect().width");
+    check(narrow < 40, "the row numbers take only the room their digits need", String(narrow));
+    check(await js(`getComputedStyle(document.querySelector('#doc th.name')).backgroundColor !==
+      getComputedStyle(document.querySelector('#doc th.letter')).backgroundColor`),
+      "the heading row of names looks apart from the column letters");
+    await load(start);
+    const px = (c) => js(`document.querySelectorAll("#doc th.letter")[${c}].getBoundingClientRect().width`);
+    const before = await px(0);
+    const edge = await js(`(() => {
+      const r = document.querySelector('#doc .col-edge').getBoundingClientRect();
+      return [r.left + r.width / 2, r.top + r.height / 2];
+    })()`);
+    await doubleClickAt(edge[0], edge[1]);
+    await until(`document.querySelectorAll("#doc th.letter")[0].getBoundingClientRect().width !== ${before}`, 3000);
+    const fitted = await px(0);
+    const widest = await js(`(() => {
+      let w = 0;
+      for (const el of document.querySelectorAll('#doc [data-c="0"]')) {
+        const s = document.createElement("span");
+        s.className = "measure";
+        s.textContent = el.textContent;
+        el.appendChild(s);
+        w = Math.max(w, s.getBoundingClientRect().width);
+        s.remove();
+      }
+      return w;
+    })()`);
+    check(fitted < before && fitted >= widest, "a double-click on a column's border fits the column " +
+      "to its widest value", `${before} -> ${fitted}, widest ${widest}`);
+    check(/ widths="/.test(await source()), "and the widths are saved, as a drag saves them");
+    await menu("undo");
+    const cell = await js(`(() => {
+      const r = document.querySelector('#doc td[data-r="0"][data-c="0"]').getBoundingClientRect();
+      return [r.right - 2, r.top + r.height / 2];
+    })()`);
+    await doubleClickAt(cell[0], cell[1]);
+    check(await until(`/ widths="/.test(ksmd.source())`, 3000),
+      "a double-click on the border between two cells fits the column too");
+  },
+
+  // The ribbon, looks on text and cells, and copying and pasting cells as Excel does.
+  async ribbon() {
+    const pasteInto = (selector, text) => js(`(() => {
+      const data = new DataTransfer();
+      data.setData("text/plain", ${JSON.stringify(text)});
+      document.querySelector(${JSON.stringify(selector)}).dispatchEvent(new ClipboardEvent("paste",
+        { clipboardData: data, bubbles: true, cancelable: true }));
+    })()`);
+    await load(`${H}abcdef\n`);
+    await select(0, 0, 1, 4);
+    await click('.ribbon .split[data-colour="color"] .apply');
+    await saves("the ribbon's font colour colours the selected text", `${H}a[bcd]{color="#c00000"}ef\n`);
+    check(await js("getComputedStyle(document.querySelector('#doc span.look')).color") === "rgb(192, 0, 0)",
+      "and the page shows the colour");
+    await select(0, 0, 0, 6);
+    await click('.ribbon .split[data-colour="fill"] .more');
+    await click('.palette .swatches button[title="#92d050"]');
+    await saves("a colour chosen in the palette fills the selection",
+      `${H}[a]{fill="#92d050"}[bcd]{color="#c00000" fill="#92d050"}[ef]{fill="#92d050"}\n`);
+    await js(`(() => {
+      const size = document.querySelector('.ribbon [data-ribbon="size"]');
+      size.value = "14";
+      size.dispatchEvent(new Event("change"));
+    })()`);
+    await select(0, 0, 0, 6);
+    await click('.ribbon [data-cmd="look-clear"]');
+    await saves("Clear takes colours and sizes away in one step", `${H}abcdef\n`);
+    await menu("undo");
+    await saves("and one undo gives them back",
+      `${H}[a]{fill="#92d050" size=14}[bcd]{color="#c00000" fill="#92d050" size=14}[ef]{fill="#92d050" size=14}\n`);
+    await select(0, 0, 0);
+    await click('.ribbon [data-cmd="align-center"]');
+    check((await source()).startsWith(`${H}{align="center"}\n`), "Centre aligns the paragraph");
+    check(await js("document.querySelector('#doc p').style.textAlign") === "center", "and the page shows it");
+    check(await js("document.querySelector('.ribbon .table-group').hidden"),
+      "the ribbon's Table group stands only while a cell is worked in");
+
+    const table = `${H}:::table name="t"\n| "a" | "b" |\n| 1 | 2 |\n| 3 | 4 |\n:::\n`;
+    await load(table);
+    await click('#doc td[data-r="0"][data-c="0"]');
+    check(!await js("document.querySelector('.ribbon .table-group').hidden"), "and stands once a cell is opened");
+    // The open cell takes the caret out of the gap above the table, and the gap goes at once.
+    // Left to `selectionchange`, which can come a frame later, the table would move up between
+    // the measure of the next cell and the press there, and the press would land below the table.
+    check(await js("!document.querySelector('#doc .gap')"), "and the gap the caret stood in goes at once");
+    await click('#doc td[data-r="1"][data-c="1"]', SHIFT);
+    check(await js("document.querySelectorAll('#doc .in-range').length") === 4,
+      "Shift+click chooses a range of cells");
+    await click('.ribbon .split[data-colour="fill"] .apply');
+    await saves("a fill on a range fills every cell of it", `${H}:::table name="t"\n| "a" | "b" |\n` +
+      `| 1 {fill="#92d050"} | 2 {fill="#92d050"} |\n| 3 {fill="#92d050"} | 4 {fill="#92d050"} |\n:::\n`);
+    check(await js(`getComputedStyle(document.querySelector('#doc td[data-r="0"][data-c="0"]')).backgroundColor`) ===
+      "rgb(146, 208, 80)", "and the cells show it");
+    await click('.ribbon [data-cmd="align-right"]');
+    check((await source()).includes('| 1 {fill="#92d050" align="right"} |'), "Right aligns the range's cells");
+    const copied = await js(`(() => {
+      const data = new DataTransfer();
+      document.dispatchEvent(new ClipboardEvent("copy", { clipboardData: data, bubbles: true, cancelable: true }));
+      return data.getData("text/plain");
+    })()`);
+    check(copied === "1\t2\r\n3\t4\r\n", "a copy of a range gives tab-separated rows, as Excel takes them",
+      JSON.stringify(copied));
+
+    await load(table);
+    await click('#doc td[data-r="0"][data-c="0"]');
+    await pasteInto('#doc .cell-input', 'Pens\t"1,234.5"\t=A1\r\n"two\nlines"\t\t12%\r\n');
+    await saves("cells copied from Excel fill the table from the open cell, which grows",
+      `${H}:::table name="t"\n| "a" | "b" | "" |\n| "Pens" | 1234.5 | =A1 |\n| "two\\nlines" | | "12%" |\n:::\n`);
+    await menu("undo");
+    await saves("and one undo takes the paste away", table);
+    await load(`${H}Text\n`);
+    await select(0, 0, 4);
+    await pasteInto("#doc", "Item\tCount\r\nPens\t2\r\n");
+    await saves("cells pasted into text make a new table, the first row its names",
+      `${H}Text\n\n:::table name="table1"\n| "Item" | "Count" |\n| "Pens" | 2 |\n:::\n`);
   },
 
   // Column widths: a drag of the edge between two column letters, and Alt+Left and Alt+Right in a
@@ -335,9 +714,9 @@ const sections = {
     check(Math.abs(after - before - 60) <= 8, "column A grows by the distance dragged",
       `${before} -> ${after}`);
     await cellsKept("the cells and the formula's value stay as they were");
-    await click('[data-cmd="undo"]');
+    await menu("undo");
     await saves("one undo gives the widths before the drag back", weighted);
-    await click('[data-cmd="redo"]');
+    await menu("redo");
     await settle();
     check((await widths()).join() === dragged.join(), "and redo the dragged ones again");
     await drag('#doc [data-edge="0"]', 0);
@@ -358,7 +737,7 @@ const sections = {
     check(more.length === 3 && more[1] > more[0] && more[0] * 3 === more[1] + more[2],
       "Alt+Right in a cell makes its column wider, from the column on its right",
       JSON.stringify(more));
-    await click('[data-cmd="undo"]');
+    await menu("undo");
     await settle();
     const wider = await widths();
     check(wider[1] > wider[0] && more[1] / (more[1] + more[2]) > wider[1] / (wider[1] + wider[2]),
@@ -368,7 +747,7 @@ const sections = {
     const narrower = await widths();
     check(narrower[1] < narrower[0] && narrower[0] * 3 === narrower[1] + narrower[2],
       "Alt+Left makes it narrower", JSON.stringify(narrower));
-    for (let i = 0; i < 4; i++) await click('[data-cmd="undo"]');
+    for (let i = 0; i < 4; i++) await menu("undo");
     await saves("undo goes back one press at a time", weighted);
     await openCell(2);
     await resized(() => press("ArrowRight", ALT));
@@ -391,6 +770,48 @@ const sections = {
     check(await until("document.getElementById('status').textContent.startsWith('A table with one column')",
       3000), "a table of one column has no width to share, and the page says so");
     await saves("and nothing changes", single);
+  },
+
+  // A column's number format: what the cells show, the cell's own number when it opens, undo,
+  // the source, and a copy that keeps every digit.
+  async numberFormats() {
+    const table = `${H}:::table name="t"\n| "a" | "b" |\n| 1234.5 | =A1/10000 |\n| "x" | |\n:::\n`;
+    const td = (r, c) => js(`document.querySelector('#doc td[data-r="${r}"][data-c="${c}"]').textContent`);
+    await load(table);
+    await click('#doc td[data-r="0"][data-c="0"]');
+    await press("Escape");
+    await menu("format-grouped");
+    await saves("Thousands gives the chosen column a format in the source",
+      `${H}:::table name="t" formats="grouped:2,"\n| "a" | "b" |\n| 1234.5 | =A1/10000 |\n| "x" | |\n:::\n`);
+    check(await td(0, 0) === "1,234.50" && await td(1, 0) === "x",
+      "the number shows with a separator and two places; text shows as it is");
+    await click('#doc td[data-r="0"][data-c="1"]');
+    await press("Escape");
+    await menu("format-percent");
+    check(await td(0, 1) === "12%" && await td(1, 1) === "", "a formula's result shows as a percent; an empty cell stays empty");
+    await menu("format-more");
+    check(await td(0, 1) === "12.3%", "More decimal places shows one more");
+    browser.answerPrompts("jpy");
+    await menu("format-currency");
+    browser.answerPrompts(null);
+    check(await td(0, 1) === "¥0", "a currency typed in lower case is taken, with the places its money has");
+    await menu("undo");
+    check(await td(0, 1) === "12.3%", "each change is one step of undo");
+    await click('#doc td[data-r="0"][data-c="0"]');
+    check(await js("document.querySelector('#doc .cell-input').value") === "1234.5",
+      "an open cell edits the number it holds, not the shown text");
+    await press("Escape");
+    const copied = await js(`(() => {
+      const data = new DataTransfer();
+      document.dispatchEvent(new ClipboardEvent("copy", { clipboardData: data, bubbles: true, cancelable: true }));
+      return data.getData("text/plain");
+    })()`);
+    check(copied === "1234.5\r\n", "a copy takes the number as calculated, so no digit is lost", JSON.stringify(copied));
+    await menu("format-none");
+    await click('#doc td[data-r="0"][data-c="1"]');
+    await press("Escape");
+    await menu("format-none");
+    await saves("General on each column leaves the format out of the source", table);
   },
 
   async examples() {
@@ -428,15 +849,27 @@ const sections = {
   },
 };
 
+Object.assign(sections, tools({ page, js, settle, until, press, type, select, click, menu, load, saves }));
+
 try {
-  await page("Page.navigate", { url: pathToFileURL(path.resolve(pageFile)).href });
-  await until("document.documentElement.dataset.ready === '1'");
-  for (const [name, run] of Object.entries(sections)) {
-    verdict.part = name;
-    try {
-      await run();
-    } catch (e) {
-      check(false, "the section ran to its end", e.message);
+  const opened = await page("Page.navigate", { url: pathToFileURL(path.resolve(pageFile)).href });
+  // A page that never starts fails once, saying what the browser showed, rather than in every
+  // section after it.
+  if (opened.errorText || !await until("document.documentElement.dataset.ready === '1'")) {
+    const seen = await js("JSON.stringify({ url: location.href, state: document.readyState, " +
+      "ready: document.documentElement.dataset.ready, scripts: document.scripts.length })")
+      .catch((e) => `unreadable: ${e.message}`);
+    verdict.part = "start";
+    check(false, "the page opened from a file starts",
+      [opened.errorText || "no navigation error", seen, ...page.errors.slice(0, 3)].join("; "));
+  } else {
+    for (const [name, run] of Object.entries(sections)) {
+      verdict.part = name;
+      try {
+        await run();
+      } catch (e) {
+        check(false, "the section ran to its end", e.message);
+      }
     }
   }
   await served(browser, pageFile, path.join(work, "served"), kssrv);

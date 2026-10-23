@@ -59,6 +59,8 @@ priv const EVP_PKEY_ED25519: I32 = 1087 //< EVP_PKEY_ED25519 (NID_ED25519)
 priv const MBSTRING_ASC: I32 = 0x1001 //< MBSTRING_ASC
 
 priv enum Peer_act //< what the peer does once a client connects
+    silent //< holds the TCP connection without a TLS response
+    trickle //< sends an incomplete TLS record a byte at a time
     no_tls //< reads the ClientHello and closes, speaking no TLS
     refused //< offers its certificate, which the client refuses
     echo_then_close //< answers `PING` with `PONG`, then closes with a close_notify
@@ -70,6 +72,7 @@ priv struct Tls_peer //<
     listener: net.Tcp_listener$@
     ctx: tls.SSL_CTX$@ //< null for `.no_tls`
     act: Peer_act
+    closed: Bool //< the deadline test peer saw EOF or a socket error, not its watchdog
 
 priv const PING: U8[] = "ping" //< what the client sends
 priv const PONG: U8[] = "pong" //< what the peer answers
@@ -78,6 +81,26 @@ priv const PONG: U8[] = "pong" //< what the peer answers
 fn tls_test_peer(peer: Tls_peer$@): Void$@
     conn: = peer.listener.accept() catch panic("accept should succeed once a client connects")
     switch peer.act
+    case .silent, .trickle
+        buf: U8[4096] = ::{}
+        first: = conn.read_for(U8$[]::buf, 5000) catch -1
+        if first == 0
+            peer.closed = true
+        if peer.act == Peer_act.trickle
+            // A valid record header followed by only part of its body keeps SSL waiting.
+            head: U8[5] = ::{ 0x16, 0x03, 0x03, 0, 128 }
+            for b in head
+                conn.write(U8[]::{ b }) catch
+                    break
+                sys.sleep_ms(30)
+        // The client must close on its deadline. The timeout also bounds a broken implementation.
+        for
+            n: = conn.read_for(U8$[]::buf, 5000) catch e
+                peer.closed = e != net.Net_error.timed_out
+                break
+            if n == 0
+                peer.closed = true
+                break
     case .no_tls
         // Reads and discards the client's ClientHello, acting as a peer that speaks no TLS.
         buf: U8[256] = ::{}
@@ -366,3 +389,48 @@ fn test_tls_write_to_a_gone_peer_raises_no_sigpipe()
     assert(failed >= 2, "a write to a peer that is gone should fail")
     assert(seen == 0, "a write to a peer that is gone should fail as a value, raising no SIGPIPE")
     verdict.pass("A write to a peer that is gone fails as a value, and raises no SIGPIPE.")
+
+fn test_tls_handshake_deadline()
+    verdict.start("[Tls] silent and trickling peers cannot extend the handshake deadline")
+    acts: = Peer_act[]::{ .silent, .trickle, .silent, .silent }
+    budgets: = I32[]::{ 100, 100, 0, -1 }
+    for i in Range.asc(acts.len)
+        defer listener: = listen_on()
+        port: = listener.port() catch panic("listener has a port")
+        $peer: = Tls_peer::{ .listener = listener, .ctx = null, .act = acts[i] }
+        worker: = thread.Thread.spawn<|Tls_peer|>(tls_test_peer, peer@) catch panic("start peer")
+        start: = sys.mono_us()
+        $timed_out: = false
+        s: = tls.Tls_stream.connect("127.0.0.1", port, budgets[i]) catch e
+            timed_out = e == tls.Tls_error.handshake_timed_out
+            fallback null
+        elapsed: = sys.mono_us() - start
+        if s != null
+            s.free()
+        worker.join_and_free()
+        assert(timed_out, "an unfinished handshake returns handshake_timed_out")
+        assert(peer.closed, "timeout cleanup closes TCP before the peer watchdog")
+        assert(elapsed < 4000000I64, "the client returns before the peer's five-second watchdog")
+    verdict.pass("silent and trickling peers time out, and failure cleanup closes the socket")
+
+fn test_tls_handshake_write_deadline()
+    verdict.start("[Tls] a full send buffer cannot extend the handshake deadline")
+    defer listener: = listen_on()
+    port: = listener.port() catch panic("listener has a port")
+    defer client: = net.Tcp_stream.connect("127.0.0.1", port) catch panic("connect locally")
+    defer peer: = listener.accept() catch panic("accept locally")
+    client.set_nonblocking() catch panic("make the sender non-blocking")
+    defer arena: = Arena(32 * 1024 * 1024)
+    len: Sz = 16 * 1024 * 1024
+    bytes: = U8$[]::{ .ptr = U8$@::arena.alloc(len), .len = len }
+    for i in Range.asc(len)
+        bytes[i] = 'x'
+    start: = sys.mono_us()
+    sent: = tls.send_before(client, bytes, start + 100000I64)
+    elapsed: = sys.mono_us() - start
+    assert(!sent && elapsed >= 100000I64 && elapsed < 4000000I64,
+        "the stalled partial write ends at the deadline")
+    buf: U8[32] = ::{}
+    n: = peer.read_for(U8$[]::buf, 1000) catch panic("some bytes were sent before the stall")
+    assert(n > 0 && buf[0] == 'x', "the deadline preserves progress before the send buffer fills")
+    verdict.pass("a partially sent buffer times out when the peer does not read")

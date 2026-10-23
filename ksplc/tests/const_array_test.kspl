@@ -142,6 +142,27 @@ fn test_const_struct_array()
     assert(total == 3, "a top-level const array of structs must be readable")
     assert(CONST_ROWS[0].name.equals("a"), "element fields must survive the emission order")
     verdict.pass("")
+
+// ==========================================
+// A top-level slice over an array literal (`T[]::{ … }`) points at an array that has no name.
+// genllvm writes that array as a constant of its own: an LLVM global's initializer cannot build
+// one in place, as C's file-scope compound literal does (emit_llvm_const_postfix in
+// gen/llvm/decl.kspl). Writing it in place made the `.ll` fail to assemble.
+// ==========================================
+priv const SLICE_NUMS: F64[] = F64[]::{ 1.5, 2.5 }
+priv const SLICE_WORDS: U8[][] = U8[][]::{ "ab", "c" }
+priv const SLICE_ROWS: Const_row[] = Const_row[]::{::{ .name = "x", .n = 3 } }
+priv const SLICE_NESTED: I32[][] = I32[][]::{ I32[]::{ 1, 2 }, I32[]::{ 3 } }
+priv $slice_var: I32[] = I32[]::{ 4, 5 }
+
+fn test_const_slice_over_an_array_literal()
+    verdict.start("[genllvm] a top-level slice over an array literal test...")
+    assert(SLICE_NUMS.len == 2 && SLICE_NUMS[1] == 2.5, "a slice of numbers must keep its elements")
+    assert(SLICE_WORDS.len == 2 && SLICE_WORDS[0].equals("ab"), "and a slice of strings")
+    assert(SLICE_ROWS[0].name.equals("x") && SLICE_ROWS[0].n == 3, "and a slice of structs")
+    assert(SLICE_NESTED[0][1] == 2 && SLICE_NESTED[1][0] == 3, "a slice in a slice has its own")
+    assert(slice_var.len == 2 && slice_var[0] == 4, "a `$` variable's slice is the same shape")
+    verdict.pass("")
 fn test_multi_dim_array() //< that multi-dimensional fixed-length arrays share one struct tag in C
     //< Caution: **Choose the tag only after stripping every level of the element's immutable
     //< qualifier** (gen/c/decl.kspl). Test both an immutable binding and a mutable one. The

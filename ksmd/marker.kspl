@@ -1,10 +1,10 @@
 //< Which line starts a block other than prose, as the reader reads it and the writer escapes it
-//< Also the small scans the readers share.
+//< Also the small scans the readers share, and the order text sorts and compares in.
 import "std/chars"
 
 fn starts_block(text: U8[]): Bool //< whether a line begins a block other than prose
     return text.starts_with("#") || text.starts_with("```") || text.starts_with(":::") ||
-        text.starts_with("|") || is_list_marker(text)
+        text.starts_with("|") || text.starts_with("{") || is_list_marker(text)
 
 fn is_list_marker(text: U8[]): Bool //< `-`, or digits and `.`, then a space or the line's end
     $mark: Sz = 1
@@ -61,3 +61,12 @@ fn quoted_end(text: U8[], from: Sz): Sz //<
     for i < text.len && text[i] != '"'
         i += 2 if text[i] == '\\' else 1
     return i if i < text.len else text.len
+
+fn compare_text(a: U8[], b: U8[]): I32 //<
+    //< Below zero when `a` comes first: letters A to Z without regard to case, then other bytes
+    for i in Range.asc(a.len if a.len < b.len else b.len)
+        x: = a[i].to_lower()
+        y: = b[i].to_lower()
+        if x != y
+            return -1 if x < y else 1
+    return -1 if a.len < b.len else 1 if a.len > b.len else 0

@@ -55,7 +55,7 @@ These reading rules settle cases the notation above leaves open:
 * Only a run of three with no mark open has two readings. Strong emphasis goes outside, unless the next run on the line can close only the other order. So `***a** b*` reads as emphasis around strong emphasis, and `***a***` as strong emphasis around emphasis.
 * A code span ends at the next run of exactly as many backticks. One space at each end is dropped when both ends have one, so a span can start or end with a backtick. The writer chooses the shortest run that the code does not hold.
 * A link's label is not empty and holds no link. Its destination follows at once in parentheses, without spaces or parentheses, and starts with `https:`, `http:`, `mailto:` or `#`.
-* A clause's kind follows `:::` at once. Its attributes may come in any order, separated by one or more spaces. The writer writes them in a fixed order with one space: `name`, `widths`; `path`; `src`, `alt`, `caption`.
+* A clause's kind follows `:::` at once. Its attributes may come in any order, separated by one or more spaces. The writer writes them in a fixed order with one space: `name`, `widths`, `formats`; `path`; `src`, `alt`, `caption`.
 * A clause closes at a line that is exactly `:::`. A table row outside a table clause is refused.
 * `name`, `path` and `src` must not be empty. `alt` may be empty, for an image that only decorates. An empty `caption` is refused: leave the attribute out.
 * A table may have a header and no data rows, so an editor can create an empty one. Every header cell is quoted text.
@@ -75,6 +75,8 @@ These reading rules settle cases the notation above leaves open:
 | Emphasis | `*text*` | No newline inside a mark |
 | Strong emphasis | `**text**` | No newline inside a mark |
 | Link | `[label](destination)` | No nested links; spaces and parentheses in destinations are percent-encoded |
+| Span with a look | `[text]{color="#c00000" fill="#fff2cc" size=14}` | A link may carry a look too: `[label](destination){...}` |
+| Aligned paragraph or heading | A line `{align="center"}` straight before it | `left`, `center` or `right` |
 | Inline code | A matching run of backticks around literal text | Use a longer run for embedded backticks; no newline |
 | Paragraph | Other text | Inline content and explicit hard breaks |
 
@@ -84,9 +86,28 @@ A backslash escapes the following ASCII punctuation outside code. Escape a block
 
 Visual typing inserts literal text. Typing `#`, `*` or `:::` does not automatically change structure. Formatting commands change the model, and the writer adds the required source delimiters and escapes. Pasted plain text stays text. A rich-text paste is accepted only through a conversion that retains supported content; unsupported content must be reported before insertion.
 
+### Looks: colours, font size and alignment
+
+**A look is direct formatting written in braces after what it formats**, as Word's and Excel's direct formatting is held beside the text. A change of look then changes one line of the file. Pandoc writes spans the same way.
+
+| Part | Written | Meaning |
+| :-- | :-- | :-- |
+| `color` | `"#c00000"` | The text's colour: `#` and six hex digits |
+| `fill` | `"#fff2cc"` | The background's colour |
+| `size` | `14`, `10.5` | The font size in points, from 6 to 72, whole or ending in `.5` |
+| `align` | `"left"`, `"center"`, `"right"` | A cell's or a paragraph's alignment; text in a span has none of its own |
+
+* **Values are written as attributes are**: strings in JSON quotes, numbers bare. One form for each value keeps the canonical file unique.
+* **The writer writes the parts in that fixed order**, and colours in lower case. A look with no part is refused, so `{}` never stands in a file.
+* **A table cell writes its look after its value**: `| 120 {color="#c00000"} |`. An empty cell can carry a look alone: `| {fill="#fff2cc"} |`. A `{` inside quoted text is text.
+* **A span is brackets with a look and no destination**: `[text]{...}`. Brackets hold no other brackets, so a link inside coloured text carries the look on its own brackets.
+* **A paragraph's or a heading's alignment stands on a line of braces right before it.** At the end of the text, an ordinary `{` in prose could not be told apart. That line holds only `align`; colour text with a span.
+* **A `{` that would read as a look is escaped**: at the start of a paragraph's line, and straight after brackets. Anywhere else it is text.
+* **A cell's new value keeps its look**, as a spreadsheet's cell keeps its format. A look is undone and redone as any edit is.
+
 ## Tables and calculations
 
-A table clause requires `name="budget"`. Names match `[a-z][a-z0-9_]*` and are unique within one source file. A table has a header row followed by data rows. The header contains quoted strings and is not part of the cell address space.
+A table clause requires `name="budget"`. A name is 1 to 255 bytes of any text but line breaks and other control characters, such as `Q1 sales`. Names are unique within one source file. A table has a header row followed by data rows. The header contains quoted strings and is not part of the cell address space.
 
 Every row starts and ends with `|`. Separators outside quoted strings split cells. Every row has the same positive number of cells. There is no Markdown alignment or separator row.
 
@@ -101,7 +122,7 @@ Text cells need quotes, so numeric-looking identifiers and a leading `=` are una
 
 Addresses start at `A1`, the first data cell. `$A$1`, `$A1` and `A$1` express fixed axes when copying formulas. Within one source, `budget.D1` names a cell in another table. Cross-file formulas are excluded initially, including references into an include.
 
-A formula holds numbers, cell references, rectangular ranges, parentheses, unary minus, `+`, `-`, `*`, `/`, and `sum`, `min`, `max`, `count`, `average`. Function names are lowercase. Multiplication and division bind before addition and subtraction. Other arithmetic groups left to right; ranges appear only as function arguments. There are no user functions.
+A formula holds numbers, text in quotes, `true` and `false`, cell references, rectangular ranges, parentheses, unary minus, `+`, `-`, `*`, `/`, the comparisons `=`, `<>`, `<`, `<=`, `>`, `>=`, the words `and`, `or` and `not`, and the functions `sum`, `min`, `max`, `count`, `average`, `if`, `round`, `sum_if`, `count_if`, `average_if` and `today`. Function names are lowercase. Multiplication and division bind before addition and subtraction, and both before a comparison. `not` binds before `and`, and `and` before `or`. Other arithmetic groups left to right. A range stands only as a function's argument, or in the condition of `sum_if`, `count_if` and `average_if`. There are no user functions.
 
 An empty cell becomes zero in scalar arithmetic. Numeric aggregates ignore empty and text cells; `count` counts numbers. An empty numeric set gives zero for `sum` and `count`, and an error for `min`, `max` and `average`. Scalar arithmetic on text is a type error. Division by zero, non-finite results, invalid references and cycles have distinct displayed errors. Errors in referenced cells propagate. Dates remain text in version 1.
 
@@ -110,18 +131,37 @@ An empty cell becomes zero in scalar arithmetic. Numeric aggregates ignore empty
 * A number has a cell number's shape without its sign: `2.5`, `1e3`, `0.5`. A sign is unary minus.
 * A cell is capital column letters, then a row number from 1 without a leading zero: `D1`, `AA12`. A `$` before either part fixes that part for copying.
 * `budget.D1` names a cell of another table in the same source. No space stands around the `.`.
+* A name that is not plain, a lowercase letter followed by lowercase letters, digits and `_`, stands in JSON quotes: `"Q1 sales".D1`. The quotes are the ones the `name` attribute uses, so one quoting rule serves the whole file. A table row already skips text in quotes, so a `|` inside a name cannot split the row.
 * A range is two cells joined by `:` without spaces: `D1:D3`. A table's name stands once, before the range: `budget.D1:D3`.
 * A range is the rectangle between its corners, which can come in either order. The writer saves the upper left corner first.
 * `#REF!` stands where a reference lost its row or column. The reader and writer keep it, and it calculates as `#REF!`.
+* **Text stands in JSON quotes, with JSON's escapes:** `"Pens"`, `"say \"hi\""`. A `|` inside the quotes stays in the cell, as in a text cell.
+* **Quotes followed at once by `.` and a cell name a table; any other quotes hold text.** So `"Q1 sales".D1` is a cell, and `"Q1 sales"` alone is text. Text has no use before `.`, so the reader never has to guess.
+* **`and`, `or`, `not`, `true` and `false` are words.** A `|` splits a table row unless it stands in quotes, so the symbols `||` and `|` cannot serve. Words also read as the sentence a person would say.
+* **A comparison takes one step: `1 < A1 < 9` does not read.** Written so, it would compare `true` with 9. Write `1 < A1 and A1 < 9`.
 * Spaces and tabs can stand between tokens. A function takes one or more arguments, separated by `,`.
-* A formula nests at most 64 levels. The formula itself is one level, and each bracket, function and unary minus adds one.
+* A formula nests at most 64 levels. The formula itself is one level, and each bracket, function, unary minus and `not` adds one.
 
 ### Values and errors
 
-A cell's value is empty, a number, text or an error. A formula's value is a number or an error, so `=A1` with text in A1 is `#VALUE!`.
+A cell's value is empty, a number, text, `true` or `false`, or an error. A formula's value is a number, text, `true` or `false`, or an error. A formula that gives an empty cell's value, such as `=A1`, shows 0, since an empty cell is 0 in arithmetic.
 
-* **Text in arithmetic is an error, even text that looks like a number.** Quotes already mark a cell as text, so converting it would only undo a choice the writer made.
-* **A reference alone as a function argument is a set of cells.** The function leaves out the set's empty cells and text. Any other argument calculates as arithmetic, so `sum(A1+0)` with text in A1 is `#VALUE!`.
+**Decided: a formula's value is no longer only a number or an error.** A choice such as `if(E1 < today(), "late", "")` gives text, and a comparison gives `true` or `false`. So `=A1` with text in A1 now gives that text, where it gave `#VALUE!` before.
+
+* **Kinds are never converted into each other.** Text and `true` or `false` in arithmetic are `#VALUE!`, even text that looks like a number. Quotes already mark a cell as text, so converting it would only undo a choice the writer made. A `true` counted as 1 would give a total that looks right and is not.
+* **`and`, `or` and `not` take only `true` and `false`.** A number or text there is `#VALUE!`; an empty cell is `false`.
+* **Two values of different kinds are unequal.** `=` gives `false` and `<>` gives `true`. `<`, `<=`, `>` and `>=` between them are `#VALUE!`: an order between a number and text would hide a mistake.
+* **An empty cell takes the kind of the other side: 0, empty text or `false`.** So `A1 = ""` and `A1 = 0` both hold for an empty A1, as an empty cell is 0 in arithmetic.
+* **Text compares without regard to case,** in the order the sort uses: letters A to Z, then other bytes by their value. So `"pens" = "Pens"` is `true`, as the sort and the filter treat them alike.
+* **`false` comes before `true`** when they are ordered, as they sort.
+* **`and` calculates its right side only when its left side is `true`, and `or` only when its left side is `false`.** So `B1 <> 0 and A1 / B1 > 2` is `false`, not `#DIV/0!`, when B1 is 0. An error or a wrong kind on the left decides too.
+* **`if(condition, then, else)` calculates only the branch it takes.** So `if(C1 = 0, 0, B1 / C1)` is 0, not `#DIV/0!`, when C1 is 0. An error in the condition is the result, and neither branch is calculated.
+* **`if` takes all three arguments.** A missing `else` would need a value of its own, and `false` in a column of numbers reads as a mistake. Two arguments are `#SYNTAX!`.
+* **The branch not taken must still read.** `if(true, 1, 2 +)` is `#SYNTAX!`, as is an unknown function there: a slip shows at once, not on the day the condition changes.
+* **`round(x, places)` changes the value, where a number format changes only what shows.** So a total of rounded prices matches the prices shown.
+* **`round` rounds the shortest decimal digits of the number, half away from zero, as a number format does.** So `round(2.675, 2)` is 2.68, the digits a person reads, rounded as they round them. The result is the F64 nearest to those digits.
+* **`places` is a whole number from -15 to 15; anything else is `#NUM!`.** A negative `places` rounds to tens, hundreds and on: `round(1250, -2)` is 1300. An F64 holds at most 17 significant digits, so a carry cannot overflow.
+* **A reference alone as a function argument is a set of cells.** The function leaves out the set's empty cells, text, and `true` and `false`. Any other argument calculates as arithmetic, so `sum(A1+0)` with text in A1 is `#VALUE!`.
 * **`min`, `max` and `average` of no numbers are `#EMPTY!`, not 0.** A zero would hide that a column holds no data yet.
 * **An error in a referenced cell carries into every formula that uses it, `count` included.** A count beside a broken cell would otherwise look right.
 * **Of two errors, the left one in the formula comes first.** In a range, the first in reading order comes first: row by row, each from the left.
@@ -131,20 +171,77 @@ Each error has its own mark, since each is fixed differently. A cycle shown as 0
 
 | Mark | The cause |
 | :-- | :-- |
-| `#VALUE!` | Text in arithmetic |
+| `#VALUE!` | A value of the wrong kind: text or `true` and `false` in arithmetic, a number or text as a condition, or two kinds ordered |
 | `#DIV/0!` | A division by zero |
-| `#NUM!` | A number or a result too large for an F64 |
+| `#NUM!` | A number or a result too large for an F64, or `round`'s places not a whole number from -15 to 15 |
 | `#REF!` | A reference to no cell: `#REF!`, a cell outside its table, or a table name this source does not hold |
 | `#CYCLE!` | The cell depends on itself, directly or through other cells |
-| `#EMPTY!` | `min`, `max` or `average` of no numbers |
-| `#SYNTAX!` | The formula does not read: an unknown function, a range outside a function, a missing bracket or operand, or more than 64 levels |
+| `#EMPTY!` | `min`, `max`, `average` or `average_if` of no numbers |
+| `#SHAPE!` | A range in the condition of `sum_if`, `count_if` or `average_if` that is not one column as tall as the values, or a condition with no range |
+| `#SYNTAX!` | The formula does not read: an unknown function, a range outside a function or a condition, a missing bracket or operand, or more than 64 levels |
+
+**Decided: `#SHAPE!` is a new mark.** A condition's ranges that do not match the values are fixed by changing a range, which no other mark asks for.
+
+### Totals by a condition
+
+`sum_if(values, condition)` adds the numbers in `values` on the rows where the condition holds. `count_if` counts those numbers. `average_if` gives their average, or `#EMPTY!` when there are none, as `average` does.
+
+```text
+=sum_if(D1:D9, B1:B9 = "Pens")
+=count_if(A1:A9, C1:C9 > 5 and B1:B9 <> "Done")
+=average_if(D1:D9, B1:B9 = "Pens" or B1:B9 = "Ink")
+```
+
+* **The condition is an ordinary expression, not text read again later.** A range in it is read as its cell on each row in turn. A comparison with a cell is then written as anywhere else: `B1:B9 = E1`.
+* **`and`, `or` and `not` join conditions,** so one function serves one condition or many. A second set of functions for several conditions would give two ways to write one thing.
+* **The values come first in all three.** One order cannot be swapped by mistake.
+* **`values` is a cell or a range, and can be several columns wide.** Each row adds its cells from the left. Its empty cells, text, and `true` and `false` are left out, as in `sum`.
+* **Every range in the condition is one column wide and as tall as `values`.** Its rows pair with the rows of `values` in order. Any other range gives `#SHAPE!`: a range quietly cut or stretched would add the wrong rows.
+* **A condition holds at least one range, or the result is `#SHAPE!`.** Without one, the condition is the same on every row and takes all rows or none. That is nearly always a range written as a cell.
+* **A cell alone in the condition is the same on every row.** `B1:B9 = E1` compares each row with E1.
+* **Inside the condition, a range alone as a function's argument is still a set of cells.** `D1:D9 > average(D1:D9)` compares each row with the average of them all.
+* **The condition takes only `true` and `false`; an empty result is `false`.** A number or text there is `#VALUE!`.
+* **The values on a row are read only where the condition holds,** as `if` reads only the branch it takes. An error on a row left out does not show. A total row inside its own range is no cycle when the condition leaves its row out.
+* **Errors carry row by row from the top:** first the condition's, then the values' on that row from the left. An error in a value on a row that holds carries, `count_if` included.
+
+### Number formats
+
+**A column's number format sets how its numbers show; each cell keeps the number it holds.** The table's `formats` attribute holds one entry per column, as `widths` does:
+
+```text
+:::table name="budget" formats=",grouped:2,percent:1,currency:USD:2"
+```
+
+| Entry | Shows 1234.5 as | Shows -0.125 as |
+| :-- | :-- | :-- |
+| Nothing | The number as calculated | The number as calculated |
+| `number:2` | `1234.50` | `-0.13` |
+| `grouped:2` | `1,234.50` | `-0.13` |
+| `percent:1` | `123,450.0%` | `-12.5%` |
+| `currency:USD:2` | `$1,234.50` | `-$0.13` |
+
+* **Each entry names its kind and its decimal places, from 0 to 9.** No part is left to a default, so one format has one spelling. A short word replaces a code of `#`, `0` and `;` that a person has to decode.
+* **A format belongs to a column, not to a cell.** A column holds one kind of value, so a new row shows like the rows above it. The source then holds one entry per column, not one per cell of 10,000 rows.
+* **A column without a format has an empty entry.** `formats` stands only while some column has a format; the reader refuses one whose entries are all empty. A wrong entry is refused at its own column on the line.
+* **Every kind but `number` puts a `,` between each three digits.** `percent` shows the number times 100: the decimal point moves two places, so 0.07 shows as exactly `7%`.
+* **The decimal point is always `.` and the separator `,`, the characters the source and a paste already use.** So every reader sees the same text in the same file. A setting per document or per machine would show one file in two ways.
+* **A currency is the three capital letters of ISO 4217.** USD, EUR, JPY, GBP, CNY, KRW, INR, CAD and AUD show their English symbols. `CA$` and `CN¥` keep two currencies that share a symbol apart. Any other code shows itself and a no-break space, as `CHF 12.00`.
+* **A minus sign stands first, before a symbol.** A number that rounds to zero shows no minus: `-0.00` would read as a value below zero.
+* **Rounding acts on the shortest decimal digits of the number, and a half goes away from zero.** So 2.675 shows as `2.68`, the digits a person reads rounded as they would round them. The binary value of 2.675 is a little less, and rounding that would show `2.67`. A half rounds up because only the shown text is rounded: a sum still adds the stored numbers. A formula's `round` follows the same rule, in the same code.
+* **Text, empty cells and errors in a formatted column show as they are.** A formula's number shows in the column's format. The header's names never change.
+* **A typed `$12` or `12%` stays text,** as any other typed text does ("How the editor changes a document" below). The format gives the symbol; the cell holds the number.
+* **An open cell edits the number it holds, not the shown text.** A format hides digits, so the cell's editor shows them all.
+* **A new column has no format, and a moved or removed column takes its format with it.** A new column's values are not known yet, so no format is guessed for them.
+
+`ksmd/format.kspl` reads, writes and shows a format. `edit.set_format` sets or clears the format of a run of columns, and `edit.step_places` shows one more or one fewer place. Each is one step of undo.
 
 ### How references follow edits
 
-Each row and column of a table holds an identity that the source does not show. A reference holds the identities of its cells, and the writer writes the coordinates they have now. The model is the only authority: calculated values are never stored in it. `ksmd/edit.kspl` holds the operations an editor calls: insert, remove and move a row or a column, set a cell and copy a cell.
+Each row and column of a table holds an identity that the source does not show. A reference holds the identities of its cells, and the writer writes the coordinates they have now. The model is the only authority: calculated values are never stored in it. `ksmd/edit.kspl` holds the operations an editor calls: insert, remove and move a row or a column, sort the rows, set a cell and copy a cell.
 
 * **Insertion and movement keep every reference on its cells.** A range spans its two corners, so a row inserted between them joins it. A row inserted after the last corner stays outside; to grow a range at its end, insert inside it.
 * **A range's corner follows its row or column.** When a corner's row moves, the range spans the corners' new places.
+* **A sort moves each row with its identity.** A formula keeps naming the cells it named before, and its written references change to their rows' new places. A formula that names its own row, such as `=B1*C1` in row 1, still names its own row after the sort.
 * **Removal turns a reference to the removed line into `#REF!`.** A range's corner on that line moves one line toward the other corner. A range with no line left becomes `#REF!`.
 * **`$` acts only on copying.** A copy shifts each part without `$` by the distance copied, and a part with `$` keeps its row or column. A shift outside the table gives `#REF!`.
 * **A reference without a table's name names a cell of the table that holds the formula.** So a copy into another table names a cell there.
@@ -155,12 +252,35 @@ Each row and column of a table holds an identity that the source does not show. 
 
 ### How tables calculate
 
-Calculation (`ksmd/calc.kspl`) reads only the model. It opens no file, and its results stand apart from the document. It calculates every table of a source together, so a reference into another table and a cycle through two tables are both seen.
+Calculation (`ksmd/calc.kspl`) reads the model and one input: the date the document was opened. It opens no file, and its results stand apart from the document. It calculates every table of a source together, so a reference into another table and a cycle through two tables are both seen.
 
 * **A cell calculates when a formula first needs it.** So a formula can name a later row, and the order of rows does not matter.
 * **A cell reached again while it calculates is a cycle.** Every cell on the cycle shows `#CYCLE!`, and the error carries into the cells that use them.
+* **Only what is calculated is followed.** A cell named in a branch `if` does not take, or on the side `and` or `or` skips, is not reached. So `=if(A1 > 0, B1, 0)` in B1 is a cycle while A1 is above 0, and 0 otherwise.
 * **A chain deeper than 256 steps is set aside, and its deepest cell calculates first.** A step is a cell or a level of a formula. So a running total down 10,000 rows calculates without exhausting the stack.
 * **After an edit, the whole source calculates again.** The table limits bound that cost; a partial recalculation waits for a measured need.
+* **A condition of `sum_if`, `count_if` or `average_if` calculates once for each row of its values.** So one such formula over 10,000 rows calculates its condition 10,000 times.
+
+### Today's date
+
+**Decided: calculation takes the date the page opened the document as an input, and reads no other outside state.** `today()` gives that date as text, `2026-10-23`, the form Ctrl+; types.
+
+* **The date stays the same while the document is open,** after any edit. It moves the next day, at the next opening. A value that changed between two edits would surprise the person who made neither change.
+* **Calculation reads no clock.** The page reads the date when it opens a document and hands it in, as `calculate(doc, today)`. So the same document and date always give the same values, and a test passes a fixed date.
+* **An included document calculates with the date of the document that includes it.** One view shows one date.
+* **`today()` is text, since dates are text in version 1.** The ISO form compares in date order, so `E1 < today()` works on a date typed with Ctrl+;. Days between two dates need a date type, which is a separate design change.
+* **Ctrl+; and `today()` differ on purpose.** Ctrl+; types a fixed date into a cell, and `today()` is the date of each opening.
+
+### What formulas leave for later
+
+These were weighed and left out, so one way to write each thing stays:
+
+* `ifs(c1, v1, c2, v2, …, otherwise)`, for a chain of choices. A nested `if` writes the same now.
+* `lookup(key, keys, values, otherwise)`, to find a value by its key in another column, exact by default.
+* `let(name, value, expression)`, for long formulas. It needs names inside a formula, which ksmd does not have.
+* Methods after a dot, as `B1.round(2)`. They would be a second way to write `round(B1, 2)`, and `.` already joins a table's name to a cell.
+* A condition written as text, as `">5"`, and a second set of functions for several conditions. `sum_if` takes an expression and joins conditions with `and` and `or`.
+* A `today()` that moves while the document is open, and a date type with days between dates.
 
 ## Includes and images
 
@@ -287,7 +407,7 @@ Undo and redo put back the selection each step started or ended with. A new acti
 
 `ksmd/port/web/` holds the page: `bridge.kspl` and `view.kspl` built as wasm32, and the script and style that show the model. `make ksmd-web` builds it as `out/ksmd/web/ksmd.html`.
 
-**Text arrives through `beforeinput`, which the page cancels.** The page runs the matching action, renders the blocks it changed, and puts the selection back from model spots. So the page keeps no edit the browser made, and the browser's own undo has nothing to undo. A dropped item is refused. Key presses carry the commands. Ctrl+B, Ctrl+I, Ctrl+E and Ctrl+K set marks, and Ctrl+Alt+0 to 6 make a paragraph or a heading. Tab and Shift+Tab nest list items, and Ctrl+Z and Ctrl+Y undo and redo.
+**Text arrives through `beforeinput`, which the page cancels.** The page runs the matching action, renders the blocks it changed, and puts the selection back from model spots. So the page keeps no edit the browser made, and the browser's own undo has nothing to undo. A dropped item is refused. Key presses carry the commands. Ctrl+B, Ctrl+I, Ctrl+E and Ctrl+K set marks, and Ctrl+Alt+0 to 6 make a paragraph or a heading. Tab and Shift+Tab nest list items, and Ctrl+Z and Ctrl+Y undo and redo. Ctrl+F and Ctrl+H open find and replace ("Find and replace" below).
 
 **An input method's composition is the one edit the browser makes itself.** Text from an input method cannot be cancelled. While a composition lasts, the page renders nothing and runs no action. When it ends, the page compares the element's text with its text before, and takes the difference as one transaction. That comparison waits one turn, so a browser that changes the text after the composition ends has done so. Any other input takes it first. The key press that starts an input method deletes a selection, so the composition starts in one place.
 
@@ -295,9 +415,47 @@ Undo and redo put back the selection each step started or ended with. A new acti
 
 **Only the blocks an action changed are rendered again.** An action reports the first block it changed and how many at the end it left alone. After a table edit, every table shows again, since a value can depend on another table.
 
-**A table shows as an HTML table of calculated values**, with column letters and row numbers. A cell edits in an input of its own. Enter, Tab and the arrow keys move between cells. The arrow keys past the first or last row leave the table for the gap there. A press between two blocks, or below the last, puts the caret in the gap there.
+**The commands stand in a menu bar of drop-down menus: Edit, View, Format, Insert and Table.** A menu opens on a press of its name, not on pointing, so moving the mouse across the bar opens nothing. While one menu is open, pointing at another name opens that one. A group of commands is a flyout beside its menu, which opens on pointing, on a press, or with Right. Esc, a press outside and a chosen command close every menu, and the focus goes back where it was. Up and Down move through a menu, and Right and Left go into a flyout, out of it, or on to the next menu. Each command keeps its shortcut, which the menu shows beside it.
+
+**A table command that cannot act is disabled, not hidden.** With no cell chosen, every table command is disabled. A person sees where the command is, and the menu does not change shape.
+
+**A right-click on a cell, a row number or a column letter opens the table menu at that place.** It chooses that cell first, and the commands act on it. Shift+F10 or the menu key in an open cell opens the menu too. The Table menu and the right-click menu are built from one list (`TABLE_GROUPS` in `ksmd/port/web/menu.js`), so the two cannot differ. The Table menu shows each group as a flyout. The right-click menu shows the groups one after another, since a menu that opens beside the pointer should need no second move.
+
+**A table shows as an HTML table of calculated values**, with column letters and row numbers. The row of names under the letters is the table's heading, with its own colour and a line below it. An empty name shows a faint "Name". The row numbers take only the width their digits need. A cell edits in an input of its own. Enter, Tab, Up and Down move between cells. Esc drops the open cell's edit and leaves the cell chosen. The arrow keys past the first or last row leave the table for the gap there. A press between two blocks, or below the last, puts the caret in the gap there.
+
+**Left and Right move the caret inside a cell's text, and move to the next cell at the text's edge.** A cell opens with all its text selected, so Left and Right then move to the next cell at once, as in a spreadsheet. Once a click or a key puts the caret inside the text, they move the caret. At the text's edge, the next press moves to the next cell. Left in the first column and Right in the last stay in the cell.
+
+**Sorting orders a table's data rows by the chosen cell's column, as one step of undo.** Numbers come first, smallest first, then text from A to Z, then `false` and `true`, then errors. Descending reverses that order. Empty cells stand last either way, as spreadsheets put them, so a sort never hides the filled rows below empty ones. Text compares letters without regard to case. Rows with equal values keep their order, so a sort by one column after another sorts by both. A formula sorts by its calculated value. The names above the data rows do not move.
+
+**A column filters from its heading, as in Excel.** Each name carries an arrow, and pressing it opens a panel under that column (`ksmd/port/web/filter.js`):
+
+* The panel starts with Sort ascending, Sort descending and Clear filter from this column. A search box follows, then the column's values, each with a tick box.
+* A condition is folded away under the list: is, is not, contains, is greater than, is less than, is empty, is not empty. A number compares as a number.
+* OK applies the ticks or the condition, and Cancel, Esc and a press outside change nothing. A sort closes the panel, so the rows can be seen.
+* Typing in the search box narrows the list shown, and never unticks a value. Looking and choosing are two acts, so they are two controls. "(Select all)" ticks or unticks the values in sight.
+* The values are listed in the order the column sorts in, so 80 comes before 120. Values that differ only in case are one value, since the filter ignores case. Empty cells are one value, listed last as "(Blanks)". The list stops at 1,000 values and says so.
+
+**Each column holds one condition, and a row shows when it meets every column's.** A narrowed column's arrow is marked, so a person sees which columns narrow the table. A line above the table says how many rows are shown, with a button that shows every row again. The Table menu's Filter group opens the same panel for the chosen cell's column. It can also show only the rows with that cell's value, or every row.
+
+**A filter is a way of looking: the file keeps every row.** It belongs to the page, and lasts until it is cleared, the table is removed, or the page closes. A filter written into the file would hide rows from the next reader, the complaint Excel's saved filters draw. A formula counts every row, shown or not. The row being edited stays in sight until the edit is taken. Up, Down and Enter pass over the hidden rows. A new row shows every row again, since the filter would hide an empty row at once.
+
+**Under the menu bar stands a ribbon, as in Office**: named groups of tools for Edit, Font, Paragraph and Insert. A Table group joins them while a table cell is the place being worked in. A tool presses the same command as the menu. The font and fill colour tools are split: the face applies the colour shown on it, and the arrow opens a palette. The palette holds Office's standard colours, "Automatic" or "No fill", and any other colour. Clear takes colours, size and alignment away in one step.
+
+**A look acts on the cells where a cell was worked in last, and on the selected text otherwise.** A press or a key in the text makes the text the place; opening or choosing a cell makes the cells the place. The page's own selection changes after an action do not count. Alignment on text aligns the paragraphs and headings the selection touches.
+
+**Shift+click chooses a range of cells from the chosen one** ("Ranges of cells" below).
+
+**The Table menu's Number format group sets the format of the chosen cell's column**, or of every column the range spans, in one step. It holds General, Number, Thousands, Percent, Currency, and More and Fewer decimal places. Currency asks for a code, and takes the places that currency's money is counted in: none for JPY and KRW, two for every other code. A cell shows the text the format gives, and the filter panel lists and matches that text.
+
+**Cells copy and paste as Excel's do.** Ctrl+C on a range puts its values on the clipboard as tab-separated rows, which a spreadsheet takes. A number goes as calculated, not as its format shows it, so no digit is lost. A paste of such rows fills the table from the chosen cell, as one step, and the table grows the rows and columns it needs. Each pasted value reads as typed text does, and a number with thousands separators, as `1,234.5`, is a number. Rows pasted into text make a new table, whose first row gives the names. A refusal changes nothing.
+
+**Ctrl+; types today's date, and Ctrl+: the time, as in Excel.** They work in a cell and in the text, and the Insert menu holds both. The date is written `2026-10-23` and the time `14:05`, ISO 8601's forms. They read the same in every country, and sort correctly as text, since a date is text in version 1.
+
+**A double-click on a column's border fits the column to its widest value on one line.** The border is the edge between two column letters, or the border between two cells. The table keeps its width, and the other columns share what is left in the proportions they had. The fit is one step of undo, and saves as `widths`, as a drag does. A row has no height in the source. It is always as tall as its content, so a double-click on a row's border has nothing to set.
 
 **A cell opens when the mouse button goes down, not on the click.** The press takes the caret out of its gap, and a gap above the table then goes. The table moves up a line under the mouse, so the button would come up on another element, and no click would come.
+
+**While a person works in a table, the page draws no caret in the text.** A cell or a range is chosen, or a cell is open. The format has no empty paragraph, so a caret beside a table would stand in a gap. That gap would push the table down a line after each action, and the next press would miss. So the table stays where it is, and the keys go to the chosen cell. Esc on a chosen cell, a press in the text, and an arrow key past the table's first or last row leave the table. The caret then comes back where the model holds it, in a gap too.
 
 **Dragging the edge between two column letters resizes the two columns beside it.** They share their width anew, and every other column keeps its weight. The page shows the new widths while the mouse moves. When the button comes up, the table's `widths` change in one step of undo, and no cell changes. A press that does not move changes nothing.
 
@@ -319,9 +477,67 @@ Undo and redo put back the selection each step started or ended with. A new acti
 
 **The editor's memory is a fixed 128 MiB.** An action that starts with less than 16 MiB free is refused, and the page asks the person to save and open the document again. The document and its whole history stay in that memory until another document opens.
 
+### Ranges of cells
+
+**A range of cells runs from the chosen cell to a far corner.** Shift+click reaches it from the chosen cell, and so do Shift and an arrow key. A press on a row number chooses that row. A press on a column letter chooses that column's data cells. Shift with either press reaches from the chosen cell's row or column.
+
+* **Shift and an arrow key extend a range from an open cell**, as in a spreadsheet. Once the caret stands inside the cell's text, Shift+Left and Shift+Right select text instead.
+* **The range keeps the identities of its rows and columns, as a formula's range does.** A row added above it, a sort or an undo leaves it on the same cells. The page keeps no element and no place on the page across an action.
+* **On a chosen cell that is not open, the keys act on the range.** Delete and Backspace clear its cells as one step, and each cell keeps its look. Enter and F2 open the chosen cell, and a typed character opens it with that character. Ctrl+Z and Ctrl+Y undo and redo, as in the text. Esc first leaves the chosen cell alone, then leaves the table.
+* **Copy, cut and paste act on the range.** A paste of one value fills every cell of the range. A paste of rows fills the table from the range's corner.
+* **A look applies to every cell of the range in one step.**
+
+### Filling cells
+
+**Ctrl+D fills a range down from its top row, and Ctrl+R right from its left column**, as in Excel. A range of one row fills down from the cell above it. A range of one column fills right from the cell left of it. The Table menu holds both, and each fill is one step of undo.
+
+* **Each cell is copied through the model's copy of a cell** (`copy_cell` in `ksmd/edit.kspl`). A reference without `$` shifts as far as the copy moves, and a part with `$` stays. The copy takes the cell's look too.
+* **A fill is refused whole.** A copy that would write a formula longer than 4,096 bytes puts back every cell copied before it.
+* **The square at a range's lower right corner fills by a drag.** A drag down or right repeats the range's cells over the cells it reaches. The square stands under the pointer, so no key or menu is needed for it.
+* **A fill copies, and makes no series.** A series guessed from the values, such as 1, 2, 3 from a 1, surprises the person who wanted copies. A formula such as `=A1+1` makes a series and says how.
+* **Ctrl+D and Ctrl+R act only while a cell or a range is chosen.** Elsewhere the browser keeps them, to bookmark the page and to load it again. Inside a table, a person reaches for a fill, and undo takes a wrong one back.
+
+### Find and replace
+
+**Ctrl+F opens a find bar under the ribbon, and Ctrl+H opens it with its replace part.** The Edit menu and the ribbon's Find tool open it too. A short selection on one line becomes the search text.
+
+* **Find looks in the text the page shows, and in each cell's text as a person edits it.** So a formula's source is searched, and its calculated value is not. Replace changes what is written, and a calculated value holds nothing written to change.
+* **A match can cross formatting.** `**bold**words` holds "boldwords", since a reader sees one word there. A match stays inside one paragraph, heading, list item, code block or cell.
+* **Without Match case, each character is compared in lower case.** Each character is folded alone, so a match keeps the text's own places in every script.
+* **Enter and F3 go to the next match, and Shift+Enter and Shift+F3 to the one before.** The bar says which match is current, and of how many. A search starts from the caret.
+* **The matches show without any change to the page's text.** Matches in text show through the browser's highlights, which add no element. So the find bar never disturbs an input method's composition. A cell that holds a match is marked as a whole.
+* **Typing in the find bar never changes the document.** Only Replace and Replace all act on it.
+* **Replace changes the current match, and the next match becomes the current one.** Replace all changes every match as one step of undo, prose and cells together.
+* **The new text takes the marks of the first character it replaces.** So a bold word stays bold, and text inside a link stays in the link.
+* **A replace is refused whole**, as every action is. A cell text the file cannot hold changes nothing. A match that no longer stands where it was found also changes nothing.
+* **Esc closes the bar and selects the current match**, or chooses its cell, so the person goes on from there.
+* **Find does not look in an included file's blocks, nor in rows a filter hides.** An included file edits in a tab of its own. A hidden row stays out, so Replace all changes nothing a person cannot see.
+
+### The heading row of a long table
+
+**A table's column letters and names stay in sight under the header while the page scrolls through the table.** The heading sticks within the page's own scroll (`position: sticky` on the table's `thead`).
+
+* **A table never scrolls in a box of its own.** A box would take the mouse wheel in the middle of a document. Its heading would also hide under the header once the page scrolled on past the box's top.
+* **Every table's heading sticks, and no source notation chooses it.** A short table never scrolls under the header, so it looks the same. A choice per table would change the file for a way of looking.
+* **The column edges stand in the letters, so a drag resizes a column wherever the table is scrolled.**
+* **On paper, the heading is the table's own `thead`, which the browser repeats on each page.**
+* **A table wider than the page reaches past it, and the page scrolls sideways.** A box that scrolled sideways would hold the heading inside it, and the heading could not stick to the page.
+
+### The contents
+
+**View, Contents shows the document's headings in a panel at the window's left**, each indented by its level, as GitHub's outline does.
+
+* **A press on a heading scrolls to it, and puts the caret at its start.** A heading shown from an included file only scrolls, since it does not edit here. Its file's path stands beside it.
+* **The heading being read is marked as the page scrolls**: the last one above the top of the reading area.
+* **The list follows every edit.** An action that changes no heading builds no list.
+* **Whether the panel shows is kept in the browser's storage, for each viewer.** It is a way of looking, so it stays out of the file. Where storage is off, the panel starts hidden.
+
 ### What the editing page does not do yet
 
 * It does not convert a rich paste; it takes the plain text and says so.
+* Find has no whole-word search and no regular expressions. It does not search table names.
+* A browser without the highlight API (`CSS.highlights`) marks no match in text. The current match still scrolls into sight, and the count still shows.
+* A fill makes no series, and a filter's hidden rows are filled as the shown ones are.
 * It never trims the undo history. A long session can use up the editor's memory, and the page then asks the person to save and open the document again.
 * The browser checks run in headless Chromium alone. Firefox, Safari, a real input method on a real keyboard and screen readers are not checked.
 * A person switching tabs in a desktop browser is not checked: the checks send the focus event themselves.
@@ -407,6 +623,7 @@ Initial limits are safety bounds, not performance claims. Apply them before allo
 | List nesting or inline nesting | 16 levels each |
 | One table | 256 columns, 10,000 data rows, 100,000 cells including the header |
 | One formula | 4,096 UTF-8 bytes and 64 expression levels |
+| `round`'s places | -15 to 15 |
 | Include depth | 16 files on the active stack |
 | Assembled view | 64 MiB of source text and 200,000 blocks, counting repeated instances |
 | One decoded image | 16 million pixels |
@@ -437,7 +654,7 @@ The reader refuses a formula longer than 4,096 bytes, and an edit that would wri
 
 **These figures come from one machine, and promise nothing elsewhere.** `make measure-ksmd` measured them on 22 October 2026. The machine had four cores of an Intel Xeon at 2.10 GHz, 15 GB of memory and Linux. The browser was the headless Chromium 141 that the browser gate drives.
 
-* `ksmd/tests/measure.kspl` writes the documents, and times the model outside the browser. `ksplc run` builds it with `-O2`.
+* `ksmd/tests/measure.kspl` writes the documents, and times the model outside the browser. `ksplc run` builds it with `-O0`, so its figures run slower than the page, which is built with `-O2`.
 * `ksmd/tests/browser/measure.mjs` times the page, opened from a file and served by `kssrv --local`. An edit is timed from the browser's input event to the end of the page's change, the layout included. Painting is not timed.
 * Each figure is the middle of five runs. Runs differ: an earlier run of the same commands opened the large document in 6.1 s.
 

@@ -3,6 +3,8 @@
 //< kept per segment, so an edit never has to close and reopen a mark itself: `build` turns the
 //< segments back into the nested inline nodes the reader would read.
 //< An offset counts UTF-8 bytes of the visible text, where a hard break counts as one byte ("\n").
+import "ksmd/look" { Look, Look_part, plain_look, same_look, with_part }
+import "ksmd/look"
 import "ksmd/model" { Document, Inline, Inline_kind }
 import "std/chars"
 import "std/ds" { List }
@@ -14,6 +16,7 @@ struct Marks //< the marks over a piece of text
     strong: Bool
     code: Bool //< inline code: literal text, which can stand inside the other marks
     link: U8[] //< the destination of the link over it, or empty
+    look: Look //< the colours and size over it, from the brackets around it; plain for none
 
 struct Seg //< a piece of text with one set of marks, or a hard break
     text: U8[] //< the text; "\n" for a hard break
@@ -21,11 +24,12 @@ struct Seg //< a piece of text with one set of marks, or a hard break
     hard: Bool
 
 fn plain(): Marks //< no mark
-    return Marks::{ .emphasis = false, .strong = false, .code = false, .link = "" }
+    return Marks::{ .emphasis = false, .strong = false, .code = false, .link = "",
+        .look = plain_look() }
 
 fn same(a: Marks, b: Marks): Bool
     return a.emphasis == b.emphasis && a.strong == b.strong && a.code == b.code &&
-        a.link.equals(b.link)
+        a.link.equals(b.link) && same_look(a.look, b.look)
 
 fn is_plain(m: Marks): Bool //< no mark at all, so the text is written without delimiters
     return same(m, plain())
@@ -68,8 +72,10 @@ fn flatten(doc: Document@, first: Sz, count: Sz, out: List<|Seg|>$@) //<
             m.strong = node.kind == .strong_start
         case .link_start
             m.link = node.text
+            m.look = node.look
         case .link_end
             m.link = ""
+            m.look = plain_look()
 
 fn cut(segs: List<|Seg|>@, from: Sz, to: Sz, out: List<|Seg|>$@) //<
     //< Appends the segments between two offsets, splitting the segments at either end
@@ -110,6 +116,23 @@ fn set_mark(segs: List<|Seg|>$@, from: Sz, to: Sz, which: Mark, on: Bool, link: 
         $s: = middle[i]
         if !s.hard
             s.marks = with_mark(s.marks, which, on, link)
+        out.push(s)
+    cut(segs, to, total, out@)
+    segs$ = out
+
+fn set_look_part(segs: List<|Seg|>$@, from: Sz, to: Sz, part: Look_part, value: U8[],
+    arena: Arena$@) //<
+        //< Sets or clears one part of the look over the text between two offsets
+        //< `value` is one `look.with_part` takes; the caller has checked it.
+    $out: = List<|Seg|>(arena)
+    total: = length(segs)
+    cut(segs, 0, from, out@)
+    $middle: = List<|Seg|>(arena)
+    cut(segs, from, to, middle@)
+    for i in Range.asc(middle.len)
+        $s: = middle[i]
+        if !s.hard
+            s.marks.look = with_part(s.marks.look, part, value).unwrap_or(s.marks.look)
         out.push(s)
     cut(segs, to, total, out@)
     segs$ = out
@@ -201,11 +224,11 @@ fn equal(a: List<|Seg|>@, b: List<|Seg|>@): Bool //<
 
 fn build(segs: List<|Seg|>@, doc: Document$@, arena: Arena$@): Sz //<
     //< Appends the inline nodes of the segments to `doc.inlines`, and returns where they start
-    //< Marks open in a fixed order, link outermost, then strong emphasis, then emphasis, as the
+    //< Marks open in a fixed order, brackets outermost, then strong emphasis, then emphasis, as the
     //< reader reads `***` that opens both. A mark closes where its text ends, and a mark inside it
     //< closes and opens again. Every mark closes before a hard break. Text lands in `arena`.
     first: = doc.inlines.len
-    $open: = Open::{ .kinds = ::{}, .links = ::{}, .depth = 0 }
+    $open: = Open::{ .kinds = ::{}, .links = ::{}, .looks = ::{}, .depth = 0 }
     $pending: = Seg::{ .text = "", .marks = plain(), .hard = false }
     defer $text: = Str_builder()
     for s in segs
@@ -217,7 +240,9 @@ fn build(segs: List<|Seg|>@, doc: Document$@, arena: Arena$@): Sz //<
         flush(text@, pending.marks, doc, arena)
         if s.hard
             open.close_to(0, doc)
-            doc.inlines.push(Inline::{ .kind = .hard_break, .text = "", .offset = 0 })
+            doc.inlines
+                .push(Inline::{ .kind = .hard_break, .text = "", .offset = 0,
+                .look = plain_look() })
             continue
         open.reach(s.marks, doc, arena)
         pending = s
@@ -232,12 +257,14 @@ priv fn flush(text: Str_builder$@, marks: Marks, doc: Document$@, arena: Arena$@
         return
     kind: = Inline_kind.code if marks.code else Inline_kind.text
     doc.inlines
-        .push(Inline::{ .kind = kind, .text = arena.dup_str(text.slice()), .offset = 0 })
+        .push(Inline::{ .kind = kind, .text = arena.dup_str(text.slice()), .offset = 0,
+        .look = plain_look() })
     text.clear()
 
 priv struct Open //< the marks open while nodes are built, outermost first
     kinds: Inline_kind[3]
-    links: U8[][3] //< a link's destination, beside its kind
+    links: U8[][3] //< brackets' destination, beside their kind
+    looks: Look[3] //< brackets' look, beside their kind
     depth: Sz
 
 impl Open
@@ -247,17 +274,17 @@ impl Open
         for keep < o.depth && o.holds(keep, m)
             keep += 1
         o.close_to(keep, doc)
-        if m.link.len > 0 && !o.has(.link_start)
-            o.push(.link_start, arena.dup_str(m.link), doc)
+        if (m.link.len > 0 || !look.is_plain(m.look)) && !o.has(.link_start)
+            o.push(.link_start, arena.dup_str(m.link), m.look, doc)
         if m.strong && !o.has(.strong_start)
-            o.push(.strong_start, "", doc)
+            o.push(.strong_start, "", plain_look(), doc)
         if m.emphasis && !o.has(.emphasis_start)
-            o.push(.emphasis_start, "", doc)
+            o.push(.emphasis_start, "", plain_look(), doc)
 
     priv fn holds(o: Self@, i: Sz, m: Marks): Bool //< whether open mark `i` is one of `m`
         switch o.kinds[i]
         case .link_start
-            return m.link.equals(o.links[i])
+            return m.link.equals(o.links[i]) && same_look(m.look, o.looks[i])
         case .strong_start
             return m.strong
         default
@@ -269,17 +296,19 @@ impl Open
                 return true
         return false
 
-    priv fn push(o: Self$@, kind: Inline_kind, link: U8[], doc: Document$@)
+    priv fn push(o: Self$@, kind: Inline_kind, link: U8[], over: Look, doc: Document$@)
         o.kinds[o.depth] = kind
         o.links[o.depth] = link
+        o.looks[o.depth] = over
         o.depth += 1
-        doc.inlines.push(Inline::{ .kind = kind, .text = link, .offset = 0 })
+        doc.inlines.push(Inline::{ .kind = kind, .text = link, .offset = 0, .look = over })
 
     priv fn close_to(o: Self$@, depth: Sz, doc: Document$@) //< closes marks down to `depth` open
         for o.depth > depth
             o.depth -= 1
             doc.inlines
-                .push(Inline::{ .kind = end_of(o.kinds[o.depth]), .text = "", .offset = 0 })
+                .push(Inline::{ .kind = end_of(o.kinds[o.depth]), .text = "", .offset = 0,
+                .look = plain_look() })
 
 priv fn end_of(kind: Inline_kind): Inline_kind
     switch kind

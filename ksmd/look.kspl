@@ -1,0 +1,169 @@
+//< The direct formatting a table cell, a span of text or a paragraph carries
+//< It is written in braces: `{color="#c00000" fill="#fff2cc" size=14 align="right"}` gives the
+//< text's colour, the background's colour, the font size in points and the alignment. A cell writes
+//< it after its value, a span after its brackets (`[text]{...}`), and a paragraph on a line of its
+//< own before the paragraph. Only a cell and a paragraph take `align`.
+import "ksmd/attribute" { Attribute }
+import "ksmd/source" { Diagnostic, Source }
+import "std/chars"
+import "std/ds" { List }
+import "std/str" { Str_builder }
+
+priv const MIN_SIZE: Sz = 12 //< 6 points, in half points
+priv const MAX_SIZE: Sz = 144 //< 72 points, in half points
+
+enum Align //< where a cell's or a paragraph's text stands across
+    none //< as the page sets it: a number to the right, other text to the left
+    left
+    center
+    right
+
+enum Look_part //< one part of a look, which the editor sets or clears
+    color
+    fill
+    size
+    align
+    all //< every part at once; only an empty value, which clears them all
+
+struct Look
+    color: U8[] //< `#rrggbb` in lower case, or empty for the page's colour
+    fill: U8[] //< the background's colour, as `color`; empty for none
+    size: Sz //< the font size in half points, so 10.5 points is 21; 0 for the page's size
+    align: Align
+
+fn plain_look(): Look //< no formatting
+    return Look::{ .color = "", .fill = "", .size = 0, .align = .none }
+
+fn is_plain(l: Look): Bool
+    return l.color.len == 0 && l.fill.len == 0 && l.size == 0 && l.align == .none
+
+fn same_look(a: Look, b: Look): Bool
+    // A colour's hex digits may be written in either case; the writer writes lower case.
+    return a.color.equals_ignore_case(b.color) && a.fill.equals_ignore_case(b.fill) &&
+        a.size == b.size && a.align == b.align
+
+fn look_of(src: Source@, attributes: List<|Attribute|>@, at: Sz, aligns: Bool): Look!Diagnostic //<
+    //< The look the attributes in one pair of braces give; `at` is where the braces open
+    //< Without `aligns`, `align` is refused: a span of text has no alignment of its own.
+    if attributes.len == 0
+        throw src.diagnostic(at, "a look in braces holds at least one attribute")
+    $l: = plain_look()
+    for a in attributes
+        if a.name.equals("color") || a.name.equals("fill")
+            colour: = a.value if a.quoted && is_colour(a.value) else ""
+            if colour.len == 0
+                throw src.diagnostic(a.offset,
+                    "a colour is '#' and six hex digits, as in \"#c00000\"")
+            if a.name.equals("color")
+                l.color = colour
+            else
+                l.fill = colour
+        else if a.name.equals("size")
+            l.size = half_points(a.value) if !a.quoted else 0
+            if l.size == 0
+                throw src.diagnostic(a.offset,
+                    "a font size is a number of points from 6 to 72, whole or ending in .5")
+        else if a.name.equals("align") && aligns
+            l.align = align_of(a.value) if a.quoted else .none
+            if l.align == .none
+                throw src.diagnostic(a.offset, "align is \"left\", \"center\" or \"right\"")
+        else
+            throw src.diagnostic(a.offset,
+                "a look takes color, fill, size and align" if aligns
+                else "a look on text takes color, fill and size")
+    return l
+
+fn write_look(l: Look, out: Str_builder$@) //< `{...}`, its parts in a fixed order
+    out.c('{')
+    $first: = true
+    if l.color.len > 0
+        out.s("color=")
+        write_colour(l.color, out)
+        first = false
+    if l.fill.len > 0
+        out.s("" if first else " ").s("fill=")
+        write_colour(l.fill, out)
+        first = false
+    if l.size > 0
+        out.s("" if first else " ").s("size=\{l.size / 2\}")
+        if l.size % 2 == 1
+            out.s(".5")
+        first = false
+    if l.align != .none
+        out.s("" if first else " ").s("align=\"").s(l.align.name()).c('"')
+    out.c('}')
+
+fn with_part($l: Look, part: Look_part, value: U8[]): Look? //<
+    //< The look with one part set as a page gives it, or cleared by an empty value; none if invalid
+    switch part
+    case .color
+        if value.len > 0 && !is_colour(value)
+            return .none
+        l.color = value
+    case .fill
+        if value.len > 0 && !is_colour(value)
+            return .none
+        l.fill = value
+    case .size
+        l.size = 0 if value.len == 0 else half_points(value)
+        if value.len > 0 && l.size == 0
+            return .none
+    case .align
+        l.align = .none if value.len == 0 else align_of(value)
+        if value.len > 0 && l.align == .none
+            return .none
+    case .all
+        if value.len > 0
+            return .none
+        return .some(plain_look())
+    return .some(l)
+
+impl Align
+    fn name(a: Self): U8[] //< as `align` writes it: `left`, `center` or `right`; empty for none
+        switch a
+        case .left
+            return "left"
+        case .center
+            return "center"
+        case .right
+            return "right"
+        default
+            return ""
+
+priv fn align_of(name: U8[]): Align //< `.none` for any other name
+    if name.equals("left")
+        return .left
+    if name.equals("center")
+        return .center
+    if name.equals("right")
+        return .right
+    return .none
+
+priv fn is_colour(text: U8[]): Bool //< `#` and six hex digits, in either case
+    if text.len != 7 || text[0] != '#'
+        return false
+    for i in Range(1, 7, 1)
+        if text[i].hex_val().is_none()
+            return false
+    return true
+
+priv fn half_points(value: U8[]): Sz //< `14` or `10.5` in half points; 0 if outside 6 to 72
+    $whole: Sz = 0
+    $i: Sz = 0
+    for i < value.len && value[i].is_digit() && i < 3
+        whole = whole * 10 + Sz::(value[i] - '0')
+        i += 1
+    if i == 0
+        return 0
+    $half: Sz = whole * 2
+    if i < value.len
+        if !value.sub_from(i).equals(".5")
+            return 0
+        half += 1
+    return half if half >= MIN_SIZE && half <= MAX_SIZE else 0
+
+priv fn write_colour(colour: U8[], out: Str_builder$@) //< quoted, in lower case
+    out.c('"')
+    for c in colour
+        out.c(c.to_lower())
+    out.c('"')

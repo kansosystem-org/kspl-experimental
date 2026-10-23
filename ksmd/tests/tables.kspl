@@ -1,10 +1,11 @@
-//< Editor actions on tables: adding and removing one, row and column edits, cell values, names and
-//< column widths
+//< Editor actions on tables: adding and removing one, row and column edits, sorting, cell values,
+//< names, column widths, pasting and filling
 //< Each check compares the saved source, and undo and redo give back the source before and after.
 //< Values are checked through calculation, so a reference left on the wrong cell shows.
 import "ksmd/calc"
-import "ksmd/editor" { Editor, Refused, Table_edit }
+import "ksmd/editor" { Editor, Refused }
 import "ksmd/editor"
+import "ksmd/editor_tables" { Table_edit }
 import "ksmd/reader"
 import "ksmd/region" { gap_spot, text_spot }
 import "ksmd/source" { Source }
@@ -25,6 +26,10 @@ fn run()
     removing()
     naming()
     widths()
+    sorting()
+    looks()
+    pasting()
+    filling()
 
 priv fn inserting()
     defer arena: = Arena(64 * 1024)
@@ -153,10 +158,17 @@ priv fn naming()
             \"z\" |\n| =c.A1 | =c.A1 |\n:::\n")
     verdict.check("both now calculate", value(ed@, 1, 0, 1, arena) == 3.0, "")
     refused(ed@, "a name another table has is refused", .taken, "Another table")
-    refused(ed@, "a name the reader refuses is refused", .bad_name, "lowercase")
+    refused(ed@, "a name the reader refuses is refused", .bad_name, "control characters")
     ed.undo()
     verdict.check("undo gives the old name back",
         source_of(ed@, arena).find_str("name=\"a\"").is_some(), "")
+    ed.rename_table(0, "Q1 sales | \"net\"") catch e
+        verdict.check("a name with spaces, a pipe and quotes", false, e.message())
+    quoted: =
+        "%ksmd 1\n\n:::table name=\"Q1 sales | \\\"net\\\"\"\n| \"x\" |\n| 3 |\n:::\n\n:::table \
+            name=\"b\"\n| \"y\" | \"z\" |\n| =\"Q1 sales | \\\"net\\\"\".A1 | =c.A1 |\n:::\n"
+    saves("a name that is not plain is written in JSON quotes in a formula", ed@, arena, quoted)
+    verdict.check("and its references still calculate", value(ed@, 1, 0, 0, arena) == 3.0, "")
 
 priv fn widths()
     defer arena: = Arena(64 * 1024)
@@ -169,7 +181,7 @@ priv fn widths()
     verdict.check("the cells and their values stay", value(ed@, 0, 0, 2, arena) == 3.0, "")
     last: = ed.history.done[ed.history.done.len - 1]@
     verdict.check("the step records the widths alone, and no copy of the table",
-        last.widths.len == 1 && last.tables.len == 0 && last.cells.len == 0, "")
+        last.columns.len == 1 && last.tables.len == 0 && last.cells.len == 0, "")
     resized(ed@, "1,1,2", arena)
     ed.undo()
     saves("undo gives the widths before back", ed@, arena,
@@ -218,7 +230,7 @@ priv enum Wrong //< an action a check expects to be refused
     pipe //< a formula with a '|' outside quotes, in cell B1 of block 0
     row //< removing row 6 of block 0
     taken //< naming block 0's table `b`
-    bad_name //< naming it `Bad`
+    bad_name //< naming it with a line break in the name
 
 priv fn refused(ed: Editor$@, what: U8[], action: Wrong, says: U8[]) //<
     //< The action is refused with a message that holds `says`
@@ -236,19 +248,196 @@ priv fn attempt(ed: Editor$@, action: Wrong): Bool!Refused
     case .taken
         ed.rename_table(0, "b")!
     case .bad_name
-        ed.rename_table(0, "Bad")!
+        ed.rename_table(0, "two\nlines")!
     return true
+
+priv fn sorting()
+    defer arena: = Arena(64 * 1024)
+    head: = "%ksmd 1\n\n:::table name=\"t\"\n| \"item\" | \"n\" | \"double\" |\n"
+    before: =
+        join3(head,
+        "| \"pear\" | 3 | =B1*2 |\n| \"Apple\" | | =B2*2 |\n| \"fig\" | 1 | =B3*2 |\n| \"apple\" | \
+            =1/0 | =B4*2 |\n", ":::\n", arena)
+    $ed: = opened(before, arena)
+    sorted(ed@, 1, false)
+    by_number: =
+        join3(head,
+        "| \"fig\" | 1 | =B1*2 |\n| \"pear\" | 3 | =B2*2 |\n| \"apple\" | =1/0 | =B3*2 |\n| \
+            \"Apple\" | | =B4*2 |\n", ":::\n", arena)
+    saves("numbers sort first, smallest first, then errors, and empty cells last", ed@, arena,
+        by_number)
+    verdict.check("each formula stays on its row's cells",
+        value(ed@, 0, 0, 2, arena) == 2.0 && value(ed@, 0, 1, 2, arena) == 6.0, "")
+    sorted(ed@, 1, true)
+    by_number_down: =
+        join3(head,
+        "| \"apple\" | =1/0 | =B1*2 |\n| \"pear\" | 3 | =B2*2 |\n| \"fig\" | 1 | =B3*2 |\n| \
+            \"Apple\" | | =B4*2 |\n", ":::\n", arena)
+    saves("descending reverses that, and empty cells stay last", ed@, arena, by_number_down)
+    ed.undo()
+    ed.undo()
+    saves("undo puts each sort back", ed@, arena, before)
+    sorted(ed@, 0, false)
+    by_text: =
+        join3(head,
+        "| \"Apple\" | | =B1*2 |\n| \"apple\" | =1/0 | =B2*2 |\n| \"fig\" | 1 | =B3*2 |\n| \"pear\" \
+            | 3 | =B4*2 |\n", ":::\n", arena)
+    saves("text sorts A to Z without regard to case, and equal text keeps its order", ed@, arena,
+        by_text)
+    sorted(ed@, 0, true)
+    by_text_down: =
+        join3(head,
+        "| \"pear\" | 3 | =B1*2 |\n| \"fig\" | 1 | =B2*2 |\n| \"Apple\" | | =B3*2 |\n| \"apple\" | \
+            =1/0 | =B4*2 |\n", ":::\n", arena)
+    saves("and Z to A, equal text still in its order", ed@, arena, by_text_down)
+    $outside: = false
+    ed.sort_table(0, 3, false) catch
+        outside = true
+    verdict.check("a column outside the table is refused", outside, "")
+
+priv fn looks()
+    defer arena: = Arena(64 * 1024)
+    before: = "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" |\n| 1 | 2 |\n| 3 | 4 |\n:::\n"
+    $ed: = opened(before, arena)
+    ed.set_look(0, -1, 0, 0, 1, .fill, "#FFF2CC") catch e
+        verdict.check("setting a fill", false, e.message())
+    ed.set_look(0, 0, 1, 1, 1, .align, "center") catch e
+        verdict.check("setting an alignment", false, e.message())
+    painted: =
+        "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" {fill=\"#fff2cc\"} | \"b\" {fill=\"#fff2cc\"} |\n| \
+            1 {fill=\"#fff2cc\"} | 2 {fill=\"#fff2cc\" align=\"center\"} |\n| 3 | 4 \
+            {align=\"center\"} |\n:::\n"
+    saves("a look is set on every cell of a rectangle, the names included", ed@, arena, painted)
+    set(ed@, 0, 0, 1, "20")
+    verdict.check("a new value keeps the cell's look",
+        source_of(ed@, arena).find_str("| 20 {fill=\"#fff2cc\" align=\"center\"} |").is_some(), "")
+    ed.undo()
+    ed.undo()
+    ed.undo()
+    saves("undo takes each look back off", ed@, arena, before)
+    $refused_look: = false
+    ed.set_look(0, 0, 0, 0, 0, .size, "100") catch
+        refused_look = true
+    verdict.check("a size outside 6 to 72 points is refused", refused_look, "")
+
+priv fn pasting()
+    defer arena: = Arena(64 * 1024)
+    before: = "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" |\n| 1 | 2 |\n:::\n"
+    $ed: = opened(before, arena)
+    $grid: = List<|List<|U8[]|>|>(arena)
+    grid.push(row3("Pens", "1,234.5", "=A1", arena))
+    grid.push(row3("Paper", "", "12%", arena))
+    ed.paste_cells(0, 0, 0, grid@) catch e
+        verdict.check("pasting a grid", false, e.message())
+    saves("a pasted grid fills cells and grows the table; 1,234.5 is a number", ed@, arena,
+        "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"\" |\n| \"Pens\" | 1234.5 | =A1 |\n| \
+            \"Paper\" | | \"12%\" |\n:::\n")
+    ed.undo()
+    saves("one undo takes the whole paste away", ed@, arena, before)
+    $bad: = List<|List<|U8[]|>|>(arena)
+    bad.push(row3("x", "=A1 | B1", "y", arena))
+    $refused_paste: = false
+    ed.paste_cells(0, 0, 0, bad@) catch
+        refused_paste = true
+    verdict.check("a grid with a value the file cannot hold is refused", refused_paste, "")
+    saves("and changes nothing", ed@, arena, before)
+    $prose: = opened("%ksmd 1\n\nText\n", arena)
+    prose.select(text_spot(0, 0, 4), text_spot(0, 0, 4))
+    $table: = List<|List<|U8[]|>|>(arena)
+    table.push(row3("Item", "Count", "Cost", arena))
+    table.push(row3("Pens", "2", "3.5", arena))
+    prose.insert_grid(table@) catch e
+        verdict.check("a grid pasted into text", false, e.message())
+    saves("a grid pasted into text becomes a table, its first row the names", prose@, arena,
+        "%ksmd 1\n\nText\n\n:::table name=\"table1\"\n| \"Item\" | \"Count\" | \"Cost\" |\n| \
+            \"Pens\" | 2 | 3.5 |\n:::\n")
+    prose.undo()
+    saves("and one undo takes it away", prose@, arena, "%ksmd 1\n\nText\n")
+
+priv fn filling()
+    defer arena: = Arena(64 * 1024)
+    head: = "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"c\" |\n"
+    before: =
+        join3(head, "| 1 | 10 | =A1+$B$1 |\n| 2 | 20 | |\n| 3 | 30 | |\n| 4 | 40 | |\n", ":::\n",
+        arena)
+    $ed: = opened(before, arena)
+    filled(ed@, 0, 2, 1, 1, 3, 2)
+    down: =
+        join3(head,
+        "| 1 | 10 | =A1+$B$1 |\n| 2 | 20 | =A2+$B$1 |\n| 3 | 30 | =A3+$B$1 |\n| 4 | 40 | =A4+$B$1 \
+            |\n", ":::\n", arena)
+    saves("fill down copies the top cell: a reference shifts, and a $ axis stays", ed@, arena, down)
+    verdict.check("and the copies calculate on their own rows",
+        value(ed@, 0, 3, 2, arena) == 14.0, "")
+    ed.undo()
+    saves("one undo takes the whole fill back", ed@, arena, before)
+    filled(ed@, 0, 0, 2, 1, 3, 0)
+    repeated: =
+        join3(head, "| 1 | 10 | =A1+$B$1 |\n| 2 | 20 | |\n| 1 | 30 | |\n| 2 | 40 | |\n", ":::\n",
+        arena)
+    saves("a range of two cells repeats down the rest", ed@, arena, repeated)
+    ed.undo()
+    filled(ed@, 0, 0, 1, 1, 0, 2)
+    saves("fill right copies the left cell across", ed@, arena,
+        join3(head, "| 1 | 1 | 1 |\n| 2 | 20 | |\n| 3 | 30 | |\n| 4 | 40 | |\n", ":::\n", arena))
+    ed.undo()
+    $outside: = false
+    ed.fill_cells(0, 0, 0, 1, 1, 4, 0) catch
+        outside = true
+    verdict.check("a fill past the last row is refused", outside, "")
+    saves("and changes nothing", ed@, arena, before)
+    too_long(arena)
+
+priv fn too_long(arena: Arena$@) //<
+    //< A fill refused midway puts back the cells it copied before the refusal
+    //< A long formula on A9 grows by one byte a reference when it is copied onto row 10.
+    defer $long: = Str_builder()
+    long.s("A9")
+    for long.slice().len + 3 <= 4096
+        long.s("+A9")
+    defer $rows: = Str_builder()
+    for r in Range.asc(10)
+        rows.s("| \{r\} | ")
+        if r == 8
+            rows.s("=A9 | =").s(long.slice()).s(" |\n")
+        else
+            rows.s("| |\n")
+    tall: =
+        join3("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"c\" |\n", rows.slice(), ":::\n",
+        arena)
+    $ed: = opened(tall, arena)
+    $refused: = false
+    ed.fill_cells(0, 8, 1, 1, 2, 9, 2) catch e
+        refused = e.message().equals(Refused.table(.too_long).message())
+    verdict.check("a fill that would write a formula too long is refused", refused, "")
+    saves("and the cell copied before the refusal is put back", ed@, arena, tall)
+    verdict.check("nothing is left to undo", !ed.can_undo(), "")
+
+priv fn filled(ed: Editor$@, top: Sz, left: Sz, height: Sz, width: Sz, bottom: Sz, right: Sz)
+    ed.fill_cells(0, top, left, height, width, bottom, right) catch e
+        verdict.check("a fill", false, e.message())
+
+priv fn row3(a: U8[], b: U8[], c: U8[], arena: Arena$@): List<|U8[]|> //< one row of a grid
+    $line: = List<|U8[]|>(arena)
+    line.push(a)
+    line.push(b)
+    line.push(c)
+    return line
 
 // ---- Helpers ----
 
-priv fn opened(bytes: U8[], arena: Arena$@): Editor
+priv fn sorted(ed: Editor$@, column: Sz, descending: Bool) //< sorts block 0's table by a column
+    ed.sort_table(0, column, descending) catch e
+        verdict.check("a sort", false, e.message())
+
+fn opened(bytes: U8[], arena: Arena$@): Editor
     src: = Source("t.ksmd", arena.dup_str(bytes)) catch e
         verdict.check("a test source is valid", false, e.message)
         panic("a test source was refused")
     doc: = reader.read(src@, arena) catch e
         verdict.check("a test document reads", false, e.message)
         panic("a test document was refused")
-    return editor.open(doc, arena)
+    return editor.open(doc, "2026-10-23", arena)
 
 priv fn inserted(ed: Editor$@, columns: Sz, rows: Sz)
     ed.insert_table(columns, rows) catch e
@@ -268,12 +457,12 @@ priv fn shown(ed: Editor@, row: Sz, column: Sz, want: U8[], what: U8[], arena: A
     verdict.check(what, got.equals(want), got)
 
 priv fn value(ed: Editor@, u: Sz, row: Sz, column: Sz, arena: Arena$@): F64 //< a number, or -1
-    r: = calc.calculate(ed.doc@, arena)
+    r: = calc.calculate(ed.doc@, ed.today, arena)
     v: = r.at(u, row, column)
     return v.number if v.kind == .number else -1.0
 
 priv fn is_error(ed: Editor@, u: Sz, row: Sz, column: Sz, arena: Arena$@): Bool
-    r: = calc.calculate(ed.doc@, arena)
+    r: = calc.calculate(ed.doc@, ed.today, arena)
     return r.at(u, row, column).kind == .error
 
 priv fn source_of(ed: Editor@, arena: Arena$@): U8[]
@@ -284,7 +473,7 @@ priv fn source_of(ed: Editor@, arena: Arena$@): U8[]
 priv fn join3(a: U8[], b: U8[], c: U8[], arena: Arena$@): U8[]
     return arena.text().s(a).s(b).s(c).take()
 
-priv fn saves(what: U8[], ed: Editor@, arena: Arena$@, expected: U8[]) //<
+fn saves(what: U8[], ed: Editor@, arena: Arena$@, expected: U8[]) //<
     //< The document saves as `expected`, and that source reads and saves again unchanged
     got: = source_of(ed, arena)
     verdict.check(what, got.equals(expected), got)

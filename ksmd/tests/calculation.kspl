@@ -14,9 +14,11 @@ import "std/io"
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
 import "std/str"
+import "std/strnum"
 import "std/verdict"
 
 priv const HEAD: U8[] = "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" |\n"
+priv const TODAY: U8[] = "2026-10-23" //< the date the test documents count as opened on
 
 fn run()
     arithmetic()
@@ -28,6 +30,16 @@ fn run()
     budget()
     chains()
     many_names()
+    comparisons()
+    logic()
+    text_in_formulas()
+    choices()
+    lazy_choices()
+    rounding()
+    today()
+    conditional_totals()
+    condition_shapes()
+    conditional_cycles()
 
 priv fn arithmetic()
     defer arena: = Arena(64 * 1024)
@@ -53,8 +65,8 @@ priv fn references()
         results("| | =A1+1 |\n| \"x\" | =A2+1 |\n| \"2026-01-02\" | =A3+1 |\n| 4 | =A5*2 |\n| =A4+5 \
             | =u.A1*t.A4 |\n:::\n\n:::table name=\"u\"\n| \"x\" |\n| 3 |\n:::\n", arena)
     number("an empty cell is 0 in arithmetic", r@, 0, 0, 1, 1.0)
-    failure("text in arithmetic is a type error", r@, 0, 1, 1, .text)
-    failure("a date stays text", r@, 0, 2, 1, .text)
+    failure("text in arithmetic is a type error", r@, 0, 1, 1, .wrong_kind)
+    failure("a date stays text", r@, 0, 2, 1, .wrong_kind)
     number("a formula can name a later row", r@, 0, 3, 1, 18.0)
     number("the later row's formula", r@, 0, 4, 0, 9.0)
     number("a reference into another table, and into its own by name", r@, 0, 4, 1, 12.0)
@@ -118,7 +130,7 @@ priv fn errors()
     failure("an open bracket", r@, 0, 8, 0, .syntax)
     failure("a row number with a leading 0", r@, 0, 8, 1, .syntax)
     marks: =
-        Calc_error.text.mark().equals("#VALUE!") &&
+        Calc_error.wrong_kind.mark().equals("#VALUE!") &&
         Calc_error.division.mark().equals("#DIV/0!") &&
         Calc_error.not_finite.mark().equals("#NUM!") &&
         Calc_error.reference.mark().equals("#REF!") &&
@@ -160,7 +172,7 @@ priv fn limits()
         deep.c('-')
     deep.s("1 | =sum(sum(1)) |\n:::\n")
     doc: = read(deep.slice(), arena)
-    r: = calc.calculate(doc@, arena)
+    r: = calc.calculate(doc@, TODAY, arena)
     number("a formula nests 64 levels", r@, 0, 0, 0, 1.0)
     failure("a formula nested 65 levels does not read", r@, 0, 0, 1, .syntax)
     number("each unary minus is a level", r@, 0, 1, 0, -1.0)
@@ -171,7 +183,7 @@ priv fn limits()
         long.s("+1")
     long.s(" |\n:::\n")
     full: = read(long.slice(), arena)
-    f: = calc.calculate(full@, arena)
+    f: = calc.calculate(full@, TODAY, arena)
     number("a formula of 4,096 bytes calculates", f@, 0, 0, 1, 2048.0)
 
 priv fn budget()
@@ -180,13 +192,13 @@ priv fn budget()
         verdict.check("the overview example reads", false, "")
         return
     $doc: = read(bytes, arena)
-    r: = calc.calculate(doc@, arena)
+    r: = calc.calculate(doc@, TODAY, arena)
     number("budget D1 is 30", r@, 0, 0, 3, 30.0)
     number("budget D2 is 10", r@, 0, 1, 3, 10.0)
     number("budget D3 is 40", r@, 0, 2, 3, 40.0)
     edit.set_cell(doc@, 0, 0, 1, .number, "24", arena) catch
         panic("setting a quantity")
-    changed: = calc.calculate(doc@, arena)
+    changed: = calc.calculate(doc@, TODAY, arena)
     number("a changed quantity changes its total", changed@, 0, 0, 3, 60.0)
     number("and the sum that depends on it", changed@, 0, 2, 3, 70.0)
     edit.insert_row(doc@, 0, 1, arena) catch
@@ -209,7 +221,7 @@ priv fn budget()
     found: = saved.find_str(expected)
     verdict.check("the edited budget saves its formulas, not their results", found.is_some(), saved)
     again: = read(saved, arena)
-    a: = calc.calculate(again@, arena)
+    a: = calc.calculate(again@, TODAY, arena)
     number("read again, the new row's total is 8", a@, 0, 1, 3, 8.0)
     number("read again, the sum takes the new row", a@, 0, 2, 3, 68.0)
     verdict.check("the edited budget saves a second time unchanged",
@@ -223,7 +235,7 @@ priv fn chains()
         long.s("| =A").s("\{row - 1\}").s("+1 |\n")
     long.s(":::\n")
     doc: = read(long.slice(), arena)
-    r: = calc.calculate(doc@, arena)
+    r: = calc.calculate(doc@, TODAY, arena)
     number("a running total down 10,000 rows", r@, 0, 9999, 0, 10000.0)
     defer $ring: = Str_builder()
     ring.s("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n| =A1000 |\n")
@@ -231,7 +243,7 @@ priv fn chains()
         ring.s("| =A").s("\{row - 1\}").s(" |\n")
     ring.s(":::\n")
     cycle: = read(ring.slice(), arena)
-    c: = calc.calculate(cycle@, arena)
+    c: = calc.calculate(cycle@, TODAY, arena)
     failure("a cycle through 1,000 cells", c@, 0, 999, 0, .cycle)
     failure("every cell of it", c@, 0, 0, 0, .cycle)
 
@@ -253,7 +265,7 @@ priv fn many_names() //<
     text.s(".B1 | =").s(names[NAMES - 1]).s(".B1+1 |\n:::\n")
     doc: = read(text.slice(), arena)
     verdict.check("2,000 table names that share a Map's slot read", doc.tables.len == NAMES + 1, "")
-    r: = calc.calculate(doc@, arena)
+    r: = calc.calculate(doc@, TODAY, arena)
     number("a formula finds the first of those tables by name", r@, NAMES, 0, 0, 6.0)
     number("and the last", r@, NAMES, 0, 1, 7.0)
     text.s("\n:::table name=\"").s(names[NAMES / 2]).s("\"\n| \"n\" |\n:::\n")
@@ -302,6 +314,239 @@ priv fn refusal_at(bytes: U8[], arena: Arena$@): U8[] //< the reader's message, 
         return arena.text().s(e.message).s(" \{e.line\}:\{e.column\}").take()
     return "read"
 
+// The cells formulas in `cases` read: A1 is 2, B1 the text Pens, A2 empty and B2 `#DIV/0!`.
+priv const INPUTS: U8[] = "| 2 | \"Pens\" |\n| | =1/0 |\n"
+
+priv fn comparisons()
+    cases(U8[][]::{ "A1=2 -> true", "A1<>2 -> false", "A1<3 -> true", "A1<=2 -> true",
+        "A1>2 -> false", "A1>=2 -> true", "A1 = 2.0 -> true", "-1 < 0 -> true",
+        "B1=\"pens\" -> true", "B1<>\"PENS\" -> false", "B1<\"Q\" -> true", "B1>\"pens\" -> false",
+        "\"a\"<\"B\" -> true", "\"ab\">\"a\" -> true", "\"\"<\"a\" -> true", "A2=0 -> true",
+        "A2=\"\" -> true", "A2=false -> true", "A2<1 -> true", "A2=A2 -> true", "A2>\"\" -> false",
+        "A2+1=1 -> true", "A1=\"2\" -> false", "A1<>\"2\" -> true", "A1<\"2\" -> #VALUE!",
+        "\"2\">=A1 -> #VALUE!", "true=1 -> false", "true<>1 -> true", "true>0 -> #VALUE!",
+        "B1=true -> false", "true>false -> true", "false=false -> true", "false<false -> false",
+        "B2=1 -> #DIV/0!", "1=B2 -> #DIV/0!", "Z99=B2 -> #REF!", "B2=Z99 -> #DIV/0!",
+        "1+1=2 -> true", "2*3>5 -> true", "-A1<0 -> true", "1<2=true -> #SYNTAX!",
+        "(1<2)=true -> true", "1= -> #SYNTAX!", "=1 -> #SYNTAX!", "1<> -> #SYNTAX!", "1=1 -> true",
+        "1==1 -> #SYNTAX!", "1=>1 -> #SYNTAX!", "1< =1 -> #SYNTAX!" })
+
+// In `logic`, the right side of `and` and `or` is calculated only when the left side does not
+// decide: `B2` is an error.
+priv fn logic()
+    cases(U8[][]::{ "true -> true", "false -> false", "true and false -> false",
+        "true and true -> true", "false or true -> true", "false or false -> false",
+        "not true -> false", "not false -> true", "not not true -> true", "not A1=3 -> true",
+        "not(A1=2) -> false", "true or false and false -> true",
+        "(true or false) and false -> false", "false and true or true -> true",
+        "A1>1 and B1=\"Pens\" -> true", "A1>1 and B1<>\"Pens\" -> false", "false and B2=1 -> false",
+        "true or B2=1 -> true", "true and B2=1 -> #DIV/0!", "false or B2=1 -> #DIV/0!",
+        "B2=1 or true -> #DIV/0!", "B2=1 and false -> #DIV/0!", "1 and true -> #VALUE!",
+        "true and 1 -> #VALUE!", "\"x\" or true -> #VALUE!", "not 0 -> #VALUE!",
+        "not \"\" -> #VALUE!", "A2 or true -> true", "not A2 -> true", "true and A2 -> false",
+        "true + 1 -> #VALUE!", "-true -> #VALUE!", "sum(true) -> #VALUE!", "sum(1, A1=2) -> #VALUE!",
+        "and -> #SYNTAX!", "true and -> #SYNTAX!", "not -> #SYNTAX!", "true(1) -> #SYNTAX!",
+        "true false -> #SYNTAX!" })
+
+priv fn text_in_formulas()
+    cases(U8[][]::{ "\"late\" -> \"late\"", "\"\" -> \"\"", "B1 -> \"Pens\"", "A2 -> 0", "A1 -> 2",
+        "\"A1\" -> \"A1\"", "\"a\\\"b\" -> \"a\"b\"", "\"x|y\" -> \"x|y\"", "\"x\" + 1 -> #VALUE!",
+        "\"1\" * 2 -> #VALUE!", "-\"1\" -> #VALUE!", "sum(\"1\") -> #VALUE!", "count(B1) -> 0",
+        "\"a\" \"b\" -> #SYNTAX!", "\"a\". -> #SYNTAX!" })
+    // Quotes before `.` and a cell name a table; anywhere else they hold text.
+    defer arena: = Arena(64 * 1024)
+    r: =
+        results("| =\"Q1 sales\".A1*2 | =\"Q1 sales\" |\n| =\"Q1 sales\".A1=\"Q1 sales\" | =\"Q1 \
+            sales\"=\"q1 SALES\" |\n:::\n\n:::table name=\"Q1 sales\"\n| \"n\" |\n| 5 |\n:::\n",
+        arena)
+    number("a quoted table name before a cell is a reference", r@, 0, 0, 0, 10.0)
+    shows("the same quotes alone are text", r@, 0, 1, "\"Q1 sales\"")
+    shows("a number and text are unequal", r@, 1, 0, "false")
+    shows("text equals text that differs only in case", r@, 1, 1, "true")
+    kind("a text cell's value keeps its text", r@, 0, 0, 1, .text)
+
+priv fn choices()
+    cases(U8[][]::{ "if(A1=2, 1, 2) -> 1", "if(A1<>2, 1, 2) -> 2",
+        "if(A1>1, \"big\", \"small\") -> \"big\"", "if(A2=\"\", \"none\", A2) -> \"none\"",
+        "if(A2=0, 0, A1/A2) -> 0", "if(A1=0, 0, 6/A1) -> 3", "if(true, A2, 1) -> 0",
+        "if(true, A2, 1)=\"\" -> true", "if(true, B1, 1) -> \"Pens\"", "if(true, true, 1) -> true",
+        "if(A1=2, if(B1=\"pens\", 10, 20), 30) -> 10", "if(A1=2, 10, if(true, 20, 30)) -> 10",
+        "1 + if(true, 2, 3) * 2 -> 5", "sum(if(true, A1, 0), 1) -> 3",
+        "if(true and B1=\"Pens\", 1, 0) -> 1", "if(not true, 1, 0) -> 0", "if(1, 1, 2) -> #VALUE!",
+        "if(\"x\", 1, 2) -> #VALUE!", "if(A2, 1, 2) -> 2", "if(B2=1, 1, 2) -> #DIV/0!",
+        "if(B2, 1, 2) -> #DIV/0!", "if(true, B2, 1) -> #DIV/0!", "if(true, 1) -> #SYNTAX!",
+        "if(true, 1, 2, 3) -> #SYNTAX!", "if() -> #SYNTAX!", "if(true) -> #SYNTAX!",
+        "If(true, 1, 2) -> #SYNTAX!", "if true, 1, 2 -> #SYNTAX!" })
+
+// The branch `if` does not take is read, so it must read, but no cell in it is calculated: an
+// error there never shows.
+priv fn lazy_choices()
+    cases(U8[][]::{ "if(true, 1, 1/0) -> 1", "if(false, 1/0, 2) -> 2", "if(false, B2, 2) -> 2",
+        "if(true, 1, Z99) -> 1", "if(true, 1, #REF!) -> 1", "if(false, sum(B1:B2), 3) -> 3",
+        "if(true, sum(A1:A2), 3) -> 2", "if(true, 1, 2 +) -> #SYNTAX!",
+        "if(true, 1, foo(1)) -> #SYNTAX!", "if(true, 1, A1:A2) -> #SYNTAX!",
+        "if(false, \"a\" \"b\", 1) -> #SYNTAX!" })
+    // A cycle is a cell reached again while it calculates. Only the branch taken is followed, so
+    // a cell named in the other branch is never reached: that is no cycle.
+    defer arena: = Arena(64 * 1024)
+    r: =
+        results("| 0 | =if(A1>0, B1, 5) |\n| 1 | =if(A2>0, B2, 5) |\n| =if(true, 1, A3) | |\n| \
+            =if(false, B4, 1) | =if(false, A4, 2) |\n| =if(true, B5, 1) | =if(true, A5, 2) |\n:::\n",
+        arena)
+    number("a cell named in the branch not taken is no cycle", r@, 0, 0, 1, 5.0)
+    failure("the same formula taking the branch is a cycle", r@, 0, 1, 1, .cycle)
+    number("a cell's own name in the branch not taken", r@, 0, 2, 0, 1.0)
+    number("two cells that name each other in branches not taken", r@, 0, 3, 0, 1.0)
+    number("and the other of the two", r@, 0, 3, 1, 2.0)
+    failure("two cells that name each other in branches taken", r@, 0, 4, 0, .cycle)
+    failure("and the other of those two", r@, 0, 4, 1, .cycle)
+    defer $long: = Str_builder()
+    long.s("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n| 1 |\n")
+    for row in Range(2, 10001, 1)
+        long.s("| =if(A").s("\{row - 1\}").s(" > 0, A").s("\{row - 1\}").s(" + 1, Z1) |\n")
+    long.s(":::\n")
+    defer big: = Arena(1024 * 1024)
+    doc: = read(long.slice(), big)
+    chain: = calc.calculate(doc@, TODAY, big)
+    number("a chain of choices down 10,000 rows", chain@, 0, 9999, 0, 10000.0)
+
+// `round` rounds the digits a person reads, half away from zero, as the number formats do.
+priv fn rounding()
+    cases(U8[][]::{ "round(2.675, 2) -> 2.68", "round(-2.675, 2) -> -2.68",
+        "round(1.005, 2) -> 1.01", "round(2.5, 0) -> 3", "round(-2.5, 0) -> -3",
+        "round(0.5, 0) -> 1", "round(0.49, 0) -> 0", "round(1.25, 1) -> 1.3",
+        "round(0.125, 2) -> 0.13", "round(9.995, 2) -> 10", "round(123.456, 0) -> 123",
+        "round(123.456, 1) -> 123.5", "round(0.1 + 0.2, 2) -> 0.3", "round(1.5, 15) -> 1.5",
+        "round(1234, -2) -> 1200", "round(1250, -2) -> 1300", "round(-1250, -2) -> -1300",
+        "round(49, -2) -> 0", "round(50, -2) -> 100", "round(1, -15) -> 0",
+        "round(5e14, -15) -> 1e15", "round(1e300, -15) -> 1e300", "round(0, 2) -> 0",
+        "round(-0.001, 2) -> 0", "round(A2, 2) -> 0", "round(A1, 0) -> 2", "round(7, A2) -> 7",
+        "round(2.25, 1) * 2 -> 4.6", "round(B1, 2) -> #VALUE!", "round(true, 2) -> #VALUE!",
+        "round(1, B1) -> #VALUE!", "round(1, 1.5) -> #NUM!", "round(1, 16) -> #NUM!",
+        "round(1, -16) -> #NUM!", "round(B2, 1) -> #DIV/0!", "round(1, B2) -> #DIV/0!",
+        "round(B2, B1) -> #DIV/0!", "round(1) -> #SYNTAX!", "round(1, 2, 3) -> #SYNTAX!",
+        "round(A1:A2, 1) -> #SYNTAX!" })
+
+// `today()` is the date the document was opened, as text in the form Ctrl+; types.
+priv fn today()
+    cases(U8[][]::{ "today() -> \"2026-10-23\"", "today() = \"2026-10-23\" -> true",
+        "\"2026-10-22\" < today() -> true", "\"2026-10-24\" < today() -> false",
+        "if(\"2026-09-30\" < today(), \"late\", \"\") -> \"late\"", "today() + 1 -> #VALUE!",
+        "today(1) -> #SYNTAX!", "today -> #SYNTAX!", "today( ) -> \"2026-10-23\"" })
+    defer arena: = Arena(64 * 1024)
+    doc: = read(join(HEAD, "| =today() | |\n:::\n", arena), arena)
+    a: = calc.calculate(doc@, "2026-10-23", arena)
+    b: = calc.calculate(doc@, "2027-01-02", arena)
+    verdict.check("the same document gives the date it is calculated with, and reads no clock",
+        a.at(0, 0, 0).text.equals("2026-10-23") &&
+        b.at(0, 0, 0).text.equals("2027-01-02"), "")
+
+// Table `d` for the conditional totals: an item, a count and a price on each row. Row 4's count
+// is empty, row 5's is text, and row 6's is `#DIV/0!`.
+priv const DATA: U8[] =
+    "\n:::table name=\"d\"\n| \"item\" | \"n\" | \"price\" |\n| \"Pens\" | 3 | 2.5 |\n| \"Ink\" | 1 \
+        | 8 |\n| \"pens\" | 2 | 2 |\n| \"Paper\" | | 4 |\n| \"Ink\" | \"many\" | 1 |\n| \"Ink\" | \
+        =1/0 | 3 |\n:::\n"
+
+priv fn conditional_totals()
+    cases_with(U8[][]::{ "sum_if(d.C1:C6, d.A1:A6 = \"Pens\") -> 4.5",
+            "count_if(d.B1:B6, d.A1:A6 = \"Pens\") -> 2",
+            "average_if(d.C1:C6, d.A1:A6 = \"pens\") -> 2.25",
+            "sum_if(d.C1:C6, d.A1:A6 = \"Ink\") -> 12", "count_if(d.C1:C6, d.A1:A6 = \"Ink\") -> 3",
+            "sum_if(d.B1:B5, d.A1:A5 = \"Ink\") -> 1", "count_if(d.B1:B5, d.A1:A5 = \"Ink\") -> 1",
+            "sum_if(d.C1:C4, d.B1:B4 > 1) -> 4.5", "sum_if(d.C1:C4, d.B1:B4 = \"\") -> 4",
+            "sum_if(d.C1:C4, d.B1:B4 >= 1 and d.A1:A4 <> \"Ink\") -> 4.5",
+            "sum_if(d.C1:C6, d.A1:A6 = \"Pens\" or d.A1:A6 = \"Paper\") -> 8.5",
+            "sum_if(d.C1:C6, not (d.A1:A6 = \"Ink\")) -> 8.5",
+            "sum_if(d.B1:C3, d.A1:A3 = \"Pens\") -> 9.5", "sum_if(d.C1, d.A1:A1 = \"Pens\") -> 2.5",
+            "sum_if(d.C1:C6, d.A1:A6 = B1) -> 4.5", "sum_if(d.C1:C6, d.A6:A1 = \"Pens\") -> 4.5",
+            "sum_if(d.C1:C6, round(d.C1:C6, 0) = 3) -> 5.5",
+            "sum_if(d.C1:C6, d.C1:C6 > average(d.C1:C6)) -> 12",
+            "sum_if(d.C1:C6, if(d.A1:A6 = \"Ink\", d.C1:C6 > 2, false)) -> 11",
+            "sum_if(d.C1:C6, d.A1:A6 = \"Nothing\") -> 0",
+            "count_if(d.C1:C6, d.A1:A6 = \"Nothing\") -> 0",
+            "average_if(d.C1:C6, d.A1:A6 = \"Nothing\") -> #EMPTY!",
+            "sum_if(d.C1:C6, d.A1:A6 = \"Pens\") * 2 -> 9",
+        // An error in a value on a row that matches carries out; on a row that does not, it is
+        // not read. An error in the condition carries out on the first row that has one.
+        "sum_if(d.B1:B6, d.A1:A6 = \"Ink\") -> #DIV/0!",
+            "count_if(d.B1:B6, d.A1:A6 = \"Ink\") -> #DIV/0!",
+            "sum_if(d.B1:B6, d.A1:A6 = \"Pens\") -> 5", "sum_if(d.C1:C6, d.B1:B6 > 1) -> #VALUE!",
+            "sum_if(d.C1:C6, d.B1:B6 = 1) -> #DIV/0!", "sum_if(d.C1:C6, d.A1:A6) -> #VALUE!",
+            "sum_if(Z1:Z6, d.A1:A6 = \"x\") -> #REF!", "sum_if(#REF!, d.A1:A6 = \"x\") -> #REF!",
+            "sum_if(d.C1:C6, d.Z1:Z6 = 1) -> #REF!",
+            "if(false, sum_if(d.C1:C6, d.A1:A6 = 1/0), 1) -> 1",
+            "sum_if(5, d.A1:A6 = \"x\") -> #SYNTAX!", "sum_if(d.C1+1, d.A1:A6 = \"x\") -> #SYNTAX!",
+            "sum_if(d.C1:C6) -> #SYNTAX!", "sum_if(d.C1:C6, d.A1:A6 = \"x\", 1) -> #SYNTAX!",
+            "d.A1:A6 = \"Pens\" -> #SYNTAX!", "if(d.A1:A6 = \"Pens\", 1, 2) -> #SYNTAX!"
+    }, DATA)
+
+// Every range in a condition is one column as tall as the values, and a condition holds one.
+priv fn condition_shapes()
+    cases_with(U8[][]::{ "sum_if(d.C1:C6, d.A1:A5 = \"Pens\") -> #SHAPE!",
+        "sum_if(d.C1:C5, d.A1:A6 = \"Pens\") -> #SHAPE!",
+        "sum_if(d.C1:C6, d.A1:B6 = \"Pens\") -> #SHAPE!",
+        "sum_if(d.C1:C6, d.A1:A6 = \"Pens\" and d.B1:B5 > 1) -> #SHAPE!",
+        "count_if(d.C1:C6, A1 = 2) -> #SHAPE!", "sum_if(d.C1:C6, true) -> #SHAPE!",
+        "average_if(d.C1, d.A1:A2 = \"Pens\") -> #SHAPE!",
+        "sum_if(d.C1:C6, d.B1:B6 = 1 and d.A1:A5 = \"x\") -> #SHAPE!",
+        "if(false, sum_if(d.C1:C6, d.A1:A5 = \"x\"), 1) -> 1",
+        "if(true, sum_if(d.C1:C6, d.A1:A5 = \"x\"), 1) -> #SHAPE!" }, DATA)
+    verdict.check("the mark of a shape error", Calc_error.shape.mark().equals("#SHAPE!"), "")
+
+// The values on a row are read only where the condition holds, so a total row inside its own
+// range is no cycle when the condition leaves its row out.
+priv fn conditional_cycles()
+    defer arena: = Arena(64 * 1024)
+    r: =
+        results("| \"Pens\" | 2 |\n| \"Ink\" | 3 |\n| \"Total\" | =sum_if(B1:B4, A1:A4 <> \
+            \"Total\") |\n| \"Total\" | =sum_if(B1:B4, A1:A4 <> \"Ink\") |\n| =1=1 | =sum(A5, \
+            B1:B2) |\n:::\n", arena)
+    number("a total in its own range, left out by the condition", r@, 0, 2, 1, 5.0)
+    failure("a total in its own range that the condition takes", r@, 0, 3, 1, .cycle)
+    number("a set of cells leaves out true and false", r@, 0, 4, 1, 5.0)
+
+priv fn cases(list: U8[][]) //< `cases_with`, with no other table
+    cases_with(list, "")
+
+priv fn cases_with(list: U8[][], after: U8[]) //<
+    //< Each a formula, without its `=`, then ` -> ` and what it calculates to as `shows` takes it
+    //< `after` holds any tables after table `t`.
+    defer arena: = Arena(256 * 1024)
+    defer $rows: = Str_builder()
+    rows.s(INPUTS)
+    for c in list
+        rows.s("| =").s(c.sub(0, arrow(c))).s(" | |\n")
+    rows.s(":::\n").s(after)
+    r: = results(arena.dup_str(rows.slice()), arena)
+    for i in Range.asc(list.len)
+        c: = list[i]
+        what: = arena.text().c('=').s(c.sub(0, arrow(c))).s(" is ")
+            .s(c.sub_from(arrow(c) + 4)).take()
+        shows(what, r@, i + 2, 0, c.sub_from(arrow(c) + 4))
+
+priv fn arrow(c: U8[]): Sz //< where ` -> ` stands in a case
+    return c.find_str(" -> ").unwrap_or(c.len)
+
+priv fn shows(what: U8[], r: Results@, row: Sz, column: Sz, want: U8[]) //<
+    //< The value of a cell of table `t` is `want`: `true`, `false`, an error's mark, text in
+    //< quotes written without escapes, or a number
+    v: = r.at(0, row, column)
+    defer $got: = Str_builder()
+    got.s(v.kind.variant_name()).c(' ').s("\{v.number\} ").s(v.text).c(' ').s(v.error.mark())
+    $ok: = false
+    if want.equals("true") || want.equals("false")
+        ok = v.kind == .boolean && v.boolean == want.equals("true")
+    else if want.starts_with("#")
+        ok = v.kind == .error && v.error.mark().equals(want)
+    else if want.starts_with("\"")
+        ok = v.kind == .text && v.text.equals(want.sub(1, want.len - 2))
+    else
+        n: = want.to_f64() catch
+            panic("a test's number does not read")
+        ok = v.kind == .number && v.number == n
+    verdict.check(what, ok, got.slice())
+
 priv fn number(what: U8[], r: Results@, u: Sz, row: Sz, column: Sz, want: F64) //<
     //< The cell's value is the number `want`
     v: = r.at(u, row, column)
@@ -322,7 +567,7 @@ priv fn kind(what: U8[], r: Results@, u: Sz, row: Sz, column: Sz, want: Value_ki
 
 priv fn results(rows: U8[], arena: Arena$@): Results //< the values of table `t` with these rows
     doc: = read(join(HEAD, rows, arena), arena)
-    return calc.calculate(doc@, arena)
+    return calc.calculate(doc@, TODAY, arena)
 
 priv fn read(bytes: U8[], arena: Arena$@): Document //< the model; a refusal stops the run
     src: = Source("t.ksmd", arena.dup_str(bytes)) catch e

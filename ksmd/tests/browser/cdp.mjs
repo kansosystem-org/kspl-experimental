@@ -77,7 +77,13 @@ export async function launch(binary, work) {
     known.add(targetId);
     const { sessionId } = await send("Target.attachToTarget", { targetId, flatten: true });
     const page = (method, params) => send(method, params, sessionId);
+    // What went wrong in the page, kept so a check that fails can say why.
+    page.errors = [];
     listeners.push((m) => {
+      if (m.sessionId === sessionId && m.method === "Runtime.exceptionThrown") {
+        const d = m.params.exceptionDetails;
+        page.errors.push(d.exception && d.exception.description ? d.exception.description : d.text);
+      }
       if (m.sessionId === sessionId && m.method === "Page.javascriptDialogOpening") {
         page("Page.handleJavaScriptDialog", answer === null ? { accept: false } :
           { accept: true, promptText: answer }).catch(() => {});

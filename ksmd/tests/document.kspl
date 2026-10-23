@@ -1,5 +1,6 @@
 //< Reader and writer checks for every block, inline markup and clause, and the examples
 //< Each model is checked against expected blocks, and each save against expected text.
+import "ksmd/look" { plain_look }
 import "ksmd/model" { Block_kind, Cell_kind, Document, Inline, Inline_kind, Piece_kind }
 import "ksmd/reader"
 import "ksmd/source" { Source }
@@ -21,6 +22,8 @@ fn run()
     clause_models()
     clause_saves()
     clause_refusals()
+    cell_looks()
+    text_looks()
     examples()
     refusals()
 
@@ -71,8 +74,8 @@ priv fn small_diff() //< changing one word of the model changes one line of the 
     node: = edited.inlines.get(1)
     edited.inlines
         .set(1,
-        Inline::{ .kind = node.kind, .text = "Second, edited, paragraph.",
-        .offset = node.offset })
+        Inline::{ .kind = node.kind, .text = "Second, edited, paragraph.", .offset = node.offset,
+        .look = plain_look() })
     defer $after: = Str_builder()
     writer.write(edited@, after@)
     verdict.check("an edit to one paragraph changes only its line",
@@ -214,8 +217,9 @@ priv fn inline_refusals()
         "this '[' is not closed on its line. Close it there, or write '\\[' for a literal '['", 3,
         3)
     refused("%ksmd 1\n\na]\n", "this ']' ends no link. Write '\\]' for a literal ']'", 3, 2)
-    refused("%ksmd 1\n\n[a] b\n", "a link's label is followed by its destination in '(' and ')'", 3,
-        3)
+    refused("%ksmd 1\n\n[a] b\n",
+        "a label in brackets is followed by a destination in '(' and ')', or a look in '{' and '}'",
+        3, 3)
     refused("%ksmd 1\n\n[a](ftp://x)\n",
         "a link goes to an https:, http: or mailto: address, or to a '#' fragment", 3, 5)
     refused("%ksmd 1\n\n[a](https://x y)\n",
@@ -286,17 +290,74 @@ priv fn clause_saves()
     canonical("a table with only its header", "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n:::\n",
         "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n:::\n")
 
+priv fn cell_looks()
+    canonical("a cell's look is written after its value, its parts in a fixed order",
+        "%ksmd 1\n\n:::table name=\"t\"\n| \"Item\" {fill=\"#DDE8F5\"} | \"n\" |\n| \"Pens\" |  \
+            120  {align=\"right\"  size=10.5 color=\"#C00000\"} |\n| {fill=\"#fff2cc\"} | \
+            =B1*2{size=14} |\n:::\n",
+        "%ksmd 1\n\n:::table name=\"t\"\n| \"Item\" {fill=\"#dde8f5\"} | \"n\" |\n| \"Pens\" | 120 \
+            {color=\"#c00000\" size=10.5 align=\"right\"} |\n| {fill=\"#fff2cc\"} | =B1*2 {size=14} \
+            |\n:::\n")
+    canonical("a brace inside quoted text is text",
+        "%ksmd 1\n\n:::table name=\"t\"\n| \"{a}\" |\n:::\n",
+        "%ksmd 1\n\n:::table name=\"t\"\n| \"{a}\" |\n:::\n")
+    refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" {color=\"red\"} |\n:::\n",
+        "a colour is '#' and six hex digits, as in \"#c00000\"", 4, 8)
+    refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" {size=5} |\n:::\n",
+        "a font size is a number of points from 6 to 72, whole or ending in .5", 4, 8)
+    refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" {align=\"middle\"} |\n:::\n",
+        "align is \"left\", \"center\" or \"right\"", 4, 8)
+    refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" {bold=1} |\n:::\n",
+        "a look takes color, fill, size and align", 4, 8)
+    refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" {} |\n:::\n",
+        "a look in braces holds at least one attribute", 4, 7)
+    refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" {size=12} x |\n:::\n",
+        "a look in braces ends its cell, with '}' last", 4, 7)
+
+priv fn text_looks()
+    canonical("a span's look is written after its brackets, its parts in a fixed order",
+        "%ksmd 1\n\nThis is [important]{size=14 color=\"#C00000\"} text.\n",
+        "%ksmd 1\n\nThis is [important]{color=\"#c00000\" size=14} text.\n")
+    canonical("a link can carry a look", "%ksmd 1\n\nSee [docs](https://x.org){fill=\"#fff2cc\"}.\n",
+        "%ksmd 1\n\nSee [docs](https://x.org){fill=\"#fff2cc\"}.\n")
+    canonical("marks inside a span", "%ksmd 1\n\n[a **b** `c`]{size=9}\n",
+        "%ksmd 1\n\n[a **b** `c`]{size=9}\n")
+    canonical("a brace after brackets that is text stays escaped", "%ksmd 1\n\n[a](#b)\\{x}\n",
+        "%ksmd 1\n\n[a](#b)\\{x}\n")
+    canonical("a paragraph that starts with a brace stays escaped", "%ksmd 1\n\n\\{not a look}\n",
+        "%ksmd 1\n\n\\{not a look}\n")
+    canonical("a line of braces aligns the paragraph or heading after it",
+        "%ksmd 1\n\n{align=\"center\"}\nCentred\ntext.\n\n{align=\"right\"}\n## Right\n",
+        "%ksmd 1\n\n{align=\"center\"}\nCentred text.\n\n{align=\"right\"}\n## Right\n")
+    defer arena: = Arena(64 * 1024)
+    doc: = read_ok("%ksmd 1\n\nx [y]{size=14} z\n", arena)
+    span: = doc.inlines.get(1)
+    verdict.check("a span is brackets with no destination and a look",
+        span.kind == Inline_kind.link_start && span.text.len == 0 && span.look.size == 28, "")
+    refused("%ksmd 1\n\n[a]{align=\"left\"}\n", "a look on text takes color, fill and size", 3, 5)
+    refused("%ksmd 1\n\n[]{size=12}\n", "these brackets hold no text", 3, 1)
+    refused("%ksmd 1\n\n[a]{size=12\n", "this look has no closing '}' on its line", 3, 4)
+    refused("%ksmd 1\n\n{align=\"center\"}\n\nText\n",
+        "put the paragraph or heading on the line right after its braces", 3, 1)
+    refused("%ksmd 1\n\n{color=\"#000000\"}\nText\n",
+        "a paragraph's line of braces holds only align. Colour text with [text]{color=...}", 3, 1)
+    refused("%ksmd 1\n\n{align=\"center\"}\n- item\n",
+        "a line of braces stands before a paragraph or a heading", 3, 1)
+    refused("%ksmd 1\n\n{align=\"center\"\nText\n",
+        "a line of braces before a paragraph ends with '}'. Write '\\{' for a literal '{'", 3, 16)
+
 priv fn clause_refusals()
     refused("%ksmd 1\n\n:::chart\n:::\n", "a clause is ':::table', ':::include' or ':::image'", 3,
         4)
     refused("%ksmd 1\n\n:::table\n| \"a\" |\n:::\n",
         "':::table' needs a name, as in name=\"budget\"", 3, 1)
-    refused("%ksmd 1\n\n:::table name=\"Budget\"\n| \"a\" |\n:::\n",
-        "a table name is a lowercase letter, then lowercase letters, digits and '_'", 3, 10)
+    refused("%ksmd 1\n\n:::table name=\"a\\tb\"\n| \"a\" |\n:::\n",
+        "a table name is 1 to 255 bytes of text, with no line breaks or other control characters",
+        3, 10)
     refused("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n:::\n\n:::table name=\"t\"\n| \"a\" \
         |\n:::\n", "another table in this source has this name", 7, 10)
     refused("%ksmd 1\n\n:::table name=\"t\" size=\"2\"\n| \"a\" |\n:::\n",
-        "':::table' takes only name and widths", 3, 19)
+        "':::table' takes only name, widths and formats", 3, 19)
     refused("%ksmd 1\n\n:::table name=\"t\" name=\"u\"\n| \"a\" |\n:::\n",
         "this attribute is given twice", 3, 19)
     refused("%ksmd 1\n\n:::table name=t\n| \"a\" |\n:::\n",

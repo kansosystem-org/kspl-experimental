@@ -1,4 +1,4 @@
-/* ksmd page: the document surface, the toolbar and the table look. */
+/* ksmd page: the document surface, the menu bar and its menus, and the table look. */
 :root {
   --paper: #ffffff;
   --ink: #1d1d1f;
@@ -8,6 +8,11 @@
   --mark: #1a5fb4;
   --error: #b3261e;
   --notice: #fff4ce;
+  --shadow: rgb(0 0 0 / 18%);
+  --heading: #e7eef8;
+  --range: rgb(26 95 180 / 14%);
+  --found: #fff2a8;
+  --found-now: #ffa94d;
 }
 
 body {
@@ -17,15 +22,16 @@ body {
   font: 16px/1.5 system-ui, sans-serif;
 }
 
-/* The file bar, the editing bar and a notice stay in sight while the document scrolls. */
+/* The file bar, the menu bar and a notice stay in sight while the document scrolls. */
 .top {
   position: sticky;
   top: 0;
-  z-index: 1;
+  z-index: 2;
+  background: var(--soft);
 }
 
 .files,
-.bar {
+.menubar {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
@@ -58,8 +64,6 @@ body {
 }
 
 .files button,
-.bar button,
-.bar select,
 .notice button {
   font: inherit;
   font-size: 14px;
@@ -91,8 +95,117 @@ body {
   gap: 4px;
 }
 
-.gap-in-bar {
-  width: 12px;
+/* The menu bar: each name opens a drop-down menu under it. */
+.menubar {
+  gap: 0;
+  padding: 2px 8px;
+}
+
+.top-menu {
+  position: relative;
+}
+
+.menu-name {
+  font: inherit;
+  font-size: 14px;
+  padding: 4px 10px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: none;
+  color: var(--ink);
+}
+
+.menu-name:hover,
+.menu-name[aria-expanded="true"] {
+  background: var(--paper);
+  border-color: var(--line);
+}
+
+/* A drop-down menu, a flyout and the right-click menu: one column of commands. */
+.menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  min-width: 14rem;
+  padding: 4px 0;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px var(--shadow);
+}
+
+.menu[hidden] {
+  display: none;
+}
+
+.menu button {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  padding: 4px 14px;
+  border: none;
+  background: none;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.menu button:hover:not(:disabled),
+.menu button:focus-visible,
+.menu .sub.open > .sub-name {
+  background: var(--soft);
+  outline: none;
+}
+
+.menu button:disabled {
+  color: var(--muted);
+  opacity: 0.6;
+}
+
+.menu kbd {
+  font: inherit;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.menu hr {
+  width: 100%;
+  margin: 4px 0;
+  border: none;
+  border-top: 1px solid var(--line);
+}
+
+/* A flyout opens beside its name, to the right, or to the left where the window ends. */
+.sub {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+.sub-name::after {
+  content: "\25B8";
+  color: var(--muted);
+}
+
+.menu.flyout {
+  top: -5px;
+  left: 100%;
+}
+
+.menu.flyout.flip {
+  left: auto;
+  right: 100%;
+}
+
+.menu.context {
+  position: fixed;
+  top: 0;
+  left: 0;
 }
 
 .doc {
@@ -159,8 +272,23 @@ body {
   outline-offset: 2px;
 }
 
+/* A table scrolls with the page, and its heading rows stay in sight under the header while the
+   rest of the table passes beneath. So the document has one scroll, and no box inside it holds
+   the wheel. A table wider than the page reaches past it, and the page scrolls sideways. */
 .table {
-  overflow-x: auto;
+  position: relative;
+}
+
+/* Its layer stands above the rows and under the header, which stands above it. */
+.table thead {
+  position: sticky;
+  top: var(--top-height, 0px);
+  z-index: 1;
+}
+
+/* The line under the names stays with them while the rows pass beneath. */
+.table thead th {
+  box-shadow: inset 0 -1px 0 var(--line);
 }
 
 .table-name {
@@ -189,17 +317,156 @@ body {
 }
 
 .table th.letter,
-.table th.row-number {
+.table th.row-number,
+.table thead tr > th:first-child {
   background: var(--soft);
   color: var(--muted);
   font-weight: normal;
   font-size: 12px;
   text-align: center;
-  width: 2.5em;
 }
 
+/* The row numbers take only the room their digits need. */
+.table th.row-number,
+.table thead tr > th:first-child {
+  width: 1%;
+  min-width: 0;
+  padding: 4px 6px;
+  white-space: nowrap;
+}
+
+/* The heading row holds the columns' names, so it looks apart from the column letters above it. */
 .table th.name {
+  position: relative;
+  padding-right: 22px;
+  background: var(--heading);
+  border-bottom: 2px solid var(--muted);
+}
+
+.table th.name[data-empty]::before {
+  content: "Name";
+  color: var(--muted);
+  font-weight: normal;
+}
+
+.table th.name[data-empty]:has(input)::before {
+  content: none;
+}
+
+/* The arrow that opens a column's sort and filter panel; a narrowed column's arrow is marked. */
+.filter-arrow {
+  position: absolute;
+  top: 50%;
+  right: 3px;
+  transform: translateY(-50%);
+  padding: 0 3px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: none;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.filter-arrow:hover {
+  border-color: var(--line);
+  background: var(--paper);
+}
+
+.filter-arrow.on {
+  color: var(--mark);
+  border-bottom: 2px solid var(--mark);
+}
+
+.table th.name:has(input) .filter-arrow,
+.include .filter-arrow {
+  display: none;
+}
+
+/* The panel under a column's heading: sorting, search, the values, a condition, OK and Cancel. */
+.filter-panel {
+  position: absolute;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 17rem;
+  padding: 8px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px var(--shadow);
+  font-size: 14px;
+}
+
+.filter-panel button,
+.filter-panel input,
+.filter-panel select {
+  font: inherit;
+}
+
+.filter-sorts {
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--line);
+}
+
+.filter-sorts button {
+  text-align: left;
+  padding: 3px 6px;
+  border: none;
+  background: none;
+  color: var(--ink);
+}
+
+.filter-sorts button:hover:not(:disabled) {
   background: var(--soft);
+}
+
+.filter-sorts button:disabled {
+  color: var(--muted);
+  opacity: 0.6;
+}
+
+.filter-values {
+  display: flex;
+  flex-direction: column;
+  max-height: 14rem;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--line);
+}
+
+.filter-values label {
+  white-space: nowrap;
+}
+
+.filter-values label[hidden] {
+  display: none;
+}
+
+.filter-capped {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.filter-panel details {
+  display: flex;
+  gap: 4px;
+}
+
+.filter-panel details[open] select,
+.filter-panel details[open] input {
+  margin: 4px 4px 0 0;
+}
+
+.filter-ends {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
 }
 
 /* The edge between two column letters, which a drag moves. */
@@ -236,9 +503,176 @@ body {
   color: var(--error);
 }
 
+/* The ribbon: named groups of tools under the menu bar, as in Office. */
+.ribbon {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 2px;
+  padding: 4px 8px;
+  background: var(--soft);
+  border-bottom: 1px solid var(--line);
+}
+
+.ribbon[hidden],
+.ribbon .group[hidden] {
+  display: none;
+}
+
+.ribbon .group {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 8px 14px;
+  border-right: 1px solid var(--line);
+}
+
+.ribbon .group::after {
+  content: attr(aria-label);
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  color: var(--muted);
+  font-size: 11px;
+  text-align: center;
+}
+
+.ribbon .table-group {
+  background: var(--heading);
+}
+
+.ribbon button,
+.ribbon select {
+  font: inherit;
+  font-size: 13px;
+  padding: 2px 6px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: none;
+  color: var(--ink);
+}
+
+.ribbon select {
+  border-color: var(--line);
+  background: var(--paper);
+}
+
+.ribbon button:hover:not(:disabled) {
+  border-color: var(--line);
+  background: var(--paper);
+}
+
+.ribbon button:disabled {
+  color: var(--muted);
+  opacity: 0.5;
+}
+
+.ribbon .icon {
+  margin-right: 3px;
+}
+
+/* A split tool: its face applies the colour shown under it, and its arrow opens the palette. */
+.ribbon .split {
+  display: inline-flex;
+  align-items: stretch;
+}
+
+.ribbon .split .apply {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  padding-bottom: 1px;
+}
+
+.ribbon .split .icon {
+  margin: 0;
+  font-weight: bold;
+}
+
+.ribbon .swatch {
+  width: 16px;
+  height: 4px;
+}
+
+.ribbon .split .more {
+  padding: 2px 2px;
+}
+
+.palette {
+  position: absolute;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px var(--shadow);
+  font-size: 13px;
+}
+
+.palette .none {
+  font: inherit;
+  text-align: left;
+}
+
+.palette .swatches {
+  display: grid;
+  grid-template-columns: repeat(7, 20px);
+  gap: 4px;
+}
+
+.palette .swatches button {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.palette .more-colours input {
+  vertical-align: middle;
+}
+
+/* The cells of a range chosen with Shift+click. */
+.table td.in-range,
+.table th.in-range {
+  box-shadow: inset 0 0 0 9999px var(--range);
+}
+
+.table td.chosen,
+.table th.chosen {
+  outline: 2px solid var(--mark);
+  outline-offset: -2px;
+}
+
+/* What a table's filter shows, with the button that shows every row again. */
+.filter-note {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.filter-note button {
+  font: inherit;
+  margin-left: 4px;
+}
+
+/* Measures a cell's value on one line, to fit its column. */
+.measure {
+  position: absolute;
+  visibility: hidden;
+  white-space: nowrap;
+}
+
 .cell-input {
   box-sizing: border-box;
   width: 100%;
+  min-width: 0;
   font: inherit;
   border: 1px solid var(--mark);
   padding: 2px 4px;
@@ -301,8 +735,19 @@ body {
 
 @media print {
   .top,
-  .status {
+  .status,
+  .contents,
+  .fill-handle {
     display: none;
+  }
+
+  body.with-contents {
+    padding-left: 0;
+  }
+
+  /* On paper the browser repeats a table's heading rows on each page. */
+  .table thead {
+    position: static;
   }
 
   .gap {

@@ -129,6 +129,13 @@ The rule is `docs/SPEC-programming-language.md`, 3.3. Three reasons put the mark
 
 **The declaration states whether it accepts the marker** (`struct Slice<|$T|> { … }`). So a `List<|$U8|>` against a type that does not declare it is a type error, not a lint found after the fact.
 
+#### A `const` slice can stand over a run of elements
+
+**A top-level `const` slice can be initialized from a run of elements (`T[]::{ … }`), not only from a string literal.** The rule is "4.1.2 `const`" in [`SPEC-programming-language.md`](SPEC-programming-language.md).
+
+* **A string literal was safe because its bytes are read-only.** The array a run builds for a top-level slice is placed in read-only memory beside the slice too. So the slice still cannot write into ROM.
+* **A refusal would cost each table a second shape.** A table of names or cases would become a fixed-length array (`T[_]`). Every call that takes it as a slice would then need the cast `T[]::(…)`.
+
 ## The type system
 
 **One rule runs through this chapter: a type says what it is, and nothing is inferred that a reader would have to guess at.**

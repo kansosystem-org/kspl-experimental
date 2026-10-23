@@ -22,7 +22,7 @@ import "std/chars"
 import "std/str" { Str_builder }
 fn run(root: Ast_node$@, cg: Genllvm_ctx$@, file_name: U8[]) //< runs the LLVM backend's phases
     //< The counterpart of genc's emit_file_node; it reads in output order (types -> globals ->
-    //< functions -> runtime -> strings).
+    //< functions -> runtime -> the arrays global slices point at -> strings).
     if root == null
         return
     cg.s("; ==========================================\n")
@@ -42,6 +42,8 @@ fn run(root: Ast_node$@, cg: Genllvm_ctx$@, file_name: U8[]) //< runs the LLVM b
     cg.s("declare void @kspl_trace_record(ptr, ptr, i32)\n")
     emit_saturating_casts(cg)
     emit_runtime_and_main(cg)
+    // Before the strings: an array's elements can add string literals to the pool.
+    gen_llvm_decl.emit_llvm_const_arrays(cg)
     emit_string_pool(cg)
     cg.s("; End of LLVM IR\n")
 

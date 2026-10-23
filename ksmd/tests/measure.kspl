@@ -8,6 +8,7 @@ import "ksmd/assemble" { assemble }
 import "ksmd/calc"
 import "ksmd/editor" { Editor }
 import "ksmd/editor"
+import "ksmd/editor_tables"
 import "ksmd/model" { Block_kind }
 import "ksmd/region" { text_spot }
 import "ksmd/workspace" { Workspace }
@@ -19,6 +20,7 @@ import "std/str" { Str_builder }
 import "std/sys"
 
 priv const RUNS: Sz = 5 //< how often each step runs; the middle time counts
+priv const OPENED: U8[] = "2026-10-23" //< the date the documents count as opened on
 
 fn main(): I32
     args: = sys.args()
@@ -106,9 +108,9 @@ priv fn measure(ws: Workspace@, name: U8[]) //< prints the middle time of each s
         blocks = top.doc.blocks.len
         bytes = top.source.bytes.len
         t = sys.mono_us()
-        _r: = calc.calculate(top.doc@, run)
+        _r: = calc.calculate(top.doc@, OPENED, run)
         values.push(sys.mono_us() - t)
-        $ed: = editor.open(top.doc, run)
+        $ed: = editor.open(top.doc, OPENED, run)
         key.push(keystroke(ed@, run))
         cell.push(cell_edit(ed@, run))
         t = sys.mono_us()
@@ -140,7 +142,7 @@ priv fn cell_edit(ed: Editor$@, run: Arena$@): I64 //< sets a count in the middl
     t: = sys.mono_us()
     ed.set_cell(block, rows / 2, 1, "7") catch
         return -1
-    _r: = calc.calculate(ed.doc@, run)
+    _r: = calc.calculate(ed.doc@, ed.today, run)
     return sys.mono_us() - t
 
 priv fn shown(what: U8[], times: List<|I64|>$@) //< the middle of the times, in milliseconds

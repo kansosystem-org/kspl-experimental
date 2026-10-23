@@ -67,10 +67,14 @@ function ksmdStart(root, bar, status, wasmBytes) {
       }
       ks.view.apply(r);
       for (const f of ks.rendered) f();
+      // A table that went takes the place with it, and the person works in the text again.
+      if (ks.where === "cell" && !ks.inTable()) ks.setPlace("text");
+      ks.view.showSelection(r.sel);
       ks.sel = r.sel;
       ks.say(r.ok ? "" : r.why);
-      bar.querySelector('[data-cmd="undo"]').disabled = r.undo !== 1;
-      bar.querySelector('[data-cmd="redo"]').disabled = r.redo !== 1;
+      // The menu and the ribbon each hold Undo and Redo.
+      for (const el of document.querySelectorAll('[data-cmd="undo"]')) el.disabled = r.undo !== 1;
+      for (const el of document.querySelectorAll('[data-cmd="redo"]')) el.disabled = r.redo !== 1;
       if (r.changed === 1) {
         for (const f of ks.changed) f();
         if (api.onchange) api.onchange();
@@ -89,17 +93,61 @@ function ksmdStart(root, bar, status, wasmBytes) {
       const f = ks.view.spotAt(s.focusNode, s.focusOffset);
       if (a && f) ks.select(a, f);
     };
-    // Puts the caret on a spot, such as a gap, and shows it.
-    ks.place = (spot) => {
-      ks.select(spot, spot);
-      ks.act("ksmd_web_selection");
+    // Puts the caret on a spot, such as a gap, or the selection from one spot to another, in the
+    // text, and shows it there. It leaves a table.
+    ks.place = (a, f = a) => {
+      ks.setPlace("text");
+      ks.select(a, f);
+      return ks.act("ksmd_web_selection");
     };
     ks.cellText = (block, row, column) => ks.out(w.ksmd_web_cell_text(block, row, column));
+    // Today's date as 2026-10-23, or the time now as 14:05: what Ctrl+; and Ctrl+: type, as in
+    // Excel. The form is ISO 8601's, which reads the same in every country and sorts as text.
+    ks.now = (time) => {
+      const d = new Date();
+      const two = (n) => String(n).padStart(2, "0");
+      return time ? `${two(d.getHours())}:${two(d.getMinutes())}` :
+        `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
+    };
 
+    // Where the person worked last: "text" or "cell". A look, a paste and the ribbon's table
+    // group follow it.
+    ks.where = "text";
+    ks.placeHooks = [];
+    ks.setPlace = (where) => {
+      if (ks.where === where) return;
+      ks.where = where;
+      for (const f of ks.placeHooks) f();
+    };
+    // Whether the person works in a table: a cell or a range chosen there, or a cell open. The
+    // page then draws no caret in the text, so no gap stands beside the table to move it.
+    ks.inTable = () => {
+      const el = ks.where === "cell" && ks.cell && ks.view.blocks()[ks.cell.block];
+      return !!el && el.classList.contains("table");
+    };
+    // Leaves the table for the text: the caret shows again at the model's selection.
+    ks.leaveTable = () => {
+      ks.setPlace("text");
+      ks.root.focus();
+      if (ks.sel) ks.view.showSelection(ks.sel);
+    };
+    // The header's height, under which a table's frozen heading and a heading scrolled to stand.
+    const top = document.querySelector(".top");
+    if (top && window.ResizeObserver) {
+      new ResizeObserver(() => {
+        document.documentElement.style.setProperty("--top-height", `${top.offsetHeight}px`);
+      }).observe(top);
+    }
     ksmdView(ks);
     ksmdTable(ks);
+    ksmdRange(ks);
+    ksmdFilter(ks);
     ksmdInput(ks);
     ksmdCommands(ks);
+    ksmdMenus(ks);
+    ksmdRibbon(ks);
+    ksmdFind(ks);
+    ksmdContents(ks);
 
     const api = {
       // Opens a document's source, as text or as bytes; on refusal the open document stays, and
@@ -107,8 +155,11 @@ function ksmdStart(root, bar, status, wasmBytes) {
       load(source) {
         ks.table.take();
         let opened;
+        // The date it opens on is what `today()` gives until the next document opens.
+        const d = new Date();
         try {
-          opened = w.ksmd_web_load(typeof source === "string" ? ks.put(source) : ks.putBytes(source));
+          opened = w.ksmd_web_load(typeof source === "string" ? ks.put(source) : ks.putBytes(source),
+            d.getFullYear(), d.getMonth() + 1, d.getDate());
         } catch (e) {
           if (!(e instanceof GaveUp)) throw e;
           w.ksmd_web_recover();
@@ -122,6 +173,8 @@ function ksmdStart(root, bar, status, wasmBytes) {
           return said;
         }
         ks.root.textContent = "";
+        ks.cell = null;
+        ks.setPlace("text");
         // Showing a large document can use up the memory too; the page then says it stopped.
         if (!ks.act("ksmd_web_render")) {
           return { ok: false, why: "The editor's memory ran out while it showed this document." };
@@ -162,24 +215,36 @@ function ksmdStart(root, bar, status, wasmBytes) {
   });
 }
 
-// The toolbar and keyboard commands, by name.
+// The menus' and the keyboard's commands, by name.
 function ksmdCommands(ks) {
   const kinds = { p: [0, 0, 0], c: [2, 0, 0], bullets: [3, 0, 0], numbers: [3, 0, 1] };
   for (let n = 1; n <= 6; n++) kinds[`h${n}`] = [1, n, 0];
   const marks = { emphasis: 0, strong: 1, code: 2 };
   const rows = { "row-above": [0, 0], "row-below": [0, 1], "row-remove": [1, 0] };
   const columns = { "column-left": [2, 0], "column-right": [2, 1], "column-remove": [3, 0] };
+  // The commands that act on the chosen cell's table.
+  const aligns = { "align-left": "left", "align-center": "center", "align-right": "right",
+    "align-none": "" };
+  const onTable = new Set([...Object.keys(rows), ...Object.keys(columns), "column-fit", "sort-up",
+    "sort-down", "filter-column", "filter-value", "filter-clear", "table-rename", "table-remove",
+    ...TABLE_GROUPS.find(([group]) => group === "Number format")[1].map(([cmd]) => cmd),
+    "fill-down", "fill-right"]);
 
   ks.command = (name) => {
     ks.flush();
     ks.table.take();
     if (name === "undo") return ks.act("ksmd_web_undo");
+    if (name === "find" || name === "replace") return ks.find.open(name === "replace");
+    if (name === "contents") return ks.contents.toggle();
     if (name === "redo") return ks.act("ksmd_web_redo");
-    if (name in rows || name in columns || name === "table-remove") return tableCommand(name);
+    if (onTable.has(name)) return tableCommand(name);
+    if (name in aligns) return ks.applyLook("align", aligns[name]);
+    if (name === "look-clear") return ks.applyLook("all", "");
     ks.sync();
     if (name in kinds) return ks.act("ksmd_web_kind", ...kinds[name]);
     if (name in marks) return ks.act("ksmd_web_mark", marks[name], 0);
     if (name === "indent" || name === "outdent") return ks.act("ksmd_web_indent", name === "indent" ? 1 : 0);
+    if (name === "date" || name === "time") return ks.act("ksmd_web_type", ks.put(ks.now(name === "time")), 0);
     if (name === "link") {
       const to = window.prompt("Link to an https:, http: or mailto: address, or a #place", "https://");
       if (to === null) return null;
@@ -193,39 +258,82 @@ function ksmdCommands(ks) {
     return null;
   };
 
-  function tableCommand(name) {
+  // Sets one part of a look, or clears it with an empty value: on the chosen cells where a cell
+  // was worked in last, or else on the selected text and, for alignment, its paragraphs.
+  const parts = { color: 0, fill: 1, size: 2, align: 3, all: 4 };
+  ks.applyLook = (part, value) => {
+    ks.flush();
+    if (ks.where === "cell" && chosen()) {
+      const r = ks.table.range();
+      ks.table.take();
+      return ks.act("ksmd_web_cell_look", r.block, r.r1, r.c1, r.r2, r.c2, parts[part], ks.put(value));
+    }
+    ks.sync();
+    if (part === "align") return ks.act("ksmd_web_align", ks.put(value));
+    return ks.act("ksmd_web_text_look", parts[part], ks.put(value));
+  };
+
+  // The chosen cell, while its table still stands where it was chosen.
+  const chosen = () => {
     const c = ks.cell;
+    const el = c && ks.view.blocks()[c.block];
+    return el && el.classList.contains("table") ? c : null;
+  };
+
+  // Enables only the table commands that can act now, so no item is pressed for nothing.
+  ks.enableTable = () => {
+    const c = chosen();
+    for (const el of document.querySelectorAll(".menu [data-cmd], .ribbon [data-cmd]")) {
+      const name = el.dataset.cmd;
+      if (!onTable.has(name)) continue;
+      el.disabled = !c || (name === "filter-clear" && !ks.filter.on(c.block)) ||
+        ((name === "filter-value" || name.startsWith("row-")) && c.row < 0);
+    }
+  };
+
+  function tableCommand(name) {
+    const c = chosen();
     if (!c) {
       ks.say("Choose a cell of the table first.");
       return null;
     }
-    if (name === "table-remove") {
-      ks.cell = null;
-      ks.root.focus();
-      return ks.act("ksmd_web_remove_table", c.block);
+    switch (name) {
+      case "table-remove":
+        ks.cell = null;
+        ks.root.focus();
+        return ks.act("ksmd_web_remove_table", c.block);
+      case "table-rename":
+        return ks.table.rename(c.block);
+      case "column-fit":
+        return ks.table.fit(c.block, c.column);
+      case "sort-up":
+      case "sort-down":
+        return ks.act("ksmd_web_sort", c.block, c.column, name === "sort-down" ? 1 : 0);
+      case "filter-column":
+        return ks.filter.open(c.block, c.column);
+      case "filter-value":
+        return ks.filter.only(c.block, c.row, c.column);
+      case "filter-clear":
+        return ks.filter.clearAll(c.block);
+      case "fill-down":
+      case "fill-right":
+        return ks.range.fill(name === "fill-down");
+      default:
+        if (name.startsWith("format-")) return ks.table.format(c.block, name);
+        break;
     }
     if (name in rows) {
+      // A new row is empty, so a filter would hide it at once; the filter goes first.
+      if (name !== "row-remove" && ks.filter.on(c.block)) {
+        ks.filter.clearAll(c.block);
+        const r = ks.act("ksmd_web_table_edit", c.block, rows[name][0], Math.max(c.row, 0) + rows[name][1]);
+        if (r && r.ok) ks.say("All rows are shown again, so the new row can be seen.");
+        return r;
+      }
       const [what, after] = rows[name];
       return ks.act("ksmd_web_table_edit", c.block, what, Math.max(c.row, 0) + after);
     }
     const [what, after] = columns[name];
     return ks.act("ksmd_web_table_edit", c.block, what, c.column + after);
-  }
-
-  for (const el of ks.bar.querySelectorAll("[data-cmd]")) {
-    // The toolbar must not take the selection away from the document.
-    el.addEventListener("mousedown", (e) => {
-      if (el.tagName === "BUTTON") e.preventDefault();
-    });
-    if (el.tagName === "SELECT") {
-      el.addEventListener("change", () => {
-        const name = el.value;
-        el.value = "";
-        ks.command(name);
-        ks.root.focus();
-      });
-    } else {
-      el.addEventListener("click", () => ks.command(el.dataset.cmd));
-    }
   }
 }

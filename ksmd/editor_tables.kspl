@@ -1,0 +1,367 @@
+//< The editor's actions on tables: adding and removing one, its rows and columns, its cells and
+//< their looks, sorting, pasting a grid, widths, number formats and names
+//< Each is one step of undo, recorded by comparing the tables with copies made before it.
+import "ksmd/calc" { calculate }
+import "ksmd/edit"
+import "ksmd/edit" { Edit_error, Sort_key }
+import "ksmd/editor" { Editor, Pos, Refused, end_block, replace }
+import "ksmd/format" { Number_format }
+import "ksmd/formula" { Positions, write_formula }
+import "ksmd/history" { Transaction, begin, capture, is_empty, record_tables, swap }
+import "ksmd/look" { Look_part, plain_look, with_part }
+import "ksmd/marker" { is_decimal }
+import "ksmd/model" { Block, Cell_kind, Table }
+import "ksmd/region" { Unit, blank_unit, gap_spot, paragraph_style, settle, whole_unit }
+import "std/chars"
+import "std/ds" { List }
+import "std/json"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+
+enum Table_edit //< a row or column edit a page asks for, at a row or column of the table
+    insert_row //< an empty row before row `at`; at the count of rows, after the last
+    remove_row
+    insert_column //< an empty column before column `at`; at the count, after the last
+    remove_column
+
+impl Editor
+    fn insert_table(ed: Self$@, columns: Sz, rows: Sz): Void!Refused //<
+        //< Puts a new table in place of the selection, splitting the text the caret stands in
+        defer scratch: = Arena(1024)
+        none: = List<|List<|U8[]|>|>(scratch)
+        ed.place_table(columns, rows, none@)!
+
+    fn insert_grid(ed: Self$@, grid: List<|List<|U8[]|>|>@): Void!Refused //<
+        //< Puts a new table made from a pasted grid in place of the selection, as one step
+        //< The grid's first row gives the column names, and the rest the data rows.
+        $columns: Sz = 1
+        for line in grid
+            columns = line.len if line.len > columns else columns
+        rows: = grid.len - 1 if grid.len > 1 else 0
+        ed.place_table(columns, rows, grid)!
+
+    priv fn place_table(ed: Self$@, columns: Sz, rows: Sz, grid: List<|List<|U8[]|>|>@):
+        Void!Refused //<
+            //< A new table in place of the selection, its cells filled from the grid, as one step
+        s: = ed.start_spot()
+        e: = ed.end_spot()
+        defer scratch: = Arena(16 * 1024)
+        before: = capture(ed.doc@, scratch)
+        $w: = ed.work(s, e, s.block, end_block(e), scratch)
+        table: = Block::{ .kind = .table, .level = 0, .label = "", .text = "",
+            .first = ed.doc.tables.len, .count = 1, .offset = 0, .align = .none }
+        $frag: = List<|Unit|>(scratch)
+        frag.push(blank_unit(paragraph_style(), scratch))
+        frag.push(whole_unit(table, scratch))
+        frag.push(blank_unit(paragraph_style(), scratch))
+        r: = replace(w@, frag@, scratch)
+        got: = settle(ed.doc@, w.units@, w.from, ed.arena, scratch) catch
+            throw .no_read_back
+        // The copy restores the tables if the grid is refused; it lasts only when there is one.
+        saved: = capture(ed.doc@, ed.arena if grid.len > 0 else scratch)
+        u: = edit.new_table(ed.doc@, columns, rows, ed.arena) catch why
+            throw .table(why)
+        if grid.len > 0
+            ed.fill(u, -1, 0, grid) catch why
+                for ed.doc.tables.len > saved.len
+                    _gone: = ed.doc.tables.pop()
+                for i in Range.asc(saved.len)
+                    ed.doc.tables[i] = saved[i]
+                throw .table(why)
+        $tx: = begin(ed.selection(), ed.arena)
+        caret: = Pos::{ .unit = r.last, .offset = 0 }
+        ed.apply(w@, tx@, got@, caret, caret)
+        ed.close_table_step(before@, tx)
+
+    fn remove_table(ed: Self$@, block: Sz): Void!Refused //<
+        //< Removes a table block and empties its table; the caret takes the gap it leaves
+        _u: = ed.table_of(block)!
+        ed.delete_range(gap_spot(block), gap_spot(block + 1), .other)!
+
+    fn edit_table(ed: Self$@, block: Sz, what: Table_edit, at: Sz): Void!Refused //<
+        //< Inserts or removes a row or a column of the table a block shows
+        u: = ed.table_of(block)!
+        defer scratch: = Arena(16 * 1024)
+        before: = capture(ed.doc@, scratch)
+        switch what
+        case .insert_row
+            edit.insert_row(ed.doc@, u, at, ed.arena) catch why
+                throw .table(why)
+        case .remove_row
+            edit.remove_row(ed.doc@, u, at) catch why
+                throw .table(why)
+        case .insert_column
+            edit.insert_column(ed.doc@, u, at, ed.arena) catch why
+                throw .table(why)
+        case .remove_column
+            edit.remove_column(ed.doc@, u, at) catch why
+                throw .table(why)
+        ed.close_table_step(before@, begin(ed.selection(), ed.arena))
+
+    fn set_cell(ed: Self$@, block: Sz, row: Sz, column: Sz, text: U8[]): Void!Refused //<
+        //< Puts what a person typed in a cell; row -1 is the names above the data rows
+        //< Text after `=` is a formula, a number as JSON writes one is a number, and nothing is an
+        //< empty cell. Quoted text is text, so `"12"` is the text 12. Anything else is text as
+        //< typed.
+        u: = ed.table_of(block)!
+        defer scratch: = Arena(16 * 1024)
+        before: = capture(ed.doc@, scratch)
+        if row < 0
+            edit.set_name(ed.doc@, u, column, text, ed.arena) catch why
+                throw .table(why)
+        else
+            value: = value_of(text, scratch)
+            edit.set_cell(ed.doc@, u, row, column, value.kind, value.text, ed.arena) catch why
+                throw .table(why)
+        ed.close_table_step(before@, begin(ed.selection(), ed.arena))
+
+    fn sort_table(ed: Self$@, block: Sz, column: Sz, descending: Bool): Void!Refused //<
+        //< Orders the data rows of the table a block shows by one column's values, as one step
+        //< A formula sorts by its calculated value, which the rows hold before the sort.
+        u: = ed.table_of(block)!
+        t: = ed.doc.tables[u]@
+        if column < 0 || column >= t.columns.len
+            throw .table(.outside)
+        defer scratch: = Arena(64 * 1024)
+        values: = calculate(ed.doc@, ed.today, scratch)
+        $keys: = List<|Sort_key|>(scratch)
+        for row in Range.asc(t.rows.len)
+            v: = values.at(u, row, column)
+            $key: = Sort_key::{ .group = 4, .number = 0.0, .text = "", .row = row }
+            switch v.kind
+            case .number
+                key.group = 0
+                key.number = v.number
+            case .text
+                key.group = 1
+                key.text = v.text
+            case .boolean
+                key.group = 2
+                key.number = 1.0 if v.boolean else 0.0
+            case .error
+                key.group = 3
+                key.text = v.error.mark()
+            case .empty
+                key.group = 4
+            keys.push(key)
+        before: = capture(ed.doc@, scratch)
+        edit.sort_rows(ed.doc@, u, keys@, descending, scratch) catch why
+            throw .table(why)
+        ed.close_table_step(before@, begin(ed.selection(), ed.arena))
+
+    fn set_look(ed: Self$@, block: Sz, from_row: Sz, from_column: Sz, to_row: Sz, to_column: Sz,
+        part: Look_part, value: U8[]): Void!Refused //<
+            //< Sets or clears one part of the look of every cell in a rectangle, as one step
+            //< Row -1 is the names above the data rows. An empty value clears that part.
+            //< The range and the value are checked first, so a refusal changes no cell.
+        u: = ed.table_of(block)!
+        t: = ed.doc.tables[u]@
+        if from_row < -1 || to_row >= t.rows.len || from_row > to_row || from_column < 0 ||
+            to_column >= t.columns.len || from_column > to_column
+            throw .table(.outside)
+        if with_part(plain_look(), part, value).is_none()
+            throw .table(.not_a_look)
+        defer scratch: = Arena(16 * 1024)
+        before: = capture(ed.doc@, scratch)
+        for row in Range(from_row, to_row + 1, 1)
+            for column in Range(from_column, to_column + 1, 1)
+                edit.set_look(ed.doc@, u, row, column, part, value, ed.arena) catch why
+                    throw .table(why)
+        ed.close_table_step(before@, begin(ed.selection(), ed.arena))
+
+    fn paste_cells(ed: Self$@, block: Sz, row: Sz, column: Sz, grid: List<|List<|U8[]|>|>@):
+        Void!Refused //<
+            //< Puts a grid of pasted texts into a table from one cell, as one step
+            //< Each text reads as typed text does (`value_of`); a number written with thousands
+            //< separators, as `1,234.5`, is a number. Row -1 starts with the names. The table
+            //< grows rows and columns where the grid reaches past it. A refusal changes nothing.
+        u: = ed.table_of(block)!
+        if row < -1 || column < 0
+            throw .table(.outside)
+        defer scratch: = Arena(64 * 1024)
+        before: = capture(ed.doc@, scratch)
+        saved: = capture(ed.doc@, ed.arena)
+        ed.fill(u, row, column, grid) catch why
+            for i in Range.asc(saved.len)
+                ed.doc.tables[i] = saved[i]
+            throw .table(why)
+        ed.close_table_step(before@, begin(ed.selection(), ed.arena))
+
+    priv fn fill(ed: Self$@, u: Sz, row: Sz, column: Sz, grid: List<|List<|U8[]|>|>@):
+        Void!Edit_error //<
+            //< Grows table `u` to hold the grid from a cell, then sets each cell; row -1 is the names
+        $width: Sz = 0
+        for line in grid
+            width = line.len if line.len > width else width
+        for ed.doc.tables[u].rows.len < row + grid.len
+            edit.insert_row(ed.doc@, u, ed.doc.tables[u].rows.len, ed.arena)!
+        for ed.doc.tables[u].columns.len < column + width
+            edit.insert_column(ed.doc@, u, ed.doc.tables[u].columns.len, ed.arena)!
+        defer scratch: = Arena(16 * 1024)
+        for r in Range.asc(grid.len)
+            line: = grid[r]
+            for c in Range.asc(line.len)
+                at_row: = row + r
+                if at_row < 0
+                    edit.set_name(ed.doc@, u, column + c, line[c], ed.arena)!
+                    continue
+                value: = value_of(pasted(line[c], scratch), scratch)
+                edit.set_cell(ed.doc@, u, at_row, column + c, value.kind, value.text, ed.arena)!
+
+    fn fill_cells(ed: Self$@, block: Sz, top: Sz, left: Sz, height: Sz, width: Sz, bottom: Sz,
+        right: Sz): Void!Refused //<
+            //< Copies a range's first cells over the rest of it, as one step
+            //< The `height` by `width` cells at `top`, `left` repeat down to `bottom` and across to
+            //< `right`. Each copy is `edit.copy_cell`'s, so a reference without `$` shifts. A
+            //< refusal changes nothing.
+        u: = ed.table_of(block)!
+        t: = ed.doc.tables[u]@
+        if top < 0 || left < 0 || height < 1 || width < 1 || bottom < top + height - 1 ||
+            right < left + width - 1 || bottom >= t.rows.len || right >= t.columns.len
+            throw .table(.outside)
+        defer scratch: = Arena(64 * 1024)
+        before: = capture(ed.doc@, scratch)
+        for row in Range(top, bottom + 1, 1)
+            for column in Range(left, right + 1, 1)
+                from_row: = top + (row - top) % height
+                from_column: = left + (column - left) % width
+                if from_row == row && from_column == column
+                    continue
+                edit.copy_cell(ed.doc@, u, from_row, from_column, u, row, column, ed.arena) catch why
+                    ed.put_tables_back(before@)
+                    throw .table(why)
+        ed.close_table_step(before@, begin(ed.selection(), ed.arena))
+
+    fn put_tables_back(ed: Self$@, before: List<|Table|>@) //<
+        //< Makes every table its copy again, after an edit refused midway; nothing is recorded
+        was: = ed.change
+        $tx: = begin(ed.selection(), ed.arena)
+        record_tables(ed.doc@, before, tx@, ed.arena)
+        defer scratch: = Arena(16 * 1024)
+        swap(ed.doc@, tx@, true, ed.change@, scratch)
+        ed.change = was
+
+    fn set_widths(ed: Self$@, block: Sz, weights: List<|Sz|>@): Void!Refused //<
+        //< Gives the columns of the table a block shows their relative widths, as one step
+        u: = ed.table_of(block)!
+        defer scratch: = Arena(16 * 1024)
+        before: = capture(ed.doc@, scratch)
+        edit.set_widths(ed.doc@, u, weights) catch why
+            throw .table(why)
+        ed.close_table_step(before@, begin(ed.selection(), ed.arena))
+
+    fn set_format(ed: Self$@, block: Sz, first: Sz, last: Sz, f: Number_format): Void!Refused //<
+        //< Gives columns `first` to `last` of a block's table one number format, as one step
+        u: = ed.table_of(block)!
+        defer scratch: = Arena(16 * 1024)
+        before: = capture(ed.doc@, scratch)
+        edit.set_format(ed.doc@, u, first, last, f, ed.arena) catch why
+            throw .table(why)
+        ed.close_table_step(before@, begin(ed.selection(), ed.arena))
+
+    fn step_places(ed: Self$@, block: Sz, first: Sz, last: Sz, more: Bool): Void!Refused //<
+        //< One more, or one fewer, decimal place in the formatted columns, as one step
+        u: = ed.table_of(block)!
+        defer scratch: = Arena(16 * 1024)
+        before: = capture(ed.doc@, scratch)
+        edit.step_places(ed.doc@, u, first, last, more) catch why
+            throw .table(why)
+        ed.close_table_step(before@, begin(ed.selection(), ed.arena))
+
+    fn rename_table(ed: Self$@, block: Sz, name: U8[]): Void!Refused //<
+        //< names the table a block shows
+        u: = ed.table_of(block)!
+        defer scratch: = Arena(16 * 1024)
+        before: = capture(ed.doc@, scratch)
+        edit.rename_table(ed.doc@, u, name, ed.arena) catch why
+            throw .table(why)
+        ed.close_table_step(before@, begin(ed.selection(), ed.arena))
+
+    fn cell_text(ed: Self@, u: Sz, row: Sz, column: Sz, arena: Arena$@): U8[] //<
+        //< What a person edits in a cell, which `set_cell` reads back as the same value
+        //< Text that would read as another kind is shown quoted, as the source writes it.
+        defer scratch: = Arena(16 * 1024)
+        at: = Positions(ed.doc@, scratch)
+        return ed.cell_text_at(u, row, column, at@, arena)
+
+    fn cell_text_at(ed: Self@, u: Sz, row: Sz, column: Sz, at: Positions@, arena: Arena$@): U8[] //<
+        //< `cell_text`, where the places of rows and columns are already worked out
+        //< Working them out once serves every cell of a table.
+        t: = ed.doc.tables[u]@
+        if row < 0
+            return t.cells[column].text
+        cell: = t.cells[t.at(row, column)]
+        switch cell.kind
+        case .empty
+            return ""
+        case .number
+            return cell.text
+        case .text
+            if value_of(cell.text, arena).kind == .text && !cell.text.starts_with("\"")
+                return cell.text
+            defer $out: = Str_builder()
+            out.c('"').escape_and_append(cell.text).c('"')
+            return arena.dup_str(out.slice())
+        case .formula
+            defer $out: = Str_builder()
+            out.c('=')
+            write_formula(ed.doc@, t, cell, at, 0, 0, out@)
+            return arena.dup_str(out.slice())
+
+    priv fn table_of(ed: Self@, block: Sz): Sz!Refused //< the table a block shows
+        if block < 0 || block >= ed.doc.blocks.len ||
+            ed.doc.blocks.get(block).kind != .table
+            throw .table(.outside)
+        return ed.doc.blocks.get(block).first
+
+    priv fn close_table_step(ed: Self$@, before: List<|Table|>@, $tx: Transaction) //<
+        //< Records how the tables differ from their copies, and the step
+        record_tables(ed.doc@, before, tx@, ed.arena)
+        ed.change.tables = true
+        ed.change.any = ed.change.any || !is_empty(tx@)
+        ed.finish(tx, .other, false)
+
+struct Value //< what typed text puts in a cell
+    kind: Cell_kind
+    text: U8[] //< a formula without its `=`, a number as written, or the text
+
+priv fn pasted(text: U8[], arena: Arena$@): U8[] //<
+    //< A pasted cell's text, with a number's thousands separators taken out: `-1,234.5` is
+    //< `-1234.5`. Anything else stays as it was.
+    t: = text.trim_spaces()
+    i: Sz = 1 if t.starts_with("-") else 0
+    $digits: Sz = 0
+    for i + digits < t.len && t[i + digits].is_digit()
+        digits += 1
+    if digits == 0 || digits > 3 || i + digits == t.len || t[i + digits] != ','
+        return t
+    defer $b: = Str_builder()
+    b.s(t.sub(0, i + digits))
+    $j: = i + digits
+    for j < t.len && t[j] == ','
+        if j + 4 > t.len || !t[j + 1].is_digit() || !t[j + 2].is_digit() ||
+            !t[j + 3].is_digit()
+            return t
+        b.s(t.sub(j + 1, 3))
+        j += 4
+    rest: = t.sub_from(j)
+    b.s(rest)
+    joined: = arena.dup_str(b.slice())
+    return joined if is_decimal(joined) else t
+
+fn value_of(typed: U8[], arena: Arena$@): Value //< how `set_cell` reads typed text
+    if typed.len == 0
+        return Value::{ .kind = .empty, .text = "" }
+    if typed[0] == '='
+        return Value::{ .kind = .formula, .text = typed.sub_from(1) }
+    if typed[0] == '"'
+        if text: = quoted(typed, arena)
+            return Value::{ .kind = .text, .text = text }
+    if is_decimal(typed)
+        return Value::{ .kind = .number, .text = typed }
+    return Value::{ .kind = .text, .text = typed }
+
+priv fn quoted(typed: U8[], arena: Arena$@): U8[]? //< the text a JSON string means, if it is one
+    parsed: = json.parse(typed, arena) catch
+        return .none
+    return parsed.val.as_str()

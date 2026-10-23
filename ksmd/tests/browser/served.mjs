@@ -32,7 +32,7 @@ const IMAGES = ':::image src="pics/dot.png" alt="A dot"\n:::\n\n' +
   ':::image src="pics/huge.png" alt="Huge"\n:::\n\n:::image src="pics/fake.png" alt="Fake"\n:::\n\n' +
   ':::image src="pics/none.png" alt="None"\n:::\n';
 const TOP = `${H}# Top\n\nFirst paragraph.\n\n:::include path="parts/notes.ksmd"\n:::\n\n${IMAGES}`;
-const NOTES = `${H}Note text.\n\n:::table name="t"\n| "a" | "b" |\n| 2 | =A1*3 |\n:::\n`;
+const NOTES = `${H}Note text.\n\n## Notes heading\n\n:::table name="t"\n| "a" | "b" |\n| 2 | =A1*3 |\n:::\n`;
 
 export async function served(browser, pageFile, work, kssrv) {
   verdict.part = "served";
@@ -208,6 +208,12 @@ const SECTIONS = {
       "a file that is not PNG or JPEG is refused, whatever its name", await shown("pics/fake.png"));
     check((await shown("pics/none.png")).includes("no file stands at this path"),
       "a missing image is an error at its clause", await shown("pics/none.png"));
+    await d.menu("contents");
+    const listed = await d.js("Array.from(document.querySelectorAll('.contents-list li'))" +
+      ".map((li) => `${li.className}:${li.textContent}`).join('|')");
+    check(listed === "level-1:Top|level-2 included:Notes headingparts/notes.ksmd",
+      "the contents list an included file's heading in its place, marked with its file", listed);
+    await d.menu("contents");
     check(snapshot(ctx.root) === before, "opening writes nothing");
     await ctx.browser.closeTab(d.page);
   },

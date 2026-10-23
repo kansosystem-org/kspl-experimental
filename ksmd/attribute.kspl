@@ -1,0 +1,77 @@
+//< Reads `name=value` pairs: a clause's after its kind, and a look's inside its braces
+//< A value is a JSON string or a decimal number. Pairs are separated by spaces, and a name is given
+//< once.
+import "ksmd/marker" { is_decimal, quoted_end }
+import "ksmd/source" { Diagnostic, Source }
+import "std/chars"
+import "std/ds" { List }
+import "std/json"
+import "std/mem" { Arena }
+import "std/str"
+
+struct Attribute //< one `name=value` pair
+    name: U8[]
+    value: U8[] //< a string's decoded bytes, or a number as written
+    quoted: Bool
+    offset: Sz //< where its name starts in the original bytes
+
+fn read_attributes(src: Source@, text: U8[], from: Sz, end: Sz, offset: Sz, arena: Arena$@):
+    List<|Attribute|>!Diagnostic //<
+        //< The pairs in `text` from `from` to `end`; `text` starts at `offset` in the original bytes
+    $found: = List<|Attribute|>(arena)
+    $i: = from
+    for i < end && text[i] == ' '
+        i += 1
+    for i < end
+        start: = i
+        for i < end && (text[i].is_lower() || text[i] == '_')
+            i += 1
+        if i == start || i == end || text[i] != '='
+            throw src.diagnostic(offset + start,
+                "an attribute is a name, '=' and a value, as in name=\"budget\"")
+        name: = text.sub(start, i - start)
+        i += 1
+        $value: U8[] = ""
+        quoted: = i < end && text[i] == '"'
+        if quoted
+            close: = quoted_end(text.sub(0, end), i)
+            if close == end
+                throw src.diagnostic(offset + i, "this quoted value has no closing '\"'")
+            value = decode(src, text.sub(i, close + 1 - i), offset + i, arena)!
+            i = close + 1
+        else
+            value_start: = i
+            for i < end && text[i] != ' '
+                i += 1
+            value = text.sub(value_start, i - value_start)
+            if !is_decimal(value)
+                throw src.diagnostic(offset + value_start,
+                    "a value is a quoted string or a decimal number")
+        if _seen: = find(found, name)
+            throw src.diagnostic(offset + start, "this attribute is given twice")
+        found
+            .push(Attribute::{ .name = name, .value = value, .quoted = quoted,
+            .offset = offset + start })
+        if i < end && text[i] != ' '
+            throw src.diagnostic(offset + i, "put a space between two attributes")
+        for i < end && text[i] == ' '
+            i += 1
+    return found
+
+fn decode(src: Source@, quoted: U8[], at: Sz, arena: Arena$@): U8[]!Diagnostic //<
+    //< The bytes a JSON string means, quotes included in `quoted`
+    doc: = json.parse(quoted, arena) catch
+        throw src.diagnostic(at, "quoted text uses JSON quoting and escapes")
+    return doc.val.as_str().unwrap_or("")
+
+fn find(attributes: List<|Attribute|>, name: U8[]): Attribute? //< the attribute so named
+    for i in Range.asc(attributes.len)
+        if attributes.get(i).name.equals(name)
+            return .some(attributes.get(i))
+    return .none
+
+fn attribute_at(attributes: List<|Attribute|>, name: U8[]): Sz //<
+    //< Where a given attribute starts; 0 when it is absent
+    if a: = find(attributes, name)
+        return a.offset
+    return 0

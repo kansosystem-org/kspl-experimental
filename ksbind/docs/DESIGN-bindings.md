@@ -86,6 +86,10 @@ Each binding closes off one well-known way that code using the library directly 
 * **The verification's own answer decides the error.** A certificate that does not verify stops the handshake, and is reported as `cert_verify_failed`. A peer that speaks no TLS is reported apart from it (`handshake_failed`).
 * A host name holding a NUL, or longer than OpenSSL takes, **fails rather than being cut** (cut, it would verify a different host).
 
+**The handshake has one deadline.** `Tls_stream.connect` gives it 10 seconds by default; `handshake_ms` sets another budget. A non-positive budget expires immediately. TCP connection and certificate-store setup precede this budget. The deadline covers every handshake read and write, including the final queued message. A peer sending occasional bytes cannot restart it.
+
+The socket is non-blocking during the handshake and uses readiness waits for the remaining time. Success restores blocking mode for normal reads and writes. Expiry returns `handshake_timed_out`. Failure frees the TLS state and closes TCP without a shutdown exchange, so cleanup cannot wait for the peer. Established-stream reads, writes and graceful close have no new timeout.
+
 **`tls`: the end of a stream.** A close_notify is the message a TLS peer sends to say "I am finished". Taking a dropped TCP connection as the end too lets whoever can drop the connection cut a reply short unnoticed (a truncation attack).
 
 * `read` knows the close_notify came when `SSL_get_error` says `SSL_ERROR_ZERO_RETURN`.
