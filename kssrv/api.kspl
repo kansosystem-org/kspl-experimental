@@ -12,6 +12,7 @@ import "std/http"
 import "std/io"
 import "std/json" + { Json_builder }
 import "std/mem" { heap_used_bytes }
+import "std/seq"
 import "std/sha256" + { Sha256 }
 import "std/str" { Str_builder }
 import "std/sys"
@@ -194,6 +195,53 @@ fn queue_api_stat(c: conn.Conn$@, query: U8[], root: U8[], keep: Bool) //<
         .set("changed_at", b.int_val(info.mtime)).build()
     queue_json(c, 200, val, keep)
 
+priv const MAX_LISTED: Sz = 2000 //< the most names one listing returns
+
+fn queue_api_list(c: conn.Conn$@, query: U8[], root: U8[], keep: Bool) //<
+    //< `GET /api/list?path=<folder>`: the names in one folder under the root, for a Save As dialog
+    //< `{"folders":[…],"files":[…],"more":false}`, each list sorted. An empty path is the root.
+    //< Caution: **Names only, and only what the page could open anyway.** No content and no size.
+    //< A link is left out, so the dialog never offers a way out of the root, and so is a hidden
+    //< name (`.git`, `.ksmd-workspace`). So is anything neither a folder nor an ordinary file.
+    //< At most `MAX_LISTED` names come back; `more` says that others stand there.
+    rel: U8[] = rel_or_refuse(c, query, root) catch
+        return
+    folder: = root if rel.len == 0 else fs.join(root, rel, c.arena)
+    if fs.is_link(folder) || !fs.is_dir(folder)
+        queue_json_error(c, 404)
+        return
+    names: = fs.read_dir(folder, c.arena) catch _e
+        queue_json_error(c, 404)
+        return
+    sorted: = names.order_by(fn(a: U8[]@, b: U8[]@; ): I32 {
+        return a.compare(b$);
+    }, c.arena)
+    $b: = Json_builder(c.arena)
+    $folders: = b.arr()
+    $files: = b.arr()
+    $listed: Sz = 0
+    $more: = false
+    for name in sorted
+        if name.len == 0 || name[0] == '.'
+            continue
+        full: = fs.join(folder, name, c.arena)
+        if fs.is_link(full)
+            continue
+        is_folder: = fs.is_dir(full)
+        if !is_folder && conn.regular_file_size(full).is_none()
+            continue
+        if listed == MAX_LISTED
+            more = true
+            break
+        listed += 1
+        if is_folder
+            folders = folders.push(b.str_val(name))
+        else
+            files = files.push(b.str_val(name))
+    val: = b.obj().set("folders", folders.build()).set("files", files.build())
+        .set("more", b.bool_val(more)).build()
+    queue_json(c, 200, val, keep)
+
 // ==========================================
 // The token
 // ==========================================
@@ -234,14 +282,14 @@ fn queue_api_car(c: conn.Conn$@, req: http.Request$@, p: pilot.Pilot$@, keep: Bo
     if dist < 0I64 || line < 0I64 || line >= I64::pilot.LINE_PATTERNS
         queue_json_error(c, 400)
         return
-    seq: = doc.val.get("seq").as_int64().unwrap_or(0I64)
+    seq_no: = doc.val.get("seq").as_int64().unwrap_or(0I64)
     obs: = pilot.Obs::{ .dist_mm = dist, .line = line }
     // The work uses the connection's arena, which `conn_build` rewinds per request.
     act: = pilot.decide(p, obs, c.arena)
     m: = pilot.MANEUVERS[act]
     conn.stats.commands += 1I64
     $b: = Json_builder(c.arena)
-    val: = b.obj().set("seq", b.int_val(seq)).set("cmd", b.str_val(m.name))
+    val: = b.obj().set("seq", b.int_val(seq_no)).set("cmd", b.str_val(m.name))
         .set("lon", b.int_val(m.lon)).set("lat", b.int_val(m.lat))
         .set("rot", b.int_val(m.rot)).set("valid_ms", b.int_val(pilot.COMMAND_VALID_MS)).build()
     queue_json(c, 200, val, keep)
@@ -307,6 +355,7 @@ fn queue_api_stop(c: conn.Conn$@) //<
 priv enum Api //< the endpoint a route reaches
     file
     stat
+    list
     here
     stop
     status
@@ -319,12 +368,13 @@ priv struct Route //< one entry point under `/api/`
     methods: U8[] //< the methods it takes, as a 405's `Allow` names them; another one is a 405
     api: Api //< the endpoint it reaches
 
-priv const ROUTES: Route[7] = ::{ //<
+priv const ROUTES: Route[8] = ::{ //<
     //< Every entry point, with who may reach it and by which methods
     //< **The guards run once, here, for every row**: decided per endpoint, a new one forgets one.
     //< `/api/file` has no `HEAD`: `/api/stat` gives the size and whether it exists (Principle 6).
     Route::{ .path = "/api/file", .reach = .local, .methods = "GET, PUT", .api = .file },
     Route::{ .path = "/api/stat", .reach = .local, .methods = "GET", .api = .stat },
+    Route::{ .path = "/api/list", .reach = .local, .methods = "GET", .api = .list },
     Route::{ .path = "/api/here", .reach = .local, .methods = "GET", .api = .here },
     Route::{ .path = "/api/stop", .reach = .local, .methods = "POST", .api = .stop },
     Route::{ .path = "/api/status", .reach = .both, .methods = "GET", .api = .status },
@@ -364,6 +414,8 @@ impl Api
             queue_api_file(c, t, req, ctx.root, keep)
         case .stat
             queue_api_stat(c, t.query, ctx.root, keep)
+        case .list
+            queue_api_list(c, t.query, ctx.root, keep)
         case .here
             queue_api_here(c)
         case .stop

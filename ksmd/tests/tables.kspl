@@ -2,14 +2,14 @@
 //< names, column widths, pasting and filling
 //< Each check compares the saved source, and undo and redo give back the source before and after.
 //< Values are checked through calculation, so a reference left on the wrong cell shows.
-import "ksmd/calc"
-import "ksmd/editor" { Editor, Refused }
-import "ksmd/editor"
-import "ksmd/editor_tables" { Table_edit }
-import "ksmd/reader"
-import "ksmd/region" { gap_spot, text_spot }
-import "ksmd/source" { Source }
-import "ksmd/writer"
+import "ksmd/base/source" { Source }
+import "ksmd/calc/calc"
+import "ksmd/edit/editor" { Editor, Refused }
+import "ksmd/edit/editor"
+import "ksmd/edit/editor_tables" { Table_edit }
+import "ksmd/edit/region" { gap_spot, text_spot }
+import "ksmd/syntax/reader"
+import "ksmd/syntax/writer"
 import "std/chars"
 import "std/ds" { List }
 import "std/mem" { Arena }
@@ -30,6 +30,8 @@ fn run()
     looks()
     pasting()
     filling()
+    series()
+    dated()
 
 priv fn inserting()
     defer arena: = Arena(64 * 1024)
@@ -251,6 +253,23 @@ priv fn attempt(ed: Editor$@, action: Wrong): Bool!Refused
         ed.rename_table(0, "two\nlines")!
     return true
 
+priv fn dated() //< a date cell reads, saves and sorts as a date
+    defer arena: = Arena(64 * 1024)
+    head: = "%ksmd 1\n\n:::table name=\"t\"\n| \"d\" |\n"
+    text: =
+        join3(head, "| 2026-10-23 |\n| \"2026-01-01\" |\n| 2025-02-28 |\n| 3 |\n", ":::\n", arena)
+    $ed: = opened(text, arena)
+    saves("a date stands bare, and a quoted one stays text", ed@, arena, text)
+    sorted(ed@, 0, false)
+    saves("numbers sort first, then dates by day, then text", ed@, arena,
+        join3(head, "| 3 |\n| 2025-02-28 |\n| 2026-10-23 |\n| \"2026-01-01\" |\n", ":::\n", arena))
+    rest: = "| 2025-02-28 |\n| 2026-10-23 |\n| \"2026-01-01\" |\n:::\n"
+    set(ed@, 0, 0, 0, "2024-02-29")
+    saves("a typed date is a date", ed@, arena, join3(head, "| 2024-02-29 |\n", rest, arena))
+    set(ed@, 0, 0, 0, "2026-02-30")
+    saves("a day that is no date stays text", ed@, arena,
+        join3(head, "| \"2026-02-30\" |\n", rest, arena))
+
 priv fn sorting()
     defer arena: = Arena(64 * 1024)
     head: = "%ksmd 1\n\n:::table name=\"t\"\n| \"item\" | \"n\" | \"double\" |\n"
@@ -382,11 +401,54 @@ priv fn filling()
         join3(head, "| 1 | 1 | 1 |\n| 2 | 20 | |\n| 3 | 30 | |\n| 4 | 40 | |\n", ":::\n", arena))
     ed.undo()
     $outside: = false
-    ed.fill_cells(0, 0, 0, 1, 1, 4, 0) catch
+    ed.fill_cells(0, 0, 0, 1, 1, 4, 0, false) catch
         outside = true
     verdict.check("a fill past the last row is refused", outside, "")
     saves("and changes nothing", ed@, arena, before)
     too_long(arena)
+
+priv fn series() //< the fill handle goes on with a series where the cells make one
+    goes_on("two numbers go on by their step", "| 1 |\n| 2 |", 2, "| 1 |\n| 2 |\n| 3 |\n| 4 |")
+    goes_on("one number alone repeats", "| 5 |", 1, "| 5 |\n| 5 |\n| 5 |\n| 5 |")
+    goes_on("decimal steps add without rounding error", "| 0.1 |\n| 0.2 |", 2,
+        "| 0.1 |\n| 0.2 |\n| 0.3 |\n| 0.4 |")
+    goes_on("a step down passes zero", "| 10 |\n| 7.5 |", 2, "| 10 |\n| 7.5 |\n| 5 |\n| 2.5 |")
+    goes_on("steps that differ repeat", "| 1 |\n| 2 |\n| 4 |", 3, "| 1 |\n| 2 |\n| 4 |\n| 1 |")
+    goes_on("text ending in a number goes on by one", "| \"Item 1\" |", 1,
+        "| \"Item 1\" |\n| \"Item 2\" |\n| \"Item 3\" |\n| \"Item 4\" |")
+    goes_on("or by its step", "| \"Q1\" |\n| \"Q3\" |", 2,
+        "| \"Q1\" |\n| \"Q3\" |\n| \"Q5\" |\n| \"Q7\" |")
+    goes_on("a number with leading zeros keeps its width", "| \"Week 08\" |", 1,
+        "| \"Week 08\" |\n| \"Week 09\" |\n| \"Week 10\" |\n| \"Week 11\" |")
+    goes_on("a date goes on by a day", "| 2026-10-30 |", 1,
+        "| 2026-10-30 |\n| 2026-10-31 |\n| 2026-11-01 |\n| 2026-11-02 |")
+    goes_on("or by its step, across a year", "| 2026-12-25 |\n| 2027-01-01 |", 2,
+        "| 2026-12-25 |\n| 2027-01-01 |\n| 2027-01-08 |\n| 2027-01-15 |")
+    goes_on("a date written as text repeats", "| \"2026-10-23\" |", 1,
+        "| \"2026-10-23\" |\n| \"2026-10-23\" |\n| \"2026-10-23\" |\n| \"2026-10-23\" |")
+    defer arena: = Arena(64 * 1024)
+    $ed: =
+        opened("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"c\" | \"d\" |\n| 1 | 2 | | \
+            |\n:::\n", arena)
+    ed.fill_cells(0, 0, 0, 1, 2, 0, 3, true) catch e
+        verdict.check("a fill right", false, e.message())
+    saves("a row goes on to the right", ed@, arena,
+        "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" | \"c\" | \"d\" |\n| 1 | 2 | 3 | 4 \
+            |\n:::\n")
+
+priv fn goes_on(what: U8[], first: U8[], given: Sz, expected: U8[]) //<
+    //< A column of four rows whose `given` first cells are `first`, filled down by the handle
+    defer arena: = Arena(64 * 1024)
+    defer $rows: = Str_builder()
+    rows.s(first)
+    for _ in Range(given, 4, 1)
+        rows.s("\n| |")
+    head: = "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n"
+    $ed: = opened(join3(head, rows.slice(), "\n:::\n", arena), arena)
+    ed.fill_cells(0, 0, 0, given, 1, 3, 0, true) catch e
+        verdict.check(what, false, e.message())
+        return
+    saves(what, ed@, arena, join3(head, expected, "\n:::\n", arena))
 
 priv fn too_long(arena: Arena$@) //<
     //< A fill refused midway puts back the cells it copied before the refusal
@@ -407,14 +469,14 @@ priv fn too_long(arena: Arena$@) //<
         arena)
     $ed: = opened(tall, arena)
     $refused: = false
-    ed.fill_cells(0, 8, 1, 1, 2, 9, 2) catch e
+    ed.fill_cells(0, 8, 1, 1, 2, 9, 2, false) catch e
         refused = e.message().equals(Refused.table(.too_long).message())
     verdict.check("a fill that would write a formula too long is refused", refused, "")
     saves("and the cell copied before the refusal is put back", ed@, arena, tall)
     verdict.check("nothing is left to undo", !ed.can_undo(), "")
 
 priv fn filled(ed: Editor$@, top: Sz, left: Sz, height: Sz, width: Sz, bottom: Sz, right: Sz)
-    ed.fill_cells(0, top, left, height, width, bottom, right) catch e
+    ed.fill_cells(0, top, left, height, width, bottom, right, false) catch e
         verdict.check("a fill", false, e.message())
 
 priv fn row3(a: U8[], b: U8[], c: U8[], arena: Arena$@): List<|U8[]|> //< one row of a grid

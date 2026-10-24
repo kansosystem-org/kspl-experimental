@@ -4,28 +4,62 @@
 // and a chosen command close every menu, through `shut`.
 // The arrow keys move through a menu: Up and Down between items, Right into a flyout or on to the
 // next menu, Left back out. Enter and Space press the item that has the focus.
-// The table's commands stand in one list, `TABLE_GROUPS`: the Table menu shows each group as a
-// flyout, and the right-click menu shows the groups one after another.
+// The menu bar holds File, Edit and View; the ribbon holds the text's tools. The table's commands
+// stand in one list, `TABLE_GROUPS`, which the right-click menu shows one group after another, a
+// long one as a flyout. Shift+F10 or the menu key opens it from a cell. A command's key, which
+// its item shows, runs it from a cell through the same list.
 "use strict";
 
 const TABLE_GROUPS = [
   ["Rows", [["row-above", "Insert row above"], ["row-below", "Insert row below"],
     ["row-remove", "Remove row"]]],
   ["Columns", [["column-left", "Insert column left"], ["column-right", "Insert column right"],
-    ["column-remove", "Remove column"], ["column-fit", "Fit column width"]]],
-  ["Fill", [["fill-down", "Fill down", "Ctrl+D"], ["fill-right", "Fill right", "Ctrl+R"]]],
-  ["Sort", [["sort-up", "Sort ascending (A to Z, 0 to 9)"], ["sort-down", "Sort descending"]]],
-  ["Filter", [["filter-column", "Filter this column…"],
-    ["filter-value", "Show only rows with this value"], ["filter-clear", "Show all rows"]]],
-  ["Number format", [["format-none", "General: as calculated"], ["format-number", "Number: 1234.50"],
-    ["format-grouped", "Thousands: 1,234.50"], ["format-percent", "Percent: 12%"],
-    ["format-currency", "Currency…"], ["format-more", "More decimal places"],
-    ["format-fewer", "Fewer decimal places"]]],
-  ["Table", [["table-rename", "Rename table…"], ["table-remove", "Remove table"]]],
+    ["column-remove", "Remove column"], ["column-fit", "Fit column width"],
+    ["column-choices", "Choices…"], ["column-rule", "Colour by value…"]]],
+  // A group marked `true` is a flyout, so the menu fits a laptop's screen; Excel's cell menu holds
+  // Sort and Filter as flyouts too. Rows, Columns and Note stay open, as the most used.
+  ["Fill", [["fill-down", "Fill down", "Ctrl+D"], ["fill-right", "Fill right", "Ctrl+R"]], true],
+  ["Sort", [["sort-up", "Sort ascending (A to Z, 0 to 9)"], ["sort-down", "Sort descending"]], true],
+  ["Filter", [["filter-column", "Filter this column…", "Alt+\u2193"],
+    ["filter-value", "Show only rows with this value"], ["filter-clear", "Show all rows"]], true],
+  ["Number format", [["format-none", "General: as calculated", "Ctrl+Shift+~"], ["format-number", "Number: 1234.50"],
+    ["format-grouped", "Thousands: 1,234.50", "Ctrl+Shift+!"], ["format-percent", "Percent: 12%", "Ctrl+Shift+%"],
+    ["format-currency", "Currency…", "Ctrl+Shift+$"], ["format-more", "More decimal places"],
+    ["format-fewer", "Fewer decimal places"]], true],
+  ["Group", [["group-rows", "Group rows", "Alt+Shift+\u2192"],
+    ["ungroup-rows", "Ungroup rows", "Alt+Shift+\u2190"], ["group-hide", "Hide detail"],
+    ["group-show", "Show detail"]], true],
+  ["AutoSum", [["autosum-sum", "Sum", "Alt+="], ["autosum-average", "Average"],
+    ["autosum-count", "Count numbers"], ["autosum-max", "Max"], ["autosum-min", "Min"]], true],
+  ["Note", [["note", "Note…", "Shift+F2"], ["note-resolve", "Resolve note"]]],
+  ["Table", [["table-rename", "Rename table…"], ["table-chart", "Insert chart"],
+    ["table-csv", "Export as CSV"], ["table-print", "Leave out of print"],
+    ["table-remove", "Remove table"]], true],
 ];
 
 function ksmdMenus(ks) {
   const bar = ks.bar;
+
+  // Each table command that has a key: the key's parts, as its item shows them, and the command.
+  const arrows = { "\u2190": "ArrowLeft", "\u2192": "ArrowRight", "\u2193": "ArrowDown" };
+  const keyed = TABLE_GROUPS.flatMap(([, cmds]) => cmds.filter((c) => c[2]).map(([cmd, , key]) => {
+    const parts = key.split("+");
+    const last = parts[parts.length - 1];
+    return { cmd, ctrl: parts.includes("Ctrl"), alt: parts.includes("Alt"),
+      shift: parts.includes("Shift"), key: arrows[last] || (last.length === 1 ? last.toLowerCase() : last) };
+  }));
+  // It runs before the cell's own keys, as a press on the item would, and leaves the cell chosen.
+  ks.root.addEventListener("keydown", (e) => {
+    const cell = e.target.closest && e.target.closest(".table [data-r]");
+    if (!cell || cell.closest(".include") || e.isComposing) return;
+    const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    const hit = keyed.find((k) => k.key === key && k.ctrl === (e.ctrlKey || e.metaKey) &&
+      k.alt === e.altKey && k.shift === e.shiftKey);
+    if (!hit) return;
+    e.preventDefault();
+    e.stopPropagation();
+    ks.command(hit.cmd);
+  }, true);
 
   function item(cmd, label, key) {
     const b = document.createElement("button");
@@ -62,17 +96,16 @@ function ksmdMenus(ks) {
     return sub;
   }
 
-  const tableMenu = bar.querySelector("[data-table-menu]");
-  for (const [name, items] of TABLE_GROUPS) tableMenu.appendChild(flyout(name, items));
-
   const context = document.createElement("div");
   context.className = "menu context";
   context.setAttribute("role", "menu");
   context.setAttribute("aria-label", "Table");
   context.hidden = true;
-  TABLE_GROUPS.forEach(([, items], k) => {
-    if (k > 0) context.appendChild(document.createElement("hr"));
-    for (const [cmd, label, key] of items) context.appendChild(item(cmd, label, key));
+  TABLE_GROUPS.forEach(([name, items, nested], k) => {
+    // Flyouts side by side share one line above and below them, as one group of names.
+    if (k > 0 && !(nested && TABLE_GROUPS[k - 1][2])) context.appendChild(document.createElement("hr"));
+    if (nested) context.appendChild(flyout(name, items));
+    else for (const [cmd, label, key] of items) context.appendChild(item(cmd, label, key));
   });
   document.body.appendChild(context);
 
@@ -82,7 +115,7 @@ function ksmdMenus(ks) {
 
   const items = (menu) => Array.from(menu.children)
     .map((el) => (el.classList.contains("sub") ? el.firstElementChild : el))
-    .filter((el) => el.tagName === "BUTTON" && !el.disabled);
+    .filter((el) => el.tagName === "BUTTON" && !el.disabled && !el.hidden);
 
   function showFlyout(sub, on) {
     const head = sub.firstElementChild;
@@ -95,9 +128,15 @@ function ksmdMenus(ks) {
       for (const inner of menu.querySelectorAll(".sub.open")) showFlyout(inner, false);
       return;
     }
-    // A flyout with no room on the right opens to the left instead.
+    // A flyout with no room on the right opens to the left instead, and one with no room below
+    // moves up until it fits.
     menu.classList.remove("flip");
-    if (menu.getBoundingClientRect().right > window.innerWidth) menu.classList.add("flip");
+    menu.style.top = "";
+    const r = menu.getBoundingClientRect();
+    if (r.right > window.innerWidth) menu.classList.add("flip");
+    if (r.bottom > window.innerHeight) {
+      menu.style.top = `${menu.offsetTop - Math.min(r.bottom - window.innerHeight, r.top)}px`;
+    }
   }
 
   function closeFlyouts(menu, except) {
@@ -142,6 +181,7 @@ function ksmdMenus(ks) {
   // Closes every menu. With `restore`, the focus goes back where it was before a menu took it.
   function shut(restore) {
     closeTop();
+    closeFlyouts(context, null);
     context.hidden = true;
     if (restore) {
       const to = back && back.isConnected ? back : ks.root;
@@ -217,7 +257,7 @@ function ksmdMenus(ks) {
       }
       return;
     }
-    const tops = Array.from(bar.querySelectorAll(".menu-name"));
+    const tops = Array.from(bar.querySelectorAll(".top-menu:not([hidden]) > .menu-name"));
     const step = (k) => {
       const at = tops.indexOf(openName || name);
       const next = tops[(at + k + tops.length) % tops.length];

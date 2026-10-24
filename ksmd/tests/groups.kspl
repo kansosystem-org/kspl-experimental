@@ -1,0 +1,153 @@
+//< Groups of rows: how `groups` reads and saves, what an edit does to them, and their undo
+import "ksmd/base/source" { Source }
+import "ksmd/edit/editor" { Editor }
+import "ksmd/edit/editor_tables" { Group_edit, Table_edit }
+import "ksmd/syntax/reader"
+import "ksmd/tests/tables" { opened, saves }
+import "std/chars"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/verdict"
+
+priv const OPEN: U8[] = "%ksmd 1\n\n:::table name=\"t\""
+priv const ROWS: U8[] = "\n| \"a\" |\n| 1 |\n| 2 |\n| 3 |\n| 4 |\n| 5 |\n| 6 |\n:::\n" //< six rows
+
+fn run()
+    reading()
+    refusals()
+    grouping()
+    following()
+
+priv fn reading()
+    defer arena: = Arena(64 * 1024)
+    for groups in U8[][]::{ "rows 2-4", "rows 1-6, rows 2-4 closed, rows 3", "rows 2-3, rows 4-5",
+        "rows 6 closed" }
+        text: = table_with(groups, arena)
+        ed: = opened(text, arena)
+        saves(arena.text().s("groups read and save unchanged: \{groups\}").take(), ed@, arena, text)
+
+priv fn refusals()
+    for groups in U8[][]::{ "rows 0", "rows 2-2", "rows 4-2", "rows 7", "rows 2-4,rows 5",
+        "rows 02", "row 2", "rows 2 open", "rows 2-4, " }
+        refused(groups,
+            "groups lists entries such as rows 2-4 or rows 6 closed, each naming data rows from 1, \
+                separated by ', '")
+    refused("rows 3, rows 2",
+        "groups lists its entries from the top, an outer group before the groups it holds")
+    refused("rows 2-3, rows 1-6",
+        "groups lists its entries from the top, an outer group before the groups it holds")
+    refused("rows 2-4, rows 3-5", "a group holds another whole, or shares no row with it")
+    refused("rows 2-3, rows 2-3 closed", "two groups hold the same rows")
+    // Nine groups, each inside the one before, in a table of nine rows.
+    defer arena: = Arena(64 * 1024)
+    refused_in(with_rows("", "| 1 |", arena), "leave out groups when the table has none")
+    defer $deep: = Str_builder()
+    defer $rows: = Str_builder()
+    for i in Range.asc(9)
+        if i > 0
+            deep.s(", ")
+            rows.c('\n')
+        if i < 8
+            deep.s("rows 1-\{9 - i\}")
+        else
+            deep.s("rows 1")
+        rows.s("| \{i + 1\} |")
+    refused_in(with_rows(deep.slice(), rows.slice(), arena), "a row stands in at most 8 groups")
+
+priv fn grouping()
+    defer arena: = Arena(64 * 1024)
+    plain: = table_with("", arena)
+    $ed: = opened(plain, arena)
+    grouped(ed@, 1, 3, .group)
+    saves("rows 2 to 4 make a group", ed@, arena, table_with("rows 2-4", arena))
+    last: = ed.history.done[ed.history.done.len - 1]@
+    verdict.check("the step records the groups alone, and no copy of the table",
+        last.columns.len == 1 && last.tables.len == 0 && last.cells.len == 0, "")
+    grouped(ed@, 1, 3, .hide)
+    saves("hiding a group is saved", ed@, arena, table_with("rows 2-4 closed", arena))
+    grouped(ed@, 4, 5, .group)
+    saves("a group beside another stays a group of its own", ed@, arena,
+        table_with("rows 2-4 closed, rows 5-6", arena))
+    grouped(ed@, 2, 2, .group)
+    saves("a group inside another", ed@, arena,
+        table_with("rows 2-4 closed, rows 3, rows 5-6", arena))
+    grouped(ed@, 2, 2, .show)
+    saves("show acts on the smallest group that holds the rows", ed@, arena,
+        table_with("rows 2-4 closed, rows 3, rows 5-6", arena))
+    wrong(ed@, 3, 4, .group, "holds another group whole", "a group that crosses another")
+    wrong(ed@, 4, 5, .group, "a group already", "the same rows twice")
+    wrong(ed@, 0, 0, .ungroup, "No group holds these rows", "ungrouping rows outside a group")
+    grouped(ed@, 2, 2, .ungroup)
+    grouped(ed@, 1, 1, .show)
+    saves("ungroup takes the smallest group away, and show shows the next", ed@, arena,
+        table_with("rows 2-4, rows 5-6", arena))
+    for _ in Range.asc(6)
+        ed.undo()
+    saves("undo takes each step back", ed@, arena, plain)
+    ed.redo()
+    saves("and redo brings it again", ed@, arena, table_with("rows 2-4", arena))
+
+priv fn following()
+    defer arena: = Arena(64 * 1024)
+    $ed: = opened(table_with("rows 2-4 closed, rows 3", arena), arena)
+    changed(ed@, .insert_row, 2)
+    saves("a row inserted inside a group joins it", ed@, arena,
+        with_rows("rows 2-5 closed, rows 4", "| 1 |\n| 2 |\n| |\n| 3 |\n| 4 |\n| 5 |\n| 6 |", arena))
+    changed(ed@, .insert_row, 1)
+    before: =
+        with_rows("rows 3-6 closed, rows 5", "| 1 |\n| |\n| 2 |\n| |\n| 3 |\n| 4 |\n| 5 |\n| 6 |",
+        arena)
+    saves("a row inserted before a group moves it down", ed@, arena, before)
+    changed(ed@, .remove_row, 4)
+    saves("a group whose last row goes is taken away", ed@, arena,
+        with_rows("rows 3-5 closed", "| 1 |\n| |\n| 2 |\n| |\n| 4 |\n| 5 |\n| 6 |", arena))
+    ed.sort_table(0, 0, true) catch e
+        verdict.check("a sort", false, e.message())
+    saves("a sort leaves the groups where they stand", ed@, arena,
+        with_rows("rows 3-5 closed", "| 6 |\n| 5 |\n| 4 |\n| 2 |\n| 1 |\n| |\n| |", arena))
+    $two: = opened(table_with("rows 2-4, rows 3-4", arena), arena)
+    changed(two@, .remove_row, 1)
+    saves("of two groups left on the same rows, the outer one stays", two@, arena,
+        with_rows("rows 2-3", "| 1 |\n| 3 |\n| 4 |\n| 5 |\n| 6 |", arena))
+
+// ---- Helpers ----
+
+priv fn table_with(groups: U8[], arena: Arena$@): U8[] //< table `t` with these groups, or none
+    if groups.len == 0
+        return arena.text().s(OPEN).s(ROWS).take()
+    return arena.text().s(OPEN).s(" groups=\"").s(groups).s("\"").s(ROWS).take()
+
+priv fn with_rows(groups: U8[], rows: U8[], arena: Arena$@): U8[] //< these groups and data rows
+    return arena.text().s(OPEN).s(" groups=\"").s(groups).s("\"\n| \"a\" |\n").s(rows).s("\n:::\n")
+        .take()
+
+priv fn refused(groups: U8[], message: U8[]) //< the reader refuses these groups with this message
+    defer arena: = Arena(64 * 1024)
+    refused_in(table_with(groups, arena), message)
+
+priv fn refused_in(text: U8[], message: U8[]) //< the reader refuses the source with this message
+    defer arena: = Arena(64 * 1024)
+    src: = Source("bad.ksmd", text) catch e
+        verdict.check(message, false, e.message)
+        return
+    _doc: = reader.read(src@, arena) catch e
+        verdict.check(message, e.message.equals(message),
+            arena.text().s(e.message).s(" in ").s(text).take())
+        return
+    verdict.check(message, false,
+        arena.text().s("the source was read: ").s(text).take())
+
+priv fn grouped(ed: Editor$@, first: Sz, last: Sz, what: Group_edit)
+    ed.group_rows(0, first, last, what) catch e
+        verdict.check("a group edit", false, e.message())
+
+priv fn changed(ed: Editor$@, what: Table_edit, at: Sz)
+    ed.edit_table(0, what, at) catch e
+        verdict.check("a row edit", false, e.message())
+
+priv fn wrong(ed: Editor$@, first: Sz, last: Sz, what: Group_edit, says: U8[], name: U8[]) //<
+    //< The group edit is refused with a message that holds `says`
+    ed.group_rows(0, first, last, what) catch e
+        verdict.check(name, e.message().find_str(says).is_some(), e.message())
+        return
+    verdict.check(name, false, "the action was taken")

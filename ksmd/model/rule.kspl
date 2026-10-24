@@ -1,0 +1,117 @@
+//< A column's colour rule, as the `rules` attribute saves it: a colour that follows each value
+//< `rules=",<0;color:#9c0006 fill:#ffc7ce"` holds one entry per column, empty for none. An entry is
+//< a condition, `;`, then the colours its cells take while the condition holds:
+//< `<5` below 5, `>5` above 5, `=5` or `=Done` equal to it, and `empty` an empty cell. `color:` is
+//< the text's colour and `fill:` the background's; the rule's colours stand over the cell's own.
+//< Text compares without regard to case, as the filter compares it. A text in a rule has no `,`,
+//< `;`, `"` or `\`, and no space at either end.
+import "ksmd/base/marker" { is_decimal }
+import "ksmd/model/look" { is_colour }
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+
+priv const MAX_TEXT: Sz = 100 //< the bytes of a rule's text
+
+enum Rule_kind
+    none //< the column has no rule
+    below
+    above
+    equal
+    empty
+
+struct Rule //< one column's rule
+    kind: Rule_kind
+    value: U8[] //< what `below`, `above` and `equal` compare with, as written
+    color: U8[] //< the text's colour while it holds, `#` and six hex digits in lower case; or empty
+    fill: U8[] //< the background's, the same way
+
+fn no_rule(): Rule
+    return Rule::{ .kind = .none, .value = "", .color = "", .fill = "" }
+
+fn rule_of(entry: U8[], arena: Arena$@): Rule? //<
+    //< The rule an entry names; an empty entry is no rule, and none where it is not one
+    if entry.len == 0
+        return .some(no_rule())
+    semi: = entry.find_str(";") catch
+        return .none
+    condition: = entry.sub(0, semi)
+    $r: = no_rule()
+    if condition.equals("empty")
+        r.kind = .empty
+    else if condition.starts_with("<") || condition.starts_with(">")
+        r.kind = .below if condition[0] == '<' else .above
+        r.value = condition.sub_from(1)
+        if !is_decimal(r.value)
+            return .none
+    else if condition.starts_with("=")
+        r.kind = .equal
+        r.value = condition.sub_from(1)
+        if !is_text(r.value)
+            return .none
+    else
+        return .none
+    // The colours: `color:#rrggbb`, then `fill:#rrggbb`, either or both, a space between.
+    $rest: = entry.sub_from(semi + 1)
+    if rest.starts_with("color:")
+        r.color = lower(rest.sub(6, 7) if rest.len >= 13 else "", arena)
+        if !is_colour(r.color)
+            return .none
+        rest = rest.sub_from(13)
+        if rest.len > 0
+            if !rest.starts_with(" ")
+                return .none
+            rest = rest.sub_from(1)
+    if rest.starts_with("fill:")
+        r.fill = lower(rest.sub(5, 7) if rest.len >= 12 else "", arena)
+        if !is_colour(r.fill)
+            return .none
+        rest = rest.sub_from(12)
+    if rest.len > 0 || r.color.len == 0 && r.fill.len == 0
+        return .none
+    return .some(r)
+
+fn write_rule(r: Rule, out: Str_builder$@) //< the entry `rule_of` reads; nothing for no rule
+    switch r.kind
+    case .none
+        return
+    case .below
+        out.c('<').s(r.value)
+    case .above
+        out.c('>').s(r.value)
+    case .equal
+        out.c('=').s(r.value)
+    case .empty
+        out.s("empty")
+    out.c(';')
+    if r.color.len > 0
+        out.s("color:").s(r.color)
+    if r.fill.len > 0
+        if r.color.len > 0
+            out.c(' ')
+        out.s("fill:").s(r.fill)
+
+fn has_rule(rules: List<|Rule|>@): Bool //< whether any column has a rule
+    for r in rules
+        if r.kind != .none
+            return true
+    return false
+
+fn same_rule(a: Rule, b: Rule): Bool
+    return a.kind == b.kind && a.value.equals(b.value) && a.color.equals(b.color) &&
+        a.fill.equals(b.fill)
+
+priv fn is_text(text: U8[]): Bool //< a text a rule can hold: 1 to 100 bytes, as the head says
+    if text.len == 0 || text.len > MAX_TEXT || text.trim_spaces().len != text.len
+        return false
+    for c in text
+        if c < 0x20U8 || c == 0x7FU8 || c == ',' || c == ';' || c == '"' || c == '\\'
+            return false
+    return true
+
+priv fn lower(text: U8[], arena: Arena$@): U8[] //< a colour in lower case, the form it is saved in
+    out: = arena.text()
+    for c in text
+        out.c(c.to_lower())
+    return out.take()

@@ -81,11 +81,11 @@ The token goes nowhere else either:
 | **Do not take the token from the command line** | The server makes it from the OS's random source |
 | **Do not stop the comparison at the first differing byte**: the response time would then reveal the token one byte at a time | Every byte is compared |
 
-## Only three things can be asked for
+## Only four things can be asked for
 
-A page can read and write files, watch whether a file changed, and keep the server running or stop it. Nothing else is offered.
+A page can read and write files, watch whether a file changed, list a folder, and keep the server running or stop it. Nothing else is offered.
 
-**Do not add an endpoint that starts a program**, for building, debugging, completion or a plugin. Every one turns a request a page can make into running code. **Nor one that lists a folder.** The page asks for each file by its name. A listing would hand the names under the root to whoever holds the token.
+**Do not add an endpoint that starts a program**, for building, debugging, completion or a plugin. Every one turns a request a page can make into running code.
 
 ### Files
 
@@ -121,6 +121,23 @@ The page asks whether a file is there, and when it last changed. The server answ
 **When to ask is the page's choice.** The page can ask before writing over a file, to see whether something else made or changed it. It can ask before opening one again, or at intervals to follow it. **The OS's file watching (inotify / ReadDirectoryChangesW) is not offered**, so a page that follows a file asks again. However often the file changed in between, the next answer gives its final state.
 
 Caution: **Do not return the contents**, only whether the file changed. Where the page needs the contents, it re-reads them through the file endpoint, so the same text never arrives by two paths.
+
+### Listing a folder
+
+A page lists the names in one folder, so that a Save As dialog can show where a file goes.
+
+| Request | Response |
+| :-- | :-- |
+| `GET /api/list?path=<p>` | `{"folders":[…],"files":[…],"more":false}`, each list in byte order. An empty or absent path is the root. 404 if it is not a folder |
+
+**A listing gives the holder of the token nothing new.** That holder can already read and write every file under the root by its name. The names only save the guesswork. Even so, the listing gives as little as it can:
+
+* **Names only.** No size, no time and no content: "Watching" and "Files" give those, so nothing arrives by two paths.
+* **A link is left out**, so the dialog never offers a way out of the root. So is anything that is neither a folder nor an ordinary file.
+* **A hidden name is left out**: one that starts with `.`, such as `.git`.
+* **At most 2000 names come back.** `more` is `true` when others stand there. The page then asks the person to type the name.
+
+Caution: **Do not list more than one folder in one request.** A whole tree in one answer has no size bound, and the dialog opens one folder at a time anyway.
 
 ### Keeping the server alive while a page is open
 

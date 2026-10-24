@@ -17,11 +17,12 @@ function ksmdFilter(ks) {
   // Each table's conditions, by the table's name: a Map from a column to
   // { values: Set of lower-case texts } or { op, arg }.
   const filters = new Map();
-  // A cell's value as the table shows it, and how it sorts: numbers, text, false and true, errors,
-  // then blanks. A number in a column with a number format carries the text the format shows, third.
+  // A cell's value as the table shows it, and how it sorts: numbers, dates, text, false and true,
+  // errors, then blanks. A number in a column with a number format carries the text the format
+  // shows, third. A date is written `2026-10-23`, so its text sorts by day.
   const shownText = (v) => (v.length > 2 ? v[2] :
     v.length > 1 ? (v[0] === 1 ? String(Number(v[1].toPrecision(15))) : v[1]) : "");
-  const group = (v) => [4, 0, 1, 3, 2][v[0]];
+  const group = (v) => [5, 0, 2, 4, 3, 1][v[0]];
   function compare(a, b) {
     if (group(a) !== group(b)) return group(a) - group(b);
     if (a[0] === 1) return a[1] - b[1];
@@ -61,6 +62,8 @@ function ksmdFilter(ks) {
     rows.forEach((tr, r) => {
       let ok = true;
       if (conds) for (const [c, cond] of conds) if (!meets(cond, wrap.values[r][c])) ok = false;
+      // A hidden group's rows stay hidden whatever the filter shows.
+      if (wrap.folded && wrap.folded[r]) ok = false;
       if (kept && kept.block === block && kept.row === r) ok = true;
       tr.hidden = !ok;
       if (ok) shown += 1;

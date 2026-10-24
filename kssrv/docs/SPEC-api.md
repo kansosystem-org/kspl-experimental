@@ -8,14 +8,14 @@
 
 A *client* is any program that sends the server HTTP requests. It can be a browser, `curl`, your own code, or the small robot car described under "Steering the car". A client is written against this document, so a change here is a change to what somebody else's code depends on.
 
-How to start it is in [`kssrv/README.md`](../README.md). The five endpoints a page opened in a browser can use are set one level up, in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md). That document is the agreement between the client page and this server and belongs to neither. Where the two documents meet, it is the canonical source (the one place the rule lives).
+How to start it is in [`kssrv/README.md`](../README.md). The six endpoints a page opened in a browser can use are set one level up, in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md). That document is the agreement between the client page and this server and belongs to neither. Where the two documents meet, it is the canonical source (the one place the rule lives).
 
 **The server runs in one of two modes, picked when it starts**, and several answers below depend on the mode.
 
 | Mode | Started as | Who can reach it | What it offers besides the files |
 | :-- | :-- | :-- | :-- |
 | Outward-facing | `kssrv.exe <port> <root>` | Any machine on the network | `/api/status`, and the car's two endpoints |
-| Local use | `kssrv.exe <port> <root> --local` | This machine only. Every request but the page's carries the token it prints at start-up | `/api/status`, and the five endpoints a page uses |
+| Local use | `kssrv.exe <port> <root> --local` | This machine only. Every request but the page's carries the token it prints at start-up | `/api/status`, and the six endpoints a page uses |
 
 Words used below:
 
@@ -106,6 +106,7 @@ For local use only (the page's endpoints; their rules are in [`../../docs/SPEC-l
 | `GET` | `/api/file?path=<p>` | Reads a file | that file's byte sequence |
 | `PUT` | `/api/file?path=<p>` | Writes the body to that name | `{"wrote":<byte count>}` |
 | `GET` | `/api/stat?path=<p>` | Tells whether a file changed | the size and the last modification |
+| `GET` | `/api/list?path=<p>` | Lists the names in one folder, for a Save As dialog | `{"folders":[…],"files":[…],"more":false}`, links and hidden names left out |
 | `GET` | `/api/here` | Keeps the server alive while a page is open | a head naming no length, then nothing until the client closes. The connection itself says a page is open ("Keeping the server alive while a page is open" in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md)) |
 | `POST` | `/api/stop` | Stops the server | `{}`, then the server stops |
 
@@ -123,7 +124,7 @@ Anything else under `/api/`:
 | a method not named above for its path | `{"error":"Method Not Allowed","status":405}`, with an `Allow` header naming the path's methods (`GET, PUT` for `/api/file`) |
 | any other `/api/...` | `{"error":"Not Found","status":404}` |
 
-**No endpoint lists a folder.** A client asks for each file by name; a listing would hand anyone the names under the root.
+**Facing outward, no endpoint lists a folder.** A client asks for each file by name; a listing would hand anyone the names under the root. Only local use lists one, for the holder of the token.
 
 ### The file endpoints for local use
 
@@ -168,7 +169,7 @@ sequenceDiagram
 **These endpoints are the protocol's, and their rules stand there.** [`docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md) says how the token reaches the page and why there is no `HEAD`. It also gives the type a file comes back as, and how a write keeps the original whole. The rules are under two headings there:
 
 * "How the token gets across";
-* "Only three things can be asked for".
+* "Only four things can be asked for".
 
 ## Steering the car
 

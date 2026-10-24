@@ -13,6 +13,30 @@
   --range: rgb(26 95 180 / 14%);
   --found: #fff2a8;
   --found-now: #ffa94d;
+  /* A cell given a colour or a fill shows on white with dark text in both schemes, as printed. */
+  --look-paper: #ffffff;
+  --look-ink: #1d1d1f;
+  color-scheme: light dark;
+}
+
+/* The same tokens when the system asks for a dark scheme; the document's own colours stay.
+   Paper is white, so print and PDF keep the light ones. */
+@media screen and (prefers-color-scheme: dark) {
+  :root {
+    --paper: #1e1f22;
+    --ink: #e3e3e3;
+    --muted: #a0a4ab;
+    --line: #3c4043;
+    --soft: #2a2b2f;
+    --mark: #8ab4f8;
+    --error: #f28b82;
+    --notice: #4a3f1a;
+    --shadow: rgb(0 0 0 / 50%);
+    --heading: #24344d;
+    --range: rgb(138 180 248 / 22%);
+    --found: #6b5a00;
+    --found-now: #9a5a00;
+  }
 }
 
 body {
@@ -22,7 +46,7 @@ body {
   font: 16px/1.5 system-ui, sans-serif;
 }
 
-/* The file bar, the menu bar and a notice stay in sight while the document scrolls. */
+/* The menu bar, the ribbon and a notice stay in sight while the document scrolls. */
 .top {
   position: sticky;
   top: 0;
@@ -30,7 +54,6 @@ body {
   background: var(--soft);
 }
 
-.files,
 .menubar {
   display: flex;
   flex-wrap: wrap;
@@ -40,30 +63,20 @@ body {
   border-bottom: 1px solid var(--line);
 }
 
-.files {
-  align-items: center;
-  border-bottom: none;
-  padding-bottom: 0;
-}
-
-.files[hidden] {
-  display: none;
-}
-
-.files input {
-  flex: 0 1 24rem;
-  min-width: 8rem;
-  font: inherit;
+/* The open document's name and whether it is saved, at the right of the menu bar. */
+.menubar .doc-name {
+  margin-left: auto;
+  align-self: center;
   font-size: 14px;
-  padding: 2px 6px;
 }
 
-.files .state {
+.menubar .state {
+  align-self: center;
+  margin-left: 8px;
   color: var(--muted);
   font-size: 14px;
 }
 
-.files button,
 .notice button {
   font: inherit;
   font-size: 14px;
@@ -210,10 +223,10 @@ body {
 
 .doc {
   box-sizing: border-box;
-  max-width: 50rem;
+  max-width: none;
   min-height: 70vh;
   margin: 0 auto;
-  padding: 16px 16px 6rem;
+  padding: 16px 32px 6rem;
   outline: none;
   white-space: pre-wrap;
   overflow-wrap: break-word;
@@ -494,7 +507,8 @@ body {
   display: none;
 }
 
-.table td.number {
+.table td.number,
+.table td.date {
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
@@ -538,10 +552,6 @@ body {
   color: var(--muted);
   font-size: 11px;
   text-align: center;
-}
-
-.ribbon .table-group {
-  background: var(--heading);
 }
 
 .ribbon button,
@@ -640,6 +650,12 @@ body {
 }
 
 /* The cells of a range chosen with Shift+click. */
+/* A cell with a colour or a fill of its own; its inline style overrides one of these two. */
+.table td.looked {
+  background-color: var(--look-paper);
+  color: var(--look-ink);
+}
+
 .table td.in-range,
 .table th.in-range {
   box-shadow: inset 0 0 0 9999px var(--range);
@@ -733,24 +749,60 @@ body {
   min-height: 1.5em;
 }
 
-@media print {
-  .top,
-  .status,
-  .contents,
-  .fill-handle {
-    display: none;
-  }
+/* View, Reading width: lines kept short, as a printed page keeps them. */
+body.reading .doc {
+  max-width: 50rem;
+  padding-left: 16px;
+  padding-right: 16px;
+}
 
-  body.with-contents {
-    padding-left: 0;
-  }
+.ribbon .glyph {
+  vertical-align: -3px;
+  margin-right: 3px;
+}
 
-  /* On paper the browser repeats a table's heading rows on each page. */
-  .table thead {
-    position: static;
-  }
+/* The button that removes a whole include or image. */
+.block-remove {
+  float: right;
+  font: inherit;
+  font-size: 13px;
+  padding: 0 6px;
+}
 
-  .gap {
-    outline: none;
-  }
+.include .inside .block-remove {
+  display: none;
+}
+
+/* A quote, set in from the left with a bar, and a divider between two parts. */
+.doc blockquote {
+  margin: 0.75em 0;
+  padding-left: 1em;
+  border-left: 3px solid var(--line);
+  color: var(--muted);
+}
+
+.doc .divider {
+  position: relative;
+}
+
+.doc .divider hr {
+  border: none;
+  border-top: 1px solid var(--line);
+  margin: 1em 0;
+}
+
+.doc .divider .block-remove {
+  position: absolute;
+  right: 0;
+  top: -0.5em;
+}
+
+/* A checklist item's box is its marker; a press on it ticks the box (`view.js`). */
+.li[data-check]::before {
+  cursor: pointer;
+  color: var(--ink);
+}
+
+.li[data-check="2"] {
+  color: var(--muted);
 }

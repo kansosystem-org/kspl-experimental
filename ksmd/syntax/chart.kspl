@@ -1,0 +1,89 @@
+//< A chart: a table's columns drawn as bars or lines, as the `:::chart` clause saves it
+//< `:::chart table="budget" kind="bar" labels="item" values="cost,tax" title="Spending"` names
+//< the table, the column whose values label the bars or points, and the columns to draw, by
+//< their names. The chart holds the table and the columns by identity, as a formula's references
+//< do, so a renamed or a moved column stays in the chart, and the writer writes the names they
+//< have now. A name that names nothing is kept as written, and the page says what is missing.
+import "ksmd/base/attribute" { write_invisible }
+import "ksmd/calc/formula" { find_table }
+import "ksmd/model/model" { Chart, Chart_kind, Document, MAX_SERIES, Table, UNBOUND }
+import "std/chars"
+import "std/ds" { List }
+import "std/str" { Str_builder }
+
+fn kind_of(text: U8[]): Chart_kind? //< `bar` or `line`
+    if text.equals("bar")
+        return .some(.bar)
+    if text.equals("line")
+        return .some(.line)
+    return .none
+
+fn split_names(text: U8[], out: List<|U8[]|>$@): Bool //<
+    //< Adds the names `cost,tax` holds; false where one is empty, or past `MAX_SERIES`
+    $start: Sz = 0
+    for i in Range.asc(text.len + 1)
+        if i < text.len && text[i] != ','
+            continue
+        if i == start || out.len == MAX_SERIES
+            return false
+        out.push(text.sub(start, i - start))
+        start = i + 1
+    return true
+
+fn bind_charts(doc: Document$@) //< finds each chart's table and columns by their names
+    for i in Range.asc(doc.charts.len)
+        $c: = doc.charts[i]
+        c.table = find_table(doc, c.name).unwrap_or(UNBOUND)
+        c.labels = UNBOUND
+        if c.table != UNBOUND
+            t: = doc.tables[c.table]@
+            c.labels = column_named(t, c.label_name)
+            for j in Range.asc(c.series_names.len)
+                c.series[j] = column_named(t, c.series_names[j])
+        doc.charts[i] = c
+
+fn column_at(t: Table@, id: Sz): Sz //< where the column of this identity stands, or `UNBOUND`
+    for c in Range.asc(t.columns.len)
+        if t.columns[c] == id
+            return c
+    return UNBOUND
+
+fn write_chart(doc: Document@, c: Chart@, invisible: Bool, out: Str_builder$@) //<
+    //< The opening line, with its names
+    //< A chart whose table is not found, as when it is read alone, writes the names it holds.
+    bound: =
+        c.table != UNBOUND && c.table < doc.tables.len &&
+        doc.tables[c.table].name.len > 0
+    out.s(":::chart table=")
+    quoted(doc.tables[c.table].name if bound else c.name, out)
+    out.s(" kind=\"").s("bar" if c.kind == .bar else "line").s("\" labels=")
+    quoted(name_of(doc, c, bound, c.labels, c.label_name), out)
+    out.s(" values=\"")
+    for j in Range.asc(c.series.len)
+        if j > 0
+            out.c(',')
+        out
+            .escape_and_append(name_of(doc, c, bound, c.series[j], c.series_names[j]))
+    out.c('"')
+    if c.title.len > 0
+        out.s(" title=")
+        quoted(c.title, out)
+    write_invisible(invisible, out)
+    out.c('\n')
+
+priv fn name_of(doc: Document@, c: Chart@, bound: Bool, id: Sz, kept: U8[]): U8[] //<
+    //< A column's name now, or the name kept where the column is not found
+    if !bound || id == UNBOUND
+        return kept
+    t: = doc.tables[c.table]@
+    at: = column_at(t, id)
+    return kept if at == UNBOUND else t.cells[at].text
+
+priv fn column_named(t: Table@, name: U8[]): Sz //< the identity of the column of that name
+    for c in Range.asc(t.columns.len)
+        if t.cells[c].text.equals(name)
+            return t.columns[c]
+    return UNBOUND
+
+priv fn quoted(text: U8[], out: Str_builder$@) //< a JSON string, as an attribute holds it
+    out.c('"').escape_and_append(text).c('"')

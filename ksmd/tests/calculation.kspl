@@ -1,13 +1,15 @@
 //< Calculating tables: each result is checked against a value worked out by hand
 //< Values are compared exactly; every expected number is one an F64 holds without rounding.
-import "ksmd/calc" { Calc_error, Results, Value_kind }
-import "ksmd/calc"
-import "ksmd/edit"
-import "ksmd/keyed" { Keyed }
-import "ksmd/model" { Document }
-import "ksmd/reader"
-import "ksmd/source" { Source }
-import "ksmd/writer"
+import "ksmd/base/dates" { write_date }
+import "ksmd/base/keyed" { Keyed }
+import "ksmd/base/source" { Source }
+import "ksmd/calc/calc" { Results }
+import "ksmd/calc/calc"
+import "ksmd/calc/value" { Calc_error, Value_kind }
+import "ksmd/edit/edit"
+import "ksmd/model/model" { Document }
+import "ksmd/syntax/reader"
+import "ksmd/syntax/writer"
 import "std/chars"
 import "std/ds" { List }
 import "std/io"
@@ -40,6 +42,7 @@ fn run()
     conditional_totals()
     condition_shapes()
     conditional_cycles()
+    lookups()
 
 priv fn arithmetic()
     defer arena: = Arena(64 * 1024)
@@ -429,17 +432,40 @@ priv fn rounding()
 
 // `today()` is the date the document was opened, as text in the form Ctrl+; types.
 priv fn today()
-    cases(U8[][]::{ "today() -> \"2026-10-23\"", "today() = \"2026-10-23\" -> true",
-        "\"2026-10-22\" < today() -> true", "\"2026-10-24\" < today() -> false",
-        "if(\"2026-09-30\" < today(), \"late\", \"\") -> \"late\"", "today() + 1 -> #VALUE!",
-        "today(1) -> #SYNTAX!", "today -> #SYNTAX!", "today( ) -> \"2026-10-23\"" })
+    cases(U8[][]::{ "today() -> @2026-10-23", "today() = date(2026, 10, 23) -> true",
+        "date(2026, 10, 22) < today() -> true", "date(2026, 10, 24) < today() -> false",
+        "if(date(2026, 9, 30) < today(), \"late\", \"\") -> \"late\"", "today() + 1 -> @2026-10-24",
+        "today() - 30 -> @2026-09-23", "7 + today() -> @2026-10-30",
+        "today() - date(2026, 1, 1) -> 295", "today() = \"2026-10-23\" -> false",
+        "today() < \"2026-10-24\" -> #VALUE!", "today() * 2 -> #VALUE!", "1 - today() -> #VALUE!",
+        "today() + 0.5 -> #VALUE!", "today() + today() -> #VALUE!", "today(1) -> #SYNTAX!",
+        "today -> #SYNTAX!", "today( ) -> @2026-10-23" })
     defer arena: = Arena(64 * 1024)
     doc: = read(join(HEAD, "| =today() | |\n:::\n", arena), arena)
     a: = calc.calculate(doc@, "2026-10-23", arena)
     b: = calc.calculate(doc@, "2027-01-02", arena)
     verdict.check("the same document gives the date it is calculated with, and reads no clock",
-        a.at(0, 0, 0).text.equals("2026-10-23") &&
-        b.at(0, 0, 0).text.equals("2027-01-02"), "")
+        a.at(0, 0, 0).number == 20749.0 && b.at(0, 0, 0).number == 20820.0, "")
+    dates()
+
+// A date names a day: it adds days, two give the days between them, and parts come out.
+priv fn dates()
+    cases(U8[][]::{ "date(2024, 2, 29) -> @2024-02-29", "date(2026, 2, 29) -> #NUM!",
+        "date(2026, 13, 1) -> #NUM!", "date(2026.5, 1, 1) -> #NUM!", "date(0, 1, 1) -> #NUM!",
+        "date(9999, 12, 31) + 1 -> #NUM!", "date(2026, 1, 1) - 1 -> @2025-12-31",
+        "date(\"2026\", 1, 1) -> #VALUE!", "year(today()) -> 2026", "month(today()) -> 10",
+        "day(today()) -> 23", "year(5) -> #VALUE!", "day(1/0) -> #DIV/0!",
+        "date(2026, 3, 1) - date(2026, 2, 1) -> 28" })
+    defer arena: = Arena(64 * 1024)
+    r: =
+        results("| 2026-10-23 | =A1+7 |\n| 2026-01-05 | =max(A1:A2) |\n| | =min(A1:A2) |\n| | \
+            =count(A1:A2) |\n| | =sum(A1:A2) |\n| 5 | =max(A1:A6) |\n:::\n", arena)
+    shows("a date cell is a date, and adds days", r@, 0, 1, "@2026-10-30")
+    shows("max of dates is the latest", r@, 1, 1, "@2026-10-23")
+    shows("min of dates is the earliest", r@, 2, 1, "@2026-01-05")
+    shows("count counts dates", r@, 3, 1, "2")
+    shows("dates have no sum", r@, 4, 1, "#VALUE!")
+    shows("max of dates and numbers together has no value", r@, 5, 1, "#VALUE!")
 
 // Table `d` for the conditional totals: an item, a count and a price on each row. Row 4's count
 // is empty, row 5's is text, and row 6's is `#DIV/0!`.
@@ -506,6 +532,24 @@ priv fn conditional_cycles()
     failure("a total in its own range that the condition takes", r@, 0, 3, 1, .cycle)
     number("a set of cells leaves out true and false", r@, 0, 4, 1, 5.0)
 
+// The value beside the first key that equals the one looked for, or `otherwise`.
+priv fn lookups()
+    cases_with(U8[][]::{ "lookup(\"Ink\", d.A1:A6, d.C1:C6, 0) -> 8",
+        "lookup(\"PENS\", d.A1:A6, d.C1:C6, 0) -> 2.5",
+        "lookup(8, d.C1:C6, d.A1:A6, \"no\") -> \"Ink\"",
+        "lookup(1, d.B1:B6, d.A1:A6, 0) -> \"Ink\"", "lookup(\"Paper\", d.A1:A6, d.B1:B6, 9) -> 0",
+        "lookup(3, d.B1:C1, d.B2:C2, 0) -> 1",
+        "lookup(\"Nothing\", d.A1:A6, d.C1:C6, \"no\") -> \"no\"",
+        "lookup(\"Nothing\", d.A1:A6, d.C1:C6, 1/0) -> #DIV/0!",
+        "lookup(\"Ink\", d.A1:A6, d.C1:C6, 1/0) -> 8",
+        "lookup(1/0, d.A1:A6, d.C1:C6, 0) -> #DIV/0!",
+        "lookup(\"Ink\", d.A1:A6, d.C1:C5, 0) -> #SHAPE!",
+        "lookup(\"Ink\", d.A1:B6, d.C1:C6, 0) -> #SHAPE!",
+        "lookup(\"Ink\", Z1:Z6, d.C1:C6, 0) -> #REF!",
+        "if(false, lookup(1/0, d.A1:A6, d.C1:C6, 0), 1) -> 1",
+        "lookup(\"Ink\", \"Ink\", d.C1:C6, 0) -> #SYNTAX!",
+        "lookup(\"Ink\", d.A1:A6, d.C1:C6) -> #SYNTAX!" }, DATA)
+
 priv fn cases(list: U8[][]) //< `cases_with`, with no other table
     cases_with(list, "")
 
@@ -530,7 +574,7 @@ priv fn arrow(c: U8[]): Sz //< where ` -> ` stands in a case
 
 priv fn shows(what: U8[], r: Results@, row: Sz, column: Sz, want: U8[]) //<
     //< The value of a cell of table `t` is `want`: `true`, `false`, an error's mark, text in
-    //< quotes written without escapes, or a number
+    //< quotes written without escapes, a date after `@`, or a number
     v: = r.at(0, row, column)
     defer $got: = Str_builder()
     got.s(v.kind.variant_name()).c(' ').s("\{v.number\} ").s(v.text).c(' ').s(v.error.mark())
@@ -539,6 +583,10 @@ priv fn shows(what: U8[], r: Results@, row: Sz, column: Sz, want: U8[]) //<
         ok = v.kind == .boolean && v.boolean == want.equals("true")
     else if want.starts_with("#")
         ok = v.kind == .error && v.error.mark().equals(want)
+    else if want.starts_with("@")
+        defer $day: = Str_builder()
+        write_date(I64::v.number, day@)
+        ok = v.kind == .date && day.slice().equals(want.sub_from(1))
     else if want.starts_with("\"")
         ok = v.kind == .text && v.text.equals(want.sub(1, want.len - 2))
     else

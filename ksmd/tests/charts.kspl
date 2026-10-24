@@ -1,0 +1,90 @@
+//< Charts: how `:::chart` reads and saves, how it follows its table, and inserting and setting one
+import "ksmd/base/source" { Source }
+import "ksmd/edit/editor_charts" { Chart_settings }
+import "ksmd/edit/editor_tables"
+import "ksmd/syntax/reader"
+import "ksmd/tests/tables" { opened, saves }
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str"
+import "std/verdict"
+
+priv const TABLE: U8[] =
+    ":::table name=\"t\"\n| \"item\" | \"cost\" | \"tax\" |\n| \"Pens\" | 3 | 1 |\n| \"Ink\" | 8 | \
+        2 |\n:::\n"
+
+fn run()
+    reading()
+    following()
+    editing()
+
+priv fn reading()
+    defer arena: = Arena(64 * 1024)
+    text: =
+        doc_with(":::chart table=\"t\" kind=\"bar\" labels=\"item\" values=\"cost,tax\" \
+            title=\"Spending\"\n:::\n", arena)
+    ed: = opened(text, arena)
+    saves("a chart reads and saves unchanged", ed@, arena, text)
+    missing: =
+        doc_with(":::chart table=\"q\" kind=\"line\" labels=\"x\" values=\"y\"\n:::\n", arena)
+    ed2: = opened(missing, arena)
+    saves("a chart whose table is missing keeps its names", ed2@, arena, missing)
+    for bad in U8[][]::{ ":::chart table=\"t\" kind=\"pie\" labels=\"item\" values=\"cost\"\n:::\n",
+        ":::chart table=\"t\" kind=\"bar\" labels=\"item\"\n:::\n",
+        ":::chart table=\"t\" kind=\"bar\" labels=\"item\" values=\"cost,\"\n:::\n",
+        ":::chart table=\"t\" kind=\"bar\" labels=\"item\" values=\"cost\" title=\"\"\n:::\n",
+        ":::chart table=\"t\" kind=\"bar\" labels=\"item\" values=\"cost\" colour=\"red\"\n:::\n",
+        ":::chart table=\"t\" kind=\"bar\" labels=\"item\" values=\"cost\"\nbody\n:::\n" }
+        refused(doc_with(bad, arena), bad)
+
+priv fn following()
+    defer arena: = Arena(64 * 1024)
+    chart: = ":::chart table=\"t\" kind=\"bar\" labels=\"item\" values=\"cost\"\n:::\n"
+    $ed: = opened(doc_with(chart, arena), arena)
+    ed.set_cell(0, -1, 1, "price") catch e
+        verdict.check("renaming a column", false, e.message())
+    ed.rename_table(0, "money") catch e
+        verdict.check("renaming the table", false, e.message())
+    saves("a renamed column and table stay in the chart, under their new names", ed@, arena,
+        "%ksmd 1\n\n:::table name=\"money\"\n| \"item\" | \"price\" | \"tax\" |\n| \"Pens\" | 3 | 1 \
+            |\n| \"Ink\" | 8 | 2 |\n:::\n\n:::chart table=\"money\" kind=\"bar\" labels=\"item\" \
+            values=\"price\"\n:::\n")
+
+priv fn editing()
+    defer arena: = Arena(64 * 1024)
+    plain: = arena.text().s("%ksmd 1\n\n").s(TABLE).take()
+    $ed: = opened(plain, arena)
+    ed.insert_chart(0) catch e
+        verdict.check("inserting a chart", false, e.message())
+    inserted: =
+        doc_with(":::chart table=\"t\" kind=\"bar\" labels=\"item\" values=\"cost\"\n:::\n", arena)
+    saves("a new chart draws the first column of numbers, labelled by the first column", ed@, arena,
+        inserted)
+    $values: = List<|Sz|>(arena)
+    values.push(2)
+    values.push(1)
+    settings: = Chart_settings::{ .table = 0, .kind = .line, .labels = 0, .values = values,
+        .title = "Both" }
+    ed.set_chart(1, settings@) catch e
+        verdict.check("setting a chart", false, e.message())
+    set: =
+        doc_with(":::chart table=\"t\" kind=\"line\" labels=\"item\" values=\"tax,cost\" \
+            title=\"Both\"\n:::\n", arena)
+    saves("new settings are saved", ed@, arena, set)
+    ed.undo()
+    saves("one undo gives the settings before back", ed@, arena, inserted)
+    ed.undo()
+    saves("and another takes the chart away", ed@, arena, plain)
+
+priv fn doc_with(chart: U8[], arena: Arena$@): U8[] //< the table `t`, then a chart clause
+    return arena.text().s("%ksmd 1\n\n").s(TABLE).s("\n").s(chart).take()
+
+priv fn refused(text: U8[], what: U8[]) //< the reader refuses the source
+    defer arena: = Arena(64 * 1024)
+    src: = Source("bad.ksmd", text) catch e
+        verdict.check(what, false, e.message)
+        return
+    _doc: = reader.read(src@, arena) catch
+        verdict.check(arena.text().s("refused: ").s(what).take(), true, "")
+        return
+    verdict.check(arena.text().s("refused: ").s(what).take(), false, "the source was read")

@@ -1,0 +1,710 @@
+//< Calculates every table of a document: the value of each data cell, kept apart from the document
+//< A formula is read from its pieces and calculated in the same pass; nothing is saved. Cells are
+//< calculated in the order they depend on each other, so a formula can name a later row.
+//< Calculation reads the model and one input, the date the document was opened, which `today()`
+//< gives. It reads no clock, so the same model and date always give the same values.
+//< Caution: **Calculate again after every edit.** `Results` holds the values of one moment, and
+//< places that an edit has moved point at other cells.
+import "ksmd/base/dates" { date_of, day_of, ymd_of }
+import "ksmd/calc/formula" { Cursor, Positions, Token, Token_kind, next, unquoted }
+import "ksmd/calc/value" { Calc_error, Value, arithmetic, boolean, compare, date_value, empty,
+    equal_keys, is_comparison, number, number_of, operand, text, truth }
+import "ksmd/model/format" { round_places }
+import "ksmd/model/model" { Cell, Document, Table }
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str"
+
+const MAX_LEVELS: Sz = 64 //< how deeply one formula nests: brackets, functions, unary minus and
+    //< `not`
+
+const MAX_ROUND: Sz = 15 //< the most places `round` takes, either way
+    //< An F64 holds at most 17 significant digits, so a carry past them cannot overflow.
+
+priv const MAX_DEPTH: Sz = 256 //< the cells and levels one calculation passes through at a time
+    //< A deeper chain is set aside and its deepest cell calculated first (`settle`), so a running
+    //< total down 10,000 rows calculates without running out of stack.
+priv const UNVISITED: U8 = 0U8
+priv const WORKING: U8 = 1U8 //< being calculated; reaching it again is a cycle
+priv const SETTLED: U8 = 2U8
+
+struct Results //< the value of every data cell of every table, at one moment
+    values: List<|Value|> //< each table's data cells from `starts`, row by row
+    starts: List<|Sz|>
+    columns: List<|Sz|> //< each table's count of columns
+
+impl Results
+    fn at(r: Self@, u: Sz, row: Sz, column: Sz): Value //< the value of a data cell of table `u`
+        index: = r.starts[u] + row * r.columns[u] + column
+        return r.values[index]
+
+fn calculate(doc: Document@, today: U8[], arena: Arena$@): Results //<
+    //< Calculates every data cell; the results live in `arena`
+    //< `today` is the date the document was opened, written `2026-10-23`.
+    //< The lists are made at their full size at once, so no cell's value is copied as they grow.
+    $cells: Sz = 0
+    for u in Range.asc(doc.tables.len)
+        cells += doc.tables[u].rows.len * doc.tables[u].columns.len
+    $c: = Calc::{ .doc = doc, .today = today, .arena = arena, .at = Positions(doc, arena),
+        .results = Results::{ .values = List<|Value|>.new_with_cap(cells, arena),
+        .starts = List<|Sz|>(arena), .columns = List<|Sz|>(arena) },
+        .states = List<|U8|>.new_with_cap(cells, arena), .depth = 0, .deferring = false,
+        .deferred = Spot::{ .table = 0, .row = 0, .column = 0 },
+        .todo = List<|Spot|>(arena) }
+    for u in Range.asc(doc.tables.len)
+        t: = doc.tables[u]@
+        c.results.starts.push(c.results.values.len)
+        c.results.columns.push(t.columns.len)
+        for _ in Range.asc(t.rows.len * t.columns.len)
+            c.results.values.push(Value.failed(.syntax))
+            c.states.push(UNVISITED)
+    for u in Range.asc(doc.tables.len)
+        for row in Range.asc(doc.tables[u].rows.len)
+            for column in Range.asc(doc.tables[u].columns.len)
+                settle(c@, Spot::{ .table = u, .row = row, .column = column })
+    return c.results
+
+priv struct Spot //< a data cell, by its table and place
+    table: Sz
+    row: Sz
+    column: Sz
+
+priv struct Calc //< the state of one calculation
+    doc: Document@
+    today: U8[] //< what `today()` gives
+    arena: Arena$@ //< holds the results, and text a formula's quotes hold with an escape
+    at: Positions
+    results: Results
+    states: List<|U8|> //< each cell's progress, in the order of `results.values`
+    depth: Sz //< how far the calculation under way has gone (`MAX_DEPTH`)
+    deferring: Bool //< a chain went past `MAX_DEPTH` at `deferred`; what it found is dropped
+    deferred: Spot
+    todo: List<|Spot|> //< the cells `settle` has set aside, the last one calculated next
+
+priv fn settle(c: Calc$@, spot: Spot) //<
+    //< Calculates a cell, setting aside each chain too deep to follow at once
+    //< The cell a chain was set aside at is calculated first, and the chain is tried again. A cell
+    //< set aside while it already waits depends on itself: it is a cycle.
+    c.todo.clear()
+    c.todo.push(spot)
+    for c.todo.len > 0
+        top: = c.todo[c.todo.len - 1]
+        c.deferring = false
+        c.depth = 0
+        _value: = value_at(c, top)
+        if !c.deferring
+            _done: = c.todo.pop()
+            continue
+        d: = c.deferred
+        if waits(c.todo@, d)
+            index: = slot(c, d)
+            c.results.values[index] = Value.failed(.cycle)
+            c.states[index] = SETTLED
+            continue
+        c.todo.push(d)
+    c.deferring = false
+    c.depth = 0
+
+priv fn waits(todo: List<|Spot|>@, d: Spot): Bool //< whether a cell is already set aside
+    for s in todo
+        if s.table == d.table && s.row == d.row && s.column == d.column
+            return true
+    return false
+
+priv fn slot(c: Calc@, s: Spot): Sz //< where a cell's value and state stand
+    return c.results.starts[s.table] + s.row * c.results.columns[s.table] + s.column
+
+priv fn value_at(c: Calc$@, s: Spot): Value //< a cell's value, calculated once
+    index: = slot(c, s)
+    state: = c.states[index]
+    if state == SETTLED
+        return c.results.values[index]
+    if state == WORKING
+        return Value.failed(.cycle)
+    // Caution: **Once a chain is set aside, calculate nothing more in this pass.** Nothing it
+    // finds is kept, and a range would calculate each later cell again.
+    if c.deferring
+        return Value.failed(.cycle)
+    if c.depth >= MAX_DEPTH
+        c.deferring = true
+        c.deferred = s
+        return Value.failed(.cycle)
+    c.states[index] = WORKING
+    c.depth += 1
+    v: = cell_value(c, s)
+    c.depth -= 1
+    if c.deferring
+        c.states[index] = UNVISITED
+        return v
+    c.results.values[index] = v
+    c.states[index] = SETTLED
+    return v
+
+priv fn cell_value(c: Calc$@, s: Spot): Value //< what a cell holds, a formula calculated
+    t: = c.doc.tables[s.table]@
+    index: = t.at(s.row, s.column)
+    cell: = t.cells[index]
+    switch cell.kind
+    case .empty
+        return empty()
+    case .text
+        return text(cell.text)
+    case .number
+        return number_of(cell.text)
+    case .date
+        return date_value(date_of(cell.text).unwrap_or(0I64))
+    case .formula
+        $p: = Parser::{ .c = c, .t = t, .cell = cell, .cur = Cursor::{ .piece = 0, .at = 0 },
+            .tok = Token(.end, 0, 0), .levels = 1, .wrong = false, .skipping = 0,
+            .rows = Row_reading::{ .count = 0, .row = 0, .ranged = false, .shaped = true } }
+        p.advance()
+        v: = p.expression()
+        if p.wrong || p.tok.kind != .end
+            return Value.failed(.syntax)
+        return number(0.0) if v.kind == .empty else v
+
+priv struct Parser //< reads one formula's tokens and calculates as it reads
+    c: Calc$@
+    t: Table@ //< the table that holds the formula
+    cell: Cell
+    cur: Cursor
+    tok: Token //< the next token, not yet taken
+    levels: Sz //< how deeply the formula nests where it is read now (`MAX_LEVELS`)
+    wrong: Bool //< the formula does not read; its value is `#SYNTAX!`
+    skipping: Sz //< above 0 while a part is read but not calculated; no cell is read then
+        //< `and` and `or` skip their right side when the left one decides, and `if` the branch
+        //< it does not take.
+    rows: Row_reading //< how a range in a condition of `sum_if` is read; count 0 elsewhere
+
+priv struct Row_reading //< a condition of `sum_if`, read once for each row of its values
+    count: Sz //< the rows of the values; every range in the condition must be that tall
+    row: Sz //< the row read now, counted from each range's top
+    ranged: Bool //< a range was read in the condition
+    shaped: Bool //< every range read was one column wide and `count` rows tall
+
+enum Fold_kind //< what a function makes of its numbers
+    sum
+    min
+    max
+    count
+    average
+
+priv struct Fold //< a function's numbers so far
+    kind: Fold_kind
+    total: F64 //< the sum, or the least or greatest number
+    numbers: Sz
+    dates: Sz //< how many of the numbers were dates
+    error: Calc_error
+    broken: Bool //< an error was taken; the first one is the result
+
+impl Parser
+    priv fn advance(p: Self$@)
+        p.tok = next(p.t, p.cell, p.cur@)
+
+    priv fn enter(p: Self$@): Bool //< goes one level deeper; false past `MAX_LEVELS`
+        if p.levels == MAX_LEVELS
+            p.wrong = true
+            return false
+        p.levels += 1
+        p.c.depth += 1
+        return true
+
+    priv fn leave(p: Self$@)
+        p.levels -= 1
+        p.c.depth -= 1
+
+    priv fn expression(p: Self$@): Value //< conditions joined by `and` and `or`; `and` binds first
+        //< The right side of `or` is calculated only when the left one is false. Most formulas
+        //< hold no word, so a comparison is read first, without the steps for `not` and `and`.
+        $left: = p.negation() if p.is_word("not") else p.comparison()
+        if p.tok.kind != .name
+            return left
+        left = p.conjunction(left)
+        for p.is_word("or")
+            p.advance()
+            l: = truth(left)
+            if l.kind == .error || l.boolean
+                p.skipping += 1
+                _right: = p.conjunction(p.negation())
+                p.skipping -= 1
+                left = l
+            else
+                left = truth(p.conjunction(p.negation()))
+        return left
+
+    priv fn conjunction(p: Self$@, first: Value): Value //< `first` and conditions joined by `and`
+        //< The right side is calculated only when the left one is true.
+        $left: = first
+        for p.is_word("and")
+            p.advance()
+            l: = truth(left)
+            if l.kind == .error || !l.boolean
+                p.skipping += 1
+                _right: = p.negation()
+                p.skipping -= 1
+                left = l
+            else
+                left = truth(p.negation())
+        return left
+
+    priv fn negation(p: Self$@): Value //< `not` before a condition, or a comparison
+        if !p.is_word("not")
+            return p.comparison()
+        p.advance()
+        if !p.enter()
+            return Value.failed(.syntax)
+        v: = truth(p.negation())
+        p.leave()
+        return v if v.kind == .error else boolean(!v.boolean)
+
+    priv fn comparison(p: Self$@): Value //< two sums compared, or one sum
+        //< A second comparison does not read: `a < b < c` would compare `true` with `c`.
+        left: = p.sum()
+        op: = p.tok.kind
+        if !is_comparison(op)
+            return left
+        p.advance()
+        right: = p.sum()
+        if is_comparison(p.tok.kind)
+            p.wrong = true
+        return compare(left, right, op)
+
+    priv fn is_word(p: Self@, word: U8[]): Bool //< whether the next token is this word
+        return p.tok.kind == .name && p.tok.text.equals(word)
+
+    priv fn sum(p: Self$@): Value //< terms joined by `+` and `-`, from the left
+        $left: = p.product()
+        for p.tok.kind == .plus || p.tok.kind == .minus
+            plus: = p.tok.kind == .plus
+            p.advance()
+            right: = p.product()
+            left = arithmetic(left, right, .plus if plus else .minus)
+        return left
+
+    priv fn product(p: Self$@): Value //< factors joined by `*` and `/`, from the left
+        $left: = p.unary()
+        for p.tok.kind == .times || p.tok.kind == .divide
+            kind: = p.tok.kind
+            p.advance()
+            right: = p.unary()
+            left = arithmetic(left, right, kind)
+        return left
+
+    priv fn unary(p: Self$@): Value //< `-` before a factor, or a factor
+        if p.tok.kind != .minus
+            return p.primary()
+        p.advance()
+        if !p.enter()
+            return Value.failed(.syntax)
+        v: = p.unary()
+        p.leave()
+        return arithmetic(number(0.0), v, .minus)
+
+    priv fn primary(p: Self$@): Value //< a number, text, a word, a cell, a bracket or a function
+        //< Only the fields needed are taken from the token: a whole token is large to copy.
+        switch p.tok.kind
+        case .number
+            n: = number_of(p.tok.text)
+            p.advance()
+            return n
+        case .text
+            quoted: = p.tok.text
+            p.advance()
+            if p.skipping > 0
+                return empty()
+            return text(unquoted(quoted, p.c.arena).unwrap_or(""))
+        case .reference
+            range: = p.tok.range
+            piece: = p.tok.piece
+            p.advance()
+            if range
+                if p.rows.count == 0
+                    p.wrong = true
+                    return Value.failed(.syntax)
+                return p.row_of(piece)
+            if p.skipping > 0
+                return empty()
+            return p.cell_of(piece)
+        case .broken
+            p.advance()
+            return Value.failed(.reference)
+        case .open
+            p.advance()
+            if !p.enter()
+                return Value.failed(.syntax)
+            v: = p.expression()
+            p.leave()
+            p.expect(.close)
+            return v
+        case .name
+            if p.is_word("true") || p.is_word("false")
+                yes: = p.is_word("true")
+                p.advance()
+                return boolean(yes)
+            return p.function()
+        case .plus, .minus, .times, .divide, .equal, .unequal, .less, .less_equal, .greater,
+            .greater_equal, .close, .comma, .bad, .end
+            p.wrong = true
+            return Value.failed(.syntax)
+
+    priv fn function(p: Self$@): Value //< a function's name, then its arguments in brackets
+        name: = p.tok.text
+        p.advance()
+        p.expect(.open)
+        if !p.enter()
+            return Value.failed(.syntax)
+        $v: = Value.failed(.syntax)
+        if name.equals("today")
+            v = date_value(date_of(p.c.today).unwrap_or(0I64))
+        else if name.equals("date")
+            v = p.date_from_parts()
+        else if name.equals("year") || name.equals("month") || name.equals("day")
+            v = part_of(p.expression(), name)
+        else if name.equals("if")
+            v = p.choice()
+        else if name.equals("round")
+            v = p.rounding()
+        else if name.equals("sum_if")
+            v = p.conditional(.sum)
+        else if name.equals("count_if")
+            v = p.conditional(.count)
+        else if name.equals("average_if")
+            v = p.conditional(.average)
+        else if name.equals("lookup")
+            v = p.lookup()
+        else
+            v = p.fold(name)
+        p.leave()
+        p.expect(.close)
+        return v
+
+    priv fn date_from_parts(p: Self$@): Value //< `date(year, month, day)` after its `(`
+        //< Each part is a whole number, and together they name a day of the years 1 to 9999; any
+        //< other is `#NUM!`.
+        $parts: Value[3] = ::{}
+        for i in Range.asc(3)
+            if i > 0
+                p.expect(.comma)
+            parts[i] = operand(p.expression())
+        for v in parts
+            if v.kind == .error
+                return v
+        for v in parts
+            if v.number != F64::(I64::v.number)
+                return Value.failed(.not_finite)
+        day: =
+            day_of(I64::parts[0].number, I64::parts[1].number, I64::parts[2].number) catch
+            return Value.failed(.not_finite)
+        return date_value(day)
+
+    priv fn choice(p: Self$@): Value //< `if(condition, then, else)`, after its `(`
+        //< Only the branch taken is calculated, so an error or a cycle in the other never shows.
+        //< An error in the condition is the result, and neither branch is calculated.
+        c: = truth(p.expression())
+        p.expect(.comma)
+        then: = p.branch(c.kind == .boolean && c.boolean)
+        p.expect(.comma)
+        otherwise: = p.branch(c.kind == .boolean && !c.boolean)
+        if c.kind == .error
+            return c
+        return then if c.boolean else otherwise
+
+    priv fn branch(p: Self$@, taken: Bool): Value //< an argument, calculated only when taken
+        if taken
+            return p.expression()
+        p.skipping += 1
+        _skipped: = p.expression()
+        p.skipping -= 1
+        return empty()
+
+    priv fn rounding(p: Self$@): Value //< `round(x, places)` after its `(`
+        //< `places` is a whole number from -15 to 15. The digits a person reads are rounded, half
+        //< away from zero, as a number format rounds them.
+        x: = operand(p.expression())
+        p.expect(.comma)
+        places: = operand(p.expression())
+        if x.kind == .error
+            return x
+        if places.kind == .error
+            return places
+        n: = places.number
+        if n < -F64::MAX_ROUND || n > F64::MAX_ROUND || F64::(Sz::n) != n
+            return Value.failed(.not_finite)
+        rounded: = round_places(x.number, Sz::n) catch
+            return Value.failed(.not_finite)
+        return number(rounded)
+
+    priv fn lookup(p: Self$@): Value //<
+        //< `lookup(key, keys, values, otherwise)` after its `(`: the value beside the first key
+        //< that equals `key`
+        //< `keys` and `values` are ranges of one column, or of one row, as long as each other. Text
+        //< equals text without regard to case, as the filter and the sort compare it. Where no key
+        //< equals it, the result is `otherwise`, which is calculated only then, as `if` does.
+        key: = p.expression()
+        p.expect(.comma)
+        keys: = p.range_piece()
+        p.expect(.comma)
+        values: = p.range_piece()
+        p.expect(.comma)
+        if p.skipping > 0 || p.wrong
+            _skipped: = p.branch(false)
+            return empty()
+        $found: Value? = .none
+        $broken: = Value.failed(.syntax)
+        $failed: = false
+        if key.kind == .error
+            broken = key
+            failed = true
+        a: = p.area_of(keys)
+        b: = p.area_of(values)
+        if !failed && (a.is_none() || b.is_none())
+            broken = Value.failed(.reference)
+            failed = true
+        if !failed
+            ka: = a.unwrap_or(empty_area())
+            va: = b.unwrap_or(empty_area())
+            if !same_line(ka, va)
+                broken = Value.failed(.shape)
+                failed = true
+            else
+                for i in Range.asc(length_of(ka))
+                    if equal_keys(key, value_at(p.c, spot_in(ka, i)))
+                        found = .some(value_at(p.c, spot_in(va, i)))
+                        break
+        otherwise: = p.branch(!failed && found.is_none())
+        if failed
+            return broken
+        if v: = found
+            return v
+        return otherwise
+
+    priv fn range_piece(p: Self$@): Sz //< the piece of a reference argument; -1 where it is not one
+        if p.tok.kind != .reference && p.tok.kind != .broken
+            p.wrong = true
+            return -1
+        piece: = p.tok.piece
+        p.advance()
+        return piece
+
+    priv fn conditional(p: Self$@, kind: Fold_kind): Value //<
+        //< `sum_if(values, condition)` after its `(`, or `count_if` or `average_if`
+        //< The values are a cell or a range. The condition is calculated once for each of their
+        //< rows, with each range in it read as its cell on that row. The values on a row are read
+        //< only where the condition is `true`, as `if` reads only the branch it takes.
+        if p.tok.kind != .reference && p.tok.kind != .broken
+            p.wrong = true
+            return Value.failed(.syntax)
+        values: = p.tok.piece
+        p.advance()
+        p.expect(.comma)
+        $fold: = Fold::{ .kind = kind, .total = 0.0, .numbers = 0, .dates = 0, .error = .syntax,
+            .broken = false }
+        $area: = Area::{ .table = 0, .rows = Span::{ .low = 0, .high = 0 },
+            .columns = Span::{ .low = 0, .high = 0 } }
+        if found: = p.area_of(values)
+            area = found
+        else
+            fold.take(Value.failed(.reference))
+        outer: = p.rows
+        p.rows = Row_reading::{ .count = area.rows.high - area.rows.low + 1, .row = 0,
+            .ranged = false, .shaped = true }
+        cur: = p.cur
+        tok: = p.tok
+        // Read once without calculating, to check every range's shape first.
+        p.skipping += 1
+        _shape: = p.expression()
+        p.skipping -= 1
+        if !fold.broken && !(p.rows.ranged && p.rows.shaped)
+            fold.take(Value.failed(.shape))
+        if p.skipping == 0
+            for row in Range.asc(p.rows.count)
+                if fold.broken || p.wrong || p.c.deferring
+                    break
+                p.cur = cur
+                p.tok = tok
+                p.rows.row = row
+                holds: = truth(p.expression())
+                if holds.kind == .error
+                    fold.take(holds)
+                else if holds.boolean
+                    p.take_row(fold@, area, area.rows.low + row)
+        p.rows = outer
+        return fold.result()
+
+    priv fn area_of(p: Self@, index: Sz): Area? //<
+        //< The cells a reference's piece names; none for -1, a reference to no cell or `#REF!`
+        if index < 0
+            return .none
+        piece: = p.t.pieces[index]
+        u: = piece.table
+        at: = p.c.at@
+        return .some(Area::{ .table = u,
+            .rows =
+            ordered(at.of(u, piece.from.row), at.of(u, piece.to.row)),
+            .columns =
+            ordered(at.of(u, piece.from.column), at.of(u, piece.to.column)) })
+
+    priv fn take_row(p: Self$@, fold: Fold$@, area: Area, row: Sz) //<
+        //< The numbers and errors of the area's cells on one row, from the left
+        for column in Range(area.columns.low, area.columns.high + 1, 1)
+            v: =
+                value_at(p.c, Spot::{ .table = area.table, .row = row, .column = column })
+            if v.kind == .number || v.kind == .date || v.kind == .error
+                fold.take(v)
+
+    priv fn row_of(p: Self$@, piece: Sz): Value //<
+        //< A range in a condition, by its piece: its cell on the row read now
+        //< It must be one column wide and as tall as the values; else the result is `#SHAPE!`.
+        p.rows.ranged = true
+        area: = p.area_of(piece) catch
+            return Value.failed(.reference)
+        if area.columns.low != area.columns.high ||
+            area.rows.high - area.rows.low + 1 != p.rows.count
+            p.rows.shaped = false
+            return Value.failed(.shape)
+        if p.skipping > 0
+            return empty()
+        return value_at(p.c,
+            Spot::{ .table = area.table, .row = area.rows.low + p.rows.row,
+            .column = area.columns.low })
+
+    priv fn fold(p: Self$@, name: U8[]): Value //< `sum(...)` after its `(`: one or more arguments
+        $fold: = Fold::{ .kind = .sum, .total = 0.0, .numbers = 0, .dates = 0, .error = .syntax,
+            .broken = false }
+        if kind: = Fold_kind.from_variant_name(name)
+            fold.kind = kind
+        else
+            p.wrong = true
+        for
+            p.argument(fold@)
+            if p.tok.kind != .comma
+                break
+            p.advance()
+        return fold.result()
+
+    priv fn argument(p: Self$@, fold: Fold$@) //<
+        //< A reference alone is a set of cells, whose empty cells, text, and true and false are
+        //< left out. Any other argument is a number, as arithmetic takes one.
+        if p.tok.kind == .reference || p.tok.kind == .broken
+            cur: = p.cur
+            tok: = p.tok
+            p.advance()
+            if p.tok.kind == .comma || p.tok.kind == .close
+                p.take_cells(fold, tok.piece)
+                return
+            p.cur = cur
+            p.tok = tok
+        fold.take(operand(p.expression()))
+
+    priv fn take_cells(p: Self$@, fold: Fold$@, piece: Sz) //< every cell a reference's piece names
+        if p.skipping > 0
+            return
+        area: = p.area_of(piece) catch
+            fold.take(Value.failed(.reference))
+            return
+        for row in Range(area.rows.low, area.rows.high + 1, 1)
+            p.take_row(fold, area, row)
+
+    priv fn cell_of(p: Self$@, index: Sz): Value //< the value of the one cell a piece names
+        if index < 0
+            return Value.failed(.reference)
+        piece: = p.t.pieces[index]
+        u: = piece.table
+        row: = p.c.at.of(u, piece.from.row)
+        column: = p.c.at.of(u, piece.from.column)
+        return value_at(p.c, Spot::{ .table = u, .row = row, .column = column })
+
+    priv fn expect(p: Self$@, kind: Token_kind) //< takes a token of this kind, or marks it wrong
+        if p.tok.kind != kind
+            p.wrong = true
+            return
+        p.advance()
+
+impl Fold
+    priv fn take(f: Self$@, v: Value) //< one number or error; the first error is kept
+        if f.broken
+            return
+        if v.kind == .error
+            f.broken = true
+            f.error = v.error
+            return
+        // Dates have a least and a greatest, and a count; they have no sum.
+        if v.kind == .date
+            if f.kind == .sum || f.kind == .average
+                f.broken = true
+                f.error = .wrong_kind
+                return
+            f.dates += 1
+        f.numbers += 1
+        switch f.kind
+        case .sum, .average
+            f.total += v.number
+        case .min
+            if f.numbers == 1 || v.number < f.total
+                f.total = v.number
+        case .max
+            if f.numbers == 1 || v.number > f.total
+                f.total = v.number
+        case .count {}
+
+    priv fn result(f: Self@): Value //< `sum` and `count` of nothing are 0; the others are errors
+        if f.broken
+            return Value.failed(f.error)
+        switch f.kind
+        case .count
+            return number(F64::f.numbers)
+        case .sum
+            return number(f.total)
+        case .min, .max, .average
+            if f.numbers == 0
+                return Value.failed(.no_numbers)
+        if f.kind == .average
+            return number(f.total / F64::f.numbers)
+        // `min` or `max` of dates alone is a date; of dates and numbers together, no value.
+        if f.dates > 0
+            if f.dates != f.numbers
+                return Value.failed(.wrong_kind)
+            return date_value(I64::f.total)
+        return number(f.total)
+
+priv fn part_of(v: Value, name: U8[]): Value //< `year(d)`, `month(d)` or `day(d)` of a date
+    if v.kind == .error
+        return v
+    if v.kind != .date
+        return Value.failed(.wrong_kind)
+    d: = ymd_of(I64::v.number)
+    if name.equals("year")
+        return number(F64::d.year)
+    return number(F64::d.month if name.equals("month") else F64::d.day)
+
+priv struct Span //< two places in order
+    low: Sz
+    high: Sz
+
+priv struct Area //< the rectangle of cells a reference names, by their places
+    table: Sz
+    rows: Span
+    columns: Span
+
+priv fn empty_area(): Area
+    return Area::{ .table = 0, .rows = Span::{ .low = 0, .high = 0 },
+        .columns = Span::{ .low = 0, .high = 0 } }
+
+priv fn length_of(a: Area): Sz //< how many cells a line of one row or one column holds
+    return a.rows.high - a.rows.low + a.columns.high - a.columns.low + 1
+
+priv fn same_line(a: Area, b: Area): Bool //<
+    //< Whether both are one column, or both one row, and hold as many cells
+    a_column: = a.columns.low == a.columns.high
+    b_column: = b.columns.low == b.columns.high
+    a_row: = a.rows.low == a.rows.high
+    b_row: = b.rows.low == b.rows.high
+    return (a_column && b_column || a_row && b_row) && length_of(a) == length_of(b)
+
+priv fn spot_in(a: Area, i: Sz): Spot //< the `i`th cell of a line, from its top or its left
+    if a.columns.low == a.columns.high
+        return Spot::{ .table = a.table, .row = a.rows.low + i, .column = a.columns.low }
+    return Spot::{ .table = a.table, .row = a.rows.low, .column = a.columns.low + i }
+
+priv fn ordered(a: Sz, b: Sz): Span
+    return Span::{ .low = a, .high = b } if a <= b else Span::{ .low = b, .high = a }

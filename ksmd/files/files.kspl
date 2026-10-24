@@ -1,0 +1,144 @@
+//< How a written path leads to a file, by its text alone, and what a document's files are read from
+//< A path is read from the folder of the source that holds it. `resolve_text` applies every rule
+//< that reads only the text, so the page in a browser applies the same rules as a folder on disk.
+//< `Files` is where the bytes come from: `Workspace` reads a folder on disk, and the page reads
+//< what the local server fetched. Each place adds its own check that no link stands on the way.
+import "ksmd/base/source" { Diagnostic, MAX_SOURCE_BYTES, Source }
+import "ksmd/model/model" { Document }
+import "ksmd/syntax/reader"
+import "std/chars"
+import "std/mem" { Arena }
+import "std/str"
+import "std/sys"
+
+enum Refusal //< why a written path, or what stands at it, is refused
+    address //< a web or network address: `https://…`, `mailto:…`, `//server/share`
+    absolute //< a path from a root or a drive
+    backslash //< a `\`, which separates folders on Windows alone
+    spelling //< a `.` segment, an empty segment, a `..` after a name, or `..` alone
+    outside //< its `..` segments climb above the workspace root
+    link //< a folder or file along it is a link, or cannot be checked
+    name //< a name Windows reads as another file: a final `.` or space, a `:`, a device name
+    missing //< nothing stands there
+    not_file //< a folder or a device stands there
+    unreadable //< the file cannot be read
+    unwritable //< the file cannot be replaced
+
+impl Refusal
+    fn message(r: Self): U8[] //< what a diagnostic says: the problem, then what to do
+        switch r
+        case .address
+            return "this path is a web or network address. Copy the file into the workspace, and \
+                write its path from this file"
+        case .absolute
+            return "this path starts from a root or a drive. Write it from the folder of this file"
+        case .backslash
+            return "this path holds '\\', which separates folders on Windows alone. Write '/' \
+                between folders"
+        case .spelling
+            return "this path holds '.', an empty segment or a misplaced '..'. Name each folder \
+                once, with any '..' first"
+        case .outside
+            return "this path climbs out of the workspace. Keep included files and images inside \
+                its folder"
+        case .link
+            return "this path passes through a link, which a workspace refuses. Name the file where \
+                it stands"
+        case .name
+            return "this path holds a name that Windows reads as another file, such as a final '.' \
+                or a device name. Rename the file"
+        case .missing
+            return "no file stands at this path. Correct the path; ksmd does not create the file"
+        case .not_file
+            return "a folder or a device stands at this path, not a file"
+        case .unreadable
+            return "this file cannot be read. Check that it is readable"
+        case .unwritable
+            return "this file cannot be written. Check that its folder exists and is writable"
+
+enum Load_error //< why a source could not be read into its model
+    refused(why: Refusal) //< the path, or what stands at it, is refused
+    invalid(at: Diagnostic) //< the source's bytes or its document are refused at a place
+
+struct Loaded //< one source, read and checked
+    path: U8[] //< from the root, with '/' between folders
+    source: Source
+    doc: Document
+
+trait Files //< where a document's sources and images are read from
+    fn resolve(r: Self, folder: U8[], written: U8[], arena: Arena$@): U8[]!Refusal //<
+        //< The path from the root that `written` names, read from `folder` (from the root; empty
+        //< for the root itself), with every check this place can make on the way
+    fn check(r: Self, path: U8[], arena: Arena$@): Void!Refusal //<
+        //< That a regular file stands at `path`, from the root
+    fn read(r: Self, path: U8[], limit: Sz, arena: Arena$@): U8[]!Refusal //<
+        //< The bytes of the file at `path`, from the root: at most `limit + 1`, so a file longer
+        //< than `limit` shows it without being read whole
+
+fn resolve_text(folder: U8[], written: U8[], arena: Arena$@): U8[]!Refusal //<
+    //< The path from the root that `written` names, read from `folder`, by its text alone. Each
+    //< leading `..` climbs one folder. A link along the path is each `Files`' own check.
+    refuse_form(written)!
+    segments: = written.split('/', arena)
+    $up: Sz = 0
+    for up < segments.len && segments.get(up).equals("..")
+        up += 1
+    if up == segments.len
+        throw .spelling
+    for i in Range.asc(segments.len - up)
+        segment: = segments.get(up + i)
+        if segment.len == 0 || segment.equals(".") || segment.equals("..")
+            throw .spelling
+    $base: = folder
+    for _ in Range.asc(up)
+        if base.len == 0
+            throw .outside
+        base = folder_of(base)
+    rest: = written.sub_from(up * 3)
+    path: =
+        rest if base.len == 0 else arena.text().s(base).c('/').s(rest).take()
+    if !sys.is_safe_relative(path)
+        throw .name
+    return path
+
+fn folder_of(path: U8[]): U8[] //< the folder of a path from the root; empty for the root itself
+    //< A path from the root has one spelling, `/` between folders and no drive, so the folder is
+    //< what stands before the last `/`. `sys.get_dir_name` would ask which OS runs the page.
+    if at: = path.rfind_char('/')
+        return path.sub(0, at)
+    return ""
+
+fn load(files: Files, written: U8[], arena: Arena$@): Loaded!Load_error //<
+    //< The source `written` names from the root, read alone, as when it is opened to edit
+    path: = files.resolve("", written, arena) catch why
+        throw .refused(why)
+    bytes: = files.read(path, MAX_SOURCE_BYTES, arena) catch why
+        throw .refused(why)
+    return parse(path, bytes, arena) catch at
+        throw .invalid(at)
+
+fn parse(path: U8[], bytes: U8[], arena: Arena$@): Loaded!Diagnostic //<
+    //< The model of a source's bytes; `path` names it in diagnostics
+    src: = Source(path, bytes)!
+    doc: = reader.read(src@, arena)!
+    return Loaded::{ .path = path, .source = src, .doc = doc }
+
+priv fn refuse_form(written: U8[]): Void!Refusal //< refuses an address, a rooted path and a `\`
+    if written.len == 0
+        throw .spelling
+    if written.starts_with("//") || written.starts_with("\\\\") || has_scheme(written)
+        throw .address
+    if sys.is_path_sep(written[0]) ||
+        written.len >= 2 && written[1] == ':' && written[0].is_alpha()
+        throw .absolute
+    if written.find_char('\\').is_some()
+        throw .backslash
+
+priv fn has_scheme(text: U8[]): Bool //< whether it starts as `https:` or `mailto:` does
+    //< A letter, at least one more letter, digit, `+`, `-` or `.`, then `:`. One letter and `:` is
+    //< a drive.
+    $i: Sz = 0
+    for i < text.len &&
+        (text[i].is_alnum() || text[i] == '+' || text[i] == '-' || text[i] == '.')
+        i += 1
+    return i >= 2 && i < text.len && text[i] == ':' && text[0].is_alpha()

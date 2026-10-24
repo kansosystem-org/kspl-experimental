@@ -154,7 +154,7 @@ async function tab(ctx, query = "") {
   if (!await d.until("document.documentElement.dataset.files === 'ready'")) {
     // Say what the page showed, so a failure seen once can be traced.
     const seen = await d.js("JSON.stringify({ files: document.documentElement.dataset.files, " +
-      "url: location.href, said: (document.querySelector('.files .state') || {}).textContent })")
+      "url: location.href, said: (document.querySelector('.menubar .state') || {}).textContent })")
       .catch((e) => `unreadable: ${e.message}`);
     throw new Error(`the served page did not get ready: ${seen}`);
   }
@@ -221,7 +221,7 @@ const SECTIONS = {
   async save(ctx) {
     const d = await tab(ctx, "?doc=top.ksmd");
     await typeAtEnd(d, 1, " More.");
-    check(await d.js("document.querySelector('.files .state').textContent") !== "",
+    check(await d.js("document.querySelector('.menubar .state').textContent") !== "",
       "an edit shows that the document is not saved");
     await d.press("s", CTRL);
     await idle(d);
@@ -233,7 +233,7 @@ const SECTIONS = {
     check(names === "parts/notes.ksmd pics/dot.png pics/fake.png pics/huge.png top.ksmd",
       "a save leaves no other file, a part file included", names);
     check((await said(d)) === "Saved top.ksmd." &&
-      await d.js("document.querySelector('.files .state').textContent") === "",
+      await d.js("document.querySelector('.menubar .state').textContent") === "",
     "the page says it saved, and no longer says unsaved");
     await d.page("Page.reload", {});
     await d.until("document.documentElement.dataset.files === 'ready'");
@@ -281,7 +281,7 @@ const SECTIONS = {
     const d = await tab(ctx, "?doc=top.ksmd");
     await typeAtEnd(d, 1, " Unsaved.");
     const edited = await d.js("ksmd.source()");
-    check(await d.until("document.querySelector('.files .state').textContent.includes('draft')"),
+    check(await d.until("document.querySelector('.menubar .state').textContent.includes('draft')"),
       "a pause in typing holds a draft in the browser");
     await ctx.browser.closeTab(d.page);
     check(ctx.disk("top.ksmd") === before, "a draft is never written to the document's file");
@@ -298,7 +298,7 @@ const SECTIONS = {
     const f = await tab(ctx, "?doc=top.ksmd");
     await typeAtEnd(f, 1, " Crashed.");
     const lost = await f.js("ksmd.source()");
-    await f.until("document.querySelector('.files .state').textContent.includes('draft')");
+    await f.until("document.querySelector('.menubar .state').textContent.includes('draft')");
     try {
       await f.page("Page.crash", {});
     } catch (_) { /* the tab is gone */ }
@@ -349,38 +349,100 @@ const SECTIONS = {
   },
 
   async create(ctx) {
-    const top = ctx.disk("top.ksmd");
     const d = await tab(ctx);
     await d.clickBelow();
     await d.type("Fresh text.");
-    await d.js("document.getElementById('path').value = 'fresh.ksmd'");
-    await d.click('[data-file="save"]');
+    await d.press("s", CTRL);
+    check(await d.until("document.getElementById('browse').open") &&
+      await d.js("document.querySelector('#browse .browse-name').value") === "notes.ksmd",
+    "Ctrl+S on a document with no file yet asks where it goes, as Save as does");
+    await d.js("document.querySelector('#browse .browse-name').value = 'fresh'");
+    await d.click('#browse [data-browse="ok"]');
     await idle(d);
-    check(ctx.disk("fresh.ksmd") === `${H}Fresh text.\n`,
-      "a new document saves where no file stood, when Save is pressed");
+    check(ctx.disk("fresh.ksmd") === `${H}Fresh text.\n`, "and saves it where no file stood");
     await typeAtEnd(d, 0, " More.");
-    await d.js("document.getElementById('path').value = 'top.ksmd'");
-    await d.click('[data-file="save"]');
+    await d.press("s", CTRL);
     await idle(d);
-    check((await said(d)).includes("already exists") && ctx.disk("top.ksmd") === top,
-      "a save to a path where another file stands is refused, and that file stays",
-      await said(d));
-    await d.js("document.getElementById('path').value = 'missing.ksmd'");
-    await d.click('[data-file="open"]');
+    check(!await d.js("document.getElementById('browse').open") &&
+      ctx.disk("fresh.ksmd") === `${H}Fresh text. More.\n`,
+    "once it has a file, Ctrl+S saves there without asking");
+    await ctx.browser.closeTab(d.page);
+    const m = await tab(ctx, "?doc=missing.ksmd");
+    check((await said(m)).startsWith("No file stands at missing.ksmd") &&
+      ctx.disk("missing.ksmd") === null, "opening a missing file creates nothing", await said(m));
+    await ctx.browser.closeTab(m.page);
+  },
+
+  // Save As and Open choose the place in a dialog that lists the workspace's folders.
+  async saveAs(ctx) {
+    const notes = ctx.disk("parts/notes.ksmd");
+    const d = await tab(ctx, "?doc=top.ksmd");
+    const shown = () => d.js("Array.from(document.querySelectorAll('#browse .browse-list button'), " +
+      "(b) => b.textContent).join(' ')");
+    const press = async (label) => {
+      await d.js(`Array.from(document.querySelectorAll('#browse .browse-list button'))
+        .find((b) => b.textContent === ${JSON.stringify(label)}).click()`);
+      await d.settle();
+    };
+    const pressOk = async () => {
+      await d.click('#browse [data-browse="ok"]');
+      await idle(d);
+    };
+    const dialogOpen = () => d.js("document.getElementById('browse').open");
+    await d.menu("file-save-as");
+    await d.until("document.querySelector('#browse .browse-list button') !== null");
+    check(await dialogOpen() && await shown() === "parts pics fresh.ksmd top.ksmd" &&
+      await d.js("document.querySelector('#browse .browse-name').value") === "top.ksmd",
+    "Save as opens a dialog on the document's folder: its folders, then its documents",
+    await shown());
+    await press("parts");
+    check(await shown() === ".. notes.ksmd" && (await d.js(
+      "document.querySelector('#browse .browse-where').textContent")) === "Workspace / parts",
+    "a press on a folder opens it, and the path to it shows above", await shown());
+    await d.js("document.querySelector('#browse .browse-name').value = 'copy'");
+    await pressOk();
+    const top = ctx.disk("top.ksmd");
+    check(!await dialogOpen() && ctx.disk("parts/copy.ksmd") === top &&
+      await d.js("document.querySelector('.menubar .doc-name').textContent") === "parts/copy.ksmd",
+    "Save as writes in the chosen folder, adds .ksmd, and the page goes on there", await said(d));
+    await typeAtEnd(d, 0, " Again.");
+    await d.menu("file-save-as");
+    await d.until("document.querySelector('#browse .browse-list button') !== null");
+    await press("notes.ksmd");
+    await d.click('#browse [data-browse="ok"]');
+    await d.settle();
+    check(await dialogOpen() && (await d.js("document.querySelector('#browse .browse-note')" +
+      ".textContent")).includes("already exists") && ctx.disk("parts/notes.ksmd") === notes,
+    "Save as onto a document that stands asks before it replaces it",
+    await d.js("document.querySelector('#browse .browse-note').textContent + ' | ' + " +
+      "document.getElementById('status').textContent"));
+    await d.click('#browse [data-browse="cancel"]');
+    await d.settle();
+    check(!await dialogOpen() && ctx.disk("parts/notes.ksmd") === notes,
+      "Cancel closes the dialog and writes nothing");
+    await d.menu("file-open");
+    await d.until("document.querySelector('#browse .browse-list button') !== null");
+    await press("..");
+    await d.js(`Array.from(document.querySelectorAll('#browse .browse-list button'))
+      .find((b) => b.textContent === 'top.ksmd').dispatchEvent(new MouseEvent('dblclick',
+      { bubbles: true }))`);
     await idle(d);
-    check((await said(d)).startsWith("No file stands at missing.ksmd") &&
-      ctx.disk("missing.ksmd") === null, "opening a missing file creates nothing", await said(d));
+    check(await d.js("document.querySelector('.menubar .doc-name').textContent") === "top.ksmd" &&
+      await d.js("ksmd.source()") === top, "Open shows the same dialog; a double press opens",
+    `${await said(d)} | ${await shown()}`);
+    fs.rmSync(path.join(ctx.root, "parts/copy.ksmd"), { force: true });
     await ctx.browser.closeTab(d.page);
   },
 
   async refusals(ctx) {
     const before = snapshot(ctx.root);
     const d = await tab(ctx);
+    // A path reaches the page in its address, as a link or the desktop opens a document.
     const opened = async (written) => {
-      await d.js(`document.getElementById('path').value = ${JSON.stringify(written)}`);
-      await d.click('[data-file="open"]');
-      await idle(d);
-      return said(d);
+      const t = await tab(ctx, `?doc=${encodeURIComponent(written)}`);
+      const got = await said(t);
+      await ctx.browser.closeTab(t.page);
+      return got;
     };
     check((await opened("../outside.ksmd")).includes("climbs out of the workspace"),
       "a path out of the workspace is refused by the workspace's rules");
@@ -412,6 +474,36 @@ const SECTIONS = {
       "the page is handed out without the token, and does not hold it");
     check(snapshot(ctx.root) === before, "no refusal writes a file");
     await ctx.browser.closeTab(d.page);
+  },
+
+  // An image pasted is written beside the document under a free name, and its clause goes in.
+  async pasteImage(ctx) {
+    fs.writeFileSync(path.join(ctx.root, "paste.ksmd"), `${H}Text.\n`);
+    fs.writeFileSync(path.join(ctx.root, "paste-image-1.png"), "taken");
+    const d = await tab(ctx, "?doc=paste.ksmd");
+    await d.select(0, 0, 5);
+    ctx.browser.answerPrompts("A dot");
+    await d.js(`(() => {
+      const dt = new DataTransfer();
+      const bytes = Uint8Array.from(atob(${JSON.stringify(DOT.toString("base64"))}), (c) => c.charCodeAt(0));
+      dt.items.add(new File([bytes], "image.png", { type: "image/png" }));
+      document.querySelector("#doc p").dispatchEvent(new ClipboardEvent("paste",
+        { clipboardData: dt, bubbles: true, cancelable: true }));
+    })()`);
+    await idle(d);
+    ctx.browser.answerPrompts(null);
+    const file = path.join(ctx.root, "paste-image-2.png");
+    check(fs.existsSync(file) && fs.readFileSync(file).equals(DOT) && ctx.disk("paste-image-1.png") === "taken",
+      "a pasted PNG is written beside the document, past a name already taken");
+    const source = await d.js("ksmd.source()");
+    check(source === `${H}Text.\n\n:::image src="paste-image-2.png" alt="A dot"\n:::\n`,
+      "its clause goes in after the caret's paragraph, with the description asked for", JSON.stringify(source));
+    check(await d.until("(() => { const i = document.querySelector('figure[data-to=\"paste-image-2.png\"] img'); " +
+      "return !!i && i.complete && i.naturalWidth === 1; })()"), "and the image shows at once");
+    await ctx.browser.closeTab(d.page);
+    for (const name of ["paste.ksmd", "paste-image-1.png", "paste-image-2.png"]) {
+      fs.rmSync(path.join(ctx.root, name), { force: true });
+    }
   },
 
   // The editor's limit and the server's ceiling are two numbers; this ties them together.

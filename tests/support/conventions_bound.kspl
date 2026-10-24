@@ -115,28 +115,36 @@ priv fn check_sema_layers(arena: Arena$@)
         "cut the new edge, or add it to `sideways_allowed` with the reason")
 
 // ==========================================
-// ksos's folders import only those below them **The compiler does not see an upward edge** that
-// closes no cycle: a driver importing a board builds, and then serves that board alone.
+// A package's folders import only those below them **The compiler does not see an upward edge**
+// that closes no cycle: a driver importing a board builds, and then serves that board alone.
 // ==========================================
 
 // Each folder, then the folders it may import, itself included (the run is in ksos/README.md).
 // **`tests` is left out**: a test reaches whatever it checks.
-priv const KSOS_LAYERS: U8[][_] = ::{ "kernel", "kernel", "net", "net", "drivers", "kernel drivers",
-    "boards", "kernel drivers boards", "demo", "kernel net drivers boards demo", "port", "" }
+priv const KSOS_LAYERS: U8[][] = U8[][]::{ "kernel", "kernel", "net", "net", "drivers",
+    "kernel drivers", "boards", "kernel drivers boards", "demo", "kernel net drivers boards demo",
+    "port", "" }
 
-priv fn check_ksos_layers(arena: Arena$@)
+// ksmd's, as "Folder map" in ksmd/README.md runs them. `files` and `edit` stand side by side.
+priv const KSMD_LAYERS: U8[][] = U8[][]::{ "base", "base", "model", "base model", "calc",
+    "base model calc", "syntax", "base model calc syntax", "files", "base model calc syntax files",
+    "edit", "base model calc syntax edit", "port", "base model calc syntax files edit port" }
+
+priv fn check_layers(pkg: U8[], layers: U8[][], arena: Arena$@) //<
+    //< Each file under `<pkg>/<folder>/` imports from `<pkg>/` only the folders its row allows
     $bad: = List<|U8[]|>(arena)
     $seen: Sz = 0
-    for i in Range(0, KSOS_LAYERS.len, 2)
-        folder: = arena.text().s("ksos/").s(KSOS_LAYERS[i]).s("/").take()
-        allowed: = KSOS_LAYERS[i + 1].split(' ', arena)
+    prefix: = arena.text().s(pkg).s("/").take()
+    for i in Range(0, layers.len, 2)
+        folder: = arena.text().s(prefix).s(layers[i]).s("/").take()
+        allowed: = layers[i + 1].split(' ', arena)
         for rel in harness
             .tracked_matching(U8[][]::{ arena.text().s(folder).s("*.kspl").take() })
             seen += 1
             for p in import_paths(rel, arena)
-                if !p.starts_with("ksos/")
+                if !p.starts_with(prefix)
                     continue
-                rest: = p.sub_from(5)
+                rest: = p.sub_from(prefix.len)
                 top: = rest.sub(0, rest.find_char('/').unwrap_or(rest.len))
                 $ok: = false
                 for a in allowed
@@ -144,8 +152,9 @@ priv fn check_ksos_layers(arena: Arena$@)
                         ok = true
                 if !ok
                     bad.push(arena.text().s(rel).s(" -> ").s(p).take())
-    verdict.check_list("a ksos folder imports only those below it", seen, "files", bad@,
-        "the run is in \"What is here\" in ksos/README.md")
+    verdict.check_list(arena.text().s("a ").s(pkg).s(" folder imports only those below it").take(),
+        seen, "files", bad@,
+        arena.text().s("the run is in ").s(pkg).s("/README.md").take())
 
 // ==========================================
 // The reference-direction table matches the list the check holds. **The canonical source is the
@@ -388,7 +397,8 @@ priv fn check_hand_lists(arena: Arena$@) //<
 fn run(arena: Arena$@)
     check_sema_layers(arena)
     check_reference_arrows(arena)
-    check_ksos_layers(arena)
+    check_layers("ksos", KSOS_LAYERS, arena)
+    check_layers("ksmd", KSMD_LAYERS, arena)
     check_no_pub_in_entries(arena)
     check_wasm_boundary(arena)
     check_hand_lists(arena)

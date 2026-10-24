@@ -1,0 +1,200 @@
+//< How a line of cells goes on when the fill handle drags it further, as a spreadsheet's does
+//< Two or more numbers with one step between each go on by that step: `1, 2` gives `3, 4`, and
+//< `10, 7.5` gives `5, 2.5`. Text that ends in a number goes on by its step too, or by one from a
+//< single cell: `Item 1` gives `Item 2`, and `Q1, Q3` gives `Q5`. Anything else repeats, as a copy
+//< does: one number alone, numbers whose steps differ, a formula, a mix of kinds, and a date or a
+//< time written as text. A date goes on by a day, as Excel's does, or by the step between two.
+//< The arithmetic is in decimal digits, so `0.1, 0.2` gives `0.3`, never `0.30000000000000004`.
+import "ksmd/base/dates" { date_of, in_range, write_date }
+import "ksmd/base/marker" { is_decimal }
+import "ksmd/model/model" { Cell, MAX_ROWS }
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str"
+import "std/str" { Str_builder }
+
+priv const MAX_DIGITS: Sz = 15 //< the most digits a value of a series holds, so none overflows
+priv const MAX_VALUE: I64 = 100000000000000000I64 //< 10^17: a value at the common scale stays below
+priv const MAX_STEP: I64 = 1000000000000I64 //<
+    //< 10^12: a step, times a table's rows, stays below 10^17
+
+enum Series_kind
+    none //< the line repeats
+    number
+    date //< dates go on by their step in days, or by one day from a single date
+    text //< text ending in a number
+
+struct Series //< how one line of cells goes on
+    kind: Series_kind
+    prefix: U8[] //< a text's part before its number
+    start: I64 //< the first value, times 10 to the power `scale`
+    step: I64 //< the step between two values, times the same
+    scale: Sz //< how many digits stand after the point
+    width: Sz //< a text's number keeps this many digits, with leading zeros
+
+priv struct Parsed //< one value of a line, as a whole number of the smallest unit
+    ok: Bool
+    prefix: U8[]
+    value: I64
+    scale: Sz
+    width: Sz
+
+fn series_of(cells: List<|Cell|>@, arena: Arena$@): Series //< how the line of cells goes on
+    $s: = Series::{ .kind = .none, .prefix = "", .start = 0I64, .step = 0I64, .scale = 0,
+        .width = 0 }
+    if cells.len == 0
+        return s
+    kind: = cells[0].kind
+    if kind == .date
+        return dates_of(cells)
+    if kind != .number && kind != .text
+        return s
+    if kind == .number && cells.len < 2
+        return s
+    $values: = List<|Parsed|>(arena)
+    $scale: Sz = 0
+    for c in cells
+        if c.kind != kind
+            return s
+        p: = number_of(c.text) if kind == .number else text_of(c.text)
+        if !p.ok ||
+            !p.prefix.equals(values[0].prefix if values.len > 0 else p.prefix)
+            return s
+        scale = p.scale if p.scale > scale else scale
+        values.push(p)
+    // Each value at the common scale, so `1` and `1.5` step by `0.5`.
+    $at: = List<|I64|>(arena)
+    for p in values
+        v: = scaled(p, scale) catch
+            return s
+        at.push(v)
+    first: = at[0]
+    $step: = 1I64
+    if at.len > 1
+        step = at[1] - first
+        for i in Range(2, at.len, 1)
+            if at[i] - at[i - 1] != step
+                return s
+    if step > MAX_STEP || step < -MAX_STEP
+        return s
+    s.kind = .number if kind == .number else .text
+    s.prefix = values[0].prefix
+    s.start = first
+    s.step = step
+    s.scale = scale
+    s.width = values[0].width
+    return s
+
+fn value_at(s: Series@, k: Sz, arena: Arena$@): U8[]? //<
+    //< The text of the value `k` places after the line's first, or none where it would not fit
+    //< A text's number below zero, a value past 15 digits, or a day past the year 9999 does not
+    //< fit: that cell repeats.
+    if s.kind == .none || k > MAX_ROWS
+        return .none
+    v: = s.start + s.step * I64::k
+    if s.kind == .date
+        if !in_range(v)
+            return .none
+        defer $day: = Str_builder()
+        write_date(v, day@)
+        return .some(arena.dup_str(day.slice()))
+    if s.kind == .text && v < 0I64
+        return .none
+    $whole: = v if v >= 0I64 else -v
+    $digits: = List<|U8|>(arena)
+    for whole > 0I64 || digits.len <= s.scale
+        digits.push(U8::(whole % 10I64) + '0')
+        whole = whole / 10I64
+    if digits.len > MAX_DIGITS
+        return .none
+    out: = arena.text()
+    out.s(s.prefix)
+    if v < 0I64
+        out.c('-')
+    for _ in Range(digits.len, s.width, 1)
+        out.c('0')
+    // The digits stand from the last; those after the point go, as far as they are zeros.
+    $kept: Sz = 0
+    for i in Range.asc(s.scale)
+        if digits[i] != '0'
+            kept = s.scale - i
+            break
+    for i in Range.desc(digits.len)
+        if i < s.scale - kept
+            break
+        if i == s.scale - 1
+            out.c('.')
+        out.c(digits[i])
+    return .some(out.take())
+
+priv fn dates_of(cells: List<|Cell|>@): Series //< how a line of dates goes on
+    $s: = Series::{ .kind = .none, .prefix = "", .start = 0I64, .step = 1I64, .scale = 0,
+        .width = 0 }
+    $previous: = 0I64
+    for i in Range.asc(cells.len)
+        if cells[i].kind != .date
+            return s
+        day: = date_of(cells[i].text) catch
+            return s
+        if i == 0
+            s.start = day
+        else if i == 1
+            s.step = day - previous
+        else if day - previous != s.step
+            return s
+        previous = day
+    s.kind = .date
+    return s
+
+priv fn scaled(p: Parsed, scale: Sz): I64? //< the value at a finer scale, if it stays in range
+    $v: = p.value
+    for _ in Range(p.scale, scale, 1)
+        if v >= MAX_VALUE || v <= -MAX_VALUE
+            return .none
+        v = v * 10I64
+    return .some(v)
+
+priv fn number_of(text: U8[]): Parsed //< a number as written, `-12.5`; none with an exponent
+    $p: = Parsed::{ .ok = false, .prefix = "", .value = 0I64, .scale = 0, .width = 0 }
+    if !is_decimal(text) || text.find_str("e").is_some() || text.find_str("E").is_some()
+        return p
+    negative: = text.starts_with("-")
+    $count: Sz = 0
+    $after: = false
+    for c in text
+        if c == '-'
+            continue
+        if c == '.'
+            after = true
+            continue
+        count += 1
+        if count > MAX_DIGITS
+            return p
+        p.value = p.value * 10I64 + I64::(c - '0')
+        if after
+            p.scale += 1
+    if negative
+        p.value = -p.value
+    p.ok = true
+    return p
+
+priv fn text_of(text: U8[]): Parsed //< text ending in a number: `Item 1`, `Q01`
+    $p: = Parsed::{ .ok = false, .prefix = "", .value = 0I64, .scale = 0, .width = 0 }
+    $from: = text.len
+    for from > 0 && text[from - 1].is_digit()
+        from -= 1
+    run: = text.len - from
+    if run == 0 || run > MAX_DIGITS
+        return p
+    // A date or a time written as text, `2026-10-23` or `14:05`, is not a count that goes on.
+    if from > 0 &&
+        (text[from - 1] == '-' || text[from - 1] == '/' || text[from - 1] == ':' ||
+        text[from - 1] == '.')
+        return p
+    for c in text.sub_from(from)
+        p.value = p.value * 10I64 + I64::(c - '0')
+    p.prefix = text.sub(0, from)
+    p.width = run if text[from] == '0' else 0
+    p.ok = true
+    return p

@@ -10,6 +10,7 @@
 // Shift+click, and Shift with an arrow key, choose a range of cells from the chosen one
 // (`range.js`).
 // A right-click on a cell, a row number or a column letter opens the table's menu (`menu.js`).
+// Groups of rows show beside the row numbers (`outline.js`).
 "use strict";
 
 function ksmdTable(ks) {
@@ -33,6 +34,7 @@ function ksmdTable(ks) {
     el.tabIndex = -1;
     if (value) {
       if (value[0] === 1) el.className = "number";
+      if (value[0] === 5) el.className = "date";
       if (value[0] === 3) el.className = "error";
       // A number in a column with a number format comes with the text the format shows.
       el.textContent = value.length > 2 ? value[2] :
@@ -112,9 +114,14 @@ function ksmdTable(ks) {
       if (!el) continue;
       if (color) el.style.color = color;
       if (fill) el.style.backgroundColor = fill;
+      if (color || fill) el.classList.add("looked");
       if (size) el.style.fontSize = `${size / 2}pt`;
       if (align) el.style.textAlign = align;
     }
+    ks.rules.paint(wrap, b.ru);
+    ks.outline.draw(wrap, b.g);
+    ks.choices.mark(wrap, b.ch);
+    ks.notes.mark(wrap, b.notes);
     ks.filter.apply(wrap);
     return wrap;
   }
@@ -258,6 +265,7 @@ function ksmdTable(ks) {
     el.textContent = "";
     el.appendChild(input);
     input.addEventListener("keydown", keys);
+    if (row >= 0) ks.choices.attach(el.closest(".table"), column, input);
     ks.range.collapse();
     // A grid from a spreadsheet fills cells from this one; one value goes into the input.
     input.addEventListener("paste", (e) => {
@@ -280,8 +288,11 @@ function ksmdTable(ks) {
   }
 
   // Takes the open cell's text into the model; the table is then shown again with its values.
-  function take() {
-    if (!open) return;
+  // With `keep`, a value the model refuses stays in its open cell to be put right, as a
+  // spreadsheet keeps it, and the result is false; else the cell shows its value again. Either
+  // way the page says why.
+  function take(keep = false) {
+    if (!open) return true;
     const o = open;
     open = null;
     if (o.input.value === o.before) {
@@ -292,9 +303,17 @@ function ksmdTable(ks) {
         // The row kept in sight while it was edited goes, if the filter does not show it.
         ks.filter.apply(el.closest(".table"));
       }
-      return;
+      return true;
     }
-    ks.act("ksmd_web_set_cell", o.block, o.row, o.column, ks.put(o.input.value));
+    const r = ks.act("ksmd_web_set_cell", o.block, o.row, o.column, ks.put(o.input.value));
+    if (!keep || !r || r.ok) return true;
+    const el = find(o.block, o.row, o.column);
+    if (el) {
+      edit(el);
+      open.input.value = o.input.value;
+    }
+    ks.say(r.why);
+    return false;
   }
 
   function moveTo(block, row, column) {
@@ -349,12 +368,6 @@ function ksmdTable(ks) {
       }
       return;
     }
-    if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === "d" || e.key === "r")) {
-      e.preventDefault();
-      take();
-      ks.range.fill(e.key === "d");
-      return;
-    }
     let to = null;
     if (e.key === "Enter") to = [stepRow(block, row, 1), column];
     else if (e.key === "Tab") to = [row, column + (e.shiftKey ? -1 : 1)];
@@ -386,8 +399,28 @@ function ksmdTable(ks) {
       return;
     } else return;
     e.preventDefault();
-    take();
+    if (!take(true)) return;
     moveTo(block, to[0], to[1]);
+  }
+
+  // Downloads the table as CSV: its names, then each row's calculated values, every row whether
+  // shown or not. A number is written as the table shows it before any format, with `.` for its
+  // point, so another program reads it as a number. The file is UTF-8 with a byte order mark,
+  // which Excel needs to read it as UTF-8; lines end in CR LF, as RFC 4180 has them.
+  function csv(block) {
+    const wrap = ks.view.blocks()[block];
+    const field = (text) => (/[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text);
+    const value = (v) => (!v || v.length < 2 ? "" : v[0] === 1 ? shown(v[1]) : String(v[1]));
+    const lines = [wrap.names.map(field).join(",")];
+    for (const row of wrap.values) lines.push(row.map((v) => field(value(v))).join(","));
+    const file = new Blob(["\uFEFF", lines.join("\r\n"), "\r\n"], { type: "text/csv" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(file);
+    a.download = `${wrap.dataset.name.replace(/[\\/:*?"<>|]/g, "_")}.csv`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    ks.say(`Exported ${a.download}.`);
+    return null;
   }
 
   function rename(block) {
@@ -483,6 +516,11 @@ function ksmdTable(ks) {
       }
     }
     const el = e.target.closest(".table [data-r]");
+    // A right press inside the chosen range keeps it, so the menu acts on the whole range.
+    if (el && e.button === 2 && inRange(blockOf(el), Number(el.dataset.r), Number(el.dataset.c))) {
+      e.preventDefault();
+      return;
+    }
     // Shift+click reaches from the chosen cell to this one, as a range.
     if (el && e.shiftKey && ks.cell && ks.cell.block === blockOf(el)) {
       e.preventDefault();
@@ -502,8 +540,15 @@ function ksmdTable(ks) {
     if (name) rename(blockOf(name));
   });
 
+  // Whether a cell stands in the chosen range of more than one cell.
+  function inRange(block, row, column) {
+    if (!ks.cell || ks.cell.block !== block || !ks.range.any()) return false;
+    const r = ks.range.rect();
+    return row >= r.r1 && row <= r.r2 && column >= r.c1 && column <= r.c2;
+  }
+
   // A right-click on a cell, a row number or a column letter chooses that place and opens the
-  // table's menu there.
+  // table's menu there. Inside the chosen range, the range stays.
   ks.root.addEventListener("contextmenu", (e) => {
     if (!e.target.closest || e.target.closest(".include")) return;
     const wrap = e.target.closest(".table");
@@ -523,7 +568,7 @@ function ksmdTable(ks) {
     } else {
       column = at.cellIndex - 1;
     }
-    choose(block, row, column);
+    if (!inRange(block, row, column)) choose(block, row, column);
     ks.menus.openContext(e.clientX, e.clientY);
   });
 
@@ -532,6 +577,7 @@ function ksmdTable(ks) {
     take,
     letters,
     rename,
+    csv,
     format,
     fit,
     range: () => ks.range.rect(),
@@ -541,6 +587,13 @@ function ksmdTable(ks) {
     editing: () => (open ? { block: open.block, row: open.row } : null),
     // Whether an event belongs to a cell's own input rather than to the document.
     owns: (target) => !!(target && target.closest && target.closest(".table")),
+    // Opens a cell with text typed in and part of it selected, as AutoSum leaves its formula.
+    openWith: (block, row, column, text, from, to) => {
+      moveTo(block, row, column);
+      if (!open) return;
+      open.input.value = text;
+      open.input.setSelectionRange(from, to);
+    },
     // Opens the first name of a new table to edit.
     editFirst: (block) => {
       const el = find(block, -1, 0);

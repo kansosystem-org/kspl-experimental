@@ -95,6 +95,7 @@ function ksmdRange(ks) {
 
   // Marks the range's cells and the chosen one, and puts the fill handle at the range's corner.
   function mark() {
+    if (ks.figures) ks.figures.update();
     for (const el of marked) {
       if (el.classList.contains("fill-handle")) el.remove();
       else el.classList.remove("in-range", "chosen", "corner");
@@ -169,6 +170,36 @@ function ksmdRange(ks) {
     focusChosen();
   }
 
+  // A drag across cells chooses the range from the cell pressed to the cell under the pointer, as
+  // in a spreadsheet. The press opens its cell as before; once the drag reaches another cell, that
+  // cell closes unchanged and the range follows the pointer until the button comes up.
+  let dragFrom = null;
+  ks.root.addEventListener("mousedown", (e) => {
+    const el = e.target.closest && e.target.closest(".table [data-r]");
+    dragFrom = null;
+    if (!el || e.button !== 0 || e.shiftKey || e.detail > 1 || el.closest(".include")) return;
+    const block = ks.view.blocks().indexOf(el.closest(".table"));
+    dragFrom = { block, row: Number(el.dataset.r), column: Number(el.dataset.c) };
+  }, true);
+  document.addEventListener("mousemove", (e) => {
+    if (!dragFrom || (e.buttons & 1) === 0) return;
+    const under = document.elementFromPoint(e.clientX, e.clientY);
+    const el = under && under.closest && under.closest(".table [data-r]");
+    if (!el || ks.view.blocks().indexOf(el.closest(".table")) !== dragFrom.block) return;
+    const row = Number(el.dataset.r);
+    const column = Number(el.dataset.c);
+    const e0 = end || { row: dragFrom.row, column: dragFrom.column };
+    if (row === e0.row && column === e0.column && end === null &&
+      row === dragFrom.row && column === dragFrom.column) return;
+    e.preventDefault();
+    if (ks.table.editing()) ks.table.take();
+    set(dragFrom.block, dragFrom.row, dragFrom.column, { row, column });
+  });
+  document.addEventListener("mouseup", () => {
+    if (dragFrom && end) focusChosen();
+    dragFrom = null;
+  });
+
   // A press on a row number chooses the row, and one on a column letter the column's data cells.
   // With Shift, the range reaches from the chosen cell's row or column.
   ks.root.addEventListener("mousedown", (e) => {
@@ -212,9 +243,6 @@ function ksmdRange(ks) {
     } else if (e.key === "Delete" || e.key === "Backspace") {
       e.preventDefault();
       clear();
-    } else if (mod && !e.altKey && (e.key === "d" || e.key === "r")) {
-      e.preventDefault();
-      fill(e.key === "d");
     } else if (e.key === "Enter" || e.key === "F2") {
       e.preventDefault();
       collapse();
@@ -259,7 +287,7 @@ function ksmdRange(ks) {
       return null;
     }
     return ks.act("ksmd_web_fill", r.block, top, left, down ? 1 : r.r2 - top + 1,
-      down ? r.c2 - left + 1 : 1, r.r2, r.c2);
+      down ? r.c2 - left + 1 : 1, r.r2, r.c2, 0);
   }
 
   // The square at the range's lower right corner. A drag down or right fills the cells it reaches
@@ -300,7 +328,7 @@ function ksmdRange(ks) {
       document.removeEventListener("mouseup", up);
       if (!to) return;
       ks.act("ksmd_web_fill", from.block, from.r1, from.c1, from.r2 - from.r1 + 1,
-        from.c2 - from.c1 + 1, to.row, to.column);
+        from.c2 - from.c1 + 1, to.row, to.column, 1);
       focusChosen();
     };
     document.addEventListener("mousemove", move);

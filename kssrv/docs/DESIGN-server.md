@@ -241,7 +241,7 @@ The counters `/api/status` returns (uptime, requests, connections) sit in one `p
 
 ### No process is started
 
-**kssrv starts no program on a request.** The rule is "Only three things can be asked for" in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md). The reason is in [`../../docs/DESIGN-repository.md`](../../docs/DESIGN-repository.md), under two headings:
+**kssrv starts no program on a request.** The rule is "Only four things can be asked for" in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md). The reason is in [`../../docs/DESIGN-repository.md`](../../docs/DESIGN-repository.md), under two headings:
 
 * "A page asks the local machine through one protocol";
 * "No program is started", inside it.

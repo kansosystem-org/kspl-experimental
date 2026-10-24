@@ -1,0 +1,94 @@
+/* ksmd page: print and PDF, which are one output, and the mark of a block left out of them.
+   The reasons are "Print and PDF" in `ksmd/docs/DESIGN-page.md`. */
+
+/* A block left out of print and PDF: marked while editing, so its author knows. */
+.print-hidden {
+  outline: 2px dashed var(--muted);
+  outline-offset: 4px;
+}
+
+.print-hidden::before {
+  content: "Not in print or PDF";
+  display: block;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.block-print {
+  margin-right: 8px;
+  font: inherit;
+  font-size: 14px;
+}
+
+/* Print and PDF show the document as its file says, without what only editing uses. A block left
+   out (`invisible="printing"`), the column letters, the row numbers, the controls, the marks of
+   notes and choices and the chosen cells all go. A filter's hidden rows stay hidden, as in Excel. */
+@media print {
+  /* `body` raises these above the styles that show each part, wherever they stand. */
+  body :is(.top, .status, .figures, .contents, .fill-handle, .print-hidden,
+    .table thead tr:first-child, .table tr > :first-child, .table-name, .filter-arrow,
+    .filter-note, .block-remove, .block-print, .chart-buttons, .chart-panel, .include-head) {
+    display: none;
+  }
+
+  /* The author's fills and the heading's colour print, as the page shows them. */
+  body {
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
+  .doc {
+    caret-color: transparent;
+  }
+
+  .table td,
+  .table th {
+    overflow-wrap: anywhere;
+    outline: none;
+    box-shadow: none;
+    text-decoration: none;
+  }
+
+  /* A table wider than the page fits it: each column keeps its share of the width. */
+  .table table {
+    table-layout: fixed;
+  }
+
+  .table .has-note {
+    background-image: none;
+  }
+
+  .doc > .has-note {
+    border-left: none;
+    padding-left: 0;
+    margin-left: 0;
+  }
+
+  .table th.name[data-empty]::before {
+    content: none;
+  }
+
+  .include {
+    padding: 0;
+    border-left: none;
+    background: none;
+  }
+
+  /* A divider ends a page, as it ends a part of the document. */
+  .doc .divider {
+    break-after: page;
+  }
+
+  body.with-contents {
+    padding-left: 0;
+  }
+
+  /* On paper the browser repeats a table's heading rows on each page. */
+  .table thead {
+    position: static;
+  }
+
+  .gap {
+    outline: none;
+  }
+}

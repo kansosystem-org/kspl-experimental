@@ -1,0 +1,66 @@
+//< Colour rules: how `rules` reads and saves, the refusals, and setting a rule with its undo
+import "ksmd/base/source" { Source }
+import "ksmd/edit/editor_tables"
+import "ksmd/syntax/reader"
+import "ksmd/tests/tables" { opened, saves }
+import "std/mem" { Arena }
+import "std/str"
+import "std/verdict"
+
+priv const OPEN: U8[] = "%ksmd 1\n\n:::table name=\"t\""
+priv const ROWS: U8[] = "\n| \"item\" | \"n\" |\n| \"Pens\" | -2 |\n:::\n"
+
+fn run()
+    reading()
+    setting()
+
+priv fn reading()
+    defer arena: = Arena(64 * 1024)
+    for rules in U8[][]::{ "=Done;fill:#c6efce,<0;color:#9c0006 fill:#ffc7ce",
+        "empty;fill:#fff2cc,>10.5;color:#006100" }
+        text: =
+            with(arena.text().s(" rules=\"").s(rules).s("\"").take(), arena)
+        ed: = opened(text, arena)
+        saves(arena.text().s("rules read and save unchanged: \{rules\}").take(), ed@, arena, text)
+    upper: = opened(with(" rules=\",<0;color:#9C0006\"", arena), arena)
+    saves("a colour is saved in lower case", upper@, arena,
+        with(" rules=\",<0;color:#9c0006\"", arena))
+    for bad in U8[][]::{ " rules=\",<x;color:#9c0006\"", " rules=\",<0\"", " rules=\",<0;\"",
+        " rules=\",<0;fill:red\"", " rules=\",<0;fill:#ffffff color:#000000\"", " rules=\",\"",
+        " rules=\"<0;fill:#ffffff\"", " rules=\",= Done;fill:#ffffff\"" }
+        refused(arena.text().s(OPEN).s(bad).s(ROWS).take(), bad)
+
+priv fn setting()
+    defer arena: = Arena(64 * 1024)
+    plain: = with("", arena)
+    $ed: = opened(plain, arena)
+    ed.set_rule(0, 1, "<0;color:#9c0006 fill:#ffc7ce") catch e
+        verdict.check("setting a rule", false, e.message())
+    saves("a rule set on a column is saved", ed@, arena,
+        with(" rules=\",<0;color:#9c0006 fill:#ffc7ce\"", arena))
+    last: = ed.history.done[ed.history.done.len - 1]@
+    verdict.check("the step records the rules alone, and no copy of the table",
+        last.columns.len == 1 && last.tables.len == 0 && last.cells.len == 0, "")
+    $refused_rule: = false
+    ed.set_rule(0, 1, "<zero;color:#9c0006") catch
+        refused_rule = true
+    verdict.check("a rule that cannot be saved is refused", refused_rule, "")
+    ed.set_rule(0, 1, "") catch e
+        verdict.check("clearing a rule", false, e.message())
+    saves("an empty rule clears the column's, and the attribute goes", ed@, arena, plain)
+    ed.undo()
+    ed.undo()
+    saves("undo takes each step back", ed@, arena, plain)
+
+priv fn with(attributes: U8[], arena: Arena$@): U8[] //< table `t` with these attributes
+    return arena.text().s(OPEN).s(attributes).s(ROWS).take()
+
+priv fn refused(text: U8[], what: U8[]) //< the reader refuses the source
+    defer arena: = Arena(64 * 1024)
+    src: = Source("bad.ksmd", text) catch e
+        verdict.check(what, false, e.message)
+        return
+    _doc: = reader.read(src@, arena) catch
+        verdict.check(arena.text().s("refused: \{what\}").take(), true, "")
+        return
+    verdict.check(arena.text().s("refused: \{what\}").take(), false, "the source was read")

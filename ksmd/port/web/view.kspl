@@ -1,24 +1,29 @@
 //< What the page shows of a document, written as JSON for the page's script to build HTML from
-//< A block is an object with a kind letter `k`: `p` paragraph, `h` heading, `c` code, `l` list,
-//< `t` table, `i` image and `n` include. Text is a list of segments: `{"t":…,"m":…,"l":…}`, where
-//< `m` adds 1 for emphasis, 2 for strong emphasis and 4 for inline code, and `l` is a link's
-//< destination; a hard break is `{"br":1}`. A table cell is `[kind]` or `[kind, value]`: 0 empty,
-//< 1 a number, 2 text, 3 an error's mark, 4 `true` or `false`. A spot is `[place, block, item,
-//< offset]`, where place 0 is text, 1 the gap before a block and 2 the gap before a list item.
-//< Where files are fetched, an include and an image add where their path leads (`to`) and any
-//< problem (`why`), and an include the blocks of its file (`inside`), shown in place and edited
-//< on their own.
+//< A block is an object with a kind letter `k`: `p`, `h`, `c`, `l`, `q` quote, `d` divider, `t`,
+//< `g` chart, `i` and `n` include. A list item has its depth `d`, `o` 1 when numbered, and `x` 1
+//< or 2 for an open or a ticked box. Text is a list of segments `{"t":…,"m":…,"l":…}`: `m` adds 1
+//< for emphasis, 2 strong, 4 code; `l` is a link's destination; a hard break is `{"br":1}`. A cell
+//< is `[kind]` or `[kind, value]`: 0 empty, 1 number, 2 text, 3 an error's mark, 4 a truth value,
+//< 5 a date. A spot is `[place, block, item, offset]`: place 0 text, 1 a block's gap, 2 an item's.
+//< An include and an image add where their path leads (`to`) and any problem (`why`), and an
+//< include its file's blocks (`inside`).
 //< Caution: **Change this and `ksmd/port/web/view.js` together**; the script reads these shapes.
-import "ksmd/assemble" { Assembly, NONE }
-import "ksmd/calc" { Results, Value }
-import "ksmd/calc"
-import "ksmd/editor" { Editor }
-import "ksmd/format" { Number_format, no_format, show }
-import "ksmd/keyed" { Keyed }
-import "ksmd/look" { is_plain }
-import "ksmd/model" { Block_kind, Document }
-import "ksmd/region" { Spot, Style, Unit, gather }
-import "ksmd/styled" { Seg }
+import "ksmd/base/dates" { write_date }
+import "ksmd/base/keyed" { Keyed }
+import "ksmd/calc/calc" { Results }
+import "ksmd/calc/calc"
+import "ksmd/calc/value" { Value }
+import "ksmd/edit/editor" { Editor }
+import "ksmd/edit/region" { Spot, Style, Unit, gather }
+import "ksmd/edit/styled" { Seg }
+import "ksmd/files/assemble" { Assembly, NONE }
+import "ksmd/model/format" { Number_format, no_format, show }
+import "ksmd/model/group" { depths }
+import "ksmd/model/look" { is_plain }
+import "ksmd/model/model" { Block_kind, Chart, Document, UNBOUND }
+import "ksmd/model/rule" { no_rule }
+import "ksmd/syntax/chart" { column_at }
+import "std/chars"
 import "std/ds" { List }
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
@@ -64,12 +69,14 @@ fn blocks(ed: Editor@, from: Sz, to: Sz, values: Results@, inside: Inside$@, out
     out.c(']')
 
 fn tables(ed: Editor@, from: Sz, to: Sz, values: Results@, out: Str_builder$@) //<
-    //< Each table block outside `from` to `to`, as a JSON list of `[block, table]`
+    //< Each table and chart block outside `from` to `to`, as a JSON list of `[block, block's JSON]`
+    //< A chart draws a table's values, so it is shown again whenever the tables are.
     defer scratch: = Arena(16 * 1024)
     out.c('[')
     $first: = true
     for b in Range.asc(ed.doc.blocks.len)
-        if b >= from && b < to || ed.doc.blocks.get(b).kind != .table
+        kind: = ed.doc.blocks.get(b).kind
+        if b >= from && b < to || kind != .table && kind != .chart
             continue
         if !first
             out.c(',')
@@ -112,14 +119,22 @@ priv fn kind_letter(kind: Block_kind): U8[]
         return "i"
     case .include
         return "n"
+    case .chart
+        return "g"
+    case .quote
+        return "q"
+    case .divider
+        return "d"
 
 priv fn block(doc: Document@, b: Sz, values: Results@, out: Str_builder$@, scratch: Arena$@,
     inside: Inside$@, entry: Sz) //<
         //< One block; `entry` is its entry in `inside`'s view, or `NONE`
     x: = doc.blocks.get(b)
     out.s("{\"k\":\"").s(kind_letter(x.kind)).c('"')
+    if x.invisible
+        out.s(",\"iv\":1")
     switch x.kind
-    case .paragraph, .heading, .code, .list
+    case .paragraph, .heading, .code, .list, .quote
         $units: = List<|Unit|>(scratch)
         gather(doc, b, b + 1, units@, scratch)
         if x.kind == .heading
@@ -127,6 +142,9 @@ priv fn block(doc: Document@, b: Sz, values: Results@, out: Str_builder$@, scrat
         if x.align != .none
             out.s(",\"a\":")
             text(x.align.name(), out)
+        if x.note.len > 0
+            out.s(",\"no\":")
+            text(x.note, out)
         if x.kind == .code
             out.s(",\"label\":")
             text(x.label, out)
@@ -139,6 +157,9 @@ priv fn block(doc: Document@, b: Sz, values: Results@, out: Str_builder$@, scrat
                     out.c(',')
                 u: = units[i]@
                 out.s("{\"d\":\{u.style.depth\},\"o\":").s("1" if u.style.ordered else "0")
+                // A checklist item's box: 1 open, 2 ticked.
+                if u.style.check != .none
+                    out.s(",\"x\":").s("1" if u.style.check == .open else "2")
                 out.s(",\"s\":")
                 segs(u.segs@, out)
                 out.c('}')
@@ -148,6 +169,9 @@ priv fn block(doc: Document@, b: Sz, values: Results@, out: Str_builder$@, scrat
             segs(units[0].segs@, out)
     case .table
         table(doc, x.first, values, out)
+    case .chart
+        chart(doc, doc.charts[x.first]@, values, out)
+    case .divider {}
     case .image
         image: = doc.images.get(x.first)
         out.s(",\"src\":")
@@ -222,20 +246,15 @@ priv fn segs(list: List<|Seg|>@, out: Str_builder$@)
         if s.marks.link.len > 0
             out.s(",\"l\":")
             text(s.marks.link, out)
-        l: = s.marks.look
-        if !is_plain(l)
-            // [colour, fill, size in half points]
-            out.s(",\"k\":[")
-            text(l.color, out)
-            out.c(',')
-            text(l.fill, out)
-            out.s(",\{l.size\}]")
+        if s.marks.color.len > 0
+            out.s(",\"co\":")
+            text(s.marks.color, out)
         out.c('}')
     out.c(']')
 
 priv fn table(doc: Document@, u: Sz, values: Results@, out: Str_builder$@) //<
     //< `"name"`, the column weights `"w"`, the column names, the identities of the rows (`"ri"`)
-    //< and columns (`"ci"`), and each data row's values
+    //< and columns (`"ci"`), the groups of rows (`"g"`), and each data row's values
     t: = doc.tables[u]@
     out.s(",\"u\":\{u\},\"name\":")
     text(t.name, out)
@@ -266,11 +285,67 @@ priv fn table(doc: Document@, u: Sz, values: Results@, out: Str_builder$@) //<
         out.s(",\{l.size\},")
         text(l.align.name(), out)
         out.c(']')
+    // Each note as [row, column, text].
+    out.s("],\"notes\":[")
+    $noted: = false
+    for i in Range.asc(t.cells.len)
+        if t.cells[i].note.len == 0
+            continue
+        if noted
+            out.c(',')
+        noted = true
+        out.s("[\{i / t.columns.len - 1\},\{i % t.columns.len\},")
+        text(t.cells[i].note, out)
+        out.c(']')
     // The identities of the rows and columns, which a range of chosen cells keeps to.
     out.s("],\"ri\":[")
     ids(t.rows@, out)
     out.s("],\"ci\":[")
     ids(t.columns@, out)
+    // Each column's choices, a list of texts, empty for a column that takes any value.
+    out.s("],\"ch\":[")
+    for c in Range.asc(t.columns.len)
+        if c > 0
+            out.c(',')
+        out.c('[')
+        if t.choices.len > 0
+            entry: = t.choices[c]
+            $start: Sz = 0
+            for i in Range.asc(entry.len + 1)
+                if entry.len > 0 && (i == entry.len || entry[i] == '|')
+                    if start > 0
+                        out.c(',')
+                    text(entry.sub(start, i - start), out)
+                    start = i + 1
+        out.c(']')
+    // Each column's colour rule as [condition, value, colour, fill], or null for none.
+    out.s("],\"ru\":[")
+    for c in Range.asc(t.columns.len)
+        if c > 0
+            out.c(',')
+        r: = t.rules[c] if t.rules.len > 0 else no_rule()
+        if r.kind == .none
+            out.s("null")
+            continue
+        out.c('[')
+        text(r.kind.variant_name(), out)
+        out.c(',')
+        text(r.value, out)
+        out.c(',')
+        text(r.color, out)
+        out.c(',')
+        text(r.fill, out)
+        out.c(']')
+    // Each group as [first row, last row, 1 if hidden, how many groups hold it].
+    out.s("],\"g\":[")
+    defer scratch: = Arena(1024)
+    $deep: = List<|Sz|>(scratch)
+    depths(t.groups@, deep@)
+    for i in Range.asc(t.groups.len)
+        g: = t.groups[i]
+        if i > 0
+            out.c(',')
+        out.s("[\{g.first\},\{g.last\},\{1 if g.closed else 0\},\{deep[i]\}]")
     out.s("],\"rows\":[")
     for r in Range.asc(t.rows.len)
         if r > 0
@@ -283,6 +358,85 @@ priv fn table(doc: Document@, u: Sz, values: Results@, out: Str_builder$@) //<
         out.c(']')
     out.s("]")
 
+priv fn chart(doc: Document@, c: Chart@, values: Results@, out: Str_builder$@) //<
+    //< `"kind"`, `"title"`, the table's place `"u"` and columns' names `"cols"`, the labels
+    //< column's place `"l"` and the drawn columns' `"v"`, then each row's label (`"lab"`) and each
+    //< drawn column's numbers (`"ser"`, null for a cell that holds none). `"why"` says what is
+    //< missing where the chart cannot be drawn.
+    out.s(",\"kind\":\"").s("bar" if c.kind == .bar else "line").s("\",\"title\":")
+    text(c.title, out)
+    bound: =
+        c.table != UNBOUND && c.table < doc.tables.len &&
+        doc.tables[c.table].name.len > 0
+    defer $why: = Str_builder()
+    if !bound
+        why.s("No table named \"").s(c.name).s("\" stands in this file.")
+        out.s(",\"why\":")
+        text(why.slice(), out)
+        return
+    t: = doc.tables[c.table]@
+    out.s(",\"u\":\{c.table\},\"cols\":[")
+    for k in Range.asc(t.columns.len)
+        if k > 0
+            out.c(',')
+        text(t.cells[k].text, out)
+    labels: = column_at(t, c.labels)
+    $missing: U8[] = c.label_name if labels == UNBOUND else ""
+    out.s("],\"l\":\{labels\},\"v\":[")
+    for j in Range.asc(c.series.len)
+        at: = column_at(t, c.series[j])
+        if at == UNBOUND && missing.len == 0
+            missing = c.series_names[j]
+        if j > 0
+            out.c(',')
+        out.s("\{at\}")
+    out.c(']')
+    if missing.len > 0
+        why.s("No column named \"").s(missing).s("\" stands in table \"").s(t.name).s("\".")
+        out.s(",\"why\":")
+        text(why.slice(), out)
+        return
+    out.s(",\"lab\":[")
+    for r in Range.asc(t.rows.len)
+        if r > 0
+            out.c(',')
+        label(values.at(c.table, r, labels), out)
+    out.s("],\"ser\":[")
+    for j in Range.asc(c.series.len)
+        at: = column_at(t, c.series[j])
+        if j > 0
+            out.c(',')
+        out.s("{\"n\":")
+        text(t.cells[at].text, out)
+        out.s(",\"v\":[")
+        for r in Range.asc(t.rows.len)
+            if r > 0
+                out.c(',')
+            v: = values.at(c.table, r, at)
+            if v.kind == .number
+                out.s("\{v.number\}")
+            else
+                out.s("null")
+        out.s("]}")
+    out.c(']')
+
+priv fn label(v: Value, out: Str_builder$@) //< a value as a chart's label shows it
+    switch v.kind
+    case .number
+        out.s("\"\{v.number\}\"")
+    case .text
+        text(v.text, out)
+    case .date
+        out.c('"')
+        write_date(I64::v.number, out)
+        out.c('"')
+    case .boolean
+        out.s("\"true\"" if v.boolean else "\"false\"")
+    case .error
+        text(v.error.mark(), out)
+    case .empty
+        out.s("\"\"")
+
 priv fn ids(list: List<|Sz|>@, out: Str_builder$@) //< numbers separated by commas
     for i in Range.asc(list.len)
         if i > 0
@@ -290,7 +444,8 @@ priv fn ids(list: List<|Sz|>@, out: Str_builder$@) //< numbers separated by comm
         out.s("\{list[i]\}")
 
 priv fn cell(v: Value, f: Number_format, out: Str_builder$@) //<
-    //< `[kind, value]`; a number in a column with a format adds the text the format shows
+    //< `[kind, value]`; a number in a column with a format adds the text the format shows, and a
+    //< date is `[5, "2026-10-23"]`
     switch v.kind
     case .empty
         out.s("[0]")
@@ -305,6 +460,10 @@ priv fn cell(v: Value, f: Number_format, out: Str_builder$@) //<
         out.s("[2,")
         text(v.text, out)
         out.c(']')
+    case .date
+        out.s("[5,\"")
+        write_date(I64::v.number, out)
+        out.s("\"]")
     case .boolean
         out.s("[4,\"true\"]" if v.boolean else "[4,\"false\"]")
 

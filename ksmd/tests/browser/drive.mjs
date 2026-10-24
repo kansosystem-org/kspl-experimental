@@ -20,7 +20,7 @@ export const verdict = {
 const KEYS = {
   Enter: [13, "\r"], Backspace: [8, ""], Delete: [46, ""], Tab: [9, ""], Escape: [27, ""],
   ArrowUp: [38, ""], ArrowDown: [40, ""], ArrowLeft: [37, ""], ArrowRight: [39, ""], End: [35, ""],
-  Home: [36, ""], F10: [121, ""],
+  Home: [36, ""], F2: [113, ""], F10: [121, ""],
 };
 export const CTRL = 2;
 export const SHIFT = 8;
@@ -108,9 +108,17 @@ export function driver(page) {
     }
   }
 
+  // A press at an element's middle. An element of the document that stands out of sight, or
+  // under the header, is scrolled into the middle of the window first, as a person scrolls to it.
   async function click(selector, modifiers = 0) {
     const box = await js(`(() => {
-      const r = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();
+      const el = document.querySelector(${JSON.stringify(selector)});
+      const top = document.querySelector('.top').getBoundingClientRect().bottom;
+      let r = el.getBoundingClientRect();
+      if (el.closest('#doc') && (r.top < top || r.bottom > window.innerHeight)) {
+        el.scrollIntoView({ block: "center" });
+        r = el.getBoundingClientRect();
+      }
       return [r.left + r.width / 2, r.top + r.height / 2];
     })()`);
     await clickAt(box[0], box[1], modifiers);
@@ -145,14 +153,29 @@ export function driver(page) {
     }
   }
 
-  // Presses a command in the menu bar as a person does: the menu's name, the flyout's name where
-  // the command stands in one, then the command.
+  // Presses a command as a person does: in the menu bar, its menu's name, the flyout's name where
+  // it stands in one, then the command; else its tool on the ribbon; else, for a table's command,
+  // a right-click on the chosen cell and the command in that menu.
   async function menu(cmd) {
     const own = `[data-cmd="${cmd}"]`;
-    const item = `.menubar ${own}`;
-    await click(`.top-menu:has(${own}) > .menu-name`);
+    if (await js(`!!document.querySelector('.menubar ${own}')`)) {
+      const item = `.menubar ${own}`;
+      await click(`.top-menu:has(${own}) > .menu-name`);
+      if (await js(`!!document.querySelector('${item}').closest(".sub")`)) {
+        await click(`.menubar .sub:has(${own}) > .sub-name`);
+      }
+      await click(item);
+      return;
+    }
+    const tool = `.ribbon .group:not([hidden]) ${own}`;
+    if (await js(`!!document.querySelector('${tool}')`)) {
+      await click(tool);
+      return;
+    }
+    await rightClick("#doc .chosen, #doc [data-r]:has(> input)");
+    const item = `.menu.context ${own}`;
     if (await js(`!!document.querySelector('${item}').closest(".sub")`)) {
-      await click(`.menubar .sub:has(${own}) > .sub-name`);
+      await point(`.menu.context .sub:has(${own}) > .sub-name`);
     }
     await click(item);
   }
@@ -173,6 +196,18 @@ export function driver(page) {
       { type: "mouseReleased", x: x + dx, y, button: "left", clickCount: 1 });
   }
 
+  // A press at one element's middle, a move to another's in steps, and a release there.
+  async function dragTo(from, to) {
+    const [x0, y0] = await middle(from);
+    const [x1, y1] = await middle(to);
+    await page("Input.dispatchMouseEvent", { type: "mousePressed", x: x0, y: y0, button: "left", clickCount: 1 });
+    for (const part of [0.25, 0.5, 0.75, 1]) {
+      await page("Input.dispatchMouseEvent", { type: "mouseMoved", x: x0 + (x1 - x0) * part,
+        y: y0 + (y1 - y0) * part, button: "left", buttons: 1 });
+    }
+    await page("Input.dispatchMouseEvent", { type: "mouseReleased", x: x1, y: y1, button: "left", clickCount: 1 });
+  }
+
   // A press in the document below its last block.
   async function clickBelow() {
     const at = await js(`(() => {
@@ -185,5 +220,5 @@ export function driver(page) {
   }
 
   return { page, js, settle, until, press, type, select, click, clickAt, clickBelow, drag, menu, point,
-    doubleClickAt, rightClick };
+    doubleClickAt, rightClick, dragTo };
 }

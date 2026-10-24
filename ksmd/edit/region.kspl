@@ -1,0 +1,336 @@
+//< A run of blocks taken apart into units of text, changed, and put back together as blocks
+//< A unit is a paragraph, a heading, a code block or one list item; a table, an image or an
+//< include is a whole unit. Units are changed without regard to which block holds them, and
+//< `settle` groups them into blocks again: neighbouring list items form one list.
+//< A prose unit left with no text becomes a gap: a place where typing makes a new block or item.
+//< Caution: **Settle only through `settle`, which checks the result.** It writes the new blocks,
+//< reads them back, and gives none where the reader would not read the same text.
+import "ksmd/base/source" { Source }
+import "ksmd/edit/styled" { Seg, build, equal, flatten, hard_break, normalized, plain, text_seg,
+    visible }
+import "ksmd/model/look" { Align }
+import "ksmd/model/model" { Block, Block_kind, Check, Document, Item, MAX_NESTING }
+import "ksmd/syntax/reader"
+import "ksmd/syntax/writer"
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+
+struct Style //< what kind of text a unit is
+    kind: Block_kind //< paragraph, heading, code, or list for a list item
+    level: Sz //< a heading's level, 1 to 6
+    depth: Sz //< a list item's nesting, from 0
+    ordered: Bool //< a numbered list item
+    check: Check //< a bulleted list item's tick box
+    label: U8[] //< a code block's language label
+    align: Align //< a paragraph's or a heading's alignment
+    note: U8[] //< a paragraph's or a heading's note; empty for none
+
+fn paragraph_style(): Style
+    return Style::{ .kind = .paragraph, .level = 0, .depth = 0, .ordered = false, .check = .none,
+        .label = "", .align = .none, .note = "" }
+
+struct Unit //< one paragraph, heading, code block or list item, or a whole other block
+    style: Style
+    segs: List<|Seg|> //< a code block's text is one segment without marks
+    whole: Bool //< a table, an image or an include, kept as `block`
+    block: Block //< the whole block
+    first: Sz //< the inline nodes it came with, kept while its text is not edited
+    count: Sz
+    code: U8[] //< the code text it came with, kept while it is not edited
+    edited: Bool //< its text or kind changed, so its nodes are made again
+
+enum Place //< where a spot stands
+    text //< in the text of a paragraph, a heading, a code block or a list item
+    block_gap //< where a new block would stand, before block `block`
+    item_gap //< where a new item would stand in list `block`, before item `item`
+
+struct Spot //< a place the caret can stand, in model terms
+    place: Place
+    block: Sz
+    item: Sz //< the item of a list block; 0 for another block
+    offset: Sz //< bytes into the visible text (`ksmd/edit/styled`); 0 in a gap
+
+fn text_spot(block: Sz, item: Sz, offset: Sz): Spot
+    return Spot::{ .place = .text, .block = block, .item = item, .offset = offset }
+
+fn gap_spot(block: Sz): Spot
+    return Spot::{ .place = .block_gap, .block = block, .item = 0, .offset = 0 }
+
+fn same_spot(a: Spot, b: Spot): Bool
+    return a.place == b.place && a.block == b.block && a.item == b.item && a.offset == b.offset
+
+fn is_text_block(kind: Block_kind): Bool //< a block whose text the caret can stand in
+    return kind == .paragraph || kind == .heading || kind == .code || kind == .list ||
+        kind == .quote
+
+fn gather(doc: Document@, from: Sz, to: Sz, units: List<|Unit|>$@, arena: Arena$@) //<
+    //< Appends the units of blocks `from` to `to`, a list's items one unit each
+    for b in Range(from, to, 1)
+        block: = doc.blocks.get(b)
+        $u: = Unit::{ .style = paragraph_style(), .segs = List<|Seg|>(arena), .whole = false,
+            .block = block, .first = block.first, .count = block.count, .code = "",
+            .edited = false }
+        switch block.kind
+        case .paragraph, .heading, .quote
+            u.style.kind = block.kind
+            u.style.level = block.level
+            u.style.align = block.align
+            u.style.note = block.note
+            flatten(doc, block.first, block.count, u.segs@)
+            units.push(u)
+        case .code
+            u.style.kind = .code
+            u.style.label = block.label
+            u.code = block.text
+            shown: =
+                (block.text.sub(0, block.text.len - 1) if block.text.ends_with("\n")
+                else block.text)
+            u.segs.push(text_seg(shown, plain()))
+            units.push(u)
+        case .list
+            for i in Range.asc(block.count)
+                item: = doc.items.get(block.first + i)
+                $one: = u
+                one.segs = List<|Seg|>(arena)
+                one.style.kind = .list
+                one.style.depth = item.depth
+                one.style.ordered = item.ordered
+                one.style.check = item.check
+                one.first = item.first
+                one.count = item.count
+                flatten(doc, item.first, item.count, one.segs@)
+                units.push(one)
+        case .table, .include, .image, .chart, .divider
+            u.whole = true
+            units.push(u)
+
+fn blank_unit(style: Style, arena: Arena$@): Unit //< an edited unit with no text yet
+    return Unit::{ .style = style, .segs = List<|Seg|>(arena), .whole = false,
+        .block = Block::{ .kind = style.kind, .level = 0, .label = "", .text = "", .first = 0,
+        .count = 0, .offset = 0, .align = .none, .note = "", .invisible = false }, .first = 0,
+        .count = 0, .code = "", .edited = true }
+
+fn whole_unit(block: Block, arena: Arena$@): Unit //< a table, an image or an include
+    $u: = blank_unit(paragraph_style(), arena)
+    u.whole = true
+    u.block = block
+    u.edited = false
+    return u
+
+fn fit(u: Unit$@, arena: Arena$@) //<
+    //< Makes an edited unit's text what its kind can hold
+    //< Code holds plain text, where a line break is "\n". A paragraph holds marks and hard breaks.
+    //< A heading or a list item is one line, so a line break there becomes a space.
+    $out: = List<|Seg|>(arena)
+    for s in u.segs
+        if u.style.kind == .code
+            out.push(text_seg(s.text, plain()))
+            continue
+        if s.hard
+            out
+                .push(hard_break() if u.style.kind == .paragraph else text_seg(" ", plain()))
+            continue
+        $start: Sz = 0
+        for i in Range.asc(s.text.len + 1)
+            if i < s.text.len && s.text[i] != '\n'
+                continue
+            if i > start
+                out.push(text_seg(s.text.sub(start, i - start), s.marks))
+            if i < s.text.len
+                out
+                    .push(hard_break() if u.style.kind == .paragraph
+                    else text_seg(" ", s.marks))
+            start = i + 1
+    u.segs = out
+
+fn is_empty(u: Unit@, arena: Arena$@): Bool //< a prose unit with no text the writer would keep
+    if u.whole || u.style.kind == .code
+        return false
+    return normalized(u.segs@, arena).len == 0
+
+struct Settled //< blocks made from units, and where each unit landed
+    blocks: List<|Block|>
+    spots: List<|Spot|> //< per unit: offset 0 of its text, or the gap it left, or a whole block's
+        //< place as the gap before it
+
+fn settle(doc: Document$@, units: List<|Unit|>@, at: Sz, arena: Arena$@, scratch: Arena$@):
+    Settled? //<
+        //< Groups units into blocks that would stand from block `at`, appending their nodes and
+        //< items to `doc`; none where the result would not read back as the same text
+    $s: = Settler::{ .doc = doc, .at = at,
+        .out = Settled::{ .blocks = List<|Block|>(scratch), .spots = List<|Spot|>(scratch) },
+        .items = List<|Item|>(scratch), .open = false, .top = false, .arena = arena }
+    for i in Range.asc(units.len)
+        u: = units[i]@
+        if u.edited && is_empty(u, scratch)
+            if u.style.kind == .list && (s.open || item_follows(units, i, scratch))
+                s.open = true
+                s.out.spots
+                    .push(Spot::{ .place = .item_gap, .block = s.here(), .item = s.items.len,
+                    .offset = 0 })
+            else
+                s.end_list()
+                s.out.spots.push(gap_spot(s.here()))
+            continue
+        if !u.whole && u.style.kind == .list
+            if s.open && s.items.len > 0 && u.style.depth == 0 && u.style.ordered != s.top
+                s.end_list()
+            if !s.open || s.items.len == 0
+                s.top = u.style.ordered
+            s.open = true
+            s.out.spots.push(text_spot(s.here(), s.items.len, 0))
+            s.items.push(s.item_of(u))
+            continue
+        s.end_list()
+        if u.whole
+            s.out.spots.push(gap_spot(s.here()))
+            s.out.blocks.push(u.block)
+        else
+            s.out.spots.push(text_spot(s.here(), 0, 0))
+            s.out.blocks.push(s.block_of(u))
+    s.end_list()
+    if !reads_back(doc, s.out.blocks@, scratch)
+        return .none
+    return .some(s.out)
+
+priv fn item_follows(units: List<|Unit|>@, i: Sz, scratch: Arena$@): Bool //<
+    //< Whether a list item with text comes after unit `i` before anything but an emptied item
+    for j in Range(i + 1, units.len, 1)
+        u: = units[j]@
+        if u.whole || u.style.kind != .list
+            return false
+        if !u.edited || !is_empty(u, scratch)
+            return true
+    return false
+
+priv struct Settler //< the state of one `settle`
+    doc: Document$@
+    at: Sz
+    out: Settled
+    items: List<|Item|> //< the items of the list being made
+    open: Bool //< a list is being made
+    top: Bool //< its top level is numbered; a top-level item with the other marker starts a list
+    arena: Arena$@
+
+impl Settler
+    priv fn here(s: Self@): Sz //< the place the next block takes
+        return s.at + s.out.blocks.len
+
+    priv fn end_list(s: Self$@) //< ends the list being made, if any
+        if !s.open
+            return
+        s.open = false
+        if s.items.len == 0
+            return
+        even_out(s.items@)
+        first: = s.doc.items.len
+        for item in s.items
+            s.doc.items.push(item)
+        s.out.blocks
+            .push(Block::{ .kind = .list, .level = 0, .label = "", .text = "", .first = first,
+            .count = s.items.len, .offset = 0, .align = .none, .note = "", .invisible = false })
+        s.items.clear()
+
+    priv fn block_of(s: Self$@, u: Unit@): Block //< a paragraph, a heading or a code block
+        $b: = Block::{ .kind = u.style.kind, .level = 0, .label = "", .text = "", .first = 0,
+            .count = 0, .offset = 0, .align = .none, .note = "", .invisible = false }
+        switch u.style.kind
+        case .code
+            b.label = u.style.label
+            b.text =
+                (u.code if !u.edited
+                else s.arena.text().s(visible(u.segs@, s.arena)).c('\n').take())
+        default
+            b.level = u.style.level if u.style.kind == .heading else 0
+            b.align = u.style.align
+            b.note = u.style.note
+            s.run(u, b.first@, b.count@)
+        return b
+
+    priv fn item_of(s: Self$@, u: Unit@): Item
+        $item: = Item::{ .depth = u.style.depth, .ordered = u.style.ordered,
+            .check = .none if u.style.ordered else u.style.check, .first = 0, .count = 0,
+            .offset = 0 }
+        s.run(u, item.first@, item.count@)
+        return item
+
+    priv fn run(s: Self$@, u: Unit@, first: Sz$@, count: Sz$@) //< the unit's inline nodes
+        if !u.edited
+            first$ = u.first
+            count$ = u.count
+            return
+        first$ = build(u.segs@, s.doc, s.arena)
+        count$ = s.doc.inlines.len - first$
+
+fn even_out(items: List<|Item|>$@) //<
+    //< Gives a list's items the nesting and markers the reader takes
+    //< An item nests at most one level deeper than the one before, the first at the top. Items at
+    //< one level share the marker of the item that opened the level.
+    $ordered_at: Bool[MAX_NESTING] = ::{}
+    for k in Range.asc(items.len)
+        $item: = items[k]
+        limit: = 0 if k == 0 else items[k - 1].depth + 1
+        if item.depth > limit
+            item.depth = limit
+        if item.depth >= MAX_NESTING
+            item.depth = MAX_NESTING - 1
+        if k == 0 || item.depth > items[k - 1].depth
+            ordered_at[item.depth] = item.ordered
+        else
+            item.ordered = ordered_at[item.depth]
+        items[k] = item
+
+priv fn reads_back(doc: Document@, blocks: List<|Block|>@, scratch: Arena$@): Bool //<
+    //< Whether the text blocks, written and read again, hold the same text as the model
+    //< The comparison allows what the writer leaves out at a line's edge (`styled.normalized`).
+    $part: = doc$
+    part.blocks = List<|Block|>(scratch)
+    for b in blocks
+        if is_text_block(b.kind)
+            part.blocks.push(b)
+    if part.blocks.len == 0
+        return true
+    defer $text: = Str_builder()
+    writer.write(part@, text@)
+    src: = Source("edit.ksmd", scratch.dup_str(text.slice())) catch
+        return false
+    back: = reader.read(src@, scratch) catch
+        return false
+    if back.blocks.len != part.blocks.len
+        return false
+    for i in Range.asc(part.blocks.len)
+        if !same_block(part@, part.blocks.get(i), back@, back.blocks.get(i), scratch)
+            return false
+    return true
+
+priv fn same_block(a: Document@, x: Block, b: Document@, y: Block, scratch: Arena$@): Bool
+    if x.kind != y.kind || x.level != y.level || x.align != y.align ||
+        !x.note.equals(y.note)
+        return false
+    switch x.kind
+    case .code
+        return x.label.equals(y.label) && x.text.equals(y.text)
+    case .list
+        if x.count != y.count
+            return false
+        for i in Range.asc(x.count)
+            p: = a.items.get(x.first + i)
+            q: = b.items.get(y.first + i)
+            if p.depth != q.depth || p.ordered != q.ordered ||
+                !same_run(a, p.first, p.count, b, q.first, q.count, scratch)
+                return false
+        return true
+    default
+        return same_run(a, x.first, x.count, b, y.first, y.count, scratch)
+
+priv fn same_run(a: Document@, first: Sz, count: Sz, b: Document@, b_first: Sz, b_count: Sz,
+    scratch: Arena$@): Bool
+    $mine: = List<|Seg|>(scratch)
+    flatten(a, first, count, mine@)
+    $theirs: = List<|Seg|>(scratch)
+    flatten(b, b_first, b_count, theirs@)
+    kept: = normalized(mine@, scratch)
+    read: = normalized(theirs@, scratch)
+    return equal(kept@, read@)

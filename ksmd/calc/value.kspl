@@ -1,0 +1,217 @@
+//< A value a formula calculates, and the arithmetic, comparisons and conversions between values
+//< `ksmd/calc/calc.kspl` reads a formula and calls these; they hold no state, so the same values
+//< always give the same result.
+import "ksmd/base/dates" { in_range }
+import "ksmd/base/marker" { compare_text }
+import "ksmd/calc/formula" { Token_kind }
+import "std/strnum"
+
+enum Calc_error //< why a cell has no value; each is fixed differently
+    wrong_kind //< text or true and false in arithmetic, or two kinds ordered: `#VALUE!`
+    division //< a division by zero: `#DIV/0!`
+    not_finite //< a result too large for a number: `#NUM!`
+    reference //< a reference to no cell: `#REF!`
+    cycle //< the cell depends on itself: `#CYCLE!`
+    no_numbers //< `min`, `max` or `average` of no numbers: `#EMPTY!`
+    shape //< a condition's range not as tall as its values, or a condition with no range: `#SHAPE!`
+    syntax //< the formula does not read: `#SYNTAX!`
+
+impl Calc_error
+    fn mark(e: Self): U8[] //< what the cell shows
+        switch e
+        case .wrong_kind
+            return "#VALUE!"
+        case .division
+            return "#DIV/0!"
+        case .not_finite
+            return "#NUM!"
+        case .reference
+            return "#REF!"
+        case .cycle
+            return "#CYCLE!"
+        case .no_numbers
+            return "#EMPTY!"
+        case .shape
+            return "#SHAPE!"
+        case .syntax
+            return "#SYNTAX!"
+
+enum Value_kind //< a formula's value is never empty: an empty cell's value as a formula's is 0
+    empty
+    number
+    text //< a text cell's text, or text a formula gives
+    date //< a day, as its count of days from 1970-01-01 in `number`
+    boolean //< `true` or `false`
+    error
+
+struct Value //< the small fields first, so they share one word
+    kind: Value_kind
+    boolean: Bool //< true for `true`; false for the other kinds
+    error: Calc_error //< an error's reason; `.syntax` for the other kinds
+    number: F64 //< a number's value, or a date's day; 0 for the other kinds
+    text: U8[] //< a text's bytes; empty for the other kinds
+
+impl Value
+    fn failed(e: Calc_error): Value //< the value of a cell that has none, for this reason
+        return Value::{ .kind = .error, .number = 0.0, .text = "", .boolean = false, .error = e }
+
+fn equal_keys(key: Value, cell: Value): Bool //< whether a cell's value is the key looked for
+    if key.kind != cell.kind
+        return false
+    switch key.kind
+    case .number, .date
+        return key.number == cell.number
+    case .text
+        return compare_text(key.text, cell.text) == 0
+    case .boolean
+        return key.boolean == cell.boolean
+    default
+        return false
+
+fn arithmetic(x: Value, y: Value, op: Token_kind): Value //<
+    //< Two numbers joined by an operator; the left error comes first
+    if x.kind == .date || y.kind == .date
+        return date_arithmetic(x, y, op)
+    a: = operand(x)
+    if a.kind == .error
+        return a
+    b: = operand(y)
+    if b.kind == .error
+        return b
+    switch op
+    case .plus
+        return number(a.number + b.number)
+    case .minus
+        return number(a.number - b.number)
+    case .times
+        return number(a.number * b.number)
+    default {}
+    if b.number == 0.0
+        return Value.failed(.division)
+    return number(a.number / b.number)
+
+fn operand(v: Value): Value //< a value in arithmetic: empty is 0, text or true and false
+    //< an error
+    switch v.kind
+    case .empty
+        return number(0.0)
+    case .text, .boolean, .date
+        return Value.failed(.wrong_kind)
+    case .number, .error
+        return v
+
+fn truth(v: Value): Value //< a value as a condition: empty is false, a number or text an error
+    switch v.kind
+    case .empty
+        return boolean(false)
+    case .number, .text, .date
+        return Value.failed(.wrong_kind)
+    case .boolean, .error
+        return v
+
+fn is_comparison(k: Token_kind): Bool
+    return k == .equal || k == .unequal || k == .less || k == .less_equal || k == .greater ||
+        k == .greater_equal
+
+fn compare(x: Value, y: Value, op: Token_kind): Value //<
+    //< Two values compared; the left error comes first
+    //< An empty value takes the other side's kind: 0, empty text or false. Values of two kinds
+    //< are unequal, and ordering them is an error. Text compares without regard to case.
+    if x.kind == .error
+        return x
+    if y.kind == .error
+        return y
+    a: = like(x, y)
+    b: = like(y, x)
+    if a.kind != b.kind
+        if op == .equal || op == .unequal
+            return boolean(op == .unequal)
+        return Value.failed(.wrong_kind)
+    $order: I32 = 0
+    switch a.kind
+    case .number, .date
+        order = -1 if a.number < b.number else 1 if a.number > b.number else 0
+    case .text
+        order = compare_text(a.text, b.text)
+    case .boolean
+        order = 0 if a.boolean == b.boolean else 1 if a.boolean else -1
+    case .empty, .error {}
+    switch op
+    case .equal
+        return boolean(order == 0)
+    case .unequal
+        return boolean(order != 0)
+    case .less
+        return boolean(order < 0)
+    case .less_equal
+        return boolean(order <= 0)
+    case .greater
+        return boolean(order > 0)
+    default {}
+    return boolean(order >= 0)
+
+fn like(v: Value, other: Value): Value //< an empty value as the zero of the other's kind
+    if v.kind != .empty
+        return v
+    switch other.kind
+    case .number
+        return number(0.0)
+    case .text
+        return text("")
+    case .boolean
+        return boolean(false)
+    case .empty, .error, .date {}
+    return v
+
+priv fn date_arithmetic(x: Value, y: Value, op: Token_kind): Value //<
+    //< A date and a whole number of days added or taken away, or two dates taken apart
+    //< A date plus or minus days is a date, and a date minus a date the days between them. Any
+    //< other use of a date in arithmetic is `#VALUE!`, and a day past the year 9999 `#NUM!`.
+    if x.kind == .error
+        return x
+    if y.kind == .error
+        return y
+    a: = number(0.0) if x.kind == .empty else x
+    b: = number(0.0) if y.kind == .empty else y
+    if op == .minus && a.kind == .date && b.kind == .date
+        return number(a.number - b.number)
+    $days: = 0.0
+    $at: = 0.0
+    if a.kind == .date && b.kind == .number && (op == .plus || op == .minus)
+        at = a.number
+        days = b.number if op == .plus else -b.number
+    else if a.kind == .number && b.kind == .date && op == .plus
+        at = b.number
+        days = a.number
+    else
+        return Value.failed(.wrong_kind)
+    if days != F64::(I64::days) || days > 4000000.0 || days < -4000000.0
+        return Value.failed(.wrong_kind)
+    day: = I64::at + I64::days
+    if !in_range(day)
+        return Value.failed(.not_finite)
+    return date_value(day)
+
+fn date_value(day: I64): Value //< a date; the caller keeps the day in the years 1 to 9999
+    return Value::{ .kind = .date, .number = F64::day, .text = "", .boolean = false,
+        .error = .syntax }
+
+fn number_of(text: U8[]): Value //< a number written in decimal; one too large is an error
+    n: = text.to_f64() catch
+        return Value.failed(.not_finite)
+    return number(n)
+
+fn number(n: F64): Value //< a number; an infinity or a NaN is an error
+    if n - n != 0.0
+        return Value.failed(.not_finite)
+    return Value::{ .kind = .number, .number = n, .text = "", .boolean = false, .error = .syntax }
+
+fn text(s: U8[]): Value
+    return Value::{ .kind = .text, .number = 0.0, .text = s, .boolean = false, .error = .syntax }
+
+fn boolean(b: Bool): Value
+    return Value::{ .kind = .boolean, .number = 0.0, .text = "", .boolean = b, .error = .syntax }
+
+fn empty(): Value
+    return Value::{ .kind = .empty, .number = 0.0, .text = "", .boolean = false,
+        .error = .syntax }

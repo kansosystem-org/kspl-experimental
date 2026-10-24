@@ -1,10 +1,10 @@
 # The first ksmd document and editor
 
-This is the design for implementers and reviewers. **It is not an implemented file-format specification.** The examples under `ksmd/examples/` illustrate these decisions. The source-validation layer is implemented. So are the reader and writer for every structure below: blocks, inline markup and clauses ("What the first reader models" below). Includes and image paths resolve inside a workspace, and each source saves alone ("Includes and images" below). Table editing and calculation are implemented ("Tables and calculations" below). An editing page edits one source in a browser ("How the editor changes a document" and "The editing page" below). Served by the local server, the page opens and saves files and holds drafts ("The file lifecycle" below). A launcher opens a `.ksmd` file from the desktop on its workspace ("Opening a document from the desktop" below).
+This is the design for implementers and reviewers. **It is not an implemented file-format specification.** The examples under `ksmd/examples/` illustrate these decisions. The source-validation layer is implemented. So are the reader and writer for every structure below: blocks, inline markup and clauses ("What the first reader models" below). Includes and image paths resolve inside a workspace, and each source saves alone ("Includes and images" below). Table editing and calculation are implemented ("Tables and calculations" below). An editing page edits one source in a browser ("How the editor changes a document" below, and [`DESIGN-page.md`](DESIGN-page.md)). Served by the local server, the page opens and saves files and holds drafts ("The file lifecycle" below). A launcher opens a `.ksmd` file from the desktop on its workspace ("Opening a document from the desktop" below).
 
 ## The first usable document
 
-A document contains prose, calculating tables, images and includes, in reading order. The editor changes that structure directly. Source is read at open and written at save, not reparsed after each keystroke.
+A document contains prose, calculating tables, charts of them, images and includes, in reading order. The editor changes that structure directly. Source is read at open and written at save, not reparsed after each keystroke.
 
 | Included | Excluded from the first release |
 | :-- | :-- |
@@ -22,7 +22,7 @@ Files use UTF-8. The first line is exactly `%ksmd 1`. An unsupported version is 
 
 A file containing only the version marker represents an empty document. A blank line separates blocks. Within a prose paragraph, a source newline becomes one space. A backslash immediately before a newline means a hard line break. The writer puts a paragraph on one source line except for hard breaks.
 
-A clause starts at column one with `:::` followed by its kind and attributes. A line containing only `:::` closes it. Clauses do not nest in version 1. The kinds are `table`, `include` and `image`; an unknown kind is an error. Attributes are unique `name=value` pairs separated by spaces. Unknown attributes and duplicate attributes are errors.
+A clause starts at column one with `:::` followed by its kind and attributes. A line containing only `:::` closes it. Clauses do not nest in version 1. The kinds are `table`, `include`, `image` and `chart`; an unknown kind is an error. Attributes are unique `name=value` pairs separated by spaces. Unknown attributes and duplicate attributes are errors.
 
 Attribute strings use JSON string quoting and escapes. Numeric attributes use decimal numbers. There are no implicit attributes, positional arguments or alternate short forms. A style cannot change a block's kind.
 
@@ -57,6 +57,7 @@ These reading rules settle cases the notation above leaves open:
 * A link's label is not empty and holds no link. Its destination follows at once in parentheses, without spaces or parentheses, and starts with `https:`, `http:`, `mailto:` or `#`.
 * A clause's kind follows `:::` at once. Its attributes may come in any order, separated by one or more spaces. The writer writes them in a fixed order with one space: `name`, `widths`, `formats`; `path`; `src`, `alt`, `caption`.
 * A clause closes at a line that is exactly `:::`. A table row outside a table clause is refused.
+* Any clause may take `invisible="printing"`, written last. Its block shows while editing and is left out of print and PDF ("Print and PDF" in [`DESIGN-page.md`](DESIGN-page.md)). It has one value, so a misspelt one is refused, not ignored.
 * `name`, `path` and `src` must not be empty. `alt` may be empty, for an image that only decorates. An empty `caption` is refused: leave the attribute out.
 * A table may have a header and no data rows, so an editor can create an empty one. Every header cell is quoted text.
 * A cell's spaces are trimmed. The writer puts one space on each side of a value, and writes an empty cell as `| |`.
@@ -72,38 +73,70 @@ These reading rules settle cases the notation above leaves open:
 | Heading | One to six `#` characters, then a space and inline text | One source line |
 | Unordered list | `- ` before each item | One source line per item; two spaces per nested level |
 | Ordered list | `1. ` before each item | Numbering is generated; two spaces per nested level |
+| Checklist item | `- [ ] ` before an open item, `- [x] ` before a ticked one | A bulleted item; it can stand among other bulleted items |
+| Quote | `> ` before each line | One paragraph; its lines join as a paragraph's do |
+| Divider | A line `---` | Nothing else on the line |
 | Emphasis | `*text*` | No newline inside a mark |
 | Strong emphasis | `**text**` | No newline inside a mark |
 | Link | `[label](destination)` | No nested links; spaces and parentheses in destinations are percent-encoded |
-| Span with a look | `[text]{color="#c00000" fill="#fff2cc" size=14}` | A link may carry a look too: `[label](destination){...}` |
+| Coloured text | `[text]{color="#c00000"}` | A link takes a colour after its destination: `[label](destination){color=...}` |
 | Aligned paragraph or heading | A line `{align="center"}` straight before it | `left`, `center` or `right` |
 | Inline code | A matching run of backticks around literal text | Use a longer run for embedded backticks; no newline |
 | Paragraph | Other text | Inline content and explicit hard breaks |
 
 Emphasis and strong emphasis may nest, with properly paired delimiters. Links may contain emphasis and inline code. Unclosed reserved delimiters are errors, not silently discarded formatting.
 
-A backslash escapes the following ASCII punctuation outside code. Escape a block marker to start a literal paragraph: `\#`, `\-`, `1\.` or `\:::`. For an ordered-list marker, escape its period (`1\.`); a backslash before a digit is invalid. The writer emits only escapes needed to avoid syntax or represent a literal backslash.
+A backslash escapes the following ASCII punctuation outside code. Escape a block marker to start a literal paragraph: `\#`, `\-`, `1\.`, `\>`, `\---` or `\:::`. For an ordered-list marker, escape its period (`1\.`); a backslash before a digit is invalid. The writer emits only escapes needed to avoid syntax or represent a literal backslash.
 
 Visual typing inserts literal text. Typing `#`, `*` or `:::` does not automatically change structure. Formatting commands change the model, and the writer adds the required source delimiters and escapes. Pasted plain text stays text. A rich-text paste is accepted only through a conversion that retains supported content; unsupported content must be reported before insertion.
 
+### Checklists, quotes and dividers
+
+**A checklist item is a bulleted item with a tick box**, as GitHub, Notion and Obsidian write it: `- [ ] Buy pens`, and `- [x] Call Sam` once ticked. A to-do list then keeps what is done in sight.
+
+* **Only a bulleted item takes a box.** A numbered to-do list is rare, and two forms for one need would make the file harder to read.
+* **The `x` is lowercase**, so one tick has one spelling. Text in brackets that is not a box is escaped: `- \[ \] x`.
+* **On the page, a press on the box ticks it, and another press takes the tick away**, as one step of undo each. A ticked item's text is greyed. Enter after a ticked item starts an open one.
+
+**A quote is a paragraph whose every line starts with `> `**, as mail and Markdown write it. Meeting notes and quoted mail are then set apart from the writer's own words. A quote holds one paragraph; two quotes stand apart with a blank line between them, so no quote nests in another.
+
+**A divider is a line `---`**, and separates two parts of a document. It holds nothing, so the page shows it as a line with a Remove button, as an image has. The ribbon's Insert group adds one at the caret.
+
 ### Looks: colours, font size and alignment
 
-**A look is direct formatting written in braces after what it formats**, as Word's and Excel's direct formatting is held beside the text. A change of look then changes one line of the file. Pandoc writes spans the same way.
+**A look is direct formatting written in braces after what it formats**, as Excel's cell formatting is held beside the value. A change of look then changes one line of the file. A table cell takes every part. Text in brackets takes a colour alone, and a paragraph or a heading alignment alone.
 
 | Part | Written | Meaning |
 | :-- | :-- | :-- |
 | `color` | `"#c00000"` | The text's colour: `#` and six hex digits |
 | `fill` | `"#fff2cc"` | The background's colour |
-| `size` | `14`, `10.5` | The font size in points, from 6 to 72, whole or ending in `.5` |
-| `align` | `"left"`, `"center"`, `"right"` | A cell's or a paragraph's alignment; text in a span has none of its own |
+| `size` | `14`, `10.5` | The font size in points, from 6 to 72, whole or ending in `.5`. The page offers 9, 10, 11, 12, 14, 18 and 24, the sizes people choose |
+| `align` | `"left"`, `"center"`, `"right"` | A cell's or a paragraph's alignment |
 
 * **Values are written as attributes are**: strings in JSON quotes, numbers bare. One form for each value keeps the canonical file unique.
 * **The writer writes the parts in that fixed order**, and colours in lower case. A look with no part is refused, so `{}` never stands in a file.
 * **A table cell writes its look after its value**: `| 120 {color="#c00000"} |`. An empty cell can carry a look alone: `| {fill="#fff2cc"} |`. A `{` inside quoted text is text.
-* **A span is brackets with a look and no destination**: `[text]{...}`. Brackets hold no other brackets, so a link inside coloured text carries the look on its own brackets.
-* **A paragraph's or a heading's alignment stands on a line of braces right before it.** At the end of the text, an ordinary `{` in prose could not be told apart. That line holds only `align`; colour text with a span.
-* **A `{` that would read as a look is escaped**: at the start of a paragraph's line, and straight after brackets. Anywhere else it is text.
+* **Text takes a colour, and nothing else, in brackets: `[text]{color="#c00000"}`.** A word in red marks a warning or a change, as people mark it in Word. A fill and a size on text are left out: they make a page uneven, and a cell carries them where a value needs them.
+* **A `{` right after brackets is escaped**, since it would read as their colour.
+* **A paragraph's or a heading's alignment stands on a line of braces right before it.** At the end of the text, an ordinary `{` in prose could not be told apart. That line holds only `align`.
+* **A `{` at the start of a paragraph's line is escaped**, since it would read as an alignment. Anywhere else it is text.
 * **A cell's new value keeps its look**, as a spreadsheet's cell keeps its format. A look is undone and redone as any edit is.
+
+### Notes
+
+**A cell, a paragraph or a heading can hold a note: a remark for the people who read the file.** Excel's notes and Word's comments serve the same need. The note stands last in the braces:
+
+```text
+| 120 {fill="#fff2cc" note="Check with Sam"} |
+
+{note="Is this the final title?"}
+# Plan
+```
+
+* **A note is 1 to 1,000 bytes of text**, a JSON string as any attribute is. A line break may stand in it, written `\n`.
+* **Resolving a note takes it away.** Word keeps a resolved comment hidden in the file. Here the file holds what is still open, so the next reader is not handed remarks that no longer apply. Undo brings a resolved note back.
+* **No threads, replies or names.** These serve several people working on one file at once, which ksmd leaves out ("What the file lifecycle leaves out" below).
+* **A note stays with its cell or paragraph.** A new value, a sort and a moved row keep it. A paragraph split in two keeps it on the part that holds the text before the split.
 
 ## Tables and calculations
 
@@ -116,15 +149,16 @@ Every row starts and ends with `|`. Separators outside quoted strings split cell
 | Nothing between separators | Empty cell |
 | `"Pens"`, `"0012"`, `"a\nb"` | Text; JSON escapes permit a multiline text value |
 | `12`, `-3.5`, `1e3` | Finite decimal number, evaluated as F64 |
+| `2026-10-23` | A date: a day of the years 1 to 9999, written as ISO 8601 writes it |
 | `=B1*C1`, `=sum(D1:D2)` | Formula source, not its cached result |
 
 Text cells need quotes, so numeric-looking identifiers and a leading `=` are unambiguous. A pipe inside a quoted string is text. A physical source row stays on one line. Multiline text is allowed through `\n`; multiline cell blocks are excluded.
 
 Addresses start at `A1`, the first data cell. `$A$1`, `$A1` and `A$1` express fixed axes when copying formulas. Within one source, `budget.D1` names a cell in another table. Cross-file formulas are excluded initially, including references into an include.
 
-A formula holds numbers, text in quotes, `true` and `false`, cell references, rectangular ranges, parentheses, unary minus, `+`, `-`, `*`, `/`, the comparisons `=`, `<>`, `<`, `<=`, `>`, `>=`, the words `and`, `or` and `not`, and the functions `sum`, `min`, `max`, `count`, `average`, `if`, `round`, `sum_if`, `count_if`, `average_if` and `today`. Function names are lowercase. Multiplication and division bind before addition and subtraction, and both before a comparison. `not` binds before `and`, and `and` before `or`. Other arithmetic groups left to right. A range stands only as a function's argument, or in the condition of `sum_if`, `count_if` and `average_if`. There are no user functions.
+A formula holds numbers, text in quotes, `true` and `false`, cell references, rectangular ranges, parentheses, unary minus, `+`, `-`, `*`, `/`, the comparisons `=`, `<>`, `<`, `<=`, `>`, `>=`, the words `and`, `or` and `not`, and the functions `sum`, `min`, `max`, `count`, `average`, `if`, `round`, `sum_if`, `count_if`, `average_if`, `lookup`, `today`, `date`, `year`, `month` and `day`. Function names are lowercase. Multiplication and division bind before addition and subtraction, and both before a comparison. `not` binds before `and`, and `and` before `or`. Other arithmetic groups left to right. A range stands only as a function's argument, or in the condition of `sum_if`, `count_if` and `average_if`. There are no user functions.
 
-An empty cell becomes zero in scalar arithmetic. Numeric aggregates ignore empty and text cells; `count` counts numbers. An empty numeric set gives zero for `sum` and `count`, and an error for `min`, `max` and `average`. Scalar arithmetic on text is a type error. Division by zero, non-finite results, invalid references and cycles have distinct displayed errors. Errors in referenced cells propagate. Dates remain text in version 1.
+An empty cell becomes zero in scalar arithmetic. Numeric aggregates ignore empty and text cells; `count` counts numbers. An empty numeric set gives zero for `sum` and `count`, and an error for `min`, `max` and `average`. Scalar arithmetic on text is a type error. Division by zero, non-finite results, invalid references and cycles have distinct displayed errors. Errors in referenced cells propagate. Dates have their own rules ("Dates" below).
 
 ### How a formula is written
 
@@ -204,6 +238,15 @@ Each error has its own mark, since each is fixed differently. A cycle shown as 0
 * **The values on a row are read only where the condition holds,** as `if` reads only the branch it takes. An error on a row left out does not show. A total row inside its own range is no cycle when the condition leaves its row out.
 * **Errors carry row by row from the top:** first the condition's, then the values' on that row from the left. An error in a value on a row that holds carries, `count_if` included.
 
+### Finding a value by its key
+
+**`lookup(key, keys, values, otherwise)` gives the value beside the first key that equals `key`**, as Excel's XLOOKUP does with an exact match. `=lookup(A1, prices.A1:A50, prices.B1:B50, 0)` finds a price by its code.
+
+* **`keys` and `values` are ranges of one column, or of one row, as long as each other.** Any other shape is `#SHAPE!`.
+* **A match is exact.** Text equals text without regard to case, as the sort and the filter compare it. A number equals the same number. No nearest match is guessed, which is the complaint VLOOKUP's default draws.
+* **`otherwise` is required, and calculated only where no key matches**, as `if` calculates only its branch. A missing key then shows what the writer chose, never an error nobody planned for.
+* **An error in `key` is the result.** A key cell holding an error is passed over.
+
 ### Number formats
 
 **A column's number format sets how its numbers show; each cell keeps the number it holds.** The table's `formats` attribute holds one entry per column, as `widths` does:
@@ -233,11 +276,61 @@ Each error has its own mark, since each is fixed differently. A cycle shown as 0
 * **An open cell edits the number it holds, not the shown text.** A format hides digits, so the cell's editor shows them all.
 * **A new column has no format, and a moved or removed column takes its format with it.** A new column's values are not known yet, so no format is guessed for them.
 
-`ksmd/format.kspl` reads, writes and shows a format. `edit.set_format` sets or clears the format of a run of columns, and `edit.step_places` shows one more or one fewer place. Each is one step of undo.
+`ksmd/model/format.kspl` reads, writes and shows a format. `edit.set_format` sets or clears the format of a run of columns, and `edit.step_places` shows one more or one fewer place. Each is one step of undo.
+
+### Choices
+
+**A column can take only the values on its list of choices**, as Excel's Data Validation list does. A tracker's Status column then holds "Done", never "done" or "Dnoe", so the filter and `count_if` see one value. The table's `choices` attribute holds one entry per column, as `formats` does; inside an entry, `|` separates the choices:
+
+```text
+:::table name="tasks" choices=",Open|In progress|Done"
+```
+
+* **A typed value equals a choice without regard to case, and the cell holds the choice as the list spells it.** Any other value is refused, and an empty cell is allowed. A paste, a fill and a copy are refused the same way.
+* **A choice is 1 to 100 bytes of text, with no `,`, `|`, `"` or `\`, and no space at either end.** A column holds at most 50, and no two equal without regard to case.
+* **A list belongs to a column**, as a format does: it moves with its column, and a new column has none. `choices` stands only while some column has one.
+* **A list only ever narrows what is typed next.** A cell that already holds another value keeps it, and the page marks it, so setting a list never changes a value.
+* **Only a list.** Excel's validation also takes number ranges, dates and formulas, which draw few users and many questions. A list taken from another table, which Excel also offers, is left for later.
+
+`ksmd/model/choice.kspl` reads, writes and checks an entry. `edit.set_choices` sets a column's list as one step of undo, and `edit.set_cell` keeps to it.
+
+### Colouring cells by their value
+
+**A column can take one colour rule: its cells that meet it take the rule's colours**, as Excel's conditional formatting does in its simplest form. Overdue counts or negative sums then stand out, and the colour follows the value when it is calculated again. The table's `rules` attribute holds one entry per column, empty for none:
+
+```text
+:::table name="budget" rules=",,<0;color:#9c0006 fill:#ffc7ce"
+```
+
+* **An entry is a condition, `;`, then the colours.** `<5` is below 5, `>5` above 5, `=5` or `=Done` equal to it, and `empty` an empty cell. `color:` is the text's colour and `fill:` the background's, one or both.
+* **The rule reads each cell's calculated value**, so a formula's result is coloured too. Text compares without regard to case, as the filter compares it.
+* **The rule's colours stand over the cell's own look** while the rule holds, as in Excel. The cell's look stays in the file.
+* **One rule per column, and only these conditions.** Excel's many rules per range, their order and "stop if true", and rules that multiply when cells are copied draw the most complaints. Colour scales, data bars, icon sets and formula conditions draw few users.
+* **A rule belongs to a column**, as a format does, and moves with it.
+
+`ksmd/model/rule.kspl` reads and writes an entry, and `edit.set_rule` sets a column's rule as one step of undo.
+
+### Groups of rows
+
+**Data rows can be grouped, and a group's rows hide and show together, as Excel's outline does.** The table's `groups` attribute saves each group, and whether it is hidden:
+
+```text
+:::table name="budget" groups="rows 2-4, rows 6-9 closed, rows 7"
+```
+
+* **An entry names data rows as a formula numbers them, from 1.** `rows 2-4` is rows 2 to 4, and `rows 7` one row. ` closed` marks a group whose rows are hidden.
+* **The entries stand from the top, an outer group before the groups it holds,** separated by `, `. One list of groups has one spelling.
+* **A group holds another group whole, or shares no row with it.** Groups nest at most 8 deep, Excel's limit. Two groups never hold the same rows.
+* **Two groups side by side stay two groups.** Excel keeps a level per row, so two groups that touch become one, and people put an empty row between them. A group here keeps its own first and last row.
+* **A group belongs to the table's layout, as a width does, so it names rows by place.** A sort or a moved row leaves the groups where they stand. A row inserted inside a group joins it. A removed row leaves it, and a group whose rows are all removed goes.
+* **Hidden rows still count.** A formula reads every row, as with a filter.
+* **Whether a group is hidden is saved in the file, unlike a filter.** A filter answers one question for the moment. Hiding detail is the shape the writer gives the table, and the next reader sees it so.
+
+`ksmd/model/group.kspl` reads, writes and checks the groups and follows a row edit. `edit.group_rows`, `edit.ungroup_rows` and `edit.show_group` act on them, each as one step of undo. Ungrouping takes away the smallest group that holds the chosen rows.
 
 ### How references follow edits
 
-Each row and column of a table holds an identity that the source does not show. A reference holds the identities of its cells, and the writer writes the coordinates they have now. The model is the only authority: calculated values are never stored in it. `ksmd/edit.kspl` holds the operations an editor calls: insert, remove and move a row or a column, sort the rows, set a cell and copy a cell.
+Each row and column of a table holds an identity that the source does not show. A reference holds the identities of its cells, and the writer writes the coordinates they have now. The model is the only authority: calculated values are never stored in it. `ksmd/edit/edit.kspl` holds the operations an editor calls: insert, remove and move a row or a column, sort the rows, set a cell and copy a cell.
 
 * **Insertion and movement keep every reference on its cells.** A range spans its two corners, so a row inserted between them joins it. A row inserted after the last corner stays outside; to grow a range at its end, insert inside it.
 * **A range's corner follows its row or column.** When a corner's row moves, the range spans the corners' new places.
@@ -252,7 +345,7 @@ Each row and column of a table holds an identity that the source does not show. 
 
 ### How tables calculate
 
-Calculation (`ksmd/calc.kspl`) reads the model and one input: the date the document was opened. It opens no file, and its results stand apart from the document. It calculates every table of a source together, so a reference into another table and a cycle through two tables are both seen.
+Calculation (`ksmd/calc/calc.kspl`) reads the model and one input: the date the document was opened. It opens no file, and its results stand apart from the document. It calculates every table of a source together, so a reference into another table and a cycle through two tables are both seen.
 
 * **A cell calculates when a formula first needs it.** So a formula can name a later row, and the order of rows does not matter.
 * **A cell reached again while it calculates is a cycle.** Every cell on the cycle shows `#CYCLE!`, and the error carries into the cells that use them.
@@ -261,14 +354,26 @@ Calculation (`ksmd/calc.kspl`) reads the model and one input: the date the docum
 * **After an edit, the whole source calculates again.** The table limits bound that cost; a partial recalculation waits for a measured need.
 * **A condition of `sum_if`, `count_if` or `average_if` calculates once for each row of its values.** So one such formula over 10,000 rows calculates its condition 10,000 times.
 
+### Dates
+
+**A date is a value of its own: a day, written `2026-10-23` and shown so.** A cell holding a bare `2026-10-23` is a date, and a typed one becomes one. A quoted `"2026-10-23"` stays text, so a file written before dates were values reads as it did.
+
+* **A date plus or minus a whole number of days is a date, and a date minus a date is the days between them**: `=A1+7`, `=B1-A1`. Any other arithmetic on a date is `#VALUE!`, and a day outside the years 1 to 9999 is `#NUM!`.
+* **Dates compare with dates.** A date and text are unequal, and ordering them is `#VALUE!`, as for any two kinds.
+* **`date(year, month, day)` makes a date**, and a day that does not exist, such as `date(2026, 2, 29)`, is `#NUM!`. `year`, `month` and `day` give a date's parts as numbers.
+* **`min` and `max` of dates give the earliest and the latest, and `count` counts them.** A date has no sum, so `sum` and `average` over one are `#VALUE!`, as is `min` over dates and numbers together.
+* **A date sorts after the numbers and before text, earliest first.** The fill handle goes on by a day, or by the step between two dates.
+* **A date has one form, ISO 8601's.** It reads the same in every country, and sorts in day order even as text. A number format does not change it.
+* **A date is a count of days, not a number.** Excel keeps a date as a serial number, so a date in a sum adds silently, and a number shown as a date misleads. Here the kinds stay apart, and a mistake shows as `#VALUE!`.
+
 ### Today's date
 
-**Decided: calculation takes the date the page opened the document as an input, and reads no other outside state.** `today()` gives that date as text, `2026-10-23`, the form Ctrl+; types.
+**Decided: calculation takes the date the page opened the document as an input, and reads no other outside state.** `today()` gives that date, the date Ctrl+; types.
 
 * **The date stays the same while the document is open,** after any edit. It moves the next day, at the next opening. A value that changed between two edits would surprise the person who made neither change.
 * **Calculation reads no clock.** The page reads the date when it opens a document and hands it in, as `calculate(doc, today)`. So the same document and date always give the same values, and a test passes a fixed date.
 * **An included document calculates with the date of the document that includes it.** One view shows one date.
-* **`today()` is text, since dates are text in version 1.** The ISO form compares in date order, so `E1 < today()` works on a date typed with Ctrl+;. Days between two dates need a date type, which is a separate design change.
+* **`today()` is a date**, so `E1 < today()` finds a date that has passed, and `today() - E1` the days since it.
 * **Ctrl+; and `today()` differ on purpose.** Ctrl+; types a fixed date into a cell, and `today()` is the date of each opening.
 
 ### What formulas leave for later
@@ -276,11 +381,29 @@ Calculation (`ksmd/calc.kspl`) reads the model and one input: the date the docum
 These were weighed and left out, so one way to write each thing stays:
 
 * `ifs(c1, v1, c2, v2, …, otherwise)`, for a chain of choices. A nested `if` writes the same now.
-* `lookup(key, keys, values, otherwise)`, to find a value by its key in another column, exact by default.
 * `let(name, value, expression)`, for long formulas. It needs names inside a formula, which ksmd does not have.
 * Methods after a dot, as `B1.round(2)`. They would be a second way to write `round(B1, 2)`, and `.` already joins a table's name to a cell.
 * A condition written as text, as `">5"`, and a second set of functions for several conditions. `sum_if` takes an expression and joins conditions with `and` and `or`.
-* A `today()` that moves while the document is open, and a date type with days between dates.
+* A `today()` that moves while the document is open, and a time of day as a value.
+
+### Charts
+
+**A chart draws a table's columns as bars or as lines**, and draws them again after every edit. The `:::chart` clause names the table, the column whose values label each bar or point, and the columns drawn:
+
+```text
+:::chart table="budget" kind="bar" labels="month" values="rent,food" title="Spending by month"
+:::
+```
+
+* **`table`, `kind`, `labels` and `values` are required, and `title` is not.** `kind` is `bar` or `line`; `values` names 1 to 8 columns, separated by `,`.
+* **Only bars and lines.** They are the charts people make most. A pie shows the same as a bar and is harder to read. Scatter, area and stacked charts draw few users.
+* **A chart holds its table and columns by identity, as a formula's references do.** A renamed or a moved column stays in the chart, and the writer writes the names they have now.
+* **A name that names nothing is kept as written, and the chart says what is missing**, as a formula's `#REF!` does. Nothing is lost when a column is removed and put back.
+* **A cell that holds no number leaves a gap**, and the axis starts at zero, so a bar's height is its value.
+* **A chart draws the table's calculated values and holds none.** The file keeps only the clause, so the table stays the one place its numbers live.
+* **The page draws a chart as SVG**, with colours that people with the common kinds of colour blindness tell apart.
+
+`ksmd/syntax/chart.kspl` reads the clause's names, finds the table and columns for them, and writes them back. `ksmd/edit/editor_charts.kspl` makes a chart of a table and gives a chart new settings. A changed chart is a new entry, and its block points at it, so undo swaps the block back.
 
 ## Includes and images
 
@@ -290,11 +413,11 @@ Links may use `https`, `http`, `mailto`, or a document fragment. Other schemes a
 
 ### The workspace and its paths
 
-**A document opens inside a workspace: a folder the user opens explicitly.** Every source and image the document reaches stays inside that folder. `Workspace` in `ksmd/workspace.kspl` holds it. The root itself may be a link.
+**A document opens inside a workspace: a folder the user opens explicitly.** Every source and image the document reaches stays inside that folder. `Workspace` in `ksmd/files/workspace.kspl` holds it. The root itself may be a link.
 
 **A path is read from the folder of the source that holds it**, for includes and images alike. An image in an included file keeps its own file's folder. A file then keeps its meaning when its folder moves with the files it names. A rule that reads paths from the top document or the working folder breaks once a file moves into a subfolder.
 
-**A path has one spelling.** `/` separates folders. Any `..` segments come first, and each climbs one folder from the holding file's folder. `resolve_text` in `ksmd/files.kspl` refuses every other form, on disk and in the page alike:
+**A path has one spelling.** `/` separates folders. Any `..` segments come first, and each climbs one folder from the holding file's folder. `resolve_text` in `ksmd/files/files.kspl` refuses every other form, on disk and in the page alike:
 
 | Written | Why it is refused |
 | :-- | :-- |
@@ -312,7 +435,7 @@ Links may use `https`, `http`, `mailto`, or a document fragment. Other schemes a
 
 ### The assembled view
 
-**Each source is read once into its own model, and the view refers to its blocks.** `assemble` in `ksmd/assemble.kspl` builds it. Each `Entry` names the instance and the block it shows. So the view can name, for every block, the file it came from and its offset there. An include clause stays in its parent's model, and the included blocks follow its entry.
+**Each source is read once into its own model, and the view refers to its blocks.** `assemble` in `ksmd/files/assemble.kspl` builds it. Each `Entry` names the instance and the block it shows. So the view can name, for every block, the file it came from and its offset there. An include clause stays in its parent's model, and the included blocks follow its entry.
 
 **Each include of a file makes an instance of its own.** A file included twice is read once and shown twice, so repetition is not a cycle. A cycle is a source already on the current include stack: a file that includes itself, or that includes a file leading back to it.
 
@@ -333,7 +456,7 @@ Links may use `https`, `http`, `mailto`, or a document fragment. Other schemes a
 
 **A save writes one source.** `Workspace.save` writes a document's canonical text through `fs.replace_file`. A crash then leaves the old text or the new, never a part. The page saves through the local server, which replaces the file the same way. A parent's model holds its include clause, not the included blocks, so its save cannot flatten them.
 
-**To change included text, the editor opens the included source.** `load` in `ksmd/files.kspl` reads it alone. Its save leaves the parent's bytes unchanged, and the next view shows the change. Undo belongs to the source being edited. Several sources are never saved in one transaction.
+**To change included text, the editor opens the included source.** `load` in `ksmd/files/files.kspl` reads it alone. Its save leaves the parent's bytes unchanged, and the next view shows the change. Undo belongs to the source being edited. Several sources are never saved in one transaction.
 
 ### Table names across includes
 
@@ -341,13 +464,19 @@ Links may use `https`, `http`, `mailto`, or a document fragment. Other schemes a
 
 ## Model and editor architecture
 
-Use an ordered block tree. Its node kinds are paragraph, heading, list, code, table, image and include. Inline nodes are text, emphasis, strong emphasis, code and link. Tables own rectangular cells, rather than general child blocks.
+**The code's folders are layers, each knowing only those below it**: `base`, `model`, `calc`, `syntax`, then `files` and `edit` side by side, then the page. "Folder map" in [`ksmd/README.md`](../README.md) lists them.
+
+* **The model and the calculation know no syntax.** So a value can be tested without reading a source, and the reader and writer can change without touching a formula's arithmetic.
+* **The editor never reads a file.** It changes one source in memory, so the page can hand it files fetched from the server, and a test can hand it text.
+* **An upward import is refused by `make test-conventions`.** The compiler sees only a cycle, and an upward import that closes none would build unnoticed.
+
+Use an ordered block tree. Its node kinds are paragraph, heading, list, code, table, chart, image and include. Inline nodes are text, emphasis, strong emphasis, code and link. Tables own rectangular cells, rather than general child blocks.
 
 Source locations belong to parsed nodes and tokens. Editing identities belong to the model and need not appear in source. Appearance holds optional column-width ratios; it cannot encode a table as prose or change formula meaning. The table's `widths` attribute, when present, is a quoted comma-separated list of positive integer weights, one per column. Weights are integers from 1 to 10,000. The writer divides them by their greatest common divisor. The editor rounds resized proportions to these weights; layout divides each weight by their sum.
 
 **Use browser layout for the first editor.** Paragraphs and real HTML tables give text flow, selection, accessibility structure and print layout without a second text-layout engine. Canvas remains an option for future specialized figures, not the default document surface.
 
-The KSPL model remains authoritative. The page turns editing into model actions ("How the editor changes a document"). The selection is a pair of model spots, not a DOM range kept across rendering. Undo records model transactions ("Undo and redo"). The page renders only the blocks an action changed, and restores the selection through the spots ("The editing page").
+The KSPL model remains authoritative. The page turns editing into model actions ("How the editor changes a document"). The selection is a pair of model spots, not a DOM range kept across rendering. Undo records model transactions ("Undo and redo"). The page renders only the blocks an action changed, and restores the selection through the spots ([`DESIGN-page.md`](DESIGN-page.md)).
 
 **A layout comparison confirmed the choice.** A small page held editable paragraphs and a real HTML table, beside a canvas that drew the same text. It ran in headless Chromium 141, and every check passed:
 
@@ -362,11 +491,11 @@ The KSPL model remains authoritative. The page turns editing into model actions 
 
 ## How the editor changes a document
 
-`Editor` in `ksmd/editor.kspl` holds one document, its selection and its history. Every action a page asks for is a method on it, and each action is one transaction.
+`Editor` in `ksmd/edit/editor.kspl` holds one document, its selection and its history. Every action a page asks for is a method on it, and each action is one transaction.
 
-**An action takes the blocks it touches apart into units, changes them, and settles them into blocks again** (`ksmd/region.kspl`). A unit is a paragraph, a heading, a code block or one list item. A table, an image or an include is a whole unit, kept as it is. An action works on units without regard to which block holds them. Settling then groups neighbouring list items into one list, and starts another list where a top-level item's marker changes.
+**An action takes the blocks it touches apart into units, changes them, and settles them into blocks again** (`ksmd/edit/region.kspl`). A unit is a paragraph, a heading, a code block or one list item. A table, a chart, an image or an include is a whole unit, kept as it is. An action works on units without regard to which block holds them. Settling then groups neighbouring list items into one list, and starts another list where a top-level item's marker changes.
 
-**Text is changed as a run of segments, each with its own marks** (`ksmd/styled.kspl`). A command sets or clears a mark per segment, and never opens or closes a node itself. Building the inline nodes again opens marks in a fixed order: a link outermost, then strong emphasis, then emphasis. That is the order in which the reader takes a run of `***` that opens both. Every mark closes before a hard break, since a mark closes on its source line.
+**Text is changed as a run of segments, each with its own marks** (`ksmd/edit/styled.kspl`). A command sets or clears a mark per segment, and never opens or closes a node itself. Building the inline nodes again opens marks in a fixed order: a link outermost, then strong emphasis, then emphasis. That is the order in which the reader takes a run of `***` that opens both. Every mark closes before a hard break, since a mark closes on its source line.
 
 **Each action's result is written and read back before it is taken.** The new text blocks are written as a small source and read again. The action is refused, and changes nothing, if the reader refuses that source or reads other text or other marks. So the editor holds no second copy of a rule the reader holds. The comparison allows what the writer leaves out at a line's edge.
 
@@ -395,152 +524,13 @@ The KSPL model remains authoritative. The page turns editing into model actions 
 
 ## Undo and redo
 
-**Each action records the swap of what it changed** (`ksmd/history.kspl`). Undoing swaps the old blocks and table parts back in, which leaves the undone version in the record, ready for redo. Inline nodes and list items are only ever added, so an old block still names valid nodes. A swap is exact only when every later action is undone first, so undo and redo run strictly in order.
+**Each action records the swap of what it changed** (`ksmd/edit/history.kspl`). Undoing swaps the old blocks and table parts back in, which leaves the undone version in the record, ready for redo. Inline nodes and list items are only ever added, so an old block still names valid nodes. A swap is exact only when every later action is undone first, so undo and redo run strictly in order.
 
 **A table edit is recorded by comparing each table with a copy made before it.** Where a table keeps its rows, columns, name and cell count, the record holds only the cells and formula pieces that differ. A cell edit in a large table then records one cell. Column widths that change alone are recorded alone, so resizing a column of a 10,000-row table copies no cell. Otherwise the record holds the whole table.
 
 **Typing joins one step per word, with no clock.** Typed text joins the step before it while the caret stays where that step left it. A space ends the step it is typed into. Deleting single characters joins the same way. A paste, a composition, Enter and every command are steps of their own. A rule with no clock gives the same steps on every machine, so a test can check it.
 
 Undo and redo put back the selection each step started or ended with. A new action drops what was undone. A refused action records nothing.
-
-## The editing page
-
-`ksmd/port/web/` holds the page: `bridge.kspl` and `view.kspl` built as wasm32, and the script and style that show the model. `make ksmd-web` builds it as `out/ksmd/web/ksmd.html`.
-
-**Text arrives through `beforeinput`, which the page cancels.** The page runs the matching action, renders the blocks it changed, and puts the selection back from model spots. So the page keeps no edit the browser made, and the browser's own undo has nothing to undo. A dropped item is refused. Key presses carry the commands. Ctrl+B, Ctrl+I, Ctrl+E and Ctrl+K set marks, and Ctrl+Alt+0 to 6 make a paragraph or a heading. Tab and Shift+Tab nest list items, and Ctrl+Z and Ctrl+Y undo and redo. Ctrl+F and Ctrl+H open find and replace ("Find and replace" below).
-
-**An input method's composition is the one edit the browser makes itself.** Text from an input method cannot be cancelled. While a composition lasts, the page renders nothing and runs no action. When it ends, the page compares the element's text with its text before, and takes the difference as one transaction. That comparison waits one turn, so a browser that changes the text after the composition ends has done so. Any other input takes it first. The key press that starts an input method deletes a selection, so the composition starts in one place.
-
-**The selection is two model spots.** A spot names a block, a list item and a UTF-8 offset into its text, or a gap. The page maps between spots and places on the page at each action, and keeps no place across one.
-
-**Only the blocks an action changed are rendered again.** An action reports the first block it changed and how many at the end it left alone. After a table edit, every table shows again, since a value can depend on another table.
-
-**The commands stand in a menu bar of drop-down menus: Edit, View, Format, Insert and Table.** A menu opens on a press of its name, not on pointing, so moving the mouse across the bar opens nothing. While one menu is open, pointing at another name opens that one. A group of commands is a flyout beside its menu, which opens on pointing, on a press, or with Right. Esc, a press outside and a chosen command close every menu, and the focus goes back where it was. Up and Down move through a menu, and Right and Left go into a flyout, out of it, or on to the next menu. Each command keeps its shortcut, which the menu shows beside it.
-
-**A table command that cannot act is disabled, not hidden.** With no cell chosen, every table command is disabled. A person sees where the command is, and the menu does not change shape.
-
-**A right-click on a cell, a row number or a column letter opens the table menu at that place.** It chooses that cell first, and the commands act on it. Shift+F10 or the menu key in an open cell opens the menu too. The Table menu and the right-click menu are built from one list (`TABLE_GROUPS` in `ksmd/port/web/menu.js`), so the two cannot differ. The Table menu shows each group as a flyout. The right-click menu shows the groups one after another, since a menu that opens beside the pointer should need no second move.
-
-**A table shows as an HTML table of calculated values**, with column letters and row numbers. The row of names under the letters is the table's heading, with its own colour and a line below it. An empty name shows a faint "Name". The row numbers take only the width their digits need. A cell edits in an input of its own. Enter, Tab, Up and Down move between cells. Esc drops the open cell's edit and leaves the cell chosen. The arrow keys past the first or last row leave the table for the gap there. A press between two blocks, or below the last, puts the caret in the gap there.
-
-**Left and Right move the caret inside a cell's text, and move to the next cell at the text's edge.** A cell opens with all its text selected, so Left and Right then move to the next cell at once, as in a spreadsheet. Once a click or a key puts the caret inside the text, they move the caret. At the text's edge, the next press moves to the next cell. Left in the first column and Right in the last stay in the cell.
-
-**Sorting orders a table's data rows by the chosen cell's column, as one step of undo.** Numbers come first, smallest first, then text from A to Z, then `false` and `true`, then errors. Descending reverses that order. Empty cells stand last either way, as spreadsheets put them, so a sort never hides the filled rows below empty ones. Text compares letters without regard to case. Rows with equal values keep their order, so a sort by one column after another sorts by both. A formula sorts by its calculated value. The names above the data rows do not move.
-
-**A column filters from its heading, as in Excel.** Each name carries an arrow, and pressing it opens a panel under that column (`ksmd/port/web/filter.js`):
-
-* The panel starts with Sort ascending, Sort descending and Clear filter from this column. A search box follows, then the column's values, each with a tick box.
-* A condition is folded away under the list: is, is not, contains, is greater than, is less than, is empty, is not empty. A number compares as a number.
-* OK applies the ticks or the condition, and Cancel, Esc and a press outside change nothing. A sort closes the panel, so the rows can be seen.
-* Typing in the search box narrows the list shown, and never unticks a value. Looking and choosing are two acts, so they are two controls. "(Select all)" ticks or unticks the values in sight.
-* The values are listed in the order the column sorts in, so 80 comes before 120. Values that differ only in case are one value, since the filter ignores case. Empty cells are one value, listed last as "(Blanks)". The list stops at 1,000 values and says so.
-
-**Each column holds one condition, and a row shows when it meets every column's.** A narrowed column's arrow is marked, so a person sees which columns narrow the table. A line above the table says how many rows are shown, with a button that shows every row again. The Table menu's Filter group opens the same panel for the chosen cell's column. It can also show only the rows with that cell's value, or every row.
-
-**A filter is a way of looking: the file keeps every row.** It belongs to the page, and lasts until it is cleared, the table is removed, or the page closes. A filter written into the file would hide rows from the next reader, the complaint Excel's saved filters draw. A formula counts every row, shown or not. The row being edited stays in sight until the edit is taken. Up, Down and Enter pass over the hidden rows. A new row shows every row again, since the filter would hide an empty row at once.
-
-**Under the menu bar stands a ribbon, as in Office**: named groups of tools for Edit, Font, Paragraph and Insert. A Table group joins them while a table cell is the place being worked in. A tool presses the same command as the menu. The font and fill colour tools are split: the face applies the colour shown on it, and the arrow opens a palette. The palette holds Office's standard colours, "Automatic" or "No fill", and any other colour. Clear takes colours, size and alignment away in one step.
-
-**A look acts on the cells where a cell was worked in last, and on the selected text otherwise.** A press or a key in the text makes the text the place; opening or choosing a cell makes the cells the place. The page's own selection changes after an action do not count. Alignment on text aligns the paragraphs and headings the selection touches.
-
-**Shift+click chooses a range of cells from the chosen one** ("Ranges of cells" below).
-
-**The Table menu's Number format group sets the format of the chosen cell's column**, or of every column the range spans, in one step. It holds General, Number, Thousands, Percent, Currency, and More and Fewer decimal places. Currency asks for a code, and takes the places that currency's money is counted in: none for JPY and KRW, two for every other code. A cell shows the text the format gives, and the filter panel lists and matches that text.
-
-**Cells copy and paste as Excel's do.** Ctrl+C on a range puts its values on the clipboard as tab-separated rows, which a spreadsheet takes. A number goes as calculated, not as its format shows it, so no digit is lost. A paste of such rows fills the table from the chosen cell, as one step, and the table grows the rows and columns it needs. Each pasted value reads as typed text does, and a number with thousands separators, as `1,234.5`, is a number. Rows pasted into text make a new table, whose first row gives the names. A refusal changes nothing.
-
-**Ctrl+; types today's date, and Ctrl+: the time, as in Excel.** They work in a cell and in the text, and the Insert menu holds both. The date is written `2026-10-23` and the time `14:05`, ISO 8601's forms. They read the same in every country, and sort correctly as text, since a date is text in version 1.
-
-**A double-click on a column's border fits the column to its widest value on one line.** The border is the edge between two column letters, or the border between two cells. The table keeps its width, and the other columns share what is left in the proportions they had. The fit is one step of undo, and saves as `widths`, as a drag does. A row has no height in the source. It is always as tall as its content, so a double-click on a row's border has nothing to set.
-
-**A cell opens when the mouse button goes down, not on the click.** The press takes the caret out of its gap, and a gap above the table then goes. The table moves up a line under the mouse, so the button would come up on another element, and no click would come.
-
-**While a person works in a table, the page draws no caret in the text.** A cell or a range is chosen, or a cell is open. The format has no empty paragraph, so a caret beside a table would stand in a gap. That gap would push the table down a line after each action, and the next press would miss. So the table stays where it is, and the keys go to the chosen cell. Esc on a chosen cell, a press in the text, and an arrow key past the table's first or last row leave the table. The caret then comes back where the model holds it, in a gap too.
-
-**Dragging the edge between two column letters resizes the two columns beside it.** They share their width anew, and every other column keeps its weight. The page shows the new widths while the mouse moves. When the button comes up, the table's `widths` change in one step of undo, and no cell changes. A press that does not move changes nothing.
-
-* **The page turns pixels into weights.** A table without `widths` first takes weights from its columns' widths on the page, about 1,000 in all.
-* **All weights are multiplied by one whole number before the two columns share theirs.** The two then have about 1,000 steps to share, and the other columns keep their proportions exactly. The writer divides the weights by their greatest common divisor again.
-* **No weight passes 10,000 or falls below 1**, the bounds the reader takes.
-
-**In a cell, Alt+Right makes its column wider and Alt+Left narrower, by a twentieth of the table's width.** The width comes from the column on its right, or for the last column from the one on its left. Each press is one step of undo, and the cell stays open for the next. The keys work in the cell because a keyboard already reaches a cell, and resizes the column being worked in. An edge that takes the focus would be one more stop for Tab on every table. A table of one column has no width to share, and the page says so.
-
-**An image and an include show what their clauses say.** Opened from a file, the page shows an image's path, alternate text and caption, and a marked box naming an include's path. Served by the local server, it shows the image and the included blocks in place ("The file lifecycle" below).
-
-**A paste takes the clipboard's plain text.** Each line starts a block of the caret's kind. When the clipboard also held formatting, the page says that it was not kept.
-
-**The page is built as wasm32 with no C library.** Clang's bulk-memory instructions copy and fill memory, so no C routine is linked.
-
-**The page is one file.** `ksmd/port/web/bundle.kspl` puts its style, its scripts and its wasm, as base64, inside `ksmd.html`. So the page opens from a file, and the local server hands it out alone.
-
-**Opened from a file, the page reaches no file: a host opens and saves through two calls.** `ksmd.load(source)` opens a source; a refused source leaves the open document as it was, and the result names the line and column. `ksmd.source()` returns the canonical source to save. `ksmd.onchange` learns of each change.
-
-**The editor's memory is a fixed 128 MiB.** An action that starts with less than 16 MiB free is refused, and the page asks the person to save and open the document again. The document and its whole history stay in that memory until another document opens.
-
-### Ranges of cells
-
-**A range of cells runs from the chosen cell to a far corner.** Shift+click reaches it from the chosen cell, and so do Shift and an arrow key. A press on a row number chooses that row. A press on a column letter chooses that column's data cells. Shift with either press reaches from the chosen cell's row or column.
-
-* **Shift and an arrow key extend a range from an open cell**, as in a spreadsheet. Once the caret stands inside the cell's text, Shift+Left and Shift+Right select text instead.
-* **The range keeps the identities of its rows and columns, as a formula's range does.** A row added above it, a sort or an undo leaves it on the same cells. The page keeps no element and no place on the page across an action.
-* **On a chosen cell that is not open, the keys act on the range.** Delete and Backspace clear its cells as one step, and each cell keeps its look. Enter and F2 open the chosen cell, and a typed character opens it with that character. Ctrl+Z and Ctrl+Y undo and redo, as in the text. Esc first leaves the chosen cell alone, then leaves the table.
-* **Copy, cut and paste act on the range.** A paste of one value fills every cell of the range. A paste of rows fills the table from the range's corner.
-* **A look applies to every cell of the range in one step.**
-
-### Filling cells
-
-**Ctrl+D fills a range down from its top row, and Ctrl+R right from its left column**, as in Excel. A range of one row fills down from the cell above it. A range of one column fills right from the cell left of it. The Table menu holds both, and each fill is one step of undo.
-
-* **Each cell is copied through the model's copy of a cell** (`copy_cell` in `ksmd/edit.kspl`). A reference without `$` shifts as far as the copy moves, and a part with `$` stays. The copy takes the cell's look too.
-* **A fill is refused whole.** A copy that would write a formula longer than 4,096 bytes puts back every cell copied before it.
-* **The square at a range's lower right corner fills by a drag.** A drag down or right repeats the range's cells over the cells it reaches. The square stands under the pointer, so no key or menu is needed for it.
-* **A fill copies, and makes no series.** A series guessed from the values, such as 1, 2, 3 from a 1, surprises the person who wanted copies. A formula such as `=A1+1` makes a series and says how.
-* **Ctrl+D and Ctrl+R act only while a cell or a range is chosen.** Elsewhere the browser keeps them, to bookmark the page and to load it again. Inside a table, a person reaches for a fill, and undo takes a wrong one back.
-
-### Find and replace
-
-**Ctrl+F opens a find bar under the ribbon, and Ctrl+H opens it with its replace part.** The Edit menu and the ribbon's Find tool open it too. A short selection on one line becomes the search text.
-
-* **Find looks in the text the page shows, and in each cell's text as a person edits it.** So a formula's source is searched, and its calculated value is not. Replace changes what is written, and a calculated value holds nothing written to change.
-* **A match can cross formatting.** `**bold**words` holds "boldwords", since a reader sees one word there. A match stays inside one paragraph, heading, list item, code block or cell.
-* **Without Match case, each character is compared in lower case.** Each character is folded alone, so a match keeps the text's own places in every script.
-* **Enter and F3 go to the next match, and Shift+Enter and Shift+F3 to the one before.** The bar says which match is current, and of how many. A search starts from the caret.
-* **The matches show without any change to the page's text.** Matches in text show through the browser's highlights, which add no element. So the find bar never disturbs an input method's composition. A cell that holds a match is marked as a whole.
-* **Typing in the find bar never changes the document.** Only Replace and Replace all act on it.
-* **Replace changes the current match, and the next match becomes the current one.** Replace all changes every match as one step of undo, prose and cells together.
-* **The new text takes the marks of the first character it replaces.** So a bold word stays bold, and text inside a link stays in the link.
-* **A replace is refused whole**, as every action is. A cell text the file cannot hold changes nothing. A match that no longer stands where it was found also changes nothing.
-* **Esc closes the bar and selects the current match**, or chooses its cell, so the person goes on from there.
-* **Find does not look in an included file's blocks, nor in rows a filter hides.** An included file edits in a tab of its own. A hidden row stays out, so Replace all changes nothing a person cannot see.
-
-### The heading row of a long table
-
-**A table's column letters and names stay in sight under the header while the page scrolls through the table.** The heading sticks within the page's own scroll (`position: sticky` on the table's `thead`).
-
-* **A table never scrolls in a box of its own.** A box would take the mouse wheel in the middle of a document. Its heading would also hide under the header once the page scrolled on past the box's top.
-* **Every table's heading sticks, and no source notation chooses it.** A short table never scrolls under the header, so it looks the same. A choice per table would change the file for a way of looking.
-* **The column edges stand in the letters, so a drag resizes a column wherever the table is scrolled.**
-* **On paper, the heading is the table's own `thead`, which the browser repeats on each page.**
-* **A table wider than the page reaches past it, and the page scrolls sideways.** A box that scrolled sideways would hold the heading inside it, and the heading could not stick to the page.
-
-### The contents
-
-**View, Contents shows the document's headings in a panel at the window's left**, each indented by its level, as GitHub's outline does.
-
-* **A press on a heading scrolls to it, and puts the caret at its start.** A heading shown from an included file only scrolls, since it does not edit here. Its file's path stands beside it.
-* **The heading being read is marked as the page scrolls**: the last one above the top of the reading area.
-* **The list follows every edit.** An action that changes no heading builds no list.
-* **Whether the panel shows is kept in the browser's storage, for each viewer.** It is a way of looking, so it stays out of the file. Where storage is off, the panel starts hidden.
-
-### What the editing page does not do yet
-
-* It does not convert a rich paste; it takes the plain text and says so.
-* Find has no whole-word search and no regular expressions. It does not search table names.
-* A browser without the highlight API (`CSS.highlights`) marks no match in text. The current match still scrolls into sight, and the count still shows.
-* A fill makes no series, and a filter's hidden rows are filled as the shown ones are.
-* It never trims the undo history. A long session can use up the editor's memory, and the page then asks the person to save and open the document again.
-* The browser checks run in headless Chromium alone. Firefox, Safari, a real input method on a real keyboard and screen readers are not checked.
-* A person switching tabs in a desktop browser is not checked: the checks send the focus event themselves.
 
 ## The file lifecycle
 
@@ -550,14 +540,18 @@ Undo and redo put back the selection each step started or ended with. A new acti
 | :-- | :-- |
 | Only this machine reaches the server | The server listens on the loopback alone, and refuses a request that names another host |
 | Another page or program cannot drive it | The server makes a new token at each start. The page moves it from the address into the tab's storage, and sends it in a header |
-| A path stays inside the workspace | The page applies the workspace's text rules (`resolve_text` in `ksmd/files.kspl`). The server refuses a link and a path out of its root |
-| No file appears by itself | Opening, viewing and drafts write nothing. A save writes the open document's own path, or a new path where no file stands |
+| A path stays inside the workspace | The page applies the workspace's text rules (`resolve_text` in `ksmd/files/files.kspl`). The server refuses a link and a path out of its root |
+| No file appears by itself | Opening, viewing and drafts write nothing. A save writes the open document's own path, or a new path where no file stands. Save As replaces another file only after a second press, and only while that file still holds what it held when chosen |
 
 ### Opening
 
-**A document opens from its path in the workspace**: from the address (`?doc=notes.ksmd`), or typed into the Document field. The page gives the file's bytes to the editor unchanged. A file the reader refuses does not open, and the open document stays.
+**A document opens from its path in the workspace**: from the address (`?doc=notes.ksmd`), or chosen in File, Open (Ctrl+O). The menu bar shows the open document's path. The page gives the file's bytes to the editor unchanged. A file the reader refuses does not open, and the open document stays.
 
-**The page builds the assembled view itself, in rounds.** An assembly over what the page holds names the files it still lacks (`Fetched` in `ksmd/fetched.kspl`). The page fetches them and assembles again, one round per level of includes. So the browser applies `assemble`'s rules, and a refusal that the server gives, such as a link, stands as that file's. A clause whose file is still being fetched shows its path and no problem.
+**The page builds the assembled view itself, in rounds.** An assembly over what the page holds names the files it still lacks (`Fetched` in `ksmd/files/fetched.kspl`). The page fetches them and assembles again, one round per level of includes. So the browser applies `assemble`'s rules, and a refusal that the server gives, such as a link, stands as that file's. A clause whose file is still being fetched shows its path and no problem.
+
+**A chart's Edit button opens a panel**: bars or lines, the labels column, the columns drawn, and a title. Apply is one step of undo. The table's right-click menu holds Insert chart, which puts a bar chart after the table. It labels the bars by the first column and draws the first column of numbers.
+
+**A Remove button on an include, an image or a chart takes that block out of the document**, as one step of undo. No text selection reaches inside such a block, so without the button only a text editor could take it out. The included file or the image file stays as it is.
 
 **An include shows its file's blocks in place, and they do not edit there.** Its Edit button opens the included file in a tab of its own, with its own undo history, its own save and its own draft. The parent's model holds the clause, so the parent's save never writes the included file.
 
@@ -565,13 +559,17 @@ Undo and redo put back the selection each step started or ended with. A new acti
 
 **A save writes the open document's canonical source to its own file, and only that file.** Ctrl+S and the Save button save. The server replaces the file through `fs.replace_file`, so a crash leaves the old text or the new.
 
+**Save As chooses the folder and the name in a dialog** (Ctrl+Shift+S), as a word processor's does. The dialog shows one folder at a time: its folders, then its `.ksmd` documents, with the path from the workspace down to it above them. It asks the local server for each folder's names; links and hidden names are not listed. A name with no extension gets `.ksmd`. A name that stands there already asks for a second press of Save before it is replaced. The chosen path then goes through the same rules as a typed one. The Open dialog is the same dialog, and a double press on a document opens it.
+
+**The dialog stays open outside the page's file steps.** A check or a draft that falls due while it is open still runs. Only what is chosen runs as a step.
+
 **A save compares the file's bytes with those this page last read or wrote, never its time.** The page keeps the SHA-256 digest of those bytes. Before it writes, it reads the file again and compares. It then sends the digest with the write, and the server replaces the file only while the file still matches. A file rewritten with the same bytes is no change, and a write from another tab in between is caught.
 
 **A file changed on disk is never overwritten without a choice.** The page writes nothing and shows a notice that does not block editing. The notice offers two ways on: replace the file with this version, or load the file's version and keep this one as a draft. No merge is offered, since a merge that drops a line loses work silently.
 
 **When the page is looked at again, it reads its file again.** Focus and visibility both start the check. With nothing unsaved, a changed file shows at once. With edits unsaved, the page shows the same notice as a save. Each include and image is fetched again, and the view changes where one changed. The server watches no file, so a page that is not looked at notices a change only at its next save.
 
-**A new document saves only where no file stands.** Its first save writes the path typed into the Document field, and the server refuses it where a file stands. A save to a path other than the document's own works the same way. So a save never replaces a file that this document did not come from. Opening a missing path creates nothing.
+**A new document saves only where no file stands, unless the person chooses to replace one.** Save on a document with no file yet opens Save As, as a word processor does. Save As replaces a file that stands only after a second press. So a save never replaces a file without a choice. Opening a missing path creates nothing.
 
 ### Drafts
 
@@ -604,12 +602,19 @@ Undo and redo put back the selection each step started or ended with. A new acti
 
 ### Images
 
-**An image's format and size come from its file's header, before the browser decodes it.** `measure` in `ksmd/image.kspl` reads a PNG's IHDR chunk, or walks a JPEG's segments to its frame header. The bytes decide the format, and the file's name does not. Another format is refused, and so is an image of more than 16 million pixels. The page passes the header in windows of 64 KiB, so a large file never fills the editor's memory. An image that is refused or missing shows the reason at its clause.
+**An image's format and size come from its file's header, before the browser decodes it.** `measure` in `ksmd/files/image.kspl` reads a PNG's IHDR chunk, or walks a JPEG's segments to its frame header. The bytes decide the format, and the file's name does not. Another format is refused, and so is an image of more than 16 million pixels. The page passes the header in windows of 64 KiB, so a large file never fills the editor's memory. An image that is refused or missing shows the reason at its clause.
+
+**An image pasted or dropped into the text is written beside the document, and its clause goes in after the caret's block.** Its name is the document's, then `-image-` and the first free number, such as `notes-image-2.png`.
+
+* **The write names no file, so it never replaces one.** A name already taken goes on to the next number.
+* **The page asks for the alternate text first.** An empty answer marks the image as one that only decorates; Cancel puts nothing in.
+* **It needs the local server and a document saved once**, for the image needs a folder to go in. Opened from a file, the page says so and changes nothing.
+* **Only PNG and JPEG go in, up to the server's 8 MiB.** An image never goes into a table cell.
+* **Undo takes the clause out, and the file stays**, as the Remove button leaves it.
 
 ### What the file lifecycle leaves out
 
 * Two people editing one file at once. A save after another person's save asks, as for any change on disk.
-* A list of the workspace's files, which the protocol does not offer. A path is typed or linked.
 * Noticing a change while the page is not looked at.
 
 ## Limits and failures
@@ -648,7 +653,7 @@ The reader refuses a formula longer than 4,096 bytes, and an edit that would wri
 | A clause's problem | Its entry | A binary search of `Assembly.problems`, which stand in the order of their entries | log2 of the problems |
 | An included source's values | Its index | A list, by that index | One step |
 
-**`Keyed` in `ksmd/keyed.kspl` is an AVL tree that compares keys byte by byte.** Its work does not depend on any hash. A sorted list is not used: names in falling order would shift the whole list at each insertion.
+**`Keyed` in `ksmd/base/keyed.kspl` is an AVL tree that compares keys byte by byte.** Its work does not depend on any hash. A sorted list is not used: names in falling order would shift the whole list at each insertion.
 
 ### What a document costs
 

@@ -1,0 +1,79 @@
+//< Notes: on a cell or a paragraph, how they read and save, and adding and resolving one
+import "ksmd/base/source" { Source }
+import "ksmd/edit/editor_tables"
+import "ksmd/edit/region" { text_spot }
+import "ksmd/syntax/reader"
+import "ksmd/tests/tables" { opened, saves }
+import "std/mem" { Arena }
+import "std/str"
+import "std/verdict"
+
+priv const TABLE: U8[] = "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n"
+
+fn run()
+    reading()
+    cells()
+    paragraphs()
+
+priv fn reading()
+    defer arena: = Arena(64 * 1024)
+    for text in U8[][]::{ "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n| 120 {fill=\"#fff2cc\" \
+        note=\"Check with Sam\"} |\n:::\n",
+        "%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n| {note=\"Say \\\"hi\\\"\\nthen go\"} |\n:::\n",
+        "%ksmd 1\n\n{align=\"center\" note=\"Is this the final title?\"}\n# Plan\n\nText.\n",
+        "%ksmd 1\n\n{note=\"A remark\"}\nText.\n" }
+        ed: = opened(text, arena)
+        saves("a note reads and saves unchanged", ed@, arena, text)
+    for bad in U8[][]::{ "%ksmd 1\n\n{note=\"\"}\nText.\n", "%ksmd 1\n\n{note=\"a\\tb\"}\nText.\n",
+        "%ksmd 1\n\n{note=2}\nText.\n" }
+        src: = Source("bad.ksmd", bad) catch
+            continue
+        $read: = true
+        _doc: = reader.read(src@, arena) catch
+            read = false
+        verdict.check(arena.text().s("a note that cannot be saved is refused: ").s(bad).take(),
+            !read, "")
+
+priv fn cells()
+    defer arena: = Arena(64 * 1024)
+    plain: = arena.text().s(TABLE).s("| 1 |\n:::\n").take()
+    $ed: = opened(plain, arena)
+    ed.set_cell_note(0, 0, 0, "Why one?") catch e
+        verdict.check("a note on a cell", false, e.message())
+    noted: = arena.text().s(TABLE).s("| 1 {note=\"Why one?\"} |\n:::\n").take()
+    saves("a cell takes a note after its value", ed@, arena, noted)
+    ed.set_cell(0, 0, 0, "2") catch e
+        verdict.check("a new value", false, e.message())
+    saves("a new value keeps the cell's note", ed@, arena,
+        arena.text().s(TABLE).s("| 2 {note=\"Why one?\"} |\n:::\n").take())
+    ed.set_cell_note(0, 0, 0, "") catch e
+        verdict.check("resolving a note", false, e.message())
+    saves("resolving takes the note away", ed@, arena,
+        arena.text().s(TABLE).s("| 2 |\n:::\n").take())
+    ed.undo()
+    ed.undo()
+    saves("undo brings it back", ed@, arena, noted)
+
+priv fn paragraphs()
+    defer arena: = Arena(64 * 1024)
+    plain: = "%ksmd 1\n\nOne two.\n"
+    $ed: = opened(plain, arena)
+    ed.set_block_note(0, "Too short?") catch e
+        verdict.check("a note on a paragraph", false, e.message())
+    noted: = "%ksmd 1\n\n{note=\"Too short?\"}\nOne two.\n"
+    saves("a paragraph takes a note on a line of braces before it", ed@, arena, noted)
+    p: = text_spot(0, 0, 3)
+    ed.select(p, p)
+    ed.enter(false) catch e
+        verdict.check("a split", false, e.message())
+    saves("a paragraph split in two keeps its note on the first part", ed@, arena,
+        "%ksmd 1\n\n{note=\"Too short?\"}\nOne\n\ntwo.\n")
+    ed.undo()
+    ed.set_block_note(0, "") catch e
+        verdict.check("resolving a paragraph's note", false, e.message())
+    saves("resolving takes it away", ed@, arena, plain)
+    $refused: = false
+    $table: = opened(arena.text().s(TABLE).s("| 1 |\n:::\n").take(), arena)
+    table.set_block_note(0, "x") catch
+        refused = true
+    verdict.check("a table takes no block note; its cells take notes", refused, "")

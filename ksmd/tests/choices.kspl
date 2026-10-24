@@ -1,0 +1,91 @@
+//< Choice lists: how `choices` reads and saves, what a typed value becomes, and the refusals
+import "ksmd/base/source" { Source }
+import "ksmd/edit/editor" { Editor }
+import "ksmd/edit/editor_tables" { Table_edit }
+import "ksmd/syntax/reader"
+import "ksmd/tests/tables" { opened, saves }
+import "std/chars"
+import "std/mem" { Arena }
+import "std/str"
+import "std/verdict"
+
+priv const OPEN: U8[] = "%ksmd 1\n\n:::table name=\"t\""
+priv const ROWS: U8[] = "\n| \"task\" | \"status\" |\n| \"Write\" | \"Open\" |\n:::\n"
+
+fn run()
+    reading()
+    typing()
+    columns()
+
+priv fn reading()
+    defer arena: = Arena(64 * 1024)
+    text: = with(" choices=\",Open|In progress|Done\"", arena)
+    ed: = opened(text, arena)
+    saves("choices read and save unchanged", ed@, arena, text)
+    for bad in U8[][]::{ " choices=\"Open\"", " choices=\",Open||Done\"", " choices=\",Open|open\"",
+        " choices=\",Open | Done\"", " choices=\",\"" }
+        refused(arena.text().s(OPEN).s(bad).s(ROWS).take(), bad)
+
+priv fn typing()
+    defer arena: = Arena(64 * 1024)
+    $ed: = opened(with(" choices=\",Open|In progress|Done\"", arena), arena)
+    set(ed@, 0, 1, "done")
+    saves("a typed choice takes the list's spelling", ed@, arena,
+        with_row(" choices=\",Open|In progress|Done\"", "| \"Write\" | \"Done\" |", arena))
+    ed.set_cell(0, 0, 1, "Later") catch e
+        verdict.check("a value off the list is refused",
+            e.message().find_str("only its choices").is_some(), e.message())
+    set(ed@, 0, 1, "")
+    saves("an empty cell is allowed", ed@, arena,
+        with_row(" choices=\",Open|In progress|Done\"", "| \"Write\" | |", arena))
+    set(ed@, 0, 0, "Anything")
+    saves("a column without a list takes any value", ed@, arena,
+        with_row(" choices=\",Open|In progress|Done\"", "| \"Anything\" | |", arena))
+
+priv fn columns()
+    defer arena: = Arena(64 * 1024)
+    plain: = with("", arena)
+    $ed: = opened(plain, arena)
+    ed.set_choices(0, 1, " Open , Done ") catch e
+        verdict.check("setting choices", false, e.message())
+    saves("choices typed with commas are trimmed and saved", ed@, arena,
+        with(" choices=\",Open|Done\"", arena))
+    last: = ed.history.done[ed.history.done.len - 1]@
+    verdict.check("the step records the choices alone, and no copy of the table",
+        last.columns.len == 1 && last.tables.len == 0 && last.cells.len == 0, "")
+    ed.set_choices(0, 1, "Open, open") catch e
+        verdict.check("two equal choices are refused",
+            e.message().find_str("cannot be saved").is_some(), e.message())
+    ed.edit_table(0, .insert_column, 0) catch e
+        verdict.check("a new column", false, e.message())
+    saves("a new column has no list, and the list moves with its column", ed@, arena,
+        "%ksmd 1\n\n:::table name=\"t\" choices=\",,Open|Done\"\n| \"\" | \"task\" | \"status\" \
+            |\n| | \"Write\" | \"Open\" |\n:::\n")
+    ed.undo()
+    ed.set_choices(0, 1, "") catch e
+        verdict.check("clearing choices", false, e.message())
+    saves("an empty list clears the column's, and the attribute goes", ed@, arena, plain)
+    ed.undo()
+    ed.undo()
+    saves("undo takes each step back", ed@, arena, plain)
+
+priv fn with(attributes: U8[], arena: Arena$@): U8[] //< table `t` with these attributes
+    return arena.text().s(OPEN).s(attributes).s(ROWS).take()
+
+priv fn with_row(attributes: U8[], row: U8[], arena: Arena$@): U8[] //< and this data row
+    return arena.text().s(OPEN).s(attributes).s("\n| \"task\" | \"status\" |\n").s(row).s("\n:::\n")
+        .take()
+
+priv fn set(ed: Editor$@, row: Sz, column: Sz, text: U8[])
+    ed.set_cell(0, row, column, text) catch e
+        verdict.check(text, false, e.message())
+
+priv fn refused(text: U8[], what: U8[]) //< the reader refuses the source
+    defer arena: = Arena(64 * 1024)
+    src: = Source("bad.ksmd", text) catch e
+        verdict.check(what, false, e.message)
+        return
+    _doc: = reader.read(src@, arena) catch
+        verdict.check(arena.text().s("refused: \{what\}").take(), true, "")
+        return
+    verdict.check(arena.text().s("refused: \{what\}").take(), false, "the source was read")

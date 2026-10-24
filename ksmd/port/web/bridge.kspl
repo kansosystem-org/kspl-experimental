@@ -8,28 +8,31 @@
 //< Caution: **Refuse an action before memory runs short**, not during it. The heap is a fixed
 //< buffer, and running out midway stops the page with the document half changed
 //< (`ksmd_js_gave_up`).
-import "ksmd/assemble" { assemble_loaded }
-import "ksmd/calc" { Results }
-import "ksmd/calc"
-import "ksmd/clause" { parse_weights }
-import "ksmd/editor" { Editor, Input, Refused }
-import "ksmd/editor"
-import "ksmd/editor_replace" { Cell_text, Span }
-import "ksmd/editor_tables" { Table_edit }
-import "ksmd/fetched" { Fetched, Held }
-import "ksmd/files" { Refusal, parse, resolve_text }
-import "ksmd/format" { currency_of, format_of }
-import "ksmd/formula" { Positions }
-import "ksmd/history" { Change }
-import "ksmd/image" { measure }
-import "ksmd/look" { Look_part }
+import "ksmd/base/source" { Diagnostic, MAX_SOURCE_BYTES, Source }
+import "ksmd/calc/calc" { Results }
+import "ksmd/calc/calc"
+import "ksmd/calc/formula" { Positions }
+import "ksmd/calc/value" { Value }
+import "ksmd/edit/editor" { Editor, Input, Refused }
+import "ksmd/edit/editor"
+import "ksmd/edit/editor_charts" { Chart_settings }
+import "ksmd/edit/editor_replace" { Cell_text, Span }
+import "ksmd/edit/editor_tables" { Group_edit, Table_edit }
+import "ksmd/edit/history" { Change }
+import "ksmd/edit/region" { Place, Spot, paragraph_style }
+import "ksmd/edit/styled" { Mark }
+import "ksmd/files/assemble" { assemble_loaded }
+import "ksmd/files/fetched" { Fetched, Held }
+import "ksmd/files/files" { Refusal, parse, resolve_text }
+import "ksmd/files/image" { measure }
+import "ksmd/model/format" { currency_of, format_of }
+import "ksmd/model/look" { Look_part }
 import "ksmd/port/web/view" { Inside }
 import "ksmd/port/web/view"
-import "ksmd/reader"
-import "ksmd/region" { Place, Spot, paragraph_style }
-import "ksmd/source" { Diagnostic, MAX_SOURCE_BYTES, Source }
-import "ksmd/styled" { Mark }
-import "ksmd/writer"
+import "ksmd/syntax/chart" { kind_of }
+import "ksmd/syntax/clause" { parse_weights }
+import "ksmd/syntax/reader"
+import "ksmd/syntax/writer"
 import "std/chars"
 import "std/ds" { List }
 import "std/json"
@@ -304,15 +307,53 @@ fn ksmd_web_enter(hard: I32): Sz //< Enter, or with `hard` a line break inside a
 
 #export
 fn ksmd_web_kind(kind: I32, level: Sz, ordered: I32): Sz //<
-    //< Sets the selection's kind: 0 paragraph, 1 heading of `level`, 2 code, 3 list item
+    //< Sets the selection's kind: 0 paragraph, 1 heading of `level`, 2 code, 3 list item, 4 quote
+    //< A list item is bulleted for `ordered` 0, numbered for 1, and a checklist item for 2.
     if !begin()
         return full()
     $style: = paragraph_style()
     style.kind =
-        (.paragraph if kind == 0 else .heading if kind == 1 else .code if kind == 2 else .list)
+        (.paragraph if kind == 0 else .heading if kind == 1 else .code if kind == 2
+        else .list if kind == 3 else .quote)
     style.level = level if kind == 1 else 0
-    style.ordered = ordered != 0
+    style.ordered = ordered == 1
+    style.check = .open if kind == 3 && ordered == 2 else .none
     ed.set_kind(style) catch e
+        return refused(e)
+    return result(true, "")
+
+#export
+fn ksmd_web_check(block: Sz, item: Sz): Sz //< ticks a checklist item's box, or takes the tick away
+    if !begin()
+        return full()
+    ed.toggle_check(block, item) catch e
+        return refused(e)
+    return result(true, "")
+
+#export
+fn ksmd_web_divider(): Sz //< a divider in place of the selection
+    if !begin()
+        return full()
+    ed.insert_divider() catch e
+        return refused(e)
+    return result(true, "")
+
+#export
+fn ksmd_web_insert_image(src_len: Sz, alt_len: Sz): Sz //<
+    //< An image in place of the selection: its path from the document's folder, then its
+    //< alternate text, are written in
+    if !begin()
+        return full()
+    both: = text_in(src_len + alt_len)
+    ed.insert_image(both.sub(0, src_len), both.sub_from(src_len)) catch e
+        return refused(e)
+    return result(true, "")
+
+#export
+fn ksmd_web_invisible(block: Sz, on: I32): Sz //< leaves a clause's block out of print, or not
+    if !begin()
+        return full()
+    ed.set_invisible(block, on != 0) catch e
         return refused(e)
     return result(true, "")
 
@@ -321,6 +362,14 @@ fn ksmd_web_indent(deeper: I32): Sz //< nests the selected list items one level 
     if !begin()
         return full()
     ed.indent(deeper != 0) catch e
+        return refused(e)
+    return result(true, "")
+
+#export
+fn ksmd_web_text_color(len: Sz): Sz //< colours the selected text: `#rrggbb` written in, or empty
+    if !begin()
+        return full()
+    ed.set_text_color(text_in(len)) catch e
         return refused(e)
     return result(true, "")
 
@@ -354,6 +403,14 @@ fn ksmd_web_insert_table(columns: Sz, rows: Sz): Sz //< a new table in place of 
     if !begin()
         return full()
     ed.insert_table(columns, rows) catch e
+        return refused(e)
+    return result(true, "")
+
+#export
+fn ksmd_web_remove_block(block: Sz): Sz //< removes a table, an include or an image block
+    if !begin()
+        return full()
+    ed.remove_block(block) catch e
         return refused(e)
     return result(true, "")
 
@@ -397,17 +454,6 @@ fn ksmd_web_cell_look(block: Sz, from_row: Sz, from_column: Sz, to_row: Sz, to_c
         (.color if part == 0 else .fill if part == 1 else .size if part == 2
         else .align if part == 3 else .all)
     ed.set_look(block, from_row, from_column, to_row, to_column, which, text_in(len)) catch e
-        return refused(e)
-    return result(true, "")
-
-#export
-fn ksmd_web_text_look(part: I32, len: Sz): Sz //<
-    //< Sets one part of the look over the selected text: 0 colour, 1 fill, 2 size in points
-    if !begin()
-        return full()
-    which: Look_part =
-        (.color if part == 0 else .fill if part == 1 else .size if part == 2 else .all)
-    ed.set_text_look(which, text_in(len)) catch e
         return refused(e)
     return result(true, "")
 
@@ -463,12 +509,94 @@ fn ksmd_web_sort(block: Sz, column: Sz, descending: I32): Sz //<
     return result(true, "")
 
 #export
-fn ksmd_web_fill(block: Sz, top: Sz, left: Sz, height: Sz, width: Sz, bottom: Sz, right: Sz): Sz //<
-    //< Copies the `height` by `width` cells at `top`, `left` over the range up to `bottom`,
-    //< `right`, repeating them, as fill down, fill right and the fill handle do
+fn ksmd_web_group(block: Sz, how: I32, first: Sz, last: Sz): Sz //<
+    //< Groups the data rows from `first` to `last` (how 0), takes away the smallest group that holds
+    //< them (1), hides that group's rows (2) or shows them (3)
+    if how < 0 || how > 3
+        return result(false, "")
     if !begin()
         return full()
-    ed.fill_cells(block, top, left, height, width, bottom, right) catch e
+    what: Group_edit =
+        (.group if how == 0 else .ungroup if how == 1 else .hide if how == 2 else .show)
+    ed.group_rows(block, first, last, what) catch e
+        return refused(e)
+    return result(true, "")
+
+#export
+fn ksmd_web_choices(block: Sz, column: Sz, len: Sz): Sz //<
+    //< Gives a column the choices typed as `Open, Done` in the `len` bytes written in; none for empty
+    if !begin()
+        return full()
+    ed.set_choices(block, column, text_in(len)) catch e
+        return refused(e)
+    return result(true, "")
+
+#export
+fn ksmd_web_rule(block: Sz, column: Sz, len: Sz): Sz //<
+    //< Gives a column the colour rule an entry names, `<0;color:#9c0006`, in the `len` bytes
+    //< written in; none for empty
+    if !begin()
+        return full()
+    ed.set_rule(block, column, text_in(len)) catch e
+        return refused(e)
+    return result(true, "")
+
+#export
+fn ksmd_web_insert_chart(block: Sz): Sz //< a bar chart of a table, after the table
+    if !begin()
+        return full()
+    ed.insert_chart(block) catch e
+        return refused(e)
+    return result(true, "")
+
+#export
+fn ksmd_web_set_chart(block: Sz, len: Sz): Sz //<
+    //< New settings for a chart, written in as JSON: `{"t":table,"k":"bar","l":labels column,
+    //< "v":[columns],"title":text}`, the columns by their places
+    if !begin()
+        return full()
+    defer scratch: = Arena(16 * 1024)
+    doc: = json.parse(text_in(len), scratch) catch
+        return result(false, "The chart's settings did not arrive whole, so nothing changed.")
+    $values: = List<|Sz|>(scratch)
+    for v in doc.val.get("v").arr_list(scratch)
+        values.push(number(v))
+    kind: = kind_of(doc.val.get("k").as_str().unwrap_or("")) catch
+        return result(false, "A chart is a bar chart or a line chart.")
+    settings: = Chart_settings::{ .table = number(doc.val.get("t")), .kind = kind,
+        .labels = number(doc.val.get("l")), .values = values,
+        .title = doc.val.get("title").as_str().unwrap_or("") }
+    ed.set_chart(block, settings@) catch e
+        return refused(e)
+    return result(true, "")
+
+#export
+fn ksmd_web_cell_note(block: Sz, row: Sz, column: Sz, len: Sz): Sz //<
+    //< Gives a cell the note in the `len` bytes written in; resolves it with none
+    if !begin()
+        return full()
+    ed.set_cell_note(block, row, column, text_in(len)) catch e
+        return refused(e)
+    return result(true, "")
+
+#export
+fn ksmd_web_block_note(block: Sz, len: Sz): Sz //<
+    //< Gives a paragraph or a heading the note in the `len` bytes written in; resolves it with none
+    if !begin()
+        return full()
+    ed.set_block_note(block, text_in(len)) catch e
+        return refused(e)
+    return result(true, "")
+
+#export
+fn ksmd_web_fill(block: Sz, top: Sz, left: Sz, height: Sz, width: Sz, bottom: Sz, right: Sz,
+    series: I32): Sz //<
+        //< Copies the `height` by `width` cells at `top`, `left` over the range up to `bottom`,
+        //< `right`, repeating them, as fill down and fill right do; 1 in `series` goes on with a
+        //< series where the cells make one, as the fill handle does
+    if !begin()
+        return full()
+    ed.fill_cells(block, top, left, height, width, bottom, right, series == 1) catch e
         return refused(e)
     return result(true, "")
 
@@ -637,13 +765,15 @@ priv fn result(ok: Bool, why: U8[]): Sz //<
     return out.slice().len
 
 priv fn values_for(from: Sz, to: Sz, scratch: Arena$@): Results //<
-    //< Every table's values when the result shows a table; typing in prose calculates nothing
+    //< Every table's values when the result shows a table or a chart; typing in prose
+    //< calculates nothing
     $shows: = ed.change.tables
     for b in Range(from, to, 1)
-        shows = shows || ed.doc.blocks.get(b).kind == .table
+        kind: = ed.doc.blocks.get(b).kind
+        shows = shows || kind == .table || kind == .chart
     if shows
         return calc.calculate(ed.doc@, ed.today, scratch)
-    return Results::{ .values = List<|calc.Value|>(scratch), .starts = List<|Sz|>(scratch),
+    return Results::{ .values = List<|Value|>(scratch), .starts = List<|Sz|>(scratch),
         .columns = List<|Sz|>(scratch) }
 
 priv fn shows_files(from: Sz, to: Sz): Bool //< whether an include or an image is in the range

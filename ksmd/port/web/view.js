@@ -44,13 +44,10 @@ function ksmdView(ks) {
           node = wrap;
         }
       }
-      if (s.k) {
-        // A span's look: [colour, fill, size in half points].
+      if (s.co) {
         const span = document.createElement("span");
-        span.className = "look";
-        if (s.k[0]) span.style.color = s.k[0];
-        if (s.k[1]) span.style.backgroundColor = s.k[1];
-        if (s.k[2]) span.style.fontSize = `${s.k[2] / 2}pt`;
+        span.className = "coloured";
+        span.style.color = s.co;
         span.appendChild(node);
         node = span;
       }
@@ -78,6 +75,7 @@ function ksmdView(ks) {
       if (k === 0 || it.d > items[k - 1].d) counts[it.d] = 0;
       counts.length = it.d + 1;
       counts[it.d] += 1;
+      if (it.x) return it.x === 2 ? "\u2611" : "\u2610";
       return it.o ? `${counts[it.d]}.` : "•";
     });
   }
@@ -92,17 +90,39 @@ function ksmdView(ks) {
     return el;
   }
 
+  // A block left out of print and PDF is marked; a chart, an image or an include has its toggle
+  // beside its Remove button, and a table has it in its right-click menu.
   function render(b) {
+    const el = shape(b);
+    el.classList.toggle("print-hidden", !!b.iv);
+    const remove = ["g", "i", "n"].includes(b.k) && el.querySelector(".block-remove");
+    if (remove) remove.before(printButton(!!b.iv));
+    return el;
+  }
+
+  function printButton(left) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "block-print";
+    b.textContent = left ? "Put back in print" : "Leave out of print";
+    b.title = left ? "Show this block in print and PDF again" :
+      "Keep this block while editing, and leave it out of print and PDF";
+    return b;
+  }
+
+  function shape(b) {
     switch (b.k) {
       case "p": {
         const el = unit("p", "b u");
         if (b.a) el.style.textAlign = b.a;
+        ks.notes.markBlock(el, b.no);
         segsInto(el, b.s);
         return el;
       }
       case "h": {
         const el = unit(`h${b.n}`, "b u");
         if (b.a) el.style.textAlign = b.a;
+        ks.notes.markBlock(el, b.no);
         segsInto(el, b.s);
         return el;
       }
@@ -119,16 +139,32 @@ function ksmdView(ks) {
         const marks = markers(b.items);
         b.items.forEach((it, k) => {
           const li = itemEl(it.d, it.o === 1, marks[k]);
+          if (it.x) li.dataset.check = String(it.x);
           segsInto(li, it.s);
           el.appendChild(li);
         });
         return el;
       }
+      case "q": {
+        const el = unit("blockquote", "b u");
+        segsInto(el, b.s);
+        return el;
+      }
+      case "d": {
+        const el = unit("div", "b divider");
+        el.contentEditable = "false";
+        el.appendChild(document.createElement("hr"));
+        el.appendChild(removeButton("Remove this divider"));
+        return el;
+      }
       case "t":
         return ks.table.render(b);
+      case "g":
+        return ks.chart.render(b);
       case "i": {
         const el = unit("figure", "b figure");
         el.contentEditable = "false";
+        el.appendChild(removeButton("Remove this image from the document; the image file stays"));
         const place = unit("div", "image");
         place.setAttribute("role", "img");
         place.setAttribute("aria-label", b.alt || b.src);
@@ -167,15 +203,16 @@ function ksmdView(ks) {
     el.dataset.path = b.path;
     el.setAttribute("role", "note");
     const head = unit("div", "include-head");
-    head.textContent = `Included from ${b.path}.`;
+    head.textContent = `Included from ${b.path}.` +
+      (b.to === undefined ? " The included file is edited on its own." : "");
+    head.appendChild(removeButton("Remove this include from the document; the included file stays"));
     el.appendChild(head);
-    if (b.to === undefined) {
-      head.textContent += " The included file is edited on its own.";
-    } else if (b.why !== undefined) {
+    // Opened from a file, the page shows the include's path alone (`b.to` is undefined).
+    if (b.to !== undefined && b.why !== undefined) {
       const why = unit("p", "problem");
       why.textContent = `This include cannot be shown: ${problem(b)}`;
       el.appendChild(why);
-    } else if (b.inside !== undefined) {
+    } else if (b.to !== undefined && b.inside !== undefined) {
       const open = document.createElement("button");
       open.type = "button";
       open.className = "include-open";
@@ -189,6 +226,51 @@ function ksmdView(ks) {
     }
     return el;
   }
+
+  // The button that removes a whole include or image block, which no text selection reaches.
+  function removeButton(title) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "block-remove";
+    b.textContent = "Remove";
+    b.title = title;
+    return b;
+  }
+
+  // A press on a checklist item's box, left of its text, ticks it or takes the tick away.
+  ks.root.addEventListener("mousedown", (e) => {
+    const li = e.target.closest && e.target.closest(".li[data-check]");
+    if (!li || li.closest(".include .inside")) return;
+    const text = parseFloat(getComputedStyle(li).paddingLeft);
+    if (e.clientX - li.getBoundingClientRect().left > text) return;
+    e.preventDefault();
+    const list = li.parentElement;
+    ks.act("ksmd_web_check", blocks().indexOf(list), Array.from(list.children).indexOf(li));
+  });
+
+  // Leave out of print acts on the press, as a chart's Edit does: an open cell closes on the
+  // press, which draws the chart again, so a click would be lost. Enter and Space still click it.
+  function printToggle(e) {
+    const b = e.target.closest && e.target.closest(".block-print");
+    if (!b || b.closest(".include .inside")) return;
+    e.preventDefault();
+    const el = b.closest(".b");
+    const block = blocks().indexOf(el);
+    const on = el.classList.contains("print-hidden") ? 0 : 1;
+    ks.table.take();
+    if (block >= 0) ks.act("ksmd_web_invisible", block, on);
+  }
+  ks.root.addEventListener("mousedown", printToggle, true);
+  ks.root.addEventListener("click", (e) => {
+    if (e.detail === 0) printToggle(e);
+  });
+
+  ks.root.addEventListener("click", (e) => {
+    const b = e.target.closest && e.target.closest(".block-remove");
+    if (!b || b.closest(".include .inside")) return;
+    const block = blocks().indexOf(b.closest(".b"));
+    if (block >= 0) ks.act("ksmd_web_remove_block", block);
+  });
 
   // The page's block elements, in the model's order; the gap element is not a block.
   const blocks = () => Array.from(ks.root.children).filter((e) => !e.classList.contains("gap"));
@@ -338,5 +420,5 @@ function ksmdView(ks) {
   }
 
   ks.view = { apply, showSelection, spotAt, pointIn, unitText, blocks, items, closest, u8len,
-    removeGap };
+    removeGap, removeButton };
 }

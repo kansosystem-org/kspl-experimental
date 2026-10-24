@@ -4,9 +4,9 @@
 
 ## Status
 
-This folder contains the design, native examples, source validation, a reader and writer, and an editing page. Source validation checks the version header, UTF-8, line endings and file size. It preserves byte offsets for diagnostics. The reader models every structure of the design: blocks, inline markup, and table, include and image clauses. The writer saves them in canonical form. A document opens inside a workspace folder, with each included file shown in place, and each source saves alone. Tables calculate, and table edits keep each formula's references on their cells.
+This folder contains the design, native examples, source validation, a reader and writer, and an editing page. Source validation checks the version header, UTF-8, line endings and file size. It preserves byte offsets for diagnostics. The reader models every structure of the design: blocks, inline markup, and table, chart, include and image clauses. The writer saves them in canonical form. A document opens inside a workspace folder, with each included file shown in place, and each source saves alone. Tables calculate, and table edits keep each formula's references on their cells.
 
-The editing page edits one document in a browser: prose, formatting, lists, code and calculating tables, with undo and redo. Its commands stand in a menu bar of drop-down menus and in a ribbon, as in Office. Text and cells take colours, a font size and alignment. A column takes a number format: thousands separators, decimal places, a percent or a currency. A table's rows sort and filter, its columns resize and fit their values, and a right-click opens its menu. A range of cells is chosen with Shift and fills down or right, and a long table keeps its heading in sight. Find and replace reach text and cells, and a contents panel lists the headings. Each edit is a model transaction. Served by the local server on a workspace folder, the page opens and saves files. It shows includes and images in place, notices a change on disk, and holds unsaved edits as drafts. Opened from a file, it edits a source that a host gives it. A `.ksmd` file double-clicked in a file manager opens in the browser, on its workspace.
+The editing page edits one document in a browser: prose, formatting, lists and checklists, quotes, code and calculating tables, with undo and redo. Its commands stand in a ribbon, as in Office, beside a menu bar of File, Edit and View; a table's stand in its right-click menu. Cells take colours, a font size and alignment, text a colour, and paragraphs alignment. A column takes a number format, a list of choices and a colour rule for its values. A table's rows sort, filter and group, its columns resize and fit their values, and a right-click opens its menu. A range of cells is chosen with Shift or a drag, and fills down or right. The fill handle goes on with a series, and a long table keeps its heading in sight. Find and replace reach text and cells, and a contents panel lists the headings. AutoSum totals a column in one press. File, Print saves a PDF too, without the editing marks, and a table that only feeds a chart can be left out of it. The status line shows the sum of the chosen cells, or the word count, and the page turns dark with the system. Each edit is a model transaction. Served by the local server on a workspace folder, the page opens and saves files. It shows includes and images in place, takes a pasted or dropped image, notices a change on disk, and holds unsaved edits as drafts. Opened from a file, it edits a source that a host gives it. A `.ksmd` file double-clicked in a file manager opens in the browser, on its workspace.
 
 Markdown supplies familiar notation, but compatibility with `.md` is not a requirement. Presentations are outside ksmd's scope.
 
@@ -24,9 +24,9 @@ Without the launcher, start the local server yourself. The folder you name is th
 1. From the repository root, run `make ksmd-web kssrv`.
 2. Run `./out/kssrv.exe 8090 <folder> --local --page=out/ksmd/web/ksmd.html`, with your folder in place of `<folder>`.
 3. Open the whole URL it prints, `http://127.0.0.1:8090/#t=…`, in a browser. The part after `#` is the token. Without it, the page reads no file.
-4. Type a document's path from the folder, such as `notes.ksmd`, into the Document field, and press Open.
+4. Choose File, Open (Ctrl+O), and choose a document in the dialog.
 
-To open a document at once, put `?doc=notes.ksmd` before the `#` in the URL. Ctrl+S saves. To start a new document, type it, type a path where no file stands, and press Save. An include's Edit button opens the included file in a tab of its own.
+To open a document at once, put `?doc=notes.ksmd` before the `#` in the URL. Ctrl+S saves. Save as (Ctrl+Shift+S) opens a dialog that lists the workspace's folders, to choose where the document goes and its name. Open uses the same dialog. To start a new document, type it and press Ctrl+S: a document with no file yet asks where it goes. An include's Edit button opens the included file in a tab of its own.
 
 Use the same port each time. The browser keeps drafts per address, so on another port the page finds none of them. Ctrl+C in the server's terminal stops it, and each start prints a new token.
 
@@ -49,36 +49,72 @@ The same run then serves the page with `kssrv --local` on a scratch workspace. I
 
 ## Folder map
 
+**The code is split into folders by what each one knows.** A folder imports only the folders below it, and `make test-conventions` refuses an import that goes up. The diagram lists them from the bottom; each arrow points at what a folder builds on.
+
+```mermaid
+flowchart BT
+    model["model<br/>the document"] --> base["base<br/>source bytes, scans, dates"]
+    calc["calc<br/>formulas and values"] --> model
+    syntax["syntax<br/>reading and writing the source"] --> calc
+    files["files<br/>paths, includes, images"] --> syntax
+    edit["edit<br/>the editor and undo"] --> syntax
+    port["port/web<br/>the page in a browser"] --> files
+    port --> edit
+```
+
+| Folder | What it holds | What it knows |
+| :-- | :-- | :-- |
+| `base/` | Validated source bytes and their locations, the small scans the readers share, keys from a document, dates, and `name=value` attributes | nothing else in ksmd |
+| `model/` | The document: blocks, inline nodes, tables, and what a column or a cell carries (a look, a format, a colour rule, choices, groups) | `base` |
+| `calc/` | A formula, the values it calculates, and the calculation of every table | `base` `model` |
+| `syntax/` | The reader and the writer of the `.ksmd` source, clauses and inline markup among them | the three above |
+| `files/` | How a path leads to a file, the workspace on disk, what a page fetched, the assembled view of includes, and image headers | the four above |
+| `edit/` | The editor: table edits, styled text, units of blocks, undo and redo, and every action | the four below `files/`; never `files/` |
+| `port/web/` | The editing page: the wasm bridge and the view, and the page's scripts and style | all of the above |
+| `tests/` | The tests of the package's inside | all of the above |
+
+**`files/` and `edit/` stand side by side.** The editor changes one source and never reads a file, so it does not import `files/`; the page joins the two. Under one layer, a file may import any file of its own folder.
+
 | File | Purpose |
 | :-- | :-- |
-| [ksmd/docs/DESIGN-ksmd.md](docs/DESIGN-ksmd.md) | Document syntax, model, editor, editing page, file lifecycle and limits |
-| [source.kspl](source.kspl) | Borrowed source views and diagnostic locations |
-| [model.kspl](model.kspl) | The blocks, inline nodes, tables and images a document holds, and the identities of table rows and columns |
-| [marker.kspl](marker.kspl) | Which line starts a block, shared by the reader and the writer |
-| [reader.kspl](reader.kspl) | Reads paragraphs, headings, code fences and lists into the model |
-| [inline.kspl](inline.kspl) | Reads the inline markup of a paragraph, a heading or a list item |
-| [clause.kspl](clause.kspl) | Reads a table, an include or an image clause |
-| [attribute.kspl](attribute.kspl) | Reads `name=value` pairs: a clause's, and a look's in braces |
-| [look.kspl](look.kspl) | A look: colours, font size and alignment, read from braces and written back |
-| [format.kspl](format.kspl) | A column's number format: read from `formats`, written back, and the text it shows for a number |
-| [formula.kspl](formula.kspl) | A formula's tokens, how its references attach to rows and columns, and how it is written back |
-| [edit.kspl](edit.kspl) | Inserts, removes and moves rows and columns, sets and copies cells, and adds, removes and renames tables |
-| [calc.kspl](calc.kspl) | Calculates every table cell, apart from the document |
-| [writer.kspl](writer.kspl) | Saves the model as canonical source |
-| [styled.kspl](styled.kspl) | Styled text: a block's text as segments with marks, and the inline nodes built from them |
-| [region.kspl](region.kspl) | Blocks taken apart into units of text, and settled into blocks again, checked by reading them back |
-| [history.kspl](history.kspl) | Undo and redo: each action's changes, kept to swap back |
-| [editor.kspl](editor.kspl) | The editor: the selection, and every action on prose as one transaction |
-| [editor_tables.kspl](editor_tables.kspl) | The editor's actions on tables: rows, columns, cells, looks, sorting, pasting, filling |
-| [editor_replace.kspl](editor_replace.kspl) | The editor's replace action: text found in prose and cells, replaced as one step |
+| [ksmd/docs/DESIGN-ksmd.md](docs/DESIGN-ksmd.md) | Document syntax, model, editor, file lifecycle and limits |
+| [ksmd/docs/DESIGN-page.md](docs/DESIGN-page.md) | The editing page: input, menus, tables on the page and its tools |
+| [examples/](examples/) | Prose, calculating tables, includes and literal syntax |
+| [base/source.kspl](base/source.kspl) | Borrowed source views and diagnostic locations |
+| [base/marker.kspl](base/marker.kspl) | Which line starts a block, shared by the reader and the writer |
+| [base/attribute.kspl](base/attribute.kspl) | Reads `name=value` pairs: a clause's, and a look's in braces |
+| [base/dates.kspl](base/dates.kspl) | Dates: a day from and to `2026-10-23`, and the calendar's arithmetic |
+| [base/keyed.kspl](base/keyed.kspl) | Values by a text key from a document, in a balanced tree instead of a hash map |
+| [model/model.kspl](model/model.kspl) | The blocks, inline nodes, tables and images a document holds, and the identities of table rows and columns |
+| [model/look.kspl](model/look.kspl) | A look: a cell's colours, font size and alignment, or a paragraph's alignment, and a note, read from braces and written back |
+| [model/choice.kspl](model/choice.kspl) | A column's list of choices: read from `choices`, written back, and the choice a typed value is |
+| [model/format.kspl](model/format.kspl) | A column's number format: read from `formats`, written back, and the text it shows for a number |
+| [model/rule.kspl](model/rule.kspl) | A column's colour rule: read from `rules`, written back |
+| [model/group.kspl](model/group.kspl) | A table's groups of rows: read from `groups`, written back, checked, and moved by a row edit |
+| [calc/formula.kspl](calc/formula.kspl) | A formula's tokens, how its references attach to rows and columns, and how it is written back |
+| [calc/value.kspl](calc/value.kspl) | A value a formula calculates, and the arithmetic and comparisons between values |
+| [calc/calc.kspl](calc/calc.kspl) | Calculates every table cell, apart from the document |
+| [syntax/reader.kspl](syntax/reader.kspl) | Reads paragraphs, headings, code fences and lists into the model |
+| [syntax/inline.kspl](syntax/inline.kspl) | Reads the inline markup of a paragraph, a heading or a list item |
+| [syntax/clause.kspl](syntax/clause.kspl) | Reads a table, an include or an image clause |
+| [syntax/chart.kspl](syntax/chart.kspl) | A chart: its clause's names, the table and columns they name, and the clause written back |
+| [syntax/writer.kspl](syntax/writer.kspl) | Saves the model as canonical source |
+| [files/files.kspl](files/files.kspl) | Which paths are refused by their text alone, and `Files`, where a document's files are read from |
+| [files/workspace.kspl](files/workspace.kspl) | The workspace on disk: the refusal of links, and reading and saving one source |
+| [files/fetched.kspl](files/fetched.kspl) | The files a page fetched through the local server, and the ones it still lacks |
+| [files/assemble.kspl](files/assemble.kspl) | The assembled view: each included file in place, with where each block came from |
+| [files/image.kspl](files/image.kspl) | An image's format and size, read from its header before anything decodes it |
+| [edit/series.kspl](edit/series.kspl) | How a line of cells goes on when the fill handle drags it: numbers by their step, text ending in a number |
+| [edit/edit.kspl](edit/edit.kspl) | Inserts, removes and moves rows and columns, sets and copies cells, and adds, removes and renames tables |
+| [edit/styled.kspl](edit/styled.kspl) | Styled text: a block's text as segments with marks, and the inline nodes built from them |
+| [edit/region.kspl](edit/region.kspl) | Blocks taken apart into units of text, and settled into blocks again, checked by reading them back |
+| [edit/history.kspl](edit/history.kspl) | Undo and redo: each action's changes, kept to swap back |
+| [edit/editor.kspl](edit/editor.kspl) | The editor: the selection, and every action on prose as one transaction |
+| [edit/editor_charts.kspl](edit/editor_charts.kspl) | The editor's actions on charts: a new chart of a table, and new settings |
+| [edit/editor_tables.kspl](edit/editor_tables.kspl) | The editor's actions on tables: rows, columns, cells, looks, sorting, pasting, filling |
+| [edit/editor_replace.kspl](edit/editor_replace.kspl) | The editor's replace action: text found in prose and cells, replaced as one step |
 | [port/desktop/](port/desktop/) | The `.ksmd` file icon, a white page with the KSPL K: `ksmd.svg`, the `ksmd.ico` rendered from it, and `ksmd.rc`, which puts it into a Windows program |
-| [port/web/](port/web/) | The editing page: the wasm bridge (`bridge.kspl`, `view.kspl`), and its scripts and style. `range.js` holds ranges of cells, `find.js` find and replace, and `contents.js` the contents. `file.js`, `local.js` and `keep.js` hold files and drafts. `bundle.kspl` makes the page one file |
-| [files.kspl](files.kspl) | Which paths are refused by their text alone, and `Files`, where a document's files are read from |
-| [workspace.kspl](workspace.kspl) | The workspace on disk: the refusal of links, and reading and saving one source |
-| [fetched.kspl](fetched.kspl) | The files a page fetched through the local server, and the ones it still lacks |
-| [keyed.kspl](keyed.kspl) | Values by a text key from a document, in a balanced tree instead of a hash map |
-| [assemble.kspl](assemble.kspl) | The assembled view: each included file in place, with where each block came from |
-| [image.kspl](image.kspl) | An image's format and size, read from its header before anything decodes it |
+| [port/web/](port/web/) | The editing page: the wasm bridge (`bridge.kspl`, `view.kspl`), and its scripts and style. `range.js` holds ranges of cells, `outline.js` groups of rows, `choices.js` choice lists, `rules.js` colour rules, `chart.js` charts, `notes.js` notes, `find.js` find and replace, and `contents.js` the contents. `file.js`, `local.js` and `keep.js` hold files and drafts, and `browse.js` the Save As and Open dialog. `bundle.kspl` makes the page one file |
 | [tests/main.kspl](tests/main.kspl) | Source validation and boundary tests |
 | [tests/document.kspl](tests/document.kspl) | Reader and writer tests: expected models, canonical saves, refusals |
 | [tests/include.kspl](tests/include.kspl) | Include, path, limit and save tests, each in a scratch folder it removes, and the rounds a page fetches in |
@@ -88,11 +124,16 @@ The same run then serves the page with `kssrv --local` on a scratch workspace. I
 | [tests/prose.kspl](tests/prose.kspl) | Editing actions on prose: typing, deleting, Enter, kinds, marks, undo and refusals |
 | [tests/tables.kspl](tests/tables.kspl) | Editing actions on tables: adding, removing, rows and columns, cells and names, filling, and their undo |
 | [tests/replacing.kspl](tests/replacing.kspl) | The replace action: text in prose and cells as one step, marks kept, and its refusals |
+| [tests/blocks.kspl](tests/blocks.kspl) | Checklists, quotes and dividers: reading, saving, ticking a box, and making each |
+| [tests/charts.kspl](tests/charts.kspl) | Charts: reading, refusals, following a renamed column, and inserting and setting one |
+| [tests/choices.kspl](tests/choices.kspl) | Choice lists: reading, what a typed value becomes, the refusals, and their undo |
+| [tests/rules.kspl](tests/rules.kspl) | Colour rules: reading, refusals, setting one and its undo |
+| [tests/notes.kspl](tests/notes.kspl) | Notes on cells and paragraphs: reading, refusals, adding, resolving and their undo |
+| [tests/groups.kspl](tests/groups.kspl) | Groups of rows: reading, refusals, edits and their undo, and what a row edit or a sort does to them |
 | [tests/format.kspl](tests/format.kspl) | Number formats: the text each kind shows, rounding and edges, reading, refusals, and setting one with its undo |
 | [tests/browser/](tests/browser/) | The page in a headless Chromium, driven over the DevTools protocol, and served by the local server (`served.mjs`). `tools.mjs` checks the tools over a whole document or a range of cells. `measure.mjs` times the page on the documents `tests/measure.kspl` writes |
 | [tests/measure.kspl](tests/measure.kspl) | Writes a typical, a medium and a large document, and times their view, values, an edit and a save outside the browser |
-| [examples/](examples/) | Prose, calculating tables, includes and literal syntax |
 
 ## Further reading
 
-Read the [design](docs/DESIGN-ksmd.md) for the document language, the model, the editing page, the file lifecycle, the limits and what the editor does not do yet. The repository's [development principles](../docs/DESIGN-principles.md) explain how to weigh reuse and complexity.
+Read the [design](docs/DESIGN-ksmd.md) for the document language, the model, the file lifecycle, the limits and what the editor does not do yet. The [page's design](docs/DESIGN-page.md) covers the editing page. The repository's [development principles](../docs/DESIGN-principles.md) explain how to weigh reuse and complexity.

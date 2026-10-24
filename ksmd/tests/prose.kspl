@@ -1,14 +1,13 @@
 //< Editor actions on prose: what each saves, and what undo and redo give back
 //< Each check opens a source, sets the selection as model spots, runs actions, and compares the
 //< canonical source with the expected one. That source must read and save again unchanged.
-import "ksmd/editor" { Editor, Refused }
-import "ksmd/editor"
-import "ksmd/look" { Look_part }
-import "ksmd/reader"
-import "ksmd/region" { Spot, Style, gap_spot, paragraph_style, text_spot }
-import "ksmd/source" { Source }
-import "ksmd/styled" { Mark }
-import "ksmd/writer"
+import "ksmd/base/source" { Source }
+import "ksmd/edit/editor" { Editor, Refused }
+import "ksmd/edit/editor"
+import "ksmd/edit/region" { Spot, Style, gap_spot, paragraph_style, text_spot }
+import "ksmd/edit/styled" { Mark }
+import "ksmd/syntax/reader"
+import "ksmd/syntax/writer"
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
 import "std/verdict"
@@ -23,6 +22,7 @@ fn run()
     kinds()
     marks()
     looks()
+    removing_blocks()
     undoing()
     refusals()
 
@@ -213,41 +213,9 @@ priv fn marks()
     marked(ed@, .link, "")
     saves("an empty destination removes the link", ed@, "%ksmd 1\n\n`ab`c**de**f\n")
     refused_link(ed@)
-    $typing: = opened("%ksmd 1\n\nab\n", arena)
-    at(typing@, 0, 0, 1)
-    marked(typing@, .strong, "")
-    typed(typing@, "X")
-    saves("a mark with nothing selected applies to the text typed next", typing@,
-        "%ksmd 1\n\na**X**b\n")
-    typed(typing@, "Y")
-    saves("and typing goes on in it", typing@, "%ksmd 1\n\na**XY**b\n")
 
-priv fn looks()
+priv fn looks() //< alignment and colour, the looks text takes
     defer arena: = Arena(64 * 1024)
-    $ed: = opened("%ksmd 1\n\nabcdef\n", arena)
-    span(ed@, text_spot(0, 0, 1), text_spot(0, 0, 4))
-    looked(ed@, .color, "#C00000")
-    saves("a colour over a range is a span with a look", ed@,
-        "%ksmd 1\n\na[bcd]{color=\"#c00000\"}ef\n")
-    span(ed@, text_spot(0, 0, 3), text_spot(0, 0, 5))
-    looked(ed@, .size, "14")
-    saves("a size over a range that overlaps it splits the spans", ed@,
-        "%ksmd 1\n\na[bc]{color=\"#c00000\"}[d]{color=\"#c00000\" size=14}[e]{size=14}f\n")
-    span(ed@, text_spot(0, 0, 0), text_spot(0, 0, 6))
-    looked(ed@, .color, "")
-    looked(ed@, .size, "")
-    saves("clearing each part takes the spans away", ed@, "%ksmd 1\n\nabcdef\n")
-    span(ed@, text_spot(0, 0, 0), text_spot(0, 0, 3))
-    marked(ed@, .link, "https://kanso.example/a")
-    span(ed@, text_spot(0, 0, 1), text_spot(0, 0, 2))
-    looked(ed@, .fill, "#fff2cc")
-    saves("a look inside a link stands on the link's own brackets", ed@,
-        "%ksmd \
-            1\n\n[a](https://kanso.example/a)[b](https://kanso.example/a){fill=\"#fff2cc\"}[c](https://kanso.example/a)def\n")
-    $outside: = false
-    ed.set_text_look(.align, "center") catch
-        outside = true
-    verdict.check("text takes no alignment of its own", outside, "")
     $aligned: = opened("%ksmd 1\n\nOne\n\n# Two\n\n- three\n", arena)
     span(aligned@, text_spot(0, 0, 0), text_spot(2, 0, 2))
     aligned.set_align("center") catch e
@@ -265,16 +233,45 @@ priv fn looks()
     saves("a heading made another level keeps its alignment", aligned@,
         "%ksmd 1\n\n{align=\"center\"}\nOne\n\n{align=\"center\"}\nNext\n\n{align=\"center\"}\n## \
             Two\n\n- three\n")
-    $typing: = opened("%ksmd 1\n\nab\n", arena)
-    at(typing@, 0, 0, 1)
-    looked(typing@, .color, "#0000ff")
-    typed(typing@, "X")
-    saves("a look with nothing selected applies to the text typed next", typing@,
-        "%ksmd 1\n\na[X]{color=\"#0000ff\"}b\n")
+    $coloured: = opened("%ksmd 1\n\nStop **now** please\n", arena)
+    span(coloured@, text_spot(0, 0, 0), text_spot(0, 0, 8))
+    coloured.set_text_color("#C00000") catch e
+        verdict.check("colouring", false, e.message())
+    saves("a colour over a range is text in brackets, with marks kept inside", coloured@,
+        "%ksmd 1\n\n[Stop **now**]{color=\"#c00000\"} please\n")
+    span(coloured@, text_spot(0, 0, 5), text_spot(0, 0, 15))
+    coloured.set_text_color("") catch e
+        verdict.check("taking the colour away", false, e.message())
+    saves("an empty colour takes it away over the range only", coloured@,
+        "%ksmd 1\n\n[Stop ]{color=\"#c00000\"}**now** please\n")
+    coloured.undo()
+    coloured.undo()
+    saves("undo puts the text back as it was", coloured@, "%ksmd 1\n\nStop **now** please\n")
+    $refused: = false
+    coloured.set_text_color("red") catch
+        refused = true
+    verdict.check("a colour that is not #rrggbb is refused", refused, "")
 
-priv fn looked(ed: Editor$@, part: Look_part, value: U8[])
-    ed.set_text_look(part, value) catch e
-        verdict.check("a look", false, e.message())
+priv fn removing_blocks()
+    defer arena: = Arena(64 * 1024)
+    before: =
+        "%ksmd 1\n\nOne\n\n:::include path=\"notes.ksmd\"\n:::\n\n:::image src=\"a.png\" \
+            alt=\"\"\n:::\n\nTwo\n"
+    $ed: = opened(before, arena)
+    ed.remove_block(1) catch e
+        verdict.check("removing an include", false, e.message())
+    saves("an include block is removed, without a text editor", ed@,
+        "%ksmd 1\n\nOne\n\n:::image src=\"a.png\" alt=\"\"\n:::\n\nTwo\n")
+    ed.remove_block(1) catch e
+        verdict.check("removing an image", false, e.message())
+    saves("and an image block", ed@, "%ksmd 1\n\nOne\n\nTwo\n")
+    ed.undo()
+    ed.undo()
+    saves("undo brings both back", ed@, before)
+    $refused_text: = false
+    ed.remove_block(0) catch
+        refused_text = true
+    verdict.check("a paragraph is not removed as a whole block", refused_text, "")
 
 priv fn undoing()
     defer arena: = Arena(64 * 1024)

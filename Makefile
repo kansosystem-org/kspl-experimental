@@ -101,6 +101,12 @@ HOST_CORES = $(shell (nproc || sysctl -n hw.ncpu || echo 4) 2>/dev/null)
 
 # The gates' Python writes UTF-8 even into a pipe, where it would fall back to the ANSI code page.
 export PYTHONUTF8 := 1
+# MSYS2's `ln -s` copies its target where Windows makes no link, and still exits 0, so a test that
+# asks for a link finds a stray copy (a folder the listing then names). `nativestrict` makes it fail
+# instead, so the test skips; where Windows allows links (Developer Mode), it makes a real one.
+ifeq ($(OS),Windows_NT)
+export MSYS := $(strip $(MSYS) winsymlinks:nativestrict)
+endif
 
 # --- The switches a person sets: `LLVM=1`, `STATS=1`, `BLAS=1` --- **Each reads 0 or 1 alone**:
 # any other value would build the default without a word (Principle 5). What they decide below

@@ -140,6 +140,13 @@ function ksmdStart(root, bar, status, wasmBytes) {
     }
     ksmdView(ks);
     ksmdTable(ks);
+    ksmdOutline(ks);
+    ksmdChoices(ks);
+    ksmdRules(ks);
+    ksmdChart(ks);
+    ksmdNotes(ks);
+    ksmdFigures(ks);
+    ksmdAutosum(ks);
     ksmdRange(ks);
     ksmdFilter(ks);
     ksmdInput(ks);
@@ -217,7 +224,8 @@ function ksmdStart(root, bar, status, wasmBytes) {
 
 // The menus' and the keyboard's commands, by name.
 function ksmdCommands(ks) {
-  const kinds = { p: [0, 0, 0], c: [2, 0, 0], bullets: [3, 0, 0], numbers: [3, 0, 1] };
+  const kinds = { p: [0, 0, 0], c: [2, 0, 0], bullets: [3, 0, 0], numbers: [3, 0, 1], checks: [3, 0, 2],
+    quote: [4, 0, 0] };
   for (let n = 1; n <= 6; n++) kinds[`h${n}`] = [1, n, 0];
   const marks = { emphasis: 0, strong: 1, code: 2 };
   const rows = { "row-above": [0, 0], "row-below": [0, 1], "row-remove": [1, 0] };
@@ -226,16 +234,21 @@ function ksmdCommands(ks) {
   const aligns = { "align-left": "left", "align-center": "center", "align-right": "right",
     "align-none": "" };
   const onTable = new Set([...Object.keys(rows), ...Object.keys(columns), "column-fit", "sort-up",
-    "sort-down", "filter-column", "filter-value", "filter-clear", "table-rename", "table-remove",
-    ...TABLE_GROUPS.find(([group]) => group === "Number format")[1].map(([cmd]) => cmd),
-    "fill-down", "fill-right"]);
+    "sort-down", "filter-column", "filter-value", "filter-clear", "table-rename", "table-csv", "table-chart", "table-print", "table-remove",
+    ...["Number format", "AutoSum"].flatMap((name) =>
+      TABLE_GROUPS.find(([group]) => group === name)[1].map(([cmd]) => cmd)),
+    "fill-down", "fill-right", "column-choices", "column-rule", "group-rows", "ungroup-rows", "group-hide", "group-show"]);
 
   ks.command = (name) => {
     ks.flush();
     ks.table.take();
+    if (name.startsWith("file-")) return ks.fileCommand ? ks.fileCommand(name) : null;
     if (name === "undo") return ks.act("ksmd_web_undo");
     if (name === "find" || name === "replace") return ks.find.open(name === "replace");
     if (name === "contents") return ks.contents.toggle();
+    if (name === "print") return window.print();
+    if (name === "note" || name === "note-resolve") return ks.notes.ask(name === "note-resolve");
+    if (name === "width-full" || name === "width-reading") return ks.setWidth(name === "width-reading");
     if (name === "redo") return ks.act("ksmd_web_redo");
     if (onTable.has(name)) return tableCommand(name);
     if (name in aligns) return ks.applyLook("align", aligns[name]);
@@ -244,6 +257,7 @@ function ksmdCommands(ks) {
     if (name in kinds) return ks.act("ksmd_web_kind", ...kinds[name]);
     if (name in marks) return ks.act("ksmd_web_mark", marks[name], 0);
     if (name === "indent" || name === "outdent") return ks.act("ksmd_web_indent", name === "indent" ? 1 : 0);
+    if (name === "divider") return ks.act("ksmd_web_divider");
     if (name === "date" || name === "time") return ks.act("ksmd_web_type", ks.put(ks.now(name === "time")), 0);
     if (name === "link") {
       const to = window.prompt("Link to an https:, http: or mailto: address, or a #place", "https://");
@@ -258,8 +272,12 @@ function ksmdCommands(ks) {
     return null;
   };
 
+  // An open cell's edit is taken before the browser prints, also when Ctrl+P prints.
+  window.addEventListener("beforeprint", () => ks.table.take());
+
   // Sets one part of a look, or clears it with an empty value: on the chosen cells where a cell
-  // was worked in last, or else on the selected text and, for alignment, its paragraphs.
+  // was worked in last, or else on the selected text: its colour, or its paragraphs' alignment.
+  // A fill and a size belong to cells alone, so in text Clear clears the alignment.
   const parts = { color: 0, fill: 1, size: 2, align: 3, all: 4 };
   ks.applyLook = (part, value) => {
     ks.flush();
@@ -269,9 +287,31 @@ function ksmdCommands(ks) {
       return ks.act("ksmd_web_cell_look", r.block, r.r1, r.c1, r.r2, r.c2, parts[part], ks.put(value));
     }
     ks.sync();
-    if (part === "align") return ks.act("ksmd_web_align", ks.put(value));
-    return ks.act("ksmd_web_text_look", parts[part], ks.put(value));
+    if (part === "align" || part === "all") return ks.act("ksmd_web_align", ks.put(part === "all" ? "" : value));
+    if (part === "color") return ks.act("ksmd_web_text_color", ks.put(value));
+    ks.say("Fill colours and font sizes apply to table cells. Choose cells first.");
+    return null;
   };
+
+  // The page's width: the document fills the window, or keeps lines short for reading. The choice
+  // is this browser's own, so it is kept there and not in the document.
+  ks.setWidth = (reading) => {
+    document.body.classList.toggle("reading", reading);
+    for (const el of document.querySelectorAll('[data-cmd="width-full"], [data-cmd="width-reading"]')) {
+      el.setAttribute("aria-checked", String((el.dataset.cmd === "width-reading") === reading));
+    }
+    try {
+      localStorage.setItem("ksmd.width", reading ? "reading" : "full");
+    } catch (_) { /* a browser that keeps nothing shows the full width next time */ }
+    return null;
+  };
+  try {
+    ks.setWidth(localStorage.getItem("ksmd.width") === "reading");
+  } catch (_) {
+    ks.setWidth(false);
+  }
+
+  const leftOut = (block) => ks.view.blocks()[block].classList.contains("print-hidden");
 
   // The chosen cell, while its table still stands where it was chosen.
   const chosen = () => {
@@ -288,6 +328,9 @@ function ksmdCommands(ks) {
       if (!onTable.has(name)) continue;
       el.disabled = !c || (name === "filter-clear" && !ks.filter.on(c.block)) ||
         ((name === "filter-value" || name.startsWith("row-")) && c.row < 0);
+      if (name === "table-print") {
+        el.textContent = c && leftOut(c.block) ? "Put back in print" : "Leave out of print";
+      }
     }
   };
 
@@ -304,8 +347,18 @@ function ksmdCommands(ks) {
         return ks.act("ksmd_web_remove_table", c.block);
       case "table-rename":
         return ks.table.rename(c.block);
+      case "table-csv":
+        return ks.table.csv(c.block);
+      case "table-print":
+        return ks.act("ksmd_web_invisible", c.block, leftOut(c.block) ? 0 : 1);
+      case "table-chart":
+        return ks.act("ksmd_web_insert_chart", c.block);
       case "column-fit":
         return ks.table.fit(c.block, c.column);
+      case "column-choices":
+        return ks.choices.ask(c.block, c.column);
+      case "column-rule":
+        return ks.rules.ask(c.block, c.column);
       case "sort-up":
       case "sort-down":
         return ks.act("ksmd_web_sort", c.block, c.column, name === "sort-down" ? 1 : 0);
@@ -318,8 +371,14 @@ function ksmdCommands(ks) {
       case "fill-down":
       case "fill-right":
         return ks.range.fill(name === "fill-down");
+      case "group-rows":
+      case "ungroup-rows":
+      case "group-hide":
+      case "group-show":
+        return ks.outline.act(name);
       default:
         if (name.startsWith("format-")) return ks.table.format(c.block, name);
+        if (name.startsWith("autosum-")) return ks.autosum.run(name, c);
         break;
     }
     if (name in rows) {

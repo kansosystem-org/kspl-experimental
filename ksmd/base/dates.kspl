@@ -1,0 +1,82 @@
+//< Dates: a day as a count of days from 1970-01-01, read from and written as `2026-10-23`
+//< The calendar is the Gregorian one, for the years 1 to 9999, as ISO 8601 writes them. The
+//< arithmetic follows the civil-from-days method, so no table of months is kept.
+import "std/chars"
+import "std/str" { Str_builder }
+import "std/strnum"
+
+priv const FIRST: I64 = -719162I64 //< 0001-01-01
+priv const LAST: I64 = 2932896I64 //< 9999-12-31
+
+struct Ymd //< a day as its year, month and day of the month
+    year: I64
+    month: I64
+    day: I64
+
+fn day_of(year: I64, month: I64, day: I64): I64? //< the day a date names, or none if it is none
+    if year < 1I64 || year > 9999I64 || month < 1I64 || month > 12I64 || day < 1I64 ||
+        day > days_in(year, month)
+        return .none
+    y: = year - 1I64 if month <= 2I64 else year
+    era: = y / 400I64
+    yoe: = y - era * 400I64
+    m: = month - 3I64 if month > 2I64 else month + 9I64
+    doy: = (153I64 * m + 2I64) / 5I64 + day - 1I64
+    doe: = yoe * 365I64 + yoe / 4I64 - yoe / 100I64 + doy
+    return .some(era * 146097I64 + doe - 719468I64)
+
+fn ymd_of(days: I64): Ymd //< the year, month and day of a day; the caller keeps it in range
+    z: = days + 719468I64
+    era: = z / 146097I64
+    doe: = z - era * 146097I64
+    yoe: = (doe - doe / 1460I64 + doe / 36524I64 - doe / 146096I64) / 365I64
+    doy: = doe - (365I64 * yoe + yoe / 4I64 - yoe / 100I64)
+    mp: = (5I64 * doy + 2I64) / 153I64
+    d: = doy - (153I64 * mp + 2I64) / 5I64 + 1I64
+    m: = mp + 3I64 if mp < 10I64 else mp - 9I64
+    y: = yoe + era * 400I64 + (1I64 if m <= 2I64 else 0I64)
+    return Ymd::{ .year = y, .month = m, .day = d }
+
+fn in_range(days: I64): Bool //< whether a day falls in the years 1 to 9999
+    return days >= FIRST && days <= LAST
+
+fn date_of(text: U8[]): I64? //< the day `2026-10-23` names: four, two and two digits, and valid
+    if text.len != 10 || text[4] != '-' || text[7] != '-'
+        return .none
+    $parts: I64[3] = ::{}
+    $at: Sz = 0
+    for k in Range.asc(3)
+        width: = 4 if k == 0 else 2
+        n: = text.sub(at, width).to_count(9999) catch
+            return .none
+        parts[k] = n
+        at += width + 1
+    return day_of(parts[0], parts[1], parts[2])
+
+fn is_date(text: U8[]): Bool //< whether text is a date as a cell writes one
+    return date_of(text).is_some()
+
+fn write_date(days: I64, out: Str_builder$@) //< `2026-10-23`
+    d: = ymd_of(days)
+    digits(d.year, 4, out)
+    out.c('-')
+    digits(d.month, 2, out)
+    out.c('-')
+    digits(d.day, 2, out)
+
+priv fn digits(n: I64, width: Sz, out: Str_builder$@) //< a number with leading zeros
+    $buf: U8[4] = ::{}
+    $v: = n
+    for i in Range.asc(width)
+        buf[width - 1 - i] = U8::(v % 10I64) + '0'
+        v = v / 10I64
+    for i in Range.asc(width)
+        out.c(buf[i])
+
+priv fn days_in(year: I64, month: I64): I64 //< how many days a month of a year holds
+    if month == 2I64
+        leap: = year % 4I64 == 0I64 && (year % 100I64 != 0I64 || year % 400I64 == 0I64)
+        return 29I64 if leap else 28I64
+    if month == 4I64 || month == 6I64 || month == 9I64 || month == 11I64
+        return 30I64
+    return 31I64

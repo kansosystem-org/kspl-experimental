@@ -1,0 +1,159 @@
+//< A table's groups of rows, which show and hide together, as the `groups` attribute saves them
+//< A group names its first and last data row by place, not by identity. Like a column's width, it
+//< is part of the table's layout, so a sort or a moved row leaves it where it stands. A row
+//< inserted inside a group joins it; a group whose rows are all removed goes.
+//< Groups nest: one holds another whole, or the two share no row. Two groups that stand side by
+//< side stay two groups.
+import "ksmd/model/model" { Group, MAX_DEPTH, Table }
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/strnum"
+
+enum Group_fault //< why a list of groups cannot be saved
+    not_rows //< an entry is not `rows N`, `rows N-M` or either with ` closed`, or names no data row
+    out_of_order //< the entries are not from the top, an outer group before the groups it holds
+    crosses //< two groups share some rows but not all of the smaller one's
+    twice //< two groups hold the same rows
+    too_deep //< a row stands in more than `MAX_DEPTH` groups
+
+fn fault_of(groups: List<|Group|>@): Group_fault? //<
+    //< What is wrong with groups in the writer's order, or none
+    defer scratch: = Arena(1024)
+    $open: = List<|Group|>(scratch)
+    for g in groups
+        for open.len > 0 && open[open.len - 1].last < g.first
+            open.remove_at(open.len - 1)
+        if open.len > 0
+            top: = open[open.len - 1]
+            if top.first == g.first && top.last == g.last
+                return .some(.twice)
+            if g.last > top.last
+                return .some(.crosses)
+        open.push(g)
+        if open.len > MAX_DEPTH
+            return .some(.too_deep)
+    return .none
+
+fn comes_first(a: Group, b: Group): Bool //<
+    //< Whether `a` stands before `b` in the writer's order: from the top, an outer group first
+    return a.first < b.first || a.first == b.first && a.last > b.last
+
+fn order(groups: List<|Group|>$@) //< puts the groups in the writer's order
+    for i in Range(1, groups.len, 1)
+        g: = groups[i]
+        $j: = i
+        for j > 0 && comes_first(g, groups[j - 1])
+            groups[j] = groups[j - 1]
+            j -= 1
+        groups[j] = g
+
+fn depths(groups: List<|Group|>@, out: List<|Sz|>$@) //<
+    //< How many groups hold each group, in the writer's order: 0 for one that no group holds
+    defer scratch: = Arena(1024)
+    $open: = List<|Group|>(scratch)
+    for g in groups
+        for open.len > 0 && open[open.len - 1].last < g.first
+            open.remove_at(open.len - 1)
+        out.push(open.len)
+        open.push(g)
+
+fn innermost(groups: List<|Group|>@, first: Sz, last: Sz): Sz? //<
+    //< The smallest group that holds the rows from `first` to `last`, by its place in the list
+    $found: Sz? = .none
+    for i in Range.asc(groups.len)
+        g: = groups[i]
+        if g.first > first || g.last < last
+            continue
+        if f: = found
+            if g.last - g.first >= groups[f].last - groups[f].first
+                continue
+        found = .some(i)
+    return found
+
+fn after_insert(t: Table$@, at: Sz) //< follows a data row inserted before the row at `at`
+    for i in Range.asc(t.groups.len)
+        if t.groups[i].first >= at
+            t.groups[i].first += 1
+        if t.groups[i].last >= at
+            t.groups[i].last += 1
+
+fn after_remove(t: Table$@, at: Sz) //<
+    //< Follows the data row at `at` removed: a group left with no row goes, and of two groups
+    //< left holding the same rows the outer one stays
+    $i: Sz = 0
+    for i < t.groups.len
+        $g: = t.groups[i]
+        if g.first > at
+            g.first -= 1
+        gone: = g.first == at && g.last == at
+        if g.last >= at && !gone
+            g.last -= 1
+        if gone ||
+            i > 0 && t.groups[i - 1].first == g.first && t.groups[i - 1].last == g.last
+            t.groups.remove_at(i)
+            continue
+        t.groups[i] = g
+        i += 1
+
+fn read_groups(text: U8[], rows: Sz, groups: List<|Group|>$@): Void!Group_fault //<
+    //< Adds the groups `rows 2-4, rows 6-9 closed` names, in the writer's order
+    //< A row is numbered from 1, as a formula names it; a group of one row is `rows 3`.
+    $start: Sz = 0
+    for start <= text.len
+        $end: = start
+        for end < text.len && text[end] != ','
+            end += 1
+        g: = entry(text.sub(start, end - start), rows) catch
+            throw .not_rows
+        if groups.len > 0 && !comes_first(groups[groups.len - 1], g)
+            if groups[groups.len - 1].first == g.first &&
+                groups[groups.len - 1].last == g.last
+                throw .twice
+            throw .out_of_order
+        groups.push(g)
+        if end == text.len
+            break
+        if !text.starts_with(", ", end)
+            throw .not_rows
+        start = end + 2
+    if f: = fault_of(groups)
+        throw f
+
+priv fn entry(text: U8[], rows: Sz): Group!Group_fault //< one entry: `rows 2-4`, maybe ` closed`
+    if !text.starts_with("rows ")
+        throw .not_rows
+    $body: = text.sub_from(5)
+    closed: = body.ends_with(" closed")
+    if closed
+        body = body.sub(0, body.len - 7)
+    $dash: = body.len
+    for i in Range.asc(body.len)
+        if body[i] == '-'
+            dash = i
+            break
+    // One form only: a number written with a leading zero is refused, as the writer never writes
+    // it.
+    if body.starts_with("0") || body.starts_with("0", dash + 1)
+        throw .not_rows
+    first: = body.sub(0, dash).to_count(rows) catch
+        throw .not_rows
+    $last: = first
+    if dash < body.len
+        last = body.sub_from(dash + 1).to_count(rows) catch
+            throw .not_rows
+        if last <= first
+            throw .not_rows
+    return Group::{ .first = first - 1, .last = last - 1, .closed = closed }
+
+fn write_groups(groups: List<|Group|>@, out: Str_builder$@) //< the value `read_groups` reads
+    for i in Range.asc(groups.len)
+        g: = groups[i]
+        if i > 0
+            out.s(", ")
+        out.s("rows \{g.first + 1\}")
+        if g.last > g.first
+            out.s("-\{g.last + 1\}")
+        if g.closed
+            out.s(" closed")

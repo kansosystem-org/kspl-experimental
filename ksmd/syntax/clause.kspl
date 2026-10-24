@@ -1,0 +1,442 @@
+//< Reads a clause, from `:::kind name=value ...` to a line of `:::`: a table, an include or an
+//< image
+//< A table's names, cells and widths are read and checked here. What a formula means, and where a
+//< path leads, are not: calculation and file resolution come after reading.
+import "ksmd/base/attribute" { Attribute, attribute_at, decode, find, read_attributes }
+import "ksmd/base/dates" { is_date }
+import "ksmd/base/keyed" { Keyed }
+import "ksmd/base/marker" { is_decimal, leading, quoted_end }
+import "ksmd/base/source" { Diagnostic, Line, Source }
+import "ksmd/calc/formula" { text_piece }
+import "ksmd/model/choice" { has_choices, is_entry }
+import "ksmd/model/format" { format_of }
+import "ksmd/model/group" { Group_fault, read_groups }
+import "ksmd/model/look" { look_of, note_of, plain_look }
+import "ksmd/model/model" { Block, Cell, Chart, Document, Image, UNBOUND, MAX_CELLS, MAX_COLUMNS,
+    MAX_FORMULA, MAX_NAME, MAX_ROWS, MAX_WEIGHT, Table }
+import "ksmd/model/rule" { has_rule, rule_of }
+import "ksmd/syntax/chart" { kind_of, split_names }
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str"
+import "std/strnum"
+
+fn read_clause(src: Source@, first: Line, doc: Document$@, names: Keyed<|Bool|>$@, arena: Arena$@):
+    Sz!Diagnostic //<
+        //< Reads the clause that opens at `first`, and returns where the next block may start
+    text: = first.text
+    $end: Sz = 3
+    for end < text.len && text[end] != ' '
+        end += 1
+    kind: = text.sub(3, end - 3)
+    attributes: = read_attributes(src, text, end, text.len, first.offset, arena)!
+    invisible: = invisible_of(src, attributes)!
+    at: = doc.blocks.len
+    next: = read_kind(src, first, kind, attributes, doc, names, arena)!
+    if invisible
+        doc.blocks[at].invisible = true
+    return next
+
+priv fn invisible_of(src: Source@, attributes: List<|Attribute|>): Bool!Diagnostic //<
+    //< Whether the clause holds `invisible="printing"`, which leaves its block out of print and PDF
+    a: = find(attributes, "invisible") catch
+        return false
+    if !string_of(src, a)!.equals("printing")
+        throw src.diagnostic(a.offset, "invisible is \"printing\", or leave it out")
+    return true
+
+priv fn read_kind(src: Source@, first: Line, kind: U8[], attributes: List<|Attribute|>,
+    doc: Document$@, names: Keyed<|Bool|>$@, arena: Arena$@): Sz!Diagnostic //<
+        //< Reads the clause of each kind, once its attributes are read
+    if kind.equals("table")
+        return read_table(src, first, attributes, doc, names, arena)
+    if kind.equals("include")
+        allow(src, attributes, U8[][]::{ "path", "invisible" },
+            "':::include' takes only path and invisible")!
+        path: =
+            required(src, first, attributes, "path",
+            "':::include' needs a path, as in path=\"notes.ksmd\"")!
+        doc.blocks
+            .push(Block::{ .kind = .include, .level = 0, .label = "", .text = path, .first = 0,
+            .count = 0, .offset = first.offset, .align = .none, .note = "", .invisible = false })
+        return empty_body(src, first, "':::include' has no body. Close it on the next line")
+    if kind.equals("image")
+        allow(src, attributes, U8[][]::{ "src", "alt", "caption", "invisible" },
+            "':::image' takes only src, alt, caption and invisible")!
+        image_src: =
+            required(src, first, attributes, "src", "':::image' needs src and alt")!
+        alt: =
+            required_or_empty(src, first, attributes, "alt", "':::image' needs src and alt")!
+        $caption: U8[] = ""
+        if a: = find(attributes, "caption")
+            caption = string_of(src, a)!
+            if caption.len == 0
+                throw src.diagnostic(a.offset, "leave out an empty caption")
+        doc.blocks
+            .push(Block::{ .kind = .image, .level = 0, .label = "", .text = "",
+            .first = doc.images.len, .count = 1, .offset = first.offset, .align = .none, .note = "",
+            .invisible = false })
+        doc.images.push(Image::{ .src = image_src, .alt = alt, .caption = caption })
+        return empty_body(src, first, "':::image' has no body. Close it on the next line")
+    if kind.equals("chart")
+        return read_chart(src, first, attributes, doc, arena)
+    throw src.diagnostic(first.offset + 3,
+        "a clause is ':::table', ':::include', ':::image' or ':::chart'")
+
+priv fn read_chart(src: Source@, first: Line, attributes: List<|Attribute|>, doc: Document$@,
+    arena: Arena$@): Sz!Diagnostic //<
+        //< `:::chart table="t" kind="bar" labels="item" values="cost,tax" title="..."`
+        //< The names are found once every table is read (`chart.bind_charts`).
+    allow(src, attributes,
+        U8[][]::{ "table", "kind", "labels", "values", "title", "invisible" },
+        "':::chart' takes only table, kind, labels, values, title and invisible")!
+    message: = "':::chart' needs table, kind, labels and values"
+    table: = required(src, first, attributes, "table", message)!
+    kind_text: = required(src, first, attributes, "kind", message)!
+    kind: = kind_of(kind_text) catch
+        throw src.diagnostic(attribute_at(attributes, "kind"), "kind is \"bar\" or \"line\"")
+    labels: = required(src, first, attributes, "labels", message)!
+    values: = required(src, first, attributes, "values", message)!
+    $names: = List<|U8[]|>(arena)
+    if !split_names(values, names@)
+        throw src.diagnostic(attribute_at(attributes, "values"),
+            "values names 1 to 8 columns, separated by ','")
+    $title: U8[] = ""
+    if a: = find(attributes, "title")
+        title = string_of(src, a)!
+        if title.len == 0
+            throw src.diagnostic(a.offset, "leave out an empty title")
+    $ids: = List<|Sz|>(arena)
+    for _ in names
+        ids.push(UNBOUND)
+    doc.blocks
+        .push(Block::{ .kind = .chart, .level = 0, .label = "", .text = "",
+        .first = doc.charts.len, .count = 1, .offset = first.offset, .align = .none, .note = "",
+        .invisible = false })
+    doc.charts
+        .push(Chart::{ .kind = kind, .title = title, .table = UNBOUND, .name = table,
+        .labels = UNBOUND, .label_name = labels, .series = ids, .series_names = names })
+    return empty_body(src, first, "':::chart' has no body. Close it on the next line")
+
+priv fn read_table(src: Source@, first: Line, attributes: List<|Attribute|>, doc: Document$@,
+    names: Keyed<|Bool|>$@, arena: Arena$@): Sz!Diagnostic //<
+        //< A header row of quoted names, then data rows, each with as many cells
+    allow(src, attributes,
+        U8[][]::{ "name", "widths", "formats", "choices", "rules", "groups", "invisible" },
+        "':::table' takes only name, widths, formats, choices, rules, groups and invisible")!
+    name: =
+        required(src, first, attributes, "name", "':::table' needs a name, as in name=\"budget\"")!
+    name_at: = attribute_at(attributes, "name")
+    if !is_table_name(name)
+        throw src.diagnostic(name_at,
+            "a table name is 1 to 255 bytes of text, with no line breaks or other control \
+                characters")
+    if names.get(name).unwrap_or(false)
+        throw src.diagnostic(name_at, "another table in this source has this name")
+    names.set(name, true)
+    $t: = Table(name, arena)
+    $at: = first.next
+    for
+        if at >= src.bytes.len
+            throw src.diagnostic(first.offset, "this clause has no closing ':::' line")
+        line: = src.line_at(at)
+        if line.text.equals(":::")
+            break
+        count: = read_row(src, line, t@, arena)!
+        header: = at == first.next
+        if !header && count != t.columns.len
+            throw src.diagnostic(line.offset, "every row has as many cells as the header")
+        if header
+            for i in Range.asc(count)
+                if t.cells[i].kind != .text
+                    throw src.diagnostic(t.cells[i].offset, "a header cell is a quoted name")
+                t.columns.push(t.next_id)
+                t.next_id += 1
+        else
+            if t.rows.len == MAX_ROWS
+                throw src.diagnostic(line.offset, "a table holds at most 10,000 data rows")
+            t.rows.push(t.next_id)
+            t.next_id += 1
+        if t.cells.len > MAX_CELLS
+            throw src.diagnostic(line.offset,
+                "a table holds at most 100,000 cells, the header's included")
+        at = line.next
+    if at == first.next
+        throw src.diagnostic(first.offset, "a table has a header row of quoted names")
+    if a: = find(attributes, "widths")
+        read_widths(src, a, t@)!
+    if a: = find(attributes, "formats")
+        read_formats(src, a, t@)!
+    if a: = find(attributes, "choices")
+        read_choice_list(src, a, t@)!
+    if a: = find(attributes, "rules")
+        read_rule_list(src, a, t@, arena)!
+    if a: = find(attributes, "groups")
+        read_group_list(src, a, t@)!
+    doc.blocks
+        .push(Block::{ .kind = .table, .level = 0, .label = "", .text = "",
+        .first = doc.tables.len, .count = 1, .offset = first.offset, .align = .none, .note = "",
+        .invisible = false })
+    doc.tables.push(t)
+    return src.line_at(at).next
+
+priv fn read_row(src: Source@, line: Line, t: Table$@, arena: Arena$@): Sz!Diagnostic //<
+    //< One row's cells, split at each '|' outside quoted text; returns how many it holds
+    text: = line.text.trim_end()
+    if text.len < 2 || text[0] != '|' || text[text.len - 1] != '|'
+        throw src.diagnostic(line.offset, "a table row starts and ends with '|'")
+    $count: Sz = 0
+    $start: Sz = 1
+    $i: Sz = 1
+    for i < text.len
+        if text[i] == '"'
+            close: = quoted_end(text, i)
+            if close == text.len
+                throw src.diagnostic(line.offset + i, "this quoted text has no closing '\"'")
+            i = close + 1
+            continue
+        if text[i] == '|'
+            if count == MAX_COLUMNS
+                throw src.diagnostic(line.offset + i, "a table holds at most 256 columns")
+            t.cells
+                .push(read_cell(src, text.sub(start, i - start), line.offset + start, t, arena)!)
+            count += 1
+            start = i + 1
+        i += 1
+    if start != text.len
+        throw src.diagnostic(line.offset, "a table row starts and ends with '|'")
+    return count
+
+priv fn read_cell(src: Source@, raw: U8[], offset: Sz, t: Table$@, arena: Arena$@):
+    Cell!Diagnostic //<
+        //< Nothing, quoted text, a number, a date, or a formula after '=', then a look in braces or
+        //< none
+        //< A formula is kept as one text piece, which `formula.bind_all` splits once every table
+        //< is read.
+    whole: = raw.trim_spaces()
+    at: = offset + leading(raw)
+    brace: = brace_at(whole)
+    $look: = plain_look()
+    $note: U8[] = ""
+    $body: = whole
+    if brace < whole.len
+        if whole[whole.len - 1] != '}'
+            throw src.diagnostic(at + brace, "a look in braces ends its cell, with '}' last")
+        attributes: = read_attributes(src, whole, brace + 1, whole.len - 1, at, arena)!
+        look = look_of(src, attributes@, at + brace)!
+        note = note_of(src, attributes@)!
+        body = whole.sub(0, brace).trim_end()
+    $cell: = Cell::{ .kind = .empty, .text = "", .first = 0, .count = 0, .offset = at, .look = look,
+        .note = note }
+    if body.len == 0
+        cell.offset = offset
+        return cell
+    if body[0] == '"'
+        if quoted_end(body, 0) != body.len - 1
+            throw src.diagnostic(at,
+                "a cell holds one value: quoted text, a number, a date, a formula after '=', or \
+                    nothing")
+        cell.kind = .text
+        cell.text = decode(src, body, at, arena)!
+        return cell
+    if body[0] == '='
+        formula: = body.sub_from(1).trim_spaces()
+        if formula.len == 0
+            throw src.diagnostic(at, "this formula is empty")
+        if formula.len > MAX_FORMULA
+            throw src.diagnostic(at, "a formula holds at most 4,096 bytes")
+        t.pieces.push(text_piece(formula))
+        cell.kind = .formula
+        cell.first = t.pieces.len - 1
+        cell.count = 1
+        return cell
+    if is_date(body)
+        cell.kind = .date
+        cell.text = body
+        return cell
+    if !is_decimal(body)
+        throw src.diagnostic(at,
+            "a cell holds one value: quoted text, a number, a date, a formula after '=', or nothing")
+    value: = body.to_f64() catch
+        throw src.diagnostic(at, "this number is too large for a cell")
+    if value - value != 0.0
+        throw src.diagnostic(at, "this number is too large for a cell")
+    cell.kind = .number
+    cell.text = body
+    return cell
+
+priv fn brace_at(text: U8[]): Sz //< where the first `{` outside quotes stands, or the length
+    $i: Sz = 0
+    for i < text.len
+        if text[i] == '"'
+            i = quoted_end(text, i) + 1
+            continue
+        if text[i] == '{'
+            return i
+        i += 1
+    return text.len
+
+priv fn read_widths(src: Source@, a: Attribute, t: Table$@): Void!Diagnostic //<
+    //< `widths="1,2,1"`: one whole-number weight per column
+    if !a.quoted
+        throw src.diagnostic(a.offset, "this attribute takes a quoted string")
+    if !parse_weights(a.value, t.weights@)
+        throw src.diagnostic(a.offset,
+            "widths is a list of whole numbers from 1 to 10,000, separated by ','")
+    if t.weights.len != t.columns.len
+        throw src.diagnostic(a.offset, "widths has one weight per column")
+
+priv fn read_formats(src: Source@, a: Attribute, t: Table$@): Void!Diagnostic //<
+    //< `formats="grouped:2,,percent:1"`: one number format per column, empty for none
+    //< A diagnostic points at the entry itself where the value holds no escape.
+    if !a.quoted
+        throw src.diagnostic(a.offset, "this attribute takes a quoted string")
+    value_at: = a.offset + 9
+    plain: =
+        value_at + a.value.len <= src.bytes.len &&
+        src.bytes.sub(value_at, a.value.len).equals(a.value)
+    $any: = false
+    $start: Sz = 0
+    for i in Range.asc(a.value.len + 1)
+        if i < a.value.len && a.value[i] != ','
+            continue
+        f: = format_of(a.value.sub(start, i - start)) catch
+            throw src.diagnostic(value_at + start if plain else a.offset,
+                "a format is number:N, grouped:N, percent:N or currency:XXX:N, with N from 0 to 9, \
+                    or nothing")
+        any = any || f.kind != .none
+        t.formats.push(f)
+        start = i + 1
+    if t.formats.len != t.columns.len
+        throw src.diagnostic(a.offset, "formats has one entry per column, empty for none")
+    if !any
+        throw src.diagnostic(a.offset, "leave out formats when no column has one")
+
+priv fn read_choice_list(src: Source@, a: Attribute, t: Table$@): Void!Diagnostic //<
+    //< `choices=",Open|Done,"`: one entry per column, empty for a column that takes any value
+    if !a.quoted
+        throw src.diagnostic(a.offset, "this attribute takes a quoted string")
+    $start: Sz = 0
+    for i in Range.asc(a.value.len + 1)
+        if i < a.value.len && a.value[i] != ','
+            continue
+        entry: = a.value.sub(start, i - start)
+        if !is_entry(entry)
+            throw src.diagnostic(a.offset,
+                "a column's choices are 1 to 50 texts separated by '|', each with no ',', '|', '\"' \
+                    or '\\', none twice")
+        t.choices.push(entry)
+        start = i + 1
+    if t.choices.len != t.columns.len
+        throw src.diagnostic(a.offset, "choices has one entry per column, empty for none")
+    if !has_choices(t.choices@)
+        throw src.diagnostic(a.offset, "leave out choices when no column has any")
+    // A cell that holds a value off its column's list still reads: the page marks it.
+
+priv fn read_rule_list(src: Source@, a: Attribute, t: Table$@, arena: Arena$@): Void!Diagnostic //<
+    //< `rules=",<0;color:#9c0006"`: one colour rule per column, empty for none
+    if !a.quoted
+        throw src.diagnostic(a.offset, "this attribute takes a quoted string")
+    $start: Sz = 0
+    for i in Range.asc(a.value.len + 1)
+        if i < a.value.len && a.value[i] != ','
+            continue
+        r: = rule_of(a.value.sub(start, i - start), arena) catch
+            throw src.diagnostic(a.offset,
+                "a rule is <N, >N, =value or empty, then ';' and color:#rrggbb, fill:#rrggbb or \
+                    both")
+        t.rules.push(r)
+        start = i + 1
+    if t.rules.len != t.columns.len
+        throw src.diagnostic(a.offset, "rules has one entry per column, empty for none")
+    if !has_rule(t.rules@)
+        throw src.diagnostic(a.offset, "leave out rules when no column has one")
+
+priv fn read_group_list(src: Source@, a: Attribute, t: Table$@): Void!Diagnostic //<
+    //< `groups="rows 2-4, rows 6-9 closed"`: the groups of data rows, from the top
+    if !a.quoted
+        throw src.diagnostic(a.offset, "this attribute takes a quoted string")
+    if a.value.len == 0
+        throw src.diagnostic(a.offset, "leave out groups when the table has none")
+    read_groups(a.value, t.rows.len, t.groups@) catch f
+        throw src.diagnostic(a.offset, message_of(f))
+
+priv fn message_of(f: Group_fault): U8[] //< what the reader says of groups it cannot read
+    switch f
+    case .not_rows
+        return "groups lists entries such as rows 2-4 or rows 6 closed, each naming data rows from \
+            1, separated by ', '"
+    case .out_of_order
+        return "groups lists its entries from the top, an outer group before the groups it holds"
+    case .crosses
+        return "a group holds another whole, or shares no row with it"
+    case .twice
+        return "two groups hold the same rows"
+    case .too_deep
+        return "a row stands in at most 8 groups"
+
+fn parse_weights(text: U8[], weights: List<|Sz|>$@): Bool //<
+    //< Adds the weights `1,2,1` names to `weights`; false if the text is not that form
+    //< Each is a whole number from 1 to 10,000, and a ',' separates two of them.
+    $start: Sz = 0
+    for i in Range.asc(text.len + 1)
+        if i < text.len && text[i] != ','
+            continue
+        weight: = text.sub(start, i - start).to_count(MAX_WEIGHT) catch
+            return false
+        if weight == 0
+            return false
+        weights.push(weight)
+        start = i + 1
+    return true
+
+priv fn allow(src: Source@, attributes: List<|Attribute|>, names: U8[][], message: U8[]):
+    Void!Diagnostic //<
+        //< Refuses any attribute but these
+    for i in Range.asc(attributes.len)
+        $known: = false
+        for name in names
+            known = known || attributes.get(i).name.equals(name)
+        if !known
+            throw src.diagnostic(attributes.get(i).offset, message)
+
+priv fn required(src: Source@, first: Line, attributes: List<|Attribute|>, name: U8[],
+    message: U8[]): U8[]!Diagnostic //<
+        //< A quoted attribute that must be given and not be empty
+    value: = required_or_empty(src, first, attributes, name, message)!
+    if value.len == 0
+        throw src.diagnostic(attribute_at(attributes, name), "this attribute is not empty")
+    return value
+
+priv fn required_or_empty(src: Source@, first: Line, attributes: List<|Attribute|>, name: U8[],
+    message: U8[]): U8[]!Diagnostic //<
+        //< A quoted attribute that must be given
+    a: = find(attributes, name) catch
+        throw src.diagnostic(first.offset, message)
+    return string_of(src, a)
+
+priv fn string_of(src: Source@, a: Attribute): U8[]!Diagnostic //< a quoted attribute's value
+    if !a.quoted
+        throw src.diagnostic(a.offset, "this attribute takes a quoted string")
+    return a.value
+
+priv fn empty_body(src: Source@, first: Line, message: U8[]): Sz!Diagnostic //<
+    //< The `:::` line right after the opening line
+    if first.next >= src.bytes.len
+        throw src.diagnostic(first.offset, "this clause has no closing ':::' line")
+    close: = src.line_at(first.next)
+    if !close.text.equals(":::")
+        throw src.diagnostic(close.offset, message)
+    return close.next
+
+fn is_table_name(name: U8[]): Bool //<
+    //< 1 to 255 bytes of text, with no line break or other control character
+    //< A formula writes a name that is not plain in JSON quotes (`write_table_name` in
+    //< `formula.kspl`), so any other character can stand in a name.
+    if name.len == 0 || name.len > MAX_NAME
+        return false
+    for c in name
+        if c < 0x20U8 || c == 0x7FU8
+            return false
+    return true

@@ -93,7 +93,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 | File | Where it comes from | License |
 | :-- | :-- | :-- |
 | `.vscode/extensions/kspl/kspl-file.ico` | Made here: the `.kspl` file icon, rendered at 16 to 256 pixels from [`.vscode/extensions/kspl/kspl-file.svg`](.vscode/extensions/kspl/kspl-file.svg), which reuses the brush strokes of [`docs/kspl-icon.svg`](docs/kspl-icon.svg) | This repository's |
-| `.vscode/extensions/kspl/icon.png` | Made here: the VS Code extension's icon, rendered from [`docs/kspl-icon.svg`](docs/kspl-icon.svg), which is drawn here with no font | This repository's |
+| `.vscode/extensions/kspl/icon.png` | Made here: the VS Code extension's icon, rendered from [`docs/kspl-icon.svg`](docs/kspl-icon.svg). Its K was generated with OpenAI's image-generation tool and selected by Kanso System, then traced here into an outline that uses no font. The `.kspl` and `.ksmd` file icons reuse the same K | This repository's ([`LICENSE.md`](LICENSE.md)), to the extent copyright applies |
 | `ksmd/port/desktop/ksmd.ico` | Made here: the file icon of `.ksmd` documents, rendered at 16 to 256 pixels from [`ksmd/port/desktop/ksmd.svg`](ksmd/port/desktop/ksmd.svg). That drawing reuses the brush-written K of [`docs/kspl-icon.svg`](docs/kspl-icon.svg) | This repository's |
 | `ksai/examples/llama_engine/mini_llama.safetensors` | Made here: tiny weights of Llama's shape (a vocabulary of 12, two layers), trained by this repository's own code | This repository's ([`LICENSE.md`](LICENSE.md)) |
 | `ksos/demo/cortex_m/pilot_policy.safetensors` | Made here: the Edge AI car's piloting policy, trained on a PC by this repository's own code | This repository's |

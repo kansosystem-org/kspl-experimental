@@ -8,22 +8,31 @@
 "use strict";
 
 function ksmdFiles(ks, api) {
-  const bar = document.querySelector(".files");
-  const field = document.getElementById("path");
-  const state = bar.querySelector(".state");
+  const fileMenu = document.querySelector(".menubar .files");
+  const named = document.querySelector(".menubar .doc-name");
+  const state = document.querySelector(".menubar .state");
   const notice = document.getElementById("notice");
   const local = ksmdLocal();
   const keep = ksmdKeep();
+  const browse = ksmdBrowse(local);
   const page = document.documentElement;
   // The open document: its path, the digest of the bytes last read or written there (null where
   // no file holds it yet), its canonical source then, and this opening's id, which keys its draft.
   let doc = { path: "", base: null, clean: "", id: newId() };
+  const MAX_IMAGE = 8 * 1024 * 1024; // the local server's ceiling on a write
+  const MAX_NAMES = 999; // the names `addImage` tries before it gives up
   let root = "";
   let busy = Promise.resolve();
   let pending = 0;
+  let choosing = false; // whether the dialog is open
   let sources = new Map(); // each included source's path, and what the server answered for it
   let images = new Map(); // each image's path, and its bytes
   const shown = new Map(); // each image's path, and what its clause shows: { url } or { why }
+
+  // Open and Save stand in the File menu only where the local server opens files; Print always does.
+  function showFileItems() {
+    for (const el of fileMenu.querySelectorAll('[data-cmd^="file-"], .file-only')) el.hidden = false;
+  }
 
   function newId() {
     return Array.from(crypto.getRandomValues(new Uint8Array(8)), (n) => n.toString(16)).join("");
@@ -85,7 +94,7 @@ function ksmdFiles(ks, api) {
     const got = await local.read(path);
     if (got.status !== 200) {
       ks.say(got.status === 404 ? `No file stands at ${path}. To start a document there, type ` +
-        "it, then press Save." : `${path} cannot be opened. ${got.why}`);
+        "it, then choose File, Save as." : `${path} cannot be opened. ${got.why}`);
       return;
     }
     const left = doc;
@@ -111,7 +120,7 @@ function ksmdFiles(ks, api) {
       return false;
     }
     doc = { path, base: await local.digest(bytes), clean: model(), id: newId() };
-    field.value = path;
+    named.textContent = path;
     document.title = `${path} - ksmd`;
     history.replaceState(null, "", `${location.pathname}?doc=${encodeURIComponent(path)}`);
     quiet();
@@ -199,6 +208,34 @@ function ksmdFiles(ks, api) {
     return { why: "this image's header is too long to read. Save the image again" };
   }
 
+  // ---- An image pasted or dropped ----
+
+  // Writes the image beside the document under the first free name, `<name>-image-<n>.png`, and
+  // puts its clause at the caret. The write names no file, so a taken name is never written over.
+  async function addImage(file) {
+    const ext = { "image/png": "png", "image/jpeg": "jpg" }[file.type];
+    if (!ext) return ks.say("Only a PNG or a JPEG image can go in a document.");
+    if (doc.path === "") return ks.say("Save the document first, so the image has a folder to go in.");
+    if (file.size > MAX_IMAGE) return ks.say("The image is larger than 8 MiB, which the local server takes.");
+    const alt = window.prompt("Describe the image for someone who cannot see it. Leave this empty if " +
+      "it only decorates.", "");
+    if (alt === null) return null;
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const slash = doc.path.lastIndexOf("/");
+    const stem = doc.path.slice(slash + 1).replace(/\.ksmd$/, "");
+    for (let n = 1; n <= MAX_NAMES; n++) {
+      const name = `${stem}-image-${n}.${ext}`;
+      const got = await local.write(doc.path.slice(0, slash + 1) + name, bytes, null);
+      if (got.status === 409) continue;
+      if (got.status !== 200) return ks.say(`The image was not saved. ${got.why}`);
+      await fetchOne(doc.path.slice(0, slash + 1) + name, true);
+      ks.sync();
+      const s = ks.enc.encode(name);
+      return ks.act("ksmd_web_insert_image", s.length, ks.putBytes(s, ks.enc.encode(alt)) - s.length);
+    }
+    return ks.say(`The image was not saved: ${MAX_NAMES} images of this document stand there already.`);
+  }
+
   function showImages() {
     for (const fig of ks.root.querySelectorAll("figure[data-to]:not([data-shown])")) {
       fig.dataset.shown = "1";
@@ -221,26 +258,12 @@ function ksmdFiles(ks, api) {
 
   // ---- Saving ----
 
+  // Saves the open document to its own file. A document that has no file yet is placed with Save
+  // As (`saveOrPlace`), so Save never asks for a path itself.
   async function save() {
-    const written = field.value.trim();
-    if (written === "") {
-      ks.say("Type a path for the document, such as notes.ksmd, then press Save.");
-      return;
-    }
-    const path = resolve(written, "saved");
-    if (path === null) return;
     const text = api.source();
-    const bytes = ks.enc.encode(text);
-    if (path !== doc.path || doc.base === null) {
-      // A new place: a file is written only where none stands, so no other file is replaced.
-      const got = await local.write(path, bytes, null);
-      if (got.status === 409) {
-        ks.say(`${path} already exists. Open it, or type another path for this document.`);
-      } else if (got.status !== 200) {
-        ks.say(`${path} could not be saved. ${got.why}`);
-      } else {
-        await saved(path, bytes, text);
-      }
+    if (doc.base === null) {
+      await place(doc.path, text, false);
       return;
     }
     const now = await local.read(doc.path);
@@ -258,6 +281,60 @@ function ksmdFiles(ks, api) {
       return;
     }
     await write(text, d);
+  }
+
+  // Saves to a new place. A file is written only where none stands, so no other file is replaced,
+  // unless the person chose to replace it: then only the bytes that stood there when asked.
+  async function place(path, text, replace) {
+    const bytes = ks.enc.encode(text);
+    let expected = null;
+    if (replace) {
+      const now = await local.read(path);
+      if (now.status === 200) expected = await local.digest(now.bytes);
+      else if (now.status !== 404) {
+        ks.say(`${path} could not be saved. ${now.why}`);
+        return;
+      }
+    }
+    const got = await local.write(path, bytes, expected);
+    if (got.status === 409) {
+      ks.say(replace ? `${path} changed while you chose it. Nothing was written. Choose again.` :
+        `${path} already exists. Open it, or type another path for this document.`);
+    } else if (got.status !== 200) {
+      ks.say(`${path} could not be saved. ${got.why}`);
+    } else {
+      await saved(path, bytes, text);
+    }
+  }
+
+  // Save As, and Open with the dialog. **The dialog is open outside `one`**, so a check or a draft
+  // waiting behind it still runs; only what is chosen runs as a step.
+  async function saveAs() {
+    if (choosing) return;
+    choosing = true;
+    const got = await browse.pick("save", doc.path || "notes.ksmd");
+    choosing = false;
+    if (got === null) return;
+    await one(async () => {
+      const path = resolve(got.path, "saved");
+      if (path === null) return;
+      if (path === doc.path && doc.base !== null) await save();
+      else await place(path, api.source(), got.replace);
+    });
+  }
+
+  // Save: to the document's own file, or with Save As where the document has no path yet.
+  function saveOrPlace() {
+    if (doc.path === "") saveAs();
+    else one(save);
+  }
+
+  async function openChosen() {
+    if (choosing) return;
+    choosing = true;
+    const got = await browse.pick("open", doc.path);
+    choosing = false;
+    if (got !== null) await one(() => open(got.path));
   }
 
   // Writes the document's own file, if it still holds what `expected` names (null: no file).
@@ -282,7 +359,7 @@ function ksmdFiles(ks, api) {
     doc = { path, base: await local.digest(bytes), clean: text, id: left.id };
     await keep.drop(root, left.path, left.id);
     if (left.path !== path) {
-      field.value = path;
+      named.textContent = path;
       document.title = `${path} - ksmd`;
       history.replaceState(null, "", `${location.pathname}?doc=${encodeURIComponent(path)}`);
       ks.call("ksmd_web_place", ks.put(path));
@@ -403,29 +480,36 @@ function ksmdFiles(ks, api) {
     const s = await local.status();
     if (!s.root) {
       if (s.why) {
-        bar.hidden = false;
-        for (const b of bar.querySelectorAll("button, input")) b.disabled = true;
+        for (const b of fileMenu.querySelectorAll('[data-cmd^="file-"]')) b.disabled = true;
+        showFileItems();
         ks.say(s.why);
       }
       page.dataset.files = "none";
       return;
     }
     root = s.root;
-    bar.hidden = false;
+    showFileItems();
     local.hold();
     keep.prune();
     doc = { path: "", base: null, clean: model(), id: newId() };
     ks.call("ksmd_web_place", ks.put(""));
-    bar.querySelector('[data-file="open"]').addEventListener("click",
-      () => one(() => open(field.value.trim())));
-    bar.querySelector('[data-file="save"]').addEventListener("click", () => one(save));
-    field.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") one(() => open(field.value.trim()));
-    });
+    ks.addImage = (file) => one(() => addImage(file));
+    ks.fileCommand = (name) => {
+      if (name === "file-open") openChosen();
+      else if (name === "file-save-as") saveAs();
+      else saveOrPlace();
+      return null;
+    };
     document.addEventListener("keydown", (e) => {
-      if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "s") {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+      const k = e.key.toLowerCase();
+      if (k === "s") {
         e.preventDefault();
-        one(save);
+        if (e.shiftKey) saveAs();
+        else saveOrPlace();
+      } else if (k === "o" && !e.shiftKey) {
+        e.preventDefault();
+        openChosen();
       }
     }, true);
     // Focus and visibility often come together: a check still waiting to run answers both.

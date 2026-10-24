@@ -1,0 +1,96 @@
+//< The editor's actions on charts: a new chart of a table, and new settings for a chart
+//< A chart's settings never change in place. A changed chart is a new one in `Document.charts`,
+//< and its block points at it, so undo swaps the block back, as for any block.
+import "ksmd/calc/calc" { calculate }
+import "ksmd/calc/value" { Value_kind }
+import "ksmd/edit/editor" { Editor, Refused, end_block, replace }
+import "ksmd/edit/history" { begin }
+import "ksmd/edit/region" { Spot, Unit, gap_spot, whole_unit }
+import "ksmd/model/model" { Block, Chart, Chart_kind, MAX_SERIES, Table }
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+
+struct Chart_settings //< what a page asks a chart to show, by the places of the table's columns
+    table: Sz //< the table's place in `Document.tables`
+    kind: Chart_kind
+    labels: Sz
+    values: List<|Sz|>
+    title: U8[]
+
+impl Editor
+    fn insert_chart(ed: Self$@, block: Sz): Void!Refused //<
+        //< A bar chart of the table a block shows, in a block of its own after the table
+        //< Its labels are the first column, and it draws the first other column that holds
+        //< numbers, or the second column where none does.
+        if block < 0 || block >= ed.doc.blocks.len ||
+            ed.doc.blocks.get(block).kind != .table
+            throw .not_whole
+        u: = ed.doc.blocks.get(block).first
+        t: = ed.doc.tables[u]@
+        defer scratch: = Arena(16 * 1024)
+        $values: = List<|Sz|>(scratch)
+        values.push(numeric_column(ed, u, t) if t.columns.len > 1 else 0)
+        settings: = Chart_settings::{ .table = u, .kind = .bar, .labels = 0, .values = values,
+            .title = "" }
+        chart: = ed.chart_of(settings@)!
+        s: = gap_spot(block + 1)
+        ed.put_chart(s, s, chart, scratch)!
+
+    fn set_chart(ed: Self$@, block: Sz, settings: Chart_settings@): Void!Refused //<
+        //< Gives a chart block new settings, as one step
+        if block < 0 || block >= ed.doc.blocks.len ||
+            ed.doc.blocks.get(block).kind != .chart
+            throw .not_whole
+        chart: = ed.chart_of(settings)!
+        defer scratch: = Arena(16 * 1024)
+        ed.put_chart(gap_spot(block), gap_spot(block + 1), chart, scratch)!
+
+    priv fn chart_of(ed: Self$@, s: Chart_settings@): Chart!Refused //<
+        //< A chart of the settings, its columns held by identity; refused where one names nothing
+        //< A column whose name holds a ',' cannot be named in `values`, so it is refused there.
+        if s.table < 0 || s.table >= ed.doc.tables.len ||
+            ed.doc.tables[s.table].name.len == 0
+            throw .table(.outside)
+        t: = ed.doc.tables[s.table]@
+        if s.labels < 0 || s.labels >= t.columns.len || s.values.len == 0 ||
+            s.values.len > MAX_SERIES
+            throw .table(.outside)
+        $ids: = List<|Sz|>(ed.arena)
+        $names: = List<|U8[]|>(ed.arena)
+        for c in s.values
+            if c < 0 || c >= t.columns.len || t.cells[c].text.len == 0 ||
+                t.cells[c].text.find_str(",").is_some()
+                throw .table(.outside)
+            ids.push(t.columns[c])
+            names.push(t.cells[c].text)
+        return Chart::{ .kind = s.kind, .title = ed.arena.dup_str(s.title), .table = s.table,
+            .name = t.name, .labels = t.columns[s.labels],
+            .label_name = t.cells[s.labels].text, .series = ids, .series_names = names }
+
+    priv fn put_chart(ed: Self$@, s: Spot, e: Spot, chart: Chart, scratch: Arena$@): Void!Refused //<
+        //< A block for the chart in place of what stands from `s` to `e`, as one step
+        ed.doc.charts.push(chart)
+        b: = Block::{ .kind = .chart, .level = 0, .label = "", .text = "",
+            .first = ed.doc.charts.len - 1, .count = 1, .offset = 0, .align = .none, .note = "",
+            .invisible = false }
+        $w: = ed.work(s, e, s.block, end_block(e), scratch)
+        $frag: = List<|Unit|>(scratch)
+        frag.push(whole_unit(b, scratch))
+        r: = replace(w@, frag@, scratch)
+        $tx: = begin(ed.selection(), ed.arena)
+        ed.commit(w@, tx@, r.caret, r.caret, scratch)!
+        ed.finish(tx, .other, false)
+
+priv fn numeric_column(ed: Editor@, u: Sz, t: Table@): Sz //<
+    //< The first column after the first whose values are mostly numbers, or the second column
+    defer scratch: = Arena(64 * 1024)
+    values: = calculate(ed.doc@, ed.today, scratch)
+    for c in Range(1, t.columns.len, 1)
+        $numbers: Sz = 0
+        for r in Range.asc(t.rows.len)
+            if values.at(u, r, c).kind == Value_kind.number
+                numbers += 1
+        if numbers * 2 > t.rows.len
+            return c
+    return 1

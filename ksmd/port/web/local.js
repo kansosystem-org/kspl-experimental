@@ -100,6 +100,17 @@ function ksmdLocal() {
         return null;
       }
     },
+    // The names in one folder: { status, folders, files, more } on 200, else { status, why }.
+    async list(path) {
+      try {
+        const got = await send(`/api/list?path=${encodeURIComponent(path)}`);
+        if (!got.ok) return { status: got.status, why: reason(got.status) };
+        const said = await got.json();
+        return { status: 200, folders: said.folders, files: said.files, more: said.more === true };
+      } catch (e) {
+        return { status: 0, why: lost(e) };
+      }
+    },
     // Replaces a file only if it still holds what `expected` names: a digest of its bytes, or
     // null for no file at all. { status, why }; 409 means the file is not what was expected.
     async write(path, bytes, expected) {

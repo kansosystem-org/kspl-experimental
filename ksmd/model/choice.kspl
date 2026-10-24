@@ -1,0 +1,93 @@
+//< A column's list of choices, as the `choices` attribute saves them: what a cell may hold
+//< `choices=",Open|In progress|Done,"` holds one entry per column, empty for a column that takes
+//< any value; inside an entry, `|` separates the choices. A typed value equals a choice without
+//< regard to case, and the cell then holds the choice as the list spells it.
+//< A choice is 1 to 100 bytes of text, with no control character, `,`, `|`, `"` or `\`, and no
+//< space at either end. A column holds at most 50, and no two equal without regard to case.
+import "ksmd/base/marker" { compare_text }
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+
+const MAX_CHOICES: Sz = 50 //< the most choices one column holds
+const MAX_CHOICE: Sz = 100 //< the bytes of one choice
+
+fn is_entry(entry: U8[]): Bool //< whether a column's entry holds choices that can be saved
+    //< An empty entry is a column with no list.
+    if entry.len == 0
+        return true
+    $count: Sz = 0
+    $start: Sz = 0
+    for i in Range.asc(entry.len + 1)
+        if i < entry.len && entry[i] != '|'
+            continue
+        one: = entry.sub(start, i - start)
+        if one.len == 0 || one.len > MAX_CHOICE || !is_choice_text(one) ||
+            one.trim_spaces().len != one.len
+            return false
+        // No two choices equal without regard to case.
+        $j: Sz = 0
+        for j < start
+            $k: = j
+            for k < entry.len && entry[k] != '|'
+                k += 1
+            if compare_text(entry.sub(j, k - j), one) == 0
+                return false
+            j = k + 1
+        count += 1
+        if count > MAX_CHOICES
+            return false
+        start = i + 1
+    return true
+
+fn choice_of(entry: U8[], typed: U8[]): U8[]? //<
+    //< The choice of an entry that the typed text equals without regard to case, as the list
+    //< spells it, or none
+    $start: Sz = 0
+    for i in Range.asc(entry.len + 1)
+        if i < entry.len && entry[i] != '|'
+            continue
+        one: = entry.sub(start, i - start)
+        if one.len > 0 && compare_text(one, typed) == 0
+            return .some(one)
+        start = i + 1
+    return .none
+
+fn entry_of(list: U8[], arena: Arena$@): U8[]? //<
+    //< The entry a person typed as `Open, In progress, Done`: each choice trimmed, joined by `|`
+    //< None where a choice is empty or cannot be saved; an empty list clears the column's.
+    if list.trim_spaces().len == 0
+        return .some("")
+    out: = arena.text()
+    $start: Sz = 0
+    for i in Range.asc(list.len + 1)
+        if i < list.len && list[i] != ','
+            continue
+        one: = list.sub(start, i - start).trim_spaces()
+        if start > 0
+            out.c('|')
+        out.s(one)
+        start = i + 1
+    entry: = out.take()
+    if !is_entry(entry)
+        return .none
+    return .some(entry)
+
+fn has_choices(choices: List<|U8[]|>@): Bool //< whether any column holds a list
+    for c in choices
+        if c.len > 0
+            return true
+    return false
+
+fn write_choices(choices: List<|U8[]|>@, out: Str_builder$@) //< the value `choices` holds
+    for i in Range.asc(choices.len)
+        if i > 0
+            out.c(',')
+        out.s(choices[i])
+
+priv fn is_choice_text(text: U8[]): Bool //< no control character, `,`, `|`, `"` or `\`
+    for c in text
+        if c < 0x20U8 || c == 0x7FU8 || c == ',' || c == '|' || c == '"' || c == '\\'
+            return false
+    return true

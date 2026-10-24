@@ -136,11 +136,11 @@ async function served(server, name) {
     })()`);
     await p.press("x");
     // The draft is held a second after typing stops; the save is timed after it.
-    await waited(p, "document.querySelector('.files .state').textContent.includes('draft')");
+    await waited(p, "document.querySelector('.menubar .state').textContent.includes('draft')");
     const s = Date.now();
     await p.press("s", 2);
     await waited(p, "document.documentElement.dataset.files === 'ready' && " +
-      "document.querySelector('.files .state').textContent === ''");
+      "document.querySelector('.menubar .state').textContent === ''");
     save.push(Date.now() - s);
     await browser.closeTab(p.page);
   }

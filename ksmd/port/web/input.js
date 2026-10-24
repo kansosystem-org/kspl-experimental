@@ -169,11 +169,23 @@ function ksmdInput(ks) {
     return s.rangeCount > 0 && !!ks.view.closest(s.focusNode, ".li");
   }
 
+  // An image file pasted or dropped is written beside the document, where the local server serves
+  // the page (`file.js`). It never goes into a cell.
+  function image(files) {
+    const file = Array.from(files || []).find((f) => f.type.startsWith("image/"));
+    if (!file) return false;
+    ks.sync();
+    if (ks.addImage) ks.addImage(file);
+    else ks.say("An image goes in only where the local server opened the document, to save it beside it.");
+    return true;
+  }
+
   root.addEventListener("paste", (e) => {
     if (ks.table.owns(e.target)) return;
     e.preventDefault();
     flush();
     const data = e.clipboardData;
+    if (data && image(data.files)) return;
     const text = data ? data.getData("text/plain") : "";
     // Cells copied from a spreadsheet: at a chosen cell they fill the table from there, and in
     // text they make a new table, whose first row gives the names.
@@ -192,7 +204,19 @@ function ksmdInput(ks) {
   });
 
   root.addEventListener("drop", (e) => {
-    if (!ks.table.owns(e.target)) e.preventDefault();
+    if (ks.table.owns(e.target)) return;
+    e.preventDefault();
+    const files = e.dataTransfer && e.dataTransfer.files;
+    if (!files || files.length === 0) return;
+    // The caret goes where the image was dropped, as a drop of text would put it.
+    const at = document.caretRangeFromPoint && document.caretRangeFromPoint(e.clientX, e.clientY);
+    if (at && root.contains(at.startContainer)) {
+      const s = window.getSelection();
+      s.removeAllRanges();
+      s.addRange(at);
+    }
+    flush();
+    image(files);
   });
 
   // A press or a key in the text makes the text the place a look acts on. The page's own

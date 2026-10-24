@@ -1,20 +1,20 @@
 // ksmd page: the ribbon, the row of tools under the menu bar, as in Office. Each group stands
-// named, and a tool shows its name or its shortcut on pointing. The Table group stands only while
-// a table cell is the place being worked in. The tools press the same commands as the menus.
+// named, and a tool shows its name or its shortcut on pointing. A table's commands stand in its
+// right-click menu, not here. The tools press the same commands as the menus.
 // A colour tool is split: its face applies the colour shown on it, and its arrow opens a palette.
+// The fill and size tools act on table cells, so they are pressed only while a cell is the place.
+// The font colour acts on cells and on selected text alike.
 "use strict";
 
 // Office's standard colours, as a palette shows them first.
 const RIBBON_COLOURS = ["#c00000", "#ff0000", "#ffc000", "#ffff00", "#92d050", "#00b050",
   "#00b0f0", "#0070c0", "#002060", "#7030a0", "#000000", "#595959", "#a6a6a6", "#ffffff"];
-// The sizes in points the size list offers, as Office's does.
-const RIBBON_SIZES = ["8", "9", "10", "10.5", "11", "12", "14", "16", "18", "20", "24", "28", "36",
-  "48", "72"];
+// The sizes in points the size list offers: the few that people choose.
+const RIBBON_SIZES = ["9", "10", "11", "12", "14", "18", "24"];
 
 function ksmdRibbon(ks) {
   const ribbon = document.querySelector(".ribbon");
   if (!ribbon) return;
-  const tableGroup = ribbon.querySelector(".table-group");
   // The colour each split tool's face applies; it changes to the colour chosen last.
   const current = { color: "#c00000", fill: "#ffff00" };
 
@@ -120,9 +120,10 @@ function ksmdRibbon(ks) {
     if (palette && e.key === "Escape") closePalette();
   });
 
-  // The Table group stands while a table cell is the place being worked in.
+  // The fill and size tools work while a table cell is the place; the font colour works in text too.
+  const cellTools = ribbon.querySelectorAll('.split[data-colour="fill"] button, [data-ribbon="size"]');
   const sync = () => {
-    tableGroup.hidden = ks.where !== "cell";
+    for (const el of cellTools) el.disabled = ks.where !== "cell";
     ks.enableTable();
   };
   ks.placeHooks.push(sync);

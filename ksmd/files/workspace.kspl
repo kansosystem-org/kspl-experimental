@@ -1,0 +1,49 @@
+//< The workspace on disk: the folder a document opens in, read and written through the file system
+//< A path is refused if its text breaks a rule (`files.resolve_text`) or if a link stands along it
+//< (`fs.stays_under`); it is never resolved and compared. Reading never creates a file, and a save
+//< writes one source alone.
+import "ksmd/files/files" { Files, Refusal, resolve_text }
+import "ksmd/model/model" { Document }
+import "ksmd/syntax/writer"
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+
+struct Workspace //< the folder the user opened; every source and image stays inside it
+    root: U8[] //< as given; the root itself may be a link
+
+impl Workspace
+    fn open(root: U8[]): Workspace? //< none where no folder stands at `root`
+        if !fs.is_dir(root)
+            return .none
+        return .some(Workspace::{ .root = root })
+
+    fn save(r: Self@, written: U8[], doc: Document@, arena: Arena$@): Void!Refusal //<
+        //< Replaces one source's file with the document's canonical text. A crash leaves the old
+        //< text or the new (`fs.replace_file`). An include stays a clause, so no other file
+        //< changes.
+        path: = r.resolve("", written, arena)!
+        defer $text: = Str_builder()
+        writer.write(doc, text@)
+        fs.replace_file(fs.join(r.root, path, arena), text.slice(), .kept) catch
+            throw .unwritable
+
+impl Workspace: Files
+    fn resolve(r: Self@, folder: U8[], written: U8[], arena: Arena$@): U8[]!Refusal //<
+        //< `resolve_text`, then the refusal of a link along the path
+        path: = resolve_text(folder, written, arena)!
+        if !fs.stays_under(r.root, path)
+            throw .link
+        return path
+
+    fn check(r: Self@, path: U8[], arena: Arena$@): Void!Refusal
+        info: = fs.stat(fs.join(r.root, path, arena)) catch
+            throw .missing
+        if info.kind != .file
+            throw .not_file
+
+    fn read(r: Self@, path: U8[], limit: Sz, arena: Arena$@): U8[]!Refusal
+        r.check(path, arena)!
+        return io.read_file_capped(fs.join(r.root, path, arena), limit + 1, arena) catch
+            throw .unreadable
