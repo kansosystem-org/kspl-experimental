@@ -2,7 +2,7 @@
 
 # **Pinned by digest**: the tag moves, and a moved base changes the image on a day nobody touched
 # this file. Dependabot proposes the next digest (`.github/dependabot.yml`).
-FROM ubuntu:26.04@sha256:f144425ff09be612d6d9ad965196e9cdc23dae1f42110a8a11a3e9a8198759f7
+FROM ubuntu:26.04@sha256:c098726dd9b9733f3e885f8de0ef375206a311b0a317eadc40d347b1115fb944
 
 # --- Fetch over IPv4: apt ---
 # **Do not take this out**: the runner has no IPv6 route, and a source answering with an AAAA
