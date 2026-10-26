@@ -239,11 +239,25 @@ function ksmdRange(ks) {
     } else if (steps[e.key] && !mod && !e.altKey) {
       e.preventDefault();
       collapse();
-      ks.table.open(c.block, c.row + steps[e.key][0], Math.max(0, c.column + steps[e.key][1]));
+      const [dr, dc] = steps[e.key];
+      ks.table.choose(c.block, dr ? ks.table.step(c.block, c.row, dr) : c.row, Math.max(0, c.column + dc));
     } else if (e.key === "Delete" || e.key === "Backspace") {
       e.preventDefault();
       clear();
-    } else if (e.key === "Enter" || e.key === "F2") {
+    } else if (e.key === "Enter" || e.key === "Tab") {
+      // Enter moves down and Tab right, Shift back, as in a spreadsheet; F2 opens the cell.
+      e.preventDefault();
+      collapse();
+      const back = e.shiftKey ? -1 : 1;
+      if (e.key === "Enter") ks.table.choose(c.block, ks.table.step(c.block, c.row, back), c.column);
+      else ks.table.choose(c.block, c.row, Math.max(0, c.column + back));
+    } else if (mod && !e.altKey && (e.key === ";" || e.key === ":")) {
+      // Today's date or the time, typed into the cell as an open one takes it; Enter keeps it.
+      e.preventDefault();
+      collapse();
+      const now = ks.now(e.key === ":");
+      ks.table.openWith(c.block, c.row, c.column, now, now.length, now.length);
+    } else if (e.key === "F2") {
       e.preventDefault();
       collapse();
       ks.table.open(c.block, c.row, c.column);
@@ -259,7 +273,7 @@ function ksmdRange(ks) {
       // Typing on a chosen cell opens it, and the key's text replaces its value, as in a
       // spreadsheet.
       collapse();
-      ks.table.open(c.block, c.row, c.column);
+      ks.table.open(c.block, c.row, c.column, true);
     }
   });
 

@@ -20,7 +20,7 @@ export const verdict = {
 const KEYS = {
   Enter: [13, "\r"], Backspace: [8, ""], Delete: [46, ""], Tab: [9, ""], Escape: [27, ""],
   ArrowUp: [38, ""], ArrowDown: [40, ""], ArrowLeft: [37, ""], ArrowRight: [39, ""], End: [35, ""],
-  Home: [36, ""], F2: [113, ""], F10: [121, ""],
+  Home: [36, ""], F2: [113, ""], F4: [115, ""], F10: [121, ""],
 };
 export const CTRL = 2;
 export const SHIFT = 8;
@@ -111,7 +111,20 @@ export function driver(page) {
   // A press at an element's middle. An element of the document that stands out of sight, or
   // under the header, is scrolled into the middle of the window first, as a person scrolls to it.
   async function click(selector, modifiers = 0) {
-    const box = await js(`(() => {
+    const box = await sighted(selector);
+    await clickAt(box[0], box[1], modifiers);
+  }
+
+  // A double press on a table cell, which opens it to edit, as in a spreadsheet; a single press
+  // only chooses it.
+  async function openCell(selector) {
+    const box = await sighted(selector);
+    await doubleClickAt(box[0], box[1]);
+  }
+
+  // An element's middle, once it stands in sight.
+  async function sighted(selector) {
+    return js(`(() => {
       const el = document.querySelector(${JSON.stringify(selector)});
       const top = document.querySelector('.top').getBoundingClientRect().bottom;
       let r = el.getBoundingClientRect();
@@ -121,7 +134,6 @@ export function driver(page) {
       }
       return [r.left + r.width / 2, r.top + r.height / 2];
     })()`);
-    await clickAt(box[0], box[1], modifiers);
   }
 
   // Where an element's middle stands on the page.
@@ -220,5 +232,5 @@ export function driver(page) {
   }
 
   return { page, js, settle, until, press, type, select, click, clickAt, clickBelow, drag, menu, point,
-    doubleClickAt, rightClick, dragTo };
+    doubleClickAt, rightClick, dragTo, openCell };
 }

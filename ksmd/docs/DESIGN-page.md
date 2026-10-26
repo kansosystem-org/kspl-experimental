@@ -22,7 +22,7 @@
 
 **A command's key stands beside its item, in the menu and in a flyout, and the same list runs it from a cell.** So the key shown and the key that acts cannot differ. The keys are Excel's: Ctrl+Shift+~, !, % and $ for the number formats, Shift+F2 for a note, and Alt+Down for the column's filter. The page has no separate list of keys; a person learns each one beside the command it runs.
 
-**A table shows as an HTML table of calculated values**, with column letters and row numbers. The row of names under the letters is the table's heading, with its own colour and a line below it. An empty name shows a faint "Name". The row numbers take only the width their digits need. A cell edits in an input of its own. Enter, Tab, Up and Down move between cells. Esc drops the open cell's edit and leaves the cell chosen. The arrow keys past the first or last row leave the table for the gap there. A press between two blocks, or below the last, puts the caret in the gap there.
+**A table shows as an HTML table of calculated values**, with column letters and row numbers. The row of names under the letters is the table's heading, with its own colour and a line below it. An empty name shows a faint "Name". The row numbers take only the width their digits need. A press chooses a cell, as in a spreadsheet. A double press or F2 opens it in an input of its own, the caret after its text. Typing on a chosen cell replaces its value. Enter, Tab and the arrow keys move the choice, passing over hidden rows. Esc drops the open cell's edit and leaves the cell chosen. The arrow keys past the first or last row leave the table for the gap there. A press between two blocks, or below the last, puts the caret in the gap there.
 
 **Left and Right move the caret inside a cell's text, and move to the next cell at the text's edge.** A cell opens with all its text selected, so Left and Right then move to the next cell at once, as in a spreadsheet. Once a click or a key puts the caret inside the text, they move the caret. At the text's edge, the next press moves to the next cell. Left in the first column and Right in the last stay in the cell.
 
@@ -56,7 +56,7 @@
 
 **A double-click on a column's border fits the column to its widest value on one line.** The border is the edge between two column letters, or the border between two cells. The table keeps its width, and the other columns share what is left in the proportions they had. The fit is one step of undo, and saves as `widths`, as a drag does. A row has no height in the source. It is always as tall as its content, so a double-click on a row's border has nothing to set.
 
-**A cell opens when the mouse button goes down, not on the click.** The press takes the caret out of its gap, and a gap above the table then goes. The table moves up a line under the mouse, so the button would come up on another element, and no click would come.
+**A cell is chosen when the mouse button goes down, not on the click.** The press takes the caret out of its gap, and a gap above the table then goes. The table moves up a line under the mouse, so the button would come up on another element, and no click would come. For the same reason, the second press of a double-click opens the cell the first chose, wherever it lands.
 
 **While a person works in a table, the page draws no caret in the text.** A cell or a range is chosen, or a cell is open. The format has no empty paragraph, so a caret beside a table would stand in a gap. That gap would push the table down a line after each action, and the next press would miss. So the table stays where it is, and the keys go to the chosen cell. Esc on a chosen cell, a press in the text, and an arrow key past the table's first or last row leave the table. The caret then comes back where the model holds it, in a gap too.
 
@@ -86,7 +86,7 @@
 
 * **Shift and an arrow key extend a range from an open cell**, as in a spreadsheet. Once the caret stands inside the cell's text, Shift+Left and Shift+Right select text instead.
 * **The range keeps the identities of its rows and columns, as a formula's range does.** A row added above it, a sort or an undo leaves it on the same cells. The page keeps no element and no place on the page across an action.
-* **On a chosen cell that is not open, the keys act on the range.** Delete and Backspace clear its cells as one step, and each cell keeps its look. Enter and F2 open the chosen cell, and a typed character opens it with that character. Ctrl+Z and Ctrl+Y undo and redo, as in the text. Esc first leaves the chosen cell alone, then leaves the table.
+* **On a chosen cell that is not open, the keys act on the range.** Delete and Backspace clear its cells as one step, and each cell keeps its look. F2 opens the chosen cell, and a typed character opens it with that character in place of its value. Enter moves the choice down and Tab right, Shift back. Ctrl+; and Ctrl+: type today's date or the time into it. Ctrl+Z and Ctrl+Y undo and redo, as in the text. Esc first leaves the chosen cell alone, then leaves the table.
 * **Copy, cut and paste act on the range.** A paste of one value fills every cell of the range. A paste of rows fills the table from the range's corner.
 * **A look applies to every cell of the range in one step.**
 
@@ -185,13 +185,31 @@
 * **Rows a filter or a closed group hides stay hidden on paper, as in Excel.** So a printout shows what the person sees.
 * **A divider ends a page.** Its line still shows at the page's end.
 * **The page always prints light, and the author's fills and colours print as the page shows them.** The browser would otherwise leave background colours out.
-* **A table wider than the page fits it**, each column keeping its share of the width. A long word wraps inside its cell.
+* **A table fits the page.** A column is never narrower than its longest word, and a number or a date stays on one line. The width left over goes by the columns' weights. Scaled down whole, a table set out for a wide window would break a short date apart.
+* **The row numbers' column keeps its place with no width.** Taken out of the rows, it would move every value one column to the left, under another column's name.
 
 **A table, chart, image or include can be left out of the output: `invisible="printing"` in its clause.** A table that only feeds a chart is the usual case. It still calculates, and the chart still draws from it.
 
 * **The attribute names the exception, so a clause without it prints.** A new block is in the output until its author says otherwise.
 * **While editing, such a block has a dashed frame and the words "Not in print or PDF"**, so its author always knows.
 * **The table menu's Table flyout holds Leave out of print. A chart, an image and an include have the button beside Remove.** Each change is one step of undo, and the button reads Put back in print once it is set.
+
+## Repeat
+
+**With nothing to redo, Redo becomes Repeat, as in Office: Ctrl+Y or F4 does the last command again where the person works now.** Insert column right then F4 inserts another column; Bold on one word then F4 makes the next selection bold.
+
+* **The button reads Repeat while it repeats, and Redo while something is left to redo.** Undo always comes back first.
+* **A command that asks for something is not repeated**, such as Rename or a note. Nor are typing and pasting.
+* **Any other change forgets what would be repeated**, so F4 never repeats a command from before the person typed.
+
+## Read-only
+
+**View, Read-only shows the document and takes no edit**, as Word's Read Mode and Excel's Protected View do. A person reading a file then changes nothing by a stray key.
+
+* **The ribbon and the blocks' buttons go, and a Read-only mark stands beside the document's name.**
+* **Every action that changes the document is refused at one place**, the call that runs it, so no key, paste or drop gets past.
+* **What only looks still works**: finding, filters, the contents, printing, saving a copy and exporting CSV. A press on a cell chooses it without opening it, so a range's sum still shows.
+* **The choice is this browser's own and is kept**, as the page's width is. Nothing goes into the file.
 
 ## The figures in the status line
 
@@ -215,6 +233,15 @@
 * **The heading being read is marked as the page scrolls**: the last one above the top of the reading area.
 * **The list follows every edit.** An action that changes no heading builds no list.
 * **Whether the panel shows is kept in the browser's storage, for each viewer.** It is a way of looking, so it stays out of the file. Where storage is off, the panel starts hidden.
+
+## A touch screen
+
+**On a touch screen, a long press on a cell opens the table's menu, and a double tap opens the cell** (`touch.js`). They stand where a mouse would right-click and double-click.
+
+* **A single tap chooses the cell**, through the mouse events the browser makes of a tap.
+* **A finger that moves more than a few pixels scrolls**, and presses nothing.
+* **A cell takes no text selection and no callout of its own.** Without that, the system's own menu would cover the table's.
+* **In a narrow window the ribbon is one row that scrolls sideways**, so the document keeps the height.
 
 ## What the editing page does not do yet
 

@@ -38,6 +38,7 @@ endif
 
 $(KSMD_OPEN_EXE): $(STAGE1_EXE) $(KSMD_OPEN_RES) tools/ksmd_open.kspl tools/ksmd_aim.kspl \
 		$(OPENER_SRC)
+	$(stop_ksmd_servers)
 	@echo "# BUILDING the launcher (out/ksmd_open.exe)"
 	$(call kspl_build,tools/ksmd_open.kspl,ksmd_open,,$(GUI_LDFLAGS) $(KSMD_OPEN_RES))
 	@echo "# built -> $(KSMD_OPEN_EXE)"

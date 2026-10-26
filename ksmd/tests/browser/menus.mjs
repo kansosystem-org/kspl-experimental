@@ -9,7 +9,7 @@ const H = "%ksmd 1\n\n";
 const check = (ok, what, detail) => verdict.check(ok, what, detail);
 
 export function menus({ browser, js, until, press, type, select, click, clickBelow, menu, point,
-  rightClick, doubleClickAt, dragTo, load, saves, source }) {
+  rightClick, doubleClickAt, dragTo, load, saves, source, openCell }) {
   return {
   // The menu bar: a press opens a menu, pointing switches while one is open, a flyout opens on
   // pointing, and Esc, a press outside and a chosen command close it. The keys work it too.
@@ -54,14 +54,16 @@ export function menus({ browser, js, until, press, type, select, click, clickBel
     const start = table(`| "pear" | 3 |\n| "fig" | 1 |\n| "apple" | 2 |\n`);
     await load(start);
     const label = () => js("document.activeElement.getAttribute('aria-label')");
-    await click('#doc td[data-r="0"][data-c="0"]');
+    const chosen = (r, c) => js(`document.activeElement.matches('#doc td.chosen[data-r="${r}"][data-c="${c}"]')`);
+    await openCell('#doc td[data-r="0"][data-c="0"]');
     await press("ArrowRight");
-    check(await label() === "Cell B1", "Right moves to the next cell, as Down moves to the next row");
+    check(await chosen(0, 1), "Right at the end of an open cell's text moves on to the next cell");
     await press("ArrowLeft");
-    check(await label() === "Cell A1", "and Left moves back");
+    check(await chosen(0, 0), "and Left on a chosen cell moves back");
+    await press("F2");
     await type("x");
     await press("ArrowLeft");
-    check(await label() === "Cell A1", "after typing, Left moves the caret inside the text first");
+    check(await label() === "Cell A1", "in an open cell, Left moves the caret inside the text first");
     await press("Escape");
     await click('#doc td[data-r="0"][data-c="1"]');
     await menu("sort-up");
@@ -103,7 +105,8 @@ export function menus({ browser, js, until, press, type, select, click, clickBel
       "and the column's arrow shows that it is narrowed");
     await click('#doc td[data-r="0"][data-c="0"]');
     await press("ArrowDown");
-    check(await label() === "Cell A3", "Down passes over a row the filter hides");
+    check(await js("document.activeElement.matches('#doc td.chosen[data-r=\"2\"][data-c=\"0\"]')"),
+      "Down passes over a row the filter hides");
     await press("Escape");
     await click('#doc th.name[data-c="1"] .filter-arrow');
     await click(".filter-panel summary");
@@ -119,12 +122,10 @@ export function menus({ browser, js, until, press, type, select, click, clickBel
     check(await js("!document.querySelector('.filter-panel')"), "Esc closes the panel and changes nothing");
     check(await visible() === 1, "so the rows stay as they were");
     await click('#doc td[data-r="0"][data-c="0"]');
-    await press("Escape");
     await menu("row-below");
     check(await visible() === 4, "a new row shows every row again, so the new row can be seen");
     await menu("undo");
     await click('#doc td[data-r="0"][data-c="1"]');
-    await press("Escape");
     await click('#doc td[data-r="0"][data-c="1"]');
     await press(";", CTRL);
     await press("Enter");
@@ -242,7 +243,7 @@ export function menus({ browser, js, until, press, type, select, click, clickBel
       JSON.stringify(copied));
 
     await load(table);
-    await click('#doc td[data-r="0"][data-c="0"]');
+    await openCell('#doc td[data-r="0"][data-c="0"]');
     await pasteInto('#doc .cell-input', 'Pens\t"1,234.5"\t=A1\r\n"two\nlines"\t\t12%\r\n');
     await saves("cells copied from Excel fill the table from the open cell, which grows",
       `${H}:::table name="t"\n| "a" | "b" | "" |\n| "Pens" | 1234.5 | =A1 |\n| "two\\nlines" | | "12%" |\n:::\n`);
@@ -271,7 +272,6 @@ export function menus({ browser, js, until, press, type, select, click, clickBel
     await load(`${H}:::table name="t"\n| "a" | "b" | "c" |\n| 1 | 2 | 3 |\n| 4 | 5 | 6 |\n:::\n`);
     // A first press takes the gap above the table away, so the table stands still for the drag.
     await click('#doc td[data-r="0"][data-c="0"]');
-    await press("Escape");
     await dragTo('#doc td[data-r="0"][data-c="0"]', '#doc td[data-r="1"][data-c="1"]');
     check(await js("document.querySelectorAll('#doc .in-range').length") === 4,
       "a drag across cells chooses the range between them, as in a spreadsheet");

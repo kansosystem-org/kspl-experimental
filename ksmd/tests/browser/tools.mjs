@@ -8,7 +8,7 @@ const H = "%ksmd 1\n\n";
 const check = (ok, what, detail) => verdict.check(ok, what, detail);
 
 export function tools({ browser, page, js, settle, until, press, type, select, click, menu, load,
-  saves, dragTo }) {
+  saves, dragTo, rightClick, openCell }) {
   const text = (selector) => js(`document.querySelector(${JSON.stringify(selector)}).textContent`);
   const found = () => text(".find-count");
   const inRange = () => js("Array.from(document.querySelectorAll('#doc .in-range'))" +
@@ -163,14 +163,12 @@ export function tools({ browser, page, js, settle, until, press, type, select, c
       await saves("Ctrl+R fills right from the left cell", table("| 1 | 1 |\n| 2 | |\n| 3 | |\n"));
       await menu("undo");
       await click('#doc td[data-r="0"][data-c="1"]');
-      await press("Escape");
       await click('#doc td[data-r="0"][data-c="1"]');
       await click('#doc td[data-r="2"][data-c="1"]', SHIFT);
       await menu("fill-down");
       await saves("the right-click menu's Fill down does the same", table("| 1 | =A1*2 |\n| 2 | =A2*2 |\n| 3 | =A3*2 |\n"));
       await menu("undo");
       await click('#doc td[data-r="0"][data-c="1"]');
-      await press("Escape");
       await click('#doc td[data-r="0"][data-c="1"]');
       await settle();
       check(await js("!!document.querySelector('#doc .fill-handle')"), "a chosen cell shows the fill handle");
@@ -182,7 +180,6 @@ export function tools({ browser, page, js, settle, until, press, type, select, c
       const counts = `${H}:::table name="n"\n| "n" |\n| 1 |\n| 2 |\n| |\n| |\n:::\n`;
       await load(counts);
       await click('#doc td[data-r="0"][data-c="0"]');
-      await press("Escape");
       await click('#doc td[data-r="1"][data-c="0"]', SHIFT);
       await settle();
       await dragTo("#doc .fill-handle", '#doc td[data-r="3"][data-c="0"]');
@@ -264,7 +261,6 @@ export function tools({ browser, page, js, settle, until, press, type, select, c
       await js("window.__file = null; window.__name = ''; URL.createObjectURL = (b) => { window.__file = b; return 'blob:x'; };" +
         "HTMLAnchorElement.prototype.click = function () { window.__name = this.download; };");
       await click('#doc td[data-r="0"][data-c="0"]');
-      await press("Escape");
       await menu("table-csv");
       // Decoding as text would drop the byte order mark, so the bytes are read.
       const got = await js("window.__file.arrayBuffer().then((b) => JSON.stringify([window.__name, " +
@@ -280,7 +276,7 @@ export function tools({ browser, page, js, settle, until, press, type, select, c
       await load(table(' choices=",Open|Done"', '| "Write" | "Maybe" |\n| "Read" | |\n'));
       check(await js("document.querySelector('#doc td[data-r=\"0\"][data-c=\"1\"]').classList.contains('off-list')"),
         "a cell off its column's list is marked");
-      await click('#doc td[data-r="1"][data-c="1"]');
+      await openCell('#doc td[data-r="1"][data-c="1"]');
       const offered = await js("(() => { const i = document.querySelector('#doc .cell-input'); " +
         "return Array.from(document.getElementById(i.getAttribute('list')).options, (o) => o.value).join('|'); })()");
       check(offered === "Open|Done", "an open cell of the column offers its choices", offered);
@@ -312,7 +308,6 @@ export function tools({ browser, page, js, settle, until, press, type, select, c
         "a cell that meets its column's rule takes the rule's colours, and one that does not keeps its own",
         `${await fill(0)} ${await fill(1)}`);
       await click('#doc td[data-r="1"][data-c="1"]');
-      await press("Escape");
       await menu("column-rule");
       check(await js("document.querySelector('.rule-panel .rule-kind').value") === "below",
         "Colour by value... opens a panel that shows the column's rule");
@@ -344,7 +339,6 @@ export function tools({ browser, page, js, settle, until, press, type, select, c
       const shown = await js("document.querySelector('#doc td[data-r=\"0\"][data-c=\"1\"]').textContent");
       check(shown === "2026-11-06", "a date plus days shows as a date", shown);
       await click('#doc td[data-r="0"][data-c="0"]');
-      await press("Escape");
       await settle();
       await dragTo("#doc .fill-handle", '#doc td[data-r="1"][data-c="0"]');
       await saves("the handle goes on with the next day", `${H}:::table name="t"\n| "day" | "next" |\n` +
@@ -356,7 +350,6 @@ export function tools({ browser, page, js, settle, until, press, type, select, c
       const table = ':::table name="t"\n| "item" | "cost" |\n| "Pens" | 3 |\n| "Ink" | 8 |\n:::\n';
       await load(`${H}${table}`);
       await click('#doc td[data-r="0"][data-c="0"]');
-      await press("Escape");
       await menu("table-chart");
       await saves("Insert chart puts a bar chart of the table after it",
         `${H}${table}\n:::chart table="t" kind="bar" labels="item" values="cost"\n:::\n`);
@@ -392,7 +385,6 @@ export function tools({ browser, page, js, settle, until, press, type, select, c
       const table = (cell) => `${H}Plan text.\n\n:::table name="t"\n| "a" |\n| ${cell} |\n:::\n`;
       await load(table("1"));
       await click('#doc td[data-r="0"][data-c="0"]');
-      await press("Escape");
       browser.answerPrompts("Why one?");
       await menu("note");
       browser.answerPrompts(null);
@@ -401,7 +393,6 @@ export function tools({ browser, page, js, settle, until, press, type, select, c
         "document.querySelector('#doc td[data-r=\"0\"][data-c=\"0\"]').title === 'Note: Why one?'"),
       "the cell is marked, and pointing at it shows the note");
       await click('#doc td[data-r="0"][data-c="0"]');
-      await press("Escape");
       await menu("note-resolve");
       await saves("Resolve note takes it away", table("1"));
       await click("#doc p");
@@ -493,7 +484,6 @@ export function tools({ browser, page, js, settle, until, press, type, select, c
       await press("Escape");
       await press("Escape");
       await click('#doc td[data-r="0"][data-c="0"]');
-      await press("Escape");
       await page("Input.dispatchMouseEvent", { type: "mousePressed", button: "right", clickCount: 1,
         ...(await js("(() => { const r = document.querySelector('#doc td.chosen').getBoundingClientRect(); " +
           "return { x: r.left + 4, y: r.top + 4 }; })()")) });
@@ -513,7 +503,6 @@ export function tools({ browser, page, js, settle, until, press, type, select, c
       const table = (rows) => `${H}:::table name="t"\n| "a" | "b" |\n${rows}:::\n`;
       await load(table('| 1 | 2 |\n| "x" | 3 |\n| 4 | |\n| | |\n'));
       await click('#doc td[data-r="3"][data-c="0"]');
-      await press("Escape");
       await press("=", ALT);
       const typed = await js("(() => { const i = document.querySelector('#doc .cell-input'); " +
         "return `${i.value}|${i.value.slice(i.selectionStart, i.selectionEnd)}`; })()");
@@ -533,7 +522,6 @@ export function tools({ browser, page, js, settle, until, press, type, select, c
       check(await js("document.getElementById('status').textContent").then((t) => t.startsWith("The row under")),
         "a row under the range that holds a value is never written over");
       await click('#doc td[data-r="0"][data-c="0"]');
-      await press("Escape");
       for (let k = 0; k < 3; k++) await press("ArrowDown", SHIFT);
       await menu("autosum-max");
       await saves("past the table's end a total adds a row, and the flyout gives Max too",
@@ -552,24 +540,26 @@ export function tools({ browser, page, js, settle, until, press, type, select, c
         "return b[0].classList.contains('print-hidden') && !b[1].classList.contains('print-hidden'); })()"),
       "a table left out of print is marked while editing");
       await click('#doc .table[data-name="t"] td[data-r="0"][data-c="0"]');
-      await press("Escape");
       await menu("filter-value");
       await page("Emulation.setEmulatedMedia", { media: "print" });
       const shown = await js(`JSON.stringify((() => {
         const d = (el) => (el ? getComputedStyle(el).display : "absent");
         const t = document.querySelector('#doc .table[data-name="t"]');
         return [d(document.querySelector('#doc .table[data-name="calc"]')), d(t),
-          d(t.querySelector('thead tr')), d(t.querySelector('th.row-number')), d(t.querySelector('.table-name')),
+          d(t.querySelector('thead tr')), t.querySelector('th.row-number').getBoundingClientRect().width < 1,
+          d(t.querySelector('.table-name')),
           d(t.querySelector('.filter-arrow')), d(document.querySelector('.top')),
           Array.from(t.querySelectorAll('tbody tr')).filter((r) => d(r) !== 'none').length,
-          getComputedStyle(document.querySelector('#doc .divider')).breakAfter];
+          getComputedStyle(document.querySelector('#doc .divider')).breakAfter,
+          Array.from(t.querySelectorAll('th.name'), (th, c) => th.getBoundingClientRect().left ===
+            t.querySelector('tbody tr:not([hidden]) td[data-c="' + c + '"]').getBoundingClientRect().left)
+            .every(Boolean)];
       })())`);
       await page("Emulation.setEmulatedMedia", { media: "" });
-      check(shown === '["none","block","none","none","none","none","none",1,"page"]',
+      check(shown === '["none","block","none",true,"none","none","none",1,"page",true]',
         "in print the left-out table, the letters, row numbers, controls and menus go, a filter's " +
-        "hidden row stays hidden, and a divider ends the page", shown);
+        "hidden row stays hidden, a divider ends the page, and each value stands under its name", shown);
       await click('#doc .table[data-name="t"] td[data-r="0"][data-c="0"]');
-      await press("Escape");
       await menu("filter-clear");
       await menu("table-print");
       await saves("the table menu's Leave out of print marks the table in the file",
@@ -583,6 +573,127 @@ export function tools({ browser, page, js, settle, until, press, type, select, c
         "---\n\nEnd.\n");
       check(await js("!document.querySelector('.files [data-cmd=\"print\"]').hidden"),
         "File holds Print, which saves a PDF through the browser's dialog");
+    },
+
+    // View, Read-only: the document shows and takes no edit; finding and filters still work.
+    async readOnly() {
+      const start = `${H}Words.\n\n:::table name="t"\n| "a" |\n| 1 |\n| 2 |\n:::\n`;
+      await load(start);
+      await menu("read-only");
+      check(await js("document.body.classList.contains('read-only') && " +
+        "document.getElementById('doc').contentEditable === 'false' && " +
+        "getComputedStyle(document.querySelector('.ribbon')).display === 'none' && " +
+        "getComputedStyle(document.querySelector('.read-only-mark')).display !== 'none'"),
+      "View, Read-only takes the ribbon away and marks the page read-only");
+      await click("#doc p");
+      await type("x");
+      await click('#doc td[data-r="0"][data-c="0"]');
+      check(await js("!document.querySelector('#doc .cell-input') && " +
+        "!!document.querySelector('#doc td.chosen[data-r=\"0\"]')"),
+      "a press on a cell chooses it without opening it");
+      await press("Delete");
+      await saves("typing and Delete change nothing", start);
+      await rightClick('#doc td.chosen');
+      check(await js("document.querySelector('.menu.context [data-cmd=\"row-above\"]').disabled && " +
+        "!document.querySelector('.menu.context [data-cmd=\"filter-value\"]').disabled"),
+      "the table menu leaves only what looks: a filter, not a new row");
+      await press("Escape");
+      await click('#doc td[data-r="0"][data-c="0"]');
+      await menu("filter-value");
+      check(await js("Array.from(document.querySelectorAll('#doc tbody tr')).filter((r) => !r.hidden).length") === 1,
+        "a filter still narrows the rows");
+      await menu("filter-clear");
+      await menu("read-only");
+      await click("#doc p");
+      await type("x");
+      check((await js("ksmd.source()")) !== start, "View, Read-only again turns editing back on");
+      check(await js("Array.from(document.querySelectorAll('.ribbon [data-cmd], .menu [data-cmd=\"replace\"]'))" +
+        ".filter((b) => b.disabled && b.dataset.cmd !== 'undo' && b.dataset.cmd !== 'redo').length === 0"),
+      "and every tool of the ribbon can be pressed again");
+    },
+
+    // Repeat: with nothing to redo, Ctrl+Y and F4 do the last command again, where the person is.
+    async repeat() {
+      const width = () => js("document.querySelector('#doc .table thead tr:last-child').cells.length - 1");
+      const redo = () => js("(() => { const b = document.querySelector('.ribbon [data-cmd=\"redo\"]'); " +
+        "return `${b.lastChild.data.trim()}:${b.disabled}`; })()");
+      await load(`${H}One two\n\n:::table name="t"\n| "a" | "b" |\n| 1 | 2 |\n:::\n`);
+      await click('#doc td[data-r="0"][data-c="0"]');
+      await menu("column-right");
+      check(await width() === 3 && await redo() === "Repeat:false",
+        "after a command, Redo becomes Repeat", `${await width()} ${await redo()}`);
+      await press("y", CTRL);
+      check(await width() === 4, "Ctrl+Y inserts another column", String(await width()));
+      await press("F4");
+      check(await width() === 5, "and so does F4", String(await width()));
+      await menu("undo");
+      check(await redo() === "Redo:false", "after an undo it is Redo again", await redo());
+      await press("y", CTRL);
+      check(await width() === 5, "and Ctrl+Y redoes", String(await width()));
+      await click("#doc p");
+      await select(0, 0, 0, 3);
+      await press("b", CTRL);
+      await select(0, 0, 4, 7);
+      await press("F4");
+      check((await js("ksmd.source()")).includes("**One** **two**"),
+        "in text, F4 repeats a mark on a new selection", await js("ksmd.source()"));
+      await select(0, 0, 7);
+      await type("!");
+      check(await redo() === "Redo:true", "typing forgets what would be repeated", await redo());
+    },
+
+    // A press chooses a cell and a double press opens it, as in a spreadsheet.
+    async cellPress() {
+      const table = (v) => `${H}:::table name="t"\n| "a" |\n| ${v} |\n:::\n`;
+      await load(table('"Pens"'));
+      await click('#doc td[data-r="0"][data-c="0"]');
+      check(await js("!document.querySelector('#doc .cell-input') && " +
+        "document.activeElement.matches('#doc td.chosen[data-r=\"0\"]')"),
+      "a press chooses the cell without opening it");
+      await type("Ink");
+      await press("Enter");
+      await saves("typing on a chosen cell replaces its value", table('"Ink"'));
+      await openCell('#doc td[data-r="0"][data-c="0"]');
+      check(await js("(() => { const i = document.querySelector('#doc .cell-input'); " +
+        "return !!i && i.selectionStart === 3 && i.selectionEnd === 3; })()"),
+      "a double press opens it, the caret after its text");
+      await type("s");
+      await press("Enter");
+      await saves("so typing there adds to the value", table('"Inks"'));
+    },
+
+    // A touch screen: a long press opens the table's menu, and a double tap opens the cell.
+    async touch() {
+      await load(`${H}:::table name="t"\n| "a" | "b" |\n| 1 | 2 |\n:::\n`);
+      // Where cell B1 stands now: choosing a cell can take the empty line above the table away.
+      const where = async () => {
+        const at = await js("(() => { const r = document.querySelector('#doc td[data-r=\"0\"][data-c=\"1\"]')" +
+          ".getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; })()");
+        return [{ x: at[0], y: at[1] }];
+      };
+      let point = await where();
+      const tap = async () => {
+        await page("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: point });
+        await page("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+      };
+      await page("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 1 });
+      try {
+        await page("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: point });
+        await new Promise((r) => setTimeout(r, 700));
+        await page("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        check(await js("!document.querySelector('.menu.context').hidden && " +
+          "document.querySelector('#doc td.chosen').dataset.c === '1'"),
+        "a long press on a cell chooses it and opens the table's menu");
+        await press("Escape");
+        point = await where();
+        await tap();
+        await tap();
+        check(await until("document.activeElement.getAttribute('aria-label') === 'Cell B1'"),
+          "a double tap opens the cell");
+        await press("Escape");
+      } finally {
+        await page("Emulation.setTouchEmulationEnabled", { enabled: false });
+      }
     },
 
     async contents() {

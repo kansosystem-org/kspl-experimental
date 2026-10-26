@@ -23,7 +23,7 @@ const check = (ok, what, detail) => verdict.check(ok, what, detail);
 const browser = await launch(binary, work);
 const page = browser.page;
 const { js, settle, until, press, type, select, click, clickBelow, drag, menu, point, doubleClickAt,
-  rightClick, dragTo } = driver(page);
+  rightClick, dragTo, openCell } = driver(page);
 
 async function load(source) {
   const r = await js(`ksmd.load(${JSON.stringify(source)})`);
@@ -247,8 +247,9 @@ const sections = {
     await press("Enter");
     check(await js("document.querySelector('#doc td[data-r=\"0\"][data-c=\"2\"]').textContent") === "15",
       "editing a value calculates the formula again");
-    await click('#doc td[data-r="0"][data-c="2"]');
+    await openCell('#doc td[data-r="0"][data-c="2"]');
     check(await js("document.activeElement.value") === "=A1*B1", "a formula cell edits its formula");
+    await press("Escape");
     await type("=A1+B1");
     await press("Enter");
     check(await js("document.querySelector('#doc td[data-r=\"0\"][data-c=\"2\"]').textContent") === "8",
@@ -329,12 +330,15 @@ const sections = {
     await stays("a press on a row number chooses the row, and the table stays", at);
     check(await focus() === "1:0", "and the keys go to its first cell", await focus());
     await press("ArrowDown");
-    check(await focus() === "Cell A3", "an arrow key on the chosen cell opens the next one", await focus());
+    check(await focus() === "2:0", "an arrow key on the chosen cell chooses the next one, as in a spreadsheet",
+      await focus());
+    await press("ArrowUp");
+    await press("Enter");
+    check(await focus() === "2:0", "and so does Enter, downward", await focus());
+    await press("F2");
+    check(await focus() === "Cell A3", "F2 opens the chosen cell", await focus());
     await press("Escape");
     check(await focus() === "2:0", "Esc in an open cell leaves it chosen", await focus());
-    await press("Enter");
-    check(await focus() === "Cell A3", "Enter on the chosen cell opens it", await focus());
-    await press("Escape");
     await press("7");
     await press("Tab");
     check(await cell(2, 0) === "7", "typing on the chosen cell opens it with that character");
@@ -352,7 +356,6 @@ const sections = {
     check(await js("!!document.querySelector('#doc .gap') && getSelection().focusNode.closest('.gap') !== null"),
       "and the caret comes back where it stood, on the empty line above the table");
     await click('#doc td[data-r="0"][data-c="0"]');
-    await press("Escape");
     await click("#doc p");
     await press("End");
     check(await focus() === "doc" && await js("getSelection().focusNode.parentElement.matches('#doc p')"),
@@ -436,8 +439,8 @@ const sections = {
     };
     // Alt+Left outside a cell goes back in the browser's history, so a cell that does not open
     // stops the section.
-    const openCell = async (column) => {
-      await click(`#doc td[data-r="0"][data-c="${column}"]`);
+    const openAt = async (column) => {
+      await openCell(`#doc td[data-r="0"][data-c="${column}"]`);
       const name = `Cell ${"ABC"[column]}1`;
       if (!await until(`document.activeElement.getAttribute("aria-label") === "${name}"`, 3000)) {
         throw new Error(`${name} did not open; the focus is on ${await js("document.activeElement.outerHTML.slice(0, 80)")}`);
@@ -475,7 +478,7 @@ const sections = {
     await load(weighted);
     check(await js("document.getElementById('doc').firstElementChild.classList.contains('gap')"),
       "an opened document that starts with a table puts the caret on an empty line above it");
-    await openCell(1);
+    await openAt(1);
     check(true, "a press on a cell opens it, although the empty line above the table goes");
     await resized(() => press("ArrowRight", ALT));
     check(await until("document.activeElement.getAttribute('aria-label') === 'Cell B1'", 3000),
@@ -490,14 +493,14 @@ const sections = {
     const wider = await widths();
     check(wider[1] > wider[0] && more[1] / (more[1] + more[2]) > wider[1] / (wider[1] + wider[2]),
       "each press is one undo step, and a second press makes it wider again", JSON.stringify(wider));
-    await openCell(1);
+    await openAt(1);
     for (let i = 0; i < 3; i++) await resized(() => press("ArrowLeft", ALT));
     const narrower = await widths();
     check(narrower[1] < narrower[0] && narrower[0] * 3 === narrower[1] + narrower[2],
       "Alt+Left makes it narrower", JSON.stringify(narrower));
     for (let i = 0; i < 4; i++) await menu("undo");
     await saves("undo goes back one press at a time", weighted);
-    await openCell(2);
+    await openAt(2);
     await resized(() => press("ArrowRight", ALT));
     const last = await widths();
     check(last[2] / (last[1] + last[2]) > 2 / 3 && last[0] * 3 === last[1] + last[2],
@@ -513,7 +516,7 @@ const sections = {
     await cellsKept("and its cells stay as they were");
     const single = `${H}:::table name="t"\n| "a" |\n| 1 |\n:::\n`;
     await load(single);
-    await openCell(0);
+    await openAt(0);
     await press("ArrowRight", ALT);
     check(await until("document.getElementById('status').textContent.startsWith('A table with one column')",
       3000), "a table of one column has no width to share, and the page says so");
@@ -527,14 +530,12 @@ const sections = {
     const td = (r, c) => js(`document.querySelector('#doc td[data-r="${r}"][data-c="${c}"]').textContent`);
     await load(table);
     await click('#doc td[data-r="0"][data-c="0"]');
-    await press("Escape");
     await menu("format-grouped");
     await saves("Thousands gives the chosen column a format in the source",
       `${H}:::table name="t" formats="grouped:2,"\n| "a" | "b" |\n| 1234.5 | =A1/10000 |\n| "x" | |\n:::\n`);
     check(await td(0, 0) === "1,234.50" && await td(1, 0) === "x",
       "the number shows with a separator and two places; text shows as it is");
     await click('#doc td[data-r="0"][data-c="1"]');
-    await press("Escape");
     await menu("format-percent");
     check(await td(0, 1) === "12%" && await td(1, 1) === "", "a formula's result shows as a percent; an empty cell stays empty");
     await menu("format-more");
@@ -545,7 +546,7 @@ const sections = {
     check(await td(0, 1) === "¥0", "a currency typed in lower case is taken, with the places its money has");
     await menu("undo");
     check(await td(0, 1) === "12.3%", "each change is one step of undo");
-    await click('#doc td[data-r="0"][data-c="0"]');
+    await openCell('#doc td[data-r="0"][data-c="0"]');
     check(await js("document.querySelector('#doc .cell-input').value") === "1234.5",
       "an open cell edits the number it holds, not the shown text");
     await press("Escape");
@@ -557,7 +558,6 @@ const sections = {
     check(copied === "1234.5\r\n", "a copy takes the number as calculated, so no digit is lost", JSON.stringify(copied));
     await menu("format-none");
     await click('#doc td[data-r="0"][data-c="1"]');
-    await press("Escape");
     await menu("format-none");
     await saves("General on each column leaves the format out of the source", table);
   },
@@ -598,9 +598,9 @@ const sections = {
 };
 
 Object.assign(sections, menus({ browser, js, until, press, type, select, click, clickBelow, menu,
-  point, rightClick, doubleClickAt, dragTo, load, saves, source }));
+  point, rightClick, doubleClickAt, dragTo, load, saves, source, openCell }));
 Object.assign(sections, tools({ browser, page, js, settle, until, press, type, select, click, menu, load,
-  saves, dragTo }));
+  saves, dragTo, rightClick, openCell }));
 
 try {
   const opened = await page("Page.navigate", { url: pathToFileURL(path.resolve(pageFile)).href });

@@ -475,9 +475,19 @@ qwen: $(STAGE1_EXE)
 	$(call kspl_build,ksai/examples/qwen_infer/main.kspl,qwen_infer,$(AI_KSPL_FLAGS))
 	@echo "# built -> $(OUT_DIR)/qwen_infer.exe"
 
+# --- Servers ksmd's launcher left running --- **On Windows a running program's file can be neither
+# replaced nor removed**, so a build or a clean would stop with "Permission denied". The launcher
+# stops them first; an open page keeps its edits as a draft, and opens again on a double-click.
+ifeq ($(PLATFORM),win32)
+stop_ksmd_servers = @if [ -x "$(KSMD_OPEN_EXE)" ]; then "./$(KSMD_OPEN_EXE)" --stop-all || true; fi
+else
+stop_ksmd_servers =
+endif
+
 # --- The static file server (kssrv/) --- Build only (it stays resident, so make does not run it).
 ## Run|kssrv|Build the HTTP server that serves static files
 kssrv: $(STAGE1_EXE)
+	$(stop_ksmd_servers)
 	@echo "# BUILDING KSSRV (static file HTTP server)"
 	$(call kspl_build,kssrv/main.kspl,kssrv,)
 	@echo "# built -> $(OUT_DIR)/kssrv.exe (try: ./$(OUT_DIR)/kssrv.exe 8080 .)"
@@ -524,6 +534,7 @@ include mk/help.mk
 # into its own). What `install-lsp` and the `fim-*` goals write is kept: it is used, not rebuilt.
 ## Build-and-install|clean|Remove `out/` and each package's `out/`
 clean:
+	$(stop_ksmd_servers)
 	@rm -rf "$(OUT_DIR)" $(wildcard */out)
 	@echo "Cleaned $(OUT_DIR) $(wildcard */out)"
 

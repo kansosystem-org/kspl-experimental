@@ -57,6 +57,11 @@ function ksmdStart(root, bar, status, wasmBytes) {
     // Runs one action and shows its result; returns the result, or null when the page stopped.
     ks.act = (name, ...args) => {
       if (ks.stopped) return null;
+      // Read-only takes every action that changes the document; showing it again is no change.
+      if (ks.readOnly && name !== "ksmd_web_render" && name !== "ksmd_web_selection") {
+        ks.say("The page is read-only. View, Read-only turns editing on again.");
+        return null;
+      }
       let r;
       try {
         r = JSON.parse(ks.out(w[name](...args)));
@@ -73,8 +78,11 @@ function ksmdStart(root, bar, status, wasmBytes) {
       ks.sel = r.sel;
       ks.say(r.ok ? "" : r.why);
       // The menu and the ribbon each hold Undo and Redo.
-      for (const el of document.querySelectorAll('[data-cmd="undo"]')) el.disabled = r.undo !== 1;
-      for (const el of document.querySelectorAll('[data-cmd="redo"]')) el.disabled = r.redo !== 1;
+      ks.canUndo = r.undo === 1;
+      ks.canRedo = r.redo === 1;
+      for (const el of document.querySelectorAll('[data-cmd="undo"]')) el.disabled = !ks.canUndo;
+      if (r.changed === 1 && ks.changedBy) ks.changedBy(name);
+      if (ks.showRedo) ks.showRedo();
       if (r.changed === 1) {
         for (const f of ks.changed) f();
         if (api.onchange) api.onchange();
@@ -152,9 +160,13 @@ function ksmdStart(root, bar, status, wasmBytes) {
     ksmdInput(ks);
     ksmdCommands(ks);
     ksmdMenus(ks);
+    ksmdTouch(ks);
     ksmdRibbon(ks);
     ksmdFind(ks);
     ksmdContents(ks);
+    try {
+      if (localStorage.getItem("ksmd.readonly") === "1") ks.setReadOnly(true);
+    } catch (_) { /* a browser that keeps nothing opens for editing */ }
 
     const api = {
       // Opens a document's source, as text or as bytes; on refusal the open document stays, and
@@ -239,13 +251,67 @@ function ksmdCommands(ks) {
       TABLE_GROUPS.find(([group]) => group === name)[1].map(([cmd]) => cmd)),
     "fill-down", "fill-right", "column-choices", "column-rule", "group-rows", "ungroup-rows", "group-hide", "group-show"]);
 
+  // Repeat, as Office's: with nothing to redo, Redo (Ctrl+Y) and F4 do the last command again where
+  // the person works now. A command that asks for something, typing and pasting are not repeated,
+  // and a change none of the commands below made forgets what would be.
+  const REPEATS = new Set([...Object.keys(kinds), ...Object.keys(marks), ...Object.keys(rows),
+    ...Object.keys(columns), ...Object.keys(aligns), "column-fit", "fill-down", "fill-right",
+    "sort-up", "sort-down", "group-rows", "ungroup-rows", "group-hide", "group-show",
+    "table-print", "format-none", "format-number", "format-grouped", "format-percent",
+    "format-more", "format-fewer", "indent", "outdent", "divider", "date", "time", "look-clear"]);
+  let repeat = null; // the last command that can be repeated, as a function, or null
+  let running = 0; // how deep commands run, so a change can be told from one a command made
+  let acted = false; // whether the running command changed the document
+  ks.changedBy = () => {
+    if (running > 0) acted = true;
+    else repeat = null;
+  };
+  // Shows Redo, or Repeat where nothing is left to redo and a command can be repeated.
+  const label = (el, text) => {
+    for (const n of el.childNodes) if (n.nodeType === 3 && n.data.trim()) n.data = text;
+  };
+  ks.showRedo = () => {
+    const repeating = !ks.canRedo && !!repeat;
+    for (const el of document.querySelectorAll('[data-cmd="redo"]')) {
+      el.disabled = ks.readOnly || !(ks.canRedo || repeat);
+      label(el, repeating ? "Repeat" : "Redo");
+      if (el.closest(".ribbon")) el.title = repeating ? "Repeat (Ctrl+Y, F4)" : "Redo (Ctrl+Y)";
+    }
+  };
+  const runs = (name, f) => {
+    running += 1;
+    if (running === 1) acted = false;
+    try {
+      return f();
+    } finally {
+      running -= 1;
+      if (running === 0) {
+        if (REPEATS.has(name)) repeat = () => ks.command(name);
+        else if (acted && name !== "undo" && name !== "redo") repeat = null;
+        ks.showRedo();
+      }
+    }
+  };
+  ks.repeat = () => (ks.canRedo || !repeat ? null : repeat());
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "F4" || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+    e.preventDefault();
+    ks.repeat();
+  }, true);
+
   ks.command = (name) => {
+    if (name === "redo" && !ks.canRedo) return ks.repeat();
+    return runs(name, () => command(name));
+  };
+
+  const command = (name) => {
     ks.flush();
     ks.table.take();
     if (name.startsWith("file-")) return ks.fileCommand ? ks.fileCommand(name) : null;
     if (name === "undo") return ks.act("ksmd_web_undo");
     if (name === "find" || name === "replace") return ks.find.open(name === "replace");
     if (name === "contents") return ks.contents.toggle();
+    if (name === "read-only") return ks.setReadOnly(!ks.readOnly);
     if (name === "print") return window.print();
     if (name === "note" || name === "note-resolve") return ks.notes.ask(name === "note-resolve");
     if (name === "width-full" || name === "width-reading") return ks.setWidth(name === "width-reading");
@@ -280,6 +346,12 @@ function ksmdCommands(ks) {
   // A fill and a size belong to cells alone, so in text Clear clears the alignment.
   const parts = { color: 0, fill: 1, size: 2, align: 3, all: 4 };
   ks.applyLook = (part, value) => {
+    const r = runs("look", () => look(part, value));
+    if (r && r.ok) repeat = () => ks.applyLook(part, value);
+    ks.showRedo();
+    return r;
+  };
+  const look = (part, value) => {
     ks.flush();
     if (ks.where === "cell" && chosen()) {
       const r = ks.table.range();
@@ -290,6 +362,25 @@ function ksmdCommands(ks) {
     if (part === "align" || part === "all") return ks.act("ksmd_web_align", ks.put(part === "all" ? "" : value));
     if (part === "color") return ks.act("ksmd_web_text_color", ks.put(value));
     ks.say("Fill colours and font sizes apply to table cells. Choose cells first.");
+    return null;
+  };
+
+  // View, Read-only: the page shows the document and takes no edit, as Word's Read Mode does. The
+  // ribbon and the blocks' buttons go, a cell is chosen but never opened, and finding, filters
+  // and printing still work. The choice is this browser's own, as the width is.
+  ks.readOnly = false;
+  ks.setReadOnly = (on) => {
+    if (on) ks.table.take();
+    ks.readOnly = on;
+    document.body.classList.toggle("read-only", on);
+    ks.root.contentEditable = on ? "false" : "true";
+    for (const el of document.querySelectorAll('[data-cmd="read-only"]')) {
+      el.setAttribute("aria-checked", String(on));
+    }
+    ks.enableTable();
+    try {
+      localStorage.setItem("ksmd.readonly", on ? "1" : "0");
+    } catch (_) { /* a browser that keeps nothing opens for editing next time */ }
     return null;
   };
 
@@ -320,13 +411,27 @@ function ksmdCommands(ks) {
     return el && el.classList.contains("table") ? c : null;
   };
 
-  // Enables only the table commands that can act now, so no item is pressed for nothing.
+  // Enables only the commands that can act now, so no item is pressed for nothing. Read-only
+  // leaves those that only look: finding, the view, printing, files, filters and CSV.
+  const LOOKS = new Set(["find", "contents", "width-full", "width-reading", "read-only", "print",
+    "file-open", "file-save", "file-save-as", "filter-column", "filter-value", "filter-clear",
+    "table-csv"]);
   ks.enableTable = () => {
     const c = chosen();
+    ks.showRedo();
     for (const el of document.querySelectorAll(".menu [data-cmd], .ribbon [data-cmd]")) {
       const name = el.dataset.cmd;
-      if (!onTable.has(name)) continue;
-      el.disabled = !c || (name === "filter-clear" && !ks.filter.on(c.block)) ||
+      if (name === "undo") {
+        el.disabled = ks.readOnly || !ks.canUndo;
+        continue;
+      }
+      if (name === "redo") continue;
+      if (!onTable.has(name)) {
+        el.disabled = ks.readOnly && !LOOKS.has(name);
+        continue;
+      }
+      el.disabled = !c || (ks.readOnly && !LOOKS.has(name)) ||
+        (name === "filter-clear" && !ks.filter.on(c.block)) ||
         ((name === "filter-value" || name.startsWith("row-")) && c.row < 0);
       if (name === "table-print") {
         el.textContent = c && leftOut(c.block) ? "Put back in print" : "Leave out of print";

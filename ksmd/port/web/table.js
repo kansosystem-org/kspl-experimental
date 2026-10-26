@@ -245,7 +245,9 @@ function ksmdTable(ks) {
   // The table and cell the row and column commands act on.
   ks.cell = null;
 
-  function edit(el) {
+  // Chooses a cell, or with `opening` opens it to edit, as a spreadsheet's double-click or F2 does,
+  // the caret at the end. With `whole`, all of its text is selected, so what is typed replaces it.
+  function edit(el, opening = true, whole = false) {
     if (open && open.input.parentNode === el) return;
     take();
     const block = blockOf(el);
@@ -253,6 +255,12 @@ function ksmdTable(ks) {
     const column = Number(el.dataset.c);
     ks.cell = { block, row, column };
     ks.setPlace("cell");
+    // A chosen cell takes keys, copies and a range's sum; read-only only ever chooses.
+    if (ks.readOnly || !opening) {
+      ks.range.collapse();
+      ks.range.focus();
+      return;
+    }
     const input = document.createElement("input");
     input.className = "cell-input";
     // An input asks for about 20 characters of width; given none, opening a cell moves no column.
@@ -283,8 +291,8 @@ function ksmdTable(ks) {
       if (open && open.input === input) take();
     });
     input.focus();
-    // All of it is selected, so typing replaces the value, as a spreadsheet's cell does.
-    input.select();
+    if (whole) input.select();
+    else input.setSelectionRange(input.value.length, input.value.length);
   }
 
   // Takes the open cell's text into the model; the table is then shown again with its values.
@@ -316,12 +324,12 @@ function ksmdTable(ks) {
     return false;
   }
 
-  function moveTo(block, row, column) {
+  function moveTo(block, row, column, opening = false, whole = false) {
     const s = size(block);
     if (row < -1) return leave(block, false);
     if (row >= s.rows) return leave(block, true);
     const el = find(block, row, Math.max(0, Math.min(s.columns - 1, column)));
-    if (el) edit(el);
+    if (el) edit(el, opening, whole);
   }
 
   // Leaves the table for the gap before or after it.
@@ -339,7 +347,7 @@ function ksmdTable(ks) {
       e.preventDefault();
       take();
       widen(block, column, e.key === "ArrowRight");
-      moveTo(block, row, column);
+      moveTo(block, row, column, true);
       return;
     }
     if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === ";" || e.key === ":")) {
@@ -495,8 +503,10 @@ function ksmdTable(ks) {
     ks.range.set(block, row, column, null);
   }
 
-  // A cell opens on the press, not on the click. A press moves the document's caret out of its
-  // gap, which can shift the table, so the button would come up elsewhere and no click would come.
+  // A press chooses a cell and a double press opens it, as in a spreadsheet; both on the press,
+  // not the click. A press moves the document's caret out of its gap, which can shift the table,
+  // so the button would come up elsewhere and no click would come.
+  let pressed = null; // the cell a single press chose, which a second press opens
   ks.root.addEventListener("mousedown", (e) => {
     // A table shown from an included file edits in that file's own tab.
     if (!e.target.closest || e.target.closest(".include")) return;
@@ -515,6 +525,17 @@ function ksmdTable(ks) {
         return fit(blockOf(bordered), column);
       }
     }
+    // The second press of a double-click opens the cell the first chose, wherever it lands now:
+    // choosing can take an empty line above the table away, and the table moves under the pointer.
+    if (e.detail >= 2 && e.button === 0 && pressed && !open) {
+      // No other press handler acts on it, such as the one that puts the caret in a gap.
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      const c = pressed;
+      pressed = null;
+      return moveTo(c.block, c.row, c.column, true);
+    }
+    pressed = null;
     const el = e.target.closest(".table [data-r]");
     // A right press inside the chosen range keeps it, so the menu acts on the whole range.
     if (el && e.button === 2 && inRange(blockOf(el), Number(el.dataset.r), Number(el.dataset.c))) {
@@ -530,7 +551,8 @@ function ksmdTable(ks) {
     }
     if (el && !el.querySelector("input")) {
       e.preventDefault();
-      edit(el);
+      edit(el, false);
+      if (e.button === 0 && !e.shiftKey) pressed = ks.cell;
     }
   });
 
@@ -581,15 +603,20 @@ function ksmdTable(ks) {
     format,
     fit,
     range: () => ks.range.rect(),
-    // Opens a cell, or leaves the table past its first or last row.
-    open: moveTo,
+    // Opens a cell to edit, or leaves the table past its first or last row; with `whole`, what is
+    // typed replaces its text.
+    open: (block, row, column, whole = false) => moveTo(block, row, column, true, whole),
+    // Chooses a cell, or leaves the table past its first or last row.
+    choose: (block, row, column) => moveTo(block, row, column, false),
+    // The row `dr` steps from `row`, passing over the rows a filter or a group hides.
+    step: (block, row, dr) => stepRow(block, row, dr),
     // The cell being edited, whose row a filter keeps in sight: { block, row } or null.
     editing: () => (open ? { block: open.block, row: open.row } : null),
     // Whether an event belongs to a cell's own input rather than to the document.
     owns: (target) => !!(target && target.closest && target.closest(".table")),
     // Opens a cell with text typed in and part of it selected, as AutoSum leaves its formula.
     openWith: (block, row, column, text, from, to) => {
-      moveTo(block, row, column);
+      moveTo(block, row, column, true);
       if (!open) return;
       open.input.value = text;
       open.input.setSelectionRange(from, to);
@@ -597,7 +624,7 @@ function ksmdTable(ks) {
     // Opens the first name of a new table to edit.
     editFirst: (block) => {
       const el = find(block, -1, 0);
-      if (el) edit(el);
+      if (el) edit(el, true, true);
     },
   };
 }
