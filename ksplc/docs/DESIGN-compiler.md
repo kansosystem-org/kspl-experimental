@@ -201,8 +201,7 @@ Each block is followed by a blank line. **`[AST Cache]` shows the disk cache's h
 
 | verdict | how it behaves |
 | :-- | :-- |
-| the peak memory | moves a whole chunk at a time |
-| the AST arena's usage against a baseline ("Arena's implementation: a linked list of chunks and bump allocation") | moves continuously, so only it catches growth within a chunk; both memory figures are needed |
+| the peak memory | moves a whole chunk at a time, so growth inside a chunk goes unseen until it takes a new one |
 | the two node sizes ("A tree node's size is fixed by rule and guarded") | fixed by rule |
 | (the compile time) | recorded beside them, decides nothing: it measures the machine and its load as much as the work |
 
@@ -276,7 +275,7 @@ Rules 2 and 3 are explained in "The normalized AST's invariants: no crash, no di
   * Caution: **Do not add a way to pass a kind as a string.** `String_pool.intern` issues a new number for a string it does not know (`base/core.kspl`). So a typo such as `"stmt_bock"` makes a node whose kind_id exceeds `k_max`. It matches no comparison and flows to the end without a single diagnostic. An enum stops the typo where it is written.
   * The one conversion from a string to a kind is `Ast_node.peek_kind_id`. `parse/load.kspl` uses it for KSPEG's rule names, which come from the grammar file as strings. Everything else reads `kind_id == .k_xxx`.
 * Rule 5. **A local the compiler adds is named by `made_name` in `base/c_name.kspl`.** Such locals are a `catch`'s unnamed error, Lower's temporaries, the collection and the index of a `for … in`, and a closure's environment value. The name opens with `_%`, and no identifier can hold `%`, so no name in the source equals it, whatever the source declares. Each backend spells it in a space of its own:
-  * C spells it `__kspl_<stem>` (`c_safe_name_to`). A source's name reaches that space only with `_kw` after it.
+  * C spells it `__k_<stem>` (`c_safe_name_to`), as in `__k_tmp3` or `__k_for_idx1`. A source's name reaches that space only with `_kw` after it.
   * LLVM spells it `%v_.<stem>`. No source name holds a `.`.
   * The `_` keeps a made name among the names nobody need read, so every unused-name check leaves it alone, as it leaves the source's `_x`.
   * **Synthesized source text cannot hold one**: it is parsed again, and the lexer refuses `%`. A closure's `call` receiver, its environment type (`_anon_env_N`) and its constructor are written that way. They keep names in the identifiers' space. A jump label is outside that space, since C labels and LLVM blocks hold no source name.

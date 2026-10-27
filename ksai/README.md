@@ -91,8 +91,6 @@ Keep speed measurements in [`ksai/benches/README.md`](benches/README.md). Do not
 
 At `-O3`, the C compiler converts `matmul_kernel`'s loop to SIMD instructions automatically. SIMD means single instruction, multiple data: one instruction operates on several numbers. `make test-simd` checks this conversion. See the kernel design in [`ksai/docs/DESIGN-learning.md`](docs/DESIGN-learning.md).
 
-Optional quantization stores weights with fewer bits. `Tensor<|T|>.quantize()` in `ksai/quant.kspl` produces int8 weights with one scale per row. `Quantized_tensor.dequantize<|T|>()` restores F32 or F64 values. Quantization reduces weight storage to a quarter; it does not promise faster computation. `matmul` and other operations use the restored tensor unchanged.
-
 ### Layers: `ksai/nn.kspl`
 
 A model combines layers built from tensor operations.
@@ -159,6 +157,7 @@ The examples show how programs use ksai. Read `llama_engine` first for basic tra
 | `examples/llama_engine/` | Trains a tiny model further from embedded weights and generates text. `main.kspl` loads, trains, and generates. `model.kspl` defines the layers | Root `make run` builds and runs it |
 | `examples/qwen_infer/` | Provides a command-line interface for inference with real Qwen2.5-Coder weights. `main.kspl` contains the model | Root `make qwen` builds it only |
 | `examples/fim_coder/` | Trains a small coding model from scratch using fill-in-the-middle (FIM): predict missing code from its surrounding code. `train` distributes sequence batches across CPUs and writes weights. `complete` produces candidates, starting with greedy selection. It takes corpus and tokenizer paths | Root `make fim-model` trains it on this repository |
+| `examples/car_pilot/` | Trains a small car's driving policy from written rules and writes it to one safetensors file ("The car's policy file" below). `policy.kspl` holds the rules and the net; `encoding.kspl` holds what both the trainer and the car read | `make car_pilot` here builds it |
 
 The examples belong to the package, like a Cargo crate's `examples/` folder. `make test` builds each example and checks its output ([`tests/examples_main.kspl`](tests/examples_main.kspl)). Build failures therefore fail the package tests. Copying the package folder includes the examples.
 
@@ -166,14 +165,47 @@ The bundled `examples/llama_engine/mini_llama.safetensors` weights are our own, 
 
 Before running `qwen_infer`, convert real weights with `tools/ai_assist/export_qwen_to_kspl.py`. Thus, `make qwen` only builds the program.
 
+### The car's policy file
+
+`car_pilot <out.safetensors>` trains the policy and writes it. The seeds are fixed, so one build writes the same file on every run. The car keeps a copy of the file; write that copy again with `car_pilot` after the rules, the net or the encoding change.
+
+The file holds everything the car needs to decide as the trainer does:
+
+| Content | Shape | What it means |
+| :-- | :-- | :-- |
+| `fc1.weight` / `fc1.bias` | [5, 24] / [24] | the input layer. The activation is SiLU (the curve applied to each layer's output) |
+| `fc2.weight` / `fc2.bias` | [24, 10] / [10] | the output layer: 10 logits, one score per manoeuvre. The highest wins |
+| `maneuvers` | [10, 3] | a manoeuvre's number, as `lon, lat, rot` (whole numbers stored as F32) |
+| `__metadata__.far_mm` | — | the cap [mm] used when the distance is normalized |
+| `__metadata__.kspl_pilot` | — | the format's version. Always check it before reading |
+
+The five inputs are, in order: whether the distance was measured, the normalized distance, and the left, centre and right line sensors.
+
+The net learns from these rules (`rule_action` in [`ksai/examples/car_pilot/policy.kspl`](examples/car_pilot/policy.kspl)). The distance is looked at first; `line` holds the sensors as `left<<2 | centre<<1 | right`, with 1 for black:
+
+| Observation | Manoeuvre |
+| :-- | :-- |
+| distance 0 (not measured) | `stop`: it does not drive without seeing ahead |
+| distance under 150mm | `back` |
+| distance under 400mm | `strafe_left` where the right sensor is black, else `strafe_right`: it dodges to the side with no line |
+| all three sensors black | `stop`: a junction or the end |
+| the left or right sensor alone | `track_left_hard` / `track_right_hard` |
+| an end sensor and the centre | `track_left` / `track_right` |
+| the centre alone | `forward` |
+| none, or the two ends only | `creep`: the line's place is unknown, so it goes slower than `forward` |
+
+Caution: **Check `__metadata__.kspl_pilot` before using the weights, and refuse a version the reader was not written for.** The version rises when the order of the inputs, the activation or the meaning of a row of `maneuvers` changes. None of these changes a tensor's shape. So a reader that checks only the shapes loads a newer file with no error, then steers wrongly. With left and right swapped among the inputs, every weight still fits.
+
+`make test` runs `car_pilot` and reads the file it writes without the trainer's constants ([`ksai/tests/examples_car.kspl`](tests/examples_car.kspl)). The reasons for this shape are in "The car's policy: learned from rules, kept as one file" in [`ksai/docs/DESIGN-learning.md`](docs/DESIGN-learning.md).
+
 Before moving or deleting an example, check these dependencies:
 
 | Gate | How it uses the examples |
 | :-- | :-- |
 | `make run` | The macOS CI AI step trains `llama_engine` and checks that its loss decreased |
-| `make test-extract` | Runs the package tests from an independent copy. Linux and Windows use this instead of `make run`. `llama_engine` trains from that copy. `qwen_infer` checks reference answers using Qwen-shaped weights from a fixed formula ([`tests/examples_qwen.kspl`](tests/examples_qwen.kspl)). `fim_coder` trains briefly on a generated corpus. It checks identical weights with one and two threads, then completes missing code ([`tests/examples_main.kspl`](tests/examples_main.kspl)) |
+| `make test-extract` | Runs the package tests from an independent copy. Linux and Windows use this instead of `make run`. `llama_engine` trains from that copy. `qwen_infer` checks reference answers using Qwen-shaped weights from a fixed formula ([`tests/examples_qwen.kspl`](tests/examples_qwen.kspl)). `fim_coder` trains briefly on a generated corpus. It checks identical weights with one and two threads, then completes missing code ([`tests/examples_main.kspl`](tests/examples_main.kspl)). `car_pilot` writes its policy file, which is read back as the car reads it |
 | `make test-simd` | Compiles `llama_engine` and `qwen_infer` to C. It checks automatic vectorization at `-O3` for each named `ksai` loop |
-| `make lint` | Includes each example's `main.kspl` in `LINT_TARGETS` in `mk/lint.mk` |
+| `make lint` | Analyses each example's `main.kspl`, which `mk/lint.mk` finds by its `fn main` |
 | `make test-ksos-link` / `make test-ksos-qemu` | Use embedded weights in the `ksos` Cortex-M demo, without a filesystem |
 
 The SIMD gate needs programs that instantiate generic functions, such as `matmul_kernel<|T|>` in `ksai/tensor.kspl`. The compiler generates their C code only for calls with concrete types, such as `F32`. Compiling ksai alone does not produce these loops. The gate therefore inspects C generated from `llama_engine` and `qwen_infer`.

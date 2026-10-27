@@ -208,6 +208,20 @@ priv fn read_row(src: Source@, line: Line, t: Table$@, arena: Arena$@): Sz!Diagn
         throw src.diagnostic(line.offset, "a table row starts and ends with '|'")
     return count
 
+fn reads_as_formula(formula: U8[]): Bool //<
+    //< Whether `formula`, saved after `=` alone in a cell, reads back as this formula and nothing
+    //< more
+    //< The editor asks this before it takes a formula, so the reader's rule for a cell is the only
+    //< one. A `|` or a `{` outside quotes, or a line break, fails it.
+    defer scratch: = Arena(8 * 1024)
+    bytes: = scratch.text().s("%ksmd 1\n| =").s(formula).s(" |").take()
+    src: = Source("", bytes) catch
+        return false
+    $t: = Table("", scratch)
+    count: = read_row(src@, src.line_at(src.body), t@, scratch) catch
+        return false
+    return count == 1 && t.cells[0].kind == .formula && t.pieces[0].text.equals(formula)
+
 priv fn read_cell(src: Source@, raw: U8[], offset: Sz, t: Table$@, arena: Arena$@):
     Cell!Diagnostic //<
         //< Nothing, quoted text, a number, a date, or a formula after '=', then a look in braces or
@@ -304,7 +318,10 @@ priv fn read_formats(src: Source@, a: Attribute, t: Table$@): Void!Diagnostic //
         f: = format_of(a.value.sub(start, i - start)) catch
             throw src.diagnostic(value_at + start if plain else a.offset,
                 "a format is number:N, grouped:N, percent:N or currency:XXX:N, with N from 0 to 9, \
-                    or nothing")
+                    date:yyyy/mm/dd, or nothing")
+        if f.kind == .general
+            throw src.diagnostic(value_at + start if plain else a.offset,
+                "a column shows its values as calculated with an empty entry; general is a cell's")
         any = any || f.kind != .none
         t.formats.push(f)
         start = i + 1

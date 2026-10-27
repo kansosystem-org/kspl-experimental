@@ -2,9 +2,11 @@
 //< **This file is the canonical source of the list and of how a name is escaped.**
 //< Only local variables, parameters and struct fields (and an enum's payload, a trait's method
 //< names and a closure's captures) are emitted under their plain names. The exception is a local
-//< that hides another of its name: it takes a made one (`hiding_local_name`). Type names and
-//< function names carry the file path as a prefix, so they never collide. The LLVM backend
-//< renames a local to `%v_<name>_<serial>`, so it is unaffected.
+//< that hides another of its name, or a global's C name: it takes a made one (`hiding_local_name`).
+//< Type names and function names carry the file path as a prefix (but `std/lang`'s types:
+//< `C_TYPE_DROPPED_MODULE` in `mangle.kspl`). A local can still spell one (`Slice_U8`), and C
+//< would then read the local in its place.
+//< The LLVM backend renames a local to `%v_<name>_<serial>`, so it is unaffected.
 import "ksplc/base/core" as base_core
 import "std/chars" // `is_upper`
 import "std/str" { Str_builder }
@@ -16,14 +18,15 @@ const MADE_NAME_MARK: U8[] = "_%" //<
     //< keeps it among the names that nobody needs to read. Every unused-name check leaves those
     //< alone.
 
-const MADE_NAME_C_PREFIX: U8[] = "__kspl_" //<
+const MADE_NAME_C_PREFIX: U8[] = "__k_" //<
     //< What stands for `MADE_NAME_MARK` in the generated C
     //< **A source's name reaches `__` only with `C_NAME_SUFFIX` after it**
     //< (`is_reserved_for_compiler`). A made name's stem never ends in that suffix. So a made name
     //< meets no name of the source in C either.
 
-const MADE_TEMP_STEM: U8[] = "tmp_" //<
+const MADE_TEMP_STEM: U8[] = "tmp" //<
     //< How Lower's temporaries open their stem: each is unique, so the LLVM backend adds no serial
+    //< No other made stem opens with it (`is_made_temp`).
 
 fn made_name(stem: U8[]): U8[] //< a name for a local the compiler makes, copied into the arena
     //< Caution: **Make every such name here.** One spelled in the identifiers' own space shares the

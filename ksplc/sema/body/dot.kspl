@@ -38,14 +38,13 @@ fn try_rewrite_enum_fmt(node: Ast_node$@, left: Ast_node$@, c: Sema_ctx$@): Bool
     args: = node.find_child(.k_expr_args)
     if args == null || args.children.len != 2
         return false
-    // Caution: **Do not decide by the name `put` alone**, or a user's own `put` that takes an enum
-    // has its body silently replaced. Check that the name is read as std/lang's `put`
-    // (read_written_name in sema/decl/name.kspl). There, a local or the file's own declaration
-    // wins.
+    // Caution: **Decide by the FQN the desugaring wrote** (`PUT_FQN` in `../../base/core.kspl`).
+    // A user's own call to `put` that takes an enum would otherwise have its body silently
+    // replaced.
     if left.kind_id == .k_expr_path && left.children.len > 1
         return false
     callee_name: = left.get_path_name() if left.kind_id == .k_expr_path else left.text
-    if !callee_name.equals("put")
+    if !callee_name.equals(base_core.PUT_FQN)
         return false
     named: = c.read_written_name(left)
     if named.template == null || !named.fqn.equals("std.lang.put")

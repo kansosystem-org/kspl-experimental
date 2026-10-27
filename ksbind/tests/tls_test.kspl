@@ -60,7 +60,7 @@ priv const MBSTRING_ASC: I32 = 0x1001 //< MBSTRING_ASC
 
 priv enum Peer_act //< what the peer does once a client connects
     silent //< holds the TCP connection without a TLS response
-    trickle //< sends an incomplete TLS record a byte at a time
+    trickle //< sends an incomplete TLS record a byte at a time, until the client closes
     no_tls //< reads the ClientHello and closes, speaking no TLS
     refused //< offers its certificate, which the client refuses
     echo_then_close //< answers `PING` with `PONG`, then closes with a close_notify
@@ -73,29 +73,54 @@ priv struct Tls_peer //<
     ctx: tls.SSL_CTX$@ //< null for `.no_tls`
     act: Peer_act
     closed: Bool //< the deadline test peer saw EOF or a socket error, not its watchdog
+    trickled_all: Bool //< the trickling peer sent every byte before the client closed
+
+priv const PEER_WATCH_MS: I32 = 30000 //<
+    //< How long the deadline test peer waits for the client to close, which bounds a broken client
+    //< Far over the client's deadline (100 ms), so a busy machine does not reach it.
+priv const TRICKLE_BYTES: Sz = 400 //< how many bytes the trickling peer sends at most
+priv const TRICKLE_GAP_MS: I32 = 30 //<
+    //< The wait between two trickled bytes, under the client's deadline
+    //< **A client that counts its deadline per read is kept waiting by each byte.** It then lets
+    //< all `TRICKLE_BYTES` through, at least 12 s, while a correct client closes after 100 ms.
 
 priv const PING: U8[] = "ping" //< what the client sends
 priv const PONG: U8[] = "pong" //< what the peer answers
+
+priv fn trickle(conn: net.Tcp_stream$@, peer: Tls_peer$@): Bool //<
+    //< Sends a record a byte at a time until the client closes: whether every byte went first
+    //< A valid header for a 16 KiB handshake record keeps SSL waiting for a body that never ends.
+    head: U8[5] = ::{ 0x16, 0x03, 0x03, 0x40, 0x00 }
+    $buf: U8[64] = ::{}
+    for i in Range.asc(TRICKLE_BYTES)
+        b: = head[i] if i < head.len else 0U8
+        conn.write(U8[]::{ b }) catch
+            return false
+        // **The wait between bytes is a read**, so the client's close ends the trickle at once.
+        n: = conn.read_for(U8$[]::buf, TRICKLE_GAP_MS) catch e
+            if e != net.Net_error.timed_out
+                peer.closed = true
+                return false
+            fallback -1
+        if n == 0
+            peer.closed = true
+            return false
+    return true
 
 #export
 fn tls_test_peer(peer: Tls_peer$@): Void$@
     conn: = peer.listener.accept() catch panic("accept should succeed once a client connects")
     switch peer.act
     case .silent, .trickle
-        buf: U8[4096] = ::{}
-        first: = conn.read_for(U8$[]::buf, 5000) catch -1
+        $buf: U8[4096] = ::{}
+        first: = conn.read_for(U8$[]::buf, PEER_WATCH_MS) catch -1
         if first == 0
             peer.closed = true
-        if peer.act == Peer_act.trickle
-            // A valid record header followed by only part of its body keeps SSL waiting.
-            head: U8[5] = ::{ 0x16, 0x03, 0x03, 0, 128 }
-            for b in head
-                conn.write(U8[]::{ b }) catch
-                    break
-                sys.sleep_ms(30)
+        if peer.act == Peer_act.trickle && !peer.closed
+            peer.trickled_all = trickle(conn, peer)
         // The client must close on its deadline. The timeout also bounds a broken implementation.
-        for
-            n: = conn.read_for(U8$[]::buf, 5000) catch e
+        for !peer.closed
+            n: = conn.read_for(U8$[]::buf, PEER_WATCH_MS) catch e
                 peer.closed = e != net.Net_error.timed_out
                 break
             if n == 0
@@ -103,7 +128,7 @@ fn tls_test_peer(peer: Tls_peer$@): Void$@
                 break
     case .no_tls
         // Reads and discards the client's ClientHello, acting as a peer that speaks no TLS.
-        buf: U8[256] = ::{}
+        $buf: U8[256] = ::{}
         conn.read(U8$[]::buf) catch {}
     default
         ssl: = tls.SSL_new(peer.ctx)
@@ -410,7 +435,10 @@ fn test_tls_handshake_deadline()
         worker.join_and_free()
         assert(timed_out, "an unfinished handshake returns handshake_timed_out")
         assert(peer.closed, "timeout cleanup closes TCP before the peer watchdog")
-        assert(elapsed < 4000000I64, "the client returns before the peer's five-second watchdog")
+        assert(!peer.trickled_all, "a trickling peer cannot keep the handshake past its deadline")
+        // Generous: only a client that waits for the peer's watchdog comes near it.
+        assert(elapsed < I64::PEER_WATCH_MS * 500I64,
+            "the client returns before the peer's watchdog")
     verdict.pass("silent and trickling peers time out, and failure cleanup closes the socket")
 
 fn test_tls_handshake_write_deadline()
@@ -428,9 +456,14 @@ fn test_tls_handshake_write_deadline()
     start: = sys.mono_us()
     sent: = tls.send_before(client, bytes, start + 100000I64)
     elapsed: = sys.mono_us() - start
-    assert(!sent && elapsed >= 100000I64 && elapsed < 4000000I64,
-        "the stalled partial write ends at the deadline")
-    buf: U8[32] = ::{}
+    // **Say which of the three failed**, with the time: each has its own cause. A buffer the OS
+    // took whole, a wait that gave up early, and one that ran over are fixed in different places.
+    took: = arena.text().s("it ran \{elapsed\} us against a deadline of 100000 us").take()
+    verdict.check("the stalled write does not finish: the OS does not take all 16 MiB", !sent, took)
+    verdict.check("the stalled write waits until the deadline", elapsed >= 100000I64, took)
+    // Generous: a write that ignores the deadline waits for good, as the peer never reads.
+    verdict.check("the stalled write does not wait for good", elapsed < 20000000I64, took)
+    $buf: U8[32] = ::{}
     n: = peer.read_for(U8$[]::buf, 1000) catch panic("some bytes were sent before the stall")
     assert(n > 0 && buf[0] == 'x', "the deadline preserves progress before the send buffer fills")
     verdict.pass("a partially sent buffer times out when the peer does not read")

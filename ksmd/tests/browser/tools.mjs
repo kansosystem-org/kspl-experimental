@@ -268,6 +268,16 @@ export function tools({ browser, page, js, settle, until, press, type, select, c
       check(got === JSON.stringify(["Q1 sales.csv", "239 187 191",
         "\uFEFFitem,cost\r\n\"Pens, blue\",1234.5\r\n\"say \"\"hi\"\"\",2469\r\n\"two\nlines\",\r\n"]),
       "Export as CSV writes the names and the calculated values, numbers without their format", got);
+      // Text a spreadsheet would run as a formula opens there as text; a negative number stays one.
+      await load(`${H}:::table name="t"\n| "=name" | "n" |\n| "=HYPERLINK(1)" | -5 |\n` +
+        `| "+cmd" | "-x" |\n| "@SUM(1)" | "\\ttab" |\n:::\n`);
+      await click('#doc td[data-r="0"][data-c="0"]');
+      await menu("table-csv");
+      // `Blob.text` drops the byte order mark, checked above.
+      const guarded = await js("window.__file.text()");
+      check(guarded === "\"'=name\",n\r\n\"'=HYPERLINK(1)\",-5\r\n\"'+cmd\",\"'-x\"\r\n" +
+        "\"'@SUM(1)\",\"'\ttab\"\r\n",
+      "text that starts as a formula is written with a ' before it, and quoted", JSON.stringify(guarded));
     },
 
     // A column's choices: offered while a cell is typed in, kept to, and set from the menu.
@@ -343,6 +353,22 @@ export function tools({ browser, page, js, settle, until, press, type, select, c
       await dragTo("#doc .fill-handle", '#doc td[data-r="1"][data-c="0"]');
       await saves("the handle goes on with the next day", `${H}:::table name="t"\n| "day" | "next" |\n` +
         "| 2026-10-30 | =A1+7 |\n| 2026-10-31 | |\n:::\n");
+      // A date typed with `/`, as Japan writes one, is a date too; the column's format shows `/`.
+      await click('#doc td[data-r="1"][data-c="0"]');
+      await type("2026/11/5");
+      await press("Enter");
+      await saves("a date typed with / is a date, kept with -", `${H}:::table name="t"\n| "day" | "next" |\n` +
+        "| 2026-10-30 | =A1+7 |\n| 2026-11-05 | |\n:::\n");
+      await click('#doc th.letter:nth-child(2)');
+      await menu("format-date-slash");
+      const slashed = await js("Array.from(document.querySelectorAll('#doc td[data-c=\"0\"]')).map((c) => c.textContent).join(' ')");
+      check(slashed === "2026/10/30 2026/11/05", "Date: 2026/10/26 shows the column's dates with /", slashed);
+      const kept = await js("ksmd.source()");
+      check(kept.includes('formats="date:yyyy/mm/dd,"') && kept.includes("| 2026-10-30 |"),
+        "and the file keeps the format, its dates with -", kept);
+      await menu("format-date");
+      check(await js("document.querySelector('#doc td[data-r=\"0\"][data-c=\"0\"]').textContent") === "2026-10-30",
+        "Date: 2026-10-26 shows them with - again");
     },
 
     // A chart of a table: inserted from the menu, drawn from the values, changed in its panel.
@@ -388,7 +414,7 @@ export function tools({ browser, page, js, settle, until, press, type, select, c
       browser.answerPrompts("Why one?");
       await menu("note");
       browser.answerPrompts(null);
-      await saves("the ribbon's Note gives the chosen cell a note", table('1 {note="Why one?"}'));
+      await saves("the table menu's Note gives the chosen cell a note", table('1 {note="Why one?"}'));
       check(await js("document.querySelector('#doc td[data-r=\"0\"][data-c=\"0\"]').classList.contains('has-note') && " +
         "document.querySelector('#doc td[data-r=\"0\"][data-c=\"0\"]').title === 'Note: Why one?'"),
       "the cell is marked, and pointing at it shows the note");
@@ -412,7 +438,7 @@ export function tools({ browser, page, js, settle, until, press, type, select, c
       await load(`${H}Buy pens\n\nCall Sam\n`);
       await select(0, 0, 0);
       await menu("checks");
-      await saves("the ribbon's Checklist makes a checklist item", `${H}- [ ] Buy pens\n\nCall Sam\n`);
+      await saves("Format, Checklist makes a checklist item", `${H}- [ ] Buy pens\n\nCall Sam\n`);
       await js(`(() => {
         const li = document.querySelector('#doc .li[data-check]');
         const r = li.getBoundingClientRect();
@@ -424,7 +450,7 @@ export function tools({ browser, page, js, settle, until, press, type, select, c
       await settle();
       await saves("a press on the box ticks it", `${H}- [x] Buy pens\n\nCall Sam\n`);
       await select(1, 0, 0);
-      await js("(() => { const k = document.querySelector('.ribbon [data-ribbon=\"kind\"]'); " +
+      await js("(() => { const k = document.querySelector('.quick [data-quick=\"kind-list\"]'); " +
         "k.value = 'quote'; k.dispatchEvent(new Event('change')); })()");
       await saves("Kind of block, Quote makes a quote", `${H}- [x] Buy pens\n\n> Call Sam\n`);
       check(await js("!!document.querySelector('#doc blockquote')"), "and the page shows it set apart");
@@ -470,15 +496,15 @@ export function tools({ browser, page, js, settle, until, press, type, select, c
       await load(table("", ""));
       await click('#doc td[data-r="0"][data-c="0"]');
       await press("%", CTRL | SHIFT);
-      await saves("Ctrl+Shift+% in an open cell gives its column the percent format", table(' formats="percent:0"', ""));
-      check(await js("document.activeElement.matches('#doc td.chosen[data-r=\\'0\\']')"),
+      await saves("Ctrl+Shift+% on a chosen cell gives it the percent format", table("", ' {format="percent:0"}'));
+      check(await js("document.activeElement.matches('#doc td.chosen[data-r=\\'0\\'] > .cell-catch')"),
         "and the cell stays chosen, so the next key reaches it");
       await press("~", CTRL | SHIFT);
-      await saves("Ctrl+Shift+~ gives it back the general format", table("", ""));
+      await saves("Ctrl+Shift+~ gives it the general format, over any of its column's", table("", ' {format="general"}'));
       browser.answerPrompts("Check");
       await press("F2", SHIFT);
       browser.answerPrompts(null);
-      await saves("Shift+F2 asks for the cell's note", table("", ' {note="Check"}'));
+      await saves("Shift+F2 asks for the cell's note", table("", ' {format="general" note="Check"}'));
       await press("ArrowDown", ALT);
       check(await js("!!document.querySelector('.filter-panel')"), "Alt+Down opens the column's filter");
       await press("Escape");
@@ -582,9 +608,10 @@ export function tools({ browser, page, js, settle, until, press, type, select, c
       await menu("read-only");
       check(await js("document.body.classList.contains('read-only') && " +
         "document.getElementById('doc').contentEditable === 'false' && " +
-        "getComputedStyle(document.querySelector('.ribbon')).display === 'none' && " +
+        "document.querySelector('.quick [data-cmd=\"strong\"]').disabled && " +
+        "!document.querySelector('.quick [data-cmd=\"find\"]').disabled && " +
         "getComputedStyle(document.querySelector('.read-only-mark')).display !== 'none'"),
-      "View, Read-only takes the ribbon away and marks the page read-only");
+      "View, Read-only leaves only the bar's tools that look, and marks the page read-only");
       await click("#doc p");
       await type("x");
       await click('#doc td[data-r="0"][data-c="0"]');
@@ -607,16 +634,17 @@ export function tools({ browser, page, js, settle, until, press, type, select, c
       await click("#doc p");
       await type("x");
       check((await js("ksmd.source()")) !== start, "View, Read-only again turns editing back on");
-      check(await js("Array.from(document.querySelectorAll('.ribbon [data-cmd], .menu [data-cmd=\"replace\"]'))" +
-        ".filter((b) => b.disabled && b.dataset.cmd !== 'undo' && b.dataset.cmd !== 'redo').length === 0"),
-      "and every tool of the ribbon can be pressed again");
+      check(await js("Array.from(document.querySelectorAll('.quick button, .menu [data-cmd=\"replace\"]'))" +
+        ".filter((b) => b.disabled && !['undo', 'redo', 'fill'].includes(b.dataset.cmd || b.closest('[data-colour]')?.dataset.colour) && " +
+        "!document.querySelector(`.menu.context [data-cmd=\"${b.dataset.cmd}\"]`)).length === 0"),
+      "and every text tool of the bar can be pressed again");
     },
 
     // Repeat: with nothing to redo, Ctrl+Y and F4 do the last command again, where the person is.
     async repeat() {
       const width = () => js("document.querySelector('#doc .table thead tr:last-child').cells.length - 1");
-      const redo = () => js("(() => { const b = document.querySelector('.ribbon [data-cmd=\"redo\"]'); " +
-        "return `${b.lastChild.data.trim()}:${b.disabled}`; })()");
+      const redo = () => js("(() => { const b = document.querySelector('.quick [data-cmd=\"redo\"]'); " +
+        "return `${b.getAttribute('aria-label')}:${b.disabled}`; })()");
       await load(`${H}One two\n\n:::table name="t"\n| "a" | "b" |\n| 1 | 2 |\n:::\n`);
       await click('#doc td[data-r="0"][data-c="0"]');
       await menu("column-right");
@@ -648,7 +676,7 @@ export function tools({ browser, page, js, settle, until, press, type, select, c
       await load(table('"Pens"'));
       await click('#doc td[data-r="0"][data-c="0"]');
       check(await js("!document.querySelector('#doc .cell-input') && " +
-        "document.activeElement.matches('#doc td.chosen[data-r=\"0\"]')"),
+        "document.activeElement.matches('#doc td.chosen[data-r=\"0\"] > .cell-catch')"),
       "a press chooses the cell without opening it");
       await type("Ink");
       await press("Enter");
@@ -660,6 +688,14 @@ export function tools({ browser, page, js, settle, until, press, type, select, c
       await type("s");
       await press("Enter");
       await saves("so typing there adds to the value", table('"Inks"'));
+      // An input method composes from the first key on a chosen cell: the focus stands where
+      // text can be typed, or Windows keeps the input method off until the cell opens ("bい").
+      await click('#doc td[data-r="0"][data-c="0"]');
+      await page("Input.imeSetComposition", { text: "b", selectionStart: 1, selectionEnd: 1 });
+      await page("Input.imeSetComposition", { text: "び", selectionStart: 1, selectionEnd: 1 });
+      await page("Input.insertText", { text: "び" });
+      await press("Enter");
+      await saves("a composition on a chosen cell replaces its value", table('"び"'));
     },
 
     // A touch screen: a long press opens the table's menu, and a double tap opens the cell.
@@ -678,10 +714,11 @@ export function tools({ browser, page, js, settle, until, press, type, select, c
       };
       await page("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 1 });
       try {
+        // The finger stays down until the menu shows, as a person's does, and then lifts.
         await page("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: point });
-        await new Promise((r) => setTimeout(r, 700));
+        const shown = await until("!document.querySelector('.menu.context').hidden", 5000);
         await page("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
-        check(await js("!document.querySelector('.menu.context').hidden && " +
+        check(shown && await js("!document.querySelector('.menu.context').hidden && " +
           "document.querySelector('#doc td.chosen').dataset.c === '1'"),
         "a long press on a cell chooses it and opens the table's menu");
         await press("Escape");

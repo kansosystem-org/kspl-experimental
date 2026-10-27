@@ -384,9 +384,9 @@ Whichever reading KSPL took, a writer from the other half would get a different 
 
 #### Translation-time conditions
 
-**`#cfg(flag)` leaves a declaration out of the build, and `##error` / `##warning` stop or warn the build. These translation-time conditions stay two separate tools. `#cfg` stays the weaker one on purpose.** (*Translation time* is while the compiler runs, before the program does.)
+**`#cfg(flag)` leaves a declaration out of the build, and `##error` stops the build. These translation-time conditions stay two separate tools. `#cfg` stays the weaker one on purpose.** (*Translation time* is while the compiler runs, before the program does.)
 
-| | `#cfg(flag)` | `##error` / `##warning` |
+| | `#cfg(flag)` | `##error` |
 | :-- | :-- | :-- |
 | What it does | Drops a declaration | Emits a diagnostic |
 | What it takes | One flag name, with no comparison and no `&&` (docs/SPEC-programming-language.md §10.1) | A foldable expression (`sizeof(Sz) == 8`): one the compiler can compute |
@@ -397,6 +397,8 @@ Two grounds follow from the table.
 
 * **A mistake shows in opposite ways.** A rich condition on the silent one alone would erase the clue to the mistake.
 * **They run at different stages.** When `#cfg` runs, the material for a comparison is absent. A comparison there would need arithmetic apart from the language, at a stage with no types: the C preprocessor's shape.
+
+**A translation-time condition has no warning form.** A condition that fails stops the build. A warning that stays would hide the next one (Principle 2).
 
 **An attribute is either interpreted by both backends or explicitly rejected by one.** (A *backend* turns the checked program into output: ksplc has one that writes C and one that writes LLVM IR.) None is silently ignored under `--to=llvm` ("An attribute: interpreted in both backends, or refused in one" in [`../ksplc/docs/DESIGN-backends.md`](../ksplc/docs/DESIGN-backends.md)).
 
@@ -457,7 +459,7 @@ There are two grounds for allowing it.
 
 **Where a default cannot be placed**, and why, is the table in docs/SPEC-programming-language.md §8.1.1. Each such place is rejected with a diagnostic (the cases `param_default_*` in `ksplc/tests/negative/fn.kspl`). A trait's declaration can carry one (the same section; `Index_place.at` in `std/lang` takes this form).
 
-**Where defaults stand is not listed here.** A default is part of its declaration's spelling. So each package's `SURFACE.txt` holds the published ones. `ksplc --emit-surface=<file> --surface-scope=all` writes every one a file reaches ("Writing out the published API" in [`../ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md)). What the second test turned away is recorded, so the same discussion is not had twice:
+**Where defaults stand is not listed here.** A default is part of its declaration's spelling. So each package's `SURFACE.txt` holds the published ones. `ksplc doc --surface-scope=all <file>` shows every one a file reaches ("Writing out the published API" in [`../ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md)). What the second test turned away is recorded, so the same discussion is not had twice:
 
 * an arena (above);
 * an environment's timing (`delay_us`);

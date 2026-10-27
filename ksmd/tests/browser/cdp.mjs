@@ -79,12 +79,15 @@ export async function launch(binary, work) {
     const page = (method, params) => send(method, params, sessionId);
     // What went wrong in the page, kept so a check that fails can say why.
     page.errors = [];
+    // The kind of each dialog the page opened, such as "beforeunload".
+    page.dialogs = [];
     listeners.push((m) => {
       if (m.sessionId === sessionId && m.method === "Runtime.exceptionThrown") {
         const d = m.params.exceptionDetails;
         page.errors.push(d.exception && d.exception.description ? d.exception.description : d.text);
       }
       if (m.sessionId === sessionId && m.method === "Page.javascriptDialogOpening") {
+        page.dialogs.push(m.params.type);
         page("Page.handleJavaScriptDialog", answer === null ? { accept: false } :
           { accept: true, promptText: answer }).catch(() => {});
       }

@@ -6,7 +6,7 @@
 * what the JSON API under `/api/` holds;
 * the limits a caller has to write against.
 
-A *client* is any program that sends the server HTTP requests. It can be a browser, `curl`, your own code, or the small robot car described under "Steering the car". A client is written against this document, so a change here is a change to what somebody else's code depends on.
+A *client* is any program that sends the server HTTP requests. It can be a browser, `curl`, your own code, or the small robot car described under "The car's policy file". A client is written against this document, so a change here is a change to what somebody else's code depends on.
 
 How to start it is in [`kssrv/README.md`](../README.md). The six endpoints a page opened in a browser can use are set one level up, in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md). That document is the agreement between the client page and this server and belongs to neither. Where the two documents meet, it is the canonical source (the one place the rule lives).
 
@@ -14,7 +14,7 @@ How to start it is in [`kssrv/README.md`](../README.md). The six endpoints a pag
 
 | Mode | Started as | Who can reach it | What it offers besides the files |
 | :-- | :-- | :-- | :-- |
-| Outward-facing | `kssrv.exe <port> <root>` | Any machine on the network | `/api/status`, and the car's two endpoints |
+| Outward-facing | `kssrv.exe <port> <root>` | Any machine on the network | `/api/status` |
 | Local use | `kssrv.exe <port> <root> --local` | This machine only. Every request but the page's carries the token it prints at start-up | `/api/status`, and the six endpoints a page uses |
 
 Words used below:
@@ -68,11 +68,11 @@ Everything under `/api/` skips static serving (handing out files from the root) 
 
 | Answer | `Content-Type` |
 | :-- | :-- |
-| `GET /api/file` and `GET /api/pilot` | bytes, as `application/octet-stream` |
+| `GET /api/file` | bytes, as `application/octet-stream` |
 | `GET /api/here` | a head and nothing after it |
 | A request that cannot be read at all (the 400, 413 and 431 above) | `text/plain`, since its path is not known yet |
 
-The endpoints come in three groups, by the mode they exist in. **An endpoint asked for in the other mode answers 404**, as if it did not exist.
+The endpoints come in two groups, by the mode they exist in. **An endpoint asked for in the other mode answers 404**, as if it did not exist.
 
 In both modes:
 
@@ -82,22 +82,19 @@ In both modes:
 
 ```console
 $ curl -s localhost:8080/api/status
-{"root":"","local":false,"uptime_s":1802,"requests":45001,"commands":0,"connections_total":501,
- "connections_open":1,"max_connections":128,"heap_bytes":86692,"pilot":{"params":394,
- "samples":768,"train_cpu_ms":606,"agreement":0.985648918469218,"agreement_checked":4808,
- "command_valid_ms":500}}
+{"root":"","local":false,"conditional_writes":false,"uptime_s":1802,"requests":45001,
+ "connections_total":501,"connections_open":1,"connections_refused":0,"max_connections":128,
+ "heap_bytes":86692}
 ```
 
 | Field | What it holds |
 | :-- | :-- |
 | `uptime_s` | the uptime in seconds |
 | `requests` | the requests handled |
-| `commands` | the manoeuvres returned to the car |
 | `connections_total` / `connections_open` / `max_connections` | the connection counters |
 | `heap_bytes` | the bytes the server holds on its heap |
 | `local` | whether it is for local use |
 | `root` | the root's path, only for local use. Empty facing outward, where it would tell anyone the machine's layout |
-| `pilot` | the steering policy's figures facing outward. `null` for local use, which trains none |
 
 For local use only (the page's endpoints; their rules are in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md)):
 
@@ -109,13 +106,6 @@ For local use only (the page's endpoints; their rules are in [`../../docs/SPEC-l
 | `GET` | `/api/list?path=<p>` | Lists the names in one folder, for a Save As dialog | `{"folders":[…],"files":[…],"more":false}`, links and hidden names left out |
 | `GET` | `/api/here` | Keeps the server alive while a page is open | a head naming no length, then nothing until the client closes. The connection itself says a page is open ("Keeping the server alive while a page is open" in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md)) |
 | `POST` | `/api/stop` | Stops the server | `{}`, then the server stops |
-
-Facing outward only (the car's endpoints):
-
-| Method | Path | What it does | Answers |
-| :-- | :-- | :-- | :-- |
-| `POST` | `/api/car` | Takes the car's sensors | the next manoeuvre ("Steering the car" below) |
-| `GET` | `/api/pilot` | Downloads the steering policy | one whole steering policy as safetensors ("Downloading the policy" below) |
 
 Anything else under `/api/`:
 
@@ -171,109 +161,20 @@ sequenceDiagram
 * "How the token gets across";
 * "Only four things can be asked for".
 
-## Steering the car
+## The car's policy file
 
-Facing outward, kssrv can drive a small robot car over the network. The car sends what its sensors measure, and the server answers with the next move.
-
-Send **the values measured at that moment** to `POST /api/car`, and it returns one next manoeuvre. The small MLP in `kssrv/pilot.kspl` decides it. (An MLP, a multi-layer perceptron, is the simplest kind of neural network: layers of weighted sums. This one has 394 weights.)
+The small robot car takes its driving policy from kssrv once, at start-up, as a plain file. It asks for `GET /pilot_policy.safetensors`, so kssrv serves the folder that holds that file. kssrv has no endpoint for the car: the file is handed out as any other file under the root.
 
 ```console
-$ curl -s -X POST localhost:8080/api/car -d '{"dist_mm":250,"line":2,"seq":17}'
-{"seq":17,"cmd":"strafe_right","lon":0,"lat":50,"rot":0,"valid_ms":500}
+$ ./out/kssrv.exe 8080 <the folder that holds pilot_policy.safetensors>
+$ curl -s -o pilot.safetensors localhost:8080/pilot_policy.safetensors
 ```
 
-What the car sends:
+The car carries the policy and decides every manoeuvre itself, so it needs the link only while the file arrives. The steps for connecting the car (a Freenove 4WD mecanum car and a Pico W) are in Phase 3 of [What works, and how far](../../README.md#-what-works-and-how-far).
 
-| Field | What it means |
-|---|---|
-| `dist_mm` | the ultrasonic distance [mm]. **0 means "it could not be measured"** (not "close") |
-| `line` | the three reflective sensors as `left<<2 \| centre<<1 \| right` (1 = black). 0-7 |
-| `seq` | the caller's serial. It is returned as it stands |
+kssrv does not know the file's contents, and kssrv and ksos (the operating system for small boards) do not reference each other. A reference would build a dependency that one package cannot notice when the other is moved. What the file holds is set by the program that writes it.
 
-What comes back:
-
-| Field | What it means |
-|---|---|
-| `seq` | the caller's serial, as it was sent |
-| `cmd` | the manoeuvre's name (the table below) |
-| `lon` / `lat` / `rot` | the fore-aft, side-to-side and rotation values. They can be passed to the car's `motor.drive` unchanged, with **positive = forward / right / clockwise** |
-| `valid_ms` | how long this instruction can be trusted. Past that, with no next answer arriving, the car stops |
-
-| Manoeuvre | lon | lat | rot |
-|---|--:|--:|--:|
-| `stop` | 0 | 0 | 0 |
-| `forward` | 60 | 0 | 0 |
-| `back` | -45 | 0 | 0 |
-| `strafe_left` / `strafe_right` | 0 | ∓50 | 0 |
-| `creep` | 18 | 0 | 0 |
-| `track_left` / `track_right` | 40 | ∓15 | ∓25 |
-| `track_left_hard` / `track_right_hard` | 10 | ∓30 | ∓50 |
-
-**The line-following `track_*` hold forward motion, sideways motion and rotation at once.** If every correction were a turn on the spot, the car would not move forward while correcting the drift. It would alternate between going forward and turning in place, instead of following the line. There are two levels, so the correction's strength changes with the drift's size.
-
-**Only the ratio of the three matters.** Once one value hits the car's cap, the car scales all three down together. So this table decides which way the car goes and how sharply it turns, not how fast; the car's cap decides the speed. That is why raising `rot` when the car cannot keep up with a curve has no effect: it is scaled back to the same ratio. Dropping `lon` is what raises the rotation per unit of distance travelled.
-
-**The sideways component can be added without cutting the rotation.** With `rot` left at the maximum, the scaling does not change, so the force moving the car straight sideways grows by that much. On a sharp curve it is less likely to leave the line, because it can move sideways without waiting for the heading to catch up. This uses the advantage of mecanum wheels (wheels with angled rollers, which let a car move sideways as well as forward).
-
-Both `dist_mm` and `line` decide which one comes back. **The distance alone does not decide it.** The distance is looked at first:
-
-| `dist_mm` | What comes back |
-|---|---|
-| `0` (not measurable) | `stop` (it does not run without seeing ahead) |
-| up to 150 | `back` |
-| 150-400 | dodges sideways. **Where it dodges to is the side with no line**, so `strafe_left` where the right sensor is black (`line` is odd) and `strafe_right` otherwise |
-| 400 and up | decided by the line (the table below) |
-
-Where the path ahead is clear, the correction's strength changes with how far sideways the line has drifted. Only the end sensor black is a large drift; the end and the centre both black is a small one.
-
-| `line` | The black sensors | What comes back |
-|--:|---|---|
-| 2 | the centre only | `forward` (it is riding on the line) |
-| 6 / 3 | left and centre / centre and right | `track_left` / `track_right` (a small drift) |
-| 4 / 1 | left only / right only | `track_left_hard` / `track_right_hard` (a large drift) |
-| 7 | all three | `stop` (a junction or the end, and it cannot judge) |
-| 0 / 5 | none of them / the two ends only | `creep` (the line's position is unknowable, so it goes slower than forward) |
-
-**`line` being 0 is "the line is nowhere", not "on the line".** Moving at the same speed as `forward` would mean running at full speed without seeing. The observation does not keep which side the line was on before it was lost, so these rules cannot pick a direction to recover in. Picking one would need history among the features (the inputs the network reads). That is a change that raises the format's version ("Downloading the policy" below).
-
-* This net's **teacher is the written rules** (`pilot.rule_action`): it learned by copying the tables above. The net is not cleverer than the rules. What it shows is that the decision is made outside the car.
-* At every point of a fine sweep over the measurable distances it **almost entirely agrees with the rules** (`/api/status` reports the figure as `pilot.agreement`). The disagreements are only around the boundaries (150mm and 400mm). On the 400mm side, where the rules would follow the line, the net still dodges sideways. So the net's boundary sits farther out than the rules', which is the safe side.
-* **The safety timeout is in the car, not the server.** The guards against a flat battery, a very close obstacle and no answer arriving are inside the car. The server can do nothing when the link drops.
-* **It answers on the accepting thread**, the one thread that also takes new connections, with no hand-off to another. One forward pass (one run of the net) takes a few microseconds, and after `build()` the policy is read-only.
-
-The steps for connecting the car (a Freenove 4WD mecanum car + a Pico W) are in Phase 3 of [What works, and how far](../../README.md#-what-works-and-how-far).
-
-Kssrv and ksos (the operating system for small boards) do not reference each other. A reference would build a dependency that one package cannot notice when the other is moved.
-
-## Downloading the policy
-
-`GET /api/pilot` returns **the very same whole policy** `POST /api/car` is using, in one file in safetensors format. Safetensors is a common file format for a neural network's weights: a JSON header, then the numbers. A car that carries it can decide for itself, without asking on every observation.
-
-```console
-$ curl -s -o pilot.safetensors localhost:8080/api/pilot
-$ python3 -c "import json,struct; d=open('pilot.safetensors','rb').read(); \
-    n=struct.unpack('<Q',d[:8])[0]; print(sorted(json.loads(d[8:8+n])))"
-['__metadata__', 'fc1.bias', 'fc1.weight', 'fc2.bias', 'fc2.weight', 'maneuvers']
-```
-
-| Content | Shape | What it means |
-|---|---|---|
-| `fc1.weight` / `fc1.bias` | [5, 24] / [24] | the input layer. The activation is SiLU (the curve applied to each layer's output) |
-| `fc2.weight` / `fc2.bias` | [24, 10] / [10] | the output layer. 10 logits (one score per manoeuvre; the highest wins) |
-| `maneuvers` | [10, 3] | a manoeuvre's number → `lon, lat, rot` (integers travelling as F32) |
-| `__metadata__.far_mm` | — | the cap [mm] used when the distance is normalized |
-| `__metadata__.kspl_pilot` | — | the format's version. Always confirm it before reading |
-
-* **The weights are not sent alone.** A receiver holding its own copy of how the features are made (`far_mm`) and of the manoeuvres' meaning cannot notice when the server's code is fixed. So the file holds everything needed to give the same answer as `POST /api/car` (`kssrv/tests/car.kspl` matches them at 968 points).
-* **`valid_ms` is not in it.** It is how long a car that asks can wait for an answer, and it means nothing to a car that carries the policy.
-* Caution: **Check `__metadata__.kspl_pilot` before using the weights, and refuse a version the reader was not written for.** A reader written for an older version still loads a newer file without any error, then steers wrongly. The version rises when one of three things changes:
-  * the order of the five features (whether the distance was measured, the distance, then the left, centre and right line sensors);
-  * the activation (SiLU);
-  * what each row of `maneuvers` means.
-
-  None of these changes a tensor's shape, so a reader that checks only the shapes cannot notice. For example, left and right could swap places among the features. Every weight would still fit, and the old reader would turn the wrong way on every correction.
-
-The `Content-Type` is looked up from the extension. **An extension it does not know is not guessed at but made `application/octet-stream`.** A receiver believes a wrong type and reads the content another way, so saying "unknown" is safer than guessing. No type is registered for safetensors, so `/api/pilot` is returned this way too.
+The `Content-Type` is looked up from the extension. **An extension it does not know is not guessed at but made `application/octet-stream`.** A receiver believes a wrong type and reads the content another way, so saying "unknown" is safer than guessing. No type is registered for safetensors, so the policy file is returned this way.
 
 ## What a client can rely on
 
@@ -293,8 +194,7 @@ These hold for every connection, in both modes.
 These are the places where the server does less than a client can expect.
 
 * **`%2f` works as a separator.** It becomes a `/` after the decode, so `/a%2Fb` is the same as `/a/b`. The check for outside the root is applied after the decode, so it is not a hole.
-* **The steering policy is not saved.** It is trained again on every outward-facing startup. The seed is fixed, so the same version gives the same weights every time.
 * **`Range` and conditional requests (`If-Modified-Since` and the like) are not supported.** It always returns the whole thing.
-* **A symbolic link is refused, not followed** (403), at any level of the path and at the name actually served. A folder is checked together with its `index.html`.
+* **A symbolic link is refused, not followed** (403), at any level of the path and at the name actually served. A folder is checked together with its `index.html`. The root itself can be a link (macOS's `/tmp` is one), and every endpoint serves it as it serves any other root.
 * **Only a regular file is served.** A FIFO or a device in the root answers 404, as if absent. Its read can go on forever and would hold the server.
 * **A name starting with a dot is not served** (404, as if absent), at any level of the path: `/.git/config`, `/.env`, `/sub/.hidden`. `/.well-known/` is the exception, since certificate issuance and other discovery read under it (RFC 8615).

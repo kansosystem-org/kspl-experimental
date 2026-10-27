@@ -1,48 +1,27 @@
 # ksbind
 
-ksbind provides bindings for OpenSSL and SQLite. A *binding* lets KSPL code call a C library. OpenSSL provides Transport Layer Security (TLS), the encryption used by `https://`. SQLite provides a small database stored in one file. The bindings contain only KSPL code and call the libraries directly. Install each library where you build the program.
+ksbind provides a binding for OpenSSL. A *binding* lets KSPL code call a C library. OpenSSL provides Transport Layer Security (TLS), the encryption used by `https://`. The binding contains only KSPL code and calls the library directly. Install the library where you build the program.
 
-Use ksbind for encrypted connections or SQL databases. These libraries are separate from the toolchain: KSPL's compiler and the C compiler it uses. They remain outside `std`, which requires no additional libraries. [`ksbind/docs/DESIGN-bindings.md`](docs/DESIGN-bindings.md) explains this separation and access to OpenSSL macros without headers.
+Use ksbind for encrypted connections. This library is separate from the toolchain: KSPL's compiler and the C compiler it uses. It remains outside `std`, which requires no additional libraries. [`ksbind/docs/DESIGN-bindings.md`](docs/DESIGN-bindings.md) explains this separation and access to OpenSSL macros without headers.
 
 ## Run it
 
-Run `make test` from this folder with `ksplc`, a C compiler, and the libraries installed ([`ksbind/Makefile`](Makefile)). If a library cannot link, the tests report `SKIPPED` and name it. [`ksbind/ksplc.cfg`](ksplc.cfg) declares the package name. A copy of this folder runs the same tests independently.
-
-This example opens a database in memory and creates a table. It stores 42, reads the value, and prints `n=42`. `ksplc run` links the library named by the binding.
-
-```kspl
-import "ksbind/db"
-import "std/io"
-
-fn main()
-    defer conn: = db.Db.open(":memory:") catch
-        return
-    conn.exec("CREATE TABLE t (n INTEGER)") catch
-        return
-    conn.exec("INSERT INTO t (n) VALUES (42)") catch
-        return
-    defer stmt: = conn.prepare("SELECT n FROM t") catch
-        return
-    stmt.step() catch
-        return
-    io.out().s("n=\{stmt.column_i64(0)\}\n")
-```
+Run `make test` from this folder with `ksplc`, a C compiler, and the library installed ([`ksbind/Makefile`](Makefile)). If a library cannot link, the tests report `SKIPPED` and name it. [`ksbind/ksplc.cfg`](ksplc.cfg) declares the package name. A copy of this folder runs the same tests independently.
 
 ## What is here
 
-Each source file provides one binding. The table lists the required libraries.
+Each source file provides one binding. The table lists the required library.
 
 | File | Content | What it needs installed |
 | :-- | :-- | :-- |
 | [`ksbind/tls.kspl`](tls.kspl) | A TLS client using a `std/net` connection. It verifies the certificate and host name | OpenSSL 1.1.0 or later (`libssl-dev`) |
-| [`ksbind/db.kspl`](db.kspl) | A SQLite connection with prepared statements, bound values, and row access. It can bind or read a structure as a whole row | SQLite 3 (`libsqlite3-dev`) |
-| [`ksbind/tests/`](tests/) | Tests using loopback connections and a database in memory. The TLS peer creates its certificate in memory | OpenSSL 1.1.1 or later, for the peer's Ed25519 key |
+| [`ksbind/tests/`](tests/) | Tests using loopback connections. The TLS peer creates its certificate in memory | OpenSSL 1.1.1 or later, for the peer's Ed25519 key |
 
 Run `ksplc doc ksbind/<file>` to list a file's published API.
 
 ## Pitfalls
 
-**TLS operations have no deadline.** `Tls_stream.connect` waits for the TLS handshake after opening the TCP connection. A peer that stops responding can leave the caller waiting indefinitely. Reads, writes, and closing the TLS stream can also wait for the peer. Do not use this API where network operations must finish within a fixed time.
+**Only the connection and the TLS handshake have a deadline.** `Tls_stream.connect` opens the TCP connection as `std/net`'s `Tcp_stream.connect` does, with that call's wait. It then gives the handshake `handshake_ms` milliseconds, and fails with `handshake_timed_out` past that time. Reads, writes, and closing the TLS stream have no deadline. A peer that stops responding can leave the caller waiting indefinitely there. Do not use this API where every network operation must finish within a fixed time.
 
 Linking combines the compiled program with its libraries. These limitations apply:
 

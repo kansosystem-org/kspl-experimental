@@ -29,6 +29,8 @@ extern "C"
         //< Caution: **Do not make it a Bool.** Turning "cannot tell" into false lets an unreadable
         //< segment pass as "not a link" (has_link_on_path below).
     fn kspl_mkdir(path_ptr: U8@, path_len: Sz): I32
+    fn kspl_long_name(path_ptr: U8@, path_len: Sz, buf: U8$@, cap: Sz): I32 //<
+        //< The kept name of the path's last segment, written into buf: its length, -1=none
     fn kspl_copy_file(from_ptr: U8@, from_len: Sz, to_ptr: U8@, to_len: Sz): I32 //<
         //< Copies `from` to a new `to` with its permission bits: 0=done, 1=no source, -1=refused
     fn kspl_create_owned(path_ptr: U8@, path_len: Sz, data: U8@, len: Sz): I32 //<
@@ -146,6 +148,22 @@ pub fn is_link(path: U8[]): Bool //< whether it is a link, without following it
     check_path(path) catch
         return true
     return kspl_is_link(path.ptr, path.len) != 0
+
+priv const MAX_NAME_BYTES: Sz = 765 //< the longest name in UTF-8: Windows's 255 UTF-16 units
+
+pub fn long_name( //< the name the file system keeps for a path's last segment
+    //< **On Windows a short name names the same entry**: `GIT~1` can stand for `.git`. So a check
+    //< on the name as written (does it start with a dot) misses it. Check the name this gives,
+    //< the long one, at each segment. POSIX keeps one name, so it is the last segment as written.
+    path: U8[], //< a path that stands; a `*` or `?` in it fails on Windows
+    arena: Arena$@, //< where the name goes; null means the heap, freed with `dealloc`
+): U8[]!Fs_error //< fails as `not_found` where nothing stands at the path
+    check_path(path)!
+    $buf: U8[MAX_NAME_BYTES] = ::{}
+    n: = kspl_long_name(path.ptr, path.len, (U8$[]::buf).ptr, buf.len)
+    if n < 0
+        throw .not_found
+    return arena.dup_str((U8[]::buf).sub(0, n))
 
 pub enum Dir_trust //< who besides the current user could change what a directory holds
     own //< no one: the current user owns it, and neither its group nor everyone can write it
@@ -280,11 +298,14 @@ pub fn absolute( //< the full path from the root: a relative path joined to the 
     //< too).
     //< Caution: **Pass a path for a child through this** before starting it in another directory.
     //< A relative path is resolved from the child's directory, not the caller's.
+    //< **On Windows a drive-relative path (`C:foo`) fails** (`invalid_path`): its cwd is unknown.
     path: U8[], //< the path; empty and `.` both mean the working directory
     arena: Arena$@, //< where the path goes; null means the heap, freed with `dealloc`
 ): U8[]!Fs_error //< the absolute path; fails if the working directory cannot be read
     if path.len > 0 && sys.is_absolute(path)
         return arena.dup_str(path)
+    if sys.root_len(path) > 0
+        throw .invalid_path // a root that is not from the top: a drive with no separator
     $buf: U8[MAX_PATH_LEN + 1] = ::{}
     here: = sys.cwd(U8$[]::buf) catch
         throw .operation_failed
@@ -410,6 +431,19 @@ priv fn walk_into(dir: U8[], skip_dir: fn(name: U8[]): Bool, arena: Arena$@,
 // a taken name, and trees are not removed" in `std/docs/DESIGN-system.md`.
 
 priv const MAX_UNIQUE_TRIES: Sz = 16 //< how many names `mkdir_unique` tries before giving up
+priv const MAX_PART_STEM: Sz = 233 //<
+    //< How much of a name `replace_file`'s temporary file keeps
+    //< The file system's limit on one name is 255 bytes. The temporary adds `.`, 16 hex digits
+    //< and `.part`.
+
+priv fn utf8_head(name: U8[], max: Sz): U8[] //< the longest start of `name` within `max` bytes
+    //< **It does not cut through a UTF-8 sequence**, so the result is still valid text.
+    if name.len <= max
+        return name
+    $n: = max
+    for n > 0 && (name[n] & 0xC0) == 0x80
+        n -= 1
+    return name.sub(0, n)
 
 priv fn random_name( //< a path under `dir` whose name holds 16 random hex digits
     dir: U8[],
@@ -482,15 +516,18 @@ pub fn replace_file( //< replaces a file's whole content, so that a power cut ca
     //< file is replaced durably, or not at all" in std/docs/DESIGN-system.md).
     //< Caution: **A failure can come after the rename**, with the new content in place but not
     //< known to be on the disk. A crash partway leaves a `<name>.<hex>.part` file beside it.
+    //< Caution: **`\` separates on every OS**: on POSIX a path holding one fails, `invalid_path`.
     path: U8[], //< the file to replace or create; its folder must exist. A link there is replaced
     data: U8[], //< its whole new content
     access: Replace_access, //< who can read the result
 ): Void!Fs_error
     check_path(path)!
+    if !sys.is_windows() && path.find_str("\\").is_some()
+        throw .invalid_path
     dir: = sys.get_dir_name(path)
     name: = sys.get_file_name(path)
     defer $work: = mem.scratch(null)
-    stem: = work.arena.text().s(name).s(".").take()
+    stem: = work.arena.text().s(utf8_head(name, MAX_PART_STEM)).s(".").take()
     for _try in Range.asc(MAX_UNIQUE_TRIES)
         part_path: = random_name(dir, stem, ".part", work.arena)!
         check_path(part_path)!

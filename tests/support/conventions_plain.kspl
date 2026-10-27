@@ -17,13 +17,6 @@ priv const MAX_HEADING_WORDS: Sz = 10
 
 priv const LEAD_WORDS: Sz = 8 //< how many of a sentence's first words a finding shows
 
-// ==========================================
-// The documents not yet in plain language
-// **Each is skipped whole**, and the list only shrinks. A listed document that passes fails the
-// check. So it is taken off once its last long sentence is split. A document not listed passes.
-// ==========================================
-priv const NOT_CONVERTED: U8[][_] = ::{}
-
 priv const QUOTED_WHOLE: U8[][_] = ::{ "LICENSE.md" } //<
     //< The documents whose text is another's words, quoted whole
     //< **They are never converted**: the MIT license is read in its own words, or not at all.
@@ -241,23 +234,16 @@ priv fn check_documents(arena: Arena$@)
             continue
         seen += 1
         found: = over_long(harness.read_under_root(rel), arena)
-        if (U8[][]::NOT_CONVERTED).contains(rel)
-            if found.len == 0
-                stale
-                    .push(arena.text().s(rel).s(": it passes now; take it off the list").take())
-            continue
         for f in found
             bad
                 .push(arena.text().s(rel).s(":\{f.line\}: \{f.words\} words (cap \{f.cap\}): \"")
                 .s(f.lead).s(" …\"").take())
-    gone(U8[][]::NOT_CONVERTED, published@, stale@, arena)
     gone(U8[][]::QUOTED_WHOLE, published@, stale@, arena)
     n: = arena.text().s("a sentence in a document holds at most \{MAX_WORDS\} words, a heading ")
         .s("\{MAX_HEADING_WORDS\} (the length alone; an instruction's 20 is left to review)").take()
     verdict.check_list(n, seen, "documents", bad@, "Split it (docs/SPEC-plain-language.md)")
-    verdict.check_list("the documents not yet in plain language are listed, and only those",
-        NOT_CONVERTED.len + QUOTED_WHOLE.len, "names", stale@,
-        "mend the lists in `tests/support/conventions_plain.kspl`")
+    verdict.check_list("every document quoted whole is a published document", QUOTED_WHOLE.len,
+        "names", stale@, "mend QUOTED_WHOLE in `tests/support/conventions_plain.kspl`")
 
 priv fn gone(names: U8[][], published: List<|U8[]|>@, stale: List<|U8[]|>$@, arena: Arena$@) //<
     //< Adds to `stale` each listed name that is no published document

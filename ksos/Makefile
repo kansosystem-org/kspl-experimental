@@ -11,8 +11,10 @@
 # **Keep a recipe to ASCII**: MSYS2's shell rereads it outside UTF-8; wording goes in an `export`.
 
 # --- How the demos are listed (the same for the three families POSIX / QEMU / UF2) ---
-# **One demo = one word in the run, plus its paired variables**: the goal, the gate's coverage and
-# the `.PHONY` grow from the run, and a pair left out stops make at start-up (the `$(error)`s).
+# **A demo is its file**: each family's run is made from the files under `demo/<port>/`, so a new
+# demo needs no edit here. The goal, the gate's coverage and the `.PHONY` grow from the run. Only a
+# decision is written by hand: a demo with a recipe of its own, the Cortex-M0 share, the serial
+# demos, a target named apart from its file, and a UF2's hint. A row naming no demo stops make.
 # **Do not copy the way of building outside the `define`** (`posix_link` / `cm_link` /
 # `nrf51_link` / `rp2040_link`).
 
@@ -45,10 +47,11 @@ endef
 # table. `row_field` takes one field; `row_keys` the suffixes, the names the targets are built on.
 row_field = $(word $(2),$(subst :, ,$(1)))
 row_keys = $(foreach r,$(1),$(call row_field,$(r),1))
-# $(call rows_missing,<rows>,<field>): the rows that leave that field out, for an `$(error)`.
-rows_missing = $(strip $(foreach r,$(1),$(if $(call row_field,$(r),$(2)),,$(r))))
 # $(call us,<suffix>): the suffix as a file name's part (`-` becomes `_`).
 us = $(subst -,_,$(1))
+# $(call demo_suffixes,<port>,<before>,<after>): the `<suffix>` of each
+# `demo/<port>/<before><suffix><after>.kspl`, with `-` for `_`, the names the targets are built on.
+demo_suffixes = $(subst _,-,$(patsubst demo/$(1)/$(2)%$(3).kspl,%,$(wildcard demo/$(1)/$(2)*$(3).kspl)))
 
 LLVM_VER := $(shell clang --version | sed -n 's/.*version \([0-9]*\).*/\1/p' | head -1)
 LLD      := $(shell command -v ld.lld      || command -v ld.lld-$(LLVM_VER)      || echo ld.lld)
@@ -95,8 +98,8 @@ endef
 # (`ksos_run_gate`), rather than ending on `timeout`'s silent 124.
 # **One default for every run.** Measured under load (every demo 10 times, 8 at once beside 16 busy
 # loops on 4 cores; and 3 times, 4 at once beside 2 busy loops pinned to one core), the slowest run
-# took 6.3 s (`ksos-cm-car-model-probe`; the slowest POSIX one, `ksos-task-manager`, 4.2 s), so
-# 30 s is about five times the slowest. A slower machine raises it on the command line
+# took under 7 s (the slowest POSIX one, `ksos-task-manager`, 4.2 s), so 30 s is more than four
+# times the slowest. A slower machine raises it on the command line
 # (`make test-ksos-posix KSOS_RUN_CAP=120`).
 # A run that needs another cap sets `ksos_run_cap_<its target>` next to this, saying why.
 KSOS_RUN_CAP := 30
@@ -164,7 +167,6 @@ define posix_link
 		-o $(POSIX_OUT)/$(2).exe
 endef
 
-# Caution: A POSIX demo not in KSOS_POSIX_DEMOS (at the end) is under no gate; it breaks unseen.
 ksos:
 	@echo "# BUILDING KANSO OS (POSIX host demo)"
 	$(call posix_link,demo/posix/producer_consumer.kspl,ksos_demo)
@@ -172,17 +174,18 @@ ksos:
 
 # --- The demos run on a POSIX host -------------------------------------------------
 # A row is `<suffix>:<input>`: `ksos-<suffix>` builds `demo/posix/<input>.kspl` into
-# `$(POSIX_OUT)/ksos_<suffix>.exe` (`-` becomes `_`). The input is always written: it cannot be
-# derived (`mq`'s is `msgq_demo`).
-KSOS_POSIX_TEMPLATED := mq:msgq_demo mutex:mutex_demo mutex-nested:mutex_nested_demo \
-    wake-preempt:wake_preempt_demo event:event_demo preempt:posix_preempt_demo \
-    delay-until:delay_until_demo lifecycle:lifecycle_demo isr:isr_signal_demo \
-    task-manager:task_manager_demo kernel-check:kernel_check timeout:timeout_demo \
-    tick-mid-switch:tick_mid_switch_demo dyn-race:dyn_race_demo wake-pass-on:wake_pass_on_demo \
-    sleep:sleep_demo
+# `$(POSIX_OUT)/ksos_<suffix>.exe` (`-` becomes `_`). **Every file of `demo/posix/` is a row**, but
+# the two with a rule of their own (`KSOS_POSIX_BY_HAND`). The suffix is the file's name less
+# `_demo`, with `-` for `_`; `KSOS_POSIX_RENAMED` holds the `<input>:<suffix>` pairs that differ.
+KSOS_POSIX_BY_HAND := panic_demo producer_consumer
+KSOS_POSIX_RENAMED := msgq_demo:mq posix_preempt_demo:preempt isr_signal_demo:isr
+posix_inputs := $(filter-out $(KSOS_POSIX_BY_HAND),$(patsubst demo/posix/%.kspl,%,$(wildcard demo/posix/*.kspl)))
+posix_suffix = $(or $(call row_field,$(filter $(1):%,$(KSOS_POSIX_RENAMED)),2),$(subst _,-,$(1:_demo=)))
+KSOS_POSIX_TEMPLATED := $(foreach i,$(posix_inputs),$(call posix_suffix,$(i)):$(i))
 
-ifneq ($(call rows_missing,$(KSOS_POSIX_TEMPLATED),2),)
-$(error a POSIX demo's row has no input: $(call rows_missing,$(KSOS_POSIX_TEMPLATED),2))
+posix_renamed_stale := $(filter-out $(posix_inputs),$(call row_keys,$(KSOS_POSIX_RENAMED)))
+ifneq ($(posix_renamed_stale),)
+$(error KSOS_POSIX_RENAMED names an input with no demo/posix/<input>.kspl: $(posix_renamed_stale))
 endif
 
 # $(call ksos_posix_demo_rule,<suffix>,<input>)
@@ -196,12 +199,9 @@ $(foreach r,$(KSOS_POSIX_TEMPLATED),$(eval $(call ksos_posix_demo_rule,$(call ro
 
 # **The demos whose mark of success is a panic**: one program, `demo/posix/panic_demo.kspl`,
 # given the stop's name as its argument (a panic ends the process, so one run is one stop).
-# `ksos_posix_panic_needle_<suffix>` is the line the run must print. **The needle is the
-# kernel-side panic's spelling itself**; change both in one commit. `ksos_families` in
-# `tests/support/conventions_iface.kspl` reads the run.
-KSOS_POSIX_PANIC := stack-overflow mutex-relock mutex-foreign-unlock delete-holder timeout-zero \
-  event-no-bits stop-outside
-
+# `ksos_posix_panic_needle_<suffix>` is the line the run must print, and **each needle is a demo**
+# (`KSOS_POSIX_PANIC`, below them). **The needle is the kernel-side panic's spelling itself**;
+# change both in one commit.
 ksos_posix_panic_needle_stack-overflow := ksos: stack overflow detected
 ksos_posix_panic_needle_mutex-relock := Mutex.lock by the holder itself
 ksos_posix_panic_needle_mutex-foreign-unlock := Mutex.unlock by a task that is not the holder
@@ -210,11 +210,8 @@ ksos_posix_panic_needle_timeout-zero := ticks must be greater than 0
 ksos_posix_panic_needle_event-no-bits := wanted must name at least one bit
 ksos_posix_panic_needle_stop-outside := ksos: stop_scheduler while no scheduler runs
 
-ksos_posix_panic_missing := $(strip \
-    $(foreach d,$(KSOS_POSIX_PANIC),$(if $(ksos_posix_panic_needle_$(d)),,$(d))))
-ifneq ($(ksos_posix_panic_missing),)
-$(error a panic demo has no ksos_posix_panic_needle_: $(ksos_posix_panic_missing))
-endif
+KSOS_POSIX_PANIC := $(sort $(patsubst ksos_posix_panic_needle_%,%,\
+    $(filter ksos_posix_panic_needle_%,$(.VARIABLES))))
 
 # $(call ksos_posix_panic_rule,<suffix>)
 # The demo's output is copied set off with `| `. Its panic is expected, so it must not open a line
@@ -297,25 +294,10 @@ ksos-cm-run: ksos-cm
 
 # --- The demos run under QEMU ------------------------------------------------------
 # A row is `<suffix>`: `ksos-cm-<suffix>` builds `ksos/demo/cortex_m/cortex_m_<suffix>.kspl` into
-# `$(CM_OUT)/ksos_cm_<suffix>.elf` (`-` becomes `_`) and runs it. A demo with a peer process or
-# objdump is written by hand.
-KSOS_CM_DEMOS := heap-probe panic-probe ai-probe ai-train-probe car-model-probe \
-    ai-weights-probe pilot-probe preempt control-ai-probe mq pi event timeout isr-block isr-unlock \
-    isr-give stack-guard
-
-# UART0's RX path: QEMU's chardev on a Unix socket, and `tests/uart_probe.py polled` checks the echo.
-ksos-cm-uart-echo: $(CM_OBJS)
-	@echo "# BUILDING+RUNNING UART0(RX) echo probe on Cortex-M (thumbv7m) bare metal"
-	$(call cm_link,demo/cortex_m/cortex_m_uart_echo.kspl,$(CM_OUT)/ksos_cm_uart_echo.elf)
-	@rm -f $(CM_OUT)/uart_echo_test.sock
-	$(call ksos_capped_run,python3 tests/uart_probe.py polled $(CM_OUT)/ksos_cm_uart_echo.elf)
-
-# UART0's RX driven by NVIC IRQ0, the CPU resting on WFI; `tests/uart_probe.py irq` checks it.
-ksos-cm-uart-irq-echo: $(CM_OBJS)
-	@echo "# BUILDING+RUNNING UART0(RX, interrupt-driven NVIC IRQ0 + WFI) echo probe on Cortex-M (thumbv7m) bare metal"
-	$(call cm_link,demo/cortex_m/cortex_m_uart_irq_echo.kspl,$(CM_OUT)/ksos_cm_uart_irq_echo.elf)
-	@rm -f $(CM_OUT)/uart_irq_echo_test.sock
-	$(call ksos_capped_run,python3 tests/uart_probe.py irq $(CM_OUT)/ksos_cm_uart_irq_echo.elf)
+# `$(CM_OUT)/ksos_cm_<suffix>.elf` (`-` becomes `_`) and runs it. **Every Cortex-M demo is a row**,
+# but those with a peer process or objdump, written by hand (`KSOS_CM_BY_HAND`).
+KSOS_CM_BY_HAND := min
+KSOS_CM_DEMOS := $(filter-out $(KSOS_CM_BY_HAND),$(call demo_suffixes,cortex_m,cortex_m_,))
 
 CM_WHERE := Cortex-M (thumbv7m)
 $(foreach r,$(KSOS_CM_DEMOS),$(eval $(call qemu_demo_rule,cm,$(r),demo/cortex_m/cortex_m_,$$(CM_OBJS),$$(CM_OUT),cm_link,mps2-an385,cortex-m3,CM_WHERE)))
@@ -361,7 +343,7 @@ nrf51_link = $(call bare_link,$(CM0_CC),$(NRF51_OUT),$(NRF51_DIR)/link.ld,$(NRF5
 # Cortex-M demo shared with `KSOS_CM_DEMOS`, into `$(NRF51_OUT)/ksos_cm0_<suffix>.elf` (`-`
 # becomes `_`) and runs it. **A demo runs here only if it fits 16 KB of RAM and needs no atomics**
 # (Armv6-M has none; the RP2040's come from its SIO): the AI, heap, pilot and car probes stay on
-# the Cortex-M3, as do the UART probes, which need the MPS2's UART.
+# the Cortex-M3.
 KSOS_CM0_DEMOS := min preempt mq pi event timeout isr-block isr-unlock isr-give stack-guard \
     panic-probe
 
@@ -370,7 +352,8 @@ $(foreach r,$(KSOS_CM0_DEMOS),$(eval $(call qemu_demo_rule,cm0,$(r),demo/cortex_
 
 # A row is `<suffix>`: `ksos-nrf51-<suffix>` builds `ksos/demo/nrf51/nrf51_<suffix>.kspl`, a demo
 # that uses the nRF51's own peripherals, into `$(NRF51_OUT)/ksos_nrf51_<suffix>.elf` and runs it.
-KSOS_NRF51_DEMOS := wfi
+# Every nRF51 demo is a row.
+KSOS_NRF51_DEMOS := $(call demo_suffixes,nrf51,nrf51_,)
 
 NRF51_WHERE := the nRF51 (Cortex-M0, QEMU microbit)
 $(foreach r,$(KSOS_NRF51_DEMOS),$(eval $(call qemu_demo_rule,nrf51,$(r),demo/nrf51/nrf51_,$$(NRF51_LINK_OBJS),$$(NRF51_OUT),nrf51_link,microbit,cortex-m0,NRF51_WHERE)))
@@ -427,13 +410,21 @@ ksos-rp2040: $(RP2040_LINK_OBJS) | $(RP2040_OUT)
 # --- The demos that go as far as a UF2 (written to the real chip) ------------------
 # A row is `<suffix>[:<hint>]`: `ksos-rp2040-<suffix>` builds
 # `ksos/demo/rp2040/rp2040_<suffix>_probe.kspl` into `$(RP2040_OUT)/ksos_rp2040_<suffix>.elf` and
-# `.uf2` (`-` becomes `_`). The hint names the guidance printed after writing (`UF2_HINT_COPY`
-# when left out); **something that moves needs its own**. Before writing:
+# `.uf2` (`-` becomes `_`). **Every such file is a row.** `ksos_rp2040_hint_<suffix>` names the
+# guidance printed after writing (`UF2_HINT_COPY` where none is set); **something that moves needs
+# its own**. Before writing:
 # * net: enable internet connection sharing on the PC ("The setting on the PC side" in ksos/docs/HOWTO-bring-up.md).
-# * car-loop: lift the wheels off, and start kssrv on 8080 (stage 6e there).
 # * car-pilot: lift the wheels off; kssrv is needed only while receiving (stage 7 there).
 # * car-ir: line tracking uses the policy in the records, so run car-pilot once first.
-KSOS_RP2040_DEMOS := buzzer board motor:UF2_HINT_MOTOR net car-loop car-pilot car-ir
+ksos_rp2040_hint_motor := UF2_HINT_MOTOR
+rp2040_suffixes := $(call demo_suffixes,rp2040,rp2040_,_probe)
+KSOS_RP2040_DEMOS := $(foreach d,$(rp2040_suffixes),$(d)$(addprefix :,$(ksos_rp2040_hint_$(d))))
+
+rp2040_hint_stale := $(filter-out $(rp2040_suffixes),\
+    $(patsubst ksos_rp2040_hint_%,%,$(filter ksos_rp2040_hint_%,$(.VARIABLES))))
+ifneq ($(rp2040_hint_stale),)
+$(error a ksos_rp2040_hint_<suffix> names no demo/rp2040/rp2040_<suffix>_probe.kspl: $(rp2040_hint_stale))
+endif
 
 # $(call ksos_rp2040_demo_rule,<suffix>,<hint or empty>)
 define ksos_rp2040_demo_rule
@@ -542,18 +533,17 @@ endif
 # The regression gate that runs under QEMU.
 # Linking is not running: this is the only goal that runs the demos (`qemu-system-arm`), and the
 # cap (`ksos_capped`) turns a hang into a failure (the verdict is read in `ksos_run_gate`).
-# Caution: **Separate what may run in parallel from what may not**: the tests/*.py demos' fixed
-# socket/port/pcap, and timing that parallel QEMUs spoil (control-ai claims **exactly zero** drift:
-# do not loosen that `== 0` to keep it parallel).
+# Caution: **Separate what may run in parallel from what may not**: timing that parallel QEMUs
+# spoil (control-ai claims **exactly zero** drift: do not loosen that `== 0` to keep it parallel).
 KSOS_QEMU_CM_DEMOS := $(addprefix ksos-cm-,$(call row_keys,$(KSOS_CM_DEMOS))) \
-    ksos-cm-run ksos-cm-uart-echo ksos-cm-uart-irq-echo
+    ksos-cm-run
 # The Cortex-M0 ones run the cortex_m0 switch, which nothing else runs (QEMU has no RP2040).
 KSOS_QEMU_CM0_DEMOS := $(addprefix ksos-cm0-,$(call row_keys,$(KSOS_CM0_DEMOS))) \
     $(addprefix ksos-nrf51-,$(call row_keys,$(KSOS_NRF51_DEMOS)))
 KSOS_QEMU_DEMOS := $(KSOS_QEMU_CM_DEMOS) $(KSOS_QEMU_CM0_DEMOS)
 
 # **The serial side is the one listed**: forgotten here, a demo runs in parallel and fails visibly.
-KSOS_QEMU_SERIAL_DEMOS := ksos-cm-uart-echo ksos-cm-uart-irq-echo ksos-cm-control-ai-probe
+KSOS_QEMU_SERIAL_DEMOS := ksos-cm-control-ai-probe
 KSOS_QEMU_PARALLEL_DEMOS := $(filter-out $(KSOS_QEMU_SERIAL_DEMOS),$(KSOS_QEMU_DEMOS))
 
 # $(call ksos_gate_rule,<gate>,<target>): `ksos-<gate>gate-<target>`, one parallel demo of a gate
@@ -588,6 +578,8 @@ define ksos_run_gate
 		exit 1; fi
 endef
 export KSOS_NO_PASS_MSG := printed no RESULT: ALL PASS line, so nothing says its checks ran
+# Said once where the emulator is missing, in place of one `Error 127` for each demo.
+export QEMU_MISSING_MSG := FAIL test-ksos-qemu: qemu-system-arm is not on PATH (Debian/Ubuntu: apt install qemu-system-arm; MSYS2 UCRT64: pacman -S mingw-w64-ucrt-x86_64-qemu)
 
 ifeq ($(strip $(LIBGCC_CM)),)
 test-ksos-qemu:
@@ -595,6 +587,7 @@ test-ksos-qemu:
 	@exit 1
 else
 test-ksos-qemu: $(CM_OBJS) $(NRF51_LINK_OBJS)
+	@command -v qemu-system-arm >/dev/null 2>&1 || { printf '%s\n' "$$QEMU_MISSING_MSG" >&2; exit 1; }
 	@echo "# [test-ksos-qemu] $(words $(KSOS_QEMU_DEMOS)) demos on qemu-system-arm (parallel $(words $(KSOS_QEMU_PARALLEL_DEMOS)) / serial $(words $(KSOS_QEMU_SERIAL_DEMOS)))"
 	$(MAKE) -j$(TEST_JOBS) $(KSOS_QEMU_GATE_TARGETS)
 	$(foreach t,$(KSOS_QEMU_SERIAL_DEMOS),$(call ksos_run_gate,$(t),qemu)$(nl))

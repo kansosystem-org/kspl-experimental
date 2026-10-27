@@ -1,7 +1,6 @@
 //< Starts kssrv, waits until it can answer, and keeps its output
 //< **This file knows no HTTP.** It handles only the child process, its logs and the check that it
-//< came up. So both entry points (`kssrv/tests/main.kspl` and
-//< `kssrv/tests/copy.kspl`) start the server the same way.
+//< came up, for `kssrv/tests/main.kspl`.
 import "std/chars"
 import "std/ds" { List }
 import "std/fs"
@@ -31,15 +30,14 @@ priv const READY_LINE: U8[] = "kssrv: I: listening on" //<
     //< `<host>:<port>, root=<root>`, and the port in it is the one the system chose.
 priv const READY_TIMEOUT_US: I64 = 300000000I64 //<
     //< The cap on waiting until it is ready (microseconds)
-    //< Training time varies widely between environments.
+    //< kssrv is ready at once, but a loaded machine or a sanitizer build can start it slowly.
 priv const READY_POLL_MS: I32 = 50
 
 fn start_server(exe: U8[], root: U8[], out_log: U8[], err_log: U8[], flags: U8[][],
     arena: Arena$@): Started //<
         //< Starts kssrv on a free port and waits **until it can answer**; the result names the port.
-        //< Caution: **Do not take a successful connection as ready.** kssrv binds first and then
-        //< trains the model and the manoeuvring policy (`kssrv/main.kspl`; this order reports a
-        //< port clash before training).
+        //< Caution: **Wait for the line that names the port.** The system chooses the port, so
+        //< only that line tells which one to connect to.
         //< **Keep the output**: without it, a failed startup leaves no reason.
     // Caution: **Take the options as a list** (some are two words, such as `--page <file>`).
     $argv: = List<|U8[]|>(arena)

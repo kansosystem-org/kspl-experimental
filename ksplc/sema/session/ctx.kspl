@@ -3,7 +3,8 @@
 //< environment. It also holds the analysis's switches, a body walk's flags (`Fn_ctx`) and each
 //< concern's state (`sema/session/state.kspl`). Every diagnostic goes through `report_diagnostic`,
 //< which applies the `##lint` levels. Declaring a symbol is checked here (`declare_symbol`).
-import "ksplc/base/ast" { Ast_node, Loc, is_anon_env_type, is_anon_fn_name }
+import "ksplc/base/ast" { Ast_node, Loc, Span_info, is_anon_env_type, is_anon_fn_name }
+import "ksplc/base/ast_ext" as _base_ast_ext // `is_implicit_name`
 import "ksplc/base/core" as base_core
 import "ksplc/base/diag" as base_diag
 import "ksplc/base/lint_codes" as base_lint_codes
@@ -12,7 +13,8 @@ import "ksplc/sema/session/import_table" as sema_session_import_table
 import "ksplc/sema/session/state" { Generic_arg, Alias_info, Import_symbol_info, Pending_inst,
     Pending_constraint, Pending_methods, Trait_inst, Diagnostic_counts, Generic_state, Mono_state,
     Alias_state, Import_hit, Import_symbol_state, Lint_setting_entry, Type_layout, Folded_layout,
-    Diag_state, Layout_state, Resolving_state }
+    Diag_state, Layout_state, Resolving_state, Static_state, Static_value, Const_fold,
+    Const_fold_float }
 import "ksplc/sema/type/display" as sema_type_display
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/naming" as sema_type_naming
@@ -133,6 +135,7 @@ struct Sema_ctx
         //< is_instantiating().
     layout: Layout_state
     resolving: Resolving_state
+    statics: Static_state //< the decisions on top-level initializers (`../body/static_init.kspl`)
     infer_expr_fn: fn(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32!Sema_error //<
         //< Hands an expression's type inference to the layer above (ksplc/sema/body)
         //< **This is the only way decl can call body.** If decl imported body, parse would reject
@@ -227,6 +230,13 @@ impl Sema_ctx
                 .cut_path = List<|Sz|>.create(base_core.arena),
                 .cut_reported = base_core.arena.create(Map<|Sz, Bool|>(base_core.arena)),
                 .registries = List<|I32|>.create(base_core.arena),
+            },
+            .statics = Static_state::{
+                .values = base_core.arena.create(Map<|Sz, Static_value|>(base_core.arena)),
+                .picks = base_core.arena.create(Map<|Sz, Ast_node$@|>(base_core.arena)),
+                .ints = base_core.arena.create(Map<|Sz, Const_fold|>(base_core.arena)),
+                .floats = base_core.arena
+                    .create(Map<|Sz, Const_fold_float|>(base_core.arena)),
             },
         }
 
@@ -386,7 +396,7 @@ impl Sema_ctx
 
     fn report_diagnostic(r: Self$@, node: Ast_node$@, sev: base_diag.Diagnostic_severity,
         msg: U8[])
-        info: = node.get_span_offset()
+        info: = written_span(node)
         r.report_core(r.file_for_node(node), r.source_for_node(node), info.offset, info.span,
             node != null, sev, msg)
 
@@ -853,3 +863,12 @@ priv fn is_upper_snake(name: U8[]): Bool //< whether name has no lowercase lette
         if ch.is_lower()
             return false
     return true
+
+priv fn written_span(node: Ast_node$@): Span_info //<
+    //< The source text a diagnostic on this node underlines
+    //< **A node that ends at an implicit name spans only its written part**, the type of a type
+    //< call. The implicit `new` stands at the type's start, with no text of its own, so the span
+    //< would otherwise end three bytes after that start, whatever the type's length.
+    if node != null && node.children.len > 1 && node.last_child().is_implicit_name()
+        return node.get_child(0).get_span_offset()
+    return node.get_span_offset()

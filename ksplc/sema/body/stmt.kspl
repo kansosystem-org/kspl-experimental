@@ -456,7 +456,7 @@ impl Ast_node
             refuse_temporary_index_write(c, left, "at")
             throw .analysis_failed
         if c.index_only_reads(route, recv_type_id)
-            refuse_read_only_element_write(c, left, recv_type_id)
+            sema_body_write_perm.refuse_read_only_element_write(c, left, recv_type_id)
             throw .analysis_failed
         // Caution: **Do not check a built-in slice's or array's element mutability here.** Only the
         // outermost `[` is visible, so `b.imm[0].v = v` would get through; the per-step check is
@@ -768,33 +768,6 @@ impl Ast_node
 
     priv fn infer_unknown_stmt(_r: Ast_node$@, _c: Sema_ctx$@): Void!Sema_error {}
 
-priv fn refuse_read_only_receiver(c: Sema_ctx$@, at: Ast_node$@) //<
-    //< Reports a write to an element through a receiver the function may only read
-    c.err(at,
-        "cannot assign through a read-only location. Take the receiver as 'T$@' (writable), or make \
-            the binding mutable ('$x')")
-
-priv fn refuse_read_only_element_write(c: Sema_ctx$@, left: Ast_node$@, recv_type_id: I32) //<
-    //< Reports a write to an element of a container whose elements are read-only
-    //< Caution: **When assigning into a container with immutable elements, report it in terms of
-    //< the elements.** The `set` path says "implement `Index_mut`", which a type carrying the
-    //< immutability in a type argument (`Slice<|T|>`) cannot do. A type with writable places
-    //< (`List<|T|>@`) reached through a read-only receiver gets the "read-only location" error.
-    // **Describe a slice in the sugar's terms:** the user wrote `[]`, so the fix is `$[]`, not a
-    // type argument they never wrote (as in `../type/display.kspl`).
-    if c.env.is_slice(c.env.receiver_base_id(recv_type_id))
-        sema_body_write_perm.report_read_only_element(c, left, recv_type_id)
-        return
-    // A type with writable places (`Index_place`) reached through a read-only receiver: the fix is
-    // the receiver, not the type.
-    if c.env.has_implemented_operator_trait(c.env.strip_ptr(recv_type_id), "Index_place")
-        refuse_read_only_receiver(c, left)
-        return
-    c.err(left,
-        "cannot write to an element here. This type provides only read-only places ('Index_ref'). \
-            If the element mutability is a type argument, write the mutable spelling (for example \
-            'Slice<|$T|>' instead of 'Slice<|T|>')")
-
 priv fn refuse_temporary_index_write(c: Sema_ctx$@, left: Ast_node$@, method: U8[]) //<
     //< Reports a write to an element of a temporary through a method that writes its receiver
     //< It is the rule a `Self$@` method call on a temporary follows (check_method_receiver_lvalue
@@ -827,7 +800,7 @@ priv fn infer_index_set(c: Sema_ctx$@, left: Ast_node$@, right: Ast_node$@, recv
                 throw .analysis_failed
         case .none {}
     if c.place_is_readonly(recv_node)
-        refuse_read_only_receiver(c, recv_node)
+        sema_body_write_perm.refuse_read_only_receiver(c, recv_node)
     left.def_node = method_sym.node
     c.refuse_packed_receiver(recv_node, method_sym.node, "[]")
     left.type_id = method_sym.type_id

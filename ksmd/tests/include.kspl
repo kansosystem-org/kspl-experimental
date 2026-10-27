@@ -5,9 +5,12 @@
 import "ksmd/base/source" { Diagnostic, MAX_SOURCE_BYTES }
 import "ksmd/files/assemble" { Assembly, NONE, assemble, assemble_loaded }
 import "ksmd/files/fetched" { Fetched, Held }
-import "ksmd/files/files" { Loaded, Refusal, load, resolve_text }
+import "ksmd/files/files" { Loaded, Refusal, load, moved_path, resolve_text }
 import "ksmd/files/workspace" { Workspace }
 import "ksmd/model/model" { Block_kind, Inline }
+import "ksmd/port/web/moving"
+import "ksmd/syntax/writer"
+import "ksmd/tests/tables" { opened }
 import "std/chars"
 import "std/fs"
 import "std/io"
@@ -33,6 +36,7 @@ fn run()
     top_failures()
     tables_per_source()
     text_rules()
+    moved_paths()
     fetched_rounds()
     leftover_part()
 
@@ -608,3 +612,32 @@ priv fn snapshot_names(root: U8[], arena: Arena$@): U8[] //< every file's name, 
             b.c(' ')
         b.s(sys.get_file_name(files.get(i)))
     return arena.dup_str(b.slice())
+
+priv fn moved_paths() //< a source saved in another folder writes its paths to name the same files
+    defer arena: = Arena(64 * 1024)
+    cases: = U8[][]::{ "|parts|parts/notes.ksmd|notes.ksmd", "|parts|notes.ksmd|../notes.ksmd",
+        "|parts|pics/a.png|../pics/a.png", "parts||notes.ksmd|parts/notes.ksmd",
+        "a/b|a/c|../d.png|../d.png", "a/b|x|e.png|../a/b/e.png",
+        "a|a/b|../top.ksmd|../../top.ksmd" }
+    for c in cases
+        p: = c.split('|', arena)
+        got: = moved_path(p.get(0), p.get(1), p.get(2), arena) catch "refused"
+        verdict.check(arena.text()
+            .s("from '\{p.get(0)\}' to '\{p.get(1)\}', \{p.get(2)\} becomes \{p.get(3)\}").take(),
+            got.equals(p.get(3)), got)
+    top: =
+        "%ksmd 1\n\nText.\n\n:::include path=\"parts/notes.ksmd\"\n:::\n\n:::image \
+            src=\"pics/a.png\" alt=\"A\"\n:::\n"
+    $ed: = opened(top, arena)
+    ed.move_paths("", "parts")
+    defer $out: = Str_builder()
+    writer.write(ed.doc@, out@)
+    moved: =
+        "%ksmd 1\n\nText.\n\n:::include path=\"notes.ksmd\"\n:::\n\n:::image src=\"../pics/a.png\" \
+            alt=\"A\"\n:::\n"
+    verdict.check("the editor writes every include's and image's path again, in one step",
+        out.slice().equals(moved), out.slice())
+    ed.undo()
+    out.clear()
+    writer.write(ed.doc@, out@)
+    verdict.check("and one undo takes them all back", out.slice().equals(top), out.slice())

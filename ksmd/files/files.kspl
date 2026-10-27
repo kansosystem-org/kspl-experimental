@@ -101,6 +101,22 @@ fn resolve_text(folder: U8[], written: U8[], arena: Arena$@): U8[]!Refusal //<
         throw .name
     return path
 
+fn moved_path(from: U8[], to: U8[], written: U8[], arena: Arena$@): U8[]!Refusal //<
+    //< How a source moved from folder `from` to folder `to` writes the path it wrote as `written`
+    //< Both folders are from the root, empty for the root itself. The file named stays the same:
+    //< the path climbs out of `to` with `..` as far as the two folders differ, then goes down.
+    target: = resolve_text(from, written, arena)!
+    $base: = to
+    $ups: Sz = 0
+    for base.len > 0 &&
+        !(target.starts_with(base) && target.len > base.len && target[base.len] == '/')
+        base = folder_of(base)
+        ups += 1
+    out: = arena.text()
+    for _ in Range.asc(ups)
+        out.s("../")
+    return out.s(target.sub_from(base.len + 1 if base.len > 0 else 0)).take()
+
 fn folder_of(path: U8[]): U8[] //< the folder of a path from the root; empty for the root itself
     //< A path from the root has one spelling, `/` between folders and no drive, so the folder is
     //< what stands before the last `/`. `sys.get_dir_name` would ask which OS runs the page.

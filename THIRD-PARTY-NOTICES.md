@@ -84,7 +84,6 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 | Llama | `ksai/examples/llama_engine/` | Meta's weights. The bundled `mini_llama.safetensors` is made here, with a vocabulary of 12 and two layers; only the shape is borrowed |
 | PyTorch / transformers / peft | `tools/ai_assist/*.py` | The packages themselves. The tools assume you install them on your own machine |
 | OpenSSL | `ksbind/tls` | The library itself. Only the caller's declarations are present |
-| SQLite | `ksbind/db` | The library itself. Only the caller's declarations are present |
 
 ## Binary files
 

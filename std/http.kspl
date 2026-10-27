@@ -465,8 +465,6 @@ priv struct Request_head //< a request's head, read and checked, with its first 
 
 priv fn scan_request_head(src: U8[], max_body: Sz, arena: Arena$@): Request_head!Http_error //<
     //< Reads a request's head as `scan_head` does, and checks its first line and its `Host`
-    //< **Both request readers go through this**, so `request_length` refuses what `parse_request`
-    //< does.
     h: = scan_head(src, max_body, arena)!
     line: = parse_request_line(h.first_line)!
     check_host(h.head, line.version)!
@@ -545,18 +543,6 @@ priv fn request_in(src: U8[], max_body: Sz, arena: Arena$@, head_only: Bool):
         .consumed = r.parts.head_end + body.len,
     })
 
-pub fn request_length( //< how many bytes the request at the start of the buffer takes in all
-    //< **For a reader that waits for the body without parsing again**: once the head has arrived,
-    //< the rest is a count. It fails as `parse_request` does on the head, `incomplete` included
-    //< until the head's empty line arrives.
-    src: U8[], //< what has arrived so far
-    max_body: Sz, //< the largest body accepted, as `parse_request` takes it
-    arena: Arena$@, //< where the head's parts go while it reads them; null reads them on the heap
-): Sz!Http_error //< the head's length plus the body's
-    defer $work: = mem.scratch(arena)
-    r: = scan_request_head(src, max_body, work.arena)!
-    return r.parts.head_end + r.parts.length.unwrap_or(0)
-
 pub fn parse_response( //< the one response at the start of the buffer; fails if it is incomplete
     //< The body limit is `DEFAULT_MAX_BODY_BYTES`; the head's is `MAX_HEAD_BYTES`.
     src: U8[], //< what has arrived so far
@@ -622,7 +608,7 @@ priv fn response_from(stream: net.Tcp_stream$@, work: mem.Scratch$@, max_body: S
         //< read_response's work, every part in `work`'s arena
     deadline: = sys.deadline_after_ms(timeout_ms)
     defer $b: = Str_builder()
-    chunk: U8[READ_CHUNK] = ::{}
+    $chunk: U8[READ_CHUNK] = ::{}
     h: = read_head(stream, b@, work.arena, max_body, deadline, U8$[]::chunk)!
     status_line: = parse_status_line(h.first_line, work.arena)!
     body_len: = response_body_len(h, status_line.status)!
@@ -695,17 +681,21 @@ pub fn format_request( //< builds one whole request as bytes: the first line, th
     b.s(body)
 
 pub fn write_request( //< sends one whole request: the first line, the headers and the body
-    //< It refuses what `format_request` refuses, before anything is written.
-    stream: net.Tcp_stream$@, //< the connection to write to
+    //< It refuses what `format_request` refuses, before anything is written. **The whole request
+    //< goes out within `timeout_ms`**, so a server that stops reading cannot hold the caller for
+    //< good (`net.Tcp_stream.write_all_for`).
+    stream: net.Tcp_stream$@, //< the connection to write to, which blocks
     method: U8[], //< the method, such as `GET`
     target: U8[], //< the target, including the query string
     head: Headers, //< the headers, `Host` among them once
-    body: U8[]): Void!Http_error
+    body: U8[], //< the whole body
+    timeout_ms: I32, //< how long the whole request can take to send; past it `.io(.timed_out)`
+): Void!Http_error
     defer $b: = Str_builder()
     format_request(b@, method, target, head, body)!
-    // Caution: write can stop partway and silently truncate the message. Use write_all (see the
+    // Caution: write can stop partway and silently truncate the message. Send it all (see the
     // note in std/net.kspl).
-    stream.write_all(b.slice()) catch e
+    stream.write_all_for(b.slice(), timeout_ms) catch e
         throw .io(e)
 
 pub fn reason_phrase( //< the standard phrase for a status number, so the two cannot disagree

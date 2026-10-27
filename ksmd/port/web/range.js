@@ -140,14 +140,44 @@ function ksmdRange(ks) {
     mark();
   }
 
+  // Caution: **Put the focus in a text box, never on the cell itself.** A cell that is not open
+  // takes no text, and Windows keeps an input method off there. Its first key then went in as a
+  // letter and opened the cell, and only the next was composed ("bい" for "び"). The box stands
+  // over the chosen cell and shows nothing. What is typed or composed in it opens the cell, the box
+  // itself becoming the open cell's input (`ks.table.openTyped`), so a composition goes on.
+  function catcher(el) {
+    for (const old of document.querySelectorAll(".cell-catch")) if (old.parentNode !== el) old.remove();
+    let box = el.querySelector(":scope > .cell-catch");
+    if (!box) {
+      box = document.createElement("input");
+      box.className = "cell-catch";
+      box.tabIndex = -1;
+      const [row, column] = [Number(el.dataset.r), Number(el.dataset.c)];
+      box.setAttribute("aria-label", row < 0 ? `Name of column ${ks.table.letters(column)}` :
+        `Cell ${ks.table.letters(column)}${row + 1}`);
+      // A touch screen keeps its keyboard down for a cell only chosen; a double tap opens it.
+      if (window.matchMedia && window.matchMedia("(hover: none)").matches) box.inputMode = "none";
+      box.addEventListener("compositionstart", () => ks.table.openTyped(box));
+      box.addEventListener("input", (e) => {
+        if (!e.isComposing) ks.table.openTyped(box);
+      });
+      el.appendChild(box);
+    }
+    box.readOnly = ks.readOnly;
+    return box;
+  }
+
   function focusChosen() {
     const c = ks.cell;
     const el = c && find(c.block, c.row, c.column);
     if (el) {
-      el.focus({ preventScroll: true });
+      catcher(el).focus({ preventScroll: true });
       el.scrollIntoView({ block: "nearest", inline: "nearest" });
     }
   }
+
+  // The chosen cell a key or a paste went to: the cell, through the box that holds the focus.
+  const chosenOf = (t) => (t && t.classList && t.classList.contains("cell-catch") ? t.parentElement : t);
 
   // Reaches from the chosen cell to another, as Shift+click does.
   function reach(row, column) {
@@ -227,8 +257,8 @@ function ksmdRange(ks) {
   // The keys on a chosen cell that is not open: the range, Delete, the fills, undo, and opening a
   // cell.
   ks.root.addEventListener("keydown", (e) => {
-    const el = e.target;
-    if (!el.matches || !el.matches(".table [data-r]") || el.closest(".include") || !ks.cell) return;
+    const el = chosenOf(e.target);
+    if (!el || !el.matches || !el.matches(".table [data-r]") || el.closest(".include") || !ks.cell) return;
     if (e.isComposing || e.keyCode === 229) return;
     const c = ks.cell;
     const mod = e.ctrlKey || e.metaKey;
@@ -257,6 +287,12 @@ function ksmdRange(ks) {
       collapse();
       const now = ks.now(e.key === ":");
       ks.table.openWith(c.block, c.row, c.column, now, now.length, now.length);
+    } else if (e.altKey && !mod && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
+      // Alt+Right and Alt+Left resize the column, as in an open cell. Left to the browser, they
+      // go back or forward a page, out of the editor.
+      e.preventDefault();
+      collapse();
+      ks.table.widen(c.block, c.column, e.key === "ArrowRight");
     } else if (e.key === "F2") {
       e.preventDefault();
       collapse();
@@ -271,9 +307,8 @@ function ksmdRange(ks) {
       ks.command(e.key.toLowerCase() === "y" || e.shiftKey ? "redo" : "undo");
     } else if (e.key.length === 1 && !mod && !e.altKey) {
       // Typing on a chosen cell opens it, and the key's text replaces its value, as in a
-      // spreadsheet.
+      // spreadsheet: the text goes into the box the focus stands in (`catcher`).
       collapse();
-      ks.table.open(c.block, c.row, c.column, true);
     }
   });
 
@@ -445,11 +480,12 @@ function ksmdRange(ks) {
 
   // A paste on a chosen cell that is not open fills the range.
   ks.root.addEventListener("paste", (e) => {
-    if (!e.target.matches || !e.target.matches(".table [data-r]") || e.target.closest(".include")) return;
+    const el = chosenOf(e.target);
+    if (!el || !el.matches || !el.matches(".table [data-r]") || el.closest(".include")) return;
     e.preventDefault();
     e.stopPropagation();
     const text = e.clipboardData ? e.clipboardData.getData("text/plain") : "";
-    pasteGrid(text, true);
+    if (!ks.tooLarge(text)) pasteGrid(text, true);
   });
 
   ks.range = { rect, set, collapse, reach, extend, fill, clear, grid, pasteGrid, mark,

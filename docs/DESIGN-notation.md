@@ -344,7 +344,7 @@ In each case nobody is told (Principle 5). So `///` is a compiler warning (`[W02
 
 * **`//<` is an ordinary line comment**, so editors, `grep` and every existing tool keep working on it.
 * **`fmt` keeps the shape.** A signature broken one parameter per line stays broken, the trailing comma deciding it (black's magic trailing comma). Decided on width alone, the shape is lost on the next run, which is what a marker behind each parameter meets in practice.
-* **One reader serves four consumers.** The record (`ksplc --emit-surface`'s fourth column), a library's interface (`--library=`), the hover and the completion list all read `ksplc/base/ast_doc.kspl` (Principle 6). The summary crosses the artefact boundary, so a caller holding only a library's header still gets it in its editor.
+* **One reader serves four consumers.** The record (`ksplc doc --emit-surface`'s fourth column), a library's interface (`--library=`), the hover and the completion list all read `ksplc/base/ast_doc.kspl` (Principle 6). The summary crosses the artefact boundary, so a caller holding only a library's header still gets it in its editor.
 
 ```mermaid
 flowchart LR

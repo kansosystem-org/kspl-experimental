@@ -109,6 +109,11 @@ impl Ast_node
         r.reject_write_to_const_element(c)!
         if !c.place_denies_write(r)
             return
+        // An element reached through `at_ref` is read-only, and the report says so in those terms.
+        if sub: = read_only_subscript(c, r)
+            recv: = sub.get_postfix_receiver()
+            refuse_read_only_element_write(c, r, recv.type_id)
+            throw .analysis_failed
         c.err(r,
             "cannot write here. The path to this location goes through a read-only pointer, or its \
                 type could not be determined. Use '$@' to allow writing through the pointer, or \
@@ -191,6 +196,26 @@ impl Ast_node
                     return
                 return recv.enforce_mutability(c)
 
+fn read_only_subscript(c: Sema_ctx$@, place: Ast_node$@): Ast_node$@? //<
+    //< The subscript through `at_ref` on the path to the place, if the path reaches one
+    //< The walk stops where place_denies_write in `../decl/access.kspl` stops: at a pointer, or
+    //< at a subscript through an `at` that ends the permission walk.
+    $node: = place
+    for node != null && node.kind_id == .k_expr_postfix && node.children.len >= 2
+        op: = node.get_postfix_op()
+        recv: = node.get_postfix_receiver()
+        if op == null || recv == null || recv.is_explicit_cast()
+            return .none
+        if op.text.equals("[")
+            if c.index_route(recv, recv.type_id) == .ref_place
+                return .some(node)
+            if c.index_stops_permission_walk(recv.type_id)
+                return .none
+        else if !op.text.equals(".") || c.env.is_pointer(recv.type_id)
+            return .none
+        node = recv
+    return .none
+
 fn report_read_only_element(c: Sema_ctx$@, at: Ast_node$@, recv_type_id: I32) //<
     //< Reports a write to an element of a built-in array or slice whose elements are read-only
     //< **The fix differs by container** ("4.2.2 Where `$` goes for a fixed-length array and a
@@ -209,3 +234,30 @@ fn report_read_only_element(c: Sema_ctx$@, at: Ast_node$@, recv_type_id: I32) //
                 follow the binding that holds it. Declare the binding mutable ('$a'), or take the \
                 receiver as 'Self$@' for a field")
     c.err(at, c.scratch.slice())
+
+fn refuse_read_only_receiver(c: Sema_ctx$@, at: Ast_node$@) //<
+    //< Reports a write to an element through a receiver the function may only read
+    c.err(at,
+        "cannot assign through a read-only location. Take the receiver as 'T$@' (writable), or make \
+            the binding mutable ('$x')")
+
+fn refuse_read_only_element_write(c: Sema_ctx$@, left: Ast_node$@, recv_type_id: I32) //<
+    //< Reports a write to an element of a container whose elements are read-only
+    //< Caution: **When assigning into a container with immutable elements, report it in terms of
+    //< the elements.** The `set` path says "implement `Index_mut`", which a type carrying the
+    //< immutability in a type argument (`Slice<|T|>`) cannot do. A type with writable places
+    //< (`List<|T|>@`) reached through a read-only receiver gets the "read-only location" error.
+    // **Describe a slice in the sugar's terms:** the user wrote `[]`, so the fix is `$[]`, not a
+    // type argument they never wrote (as in `../type/display.kspl`).
+    if c.env.is_slice(c.env.receiver_base_id(recv_type_id))
+        report_read_only_element(c, left, recv_type_id)
+        return
+    // A type with writable places (`Index_place`) reached through a read-only receiver: the fix is
+    // the receiver, not the type.
+    if c.env.has_implemented_operator_trait(c.env.strip_ptr(recv_type_id), "Index_place")
+        refuse_read_only_receiver(c, left)
+        return
+    c.err(left,
+        "cannot write to an element here. This type provides only read-only places ('Index_ref'). \
+            If the element mutability is a type argument, write the mutable spelling (for example \
+            'Slice<|$T|>' instead of 'Slice<|T|>')")

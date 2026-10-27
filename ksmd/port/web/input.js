@@ -1,6 +1,6 @@
 // ksmd page: input. Text arrives through `beforeinput`, which is cancelled and turned into a model
-// action; commands arrive through key presses and the toolbar. The page never keeps an edit the
-// browser made, except an input method's composition while it lasts.
+// action; commands arrive through key presses, the menus and the quick access bar. The page never
+// keeps an edit the browser made, except an input method's composition while it lasts.
 // Caution: **Never render the element being composed in, and commit a composition once.** An input
 // method owns that element until `compositionend`. The commit compares the element's text before and
 // after, so a later `input` event adds nothing.
@@ -187,6 +187,7 @@ function ksmdInput(ks) {
     const data = e.clipboardData;
     if (data && image(data.files)) return;
     const text = data ? data.getData("text/plain") : "";
+    if (ks.tooLarge(text)) return;
     // Cells copied from a spreadsheet: at a chosen cell they fill the table from there, and in
     // text they make a new table, whose first row gives the names.
     if (ks.where === "cell" && ks.cell && ks.range.pasteGrid(text, false)) return;

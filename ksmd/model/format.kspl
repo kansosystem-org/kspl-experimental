@@ -1,7 +1,7 @@
 //< A table column's number format: how its numbers show, while each cell keeps its number
 //< A table's `formats` attribute holds one entry per column: `number:2`, `grouped:2`, `percent:1`
-//< or `currency:USD:2`, or nothing for a column without one. A format rounds only what the page
-//< shows. Text, empty cells and errors show as they are.
+//< or `currency:USD:2`, `date:yyyy/mm/dd` for dates, or nothing for a column without one. A format
+//< rounds only what the page shows. Text, empty cells and errors show as they are.
 //< The number's shortest decimal digits are rounded, half away from zero, so `2.675` shows as
 //< `2.68`, as a person rounds the digits they read. A formula's `round` rounds by the same rule
 //< (`round_places`).
@@ -13,12 +13,22 @@ const MAX_PLACES: Sz = 9 //< the most digits a format shows after the decimal po
 
 priv const DIGITS: Sz = 24 //< room for a number's shortest digits, which are at most 17
 
+const GENERAL: U8[] = "general" //< a cell's own format that shows its value as calculated
+    //< **A column has no such entry**: its empty entry says the same.
+
+const SLASH_DATE: U8[] = "date:yyyy/mm/dd" //< the entry of a column that shows dates with `/`
+    //< **Only the form other than the file's own is an entry.** A date shows as `2026-10-23` with
+    //< no entry, so one format keeps one spelling.
+
 enum Format_kind //< how a column shows its numbers
     none //< as calculated
     number //< fixed places, without thousands separators: `1234.50`
     grouped //< fixed places, with a `,` between each three digits: `1,234.50`
     percent //< the number times 100, grouped, then `%`: `12.5%`
     currency //< a currency's symbol, then the number grouped: `$1,234.50`
+    slash_date //<
+        //< a date as `2026/10/23`; numbers show as calculated, and no date shows `2026-10-23`
+    general //< as calculated, whatever the column's format: a cell's own choice, never a column's
 
 struct Number_format
     kind: Format_kind
@@ -31,10 +41,17 @@ fn no_format(): Number_format //< a column that shows its numbers as calculated
 fn same_format(a: Number_format, b: Number_format): Bool
     return a.kind == b.kind && a.places == b.places && a.code.equals(b.code)
 
+fn shows_numbers(f: Number_format): Bool //< whether a format changes how numbers show
+    return f.kind != .none && f.kind != .slash_date && f.kind != .general
+
 fn format_of(text: U8[]): Number_format? //<
     //< The format an entry of `formats` names, or no format for an empty entry; none if invalid
     if text.len == 0
         return .some(no_format())
+    if text.equals(SLASH_DATE)
+        return .some(Number_format::{ .kind = .slash_date, .places = 0, .code = "" })
+    if text.equals(GENERAL)
+        return .some(Number_format::{ .kind = .general, .places = 0, .code = "" })
     if text.len < 3 || text[text.len - 2] != ':' || !text[text.len - 1].is_digit()
         return .none
     $f: = no_format()
@@ -64,6 +81,12 @@ fn currency_of(code: U8[]): Number_format? //<
 fn write_format(f: Number_format, out: Str_builder$@) //< the entry `formats` holds; none is empty
     switch f.kind
     case .none
+        return
+    case .slash_date
+        out.s(SLASH_DATE)
+        return
+    case .general
+        out.s(GENERAL)
         return
     case .number
         out.s("number")

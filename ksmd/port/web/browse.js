@@ -18,7 +18,8 @@ function ksmdBrowse(local) {
   let mode = "save";
   let folder = "";
   let files = [];
-  let replacing = ""; // the path a second press of Save replaces
+  // The file a second press of Save replaces: { path, digest } of its bytes when it was chosen.
+  let replacing = null;
   let done = null;
 
   const join = (a, b) => (a === "" ? b : `${a}/${b}`);
@@ -61,7 +62,7 @@ function ksmdBrowse(local) {
       return false;
     }
     folder = to;
-    replacing = "";
+    replacing = null;
     files = got.files.filter((f) => f.endsWith(EXT));
     showWhere();
     list.textContent = "";
@@ -70,7 +71,7 @@ function ksmdBrowse(local) {
     for (const f of files) {
       item(f, "file", () => {
         name.value = f;
-        replacing = "";
+        replacing = null;
         note.textContent = "";
       }, () => {
         name.value = f;
@@ -83,8 +84,10 @@ function ksmdBrowse(local) {
     return true;
   }
 
-  // Takes the typed name in the folder shown: the path, or nothing where it is not yet decided.
-  function choose() {
+  // Takes the typed name in the folder shown: { path, expected }, or nothing where it is not yet
+  // decided. `expected` is null, or the digest of a file chosen to be replaced. **The file is read
+  // when the person chooses it**, so the second press replaces only the bytes that stood then.
+  async function choose() {
     let n = name.value.trim();
     if (n === "") {
       note.textContent = "Type a name for the document, such as notes.ksmd.";
@@ -94,11 +97,24 @@ function ksmdBrowse(local) {
     if (mode === "save" && !n.slice(n.lastIndexOf("/") + 1).includes(".")) n += EXT;
     const path = join(folder, n);
     const there = files.includes(n);
-    if (mode === "open" || !there || replacing === path) {
-      finish({ path, replace: mode === "save" && there });
+    if (mode === "open" || !there) {
+      finish({ path, expected: null });
       return;
     }
-    replacing = path;
+    if (replacing && replacing.path === path) {
+      finish({ path, expected: replacing.digest });
+      return;
+    }
+    const now = await local.read(path);
+    if (now.status === 404) {
+      finish({ path, expected: null });
+      return;
+    }
+    if (now.status !== 200) {
+      note.textContent = `${n} cannot be replaced. ${now.why}`;
+      return;
+    }
+    replacing = { path, digest: await local.digest(now.bytes) };
     note.textContent = `${n} already exists. Press Save again to replace it.`;
   }
 
@@ -116,7 +132,7 @@ function ksmdBrowse(local) {
   });
   ok.addEventListener("click", choose);
   name.addEventListener("input", () => {
-    replacing = "";
+    replacing = null;
   });
   name.addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
@@ -126,7 +142,7 @@ function ksmdBrowse(local) {
   });
 
   return {
-    // Opens the dialog on the folder of `start`: { path, replace } once chosen, or null.
+    // Opens the dialog on the folder of `start`: { path, expected } once chosen, or null.
     async pick(how, start) {
       mode = how;
       title.textContent = how === "save" ? "Save as" : "Open";

@@ -54,6 +54,10 @@ struct Gate //< one gate: what `make` is asked for, and where it runs
         //< **For two gates that each keep about one core busy and share no file.** The two rows
         //< stand next to each other, name each other, and agree on `stops` and `early`
         //< (`pair_fault`). A set that runs only one of them runs it alone.
+    not_on: U8[] //<
+        //< The platforms `ci-full` leaves it out on, space-separated as `PLATFORM` spells them
+        //< **Only for a gate that cannot give a true answer there**, never for a missing tool: the
+        //< port it runs needs Linux, or its baseline was measured on Linux.
 
 // Caution: **The order is the order they run in.** A gate can use what one before it built (the
 // self-host builds stage2, which perf-log measures again).
@@ -67,10 +71,8 @@ const GATES: Gate[_] = ::{
     // tools/ has tests but no `Makefile`, so no copy runs them; `debug` holds them on macOS.
     Gate::{ .log = "debug_tools", .args = "debug-tools", .par = .serial, .verdict = true,
         .shard = .rest, .macos = false, .stops = false, .early = false },
-    Gate::{ .log = "lint", .args = "lint", .par = .parallel, .verdict = true, .shard = .core,
-        .macos = true, .stops = false, .early = true },
-    Gate::{ .log = "lint_cfg", .args = "lint-cfg", .par = .serial, .verdict = true,
-        .shard = .linux, .macos = false, .stops = false, .early = false },
+    Gate::{ .log = "lint", .args = "lint", .par = .parallel, .verdict = true, .shard = .linux,
+        .macos = false, .stops = false, .early = true },
     // **Only this `-j` shrinks the suites' time**, and the order they start in settles it (`SUITES`
     // in `mk/test.mk`, longest first; the halves are cut at `SUITES_B` there). Caution: **keep
     // `--output-sync=target`**, or one suite's `RESULT:` lines scatter among another's.
@@ -83,7 +85,7 @@ const GATES: Gate[_] = ::{
     // On a fall, run `make self-host`, then `make commit-seed`, and commit `ksplc/seed.c` with
     // `ksplc/seed.sum`.
     Gate::{ .log = "seed_sum", .args = "test-seed-sum", .par = .serial, .verdict = true,
-        .shard = .core, .macos = true, .stops = false, .early = false },
+        .shard = .linux, .macos = false, .stops = false, .early = false },
     Gate::{ .log = "fm", .args = "test-freestanding-math", .par = .serial, .verdict = true,
         .shard = .core, .macos = true, .stops = false, .early = false },
     Gate::{ .log = "simd", .args = "test-simd", .par = .serial, .verdict = true, .shard = .core,
@@ -113,10 +115,11 @@ const GATES: Gate[_] = ::{
     // kssrv's and ksbind's tests through LLVM, which `debug` holds neither of (`test-llvm-pkgs`).
     Gate::{ .log = "llvm_pkgs", .args = "test-llvm-pkgs", .par = .serial, .verdict = true,
         .shard = .linux, .macos = false, .stops = false, .early = false },
-    // Peak memory alone settles it; the time is only recorded (`tests/tools/perf_guard.kspl`).
+    // Peak memory and the tree types' exact sizes settle it; the time is only recorded
+    // (`tests/tools/perf_guard.kspl`).
     // **Linux alone**: the baseline is Linux's, so another platform's numbers say nothing.
     Gate::{ .log = "perf", .args = "perf-log", .par = .serial, .verdict = false, .shard = .linux,
-        .macos = false, .stops = false, .early = false },
+        .macos = false, .stops = false, .early = false, .not_on = "win32 darwin" },
     // macOS runs these compiler suites, which the shared jobs reach through both suite shares.
     // It leaves out `perf` (the baseline is Linux's) and what is platform-independent; it keeps
     // what meets Apple's toolchain only there (`fm`, `emit_runtime`).
@@ -130,27 +133,25 @@ const GATES: Gate[_] = ::{
         .shard = .none, .macos = true, .stops = false, .early = false },
     // Each needs a tool only the devcontainer image holds: `<ucontext.h>`, `qemu-system-arm`, node,
     // wasm-ld and a browser, `desktop-file-validate`, libopenblas, ThreadSanitizer, the address and
-    // leak sanitizers. **A browser and the validator are required here** (`KSMD_REQUIRE_*`): the
-    // image bundles them, so their absence is a fault, not the place.
+    // leak sanitizers. **A browser and the validator are required here**: the image bundles them,
+    // so their absence is a fault, not the place. The browser's switch is `REQUIRE_SWITCHES` in
+    // `mk/test.mk`; the validator's is set by its row, as `make ksmd` needs no validator.
     Gate::{ .log = "ksos_posix", .args = "test-ksos-posix", .par = .serial, .verdict = false,
-        .shard = .linux, .macos = false, .stops = false, .early = false },
+        .shard = .linux, .macos = false, .stops = false, .early = false, .not_on = "win32" },
     Gate::{ .log = "ksos_qemu", .args = "test-ksos-qemu", .par = .serial, .verdict = false,
         .shard = .linux, .macos = false, .stops = false, .early = false },
-    Gate::{ .log = "js_syntax", .args = "test-js-syntax", .par = .serial, .verdict = true,
-        .shard = .linux, .macos = false, .stops = false, .early = false },
     // ksmd's page in Chromium, driven by real input events (`ksmd/tests/browser/main.mjs`).
-    Gate::{ .log = "ksmd_browser", .args = "test-ksmd-browser KSMD_REQUIRE_BROWSER=1",
-        .par = .serial, .verdict = true, .shard = .linux, .macos = false, .stops = false,
-        .early = false },
+    Gate::{ .log = "ksmd_browser", .args = "test-ksmd-browser", .par = .serial, .verdict = true,
+        .shard = .linux, .macos = false, .stops = false, .early = false },
     Gate::{ .log = "ksmd_desktop", .args = "test-ksmd-desktop KSMD_REQUIRE_DESKTOP=1",
         .par = .serial, .verdict = true, .shard = .linux, .macos = false, .stops = false,
-        .early = false },
+        .early = false, .not_on = "win32 darwin" },
     // ksmd's launcher run as a double-click runs it, two opens at once included
     // (`tools/tests/ksmd_launch.kspl`). **Linux alone**, so the launcher's lock on Windows goes
     // unchecked ("What each platform runs" in `docs/SPEC-gates.md`).
     Gate::{ .log = "ksmd_open", .args = "test-ksmd-open", .par = .serial, .verdict = true,
         .shard = .linux, .macos = false, .stops = false, .early = false },
-    // Caution: **Build and run the BLAS backend for real.** `lint-cfg` reads its branch, but only
+    // Caution: **Build and run the BLAS backend for real.** `make lint` reads its branch, but only
     // a link shows whether the FFI is right.
     Gate::{ .log = "blas", .args = "test-blas", .par = .serial, .verdict = true, .shard = .linux,
         .macos = false, .stops = false, .early = false },
@@ -253,9 +254,14 @@ enum Set //< a set of gates one command runs, named as `make` names it
     ci_shard_core //< `make ci-shard-core`
     ci_shard_rest //< `make ci-shard-rest`
     ci_shard_linux //< `make ci-shard-linux`: what Linux alone runs
+    ci_full //<
+        //< `make ci-full`: every gate this host can answer, the Linux-only ones included
+        //< **For a person checking all on one machine**, where CI spreads the gates over platforms
+        //< so each answer is paid for once. A SKIP passes, and the round lists it
+        //< (`Judge.any_skip`).
 
 const SET_ORDER: Set[_] = ::{ Set.ci, Set.ci_macos, Set.ci_shard_core, Set.ci_shard_rest,
-    Set.ci_shard_linux } //< every set, so a name can be read back
+    Set.ci_shard_linux, Set.ci_full } //< every set, so a name can be read back
 
 fn set_from(name: U8[], arena: Arena$@): Set? //< the set a name spells, if any
     //< **A name is the variant's with `_` written `-`** (`ci-shard-core`), so `make`, the workflow
@@ -279,6 +285,10 @@ impl Set
             return g.shard == Shard.core
         case .ci_shard_rest
             return g.shard == Shard.rest
+        case .ci_full
+            // `Shard.none` is macOS's stand-in for the copies `test-extract` builds, which this set
+            // runs, so it would check the same thing twice.
+            return (shared || g.shard == Shard.linux) && !lists(g.not_on, platform)
 
 // ==========================================
 // The SKIP lines a round expects. **A SKIP no row holds fails its gate**: a tool gone missing from
@@ -292,12 +302,13 @@ struct Expected_skip //< one SKIP a platform's round may print
     says: U8[] //< a piece of the line that tells its reason apart
 
 const EXPECTED_SKIPS: Expected_skip[_] = ::{
-    Expected_skip::{ .on = "linux win32 darwin", .says = "this machine has no IPv6 at all" },
+    Expected_skip::{ .on = "linux", .says = "this machine has no IPv6 at all" },
     Expected_skip::{ .on = "win32 darwin", .says = "the loopback holds no `::1`" },
     Expected_skip::{ .on = "win32 darwin", .says = "x86_64-w64-mingw32-gcc is not installed" },
     Expected_skip::{ .on = "linux win32 darwin", .says = "Wine is not installed" },
     Expected_skip::{ .on = "win32", .says = "so none goes silent" },
     Expected_skip::{ .on = "win32", .says = "which Windows does not have" },
+    Expected_skip::{ .on = "win32", .says = "Windows starts a browser without `xdg-open`" },
     Expected_skip::{ .on = "win32 darwin", .says = "taskset is not installed" },
     Expected_skip::{ .on = "win32 darwin", .says = "cannot grow a file past 2 GiB" },
     Expected_skip::{ .on = "win32 darwin", .says = "no tool that marks a file read-only" },
@@ -337,11 +348,7 @@ const EXPECTED_SKIPS: Expected_skip[_] = ::{
     Expected_skip::{ .on = "win32 darwin", .says = "clock cannot measure a silence" },
     Expected_skip::{ .on = "win32 darwin", .says = "it is not split" },
     Expected_skip::{ .on = "darwin", .says = "neither Windows's sharing check nor /proc" },
-    Expected_skip::{ .on = "darwin", .says = "no browser" },
     Expected_skip::{ .on = "darwin", .says = "no util-linux `script`" },
-    Expected_skip::{ .on = "darwin", .says = "desktop-file-validate is not installed" },
-    Expected_skip::{ .on = "darwin", .says = "update-mime-database is not installed" },
-    Expected_skip::{ .on = "darwin", .says = "update-desktop-database is not installed" },
 }
 
 fn skip_lines(text: U8[], arena: Arena$@): List<|U8[]|> //< a log's lines that say a check skipped
@@ -360,6 +367,15 @@ fn is_skip_line(line: U8[]): Bool //< whether a log's line says a check skipped 
         i += 1
     rest: = line.sub_from(i)
     return rest.starts_with("SKIP") || rest.starts_with("RESULT: SKIPPED")
+
+fn said_verdict(text: U8[], arena: Arena$@): Bool //<
+    //< Whether a log holds the verdict a passing gate prints, at the head of a line (`Gate.verdict`)
+    //< `RESULT: ALL PASS`, or `RESULT: SKIPPED` from a gate skipped whole for want of its tool.
+    //< **The skipped one passes only where a row holds it**, as every SKIP line (`Judge`).
+    for line in text.lines(arena)
+        if line.starts_with("RESULT: ALL PASS") || line.starts_with("RESULT: SKIPPED")
+            return true
+    return false
 
 // ==========================================
 // The SKIP lines a switch turned off lets through. **On Linux a switch makes a missing tool fail**
@@ -386,6 +402,7 @@ const SWITCH_SKIPS: Switch_skip[_] = ::{
     Switch_skip::{ .name = "KSBIND_REQUIRE_LIBS", .says = "do not link here" },
     Switch_skip::{ .name = "KSOS_REQUIRE_ARM", .says = "no ARM toolchain" },
     Switch_skip::{ .name = "KSOS_REQUIRE_ARM", .says = "test-ksos-link" },
+    Switch_skip::{ .name = "KSMD_REQUIRE_BROWSER", .says = "no browser" },
 }
 
 fn is_expected_skip(line: U8[], platform: U8[], relaxed: U8[]): Bool //<
@@ -437,10 +454,12 @@ const END_EXT: U8[] = ".end" //< the file beside a log holding `<exit code> <sec
 struct Judge //< what a SKIP line is held against: the round's platform and the switches off
     platform: U8[] //< make's `PLATFORM`; empty where it names none, and then no SKIP is judged
     relaxed: U8[] //< the switches turned off, space-separated (`--relaxed` in `tools/ci.kspl`)
+    any_skip: Bool //< every SKIP passes (`Set.ci_full`): a machine of one's own lacks what it lacks
 
 impl Judge
     fn unexpected(j: Self@, line: U8[]): Bool //< whether a SKIP line fails its gate here
-        return j.platform.len > 0 && !is_expected_skip(line, j.platform, j.relaxed)
+        return !j.any_skip && j.platform.len > 0 &&
+            !is_expected_skip(line, j.platform, j.relaxed)
 
 struct Outcome //< what one gate left
     log: U8[]
@@ -644,9 +663,7 @@ fn causes(text: U8[], log: U8[], verdict: Bool, j: Judge@, arena: Arena$@): List
     lines: = text.lines(arena)
     $out: = List<|Cause|>(arena)
     $own: = false
-    $passed: = false
-    for line in lines
-        passed = passed || line.trim_spaces().starts_with("RESULT: ALL PASS")
+    passed: = said_verdict(text, arena)
     for k in CAUSE_ORDER
         for line in lines
             if got: = kind_of(line, log, j)

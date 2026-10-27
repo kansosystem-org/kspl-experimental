@@ -251,4 +251,5 @@ update-desktop-database ~/.local/share/applications
 | :-- | :-- |
 | **A run from a terminal** | `out/ksmd_open.exe <document>` prints why it refuses a document, such as a name not ending in `.ksmd` |
 | **`out/tmp/ksmd_open.browser.log`** | What the browser printed when the launcher started it |
-| **The URL printed on the terminal** | Paste the whole of it, with the token after `#`, into a browser. If the page opens, only the hand-over to the browser failed |
+| **The page the launcher names** | Open it in a browser. If the document opens, only the hand-over to the browser failed |
+| **`out/ksmd_open.exe --show <document>`** | It prints the whole URL, with the token after `#`. Paste the whole of it into a browser. Without `--show` the launcher prints no token, since a double-click's output can reach others |

@@ -32,11 +32,19 @@ function ksmdStart(root, bar, status, wasmBytes) {
 
     // Writes text, or byte arrays one after another, into the editor's input buffer, and returns
     // the length in bytes. **Make the view after asking for the buffer**: memory can move when it
-    // grows.
+    // grows. A buffer the memory cannot hold stops the page, so the action after it does nothing.
     ks.put = (text) => ks.putBytes(enc.encode(text));
     ks.putBytes = (...parts) => {
       const len = parts.reduce((n, p) => n + p.length, 0);
-      let at = w.ksmd_web_in(Math.max(len, 1));
+      if (ks.stopped) return 0;
+      let at;
+      try {
+        at = w.ksmd_web_in(Math.max(len, 1));
+      } catch (e) {
+        if (!(e instanceof GaveUp)) throw e;
+        stop(e.message);
+        return 0;
+      }
       for (const p of parts) {
         new Uint8Array(mem.buffer, at, p.length).set(p);
         at += p.length;
@@ -46,6 +54,14 @@ function ksmdStart(root, bar, status, wasmBytes) {
     ks.out = (len) => (len > 0 ? dec.decode(new Uint8Array(mem.buffer, w.ksmd_web_out_ptr(), len)) : "");
     ks.say = (text) => {
       status.textContent = text;
+    };
+    // Whether pasted text is longer than a source can hold, after saying so. It is checked before
+    // it goes in, so a paste never asks for more memory than the editor has.
+    ks.tooLarge = (text) => {
+      const max = w.ksmd_web_source_limit();
+      if (text.length <= max && enc.encode(text).length <= max) return false;
+      ks.say(`Nothing was pasted: the text is larger than the ${max / 1048576} MiB a document can hold.`);
+      return true;
     };
 
     function stop(why) {
@@ -70,6 +86,7 @@ function ksmdStart(root, bar, status, wasmBytes) {
         stop(e.message);
         return null;
       }
+      ks.here = r.here;
       ks.view.apply(r);
       for (const f of ks.rendered) f();
       // A table that went takes the place with it, and the person works in the text again.
@@ -77,7 +94,7 @@ function ksmdStart(root, bar, status, wasmBytes) {
       ks.view.showSelection(r.sel);
       ks.sel = r.sel;
       ks.say(r.ok ? "" : r.why);
-      // The menu and the ribbon each hold Undo and Redo.
+      // The menu and the quick access bar can each hold Undo and Redo.
       ks.canUndo = r.undo === 1;
       ks.canRedo = r.redo === 1;
       for (const el of document.querySelectorAll('[data-cmd="undo"]')) el.disabled = !ks.canUndo;
@@ -108,6 +125,14 @@ function ksmdStart(root, bar, status, wasmBytes) {
       ks.select(a, f);
       return ks.act("ksmd_web_selection");
     };
+    // What stands at the page's selection now: its kind of block, alignment and marks, which the
+    // quick access bar shows. It tells the editor where the selection is, and changes nothing.
+    ks.hereNow = () => {
+      if (ks.stopped) return ks.here;
+      ks.sync();
+      ks.here = JSON.parse(ks.out(w.ksmd_web_here()));
+      return ks.here;
+    };
     ks.cellText = (block, row, column) => ks.out(w.ksmd_web_cell_text(block, row, column));
     // Today's date as 2026-10-23, or the time now as 14:05: what Ctrl+; and Ctrl+: type, as in
     // Excel. The form is ISO 8601's, which reads the same in every country and sorts as text.
@@ -118,8 +143,8 @@ function ksmdStart(root, bar, status, wasmBytes) {
         `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
     };
 
-    // Where the person worked last: "text" or "cell". A look, a paste and the ribbon's table
-    // group follow it.
+    // Where the person worked last: "text" or "cell". A look, a paste and the fill and size tools
+    // follow it.
     ks.where = "text";
     ks.placeHooks = [];
     ks.setPlace = (where) => {
@@ -158,12 +183,14 @@ function ksmdStart(root, bar, status, wasmBytes) {
     ksmdRange(ks);
     ksmdFilter(ks);
     ksmdInput(ks);
-    ksmdCommands(ks);
+    // The menus and the quick access bar stand before the commands set their ticks.
     ksmdMenus(ks);
+    ksmdQuick(ks);
+    ksmdCommands(ks);
     ksmdTouch(ks);
-    ksmdRibbon(ks);
     ksmdFind(ks);
     ksmdContents(ks);
+    ks.quick.sync();
     try {
       if (localStorage.getItem("ksmd.readonly") === "1") ks.setReadOnly(true);
     } catch (_) { /* a browser that keeps nothing opens for editing */ }
@@ -172,13 +199,19 @@ function ksmdStart(root, bar, status, wasmBytes) {
       // Opens a document's source, as text or as bytes; on refusal the open document stays, and
       // `line` and `column` name the place.
       load(source) {
-        ks.table.take();
+        // Text in a cell still open that the editor refuses would be lost, so nothing opens then.
+        if (!ks.table.take("stay")) {
+          const why = "the text in the open cell cannot go in. Change it, or press Esc to drop it";
+          ks.say(`This document cannot be opened: ${why}.`);
+          return { ok: false, why };
+        }
         let opened;
         // The date it opens on is what `today()` gives until the next document opens.
         const d = new Date();
+        const len = typeof source === "string" ? ks.put(source) : ks.putBytes(source);
+        if (ks.stopped) return { ok: false, why: "The editor's memory ran out." };
         try {
-          opened = w.ksmd_web_load(typeof source === "string" ? ks.put(source) : ks.putBytes(source),
-            d.getFullYear(), d.getMonth() + 1, d.getDate());
+          opened = w.ksmd_web_load(len, d.getFullYear(), d.getMonth() + 1, d.getDate());
         } catch (e) {
           if (!(e instanceof GaveUp)) throw e;
           w.ksmd_web_recover();
@@ -201,10 +234,11 @@ function ksmdStart(root, bar, status, wasmBytes) {
         ks.say("");
         return said;
       },
-      // The canonical source of the open document, as a save writes it.
+      // The canonical source of the open document, as a save writes it. Text in a cell still open
+      // that the editor refuses stays there, and is not in it.
       source() {
         ks.flush();
-        ks.table.take();
+        ks.table.take("stay");
         return ks.out(w.ksmd_web_source());
       },
       // The most bytes one source can hold: an open reads no more, and a save writes no more.
@@ -221,6 +255,7 @@ function ksmdStart(root, bar, status, wasmBytes) {
     api.load("%ksmd 1\n");
     // Each call that hands a file to the editor can run out of memory as an action can.
     ks.call = (name, ...args) => {
+      if (ks.stopped) return 0;
       try {
         return w[name](...args);
       } catch (e) {
@@ -247,8 +282,7 @@ function ksmdCommands(ks) {
     "align-none": "" };
   const onTable = new Set([...Object.keys(rows), ...Object.keys(columns), "column-fit", "sort-up",
     "sort-down", "filter-column", "filter-value", "filter-clear", "table-rename", "table-csv", "table-chart", "table-print", "table-remove",
-    ...["Number format", "AutoSum"].flatMap((name) =>
-      TABLE_GROUPS.find(([group]) => group === name)[1].map(([cmd]) => cmd)),
+    ...["Number format", "AutoSum"].flatMap((name) => TABLE_GROUPS.find(([group]) => group === name)[1]),
     "fill-down", "fill-right", "column-choices", "column-rule", "group-rows", "ungroup-rows", "group-hide", "group-show"]);
 
   // Repeat, as Office's: with nothing to redo, Redo (Ctrl+Y) and F4 do the last command again where
@@ -258,7 +292,7 @@ function ksmdCommands(ks) {
     ...Object.keys(columns), ...Object.keys(aligns), "column-fit", "fill-down", "fill-right",
     "sort-up", "sort-down", "group-rows", "ungroup-rows", "group-hide", "group-show",
     "table-print", "format-none", "format-number", "format-grouped", "format-percent",
-    "format-more", "format-fewer", "indent", "outdent", "divider", "date", "time", "look-clear"]);
+    "format-more", "format-fewer", "format-date", "format-date-slash", "indent", "outdent", "divider", "date", "time", "look-clear"]);
   let repeat = null; // the last command that can be repeated, as a function, or null
   let running = 0; // how deep commands run, so a change can be told from one a command made
   let acted = false; // whether the running command changed the document
@@ -268,14 +302,18 @@ function ksmdCommands(ks) {
   };
   // Shows Redo, or Repeat where nothing is left to redo and a command can be repeated.
   const label = (el, text) => {
-    for (const n of el.childNodes) if (n.nodeType === 3 && n.data.trim()) n.data = text;
+    const own = el.querySelector(".label");
+    if (own) own.textContent = text;
   };
   ks.showRedo = () => {
     const repeating = !ks.canRedo && !!repeat;
     for (const el of document.querySelectorAll('[data-cmd="redo"]')) {
       el.disabled = ks.readOnly || !(ks.canRedo || repeat);
       label(el, repeating ? "Repeat" : "Redo");
-      if (el.closest(".ribbon")) el.title = repeating ? "Repeat (Ctrl+Y, F4)" : "Redo (Ctrl+Y)";
+      if (el.closest(".quick")) {
+        el.title = repeating ? "Repeat (Ctrl+Y, F4)" : "Redo (Ctrl+Y)";
+        el.setAttribute("aria-label", repeating ? "Repeat" : "Redo");
+      }
     }
   };
   const runs = (name, f) => {
@@ -304,22 +342,31 @@ function ksmdCommands(ks) {
     return runs(name, () => command(name));
   };
 
+  // A command first takes the open cell. Text there that the editor refuses stays, and the
+  // command does nothing, so a menu never drops what was typed.
   const command = (name) => {
     ks.flush();
-    ks.table.take();
+    if (!ks.table.take("stay")) return null;
     if (name.startsWith("file-")) return ks.fileCommand ? ks.fileCommand(name) : null;
     if (name === "undo") return ks.act("ksmd_web_undo");
     if (name === "find" || name === "replace") return ks.find.open(name === "replace");
     if (name === "contents") return ks.contents.toggle();
     if (name === "read-only") return ks.setReadOnly(!ks.readOnly);
     if (name === "print") return window.print();
+    if (name === "quick-choose") return ks.quick.choose();
+    if (name === "color" || name === "fill") return ks.quick.palette(name);
+    if (name.startsWith("size-")) return ks.applyLook("size", name === "size-default" ? "" : name.slice(5));
     if (name === "note" || name === "note-resolve") return ks.notes.ask(name === "note-resolve");
     if (name === "width-full" || name === "width-reading") return ks.setWidth(name === "width-reading");
     if (name === "redo") return ks.act("ksmd_web_redo");
     if (onTable.has(name)) return tableCommand(name);
-    if (name in aligns) return ks.applyLook("align", aligns[name]);
+    // Pressing an alignment that is on takes it off, as in Excel and Word: the text then stands
+    // where the page sets it.
+    if (name in aligns) return ks.applyLook("align", alignNow() === aligns[name] ? "" : aligns[name]);
     if (name === "look-clear") return ks.applyLook("all", "");
     ks.sync();
+    // A list or a quote pressed where it stands already turns back into paragraphs, as in Word.
+    if (name in kinds && isOn(name, ks.hereNow())) return ks.act("ksmd_web_kind", ...kinds.p);
     if (name in kinds) return ks.act("ksmd_web_kind", ...kinds[name]);
     if (name in marks) return ks.act("ksmd_web_mark", marks[name], 0);
     if (name === "indent" || name === "outdent") return ks.act("ksmd_web_indent", name === "indent" ? 1 : 0);
@@ -336,6 +383,21 @@ function ksmdCommands(ks) {
       return r;
     }
     return null;
+  };
+
+  // Whether a kind that turns off when pressed again stands at the selection.
+  const isOn = (name, h) => !!h && ((h.k === "list" && ((name === "bullets" && h.o === 0 && h.c === 0) ||
+    (name === "numbers" && h.o === 1) || (name === "checks" && h.c > 0))) || (name === "quote" && h.k === "quote"));
+
+  // The alignment where the person works: the chosen cell's, or the selected text's first paragraph.
+  const alignNow = () => {
+    if (ks.where === "cell") {
+      const c = chosen();
+      const el = c && ks.view.blocks()[c.block].querySelector(`[data-r="${c.row}"][data-c="${c.column}"]`);
+      return el ? el.style.textAlign : "";
+    }
+    const h = ks.hereNow();
+    return h ? h.a : "";
   };
 
   // An open cell's edit is taken before the browser prints, also when Ctrl+P prints.
@@ -359,15 +421,16 @@ function ksmdCommands(ks) {
       return ks.act("ksmd_web_cell_look", r.block, r.r1, r.c1, r.r2, r.c2, parts[part], ks.put(value));
     }
     ks.sync();
-    if (part === "align" || part === "all") return ks.act("ksmd_web_align", ks.put(part === "all" ? "" : value));
+    if (part === "all") return ks.act("ksmd_web_clear_look");
+    if (part === "align") return ks.act("ksmd_web_align", ks.put(value));
     if (part === "color") return ks.act("ksmd_web_text_color", ks.put(value));
     ks.say("Fill colours and font sizes apply to table cells. Choose cells first.");
     return null;
   };
 
   // View, Read-only: the page shows the document and takes no edit, as Word's Read Mode does. The
-  // ribbon and the blocks' buttons go, a cell is chosen but never opened, and finding, filters
-  // and printing still work. The choice is this browser's own, as the width is.
+  // blocks' buttons go, the commands that edit cannot be pressed, a cell is chosen but never
+  // opened, and finding, filters and printing still work. The choice is this browser's own, as the width is.
   ks.readOnly = false;
   ks.setReadOnly = (on) => {
     if (on) ks.table.take();
@@ -377,7 +440,7 @@ function ksmdCommands(ks) {
     for (const el of document.querySelectorAll('[data-cmd="read-only"]')) {
       el.setAttribute("aria-checked", String(on));
     }
-    ks.enableTable();
+    ks.quick.sync();
     try {
       localStorage.setItem("ksmd.readonly", on ? "1" : "0");
     } catch (_) { /* a browser that keeps nothing opens for editing next time */ }
@@ -413,19 +476,30 @@ function ksmdCommands(ks) {
 
   // Enables only the commands that can act now, so no item is pressed for nothing. Read-only
   // leaves those that only look: finding, the view, printing, files, filters and CSV.
-  const LOOKS = new Set(["find", "contents", "width-full", "width-reading", "read-only", "print",
+  const LOOKS = new Set(["find", "contents", "width-full", "width-reading", "read-only", "print", "quick-choose",
     "file-open", "file-save", "file-save-as", "filter-column", "filter-value", "filter-clear",
     "table-csv"]);
+  const MARKS = new Set(["strong", "emphasis", "code", "link"]);
   ks.enableTable = () => {
     const c = chosen();
     ks.showRedo();
-    for (const el of document.querySelectorAll(".menu [data-cmd], .ribbon [data-cmd]")) {
+    for (const el of document.querySelectorAll(".menu [data-cmd], .quick [data-cmd]")) {
       const name = el.dataset.cmd;
       if (name === "undo") {
         el.disabled = ks.readOnly || !ks.canUndo;
         continue;
       }
       if (name === "redo") continue;
+      if (MARKS.has(name)) {
+        // A mark belongs to text: a cell holds a value, and a code block literal text.
+        el.disabled = ks.readOnly || ks.where === "cell" || !!(ks.here && /^(code|other)$/.test(ks.here.k));
+        continue;
+      }
+      if (name === "fill" || name.startsWith("size-")) {
+        // A fill and a size belong to table cells alone.
+        el.disabled = ks.readOnly || ks.where !== "cell";
+        continue;
+      }
       if (!onTable.has(name)) {
         el.disabled = ks.readOnly && !LOOKS.has(name);
         continue;
@@ -434,7 +508,9 @@ function ksmdCommands(ks) {
         (name === "filter-clear" && !ks.filter.on(c.block)) ||
         ((name === "filter-value" || name.startsWith("row-")) && c.row < 0);
       if (name === "table-print") {
-        el.textContent = c && leftOut(c.block) ? "Put back in print" : "Leave out of print";
+        const text = c && leftOut(c.block) ? "Put back in print" : "Leave out of print";
+        label(el, text);
+        if (el.closest(".quick")) el.title = text;
       }
     }
   };

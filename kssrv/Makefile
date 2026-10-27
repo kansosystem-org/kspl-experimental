@@ -1,11 +1,10 @@
-# kssrv -- building and testing this package on its own, from a `ksplc`, a C compiler and the
-# `ksai` it uses; `make check-pilot-copy COPY=<file>`: a copy of its policy still drives as it does
+# kssrv -- building and testing this package on its own, from a `ksplc` and a C compiler
 # Caution: **Keep this file standing alone.** A copy of this folder alone is tested by it.
 
 KSPLC ?= ksplc
 OUT ?= out
 
-.PHONY: all server test check-pilot-copy
+.PHONY: all server test
 
 all: server
 
@@ -18,8 +17,3 @@ server:
 test: server
 	rm -rf "$(OUT)/test"
 	"$(KSPLC)" run tests/main.kspl "$(OUT)/kssrv.exe" "$(OUT)/test"
-
-check-pilot-copy: server
-	@test -n "$(COPY)" || { echo "name the copy: make check-pilot-copy COPY=<file>"; exit 2; }
-	rm -rf "$(OUT)/copy"
-	"$(KSPLC)" run tests/copy.kspl "$(OUT)/kssrv.exe" "$(COPY)" "$(OUT)/copy"

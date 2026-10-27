@@ -1,6 +1,7 @@
 // The ksmd page in a headless Chromium: typing, composition, selection, paste, undo, blocks,
-// formatting, the menus, tables, sorting and filtering, each driven through the browser's own input events and checked by the
-// canonical source the page gives back. The menus, the ribbon and the table's own tools are
+// formatting, the menus, tables, sorting and filtering, links, and memory that runs out, each
+// driven through the browser's own input events and checked by the canonical source the page
+// gives back. The menus, the quick access bar and the table's own tools are
 // `menus.mjs`; the tools over a whole document or a range of cells are `tools.mjs`.
 // An input method's composition is driven as one sends it (`Input.imeSetComposition`, then
 // `Input.insertText` to commit); a real input method on a real keyboard is not checked here.
@@ -135,7 +136,7 @@ const sections = {
     await press("y", CTRL);
     await saves("redo gives both back", `${H}Start more words\n`);
     await menu("undo");
-    await saves("the toolbar's Undo does the same", `${H}Start more\n`);
+    await saves("the Edit menu.s Undo does the same", `${H}Start more\n`);
     await menu("redo");
     await saves("and its Redo", `${H}Start more words\n`);
   },
@@ -183,14 +184,14 @@ const sections = {
     await select(0, 0, 0);
     await press("2", CTRL | ALT);
     await saves("Ctrl+Alt+2 makes a heading", `${H}## [one](https://kanso.example/one) two \`three\`\n`);
-    await js("(() => { const k = document.querySelector('.ribbon [data-ribbon=\"kind\"]'); k.value = 'p'; k.dispatchEvent(new Event('change')); })()");
-    await saves("the ribbon's Kind of block, Paragraph makes it a paragraph again", `${H}[one](https://kanso.example/one) two \`three\`\n`);
-    await js("(() => { const k = document.querySelector('.ribbon [data-ribbon=\"kind\"]'); k.value = 'c'; k.dispatchEvent(new Event('change')); })()");
+    await js("(() => { const k = document.querySelector('.quick [data-quick=\"kind-list\"]'); k.value = 'p'; k.dispatchEvent(new Event('change')); })()");
+    await saves("the quick access bar's Kind of block, Paragraph makes it a paragraph again", `${H}[one](https://kanso.example/one) two \`three\`\n`);
+    await js("(() => { const k = document.querySelector('.quick [data-quick=\"kind-list\"]'); k.value = 'c'; k.dispatchEvent(new Event('change')); })()");
     await saves("and code, which keeps the text and drops the marks", `${H}\`\`\`\none two three\n\`\`\`\n`);
     await load(`${H}a\n\nb\n`);
     await select(0, 0, 0);
     await menu("bullets");
-    await saves("the ribbon's List makes a list item", `${H}- a\n\nb\n`);
+    await saves("Format, Bulleted list makes a list item", `${H}- a\n\nb\n`);
     await select(1, 0, 0);
     await menu("bullets");
     await saves("a list item made next to the list joins it", `${H}- a\n- b\n`);
@@ -295,8 +296,9 @@ const sections = {
     const cell = (r, c) => js(`document.querySelector('#doc td[data-r="${r}"][data-c="${c}"]').textContent`);
     // Where the keys go: the chosen cell as "row:column", an open cell by its name, or "doc".
     const focus = () => js(`(() => {
-      const a = document.activeElement;
+      let a = document.activeElement;
       if (a.id === "doc") return "doc";
+      if (a.matches(".cell-catch")) a = a.parentElement;
       if (a.matches("#doc td.chosen")) return a.dataset.r + ":" + a.dataset.c;
       return a.getAttribute("aria-label") || a.tagName;
     })()`);
@@ -500,6 +502,14 @@ const sections = {
       "Alt+Left makes it narrower", JSON.stringify(narrower));
     for (let i = 0; i < 4; i++) await menu("undo");
     await saves("undo goes back one press at a time", weighted);
+    // On a chosen cell too: left to the browser, Alt+Left goes back a page, out of the editor.
+    await click('#doc td[data-r="0"][data-c="1"]');
+    const href = await js("location.href");
+    await resized(() => press("ArrowRight", ALT));
+    check((await widths())[1] > (await widths())[0] && await js("location.href") === href &&
+      await js("!!document.querySelector('#doc td.chosen[data-c=\"1\"]')"),
+    "Alt+Right on a chosen cell makes its column wider, and the page stays");
+    await menu("undo");
     await openAt(2);
     await resized(() => press("ArrowRight", ALT));
     const last = await widths();
@@ -529,15 +539,18 @@ const sections = {
     const table = `${H}:::table name="t"\n| "a" | "b" |\n| 1234.5 | =A1/10000 |\n| "x" | |\n:::\n`;
     const td = (r, c) => js(`document.querySelector('#doc td[data-r="${r}"][data-c="${c}"]').textContent`);
     await load(table);
-    await click('#doc td[data-r="0"][data-c="0"]');
+    // A column chosen by its letter takes the format as its own, which new rows follow too.
+    await click('#doc th.letter:nth-child(2)');
     await menu("format-grouped");
-    await saves("Thousands gives the chosen column a format in the source",
+    await saves("Thousands on a column chosen by its letter gives the column a format in the source",
       `${H}:::table name="t" formats="grouped:2,"\n| "a" | "b" |\n| 1234.5 | =A1/10000 |\n| "x" | |\n:::\n`);
     check(await td(0, 0) === "1,234.50" && await td(1, 0) === "x",
       "the number shows with a separator and two places; text shows as it is");
     await click('#doc td[data-r="0"][data-c="1"]');
     await menu("format-percent");
     check(await td(0, 1) === "12%" && await td(1, 1) === "", "a formula's result shows as a percent; an empty cell stays empty");
+    check((await js("ksmd.source()")).includes('| =A1/10000 {format="percent:0"} |'),
+      "a format on a chosen cell is that cell's own, written in its braces", await js("ksmd.source()"));
     await menu("format-more");
     check(await td(0, 1) === "12.3%", "More decimal places shows one more");
     browser.answerPrompts("jpy");
@@ -556,10 +569,11 @@ const sections = {
       return data.getData("text/plain");
     })()`);
     check(copied === "1234.5\r\n", "a copy takes the number as calculated, so no digit is lost", JSON.stringify(copied));
+    await click('#doc th.letter:nth-child(2)');
     await menu("format-none");
     await click('#doc td[data-r="0"][data-c="1"]');
-    await menu("format-none");
-    await saves("General on each column leaves the format out of the source", table);
+    await menu("look-clear");
+    await saves("General on the column, and Clear format on the cell, leave the formats out of the source", table);
   },
 
   async examples() {
@@ -594,6 +608,59 @@ const sections = {
       "a pipe in quoted text stays in its cell, and 0012 and =1+2 stay text");
     check(await js("document.querySelector('#doc pre').textContent.startsWith(':::include')"),
       "the fenced clause stays code");
+  },
+
+  // A link opens in a tab of its own, and never takes the editor's tab away from the document.
+  async links() {
+    await load(`${H}See [site](https://kanso.example/x) and [part](#heart=1).\n`);
+    await js("window.opened = []; window.open = (...a) => { window.opened.push(a.join(' ')); return null; }");
+    const opened = () => js("window.opened.join(' | ')");
+    const here = await js("location.href");
+    const link = (text) => `#doc a[href${text === "site" ? '^="https"' : '^="#"'}]`;
+    await click(link("site"));
+    check(await opened() === "", "a plain press on a link while editing only places the caret");
+    await click(link("site"), CTRL);
+    check(await opened() === "https://kanso.example/x _blank noopener,noreferrer",
+      "Ctrl+press opens the link in a new tab, with no way back to this page", await opened());
+    await menu("read-only");
+    await js("window.opened = []");
+    await click(link("site"));
+    check(await opened() === "https://kanso.example/x _blank noopener,noreferrer" &&
+      await js("location.href") === here, "in Read-only a plain press opens it, and this tab stays",
+    await opened());
+    await click(link("part"));
+    check(await js("location.href") === here && await opened() === "https://kanso.example/x _blank " +
+      "noopener,noreferrer", "a link to a place changes neither this tab's address nor any tab",
+    await js("location.href"));
+    await menu("read-only");
+  },
+
+  // Text larger than the editor's memory never corrupts the document: a paste is refused before
+  // it goes in, and memory that runs out stops the page cleanly.
+  async memory() {
+    const start = `${H}Alpha.\n\n:::table name="t"\n| "a" |\n| 1 |\n:::\n`;
+    await load(start);
+    await select(0, 0, 6);
+    const huge = "140 * 1024 * 1024";
+    await js(`(() => {
+      const data = new DataTransfer();
+      data.setData("text/plain", "x".repeat(${huge}));
+      document.getElementById("doc").dispatchEvent(new ClipboardEvent("paste",
+        { clipboardData: data, bubbles: true, cancelable: true }));
+    })()`);
+    check((await js("document.getElementById('status').textContent")).startsWith("Nothing was pasted"),
+      "a paste larger than a document can hold is refused, and the page says so");
+    await select(0, 0, 6);
+    await type(" Beta.");
+    await saves("and the document goes on taking edits", start.replace("Alpha.", "Alpha. Beta."));
+    // A host that hands in more text than the memory holds: the page stops before any action.
+    const errors = page.errors.length;
+    const said = await js(`JSON.stringify(ksmd.load("x".repeat(${huge})))`);
+    check((await js("document.getElementById('status').textContent")).startsWith("The editor stopped") &&
+      page.errors.length === errors, "text larger than the memory stops the page, and throws nothing",
+    `${said} ${page.errors.slice(errors).join(" | ").slice(0, 300)}`);
+    await page("Page.reload", {});
+    await until("document.documentElement.dataset.ready === '1'");
   },
 };
 

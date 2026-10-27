@@ -8,7 +8,7 @@
 //< An include and an image add where their path leads (`to`) and any problem (`why`), and an
 //< include its file's blocks (`inside`).
 //< Caution: **Change this and `ksmd/port/web/view.js` together**; the script reads these shapes.
-import "ksmd/base/dates" { write_date }
+import "ksmd/base/dates" { write_date, write_date_with }
 import "ksmd/base/keyed" { Keyed }
 import "ksmd/calc/calc" { Results }
 import "ksmd/calc/calc"
@@ -17,7 +17,7 @@ import "ksmd/edit/editor" { Editor }
 import "ksmd/edit/region" { Spot, Style, Unit, gather }
 import "ksmd/edit/styled" { Seg }
 import "ksmd/files/assemble" { Assembly, NONE }
-import "ksmd/model/format" { Number_format, no_format, show }
+import "ksmd/model/format" { Number_format, no_format, show, shows_numbers }
 import "ksmd/model/group" { depths }
 import "ksmd/model/look" { is_plain }
 import "ksmd/model/model" { Block_kind, Chart, Document, UNBOUND }
@@ -354,7 +354,10 @@ priv fn table(doc: Document@, u: Sz, values: Results@, out: Str_builder$@) //<
         for c in Range.asc(t.columns.len)
             if c > 0
                 out.c(',')
-            cell(values.at(u, r, c), t.formats[c] if t.formats.len > 0 else no_format(), out)
+            // A cell's own format stands over its column's.
+            own: = t.cells[t.at(r, c)].look.format
+            column: = t.formats[c] if t.formats.len > 0 else no_format()
+            cell(values.at(u, r, c), own if own.kind != .none else column, out)
         out.c(']')
     out.s("]")
 
@@ -451,7 +454,7 @@ priv fn cell(v: Value, f: Number_format, out: Str_builder$@) //<
         out.s("[0]")
     case .number
         out.s("[1,\{v.number\}")
-        if f.kind != .none
+        if shows_numbers(f)
             out.s(",\"")
             show(v.number, f, out)
             out.c('"')
@@ -463,6 +466,9 @@ priv fn cell(v: Value, f: Number_format, out: Str_builder$@) //<
     case .date
         out.s("[5,\"")
         write_date(I64::v.number, out)
+        if f.kind == .slash_date
+            out.s("\",\"")
+            write_date_with(I64::v.number, '/', out)
         out.s("\"]")
     case .boolean
         out.s("[4,\"true\"]" if v.boolean else "[4,\"false\"]")

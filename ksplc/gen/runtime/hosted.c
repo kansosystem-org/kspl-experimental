@@ -224,11 +224,14 @@ KSPL_UNUSED static int kspl_win_to_wide(const char *utf8, Sz len, wchar_t *out, 
 }
 
 /* Copies a UTF-16 NUL terminator to UTF-8 and returns the length without the NUL (-1 where it
- * does not fit). */
+ * does not fit or is not valid UTF-16).
+ * Caution: **Refuse an unpaired surrogate** (WC_ERR_INVALID_CHARS), as kspl_win_to_wide refuses
+ * bytes that are not UTF-8. Replaced by U+FFFD, a name would come back as another name, which the
+ * way out then cannot find. */
 KSPL_UNUSED static int kspl_win_from_wide(const wchar_t *w, char *out, Sz out_cap) {
     int n;
     if (out_cap < 1 || out_cap > 0x7FFFFFFF) return -1;
-    n = WideCharToMultiByte(CP_UTF8, 0, w, -1, out, (int)out_cap, NULL, NULL);
+    n = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, w, -1, out, (int)out_cap, NULL, NULL);
     if (n <= 0) return -1;
     return n - 1;
 }
@@ -250,11 +253,13 @@ KSPL_UNUSED static wchar_t *kspl_win_wide_dup(const char *utf8) {
     return w;
 }
 
-/* The reverse: a NUL-terminated UTF-16 to a UTF-8 one on the heap; NULL where it cannot be. */
+/* The reverse: a NUL-terminated UTF-16 to a UTF-8 one on the heap; NULL where it cannot be. An
+ * unpaired surrogate is refused, as at kspl_win_from_wide. */
 KSPL_UNUSED static char *kspl_win_utf8_dup(const wchar_t *w) {
-    int n = WideCharToMultiByte(CP_UTF8, 0, w, -1, NULL, 0, NULL, NULL);
+    int n = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, w, -1, NULL, 0, NULL, NULL);
     char *u = n > 0 ? (char *)malloc((size_t)n) : NULL;
-    if (u != NULL && WideCharToMultiByte(CP_UTF8, 0, w, -1, u, n, NULL, NULL) != n) {
+    if (u != NULL &&
+        WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, w, -1, u, n, NULL, NULL) != n) {
         free(u);
         u = NULL;
     }
@@ -296,9 +301,15 @@ KSPL_LINK char **kspl_os_argv(int argc, char **argv) {
         LocalFree(wav);
         return argv;
     }
+    /* Caution: **Do not fall back to the narrow argv for one argument.** It holds `?` for what the
+     * code page lacks, so the program would act on another name with no sign of it. An argument
+     * that is not valid UTF-16 (an unpaired surrogate) has no UTF-8 form, so the program stops. */
     for (i = 0; i < argc; i++) {
-        char *u = kspl_win_utf8_dup(wav[i]);
-        out[i] = u != NULL ? u : argv[i];
+        out[i] = kspl_win_utf8_dup(wav[i]);
+        if (out[i] == NULL) {
+            kspl_check_fail("panic: argument %d is not valid Unicode (it holds an unpaired "
+                "surrogate), so it has no UTF-8 form\n", i);
+        }
     }
     out[argc] = NULL;
     LocalFree(wav);

@@ -84,7 +84,7 @@ Caution: The dependencies run one way, downward; do not add an `import` in the r
 
 ## Files near the limit and how they split
 
-No file in kspeg exceeds 900 lines; the nearest is [`kspeg/engine.kspl`](engine.kspl). **Before adding to it, write here what will be split out and where it goes** (`make test-conventions` checks this). How to choose where to cut is "Choosing where to split a file" in [`docs/DESIGN-principles.md`](../docs/DESIGN-principles.md). How kspeg's files are split is "How the engine is split across files" in [`kspeg/docs/DESIGN-engine.md`](docs/DESIGN-engine.md).
+The file nearest the limit is [`kspeg/engine.kspl`](engine.kspl). **Before adding to it, write here what will be split out and where it goes** (`make test-conventions` checks this). How to choose where to cut is "Choosing where to split a file" in [`docs/DESIGN-principles.md`](../docs/DESIGN-principles.md). How kspeg's files are split is "How the engine is split across files" in [`kspeg/docs/DESIGN-engine.md`](docs/DESIGN-engine.md).
 
 ## Further reading
 

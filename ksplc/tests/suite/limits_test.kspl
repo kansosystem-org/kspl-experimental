@@ -98,6 +98,28 @@ priv fn src_const_chain(n: Sz, arena: Arena$@): U8[] //<
     b.s("fn main(): I32\n  _buf: I32[A\{n\}] = ::{}\n")
     return b.s("  return I32::_buf.len - A\{n\}\n").take()
 
+priv fn src_const_fan(n: Sz, arena: Arena$@): U8[] //<
+    //< It writes a source with chains of n constants, each naming the one before twice
+    //< One chain is integers, one floating point. Each constant is folded once and its value
+    //< kept, so the translation is linear in n. **A fold that walks each name again costs 2^n**,
+    //< and the suite would never return.
+    b: = arena.text()
+    b.s("const A0: I32 = 1\nconst X0: F64 = 1.0\n")
+    for i in Range.asc(n)
+        b.s("const A\{i + 1\}: I32 = A\{i\} * A\{i\}\n")
+        b.s("const X\{i + 1\}: F64 = X\{i\} * X\{i\}\n")
+    b.s("fn main(): I32\n  _buf: I32[A\{n\}] = ::{}\n")
+    return b.s("  return I32::_buf.len - A\{n\} + I32::(X\{n\} - 1.0)\n").take()
+
+priv fn src_float_chain(n: Sz, arena: Arena$@): U8[] //<
+    //< It writes a source with a chain of n floating-point constants, each the one before plus 1
+    //< Nothing reads the last one, so only the check of each top-level initializer folds it.
+    b: = arena.text()
+    b.s("const X0: F64 = 1.0\n")
+    for i in Range.asc(n)
+        b.s("const X\{i + 1\}: F64 = X\{i\} + 1.0\n")
+    return b.s("fn main(): I32\n  return 0\n").take()
+
 priv fn src_alias_forward(n: Sz, arena: Arena$@): U8[] //<
     //< It writes a source with a forward chain of n aliases (`A0 = A1; A1 = A2; ...`)
     //< **A chain takes a different path by direction**: forward nests the resolution, backward
@@ -144,7 +166,7 @@ priv fn too_deep(slot: U8[], name: U8[], src: U8[], marker: U8[], arena: Arena$@
 
 fn main(): I32
     arena: = harness.begin(256 * 1024 * 1024)
-    io.out().s("# implementation limits: 11\n")
+    io.out().s("# implementation limits: 13\n")
     at_limit("block",
         arena.text().s("a block can be nested \{BLOCK_NESTING\} deep").take(),
         src_block(BLOCK_NESTING, arena), arena)
@@ -166,6 +188,10 @@ fn main(): I32
     at_limit("const",
         arena.text().s("constant references can be chained \{CONST_CHAIN\} deep").take(),
         src_const_chain(CONST_CHAIN, arena), arena)
+    at_limit("const_fan",
+        arena.text()
+        .s("constants each naming the one before twice can be chained \{CONST_CHAIN\} deep").take(),
+        src_const_fan(CONST_CHAIN, arena), arena)
 
     // The cut-off differs per kind of chain, so the depth is kept per kind (shared, the constant
     // chain misses the cap). The constant chain goes over modestly: folding costs declarations
@@ -177,6 +203,8 @@ fn main(): I32
         src_alias_forward(deep, arena), "chain too deep", arena)
     too_deep("deep_const", "a constant reference chain too deep is refused as a depth",
         src_const_chain(CONST_CHAIN * 5, arena), "nesting too deep", arena)
+    too_deep("deep_float_const", "a floating-point constant chain too deep is refused as a depth",
+        src_float_chain(CONST_CHAIN * 5, arena), "nesting too deep", arena)
     // Far past the guarantee, either the block check or the parser's own depth guard refuses it.
     // Which one depends on the stack a build of ksplc spends per level. Both name depth.
     too_deep("deep_block", "a block nested far past the guarantee is refused as a depth",

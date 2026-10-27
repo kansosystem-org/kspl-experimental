@@ -12,7 +12,6 @@ import "ksplc/base/locate" as base_locate
 import "ksplc/base/package" as base_package
 import "ksplc/base/setup" as base_setup
 import "ksplc/base/stats" as base_stats
-import "ksplc/base/target" as base_target
 import "ksplc/cli"
 import "ksplc/fmt/file" as fmt_file
 import "ksplc/fmt/printer" as fmt_printer
@@ -27,7 +26,6 @@ import "ksplc/tools/interface" as tools_interface
 import "ksplc/tools/keywords" as tools_keywords
 import "ksplc/tools/libs" as tools_libs
 import "ksplc/tools/run" as tools_run
-import "ksplc/tools/surface" as tools_surface
 import "ksplc/usage"
 import "std/ds" { List }
 import "std/io"
@@ -151,8 +149,6 @@ priv fn answer_info(topic: usage.Info_topic): Void!pipeline.Compile_error //< it
         parser: = kspl_parser()!
         defer parser.free_memo()
         tools_keywords.run_keyword_dump(parser)
-    case .machine
-        io.out().s(base_target.named_name()).c('\n')
     case .package
         decl: = base_package.here()
         io.out().s(decl.name).c('\n')
@@ -267,22 +263,6 @@ priv fn run_compiler(in_path: U8[], out_path: U8[], deps_path: U8[], libs_path: 
         interface_texts.push(text)
         if compiler.sema.diags.counts.errors > errs
             throw .sema(.analysis_failed)
-    $surface_text: U8[] = ""
-    if base_core.config.surface_path.len > 0
-        // The API record copies the spelling as written, so it needs a tree that still has its
-        // trivia. Only this tree is parsed again from the source already read.
-        // Caution: **Never fall back to an empty tree**: the record would be written empty, and
-        // `make test-surface` would read every published name as removed. The file parsed once
-        // already, so a source not held or a second parse that fails is the compiler's own fault.
-        main_src: = compiler.source_map.get(compiler.sema.main_file).unwrap_or("")
-        base_diag.ice_assert(main_src.len > 0, "--emit-surface: the main file's source is not held")
-        raw_root: =
-            parse_load.parse_raw_ast(main_src, compiler.sema.main_file, compiler.base_parser, true)
-            catch null
-        base_diag.ice_assert(raw_root != null,
-            "--emit-surface: the main file parsed once and not again")
-        surface_text = tools_surface.render_surface(raw_root, main_src, compiler.sema.main_file)
-
     compiler.run_lower_and_codegen(out_path)!
     // Lower and the code generation also report diagnostics with sema.err() (the retain/release
     // insertion reaching its depth limit, and the like). The errs check above comes before that. So
@@ -299,12 +279,8 @@ priv fn run_compiler(in_path: U8[], out_path: U8[], deps_path: U8[], libs_path: 
     if libs_path.len > 0
         tools_libs.write_libs_file(libs_path, compiler.root_file) catch e
             throw .io(e)
-    // Caution: **An API record or an interface that fails to write fails the compile**, as a libs
-    // file does. Otherwise `make test-surface` would compare against a record left from an earlier
-    // run.
-    if base_core.config.surface_path.len > 0
-        io.write_file(base_core.config.surface_path, surface_text) catch e
-            throw .io(e)
+    // Caution: **An interface that fails to write fails the compile**, as a libs file does.
+    // Otherwise a caller would build against an interface left from an earlier run.
     for i in Range.asc(interface_texts.len)
         io.write_file(base_core.config.interface_paths.get(i), interface_texts.get(i)) catch e
             throw .io(e)

@@ -202,7 +202,7 @@ The record holds the type, what was measured, the number and the node that asked
 * **They go at the end of each unit**, where every type is complete, and each unit writes those recorded since the last. A fold genc makes itself (`emit_const_ref_inline`) is then checked too, in whichever unit made it.
 * **A recorded type is kept by `prune_unreachable_types`** (`lower/prune.kspl`), or the check would name a type the C never declares.
 * Caution: **A new reader of a layout whose number reaches the output must call `record_folded`.** Without it, that number is laid out for the machine named and nothing compares it with the C compiler's.
-* `sizeof` / `offsetof` written in a function body or a global's initializer stay C's own (`emit_sizeof` in `gen/c/expr.kspl`); only a number ksplc decides needs the check.
+* `sizeof` / `offsetof` written in a function body stay C's own (`emit_sizeof` in `gen/c/expr.kspl`); only a number ksplc decides needs the check. A global's initializer holds the number sema folded, so its `sizeof` is recorded and checked too.
 
 #### The main walk's order, and where the helper files stand
 
@@ -213,6 +213,8 @@ The record holds the type, what was measured, the number and the node that asked
 | a function | `infer_fn` |
 | an `impl` | `infer_impl_decl` (`infer_fn` for each method) |
 | a top-level `const` / `var` | `infer_expr` |
+
+**Once every top-level initializer is typed, a second loop checks each one** (`check_static_initializer` in `sema/body/static_init.kspl`). A fold reads the operands' types, so it waits for all of them. The decision it records is what Lower and both backends follow ("The static-initializer check is applied to both `var` and `const`" in [`DESIGN-diagnostics.md`](DESIGN-diagnostics.md)).
 
 `infer_fn` resolves the signature, infers the body (`infer_stmts` in `sema/body/stmt.kspl`), and at once runs `analyze_function_body` (`sema/body/analyze.kspl`) on that function. That is a per-function step, not a global pass after every function is gathered.
 
@@ -339,6 +341,10 @@ Caution: **Name an instance through those functions only.** A second spelling of
 
 **A type's name in the generated code is spelled in one place, and from Lower on only once.** `Env.mangle_type_id_to` in `sema/type/naming.kspl` spells it, and every name of a type in the output comes from there: the declaration's (`transform_decl_name` in `lower/abi.kspl`), each use's, and the tags a `switch` names. Spelled a second way, from the type's canonical string, the name drifts on an instance whose immutability is dropped (`variance_stripped`). For example, a `switch` on `Pick<|I32|>` of an `enum Pick<|$T|>` named tags C never declared. Code generation asks for the same few thousand names tens of thousands of times, and spelling one walks it a character at a time. So from Lower on, each type's name is kept on its entry (`Entry.c_name`) the first time it is spelled, and later requests copy it. **Not earlier.** Until sema has recorded every instance, an instance whose immutability is dropped can still answer with the name its record will replace. A kept name would then give one type two names. `lower_root.run` turns the keeping on (`Env.c_names_final`), where it turns on the ARC answers' memo for the same reason. The cost is one slice on each type's entry and one copy of each name the output uses.
 
+**The core types of `std/lang` are named in C without their module**: `Slice_U8`, `Option_I32`, `Writer`, not `std_lang_Slice_U8`. They appear in nearly every signature, so the module took about 5% of the generated C and made a debugger's type column hard to read. `mangle_c_type_name_to` in `base/mangle.kspl` leaves `std.lang.` out wherever a type's name opens with it, inside the arguments too. A function keeps its module (`kspl_std_lang_panic`). A local that spells such a name takes a made one (`global_c_names` in `lower/abi.kspl`).
+
+**Two names that C would spell alike are refused, not renamed.** The C names stay readable, so they are not one-to-one: `_`, `.` and `/` all become `_`, and `a_b/c.Foo` meets `a/b_c.Foo`. Two checks refuse a meeting at translation time, naming both sides. `try_prepare_instance` refuses an instance whose C name another instance holds (`Env.instance_c_owners`); before, it reused that one, and `f<|-3|>` ran `f<|3|>`'s body. `C_names.claim` in `lower/abi.kspl` refuses a global declaration whose C name another declaration holds. A length-prefixed scheme would make a meeting impossible, but no C name could then be read without a tool. Renaming one side silently would make a name depend on which other names exist. A minus sign before a number is spelled `Neg`, so `f<|-3|>` is `f_Neg3` and never meets `f<|3|>`.
+
 **An instantiation's name is decided by the definition's position alone, not by how a reference spells it** (unqualified from within the same file, say). The record holds the template's FQN. Two spellings of one type would make two bodies for the same type: `std.ds.Map_entry<|Sz, I32|>$@`, and `Map_entry<|Sz, I32|>$@` unqualified inside `std/ds.kspl`. The generated C then refers to an element type it never defines (`error: unknown type name 'Map_entry_Sz_I32'`). `generics.templates` keys a template by its FQN alone ("Name resolution with no namespace goes through one function" in [`DESIGN-diagnostics.md`](DESIGN-diagnostics.md)). Normalize to the FQN before making the record:
 
 1. A caller of `instantiate_struct` / `instantiate_fn` in `sema/decl/mono.kspl` passes the template's FQN, never a short name.
@@ -350,7 +356,7 @@ The `end_idx` of `find_generic_bounds`, which `canonicalize_one_type_arg` uses, 
 
 **What happens after the work list is consumed.** `sema_body_infer.run` goes on:
 
-1. It evaluates the `##error` / `##warning` directives.
+1. It evaluates the `##error` directives.
 2. It rebuilds `root.children`, removing the generics' templates and swapping the instantiated nodes in.
 3. Then come the LSP-only extra resolution pass, and `check_unused_imports` / `check_unused_symbols`.
 

@@ -53,17 +53,40 @@ web-tools:
 	  echo "Debian/Ubuntu: install lld"; \
 	  exit 1; }
 
-# The page is one file: `page.html` names the style and scripts that go inside it.
-web: web-tools
-	@echo "# BUILDING the ksmd page for the browser (wasm32, freestanding)"
-	@mkdir -p "$(OUT)/gen" "$(WEB)"
-	"$(KSPLC)" --freestanding --machine=$(WASM_MACHINE) $(WEB_SRC)/bridge.kspl \
-		"$(OUT)/gen/ksmd_bridge.c"
-	$(WASM_CC) -c "$(OUT)/gen/ksmd_bridge.c" -o "$(OUT)/gen/ksmd_bridge.o"
-	$(WASM_LD) "$(OUT)/gen/ksmd_bridge.o" "$(WASM_BUILTINS)" -o "$(WEB)/ksmd.wasm"
-	"$(KSPLC)" run $(WEB_SRC)/bundle.kspl $(WEB_SRC)/page.html "$(WEB)/ksmd.wasm" "$(WEB)/ksmd.html"
+# **The page and its wasm are files with the sources they are built from**, so a second gate that
+# wants the page builds nothing. The wasm's sources are what ksplc read (`--emit-deps`) inside this
+# folder. A whole path, std's, is left out, as a drive's colon would break the rule; the compiler
+# stands for std. So is a `ksplc.cfg` not found (dashes for its hash), which would rebuild it every
+# time. Where `KSPLC` names no file make can see (a name on `PATH`, a path with a space), the page
+# is built every time; so is a wasm with no record of its sources.
+WEB_WASM := $(WEB)/ksmd.wasm
+WEB_PAGE := $(WEB)/ksmd.html
+BRIDGE := $(OUT)/gen/ksmd_bridge
+KSPLC_FILE := $(or $(if $(word 2,$(KSPLC)),,$(wildcard $(KSPLC))),FORCE)
+
+web: web-tools $(WEB_PAGE)
 	@printf 'OUTPUT: %s (one file: open it in a browser, or serve it with kssrv --page)\n' \
-		"$(WEB)/ksmd.html"
+		"$(WEB_PAGE)"
+
+$(WEB_WASM): $(KSPLC_FILE) $(WEB_SRC)/bridge.kspl $(WEB_SRC)/imports.txt \
+		$(if $(wildcard $(BRIDGE).d),,FORCE) | web-tools
+	@echo "# BUILDING the ksmd page's wasm (wasm32, freestanding)"
+	@mkdir -p "$(OUT)/gen" "$(WEB)"
+	"$(KSPLC)" --freestanding --machine=$(WASM_MACHINE) --emit-deps="$(BRIDGE).deps" \
+		$(WEB_SRC)/bridge.kspl "$(BRIDGE).c"
+	$(WASM_CC) -c "$(BRIDGE).c" -o "$(BRIDGE).o"
+	$(WASM_LD) "$(BRIDGE).o" "$(WASM_BUILTINS)" -o "$(WEB_WASM)"
+	awk '$$1 !~ /^-/ && $$2 !~ /^(\/|[A-Za-z]:)/ { print "$@: " $$2; print $$2 ":" }' \
+		"$(BRIDGE).deps" > "$(BRIDGE).d"
+-include $(BRIDGE).d
+
+# The page is one file: `page.html` names the style and scripts that go inside it, from its folder.
+$(WEB_PAGE): $(WEB_WASM) $(KSPLC_FILE) $(WEB_SRC)/bundle.kspl \
+		$(wildcard $(WEB_SRC)/*.html $(WEB_SRC)/*.js $(WEB_SRC)/*.css)
+	@echo "# BUNDLING the ksmd page into one file"
+	"$(KSPLC)" run $(WEB_SRC)/bundle.kspl $(WEB_SRC)/page.html "$(WEB_WASM)" "$(WEB_PAGE)"
+
+FORCE:
 
 # ==========================================
 # The page in a real browser
@@ -79,8 +102,9 @@ KSMD_BROWSER := $(firstword $(wildcard /opt/chrome-linux/chrome) \
         p=$$(command -v $$b 2>/dev/null) || continue; \
         case "$$(readlink -f "$$p")" in (/snap/*) continue;; esac; \
         grep -qs snap "$$p" && continue; echo "$$p"; break; done))
-# Where it is 1, finding no browser is a failure rather than a SKIP: an image that holds a browser
-# sets it, so a round that lost the tool does not stay green.
+# Where it is 1, finding no browser is a failure rather than a SKIP, so a round that lost the tool
+# does not stay green. From the root it is 1 on Linux, whose image holds a browser
+# (`REQUIRE_SWITCHES` in the root's `mk/test.mk`); here it is off unless given.
 KSMD_REQUIRE_BROWSER ?=
 # The local server that serves the page to the checks that open and save files. It is another
 # package, so it is passed in; from the root, `make test-ksmd-browser` builds it and passes it.
@@ -90,9 +114,11 @@ test-browser: web
 	@echo "# CHECKING the ksmd page in a browser"
 	@if [ -z "$(KSMD_BROWSER)" ]; then \
 	  if [ "$(KSMD_REQUIRE_BROWSER)" = 1 ]; then \
-	    echo "RESULT: SOME FAILED (1) -> no browser found (KSMD_REQUIRE_BROWSER)"; exit 1; fi; \
-	  echo "RESULT: SKIPPED (no browser - see docs/SPEC-gates.md)"; exit 0; fi
-	node tests/browser/main.mjs "$(KSMD_BROWSER)" "$(WEB)/ksmd.html" "$(OUT)/browser" $(if $(KSSRV),"$(KSSRV)")
+	    echo "RESULT: SOME FAILED (1) -> no browser found, and KSMD_REQUIRE_BROWSER=1 requires one." \
+	      "On a machine without one, KSMD_REQUIRE_BROWSER=0 makes this a SKIP;" \
+	      "such a round is not CI's verdict"; exit 1; fi; \
+	  echo "RESULT: SKIPPED (no browser - see docs/SPEC-gates.md)"; fi
+	$(if $(KSMD_BROWSER),node tests/browser/main.mjs "$(KSMD_BROWSER)" "$(WEB_PAGE)" "$(OUT)/browser" $(if $(KSSRV),"$(KSSRV)"))
 
 # ==========================================
 # What a document costs
@@ -102,5 +128,5 @@ test-browser: web
 measure: web
 	@test -n "$(KSMD_BROWSER)" || { echo "no browser found: the page is not measured"; exit 1; }
 	"$(KSPLC)" run tests/measure.kspl "$(OUT)/measure"
-	node tests/browser/measure.mjs "$(KSMD_BROWSER)" "$(WEB)/ksmd.html" "$(OUT)/measure-browser" \
+	node tests/browser/measure.mjs "$(KSMD_BROWSER)" "$(WEB_PAGE)" "$(OUT)/measure-browser" \
 		"$(OUT)/measure" $(if $(KSSRV),"$(KSSRV)")

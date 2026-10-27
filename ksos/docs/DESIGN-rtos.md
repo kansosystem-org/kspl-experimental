@@ -102,7 +102,7 @@ flowchart TD
     H -->|yes| J[return from start_scheduler]
 ```
 
-**`start_scheduler` returns when no task remains, or when the application calls `stop_scheduler()`.** A task remains until it ends (its entry returns, or `Task.delete`); a blocked or suspended one remains. While every task that remains is blocked with no deadline, the scheduler sleeps until an interrupt (`ksos_port_wait_irq`) and looks again (`make ksos-sleep`, `make ksos-cm-uart-irq-echo`).
+**`start_scheduler` returns when no task remains, or when the application calls `stop_scheduler()`.** A task remains until it ends (its entry returns, or `Task.delete`); a blocked or suspended one remains. While every task that remains is blocked with no deadline, the scheduler sleeps until an interrupt (`ksos_port_wait_irq`) and looks again (`make ksos-sleep`, `make ksos-nrf51-wfi`).
 
 * **Why it does not return when every task is merely blocked**: a task can wait on a semaphore that an interrupt handler gives. That task would never run again. A handler's `give` cannot restart a scheduler that has returned, since the code after `start_scheduler` already runs in its place. Looping instead would hold the CPU at full use for as long as the wait lasts.
 * **Why it still returns once every task has ended**: a program on a host goes on after its tasks. That is where a demo checks what they did.
@@ -330,7 +330,7 @@ The timer is SysTick (the timer built into every Cortex-M core). PendSV is set t
 * it never reached its checks;
 * it panicked.
 
-**Automated emulators have no terminal input or monitor.** Parallel runs sharing a terminal can suspend each other while changing its settings. The semihosting demos discard UART input; the UART probes use their socket instead. Every run has a time limit followed by a forced kill if graceful shutdown stalls, so a stopped emulator cannot hold the gate indefinitely.
+**Automated emulators have no terminal input or monitor.** Parallel runs sharing a terminal can suspend each other while changing its settings. The demos use semihosting and discard UART input. Every run has a time limit followed by a forced kill if graceful shutdown stalls, so a stopped emulator cannot hold the gate indefinitely.
 
 ### The Cortex-M0/M0+ port (`port/cortex_m0/`)
 
@@ -466,7 +466,6 @@ A driver talks to one piece of hardware by reading and writing its *registers*: 
 
 | Driver | What the hardware does | Checked where |
 | :-- | :-- | :-- |
-| UART | a serial port: bytes in and out over two wires | QEMU |
 | RTC | a clock that keeps the date and time | the real chip |
 | GPIO | pins switched on or off, or read | the real chip |
 | PWM | a pin switched on and off fast, for motor speed | the real chip |
@@ -490,7 +489,7 @@ What each is confirmed to do on the real chip is in "What has been checked on re
 
 | the place | what is in it |
 | :-- | :-- |
-| `rp2040/` `mps2/` `nrf51/` `cortex_m/` | what hits that chip's or IP's registers directly |
+| `rp2040/` `nrf51/` `cortex_m/` | what hits that chip's or IP's registers directly |
 | directly under `drivers/` | what does not depend on a chip: an outside part (`ht16k33`), a class specification (`cdc_ncm`), and what every driver relies on (`mmio`) |
 
 Caution: **Do not repeat the folder's name in a file name** (`rp2040/gpio.kspl`, not `rp2040/rp2040_gpio.kspl`). An import's alias is the last name, so the caller would read `rp2040_gpio.set_dir(...)`.
@@ -500,21 +499,6 @@ The port layer (`port/`) is something else: the boot and the C/asm glue (startup
 **`wait` in `ksos/drivers/mmio.kspl` is the one home of the busy wait every driver shares** (`mmio.wait(addr, mask, want_nonzero)!`). A *busy wait* reads a register over and over until a bit changes. It gives up with `timed_out` after `POLL_TIMEOUT_ITERS` iterations, so hardware that does not answer cannot stall a driver forever. Do not copy the loop or the constant into a driver.
 
 **A driver's call that can fail returns `Void!Driver_error`** (`Driver_error` in the same file), not a `Bool`. A `Bool` said only "it did not work", and a caller could drop it unseen. A result must be passed on with `!` or handled with `catch`. Its kind (`timed_out`, `no_answer`, `not_found`, `out_of_range`, `full`) says why. A board passes a driver's failure on; a demo decides there what to leave out and how to say so. Two kinds stay `Bool`: a question (`i2c.present`, `usb_cdc.is_configured`), and a try that is answered at once (`usb_cdc.write`, `flash.program_at`, which implements ksdb's `Store`).
-
-### UART (`uart.kspl` / `uart_irq.kspl`)
-
-`drivers/mps2/uart.kspl` drives the ARM CMSDK APB UART0 of QEMU's `mps2-an385` (at `0x40004000`, wired to a serial console chardev). A real board with the same IP runs it unchanged. Two demos check it:
-
-| Demo | What it proves |
-| :-- | :-- |
-| `make ksos-cm-uart-echo` | both directions, polled (`getc` / `putc`). `ksos/tests/uart_probe.py polled` sends bytes over a Unix domain socket and matches the echo (`RESULT: ALL PASS`). The bytes travel through QEMU's serial chardev, so **it is genuine memory-mapped I/O, not ARM semihosting** (`ksos/demo/common/semihost_console.kspl`, the `BKPT` trap). |
-| `make ksos-cm-uart-irq-echo` | the receive path **driven by an interrupt** (below) |
-
-`uart_irq.kspl` turns on CTRL's RX_INTEN and NVIC IRQ0 (UART0's RX in QEMU's board definition; the NVIC is the Cortex-M's interrupt controller). The ISR `uart0_irq0_handler` is joined to the shared vector table through a weak symbol. It reads the byte into a ring (`std/ring`) and gives a `Sem` that counts the bytes held. `getc` takes the semaphore, so the task blocks, and with nothing else to run the scheduler sleeps on `WFI` (an instruction that sleeps until an interrupt). `WFI` has no other way out, so wrong NVIC or ISR wiring hangs it. A line echoed back through `ksos/tests/uart_probe.py irq` is direct evidence that real interrupts woke the CPU; the probe also requires the demo's own verdict (QEMU's exit status).
-
-* **Every byte is kept until the ring is full**, then counted as dropped (`dropped()`). A single byte and a "received" flag would let the next byte overwrite one the task has not read. A flag cleared before the byte was read would let an interrupt in between duplicate or lose one. The demo reads a whole line before echoing any of it, so bytes arriving meanwhile must queue.
-* **The handler clears the interrupt's cause first, then reads while RX_FULL holds.** A byte can arrive between a read and a later clear. Its cause would be cleared with the other's, and it would wait in the data register with no interrupt to fetch it. The line then never completes. QEMU's chardev delivers the next byte as soon as the register empties, so it meets this in most runs.
-* **The ring and a count, not a `Queue<|U8|>`**: bytes streamed from a handler go through `Ring` ("The guidance for adding an API or an implementation" below). `getc` reads the ring inside a critical section, as the handler writes it too.
 
 ### The RTC (`rtc.kspl`) — real chip only
 
@@ -824,16 +808,13 @@ Caution: Do not make the reverse reference (pointing at a demo from here). Once 
 
 The car downloads its driving policy (a small neural net) once, and saves it in its own Flash. From then on it drives by itself with no PC.
 
-At start-up it takes one whole policy with `GET /api/pilot`, keeps it inside the device and disconnects. From then on, round after round, it reads the sensors, decides the next manoeuvre in the car, turns the four wheels and keeps the observation.
+At start-up it fetches one whole policy as a file from kssrv (`GET /pilot_policy.safetensors`), keeps it inside the device and disconnects. From then on, round after round, it reads the sensors, decides the next manoeuvre in the car, turns the four wheels and keeps the observation.
+
+**The policy file is `ksos/demo/cortex_m/pilot_policy.safetensors`, the one copy that the car and `cortex_m_pilot_probe` both use.** `ksai/examples/car_pilot` writes it offline, and kssrv only hands it out as a file. After the rules, the net or the encoding change, write it again with `ksplc run ksai/examples/car_pilot/main.kspl ksos/demo/cortex_m/pilot_policy.safetensors`.
 
 The policy and the observations live in **the record inside the device** (the last 64KB of Flash; "ksdb" in the root README). That lets it start with no upstream. Where the link cannot be raised, or kssrv is not running, it decides with the policy it took last time.
 
-| | Where it decides | With no link |
-| :-- | :-- | :-- |
-| the closed-loop probe (`rp2040_car_loop_probe.kspl`) | asks the upstream on every observation | can decide nothing |
-| this probe | holds the policy in the car | runs on |
-
-**It differs from the closed-loop version only in where the judgement lives.** The deciding is the same (the same weights, the same forward pass), so there are not two judgements.
+**The car does not ask the PC on each observation.** A car that asks can decide nothing once the link drops, and a TCP round trip has to fit inside each 100ms round. A car that holds the policy needs the link only once.
 
 **The safety timeouts are in the car, outside the policy.** They have to hold whatever the policy answers, and with no policy at all, and once the link drops nothing upstream can stop the car. Bringing the policy home does not change that. Which ones each firmware carries is in "The safety timeouts of each firmware" in [`HOWTO-bring-up.md`](HOWTO-bring-up.md).
 
@@ -846,7 +827,7 @@ The policy and the observations live in **the record inside the device** (the la
 
 **A long press on the remote prints the kept record to the console**, with no link and no PC. A record that can be kept but not read gives nothing to judge by.
 
-**Only the first run needs the PC**, to take the policy from kssrv (its stages 6e and 9, in [`HOWTO-bring-up.md`](HOWTO-bring-up.md)). Later runs start from the record.
+**Only the first run needs the PC**, to take the policy from kssrv (its stages 7 and 9, in [`HOWTO-bring-up.md`](HOWTO-bring-up.md)). Later runs start from the record.
 
 ### The USB-Ethernet probe's steps and what the PC needs
 
@@ -868,34 +849,22 @@ There is no DHCP (the protocol that hands out addresses), so **the addresses are
 
 ## 🤖 The AI on bare metal
 
-The car runs a small neural net with no operating system and no `malloc`. It also trains a second small net that guesses what its sensors will read next. That second net does not beat the simple guess "the same as last time" on a real floor, for reasons given below.
+The car runs a small neural net with no operating system and no `malloc`.
 
 **The policy is carried into the car and decided there.** Why, and the safety timeouts kept outside it, are in "What the self-driving probe does, and where its judgement lives" above. `ksos-cm-pilot-probe` and the car's firmware read one safetensors file written into Flash with `embed` (the weights, the manoeuvre table and the preprocessing constants). They check the format's version and every tensor's shape, and decide the next manoeuvre inside the car alone:
 
 * Caution: **Confirm the version before reading it.** The order of the features, the activation and what the manoeuvre table means cannot be told from a tensor's shape. The probe also tests that a truncated file is refused.
 * **A tie goes to the smaller number (= stopping).** An observation where nothing can be measured and there is no line makes every feature 0, and so every logit (the net's raw score per manoeuvre). That really happens, so the probe's first case tests it.
 
-### What the car learns from its own record
+### What the car does not learn on board
 
-**The car learns from its own record, and a falling loss is no evidence.** Two nets are involved:
+**The car trains no net while it drives.** Two kinds of learning on the car were weighed, and neither pays its way:
 
-| Net | What it does | Its teacher |
-| :-- | :-- | :-- |
-| the policy | decides what to do | trained on the PC, from written rules |
-| the forward model (`ksos/demo/common/car_model.kspl`) | guesses what happens if it does: the next round's three line bits. It guesses them from the three now, the three a round before and the manoeuvre about to be made | the reflective sensors' reading one round later |
-
-**It guesses the line, not the distance ahead.** On a lap course the distance does not respond to the car's own motion. With nothing ahead it stays near 3000mm. What moves it (the car's position and heading) is not among the net's inputs. So an object passing at the side does not help either. The line's three bits spread over 0 to 7 and move with the steering. What is decided about that learning:
-
-* **Training the policy further on its own record learns nothing.** The record's manoeuvres are the ones that net chose, so training with them as the teacher converges on the net unchanged. The loss falls (the logits sharpen toward its own argmax, its top choice), but the driving does not change. It looks alive and has no effect, so it is not built. What the PC cannot hold is how this car actually moves on this floor, and that is what is trained here.
+* **Training the policy further on its own record learns nothing.** The record's manoeuvres are the ones that net chose, so training with them as the teacher converges on the net unchanged. The loss falls (the logits sharpen toward its own argmax, its top choice), but the driving does not change. It looks alive and has no effect, so it is not built.
 * **The record as it stands is no training set for the policy either.** Lines a safety timeout drove (`safety=1`) are not the policy's choices, and after the cap the triple alone cannot tell them apart. That is why each line keeps that origin bit. The record keeps only laps where the triple changed, plus a heartbeat. So training on it unweighted imitates only the instants the car hesitated.
-* **No teacher is needed.** The reflective sensors return the answer one round later (*self-supervised*), so neither a rule nor a way to ask the PC is needed. Copy a rule into the car, and the policy's net becomes an ornament.
-* **The verdict is "the prediction started being right", not "the loss fell"**, which always happens with its own output as the teacher. The probe gives the answer from outside: a function standing in for the floor, whose content the net cannot see. It asks that the missed bits decrease, and fall below answering "the same as the previous round" (`base_permille`). A decrease alone can mean only an easier stretch of floor.
-* **On a real floor the answer is not in its input.** The car's position on the course and its heading decide the next bits, while the net sees only the bits and the manoeuvre. Where the line barely moves between rounds, the net can learn at best "no change". A draw with the baseline means exactly that.
-* **A round spent stopped asks no question.** What is guessed is the result of its own movement, and when stopped there is none. Included, it breaks two ways. Where stopping is the majority, it learns "stop and nothing changes" and the error drops to 0: it looks trained and has learned nothing. And a bit that changes while stopped is an outside touch, noise the net's input cannot explain.
-  * Caution: **So "the error is 0" is no evidence that it holds** (look at the steps trained first).
-  * **A round whose steering was redone mid-round is dropped too** (`forget` in `car_model`), since the instruction asked about is not the one that moved the car. A round a safety timeout drove is learned from: the net predicts the floor's response, whoever decided.
-* The trained weights are left in ksdb as raw bytes, and the next start-up carries on from them. **Put the scale (the speed cap), the net's shape and the layout's version into the run, and refuse anything that disagrees.** The shape would match, so a wrong run used silently goes wrong without a sign. The run is understood by this chip alone (the F32s are copied unchanged, so it cannot be moved to a PC).
-* **Leave how far it has got (the steps, the net's miss and the baseline's) beside the weights.** A device can run with neither a link nor a console. There, that value, read at the next start-up with a connection, is the only thing that says how far it got. With the weights alone, nothing outside can confirm whether the training progresses.
+* **A net that predicts the next line reading gains nothing on a real floor.** The car's position on the course and its heading decide the next reading, and neither is among the inputs the car has. Where the line barely moves between rounds, such a net learns at best "no change", which repeating the last reading already gives.
+
+Training on a microcontroller itself is checked apart from the car: `make ksos-cm-ai-train-probe` trains a LoRA adapter on bare metal and saves and restores it.
 
 ### What lets ksai run with no malloc
 

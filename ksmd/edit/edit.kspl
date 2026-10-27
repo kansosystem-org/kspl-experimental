@@ -6,17 +6,18 @@
 //< Caution: **An edit that would write a formula longer than 4,096 bytes is undone and refused.**
 //< The reader refuses such a formula, so the saved source could not be opened again.
 import "ksmd/base/dates" { is_date }
-import "ksmd/base/marker" { compare_text, is_decimal, quoted_end }
+import "ksmd/base/marker" { compare_text, is_decimal }
 import "ksmd/calc/formula" { BROKEN, Positions, bind, find_table, has_attachable, text_piece,
     write_formula }
 import "ksmd/model/choice" { choice_of, is_entry }
-import "ksmd/model/format" { MAX_PLACES, Number_format, no_format }
+import "ksmd/model/format" { MAX_PLACES, Number_format, no_format, shows_numbers }
 import "ksmd/model/group" { after_insert, after_remove, fault_of, innermost, order }
 import "ksmd/model/look" { Look_part, is_note, plain_look, with_part }
 import "ksmd/model/model" { Cell, Cell_kind, Corner, Document, Group, MAX_CELLS, MAX_COLUMNS,
     MAX_FORMULA, MAX_ROWS, MAX_WEIGHT, Piece, Table }
 import "ksmd/model/rule" { Rule, no_rule }
-import "ksmd/syntax/clause" { is_table_name }
+import "ksmd/syntax/chart" { reads_back }
+import "ksmd/syntax/clause" { is_table_name, reads_as_formula }
 import "std/chars"
 import "std/ds" { List }
 import "std/mem" { Arena }
@@ -47,6 +48,7 @@ enum Edit_error //< why an edit was refused; a refused edit changes nothing
     not_choices //< a list of choices that cannot be saved
     not_a_rule //< a colour rule that cannot be saved
     not_a_note //< a note is 1 to 1,000 bytes of text
+    chart_name //< a chart would not find its column again by the column's name
 
 impl Edit_error
     fn message(e: Self): U8[] //< what the editor says: the problem, then what to do
@@ -64,8 +66,8 @@ impl Edit_error
         case .too_long
             return "A formula would be longer than 4,096 bytes. Shorten the formula."
         case .not_a_value
-            return "This value cannot be saved in one cell. Put a '|' or a line break inside \
-                quotes."
+            return "This value cannot be saved in one cell. Put each '|' and '{' inside quotes, and \
+                write a line break as \\n inside quotes."
         case .not_a_name
             return "A table name is 1 to 255 bytes of text, with no line breaks or other control \
                 characters."
@@ -98,6 +100,9 @@ impl Edit_error
                 column's choices."
         case .not_a_note
             return "This note cannot be saved. A note is 1 to 1,000 bytes of text."
+        case .chart_name
+            return "A chart finds its columns by their names. Give each column it shows a name no \
+                other column has, with no ','."
         case .not_a_rule
             return "This rule cannot be saved. Compare with a number, or with text that has no ',', \
                 ';', '\"' or '\\', and choose a colour."
@@ -110,66 +115,65 @@ priv struct Saved //< a piece an edit changed, kept to undo the edit
     index: Sz
     piece: Piece
 
-fn insert_row(doc: Document$@, u: Sz, at: Sz, arena: Arena$@): Void!Edit_error //<
-    //< An empty data row before the row at `at`; at the count of rows, after the last one
+fn insert_rows(doc: Document$@, u: Sz, at: Sz, count: Sz, arena: Arena$@): Void!Edit_error //<
+    //< `count` empty data rows before the row at `at`; at the count of rows, after the last one
+    //< Every formula is measured once for all of them, not once for each row.
     t: = table_at(doc, u)!
-    if at < 0 || at > t.rows.len
+    if at < 0 || at > t.rows.len || count < 1
         throw .outside
-    if t.rows.len == MAX_ROWS
+    if t.rows.len + count > MAX_ROWS
         throw .too_many_rows
-    if t.cells.len + t.columns.len > MAX_CELLS
+    if t.cells.len + count * t.columns.len > MAX_CELLS
         throw .too_many_cells
-    t.rows.insert(at, t.next_id)
-    t.next_id += 1
-    for c in Range.asc(t.columns.len)
-        t.cells.insert(t.at(at, c), empty_cell())
+    add_cells(t, at, count, true)
+    widen(t.rows@, at, count, 0)
+    for i in Range.asc(count)
+        t.rows[at + i] = t.next_id + i
+    t.next_id += count
     fits(doc) catch
-        remove_cells(t, at, true)
-        t.rows.remove_at(at)
-        t.next_id -= 1
+        remove_cells(t, at, count, true)
+        narrow(t.rows@, at, count)
+        t.next_id -= count
         throw .too_long
-    after_insert(t, at)
+    after_insert(t, at, count)
     attach_loose(doc, arena)
 
-fn insert_column(doc: Document$@, u: Sz, at: Sz, arena: Arena$@): Void!Edit_error //<
-    //< A column before the column at `at`, with an empty name and empty cells
-    //< In a table with column widths, it takes the width of the column it stands before, or of
-    //< the last column when it is added after it.
+fn insert_columns(doc: Document$@, u: Sz, at: Sz, count: Sz, arena: Arena$@): Void!Edit_error //<
+    //< `count` columns before the column at `at`, with empty names and empty cells
+    //< In a table with column widths, each takes the width of the column they stand before, or of
+    //< the last column when they are added after it.
     t: = table_at(doc, u)!
-    if at < 0 || at > t.columns.len
+    if at < 0 || at > t.columns.len || count < 1
         throw .outside
-    if t.columns.len == MAX_COLUMNS
+    if t.columns.len + count > MAX_COLUMNS
         throw .too_many_columns
-    if t.cells.len + t.rows.len + 1 > MAX_CELLS
+    if t.cells.len + count * (t.rows.len + 1) > MAX_CELLS
         throw .too_many_cells
     if t.weights.len > 0
-        t.weights.insert(at, t.weights[at if at < t.weights.len else at - 1])
+        widen(t.weights@, at, count, t.weights[at if at < t.weights.len else at - 1])
     if t.formats.len > 0
-        t.formats.insert(at, no_format())
+        widen(t.formats@, at, count, no_format())
     if t.choices.len > 0
-        t.choices.insert(at, "")
+        widen(t.choices@, at, count, "")
     if t.rules.len > 0
-        t.rules.insert(at, no_rule())
-    t.columns.insert(at, t.next_id)
-    t.next_id += 1
-    columns: = t.columns.len
-    for r in Range.asc(t.rows.len + 1)
-        $cell: = empty_cell()
-        if r == 0
-            cell.kind = .text
-        t.cells.insert(r * columns + at, cell)
+        widen(t.rules@, at, count, no_rule())
+    add_cells(t, at, count, false)
+    widen(t.columns@, at, count, 0)
+    for i in Range.asc(count)
+        t.columns[at + i] = t.next_id + i
+    t.next_id += count
     fits(doc) catch
-        remove_cells(t, at, false)
-        t.columns.remove_at(at)
-        t.next_id -= 1
+        remove_cells(t, at, count, false)
+        narrow(t.columns@, at, count)
+        t.next_id -= count
         if t.weights.len > 0
-            t.weights.remove_at(at)
+            narrow(t.weights@, at, count)
         if t.formats.len > 0
-            t.formats.remove_at(at)
+            narrow(t.formats@, at, count)
         if t.choices.len > 0
-            t.choices.remove_at(at)
+            narrow(t.choices@, at, count)
         if t.rules.len > 0
-            t.rules.remove_at(at)
+            narrow(t.rules@, at, count)
         throw .too_long
     attach_loose(doc, arena)
 
@@ -185,7 +189,7 @@ fn remove_row(doc: Document$@, u: Sz, at: Sz): Void!Edit_error //<
     $cells: = List<|Cell|>(scratch)
     for c in Range.asc(t.columns.len)
         cells.push(t.cells[t.at(at, c)])
-    remove_cells(t, at, true)
+    remove_cells(t, at, 1, true)
     t.rows.remove_at(at)
     fits(doc) catch
         t.rows.insert(at, id)
@@ -225,7 +229,7 @@ fn remove_column(doc: Document$@, u: Sz, at: Sz): Void!Edit_error //<
     if t.rules.len > 0
         rule = t.rules[at]
         t.rules.remove_at(at)
-    remove_cells(t, at, false)
+    remove_cells(t, at, 1, false)
     t.columns.remove_at(at)
     fits(doc) catch
         t.columns.insert(at, id)
@@ -316,6 +320,10 @@ fn move_column(doc: Document$@, u: Sz, from: Sz, to: Sz): Void!Edit_error //<
     fits(doc) catch
         shift_column(t, to, from)
         throw .too_long
+    // Of two columns with one name, a chart finds the first.
+    charts_found(doc, u) catch why
+        shift_column(t, to, from)
+        throw why
 
 fn set_cell(doc: Document$@, u: Sz, row: Sz, column: Sz, kind: Cell_kind, text: U8[],
     arena: Arena$@): Void!Edit_error //<
@@ -356,7 +364,7 @@ fn set_cell(doc: Document$@, u: Sz, row: Sz, column: Sz, kind: Cell_kind, text: 
         formula: = text.trim_spaces()
         if formula.len > MAX_FORMULA
             throw .too_long
-        if formula.len == 0 || !is_utf8(formula) || !one_cell(formula)
+        if formula.len == 0 || !reads_as_formula(formula)
             throw .not_a_value
         cell.first = t.pieces.len
         cell.count = bind(doc, u, arena.dup_str(formula), t.pieces@)
@@ -503,16 +511,21 @@ fn set_widths(doc: Document$@, u: Sz, weights: List<|Sz|>@): Void!Edit_error //<
 fn set_format(doc: Document$@, u: Sz, first: Sz, last: Sz, f: Number_format, arena: Arena$@):
     Void!Edit_error //<
         //< Gives columns `first` to `last` one number format; no format clears theirs
+        //< `general` is a cell's own format alone: for a column it is the empty entry. The cells of
+        //< those columns lose their own formats, so the whole column shows the one chosen, as
+        //< Excel's format on a whole column does.
     t: = table_at(doc, u)!
     if first < 0 || last < first || last >= t.columns.len
         throw .outside
     if t.formats.len == 0
         for _ in Range.asc(t.columns.len)
             t.formats.push(no_format())
-    $kept: = f
+    $kept: = no_format() if f.kind == .general else f
     kept.code = arena.dup_str(f.code)
     for c in Range(first, last + 1, 1)
         t.formats[c] = kept
+        for r in Range(-1, t.rows.len, 1)
+            t.cells[t.at(r, c)].look.format = no_format()
     for g in t.formats
         if g.kind != .none
             return
@@ -527,7 +540,7 @@ fn step_places(doc: Document$@, u: Sz, first: Sz, last: Sz, more: Bool): Void!Ed
     $formatted: = false
     $changed: = false
     for c in Range(first, last + 1, 1)
-        if t.formats.len == 0 || t.formats[c].kind == .none
+        if t.formats.len == 0 || !shows_numbers(t.formats[c])
             continue
         formatted = true
         places: = t.formats[c].places
@@ -543,17 +556,21 @@ fn step_places(doc: Document$@, u: Sz, first: Sz, last: Sz, more: Bool): Void!Ed
         throw .places
 
 fn set_name(doc: Document$@, u: Sz, column: Sz, text: U8[], arena: Arena$@): Void!Edit_error //<
-    //< Gives a column the name its header shows
+    //< Gives a column the name its header shows; the header keeps its look and note
+    //< Refused where a chart would then not find its columns by their names.
     t: = table_at(doc, u)!
     if column < 0 || column >= t.columns.len
         throw .outside
     if !is_utf8(text)
         throw .not_a_value
+    was: = t.cells[column]
     $cell: = empty_cell()
     cell.kind = .text
     cell.text = arena.dup_str(text)
-    cell.look = t.cells[column].look
-    t.cells[column] = cell
+    t.cells[column] = with_look(cell, was)
+    charts_found(doc, u) catch why
+        t.cells[column] = was
+        throw why
 
 fn new_table(doc: Document$@, columns: Sz, rows: Sz, arena: Arena$@): Sz!Edit_error //<
     //< Adds a table with empty names and cells, and returns its place in `doc.tables`
@@ -622,7 +639,8 @@ fn remove_table(doc: Document$@, u: Sz, arena: Arena$@): Void!Edit_error //<
 
 fn rename_table(doc: Document$@, u: Sz, name: U8[], arena: Arena$@): Void!Edit_error //<
     //< Gives a table another name; references written with its name follow it
-    //< A reference kept as text that now names one of its cells attaches.
+    //< A reference kept as text that now names one of its cells attaches. Refused where a formula
+    //< would then be written longer than 4,096 bytes.
     t: = table_at(doc, u)!
     if t.name.len == 0
         throw .outside
@@ -632,7 +650,12 @@ fn rename_table(doc: Document$@, u: Sz, name: U8[], arena: Arena$@): Void!Edit_e
         if found != u
             throw .name_taken
         return
+    was: = t.name
     t.name = arena.dup_str(name)
+    // A reference written with the table's name grows with it.
+    fits(doc) catch
+        t.name = was
+        throw .too_long
     attach_loose(doc, arena)
 
 priv struct Written //< a formula written out as text, to be bound again
@@ -703,6 +726,14 @@ priv fn fits(doc: Document@): Void!Edit_error //<
             if out.slice().len > MAX_FORMULA
                 throw .too_long
 
+priv fn charts_found(doc: Document@, u: Sz): Void!Edit_error //<
+    //< Refuses when a chart that a block shows would not find its columns of table `u` again
+    for i in Range.asc(doc.blocks.len)
+        b: = doc.blocks.get(i)
+        if b.kind == .chart && doc.charts[b.first].table == u &&
+            !reads_back(doc, doc.charts[b.first]@)
+            throw .chart_name
+
 priv fn attach_loose(doc: Document$@, arena: Arena$@) //<
     //< Binds again each formula holding a reference kept as text that names a cell now
     //< So a formula's reference is attached whenever it names a cell, as after reading.
@@ -727,7 +758,7 @@ priv fn shift_row(t: Table$@, from: Sz, to: Sz) //< moves a row's identity and i
     $cells: = List<|Cell|>(scratch)
     for c in Range.asc(t.columns.len)
         cells.push(t.cells[t.at(from, c)])
-    remove_cells(t, from, true)
+    remove_cells(t, from, 1, true)
     id: = t.rows[from]
     t.rows.remove_at(from)
     t.rows.insert(to, id)
@@ -761,15 +792,58 @@ priv fn shift_column(t: Table$@, from: Sz, to: Sz) //<
         t.rules.remove_at(from)
         t.rules.insert(to, rule)
 
-priv fn remove_cells(t: Table$@, at: Sz, row: Bool) //<
-    //< Removes the cells of data row `at`, or of column `at` with its name
-    if row
-        for _ in Range.asc(t.columns.len)
-            t.cells.remove_at(t.at(at, 0))
-        return
+priv fn add_cells(t: Table$@, at: Sz, count: Sz, row: Bool) //<
+    //< Puts empty cells for `count` data rows from row `at`, or for `count` columns from column
+    //< `at`, before `rows` or `columns` counts them
+    //< A new column's name is empty text. Each cell moves once, so the cost is the table's size.
     columns: = t.columns.len
-    for r in Range.desc(t.rows.len + 1)
-        t.cells.remove_at(r * columns + at)
+    if row
+        widen(t.cells@, t.at(at, 0), count * columns, empty_cell())
+        return
+    lines: = t.rows.len + 1
+    wider: = columns + count
+    $name: = empty_cell()
+    name.kind = .text
+    widen(t.cells@, t.cells.len, lines * count, empty_cell())
+    // From the end backwards, so no cell is overwritten before it moves.
+    for r in Range.desc(lines)
+        for c in Range.desc(wider)
+            t.cells[r * wider + c] =
+                (t.cells[r * columns + c] if c < at
+                else t.cells[r * columns + c - count] if c >= at + count else name if r == 0
+                else empty_cell())
+
+priv fn remove_cells(t: Table$@, at: Sz, count: Sz, row: Bool) //<
+    //< Removes the cells of `count` data rows from row `at`, or of `count` columns from column `at`
+    //< with their names, while `rows` or `columns` still counts them
+    columns: = t.columns.len
+    if row
+        narrow(t.cells@, t.at(at, 0), count * columns)
+        return
+    $kept: Sz = 0
+    for i in Range.asc(t.cells.len)
+        c: = i % columns
+        if c < at || c >= at + count
+            t.cells[kept] = t.cells[i]
+            kept += 1
+    for t.cells.len > kept
+        _gone: = t.cells.pop()
+
+priv fn widen<|T|>(list: List<|T|>$@, at: Sz, count: Sz, fill: T) //<
+    //< Puts `count` copies of `fill` before place `at`, moving each later element once
+    for _ in Range.asc(count)
+        list.push(fill)
+    for i in Range.desc(list.len - at - count)
+        list[at + count + i] = list[at + i]
+    for i in Range.asc(count)
+        list[at + i] = fill
+
+priv fn narrow<|T|>(list: List<|T|>$@, at: Sz, count: Sz) //<
+    //< Removes `count` elements from place `at`, moving each later element once
+    for i in Range(at, list.len - count, 1)
+        list[i] = list[i + count]
+    for _ in Range.asc(count)
+        _gone: = list.pop()
 
 priv fn line_of(c: Corner, row: Bool): Sz
     return c.row if row else c.column
@@ -785,23 +859,6 @@ priv fn table_at(doc: Document$@, u: Sz): Table$@!Edit_error //< the table at pl
     if u < 0 || u >= doc.tables.len
         throw .outside
     return doc.tables[u]@
-
-priv fn one_cell(formula: U8[]): Bool //<
-    //< Whether a formula reads back as one cell: no line break, and every `|` inside quotes
-    for c in formula
-        if c == '\n' || c == '\r'
-            return false
-    $i: Sz = 0
-    for i < formula.len
-        if formula[i] == '|'
-            return false
-        if formula[i] == '"'
-            close: = quoted_end(formula, i)
-            if close == formula.len
-                return false
-            i = close
-        i += 1
-    return true
 
 priv fn is_utf8(text: U8[]): Bool //< whether the text is well-formed UTF-8, as a source must be
     $i: Sz = 0

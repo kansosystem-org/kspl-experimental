@@ -1,4 +1,4 @@
-# The record of the API this package publishes, written by ksplc --emit-surface.
+# The record of the API this package publishes, written by ksplc doc --emit-surface.
 # Caution: Do not fix it by hand. Change the API, remake it with `make surface`, and commit the diff.
 # The columns are tab-separated: the file's logical name / the key / the text / the documentation (left off where there is none). Rows are by key, ascending.
 std/argparse	Argument_error	pub enum Argument_error	why the arguments could not be read as declared
@@ -234,8 +234,7 @@ std/ds	Map.entries	pub entries: Map_entry<|K, V|>$@	the slots, `cap` of them
 std/ds	Map.len	pub len: Sz	how many live pairs it holds
 std/ds	Map.used	pub used: Sz	live slots and tombstones together, which decide a resize. **Growth is decided by this, not by len.** With len, repeated set and remove fill the table with tombstones until no insertion point can be found.
 std/ds	Map<|K, V|>.free	pub fn free(r: Self$@)	frees the pairs and the memory. As in `List.free`, the live slots' ownership is released before the memory is freed.
-std/ds	Map<|K, V|>.get	pub fn get(r: Self$@, key: K): V?	the value for the key, or none if it is absent
-std/ds	Map<|K, V|>.get_ptr	pub fn get_ptr(r: Self$@, key: K): V$@?	borrows the value, or none if the key is absent. The pointer stays valid until the map grows, removes the pair, or is freed.
+std/ds	Map<|K, V|>.get	pub fn get(r: Self@, key: K): V?	the value for the key, or none if it is absent
 std/ds	Map<|K, V|>.items	pub fn items(r: Self$@): Map_seq<|K, V|>	a chain over the live pairs (`for e in m.items()`). Caution: **Do not return a list.** It would instantiate **all of `List` for the nested element type** for every `Map`. That increases translation time and peak memory ("Returning every entry builds no nested generic" in `std/docs/DESIGN-core.md`).
 std/ds	Map<|K, V|>.new	pub fn new(arena: Arena$@): Map<|K, V|>	an empty map, which has allocated no memory yet. **`arena` is "where the elements go"** (as with `List.new`).
 std/ds	Map<|K, V|>.new_with_cap	pub fn new_with_cap(initial_cap: Sz, arena: Arena$@): Map<|K, V|>	an empty map with its slots already allocated. Caution: **It counts slots, not pairs**: it resizes once half the slots are used.
@@ -290,7 +289,7 @@ std/fs	MAX_PATH_LEN	pub const MAX_PATH_LEN: Sz = 4095	the longest path passed to
 std/fs	Replace_access	pub enum Replace_access	who can read the file `replace_file` leaves. On Windows the ACL the file takes from its folder decides under either, as at `write_unique`; `kept` carries the read-only mark instead.
 std/fs	Replace_access.kept	kept	as the replaced file allowed: its permission bits; a new file gets a plain write's
 std/fs	Replace_access.owner_only	owner_only	its owner alone (0600), whatever the replaced file allowed, as for a secret
-std/fs	absolute	pub fn absolute(path: U8[], arena: Arena$@): U8[]!Fs_error	the full path from the root: a relative path joined to the working directory. **Only the text is joined.** `..` and links stay. Folding `a/link/..` into `a` names a different place when `link` points elsewhere (Rust's `std::path::absolute` keeps them too). Caution: **Pass a path for a child through this** before starting it in another directory. A relative path is resolved from the child's directory, not the caller's.
+std/fs	absolute	pub fn absolute(path: U8[], arena: Arena$@): U8[]!Fs_error	the full path from the root: a relative path joined to the working directory. **Only the text is joined.** `..` and links stay. Folding `a/link/..` into `a` names a different place when `link` points elsewhere (Rust's `std::path::absolute` keeps them too). Caution: **Pass a path for a child through this** before starting it in another directory. A relative path is resolved from the child's directory, not the caller's. **On Windows a drive-relative path (`C:foo`) fails** (`invalid_path`): its cwd is unknown.
 std/fs	can_run	pub fn can_run(path: U8[]): Bool	whether it can actually be started on this system. On Windows the extension decides (the trap is at `is_executable`). A folder cannot be started on either.
 std/fs	copy_file	pub fn copy_file(from_path: U8[], to_path: U8[]): Void!Fs_error	copies one file's contents and its permission bits to a new name. **The mode goes too, from the first byte.** Written fresh, a script would lose its execute bit. A file only its owner could read would stand readable by others while it is written. On Windows the read-only mark goes instead. Only a regular file is copied. Caution: **It fails if the destination already stands**, so a link planted there is not followed.
 std/fs	copy_tree	pub fn copy_tree(from: U8[], to: U8[], skip_dir: fn(name: U8[]): Bool, arena: Arena$@): Void!Fs_error	copies every file under one directory to a path that does not exist yet. The relative layout and each file's permission bits are kept, **the bits from the copy's first byte**. So a private file is never readable by others on the way. A file is copied a piece at a time. **A link is not copied**, to a file or a directory alike. Followed, it would copy what lies outside. Anything but a directory or a regular file (a FIFO) fails it. Caution: **It fails if the destination already exists.** A copy mixed with files left by an earlier run is not a copy of the tree, and nothing in it would show that.
@@ -300,13 +299,14 @@ std/fs	is_dir	pub fn is_dir(path: U8[]): Bool	whether it is a directory; a link 
 std/fs	is_executable	pub fn is_executable(path: U8[]): Bool	whether the owner's execute bit is set; Windows: false. Close to Python's `os.access(p, os.X_OK)`. **Always false on Windows**, which has no execute bit. Caution: **Do not use this to decide "can it be started"**: `can_run` below answers that.
 std/fs	is_link	pub fn is_link(path: U8[]): Bool	whether it is a link, without following it. **`is_dir` cannot tell**: it follows the link. A tree walk must **first decide whether it can follow the link**. A path that does not exist gives false (the functions that create paths call this).
 std/fs	join	pub fn join(a: U8[], b: U8[], arena: Arena$@): U8[]	a path with a segment appended (Python's `os.path.join`). It writes `/` at the join, which Windows also accepts. Separators at the join are not doubled. **After a bare root, `b` follows it directly**: `/` and `etc` give `/etc`. On Windows `C:` and `x` give `C:x`, which stays relative to that drive's working folder, as Python, Go and Rust answer. To split a path, use `sys.get_dir_name` / `sys.get_file_name`.
+std/fs	long_name	pub fn long_name(path: U8[], arena: Arena$@): U8[]!Fs_error	the name the file system keeps for a path's last segment. **On Windows a short name names the same entry**: `GIT~1` can stand for `.git`. So a check on the name as written (does it start with a dot) misses it. Check the name this gives, the long one, at each segment. POSIX keeps one name, so it is the last segment as written.
 std/fs	mkdir	pub fn mkdir(path: U8[]): Void!Fs_error	creates one directory; fails if the path exists
 std/fs	mkdir_all	pub fn mkdir_all(path: U8[]): Void!Fs_error	creates every missing level (`mkdir -p`). A level that already exists counts as success. On a failure part way, it **stops there and throws** `mkdir_failed` with the segment it could not create.
 std/fs	mkdir_unique	pub fn mkdir_unique(base: U8[], prefix: U8[], arena: Arena$@): U8[]!Fs_error	creates a directory with a name nobody has used, and returns its path. **Creating it decides that it is new, not checking first**: `mkdir` fails on a path that exists, a link included. A used name is retried with another random suffix (Python's `mkdtemp`). **Nothing removes it.** Its creator removes it, or the directory that holds it.
 std/fs	read_dir	pub fn read_dir(path: U8[], arena: Arena$@): List<|U8[]|>!Fs_error	one directory's entries, without descending. `.` and `..` are skipped, so the list holds only the entries. A name that cannot be read, or a directory the OS stops reading part way, fails the call (`operation_failed`), never hands back a listing cut short.
 std/fs	remove_path	pub fn remove_path(path: U8[]): Void!Fs_error	deletes a file, or an empty directory
 std/fs	rename_path	pub fn rename_path(old_path: U8[], new_path: U8[]): Void!Fs_error	renames or moves a file or a directory
-std/fs	replace_file	pub fn replace_file(path: U8[], data: U8[], access: Replace_access): Void!Fs_error	replaces a file's whole content, so that a power cut cannot lose it. **A crash at any moment leaves the old content or the new**, never an empty or partial file. Once it returns, the new content is on the disk. The price is a wait for the disk ("A file is replaced durably, or not at all" in std/docs/DESIGN-system.md). Caution: **A failure can come after the rename**, with the new content in place but not known to be on the disk. A crash partway leaves a `<name>.<hex>.part` file beside it.
+std/fs	replace_file	pub fn replace_file(path: U8[], data: U8[], access: Replace_access): Void!Fs_error	replaces a file's whole content, so that a power cut cannot lose it. **A crash at any moment leaves the old content or the new**, never an empty or partial file. Once it returns, the new content is on the disk. The price is a wait for the disk ("A file is replaced durably, or not at all" in std/docs/DESIGN-system.md). Caution: **A failure can come after the rename**, with the new content in place but not known to be on the disk. A crash partway leaves a `<name>.<hex>.part` file beside it. Caution: **`\` separates on every OS**: on POSIX a path holding one fails, `invalid_path`.
 std/fs	skip_build_output	pub fn skip_build_output(name: U8[]): Bool	a `skip_dir` that leaves out `out` and `.git`. A repository's build output and git's own folder: neither holds a file anyone wrote there.
 std/fs	skip_none	pub fn skip_none(_name: U8[]): Bool	a `skip_dir` that enters every directory
 std/fs	stat	pub fn stat(path: U8[]): File_info!Fs_error	what the OS reports about a path, following links
@@ -325,8 +325,6 @@ std/fuzz	Campaign.subject	pub subject: U8[]	the program under test, as the lines
 std/fuzz	Campaign.tell_kind	pub tell_kind: Bool	the kind's name goes before the input file (`<exe> <kind> <file>`)
 std/fuzz	Campaign.wait_ms	pub wait_ms: I32	a trial's first timeout (`run_trial`)
 std/fuzz	Campaign.work	pub work: U8[]	where each trial's input is written, and a failing one kept
-std/fuzz	Findings	pub struct Findings	the findings, grouped by how the trials ended
-std/fuzz	Findings.free	pub fn free(r: Self)	lets go every finding, when `findings_new` was given null. Made in the caller's arena, it frees nothing: that arena does.
 std/fuzz	Findings:Manual_free	impl Findings: Manual_free	`free()` lets go the arena findings made with null live in
 std/fuzz	Input_kind	pub struct Input_kind	one kind of input the program under test reads
 std/fuzz	Input_kind.ext	pub ext: U8[]	the input file's ending. Caution: **Name it as the program expects for that kind**: another name can take another code path.
@@ -349,19 +347,12 @@ std/fuzz	Setup.exe	pub exe: U8[]	the program under test, as a full path
 std/fuzz	Setup.free	pub fn free(r: Self)	lets go all it names, when `setup` was given null. Made in the caller's arena, it frees nothing: that arena does.
 std/fuzz	Setup.work	pub work: U8[]	the work folder, as a full path; it stands once `setup` returns
 std/fuzz	Setup:Manual_free	impl Setup: Manual_free	`free()` lets go the arena a setup made with null lives in
-std/fuzz	Trial	pub struct Trial	the outcome of one trial
-std/fuzz	Trial.got	pub got: subproc.Run_result	the run; the rerun with a longer timeout if the first timed out
-std/fuzz	Trial.slow	pub slow: Bool	it timed out the first time but ended within the longer timeout. Caution: **Report it when it is true** (`note` does): a trial near the timeout will one day look hung.
 std/fuzz	again_with_asan	pub fn again_with_asan(a: Sanitized, again: U8[], arena: Arena$@): U8[]	the reproduce line, carrying `--asan` where the build had it
 std/fuzz	check_dirs	pub fn check_dirs(dirs: U8[][], arena: Arena$@): Void!U8[]	fails unless every seed folder stands. Caution: **A seed folder that does not exist is an error**, not a folder with no seeds. A path broken on its way here would fuzz with fewer seeds and pass.
 std/fuzz	check_seeds	pub fn check_seeds(c: Campaign@, all: List<|Sample|>@, arena: Arena$@): List<|Sample|>	has the program read every seed once, and returns those it accepted. Caution: **Do not continue silently if a seed cannot be written.** The program then reads the previous trial's input, and the input fuzzed and the finding disagree. **Drop a refused seed here, before fuzzing.** Otherwise every trial mutates a seed that is unreadable from the start. **A seed that stops the program fails**: dropped, a file that crashes it goes unseen.
-std/fuzz	declare	pub fn declare(p: argparse.Parser$@, o: Options$@)	adds `--trials` and `--seed` to the caller's parser. The values in `o` at the call are the defaults. **Declare both options through this**: the same names everywhere let the reproduce line of `report_all` run as printed.
+std/fuzz	declare	pub fn declare(p: argparse.Parser$@, o: Options$@)	adds `--trials` and `--seed` to the caller's parser. The values in `o` at the call are the defaults. **Declare both options through this**: the same names everywhere let the reproduce line that `scatter` prints run as printed.
 std/fuzz	declare_asan	pub fn declare_asan(p: argparse.Parser$@, a: Sanitized$@)	adds `--asan` and `--require-asan` to the caller's parser
-std/fuzz	findings_new	pub fn findings_new(arena: Arena$@): Findings	an empty set of findings. With `null`, `defer found.free()` frees it and every finding `note` adds.
 std/fuzz	gather	pub fn gather(dirs: U8[][], endings: U8[][], cap: I64, arena: Arena$@): List<|Sample|>	collects the files with the given endings under the folders, as seeds. **In the order the folders are given, and within a folder in path order**, so the seeds are the same on every machine. The kind is the ending that matched; the name is the path below. Caution: **Nothing under a folder named `out` or `.git`**: a seed list that changes with the last build reproduces nothing.
-std/fuzz	note	pub fn note(f: Findings, t: Trial@, trial: Sz, seed_name: U8[], data: U8[], dir: U8[], ext: U8[])	records one trial, and saves its input if it is a finding. **A trial that ended with the program's own answer is not recorded**: that is the normal end. A slow one (`Trial.slow`) is said on a line of its own.
-std/fuzz	pick	pub fn pick(all: List<|Sample|>@, kind: U8[], r: Prng$@): Sz	one seed of the given kind, or `all.len` if there is none. Caution: **It does not pick from all seeds**, or a kind with few seeds would almost never be tested; the caller picks the kind first.
-std/fuzz	report_all	pub fn report_all(f: Findings, o: Options, subject: U8[], wait_ms: I32, again: U8[], arena: Arena$@)	prints the findings, the three check lines, and how to run it again. Caution: **Keep the three lines separate**, or the verdict cannot tell a crash from a hang. **A fuzz run with no trials is a failure**, not three passes over nothing.
 std/fuzz	report_asan	pub fn report_asan(a: Sanitized)	says whether the program under test is sanitized, in a line. A check where it is, or is required; a skip otherwise. Caution: **Report it either way.** A program built without it passes the same way. Nothing else would show that the most important failures go unchecked.
 std/fuzz	scatter	pub fn scatter(c: Campaign@, seeds: List<|Sample|>@, what: U8[], o: Options, arena: Arena$@): Void!U8[]	runs the trials, checks that they reached the program, and reports them. **A kind with no seed fails**, and is left out of the draw. Its input goes unfuzzed. No machine lacks anything to explain it (`check_seeds` refused its seeds, or none is written).
 std/fuzz	setup	pub fn setup(p: argparse.Parser$@, o: Options$@, run_as: U8[], program: U8[], seed_dirs: Bool, arena: Arena$@): Setup!U8[]	reads `<program> <work folder> [seed folder ...]`, and makes the work folder. It declares the positional arguments and the two numbers (`declare`), so the caller declares only its own options before the call. With `null`, `defer s.free()` frees the result.
@@ -429,8 +420,7 @@ std/http	parse_request_head	pub fn parse_request_head(src: U8[], max_body: Sz, a
 std/http	parse_response	pub fn parse_response(src: U8[], arena: Arena$@): Response$@!Http_error	the one response at the start of the buffer; fails if it is incomplete. The body limit is `DEFAULT_MAX_BODY_BYTES`; the head's is `MAX_HEAD_BYTES`.
 std/http	read_response	pub fn read_response(stream: net.Tcp_stream$@, arena: Arena$@, max_body: Sz, timeout_ms: I32): Response$@!Http_error	reads one whole response from a connection and splits it into its parts
 std/http	reason_phrase	pub fn reason_phrase(status: I32): U8[]?	the standard phrase for a status number, so the two cannot disagree. RFC 9110's "reason-phrase"; none for a number it does not know. The builders below write it from the number, so no caller passes the number and the phrase as a pair (which could say `404 Bad Request`). Caution: **Do not fill in `"unknown"`**: a phrase from nowhere stays in the receiver's log.
-std/http	request_length	pub fn request_length(src: U8[], max_body: Sz, arena: Arena$@): Sz!Http_error	how many bytes the request at the start of the buffer takes in all. **For a reader that waits for the body without parsing again**: once the head has arrived, the rest is a count. It fails as `parse_request` does on the head, `incomplete` included until the head's empty line arrives.
-std/http	write_request	pub fn write_request(stream: net.Tcp_stream$@, method: U8[], target: U8[], head: Headers, body: U8[]): Void!Http_error	sends one whole request: the first line, the headers and the body. It refuses what `format_request` refuses, before anything is written.
+std/http	write_request	pub fn write_request(stream: net.Tcp_stream$@, method: U8[], target: U8[], head: Headers, body: U8[], timeout_ms: I32): Void!Http_error	sends one whole request: the first line, the headers and the body. It refuses what `format_request` refuses, before anything is written. **The whole request goes out within `timeout_ms`**, so a server that stops reading cannot hold the caller for good (`net.Tcp_stream.write_all_for`).
 std/io	File_stream	pub struct File_stream	one open file to write to, read from and close. **Its owner closes it with `free()`**, usually by declaring it with `defer` in front. Call `sync()!` before that to learn whether the written data arrived.
 std/io	File_stream.c	pub fn c(r: Self$@, val: U8): Self$@	writes one byte and returns the stream
 std/io	File_stream.flush	pub fn flush(r: Self$@): Self$@	flushes buffered data; does not report a failure. A destination that has gone away ends the program quietly, as a refused write does. `sync()` is the flush that reports a failure.
@@ -441,7 +431,6 @@ std/io	File_stream.stream	pub stream: Void$@	the C `FILE *`; null once `free()` 
 std/io	File_stream.sync	pub fn sync(r: Self$@): Void!Io_error	flushes buffered data and reports a failure. It does not mean the data reached the disk: `fs.replace_file` is what puts a file there. `Writer.flush()` returns `Self$@` for chaining, so only this method can report a failure, **an earlier write's included**. A write the stream refused (a full disk) is kept on it. A flush with nothing left to write would report success.
 std/io	File_stream:Manual_free	impl File_stream: Manual_free	it owns the handle and releases it in `free()`
 std/io	File_stream:Move_only	impl File_stream: Move_only	copying it would close one file twice
-std/io	File_stream:Reader	impl File_stream: Reader	so it can be used wherever a `Reader` is expected
 std/io	File_stream:Writer	impl File_stream: Writer	so it can be used wherever a `Writer` is expected
 std/io	Io_error	pub enum Io_error	why a read, a write or an open failed
 std/io	Io_error.close_failed	close_failed	buffered data could not be flushed on closing
@@ -449,13 +438,10 @@ std/io	Io_error.file_not_found	file_not_found(path: U8[])	the file could not be 
 std/io	Io_error.invalid_arg	invalid_arg	an argument is invalid, such as a path containing a NUL
 std/io	Io_error.read_failed	read_failed(path: U8[])	the read was refused, or the path is a directory; names the file. Empty from an open `File_stream`, which does not keep its path.
 std/io	Io_error.write_failed	write_failed(path: U8[])	the write was refused or incomplete; names the file. Empty from an open `File_stream`, as `read_failed`.
-std/io	Reader	pub trait Reader	anything bytes can be read from
-std/io	Reader.read	fn read(r: Self, $buf: U8$[]): Sz!Io_error	fills buf; returns the count read, 0 at the end
 std/io	Std_stream:Writer	impl Std_stream: Writer	what `out()` and `err()` hand out
-std/io	copy	pub fn copy(src: Reader, dst: Writer): Sz!Io_error	reads to the end, writes it all out, and returns how much was copied. Caution: **A write failure is not reported here**: `Writer` returns no failure. Check the destination after it (`File_stream.sync()!`), or a full disk passes for a whole copy.
 std/io	err	pub fn err(): Writer	standard error, opened on the first call
 std/io	getchar	pub fn getchar(): U8?!Io_error	one byte from standard input, or none at the end. **A failed read is an error, not the end**, as at `read_stdin`.
-std/io	open	pub fn open(path: U8[], mode: U8[]): File_stream!Io_error	opens a file, handling a non-ASCII path on Windows too. A child process started while it is open does not get it.
+std/io	open	pub fn open(path: U8[], mode: U8[]): File_stream!Io_error	opens a file, handling a non-ASCII path on Windows too. A child process started while it is open does not get it. **The bytes are read and written as they are on every OS**: on Windows too, `b` changes nothing, and no `\r` is added or dropped. While it is open, another process can still rename or remove the file.
 std/io	out	pub fn out(): Writer	standard output, opened on the first call
 std/io	read_file	pub fn read_file(path: U8[], arena: Arena$@): U8[]!Io_error	the whole file. A `/proc` file that reports 0 bytes, and a pipe, are still read to the end.
 std/io	read_file_capped	pub fn read_file_capped(path: U8[], cap: Sz, arena: Arena$@): U8[]!Io_error	the file's first `cap` bytes, or the whole file if it is shorter. **It stops at `cap` however long the file grows**, so a child still writing cannot fill the memory. The buffer grows with what is read, never to the whole cap up front.
@@ -593,7 +579,7 @@ std/lang	Panic_msg.slice	pub fn slice(r: Self$@): U8$[]	what has been written, t
 std/lang	Range	pub struct Range	an integer sequence with a fixed step for `for` iteration
 std/lang	Range.asc	pub fn asc(stop: Sz): Range	0 up to but not including `stop`
 std/lang	Range.desc	pub fn desc(n: Sz): Range	`n - 1` down to 0
-std/lang	Range.get	pub fn get(r: Self$@, i: Sz): Sz	the i-th value of the sequence
+std/lang	Range.get	pub fn get(r: Self@, i: Sz): Sz	the i-th value of the sequence
 std/lang	Range.len	pub len: Sz	the value count, fixed at construction
 std/lang	Range.new	pub fn new(start: Sz, stop: Sz, step: Sz): Range	constructs a range with the specified step. A zero step or a step in the wrong direction produces an empty range.
 std/lang	Range.start	pub start: Sz	the first value
@@ -634,24 +620,9 @@ std/lang	put	pub fn put<|W: Writer, T: Formattable|>(w: W, v: T): W	writes one v
 std/lang	sub_count	pub fn sub_count(count: Sz, start: Sz, len: Sz): Sz	the number of requested elements available within the sequence. The sequence contains `count` items. The request starts at `start` and asks for `len` items. **Check the lower bound of `start` too.** `Sz` is signed. Checking only the upper bound permits negative offsets that point before the sequence. Caution: **Do not compare with `start + len`.** A large `len` can overflow the addition and bypass the limit.
 std/lang	take_panic_record #cfg(freestanding)	pub fn take_panic_record(): Panic_info?	the previous run's panic, if present
 std/libc	Signal_handler	pub typedef Signal_handler = fn(sig: I32): Void	what `signal()` takes and returns. An unnamed function-pointer type in an extern declaration produces no valid C type name (the same holds for Thread_entry in std/thread.kspl).
-std/libc	abort #noreturn	pub fn abort(): Void	C's abort: ends the program at once, abnormally
-std/libc	cos	pub fn cos(x: F64): F64	C's cos: the cosine of x in radians
-std/libc	exit #noreturn	pub fn exit(status: I32): Void	C's exit: ends the program with status, flushing C's streams
-std/libc	exp	pub fn exp(x: F64): F64	C's exp: e to the power x
-std/libc	free	pub fn free(ptr: Void$@)	C's free: gives back what malloc handed out
-std/libc	getchar	pub fn getchar(): I32	C's getchar: the next byte of standard input, or -1 at its end
-std/libc	getenv	pub fn getenv(name: Void$@): Void$@	C's getenv: the value of the environment variable name, or null. Caution: **Do not use it to read characters on Windows** (same reason as `fopen`). Use `std/sys`'s `get_env` instead.
-std/libc	log	pub fn log(x: F64): F64	C's log: the natural logarithm
-std/libc	malloc	pub fn malloc(size: Sz): U8$@	C's malloc: size bytes from the heap, or null
-std/libc	memcmp	pub fn memcmp(buf1: Void$@, buf2: Void$@, n: Sz): I32	C's memcmp: compares n bytes, 0 if equal
-std/libc	memset	pub fn memset(dest: Void$@, c: I32, n: Sz): Void$@	C's memset: fills n bytes of dest with c
-std/libc	pow	pub fn pow(base: F64, exp: F64): F64	C's pow: base to the power exp
 std/libc	signal	pub fn signal(sig: I32, handler: Signal_handler): Signal_handler	C's signal: sets a handler
-std/libc	sin	pub fn sin(x: F64): F64	C's sin: the sine of x in radians
 std/libc	snprintf	pub fn snprintf(str: Void$@, size: Sz, format: Void@, ...): I32	C's snprintf: formats into str. **Take the format as a `Void@`, not a `U8@`.** C's format is a plain `char*`, and KSPL's `U8` is unsigned ("Primitive types" in docs/SPEC-programming-language.md). A `U8@` mismatches on hosted and freestanding targets and triggers -Wpointer-sign (Principle 2 in `docs/DESIGN-principles.md`).
-std/libc	sqrt	pub fn sqrt(x: F64): F64	C's sqrt: the non-negative square root
 std/libc	strtod	pub fn strtod(nptr: Void$@, endptr: Void$@): F64	C's strtod: the number a C string spells
-std/libc	tan	pub fn tan(x: F64): F64	C's tan: the tangent of x in radians
 std/log	Level	pub enum Level	how serious a line is, and so whether it is emitted at all. Most serious first. **These are the four words of the diagnostic ladder** (the ladder in `../docs/SPEC-programming-language.md`), so the product uses one vocabulary for severity. **The meaning still differs**: here a level decides whether the line is emitted at all.
 std/log	Level.error	error	something did not work, and the run cannot continue as asked
 std/log	Level.hint	hint	detail wanted only while tracking down a problem
@@ -764,6 +735,7 @@ std/net	Tcp_stream.set_nonblocking	pub fn set_nonblocking(r: Self$@): Void!Net_e
 std/net	Tcp_stream.shut_write	pub fn shut_write(r: Self$@): Void!Net_error	closes only the sending half, to signal the end. **This is not a disconnection.** The peer's `read` returns 0, while this side **can still read and wait for a response**. Caution: **Do not use it instead of closing** (only `free` releases the memory).
 std/net	Tcp_stream.write	pub fn write(r: Self$@, buf: U8[]): Sz!Net_error	sends and returns how much was sent; a partial send is normal. To send everything, use `write_all` (a separate name, as in Rust, because a missing loop silently truncates).
 std/net	Tcp_stream.write_all	pub fn write_all(r: Self$@, buf: U8[]): Void!Net_error	sends every byte in a loop; a non-blocking socket can still fail. On a non-blocking socket it throws would_block rather than spinning. The amount already sent is then lost. To resume a partial send, use write and track the progress yourself.
+std/net	Tcp_stream.write_all_for	pub fn write_all_for(r: Self$@, buf: U8[], timeout_ms: I32): Void!Net_error	sends every byte as `write_all` does, all within `timeout_ms`. For a peer that can stop reading: once the OS's buffer is full, `write_all` waits for it for good. Past the time it throws `timed_out`, and how much was sent is not known. Caution: **The stream is blocking when it returns**, as `connect` and `accept` make it. Do not use it on a stream that `std/reactor` drives.
 std/net	Tcp_stream:Manual_free	impl Tcp_stream: Manual_free	it owns its socket and memory and frees them with `free()`
 std/prng	Prng	pub struct Prng	a reproducible pseudo-random generator (xorshift64*)
 std/prng	Prng.below	pub fn below(r: Self$@, n: Sz): Sz	a number in [0, n). **Every value is equally likely.** A plain remainder favours the low values, so a raw value past the last whole multiple of n is retried (as OpenBSD's `arc4random_uniform` does). **n of 0 or less stops the program**, as a division by zero does. There is no number to choose, and any answer would be out of the range the caller asked for.
@@ -901,11 +873,8 @@ std/seq	Keep<|S, T|>:Iter<|T|>	impl<|S: Iter<|T|>, T|> Keep<|S, T|>: Iter<|T|>	s
 std/seq	List<|T|>.all	pub fn all(r: Self@, pred: Callable1<|T@, Bool|>): Bool	whether every element meets it. An empty list gives true.
 std/seq	List<|T|>.any	pub fn any(r: Self@, pred: Callable1<|T@, Bool|>): Bool	whether at least one element meets it
 std/seq	List<|T|>.distinct	pub fn distinct(r: Self@, eq: Callable2<|T@, T@, Bool|>, arena: Arena$@): List<|T|>	a new list keeping the first of each group of equal elements, in order. O(n^2); for large data with a hashable type, use a `Map`.
-std/seq	List<|T|>.first	pub fn first(r: Self@): T?	the first element, or none when the list is empty
 std/seq	List<|T|>.order_by	pub fn order_by(r: Self@, cmp: Callable2<|T@, T@, I32|>, arena: Arena$@): List<|T|>	a new list in ascending order; equal elements keep their order. A merge sort: stable, with O(n log n) comparisons. Short runs (16) are first sorted by insertion, as Timsort does with its short runs.
 std/seq	List<|T|>.select	pub fn select<|U|>(r: Self@, f: Callable1<|T, U|>): Conversion<|List_seq<|T|>, T, U|>	a chain of each element passed through a function (`map` elsewhere). Caution: **Do not turn it into a free function.** `U` is decided at the call site, not by the receiver ("A name on the impl that the receiver leaves open" in `../docs/DESIGN-programming-language.md`).
-std/seq	List<|T|>.skip	pub fn skip(r: Self@, n: Sz, arena: Arena$@): List<|T|>	a new list of what remains after the first n elements
-std/seq	List<|T|>.take	pub fn take(r: Self@, n: Sz, arena: Arena$@): List<|T|>	a new list of the first n elements
 std/seq	List<|T|>.where	pub fn where(r: Self@, pred: Callable1<|T@, Bool|>): Keep<|List_seq<|T|>, T|>	a chain of the elements that meet the condition. **It touches no element here.**
 std/seq	List_seq	pub struct List_seq<|T|>	the start of a chain; reads a `List` and advances a position. **A copy copies the position too**, and `for` and `to_list` take the receiver by value: that is what makes a chain drivable any number of times.
 std/seq	List_seq<|T|>.next	pub fn next(r: Self$@): T?	the next element, or nothing at the end
@@ -1029,8 +998,6 @@ std/strfmt	Uint_fmt	pub struct Uint_fmt	a `U64` with its width, fill and comma s
 std/strfmt	Uint_fmt.fmt	pub fn fmt(r: Self, w: Writer): Writer	writes the value to w
 std/strfmt	Uint_fmt:Formattable	impl Uint_fmt: Formattable	so it can be used inside an interpolation
 std/strfmt	hex	pub fn hex(val: U64, digits: Sz): Hex_fmt	hex with a leading `0x`; a value wider than `digits` is not cut
-std/strfmt	write_float	pub fn write_float(w: Writer, v: F64, precision: I32, width: Sz, fill: U8, comma: Bool): Writer	writes a floating-point number
-std/strfmt	write_int	pub fn write_int(w: Writer, v: I64, width: Sz = 0, fill: U8 = ' ', comma: Bool = false): Writer	writes a signed integer as decimal
 std/strfmt	write_ptr #cfg(!freestanding)	pub fn write_ptr(w: Writer, val: Void$@): Writer	writes an address like `%p`, in the host libc's format
 std/strfmt	write_ptr #cfg(freestanding)	pub fn write_ptr(w: Writer, val: Void$@): Writer	writes an address as `0x` plus lowercase hex, whatever the host does
 std/strnum	Strnum_error	pub enum Strnum_error	why a string could not be read as a number. It is separate from `std/str`'s `Str_error`, which has the same two variants. Using that one would make a program that only reads numbers pay for all of `std/str`, and form a cycle.

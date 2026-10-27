@@ -158,8 +158,6 @@ A few documents have names chosen by a tool or a convention outside this reposit
 
 **A file can come near the line cap, the most lines that a source file can have. Then the `README.md` of its top-level folder says how the file will be split.** It says so under the heading "Files near the limit and how they split". What counts as near is "Principle 3 - what is counted, and how" in [`SPEC-gates.md`](SPEC-gates.md). The check is `make test-conventions`.
 
-**A top-level folder's README with no file near the cap can say so in one line**, in the form "No file in `<folder>` exceeds 900 lines". `make test-conventions` checks that line against the tree. It fails if a file under the named folder is over 900 lines, or if the number in the line differs from the check's number.
-
 **Do not write a file's line count there.** It changes with every edit, so only what is split out and where it goes are written.
 
 Caution: **Read the plan before touching a file it names.** A file named there is touched only once "what is split out" and "where it goes" are written for it.

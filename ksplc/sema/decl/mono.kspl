@@ -106,10 +106,19 @@ impl Sema_ctx
         args: I32[]): Ast_node$@?
         // Caution: Look up the mangled-name key too. The literal text `Base<|args|>` varies with
         // qualification, and the same instance created twice fails in C with `redefinition of ...`.
-        if r.env.instantiated_nodes.get(full_inst_name).is_some() ||
-            r.env.instantiated_nodes.get(inst_name).is_some()
+        if r.env.instantiated_nodes.get(full_inst_name).is_some()
             return .none
         tmpl_node: = r.generics.templates.get(base_name).unwrap_or(null)
+        if r.env.instantiated_nodes.get(inst_name).is_some()
+            // Caution: **Refuse an instance whose C name another one holds; do not reuse that
+            // one.** `f<|-3|>` once took `f<|3|>`'s name and ran its body, with no diagnostic.
+            owner: = r.env.instance_c_owners.get(inst_name).unwrap_or(full_inst_name)
+            if !owner.equals(full_inst_name) && tmpl_node != null
+                r.clear_scratch()
+                    .s("'\{full_inst_name\}' takes the name '\{inst_name\}' in the generated C, and \
+                        so does '\{owner\}'. Give one of them other type arguments")
+                r.err(tmpl_node, r.scratch.slice())
+            return .none
         if tmpl_node == null
             return .none
         inst: = prepare_inst_node(r, tmpl_node, inst_name, args)
@@ -276,9 +285,12 @@ impl Sema_ctx
             //< It pushes onto instantiated_nodes_list once: the backends emit a definition per
             //< entry. `emit` false: it **shares its C representation with another instance**
             //< (variance), so no definition is emitted.
-        r.env.instantiated_nodes.set(base_core.arena.dup_str(full_name), node)
+        key: = base_core.arena.dup_str(full_name)
+        r.env.instantiated_nodes.set(key, node)
         if !mangled_name.equals(full_name)
-            r.env.instantiated_nodes.set(base_core.arena.dup_str(mangled_name), node)
+            c_name: = base_core.arena.dup_str(mangled_name)
+            r.env.instantiated_nodes.set(c_name, node)
+            r.env.instance_c_owners.set(c_name, key)
         if emit
             r.env.instantiated_nodes_list.push(node)
 

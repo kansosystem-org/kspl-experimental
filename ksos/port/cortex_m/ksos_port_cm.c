@@ -155,8 +155,7 @@ void ksos_port_wait_irq(void) {
     __asm__ volatile("dsb\n\twfi\n\tcpsie i\n\tisb\n\tcpsid i" ::: "memory");
 }
 
-// The default handler for UART0's RX interrupt (NVIC IRQ0, on the mps2-an385). The vector table
-// always refers to it; being weak, it stays this empty one where the interrupt-driven UART driver
-// is not linked.
+// The default handler for NVIC IRQ0 (UART0's RX interrupt on the mps2-an385). The vector table
+// always refers to it; being weak, it stays this empty one where no program defines its own.
 void __attribute__((weak)) uart0_irq0_handler(void) {
 }

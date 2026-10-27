@@ -4,46 +4,20 @@
 // and a chosen command close every menu, through `shut`.
 // The arrow keys move through a menu: Up and Down between items, Right into a flyout or on to the
 // next menu, Left back out. Enter and Space press the item that has the focus.
-// The menu bar holds File, Edit and View; the ribbon holds the text's tools. The table's commands
-// stand in one list, `TABLE_GROUPS`, which the right-click menu shows one group after another, a
-// long one as a flyout. Shift+F10 or the menu key opens it from a cell. A command's key, which
-// its item shows, runs it from a cell through the same list.
+// The menu bar holds every command, each with its icon (`MENUS` in `commands.js`). The table's
+// commands stand in its Table menu and in the right-click menu alike, from one list,
+// `TABLE_GROUPS`. Shift+F10 or the menu key opens the right-click menu from a cell. A command's
+// key, which its item shows, runs it from a cell through the same list. A right-click on an item
+// offers to add it to the quick access bar, or to take it off (`quick.js`).
 "use strict";
-
-const TABLE_GROUPS = [
-  ["Rows", [["row-above", "Insert row above"], ["row-below", "Insert row below"],
-    ["row-remove", "Remove row"]]],
-  ["Columns", [["column-left", "Insert column left"], ["column-right", "Insert column right"],
-    ["column-remove", "Remove column"], ["column-fit", "Fit column width"],
-    ["column-choices", "Choices…"], ["column-rule", "Colour by value…"]]],
-  // A group marked `true` is a flyout, so the menu fits a laptop's screen; Excel's cell menu holds
-  // Sort and Filter as flyouts too. Rows, Columns and Note stay open, as the most used.
-  ["Fill", [["fill-down", "Fill down", "Ctrl+D"], ["fill-right", "Fill right", "Ctrl+R"]], true],
-  ["Sort", [["sort-up", "Sort ascending (A to Z, 0 to 9)"], ["sort-down", "Sort descending"]], true],
-  ["Filter", [["filter-column", "Filter this column…", "Alt+\u2193"],
-    ["filter-value", "Show only rows with this value"], ["filter-clear", "Show all rows"]], true],
-  ["Number format", [["format-none", "General: as calculated", "Ctrl+Shift+~"], ["format-number", "Number: 1234.50"],
-    ["format-grouped", "Thousands: 1,234.50", "Ctrl+Shift+!"], ["format-percent", "Percent: 12%", "Ctrl+Shift+%"],
-    ["format-currency", "Currency…", "Ctrl+Shift+$"], ["format-more", "More decimal places"],
-    ["format-fewer", "Fewer decimal places"]], true],
-  ["Group", [["group-rows", "Group rows", "Alt+Shift+\u2192"],
-    ["ungroup-rows", "Ungroup rows", "Alt+Shift+\u2190"], ["group-hide", "Hide detail"],
-    ["group-show", "Show detail"]], true],
-  ["AutoSum", [["autosum-sum", "Sum", "Alt+="], ["autosum-average", "Average"],
-    ["autosum-count", "Count numbers"], ["autosum-max", "Max"], ["autosum-min", "Min"]], true],
-  ["Note", [["note", "Note…", "Shift+F2"], ["note-resolve", "Resolve note"]]],
-  ["Table", [["table-rename", "Rename table…"], ["table-chart", "Insert chart"],
-    ["table-csv", "Export as CSV"], ["table-print", "Leave out of print"],
-    ["table-remove", "Remove table"]], true],
-];
 
 function ksmdMenus(ks) {
   const bar = ks.bar;
 
   // Each table command that has a key: the key's parts, as its item shows them, and the command.
   const arrows = { "\u2190": "ArrowLeft", "\u2192": "ArrowRight", "\u2193": "ArrowDown" };
-  const keyed = TABLE_GROUPS.flatMap(([, cmds]) => cmds.filter((c) => c[2]).map(([cmd, , key]) => {
-    const parts = key.split("+");
+  const keyed = TABLE_GROUPS.flatMap(([, cmds]) => cmds.filter((c) => COMMAND.get(c).key).map((cmd) => {
+    const parts = COMMAND.get(cmd).key.split("+");
     const last = parts[parts.length - 1];
     return { cmd, ctrl: parts.includes("Ctrl"), alt: parts.includes("Alt"),
       shift: parts.includes("Shift"), key: arrows[last] || (last.length === 1 ? last.toLowerCase() : last) };
@@ -61,12 +35,19 @@ function ksmdMenus(ks) {
     ks.command(hit.cmd);
   }, true);
 
-  function item(cmd, label, key) {
+  // One command's item: its icon, its name, and its key.
+  function item(cmd) {
+    const { label, key } = COMMAND.get(cmd);
     const b = document.createElement("button");
     b.type = "button";
-    b.setAttribute("role", "menuitem");
+    b.setAttribute("role", CHECKED[cmd] || "menuitem");
+    if (CHECKED[cmd]) b.setAttribute("aria-checked", "false");
     b.dataset.cmd = cmd;
-    b.textContent = label;
+    b.appendChild(ksmdIcon(cmd));
+    const name = document.createElement("span");
+    name.className = "label";
+    name.textContent = label;
+    b.appendChild(name);
     if (key) {
       const kbd = document.createElement("kbd");
       kbd.textContent = key;
@@ -84,16 +65,59 @@ function ksmdMenus(ks) {
     head.setAttribute("role", "menuitem");
     head.setAttribute("aria-haspopup", "menu");
     head.setAttribute("aria-expanded", "false");
-    head.textContent = name;
+    head.appendChild(ksmdIcon(items[0]));
+    const label = document.createElement("span");
+    label.className = "label";
+    label.textContent = name;
+    head.appendChild(label);
     const menu = document.createElement("div");
     menu.className = "menu flyout";
     menu.setAttribute("role", "menu");
     menu.setAttribute("aria-label", name);
     menu.hidden = true;
-    for (const [cmd, label, key] of items) menu.appendChild(item(cmd, label, key));
+    for (const cmd of items) menu.appendChild(item(cmd));
     sub.appendChild(head);
     sub.appendChild(menu);
     return sub;
+  }
+
+  // Fills a menu from its list: commands, lines between groups, and flyouts.
+  function fill(menu, entries) {
+    for (const entry of entries) {
+      if (entry === "-") menu.appendChild(document.createElement("hr"));
+      else if (Array.isArray(entry)) menu.appendChild(flyout(entry[0], entry[1]));
+      else menu.appendChild(item(entry));
+    }
+  }
+
+  // The menu bar's menus stand before the document's name. File's own commands show only where
+  // the local server opens files (`file.js`).
+  const before = bar.firstChild;
+  for (const [name, entries] of MENUS) {
+    const top = document.createElement("div");
+    top.className = "top-menu";
+    const head = document.createElement("button");
+    head.type = "button";
+    head.className = "menu-name";
+    head.setAttribute("aria-haspopup", "menu");
+    head.setAttribute("aria-expanded", "false");
+    head.textContent = name;
+    const menu = document.createElement("div");
+    menu.className = "menu";
+    menu.setAttribute("role", "menu");
+    menu.setAttribute("aria-label", name);
+    menu.hidden = true;
+    fill(menu, entries);
+    if (name === "File") {
+      top.classList.add("files");
+      for (const el of menu.querySelectorAll('[data-cmd^="file-"]')) el.hidden = true;
+      const line = menu.querySelector("hr");
+      line.classList.add("file-only");
+      line.hidden = true;
+    }
+    top.appendChild(head);
+    top.appendChild(menu);
+    bar.insertBefore(top, before);
   }
 
   const context = document.createElement("div");
@@ -101,12 +125,8 @@ function ksmdMenus(ks) {
   context.setAttribute("role", "menu");
   context.setAttribute("aria-label", "Table");
   context.hidden = true;
-  TABLE_GROUPS.forEach(([name, items, nested], k) => {
-    // Flyouts side by side share one line above and below them, as one group of names.
-    if (k > 0 && !(nested && TABLE_GROUPS[k - 1][2])) context.appendChild(document.createElement("hr"));
-    if (nested) context.appendChild(flyout(name, items));
-    else for (const [cmd, label, key] of items) context.appendChild(item(cmd, label, key));
-  });
+  // Flyouts side by side share one line above and below them, as one group of names.
+  fill(context, MENUS.find(([name]) => name === "Table")[1]);
   document.body.appendChild(context);
 
   // The open top menu's name, or null; and where the focus was before a menu took it.
@@ -241,6 +261,13 @@ function ksmdMenus(ks) {
       if (head) showFlyout(head.parentElement, true);
     });
     menu.addEventListener("keydown", keys);
+    // A right-click on an item offers to put it on the quick access bar, or to take it off.
+    menu.addEventListener("contextmenu", (e) => {
+      const el = e.target.closest(".menu [data-cmd]");
+      if (!el) return;
+      e.preventDefault();
+      ks.quick.offer(el.dataset.cmd, e.clientX, e.clientY);
+    });
   }
 
   function keys(e) {

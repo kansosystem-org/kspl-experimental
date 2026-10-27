@@ -1,5 +1,5 @@
 # ==================================================================
-# mk/ci.mk — the CI's entry points (ci / ci-macos / ci-shard-*)
+# mk/ci.mk — the CI's entry points (ci / ci-macos / ci-full / ci-shard-*)
 # Taken in by the root Makefile; the rule for including is in the header of its `include mk/ci.mk`.
 # **The gates, their order and which job runs each are `tools/ci_gates.kspl`'s table**; each
 # target here only names its set, spelt as the target (`tools/ci.kspl`). The seed runs it, so a
@@ -41,7 +41,8 @@ ci_run = ./$(SEED_EXE) run tools/ci.kspl --make='$(ci_make)' --jobs=$(TEST_JOBS)
 
 ## Gates|ci|Every gate this host runs natively (each platform's set: `docs/SPEC-gates.md`); STOP=1 ends at the first failed gate; CI_SERIAL=1 runs each gate alone
 ## Gates|ci-macos|Every gate run on macOS
-ci ci-macos: $(SEED_EXE)
+## Gates|ci-full|Every gate this host can run, the ones CI runs on Linux alone included; a missing tool's SKIP passes and is listed at the end
+ci ci-macos ci-full: $(SEED_EXE)
 	@$(ci_run) $@
 
 ## Gates|ci-shard-*|One job's share of `ci` (the names are `Shard` in `tools/ci_gates.kspl`)
@@ -56,4 +57,4 @@ ci-summary:
 	  echo "no gate log: the round fell before a gate ran (the cause is the step above)" \
 	    >> "$${GITHUB_STEP_SUMMARY:-/dev/stdout}"; fi
 
-.PHONY: ci ci-macos ci-summary
+.PHONY: ci ci-macos ci-full ci-summary

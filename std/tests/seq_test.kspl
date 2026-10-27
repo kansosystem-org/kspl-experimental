@@ -66,21 +66,8 @@ fn test_seq_combinators(arena: Arena$@)
     }, arena)
     assert(uniq_ages.len == 4, "distinct: expected 4 unique ages (30,15,25,42)")
 
-    if first: = people.first()
-        assert(first.name.equals("Alice"), "first() should be Alice")
-    else
-        panic("first() should find an element in a list that has one")
-
     assert(people.any(is_adult), "any: should have an adult")
     assert(!people.all(is_adult), "all: not everyone is an adult")
-
-    top2: = sorted.take(2, arena)
-    assert(top2.len == 2 && top2.get(0).age == 15 && top2.get(1).age == 15, "take wrong")
-    rest: = sorted.skip(2, arena)
-    assert(rest.len == 3, "skip wrong")
-
-    empty: = List<|Seq_person|>(arena)
-    assert(empty.first().is_none(), "first() on an empty list should be none")
 
     verdict.pass("The collection operations work as expected.")
 
@@ -122,11 +109,6 @@ fn test_seq_order_by_stable(arena: Arena$@) //<
     verdict.start("[Seq] order_by sorts long lists and keeps equals in order test...")
     by_key: = fn(a: Seq_tagged@, b: Seq_tagged@; ): I32
         return a.key - b.key
-    $empty: = List<|Seq_tagged|>(null)
-    $taken: = empty.take(-1, null)
-    assert(taken.len == 0, "taking a negative count preserves an empty result")
-    taken.free()
-    empty.free()
     for n in U8[]::{ 0, 1, 16, 17, 33, 200 }
         $xs: = List<|Seq_tagged|>(arena)
         // Only 7 keys, so every length past 7 has equal keys whose order must be kept.
@@ -218,7 +200,7 @@ fn test_ring_basic()
     assert(n == 5, "Ring: write returns the number of bytes written")
     assert(r.len() == 5 && r.free_space() == 3, "Ring: len/free_space after a write")
 
-    out: U8[5] = ::{}
+    $out: U8[5] = ::{}
     m: = r.read(U8$[]::out)
     got: = U8[]::out
     assert(m == 5 && got.equals("hello"), "Ring: read returns in the order written")
@@ -257,7 +239,7 @@ fn test_ring_wraparound()
 
     // Advances tail to 4, so that the write runs past the end.
     r.write("hello")
-    drop: U8[4] = ::{}
+    $drop: U8[4] = ::{}
     r.read(U8$[]::drop)
     assert(r.len() == 1, "Ring: one byte is left")
 
@@ -283,7 +265,7 @@ fn test_ring_wraparound()
             "Ring: a one-byte read is in the order written")
     assert(r.write("X") == 1, "Ring: a write succeeds once there is free space")
     assert(r.len() == 3, "Ring: len after the wrap")
-    tailbuf: U8[3] = ::{}
+    $tailbuf: U8[3] = ::{}
     r.read(U8$[]::tailbuf)
     tail: = U8[]::tailbuf
     assert(tail.equals("ghX"), "Ring: a read that crossed the wrap")
@@ -387,6 +369,11 @@ fn test_iteration(arena: Arena$@)
 // unreachable.
 // ==========================================
 
+priv fn read_through(m: Map<|I32, I32|>@, key: I32): I32 //<
+    //< `m[key]` and `m.get(key)` through a read-only map, which must agree
+    via_index: = m[key].unwrap_or(-1)
+    return via_index if via_index == m.get(key).unwrap_or(-2) else -3
+
 fn test_map_removal() //<
     //< That after removal and re-insertion in a Map every key is found, and found once
     //< Caution: **Test with a pair of colliding keys**: a plain empty slot left behind ends the
@@ -409,6 +396,7 @@ fn test_map_removal() //<
     defer $m: = Map<|I32, I32|>(null)
     m.set(ka, 100)
     m.set(kb, 200)
+    assert(read_through(m@, kb) == 200, "a read-only map is read with `[]` and with `get`")
     assert(m.remove(ka), "the earlier key can be removed")
     assert(m.len == 1, "the count goes down by one")
     assert(m.get(kb).unwrap_or(-1) == 200,

@@ -1,12 +1,15 @@
 // The ksmd page served by `kssrv --local` on a scratch workspace: opening, saving and reopening,
 // a change made on disk, a draft that outlives its tab, an included file edited in a tab of its
-// own, images, and the refusals. Every check that writes compares the bytes on disk.
+// own, images, and the refusals. Every check that writes compares the bytes on disk. Drafts and
+// many tabs are `drafts.mjs`; each way the page could lose edits is `losses.mjs`.
 // The server is the one the repository builds; it is started on port 0 and stopped by asking it.
 import { spawn } from "child_process";
 import fs from "fs";
 import http from "http";
 import path from "path";
 import { CTRL, driver, verdict } from "./drive.mjs";
+import { drafts } from "./drafts.mjs";
+import { losses } from "./losses.mjs";
 
 const check = (ok, what, detail) => verdict.check(ok, what, detail);
 
@@ -56,7 +59,7 @@ export async function served(browser, pageFile, work, kssrv) {
     check(false, "the local server starts", e.message);
     return;
   }
-  const ctx = { browser, root, server, disk: (rel) => read(root, rel) };
+  const ctx = { browser, root, server, kssrv, pageFile, work, disk: (rel) => read(root, rel) };
   try {
     for (const [name, run] of Object.entries(SECTIONS)) {
       verdict.part = `served ${name}`;
@@ -95,10 +98,11 @@ function snapshot(root) {
   return out.join("\n");
 }
 
-// Starts kssrv on the root, and reads the URL it prints: the port and the token.
-export function start(kssrv, root, pageFile, logFile) {
+// Starts kssrv on the root, and reads the URL it prints: the port and the token. `more` holds
+// further options, such as `--idle=<seconds>`.
+export function start(kssrv, root, pageFile, logFile, more = []) {
   return new Promise((resolve, reject) => {
-    const child = spawn(kssrv, ["0", root, "--local", `--page=${path.resolve(pageFile)}`],
+    const child = spawn(kssrv, ["0", root, "--local", `--page=${path.resolve(pageFile)}`, ...more],
       { stdio: ["ignore", "pipe", "pipe"] });
     let seen = "";
     const log = fs.createWriteStream(logFile);
@@ -148,9 +152,18 @@ function request(port, method, target, headers = {}, body = null) {
   });
 }
 
-// A new tab on the page, once it has opened what its address names.
-async function tab(ctx, query = "") {
-  const d = driver(await ctx.browser.open(ctx.server.url(query)));
+// A new tab on the page, once it has opened what its address names. `script` runs in the page
+// before the page's own, as a browser's settings would take effect.
+async function tab(ctx, query = "", script = null) {
+  let page;
+  if (script === null) {
+    page = await ctx.browser.open(ctx.server.url(query));
+  } else {
+    page = await ctx.browser.open("about:blank");
+    await page("Page.addScriptToEvaluateOnNewDocument", { source: script });
+    await page("Page.navigate", { url: ctx.server.url(query) });
+  }
+  const d = driver(page);
   if (!await d.until("document.documentElement.dataset.files === 'ready'")) {
     // Say what the page showed, so a failure seen once can be traced.
     const seen = await d.js("JSON.stringify({ files: document.documentElement.dataset.files, " +
@@ -167,6 +180,15 @@ async function idle(d) {
   return d.until("document.documentElement.dataset.files === 'ready'");
 }
 
+// Waits until a file on disk holds `want`, or the cap passes. **A file step started by a dialog's
+// button can begin after `idle` has looked**, so a check that reads the disk at once can come
+// before the write it checks.
+async function onDisk(ctx, rel, want, ms = 10000) {
+  const end = Date.now() + ms;
+  while (ctx.disk(rel) !== want && Date.now() < end) await new Promise((r) => setTimeout(r, 50));
+  return ctx.disk(rel) === want;
+}
+
 const said = (d) => d.js("document.getElementById('status').textContent");
 const noticed = (d) => d.js("(() => { const n = document.getElementById('notice'); " +
   "return n.hidden ? '' : n.querySelector('.notice-text').textContent; })()");
@@ -175,6 +197,19 @@ const noticed = (d) => d.js("(() => { const n = document.getElementById('notice'
 async function choose(d, label) {
   await d.js(`Array.from(document.querySelectorAll('#notice button'))
     .find((b) => b.textContent.startsWith(${JSON.stringify(label)})).click()`);
+  await idle(d);
+}
+
+// Opens a document through File, Open: each folder by a press, then the document by a double press.
+async function openInDialog(d, steps) {
+  await d.menu("file-open");
+  for (const [k, name] of steps.entries()) {
+    const button = `Array.from(document.querySelectorAll('#browse .browse-list button'))
+      .find((b) => b.textContent === ${JSON.stringify(name)})`;
+    await d.until(`!!${button}`);
+    await d.js(k < steps.length - 1 ? `${button}.click()` :
+      `${button}.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+  }
   await idle(d);
 }
 
@@ -235,8 +270,7 @@ const SECTIONS = {
     check((await said(d)) === "Saved top.ksmd." &&
       await d.js("document.querySelector('.menubar .state').textContent") === "",
     "the page says it saved, and no longer says unsaved");
-    await d.page("Page.reload", {});
-    await d.until("document.documentElement.dataset.files === 'ready'");
+    await d.reload("document.documentElement.dataset.files === 'ready'");
     check(await d.js("ksmd.source()") === want, "a reload opens the saved file again");
     await ctx.browser.closeTab(d.page);
   },
@@ -359,7 +393,7 @@ const SECTIONS = {
     await d.js("document.querySelector('#browse .browse-name').value = 'fresh'");
     await d.click('#browse [data-browse="ok"]');
     await idle(d);
-    check(ctx.disk("fresh.ksmd") === `${H}Fresh text.\n`, "and saves it where no file stood");
+    check(await onDisk(ctx, "fresh.ksmd", `${H}Fresh text.\n`), "and saves it where no file stood");
     await typeAtEnd(d, 0, " More.");
     await d.press("s", CTRL);
     await idle(d);
@@ -401,25 +435,42 @@ const SECTIONS = {
     "a press on a folder opens it, and the path to it shows above", await shown());
     await d.js("document.querySelector('#browse .browse-name').value = 'copy'");
     await pressOk();
+    // An include's or an image's path is read from the document's folder, so each is written
+    // again to name the same file from the new one.
+    const copy = ctx.disk("parts/copy.ksmd") || "";
     const top = ctx.disk("top.ksmd");
-    check(!await dialogOpen() && ctx.disk("parts/copy.ksmd") === top &&
+    check(!await dialogOpen() &&
       await d.js("document.querySelector('.menubar .doc-name').textContent") === "parts/copy.ksmd",
     "Save as writes in the chosen folder, adds .ksmd, and the page goes on there", await said(d));
+    check(copy.includes(':::include path="notes.ksmd"') && copy.includes('src="../pics/dot.png"') &&
+      !copy.includes('"pics/') && ctx.disk("top.ksmd").includes('path="parts/notes.ksmd"'),
+    "and the paths of its includes and images name the same files from the new folder", copy);
+    check(await d.until("(document.querySelector('#doc .include') || {}).textContent.includes('Note text.')"),
+      "so the include still shows its file there");
     await typeAtEnd(d, 0, " Again.");
-    await d.menu("file-save-as");
-    await d.until("document.querySelector('#browse .browse-list button') !== null");
-    await press("notes.ksmd");
-    await d.click('#browse [data-browse="ok"]');
-    await d.settle();
-    check(await dialogOpen() && (await d.js("document.querySelector('#browse .browse-note')" +
-      ".textContent")).includes("already exists") && ctx.disk("parts/notes.ksmd") === notes,
-    "Save as onto a document that stands asks before it replaces it",
-    await d.js("document.querySelector('#browse .browse-note').textContent + ' | ' + " +
-      "document.getElementById('status').textContent"));
+    const asked = "document.querySelector('#browse .browse-note').textContent.includes('already exists')";
+    const onto = async () => {
+      await d.menu("file-save-as");
+      await d.until("document.querySelector('#browse .browse-list button') !== null");
+      await press("notes.ksmd");
+      await d.click('#browse [data-browse="ok"]');
+      return d.until(asked);
+    };
+    check(await onto() && await dialogOpen() && ctx.disk("parts/notes.ksmd") === notes,
+      "Save as onto a document that stands asks before it replaces it",
+      await d.js("document.querySelector('#browse .browse-note').textContent + ' | ' + " +
+        "document.getElementById('status').textContent"));
     await d.click('#browse [data-browse="cancel"]');
     await d.settle();
     check(!await dialogOpen() && ctx.disk("parts/notes.ksmd") === notes,
       "Cancel closes the dialog and writes nothing");
+    await onto();
+    const theirs = `${notes}\nChanged while the dialog asked.\n`;
+    fs.writeFileSync(path.join(ctx.root, "parts/notes.ksmd"), theirs);
+    await pressOk();
+    check(ctx.disk("parts/notes.ksmd") === theirs && (await said(d)).includes("changed after you chose it"),
+      "the second press replaces only the bytes that stood when the file was chosen", await said(d));
+    fs.writeFileSync(path.join(ctx.root, "parts/notes.ksmd"), notes);
     await d.menu("file-open");
     await d.until("document.querySelector('#browse .browse-list button') !== null");
     await press("..");
@@ -521,3 +572,6 @@ const SECTIONS = {
     fs.rmSync(file, { force: true });
   },
 };
+
+const helpers = { tab, idle, said, noticed, choose, typeAtEnd, start, openInDialog };
+Object.assign(SECTIONS, drafts(helpers), losses(helpers));

@@ -1,11 +1,11 @@
-//< Reads the policy `GET /api/pilot` serves, by the same steps the car takes
-//< It is not a suite; `kssrv/tests/main.kspl` and `kssrv/tests/copy.kspl` use it.
-//< Caution: **Do not copy kssrv/pilot.kspl's formulas; build only from what came back.** By design
-//< the blob holds both how the features are made and what the manoeuvres mean. "The shipped policy
-//< can be reproduced on its own" in kssrv/docs/DESIGN-server.md says so. With a constant kept here,
-//< nothing would test that "the blob alone reproduces it".
-//< **Write the rule (`car_rule`) again from the specification.** Copying the implementation's
-//< formula makes both wrong in the same way when the formula is wrong.
+//< Reads the policy file `car_pilot` writes, by the same steps the car takes
+//< It is not a suite; `ksai/tests/examples_car.kspl` uses it.
+//< Caution: **Do not copy the trainer's formulas; build only from what the file holds.** By design
+//< the file holds both how the features are made and what the manoeuvres mean ("The car's policy
+//< file" in ksai/README.md). With a constant kept here, nothing would test that "the file alone
+//< reproduces it".
+//< **Write the rule (`car_rule`) again from the README's table of rules.** Copying the
+//< implementation's formula makes both wrong in the same way when the formula is wrong.
 import "ksai/safetensors" as st
 import "ksai/tensor" { Tensor }
 import "std/ds" { List }
@@ -14,7 +14,7 @@ import "std/mem" { Arena }
 import "std/strfmt" as _strfmt
 import "std/strnum"
 
-struct Blob //< the whole policy the server serves
+struct Blob //< the whole policy the file holds
     // The format's version (`__metadata__.kspl_pilot`).
     // Caution: Neither the feature order, the activation, nor the manoeuvre table's meaning shows
     // in a tensor's shape. So an old reader whose version was not raised goes silently wrong.
@@ -49,7 +49,7 @@ struct Drive //< the answer to one observation
     lat: I32
     rot: I32
     // The logit gap between first and second.
-    // Caution: **Drop a close-call point from the verdict.** The server computes in F32 and this
+    // Caution: **Drop a close-call point from the verdict.** The trainer computes in F32 and this
     // file in double precision, so that difference alone can swap first and second.
     margin: F64
 
@@ -144,7 +144,7 @@ priv const BACK_MM: I64 = 150I64 //< the distance below which it backs off (mm)
 priv const STRAFE_MM: I64 = 400I64 //< the distance below which it dodges sideways (mm)
 
 fn car_rule(dist_mm: I64, line: I64): U8[] //<
-    //< kssrv/pilot.kspl's rule, written again from the specification to check the answers
+    //< The trainer's rule (`rule_action`), written again from the README to check answers
     if dist_mm <= 0I64
         return "stop"
     if dist_mm < BACK_MM

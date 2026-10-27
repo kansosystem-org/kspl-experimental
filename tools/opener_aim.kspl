@@ -1,8 +1,10 @@
-//< Builds the URL that opens a page on the local server, the page handing it on, and the note
-//< **There is no child process and no network here** (those are in `tools/opener.kspl`). So a
-//< test can confirm from the paths and the files written alone that the right path is opened. It
-//< can also confirm that the token stays off every command line (`tools/tests/page_test.kspl`).
-//< Caution: **Do not add more places that know the URL's format**: every opener, its make targets
+//< ksmd's opener's rules: the URL, the page handing it on, the note, the workspace and its port
+//< **There is no child process and no network here** (those are in `tools/opener.kspl` and
+//< `tools/ksmd_open.kspl`). So a test can confirm from the paths and the files written alone that
+//< the right path is opened (`tools/tests/page_test.kspl`, `tools/tests/ksmd_aim_test.kspl`). It
+//< can also confirm that the token stays off every command line. The reasons are "Opening a
+//< `.ksmd` document" in `tools/docs/DESIGN-tools.md`.
+//< Caution: **Do not add more places that know the URL's format**: the opener, its make targets
 //< and the file associations go through these files.
 import "std/chars"
 import "std/fs"
@@ -12,15 +14,20 @@ import "std/strnum"
 import "std/sys"
 import "std/url" as url_text
 
-struct App //< what one application's opener names: its page, its files and its messages
-    name: U8[] //< the application's name, in messages and in the title of the page handed on
-    files: U8[] //< how every file its runs leave in `tmp/` starts: the note, the lock, the logs
-    built: U8[] //< the folder its make writes into, beside the server (`OUT=` or `WEB=`)
-    page: U8[] //< the built page, inside `built`
-        //< Caution: **Do not copy the page into the served folder.** Requiring "under the root"
-        //< would copy a page of megabytes into the user's folder. kssrv returns the file named by
-        //< `--page` for `/` ("Where it listens" in `docs/SPEC-local-server.md`).
-    tip: U8[] //< one line on using the page, printed once it opens
+const APP_NAME: U8[] = "ksmd" //< the application's name, in messages and the handed page's title
+
+const FILES: U8[] = "ksmd_open" //<
+    //< How every file the opener's runs leave in `tmp/` starts: the note, the lock, the logs
+
+const BUILT: U8[] = "ksmd" //< the folder ksmd's make writes into, beside the server (`OUT=`)
+
+const PAGE: U8[] = "web/ksmd.html" //< the built page, inside `BUILT`
+    //< Caution: **Do not copy the page into the served folder.** Requiring "under the root" would
+    //< copy a page of megabytes into the user's folder. kssrv returns the file named by `--page`
+    //< for `/` ("Where it listens" in `docs/SPEC-local-server.md`).
+
+const TIP: U8[] = "Ctrl+S saves, and this browser keeps a draft until then" //<
+    //< One line on using the page, printed once it opens
 
 fn trim_end_sep(dir: U8[]): U8[] //< a folder without the separators after its last name
     //< Caution: **Compare folders without them**: `devel/` and `devel` are one folder. The note
@@ -87,6 +94,10 @@ fn token_in_url(url: U8[]): U8[] //<
         return url.sub_from(at + mark.len)
     return ""
 
+fn without_token(url: U8[]): U8[] //< the URL with its fragment, the part holding the token, cut off
+    //< **What can be put out where others read it**: it names the page and opens no file.
+    return url.sub(0, url.find_char('#').unwrap_or(url.len))
+
 fn port_in_url(url: U8[]): U8[] //<
     //< the port to wait on, from the URL, empty where there is none
     //< Caution: **Look only after the `://` and before the first `/`** (`http:` and the fragment
@@ -116,9 +127,8 @@ fn url_for( //< the URL to open, with the document to open added
     win: Bool, //< only when this is set is `\` turned into `/`
     text: Str_builder$@, //< where the URL is built
 ): U8[]
-    cut: = url.find_char('#').unwrap_or(url.len) // with no fragment, the tail is empty
-    head: = url.sub(0, cut)
-    tail: = url.sub_from(cut)
+    head: = without_token(url)
+    tail: = url.sub_from(head.len) // with no fragment, the tail is empty
     text.s(head).s("?doc=")
     $start: Sz = 0
     for i in Range.asc(doc.len + 1)
@@ -140,7 +150,7 @@ const PAGE_KEEP_S: I64 = 600 //< how long a handed page is kept [s]
     //< **Long enough for a cold browser to start and read it**; the next run removes it after that
     //< (`sweep_pages`).
 
-fn page_text(open_url: U8[], app: App, text: Str_builder$@): U8[] //<
+fn page_text(open_url: U8[], text: Str_builder$@): U8[] //<
     //< The page handed to the browser in place of the URL, which moves on to the URL
     //< **The browser is handed this page's path, never the URL.** A command line is open to every
     //< user on the machine (`ps`), and the URL holds the token. The page moves on at once
@@ -149,9 +159,9 @@ fn page_text(open_url: U8[], app: App, text: Str_builder$@): U8[] //<
     text.s("<!doctype html>\n<meta charset=\"utf-8\">\n")
     text.s("<meta http-equiv=\"refresh\" content=\"0;url=")
     attr_into(text, open_url)
-    text.s("\">\n<title>").s(app.name).s("</title>\n<a href=\"")
+    text.s("\">\n<title>").s(APP_NAME).s("</title>\n<a href=\"")
     attr_into(text, open_url)
-    text.s("\">open ").s(app.name).s("</a>\n")
+    text.s("\">open ").s(APP_NAME).s("</a>\n")
     return text.slice()
 
 priv fn attr_into(text: Str_builder$@, s: U8[]) //< writes s as a quoted attribute's value
@@ -171,16 +181,14 @@ fn write_page( //< writes the page for the URL, readable by its owner alone, and
     //< **A name of its own each time** (`fs.write_unique`). Otherwise two documents opened at once
     //< (several chosen and opened together) would each hand the browser the other's page.
     open_url: U8[], //< the URL to move on to, token included
-    app: App, //< whose page it is, for its title and how its name starts
     dir: U8[], //< the folder it goes in
     arena: Arena$@, //< where the path goes
 ): U8[]!fs.Fs_error
     defer $text: = Str_builder()
-    return fs.write_unique(dir, page_prefix(app, arena), PAGE_EXT,
-        page_text(open_url, app, text@), arena)
+    return fs.write_unique(dir, page_prefix(arena), PAGE_EXT, page_text(open_url, text@), arena)
 
-priv fn page_prefix(app: App, arena: Arena$@): U8[] //< how a handed page's name starts
-    return arena.text().s(app.files).c('-').take()
+priv fn page_prefix(arena: Arena$@): U8[] //< how a handed page's name starts
+    return arena.text().s(FILES).c('-').take()
 
 fn browser_argv( //< the command that starts the browser on a page
     //< **It takes the page's path, not the URL** (the reason is at `page_text`).
@@ -198,14 +206,14 @@ fn browser_argv( //< the command that starts the browser on a page
         turned.c('\\' if c == '/' else c)
     return U8[][2]::{ tool, turned.take() }
 
-fn sweep_pages(dir: U8[], app: App, now: I64, arena: Arena$@) //<
-    //< Removes the pages this application's opener handed long enough ago
+fn sweep_pages(dir: U8[], now: I64, arena: Arena$@) //<
+    //< Removes the pages the opener handed long enough ago
     //< **A page is needed only until the browser has read it**, and nothing tells when that was:
     //< the opener exits once the browser is started. So each run removes the pages older than
-    //< `PAGE_KEEP_S`. Only names this file gives this application are touched.
+    //< `PAGE_KEEP_S`. Only names this file gives are touched: another tool can share the folder.
     names: = fs.read_dir(dir, arena) catch
         return
-    prefix: = page_prefix(app, arena)
+    prefix: = page_prefix(arena)
     for name in names
         if !name.starts_with(prefix) || !name.ends_with(PAGE_EXT)
             continue
@@ -222,10 +230,6 @@ fn write_owned(path: U8[], data: U8[]): Void!fs.Fs_error //<
     //< keeps the mode it had. A crash partway leaves a note no search can read.
     fs.replace_file(path, data, .owner_only)!
 
-priv const MAX_RECORDS: Sz = 8 //< the cap on the records listed in the note
-    //< Caution: **Do not let it grow without limit**: each run adds one, and every search would
-    //< connect to all the dead servers.
-
 fn state_count(body: U8[]): Sz //< how many records the note holds
     //< A record is two lines, "the URL to open" then "the folder being served", newest first.
     //< **Do not keep only one**: each folder has its own server. The two lines need no other
@@ -238,23 +242,25 @@ fn state_count(body: U8[]): Sz //< how many records the note holds
 fn state_record(body: U8[], i: Sz): U8[][2] //< the i-th record, both halves empty where none
     return U8[][2]::{ state_line(body, i * 2), state_line(body, i * 2 + 1) }
 
-fn state_text(url: U8[], root: U8[], had: U8[], text: Str_builder$@): U8[] //< the note, rebuilt
-    //< The server just started goes first, the earlier records after it.
-    //< Caution: **Drop an old record for the same folder**, or the search connects to a dead server
-    //< first.
-    //< **Store the URL unchanged**: splitting it into port and token and rebuilding it here would
-    //< make a third place that knows its format.
+fn state_text( //< the note, rebuilt
+    //< The new server goes first. An old record for the same folder is dropped, or the search
+    //< connects to a dead server first. **Store the URL unchanged** (the format stays here).
+    //< Caution: **Drop a record when its server stops answering, never at a count.** Cut at a
+    //< count, the note drops a running server, which `--list` and `--stop-all` then cannot reach
+    //< ("Reusing a server" in `tools/docs/DESIGN-tools.md`).
+    url: U8[], //< the URL the new server printed
+    root: U8[], //< the folder it serves
+    had: U8[], //< the note as it stood
+    answers: Callable1<|U8[], Bool|>, //< whether the server a record's URL names still answers
+    text: Str_builder$@, //< where the note is built
+): U8[]
     state_put(text, url, root)
     count: = state_count(had)
-    $kept: Sz = 1
     for i in Range.asc(count)
-        if kept >= MAX_RECORDS
-            break
         one: = state_record(had, i)
-        if one[1].equals(root) || !on_loopback(one[0])
+        if one[1].equals(root) || !on_loopback(one[0]) || !answers.call(one[0])
             continue
         state_put(text, one[0], one[1])
-        kept += 1
     return text.slice()
 
 fn state_put(text: Str_builder$@, url: U8[], root: U8[]) //< adds one record to the end of a note
@@ -285,3 +291,67 @@ priv fn state_line(body: U8[], i: Sz): U8[] //< the note's i-th line
                 return body.sub(from, end)
             from += end + 1
     return ""
+
+// ==========================================
+// The workspace a document opens in, and its port
+// ==========================================
+
+const MARK: U8[] = ".ksmd-workspace" //< the file that makes its folder a workspace
+    //< **The nearest folder at or above the document that holds it is the workspace.** Without
+    //< one, the document's own folder is. Its content is not read, so it can be empty.
+
+const PORT_BASE: I32 = 20000 //< the lowest port a workspace gets
+const PORT_SPAN: I32 = 10000 //< how many ports from `PORT_BASE` workspaces spread over
+    //< **20000 to 29999 lies below the ports each OS hands out to outgoing connections** (from
+    //< 32768 on Linux, 49152 on Windows and macOS), so a connection rarely holds one by chance.
+
+fn home_port(root: U8[]): I32 //< the port a workspace's server starts from, the same every run
+    //< FNV-1a over the folder's absolute path, spread over `PORT_SPAN` ports.
+    //< Caution: **Do not change the formula.** The browser keeps drafts per address, port included,
+    //< so a new formula hides every draft held before. `tools/tests/ksmd_aim_test.kspl` pins
+    //< values.
+    $h: U64 = 14695981039346656037U64
+    for c in root
+        h = h ^ U64::c
+        h = h * 1099511628211U64
+    return PORT_BASE + I32::(h % U64::PORT_SPAN)
+
+fn is_ksmd(path: U8[]): Bool //< whether the file's name ends in `.ksmd`, in any case
+    //< **Any case**: Windows and Linux's MIME globs both hand `NOTES.KSMD` to the association.
+    ext: = ".ksmd"
+    return path.len >= ext.len &&
+        path.sub_from(path.len - ext.len).equals_ignore_case(ext)
+
+fn plain(path: U8[], arena: Arena$@): U8[] //<
+    //< An absolute path without `.` segments or doubled separators; empty where it holds a `..`
+    //< **The workspace and its port are found from the text**, so one folder must have one
+    //< spelling: `/a/./b` and `/a//b` are `/a/b`. Caution: **Do not fold a `..` away.** Behind a
+    //< link, `a/link/..` is another folder than `a`, so the file opened would not be the one named.
+    root: = sys.root_len(path)
+    out: = arena.text()
+    out.s(path.sub(0, root))
+    $kept: Sz = 0
+    $at: Sz = root
+    for at < path.len
+        end: = sys.segment_end(path, at)
+        piece: = path.sub(at, end - at)
+        if piece.equals("..")
+            return ""
+        if piece.len > 0 && !piece.equals(".")
+            if kept > 0
+                out.c(path[at - 1]) // the separator as written before it
+            out.s(piece)
+            kept += 1
+        at = end + 1
+    return out.take()
+
+fn under(root: U8[], path: U8[]): Bool //< whether `path` lies inside the folder `root`
+    //< Both are `plain`. **A shared start is not enough**: `/ws2/a.ksmd` is not under `/ws`.
+    if !path.starts_with(root) || path.len <= root.len
+        return false
+    return sys.is_path_sep(root[root.len - 1]) || sys.is_path_sep(path[root.len])
+
+fn workspace_of(folder: U8[], arena: Arena$@): U8[] //< the workspace of a document in `folder`
+    //< The nearest folder at or above it that holds `MARK`, else `folder` itself.
+    marked: = marked_above(folder, MARK, arena)
+    return folder if marked.len == 0 else marked

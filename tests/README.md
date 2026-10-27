@@ -82,7 +82,7 @@ These folders hold material that a package's own checks run against; this table 
 | Folder | How it is called |
 |---|---|
 | `tests/freestanding/` | `make test-freestanding-math`, comparing `#cfg(freestanding)`'s std/math (the build with no operating system under it) against the real libm |
-| `ksos/tests/` | ksos's own tests, run by its own [`ksos/Makefile`](../ksos/Makefile) (`make debug-ksos` from here, `make test-extract` in CI). They are the unit tests, the USB descriptors read as text, and elf2uf2 fed broken ELFs. `make test-ksos-qemu` reads the demos' UART output through `uart_probe.py` |
+| `ksos/tests/` | ksos's own tests, run by its own [`ksos/Makefile`](../ksos/Makefile) (`make debug-ksos` from here, `make test-extract` in CI). They are the unit tests, the USB descriptors read as text, and elf2uf2 fed broken ELFs |
 | `ksmd/tests/browser/` | ksmd's checks on its page in a browser, run by its own [`ksmd/Makefile`](../ksmd/Makefile) (`make test-ksmd-browser` from here) |
 
 ## Files near the limit and how they split

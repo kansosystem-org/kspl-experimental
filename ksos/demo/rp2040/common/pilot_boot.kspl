@@ -38,6 +38,10 @@ const FETCH_IDLE_MS: U32 = 500 //< how long to wait while downloading the policy
     //< and another follows until the response is complete.
 const FETCH_TRIES: U32 = 8
 
+const POLICY_PATH: U8[] = "/pilot_policy.safetensors" //< the policy file, under kssrv's root
+    //< kssrv hands it out as any other file; stage 7 of `ksos/docs/HOWTO-bring-up.md` names the
+    //< folder to serve (`ksos/demo/cortex_m`, where the file is kept).
+
 // Global: too large for the task stack (2048).
 $heap_buf: U8[4096] // used by Str_builder (building the request)
 $resp_buf: U8[4096] // the whole downloaded response (the header plus the policy)
@@ -54,7 +58,8 @@ fn fetch_policy(ln: con.Line$@, arena: Arena$@): U8[] //< requests the policy on
     //< Caution: **Keep reading until it is complete**: on `incomplete` from std/http, which checks
     //< the length, it reads more.
     defer $req: = Str_builder()
-    req.s("GET /api/pilot HTTP/1.1\r\nHost: 192.168.137.1\r\nConnection: close\r\n\r\n")
+    req.s("GET ").s(POLICY_PATH)
+    req.s(" HTTP/1.1\r\nHost: 192.168.137.1\r\nConnection: close\r\n\r\n")
     if !nc.send_all(req.slice().ptr, req.len)
         con.say(ln, "[pilot]", "FAILED to send the request")
         return ""

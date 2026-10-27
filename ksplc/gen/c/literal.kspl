@@ -5,8 +5,10 @@
 //< but it only decides where the lines break, and it takes the escaping from here.
 //< Building expressions (precedence, parentheses, calls) belongs to `ksplc/gen/c/expr.kspl`.
 import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/core" as base_core
 import "ksplc/base/literal" as base_literal
 import "ksplc/gen/c/ctx" { Genc_ctx }
+import "ksplc/sema/session/state" { Static_value }
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
 import "std/chars"
@@ -61,7 +63,30 @@ fn emit_folded_i64(c: Genc_ctx$@, v: I64) //<
     else
         c.s("\{v\}LL")
 
+fn emit_folded_f64(c: Genc_ctx$@, f: F64) //<
+    //< It writes a floating-point value the constant folder produced as a C `double` constant
+    //< The shortest digits that read back as the same `double` are written, so C's own reading
+    //< gives the folded bits. Infinity and a NaN have no literal in C. They are written as the
+    //< divisions that give them, which C accepts in a static initializer.
+    if f != f
+        c.s("(0.0 / 0.0)")
+    else if f - f != 0.0
+        c.s("(1.0 / 0.0)" if f > 0.0 else "(-1.0 / 0.0)")
+    else
+        c.s("\{f\}")
+
 impl Ast_node
+    fn emit_static_value(r: Ast_node$@, c: Genc_ctx$@, v: Static_value) //<
+        //< It writes the value sema folded for a top-level initializer's node, cast to its type
+        //< Both backends write this value, never the expression (sema/body/static_init.kspl).
+        c.s("((").t(r.type_id).s(")")
+        switch v
+        case .whole(n)
+            emit_folded_i64(c, n)
+        case .real(f)
+            emit_folded_f64(c, f)
+        c.s(")")
+
     fn emit_negated_i64_min(r: Ast_node$@, c: Genc_ctx$@): Bool //<
         //< It writes `-r` as I64's minimum where literal r's magnitude is 2^63, saying if it did
         //< Negated as written, C reads the magnitude as unsigned and warns (emit_folded_i64).
@@ -119,6 +144,32 @@ impl Ast_node
         //< `'\b'` is 8 in C and 'b' in KSPL. Emitted as a value, it cannot be misread.
         c.s("\{base_literal.char_literal_byte(r.text)\}")
 
+    fn name_string_literals(r: Ast_node$@, c: Genc_ctx$@) //<
+        //< Writes a named constant for each string slice under r that this unit has none for yet
+        //< **At `-O0` a compound literal costs a stack slot, two stores and a copy at each use.** A
+        //< constant is written once and read by name: the seed's 8,387 uses hold 3,179 texts, and
+        //< the C compiler's work fell by about 4%. The caller writes them before a function's
+        //< definition, where every type is complete. Each unit numbers its own; they are `static`.
+        if r == null
+            return
+        if r.kind_id == .k_string && c.env.is_slice(r.type_id)
+            defer $key: = Str_builder()
+            r.literal_key_to(c, key@)
+            if c.literals.get(key.slice()).is_none()
+                name: = base_core.arena.text().s("kspl_lit_\{c.literals.len\}").take()
+                c.literals.set(base_core.arena.dup_str(key.slice()), name)
+                c.s("static const KSPL_UNUSED ").t_ret(r.type_id).s(" ").s(name)
+                    .s(" = KSPL_STR_INIT(\"")
+                r.text.append_literal_bytes(c, append_c_string_byte)
+                c.s("\");\n")
+        for child in r.children
+            child.name_string_literals(c)
+
+    priv fn literal_key_to(r: Ast_node$@, c: Genc_ctx$@, key: Str_builder$@) //<
+        //< A string slice's key among the named constants: its C type, unqualified, and spelling
+        c.map_c_type_to_impl(r.type_id, key, 0, true)
+        key.c('|').s(r.text)
+
     fn emit_string_literal(r: Ast_node$@, c: Genc_ctx$@, as_init: Bool)
         // Caution: **Do not pass the spelling to C's lexer.** The escapes differ: `\x41` is 'A' in
         // C but 'x' plus "41" in KSPL; `\101` is 'A' in C but three characters in KSPL. The
@@ -127,6 +178,12 @@ impl Ast_node
         // too) gets its own C escape. A `\uXXXX` is emitted as its UTF-8 bytes, because C
         // rejects a `\u` naming a basic character (Principle 2).
         is_slice: = !c.env.is_pointer(r.type_id)
+        if is_slice && !as_init
+            defer $key: = Str_builder()
+            r.literal_key_to(c, key@)
+            if name: = c.literals.get(key.slice())
+                c.s(name)
+                return
         if is_slice
             if as_init
                 c.s("KSPL_STR_INIT(")

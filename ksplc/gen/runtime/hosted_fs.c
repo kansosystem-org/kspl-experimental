@@ -128,14 +128,30 @@ KSPL_LINK I32 kspl_is_link(const U8 *path_ptr, Sz path_len) {
     return S_ISLNK(st.st_mode) ? 1 : 0;
 }
 
+/* Writes the name the file system keeps for a path's last segment into buf, for std/fs.kspl's
+ * long_name, and returns its length. -1 = nothing stands at the path, or the name does not fit.
+ * POSIX keeps one name per entry, so it is the last segment as written. */
+KSPL_LINK I32 kspl_long_name(const U8 *path_ptr, Sz path_len, U8 *buf, Sz cap) {
+    char path[4096];
+    struct stat st;
+    Sz start = path_len;
+    if (!kspl_to_cstr(path_ptr, path_len, path, sizeof(path))) return -1;
+    if (lstat(path, &st) != 0) return -1;
+    while (start > 0 && path_ptr[start - 1] != '/') start--;
+    if (path_len - start > cap) return -1;
+    memcpy(buf, path_ptr + start, (size_t)(path_len - start));
+    return (I32)(path_len - start);
+}
+
 /* Copies one file to a name that does not stand yet, with the source's permission bits (for
  * std/fs.kspl's copy_tree). 0 = done, 1 = the source cannot be opened, -1 = refused.
  * **The bits are the copy's from its first byte.** Created wider and narrowed afterwards, a private
  * file would stand readable by others while it is written. Where the narrowing fails, it would
  * stay so for good. O_EXCL makes it new, so a link planted at the name is not followed. The umask
  * can only narrow the bits at the creation, and fchmod then gives them exactly. Only a regular
- * file is copied (read, a FIFO would wait for good), a piece at a time. What fails partway is
- * removed. */
+ * file is copied, a piece at a time. What fails partway is removed.
+ * **The source opens with O_NONBLOCK, and its kind is checked before any read.** A plain open of a
+ * FIFO waits for a writer, for good. The flag is cleared once the file is known to be regular. */
 KSPL_LINK I32 kspl_copy_file(const U8 *from_ptr, Sz from_len, const U8 *to_ptr, Sz to_len) {
     char from[4096];
     char to[4096];
@@ -143,10 +159,12 @@ KSPL_LINK I32 kspl_copy_file(const U8 *from_ptr, Sz from_len, const U8 *to_ptr, 
     int ok = 1;
     if (!kspl_to_cstr(from_ptr, from_len, from, sizeof(from))) return -1;
     if (!kspl_to_cstr(to_ptr, to_len, to, sizeof(to))) return -1;
-    int in = open(from, O_RDONLY | O_CLOEXEC);
+    int in = open(from, O_RDONLY | O_CLOEXEC | O_NONBLOCK);
     if (in < 0) return 1;
     char *buf = (char *)malloc(KSPL_COPY_PIECE);
-    if (buf == NULL || fstat(in, &st) != 0 || !S_ISREG(st.st_mode)) {
+    int flags = fcntl(in, F_GETFL);
+    if (buf == NULL || fstat(in, &st) != 0 || !S_ISREG(st.st_mode) || flags < 0 ||
+        fcntl(in, F_SETFL, flags & ~O_NONBLOCK) != 0) {
         free(buf);
         close(in);
         return -1;
@@ -371,6 +389,8 @@ KSPL_LINK void kspl_lock_close(I64 handle) {
 #include <windows.h>
 #include <sys/stat.h>
 #include <direct.h>
+#include <fcntl.h> /* _O_BINARY */
+#include <io.h> /* _open_osfhandle */
 #include <wchar.h>
 
 /* The longest path Win32 takes as it stands, the NUL counted. It is CreateDirectoryW's 248, the
@@ -547,6 +567,27 @@ KSPL_LINK I32 kspl_is_link(const U8 *path_ptr, Sz path_len) {
     return (fd.dwReserved0 & IO_REPARSE_TAG_NAME_SURROGATE_BIT) ? 1 : 0;
 }
 
+/* The POSIX side's meanings. **A short name (`GIT~1` for `.git`) gives its long name**, which
+ * FindFirstFileW reports for the entry whatever name found it. A `*` or a `?` is refused: there
+ * it would match other names. */
+KSPL_LINK I32 kspl_long_name(const U8 *path_ptr, Sz path_len, U8 *buf, Sz cap) {
+    wchar_t path[KSPL_WPATH_CAP];
+    WIN32_FIND_DATAW fd;
+    char utf8[MAX_PATH * 3 + 1];
+    HANDLE h;
+    int len;
+    if (memchr(path_ptr, '*', (size_t)path_len) != NULL) return -1;
+    if (memchr(path_ptr, '?', (size_t)path_len) != NULL) return -1;
+    if (!kspl_path_to_wide(path_ptr, path_len, path, KSPL_WPATH_CAP)) return -1;
+    h = FindFirstFileW(path, &fd);
+    if (h == INVALID_HANDLE_VALUE) return -1;
+    FindClose(h);
+    len = kspl_win_from_wide(fd.cFileName, utf8, (Sz)sizeof(utf8));
+    if (len < 0 || (Sz)len > cap) return -1;
+    memcpy(buf, utf8, (size_t)len);
+    return (I32)len;
+}
+
 /* The POSIX side's meanings. Windows keeps no permission bits. Who can read the copy is the ACL it
  * takes from its folder, as a file kspl_create_owned makes. What is carried over is the read-only
  * mark, put on once the contents are in (a read-only file takes no writes). CREATE_NEW makes it
@@ -560,8 +601,8 @@ KSPL_LINK I32 kspl_copy_file(const U8 *from_ptr, Sz from_len, const U8 *to_ptr, 
     int ok = 1;
     if (!kspl_path_to_wide(from_ptr, from_len, from, KSPL_WPATH_CAP)) return -1;
     if (!kspl_path_to_wide(to_ptr, to_len, to, KSPL_WPATH_CAP)) return -1;
-    in = CreateFileW(from, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
-        FILE_ATTRIBUTE_NORMAL, NULL);
+    in = CreateFileW(from, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (in == INVALID_HANDLE_VALUE) return 1;
     buf = (char *)malloc(KSPL_COPY_PIECE);
     if (buf == NULL || !GetFileInformationByHandle(in, &info) || GetFileType(in) != FILE_TYPE_DISK) {
@@ -659,6 +700,26 @@ static void kspl_win_restore_attr(const wchar_t *path, DWORD attr) {
     }
 }
 
+/* How many times, and how many milliseconds apart, a rename is tried again (kspl_win_move). */
+#define KSPL_MOVE_TRIES 5
+#define KSPL_MOVE_PAUSE_MS 50
+
+/* MoveFileExW, tried again a few times where another process holds the file for a moment.
+ * **A virus scanner or a search indexer opens a new file to read it**, often without
+ * FILE_SHARE_DELETE, so a rename fails with a sharing or access error for a few milliseconds. Any
+ * other error, and a hold that lasts, fails as before. */
+static BOOL kspl_win_move(const wchar_t *from, const wchar_t *to, DWORD flags) {
+    for (int i = 0;; i++) {
+        if (MoveFileExW(from, to, flags)) return TRUE;
+        DWORD e = GetLastError();
+        if (i + 1 >= KSPL_MOVE_TRIES || (e != ERROR_SHARING_VIOLATION && e != ERROR_ACCESS_DENIED &&
+            e != ERROR_LOCK_VIOLATION)) {
+            return FALSE;
+        }
+        Sleep(KSPL_MOVE_PAUSE_MS);
+    }
+}
+
 /* The POSIX side's meanings, with no folder to sync. FlushFileBuffers puts the part on the disk,
  * and MOVEFILE_WRITE_THROUGH returns once the rename is on it. Who can read the file is the ACL it
  * takes from its folder under either rule (the reason is at write_unique in std/fs.kspl). `kept`
@@ -689,7 +750,7 @@ KSPL_LINK I32 kspl_replace_file(const U8 *part_ptr, Sz part_len, const U8 *path_
     }
     if (ok) {
         DWORD attr = kspl_win_writable(path);
-        if (!MoveFileExW(part, path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        if (!kspl_win_move(part, path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
             kspl_win_restore_attr(path, attr);
             ok = 0;
         }
@@ -738,39 +799,77 @@ KSPL_LINK I32 kspl_rename_cstr(const U8 *old_cstr, const U8 *new_cstr) {
         return -1;
     }
     DWORD attr = kspl_win_writable(newp);
-    if (MoveFileExW(oldp, newp, MOVEFILE_REPLACE_EXISTING)) return 0;
+    if (kspl_win_move(oldp, newp, MOVEFILE_REPLACE_EXISTING)) return 0;
     kspl_win_restore_attr(newp, attr);
     return -1;
 }
 
-/* Opens a path. `N` makes the handle not inheritable (hosted.c's "Nothing the runtime opens
- * passes to a child unasked"); the CRT's default hands it to every child.
+/* Opens a path, with the POSIX side's meanings for the mode.
+ * **Always binary**: in text mode the CRT stops a read at byte 0x1A and turns `\n` into `\r\n`
+ * on a write, so the bytes would differ from what POSIX reads and writes.
+ * **Every sharing flag is given**, as POSIX has no sharing modes. Without FILE_SHARE_DELETE, a
+ * reader holding the file would make a rename or a removal over it fail (`fs.replace_file`). No
+ * security attributes, so the handle is not inheritable (hosted.c's "Nothing the runtime opens
+ * passes to a child unasked"); the CRT's `fopen` hands it to every child.
  * Caution: **Do not call `fopen` directly from the KSPL side** (the same reason). */
 KSPL_LINK void *kspl_fopen_cstr(const U8 *path_cstr, const U8 *mode_cstr) {
     wchar_t path[KSPL_WPATH_CAP];
-    wchar_t mode[16];
-    size_t n;
-    if (!kspl_fopen_mode_ok((const char *)mode_cstr)) return NULL;
+    const char *mode = (const char *)mode_cstr;
+    char shape[4] = {0, 0, 0, 0};
+    DWORD access, creation;
+    int plus, fd, osflags;
+    HANDLE h;
+    FILE *f;
+    if (!kspl_fopen_mode_ok(mode)) return NULL;
     if (!kspl_path_to_wide(path_cstr, (Sz)strlen((const char *)path_cstr), path, KSPL_WPATH_CAP)) {
         return NULL;
     }
-    if (!kspl_win_cstr_to_wide((const char *)mode_cstr, mode, 15)) return NULL;
-    n = wcslen(mode);
-    mode[n] = L'N';
-    mode[n + 1] = L'\0';
-    return (void *)_wfopen(path, mode);
+    plus = strchr(mode, '+') != NULL;
+    access = plus ? GENERIC_READ | GENERIC_WRITE : (mode[0] == 'r' ? GENERIC_READ : GENERIC_WRITE);
+    if (mode[0] == 'r') creation = OPEN_EXISTING;
+    else if (mode[0] == 'a') creation = OPEN_ALWAYS;
+    else creation = strchr(mode, 'x') != NULL ? CREATE_NEW : CREATE_ALWAYS;
+    h = CreateFileW(path, access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+        creation, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) return NULL;
+    osflags = plus ? 0 : (mode[0] == 'r' ? _O_RDONLY : 0);
+    if (mode[0] == 'a') osflags |= _O_APPEND;
+    fd = _open_osfhandle((intptr_t)h, osflags | _O_BINARY);
+    if (fd < 0) {
+        CloseHandle(h);
+        return NULL;
+    }
+    shape[0] = mode[0];
+    shape[1] = plus ? '+' : 'b';
+    shape[2] = plus ? 'b' : '\0';
+    f = _fdopen(fd, shape);
+    if (f == NULL) _close(fd);
+    return (void *)f;
 }
 
 /* A lock on a file, the handle a HANDLE (0 = failure), for std/fs.kspl's File_lock.
    Every sharing flag is given, so the file itself is never what blocks: only the lock does. The
- * handle is not inheritable, so a child does not hold it on. */
+ * handle is not inheritable, so a child does not hold it on.
+ * **A link at the lock's name is opened as itself and refused**, as O_NOFOLLOW on the POSIX side.
+ * Followed, a link planted there would have the lock create or open another file.
+ * Caution: **Refuse by the name-surrogate tag, not the reparse attribute alone**, as kspl_is_link
+ * does: a OneDrive file not yet downloaded carries the attribute too. A tag that cannot be read
+ * is refused. */
 KSPL_LINK I64 kspl_lock_open(const U8 *path_ptr, Sz path_len) {
     wchar_t path[KSPL_WPATH_CAP];
+    FILE_ATTRIBUTE_TAG_INFO tag;
     if (!kspl_path_to_wide(path_ptr, path_len, path, KSPL_WPATH_CAP)) return 0;
     HANDLE h = CreateFileW(path, GENERIC_READ | GENERIC_WRITE,
                            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
-                           OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    return h == INVALID_HANDLE_VALUE ? 0 : (I64)(intptr_t)h;
+                           OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+    if (h == INVALID_HANDLE_VALUE) return 0;
+    if (!GetFileInformationByHandleEx(h, FileAttributeTagInfo, &tag, sizeof(tag)) ||
+        ((tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 &&
+         IsReparseTagNameSurrogate(tag.ReparseTag))) {
+        CloseHandle(h);
+        return 0;
+    }
+    return (I64)(intptr_t)h;
 }
 
 /* Takes the lock on the first byte: 0 = held, 1 = another holds it (only where `wait` is 0),

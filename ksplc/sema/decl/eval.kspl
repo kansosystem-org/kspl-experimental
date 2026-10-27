@@ -2,21 +2,25 @@
 //< It folds literals, the operators, `sizeof` / `offsetof`, casts and references to a `const`, at
 //< the operands' width. **A signed result that does not fit is an error**, as is a division by
 //< zero. The quiet forms (`try_eval_constexpr`) tell whether an expression folds, reporting
-//< nothing. It also checks that a top-level initializer is a static one.
+//< nothing. **A constant's value is kept once folded** (`Static_state` in
+//< `../session/state.kspl`), so a chain of constants folds in linear time.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/core" as _base_core // the operator classes (`is_shift_op` ...)
 import "ksplc/base/literal" as base_literal
+import "ksplc/sema/decl/fold_float" as sema_decl_fold_float
 import "ksplc/sema/decl/layout" as sema_decl_layout
 import "ksplc/sema/decl/name" as sema_decl_name
 import "ksplc/sema/decl/resolve" as sema_decl_resolve
 import "ksplc/sema/session/ctx" { Sema_ctx, Sema_error }
+import "ksplc/sema/session/state" { Const_fold, Const_fold_float }
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
 import "ksplc/sema/type/scope" { Sema_symbol }
 import "std/chars" // testing and slicing single characters
 import "std/checked_int" // the signed overflow checks shared with run-time arithmetic
-import "std/ds" { List, Map }
+import "std/ds" { List }
+import "std/math"
 import "std/str"
 
 impl U8[]
@@ -99,6 +103,52 @@ impl Sema_ctx
             return .none
         return .some(v)
 
+    fn kept_const_fold(r: Self$@, decl_key: Sz): Const_fold? //<
+        //< The value kept for the constant declared at decl_key, if it is of the current epoch
+        if r.statics.epoch == 0
+            return .none
+        if kept: = r.statics.ints.get(decl_key)
+            if kept.epoch == r.statics.epoch
+                return .some(kept)
+        return .none
+
+    fn keep_const_fold(r: Self$@, decl_key: Sz, value: I64, below: I32) //<
+        //< Keeps a constant's folded value for the current epoch (none while the cache is off)
+        if r.statics.epoch != 0
+            r.statics.ints
+                .set(decl_key,
+                Const_fold::{ .value = value, .below = below, .epoch = r.statics.epoch })
+
+    fn kept_float_fold(r: Self$@, decl_key: Sz): Const_fold_float? //<
+        //< The floating-point value kept for the constant declared at decl_key, as kept_const_fold
+        if r.statics.epoch == 0
+            return .none
+        if kept: = r.statics.floats.get(decl_key)
+            if kept.epoch == r.statics.epoch
+                return .some(kept)
+        return .none
+
+    fn keep_float_fold(r: Self$@, decl_key: Sz, value: F64, below: I32) //<
+        //< Keeps a floating-point constant's folded value, as keep_const_fold
+        if r.statics.epoch != 0
+            r.statics.floats
+                .set(decl_key,
+                Const_fold_float::{ .value = value, .below = below, .epoch = r.statics.epoch })
+
+    priv fn reuse_const_fold(r: Self$@, kept: Const_fold, decl_key: Sz, depth: I32):
+        I64!Sema_error //<
+            //< The kept value of a constant reached `depth` levels down, cut where a fold would be
+            //< The constant's own fold went `kept.below` levels deeper. So the walk it saves
+            //< reaches the same depth, and the same chains stay too deep.
+        deepest: = depth + 1 + kept.below
+        if deepest > MAX_CONSTEXPR_DEPTH
+            cut_at_limit(r) catch e
+                if r.resolving.cut_waiting
+                    r.resolving.cut_path.push(decl_key)
+                throw e
+        r.statics.deepest = math.max(r.statics.deepest, deepest)
+        return kept.value
+
 priv const I64_MAX_VAL: I64 = 9223372036854775807I64 //< i64's boundaries
     //< The lower one is built as `-(2^63 - 1) - 1`: the literal 2^63 does not fit in I64. The `I64`
     //< suffix keeps it clear of the rule for a `-`'s left-hand literal in sema/body/binary.kspl.
@@ -159,14 +209,15 @@ priv const MAX_CONSTEXPR_DEPTH: I32 = GUARANTEED_CONST_CHAIN * 4 //< the fold's 
     //< ksplc/parse/normalize.kspl stops one expression's nesting. Only a chain across declarations
     //< (eval_ident_or_path) reaches here.
 
-priv enum Bad_init_why //< why a form cannot be a static initializer, which picks the message
-    run_time //< a call, a dereference or a variable's value
-    cycle //< a cycle among constant definitions
-    part_read //< a part of another value: an element, a field, a slice's `.len` or `.ptr`
-
-priv struct Bad_init //< where a form that cannot be a static initializer was found
-    node: Ast_node$@
-    why: Bad_init_why
+priv fn cut_at_limit(c: Sema_ctx$@): Void!Sema_error //<
+    //< Stops a fold that went past the depth limit
+    //< Caution: **Do not stop with `not_constant`.** Under suppression the report is dropped, and
+    //< fold_static in ../body/static_init.kspl re-folds only what did not stop with
+    //< `not_constant`, so the depth error would appear nowhere. **A quiet fold leaves no cut to
+    //< report**; the loud fold that follows it does.
+    if !c.suppress_errors
+        c.resolving.cut_waiting = true
+    throw .nesting_too_deep
 
 impl Ast_node
     fn eval_constexpr(r: Self$@, c: Sema_ctx$@): I32!Sema_error //<
@@ -205,6 +256,17 @@ impl Ast_node
         c.resolving.cut_path.len = 0
         if seen
             return
+        r.report_chain_too_deep(c)
+
+    fn report_float_cut(r: Self$@, c: Sema_ctx$@) //<
+        //< Reports a floating-point fold the depth limit cut (fold_float.kspl), once per translation
+        //< Every constant past the limit is cut again, and one report names the chain.
+        if c.statics.float_cut_reported
+            return
+        c.statics.float_cut_reported = true
+        r.report_chain_too_deep(c)
+
+    priv fn report_chain_too_deep(r: Self$@, c: Sema_ctx$@) //< the one message for a cut chain
         c.clear_scratch()
             .s("constant expression nesting too deep. Folding follows more constants defined by \
                 other constants than the compiler supports. The language guarantees \
@@ -217,13 +279,9 @@ impl Ast_node
         if r == null
             throw .not_constant
         if depth > MAX_CONSTEXPR_DEPTH
-            // Caution: **Do not return with `not_constant`.** Under suppression the report is
-            // dropped, and report_init_overflow re-folds only what did not return `not_constant`,
-            // so the depth error would appear nowhere. **A quiet fold leaves no cut to report**;
-            // the loud fold that follows it does.
-            if !c.suppress_errors
-                c.resolving.cut_waiting = true
-            throw .nesting_too_deep
+            cut_at_limit(c)!
+        if depth > c.statics.deepest
+            c.statics.deepest = depth
 
         switch r.kind_id
         case .k_integer
@@ -346,6 +404,13 @@ impl Ast_node
         return r.eval_unknown(c, depth)!
 
     fn eval_binary(r: Self$@, c: Sema_ctx$@, depth: I32): I64!Sema_error
+        // A comparison of floating-point values folds as fold_float.kspl folds its operands.
+        if r.children.len >= 3 && c.env.is_float(r.get_binary_left().type_id)
+            switch r.fold_float_compare(c)
+            case .some(v)
+                return v
+            case .none
+                return r.eval_unknown(c, depth)!
         if r.children.len >= 3
             left: = r.get_binary_left().eval_constexpr_internal(c, depth + 1)!
             op: = r.get_binary_op().text
@@ -550,6 +615,17 @@ impl Ast_node
             op_node: = r.get_postfix_op()
             if op_node != null && op_node.text.equals("::")
                 recv: = r.get_postfix_receiver()
+                // A cast from a floating-point value folds as fold_float.kspl decides it, or the
+                // two folds would disagree on `I32::2.9`.
+                if recv != null && c.env.is_float(recv.type_id)
+                    switch r.float_cast_of(c, false)
+                    case .fits(v)
+                        return v
+                    case .out_of_range
+                        // The cast's own check has reported it (sema/body/postfix.kspl).
+                        throw .invalid_argument
+                    case .not_constant
+                        return r.eval_unknown(c, depth)!
                 if recv != null
                     v: = recv.eval_constexpr_internal(c, depth + 1)!
                     return r.fold_cast(c, v, depth)
@@ -567,15 +643,22 @@ impl Ast_node
                 // Caution: Track the path with a Map (keyed by the declaration node's address); a
                 // List costs the square of the chain's length.
                 decl_key: = Sz::decl_node
+                if kept: = c.kept_const_fold(decl_key)
+                    return c.reuse_const_fold(kept, decl_key, depth)!
                 if c.resolving.consts.get(decl_key).unwrap_or(false)
                     throw .not_constant
                 c.resolving.consts.set(decl_key, true)
                 defer c.resolving.consts.remove(decl_key)
+                outer_deepest: = c.statics.deepest
+                c.statics.deepest = depth + 1
                 v: = expr_node.eval_constexpr_internal(c, depth + 1) catch e
+                    c.statics.deepest = math.max(outer_deepest, c.statics.deepest)
                     // A cut below is waiting to be reported: it went through this constant.
                     if c.resolving.cut_waiting
                         c.resolving.cut_path.push(decl_key)
                     throw e
+                c.keep_const_fold(decl_key, v, c.statics.deepest - (depth + 1))
+                c.statics.deepest = math.max(outer_deepest, c.statics.deepest)
                 return v
         // **Name what was written and what would fold**: "path" is the compiler's word for a
         // dotted name, not the writer's.
@@ -675,8 +758,8 @@ impl Ast_node
         //< where it does not point at a constant.
         //< Caution: **Do not rely on the name alone.** The ABI pass (lower/abi.kspl) rewrites a
         //< `priv` top-level identifier's text into a mangled name (`kspl_priv_<file>_<name>`). The
-        //< fold is called from codegen too (emit_llvm_const_scalar_expr in gen/llvm/decl.kspl). By
-        //< then the tree is rewritten, so the name is not in symtab.
+        //< lookup is called from codegen too (named_const_init in gen/llvm/decl.kspl). By then the
+        //< tree is rewritten, so the name is not in symtab.
         $decl_node: Ast_node$@ = null
         if sym_ptr: = named
             switch sym_ptr.kind
@@ -697,122 +780,17 @@ impl Ast_node
     fn const_init_expr(r: Self$@, c: Sema_ctx$@): Ast_node$@? //<
         //< The initializing expression of the `const` this reference points at
         //< null where it points at no constant, or there is no initializer.
-        //< Note: Used when the generated C writes a top-level `const`'s initializer
-        //< (`gen/c/expr.kspl`). C requires a constant expression there, and in C99 the name of an
-        //< object is not one, `const` or not. Emitting **the expression it points at** instead of
-        //< the name meets that constraint.
+        //< Note: Both backends write it in place of a reference inside a top-level initializer. C
+        //< requires a constant expression there, and in C99 the name of an object is not one,
+        //< `const` or not. To LLVM a name is no constant either.
+        if decl_node: = r.referenced_const(c)
+            return .some(decl_node.get_var_decl_expr())
+        return .none
+
+    fn referenced_const(r: Self$@, c: Sema_ctx$@): Ast_node$@? //<
+        //< The declaration of the `const` this reference points at, where it has an initializer
         if decl_node: = r.const_decl_of(r.resolve_ref_symbol(c))
             expr_node: = decl_node.get_var_decl_expr()
             if expr_node != null && expr_node.kind_id != .k_empty
-                return .some(expr_node)
+                return .some(decl_node)
         return .none
-
-    priv fn find_bad_init_expr(r: Self$@, c: Sema_ctx$@, seen: Map<|Sz, Bool|>$@,
-        clean: Map<|Sz, Bool|>$@): Bad_init? //<
-            //< The first form in a top-level initializer that a static initializer cannot contain
-            //< It searches the initializer depth-first.
-            //< Caution: eval_constexpr folds integers only, not `::{...}`, a string, null or a
-            //< cast. **Follow a constant reference**, or `const A = B; const B = A;` slips through.
-        if r == null
-            return .none
-        // `sizeof(g)` reads no value: its operand is not evaluated, only its type is taken.
-        if r.kind_id == .k_expr_sizeof || r.kind_id == .k_expr_offsetof
-            return .none
-        op: = r.get_postfix_op()
-        if op != null
-            // `x@` is C's "address constant"; it reads no value, so the receiver is not followed.
-            if op.text.equals("@")
-                return .none
-            // A function call and a dereference do not have their value fixed at link time.
-            if op.text.equals("(") || op.text.equals("$")
-                return .some(Bad_init::{ .node = r, .why = .run_time })
-            // Neither backend writes a part of a value as a static value. C99 has no constant that
-            // reads an element or a member, and the fold reads integers alone.
-            if op.text.equals("[") || r.reads_member(c)
-                return .some(Bad_init::{ .node = r, .why = .part_read })
-        if r.def_node != null
-            // A variable's reference is a run-time read. An enum variant, a function (a legitimate
-            // function pointer initializer) and a field have other def_node kinds.
-            if r.def_node.kind_id == .k_decl_var || r.def_node.kind_id == .k_decl_var_item
-                return .some(Bad_init::{ .node = r, .why = .run_time })
-            if r.def_node.kind_id == .k_decl_const
-                key: = Sz::r.def_node
-                if seen.get(key).unwrap_or(false)
-                    return .some(Bad_init::{ .node = r, .why = .cycle })
-                // Caution: **Do not walk a declaration twice once it is known clean.** A
-                // `k_expr_path` and its `k_identifier` point at one reference, so the cost becomes
-                // 2^N. It is clean only where **the walk reached the end and found nothing**; a
-                // partial walk lets a problem by.
-                already: = clean.get(key).unwrap_or(false)
-                inner: = r.def_node.get_var_decl_expr()
-                if !already && inner != null && inner.kind_id != .k_empty
-                    seen.set(key, true)
-                    found: = inner.find_bad_init_expr(c, seen, clean)
-                    seen.remove(key)
-                    if found.is_some()
-                        return found
-                    clean.set(key, true)
-        for child in r.children
-            found: = child.find_bad_init_expr(c, seen, clean)
-            if found.is_some()
-                return found
-        return .none
-
-    priv fn reads_member(r: Self$@, c: Sema_ctx$@): Bool //<
-        //< Whether it reads a struct's field or a slice's `.len` or `.ptr`
-        //< An array's `.len` is no read: sema has made it its integer already. A name through a
-        //< module, an enum variant and a method are other kinds of node.
-        if r.kind_id != .k_expr_postfix || !r.get_postfix_op().text.equals(".")
-            return false
-        if r.def_node != null && r.def_node.kind_id == .k_struct_field
-            return true
-        recv: = r.get_postfix_receiver()
-        return recv != null &&
-            c.env.is_slice(c.env.get_clean_real_type(recv.type_id))
-
-    fn check_static_initializer(r: Self$@, c: Sema_ctx$@) //<
-        //< Checks a top-level variable's or constant's initializer
-        //< C requires a constant expression there. So a run-time computation is rejected here,
-        //< rather than failing in C with `initializer element is not constant`.
-        // Caution: **Track the path (seen) and the finished declarations (clean) with a Map**
-        // (keyed by the declaration node's address). A List goes cubic and **never finishes**. An
-        // empty Map takes no memory (Map.new in std/ds.kspl).
-        defer $seen: = Map<|Sz, Bool|>(null)
-        // Caution: **Use clean only inside this one walk.** Across declarations it would remember
-        // "clean" before `def_node` is linked and let a cycle by
-        // (the case const_cycle in tests/negative/const.kspl).
-        defer $clean: = Map<|Sz, Bool|>(null)
-        if bad: = r.find_bad_init_expr(c, seen@, clean@)
-            switch bad.why
-            case .cycle
-                c.err(bad.node, "circular constant definition detected")
-            case .part_read
-                c.err(bad.node,
-                    "a top-level initializer cannot read a part of another value (an element, a \
-                        field, a slice's `.len` or `.ptr`). Write the value itself, or name a \
-                        `const` that holds it")
-            case .run_time
-                c.err(bad.node, "top-level variable initializer is not a compile-time constant")
-            return
-        r.report_init_overflow(c)
-
-    priv fn report_init_overflow(r: Self$@, c: Sema_ctx$@) //<
-        //< Folds an initializer whose form passed, reporting overflow and division by zero
-        //< **`eval_constexpr` cannot be relied on.** The width and sign come from the operands'
-        //< types.
-        // **Fold quietly first**, or a string, `::{}`, `x@` or a function name gets a needless "not
-        // a constant expression" (find_bad_init_expr checks the form).
-        $broken: = false
-        _quiet: = c.fold_quietly(r, false) catch e
-            switch e
-            case .not_constant {}
-            default
-                broken = true
-            fallback 0I64
-        if !broken
-            return
-        // It overflows, divides by 0, or is too deep.
-        // **Report by folding again**, so one reporting point names the step that overflowed. A
-        // chain **not used** as a constant expression is folded only here, so its depth is reported
-        // here.
-        _loud: = r.eval_constexpr_internal(c, 0) catch 0I64

@@ -16,7 +16,6 @@ import "ksplc/lsp/msg" as lsp_msg
 import "ksplc/lsp/nav" as lsp_nav
 import "ksplc/lsp/outline" as lsp_outline
 import "ksplc/lsp/rename" as lsp_rename
-import "ksplc/lsp/semtok" as lsp_semtok
 import "ksplc/lsp/state" { Doc_state, Server }
 import "ksplc/lsp/uses" as lsp_uses
 import "ksplc/lsp/workspace" as lsp_workspace
@@ -233,7 +232,7 @@ priv fn build_document_state(server: Server$@, src: U8[], uri: U8[], send_diag: 
     // returns on it, and that takes away the tree and every answer.
     quiet: = compiler.has_load_error || parse_load.recovered()
 
-    // **Only this document's bodies are checked.** The hover, the jump, the colouring and this
+    // **Only this document's bodies are checked.** The hover, the jump, the outline and this
     // document's diagnostics rely on this state. None looks inside another file's body (the
     // grounds are "A `didOpen` checks one document's bodies" in `../docs/DESIGN-tools.md`).
     compiler.run_semantic_analysis(doc_path(ptr.uri_perm), true, quiet, .main_file) catch {}
@@ -284,9 +283,6 @@ impl Server
         else if method.equals("textDocument/prepareCallHierarchy")
             if st: = r.document_state(params, id_val, arena)
                 lsp_call_hier.prepare_call_hierarchy(st, params, id_val, arena)
-        else if method.equals("textDocument/semanticTokens/full")
-            if st: = r.document_state(params, id_val, arena)
-                lsp_semtok.handle(st, id_val, arena)
         else if method.equals("textDocument/documentSymbol")
             if st: = r.document_state(params, id_val, arena)
                 lsp_outline.handle(st, id_val, arena)
@@ -465,9 +461,6 @@ priv fn answer_initialize(params: json.Value, id_val: json.Value, arena: Arena$@
         .set("inlayHintProvider", b.bool_val(false))
         .set("callHierarchyProvider", b.bool_val(true))
         .set("documentSymbolProvider", b.bool_val(true))
-    // The colouring of names. **It is not a substitute for the grammar's colouring** — it is
-    // layered over the editor's own colouring (the heading of `semtok.kspl`).
-    .set("semanticTokensProvider", lsp_semtok.provider(b@))
         .set("completionProvider", completion_options(b)).build()
 
     result: = b.obj().set("capabilities", cap).build()

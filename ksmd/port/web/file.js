@@ -18,7 +18,11 @@ function ksmdFiles(ks, api) {
   const page = document.documentElement;
   // The open document: its path, the digest of the bytes last read or written there (null where
   // no file holds it yet), its canonical source then, and this opening's id, which keys its draft.
+  // **After the start, change it only through `become`**: the editor, the menu bar and the address
+  // follow it there.
   let doc = { path: "", base: null, clean: "", id: newId() };
+  // Whether a draft holds the edits as they are now: false from an edit until a draft is written.
+  let heldNow = true;
   const MAX_IMAGE = 8 * 1024 * 1024; // the local server's ceiling on a write
   const MAX_NAMES = 999; // the names `addImage` tries before it gives up
   let root = "";
@@ -30,8 +34,10 @@ function ksmdFiles(ks, api) {
   const shown = new Map(); // each image's path, and what its clause shows: { url } or { why }
 
   // Open and Save stand in the File menu only where the local server opens files; Print always does.
+  // The quick access bar shows them where the menu does.
   function showFileItems() {
     for (const el of fileMenu.querySelectorAll('[data-cmd^="file-"], .file-only')) el.hidden = false;
+    ks.quick.render();
   }
 
   function newId() {
@@ -43,6 +49,8 @@ function ksmdFiles(ks, api) {
   };
   const model = () => ks.out(ks.call("ksmd_web_source"));
   const limit = () => ks.call("ksmd_web_source_limit");
+  // Whether the page holds edits its file lacks: in the document, or typed in a cell still open.
+  const unsaved = () => model() !== doc.clean || ks.table.pending() !== null;
 
   // Runs steps one at a time; `data-files` is "busy" until the last has ended.
   function one(step) {
@@ -79,6 +87,30 @@ function ksmdFiles(ks, api) {
     notice.hidden = true;
   };
 
+  // Shows which document is open: in the menu bar, the window's title and the address.
+  function show() {
+    named.textContent = doc.path;
+    document.title = doc.path ? `${doc.path} - ksmd` : "ksmd";
+    history.replaceState(null, "", location.pathname +
+      (doc.path ? `?doc=${encodeURIComponent(doc.path)}` : ""));
+  }
+
+  // Hands the editor the path it reads each include and image from. It forgets what was fetched
+  // before, so `fill` fetches each file again.
+  let placed = null;
+  function placeEditor(path) {
+    ks.call("ksmd_web_place", ks.put(path));
+    placed = path;
+  }
+
+  // Makes `next` the open document, in the editor, the menu bar and the address. The editor keeps
+  // what it fetched where it holds that path already.
+  function become(next) {
+    if (next.path !== placed) placeEditor(next.path);
+    doc = next;
+    show();
+  }
+
   // ---- Opening ----
 
   // Resolves a typed path by the workspace's rules: the path, or null after saying why not.
@@ -88,41 +120,78 @@ function ksmdFiles(ks, api) {
     return r && r.ok ? r.path : null;
   }
 
-  async function open(written) {
+  // Opens a document in place of the open one: true once it is open. Unsaved edits go aside as a
+  // draft; where none can be held, the page asks first, unless the person chose to `discard` them.
+  // A path that does not open leaves the address, which names only the open document.
+  async function open(written, discard = false) {
     const path = resolve(written, "opened");
-    if (path === null) return;
+    if (path === null) {
+      show();
+      return false;
+    }
     const got = await local.read(path);
     if (got.status !== 200) {
       ks.say(got.status === 404 ? `No file stands at ${path}. To start a document there, type ` +
         "it, then choose File, Save as." : `${path} cannot be opened. ${got.why}`);
-      return;
+      show();
+      return false;
     }
     const left = doc;
     const aside = await holdAside();
-    if (await take(path, got.bytes) && aside && left.path !== path) {
-      ks.say(`Opened ${path}. Your unsaved edits to ${left.path || "the new document"} are held ` +
-        "aside as a draft. Open it again to bring them back.");
+    if (!discard && !aside && unsaved()) {
+      askLeave(path);
+      return false;
     }
+    if (!await take(path, got.bytes)) {
+      show();
+      return false;
+    }
+    if (!aside || left.path === path) return true;
+    // A new document has no path to open it by: the page offers its draft where it opens on none.
+    ks.say(`Opened ${path}. Your unsaved edits to ${left.path || "the new document"} are held ` +
+      "aside as a draft. " + (left.path ? "Open it again to bring them back." :
+      "To bring them back, open this page's address without \"?doc=\" and the path after it."));
+    return true;
   }
 
-  // Lays a file's bytes in as the open document; false where the editor refuses them.
-  async function take(path, bytes) {
-    ks.call("ksmd_web_place", ks.put(path));
+  // Where no draft could be held, opening another document would lose the edits: the page asks.
+  function askLeave(path) {
+    const name = doc.path || "the new document";
+    const choices = [];
+    if (doc.base !== null) {
+      choices.push([`Save ${name}, then open ${path}`, async () => {
+        if (await save()) await open(path);
+      }]);
+    }
+    choices.push([`Discard my edits and open ${path}`, () => open(path, true)], ["Cancel", quiet]);
+    ask(`Your edits to ${name} are not saved, and this browser could not hold a draft of them.` +
+      (doc.base === null ? " To keep them, choose Cancel, then File, Save as." : ""), choices);
+  }
+
+  // Lays a file's bytes in as the open document; false where the editor refuses them, after
+  // saying why and then `after`. The editor takes the path before the bytes, so the view it shows
+  // at once reads includes from the new folder; a refusal gives it the old path back. Text in a
+  // cell still open that the editor refuses opens nothing (`api.load`), and the view stays as it
+  // is, so the cell stays open with it.
+  async function take(path, bytes, after = "") {
+    const base = await local.digest(bytes);
+    const cellTaken = ks.table.take("stay");
+    if (cellTaken) placeEditor(path);
     const max = limit();
     const said = api.load(bytes.length > max + 1 ? bytes.subarray(0, max + 1) : bytes);
     // A stopped editor says so, and nothing may say the file opened.
     if (ks.stopped) return false;
     if (!said.ok) {
-      ks.call("ksmd_web_place", ks.put(doc.path));
-      await fill();
+      if (cellTaken) {
+        placeEditor(doc.path);
+        await fill();
+      }
       ks.say(`${path} cannot be opened: ${said.line ? `line ${said.line}, column ` +
-        `${said.column}: ` : ""}${said.why}.`);
+        `${said.column}: ` : ""}${said.why}.${after}`);
       return false;
     }
-    doc = { path, base: await local.digest(bytes), clean: model(), id: newId() };
-    named.textContent = path;
-    document.title = `${path} - ksmd`;
-    history.replaceState(null, "", `${location.pathname}?doc=${encodeURIComponent(path)}`);
+    become({ path, base, clean: model(), id: newId() });
+    forget();
     quiet();
     showState(false);
     await fill();
@@ -133,6 +202,14 @@ function ksmdFiles(ks, api) {
   }
 
   // ---- What includes and images show ----
+
+  // Lets go what was fetched for the document before: the files' bytes and the images' URLs.
+  function forget() {
+    for (const s of shown.values()) if (s.url) URL.revokeObjectURL(s.url);
+    shown.clear();
+    sources = new Map();
+    images = new Map();
+  }
 
   // Fetches what the view lacks, a round per level of includes, then shows the whole document.
   async function fill() {
@@ -258,54 +335,59 @@ function ksmdFiles(ks, api) {
 
   // ---- Saving ----
 
-  // Saves the open document to its own file. A document that has no file yet is placed with Save
-  // As (`saveOrPlace`), so Save never asks for a path itself.
-  async function save() {
+  // The source a save writes, or null where text in a cell still open cannot go in. The text then
+  // stays in its cell and in the draft, and nothing is written.
+  function toSave() {
     const text = api.source();
-    if (doc.base === null) {
-      await place(doc.path, text, false);
-      return;
-    }
+    if (ks.table.pending() === null) return text;
+    ks.say("Nothing was saved: the text in the open cell cannot go in. Change it, or press Esc to " +
+      "drop it.");
+    return null;
+  }
+
+  // Saves the open document to its own file: true once it is written. A document that has no
+  // file yet is placed with Save As (`saveOrPlace`), so Save never asks for a path itself.
+  async function save() {
+    const text = toSave();
+    if (text === null) return false;
+    if (doc.base === null) return place(doc.path, text, null);
     const now = await local.read(doc.path);
     if (now.status === 404) {
       askGone();
-      return;
+      return false;
     }
     if (now.status !== 200) {
       ks.say(`${doc.path} could not be saved. ${now.why}`);
-      return;
+      return false;
     }
     const d = await local.digest(now.bytes);
     if (d !== doc.base) {
-      askChanged(now.bytes, d);
-      return;
+      await askChanged(now.bytes, d);
+      return false;
     }
-    await write(text, d);
+    return write(text, d);
   }
 
-  // Saves to a new place. A file is written only where none stands, so no other file is replaced,
-  // unless the person chose to replace it: then only the bytes that stood there when asked.
-  async function place(path, text, replace) {
+  // Saves to a new place: true once it is written. A file is written only where none stands, so
+  // no other file is replaced, unless the person chose to replace it. Then `expected` names the
+  // bytes that stood there when it was chosen, and only those are replaced.
+  async function place(path, text, expected) {
     const bytes = ks.enc.encode(text);
-    let expected = null;
-    if (replace) {
-      const now = await local.read(path);
-      if (now.status === 200) expected = await local.digest(now.bytes);
-      else if (now.status !== 404) {
-        ks.say(`${path} could not be saved. ${now.why}`);
-        return;
-      }
-    }
     const got = await local.write(path, bytes, expected);
     if (got.status === 409) {
-      ks.say(replace ? `${path} changed while you chose it. Nothing was written. Choose again.` :
-        `${path} already exists. Open it, or type another path for this document.`);
-    } else if (got.status !== 200) {
-      ks.say(`${path} could not be saved. ${got.why}`);
-    } else {
-      await saved(path, bytes, text);
+      ks.say(expected !== null ? `${path} changed after you chose it. Nothing was written. ` +
+        "Choose again." : `${path} already exists. Open it, or type another path for this document.`);
+      return false;
     }
+    if (got.status !== 200) {
+      ks.say(`${path} could not be saved. ${got.why}`);
+      return false;
+    }
+    await saved(path, bytes, text);
+    return true;
   }
+
+  const folderOf = (path) => path.slice(0, path.lastIndexOf("/") + 1);
 
   // Save As, and Open with the dialog. **The dialog is open outside `one`**, so a check or a draft
   // waiting behind it still runs; only what is chosen runs as a step.
@@ -317,9 +399,23 @@ function ksmdFiles(ks, api) {
     if (got === null) return;
     await one(async () => {
       const path = resolve(got.path, "saved");
-      if (path === null) return;
-      if (path === doc.path && doc.base !== null) await save();
-      else await place(path, api.source(), got.replace);
+      if (path === null || toSave() === null) return;
+      if (path === doc.path && doc.base !== null) {
+        await save();
+        return;
+      }
+      // An include's or an image's path is read from the document's folder, so saved in another
+      // folder, each path is written again to name the same file. One undo takes that back.
+      const from = folderOf(doc.path).replace(/\/$/, "");
+      const to = folderOf(path).replace(/\/$/, "");
+      let moved = false;
+      if (from !== to) {
+        const f = ks.enc.encode(from);
+        const r = ks.act("ksmd_web_move_paths", f.length, ks.putBytes(f, ks.enc.encode(to)) - f.length);
+        moved = !!r && r.changed === 1;
+      }
+      // A save that does not happen leaves the paths as they were, for the document's own folder.
+      if (!(await place(path, api.source(), got.expected)) && moved) ks.act("ksmd_web_undo");
     });
   }
 
@@ -337,44 +433,48 @@ function ksmdFiles(ks, api) {
     if (got !== null) await one(() => open(got.path));
   }
 
-  // Writes the document's own file, if it still holds what `expected` names (null: no file).
+  // Writes `text` to the document's own file, if it still holds what `expected` names (null: no
+  // file). True once it is written; a null `text` writes nothing.
   async function write(text, expected) {
+    if (text === null) return false;
     const bytes = ks.enc.encode(text);
     const got = await local.write(doc.path, bytes, expected);
     if (got.status === 409) {
       const now = await local.read(doc.path);
-      if (now.status === 200) askChanged(now.bytes, await local.digest(now.bytes));
+      if (now.status === 200) await askChanged(now.bytes, await local.digest(now.bytes));
       else askGone();
-      return;
+      return false;
     }
     if (got.status !== 200) {
       ks.say(`${doc.path} could not be saved. ${got.why}`);
-      return;
+      return false;
     }
     await saved(doc.path, bytes, text);
+    return true;
   }
 
   async function saved(path, bytes, text) {
     const left = doc;
-    doc = { path, base: await local.digest(bytes), clean: text, id: left.id };
+    become({ path, base: await local.digest(bytes), clean: text, id: left.id });
     await keep.drop(root, left.path, left.id);
-    if (left.path !== path) {
-      named.textContent = path;
-      document.title = `${path} - ksmd`;
-      history.replaceState(null, "", `${location.pathname}?doc=${encodeURIComponent(path)}`);
-      ks.call("ksmd_web_place", ks.put(path));
-      await fill();
-    }
+    if (left.path !== path) await fill();
     quiet();
-    showState(model() !== doc.clean);
+    showState(unsaved());
     ks.say(`Saved ${path}.`);
   }
 
-  function askChanged(bytes, d) {
+  // Where no draft could be held, the choice to load the file's version says that it discards
+  // the page's edits. Where it says it keeps them, it loads nothing unless a draft holds them.
+  async function askChanged(bytes, d) {
+    const kept = await holdAside();
     ask(`${doc.path} was changed on disk after this page opened it. Your edits are not saved.`, [
-      ["Replace the file with this version", () => write(api.source(), d)],
-      ["Load the file's version; keep mine as a draft", async () => {
-        await holdAside();
+      ["Replace the file with this version", () => write(toSave(), d)],
+      [kept ? "Load the file's version; keep mine as a draft" : "Load the file's version; discard " +
+        "mine", async () => {
+        if (!await holdAside() && kept && unsaved()) {
+          ks.say("Nothing was loaded: your edits could not be held as a draft. Save them first.");
+          return;
+        }
         await take(doc.path, bytes);
       }],
       ["Keep editing", quiet],
@@ -383,7 +483,7 @@ function ksmdFiles(ks, api) {
 
   function askGone() {
     ask(`${doc.path} is no longer on disk. Your edits are not saved.`, [
-      ["Save it there again", () => write(api.source(), null)],
+      ["Save it there again", () => write(toSave(), null)],
       ["Keep editing", quiet],
     ]);
   }
@@ -393,15 +493,15 @@ function ksmdFiles(ks, api) {
   async function check() {
     if (doc.path !== "" && doc.base !== null) {
       const now = await local.read(doc.path);
-      if (now.status === 404 && model() !== doc.clean) {
+      if (now.status === 404 && unsaved()) {
         askGone();
       } else if (now.status === 200) {
         const d = await local.digest(now.bytes);
         if (d !== doc.base) {
-          if (model() !== doc.clean) {
-            askChanged(now.bytes, d);
-          } else {
-            await take(doc.path, now.bytes);
+          if (unsaved()) {
+            await askChanged(now.bytes, d);
+          } else if (await take(doc.path, now.bytes, " It was changed on disk. The page shows " +
+            "the version it opened.")) {
             ks.say(`${doc.path} was changed on disk. The page shows it as it is now.`);
             return;
           }
@@ -416,21 +516,60 @@ function ksmdFiles(ks, api) {
   let timer = null;
   let first = 0;
   // Holds the unsaved source aside, or lets the draft go where nothing is unsaved. True where a
-  // draft is held.
+  // draft is held. **A cell still open is held as it is**: taking it would close it under the
+  // person's typing, and a value the model refuses would be lost.
   async function holdAside() {
     clearTimeout(timer);
     timer = null;
     if (root === "") return false;
     const mine = doc;
     const text = model();
-    if (text === mine.clean) {
+    const cell = ks.table.pending();
+    heldNow = true;
+    if (text === mine.clean && cell === null) {
       showState(false);
       await keep.drop(root, mine.path, mine.id);
       return false;
     }
-    const held = await keep.put({ root, path: mine.path, id: mine.id, text, base: mine.base });
+    const held = await keep.put({ root, path: mine.path, id: mine.id, text, cell, base: mine.base });
+    // An edit made while the draft was written is not in it, and has set `heldNow` false.
+    heldNow = heldNow && held !== null;
     if (doc === mine) showState(true, held !== null);
     return held !== null;
+  }
+
+  // Brings a draft back in place of the open document. Edits made since it opened go aside first,
+  // as a draft of their own, so neither version is lost.
+  async function bringBack(d) {
+    const since = unsaved();
+    if (since && !await holdAside()) {
+      ks.say("The draft was not brought back: your edits since the document opened cannot be held " +
+        "aside. Save them first.");
+      return;
+    }
+    const said = api.load(d.text);
+    if (!said.ok) {
+      if (!ks.stopped) ks.say(`The draft was not brought back: ${said.why}.`);
+      return;
+    }
+    become({ ...doc, base: d.base, id: newId() });
+    quiet();
+    await fill();
+    // The text of a cell that was open goes in as the cell's value, as taking the cell does. A
+    // value the editor refuses stays in its open cell, so the new draft holds it too.
+    const c = d.cell;
+    const r = c ? ks.act("ksmd_web_set_cell", c.block, c.row, c.column, ks.put(c.text)) : null;
+    if (r && !r.ok) ks.table.openWith(c.block, c.row, c.column, c.text, c.text.length, c.text.length);
+    // The old draft goes only once a new one holds what came back.
+    if (!await holdAside() && unsaved()) {
+      ks.say("The draft is back, but this browser could not hold it again, so the old draft stays. " +
+        "Save the document.");
+      return;
+    }
+    await keep.drop(d.root, d.path, d.id);
+    ks.say(`The draft of ${d.path || "the new document"} is back. It is not saved yet.` +
+      (r && !r.ok ? ` The text typed in a cell stays open in its cell: ${r.why}` : "") + (since ?
+      " Your edits made since the document opened are held aside as a draft." : ""));
   }
 
   async function offerDraft() {
@@ -440,15 +579,7 @@ function ksmdFiles(ks, api) {
     const more = found.length > 1 ? ` ${found.length - 1} older drafts are held too.` : "";
     ask(`Unsaved edits to ${d.path || "a new document"} from ${new Date(d.at).toLocaleString()} ` +
       `are held aside as a draft.${more}`, [
-      ["Bring them back", async () => {
-        if (!api.load(d.text).ok) return;
-        doc = { ...doc, base: d.base };
-        await holdAside();
-        await keep.drop(d.root, d.path, d.id);
-        quiet();
-        await fill();
-        ks.say(`The draft of ${d.path || "the new document"} is back. It is not saved yet.`);
-      }],
+      ["Bring them back", () => bringBack(d)],
       ["Discard them", async () => {
         await keep.drop(d.root, d.path, d.id);
         quiet();
@@ -460,13 +591,19 @@ function ksmdFiles(ks, api) {
   // ---- Start ----
 
   ks.rendered.push(showImages);
-  ks.changed.push(() => {
+  // An edit, in the document or in a cell still open, is unsaved until a save.
+  const edited = () => {
+    heldNow = false;
     showState(true);
     const now = Date.now();
     if (timer === null) first = now;
     clearTimeout(timer);
     // A pause of a second holds a draft, and so does typing that has gone on five seconds.
     timer = setTimeout(() => one(holdAside), now - first >= 5000 ? 0 : 1000);
+  };
+  ks.changed.push(edited);
+  ks.root.addEventListener("input", (e) => {
+    if (e.target.classList && e.target.classList.contains("cell-input")) edited();
   });
   ks.root.addEventListener("click", (e) => {
     const b = e.target.closest && e.target.closest(".include-open");
@@ -491,8 +628,9 @@ function ksmdFiles(ks, api) {
     showFileItems();
     local.hold();
     keep.prune();
+    // The new document is open, and the address keeps the one to open until it opens.
+    placeEditor("");
     doc = { path: "", base: null, clean: model(), id: newId() };
-    ks.call("ksmd_web_place", ks.put(""));
     ks.addImage = (file) => one(() => addImage(file));
     ks.fileCommand = (name) => {
       if (name === "file-open") openChosen();
@@ -528,7 +666,16 @@ function ksmdFiles(ks, api) {
       else lookAgain();
     });
     window.addEventListener("pagehide", () => one(holdAside));
+    // A draft written as the page goes may not land, so leaving asks while no draft holds the edits.
+    window.addEventListener("beforeunload", (e) => {
+      if (heldNow || !unsaved()) return;
+      e.preventDefault();
+      e.returnValue = "";
+    });
     const linked = new URLSearchParams(location.search).get("doc");
-    await one(() => (linked ? open(linked) : offerDraft()));
+    // A linked document that does not open leaves the new document, whose draft is then offered.
+    await one(async () => {
+      if (!linked || !await open(linked)) await offerDraft();
+    });
   })();
 }

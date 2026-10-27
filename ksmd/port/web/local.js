@@ -7,20 +7,22 @@
 
 function ksmdLocal() {
   const KEY = "ksmd.token";
-  // A request past this many milliseconds says why: a browser opens six connections to one
-  // server, and each tab holds one of them (`hold`).
+  // The token's one form: 48 lowercase hexadecimal digits ("How the token gets across").
+  const TOKEN = /^[0-9a-f]{48}$/;
+  // A request past this many milliseconds gives up and says so.
   const WAIT_MS = 15000;
 
+  // Takes the token from the fragment's `t=` once, when the page starts. **Read it as name=value
+  // pairs**: `#heart=1` holds no token. Text of another form never replaces the token kept.
   function takeToken() {
-    const hash = location.hash || "";
-    const at = hash.indexOf("t=");
-    if (at < 0) return "";
-    const got = decodeURIComponent(hash.slice(at + 2).split("&")[0]);
+    const got = new URLSearchParams((location.hash || "").slice(1)).get("t");
+    if (got === null) return "";
     try {
       history.replaceState(null, "", location.pathname + location.search);
     } catch (_) { /* the token still works where the address cannot be rewritten */ }
+    if (!TOKEN.test(got)) return "";
     try {
-      if (got) sessionStorage.setItem(KEY, got);
+      sessionStorage.setItem(KEY, got);
     } catch (_) { /* without storage, a reload asks for the URL again */ }
     return got;
   }
@@ -39,8 +41,8 @@ function ksmdLocal() {
 
   // Why a request got no answer, in words a person can act on.
   const lost = (e) => (e && e.name === "TimeoutError" ?
-    `The local server did not answer within ${WAIT_MS / 1000} seconds. A browser opens six ` +
-      "connections to one server, and each ksmd tab holds one. Close a ksmd tab, then try again." :
+    `The local server did not answer within ${WAIT_MS / 1000} seconds. Try again. If it still ` +
+      "does not answer, start ksmd on the folder again, then open the URL it shows." :
     "The local server cannot be reached. Start ksmd on the folder again, then open the URL it shows.");
 
   // What a refusal means for a file, by its status.
@@ -122,19 +124,26 @@ function ksmdLocal() {
         return { status: 0, why: lost(e) };
       }
     },
-    // Holds one connection open while the page is open, so the server stops only once no page
-    // holds it. **It opens again when it ends**, as a connection can break with the tab open.
-    async hold() {
-      for (;;) {
-        try {
-          const got = await fetch("/api/here", { headers: head() });
-          if (got.ok && got.body) {
-            const reader = got.body.getReader();
-            while (!(await reader.read()).done) { /* nothing arrives; the wait is the hold */ }
-          }
-        } catch (_) { /* the server went, or the connection broke */ }
-        await new Promise((go) => setTimeout(go, 5000));
-      }
+    // Holds one connection open while a tab of the page is open, so the server stops only once
+    // none is. **One tab of this address holds it**: a browser opens six connections to one
+    // server, and a hold in each tab would use them up, so no save could go out. The other tabs
+    // wait for the lock, and one takes over when the holder closes. The hold opens again when it
+    // ends, as a connection can break with the tab open.
+    hold() {
+      const holding = async () => {
+        for (;;) {
+          try {
+            const got = await fetch("/api/here", { headers: head() });
+            if (got.ok && got.body) {
+              const reader = got.body.getReader();
+              while (!(await reader.read()).done) { /* nothing arrives; the wait is the hold */ }
+            }
+          } catch (_) { /* the server went, or the connection broke */ }
+          await new Promise((go) => setTimeout(go, 5000));
+        }
+      };
+      if (navigator.locks) navigator.locks.request("ksmd-hold", holding);
+      else holding();
     },
   };
 }

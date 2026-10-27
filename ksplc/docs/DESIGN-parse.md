@@ -364,10 +364,10 @@ impl E
 | an `enum` carrying a const generic | the type arguments' names are not restored |
 | `variants()` and `from_variant_name()` on an `enum` with a type parameter or a payload variant | a top-level constant cannot hold a generic type, and a variant with a payload is no value without its data. Sema reports a use of either by name (`refuse_variant_list` in `sema/body/dot.kspl`) |
 
-**What it makes is placed at the `enum`'s name, and is marked as made by the compiler.** Parsed from a string, its positions are the string's. Read in the file, they land on whatever the file's first lines hold. Unplaced, the editor would colour the `Mode` of `impl Mode` over the path in an `import` line, and a hover or a jump there would answer the `enum`.
+**What it makes is placed at the `enum`'s name, and is marked as made by the compiler.** Parsed from a string, its positions are the string's. Read in the file, they land on whatever the file's first lines hold. Unplaced, a hover or a jump on the path in an `import` line would answer the `enum`.
 
 * `place_as_made` in `base/ast_ext.kspl` places every node at the name, so a diagnostic, and the jump from a written `e.variant_name()`, land on what it was made for.
-* It also marks the `impl`, its methods and the constant. The language server's walks by position skip what `made_by_compiler` answers (`lsp/semtok.kspl`, `lsp/outline.kspl`, `lsp/position.kspl`, `lsp/uses.kspl`).
+* It also marks the `impl`, its methods and the constant. The language server's walks by position skip what `made_by_compiler` answers (`lsp/outline.kspl`, `lsp/position.kspl`, `lsp/uses.kspl`).
 * The mark lives in `ival`, which the AST cache keeps.
 
 Swift's synthesized conformances take the same two steps (an implicit declaration, placed at the type), as rustc marks what a derive expands (`Span::from_expansion`).

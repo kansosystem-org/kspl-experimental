@@ -19,18 +19,36 @@ import "ksmd/model/model" { Block, Cell, Document, Inline, Table }
 import "ksmd/model/rule" { has_rule, write_rule }
 import "ksmd/syntax/chart" { write_chart }
 import "std/chars"
+import "std/ds" { List }
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
 
 priv const MIN_FENCE: Sz = 3
+priv const HEADER: U8[] = "%ksmd 1\n"
 
 fn write(doc: Document@, out: Str_builder$@) //< appends the whole source to `out`
     defer scratch: = Arena(16 * 1024)
     at: = Positions(doc, scratch)
-    out.s("%ksmd 1\n")
+    out.s(HEADER)
     for i in Range.asc(doc.blocks.len)
         out.c('\n')
         write_block(doc, doc.blocks.get(i), at@, out)
+
+fn size(doc: Document@): Sz //< how many bytes `write` appends
+    return HEADER.len + blocks_size(doc, doc.blocks@, 0, doc.blocks.len)
+
+fn blocks_size(doc: Document@, blocks: List<|Block|>@, from: Sz, to: Sz): Sz //<
+    //< How many bytes blocks `from` to `to` of `blocks` take in the source, with a blank line each
+    //< Each block is written alone into one buffer used again, so the whole source is never held.
+    defer scratch: = Arena(16 * 1024)
+    at: = Positions(doc, scratch)
+    defer $out: = Str_builder()
+    $bytes: Sz = 0
+    for i in Range(from, to, 1)
+        out.clear()
+        write_block(doc, blocks.get(i), at@, out@)
+        bytes += 1 + out.slice().len
+    return bytes
 
 priv fn write_block(doc: Document@, b: Block, at: Positions@, out: Str_builder$@)
     // A paragraph's or a heading's alignment and note stand on a line of braces before it.

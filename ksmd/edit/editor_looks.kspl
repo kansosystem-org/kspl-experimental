@@ -1,0 +1,134 @@
+//< The editor's looks of text: a colour, an alignment, Clear, and what stands at the selection
+//< A look is direct formatting, as Excel's cell formatting is. The marks, strong and emphasis, are
+//< part of what the text says, so `toggle_mark` in `editor.kspl` holds them, and Clear leaves them.
+import "ksmd/edit/editor" { Editor, Refused, Work, end_block }
+import "ksmd/edit/region" { Style, same_spot }
+import "ksmd/edit/styled" { Mark, has_mark, length, marks_before, set_color }
+import "ksmd/model/look" { plain_look, with_part }
+import "std/mem" { Arena }
+
+impl Editor
+    fn set_text_color(ed: Self$@, color: U8[]): Void!Refused //<
+        //< Colours the selected text, or takes its colour away with an empty one
+        //< With nothing selected, the colour applies to the text typed next. Code blocks, tables,
+        //< images and includes are left as they are.
+        given: = with_part(plain_look(), .color, color) catch
+            throw .look
+        kept: = ed.arena.dup_str(given.color)
+        s: = ed.start_spot()
+        e: = ed.end_spot()
+        defer scratch: = Arena(16 * 1024)
+        $w: = ed.work(s, e, s.block, end_block(e), scratch)
+        if same_spot(s, e)
+            unit: = w.units[w.start.unit]@
+            $m: =
+                ed.typing if ed.marked else marks_before(unit.segs@, w.start.offset)
+            m.color = kept
+            ed.typing = m
+            ed.marked = true
+            return
+        for i in Range(w.start.unit, w.end.unit + 1, 1)
+            u: = w.units[i]@
+            if u.whole || u.style.kind == .code
+                continue
+            from: = w.start.offset if i == w.start.unit else 0
+            to: = w.end.offset if i == w.end.unit else length(u.segs@)
+            set_color(u.segs@, from, to, kept, scratch)
+            u.edited = true
+        ed.restyle(w@, scratch)!
+
+    fn set_align(ed: Self$@, value: U8[]): Void!Refused //<
+        //< Aligns each paragraph and heading of the selection: left, center, right, or empty for
+        //< none. List items and other blocks are left as they are.
+        $probe: = plain_look()
+        probe = with_part(probe, .align, value) catch
+            throw .look
+        s: = ed.start_spot()
+        e: = ed.end_spot()
+        defer scratch: = Arena(16 * 1024)
+        $w: = ed.work(s, e, s.block, end_block(e), scratch)
+        for i in Range(w.start.unit, w.end.unit + 1, 1)
+            u: = w.units[i]@
+            if u.whole || u.style.kind != .paragraph && u.style.kind != .heading
+                continue
+            u.style.align = probe.align
+            u.edited = true
+        ed.restyle(w@, scratch)!
+
+    fn clear_look(ed: Self$@): Void!Refused //<
+        //< Takes the selection's look away in one step: the text's colour, and the alignment of
+        //< each paragraph and heading it touches, as Excel's Clear Formats does
+        //< With nothing selected, the paragraph's alignment goes, and text typed next takes no
+        //< colour. The marks stay: they are part of what the text says, not of its look.
+        s: = ed.start_spot()
+        e: = ed.end_spot()
+        defer scratch: = Arena(16 * 1024)
+        $w: = ed.work(s, e, s.block, end_block(e), scratch)
+        collapsed: = same_spot(s, e)
+        for i in Range(w.start.unit, w.end.unit + 1, 1)
+            u: = w.units[i]@
+            if u.whole || u.style.kind == .code
+                continue
+            if u.style.kind == .paragraph || u.style.kind == .heading
+                u.style.align = .none
+            if !collapsed
+                from: = w.start.offset if i == w.start.unit else 0
+                to: = w.end.offset if i == w.end.unit else length(u.segs@)
+                set_color(u.segs@, from, to, "", scratch)
+            u.edited = true
+        if collapsed
+            unit: = w.units[w.start.unit]@
+            $m: =
+                ed.typing if ed.marked else marks_before(unit.segs@, w.start.offset)
+            m.color = ""
+            ed.typing = m
+            ed.marked = true
+        ed.restyle(w@, scratch)!
+
+    fn here(ed: Self$@): Here //< what stands at the selection, as a toolbar shows it
+        //< The style is the first unit's. A mark is on where all the selected text has it, or,
+        //< with nothing selected, where the text typed next would take it. Inline code shows on
+        //< where the caret stands inside it.
+        s: = ed.start_spot()
+        e: = ed.end_spot()
+        defer scratch: = Arena(16 * 1024)
+        w: = ed.work(s, e, s.block, end_block(e), scratch)
+        first: = w.units[w.start.unit]@
+        $h: = Here::{ .style = first.style, .whole = first.whole, .emphasis = false,
+            .strong = false, .code = false }
+        if first.whole || first.style.kind == .code
+            return h
+        if same_spot(s, e)
+            m: =
+                ed.typing if ed.marked else marks_before(first.segs@, w.start.offset)
+            h.emphasis = m.emphasis
+            h.strong = m.strong
+            h.code =
+                w.start.offset > 0 &&
+                has_mark(first.segs@, w.start.offset - 1, w.start.offset, .code)
+            return h
+        h.emphasis = covered(w@, .emphasis)
+        h.strong = covered(w@, .strong)
+        h.code = covered(w@, .code)
+        return h
+
+struct Here //< what stands at the selection: the kind of its first unit, and the marks on it
+    style: Style
+    whole: Bool //< the selection starts on a whole block, such as a table or an image
+    emphasis: Bool
+    strong: Bool
+    code: Bool
+
+priv fn covered(w: Work@, which: Mark): Bool //< whether all the selected text has a mark
+    $any: = false
+    for i in Range(w.start.unit, w.end.unit + 1, 1)
+        u: = w.units[i]@
+        if u.whole || u.style.kind == .code
+            continue
+        from: = w.start.offset if i == w.start.unit else 0
+        to: = w.end.offset if i == w.end.unit else length(u.segs@)
+        if to > from
+            if !has_mark(u.segs@, from, to, which)
+                return false
+            any = true
+    return any

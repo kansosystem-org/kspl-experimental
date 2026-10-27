@@ -1,41 +1,34 @@
 //< Keeps what the car must remember across a power cut
-//< The policy that was handed out, and the weights it learned itself — into and out of the record
-//< on the board (ksdb).
+//< The policy that was handed out, into and out of the record on the board (ksdb).
 //< **The record kinds' numbers are set here and nowhere else.** Assigned in two places, one number
 //< would get a second meaning, and what the previous start-up wrote would be read as another type.
 //< **Every one of them is on the "keep running even if it cannot be saved" side.** When the
 //< record is full or a write fails, neither driving nor deciding stops. The caller shows in the
 //< report how many times it could save.
 import "ksdb/log" as ksdblog
-import "ksos/demo/common/car_model" as cmodel
 import "ksos/demo/rp2040/common/console" as con
 import "ksos/demo/rp2040/common/records"
+import "ksos/demo/rp2040/common/sample" as csample
 
 const KIND_POLICY: U16 = 1 //< the record kinds
     //< 0 is the marker, so it is not used (`records.KIND_MARKER`).
 const KIND_SAMPLE: U16 = 2
-const KIND_MODEL: U16 = 3
-
-$saves: U32 = 0
-
-fn models_saved(): U32 //< how many times the learned weights were saved in the record
-    //< **While it is 0, the next start-up does not resume where this one left off.**
-    return saves
 
 fn wipe(marker: U8[], blob: U8[]): Bool //<
     //< Erases the record, and writes back only the marker and the policy
     //< **true if they were written back.**
     //< Caution: **Do not erase the policy too.** It is in the same region. A naive erase leaves
-    //< the car unable to move at all on the next start-up with no PC there. **The observations and
-    //< the learned weights do go** (the weights are learned again while driving).
+    //< the car unable to move at all on the next start-up with no PC there. **The observations do
+    //< go.**
     if !records.ok()
         return false
     lg: = records.handle()
     lg.reset() catch
         return false
+    // The observations are gone, so the recorder starts again, whatever the write-back does.
+    csample.restart()
     lg.append(records.KIND_MARKER, marker) catch
         return false
-    saves = 0
     if blob.len == 0
         return true
     lg.append(KIND_POLICY, blob) catch
@@ -72,21 +65,3 @@ fn stored_policy(buf: U8$[]): U8[]!ksdblog.Ksdb_error //<
         throw .not_found
     n: = records.handle().last(KIND_POLICY, buf)!
     return U8[]::{ .ptr = buf.ptr, .len = n }
-
-fn save_model(buf: U8$[]) //< saves the learned weights in the record
-    //< Caution: **It returns silently even when it fails.** It is called again and again inside the
-    //< loop, so messages here would flood the lines while it runs.
-    if !records.ok() || !cmodel.save(buf)
-        return
-    records.handle().append(KIND_MODEL, U8[]::{ .ptr = buf.ptr, .len = buf.len }) catch
-        return
-    saves += 1
-
-fn load_model(buf: U8$[]): Bool //< reads the weights the previous start-up saved
-    //< **true if they were read.**
-    //< **They can be rejected** (after the scale or the net's shape changes). Then it runs with the
-    //< initial values and learns again.
-    n: = records.read_last(KIND_MODEL, buf)
-    if n != buf.len
-        return false
-    return cmodel.load(U8[]::{ .ptr = buf.ptr, .len = n })

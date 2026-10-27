@@ -1,12 +1,17 @@
 //< Charts: how `:::chart` reads and saves, how it follows its table, and inserting and setting one
 import "ksmd/base/source" { Source }
+import "ksmd/edit/edit"
+import "ksmd/edit/editor" { Editor, Refused }
 import "ksmd/edit/editor_charts" { Chart_settings }
 import "ksmd/edit/editor_tables"
 import "ksmd/syntax/reader"
+import "ksmd/syntax/writer"
 import "ksmd/tests/tables" { opened, saves }
+import "std/chars"
 import "std/ds" { List }
 import "std/mem" { Arena }
 import "std/str"
+import "std/str" { Str_builder }
 import "std/verdict"
 
 priv const TABLE: U8[] =
@@ -17,6 +22,7 @@ fn run()
     reading()
     following()
     editing()
+    names()
 
 priv fn reading()
     defer arena: = Arena(64 * 1024)
@@ -75,6 +81,54 @@ priv fn editing()
     saves("one undo gives the settings before back", ed@, arena, inserted)
     ed.undo()
     saves("and another takes the chart away", ed@, arena, plain)
+
+// The reader finds a chart's columns by their names, so an edit that would lose one is refused.
+priv fn names()
+    defer arena: = Arena(64 * 1024)
+    text: =
+        doc_with(":::chart table=\"t\" kind=\"bar\" labels=\"item\" values=\"cost\"\n:::\n", arena)
+    $ed: = opened(text, arena)
+    lost(ed@, "a drawn column's name cannot be emptied", 1, "", text, arena)
+    lost(ed@, "a drawn column's name holds no ','", 1, "cost, net", text, arena)
+    lost(ed@, "a drawn column does not take the name of a column before it", 1, "item", text, arena)
+    lost(ed@, "the labels' name cannot be emptied", 0, "", text, arena)
+    lost(ed@, "no column before a drawn one takes its name", 0, "cost", text, arena)
+    ed.set_cell(0, -1, 2, "cost") catch e
+        verdict.check("a name after a drawn one's", false, e.message())
+    verdict.check("a column after a drawn one can take its name, which still finds the first",
+        source_of(ed@, arena).find_str("| \"cost\" | \"cost\" |").is_some(), "")
+    $twice: =
+        opened("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"x\" | \"x\" |\n| 1 | 2 | 3 \
+            |\n:::\n\n:::chart table=\"t\" kind=\"bar\" labels=\"a\" values=\"x\"\n:::\n", arena)
+    before: = source_of(twice@, arena)
+    $moved: = true
+    edit.move_column(twice.doc@, 0, 2, 0) catch
+        moved = false
+    verdict.check("a column does not move before a drawn column of the same name",
+        !moved && source_of(twice@, arena).equals(before), "")
+    unnamed: = "%ksmd 1\n\n:::table name=\"t\"\n| \"\" | \"cost\" |\n| \"Jan\" | 1 |\n:::\n"
+    $blank: = opened(unnamed, arena)
+    $inserted: = true
+    blank.insert_chart(0) catch e
+        inserted = false
+        verdict.check("a chart's labels need a name",
+            e.message().equals(Refused.table(.chart_name).message()), e.message())
+    verdict.check("so no chart is put in", !inserted, "")
+    saves("and the document stays as it was", blank@, arena, unnamed)
+
+priv fn lost(ed: Editor$@, what: U8[], column: Sz, name: U8[], text: U8[], arena: Arena$@) //<
+    //< Giving a column of table `t` this name is refused for the chart, and changes nothing
+    ed.set_cell(0, -1, column, name) catch e
+        verdict.check(what,
+            e.message().equals(Refused.table(.chart_name).message()), e.message())
+        saves(arena.text().s(what).s(": nothing changes").take(), ed, arena, text)
+        return
+    verdict.check(what, false, "the name was set")
+
+priv fn source_of(ed: Editor@, arena: Arena$@): U8[] //< the source the document saves as
+    defer $out: = Str_builder()
+    writer.write(ed.doc@, out@)
+    return arena.dup_str(out.slice())
 
 priv fn doc_with(chart: U8[], arena: Arena$@): U8[] //< the table `t`, then a chart clause
     return arena.text().s("%ksmd 1\n\n").s(TABLE).s("\n").s(chart).take()

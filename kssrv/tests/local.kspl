@@ -182,9 +182,6 @@ priv fn status_cases(port: I32, auth: U8[], arena: Arena$@): Void!client.Http_en
     verdict.check("--local's status declares it is for local use",
         client.doc_of(st0, arena).get("local").as_bool().unwrap_or(false),
         client.shown(st0, arena))
-    verdict.check("--local's status carries no policy (none is trained)",
-        client.doc_of(st0, arena).get("pilot").get("params").as_int().unwrap_or(-1) < 0,
-        client.shown(st0, arena))
 
 priv fn read_cases(port: I32, auth: U8[], arena: Arena$@): Void!client.Http_end //< reading a file
     got: = client.get(port, "/api/file?path=sub/one.txt", auth, arena)!
@@ -293,7 +290,7 @@ priv fn conditional_cases(port: I32, auth: U8[], arena: Arena$@): Void!client.Ht
     client.expect_status("conditional creation succeeds once", first, 200, arena)
     second: = client.put_file(port, path, missing, "overwrite", arena)!
     client.expect_status("conditional creation refuses an existing file", second, 409, arena)
-    hex: U8[sha256.HEX_LEN] = ::{}
+    $hex: U8[sha256.HEX_LEN] = ::{}
     sha256.write_hex(sha256.hash("original"), U8$[]::hex)
     expected: = arena.text().s(auth).s("X-Kanso-If-Content: ").s(U8[]::hex).s("\r\n").take()
     saved: = client.put_file(port, path, expected, "winner", arena)!
@@ -333,6 +330,18 @@ priv fn write_cases(port: I32, auth: U8[], root: U8[], arena: Arena$@): Void!cli
     twice: = client.get(port, "/api/file?path=sub/two.txt", auth, arena)!
     ok6: = again.status == 200 && twice.body.equals("second\n")
     verdict.check("writing twice replaces", ok6, client.shown(twice, arena))
+    // Caution: **Hold the reading connection open while writing**, as a page does. An empty file
+    // read on it stayed open in the server, and Windows cannot replace an open file. Only
+    // Windows shows it: elsewhere the rename goes through.
+    empty: = fs.join(root, "sub/empty.txt", arena)
+    io.write_file(empty, "") catch panic("sub/ must be writable")
+    defer $held: = client.Conn.open(port)!
+    held.send(client.raw("GET", "/api/file?path=sub/empty.txt", auth, "", arena))!
+    read: = held.next(false, client.DEFAULT_TIMEOUT_MS, arena)!
+    client.expect_status("an empty file is read", read, 200, arena)
+    over: = client.put_file(port, "/api/file?path=sub/empty.txt", auth, "now\n", arena)!
+    client.expect_status("an empty file read on an open connection can be written", over, 200,
+        arena)
     // Caution: **A write keeps the file's mode.** Suppose it is written to another name and renamed
     // over the file. A file only its owner can read would then be readable by others. A script
     // would lose its execute bit.
@@ -368,15 +377,11 @@ priv fn cap_cases(port: I32, auth: U8[], arena: Arena$@): Void!client.Http_end /
 
 priv fn files_only_cases(port: I32, auth: U8[], arena: Arena$@): Void!client.Http_end //<
     //< files, and nothing else
-    // No endpoint starts a program, even for the token. The car's endpoints are not there: local
-    // use trains no policy (the car cannot reach the loopback).
-    for gone in U8[][]::{ "/api/run", "/api/plugins", "/api/pilot" }
+    // No endpoint starts a program, even for the token.
+    for gone in U8[][]::{ "/api/run", "/api/plugins" }
         r: = client.get(port, gone, auth, arena)!
         nm_g: = arena.text().s("--local answers files only: ").s(gone).s(" is not there").take()
         client.expect_status(nm_g, r, 404, arena)
-    car: = client.post_json(port, "/api/car", auth, "{\"dist_mm\":250,\"line\":2,\"seq\":1}",
-        client.DEFAULT_TIMEOUT_MS, arena)!
-    client.expect_status("--local answers files only: /api/car is not there", car, 404, arena)
 
 priv fn early_cases(port: I32, auth: U8[], arena: Arena$@): Void!client.Http_end //<
     //< refuses a head before its body

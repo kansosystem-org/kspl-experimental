@@ -215,6 +215,13 @@ fn test_fs_absolute() //< a relative path joined onto the working directory, not
     rooted_want: U8[] = "C:\\x" if sys.is_windows() else "C:/x"
     rooted: = fs.join("C:\\", "x", arena).equals(rooted_want)
     assert(rooted, "a drive's root keeps its separator")
+    // On Windows `C:x` is relative to that drive's own working place, which absolute cannot read.
+    $drive_refused: = false
+    _abs: = fs.absolute("C:x", arena) catch
+        drive_refused = true
+        fallback ""
+    assert(drive_refused == sys.is_windows(),
+        "a path relative to a drive is refused on Windows, and is a plain name elsewhere")
     verdict
         .pass("A relative path is joined onto the working place as spelled, `..` left in it, and a \
             bare root takes a segment with no separator added.")
@@ -532,7 +539,8 @@ fn test_run_many(arena: Arena$@)
     t2: = sys.mono_us()
     // Long enough for the shell to start and print on a slow runner; the job sleeps far longer.
     cut: = subproc.run_many(stuck, 1, 3000, 4096, work, arena)
-    assert(sys.mono_us() - t2 < 10000000I64, "the stuck job is killed at its limit")
+    // Generous: waiting the job out takes 30 s, a stop at the limit 3 s on a quiet machine.
+    assert(sys.mono_us() - t2 < 20000000I64, "the stuck job is killed at its limit")
     stuck_run: = cut.get(0) catch panic("the stuck job must start")
     behind: = cut.get(1) catch panic("the job behind it must start")
     assert(stuck_run.exit_code.is_none(), "it comes back with no code, stopped at its limit")
@@ -743,16 +751,17 @@ fn test_child_holds_no_file(ksplc: U8[], arena: Arena$@) //<
     path: = "out/tmp/kspl_test_child_file/held.txt"
     $file: = io.open(path, "wb") catch panic("the file must open for writing")
     if sys.is_windows()
-        // The CRT opens a file without FILE_SHARE_DELETE, so a handle the child held refuses this.
+        // A rename over an open file fails on Windows, whatever sharing it was opened with. So a
+        // handle the child held refuses this replacement.
         $child: = subproc.spawn_piped(U8[][]::{ ksplc, "lsp" }, "")
             catch panic("the child must start")
         file.free()
-        $removed: = true
-        fs.remove_path(path) catch
-            removed = false
+        $replaced: = true
+        fs.replace_file(path, "", .kept) catch
+            replaced = false
         child.close_stdin()
         child.kill()
-        assert(removed, "a file closed while a child started before runs can be removed")
+        assert(replaced, "a file closed while a child started before runs can be replaced")
     else if fs.exists("/proc/self/fd")
         listing: =
             subproc.run_capture(U8[][]::{ "/bin/sh", "-c", "ls -l /proc/self/fd" }, "", 5000, 65536,
@@ -789,5 +798,14 @@ fn test_fs_stat_fifo() //<
     info: = fs.stat(fifo) catch panic("stat should succeed for a FIFO")
     assert(info.kind == fs.File_kind.other, "a FIFO's metadata should report neither kind")
     assert(!fs.is_dir(fifo), "a FIFO is no directory")
+    // **A copy refuses it without waiting**: a plain open of a FIFO waits for a writer.
+    copy: = "out/tmp/kspl_test_fs_fifo_copy"
+    fs.remove_path(copy) catch {}
+    $refused: = false
+    fs.copy_file(fifo, copy) catch
+        refused = true
+    assert(refused && !fs.exists(copy), "copy_file should refuse a FIFO, and leave no copy")
     fs.remove_path(fifo) catch panic("a FIFO should be removable")
-    verdict.pass("stat reports a FIFO as neither a regular file nor a directory.")
+    verdict
+        .pass("stat reports a FIFO as neither a regular file nor a directory, and copy_file refuses \
+            it.")

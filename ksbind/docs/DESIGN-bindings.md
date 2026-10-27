@@ -1,41 +1,36 @@
 # ksbind — the design
 
-`ksbind` lets a KSPL program use two C libraries that do not come with the toolchain:
-
-* OpenSSL, for a TLS client (an encrypted connection, as HTTPS uses);
-* SQLite, for a database. Each binding is plain KSPL that calls the library's own functions.
+`ksbind` lets a KSPL program use OpenSSL for a TLS client (an encrypted connection, as HTTPS uses). OpenSSL is a C library that does not come with the toolchain. The binding is plain KSPL that calls the library's own functions.
 
 Two requirements decide nearly all of its shape.
 
 | Requirement | What it means for a program |
 | :-- | :-- |
-| **A program that binds no outside library needs nothing installed** | `std`, which every program reads, holds no binding, and the runtime every program carries holds none of these libraries' C |
+| **A program that binds no outside library needs nothing installed** | `std`, which every program reads, holds no binding, and the runtime every program carries holds none of OpenSSL's C |
 | **A binding is KSPL and nothing else** | It calls the library's own functions, so `import` and `ksplc run` are all a program needs, with no C file to build and no switch to set |
 
 ## The design decisions
 
 ### The bindings stand apart from `std`
 
-**The bindings to outside C libraries live in their own package, not in the standard library.** `std` is plain KSPL over the runtime every program carries. **It builds anywhere with nothing installed** ("The standard library reaches only itself" in [`../../docs/DESIGN-repository.md`](../../docs/DESIGN-repository.md) states it for `std`). A program that wants them imports `ksbind/tls` or `ksbind/db`.
+**The bindings to outside C libraries live in their own package, not in the standard library.** `std` is plain KSPL over the runtime every program carries. **It builds anywhere with nothing installed** ("The standard library reaches only itself" in [`../../docs/DESIGN-repository.md`](../../docs/DESIGN-repository.md) states it for `std`). A program that wants them imports `ksbind/tls`.
 
 **Inside `std`, a binding would need a switch.** There are only two ways to have one, and both are bad:
 
-* `std` builds only where OpenSSL and SQLite are installed; or
+* `std` builds only where OpenSSL is installed; or
 * each binding is compiled out by default and answers `unsupported` at run time.
 
 The second leaves a call that compiles everywhere and does nothing until a build flag is set: writable but ineffective (Principle 5 in [`../../docs/DESIGN-principles.md`](../../docs/DESIGN-principles.md)). And where a binding needs C, the only C `std` has is the runtime every program carries.
 
 **How the standard libraries KSPL is matched against draw the line**:
 
-| Language | TLS in the standard library | A database in the standard library |
-| :-- | :-- | :-- |
-| Rust, C++ | No; it comes from outside libraries | No; it comes from outside libraries |
-| Go, Java | Yes, written in the language itself with no C library beneath it | Only an interface; the drivers are outside |
-| Python | An `ssl` module that binds the system's OpenSSL, so what it can do follows the version of OpenSSL it was built against | A `sqlite3` module that binds SQLite, built with Python itself |
+| Language | TLS in the standard library |
+| :-- | :-- |
+| Rust, C++ | No; it comes from outside libraries |
+| Go, Java | Yes, written in the language itself with no C library beneath it |
+| Python | An `ssl` module that binds the system's OpenSSL, so what it can do follows the version of OpenSSL it was built against |
 
 **Kanso writes no TLS of its own**: a home-made implementation of the protocol is a risk nothing here makes worth taking, so TLS is OpenSSL's. That leaves Python's shape or Rust's, and Python's puts into `std` the binding to an outside library that this design keeps out of it. So the shape is Rust's and C++'s: outside the standard library.
-
-**There is no database interface in `std` either**, as Go and Java hold. With one driver, an interface above it would be a second way to reach the same thing (Principle 6). That holds until a second driver gives the interface something to choose between.
 
 **What it gives up**:
 
@@ -44,7 +39,7 @@ The second leaves a call that compiles everywhere and does nothing until a build
 
 ### Each binding calls its library directly, holding no C
 
-**Each binding declares the C functions it calls inside its own `.kspl` file, and each `extern` block names its libraries with `#link`** (`ssl` and `crypto`, `sqlite3`). An `extern` block is where KSPL declares functions written in C. `#link` names the library to link, so `ksplc run` links it and no build file carries the names. No header of either library is in any translation unit (the C file a compiler turns into one object file). The declarations in the `.kspl` are the only ones C sees.
+**Each binding declares the C functions it calls inside its own `.kspl` file, and each `extern` block names its libraries with `#link`** (`ssl` and `crypto`). An `extern` block is where KSPL declares functions written in C. `#link` names the library to link, so `ksplc run` links it and no build file carries the names. No header of the library is in any translation unit (the C file a compiler turns into one object file). The declarations in the `.kspl` are the only ones C sees.
 
 **A macro is reached through what it expands to.** A C macro is text the C preprocessor replaces before compiling, so it is not a function KSPL can call. OpenSSL spells several settings as macros over two functions, `SSL_CTX_ctrl` and `SSL_ctrl`, each taking a command number:
 
@@ -54,7 +49,7 @@ The second leaves a call that compiles everywhere and does nothing until a build
 | `SSL_set_tlsext_host_name(ssl, name)` | `SSL_ctrl(ssl, 55, 0, name)` (`SSL_CTRL_SET_TLSEXT_HOSTNAME`, `TLSEXT_NAMETYPE_host_name`) |
 | `SSL_library_init()` | Nothing: OpenSSL 1.1.0 and later initialise on first use |
 
-**The numbers are part of OpenSSL's ABI** (the binary interface: the numbers and layouts a compiled program relies on). They are the same in 1.1.0, 1.1.1 and 3.x, as are `SSL_VERIFY_PEER` (1) and `X509_V_OK` (0). Each stands once, as a named constant beside the declarations. SQLite's `SQLITE_TRANSIENT`, a function pointer with every bit set, is passed as the pointer-width integer `-1` (the reason is beside the constant in `ksbind/db.kspl`).
+**The numbers are part of OpenSSL's ABI** (the binary interface: the numbers and layouts a compiled program relies on). They are the same in 1.1.0, 1.1.1 and 3.x, as are `SSL_VERIFY_PEER` (1) and `X509_V_OK` (0). Each stands once, as a named constant beside the declarations.
 
 **C's `long` crosses without C as well.** The two `ctrl` functions take a `long` and return one, and so does `SSL_get_verify_result`, each value fitting in 32 bits. A `long` parameter is declared `Sz` (KSPL's pointer-sized unsigned integer) and a `long` result `I32`. This is right on every target KSPL builds for. The rule and its reason are "What cannot be written in C's types" in [`../../docs/DESIGN-programming-language.md`](../../docs/DESIGN-programming-language.md).
 
@@ -73,12 +68,6 @@ Each binding closes off one well-known way that code using the library directly 
 | `tls` | Calling OpenSSL directly | **Forgotten verification.** Not calling `SSL_CTX_set_verify`, or setting SNI (`SSL_set_tlsext_host_name`) without the host name check (`SSL_set1_host`), are the standard mistakes | A client context always verifies (`SSL_VERIFY_PEER`, the default CA store), at TLS 1.2 or above; SNI and the host name check are both set |
 | `tls` (the end of a stream) | `SSL_read` | **A cut stream read as a proper end.** `SSL_read` returns 0 both for the peer's close_notify and for a TCP connection dropped without one | `read` returns 0 only after a close_notify; a connection ending any other way is `io_failed` |
 | `tls` (a peer that is gone) | `SSL_set_fd`, OpenSSL writing to the socket itself | **A write to a peer that is gone kills the program.** OpenSSL writes with no `MSG_NOSIGNAL` and offers no way to ask for it, so SIGPIPE is raised. A program that has not set it aside dies. A KSPL program ignores it, but the program a KSPL library is linked into can leave it in force | OpenSSL reads and writes memory. Every byte crosses the socket through `std/net`, whose write never raises SIGPIPE. A write to a peer that is gone fails as `io_failed` |
-| `db` | SQLite's C API | **SQL injection.** An API building queries by concatenating strings gets misused | Only placeholders: `prepare` plus `bind_i64`/`bind_f64`/`bind_text`/`bind_null` |
-| `db` (several statements) | `sqlite3_prepare_v2` | **Every statement after the first dropped without a word.** It prepares one statement and points past it, so `exec` of two `CREATE TABLE`s would make only the first | `prepare` and `exec` refuse SQL holding a second statement (`several_statements`), before anything runs. SQL holding a NUL is refused too (`prepare_failed` with SQLITE_ERROR). SQLite stops reading at the NUL, so what follows it would be dropped the same way |
-| `db` (what failed) | `sqlite3_errcode` | **A code that names no table or column.** `SQLITE_ERROR` (1) stands for a mistyped table, a syntax error and a missing column alike. SQLite's text says which, but it lasts only until the connection's next call | Each error SQLite decided carries its code and its text (`said`), copied at once |
-| `db` (rows from `exec`) | `sqlite3_exec` without a callback | **Rows thrown away unread.** A `SELECT` given to the call that runs a statement for its effect seems to succeed | `exec` refuses SQL that returns rows (`returns_rows`), before it runs |
-| `db` (closing) | `sqlite3_close` | **A connection closed while a statement is open stays open.** It answers `SQLITE_BUSY` and closes nothing. A caller that drops the answer leaks the connection, its file and its lock for as long as the process runs | `Db.free` closes with `sqlite3_close_v2`: the connection closes at once, or once its last statement is freed. So the two frees can come in either order |
-| `db` (a whole row) | `serde`'s derive / Swift's `Codable` / Jackson's annotations | **A column's name is written twice, once for the writer and once for the reader**, and fixing only one silently fills in the default | `Statement.bind_row` / `Statement.read_row` match a struct's fields to columns by name, and refuse what does not match |
 
 **`tls`: forgotten verification.** Verifying means checking that the server's certificate was signed by a trusted authority (a CA) and names the host you asked for. SNI tells the server which host name you want; it checks nothing by itself.
 
@@ -101,39 +90,11 @@ The socket is non-blocking during the handshake and uses readiness waits for the
 * **Blocking SIGPIPE for the calling thread around each call is not used either.** It touches every OpenSSL call that can write: the handshake, a read answering the peer, and the close as well as a write. A signal blocked is not one ignored: it stays pending. It then has to be drained without taking one that another thread was owed.
 * **What it gives up**: each record is copied once more, through the memory buffer. A read or write drives OpenSSL in a loop of its own rather than letting it wait on the socket.
 
-**`db`: SQL injection.** A query built by joining strings lets a value such as `'; DROP TABLE t; --` run as SQL. With a placeholder (`?` or `:name` in the SQL), the value is passed apart from the SQL text, so it is never read as SQL.
-
-**`db`: several statements.** The check of what follows the first statement allows only spaces, semicolons and comments. **SQLite's own parser judges the rest** (it is prepared, and must hold no statement), so no second reading of SQL's comments stands here. There is no call running several: each statement goes on its own.
-
-**`db`: what failed.** The text is copied into the value that failed, a `Db` or a `Statement`, and the error points at that copy.
-
-* **It stays readable until that value fails again or is freed.** Copied into memory the caller owns, every error would have to be freed by whoever catches it. The common `catch e` that prints and returns would then leak it. Handed SQLite's own pointer instead, the text would be gone by the caller's next call.
-* **A statement keeps its own copy, not its `Db`'s**: a statement works after its `Db` is freed ("`db`: closing" below), so it cannot write into the `Db`.
-* **`exec` puts a step's text into the `Db`**: the statement it made is freed before the error reaches the caller.
-* Two errors say SQLite's fixed text for the code (`sqlite3_errstr`), which lives as long as the process. Copying would allocate again.
-  * A refusal made before SQLite is asked (a NUL, a length past SQLite's `int`).
-  * An allocation that failed.
-* **What it gives up**: a failed `open` says only that fixed text. The connection SQLite hands back is closed, and no `Db` stands to hold its message.
-
-**`db`: rows from `exec`.** **Whether SQL returns rows is decided by its result columns (`sqlite3_column_count`), before the step.** Decided by the step, an `INSERT … RETURNING` would have made its change by the time its first row came. The error would then stand over a change that was made. So a `PRAGMA` that answers with a row (`journal_mode=WAL`) is refused too, and is run with `prepare` and `step`.
-
-**`db`: closing.** KSPL has no borrow checker, so nothing stops a `Db` from being freed before a `Statement` it prepared. Two values freed at the end of a scope or held in one struct come apart in either order. So the order is made not to matter, rather than refused.
-
-* **A statement whose database was freed still works until it is freed**: SQLite keeps the connection until then. Nothing dangles, since the statement holds the connection, not the `Db`.
-* **`free` neither finalizes the statements nor fails.** Finalized behind the caller's back, a `Statement` would hold a handle already gone, and its own `free` would finalize it twice. A failure has nowhere to go: `free` returns nothing, and a `defer` could not act on it.
-* **What it gives up**: a statement never freed keeps its file open with nothing said, as any leaked value keeps what it owns.
-
-**`db`: a whole row.** `bind_row` and `read_row` walk `std/reflect`'s table (the list of a struct's fields), which ksplc synthesizes from an empty `impl X: reflect.Reflectable {}`.
-
-* **They match by name** (`:field` when binding, the column's name when reading). Matched by position, reordering the SQL's columns would silently read the wrong one wherever the types agree.
-* A missing column and a `NULL` one are refused with different values (`missing_column` / `column_type`).
-* **An integer the field cannot hold is refused** (`column_type`), not narrowed: 5000000000 into an `I32`, 300 or -1 into a `U8`, and on writing a `U64` past SQLite's signed 64-bit integer. Whether it fits is `std/reflect`'s `fits_int`.
-
 ### The tests run only through this package's own `make test`
 
-**The tests link OpenSSL and SQLite, so they run from this folder's own `make test`, not from the `make debug` every environment runs.** `make test-extract` runs that `make test` from a copy of the folder.
+**The tests link OpenSSL, so they run from this folder's own `make test`, not from the `make debug` every environment runs.** `make test-extract` runs that `make test` from a copy of the folder.
 
-**Where the libraries do not link, the run skips and says so. On Linux it fails instead** (`KSBIND_REQUIRE_LIBS`), since the image the gates run in holds both.
+**Where the libraries do not link, the run skips and says so. On Linux it fails instead** (`KSBIND_REQUIRE_LIBS`), since the image the gates run in holds it.
 
 | Situation | Result |
 | :-- | :-- |
@@ -162,4 +123,4 @@ sequenceDiagram
 
 The CA's certificate (not its key) is written to a scratch file that `SSL_CERT_FILE` names for the length of the test. OpenSSL reads the variable when the client loads the default store. So the client runs as a program runs it, with no call added to `ksbind/tls` for the tests. The peer answers at `127.0.0.1` with a certificate for `localhost` or for another name. The client connects to `localhost`, so the host name check is tested without editing the machine's host table.
 
-**What it gives up**: on Windows and macOS, the gates' machines have neither library. There the bindings are analysed by `make lint`, and on Windows compiled by `make test-c-warnings`. They are never linked or run there.
+**What it gives up**: on Windows and macOS, the gates' machines do not have OpenSSL. There the binding is analysed by `make lint`, and on Windows compiled by `make test-c-warnings`. It is never linked or run there.

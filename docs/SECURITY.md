@@ -23,6 +23,6 @@
 
 | Where the problem is | What to do |
 | :-- | :-- |
-| OpenSSL or SQLite, which `ksbind` passes its work to | Report it to that project |
+| OpenSSL, which `ksbind` passes its work to | Report it to that project |
 | OpenBLAS, which the optional BLAS build passes its work to | Report it to that project |
 | `.devcontainer/`, a local tool and not something shipped | Out of scope |

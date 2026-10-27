@@ -99,6 +99,117 @@ impl Writer
 fn main(): I32
   io.out().hex2(255).c('\n')
   return 0
+// ==== case index_write_paths
+//< Each route of `a[i]` refuses a write its method's receiver or result does not allow
+//< `at_ref` returns a read-only pointer, so a field below it is read-only too. A `get` or an
+//< `at_ref` declared with `Self$@` needs a writable receiver, as a method call does. `get` returns
+//< a copy, which is no place. Let through, each wrote a copy, wrote ROM, or broke the generated C.
+//< Each shape is a function of its own: sema stops a body at its first error.
+// EXPECT: cannot write to an element here. This type provides only read-only places ('Index_ref')
+// EXPECT: cannot assign through a read-only location
+// EXPECT: expected 'I32$@', but got 'I32@'
+// EXPECT: cannot call a method that takes a writable receiver ('Self$@') on a read-only location
+// EXPECT: reads through 'get', which takes its receiver as 'Self$@'
+// EXPECT: reads through 'get', which takes its receiver as 'Self$@'
+// EXPECT: reads through 'at_ref', which takes its receiver as 'Self$@'
+// EXPECT: cannot assign to this expression. It is a value, not a place
+// EXPECT: cannot call a method that writes its receiver ('Self$@') on a temporary object
+// EXPECT: cannot take the address of a call result
+import "std/ds" { List }
+
+struct P
+  x: I32
+impl P
+  fn bump(r: Self$@)
+    r.x += 1
+
+fn wr(p: I32$@)
+  p$ = 9
+
+struct Ro
+  len: Sz
+  items: P[2]
+impl Ro: Index_ref<|Sz, P|>
+  fn at_ref(r: Self@, i: Sz, _file: U8[], _line: Sz): P@
+    return r.items[i]@
+
+fn case_field_through_at_ref()
+  $s: = Ro::{ .len = 2, .items = ::{} }
+  s[0].x = 5
+
+fn case_field_through_read_only_list(xs: List<|P|>@)
+  xs[0].x = 5
+
+fn case_field_address_through_read_only_list(xs: List<|P|>@)
+  wr(xs[0].x@)
+
+fn case_method_through_read_only_list(xs: List<|P|>@)
+  xs[0].bump()
+
+struct Counted
+  len: Sz
+  reads: Sz
+impl Counted: Index<|Sz, Sz|>
+  fn get(r: Self$@, i: Sz): Sz
+    r.reads += 1
+    return i
+
+const COUNTED: Counted = ::{ .len = 2, .reads = 0 }
+
+fn case_writing_get_on_const(): Sz
+  return COUNTED[1]
+
+fn case_writing_get_in_loop(): Sz
+  xs: = Counted::{ .len = 2, .reads = 0 }
+  $sum: Sz = 0
+  for x in xs
+    sum += x
+  return sum
+
+struct Counted_ref
+  len: Sz
+  hits: Sz
+  data: Sz[2]
+impl Counted_ref: Index_ref<|Sz, Sz|>
+  fn at_ref(r: Self$@, i: Sz, _file: U8[], _line: Sz): Sz@
+    r.hits += 1
+    return r.data[i]@
+
+const COUNTED_REF: Counted_ref = ::{ .len = 2, .hits = 0, .data = ::{ 1, 2 } }
+
+fn case_writing_at_ref_on_const(): Sz
+  return COUNTED_REF[1]
+
+struct Store
+  len: Sz
+  items: P[2]
+impl Store: Index<|Sz, P|>
+  fn get(r: Self@, i: Sz): P
+    return r.items[i]
+
+fn case_field_of_copy()
+  $s: = Store::{ .len = 2, .items = ::{} }
+  s[0].x = 5
+
+fn case_method_on_copy()
+  $s: = Store::{ .len = 2, .items = ::{} }
+  s[0].bump()
+
+fn case_field_address_of_copy()
+  s: = Store::{ .len = 2, .items = ::{} }
+  wr(s[0].x@)
+
+fn main()
+  case_field_through_at_ref()
+  case_field_through_read_only_list(null)
+  case_field_address_through_read_only_list(null)
+  case_method_through_read_only_list(null)
+  _a: = case_writing_get_on_const()
+  _b: = case_writing_get_in_loop()
+  _c: = case_writing_at_ref_on_const()
+  case_field_of_copy()
+  case_method_on_copy()
+  case_field_address_of_copy()
 // ==== case method_type_args_from_impl
 //< A call to a generic type's method cannot write type arguments
 //< **There is nothing to bind them to:** they are the enclosing `impl`'s, settled by the receiver.
@@ -289,7 +400,7 @@ struct Pair
   b: I32
 
 impl Pair: Index<|Sz, I32|>
-  fn get(r: Self$@, index: Sz): I32
+  fn get(r: Self@, index: Sz): I32
     return r.a if index == 0 else r.b
 
 fn main(): I32

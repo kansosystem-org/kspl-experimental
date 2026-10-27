@@ -1,5 +1,6 @@
 //< Builds the applications as they ship and checks what they print when run
 //< `make test` runs it (`ksai/Makefile`), passing the programs it built and a working directory.
+import "ksai/tests/examples_car" as car
 import "ksai/tests/examples_qwen" as qwen
 import "std/chars"
 import "std/fs"
@@ -14,8 +15,9 @@ import "std/sys"
 import "std/verdict"
 
 priv const USAGE: U8[] =
-    "usage: ksplc run tests/examples_main.kspl <llama_engine> <qwen_infer> <fim_coder> <work_dir>" //<
-        //< the arguments, in that order (`make test` in `ksai/Makefile` passes them)
+    "usage: ksplc run tests/examples_main.kspl <llama_engine> <qwen_infer> <fim_coder> <car_pilot> \
+        <work_dir>" //<
+            //< the arguments, in that order (`make test` in `ksai/Makefile` passes them)
 
 priv const LLAMA_VERDICT: U8[] = "RESULT: ALL PASS" //< what llama_engine says when training works
     //< Caution: **Keep it in step with `ksai/examples/llama_engine/main.kspl`**, whose line
@@ -29,6 +31,7 @@ priv struct Tests //< what the tests take: each program's path, and where they r
     llama_exe: U8[]
     qwen_exe: U8[]
     fim_exe: U8[]
+    car_exe: U8[]
     work: U8[]
     arena: Arena$@
 
@@ -38,13 +41,14 @@ fn main(): I32
     io.set_line_buffered()
     defer arena: = Arena(64 * 1024 * 1024)
     argv: = sys.args()
-    if argv.len != 5
+    if argv.len != 6
         panic(arena.dup_str(USAGE))
     // The children start in `work`, so the programs' paths are made absolute first.
     llama: = fs.absolute(argv.get(1), arena) catch panic("cannot read the working directory")
     fim: = fs.absolute(argv.get(3), arena) catch panic("cannot read the working directory")
+    car_exe: = fs.absolute(argv.get(4), arena) catch panic("cannot read the working directory")
     $t: = Tests::{ .llama_exe = llama, .qwen_exe = arena.dup_str(argv.get(2)), .fim_exe = fim,
-        .work = arena.dup_str(argv.get(4)), .arena = arena }
+        .car_exe = car_exe, .work = arena.dup_str(argv.get(5)), .arena = arena }
     t.run()
     return 0
 

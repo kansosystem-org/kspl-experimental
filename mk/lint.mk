@@ -1,5 +1,5 @@
 # ==================================================================
-# mk/lint.mk — formatting and static analysis (fmt / lint / lint-cfg)
+# mk/lint.mk — formatting and static analysis (fmt / lint)
 # Taken in by the root Makefile; the rule for including is in the header of its `include mk/ci.mk`.
 # ==================================================================
 # fmt takes every *.kspl but `FMT_UNTOUCHED`: ksplc/tests/negative/ (broken on purpose) and
@@ -29,9 +29,31 @@ fmt: $(SEED_EXE)
 		> /dev/null 2>> "$$log" \
 		|| { cat "$$log" >&2; exit 1; }
 
-# **A tool is an entry point by its `fn main`**, so a new one cannot leak out of the gate; a file of
-# tools/ without one is a library, linted through the tools that import it.
-TOOL_MAINS := $(shell grep -lE '^(pub )?fn main\b' tools/*.kspl)
+# **A source is an entry point by its `fn main`**: a line that opens with `fn main(` or
+# `pub fn main(`, outside a `"""` string (a suite writes the programs it runs into such strings).
+# So a new program is linted with no list to edit. The sources are those `FMT_LIST` takes, for its
+# reasons, less `LINT_FIXTURES`. `make test-conventions` holds this rule to its own copy, `is_entry`.
+# Caution: **Count no `"""` on a `//` line outside a string**, as `is_entry` does.
+# The pattern is a variable, since a `(` written inside `$(shell …)` would end the call.
+lint_main_re := ^(pub )?fn main[(]
+lint_main_prog := FNR == 1 { raw = 0 } \
+  !raw && /$(lint_main_re)/ && !(FILENAME in hit) { hit[FILENAME] = 1; print FILENAME } \
+  !raw && /^[ \t]*\/\// { next } \
+  { if (gsub(/"""/, "&") % 2) raw = !raw }
+
+# The folders of a suite's material, each linted by its suite and not here: the sources diagnose by
+# design (`negative/`, `parse/`, `lint/`), stop on purpose (`runtime/`), or import what the suite
+# writes beside them (`ship/`). `make test-conventions` reads this list.
+LINT_FIXTURES := ksplc/tests/negative ksplc/tests/parse ksplc/tests/lint ksplc/tests/runtime \
+  ksplc/tests/ship
+
+# Caution: **Pass the paths through a pipe, not as arguments**: hundreds of them on one command line
+# pass the length Windows allows.
+LINT_MAINS := $(shell { git ls-files; git ls-files --others --exclude-standard; } \
+  | grep '\.kspl$$' | grep -v $(foreach d,$(LINT_FIXTURES),-e '^$(d)/') \
+  | while IFS= read -r f; do if [ -f "$$f" ]; then printf '%s\n' "$$f"; fi; done \
+  | tr '\n' '\0' | xargs -0 grep -lE '$(lint_main_re)' | tr '\n' '\0' \
+  | xargs -0 awk '$(lint_main_prog)')
 
 # Entries called from outside their I0402 package: linted with it off, their callers with it on.
 # Every ksplc suite stands on its harness, which the root's suites call too.
@@ -39,36 +61,23 @@ LINT_SUITES_OWN := $(wildcard ksplc/tests/suite/*.kspl)
 LINT_TARGETS_OWN := ksplc/tests/main.kspl ksos/tests/main.kspl tools/tests/main.kspl \
 	tools/repo_stat.kspl tools/seed_sum.kspl $(LINT_SUITES_OWN)
 
-# Caution: **Keep tests/debug/main.kspl**: some code (std/regex, generics) is reached only from it.
-# **Suites, `ksplc/tests/prog/` and the POSIX demos come by wildcard**: nothing else lints their
-# routes, and a named list leaks a new one out of the gate.
-LINT_TARGETS := ksplc/main.kspl tests/debug/main.kspl ksai/examples/llama_engine/main.kspl \
-	ksai/examples/qwen_infer/main.kspl ksai/examples/fim_coder/main.kspl \
-	ksai/benches/bench_train.kspl \
-	ksos/net/mini_ipv4.kspl ksos/net/tcp_conn.kspl kssrv/main.kspl \
-	tools/ai_assist/build_corpus.kspl tools/ai_assist/eval_fim.kspl tools/ai_assist/make_fim.kspl \
-	tools/ai_assist/train_bpe.kspl \
-	ksos/port/rp2040/pad_checksum.kspl ksos/port/rp2040/elf2uf2.kspl \
-	$(filter-out $(LINT_TARGETS_OWN),$(TOOL_MAINS)) tools/opener_aim.kspl tools/opener.kspl \
-	tools/tests/ksmd_launch.kspl \
-	ksai/benches/run_bench.kspl \
-	ksai/tests/read_prog.kspl ksmd/port/web/bundle.kspl ksmd/tests/measure.kspl \
-	std/tests/read_prog.kspl $(filter-out $(LINT_TARGETS_OWN),$(wildcard */tests/fuzz_main.kspl)) \
-	ksai/tests/main.kspl ksbind/tests/main.kspl ksdb/tests/main.kspl kspeg/tests/main.kspl ksmd/tests/main.kspl \
-	kssrv/tests/main.kspl \
-	std/tests/main.kspl \
-	kssrv/tests/copy.kspl ksai/tests/examples_main.kspl \
-	ksai/tests/stops_main.kspl ksai/tests/stops.kspl ksplc/tests/filepath/main.kspl \
-	$(wildcard ksos/demo/posix/*.kspl) \
-	$(wildcard tests/suite/*.kspl) \
-	$(wildcard tests/tools/*.kspl) \
-	$(wildcard ksplc/tests/prog/*.kspl) \
-	$(wildcard ksplc/tests/notation/*.kspl) \
-	$(EXTRA_LINT_TARGETS)
-
+# The bare-metal demos and the page's wasm bridge, linted with `--freestanding`. They hold no `main`.
 LINT_TARGETS_FREE := $(wildcard ksos/demo/cortex_m/*.kspl) \
 	$(wildcard ksos/demo/rp2040/*.kspl) $(wildcard ksos/demo/nrf51/*.kspl) \
 	ksmd/port/web/bridge.kspl
+
+# The entries named by hand hold no `main`: libraries also linted on their own (`ksos/net/` and the
+# opener's two files), and every file of `ksplc/tests/prog/`, its helpers too. **`ksplc/main.kspl`
+# comes first**: its lint takes longest, so `make -j` starts it first.
+lint_named := ksplc/main.kspl ksos/net/mini_ipv4.kspl ksos/net/tcp_conn.kspl \
+	tools/opener_aim.kspl tools/opener.kspl $(wildcard ksplc/tests/prog/*.kspl)
+LINT_TARGETS := $(lint_named) \
+	$(filter-out $(lint_named) $(LINT_TARGETS_OWN) $(LINT_TARGETS_FREE),$(LINT_MAINS))
+
+# **Only ksai holds a `#cfg(blas)` branch** (`make test-conventions` holds it there), so its tests
+# are linted a second time with the branch on. The item's name ends in `-blas`, as the file is
+# also a plain item of `LINT_TARGETS`.
+LINT_TARGETS_BLAS := ksai/tests/main.kspl
 
 # $(call lint_clean,<log>,<what was linted>,<ksplc's exit status>): passes where ksplc ended with 0
 # and the log's whole tally line counts nothing down to Hint, and otherwise shows it and fails.
@@ -84,28 +93,21 @@ lint_run = echo "  -> $(1) $(2)"; log=$(LINT_LOG_DIR)/$(3).log; \
 	./$(STAGE1_EXE) lint $(2) $(1) > $$log 2>&1; status=$$?; \
 	$(call lint_clean,$$log,$(strip $(1) $(2)),$$status)
 
+# $(call lint_one_rule,<file>,<options>[,<name suffix>]): the item `lint-one-<file><suffix>`.
 define lint_one_rule
-lint-one-$(subst /,_,$(1)): $$(STAGE1_EXE)
-	@$$(call lint_run,$(1),$(2),$(subst /,_,$(1)))
+lint-one-$(subst /,_,$(1))$(3): $$(STAGE1_EXE)
+	@$$(call lint_run,$(1),$(2),$(subst /,_,$(1))$(3))
 endef
 $(foreach f,$(LINT_TARGETS),$(eval $(call lint_one_rule,$(f),)))
 $(foreach f,$(LINT_TARGETS_FREE),$(eval $(call lint_one_rule,$(f),--freestanding)))
 $(foreach f,$(LINT_TARGETS_OWN),$(eval $(call lint_one_rule,$(f),--lint=I0402=off)))
+$(foreach f,$(LINT_TARGETS_BLAS),$(eval $(call lint_one_rule,$(f),--define=blas,-blas)))
 LINT_ONE_TARGETS := $(addprefix lint-one-,$(subst /,_,$(LINT_TARGETS) $(LINT_TARGETS_FREE) \
-  $(LINT_TARGETS_OWN)))
+  $(LINT_TARGETS_OWN)) $(addsuffix -blas,$(subst /,_,$(LINT_TARGETS_BLAS))))
 
 ## Local-cycle|lint|Static analysis. Zero down to hints is a pass
 lint: $(LINT_ONE_TARGETS)
 	@echo "RESULT: ALL PASS ($(words $(LINT_ONE_TARGETS)) lint targets clean)"
 
-## Per-item|lint-one-*|One file's worth of `make lint` (named by its path, `/` becoming `_`)
+## Per-item|lint-one-*|One file's worth of `make lint` (named by its path, `/` becoming `_`; `-blas` ends the `#cfg(blas)` reading)
 .PHONY: $(LINT_ONE_TARGETS)
-
-# **Only ksai holds a `#cfg(blas)` branch** (`make test-conventions` holds it there), so its tests
-# are the program read with the branch on.
-## Local-cycle|lint-cfg|The semantic analysis inside the `#cfg(blas)` branch
-lint-cfg: $(STAGE1_EXE)
-	@$(call lint_run,ksai/tests/main.kspl,--define=blas,cfg_blas)
-	@echo "RESULT: ALL PASS (the #cfg(blas) branch is clean)"
-
-.PHONY: lint-cfg

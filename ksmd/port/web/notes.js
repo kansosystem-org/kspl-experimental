@@ -1,7 +1,7 @@
 // ksmd page: notes on a table cell or a paragraph. A cell with a note has a red corner, as in
 // Excel; a paragraph or a heading with one has a bar at its left. Pointing at either shows the note.
-// The ribbon's Note asks for the note of the chosen cell, or of the paragraph the caret stands in;
-// an empty answer resolves it. The table's right-click menu holds Note... and Resolve note too.
+// Insert, Note asks for the note of the chosen cell, or of the paragraph the caret stands in; an
+// empty answer resolves it. The Table menu and the right-click menu hold Note... and Resolve note too.
 // A note is saved in the file (`note` in braces), and each change is one step of undo.
 "use strict";
 

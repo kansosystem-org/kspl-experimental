@@ -9,6 +9,12 @@ import "std/str" { Str_builder }
 
 const KSPL_PREFIX: U8[] = "kspl_" //< what every generated global symbol's name begins with
 
+const C_TYPE_DROPPED_MODULE: U8[] = "std.lang." //<
+    //< The module a type's C name leaves out: `Slice_U8`, not `std_lang_Slice_U8`
+    //< The core types appear in nearly every signature, so the prefix took about 5% of the C.
+    //< A local can still spell such a name; it then takes a made one (`global_c_names` in
+    //< `../lower/abi.kspl`).
+
 impl U8[]
     fn has_kspl_prefix(r: U8[]): Bool //< whether a symbol's name already begins with `kspl_`
         return r.starts_with(KSPL_PREFIX)
@@ -66,6 +72,29 @@ impl U8[]
         r.mangle_c_identifier_to(res)
         return res
 
+    fn mangle_c_type_name_to(r: U8[], w: Writer): Writer //<
+        //< Writes a type's name as C names it, `C_TYPE_DROPPED_MODULE` left out
+        //< It is left out wherever a name opens with it, inside the type arguments too.
+        //< Caution: **Spell every type's C name through here**, a method's type part included.
+        //< A name spelled through mangle_type_name_to alone keeps the module, and C declares one
+        //< name and uses another.
+        defer $kept: = Str_builder()
+        r.drop_c_type_module_to(kept)
+        return kept.slice().mangle_type_name_to(w)
+
+    fn drop_c_type_module_to(r: U8[], w: Writer): Writer //<
+        //< Writes the type text with `C_TYPE_DROPPED_MODULE` left out wherever a name opens with it
+        $res: = w
+        for $i: = 0; i < r.len;
+            prev: = (r.ptr + i - 1)$ if i > 0 else ' '
+            opens_name: = !(prev.is_alnum() || prev == '_' || prev == '.' || prev == '/')
+            if opens_name && r.starts_with(C_TYPE_DROPPED_MODULE, i)
+                i += I32::C_TYPE_DROPPED_MODULE.len
+                continue
+            res = res.c((r.ptr + i)$)
+            i += 1
+        return res
+
     fn mangle_type_name_to(r: U8[], w: Writer): Writer
         $res: = w
         $pending_under: = false
@@ -101,6 +130,16 @@ impl U8[]
                 word = "Ptr"
             case '!'
                 word = "Result"
+            case '-'
+                // A negative value in a const type argument (`f<|-3|>` is `f_Neg3`). As a
+                // separator alone it would meet `f<|3|>`'s name, and C would hold one function.
+                opens_number: =
+                    i + 1 < r.len && r[i + 1].is_digit() &&
+                    !(i > 0 && r[i - 1].is_alnum())
+                if opens_number
+                    word = "Neg"
+                else if has_output
+                    pending_under = true
             case '['
                 word = "Array_"
             case '.', '/', '\\', '<', ',', '|', '(', ')', ':', ' ', '?'

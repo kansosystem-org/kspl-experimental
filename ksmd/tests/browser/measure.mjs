@@ -38,7 +38,13 @@ const took = async () => {
 // so the large one opens only beside a small one.
 async function fresh() {
   await d.page("Page.navigate", { url: pathToFileURL(path.resolve(pageFile)).href });
-  await d.until("document.documentElement.dataset.ready === '1'");
+  await opened("document.documentElement.dataset.ready === '1'");
+}
+
+// Waits for the page to reach a state, and stops the measure where it never does: a step that
+// went elsewhere would time the wrong thing.
+async function opened(expression) {
+  if (!(await d.until(expression))) throw new Error(`the page did not reach: ${expression}`);
 }
 
 async function inPage(name) {
@@ -73,22 +79,24 @@ async function inPage(name) {
   const rows = await d.js("document.querySelector('#doc table').tBodies[0].rows.length");
   const cell = `#doc .table td[data-r="${Math.floor(rows / 2)}"][data-c="1"]`;
   await d.js(`document.querySelector('${cell}').scrollIntoView({ block: "center" })`);
+  // A press chooses the cell; typing opens it, and Enter takes the value and chooses the next.
+  const chosen = "document.activeElement.classList.contains('cell-catch')";
   await d.click(cell);
-  await d.until("document.activeElement.classList.contains('cell-input')");
+  await opened(chosen);
   const edit = [];
   for (let i = 0; i < RUNS; i++) {
     await d.type("7");
     await stopwatch("keydown");
     await d.press("Enter");
     edit.push(await took());
-    await d.until("document.activeElement.classList.contains('cell-input')");
+    await opened(chosen);
   }
   const resize = [];
   for (let i = 0; i < RUNS; i++) {
     await stopwatch("keydown");
     await d.press(i % 2 === 0 ? "ArrowRight" : "ArrowLeft", ALT);
     resize.push(await took());
-    await d.until("document.activeElement.classList.contains('cell-input')");
+    await opened(chosen);
   }
   const save = [];
   for (let i = 0; i < RUNS; i++) {

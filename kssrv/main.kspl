@@ -12,7 +12,6 @@
 // ==========================================
 import "kssrv/api"
 import "kssrv/conn"
-import "kssrv/pilot"
 import "std/argparse"
 import "std/chars" // single-character tests and slicing
 import "std/fs"
@@ -151,6 +150,20 @@ priv fn hides_name(rel: U8[]): Bool //<
         start = at + 1
     return false
 
+priv fn hides_long_name(root: U8[], rel: U8[], arena: Arena$@): Bool //<
+    //< Whether a segment of `rel`, by the name the file system keeps, starts with a dot
+    //< Caution: **Windows answers to a short name too**: `/GIT~1/config` opens `.git/config`, and
+    //< the name as asked for starts with no dot. So each segment's long name is checked as well.
+    for $at: Sz = 0; at <= rel.len; at += 1
+        if at < rel.len && !sys.is_path_sep(rel[at])
+            continue
+        long: =
+            fs.long_name(fs.join(root, rel.sub(0, at), arena), arena) catch
+            return false
+        if long.starts_with(".") && !long.equals(WELL_KNOWN)
+            return true
+    return false
+
 priv fn asks_for_page(decoded: U8[]): Bool //<
     //< Whether a decoded path names the page: the root itself, or `index.html` in it
     //< **Decided from the text alone.** So a caller can ask it before looking at anything under the
@@ -178,7 +191,7 @@ priv fn path_to_rel(decoded: U8[], root: U8[], is_page: Bool, arena: Arena$@): R
             t = r
         case .none
             return .rejected
-    if hides_name(t)
+    if hides_name(t) || hides_long_name(root, t, arena)
         return .hidden
     return .ok(t)
 
@@ -200,7 +213,7 @@ priv fn queue_for_request(c: conn.Conn$@, req: http.Request$@, ctx: conn.Ctx$@) 
     conn.stats.requests += 1I64
     // **Every request shows someone is still there.** Stamped per endpoint, the next endpoint added
     // would forget it.
-    asked_us = sys.mono_us()
+    conn.used_us = sys.mono_us()
     is_head: = req.method.equals("HEAD")
     is_get: = req.method.equals("GET")
     keep_alive: = !req.wants_close()
@@ -627,9 +640,6 @@ priv fn sweep_done(t: conn.Conn_table$@, ctx: conn.Ctx$@) //<
 // The token
 // ==========================================
 
-$asked_us: I64 = 0I64 //< when the last request arrived, on the monotonic clock
-    //< Also set at start-up, so the wait for the first page is like any other.
-
 priv const ANY_HOST: U8[] = "0.0.0.0" //< the address listened on
     //< **Local use listens on the loopback only.** It is built so that it cannot be reached from
     //< outside ("Where it listens" in `docs/SPEC-local-server.md`).
@@ -782,22 +792,9 @@ fn main(): I32
         for i in Range.asc(conn.MAX_CONNS)
             conn.table_drop(table@, i, lg@)
 
-    // Facing outward, the car's steering policy trains before accepting starts, **after the bind**,
-    // so a port clash shows before training. A connect meanwhile succeeds in the kernel's backlog.
-    // So **a successful connect does not mean it can answer**. The "listening on" line below does
-    // (`kssrv/tests/start.kspl` waits for it). If you move the line, fix that file too.
-    // **Local use trains nothing**: it listens on the loopback, which the car cannot reach, and a
-    // page opening a document should not wait on it.
-    $p: pilot.Pilot$@ = null
-    if !o.local
-        build_arena: = Arena(1024 * 1024)
-        p = pilot.build(build_arena)
-        build_arena.free()
-        pilot.print_summary(p, lg@)
-    defer
-        if p != null
-            pilot.free(p)
-    $ctx: conn.Ctx = ::{ .root = o.root, .lg = lg@, .token = token, .p = p, .page = o.page }
+    // The "listening on" line `announce` prints names the port, which `kssrv/tests/start.kspl`
+    // waits for. If you change the line, fix that file too.
+    $ctx: conn.Ctx = ::{ .root = o.root, .lg = lg@, .token = token, .page = o.page }
 
     conn.stats.started_s = sys.wall_seconds()
     announce(o@, host, port, token, lg@)
@@ -815,7 +812,8 @@ priv fn serve( //< answers until asked to stop, or until no page holds it for `i
     // it **would happen twice per connection** (a line at accept and at close). `FLUSH_GAP_US` is
     // checked **before entering the wait**, so when idle a line just written goes out in that pass.
     $flushed_us: = sys.mono_us()
-    asked_us = flushed_us
+    // Stamped at start-up too, so the wait for the first page is like any other.
+    conn.used_us = flushed_us
     for
         backlogged: = drive_backlog(table, ctx)
         rebuild_interests(r, listener, table)
@@ -828,8 +826,9 @@ priv fn serve( //< answers until asked to stop, or until no page holds it for `i
         if conn.stop_asked_by != 0I64 && !conn.open_serial(table, conn.stop_asked_by)
             lg.say(.information, "asked to stop: stopping")
             return 0
-        // **No holder means "nobody is using me".**
-        if idle_s > 0I64 && !conn.any_holding(table) && now_us - asked_us >= idle_s * US_PER_S
+        // **No holder means "nobody is using me".** The wait counts from the last request or the
+        // last page letting go, whichever came later (`conn.used_us`).
+        if idle_s > 0I64 && !conn.any_holding(table) && now_us - conn.used_us >= idle_s * US_PER_S
             if ln: = lg.at(.information)
                 ln.s("no page has held it for \{idle_s\} seconds: stopping")
             return 0

@@ -165,7 +165,13 @@ pacman -S --needed git
 pacman -S --needed $(sed 's/#.*//' tools/msys2-packages.txt)
 ```
 
-Two more are worth adding; `make ci` needs neither:
+**That is all `make` and `make ci` need.** To check everything this PC can with `make ci-full` ("How the gates are arranged" in [`SPEC-gates.md`](SPEC-gates.md)), add [`tools/msys2-packages-full.txt`](../tools/msys2-packages-full.txt) the same way. It holds the tools of the gates CI runs on Linux alone: QEMU, Node.js, the ARM and LLVM tools, OpenBLAS and OpenSSL. Each line says which gate needs it.
+
+```sh
+pacman -S --needed $(sed 's/#.*//' tools/msys2-packages-full.txt)
+```
+
+Two more are worth adding; no gate needs either:
 
 ```sh
 pacman -S --needed mingw-w64-ucrt-x86_64-clang-tools-extra mingw-w64-ucrt-x86_64-lldb
@@ -178,7 +184,7 @@ pacman -S --needed mingw-w64-ucrt-x86_64-clang-tools-extra mingw-w64-ucrt-x86_64
 
 Caution: **Do not install `mingw-w64-ucrt-x86_64-make`.** UCRT64's PATH would pick it first. If it is installed, the Makefile rejects it at start-up and says what breaks and how to reach MSYS2's `make`.
 
-`make BLAS=1` needs OpenBLAS, which MSYS2 packages as `mingw-w64-ucrt-x86_64-openblas`; ordinary language development does not need it.
+`make BLAS=1` needs OpenBLAS (`mingw-w64-ucrt-x86_64-openblas`, in the full list); ordinary language development does not need it.
 
 **To build Kanso OS for bare metal (`ksos-cm*` / `ksos-rp*`) on Windows**, which only a real microcontroller needs, add these:
 
@@ -189,23 +195,9 @@ Caution: **Do not install `mingw-w64-ucrt-x86_64-make`.** UCRT64's PATH would pi
 | `ld.lld` | The bare-metal final link (`-lld`) | Likewise not found |
 | `arm-none-eabi-gcc` | Using libgcc's definitions (soft-float and 64-bit integer division); `clang` still compiles (`-arm-none-eabi-gcc`) | It stops with `ARM_TOOLCHAIN_HINT`'s guidance |
 
-**`clang`'s package does not include the LLVM binutils (`llvm-objcopy` and the rest) or `ld.lld`.** clang alone cross-compiles for ARM, so the build reaches the link and stops there. Install these three:
+**`clang`'s package does not include the LLVM binutils (`llvm-objcopy` and the rest) or `ld.lld`.** clang alone cross-compiles for ARM, so the build reaches the link and stops there. The full list above installs all three (`-llvm`, `-lld`, `-arm-none-eabi-gcc`), and QEMU to run the demos.
 
-```sh
-pacman -S --needed \
-  mingw-w64-ucrt-x86_64-llvm \
-  mingw-w64-ucrt-x86_64-lld \
-  mingw-w64-ucrt-x86_64-arm-none-eabi-gcc
-```
-
-**To build ksmd's page for the browser (`make ksmd-web` / `make test-ksmd-browser`)**, install the LLVM tools and clang's wasm32 builtins:
-
-```sh
-pacman -S --needed \
-  mingw-w64-ucrt-x86_64-llvm \
-  mingw-w64-ucrt-x86_64-lld \
-  mingw-w64-ucrt-x86_64-wasi-compiler-rt
-```
+**To build ksmd's page for the browser (`make ksmd-web` / `make test-ksmd-browser`)**, the full list above installs the LLVM tools and clang's wasm32 builtins (`-llvm`, `-lld`, `-wasi-compiler-rt`).
 
 **The `-wasi-compiler-rt` package supplies the arithmetic helpers that clang emits for wasm32.** The page remains freestanding and uses no WASI system calls. Keep clang and this package at matching versions with `pacman -Syu`.
 
@@ -213,7 +205,7 @@ pacman -S --needed \
 |---|---|---|
 | `wasm-ld` | The wasm32 final link (`-lld`) | `wasm-ld: command not found` |
 | Clang's wasm32 builtins archive | Arithmetic helpers (`-wasi-compiler-rt`) | The build reports that wasm32 builtins are not installed |
-| `node` | Driving the page in a browser (`make test-ksmd-browser`) / checking the JS syntax (`make test-js-syntax`) | `node: command not found` |
+| `node` | Driving the page in a browser (`make test-ksmd-browser`) | `node: command not found` |
 
 For `node`, the Windows build of Node.js on the PATH is quicker than an MSYS2 package. Node is needed for the tests.
 

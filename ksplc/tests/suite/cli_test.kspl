@@ -151,7 +151,14 @@ priv fn case_info(arena: Arena$@)
     ok_case("info link-libs", U8[][]::{ "info", "link-libs" }, "-lm")
     ok_case("info exe-flags", U8[][]::{ "info", "exe-flags" }, "-")
     ok_case("info cache-dir", U8[][]::{ "info", "cache-dir" }, cache_root(arena))
-    ok_case("info keywords", U8[][]::{ "info", "keywords" }, "Total:")
+    // One keyword a line, sorted and each once, as the other subjects answer a list.
+    kw: = cli(U8[][]::{ "info", "keywords" })
+    $prev: U8[] = ""
+    $in_order: = kw.exited_with(0) && kw.out.find_str("\nfn\n").is_some()
+    for line in kw.out.lines(arena)
+        in_order = in_order && line.compare(prev) > 0
+        prev = line
+    verdict.check("info keywords: one a line, sorted, each once", in_order, kw.out)
     // A missing or wrong subject is rejected, with the valid ones listed.
     ng_case("info: with no subject it turns it away", U8[][]::{ "info" }, "std-dir")
     ng_case("info: an unknown subject is turned away", U8[][]::{ "info", "std-dirs" }, "std-dir")
@@ -303,10 +310,8 @@ priv fn case_explain(arena: Arena$@) //<
         "W0101  An out-of-bounds array access")
     ok_case("explain: the list marks a code off by default", U8[][]::{ "explain" },
         "I0402  A `pub` used only from inside its package  (off by default)")
-    ok_case("explain: a code's start lists the codes it begins", U8[][]::{ "explain", "i03" },
-        "I0301  An unnecessary `::` cast")
-    ng_case("explain: a start no code begins with is turned away", U8[][]::{ "explain", "W9" },
-        "no diagnostic code starts with 'W9'")
+    ng_case("explain: a code's start is turned away, not taken as a list",
+        U8[][]::{ "explain", "I03" }, "'I03' is not a diagnostic code")
     ng_case("explain: two codes are turned away", U8[][]::{ "explain", "W0207", "W0202" },
         "usage: ksplc explain")
     ng_case("explain: an option is turned away", U8[][]::{ "explain", "--stats", "W0207" },
@@ -456,19 +461,15 @@ priv fn case_output_language(arena: Arena$@) //<
 priv fn case_machine(arena: Arena$@) //<
     //< `--machine` names a machine from ksplc's table, and nothing else
     //< **A name the table lacks is refused with the list**, never guessed: a guess folds sizes the
-    //< C compiler then disagrees with. `info machine` answers the default, which compiles.
+    //< C compiler then disagrees with.
     dir: = harness.sandbox("cli_machine")
     src: = fs.join(dir, "prog.kspl", arena)
     io.write_file(src, "fn main(): I32\n  return 3 if sizeof(Sz) == sizeof(U8@) else 4\n") catch
         verdict.check("--machine: the program can be written", false, "")
         return
     out_c: = fs.join(dir, "prog.c", arena)
-    host: = cli(U8[][]::{ "info", "machine" })
-    name: = host.out.trim_end()
-    verdict.check("info machine names the machine ksplc runs on",
-        host.exited_with(0) && name.len > 0, host.out)
-    ok_case("the machine info names compiles",
-        U8[][]::{ std_flag(), arena.text().s("--machine=").s(name).take(), src, out_c }, "")
+    ok_case("a machine from the table compiles",
+        U8[][]::{ std_flag(), "--machine=aarch64-linux-gnu", src, out_c }, "")
     ng_case("an unknown machine is refused, with the known ones listed",
         U8[][]::{ std_flag(), "--machine=pdp11", src, out_c }, "thumbv7m-none-eabi")
     ng_case("--to=llvm is refused for a machine with 4-byte pointers",
@@ -510,7 +511,12 @@ priv fn case_refusals()
     ng_case("two subcommands cannot be written", U8[][]::{ "fmt", "lint", "a.kspl" }, "")
     // An option given with nothing after its `=` is refused, never read as the default.
     ng_case("--surface-scope= is refused, not read as pub",
-        U8[][]::{ "--surface-scope=", "a.kspl", "a.c" }, "'--surface-scope' needs a value")
+        U8[][]::{ "doc", "--surface-scope=", "std/io" }, "'--surface-scope' needs a value")
+    // **The record is written from the source alone**, so a compile does not write it.
+    ng_case("--emit-surface does not take effect on compile",
+        U8[][]::{ "--emit-surface=a.tsv", "a.kspl", "a.c" }, "It takes effect on: doc")
+    ng_case("doc --emit-surface refuses one entry, recording only a whole file",
+        U8[][]::{ "doc", "--emit-surface=a.tsv", "std/io.read_file" }, "records one whole file")
     ng_case("--to= is refused, not ignored", U8[][]::{ "--to=", "a.kspl", "a.c" },
         "'--to' needs a value")
     // **A source in braces is refused by name.** Read as the indentation notation, it would fail
@@ -574,6 +580,69 @@ priv fn case_fmt_reads_back(arena: Arena$@) //< checks `fmt` writes no file that
     r: = harness.run_in(U8[][]::{ harness.ksplc_exe(), std_flag(), "run", path }, dir)
     verdict.check("fmt read-back: the file still runs after fmt --in-place",
         r.exited_with(0) && r.out.find_str("3").is_some(), r.out)
+
+priv fn unformatted(lines: Sz, arena: Arena$@): U8[] //< a program `fmt` changes: two-space indents
+    b: = arena.text().s("fn main(): I32\n")
+    for i in Range.asc(lines)
+        b.s("  _v\{i\}: = \{i\}\n")
+    return b.s("  return 0\n").take()
+
+priv fn case_fmt_in_place_safe(arena: Arena$@) //<
+    //< `fmt --in-place` replaces a file safely: a link refused, the mode kept, a failed write harmless
+    //< **The new text goes to a `.part` file renamed over the old** (`format_file` in
+    //< `ksplc/fmt/file.kspl`). A write cut short by a file-size limit must leave the old bytes, and
+    //< no `.part` file.
+    dir: = harness.sandbox("cli_fmt_in_place")
+    src: = unformatted(3, arena)
+    target: = fs.join(dir, "t.kspl", arena)
+    link: = fs.join(dir, "l.kspl", arena)
+    moded: = fs.join(dir, "m.kspl", arena)
+    big: = fs.join(dir, "big.kspl", arena)
+    big_src: = unformatted(400, arena)
+    for p in U8[][]::{ target, moded, big }
+        io.write_file(p, big_src if p.equals(big) else src) catch
+            verdict.check("fmt --in-place: the samples can be written", false, p)
+            return
+    name_link: = "fmt --in-place: a link is refused, and stays a link to an unchanged file"
+    if plant_link(link, target, arena)
+        f: = harness.run_in(U8[][]::{ harness.ksplc_exe(), "fmt", "--in-place", link }, dir)
+        verdict.check(name_link,
+            !f.exited_with(0) && f.out.find_str("symbolic link").is_some() && fs.is_link(link) &&
+            (io.read_file(target, arena) catch "").equals(src), f.out)
+    else
+        verdict.skip_check(name_link, "a link cannot be made with `ln -s` in this environment")
+    name_mode: = "fmt --in-place: the file keeps its mode, 0751"
+    if sys.is_windows()
+        verdict.skip_check(name_mode,
+            "this system has no POSIX mode for `chmod` to set and `ls -l` to read")
+    else
+        c: = harness.run_in(U8[][]::{ "chmod", "751", moded }, dir)
+        f: = harness.run_in(U8[][]::{ harness.ksplc_exe(), "fmt", "--in-place", moded }, dir)
+        l: = harness.run_in(U8[][]::{ "ls", "-l", moded }, dir)
+        changed: =
+            c.exited_with(0) && !(io.read_file(moded, arena) catch src).equals(src)
+        verdict.check(name_mode,
+            f.exited_with(0) && changed && l.out.starts_with("-rwxr-x--x"),
+            arena.text().s(l.out).s(f.out).take())
+    name_short: = "fmt --in-place: a write cut short leaves the old bytes and no .part file"
+    if sys.is_windows()
+        verdict.skip_check(name_short,
+            "a short write needs `ulimit -f`, which Windows does not have")
+        return
+    // One or two KiB (`ulimit -f` counts blocks of 512 or 1024 bytes), below the formatted text.
+    // SIGXFSZ ignored, the write returns short instead of killing the formatter.
+    f: = harness.run_in(U8[][]::{ "/bin/sh", "-c",
+        "ulimit -f 2 && trap '' XFSZ && exec \"$0\" fmt --in-place \"$1\"", harness.ksplc_exe(),
+        big }, dir)
+    $part: = false
+    names: = fs.read_dir(dir, arena) catch
+        fallback List<|U8[]|>(arena)
+    for n in names
+        part = part || n.ends_with(".part")
+    kept: = (io.read_file(big, arena) catch "").equals(big_src)
+    verdict.check(name_short,
+        !f.exited_with(0) && f.out.find_str("safely replaced").is_some() && kept && !part,
+        arena.text().s("old bytes kept: \{kept\}, .part left: \{part\}\n").s(f.out).take())
 
 priv fn case_bad_utf8(arena: Arena$@) //< checks that a byte that is not UTF-8 stops the read
     //< A string's stray byte went on to C, and a comment's passed unseen. **Ask `fmt` too**: it
@@ -753,6 +822,18 @@ priv fn case_diagnostic_json(arena: Arena$@) //<
         wides.len == 2 &&
         wides.get(0).get("end_column").as_int().unwrap_or(0I32) == 17I32,
         arena.text().s("\{wides.len\} lines").take())
+    // **A type call's error underlines the type as written**, not the `new` it calls, which the
+    // source does not hold.
+    typed: = fs.join(dir, "type_call.kspl", arena)
+    io.write_file(typed, "struct Longname\n  n: I32\nfn main()\n  _x: = Longname(1)\n") catch
+        verdict.check("json diagnostics: the sample can be written", false, typed)
+        return
+    calls: = json_lines(U8[][]::{ "--diagnostic-format=json", typed, out_c }, arena)
+    verdict.check("json diagnostics: a type call's error underlines the whole type name",
+        calls.len == 2 &&
+        calls.get(0).get("column").as_int().unwrap_or(0I32) == 9I32 &&
+        calls.get(0).get("end_column").as_int().unwrap_or(0I32) == 17I32,
+        arena.text().s("\{calls.len\} lines").take())
     ng_case("json diagnostics: an unknown format is refused",
         U8[][]::{ "--diagnostic-format=xml", bad, out_c }, "expected text or json")
     // `--stats` reports in text on standard error, the stream json leaves to its objects.
@@ -809,6 +890,7 @@ fn main(): I32
     case_bom(arena)
     case_bad_utf8(arena)
     case_fmt_reads_back(arena)
+    case_fmt_in_place_safe(arena)
     cli_emit.case_surface_doc(arena)
     cli_emit.case_emit_libs(arena)
     case_entry_spelling(arena)

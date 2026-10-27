@@ -6,6 +6,7 @@
 //< ends its step, so each word is one undo step. Deleting single characters joins the same way.
 //< Caution: **Keep the arena as long as the editor.** The document, every edit and the history live
 //< in it, and nothing in it is freed before the editor goes.
+import "ksmd/base/source" { MAX_SOURCE_BYTES }
 import "ksmd/edit/edit"
 import "ksmd/edit/edit" { Edit_error }
 import "ksmd/edit/history" { Change, History, Selection, Step_kind, Transaction, begin, capture,
@@ -13,10 +14,12 @@ import "ksmd/edit/history" { Change, History, Selection, Step_kind, Transaction,
 import "ksmd/edit/region" { Settled, Spot, Style, Unit, blank_unit, fit, gap_spot, gather,
     is_text_block, paragraph_style, same_spot, settle, text_spot, whole_unit }
 import "ksmd/edit/styled" { Mark, Marks, Seg, cut, hard_break, has_mark, length, marks_before, plain,
-    set_color, set_mark, text_seg, visible }
-import "ksmd/model/look" { is_note, plain_look, with_part }
-import "ksmd/model/model" { Block, Block_kind, Document, Image, MAX_NESTING }
+    set_mark, text_seg, visible }
+import "ksmd/model/look" { is_note }
+import "ksmd/model/model" { Block, Block_kind, Document, Image, MAX_BLOCKS, MAX_NESTING }
 import "ksmd/syntax/inline" { is_destination }
+import "ksmd/syntax/writer"
+import "ksmd/syntax/writer" { blocks_size }
 import "std/chars"
 import "std/ds" { List }
 import "std/mem" { Arena }
@@ -30,6 +33,8 @@ enum Refused //< why an action changed nothing
     not_noted //< a note stands on a paragraph or a heading, and holds 1 to 1,000 bytes
     not_whole //< no table, include or image stands at that place
     stale //< the text or the cells to replace are no longer where they were found
+    too_many_blocks //< a source holds at most 100,000 blocks
+    too_large //< a source holds at most 8 MiB
 
 impl Refused
     fn message(r: Self): U8[] //< what the page says: the problem, then what to do
@@ -51,6 +56,12 @@ impl Refused
                 points, and alignment left, center or right."
         case .stale
             return "The document changed after the search. Search again, then replace."
+        case .too_many_blocks
+            return "A ksmd file holds at most 100,000 blocks, so this change was not made. Move \
+                part of the document into a file that it includes."
+        case .too_large
+            return "A ksmd file holds at most 8 MiB, so this change was not made. Move part of the \
+                document into a file that it includes."
 
 enum Input //< how text arrived
     typing //< typed keys, which join one undo step
@@ -70,6 +81,7 @@ struct Editor
     change: Change //< what the actions since the caller last cleared it changed
     today: U8[] //< the date the document was opened, `2026-10-23`: what `today()` gives
         //< It stays while the editor is open, so a value does not change while a person works.
+    written: Sz //< how many bytes the document's source takes, as the writer writes it
 
 struct Pos //< a place in a work's units
     unit: Sz
@@ -94,7 +106,8 @@ fn open(doc: Document, today: U8[], arena: Arena$@): Editor //<
     start: = first_spot(doc@)
     return Editor::{ .doc = doc, .arena = arena, .history = new_history(arena), .anchor = start,
         .focus = start, .gap = paragraph_style(), .typing = plain(), .marked = false,
-        .joinable = false, .change = Change.none(doc@), .today = today }
+        .joinable = false, .change = Change.none(doc@), .today = today,
+        .written = writer.size(doc@) }
 
 priv fn first_spot(doc: Document@): Spot //< the start of the first text, or the gap before all
     if doc.blocks.len > 0 && is_text_block(doc.blocks.get(0).kind)
@@ -155,7 +168,7 @@ impl Editor
         $tx: = begin(ed.selection(), ed.arena)
         ed.commit(w@, tx@, r.caret, r.caret, scratch)!
         tx.word_ended = clean.ends_with(" ")
-        ed.finish(tx, kind, join)
+        ed.finish(tx, kind, join)!
 
     fn erase(ed: Self$@, backward: Bool): Void!Refused //<
         //< Deletes the selection; with none, one character, or joins two blocks at their edge
@@ -208,7 +221,7 @@ impl Editor
             r: = replace(w@, frag@, scratch)
             $tx: = begin(ed.selection(), ed.arena)
             ed.commit(w@, tx@, r.caret, r.caret, scratch)!
-            ed.finish(tx, .other, false)
+            ed.finish(tx, .other, false)!
             return
         if collapsed && unit.edited && length(unit.segs@) == 0 && unit.style.kind == .list
             $style: = unit.style
@@ -219,7 +232,7 @@ impl Editor
             w.units[w.start.unit].style = style
             $tx: = begin(ed.selection(), ed.arena)
             ed.commit(w@, tx@, w.start, w.start, scratch)!
-            ed.finish(tx, .other, false)
+            ed.finish(tx, .other, false)!
             return
         ed.split(w@, false, scratch)!
 
@@ -323,35 +336,6 @@ impl Editor
             u.edited = true
         ed.restyle(w@, scratch)!
 
-    fn set_text_color(ed: Self$@, color: U8[]): Void!Refused //<
-        //< Colours the selected text, or takes its colour away with an empty one
-        //< With nothing selected, the colour applies to the text typed next. Code blocks, tables,
-        //< images and includes are left as they are.
-        given: = with_part(plain_look(), .color, color) catch
-            throw .look
-        kept: = ed.arena.dup_str(given.color)
-        s: = ed.start_spot()
-        e: = ed.end_spot()
-        defer scratch: = Arena(16 * 1024)
-        $w: = ed.work(s, e, s.block, end_block(e), scratch)
-        if same_spot(s, e)
-            unit: = w.units[w.start.unit]@
-            $m: =
-                ed.typing if ed.marked else marks_before(unit.segs@, w.start.offset)
-            m.color = kept
-            ed.typing = m
-            ed.marked = true
-            return
-        for i in Range(w.start.unit, w.end.unit + 1, 1)
-            u: = w.units[i]@
-            if u.whole || u.style.kind == .code
-                continue
-            from: = w.start.offset if i == w.start.unit else 0
-            to: = w.end.offset if i == w.end.unit else length(u.segs@)
-            set_color(u.segs@, from, to, kept, scratch)
-            u.edited = true
-        ed.restyle(w@, scratch)!
-
     fn set_block_note(ed: Self$@, block: Sz, note: U8[]): Void!Refused //<
         //< Gives a paragraph or a heading a note, or resolves it with empty text, as one step
         if block < 0 || block >= ed.doc.blocks.len
@@ -416,7 +400,7 @@ impl Editor
         r: = replace(w@, frag@, scratch)
         $tx: = begin(ed.selection(), ed.arena)
         ed.commit(w@, tx@, r.caret, r.caret, scratch)!
-        ed.finish(tx, .other, false)
+        ed.finish(tx, .other, false)!
 
     priv fn insert_whole(ed: Self$@, b: Block): Void!Refused //<
         //< A whole block in place of the selection, with an empty paragraph on each side
@@ -432,25 +416,7 @@ impl Editor
         caret: = Pos::{ .unit = r.last, .offset = 0 }
         $tx: = begin(ed.selection(), ed.arena)
         ed.commit(w@, tx@, caret, caret, scratch)!
-        ed.finish(tx, .other, false)
-
-    fn set_align(ed: Self$@, value: U8[]): Void!Refused //<
-        //< Aligns each paragraph and heading of the selection: left, center, right, or empty for
-        //< none. List items and other blocks are left as they are.
-        $probe: = plain_look()
-        probe = with_part(probe, .align, value) catch
-            throw .look
-        s: = ed.start_spot()
-        e: = ed.end_spot()
-        defer scratch: = Arena(16 * 1024)
-        $w: = ed.work(s, e, s.block, end_block(e), scratch)
-        for i in Range(w.start.unit, w.end.unit + 1, 1)
-            u: = w.units[i]@
-            if u.whole || u.style.kind != .paragraph && u.style.kind != .heading
-                continue
-            u.style.align = probe.align
-            u.edited = true
-        ed.restyle(w@, scratch)!
+        ed.finish(tx, .other, false)!
 
     fn undo(ed: Self$@) //< swaps the last action's changes back out; nothing if none is left
         if ed.history.done.len == 0
@@ -459,6 +425,7 @@ impl Editor
         $tx: = ed.history.done.pop() catch
             return
         swap(ed.doc@, tx@, true, ed.change@, scratch)
+        ed.written -= tx.grown
         ed.restore(tx.before)
         ed.history.undone.push(tx)
 
@@ -469,6 +436,7 @@ impl Editor
         $tx: = ed.history.undone.pop() catch
             return
         swap(ed.doc@, tx@, false, ed.change@, scratch)
+        ed.written += tx.grown
         ed.restore(tx.after)
         ed.history.done.push(tx)
 
@@ -480,8 +448,12 @@ impl Editor
     fn end_spot(ed: Self@): Spot
         return ed.focus if !later(ed.anchor, ed.focus) else ed.anchor
 
-    fn finish(ed: Self$@, $tx: Transaction, kind: Step_kind, join: Bool) //<
+    fn finish(ed: Self$@, $tx: Transaction, kind: Step_kind, join: Bool): Void!Refused //<
         //< Records a transaction, or joins it to the last when `join` says it continues that step
+        //< A transaction that would take the source past a limit the reader holds is undone and
+        //< refused, so every step can be saved and opened again.
+        if !is_empty(tx@)
+            ed.keep_limits(tx@)!
         tx.after = ed.selection()
         tx.kind = kind
         ed.joinable = kind != .other
@@ -490,11 +462,33 @@ impl Editor
             last.blocks[0].count = tx.blocks[0].count
             last.after = tx.after
             last.word_ended = tx.word_ended
+            last.grown += tx.grown
             return
         if is_empty(tx@)
             return
         ed.history.done.push(tx)
         ed.history.undone.clear()
+
+    priv fn keep_limits(ed: Self$@, tx: Transaction$@): Void!Refused //<
+        //< Undoes a transaction and refuses it where its source would hold too many blocks or bytes
+        //< `apply` counts the bytes of the blocks it changes. A table changes how other blocks
+        //< write, so a transaction that changed one has its whole source measured.
+        if tx.tables.len + tx.cells.len + tx.pieces.len + tx.columns.len > 0
+            tx.grown = writer.size(ed.doc@) - ed.written
+        $why: Refused? = .none
+        if ed.doc.blocks.len > MAX_BLOCKS
+            why = .some(.too_many_blocks)
+        else if ed.written + tx.grown > MAX_SOURCE_BYTES
+            why = .some(.too_large)
+        if refused: = why
+            defer scratch: = Arena(16 * 1024)
+            swap(ed.doc@, tx, true, ed.change@, scratch)
+            ed.restore(tx.before)
+            // The blocks are shown again, but the document is as it was: an action commits one
+            // transaction, so nothing is left for a host to save.
+            ed.change.any = false
+            throw refused
+        ed.written += tx.grown
 
     fn commit(ed: Self$@, w: Work$@, tx: Transaction$@, anchor: Pos, focus: Pos, scratch: Arena$@):
         Void!Refused //<
@@ -522,7 +516,9 @@ impl Editor
     fn apply(ed: Self$@, w: Work$@, tx: Transaction$@, got: Settled@, anchor: Pos, focus: Pos) //<
         //< Puts settled blocks in the document and moves the caret
         if w.to > w.from || got.blocks.len > 0
+            was: = blocks_size(ed.doc@, ed.doc.blocks@, w.from, w.to)
             replace_blocks(ed.doc@, tx, w.from, w.to - w.from, got.blocks@, ed.change@, ed.arena)
+            tx.grown += blocks_size(ed.doc@, got.blocks@, 0, got.blocks.len) - was
         ed.anchor = spot_of(got, anchor)
         ed.focus = spot_of(got, focus)
         if ed.focus.place != .text
@@ -545,13 +541,13 @@ impl Editor
         ed.joinable = false
         ed.marked = false
 
-    priv fn restyle(ed: Self$@, w: Work$@, scratch: Arena$@): Void!Refused //<
+    fn restyle(ed: Self$@, w: Work$@, scratch: Arena$@): Void!Refused //<
         //< Commits a work whose units changed kind or marks, keeping the selection's two ends
         $tx: = begin(ed.selection(), ed.arena)
         anchor_first: = !later(ed.anchor, ed.focus)
         ed.commit(w, tx@, w.start if anchor_first else w.end, w.end if anchor_first else w.start,
             scratch)!
-        ed.finish(tx, .other, false)
+        ed.finish(tx, .other, false)!
 
     priv fn split(ed: Self$@, w: Work$@, out_of_code: Bool, scratch: Arena$@): Void!Refused //<
         //< Replaces the selection with a line end: the text after it starts a new block
@@ -576,7 +572,7 @@ impl Editor
             else Pos::{ .unit = r.last, .offset = 0 })
         $tx: = begin(ed.selection(), ed.arena)
         ed.commit(w, tx@, caret, caret, scratch)!
-        ed.finish(tx, .other, false)
+        ed.finish(tx, .other, false)!
 
     fn remove_block(ed: Self$@, block: Sz): Void!Refused //<
         //< Removes a whole block, a table, an include or an image, as one step
@@ -597,7 +593,7 @@ impl Editor
         join: = ed.can_join(kind, w.from, w.to - w.from)
         $tx: = begin(ed.selection(), ed.arena)
         ed.commit(w@, tx@, r.caret, r.caret, scratch)!
-        ed.finish(tx, kind, join)
+        ed.finish(tx, kind, join)!
 
     priv fn lift_or_join(ed: Self$@, p: Spot, scratch: Arena$@): Void!Refused //<
         //< Backspace at the start of a block's text

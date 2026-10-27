@@ -71,7 +71,9 @@ priv fn big_cases(port: I32, arena: Arena$@): Void!client.Http_end //<
         r.status == 200 && r.body.equals(want), d)
     // **A download nobody reads holds a chunk, not the file.** Held whole, `READERS` slow readers
     // hold `READERS` copies, and enough of them run the server out of memory.
-    before: = heap_of(port, arena)!
+    first: = client.get(port, "/api/status", "", arena)!
+    before: = client.doc_of(first, arena).get("heap_bytes").as_int64().unwrap_or(-1I64)
+    asked: = client.doc_of(first, arena).get("requests").as_int64().unwrap_or(-1I64)
     $slow: = List<|client.Conn$@|>(arena)
     defer free_all(slow@)
     for _i in Range.asc(READERS)
@@ -79,12 +81,11 @@ priv fn big_cases(port: I32, arena: Arena$@): Void!client.Http_end //<
         one
             .send(client.raw("GET", arena.text().c('/').s(BIG_REL).take(), "", "", arena))!
         slow.push(one)
-    sys.sleep_ms(300)
-    during: = heap_of(port, arena)!
+    during: = heap_once_served(port, asked + I64::READERS, arena)!
     grown: = during - before
     bound: = I64::BIG_BYTES
     verdict.check("a large file held unread by several readers costs less than one copy of it",
-        before > 0I64 && grown < bound,
+        before > 0I64 && during > 0I64 && grown < bound,
         arena.text().s("the heap grew by \{grown\} bytes; one copy is \{bound\}").take())
 
 priv fn trickle_cases(port: I32, arena: Arena$@): Void!client.Http_end //<
@@ -109,22 +110,28 @@ priv fn peer_cases(port: I32, arena: Arena$@): Void!client.Http_end //<
     //< Caution: **Start from none held**: one left from an earlier case takes a place among them.
     verdict.check("the server holds nothing from earlier cases before the cap is filled",
         alone(port, arena)!, "a connection from an earlier case stayed open")
+    // **The connection asking how many are open is one of those held**: a further one would be
+    // past the cap itself.
     $held: = List<|client.Conn$@|>(arena)
     defer free_all(held@)
-    for _i in Range.asc(PER_PEER)
+    asker: = client.Conn.open_in(port, arena)!
+    held.push(asker)
+    for _i in Range.asc(PER_PEER - 1)
         held.push(client.Conn.open_in(port, arena)!)
-    // The connections are idle, but the server counts each it accepted.
-    sys.sleep_ms(200)
+    verdict.check("the server has accepted every connection held",
+        open_reaches(asker, PER_PEER, arena)!, "it never counted them all open")
     defer $over: = client.Conn.open(port)!
     over.send(client.raw("GET", "/style.css", "", "", arena)) catch {}
     none: client.Resp = ::{ .status = 0, .head = "", .body = "" }
     refused: = over.next(false, 2000, arena) catch none
     nm: = arena.text().s("the connection past \{PER_PEER\} from one address is refused").take()
     client.expect_status(nm, refused, 0, arena)
-    held.get(0).free()
-    held.set(0, held.get(held.len - 1))
+    held.get(1).free()
+    held.set(1, held.get(held.len - 1))
     held.len -= 1
-    sys.sleep_ms(200)
+    // The refused connection is still open on this side, but the server let it go.
+    verdict.check("the server lets go of the connection closed",
+        open_reaches(asker, PER_PEER - 1, arena)!, "it never counted one fewer open")
     again: = client.get(port, "/style.css", "", arena)!
     client.expect_status("once one closes, a new connection from it is served", again, 200, arena)
 
@@ -138,9 +145,32 @@ priv fn alone(port: I32, arena: Arena$@): Bool!client.Http_end //<
         sys.sleep_ms(ALONE_POLL_MS)
     return false
 
-priv fn heap_of(port: I32, arena: Arena$@): I64!client.Http_end //< the heap `/api/status` names
-    st: = client.get(port, "/api/status", "", arena)!
-    return client.doc_of(st, arena).get("heap_bytes").as_int64().unwrap_or(-1I64)
+priv fn heap_once_served(port: I32, want: I64, arena: Arena$@): I64!client.Http_end //<
+    //< The heap `/api/status` names once the server has answered `want` requests besides these
+    //< Each status request counts itself too, so the figure is checked against `want` plus the
+    //< polls so far. -1 where it does not get there within the usual timeout.
+    deadline: = sys.mono_us() + I64::client.DEFAULT_TIMEOUT_MS * 1000I64
+    $polls: I64 = 0I64
+    for sys.mono_us() < deadline
+        st: = client.get(port, "/api/status", "", arena)!
+        polls += 1I64
+        doc: = client.doc_of(st, arena)
+        if doc.get("requests").as_int64().unwrap_or(-1I64) >= want + polls
+            return doc.get("heap_bytes").as_int64().unwrap_or(-1I64)
+        sys.sleep_ms(ALONE_POLL_MS)
+    return -1I64
+
+priv fn open_reaches(asker: client.Conn$@, want: Sz, arena: Arena$@): Bool!client.Http_end //<
+    //< Whether `/api/status`, asked on `asker`, comes to name `want` connections open
+    //< **It asks on a connection already held**, so asking adds none.
+    deadline: = sys.mono_us() + I64::client.DEFAULT_TIMEOUT_MS * 1000I64
+    for sys.mono_us() < deadline
+        asker.send(client.raw("GET", "/api/status", "", "", arena))!
+        st: = asker.next(false, client.DEFAULT_TIMEOUT_MS, arena)!
+        if client.doc_of(st, arena).get("connections_open").as_int64().unwrap_or(-1I64) == I64::want
+            return true
+        sys.sleep_ms(ALONE_POLL_MS)
+    return false
 
 priv fn free_all(held: List<|client.Conn$@|>$@) //< closes every connection still held
     for c in held@

@@ -1,7 +1,7 @@
 //< `ksplc doc`: what a file, one entry or a folder publishes, rendered from the source when asked
-//< It reads the lines `--emit-surface` reads (`surface_lines` in `tools/surface.kspl`), so the
-//< reference and the record cannot disagree. **Nothing is written to disk**: a declaration's own
-//< `//<` is the one copy of what it says, and this renders it on request, as Markdown.
+//< The reference and the record (`--emit-surface=`) come from the same lines (`surface_lines` in
+//< `tools/surface.kspl`), so they cannot disagree. **The reference is never written to disk**: a
+//< declaration's own `//<` is the one copy of what it says, and this renders it on request.
 //< The rows are rendered directly; their keys identify file descriptions, parameters and returns.
 
 // ==========================================
@@ -344,6 +344,7 @@ priv fn write_folder(name: U8[], dir: U8[], parser: kspeg.Target$@, out: Str_bui
 
 fn print_doc(target: U8[], parser: kspeg.Target$@): Bool //<
     //< Prints the reference `target` names; false (with the reason printed) where it names nothing
+    //< **With `--emit-surface=`, it writes the file's record there instead**, and prints nothing.
     //< **The entry follows the first `.` after the last `/`** (`std/mem.Arena.alloc` is the file
     //< `std/mem` and the entry `Arena.alloc`), since a logical name holds no `.`.
     $after_slash: Sz = 0
@@ -359,6 +360,12 @@ fn print_doc(target: U8[], parser: kspeg.Target$@): Bool //<
     key: = "" if cut >= target.len else target.sub_from(cut + 1)
     defer $out: = Str_builder()
     path: = file_path_of(name)
+    record: = base_core.config.surface_path
+    if record.len > 0 && (key.len > 0 || !fs.exists(path))
+        io.err()
+            .s("ksplc doc: --emit-surface records one whole file, and '\{target\}' is not one. Name \
+                a file such as std/io\n")
+        return false
     if !fs.exists(path)
         dir: = folder_path_of(name)
         if key.len > 0 || !fs.is_dir(dir)
@@ -370,6 +377,12 @@ fn print_doc(target: U8[], parser: kspeg.Target$@): Bool //<
         return true
     switch read_lines(path, name, parser)
     case .some(rows)
+        // **The record replaces the reference**: a tool reading the file wants nothing printed.
+        if record.len > 0
+            io.write_file(record, tools_surface.render_surface(rows@, name)) catch e
+                io.err().s("ksplc doc: cannot write \{record\}: \{e\}\n")
+                return false
+            return true
         if key.len == 0
             write_file(name, rows@, out@)
         else if write_one(name, rows@, key, out@) == 0

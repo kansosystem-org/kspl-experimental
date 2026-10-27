@@ -1,63 +1,64 @@
 //< ksmd's opener's rules: the workspace, its port, and which files and paths it takes
 //< A mistake here breaks nothing visible at once. A port that moves between runs hides the drafts
 //< held before; a workspace chosen too narrow refuses an include that climbs with `../`. So each
-//< rule is checked alone (`tools/ksmd_aim.kspl`); `tools/tests/ksmd_launch.kspl` runs the launcher.
+//< rule is checked alone (`tools/opener_aim.kspl`); `tools/tests/ksmd_launch.kspl` runs the
+//< launcher.
 import "std/fs"
 import "std/mem" { Arena }
 import "std/str"
 import "std/verdict"
-import "tools/ksmd_aim"
+import "tools/opener_aim" as aim
 
 priv const SCRATCH: U8[] = "out/tmp/kspl_test_ksmd_aim" //< where the checks that write files work
 
 fn test_a_workspace_keeps_its_port() //< the same folder gets the same port, run after run
-    verdict.start("[tools/ksmd_aim] a workspace's own port test...")
+    verdict.start("[tools/opener_aim] a workspace's own port test...")
     // **The values are pinned**: a changed formula moves every workspace, and its drafts with it.
-    assert(ksmd_aim.home_port("/home/me/notes") == 26466, "a folder's port is the one pinned")
-    assert(ksmd_aim.home_port("/home/me/notes2") == 21056, "a neighbouring name gets another")
-    assert(ksmd_aim.home_port("C:\\Users\\me\\notes") == 24355, "a Windows path is hashed alike")
-    assert(ksmd_aim.home_port("/") == 25758 && ksmd_aim.home_port("") == 26037,
+    assert(aim.home_port("/home/me/notes") == 26466, "a folder's port is the one pinned")
+    assert(aim.home_port("/home/me/notes2") == 21056, "a neighbouring name gets another")
+    assert(aim.home_port("C:\\Users\\me\\notes") == 24355, "a Windows path is hashed alike")
+    assert(aim.home_port("/") == 25758 && aim.home_port("") == 26037,
         "the root and an empty name have ports too")
     for root in U8[][]::{ "/", "/a", "/home/me/notes", "D:\\work" }
-        at: = ksmd_aim.home_port(root)
-        assert(at >= ksmd_aim.PORT_BASE && at < ksmd_aim.PORT_BASE + ksmd_aim.PORT_SPAN,
+        at: = aim.home_port(root)
+        assert(at >= aim.PORT_BASE && at < aim.PORT_BASE + aim.PORT_SPAN,
             "every port lies in the workspaces' range")
     verdict.pass("a folder's port is pinned, and every port lies between 20000 and 29999.")
 
 fn test_only_a_ksmd_file_opens() //< the name must end in `.ksmd`, in any case
-    verdict.start("[tools/ksmd_aim] which files open test...")
-    assert(ksmd_aim.is_ksmd("notes.ksmd") && ksmd_aim.is_ksmd("/a/b/Notes.KSMD"),
+    verdict.start("[tools/opener_aim] which files open test...")
+    assert(aim.is_ksmd("notes.ksmd") && aim.is_ksmd("/a/b/Notes.KSMD"),
         "a .ksmd file opens, whatever its case")
-    assert(!ksmd_aim.is_ksmd("notes.md") && !ksmd_aim.is_ksmd("notes.ksmd.txt") &&
-        !ksmd_aim.is_ksmd("ksmd") && !ksmd_aim.is_ksmd(""), "any other name is refused")
+    assert(!aim.is_ksmd("notes.md") && !aim.is_ksmd("notes.ksmd.txt") && !aim.is_ksmd("ksmd") &&
+        !aim.is_ksmd(""), "any other name is refused")
     verdict.pass("only a name ending in .ksmd opens.")
 
 fn test_one_folder_has_one_spelling(arena: Arena$@) //< `.` and doubled separators drop
-    verdict.start("[tools/ksmd_aim] one spelling of a path test...")
-    assert(ksmd_aim.plain("/a/./b//c.ksmd", arena).equals("/a/b/c.ksmd"), "`.` and `//` drop")
-    assert(ksmd_aim.plain("/a/b/", arena).equals("/a/b"), "a separator at the end drops")
-    assert(ksmd_aim.plain("/", arena).equals("/"), "the root stays the root")
-    assert(ksmd_aim.plain("/a\\.\\b.ksmd", arena).equals("/a\\b.ksmd"),
+    verdict.start("[tools/opener_aim] one spelling of a path test...")
+    assert(aim.plain("/a/./b//c.ksmd", arena).equals("/a/b/c.ksmd"), "`.` and `//` drop")
+    assert(aim.plain("/a/b/", arena).equals("/a/b"), "a separator at the end drops")
+    assert(aim.plain("/", arena).equals("/"), "the root stays the root")
+    assert(aim.plain("/a\\.\\b.ksmd", arena).equals("/a\\b.ksmd"),
         "a `\\` stays as written between the names kept")
-    // Caution: **A `..` is refused, not folded** (the reason is at `ksmd_aim.plain`).
-    assert(ksmd_aim.plain("/a/../b.ksmd", arena).len == 0 &&
-        ksmd_aim.plain("/a/b/..", arena).len == 0, "a `..` anywhere is refused")
-    assert(ksmd_aim.plain("/a/..b/c", arena).equals("/a/..b/c"), "a name starting `..` is a name")
+    // Caution: **A `..` is refused, not folded** (the reason is at `aim.plain`).
+    assert(aim.plain("/a/../b.ksmd", arena).len == 0 && aim.plain("/a/b/..", arena).len == 0,
+        "a `..` anywhere is refused")
+    assert(aim.plain("/a/..b/c", arena).equals("/a/..b/c"), "a name starting `..` is a name")
     verdict.pass("`.` and doubled separators drop, and a path holding `..` is refused.")
 
 fn test_inside_a_workspace() //< a path is inside a folder only past a separator
-    verdict.start("[tools/ksmd_aim] a document inside a workspace test...")
-    assert(ksmd_aim.under("/ws", "/ws/a.ksmd") && ksmd_aim.under("/ws", "/ws/p/a.ksmd"),
+    verdict.start("[tools/opener_aim] a document inside a workspace test...")
+    assert(aim.under("/ws", "/ws/a.ksmd") && aim.under("/ws", "/ws/p/a.ksmd"),
         "a document in the folder or below it is inside")
-    assert(!ksmd_aim.under("/ws", "/ws2/a.ksmd"), "a folder sharing the start of the name is not")
-    assert(!ksmd_aim.under("/ws", "/ws") && !ksmd_aim.under("/ws/p", "/ws/a.ksmd"),
+    assert(!aim.under("/ws", "/ws2/a.ksmd"), "a folder sharing the start of the name is not")
+    assert(!aim.under("/ws", "/ws") && !aim.under("/ws/p", "/ws/a.ksmd"),
         "the folder itself and a folder beside it are not")
-    assert(ksmd_aim.under("/", "/a.ksmd"), "everything is inside the root")
+    assert(aim.under("/", "/a.ksmd"), "everything is inside the root")
     verdict.pass("a document is inside a workspace only below the folder's own name.")
 
 fn test_the_nearest_marked_folder_is_the_workspace(arena: Arena$@) //<
     //< A marked folder above wins over the document's own; with none, its own folder is chosen
-    verdict.start("[tools/ksmd_aim] choosing the workspace test...")
+    verdict.start("[tools/opener_aim] choosing the workspace test...")
     fs.mkdir_all(SCRATCH) catch panic("cannot create the scratch folder")
     here: = fs.mkdir_unique(SCRATCH, "ws_", arena) catch panic("cannot create the working folder")
     top: = fs.absolute(here, arena) catch panic("the working folder has a full path")
@@ -65,17 +66,17 @@ fn test_the_nearest_marked_folder_is_the_workspace(arena: Arena$@) //<
     inner: = fs.join(top, "notes/parts/own", arena)
     fs.mkdir_all(inner) catch panic("cannot create the folders")
     // A document whose folders hold no mark is its own folder's. No mark stands above `out/tmp`.
-    assert(ksmd_aim.workspace_of(deep, arena).equals(deep), "with no mark, its folder is chosen")
-    fs.write_tree(top, U8[][]::{ ksmd_aim.MARK }, U8[][]::{ "" }, arena)
+    assert(aim.workspace_of(deep, arena).equals(deep), "with no mark, its folder is chosen")
+    fs.write_tree(top, U8[][]::{ aim.MARK }, U8[][]::{ "" }, arena)
         catch panic("cannot write the mark")
-    assert(ksmd_aim.workspace_of(deep, arena).equals(top), "the marked folder above is chosen")
+    assert(aim.workspace_of(deep, arena).equals(top), "the marked folder above is chosen")
     // **The nearest mark wins**, so a folder can be a workspace inside a larger one.
-    fs.write_tree(inner, U8[][]::{ ksmd_aim.MARK }, U8[][]::{ "" }, arena)
+    fs.write_tree(inner, U8[][]::{ aim.MARK }, U8[][]::{ "" }, arena)
         catch panic("cannot write the second mark")
-    assert(ksmd_aim.workspace_of(inner, arena).equals(inner), "the nearest mark is chosen")
-    assert(ksmd_aim.workspace_of(deep, arena).equals(top), "a mark below the document counts not")
-    fs.remove_path(fs.join(inner, ksmd_aim.MARK, arena)) catch {}
-    fs.remove_path(fs.join(top, ksmd_aim.MARK, arena)) catch {}
+    assert(aim.workspace_of(inner, arena).equals(inner), "the nearest mark is chosen")
+    assert(aim.workspace_of(deep, arena).equals(top), "a mark below the document counts not")
+    fs.remove_path(fs.join(inner, aim.MARK, arena)) catch {}
+    fs.remove_path(fs.join(top, aim.MARK, arena)) catch {}
     for one in U8[][]::{ inner, deep, fs.join(top, "notes", arena), top }
         fs.remove_path(one) catch {}
     verdict.pass("the nearest folder holding .ksmd-workspace is chosen, else the document's own.")

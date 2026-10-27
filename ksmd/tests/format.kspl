@@ -3,7 +3,8 @@
 import "ksmd/base/source" { Source }
 import "ksmd/edit/editor" { Editor }
 import "ksmd/edit/editor_tables" { Table_edit }
-import "ksmd/model/format" { Number_format, currency_of, format_of, round_places, show }
+import "ksmd/model/format" { Number_format, currency_of, format_of, round_places, show,
+    shows_numbers }
 import "ksmd/syntax/reader"
 import "ksmd/tests/tables" { opened, saves }
 import "std/chars"
@@ -118,14 +119,14 @@ priv fn reading()
 
 priv fn refusals()
     refused(":::table name=\"t\" formats=\"money:2,\"",
-        "a format is number:N, grouped:N, percent:N or currency:XXX:N, with N from 0 to 9, or \
-            nothing", 28)
+        "a format is number:N, grouped:N, percent:N or currency:XXX:N, with N from 0 to 9, \
+            date:yyyy/mm/dd, or nothing", 28)
     refused(":::table name=\"t\" formats=\"number:2,number:10\"",
-        "a format is number:N, grouped:N, percent:N or currency:XXX:N, with N from 0 to 9, or \
-            nothing", 37)
+        "a format is number:N, grouped:N, percent:N or currency:XXX:N, with N from 0 to 9, \
+            date:yyyy/mm/dd, or nothing", 37)
     refused(":::table name=\"t\" formats=\",currency:usd:2\"",
-        "a format is number:N, grouped:N, percent:N or currency:XXX:N, with N from 0 to 9, or \
-            nothing", 29)
+        "a format is number:N, grouped:N, percent:N or currency:XXX:N, with N from 0 to 9, \
+            date:yyyy/mm/dd, or nothing", 29)
     refused(":::table name=\"t\" formats=\"number:2\"",
         "formats has one entry per column, empty for none", 19)
     refused(":::table name=\"t\" formats=\",\"", "leave out formats when no column has one", 19)
@@ -165,6 +166,8 @@ priv fn editing()
     saves("clearing the last format leaves formats out", ed@, arena,
         "%ksmd 1\n\n:::table name=\"t\"\n| \"\" | \"b\" |\n| | =#REF!*2 |\n:::\n")
     wrong(ed@, "more places on a column with no format", "no number format")
+    dated(arena)
+    owned(arena)
     formatted(ed@, 0, 0, "number:0")
     ed.step_places(0, 0, 0, false) catch e
         verdict.check("fewer than no places is refused",
@@ -216,3 +219,53 @@ priv fn wrong(ed: Editor$@, what: U8[], says: U8[]) //< more places is refused, 
         verdict.check(what, e.message().find_str(says).is_some(), e.message())
         return
     verdict.check(what, false, "the action was taken")
+
+priv fn dated(arena: Arena$@) //< a column that shows its dates with `/`
+    head: = "%ksmd 1\n\n:::table name=\"t\""
+    rows: = "\n| \"d\" | \"n\" |\n| 2026-10-26 | 1234.5 |\n:::\n"
+    $ed: = opened(arena.text().s(head).s(rows).take(), arena)
+    formatted(ed@, 0, 1, "date:yyyy/mm/dd")
+    saves("a date format is written as its pattern", ed@, arena,
+        arena.text().s(head).s(" formats=\"date:yyyy/mm/dd,date:yyyy/mm/dd\"").s(rows).take())
+    verdict.check("the cell still holds the date in the file's form",
+        ed.cell_text(0, 0, 0, arena).equals("2026-10-26"), ed.cell_text(0, 0, 0, arena))
+    verdict.check("a date format leaves a column's numbers as calculated",
+        !shows_numbers(fmt("date:yyyy/mm/dd")) && shows_numbers(fmt("number:0")), "")
+    wrong(ed@, "more places on a column of dates", "no number format")
+    formatted(ed@, 0, 1, "")
+    saves("General takes the date format away", ed@, arena,
+        arena.text().s(head).s(rows).take())
+    refused(":::table name=\"t\" formats=\"date:yyyy-mm-dd,\"",
+        "a format is number:N, grouped:N, percent:N or currency:XXX:N, with N from 0 to 9, \
+            date:yyyy/mm/dd, or nothing", 28)
+
+priv fn owned(arena: Arena$@) //< a cell's own format, over its column's
+    head: = "%ksmd 1\n\n:::table name=\"t\" formats=\"grouped:1\"\n| \"n\" |\n"
+    $ed: =
+        opened(arena.text().s(head).s("| 1234.5 |\n| 0.125 |\n:::\n").take(), arena)
+    ed.set_look(0, 1, 0, 1, 0, .format, "percent:1") catch e
+        verdict.check("a cell's own format", false, e.message())
+    saves("a cell's own format is written in its braces", ed@, arena,
+        arena.text().s(head).s("| 1234.5 |\n| 0.125 {format=\"percent:1\"} |\n:::\n").take())
+    ed.step_cell_places(0, 0, 0, 0, 0, true) catch e
+        verdict.check("one more place on a cell", false, e.message())
+    saves("a cell with no format of its own takes its column's, with a place more", ed@, arena,
+        arena.text().s(head)
+        .s("| 1234.5 {format=\"grouped:2\"} |\n| 0.125 {format=\"percent:1\"} |\n:::\n").take())
+    ed.set_look(0, 0, 0, 0, 0, .format, "general") catch e
+        verdict.check("general on a cell", false, e.message())
+    saves("general shows a cell as calculated, whatever its column's format", ed@, arena,
+        arena.text().s(head)
+        .s("| 1234.5 {format=\"general\"} |\n| 0.125 {format=\"percent:1\"} |\n:::\n").take())
+    ed.set_look(0, 0, 0, 1, 0, .all, "") catch e
+        verdict.check("clearing the looks", false, e.message())
+    saves("Clear format takes a cell's own format away", ed@, arena,
+        arena.text().s(head).s("| 1234.5 |\n| 0.125 |\n:::\n").take())
+    ed.set_look(0, 1, 0, 1, 0, .format, "percent:1") catch e
+        verdict.check("a cell's own format again", false, e.message())
+    formatted(ed@, 0, 0, "number:0")
+    saves("a column's format takes its cells' own formats away", ed@, arena,
+        "%ksmd 1\n\n:::table name=\"t\" formats=\"number:0\"\n| \"n\" |\n| 1234.5 |\n| 0.125 \
+            |\n:::\n")
+    refused(":::table name=\"t\" formats=\"general,\"",
+        "a column shows its values as calculated with an empty entry; general is a cell's", 28)

@@ -56,12 +56,38 @@ fn date_of(text: U8[]): I64? //< the day `2026-10-23` names: four, two and two d
 fn is_date(text: U8[]): Bool //< whether text is a date as a cell writes one
     return date_of(text).is_some()
 
+fn typed_date(text: U8[]): I64? //<
+    //< the day a person types: `2026-10-23`, or `2026/10/23` or `2026/1/5`
+    //< The `/` form is the one Japan, China and Korea write a date in, and Excel there reads it so.
+    //< Its month and day take one digit or two; the file keeps the `-` form alone (`date_of`).
+    if d: = date_of(text)
+        return .some(d)
+    if text.len < 8 || text.len > 10 || text[4] != '/'
+        return .none
+    year: = text.sub(0, 4).to_count(9999) catch
+        return .none
+    rest: = text.sub_from(5)
+    slash: = rest.find_char('/') catch
+        return .none
+    month_text: = rest.sub(0, slash)
+    day_text: = rest.sub_from(slash + 1)
+    if month_text.len < 1 || month_text.len > 2 || day_text.len < 1 || day_text.len > 2
+        return .none
+    month: = month_text.to_count(12) catch
+        return .none
+    day: = day_text.to_count(31) catch
+        return .none
+    return day_of(year, month, day)
+
 fn write_date(days: I64, out: Str_builder$@) //< `2026-10-23`
+    write_date_with(days, '-', out)
+
+fn write_date_with(days: I64, between: U8, out: Str_builder$@) //< `2026-10-23`, or `2026/10/23`
     d: = ymd_of(days)
     digits(d.year, 4, out)
-    out.c('-')
+    out.c(between)
     digits(d.month, 2, out)
-    out.c('-')
+    out.c(between)
     digits(d.day, 2, out)
 
 priv fn digits(n: I64, width: Sz, out: Str_builder$@) //< a number with leading zeros

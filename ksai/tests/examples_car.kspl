@@ -1,0 +1,102 @@
+//< Runs `car_pilot` and checks that the file it writes drives as the trainer does
+//< Not a suite; part of `ksai/tests/examples_main.kspl`. **The file is read without the trainer's
+//< constants** (`ksai/tests/car_pilot_blob.kspl`), so a feature or a manoeuvre the file does not
+//< carry shows here as a different answer.
+import "ksai/examples/car_pilot/policy"
+import "ksai/tests/car_pilot_blob" as blob
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" // `arena.text()`
+import "std/strfmt" as _strfmt
+import "std/subproc"
+import "std/verdict"
+
+priv const DIST_STEPS: Sz = 121 //< how many distance steps
+    //< From 0mm to 3000mm in 25mm steps.
+priv const DIST_STEP_MM: I64 = 25I64
+priv const LINE_COUNT: Sz = 8
+priv const NEAR_MM: I64 = 150I64 //< the point-blank distance (mm)
+    //< Nearer than this it must not move forward.
+priv const TIGHT_MARGIN: F64 = 0.0001 //< the logit gap counted as a close call
+priv const MAX_TIGHT: Sz = 5 //< how many points may be dropped from the verdict as a close call
+    //< More than this is itself a fault.
+priv const MIN_AGREE_PCT: Sz = 95 //< the share of manoeuvres that must match the rule (per cent)
+priv const CAR_WAIT_MS: I32 = 600000 //< the cap on one run of car_pilot (it trains)
+priv const SAID_CAP: Sz = 1024 * 1024 //< how much of what it says is kept
+
+priv struct Sweep //< what the sweep collected
+    seen: Sz
+    agree: Sz
+    bad: List<|U8[]|>$@ //< the points that broke a safety property
+    diff: List<|U8[]|>$@ //< the points where the file's manoeuvre differs from the trainer's
+    tight: Sz //< the points dropped from the verdict as a close call
+
+fn test_car_pilot_file(car_exe: U8[], work: U8[], arena: Arena$@) //<
+    //< car_pilot writes a policy file that the car can read, and that decides as the trainer does
+    verdict.start("[examples] car_pilot writes a policy that drives as the trainer does")
+    dir: = fs.join(work, "car", arena)
+    fs.mkdir_all(dir) catch
+        panic(U8$[]::arena.text().s("cannot create the working directory: \{dir\}").take())
+    r: =
+        subproc.run_capture(U8[][]::{ car_exe, "pilot.safetensors" }, dir, CAR_WAIT_MS, SAID_CAP,
+        arena) catch panic("car_pilot must start")
+    assert(r.exited_with(0),
+        U8$[]::arena.text().s("car_pilot failed (exit \{r.exit_code.unwrap_or(-1)\}):\n")
+        .s(r.stdout_data).s(r.stderr_data).take())
+    data: = io.read_file(fs.join(dir, "pilot.safetensors", arena), arena) catch
+        panic("car_pilot wrote no file")
+    b: = blob.load(data, arena) catch panic("the file car_pilot wrote is not a policy")
+    assert(b.version.equals("2") && b.far_mm > 0.0 && b.man.shape.len == 2 &&
+        b.man.shape[0] == 10 && b.man.shape[1] == 3,
+        U8$[]::arena.text().s("the file's version or shapes are wrong: version '").s(b.version)
+        .s("'").take())
+    verdict.pass("the file holds the version, far_mm and the manoeuvre table")
+
+    defer compute: = Arena(1024 * 1024)
+    p: = policy.build(compute)
+    defer policy.free(p)
+    assert(b.params == p.params,
+        U8$[]::arena.text().s("the file holds \{b.params\} weights, the trainer \{p.params\}")
+        .take())
+    sw: = sweep(p, b, compute, arena)
+    verdict.check_list("no advance at an unmeasurable or point-blank distance", sw.seen, "points",
+        sw.bad, "the advance must be zero where the distance cannot be measured or is too near")
+    verdict.check("the manoeuvre matches the rule 95% of the time or better",
+        sw.agree * 100 >= sw.seen * MIN_AGREE_PCT,
+        arena.text().s("\{sw.agree\}/\{sw.seen\}").take())
+    if sw.tight > MAX_TIGHT
+        sw.diff
+            .push(arena.text().s("too many close calls: \{sw.tight\}/\{sw.seen\}").take())
+    verdict.check_list("the file alone gives the trainer's manoeuvre", sw.seen, "points", sw.diff,
+        "the file must decide as the trainer does: compare the encoding both sides read")
+
+priv fn sweep(p: policy.Pilot$@, b: blob.Blob, compute: Arena$@, arena: Arena$@): Sweep //<
+    //< Sweeps every distance and line, checking the rule match and the **safety properties**
+    //< **The match rate alone is not enough.** "Never move towards something too near" must hold
+    //< even after a change that lowers the match rate.
+    defer scratch: = Arena(1024 * 1024)
+    $sw: = Sweep::{ .seen = 0, .agree = 0, .bad = List<|U8[]|>.create(arena),
+        .diff = List<|U8[]|>.create(arena), .tight = 0 }
+    for k in Range.asc(DIST_STEPS)
+        dist: = I64::k * DIST_STEP_MM
+        for line in Range.asc(LINE_COUNT)
+            mark: = compute.save()
+            m: = policy
+                .MANEUVERS[policy.decide(p, policy.Obs::{ .dist_mm = dist, .line = line }, compute)]
+            compute.restore(mark)
+            sw.seen += 1
+            at: = arena.text().s("dist=\{dist\} line=\{line\}: ").s(m.name).take()
+            if m.name.equals(blob.car_rule(dist, line))
+                sw.agree += 1
+            if (dist == 0I64 && !m.name.equals("stop")) ||
+                (dist > 0I64 && dist < NEAR_MM && m.lon > 0)
+                sw.bad.push(at)
+            d: = blob.drive(b, dist, line, scratch)
+            if d.margin < TIGHT_MARGIN
+                sw.tight += 1
+            else if d.lon != m.lon || d.lat != m.lat || d.rot != m.rot
+                sw.diff
+                    .push(arena.text().s(at).s(" -> \{d.lon\},\{d.lat\},\{d.rot\}").take())
+    return sw

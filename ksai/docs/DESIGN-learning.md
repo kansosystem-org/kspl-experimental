@@ -173,7 +173,7 @@ Caution: **`-ffast-math` is not used**, since accuracy comes first. Without it, 
 
 ## Tensors and weights share an explicit arena lifetime
 
-**Tensor, quantized-weight and adapter allocation requires a non-null arena.** The caller releases or resets that arena after all views are finished. There is no per-tensor `free`, heap fallback or ownership flag; even an empty result follows the same rule. A failed partial load leaves its allocations on the caller's arena until that arena is released.
+**Tensor and adapter allocation requires a non-null arena.** The caller releases or resets that arena after all views are finished. There is no per-tensor `free`, heap fallback or ownership flag; even an empty result follows the same rule. A failed partial load leaves its allocations on the caller's arena until that arena is released.
 
 | Result | Shape | Elements |
 | :-- | :-- | :-- |
@@ -182,7 +182,7 @@ Caution: **`-ffast-math` is not used**, since accuracy comes first. Without it, 
 | `Safetensors.get_tensor`, aligned bytes | arena | borrowed from the file |
 | `Safetensors.get_tensor`, misaligned bytes | arena | an aligned copy on the arena |
 
-**Constructors control allocation details.** A tensor's arena, a quantized matrix's scales and a parsed weights file's representation are not public fields. Public callers use constructors instead of fabricating these descriptors. Tensor elements remain accessible for numerical kernels. Copying a view does not extend the arena or file's lifetime.
+**Constructors control allocation details.** A tensor's arena and a parsed weights file's representation are not public fields. Public callers use constructors instead of fabricating these descriptors. Tensor elements remain accessible for numerical kernels. Copying a view does not extend the arena or file's lifetime.
 
 **A parsed header lives on the supplied arena.** `metadata()` returns its JSON value; no separate JSON owner is needed. `load_from_bytes` borrows the caller's file bytes, while `model_file.load_safetensors` reads the file straight into the arena, so the file is held once and never on the heap. A model needs no extra file-owner field to keep its weights alive.
 
@@ -219,6 +219,26 @@ Caution: **Keep the layers so that taking one out leaves the others to catch it.
 * A random single-byte flip almost never produces a wrong range (a few hundred to one against).
 
 **So the known invariants are built by hand and tested directly** ("refusing a weight whose named range is wrong" in [`tests/tensor_test.kspl`](../tests/tensor_test.kspl)). Fuzzing hunts unknown breakage and does not replace this (Principle 8).
+
+## The car's policy: learned from rules, kept as one file
+
+`examples/car_pilot` trains a net of 394 weights from written rules (`rule_action` in [`../examples/car_pilot/policy.kspl`](../examples/car_pilot/policy.kspl)) and writes it to one file. A small car reads that file once and then decides every manoeuvre itself.
+
+* **Why a net**: the rules as written would need no net. The net is not cleverer than the rules. It shows that a function learned on a PC runs inside a car's control loop.
+* Caution: **Do not make the rules a fallback at run time.** Overriding a disagreement with them makes the net an ornament and the agreement rate meaningless. The rules are only the teacher and the answer key.
+* **Measure the agreement rate by stepping through the whole range, not by random samples.** Disagreements gather within a few tens of mm past the boundaries (150mm and 400mm). As many random samples as training used can show "100%" without touching that band.
+* **The agreement rate and the refusal at close range are tested together** ([`../tests/examples_car.kspl`](../tests/examples_car.kspl)). The test needs 95% agreement or more, and no forward motion at an unmeasured distance or at very close range. The rate alone is not enough: a change that lowers it must still not tip toward danger.
+* **The battery is not an input.** Stopping on a flat battery is the car's own decision, as are backing off at very close range and the other safety stops.
+
+**Training runs offline, and the file is what is kept.** A trainer run at each start of a server made that start wait. Also, the copy the car carried could drift from the one trained again. With one kept file, the car drives on exactly what was tested.
+
+**The file holds more than the weights: also how the inputs are made (`far_mm`), the manoeuvre table and the format's version.**
+
+* **Why all of it**: with the weights alone, the reader keeps its own copy of the input encoding and of the manoeuvres' meaning. A copy cannot notice when the trainer's code is fixed.
+* **Why safetensors**: it is ksai's one format for named tensors ([`../safetensors.kspl`](../safetensors.kspl)), with a reader and a writer in place.
+* **Why it is not quantized** (stored as smaller, less exact numbers): the weights are about a kilobyte even as F32. Storing them as int8 would save about three quarters of that, but the reader's answers would drift from the trainer's. As F32, "the same observation gives the same manoeuvre" can be tested.
+* **What tests it: a policy rebuilt from the file alone gives the trainer's manoeuvre at every point** ([`../tests/car_pilot_blob.kspl`](../tests/car_pilot_blob.kspl) reads it with no constant of the trainer's). The trainer computes in F32 and the checker in double precision. So points where the top two logits nearly tie are not judged, and a cap limits how many there can be.
+* **Do not forget to raise the version (`__metadata__.kspl_pilot`).** The input order, the activation and the manoeuvre table's meaning cannot be told from a tensor's shape. Left unraised, an old reader applies new weights the old way and goes wrong with no error.
 
 ## Further reading
 

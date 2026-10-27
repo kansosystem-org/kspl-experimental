@@ -21,6 +21,7 @@ import "std/sys"
 import "tools/surface_rows" as rows
 
 priv const RECORD_NAME: U8[] = "SURFACE.txt"
+priv const SOURCE_EXT: U8[] = ".kspl"
 priv const DEFAULT_KSPLC: U8[] = "out/ksplc_stage1.exe"
 priv const WORK_DIR: U8[] = "out/surface"
 priv const EMIT_TIMEOUT_MS: I32 = 300000
@@ -45,7 +46,7 @@ priv fn sources(pkg: U8[], arena: Arena$@): List<|U8[]|>!fs.Fs_error //<
     paths: = fs.walk_files(pkg, skip_dir, arena)!
     $out: = List<|U8[]|>(arena)
     for p in paths
-        if p.ends_with(".kspl")
+        if p.ends_with(SOURCE_EXT)
             out.push(p)
     return out
 
@@ -60,21 +61,19 @@ priv fn stem_of(path: U8[], arena: Arena$@): U8[] //< the temporary file's name
     return s.take()
 
 priv fn built(pkg: U8[], ksplc: U8[], arena: Arena$@): U8[]!fs.Fs_error //<
-    //< Runs ksplc on each file in turn and collects one package's API
+    //< Runs `ksplc doc` on each file in turn and collects one package's API
     //< **It stops at the first file that cannot be read**: a partial record would shrink silently,
-    //< its entries shown as removed. **It runs once per file**: no entry point imports every file,
-    //< so each file is one in turn.
+    //< its entries shown as removed. The record needs the source alone, so no file is compiled.
     fs.mkdir_all(WORK_DIR)!
     files: = sources(pkg, arena)!
     defer $out: = Str_builder()
     for src in files
         stem: = stem_of(src, arena)
         tsv: = fs.join(WORK_DIR, arena.text().s(stem).s(".tsv").take(), arena)
-        obj: = fs.join(WORK_DIR, arena.text().s(stem).s(".c").take(), arena)
         fs.remove_path(tsv) catch {}
-        argv: = U8[][]::{ ksplc, "--std-dir=std",
-            arena.text().s("--emit-surface=").s(tsv).take(),
-            arena.text().s("--surface-scope=").s(SCOPE_PUB).take(), src, obj }
+        // `ksplc doc` takes the logical name, and records only what is published by default.
+        argv: = U8[][]::{ ksplc, "--std-dir=std", "doc",
+            arena.text().s("--emit-surface=").s(tsv).take(), src.strip_suffix(SOURCE_EXT) }
         _printed: = subproc.run(argv, "", EMIT_TIMEOUT_MS, CAPTURE_CAP, arena) catch e
             e.describe(arena.text().s("writing out ").s(src).s("'s API").take(), ksplc)
             throw .operation_failed
@@ -82,9 +81,6 @@ priv fn built(pkg: U8[], ksplc: U8[], arena: Arena$@): U8[]!fs.Fs_error //<
             throw .operation_failed
         out.s(part)
     return arena.dup_str(out.slice())
-
-priv const SCOPE_PUB: U8[] = "pub" //< the record's scope: only what is published is recorded
-    //< Nobody may rely on a `priv`, so changing one breaks nothing.
 
 priv fn declarations_only(body: U8[], arena: Arena$@): U8[] //<
     //< The built text without the rows that describe part of a declaration

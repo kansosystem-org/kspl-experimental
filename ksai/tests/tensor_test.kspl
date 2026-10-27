@@ -1,7 +1,6 @@
 import "ksai/lora" { Lora }
 import "ksai/lora_set" { Lora_widths, Qkv_lora }
 import "ksai/model_file" as ai_file
-import "ksai/quant"
 import "ksai/safetensors" as ai_st
 import "ksai/tensor" { Tensor }
 import "std/buf" { Buf_writer }
@@ -186,61 +185,6 @@ fn test_view_rows(arena: Arena$@) //< a view of rows from any row, and a rejecti
     verdict.pass("view_rows views rows from any row, shares them, and refuses rows past the end")
 
 // ==========================================
-// ksai/quant: the symmetric int8 quantization of weights per row (quantize) and the expansion back
-// (dequantize).
-// ==========================================
-fn test_quantize_roundtrip(arena: Arena$@)
-    verdict.start("[Quant] int8 quantization of weights per row (quantize/dequantize) test...")
-
-    w_shape: Sz[2] = ::{ 2, 4 }
-    $w: = Tensor<|F32|>(Sz[]::w_shape, arena)
-    (w.data + 0)$ = 1.0
-    (w.data + 1)$ = -2.0
-    (w.data + 2)$ = 0.5
-    (w.data + 3)$ = -0.25
-    (w.data + 4)$ = 10.0
-    (w.data + 5)$ = -10.0
-    (w.data + 6)$ = 0.0
-    (w.data + 7)$ = 5.0
-
-    $qw: = w.quantize(arena) catch panic("quantize failed unexpectedly on a valid 2D tensor")
-    assert(qw.rows == 2, "quantize: rows must match the source tensor")
-    assert(qw.cols == 4, "quantize: cols must match the source tensor")
-
-    dw: = qw.dequantize<|F32|>(arena)
-    // The largest absolute value is 10.0, so the error stays within about half a scale step
-    tol: = (10.0 / 127.0) * 0.6
-    for i in Range.asc(w.size)
-        orig: = F64::(w.data + i)$
-        got: = F64::(dw.data + i)$
-        diff: = math.abs(orig - got)
-        assert(diff <= tol, "quantize/dequantize roundtrip error must stay within one scale step")
-
-    // A matrix product on weights quantized and expanded back stays close to the unquantized result
-    x_shape: Sz[2] = ::{ 1, 2 }
-    $x: = Tensor<|F32|>(Sz[]::x_shape, arena)
-    (x.data + 0)$ = 2.0
-    (x.data + 1)$ = 3.0
-    y_ref: = x.matmul(w) catch panic("reference matmul failed unexpectedly")
-    y_quant: = x.matmul(dw) catch panic("matmul on dequantized weights failed unexpectedly")
-    for i in Range.asc(y_ref.size)
-        orig: = F64::(y_ref.data + i)$
-        got: = F64::(y_quant.data + i)$
-        diff: = math.abs(orig - got)
-        assert(diff <= 1.0,
-            "matmul on dequantized weights must stay close to the unquantized result")
-
-    // A one-dimensional tensor is rejected as rank_mismatch (only two dimensions are supported)
-    bad_shape: Sz[1] = ::{ 4 }
-    $bad: = Tensor<|F32|>(Sz[]::bad_shape, arena)
-    $caught: = false
-    bad.quantize(arena) catch
-        caught = true
-    assert(caught, "quantize on a 1D tensor must throw rank_mismatch")
-
-    verdict.pass("int8 quantizing per row keeps both the values and the matrix product close.")
-
-// ==========================================
 // The round trip of writing safetensors out then reading it back.
 // Caution: **Send reading and writing through one path.** A check on one side passes where both
 // are wrong the same way (the format is also shared with tools/ai_assist/safetensors_io.py).
@@ -367,7 +311,7 @@ priv fn blob_of(header: U8[], payload_len: Sz, arena: Arena$@, payload: U8[] = "
     hdr.s(header)
     for (hdr.len + 8) % 8 != 0
         hdr.s(" ")
-    len_bytes: U8[8] = ::{}
+    $len_bytes: U8[8] = ::{}
     len_slice: = U8$[]::len_bytes
     len_slice.put_u64_le(0, U64::hdr.len)
     blob: = arena.text()
@@ -419,7 +363,7 @@ fn test_safetensors_refuses_a_bad_range(arena: Arena$@)
     // The case where the header length is longer than the file. **Only this one is built
     // differently** (the length's 8 bytes are written by hand).
     defer $big_len: = Str_builder()
-    huge: U8[8] = ::{}
+    $huge: U8[8] = ::{}
     huge_slice: = U8$[]::huge
     huge_slice.put_u64_le(0, 100000U64)
     big_len.s(U8$[]::huge).s("{}")

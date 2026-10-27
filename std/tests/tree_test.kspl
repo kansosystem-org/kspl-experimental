@@ -118,6 +118,7 @@ fn test_fs_replace_file()
     assert(missing, "a missing folder fails the call")
     names: = fs.read_dir(dir, arena) catch panic("the folder must be readable")
     assert(names.len == 2, "no part is left beside the file")
+    replace_long_names(dir, arena)
     _writable: = set_mode(doc, "644", arena)
     fs_test.clear_tree_best_effort(dir, arena)
     if shown.len == 0
@@ -126,6 +127,47 @@ fn test_fs_replace_file()
     verdict
         .pass("Each replacement held its content whole, kept or narrowed the mode, and left no \
             part.")
+
+priv fn replace_long_names(dir: U8[], arena: Arena$@) //<
+    //< A name near the 255-byte limit is replaced, and a `\` in a name is refused on POSIX
+    //< The part file's name adds 22 bytes. So the name is cut there, and a cut through a
+    //< character of three bytes keeps the character whole.
+    long: = arena.text()
+    for _i in Range.asc(250)
+        long.c('a')
+    wide: = arena.text()
+    for _i in Range.asc(83)
+        wide.s("あ") // 249 bytes
+    for name in U8[][]::{ long.take(), wide.take() }
+        at: = fs.join(dir, name, arena)
+        fs.replace_file(at, "one", .kept) catch panic("a long name should be written")
+        fs.replace_file(at, "two", .kept) catch panic("a long name should be replaced")
+        assert(holds(at, "two"), "a long name holds what was written last")
+        fs.remove_path(at) catch panic("the long name must be removable")
+    // On Windows `\\` separates folders, so the name means `y.txt` in a folder `x` that does not
+    // stand there; only POSIX has a rule to check.
+    if !sys.is_windows()
+        $refused: = false
+        fs.replace_file(fs.join(dir, "x\\y.txt", arena), "x", .kept) catch
+            refused = true
+        assert(refused, "a name holding `\\` is refused on POSIX")
+
+fn test_fs_long_name()
+    verdict.start("[Fs] the name the file system keeps for a path's last segment test...")
+    defer arena: = Arena(16 * 1024)
+    dir: = fs.mkdir_unique(BASE, "long_name_", arena)
+        catch panic("mkdir_unique should make a directory")
+    hidden: = fs.join(dir, ".hidden", arena)
+    fs.mkdir(hidden) catch panic("the folder must be makeable")
+    kept: = fs.long_name(hidden, arena) catch panic("a name that stands has a kept name")
+    assert(kept.equals(".hidden"), "a long name comes back as written")
+    $missing: = false
+    _none: = fs.long_name(fs.join(dir, "absent", arena), arena) catch
+        missing = true
+        fallback ""
+    assert(missing, "a name with nothing at it fails")
+    fs_test.clear_tree_best_effort(dir, arena)
+    verdict.pass("A long name comes back as written, and a missing one fails.")
 
 fn test_fs_write_tree()
     verdict.start("[Fs] writing a tree of files test...")

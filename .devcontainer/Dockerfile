@@ -13,9 +13,10 @@ RUN echo 'Acquire::ForceIPv4 "true";' > /etc/apt/apt.conf.d/99force-ipv4
 # Caution: **Name, per tool, the target that calls it**, or what the default build leaves alone
 # looks unused and goes. This is the tool list's canonical source.
 #   test-ship's Windows half: gcc-mingw-w64-x86-64-win32 (the x86_64 cross compiler alone, the
-#   one `x86_64-w64-mingw32-gcc` names; Wine, which would run its output, is left out for its size)
+#   one `x86_64-w64-mingw32-gcc` names; Wine, which would run its output, is left out for its size,
+#   so no CI job runs that output: note 19 in `docs/SPEC-gates.md` says how to run it by hand)
 #   BLAS=1: libopenblas-dev · test-ksos-qemu: qemu-system-arm · bare metal: gcc-arm-none-eabi
-#   ksbind's own test (test-extract): libssl-dev, libsqlite3-dev · test-ksmd-browser: nodejs
+#   ksbind's own test (test-extract): libssl-dev · test-ksmd-browser: nodejs
 #   test-pytools: python3-numpy (without it, the Linux round fails)
 #   test-ksmd-desktop: desktop-file-utils, shared-mime-info
 #   the HTTPS download below (Chromium): ca-certificates
@@ -32,7 +33,6 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     libopenblas-dev \
     libssl-dev \
-    libsqlite3-dev \
     qemu-system-arm \
     gcc-arm-none-eabi \
     desktop-file-utils \

@@ -67,6 +67,21 @@ priv fn rows()
     edited("a range grows when its corner row moves away from the other corner", HEAD,
         "| 1 | |\n| 2 | |\n| 3 | =sum(A1:A2) |\n:::\n", .move_row, 1,
         "| 1 | |\n| 3 | =sum(A1:A3) |\n| 2 | |\n:::\n")
+    defer arena: = Arena(64 * 1024)
+    $doc: =
+        read("%ksmd 1\n\n:::table name=\"t\" widths=\"1,2\" groups=\"rows 1-2\"\n| \"a\" | \"b\" \
+            |\n| 1 | =A1 |\n| 2 | =sum(A1:A2) |\n:::\n", arena)
+    edit.insert_rows(doc@, 0, 1, 3, arena) catch
+        panic("inserting three rows")
+    edit.insert_columns(doc@, 0, 1, 2, arena) catch
+        panic("inserting two columns")
+    many: = written(doc@, arena)
+    want: =
+        "%ksmd 1\n\n:::table name=\"t\" widths=\"1,2,2,2\" groups=\"rows 1-5\"\n| \"a\" | \"\" | \
+            \"\" | \"b\" |\n| 1 | | | =A1 |\n| | | | |\n| | | | |\n| | | | |\n| 2 | | | =sum(A1:A5) \
+            |\n:::\n"
+    verdict.check("rows and columns inserted together do what each one alone does",
+        many.equals(want), many)
 
 priv fn removed_rows()
     edited("removing a row turns a reference to it into #REF!", HEAD, ROWS, .remove_row, 0,
@@ -97,9 +112,9 @@ priv fn columns()
             1 |\n:::\n")
     defer arena: = Arena(64 * 1024)
     $doc: = read("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n| =B1 |\n:::\n", arena)
-    edit.insert_column(doc@, 0, 1, arena) catch
+    edit.insert_columns(doc@, 0, 1, 1, arena) catch
         panic("inserting a column")
-    edit.insert_column(doc@, 0, 0, arena) catch
+    edit.insert_columns(doc@, 0, 0, 1, arena) catch
         panic("inserting a column")
     saved: = written(doc@, arena)
     verdict.check("a reference to no cell attaches once its cell exists, then moves",
@@ -122,7 +137,7 @@ priv fn copies()
     saved: = written(doc@, arena)
     verdict.check("a copy shifts the axes without $, and a shift outside the table is #REF!",
         saved.equals(expected), saved)
-    edit.insert_row(doc@, 0, 0, arena) catch
+    edit.insert_rows(doc@, 0, 0, 1, arena) catch
         panic("inserting a row")
     moved: = "| | |\n| =#REF!+$A$2+$A2+#REF! | =A2+$A$2+$A2+A$2 |\n| 2 | =A3+$A$2+$A3+A$2 |\n:::\n"
     expected_moved: =
@@ -187,6 +202,9 @@ priv fn cells()
     refused_set("a number keeps JSON's shape", doc@, .number, "012", arena)
     refused_set("a number is finite", doc@, .number, "1e999", arena)
     refused_set("a formula's '|' stands inside quotes", doc@, .formula, "A1 | B1", arena)
+    refused_set("a formula's '{' stands inside quotes", doc@, .formula, "A1 {", arena)
+    refused_set("a formula takes no look in braces", doc@, .formula, "A1 {color=\"#000000\"}",
+        arena)
     refused_set("a formula's quotes close", doc@, .formula, "\"a", arena)
     refused_set("a formula takes one line", doc@, .formula, "A1\nB1", arena)
     refused_set("a formula takes one line, inside quotes too", doc@, .formula, "\"a\nb\"", arena)
@@ -197,6 +215,11 @@ priv fn cells()
     quoted: = written(doc@, arena)
     verdict.check("a formula holding a quoted pipe saves as one cell",
         quoted.equals(join(HEAD, "| \"Pens\" | =\"a|b\" + 1 |\n:::\n", arena)), quoted)
+    edit.set_cell(doc@, 0, 0, 1, .formula, "\"{a}\" = A1", arena) catch
+        panic("a quoted brace is one cell")
+    braced: = written(doc@, arena)
+    verdict.check("a formula holding a quoted brace saves as one cell",
+        braced.equals(join(HEAD, "| \"Pens\" | =\"{a}\" = A1 |\n:::\n", arena)), braced)
 
 priv fn refusals()
     defer arena: = Arena(256 * 1024)
@@ -214,9 +237,15 @@ priv fn refusals()
     refused("a removal that would write #REF! past 4,096 bytes is refused", doc@, .remove_row, 8,
         .too_long, arena)
     refused("a row outside the table is refused", doc@, .insert_row, 10, .outside, arena)
+    before_many: = written(doc@, arena)
+    $why: = Edit_error.outside
+    edit.insert_rows(doc@, 0, 0, 3, arena) catch e
+        why = e
+    verdict.check("rows inserted together are refused as one, and change nothing",
+        why == .too_long && written(doc@, arena).equals(before_many), "")
     refused("a move outside the table is refused", doc@, .move_row, 9, .outside, arena)
     before: = written(doc@, arena)
-    edit.insert_row(doc@, 1, 0, arena) catch e
+    edit.insert_rows(doc@, 1, 0, 1, arena) catch e
         verdict.check("a table outside the document is refused",
             e == .outside && written(doc@, arena).equals(before), "")
     $one: = read("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n:::\n", arena)
@@ -265,13 +294,13 @@ priv fn apply(doc: Document$@, change: Change, at: Sz, arena: Arena$@): Void!Edi
     switch change
     case .none {}
     case .insert_row
-        edit.insert_row(doc, 0, at, arena)!
+        edit.insert_rows(doc, 0, at, 1, arena)!
     case .remove_row
         edit.remove_row(doc, 0, at)!
     case .move_row
         edit.move_row(doc, 0, at, last_row)!
     case .insert_column
-        edit.insert_column(doc, 0, at, arena)!
+        edit.insert_columns(doc, 0, at, 1, arena)!
     case .remove_column
         edit.remove_column(doc, 0, at)!
     case .move_column

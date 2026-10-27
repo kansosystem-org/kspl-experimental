@@ -127,7 +127,7 @@ fn open_file(file_name: U8[]): File_descriptor!Io_error
 
 **C's reserved words (`int` / `long` / `goto` and so on) are usable as identifiers**, except those that are also KSPL's own: `struct` / `enum` / `typedef` / `const` / `if` / `else` / `for` / `switch` / `return` / `break` / `continue` / `case` / `default` / `extern` / `sizeof` / `offsetof`.
 
-Such a name would clash with C in the generated C, so `ksplc` adds the suffix `_kw` to it there. Only local variables, parameters and struct fields keep their bare names in the generated C, so only those get the suffix. Type and function names always carry a prefix made from their file's path, so they never collide. It is a compile error only when the suffixed name already exists in the same scope (`goto` beside `goto_kw`).
+Such a name would clash with C in the generated C, so `ksplc` adds the suffix `_kw` to it there. Only local variables, parameters and struct fields keep their bare names in the generated C, so only those get the suffix. Type and function names carry a prefix made from their file's path; `std/lang`'s types alone go without. In C, `_`, `.` and `/` all become `_`. **Two names spelled alike in C are a compile error naming both**: a `Foo` in each of the files `a_b/c` and `a/b_c`, or two instances of one generic. It is a compile error only when the suffixed name already exists in the same scope (`goto` beside `goto_kw`).
 
 **Two more groups get `_kw` and are usable too:**
 
@@ -691,6 +691,8 @@ typedef B = A // error: the same cycle
 | `\{x\}` | `put(w, x)`: a free function in `std/lang` |
 | `"Value: \{x\}"` | `put(w.s("Value: "), x)` |
 
+**The call is always `std/lang`'s `put`.** A `put` that the file declares or imports does not take it.
+
 The destination (the `Writer` from `io.out()`, a `Str_builder`, …) must therefore implement the `Writer` trait, which carries writing methods such as `s()`. Each interpolated value's type must implement the `Formattable` trait, which carries `fmt(w: Writer): Writer` (`Str_builder` implements both). A trait is a named set of methods a type promises to have ([5.1](#51-traits-trait)).
 
 `put` returns the destination it was given, at its own type. So interpolation on a `Str_builder` keeps the concrete type and can chain `Str_builder`'s own methods (`b.s("n=\{n\}").slice()`). Do not use `Formattable.fmt`'s return value: called through the trait, it has collapsed to `Writer`.
@@ -934,6 +936,8 @@ A **place** is an expression referring to where a value is, roughly what C calls
 
 **An element that a container owns follows the same rule.** A container owns its elements where its `Index_place.at` takes `Self$@`, as `List<|T|>`'s does ([6.1.2](#612-indexing)). So `make_list()[0]` can be read, but it cannot be assigned, and `make_list()[0]@` is refused.
 
+**A subscript through `Index` is a call's result**, `a.get(i)` ([6.1.2](#612-indexing)). So it is not a place, as `f()` is not. A write to its field (`s[0].x = 5`), its field's address (`s[0].x@`) and a `Self$@` method on it (`s[0].bump()`) are refused. Each would change only the copy `get` returned.
+
 **Three operations touch a place, and the same three rules decide all three.**
 
 ```mermaid
@@ -1062,7 +1066,9 @@ A cast to a mutable pointer, `T$@::(...)`, strips immutability and allows writin
 
 Only the binding's immutability can be stripped. A mutable slice or pointer cannot be made from memory that is itself read-only (a `const` declaration, a string literal). Writing there would make the generated C rewrite `.rodata` (ROM on a freestanding target, one with no operating system) and fail with no diagnostic. So the compiler stops it as `cannot cast a 'const' declaration to the mutable slice type`.
 
-**Put a `$` on an array a mutable view is made from.** The `U8$[]::buf` of `$buf: U8[64]` is accepted. Drop the `$` and the generated C declaration gains a `const`, so the same cast points at read-only memory. [I0601] counts this `$` as in use, though the write goes through the view and never rewrites the name.
+**A mutable view is made only from an array that is a place.** `I32$[]::make_array()` and `I32$[]::make().arr` are refused. The array is a copy with no name, so a write through the view would change only the copy. Bind the array to a `$` name first.
+
+**A mutable view is made only from an array whose binding has a `$`.** The `U8$[]::buf` of `$buf: U8[64]` is accepted. Without the `$`, the array is read-only and the cast is a compile error. A write through the view would change memory the program promised not to change. [I0601] counts this `$` as in use, though the write goes through the view and never rewrites the name.
 
 ### 4.4 Initialization rules and definite initialization
 
@@ -1075,7 +1081,14 @@ The initialization rules differ with where a variable is declared:
 
 #### 4.4.1 Top-level variables
 
-**Without an initializer, a top-level (global) variable is zero-initialized** at program start, as in C's BSS section. The BSS section is the part of a program's memory that the loader fills with zeros. The variable sits in static memory, so an initializer must have a value fixed at compile time. A run-time computation (a function call, reading another variable, dereferencing a pointer) is refused as `top-level variable initializer is not a compile-time constant`. For run-time initialization, call an initialization function from `main`. **Nor can an initializer read a part of another value**: an element (`a[2]`, `"abc"[1]`), a field (`p.x`) or a slice's `.len` or `.ptr`, even of a `const`. Such a read is refused as `a top-level initializer cannot read a part of another value`; write the value itself. An array's `.len` is no read: it comes from the type.
+**Without an initializer, a top-level (global) variable is zero-initialized** at program start, as in C's BSS section. The BSS section is the part of a program's memory that the loader fills with zeros. The variable sits in static memory, so an initializer must have a value fixed at compile time. The same rule holds for a `const` and a `$` variable. Each part of an initializer is one of the following:
+
+* **A number the compiler computes.** An integer, `Bool`, character, scalar enum or floating-point part is folded, an integer by the rules in [6.8](#68-integer-arithmetic-folding-overflow-division-shifts). The program holds the folded value. Such a part may use every operator, `&&`, `||`, a conditional, a cast, `sizeof`, `offsetof` and the name of another `const`.
+* **A shape kept as written**: a compound literal (`::{ … }`), a string, `null`, a function or an anonymous function without captures. A tagged union's variant, a trait value and another `const` of such a shape count too.
+* **A fixed address**: `g@` of a global `g`, or of a field or a constant index inside one (`g.a[2]@`). A slice over such an array (`T[]::table`) and over an array literal (`T[]::{ … }`) also count. So does a pointer cast of an address or of an integer (`U32@::0x4000_0000`).
+* **A conditional whose condition folds.** It stands for the branch that the condition picks, of any shape.
+
+Anything else is refused by the compiler itself. A run-time computation (a function call, reading another variable, dereferencing a pointer) is refused as `top-level variable initializer is not a compile-time constant`. For run-time initialization, call an initialization function from `main`. **Nor can an initializer read a part of another value**: an element (`a[2]`, `"abc"[1]`), a field (`p.x`) or a slice's `.len` or `.ptr`, even of a `const`. Such a read is refused as `a top-level initializer cannot read a part of another value`; write the value itself. An array's `.len` is no read: it comes from the type. An address reached through a pointer or a computed index is refused as `a top-level initializer can take only a fixed address`. Any other form that does not fold is refused as `this cannot stand in a top-level initializer`.
 
 **Top-level declarations are not bound by their order.** KSPL compiles in several passes, so code can refer to a function, type or constant defined later in the file. An initializer or an array's length can refer to a `const` declared later in the same file, and so can `sizeof` ([6.7](#67-built-in-operators)). Only constants referring to each other are refused, as `circular constant definition detected`.
 
@@ -1424,7 +1437,7 @@ Such a *data race* (two threads touching the same memory at once, at least one o
 
 Declare that a type conforms to `std/reflect`'s `Reflectable` with an **empty body**, and the compiler writes a description of the type's fields for you. Code such as a JSON reader can then walk the fields by name at run time.
 
-The compiler builds two things from the type's declaration: a field table (a `const` of `Field_info`: each field's name, offset and kind) and the body of `fields()`. `std/json`'s `from_struct` / `into_struct` and `ksbind/db`'s `bind_row` / `read_row` walk it.
+The compiler builds two things from the type's declaration: a field table (a `const` of `Field_info`: each field's name, offset and kind) and the body of `fields()`. `std/json`'s `from_struct` / `into_struct` walk it.
 
 ```kspl
 import "std/ds" { List }
@@ -1538,16 +1551,18 @@ Implement a prescribed trait (`Add` or `Eq` in `std/lang`, and so on), and `+` a
 | `Index_place` | `a.at(i)$` | Read, assign, compound-assign, take an address |
 | `Index_ref` | `a.at_ref(i)$` | Read and take an address only |
 
-* **`Index` / `Index_mut` exchange "a value", not "an element's place" ([4.3](#43-places-and-the-rules-for-when-they-may-be-written))**: a read `a[i]` becomes `a.get(i)`, and a write `a[i] = v` becomes `a.set(i, v)`. On a type implementing only these, two shapes are compile errors:
+* **`Index` / `Index_mut` exchange "a value", not "an element's place" ([4.3](#43-places-and-the-rules-for-when-they-may-be-written))**: a read `a[i]` becomes `a.get(i)`, and a write `a[i] = v` becomes `a.set(i, v)`. On a type implementing only these, three shapes are compile errors:
   * **Taking an element's address** `a[i]@`: `get` returns a copy, so the `@` would be the address of a temporary.
   * **Compound assignment** `a[i] += v`: a read-modify-write cannot be built from a `get`/`set` pair. Write `a.set(i, a.get(i) + v)`.
+  * **A write into the copy**: `a[i].f = v`, `a[i].f@` passed to a `T$@`, and `a[i].m()` for a `Self$@` method. `get`'s result is not a place ([4.3](#43-places-and-the-rules-for-when-they-may-be-written)).
 * **Indexing that returns an element's place (`Index_place`)**: a type implements `Index_place<|Idx, Output|>`, which carries `fn at(r: Self$@, index: Idx, …): Output$@`. Its last two parameters receive the caller's position ([8.1.1](#811-default-arguments)). Then `a[i]` is a "place" just like a built-in slice or array ([4.3](#43-places-and-the-rules-for-when-they-may-be-written)). All four shapes work (read, assign, compound-assign, take an address), and a field of a struct element is updated directly, with no copy (`a[i].f = v`). The compiler desugars `a[i]` to `a.at(i)$`.
   * It takes precedence over `Index`/`Index_mut` on a type implementing both; `at` alone covers reading and writing.
   * In the standard library, `List<|T|>` implements it naming `Self$@`, and `Slice<|$T|>` / `Tensor<|T|>` naming `Self@`.
   * **The receiver shape an implementation declared decides whether it is chosen when the receiver is read-only**. `at(r: Self$@, …)` touches the descriptor itself, so it needs a writable receiver. It is not chosen across a read-only place such as `xs: List<|T|>@`, and the choice goes to the next one, `Index_ref`. `at(r: Self@, …)` only reads the descriptor and returns the mutable pointer inside. So it is chosen across a read-only place too, and the elements can be written. A bare `Self` (received by value) counts as needing a writable receiver.
+  * **The method a route calls follows the rule for a method's receiver** ([4.3.3](#433-the-same-rule-applies-to-method-calls)). A `get` or an `at_ref` declared with `Self$@` cannot read through a read-only place or a temporary, as `a.get(i)` cannot. That covers `for x in a` too. Declare the receiver `Self@` where the method does not write.
   * **A temporary counts as a read-only receiver here**, as it does for any `Self$@` method ([5.2](#52-implementations-impl-and-receivers)). A temporary is a call's result or another value with no variable. `make_list()[0]` therefore reads through `at_ref`. A write to it is refused, because it would change a copy that is then thrown away. Without `Index_ref`, the read is refused too. Bind the value to a name first (`$xs: = make_list();`).
   * **Once it is chosen, the returned pointer's type also decides whether a write is allowed** (the path rule in [4.3](#43-places-and-the-rules-for-when-they-may-be-written)). Through `at(r: Self@, …)`, the returned `Output$@` speaks for the permission, not the path reaching the receiver. That is how a pointer field is already written. Take a read-only `x` (a parameter received by value, or a variable declared without `$`) whose field `p` is a `T$@`. Then `x.p$ = v` is accepted, because the write lands where `p` points, not in `x`. So `p`'s own `$` decides. `x[i] = v` through `at(r: Self@, …)` also lands where a returned pointer points, so it is accepted in the same function on the same terms. With `at(r: Self$@, …)` the same `x[i] = v` is refused, while `x.p$ = v` still passes.
-* **Indexing that returns a read-only place (`Index_ref`)**: a type implements `Index_ref<|Idx, Output|>`, which carries `fn at_ref(r: Self, index: Idx, …): Output@`, with the same two position parameters. Then `a[i]` is a read-only "place". Reading and taking an address are accepted (`a[i]@` is an `Output@`). Assignment and compound assignment are refused because the element type is immutable. The compiler desugars `a[i]` to `a.at_ref(i)$`.
+* **Indexing that returns a read-only place (`Index_ref`)**: a type implements `Index_ref<|Idx, Output|>`, which carries `fn at_ref(r: Self, index: Idx, …): Output@`, with the same two position parameters. Then `a[i]` is a read-only "place". Reading and taking an address are accepted (`a[i]@` is an `Output@`). Assignment and compound assignment are refused because the element type is immutable. So are a write to the element's field (`a[i].f = v`) and a `Self$@` method on it. The compiler desugars `a[i]` to `a.at_ref(i)$`.
   * **A container whose referent is immutable can implement only this one.** `Index_place.at` promises an `Output$@`, which a type holding only a read-only referent such as `ptr: T@` cannot give. Where the elements' immutability rides on a type argument (`Slice<|T|>`), the declaration does not show it. So it is checked per instantiation and made a compile error. Write a `$` on the `impl`'s target so `Index_place` attaches to the mutable version only ([3.3](#33-structs-struct)).
   * Unlike `Index`, **no copy appears**. `get` duplicates the element, so `a[i].f` carries the whole element to read one field. `Index_ref` is a place, and works in the same shape whatever the element's size.
 * On a built-in slice or array, `s[i]` is a "place" from the start, so all four shapes can be written.
@@ -1999,7 +2014,7 @@ Three words are used below:
 * **Division, remainder, right shift, and ordering comparisons change their answer with signedness.** On an unsigned type everything is evaluated as unsigned (`(1U32 - 2U32) >> 1U32` is `2147483647`, not an arithmetic shift of `-1`).
 * **A shift amount must be smaller than the operand's width** (`shift amount is out of range in compile-time constant expression`): `1U64 << 40` can be written, `1U32 << 40` cannot.
 
-**The folding rules above take effect in two places.** One is a context that cannot go on without the value (an array length, an enum tag, a generic's `const` argument). The other is a top-level initializer, which is folded only to inspect it for overflow. An ordinary expression inside a function (`x: I32 = a + b;`) is generated unfolded, and so follows the next rule.
+**The folding rules above take effect in two places.** One is a context that cannot go on without the value (an array length, an enum tag, a generic's `const` argument). The other is a top-level initializer, whose numbers the program holds as folded ([4.4.1](#441-top-level-variables)). An ordinary expression inside a function (`x: I32 = a + b;`) is generated unfolded, and so follows the next rule.
 
 **A run-time overflow wraps `mod 2^N`, signed or not**, though C leaves signed overflow undefined. When `+` `-` `*` `<<` or unary minus exceeds the type's width, the value wraps in two's complement. Adding `1` to `I32`'s maximum gives its minimum, and unary minus on `I32`'s minimum gives that minimum itself.
 
@@ -2318,6 +2333,7 @@ fn process_item<|T: Drawable + Serializable|>(item: T)
   * anywhere else nothing gives it a type, and it is a compile error: two names compared with each other, and `sizeof` (below).
 * **A function's name compared with `==` or `!=` takes the other side's function type**, on whichever side it is written. `twice == f` and `f == twice` are one comparison. The name is checked against `f`'s type as any function's name is. Two names (`twice == thrice`) give neither a type and are a compile error. Bind one side to a variable of a function type first.
 * **A function's name is not a type, and has no size**: `x: twice` and `sizeof(twice)` are compile errors. A pointer to a function has a function type (`fn(x: I32): I32`), and `sizeof` of that type gives its size ([6.7](#67-built-in-operators)).
+* **Only a function, a method or a value of a function type is called.** `(…)` after any other value is a compile error, a call's result included (`twice(1)(5)` with `twice` returning `I32`). A function value has no members either: `P.make.qq(3)` is a compile error, not a call of `P.make`.
 * **A function value takes `==` and `!=` alone.** Ordering (`<`), arithmetic, a unary operator (`-f`, `!f`) and a compound assignment (`f += g`) on it are compile errors; a null check is `f == null`.
 
 * **Variadic arguments**: `...` at the end of the argument list receives a variable number of arguments as C does, for interoperating with C.
@@ -3182,7 +3198,6 @@ There are two kinds, told apart only by the number of `#`s. Both are written bef
 | Notation | Target | Description |
 | --- | --- | --- |
 | `##error(cond, msg)` | A top-level statement | **A compile-time assertion**: when `cond` is false, compilation stops at once and shows `msg`. |
-| `##warning(cond, msg)` | A top-level statement | **A compile-time warning**: when `cond` is false, `msg` is shown as a warning and compilation continues. |
 | `##lint(CODE = level, ...)` | A top-level statement | **A level per diagnostic code**: `off`, `on` or `error`. `off` emits nothing. `on` emits at the default severity, so it enables a code that is off by default. `error` promotes it to an error. It acts on the whole file, wherever in the file it is written (it takes effect before the diagnostics). An unknown code or level is a compile error. An error-severity diagnostic carries no code, so this cannot silence a real defect. Details are in the Lint section of the development tools specification. |
 
 **A directive name absent from this table is a compile error** (`unknown directive '##foo'`), as an unknown attribute is. The grammar accepts any `##<name>(...)`, and this table is the single list of names. The argument shape is matched per name as well: `##error(CODE = level)` and `##lint(<expression>)` are both errors. An attribute name written as a directive (`##cfg(x)`) gets a note to write `#cfg`.

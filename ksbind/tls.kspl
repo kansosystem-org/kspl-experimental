@@ -134,15 +134,21 @@ priv fn client_ssl(ctx: SSL_CTX$@, host: U8[]): SSL$@!Tls_error //<
         throw .ctx_failed
     return ssl
 
-priv fn wait_before(tcp: net.Tcp_stream$@, interest: U8, deadline: I64): Bool
-    left: = deadline - sys.mono_us()
-    if left <= 0
-        return false
+priv fn wait_before(tcp: net.Tcp_stream$@, interest: U8, deadline: I64): Bool //<
+    //< Waits until the socket is ready or the deadline passes: whether it became ready in time
     defer $watch: = Reactor()
     watch.register(tcp.raw_handle(), interest, 0)
-    defer $ready: = watch.wait(I32::((left + 999I64) / 1000I64)) catch
-        return false
-    return ready.len > 0 && sys.mono_us() < deadline
+    for
+        left: = deadline - sys.mono_us()
+        if left <= 0
+            return false
+        // **A wait can end early with nothing ready.** WSAPoll counts in the timer's ticks of
+        // about 15 ms, not on `mono_us`'s clock. Read as the end, it would fail a handshake that
+        // still had time, as `handshake_failed` and not `handshake_timed_out`.
+        defer $ready: = watch.wait(I32::((left + 999I64) / 1000I64)) catch
+            return false
+        if ready.len > 0
+            return sys.mono_us() < deadline
 
 fn send_before(tcp: net.Tcp_stream$@, bytes: U8[], deadline: I64): Bool //<
     //< Sends before an absolute mono_us deadline; tcp must already be non-blocking

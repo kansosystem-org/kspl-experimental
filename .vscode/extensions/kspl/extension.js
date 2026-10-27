@@ -221,19 +221,10 @@ function startLspServer(context) {
         lspProcess = null;
         settlePendingRequests();
     });
-    // Caution: **Take the legend from the answer; do not copy it here.** A token's number means
-    // what `initialize`'s legend says (`ksplc/lsp/semtok.kspl`); a copied roster puts the colours
-    // on the wrong names the day a kind is added, with nothing saying so.
     heldMessages = [];
     sendRequest("initialize", {
         capabilities: { textDocument: { rename: { prepareSupport: true } } }
-    }).then((result) => {
-        const caps = result && result.capabilities;
-        const said = caps && caps.semanticTokensProvider;
-        if (said && said.legend && Array.isArray(said.legend.tokenTypes)) {
-            registerSemanticTokens(said.legend);
-        }
-    }, (err) => {
+    }).catch((err) => {
         logError(`[Error] initialize failed: ${err.message}`);
     }).then(() => {
         const held = heldMessages || [];
@@ -241,25 +232,6 @@ function startLspServer(context) {
         sendNotification("initialized", {});
         for (const msgObj of held) writeMessage(msgObj);
     });
-}
-
-// The colours of meaning (type, function, field) **lie over the grammar's colours**: the grammar
-// tells a word from a string, this tells one identifier from another.
-// **Register it only once the legend has come**: with a roster of our own, a server naming its
-// kinds in another order paints every name the wrong colour.
-function registerSemanticTokens(said) {
-    const legend = new vsc.SemanticTokensLegend(said.tokenTypes, said.tokenModifiers || []);
-    track(vsc.languages.registerDocumentSemanticTokensProvider(KSPL_SELECTOR, {
-        async provideDocumentSemanticTokens(document, token) {
-            const result = await sendRequest("textDocument/semanticTokens/full", {
-                textDocument: { uri: getRelativeUri(document.uri) }
-            }, token);
-            // **An answer that is not there is not an empty one.** Give an empty set back and the
-            // colours already painted are wiped; give null and what is there stays.
-            if (!result || !Array.isArray(result.data)) return null;
-            return new vsc.SemanticTokens(Uint32Array.from(result.data));
-        }
-    }, legend));
 }
 
 function processBuffer() {

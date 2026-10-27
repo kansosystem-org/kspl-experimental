@@ -311,6 +311,19 @@ priv fn report_field_called(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@, f
         c.scratch.s(" Read it without the '()': '.\{member\}'")
     c.err(node, c.scratch.slice())
 
+priv fn report_value_called(c: Sema_ctx$@, node: Ast_node$@, value_id: I32) //<
+    //< Reports `(...)` after a value that is not a function (`twice(1)(5)`, `arr[0](1)`)
+    //< Only a name, a method or a value of a function type is called. Let through, the call
+    //< takes the callee of the expression before it, and the backends emit code that does not
+    //< build. An unknown type was reported where it failed.
+    if sema_type_env.is_unknown(value_id)
+        return
+    shown: = c.env.display(value_id)
+    c.clear_scratch().s("cannot call this value. It is a value of type '\{shown\}', not a function")
+    if holds_call_method(c, value_id)
+        c.scratch.s(". Call it through its 'call' method: '(...).call(...)'")
+    c.err(node, c.scratch.slice())
+
 fn infer(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@, target_id: I32, expected_id: I32):
     I32!Sema_error
     if left.kind_id == .k_enum_init
@@ -323,6 +336,10 @@ fn infer(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@, target_id: I32, expe
     if !is_method_access && !is_fn_ptr && left.kind_id == .k_expr_postfix &&
         left.get_postfix_op().is_literal(".") && !sema_type_env.is_unknown(target_id)
         report_field_called(c, node, left, target_id)
+        return I32::sema_type_env.Builtin_type_id.unknown
+    if !is_method_access && !is_fn_ptr && left.kind_id == .k_expr_postfix &&
+        !left.get_postfix_op().is_literal(".")
+        report_value_called(c, node, target_id)
         return I32::sema_type_env.Builtin_type_id.unknown
     // The name looked up, without any `<|…|>`, and the type arguments written for the function.
     parts: = sema_decl_name.named_fn(left)

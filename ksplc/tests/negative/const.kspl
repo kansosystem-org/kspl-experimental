@@ -112,6 +112,31 @@ pub const OK_LEN: Sz = A.len
 
 fn main(): I32
   return Z1 + Z2 + I32::Z3 + I32::Z4 + I32::Z5 + I32::OK_LEN + I32::z6$
+// ==== case const_init_refused_shape
+//< A top-level initializer that neither folds nor is a shape both backends write is refused
+//< Each was let through before, and one backend failed on it: the C compiler with "initializer
+//< element is not constant", or LLVM with advice to compile through C. A conditional whose
+//< condition reads a variable is refused at that read.
+// EXPECT: a top-level initializer can take only a fixed address
+// EXPECT: this cannot stand in a top-level initializer
+// EXPECT: top-level variable initializer is not a compile-time constant
+// EXPECT: Finished with 4 error(s)
+// EXPECT-NOT: initializer element
+pub struct P
+  pub x: I32
+pub const PT: P = ::{ .x = 1 }
+pub const PP: P@ = PT@
+pub const NUMS: I32[2] = ::{ 1, 2 }
+pub $g: I32 = 0
+pub const THROUGH_PTR: I32@ = PP$.x@
+pub const GAP: Sz = Sz::NUMS[1]@ - Sz::NUMS[0]@
+pub const SAME: Bool = PP == PT@
+pub const PICKED: P = PT if g > 0 else ::{ .x = 2 }
+// The passing side: a conditional whose condition folds picks its branch, of any shape.
+pub const PICKED_OK: P = PT if NUMS.len > 1 else ::{ .x = 2 }
+
+fn main(): I32
+  return THROUGH_PTR$ + I32::GAP + I32::SAME + PICKED.x + PICKED_OK.x
 // ==== case const_ptr_field_write
 //< A write into a field at the target of a read-only pointer (`T@`)
 //< The type declares the target immutable. So it is refused, as a write to an element of a

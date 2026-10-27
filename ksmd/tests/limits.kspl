@@ -1,0 +1,115 @@
+//< The source limits on editing: a step that would leave more blocks or bytes than the reader
+//< opens is refused, and changes nothing
+//< Each check reads the saved source again, as the next opening would.
+import "ksmd/base/source" { MAX_SOURCE_BYTES, Source }
+import "ksmd/edit/editor" { Editor, Refused }
+import "ksmd/edit/editor_tables"
+import "ksmd/edit/region" { text_spot }
+import "ksmd/model/model" { MAX_BLOCKS }
+import "ksmd/syntax/reader"
+import "ksmd/syntax/writer"
+import "ksmd/tests/tables" { opened }
+import "std/mem" { Arena }
+import "std/str"
+import "std/str" { Str_builder }
+import "std/verdict"
+
+priv const ROOM: Sz = 10 //< the bytes the test document leaves free below 8 MiB
+
+fn run()
+    blocks()
+    bytes()
+
+priv fn blocks()
+    defer $text: = Str_builder()
+    text.s("%ksmd 1\n")
+    for _ in Range.asc(MAX_BLOCKS - 1)
+        text.s("\na\n")
+    defer arena: = Arena(1024 * 1024)
+    $ed: = opened(text.slice(), arena)
+    last: = text_spot(MAX_BLOCKS - 2, 0, 1)
+    ed.select(last, last)
+    refused(ed@, "a paste past 100,000 blocks is refused", "\nb\nc", .too_many_blocks,
+        text.slice(), arena)
+    ed.type_text("\nb", .paste) catch e
+        verdict.check("a paste up to 100,000 blocks", false, e.message())
+    reopens("so the document holds 100,000 blocks, and opens again", ed@)
+
+priv fn bytes()
+    defer $text: = Str_builder()
+    text.s("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" |\n| 1 |\n:::\n")
+    defer $line: = Str_builder()
+    for _ in Range.asc(65534)
+        line.c('a')
+    for text.slice().len + 2 * 65536 <= MAX_SOURCE_BYTES - ROOM
+        text.s("\n").s(line.slice()).s("\n")
+    tail: = MAX_SOURCE_BYTES - ROOM - text.slice().len - 2
+    text.c('\n')
+    for _ in Range.asc(tail)
+        text.c('a')
+    text.c('\n')
+    defer arena: = Arena(1024 * 1024)
+    $ed: = opened(text.slice(), arena)
+    verdict.check("the editor counts the bytes the source takes",
+        ed.written == MAX_SOURCE_BYTES - ROOM, arena.text().s("\{ed.written\}").take())
+    end: = text_spot(ed.doc.blocks.len - 1, 0, tail)
+    ed.select(end, end)
+    refused(ed@, "typing past 8 MiB is refused", "bbbbbbbbbbb", .too_large, text.slice(), arena)
+    ed.type_text("bbbbbbbbbb", .typing) catch e
+        verdict.check("typing up to 8 MiB", false, e.message())
+    reopens("so the source takes 8 MiB, and opens again", ed@)
+    defer $full: = Str_builder()
+    writer.write(ed.doc@, full@)
+    $grew: = true
+    ed.set_cell(0, 0, 0, "12") catch e
+        grew = false
+        verdict.check("a cell's value past 8 MiB is refused",
+            e.message().equals(Refused.too_large.message()), e.message())
+    verdict.check("and changes nothing", !grew && source_is(ed@, full.slice()), "")
+    ed.set_cell(0, 0, 0, "") catch e
+        verdict.check("emptying a cell", false, e.message())
+    counted("a table step counts the bytes again", ed@)
+    ed.undo()
+    counted("undo takes its bytes back", ed@)
+    ed.undo()
+    counted("so does undoing typed text", ed@)
+    ed.redo()
+    counted("and redo adds them again", ed@)
+
+priv fn refused(ed: Editor$@, what: U8[], typed: U8[], want: Refused, before: U8[],
+    arena: Arena$@) //<
+        //< Pasting `typed` is refused for the reason `want`, and the document stays `before`
+    could_undo: = ed.can_undo()
+    ed.type_text(typed, .paste) catch e
+        verdict.check(what, e.message().equals(want.message()), e.message())
+        verdict.check(arena.text().s(what).s(": nothing changes").take(),
+            source_is(ed, before) && ed.can_undo() == could_undo, "")
+        verdict.check(arena.text().s(what).s(": nothing is left to save").take(),
+            !ed.change.any, "")
+        return
+    verdict.check(what, false, "the text was put in")
+
+priv fn counted(what: U8[], ed: Editor@) //<
+    //< The editor's count of the source's bytes is what the writer writes
+    defer $out: = Str_builder()
+    writer.write(ed.doc@, out@)
+    defer $said: = Str_builder()
+    said.s("\{ed.written\} counted, \{out.slice().len\} written")
+    verdict.check(what, ed.written == out.slice().len, said.slice())
+
+priv fn reopens(what: U8[], ed: Editor@) //< the saved source reads again
+    defer $out: = Str_builder()
+    writer.write(ed.doc@, out@)
+    src: = Source("again.ksmd", out.slice()) catch e
+        verdict.check(what, false, e.message)
+        return
+    defer arena: = Arena(1024 * 1024)
+    _doc: = reader.read(src@, arena) catch e
+        verdict.check(what, false, e.message)
+        return
+    verdict.check(what, true, "")
+
+priv fn source_is(ed: Editor@, expected: U8[]): Bool //< whether the document saves as `expected`
+    defer $out: = Str_builder()
+    writer.write(ed.doc@, out@)
+    return out.slice().equals(expected)

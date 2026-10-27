@@ -269,10 +269,12 @@ fn test_http_reject_smuggling()
         "GET / HTTP/1.0\r\nHost: a\r\nHost: b\r\n\r\n" }
         assert(parse_error(twice, http.DEFAULT_MAX_BODY_BYTES, arena_h).equals("invalid_host"),
             "a request naming Host twice must be refused as invalid_host")
-        $length_ok: = true
-        _n: = http.request_length(twice, http.DEFAULT_MAX_BODY_BYTES, arena_h) catch
-            length_ok = false
-        assert(!length_ok, "request_length must refuse what parse_request refuses")
+        $head_ok: = true
+        _h: =
+            http.parse_request_head(twice, http.DEFAULT_MAX_BODY_BYTES, arena_h) catch
+            head_ok = false
+            fallback null
+        assert(!head_ok, "parse_request_head must refuse what parse_request refuses")
     assert(parse_error("GET / HTTP/1.1\r\n\r\n", http.DEFAULT_MAX_BODY_BYTES, arena_h)
         .equals("invalid_host"), "an HTTP/1.1 request naming no Host must be refused")
     // Caution: **HTTP/1.0 can leave it out**, which a refusal of every missing Host would break.
@@ -347,10 +349,11 @@ fn test_http_host_value()
         req: = arena.text().s("GET / HTTP/1.0\r\nHost: ").s(bad).s("\r\n\r\n").take()
         assert(parse_error(req, http.DEFAULT_MAX_BODY_BYTES, arena).equals("invalid_host"),
             "a Host value that is not a host and a port must be refused, on HTTP/1.0 too")
-        $length_ok: = true
-        _n: = http.request_length(req, http.DEFAULT_MAX_BODY_BYTES, arena) catch
-            length_ok = false
-        assert(!length_ok, "request_length must refuse what parse_request refuses")
+        $head_ok: = true
+        _h: = http.parse_request_head(req, http.DEFAULT_MAX_BODY_BYTES, arena) catch
+            head_ok = false
+            fallback null
+        assert(!head_ok, "parse_request_head must refuse what parse_request refuses")
     // One answer to "HTTP/1.1 or later", which the Host rule and a connection's default share.
     assert(http.is_1_1_or_later("HTTP/1.1") && http.is_1_1_or_later("HTTP/2.0"),
         "1.1 and later versions are 1.1 or later")
@@ -571,7 +574,7 @@ fn test_http_socket_roundtrip()
     // anything is written. The round trip below then shows the connection was left clean.
     for bad in U8[][]::{ "/a b", "/a\tb" }
         $refused: = false
-        http.write_request(client, "GET", bad, http.headers(arena).build(), "") catch e
+        http.write_request(client, "GET", bad, http.headers(arena).build(), "", 60000) catch e
             switch e
             case .invalid_request_line
                 refused = true
@@ -580,7 +583,7 @@ fn test_http_socket_roundtrip()
     // A request's length is the body's too, refused before anything is written.
     $mismatch: = false
     http.write_request(client, "POST", "/echo",
-        http.headers(arena).add("Content-Length", "1").build(), "ping") catch e
+        http.headers(arena).add("Content-Length", "1").build(), "ping", 60000) catch e
         switch e
         case .length_mismatch
             mismatch = true
@@ -591,7 +594,7 @@ fn test_http_socket_roundtrip()
         http.headers(arena).add("Host", "a").add("Host", "b").build(),
         http.headers(arena).add("Host", "user@a").build() }
         $host_refused: = false
-        http.write_request(client, "GET", "/", bad_host, "") catch e
+        http.write_request(client, "GET", "/", bad_host, "", 60000) catch e
             switch e
             case .invalid_host
                 host_refused = true
@@ -599,7 +602,7 @@ fn test_http_socket_roundtrip()
         assert(host_refused,
             "write_request must refuse a head naming Host other than once, or not as a host")
     req_headers: = http.headers(arena).add("Host", "example.com").build()
-    http.write_request(client, "POST", "/echo", req_headers, "ping")
+    http.write_request(client, "POST", "/echo", req_headers, "ping", 60000)
         catch panic("client write_request should succeed")
     defer resp: =
         http.read_response(client, null, http.DEFAULT_MAX_BODY_BYTES, 60000)

@@ -14,7 +14,7 @@ fn check_ncm_build() //<
     //< Checks the built NTB byte by byte against the layout the specification gives
     verdict.start("[NCM] assembling an NTB16 test...")
     frame: U8[6] = ::{ 0xde, 0xad, 0xbe, 0xef, 0x01, 0x02 }
-    buf: U8[64] = ::{}
+    $buf: U8[64] = ::{}
     n: = ncm.build_one(U8$[]::buf, U8[]::frame, 6, 0x1234)
     assert(n == ncm.ONE_DATAGRAM_OVERHEAD + 6,
         "the NTB's total length is the 28-byte header plus the frame's length")
@@ -47,12 +47,12 @@ fn check_ncm_build_rejects_overflow() //<
     //< If it does not fit, it returns 0 without writing a single byte
     verdict.start("[NCM] turning a request that does not fit away test...")
     frame: U8[8] = ::{ 1, 2, 3, 4, 5, 6, 7, 8 }
-    small: U8[32] = ::{} // 28 + 8 = 36 > 32
+    $small: U8[32] = ::{} // 28 + 8 = 36 > 32
     too_big: = ncm.build_one(U8$[]::small, U8[]::frame, 8, 0)
     assert(too_big == 0, "where it does not fit it returns 0")
     assert(small[0] == 0, "where it turned it away it does not rewrite anything")
     // A zero-length frame cannot be expressed (it would look like the (0,0) terminator).
-    ok_buf: U8[64] = ::{}
+    $ok_buf: U8[64] = ::{}
     zero_len: = ncm.build_one(U8$[]::ok_buf, U8[]::frame, 0, 0)
     assert(zero_len == 0, "it does not assemble a length of 0")
 
@@ -74,7 +74,7 @@ fn check_ncm_build_rejects_overflow() //<
 fn check_ncm_roundtrip() //< it can parse what it built itself (the round trip)
     verdict.start("[NCM] the assemble-then-parse round trip test...")
     frame: U8[14] = ::{ 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x02, 0, 0, 0, 0, 1, 0x08, 0x06 }
-    buf: U8[64] = ::{}
+    $buf: U8[64] = ::{}
     n: = ncm.build_one(U8$[]::buf, U8[]::frame, 14, 7)
 
     assert(ncm.block_length(U8[]::buf, n) == n, "block_length returns the total length")
@@ -152,7 +152,7 @@ fn check_ncm_rejects_broken() //<
     //< Caution: Do not read outside the buffer on a broken NTB. Bytes the peer (the host) built
     //< must not be trusted as they are.
     verdict.start("[NCM] turning a broken NTB away test...")
-    good: U8[64] = ::{}
+    $good: U8[64] = ::{}
     src: U8[4] = ::{ 1, 2, 3, 4 }
     n: = ncm.build_one(U8$[]::good, U8[]::src, 4, 0)
 
@@ -238,7 +238,7 @@ priv fn our_mac(): ip4.Mac //< the MAC the answers go out under
 priv fn arp_reject(work: U8$[], orig: U8[], off: Sz, v: U8, our_ip: U32, msg: U8$[]) //<
     //< Checks that it does not answer a frame with one byte of the original changed
     //< It restores the bytes each time, so the checks do not inherit each other's changes.
-    out: U8[64] = ::{}
+    $out: U8[64] = ::{}
     for i in Range.asc(orig.len)
         work[i] = orig[i]
     work[off] = v
@@ -254,7 +254,7 @@ fn check_arp_reply() //<
     req: U8[60] = ::{ 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x08,
         0x06, 0x00, 0x01, 0x08, 0x00, 6, 4, 0x00, 0x01, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 192, 168,
         137, 1, 0, 0, 0, 0, 0, 0, 192, 168, 137, 50 }
-    out: U8[64] = ::{}
+    $out: U8[64] = ::{}
     n: = ip4.build_arp_reply(U8$[]::out, U8[]::req, 60, our_ip, our_mac())
     assert(n == 60, "it fills to the smallest frame length and returns")
     assert(out[0] == 0xaa && out[5] == 0xff, "the destination is the requester's MAC")
@@ -293,7 +293,7 @@ fn check_arp_reply() //<
 
 priv fn icmp_reject(work: U8$[], orig: U8[], off: Sz, v: U8, our_ip: U32, msg: U8$[]) //<
     //< The ICMP version of arp_reject
-    out: U8[64] = ::{}
+    $out: U8[64] = ::{}
     for i in Range.asc(orig.len)
         work[i] = orig[i]
     work[off] = v
@@ -355,7 +355,7 @@ fn check_icmp_echo_reply() //<
         0xbe,
         0xef
     }
-    out: U8[64] = ::{}
+    $out: U8[64] = ::{}
     n: = ip4.build_icmp_echo_reply(U8$[]::out, U8[]::req, 60, our_ip, our_mac())
     assert(n == 60, "it fills to the smallest frame length and returns (the body is 14 + 32 = 46)")
     assert(out[0] == 0xaa && out[5] == 0xff, "the destination is the sender's MAC")

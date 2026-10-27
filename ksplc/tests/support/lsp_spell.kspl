@@ -541,9 +541,11 @@ fn check_hover_prelude(c: jsonrpc_client.Client$@, arena: Arena$@)
             continue
         text: = lsp_client.hover_text(got.val)
         // Caution: **Check for the internal name too.** The owner and the receiver can both read
-        // right while the method's own name is still the mangled one.
+        // right while the method's own name is still the mangled one: a function's keeps
+        // `std_lang_`, a type's opens with its own name (`Slice_U8`).
         ok: =
-            text.find_str(LANG_WANTS[i]).is_some() && text.find_str("std_lang_").is_none()
+            text.find_str(LANG_WANTS[i]).is_some() && text.find_str("std_lang_").is_none() &&
+            text.find_str("Slice_").is_none()
         verdict.check(label, ok,
             lsp_client.why(c, arena.text().s("'").s(text).s("'").take(), arena))
         if LANG_WANTS[i].starts_with("std.lang.") &&

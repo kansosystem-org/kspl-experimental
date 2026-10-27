@@ -76,7 +76,7 @@ impl Ast_node
         // `[]`; once that is rewritten to `Slice<|T|>`, the elements read as the descriptor's
         // fields (`too many initializers for struct`).
         if r.kind_id == .k_struct_literal
-            r.desugar_slice_elems()
+            r.desugar_slice_elems(ctx)
         // It rewrites a written `T[]` into `Slice<|$T|>`, and `T?` into `Option<|T|>`.
         // Caution: **Finish it before descending into the children.** It folds the run of
         // postfixes, so with the children walked first the inner level would look doubled.
@@ -115,17 +115,21 @@ impl Ast_node
         else if r.kind_id == .k_expr_fn_lit
             r.desugar_fn_lit(ctx)
 
-    priv fn desugar_slice_elems(r: Ast_node$@) //<
+    priv fn desugar_slice_elems(r: Ast_node$@, ctx: Desugar_ctx$@) //<
         //< It expands a `T[]::{ v1, v2, … }` (elements with no field names) into an array's slice
         //< The result is `T[]::(T[_]::{ v1, v2, … })`: a slice of an array made from the elements.
         //<
         //< **Field names tell it apart from building a descriptor** (`T[]::{ .ptr = p, .len = n
-        //< }`). An empty `T[]::{}` is left alone: a descriptor of length 0.
+        //< }`). An empty `T[]::{}` is left alone: a descriptor of length 0. A run for `T$[]` is
+        //< refused: its array has no name to carry the `$` writable memory needs.
         ty: = r.get_child(0) if r.children.len > 0 else null
         if ty == null || ty.kind_id != .k_type_expr
             return
         last: = ty.last_child()
-        if last == null || last.kind_id != .k_type_postfix || !last.text.equals("[]")
+        if last == null || last.kind_id != .k_type_postfix
+            return
+        is_mut: = last.text.equals("$[]")
+        if !last.text.equals("[]") && !is_mut
             return
         $elems: Sz = 0
         for child in r.children
@@ -136,6 +140,12 @@ impl Ast_node
                 return // names or indices: building a descriptor
             elems += 1
         if elems == 0
+            return
+        if is_mut
+            r.desugar_err(ctx,
+                "a run of elements cannot make a mutable slice ('$[]'). Its array has no name, and \
+                    writable memory needs a binding's '$'. Declare the array ('$a: T[_] = ::{ … \
+                    }') and cast it ('T$[]::a'), or write 'T[]::{ … }' for a read-only slice")
             return
         inner_ty: = ty.clone()
         inner_ty.last_child().text = "[_]"
@@ -334,7 +344,8 @@ impl Ast_node
                     put_args: = Ast_node.build_args(part.loc)
                     put_args.add_child(current_recv)
                     put_args.add_child(fmt_recv)
-                    current_recv = Ast_node.build_fn_call("put", put_args, part.loc)
+                    // The callee is named by its FQN (`PUT_FQN` in `../base/core.kspl`).
+                    current_recv = Ast_node.build_fn_call(base_core.PUT_FQN, put_args, part.loc)
                     has_parts = true
 
         if !has_parts

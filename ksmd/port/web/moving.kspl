@@ -1,0 +1,63 @@
+//< A source saved in another folder: each include's and image's path written again for it
+//< A path is read from the folder of the source that holds it, so a source that moves keeps its
+//< files only if its paths are written from the new folder. The editor makes it one step of undo.
+//< It stands here because it needs both `files`' path rules and the editor, which sit side by side.
+import "ksmd/edit/editor" { Editor, end_block }
+import "ksmd/edit/region" { gap_spot }
+import "ksmd/files/files" { moved_path }
+import "ksmd/model/model" { Block, Document }
+import "std/mem" { Arena }
+import "std/str"
+
+impl Editor
+    fn move_paths(ed: Self$@, from: U8[], to: U8[]) //<
+        //< Writes each include's and image's path again for the source's new folder, as one step
+        //< `from` and `to` are the old and new folders, from the workspace's root. Each path still
+        //< names the file it named. A path the old folder could not read is left as it is.
+        defer scratch: = Arena(16 * 1024)
+        $first: Sz = -1
+        $last: Sz = -1
+        for b in Range.asc(ed.doc.blocks.len)
+            if !ed.moves(ed.doc.blocks.get(b), from, to, scratch)
+                .equals(path_of(ed.doc@, ed.doc.blocks.get(b)))
+                if first < 0
+                    first = b
+                last = b
+        if first < 0
+            return
+        s: = gap_spot(first)
+        e: = gap_spot(last + 1)
+        $w: = ed.work(s, e, s.block, end_block(e), scratch)
+        for i in Range.asc(w.units.len)
+            u: = w.units[i]@
+            if !u.whole || (u.block.kind != .include && u.block.kind != .image)
+                continue
+            moved: = ed.arena.dup_str(ed.moves(u.block, from, to, scratch))
+            if u.block.kind == .include
+                u.block.text = moved
+            else
+                // The old image stays in the list, so an undo finds it, as `insert_image` keeps
+                // one.
+                $image: = ed.doc.images.get(u.block.first)
+                image.src = moved
+                ed.doc.images.push(image)
+                u.block.first = ed.doc.images.len - 1
+            u.edited = true
+        // Nothing in the text changes, so the step cannot pass a limit the reader holds.
+        ed.restyle(w@, scratch) catch
+            return
+
+    priv fn moves(ed: Self@, block: Block, from: U8[], to: U8[], scratch: Arena$@): U8[] //<
+        //< The path an include or an image block writes from folder `to`; empty for another block
+        written: = path_of(ed.doc@, block)
+        if written.len == 0
+            return ""
+        return moved_path(from, to, written, scratch) catch
+            return written
+
+priv fn path_of(doc: Document@, block: Block): U8[] //< an include's or an image's path; else empty
+    if block.kind == .include
+        return block.text
+    if block.kind == .image
+        return doc.images.get(block.first).src
+    return ""

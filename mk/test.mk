@@ -69,7 +69,7 @@ test-llvm-pkgs: $(STAGE1_EXE) $(SEED_EXE)
 	@$(MAKE) --no-print-directory LLVM=1 STAGE1_EXE=$(STAGE1_EXE) debug-file \
 		SRC_KSPL=kssrv/main.kspl OUT_STEM=kssrv_llvm
 	rm -rf "$(TMP_DIR)/kssrv_llvm_test"
-	cd kssrv && KSPLC_STD_DIR="$(abspath std)" KSPLC_PKG_SRC_DIR="$(abspath .)" \
+	cd kssrv && KSPLC_STD_DIR="$(abspath std)" \
 		"$(abspath $(STAGE1_EXE))" run "$(abspath kssrv/tests/main.kspl)" \
 		"$(abspath $(OUT_DIR))/kssrv_llvm.exe" \
 		"$(abspath $(TMP_DIR))/kssrv_llvm_test"
@@ -109,18 +109,20 @@ suite_found := $(sort $(subst _,-,$(patsubst tests/suite/%_test.kspl,%, \
 # rebuilds itself and takes a share of the suites. **std's copy (`extract-std`) runs apart from the
 # rest of the packages' (`extract-rest`)**: each runs its packages one after another, so together
 # they would be the longest wait of a half.
-SUITES := lsp-tree extract-ksplc-core extract-ksplc-rest extract-rest extract-std fmt-tree docref c-warnings docsnippet pilot-copy \
+SUITES := lsp-tree extract-ksplc-core extract-ksplc-rest extract-rest extract-std fmt-tree docref c-warnings docsnippet \
   conventions deps spec-claims vscode link-rules pytools recipe-bytes lint-gate own-machine \
   $(EXTRA_SUITES)
 
-# Linux's image alone holds their tool (`js-syntax`: node; `race`: clang's ThreadSanitizer;
-# `sanitize`: its address, leak and undefined-behaviour sanitizers): out of `test-suites`, run by
-# `ci-shard-linux`.
-LINUX_SUITES := js-syntax race sanitize
+# Linux's image alone holds their tool (`race`: clang's ThreadSanitizer; `sanitize`: its address,
+# leak and undefined-behaviour sanitizers): out of `test-suites`, run by `ci-shard-linux`.
+LINUX_SUITES := race sanitize
 
 ALL_SUITES := $(SUITES) $(LINUX_SUITES)
 
-# A suite file in no list would never run, and nothing would say so.
+# A suite file in no list would never run, and nothing would say so. **These lists, and `SUITES`
+# in `ksplc/Makefile`, stay written by hand, not made from the files**: a suite's place in `SUITES`
+# sets when `make -j` starts it, so each new name needs that decision. This check asks for it as
+# make starts.
 suite_unlisted := $(filter-out $(ALL_SUITES),$(suite_found))
 ifneq ($(suite_unlisted),)
 $(error there are suite files listed in neither SUITES nor LINUX_SUITES: $(suite_unlisted))
@@ -185,7 +187,7 @@ fuzz-long: $(STAGE1_EXE) $(SEED_EXE)
 # such a round is not CI's verdict. Each reads 0 or 1 alone. What each requires, and what turning
 # it off gives up, is "The switches that require a tool" in `docs/SPEC-gates.md`.
 REQUIRE_SWITCHES := KANSO_REQUIRE_ASAN KANSO_REQUIRE_TSAN KANSO_REQUIRE_BOTH_CC \
-  KANSO_REQUIRE_CHOWN KANSO_REQUIRE_MINGW KSBIND_REQUIRE_LIBS KSOS_REQUIRE_ARM
+  KANSO_REQUIRE_CHOWN KANSO_REQUIRE_MINGW KSBIND_REQUIRE_LIBS KSOS_REQUIRE_ARM KSMD_REQUIRE_BROWSER
 require_default := $(if $(filter linux,$(PLATFORM)),1,0)
 $(foreach v,$(REQUIRE_SWITCHES),$(eval $(v) ?= $(require_default)))
 $(foreach v,$(REQUIRE_SWITCHES),$(if $(filter 0 1,$($(v))),,\
@@ -331,7 +333,9 @@ test-simd: $(STAGE1_EXE)
 # --- The published API: its record (`SURFACE.txt`), and the reference to browse under `out/docs/` ---
 # Caution: **Only the record is committed** (an API change shows as a diff); remake it by
 # `make surface`. The reference is `ksplc doc`'s answer, written out only to be browsed.
-SURFACE_PKGS := std ksai kspeg ksdb ksbind
+# **A package publishes an API when it holds a `SURFACE.txt`**, so the file enrolls it: an empty
+# one is enough for `make surface` to write the first record.
+SURFACE_PKGS := $(patsubst %/SURFACE.txt,%,$(wildcard */SURFACE.txt))
 
 ## Measure-and-inspect|surface|Rewrite each package's API record (`SURFACE.txt`), and write its reference to browse under `out/docs/`
 surface: $(STAGE1_EXE)

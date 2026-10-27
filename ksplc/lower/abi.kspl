@@ -16,29 +16,70 @@ import "ksplc/sema/type/query" as sema_type_query
 import "ksplc/sema/type/scope" as sema_type_scope + { Sema_symbol }
 import "std/chars" // the one-character tests and cuts
 import "std/ds" { Map }
-import "std/str"
+import "std/str" { Str_builder }
 fn run(r: Ast_node$@, c: Sema_ctx$@) //< the ABI conversion pass's entry point
     //< It overwrites names with their mangled forms in place, recursively over the whole tree.
     base_diag.ice_assert(r != null, "abi.apply: file_node is null")
-    $verbatim: = verbatim_c_names(c)
-    defer verbatim.free()
-    r.apply_abi_recursive(c, verbatim@, 0)
+    $names: = C_names::{ .globals = global_c_names(c),
+        .declared = Map<|U8[], Sema_symbol$@|>(null) }
+    defer names.globals.free()
+    defer names.declared.free()
+    r.apply_abi_recursive(c, names@, 0)
 
-priv fn verbatim_c_names(c: Sema_ctx$@): Map<|U8[], Bool|> //<
-    //< The C names the program's globals keep as written (an `extern` block's, an `#export`)
+priv struct C_names //< the C names the pass deals in, for the checks on them
+    globals: Map<|U8[], Bool|> //< what a local must not spell (`global_c_names`)
+    declared: Map<|U8[], Sema_symbol$@|> //< each global declaration's C name, and whose it is
+
+impl C_names
+    priv fn claim(r: Self$@, c: Sema_ctx$@, at: Ast_node$@, sym: Sema_symbol$@, c_name: U8[]) //<
+        //< Records c_name (on the arena) as sym's, and reports it where another global took it first
+        //< **Two KSPL names can meet in C**: `_`, `.` and `/` all become `_`, so `a_b/c.Foo` and
+        //< `a/b_c.Foo` are both `p_a_b_c_Foo`. The C compiler would refuse the second, far from the
+        //< source. A name written as it stands (`extern`, `#export`) is C's own and not checked.
+        if other: = r.declared.get(c_name)
+            // A generic trait's default method has a clone per instance of the trait, each with
+            // its symbol; a clone keeps its declaration's position.
+            if other.node != null && sym.node != null &&
+                !other.node.loc.same_as(sym.node.loc)
+                file: = base_diag.shown_file(other.node.loc.file())
+                line: = c.line_of(other.node.loc)
+                c.clear_scratch()
+                    .s("'\{sym.name\}' takes the name '\{c_name\}' in the generated C, and so does \
+                        '\{other.name\}' at \{file\}:\{line\}. Rename one of them, or the folder or \
+                        file that holds it")
+                c.err(at, c.scratch.slice())
+            return
+        r.declared.set(c_name, sym)
+
+priv fn global_c_names(c: Sema_ctx$@): Map<|U8[], Bool|> //<
+    //< The C names of the program's globals that a local can spell: verbatim ones and types'
     //< A local of such a name takes a made one, as a local hiding a local does. C would read the
-    //< local itself in its own initializer, where KSPL reads the global (`libc.abs` is `abs`).
+    //< local in place of the global from its declaration on: a local `Slice_U8` hides
+    //< the slice type, and `libc.abs`'s `abs` is read as the local in its own initializer.
+    //< Note: Every other global's C name opens with `kspl_` (`KSPL_PREFIX`), which
+    //< `spells_global_c_name` tests without a list.
     $names: = Map<|U8[], Bool|>(null)
     for e in c.symtab.by_fqn.items()
         sym: = e.value
         if !sym.flags.is_method && sym.uses_verbatim_c_name()
             names.set(sym.name, true)
+    defer $spelled: = Str_builder()
+    for $type_id: = 1; type_id < c.env.id_to_type.len; type_id += 1
+        // A pointer and a read-only type have no name in C: genc writes `T*` and `const T` around
+        // their base (`map_c_type_to_impl`). Leave them out, or a chain too deep for C is spelled
+        // here and stops the compiler before genc reports it at its line.
+        info: = c.env.get_info(type_id)
+        if info.is_pointer() || info.is_const_of()
+            continue
+        spelled.clear()
+        c.env.mangle_type_id_to(type_id, spelled)
+        if names.get(spelled.slice()).is_none()
+            names.set(base_core.arena.dup_str(spelled.slice()), true)
     return names
 
 impl Ast_node
-    priv fn apply_abi_recursive(r: Ast_node$@, c: Sema_ctx$@, verbatim: Map<|U8[], Bool|>$@,
-        owner_id: I32) //<
-            //< owner_id: the type of the `impl` whose direct child r is, or 0
+    priv fn apply_abi_recursive(r: Ast_node$@, c: Sema_ctx$@, names: C_names$@, owner_id: I32) //<
+        //< owner_id: the type of the `impl` whose direct child r is, or 0
         if r == null
             return
         kind: = r.kind_id
@@ -50,14 +91,14 @@ impl Ast_node
         target: = r.get_decl_type_node() if kind == .k_decl_impl else null
         child_owner_id: = target.type_id if target != null else 0
         for child in r.children
-            child.apply_abi_recursive(c, verbatim, child_owner_id)
+            child.apply_abi_recursive(c, names, child_owner_id)
 
         if kind == .k_identifier || kind == .k_expr_path
-            r.name_hiding_local(verbatim)
+            r.name_hiding_local(names.globals@)
         switch kind
         case .k_decl_fn, .k_decl_var, .k_decl_const, .k_decl_embed, .k_decl_struct, .k_decl_enum,
             .k_decl_typedef, .k_decl_trait
-            r.transform_decl_name(c, owner_id)
+            r.transform_decl_name(c, owner_id, names)
         case .k_expr_postfix
             op_node: = r.get_postfix_op()
             if op_node != null && op_node.text.equals("(")
@@ -68,20 +109,20 @@ impl Ast_node
             r.transform_path_access(c)
         default {}
 
-    priv fn name_hiding_local(r: Ast_node$@, verbatim: Map<|U8[], Bool|>$@) //<
+    priv fn name_hiding_local(r: Ast_node$@, globals: Map<|U8[], Bool|>$@) //<
         //< Gives a local hiding another of its name a C name of its own (`hiding_local_name`)
         //< It renames the declared name and every reference alike. Both reach the declaration's
         //< symbol: a reference and a declared name through `def_node`, a `switch` arm's or a
         //< `catch`'s binding through its own `sym_ptr`. The name is made from the symbol alone, so
-        //< a node Lower cloned takes the same one. A global's verbatim C name counts as hidden.
-        $found: = hiding_local_of(r.def_node, verbatim)
+        //< a node Lower cloned takes the same one. A global's C name counts as hidden.
+        $found: = hiding_local_of(r.def_node, globals)
         if found.is_none()
-            found = hiding_local_of(r, verbatim)
+            found = hiding_local_of(r, globals)
         if sym: = found
             c_name: = base_c_name.hiding_local_name(sym.name, sym.hidden_count)
             r.flatten_to_identifier(c_name)
 
-    priv fn transform_decl_name(r: Ast_node$@, c: Sema_ctx$@, owner_id: I32) //<
+    priv fn transform_decl_name(r: Ast_node$@, c: Sema_ctx$@, owner_id: I32, names: C_names$@) //<
         //< Gives a declaration its final C name, which both backends write as it stands
         //< owner_id: the type of the `impl` r is a method of, or 0
         id_node: = r.find_child(.k_identifier)
@@ -104,8 +145,10 @@ impl Ast_node
         else
             get_c_identifier_for_sym_to(sym, id_node.text, w)
 
-        c_name: = w.slice()
-        id_node.text = base_core.arena.dup_str(c_name)
+        id_node.text = base_core.arena.dup_str(w.slice())
+        // Caution: **Pass the arena's copy**: a report reuses the scratch the name was spelled in.
+        if !sym.uses_verbatim_c_name()
+            names.claim(c, id_node, sym, id_node.text)
 
     fn receiver_wants_ptr(r: Ast_node$@, c: Sema_ctx$@): Bool //<
         //< Whether the method that the method access `r` calls takes its receiver by pointer
@@ -307,7 +350,7 @@ fn get_c_identifier_for_sym_to(sym: Sema_symbol$@, base_name: U8[], w: Writer): 
         if last_dot >= 0
             t_name: = sym.name.sub(0, last_dot)
             m_name: = sym.name.sub_from(last_dot + 1)
-            return t_name.mangle_type_name_to(w.s("kspl_")).s("_\{m_name\}")
+            return t_name.mangle_c_type_name_to(w.s("kspl_")).s("_\{m_name\}")
         return sym.name.mangle_type_name_to(w.s("kspl_"))
 
     def_in: = sym.get_defined_in()
@@ -345,16 +388,23 @@ priv fn get_global_symbol_by_def(def_node: Ast_node$@): Sema_symbol$@? //<
     // A local variable is not mangled.
     return .none
 
-priv fn hiding_local_of(decl: Ast_node$@, verbatim: Map<|U8[], Bool|>$@): Sema_symbol$@? //<
-    //< The symbol decl declares, if it is a local hiding another of its name or a verbatim C name
+priv fn hiding_local_of(decl: Ast_node$@, globals: Map<|U8[], Bool|>$@): Sema_symbol$@? //<
+    //< The symbol decl declares, if it is a local hiding another of its name or a global's C name
     if decl == null || decl.sym_ptr == null
         return .none
     sym: = Sema_symbol$@::decl.sym_ptr
-    if sym.flags.is_global || sym.flags.is_method || !sym.kind.is_value()
+    // A helper Lower made (`is_premangled`) is a global under its C name, though not flagged one.
+    if sym.flags.is_global || sym.flags.is_method || sym.flags.is_premangled ||
+        !sym.kind.is_value()
         return .none
-    if sym.hidden_count == 0 && !verbatim.get(sym.name).unwrap_or(false)
+    if sym.hidden_count == 0 && !sym.name.spells_global_c_name(globals)
         return .none
     return .some(sym)
+
+impl U8[]
+    priv fn spells_global_c_name(r: U8[], globals: Map<|U8[], Bool|>$@): Bool //<
+        //< Whether a local of this name would take a global's C name (`global_c_names`)
+        return r.has_kspl_prefix() || globals.get(r).unwrap_or(false)
 
 priv fn write_priv_prefix_to(fname: U8[], w: Writer): Writer
     $res: = w.s("kspl_priv_")

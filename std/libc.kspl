@@ -1,6 +1,8 @@
 //< The C standard library's declarations, written in KSPL
-//< **This is the only file that declares libc.** A hosted program gets `malloc`, `snprintf` or
-//< `signal` from here, so one declaration serves every backend.
+//< **This is the only file that declares libc.** The standard library gets `malloc` or `memcmp`
+//< from here, so one declaration serves every backend.
+//< **Only `snprintf`, `strtod` and `signal` are public.** Each other binding has a safer `std`
+//< function (`math.sqrt`, `sys.get_env`, `mem.alloc`), or only `std` uses it.
 //< Caution: **Nothing that uses C's `long` goes here** (`fseek` / `ftell` / `clock`).
 //< Its width differs by platform, so one declaration would be right on one and wrong on another.
 pub typedef Signal_handler = fn(sig: I32): Void //< what `signal()` takes and returns.
@@ -18,20 +20,20 @@ extern "C"
     fn get_stdout(): Void$@
     fn get_stderr(): Void$@
     // --- Memory ---
-    pub fn malloc(size: Sz): U8$@ //< C's malloc: size bytes from the heap, or null
-    pub fn free(ptr: Void$@) //< C's free: gives back what malloc handed out
+    fn malloc(size: Sz): U8$@ //< C's malloc: size bytes from the heap, or null
+    fn free(ptr: Void$@) //< C's free: gives back what malloc handed out
     fn memcpy(dest: Void$@, src: Void$@, n: Sz): Void$@
     fn memmove(dest: Void$@, src: Void$@, n: Sz): Void$@
-    pub fn memset(dest: Void$@, c: I32, n: Sz): Void$@ //< C's memset: fills n bytes of dest with c
-    pub fn memcmp(buf1: Void$@, buf2: Void$@, n: Sz): I32 //<
+    fn memset(dest: Void$@, c: I32, n: Sz): Void$@ //< C's memset: fills n bytes of dest with c
+    fn memcmp(buf1: Void$@, buf2: Void$@, n: Sz): I32 //<
         //< C's memcmp: compares n bytes, 0 if equal
     // --- Process & Args ---
     argc: I32
     argv: U8$@$@
     #noreturn
-    pub fn exit(status: I32): Void //< C's exit: ends the program with status, flushing C's streams
+    fn exit(status: I32): Void //< C's exit: ends the program with status, flushing C's streams
     #noreturn
-    pub fn abort(): Void //< C's abort: ends the program at once, abnormally
+    fn abort(): Void //< C's abort: ends the program at once, abnormally
     // --- File System ---
     fn fopen(filename: Void$@, mode: Void$@): Void$@ //<
         //< C's fopen: opens the file named filename, or returns null
@@ -49,10 +51,10 @@ extern "C"
         //< Caution: **Do not use it** (same reason as `fopen`). To rename a file, use `std/fs`'s
         //< `rename_path`.
 
-    pub fn getchar(): I32 //< C's getchar: the next byte of standard input, or -1 at its end
+    fn getchar(): I32 //< C's getchar: the next byte of standard input, or -1 at its end
     fn fflush(stream: Void$@): I32
     // --- Environment ---
-    pub fn getenv(name: Void$@): Void$@ //<
+    fn getenv(name: Void$@): Void$@ //<
         //< C's getenv: the value of the environment variable name, or null
         //< Caution: **Do not use it to read characters on Windows** (same reason as `fopen`).
         //< Use `std/sys`'s `get_env` instead.
@@ -63,10 +65,10 @@ extern "C"
     fn time(dst: I64$@): I64
     // --- Math ---
     pub fn strtod(nptr: Void$@, endptr: Void$@): F64 //< C's strtod: the number a C string spells
-    pub fn sqrt(x: F64): F64 //< C's sqrt: the non-negative square root
-    pub fn exp(x: F64): F64 //< C's exp: e to the power x
-    pub fn log(x: F64): F64 //< C's log: the natural logarithm
-    pub fn pow(base: F64, exp: F64): F64 //< C's pow: base to the power exp
-    pub fn sin(x: F64): F64 //< C's sin: the sine of x in radians
-    pub fn cos(x: F64): F64 //< C's cos: the cosine of x in radians
-    pub fn tan(x: F64): F64 //< C's tan: the tangent of x in radians
+    fn sqrt(x: F64): F64 //< C's sqrt: the non-negative square root
+    fn exp(x: F64): F64 //< C's exp: e to the power x
+    fn log(x: F64): F64 //< C's log: the natural logarithm
+    fn pow(base: F64, exp: F64): F64 //< C's pow: base to the power exp
+    fn sin(x: F64): F64 //< C's sin: the sine of x in radians
+    fn cos(x: F64): F64 //< C's cos: the cosine of x in radians
+    fn tan(x: F64): F64 //< C's tan: the tangent of x in radians

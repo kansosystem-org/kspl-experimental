@@ -96,7 +96,6 @@ priv fn check_shebang_modes(arena: Arena$@) //< checks Git's index, including on
 priv const CI_YML: U8[] = ".github/workflows/ci.yml"
 priv const JOBS_HEAD: U8[] = "jobs:"
 priv const INPUTS_HEAD: U8[] = "    inputs:"
-priv const CRON_HEAD: U8[] = "- cron: \""
 priv const JOB_PAD: U8[] = "  "
 priv const INPUT_PAD: U8[] = "      "
 priv const GUARD_HEAD: U8[] = "    if:"
@@ -151,37 +150,6 @@ priv fn dispatch_inputs_of(yml: U8[], arena: Arena$@): List<|U8[]|> //<
         name: = key_at(line, INPUT_PAD)
         if name.len > 0
             out.push(name)
-    return out
-
-priv fn crons_of(yml: U8[], arena: Arena$@): List<|U8[]|> //<
-    //< The expressions of the crons `schedule:` declares
-    $out: = List<|U8[]|>(arena)
-    for line in yml.lines(arena)
-        t: = line.trim_spaces()
-        if !t.starts_with(CRON_HEAD)
-            continue
-        rest: = t.sub_from(CRON_HEAD.len)
-        if end: = rest.find_char('"')
-            out.push(rest.sub(0, end))
-    return out
-
-priv fn quoted_crons(guard: U8[], arena: Arena$@): List<|U8[]|> //<
-    //< Of the `'...'` inside an `if:`, lists the ones holding a space
-    //< **A quoted text holding a space is a cron**; the condition's other quoted texts
-    //< (`'schedule'`, `'workflow_dispatch'`) hold none.
-    $out: = List<|U8[]|>(arena)
-    $rest: = guard
-    for
-        if open: = rest.find_char('\'')
-            tail: = rest.sub_from(open + 1)
-            if close: = tail.find_char('\'')
-                if tail.sub(0, close).find_char(' ').is_some()
-                    out.push(tail.sub(0, close))
-                rest = tail.sub_from(close + 1)
-            else
-                break
-        else
-            break
     return out
 
 priv fn guard_of(body: U8[], arena: Arena$@): U8[] //<
@@ -287,51 +255,47 @@ priv fn check_ci_shards(arena: Arena$@)
             origin)")
 
 priv fn check_dispatch_switches(arena: Arena$@) //<
-    //< A job's `if:` matches the input of the manual start and the cron `schedule:` declares
+    //< A job's `if:` matches the input of the manual start
     //< Caution: **Add only one side and either direction breaks silently**: an input alone "can be
     //< pressed and does nothing" (Principle 5); a job alone runs whatever is chosen. The names
-    //< match so nobody has to remember the pairing; a cron that is not declared matches no run.
+    //< match so nobody has to remember the pairing.
     yml: = harness.read_under_root(CI_YML)
     $names: = List<|U8[]|>(arena)
     $bodies: = List<|U8[]|>(arena)
     job_blocks(yml, names@, bodies@, arena)
     got: = dispatch_inputs_of(yml, arena)
     if names.len == 0 || got.len == 0
-        verdict.check("a job's if: matches the input and cron declarations", false,
+        verdict.check("a job's if: matches its input", false,
             arena.text().s("could not read the jobs or the inputs out of ").s(CI_YML).take())
         return
     $bad: = List<|U8[]|>(arena)
     scan.diff_into(names@, got@, "the jobs", "workflow_dispatch's inputs", bad@, arena)
     scan.diff_into(got@, names@, "workflow_dispatch's inputs", "the jobs", bad@, arena)
-    crons: = crons_of(yml, arena)
     for i in Range.asc(names.len)
         guard: = guard_of(bodies.get(i), arena)
         want: = arena.text().s("inputs['").s(names.get(i)).s("']").take()
         if guard.find_str(want).is_none()
             bad
                 .push(arena.text().s(names.get(i)).s("'s if: does not look at ").s(want).take())
-        // Caution: If a cron that is not declared is allowed, the condition silently has no effect.
-        // (A condition meant to leave out the weekdays matches no run.)
-        for c in quoted_crons(guard, arena)
-            if !crons.contains(c)
-                bad
-                    .push(arena.text().s(names.get(i)).s("'s if: holds the cron '").s(c)
-                    .s("', which schedule: does not declare").take())
-    verdict.check_list("a job's if: matches the input and cron declarations", names.len, "jobs",
-        bad@,
+    verdict.check_list("a job's if: matches its input", names.len, "jobs", bad@,
         "add a job and add an input of the same name and an if: too (.github/workflows/ci.yml)")
 
 priv const LINT_MK: U8[] = "mk/lint.mk" //<
-    //< The static analysis' list of entry points agrees with the tree
+    //< The static analysis' entry points, which make derives, agree with the tree
     //< Caution: **A source holding `fn main` that is missing from the list is never linted.** The
-    //< analysis walks imports, so **an entry point nobody imports is not covered**.
+    //< analysis walks imports, so **an entry point nobody imports is not covered**. make finds the
+    //< entry points by its own copy of `is_entry` (`lint_main_prog`), and this check holds the two.
 
-priv const LINT_SOURCES: U8[][_] = ::{ "*.kspl", ":!ksplc/tests/negative/*",
-    ":!ksplc/tests/parse/*", ":!ksplc/tests/lint/*", ":!ksplc/tests/runtime/*",
-    ":!ksplc/tests/ship/*" } //<
-        //< Sources searched for an entry point, and the fixtures left out, each linted by its suite
-        //< The suites' material diagnoses by design (`negative/`, `lint/`), stops on purpose
-        //< (`runtime/`), or imports what the suite writes beside it (`ship/`).
+priv const FIXTURES_HEAD: U8[] = "LINT_FIXTURES := " //<
+    //< The make list of the folders whose sources only their suite lints
+
+priv fn lint_sources(arena: Arena$@): List<|U8[]|> //<
+    //< Sources searched for an entry point, less the folders in `LINT_FIXTURES`
+    $out: = List<|U8[]|>(arena)
+    out.push("*.kspl")
+    for d in htext.make_list(harness.read_under_root(LINT_MK), FIXTURES_HEAD, arena)
+        out.push(arena.text().s(":!").s(d).s("/*").take())
+    return out
 
 priv fn is_entry(src: U8[], arena: Arena$@): Bool //<
     //< Whether a source defines `main`: a line opening with it, outside a `"""` string
@@ -352,10 +316,11 @@ priv const ENTRY_SAMPLES: Sample[_] = ::{
     Sample::{ .text = "pub fn main(): I32\n  return 0\n", .hits = true },
     Sample::{ .text = "fn mainly(): I32\n", .hits = false },
     Sample::{ .text = "  // fn main(): I32\n", .hits = false },
+    Sample::{ .text = "// a \"\"\" in a comment\nfn main()\n", .hits = true },
 }
 
 priv fn lint_targets(arena: Arena$@): List<|U8[]|> //<
-    //< Every entry point the lint lists name, their wildcards expanded by make itself
+    //< Every entry point the lint lists name, as make itself expands them
     $out: = List<|U8[]|>(arena)
     r: = harness
         .make(U8[][]::{ "LOGGING=1", "-s", "--no-print-directory", "--eval",
@@ -375,7 +340,8 @@ priv fn check_lint_entries(arena: Arena$@)
         bad
             .push(arena.text().s("make could not print the lint lists of ").s(LINT_MK).take())
     $seen: Sz = 0
-    for rel in harness.tracked_matching(U8[][]::LINT_SOURCES)
+    $sources: = lint_sources(arena)
+    for rel in harness.tracked_matching(sources.slice())
         if !is_entry(harness.read_under_root(rel), arena)
             continue
         seen += 1
@@ -383,8 +349,9 @@ priv fn check_lint_entries(arena: Arena$@)
             bad.push(rel)
     verdict.check_list("no entry point of the static analysis has leaked out", seen, "entry points",
         bad@,
-        arena.text().s("line it up in LINT_TARGETS in ").s(LINT_MK)
-        .s(", or leave its folder out in `lint_sources` with why").take())
+        arena.text().s("make `lint_main_prog` in ").s(LINT_MK)
+        .s(" read a `main` as `is_entry` does, or add its folder to `LINT_FIXTURES` with why")
+        .take())
 
 // ==========================================
 // The platform table names every gate and every suite CI runs
@@ -507,7 +474,7 @@ priv fn check_linux_suites_gated(arena: Arena$@) //<
 
 priv const BLAS_HOME: U8[] = "ksai/" //<
     //< The one package `make test-blas` builds with `BLAS=1`
-    //< **A `#cfg(blas)` elsewhere is never built**: `lint-cfg` analyses it, but no gate links or
+    //< **A `#cfg(blas)` elsewhere is never built**: `make lint` analyses it, but no gate links or
     //< runs it ("note 15" in `docs/SPEC-gates.md`).
 
 priv fn holds_blas(src: U8[], arena: Arena$@): Bool //<
@@ -527,7 +494,7 @@ priv const BLAS_SAMPLES: Sample[_] = ::{
     Sample::{ .text = "#cfg(blas)\nfn f()\n", .hits = true },
     Sample::{ .text = "    #cfg(!blas)\n    x = 1\n", .hits = true },
     Sample::{ .text = "priv const S: U8[] =\n  \"\"\"x\n#cfg(blas)\n\"\"\"\n", .hits = false },
-    Sample::{ .text = "// #cfg(blas) is read by lint-cfg\n", .hits = false },
+    Sample::{ .text = "// #cfg(blas) is read by make lint\n", .hits = false },
     Sample::{ .text = "#cfg(llvm)\nfn f()\n", .hits = false },
 }
 

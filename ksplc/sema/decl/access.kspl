@@ -115,6 +115,10 @@ impl Sema_ctx
         if recv == null || recv.is_explicit_cast()
             return false
         if op.equals("[")
+            // **A subscript through `at_ref` ends at a read-only pointer**, so nothing below it can
+            // be written: not the element, not its field (`xs[0].x = 5` on `xs: List<|P|>@`).
+            if r.index_route(recv, recv.type_id) == .ref_place
+                return true
             // **A subscript through a user-defined `at` stops at the pointer it returns.** **That
             // pointer's type**, not the path's root, decides the permission. The `.` levels stop
             // the same way, which is why an `x.s.ptr$` in the same frame passes. A fixed-length
@@ -185,24 +189,44 @@ impl Sema_ctx
         // **A temporary is not writable either**: `at(r: Self$@, …)` would write a copy that is
         // then discarded, as any `Self$@` method on it would ("Implementations (`impl`) and
         // receivers" in docs/SPEC-programming-language.md). A read takes `at_ref` instead.
-        writable: =
-            recv_node == null ||
-            (!r.place_is_readonly(recv_node) && !r.env.receiver_needs_hoist(recv_node))
-        if r.env.has_implemented_operator_trait(base_id, "Index_place") &&
-            (writable || !r.env.index_owns_elements(base_id))
-            return .place
+        // The receiver is asked only for an `at` that owns its elements. place_denies_write asks
+        // this at each `[` of a path, so asking always would walk a nested path once per level.
+        if r.env.has_implemented_operator_trait(base_id, "Index_place")
+            if !r.env.index_owns_elements(base_id) || recv_node == null ||
+                (!r.place_is_readonly(recv_node) && !r.env.receiver_needs_hoist(recv_node))
+                return .place
         if r.env.has_implemented_operator_trait(base_id, "Index_ref")
             return .ref_place
         return .by_value
 
     fn index_read_needs_writable(r: Self$@, recv_id: I32): Bool //<
         //< Whether `a[i]` can read only through a writable receiver of this type
-        //< That is so where `index_route` gives `.place` alone, from an `at(r: Self$@, …)`.
+        //< That is so where the route a read-only receiver takes ends at a method that declares
+        //< `Self$@`. That method is an `at(r: Self$@, …)` with no other trait to fall back on, or
+        //< an `at_ref` or a `get` declared with `Self$@`.
         r.ensure_instance_methods(recv_id) catch {}
         base_id: = r.env.strip_ptr(recv_id)
-        return r.env.index_owns_elements(base_id) &&
-            !r.env.has_implemented_operator_trait(base_id, "Index_ref") &&
-            !r.env.has_implemented_operator_trait(base_id, "Index")
+        if r.env.has_implemented_operator_trait(base_id, "Index_place") &&
+            !r.env.index_owns_elements(base_id)
+            return false // an `at(r: Self@, …)` serves any receiver
+        $method: U8[] = "get"
+        if r.env.has_implemented_operator_trait(base_id, "Index_ref")
+            method = "at_ref"
+        else if !r.env.has_implemented_operator_trait(base_id, "Index")
+            return r.env.has_implemented_operator_trait(base_id, "Index_place")
+        sym: = r.resolve_operator_method(recv_id, method).unwrap_or(null)
+        return r.method_writes_receiver(sym)
+
+    fn method_writes_receiver(r: Self$@, method_sym: Sema_symbol$@): Bool //<
+        //< Whether the method declares its receiver as `Self$@`
+        //< An implicit call (`a[i]`, `for x in a`) then needs a writable receiver, as `a.m()` does.
+        if method_sym == null
+            return false
+        switch r.env.method_receiver_permission(method_sym.node)
+        case .some(need)
+            return need.mut_ptr
+        case .none
+            return false
 
     fn index_only_reads(r: Self$@, route: Index_route, recv_id: I32): Bool //<
         //< Whether the subscript returns only a read-only place (`Index_ref` without `Index_mut`)

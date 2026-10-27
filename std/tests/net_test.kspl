@@ -1,5 +1,6 @@
 //< Tests of `std/net` over real TCP loopback traffic
 import "std/ds" { List }
+import "std/fs"
 import "std/io"
 import "std/mem"
 import "std/net"
@@ -131,15 +132,14 @@ fn test_net_names() //<
 // `no_ipv6_loopback` tells apart. Only one of them is a setting the machine's start can change.
 // ==========================================
 priv fn no_ipv6_loopback(): U8[] //< why `::1` cannot be bound here, as a SKIP line's reason
-    //< **IPv6's every address still binds where only the loopback lacks `::1`.** A socket of the
-    //< family opens, and nothing checks an address the interfaces hold. So a failing `"::"` means
-    //< the OS has no IPv6 at all (a Linux kernel started with `ipv6.disable=1`). Neither an image
-    //< nor a container's option can give that. A passing one means the loopback's IPv6 is turned
-    //< off (`disable_ipv6` on a container's `lo`), which a container's start decides.
-    any: = net.Tcp_listener.bind("::", 0) catch
+    //< **The kernel answers, not `std/net`**, so a fault in the code under test cannot pass as a
+    //< machine without IPv6. Linux lists `/proc/sys/net/ipv6` only where its kernel has IPv6; a
+    //< kernel started with `ipv6.disable=1` has none, and no image or container option gives it.
+    //< Elsewhere nothing tells, so the reason is the loopback, which the gates expect only off
+    //< Linux. On Linux that reason means a container started with `::1` turned off.
+    if fs.is_dir("/proc/sys/net") && !fs.exists("/proc/sys/net/ipv6")
         return "this machine has no IPv6 at all"
-    any.free()
-    return "IPv6 is on, but the loopback holds no `::1`"
+    return "the loopback holds no `::1`"
 
 fn test_tcp_ipv6()
     verdict.start("[Net] connecting over the IPv6 loopback and peer() test...")
@@ -426,6 +426,41 @@ fn test_tcp_read_for() //<
     listener.free()
     verdict.pass("read_for ends at its timeout on a quiet peer, and reads what the peer sends.")
 
+priv const STALL_BYTES: Sz = 256 * 1024 * 1024 //< more than any socket's buffers hold at once
+
+fn test_tcp_write_all_for() //<
+    //< a send with a time limit ends at it on a peer that stops reading, and sends to one that reads
+    //< **The memory is never touched here**, as in test_tcp_past_int: the OS only copies from it.
+    verdict.start("[Net] a send that ends at its timeout test...")
+    listener: = net.Tcp_listener.bind("127.0.0.1", 0)
+        catch panic("bind should succeed on a free port")
+    port: = listener.port() catch panic("a bound socket knows its port")
+    client: = net.Tcp_stream.connect("127.0.0.1", port)
+        catch panic("connect should succeed once the listener is bound")
+    conn: = listener.accept() catch panic("accept should succeed once the client connects")
+    big: = U8$@::mem.alloc(STALL_BYTES)
+    $timed_out: = false
+    client.write_all_for(U8[]::{ .ptr = big, .len = STALL_BYTES }, 200) catch e
+        timed_out = e == net.Net_error.timed_out
+    assert(timed_out, "a peer that reads nothing makes write_all_for fail as timed_out")
+    mem.dealloc(Void$@::big)
+    conn.free()
+    client.free()
+    // A fresh connection: the first one holds half a send.
+    again: = net.Tcp_stream.connect("127.0.0.1", port)
+        catch panic("connect should succeed once the listener is bound")
+    peer: = listener.accept() catch panic("accept should succeed once the client connects")
+    again.write_all_for("hi", 60000) catch panic("a send the peer has room for should finish")
+    $buf: U8[16] = ::{}
+    n: = peer.read_for(U8$[]::buf, 60000) catch panic("what was sent should be read")
+    assert(U8[]::{ .ptr = buf[0]@, .len = n }.equals("hi"), "write_all_for sends every byte")
+    peer.free()
+    again.free()
+    listener.free()
+    verdict
+        .pass("write_all_for ends at its timeout on a peer that reads nothing, and sends to one \
+            that reads.")
+
 priv const FOUR_GIB: I64 = 1I64 << 32 //< a length whose low 32 bits are all 0
 
 fn test_tcp_past_int() //<
@@ -506,7 +541,7 @@ fn test_reactor_multi_connection()
     empty_ready.free()
 
     // A nonblocking read with no data throws would_block, not io_failed, so the caller can retry.
-    probe_buf: U8[8] = ::{}
+    $probe_buf: U8[8] = ::{}
     $would_block_seen: = false
     c0.read(U8$[]::probe_buf) catch e
         switch e
@@ -536,7 +571,7 @@ fn test_reactor_multi_connection()
         for item in ready
             assert((item.revents & reactor.READABLE) != 0, "ready item must report readable")
             stream: = c0 if item.token == 0 else c1 if item.token == 1 else c2
-            buf: U8[64] = ::{}
+            $buf: U8[64] = ::{}
             n: = stream.read(U8$[]::buf)
                 catch panic("stream read should succeed once reactor reports readable")
             assert(n > 0, "should have received the echoed bytes")

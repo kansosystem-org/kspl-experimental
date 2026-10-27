@@ -16,6 +16,7 @@ import "ksmd/calc/value" { Value }
 import "ksmd/edit/editor" { Editor, Input, Refused }
 import "ksmd/edit/editor"
 import "ksmd/edit/editor_charts" { Chart_settings }
+import "ksmd/edit/editor_looks"
 import "ksmd/edit/editor_replace" { Cell_text, Span }
 import "ksmd/edit/editor_tables" { Group_edit, Table_edit }
 import "ksmd/edit/history" { Change }
@@ -25,8 +26,9 @@ import "ksmd/files/assemble" { assemble_loaded }
 import "ksmd/files/fetched" { Fetched, Held }
 import "ksmd/files/files" { Refusal, parse, resolve_text }
 import "ksmd/files/image" { measure }
-import "ksmd/model/format" { currency_of, format_of }
+import "ksmd/model/format" { currency_of, format_of, write_format }
 import "ksmd/model/look" { Look_part }
+import "ksmd/port/web/moving"
 import "ksmd/port/web/view" { Inside }
 import "ksmd/port/web/view"
 import "ksmd/syntax/chart" { kind_of }
@@ -83,8 +85,9 @@ priv fn ensure() //< sets up the heap, the output and an empty document, once
 fn ksmd_web_in(n: Sz): U8$@ //< a buffer of at least `n` bytes for the script to write text into
     ensure()
     if n > input_cap
-        if input != null
-            dealloc(Void$@::input)
+        // Caution: **Forget the old buffer before asking for a new one.** A request that fails
+        // stops the page, and a freed buffer still named here would be written again.
+        release_all_input()
         input = U8$@::mem.alloc(n)
         input_cap = n
     return input
@@ -142,10 +145,14 @@ priv const KEPT_INPUT: Sz = 1024 * 1024 //< the input buffer kept between action
     //< A source or an image's window can need more for one call; it is let go after it.
 
 priv fn release_input() //< lets go a large input buffer, so a load does not hold it twice
-    if input != null && input_cap > KEPT_INPUT
+    if input_cap > KEPT_INPUT
+        release_all_input()
+
+priv fn release_all_input() //< lets go the input buffer, whatever its size
+    if input != null
         dealloc(Void$@::input)
-        input = null
-        input_cap = 0
+    input = null
+    input_cap = 0
 
 #export
 fn ksmd_web_source_limit(): Sz //< the most bytes a source may hold; the script reads one more
@@ -275,6 +282,14 @@ fn ksmd_web_select(ap: I32, ab: Sz, ai: Sz, ao: Sz, fp: I32, fb: Sz, fi: Sz, fo:
     ed.select(spot(ap, ab, ai, ao), spot(fp, fb, fi, fo))
 
 #export
+fn ksmd_web_here(): Sz //<
+    //< what stands at the selection, as `result` gives it in `here`; changes nothing
+    ensure()
+    out.clear()
+    here(out)
+    return out.slice().len
+
+#export
 fn ksmd_web_selection(): Sz //< a result that changes nothing, to show the selection after `select`
     if !begin()
         return full()
@@ -336,6 +351,16 @@ fn ksmd_web_divider(): Sz //< a divider in place of the selection
         return full()
     ed.insert_divider() catch e
         return refused(e)
+    return result(true, "")
+
+#export
+fn ksmd_web_move_paths(from_len: Sz, to_len: Sz): Sz //<
+    //< Writes the includes' and images' paths again for the document's new folder, as one step:
+    //< the old folder, then the new one, from the workspace's root, are written in
+    if !begin()
+        return full()
+    both: = text_in(from_len + to_len)
+    ed.move_paths(both.sub(0, from_len), both.sub_from(from_len))
     return result(true, "")
 
 #export
@@ -447,13 +472,46 @@ fn ksmd_web_set_cell(block: Sz, row: Sz, column: Sz, len: Sz): Sz //<
 fn ksmd_web_cell_look(block: Sz, from_row: Sz, from_column: Sz, to_row: Sz, to_column: Sz,
     part: I32, len: Sz): Sz //<
         //< Sets one part of the look of a rectangle of cells: 0 the text's colour, 1 the
-        //< background's, 2 the font size in points, 3 the alignment; empty text clears it
+        //< background's, 2 the font size in points, 3 the alignment, 4 every part, 5 the cell's own
+        //< number format, as `formats` writes an entry or `general`; empty text clears it
     if !begin()
         return full()
     which: Look_part =
         (.color if part == 0 else .fill if part == 1 else .size if part == 2
-        else .align if part == 3 else .all)
+        else .align if part == 3 else .format if part == 5 else .all)
     ed.set_look(block, from_row, from_column, to_row, to_column, which, text_in(len)) catch e
+        return refused(e)
+    return result(true, "")
+
+#export
+fn ksmd_web_clear_look(): Sz //< takes the selected text's colour and alignment away, in one step
+    if !begin()
+        return full()
+    ed.clear_look() catch e
+        return refused(e)
+    return result(true, "")
+
+#export
+fn ksmd_web_cell_places(block: Sz, from_row: Sz, from_column: Sz, to_row: Sz, to_column: Sz,
+    more: I32): Sz //<
+        //< One more (1), or one fewer (0), decimal place in each cell of a rectangle
+    if !begin()
+        return full()
+    ed.step_cell_places(block, from_row, from_column, to_row, to_column, more != 0) catch e
+        return refused(e)
+    return result(true, "")
+
+#export
+fn ksmd_web_cell_currency(block: Sz, from_row: Sz, from_column: Sz, to_row: Sz, to_column: Sz,
+    len: Sz): Sz //<
+        //< Shows the cells' numbers as money in the currency written in, as `USD`
+    if !begin()
+        return full()
+    f: = currency_of(text_in(len)) catch
+        return refused(.table(.not_a_format))
+    defer $entry: = Str_builder()
+    write_format(f, entry@)
+    ed.set_look(block, from_row, from_column, to_row, to_column, .format, entry.slice()) catch e
         return refused(e)
     return result(true, "")
 
@@ -739,7 +797,7 @@ priv fn refused(e: Refused): Sz
     return result(false, e.message())
 
 priv fn result(ok: Bool, why: U8[]): Sz //<
-    //< `{"ok","why","from","tail","blocks","tables","sel","changed","undo","redo"}`: the blocks
+    //< `{"ok","why","from","tail","blocks","tables","sel","here","changed","undo","redo"}`: the blocks
     //< from `from` up to the `tail` unchanged at the end, and each other table when values may have
     //< changed. `changed` is 1 when the document changed, so a host knows to save it.
     defer scratch: = Arena(64 * 1024)
@@ -759,10 +817,30 @@ priv fn result(ok: Bool, why: U8[]): Sz //<
         out.s("[]")
     out.s(",\"sel\":")
     view.selection(ed, out)
+    out.s(",\"here\":")
+    here(out)
     out.s(",\"changed\":").s("1" if ed.change.any else "0")
     out.s(",\"undo\":").s("1" if ed.can_undo() else "0")
     out.s(",\"redo\":").s("1" if ed.can_redo() else "0").c('}')
     return out.slice().len
+
+priv fn here(out: Str_builder$@) //<
+    //< `{"k","l","o","c","a","m"}`: the first selected unit's kind, level, numbering, tick box and
+    //< alignment, and `[emphasis, strong, code]` as 0 or 1, for the quick access bar to show
+    h: = ed.here()
+    st: = h.style
+    kind: =
+        ("other" if h.whole else "paragraph" if st.kind == .paragraph
+        else "heading" if st.kind == .heading else "code" if st.kind == .code
+        else "list" if st.kind == .list else "quote" if st.kind == .quote else "other")
+    align: =
+        ("left" if st.align == .left else "center" if st.align == .center
+        else "right" if st.align == .right else "")
+    check: = 1 if st.check == .open else 2 if st.check == .done else 0
+    out
+        .s("{\"k\":\"\{kind\}\",\"l\":\{st.level\},\"o\":\{1 if st.ordered else 0\},\"c\":\{check\},")
+    out.s("\"a\":\"\{align\}\",\"m\":[\{1 if h.emphasis else 0\},\{1 if h.strong else 0\},")
+    out.s("\{1 if h.code else 0\}]}")
 
 priv fn values_for(from: Sz, to: Sz, scratch: Arena$@): Results //<
     //< Every table's values when the result shows a table or a chart; typing in prose

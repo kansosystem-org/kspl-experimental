@@ -188,7 +188,6 @@ The design is "The compiler as a whole" in [`ksplc/docs/DESIGN-compiler.md`](doc
   * Completion: [`complete.kspl`](lsp/complete.kspl).
   * References and renaming: [`uses.kspl`](lsp/uses.kspl). What a rename refuses is in [`rename.kspl`](lsp/rename.kspl).
   * The call hierarchy: [`call_hier.kspl`](lsp/call_hier.kspl).
-  * Semantic tokens, the colouring of each word by what it is: [`semtok.kspl`](lsp/semtok.kspl).
   * The outline, what a file declares, nested: [`outline.kspl`](lsp/outline.kspl).
   * Which files are in the workspace: [`workspace.kspl`](lsp/workspace.kspl).
 
@@ -227,7 +226,7 @@ What `ksplc fmt` and `--style` promise is [`ksplc/docs/SPEC-tools.md`](docs/SPEC
 | File | What it does | How you reach it |
 | :-- | :-- | :-- |
 | [`keywords.kspl`](tools/keywords.kspl) | Derives the keyword list from the grammar | — |
-| [`surface.kspl`](tools/surface.kspl) | The record of the API a package offers | `--emit-surface=` |
+| [`surface.kspl`](tools/surface.kspl) | The record of the API a package offers | `ksplc doc --emit-surface=` |
 | [`interface.kspl`](tools/interface.kspl) | A library's interface, a C header or an `extern "C"` block, from its `#export` functions | `--library=` |
 | [`doc.kspl`](tools/doc.kspl) | What a file, an entry or a folder publishes, rendered from the source as the reference to read | `ksplc doc` |
 | [`explain.kspl`](tools/explain.kspl) | Prints a diagnostic code's section of the diagnostics specification (`ksplc/docs/SPEC-diagnostics.md`) | `ksplc explain` |

@@ -1,6 +1,6 @@
 # kssrv — the design
 
-kssrv (Kanso Server) is an HTTP server written in KSPL on `std` and `ksai`. It is where `ksplc` and `std` meet a real run: a program that stays up and answers requests without end. This document holds its decisions and their grounds. Starting it is in [kssrv](../README.md), what a client can ask for in [`SPEC-api.md`](SPEC-api.md), and what is left in the "kssrv" section of [`docs/PLAN.md`](../../docs/PLAN.md).
+kssrv (Kanso Server) is an HTTP server written in KSPL on `std`. It is where `ksplc` and `std` meet a real run: a program that stays up and answers requests without end. This document holds its decisions and their grounds. Starting it is in [kssrv](../README.md), what a client can ask for in [`SPEC-api.md`](SPEC-api.md), and what is left in the "kssrv" section of [`docs/PLAN.md`](../../docs/PLAN.md).
 
 ## The command line and the two modes
 
@@ -16,21 +16,18 @@ Caution: **Read the options by name.** Told apart by the argument count, the pre
 
 ### Local use and outward-facing use are split by one decision
 
-The one flag `--local` sets four things together, and the body cap follows it, so no unsafe mix of them can be written.
+The one flag `--local` sets three things together, and the body cap follows it, so no unsafe mix of them can be written.
 
 | What it decides | Local use (`--local`) | Outward-facing use |
 | :-- | :-- | :-- |
 | The address it listens on | `127.0.0.1` only (the *loopback*: this machine alone) | every address (`0.0.0.0`) |
 | A token needed on each request | yes (a secret string made at start-up) | no |
 | The file endpoints (`/api/file`, `/api/stat`) | exist | answer **404** |
-| The car's endpoints | answer **404**; no steering policy is trained | exist |
 | The cap on a request's body | large: files are written back through it | small: each connection holds its part-read body |
 
 **They are not separate options.** Made separate, "facing outward, no token needed, file endpoints open" becomes writable, and a combination that can be written is written eventually.
 
 **Facing outward, the file endpoints answer 404 rather than 401.** A 401 ("you need to log in") would tell the client that a token would open something. What is not there is answered as not there.
-
-**For local use, the car's endpoints answer 404 too, and no steering policy is trained** (`Reach` in `kssrv/api.kspl`). Local use listens on the loopback, which the car cannot reach. A page opening a document would otherwise wait on the training at every start.
 
 How the token is made, passed on and compared is in the agreement ("How the token gets across" in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md)).
 
@@ -197,11 +194,13 @@ Note: The check is "after a 413 it reads the rest of the body rather than resett
 
 ### The server stops when no page is holding it
 
-**`--idle=<seconds>` stops the server once no page is holding it and nothing has been asked for that long.** The rule is "Keeping the server alive while a page is open" in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md). Why a held connection, and not a timer, is in "A page asks the local machine through one protocol" in [`../../docs/DESIGN-repository.md`](../../docs/DESIGN-repository.md). Without the option the server stays up. Facing outward no page holds it, and a server told nothing must not stop itself.
+**`--idle=<seconds>` stops the server once no page has held it and nothing has been asked for that long.** The rule is "Keeping the server alive while a page is open" in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md). Why a held connection, and not a timer, is in "A page asks the local machine through one protocol" in [`../../docs/DESIGN-repository.md`](../../docs/DESIGN-repository.md). Without the option the server stays up. Facing outward no page holds it, and a server told nothing must not stop itself.
 
 Caution: **Stamp the clock for every request, in one place** (`queue_for_request` in `kssrv/main.kspl`). Stamped per entry point, the next one added is the one forgotten.
 
-`kssrv/tests/main.kspl` tests both halves ("a page holding it keeps it up past the wait" and "it stops itself once nothing holds it"). **Both are needed**: with only the second, a server that never stayed up would pass.
+Caution: **Stamp it too when a page lets go of its hold** (`table_drop` in `kssrv/conn.kspl`). A page sends nothing while it holds the server. Suppose the wait counted from its last request alone. Then a page held open longer than the wait would stop the server the moment it closed. A reload would find no server.
+
+`kssrv/tests/main.kspl` tests both halves ("a page holding it keeps it up past the wait" and "it stops itself once nothing holds it"). **Both are needed**: with only the second, a server that never stayed up would pass. A third check is "it waits the whole time after the last page lets go". It holds the page past the wait, so it fails where the wait counts from the last request.
 
 ### The server stops when asked, once the answer is out
 
@@ -278,31 +277,15 @@ The usage text is not a log line: it has no severity and is always printed, so i
 
 ## The car
 
-Kssrv also steers a toy car over the network. A small neural net, trained at start-up from written rules, picks the car's next move; the car keeps its own safety stops.
+The car (a small robot car that drives itself) takes its driving policy from kssrv as a plain file, `pilot_policy.safetensors`, once at start-up. kssrv has no endpoint for the car, and it trains nothing.
 
-### The server judges, and the car keeps the safety timeout
+### The car carries its policy, handed out as a file
 
-The MLP (a small neural net of a few layers) in `kssrv/pilot.kspl` answers `POST /api/car`. It is **trained at start-up with the written rules (`rule_action`) as its teacher**.
+**The car decides every manoeuvre itself, and it keeps its own safety stops.** A car that asked the server on every round could decide nothing once the link dropped. Also, each round of its control loop would have to hold a network round trip.
 
-* **Why a net**: the point is to show the decision made outside the car; the rules as written would need no PC. The net is not cleverer than the rules. It only shows that a function learned from them runs inside a control loop.
-* Caution: **Do not make the rules a runtime escape hatch.** Overriding a disagreement with them makes the net an ornament and the agreement rate meaningless. The rules are only the teacher and the answer key.
-* **Measure the agreement rate by stepping end to end, not by random samples.** Disagreements gather in the few tens of mm past the boundaries (150mm and 400mm). As many random samples as training used can show "100%" without touching that band.
-* **The agreement rate and the refusal at close range are tested together** (`kssrv/tests/car.kspl`). It needs 95% or more agreement at every stepped point, and no forward motion at an unmeasurable distance or at very close range. The rate alone is not enough: a fix that lowers it must still not tip toward danger.
-* **The battery is not a net input.** Stopping on a flat battery is the car's own judgement, like backing off at very close range and stopping when no answer arrives. Once the link drops, the server can do nothing.
+**The policy is trained offline, before the server starts, and kept as a file.** So:
 
-### The car's answer is computed on the accepting thread
+* kssrv starts at once in both modes, and it needs no AI engine.
+* The file the car drives on is the file that is kept. A copy trained again at each start could differ from the kept one, and a test would have to compare the two.
+* Any server that hands out files serves the car, kssrv among them.
 
-A few hundred weights take microseconds per forward pass (one run of the net). So answering on the accepting thread stalls no other connection. Handing it to a second thread would stretch the control period by that round trip. After `build()` the policy is read-only and no endpoint rewrites it. **An endpoint that continues training it breaks this premise.**
-
-### The shipped policy can be reproduced on its own
-
-`GET /api/pilot` sends the car everything it needs to make the same decisions without the server, in one file.
-
-That one safetensors file (a standard format for storing named arrays of numbers) holds more than the weights. **It also holds how the features are made (`far_mm`), the manoeuvre table and the format's version**.
-
-* **Why all of it**: with the weights alone, the receiver would keep its own copy of the preprocessing and of the manoeuvres' meaning. A copy cannot notice when the server's code is fixed. With everything needed to reproduce `decide` and the manoeuvres' meaning in one file, no disagreement arises.
-* **Why safetensors**: it is the codebase's one format for storing tensors (`ksai/safetensors`), with reader and writer in place.
-* **Why it is not quantized** (stored as smaller, less exact numbers): the weights are about a kilobyte even as F32. int8 would save about three quarters of that at a higher cost: the receiver's answers would drift from the server's. As F32, "the same observation gives the same manoeuvre" can be matched.
-* **What tests it: a policy rebuilt from the shipped blob alone returns the same manoeuvre as `POST /api/car` at every swept point** (`kssrv/tests/car.kspl`). Shapes can fit while a drifted preprocessing constant or manoeuvre table changes the answer. The server computes in F32 and the checker in double precision. So points where the top two logits (the net's raw scores) nearly tie are not judged. A cap limits how many such points there can be (more is itself an anomaly).
-* **`command_valid_ms` is not included.** It is how long a car that asks can wait for an answer, which means nothing to a car carrying the policy. That car's timeout is its own.
-* **Do not forget to raise the version (`__metadata__.kspl_pilot`).** The feature order, the activation and the manoeuvre table's meaning cannot be told from a tensor's shape. Left unraised, an old reader applies new weights the old way and goes wrong silently, the shapes fitting.

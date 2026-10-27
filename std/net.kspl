@@ -290,6 +290,51 @@ impl Tcp_stream
                 throw .io_failed // no progress is possible (the peer closed)
             sent += n
 
+    pub fn write_all_for( //< sends every byte as `write_all` does, all within `timeout_ms`
+        //< For a peer that can stop reading: once the OS's buffer is full, `write_all` waits for it
+        //< for good. Past the time it throws `timed_out`, and how much was sent is not known.
+        //< Caution: **The stream is blocking when it returns**, as `connect` and `accept` make it.
+        //< Do not use it on a stream that `std/reactor` drives.
+        r: Self$@,
+        buf: U8[], //< the bytes sent
+        timeout_ms: I32, //< how long the whole send can take; a non-positive time is past at once
+    ): Void!Net_error
+        deadline: = kspl_mono_us() + I64::timeout_ms * 1000I64
+        r.set_nonblocking()!
+        r.send_until(buf, deadline) catch e
+            r.set_blocking() catch {}
+            throw e
+        r.set_blocking()!
+
+    priv fn send_until(r: Self$@, buf: U8[], deadline: I64): Void!Net_error //<
+        //< Sends every byte of a non-blocking stream, waiting for room until the deadline
+        $sent: Sz = 0
+        for sent < buf.len
+            n: = r.write(buf.sub_from(sent)) catch e
+                if e != .would_block
+                    throw e
+                r.wait_for_room(deadline)!
+                continue
+            if n == 0
+                throw .io_failed // no progress is possible (the peer closed)
+            sent += n
+
+    priv fn wait_for_room(r: Self$@, deadline: I64): Void!Net_error //<
+        //< Waits until the stream can take more bytes; `timed_out` once the deadline has passed
+        left_ms: = (deadline - kspl_mono_us()) / 1000I64
+        if left_ms <= 0I64
+            throw .timed_out
+        $h: I64[1] = ::{ r.handle }
+        $want: U8[1] = ::{ POLL_WRITABLE }
+        $got: U8[1] = ::{}
+        ready: =
+            kspl_net_poll((I64$[]::h).ptr, (U8$[]::want).ptr, 1,
+            I32::(left_ms if left_ms < 0x7FFFFFFFI64 else 0x7FFFFFFFI64), (U8$[]::got).ptr)
+        if ready < 0
+            throw .io_failed
+        if ready == 0
+            throw .timed_out
+
     pub fn read( //< receives and returns how much arrived; 0 means the peer closed
         r: Self$@,
         buf: U8$[], //< where the bytes go

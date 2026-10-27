@@ -7,6 +7,7 @@ import "ksmd/calc/calc"
 import "ksmd/edit/editor" { Editor, Refused }
 import "ksmd/edit/editor"
 import "ksmd/edit/editor_tables" { Table_edit }
+import "ksmd/edit/history" { capture }
 import "ksmd/edit/region" { gap_spot, text_spot }
 import "ksmd/syntax/reader"
 import "ksmd/syntax/writer"
@@ -29,6 +30,7 @@ fn run()
     sorting()
     looks()
     pasting()
+    kept_small()
     filling()
     series()
     dated()
@@ -171,6 +173,19 @@ priv fn naming()
             name=\"b\"\n| \"y\" | \"z\" |\n| =\"Q1 sales | \\\"net\\\"\".A1 | =c.A1 |\n:::\n"
     saves("a name that is not plain is written in JSON quotes in a formula", ed@, arena, quoted)
     verdict.check("and its references still calculate", value(ed@, 1, 0, 0, arena) == 3.0, "")
+    defer $long: = Str_builder()
+    long.s("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" |\n| 1 | =t.A1")
+    for _ in Range.asc(800)
+        long.s("+t.A1")
+    long.s(" |\n:::\n")
+    $grown: = opened(long.slice(), arena)
+    $renamed: = true
+    grown.rename_table(0, "quarterly_sales") catch e
+        renamed = false
+        verdict.check("a name that would write a formula past 4,096 bytes is refused",
+            e.message().equals(Refused.table(.too_long).message()), e.message())
+    verdict.check("so the table keeps its name", !renamed, "")
+    saves("and the document stays as it was", grown@, arena, long.slice())
 
 priv fn widths()
     defer arena: = Arena(64 * 1024)
@@ -269,6 +284,18 @@ priv fn dated() //< a date cell reads, saves and sorts as a date
     set(ed@, 0, 0, 0, "2026-02-30")
     saves("a day that is no date stays text", ed@, arena,
         join3(head, "| \"2026-02-30\" |\n", rest, arena))
+    set(ed@, 0, 0, 0, "2026/10/26")
+    saves("a date typed with / is a date, kept with -", ed@, arena,
+        join3(head, "| 2026-10-26 |\n", rest, arena))
+    set(ed@, 0, 0, 0, "2026/1/5")
+    saves("its month and day take one digit too", ed@, arena,
+        join3(head, "| 2026-01-05 |\n", rest, arena))
+    for typed in U8[][]::{ "2026/02/30", "2026/1/", "26/10/26", "2026/10-26", "2026/100/1" }
+        set(ed@, 0, 0, 0, typed)
+        verdict.check(arena.text().s("a typed \{typed\} that is no date stays text").take(),
+            ed.cell_text(0, 0, 0, arena)
+            .equals(arena.text().c('"').s(typed).c('"').take()) ||
+            ed.cell_text(0, 0, 0, arena).equals(typed), ed.cell_text(0, 0, 0, arena))
 
 priv fn sorting()
     defer arena: = Arena(64 * 1024)
@@ -372,6 +399,33 @@ priv fn pasting()
             \"Pens\" | 2 | 3.5 |\n:::\n")
     prose.undo()
     saves("and one undo takes it away", prose@, arena, "%ksmd 1\n\nText\n")
+
+// The editor's arena lasts as long as the editor, so a paste keeps no copy of the tables there.
+// A refused paste puts them back from the copy made to record the step.
+priv fn kept_small()
+    defer $tall: = Str_builder()
+    tall.s("%ksmd 1\n\n:::table name=\"t\"\n| \"a\" | \"b\" |\n")
+    for i in Range.asc(1000)
+        tall.s("| \{i\} | =A\{i + 1\}*2 |\n")
+    tall.s(":::\n")
+    defer arena: = Arena(64 * 1024)
+    $ed: = opened(tall.slice(), arena)
+    defer probe: = Arena(64 * 1024)
+    _copy: = capture(ed.doc@, probe)
+    copy: = probe.get_total_used()
+    $one: = List<|List<|U8[]|>|>(probe)
+    $cell: = List<|U8[]|>(probe)
+    cell.push("7")
+    one.push(cell)
+    before: = arena.get_total_used()
+    ed.paste_cells(0, 5, 1, one@) catch e
+        verdict.check("pasting one cell", false, e.message())
+    ed.select(gap_spot(1), gap_spot(1))
+    ed.insert_grid(one@) catch e
+        verdict.check("pasting a grid after the table", false, e.message())
+    grew: = arena.get_total_used() - before
+    verdict.check("a pasted cell and a pasted grid keep no copy of the tables", grew < copy / 4,
+        arena.text().s("\{grew\} bytes kept, against \{copy\} for a copy").take())
 
 priv fn filling()
     defer arena: = Arena(64 * 1024)

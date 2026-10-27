@@ -1,4 +1,4 @@
-// The page's menus and ribbon, and the table's own tools: moving between cells, sorting,
+// The page's menus and quick access bar, and the table's own tools: moving between cells, sorting,
 // filtering, the right-click menu, fitting a column, looks, copying and pasting, and removing a
 // whole block. Each is driven through the browser's own input events, as `main.mjs` drives the
 // rest, and checked by the saved source and its undo.
@@ -21,9 +21,15 @@ export function menus({ browser, js, until, press, type, select, click, clickBel
     })()`);
     const names = await js("Array.from(document.querySelectorAll('.menubar .top-menu:not([hidden]) > .menu-name'))" +
       ".map((b) => b.textContent).join(' ')");
-    check(names === "File Edit View", "opened from a file, the menu bar holds File (for Print), Edit and View; " +
-      "the ribbon holds the rest",
-      names);
+    check(names === "File Edit View Insert Format Table",
+      "opened from a file, the menu bar holds File (for Print), Edit, View, Insert, Format and Table", names);
+    const missing = await js("Array.from(document.querySelectorAll('.menubar .menu [data-cmd], .menubar .sub-name'))" +
+      ".filter((b) => !b.querySelector('svg.glyph path, svg.glyph text, svg.glyph circle')).map((b) => b.textContent)");
+    check(missing.length === 0, "every item of every menu carries its icon", missing.join(", "));
+    const table = await js("Array.from(document.querySelectorAll('.menu.context [data-cmd]')).map((b) => b.dataset.cmd).join(' ')");
+    const tableMenu = await js("Array.from(document.querySelectorAll('.top-menu:has([data-cmd=\"row-above\"]) [data-cmd]'))" +
+      ".map((b) => b.dataset.cmd).join(' ')");
+    check(table.length > 0 && table === tableMenu, "the Table menu holds the right-click menu's commands", tableMenu);
     const edit = '.top-menu:has([data-cmd="find"])';
     const view = '.top-menu:has([data-cmd="contents"])';
     await click(`${edit} > .menu-name`);
@@ -54,7 +60,7 @@ export function menus({ browser, js, until, press, type, select, click, clickBel
     const start = table(`| "pear" | 3 |\n| "fig" | 1 |\n| "apple" | 2 |\n`);
     await load(start);
     const label = () => js("document.activeElement.getAttribute('aria-label')");
-    const chosen = (r, c) => js(`document.activeElement.matches('#doc td.chosen[data-r="${r}"][data-c="${c}"]')`);
+    const chosen = (r, c) => js(`document.activeElement.matches('#doc td.chosen[data-r="${r}"][data-c="${c}"] > .cell-catch')`);
     await openCell('#doc td[data-r="0"][data-c="0"]');
     await press("ArrowRight");
     check(await chosen(0, 1), "Right at the end of an open cell's text moves on to the next cell");
@@ -105,7 +111,7 @@ export function menus({ browser, js, until, press, type, select, click, clickBel
       "and the column's arrow shows that it is narrowed");
     await click('#doc td[data-r="0"][data-c="0"]');
     await press("ArrowDown");
-    check(await js("document.activeElement.matches('#doc td.chosen[data-r=\"2\"][data-c=\"0\"]')"),
+    check(await js("document.activeElement.matches('#doc td.chosen[data-r=\"2\"][data-c=\"0\"] > .cell-catch')"),
       "Down passes over a row the filter hides");
     await press("Escape");
     await click('#doc th.name[data-c="1"] .filter-arrow');
@@ -180,8 +186,8 @@ export function menus({ browser, js, until, press, type, select, click, clickBel
       "a double-click on the border between two cells fits the column too");
   },
 
-  // The ribbon, looks on text and cells, and copying and pasting cells as Excel does.
-  async ribbon() {
+  // The quick access bar, looks on text and cells, and copying and pasting cells as Excel does.
+  async quickBar() {
     const pasteInto = (selector, text) => js(`(() => {
       const data = new DataTransfer();
       data.setData("text/plain", ${JSON.stringify(text)});
@@ -189,23 +195,100 @@ export function menus({ browser, js, until, press, type, select, click, clickBel
         { clipboardData: data, bubbles: true, cancelable: true }));
     })()`);
     await load(`${H}abcdef\n`);
+    // A right-click on a menu's item adds it to the bar, and the chooser takes it off again. The
+    // choice is kept in this browser.
+    const onBar = (cmd) => js(`!!document.querySelector('.quick [data-cmd="${cmd}"]')`);
+    check(!await onBar("divider"), "the bar starts without Divider");
+    const tools = () => js("Array.from(document.querySelectorAll('.quick > *')).map((e) => " +
+      "e.classList.contains('sep') ? '|' : e.dataset.cmd || e.dataset.colour || e.dataset.quick).join(' ')");
+    check(await tools() === "undo redo find | table | kind-list strong emphasis color fill align-left align-center " +
+      "align-right bullets | autosum-sum", "the bar keeps the menus' order, a line between two menus' tools, " +
+      "and no Save where the menu has none", await tools());
+    await click('.top-menu:has([data-cmd="divider"]) > .menu-name');
+    await rightClick('.menubar [data-cmd="divider"]');
+    await click(".quick-offer button");
+    check(await onBar("divider") && await js("JSON.parse(localStorage.getItem('ksmd.quick')).includes('divider')"),
+      "a right-click on a menu's item adds it to the bar, and this browser keeps the choice");
+    check((await tools()).includes("| table divider |"), "where its menu puts it, whenever it was added",
+      await tools());
+    await select(0, 0, 6);
+    await click('.quick [data-cmd="divider"]');
+    check((await source()).includes("---"), "and its tool on the bar runs it", await source());
+    await menu("undo");
+    await menu("quick-choose");
+    check(await js("document.querySelector('.quick-choose').open && " +
+      "document.querySelector('.quick-choose input[value=\"divider\"]').checked"),
+      "View, Quick access bar opens the chooser, with the bar's tools ticked");
+    await click('.quick-choose input[value="divider"]');
+    check(!await onBar("divider"), "taking the tick away takes the tool off the bar");
+    await js("document.querySelector('.quick-choose input[value=\"table-csv\"]').scrollIntoView({ block: 'center' })");
+    await click('.quick-choose input[value="table-csv"]');
+    check(await onBar("table-csv"), "and any command can be put on it");
+    await click(".quick-choose .quick-buttons button");
+    check(!await onBar("table-csv"), "Reset brings back the tools the bar starts with");
+    await click(".quick-choose .quick-buttons button:last-child");
+    check(!await js("document.querySelector('.quick-choose').open"), "and Close closes the chooser");
+    // The bar shows what stands at the caret, as Word's does.
+    await load(`${H}# T*odo*\n\nab **cd** ef\n\n\`\`\`\ncode\n\`\`\`\n`);
+    const pressed = (cmd) => js(`document.querySelector('.quick [data-cmd="${cmd}"]').getAttribute('aria-pressed') === 'true'`);
+    const kind = () => js("document.querySelector('.quick [data-quick=\"kind-list\"]').value");
+    const state = (k, cmd) => until(`document.querySelector('.quick [data-quick="kind-list"]').value === '${k}' && ` +
+      `document.querySelector('.quick [data-cmd="${cmd}"]').getAttribute('aria-pressed') === 'true'`);
+    await select(0, 0, 3);
+    check(await state("h1", "emphasis") && !await pressed("strong"),
+      "in an italic word of a heading, the kind list shows Heading 1 and Emphasis is pressed in",
+      `${await kind()} ${await pressed("emphasis")}`);
+    await select(1, 0, 4);
+    check(await state("p", "strong") && !await pressed("emphasis"), "in a strong word of a paragraph, Strong is");
+    await select(1, 0, 1, 7);
+    check(await until("document.querySelector('.quick [data-cmd=\"strong\"]').getAttribute('aria-pressed') === 'false'"),
+      "over text only part of which is strong, Strong is not pressed in");
+    await select(2, 0, 2);
+    check(await until("document.querySelector('.quick [data-quick=\"kind-list\"]').value === 'c'") &&
+      await js("document.querySelector('.quick [data-cmd=\"strong\"]').disabled && " +
+        "document.querySelector('.menubar [data-cmd=\"emphasis\"]').disabled"),
+      "in a code block, which holds literal text, the marks cannot be pressed");
+    await select(0, 0, 1);
+    check(await until("!document.querySelector('.quick [data-cmd=\"strong\"]').disabled"),
+      "and in a heading they can");
+
+    // Clear takes a text's colour away, and an alignment or a list pressed again turns off.
+    await load(`${H}a[bcd]{color="#c00000"}ef\n`);
+    await select(0, 0, 0, 6);
+    await menu("look-clear");
+    await saves("in text, Clear takes the colour away too", `${H}abcdef\n`);
+    await select(0, 0, 1);
+    await click('.quick [data-cmd="align-center"]');
+    await saves("Centre centres the paragraph", `${H}{align="center"}\nabcdef\n`);
+    await click('.quick [data-cmd="align-center"]');
+    await saves("and Centre pressed again takes the alignment off, as in Excel and Word", `${H}abcdef\n`);
+    await menu("bullets");
+    await saves("Bulleted list makes a list item", `${H}- abcdef\n`);
+    await menu("bullets");
+    await saves("and pressed again, a paragraph", `${H}abcdef\n`);
+    await load(`${H}:::table name="t"\n| "a" |\n| 1 |\n:::\n`);
+    await click('#doc td[data-r="0"][data-c="0"]');
+    await click('.quick [data-cmd="align-right"]');
+    await saves("Right aligns the chosen cell", `${H}:::table name="t"\n| "a" |\n| 1 {align="right"} |\n:::\n`);
+    await click('.quick [data-cmd="align-right"]');
+    await saves("and pressed again takes the cell's alignment off", `${H}:::table name="t"\n| "a" |\n| 1 |\n:::\n`);
+
+    await load(`${H}abcdef\n`);
     await select(0, 0, 1, 4);
-    check(await js("document.querySelector('.ribbon [data-colour=\"fill\"] .apply').disabled && " +
-      "document.querySelector('.ribbon [data-ribbon=\"size\"]').disabled"),
+    check(await js("document.querySelector('.quick [data-colour=\"fill\"] .apply').disabled && " +
+      "document.querySelector('.menubar [data-cmd=\"size-14\"]').disabled"),
     "in text, the fill and size tools cannot be pressed: they act on table cells");
-    await click('.ribbon [data-colour="color"] .apply');
+    await click('.quick [data-colour="color"] .apply');
     await saves("the font colour colours the selected text", `${H}a[bcd]{color="#c00000"}ef\n`);
     check(await js("getComputedStyle(document.querySelector('#doc span.coloured')).color") === "rgb(192, 0, 0)",
       "and the page shows it in that colour");
     await menu("undo");
     await select(0, 0, 0);
-    await click('.ribbon [data-cmd="align-center"]');
+    await click('.quick [data-cmd="align-center"]');
     check((await source()).startsWith(`${H}{align="center"}\n`), "Centre aligns the paragraph");
     check(await js("document.querySelector('#doc p').style.textAlign") === "center", "and the page shows it");
-    await click('.ribbon [data-cmd="look-clear"]');
+    await menu("look-clear");
     await saves("in text, Clear takes the alignment away", `${H}abcdef\n`);
-    check(await js("!document.querySelector('.ribbon .table-group, .ribbon [data-cmd=\"row-above\"]')"),
-      "the ribbon holds no table commands: the table's right-click menu holds them");
 
     const table = `${H}:::table name="t"\n| "a" | "b" |\n| 1 | 2 |\n| 3 | 4 |\n:::\n`;
     await load(table);
@@ -217,22 +300,18 @@ export function menus({ browser, js, until, press, type, select, click, clickBel
     await click('#doc td[data-r="1"][data-c="1"]', SHIFT);
     check(await js("document.querySelectorAll('#doc .in-range').length") === 4,
       "Shift+click chooses a range of cells");
-    await click('.ribbon .split[data-colour="fill"] .more');
+    await click('.quick .split[data-colour="fill"] .more');
     await click('.palette .swatches button[title="#92d050"]');
     await saves("a colour chosen in the palette fills every cell of the range", `${H}:::table name="t"\n| "a" | "b" |\n` +
       `| 1 {fill="#92d050"} | 2 {fill="#92d050"} |\n| 3 {fill="#92d050"} | 4 {fill="#92d050"} |\n:::\n`);
     check(await js(`getComputedStyle(document.querySelector('#doc td[data-r="0"][data-c="0"]')).backgroundColor`) ===
       "rgb(146, 208, 80)", "and the cells show it");
-    await click('.ribbon [data-cmd="align-right"]');
+    await click('.quick [data-cmd="align-right"]');
     check((await source()).includes('| 1 {fill="#92d050" align="right"} |'), "Right aligns the range's cells");
-    const sizes = await js("Array.from(document.querySelectorAll('.ribbon [data-ribbon=\"size\"] option'))" +
-      ".map((o) => o.value).filter((v) => /^\\d/.test(v)).join(' ')");
-    check(sizes === "9 10 11 12 14 18 24", "the size list offers the few sizes people choose", sizes);
-    await js(`(() => {
-      const size = document.querySelector('.ribbon [data-ribbon="size"]');
-      size.value = "14";
-      size.dispatchEvent(new Event("change"));
-    })()`);
+    const sizes = await js("Array.from(document.querySelectorAll('.menubar [data-cmd^=\"size-\"]'))" +
+      ".map((b) => b.dataset.cmd.slice(5)).filter((v) => /^\\d/.test(v)).join(' ')");
+    check(sizes === "9 10 11 12 14 18 24", "Format, Font size offers the few sizes people choose", sizes);
+    await menu("size-14");
     check((await source()).includes('| 4 {fill="#92d050" size=14 align="right"} |'), "and a size sizes the range's cells");
     const copied = await js(`(() => {
       const data = new DataTransfer();
@@ -291,8 +370,53 @@ export function menus({ browser, js, until, press, type, select, click, clickBel
     check(reading < full, "View, Reading width keeps lines short", `${full} -> ${reading}`);
     await menu("width-full");
     check(await width() === full, "and Full width fills the window again");
-    check(await js("document.querySelectorAll('.ribbon [data-cmd^=\"align-\"] svg').length") === 3,
+    check(await js("document.querySelectorAll('.quick [data-cmd^=\"align-\"] svg').length") === 3,
       "each alignment tool draws its own lines");
+  },
+
+  // Each table and format command that no other check presses, pressed once from its menu where
+  // it can act: it must change the source.
+  async everyCommand() {
+    const table = `${H}:::table name="t" formats=",number:2"\n| "a" | "b" |\n| 1 | 2 |\n| 3 | 4 |\n| | |\n:::\n`;
+    const grouped = `${H}:::table name="t" groups="rows 2-3"\n| "n" |\n| 1 |\n| 2 |\n| 3 |\n:::\n`;
+    const cell = (r, c) => click(`#doc td[data-r="${r}"][data-c="${c}"]`);
+    const twoRows = async () => {
+      await cell(0, 0);
+      await press("ArrowDown", SHIFT);
+    };
+    // Show detail acts on a hidden row, which only the menu bar reaches.
+    const fromBar = async (cmd) => {
+      const own = `[data-cmd="${cmd}"]`;
+      await click(`.top-menu:has(${own}) > .menu-name`);
+      await click(`.menubar .sub:has(${own}) > .sub-name`);
+      await click(`.menubar ${own}`);
+    };
+    const cases = [
+      ["format-number", table, () => cell(0, 0)],
+      ["format-fewer", table, () => cell(0, 1)],
+      ["column-left", table, () => cell(0, 0)],
+      ["group-show", grouped, async () => {
+        await cell(1, 0);
+        await menu("group-hide");
+      }, fromBar],
+      ["autosum-average", table, twoRows],
+      ["autosum-count", table, twoRows],
+      ["autosum-min", table, twoRows],
+      ...["9", "10", "11", "12", "18", "24"].map((n) => [`size-${n}`, table, () => cell(0, 0)]),
+      ["size-default", table, async () => {
+        await cell(0, 0);
+        await menu("size-9");
+      }],
+      ...["h3", "h4", "h5", "h6"].map((h) => [h, `${H}Text.\n`, () => select(0, 0, 2)]),
+    ];
+    for (const [cmd, start, ready, how = menu] of cases) {
+      await load(start);
+      await ready();
+      const before = await source();
+      await how(cmd);
+      const after = await source();
+      check(after !== before, `${cmd} changes the document`, JSON.stringify(after));
+    }
   },
 
   };

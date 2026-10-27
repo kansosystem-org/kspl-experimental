@@ -3,7 +3,6 @@
 //< **The code here only builds responses**; the accept loop in `kssrv/main.kspl` sends them.
 //< **`Rc<|Conn|>` manages only the memory's lifetime.** `conn_close` frees the socket, the arena
 //< and the two buffers explicitly.
-import "kssrv/pilot"
 import "std/chars"
 import "std/fs"
 import "std/http"
@@ -33,7 +32,6 @@ const CONN_ARENA_CHUNK: Sz = 16 * 1024 //< how far each connection's working are
 struct Stats
     started_s: I64 //< wall-clock time (sys.clock is CPU time, so it cannot measure uptime)
     requests: I64
-    commands: I64 //< how many manoeuvres were returned to the car
     connections_total: I64
     connections_open: I64
     connections_refused: I64 //< how many arrived while every slot was taken
@@ -42,6 +40,11 @@ $stats: Stats = ::{}
 $stop_asked_by: I64 = 0I64 //< the serial of the connection that asked the server to stop
     //< **0 while nobody has asked** (`POST /api/stop`). The accept loop stops once that connection
     //< is gone (`open_serial`), so the answer has gone out first.
+
+$used_us: I64 = 0I64 //< when someone last used the server, on the monotonic clock
+    //< **A request arriving sets it, and so does a page letting go of its hold** (`table_drop`).
+    //< `--idle` counts from it (`serve` in `kssrv/main.kspl`), so its wait starts when the last
+    //< page closes, however long that page held the server.
 
 // ==========================================
 // Everything needed to handle a request; the accept loop holds one and passes it down.
@@ -57,9 +60,6 @@ struct Ctx
     // The token for local use. **Empty means the server faces outward**, with no file endpoints
     // either (one decision; `--local` in `kssrv/main.kspl`).
     token: U8[]
-    p: pilot.Pilot$@ //< the policy that chooses the manoeuvre returned to the car
-        //< **Null for local use**, which trains none (`main` in `kssrv/main.kspl`); the car's
-        //< endpoints are then a 404 (`Reach` in `kssrv/api.kspl`).
     // The file returned for `/` and `/index.html`. **Empty means the `index.html` under the root.**
     // Only whoever starts the server names it (`--page` in `kssrv/main.kspl`; the agreement is
     // "Where it listens" in `docs/SPEC-local-server.md`).
@@ -199,6 +199,11 @@ fn table_drop(t: Conn_table$@, slot: Sz, lg: Log$@) //< closes a slot's connecti
     if t.slots[slot].is_empty()
         return
     serial: = t.slots[slot].get().serial
+    // Caution: **A page letting go counts as a use.** Counted from the page's last request
+    // instead, a page held open past `--idle` stops the server the moment it closes, even for a
+    // reload.
+    if t.slots[slot].get().holding
+        used_us = sys.mono_us()
     conn_close(t.slots[slot].get())
     // Assigning the empty value releases the stored handle.
     t.slots[slot] = Rc<|Conn|>.empty()
@@ -230,12 +235,17 @@ fn queue_file(c: Conn$@, ctype: U8[], file: io.File_stream, length: Sz, keep: Bo
     //< Queues a 200 whose body is `length` bytes of `file`, sent as the connection drains
     //< The head names `length` (the size `stat` gave). **The connection then holds one chunk at a
     //< time, not the file** (`conn_send` in `kssrv/main.kspl`). It owns `file` from here on.
+    $owned: = file
     before: = c.outbuf.len
     queue_to_head(c, 200, ctype, length, keep)
     // A HEAD names the length and takes no body; a head the builder refused added nothing.
-    if c.answers_head || c.outbuf.len == before
+    // Caution: **Close a file no byte of which goes out** (an empty file too). Only a chunk read
+    // closes it later (`refill_from_file`). On Windows an open file cannot be replaced, so a
+    // page holding the connection made every save of that file fail.
+    if c.answers_head || c.outbuf.len == before || length == 0
+        owned.free()
         return
-    c.file = file
+    c.file = owned
     c.file_left = length
 
 fn peer_count(t: Conn_table$@, peer: U8[]): Sz //<

@@ -1,8 +1,8 @@
 //< The size caps, and how a file near a cap is split (not the suite)
 //< **Where a file splits is decided when it comes near the cap** (Principle 3).
-//< Caution: **Do not stop at printing a notice.** Shown only on screen, the README keeps saying
-//< "no file exceeds it" while out of date, and **nobody sees that it is** (Principle 7). A
-//< function's length is lint's ([H0803], which `make lint` refuses), in both notations.
+//< Caution: **Do not stop at printing a notice.** Shown only on screen, it is read past, and the
+//< file reaches the cap with no split written. A function's length is lint's ([H0803], which
+//< `make lint` refuses), in both notations.
 import "std/chars" // judging one character's case
 import "std/ds" { List }
 import "std/mem" { Arena }
@@ -10,7 +10,7 @@ import "std/str" { Str_builder }
 import "std/strfmt" as _strfmt
 import "std/strnum"
 import "std/verdict"
-import "tests/support/conventions_scan" as scan + { Sample }
+import "tests/support/conventions_scan" as scan
 import "tests/support/harness"
 
 priv const MAX_FILE_LINES: Sz = 1000
@@ -54,35 +54,13 @@ priv fn check_sizes(arena: Arena$@)
 
 priv const PLAN_HEAD: U8[] = "Files near the limit and how they split" //<
     //< The heading of the section that says how a file splits
-    //< Below is the sentence that says explicitly that the section is empty. **Both are text from
-    //< the README**: change these two and the README in the same commit.
+    //< **It is text from the README**: change it and the READMEs in the same commit.
 priv fn plan_readme_of(rel: U8[], arena: Arena$@): U8[] //<
     //< The README that says how a file splits: the one in the file's top-level folder
     //< For example, `ksplc/lsp/nav.kspl` is planned in `ksplc/README.md`.
     if cut: = rel.find_char('/')
         return arena.text().s(rel.sub(0, cut)).s("/README.md").take()
     return "README.md"
-priv const NONE_LEAD: U8[] = "No file" //<
-    //< The two texts of the sentence that says the section is empty
-    //< Caution: **Make both texts distinctive.** Matching `lines` alone hits text about the cap
-    //< itself, such as "1000 lines per file".
-priv const NONE_TAIL: U8[] = "exceeds 900 lines"
-
-priv fn claims_none(line: U8[], _arena: Arena$@): Bool //<
-    //< Whether that line says explicitly "there is no file over it here"
-    //< **The line count itself is not checked here** (`check_plans` below does); built into the
-    //< judgment, it would make the sample table impossible to write.
-    return line.find_str(NONE_LEAD).is_some() && line.find_str(NONE_TAIL).is_some()
-
-// The texts that hit `claims_none` and the texts that do not.
-priv const NONE_SAMPLES: Sample[_] = ::{
-    Sample::{ .text = "**No file in ksplc exceeds 900 lines today.** Next…", .hits = true },
-    Sample::{ .text = "No file in std exceeds 900 lines", .hits = true },
-    Sample::{ .text = "The files that exceed 900 lines are the following two", .hits = false },
-    Sample::{ .text = "There is no file near the limit", .hits = false },
-    Sample::{ .text = "1000 lines per file", .hits = false },
-}
-
 priv fn heading_depth(line: U8[]): Sz //<
     //< The depth (the count of `#`) if that line is a heading, and 0 otherwise
     $n: Sz = 0
@@ -150,53 +128,9 @@ priv const PLAN_SAMPLES: Plan_sample[_] = ::{
         .rel = "a/c.kspl", .hits = false },
 }
 
-priv fn covered_by(readme_rel: U8[]): U8[] //<
-    //< From a README's path, the prefix it is responsible for (for `a/b/README.md`, `a/b/`)
-    if cut: = readme_rel.rfind_char('/')
-        return readme_rel.sub(0, cut + 1)
-    return ""
-
-priv fn claim_under(line: U8[], readme_rel: U8[], arena: Arena$@): U8[] //<
-    //< The prefix one "there is no file over it" line speaks for
-    //< Caution: **The root README's claim carries its own scope.** It covers every package. Read by
-    //< its folder, the line matches no file and passes next to one over the cap (Principle 8).
-    //< The scope comes from the claim's words ("No file in kspeg exceeds 900 lines" is `kspeg/`'s).
-    //< When it names none, it is its README's folder.
-    if lead: = line.find_str(NONE_LEAD)
-        if tail: = line.find_str(NONE_TAIL)
-            if tail > lead
-                from: = lead + NONE_LEAD.len
-                mid: = line.sub(from, tail - from).trim_spaces()
-                if mid.starts_with("in ")
-                    name: = mid.sub_from(3).trim_spaces()
-                    if name.len > 0 && name.find_char(' ').is_none()
-                        return arena.text().s(name).s("/").take()
-    return covered_by(readme_rel)
-
-priv struct Scope_sample //< one claim, and the prefix it should speak for
-    line: U8[]
-    readme: U8[]
-    under: U8[]
-
-priv const SCOPE_SAMPLES: Scope_sample[_] = ::{
-    Scope_sample::{ .line = "**No file in kspeg exceeds 900 lines today.**", .readme = "README.md",
-        .under = "kspeg/" },
-    // **A claim naming no folder falls back to its own folder.**
-    Scope_sample::{ .line = "No file exceeds 900 lines here.", .readme = "a/b/README.md",
-        .under = "a/b/" },
-    // **What comes between is not one word, so it names no folder.**
-    Scope_sample::{ .line = "No file of the two exceeds 900 lines", .readme = "a/b/README.md",
-        .under = "a/b/" },
-    Scope_sample::{ .line = "No file in std exceeds 900 lines", .readme = "README.md",
-        .under = "std/" },
-}
-
 priv fn check_plans(near: List<|U8[]|>@, files: Sz, arena: Arena$@) //<
     //< Whether a file near the cap is named in the README with how it splits
     //< `files` is how many files were measured: with none near the cap, the walk still saw them.
-    //< **Two things are checked together**: (1) the section names the file that went over; (2)
-    //< under a README saying "there is no file over it", none has. With only one, a name next to a
-    //< stale "there is none" passes green.
     $bad: = List<|U8[]|>(arena)
     for rel in near
         readme_rel: = plan_readme_of(rel, arena)
@@ -210,32 +144,7 @@ priv fn check_plans(near: List<|U8[]|>@, files: Sz, arena: Arena$@) //<
     verdict.check_list(n1, files, "files", bad@,
         "where it splits is decided when it comes near the cap (Principle 3)")
 
-    $stale: = List<|U8[]|>(arena)
-    $claims: Sz = 0
-    for readme_rel in harness.tracked_matching(U8[][]::{ "*README.md" })
-        ls: = harness.read_under_root(readme_rel).lines(arena)
-        for ln in ls
-            if !claims_none(ln, arena)
-                continue
-            claims += 1
-            under: = claim_under(ln, readme_rel, arena)
-            // Caution: **Check the line count here too.** The README's number and `WARN_FILE_LINES`
-            // are written separately, so if not tied, one of them changes alone (Principle 4).
-            if ln.find_str(arena.text().s("\{WARN_FILE_LINES\}").take()).is_none()
-                stale
-                    .push(arena.text().s(readme_rel).s(": the \"").s(NONE_LEAD)
-                    .s("\" line says a number other than \{WARN_FILE_LINES\}").take())
-            for rel in near
-                if under.len > 0 && rel.starts_with(under)
-                    stale
-                        .push(arena.text().s(readme_rel).s(": it says \"there is none\" and ")
-                        .s(rel).s(" is over it").take())
-    verdict.check_list("a README saying \"no file is over it\" really has not one", claims, "lines",
-        stale@, "where one is over, delete that sentence and write how it splits")
-
 priv fn check_fires(arena: Arena$@)
-    scan.check_samples("the judgment of \"no file is over it\" can fire", Sample[]::NONE_SAMPLES,
-        "none_samples", claims_none, arena)
     $k: = List<|U8[]|>(arena)
     for s in PLAN_SAMPLES
         if planned(s.readme, s.rel, arena) != s.hits
@@ -246,15 +155,6 @@ priv fn check_fires(arena: Arena$@)
     verdict.check_list("the judgment of whether the splitting section names it can fire",
         PLAN_SAMPLES.len, "samples", k@,
         "the table of what is hit and what is not is `plan_samples`")
-    $u: = List<|U8[]|>(arena)
-    for s in SCOPE_SAMPLES
-        got: = claim_under(s.line, s.readme, arena)
-        if !got.equals(s.under)
-            u
-                .push(arena.text().s("\"").s(s.line).s("\" should speak for ").s(s.under)
-                .s(" and came out ").s(got).take())
-    verdict.check_list("the reading of what a \"there is none\" line speaks for can fire",
-        SCOPE_SAMPLES.len, "samples", u@, "the table of claims is `scope_samples`")
 
 // ==========================================
 // The hover's widths follow the formatter's. A comment past the width is the formatter's to cut

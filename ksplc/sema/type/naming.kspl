@@ -86,7 +86,7 @@ impl Env
         if plain: = r.variance_stripped(type_id)
             return r.instance_c_name_to(plain, res)
         base_str: = r.get_str(type_id)
-        return base_str.mangle_type_name_to(res)
+        return base_str.mangle_c_type_name_to(res)
 
     fn mangled_into(r: Self$@, type_id: I32, b: Str_builder$@): U8$[] //<
         //< type_id's mangled name, written afresh into b: valid until b is used again
@@ -139,11 +139,16 @@ impl Env
         //< Writes the instance's mangled name, the one it has in the type table and in C
         //< Caution: **Name an instance through here only.** A second spelling of the rule makes
         //< two names for one instance, and C fails with `redefinition` or `unknown type name`.
+        //< The arguments' `std.lang.` is dropped before the `_` joins them: after it, the module
+        //< would not open a name and would stay. Caution: **Mangle the joined text whole**, or a
+        //< separator is lost at the join and `f<|-3|>` takes `f<|3|>`'s name.
         defer $full: = Str_builder()
         full.s(inst.template)
         if inst.args.len > 0
-            r.type_args_to(inst.args, full.s("_"))
-        return full.slice().mangle_type_name_to(w)
+            defer $args: = Str_builder()
+            r.type_args_to(inst.args, args)
+            args.slice().drop_c_type_module_to(full.s("_"))
+        return full.slice().mangle_c_type_name_to(w)
 
 struct Mangle_seen //< the record for emitting a composite type "once per mangled name"
     //< Caution: **Do not write how duplicates are skipped anywhere but here.** Two generators walk

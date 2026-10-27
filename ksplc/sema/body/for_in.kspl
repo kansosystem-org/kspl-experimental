@@ -75,13 +75,16 @@ impl Ast_node
         if drives_by_next(c, coll_id)
             r.build_step_loop(item_id, coll_ref)
             return
-        r.build_index_loop(item_id, coll_ref)
+        r.build_index_loop(item_id, coll_ref, c.env.is_slice(c.env.strip_ptr(coll_id)))
 
-    priv fn build_index_loop(r: Self$@, item_id: Ast_node$@, coll_ref: Ast_node$@) //<
+    priv fn build_index_loop(r: Self$@, item_id: Ast_node$@, coll_ref: Ast_node$@, over_slice: Bool) //<
         //< The form that loops by index
-        //< `for _%for_idx_sN: = 0; _%for_idx_sN < coll.len; _%for_idx_sN += 1 { … }`, leaving the
-        //< indexing to sema's index path. The index is untyped: an `I32` widening to `Sz` passes
-        //< both the `.len` comparison and `get()`.
+        //< `for _%for_idxN: = 0; _%for_idxN < coll.len; _%for_idxN += 1 { … }`, leaving the
+        //< indexing to sema's index path. The index is untyped: an `I32` widening to `Sz`
+        //< passes both the `.len` comparison and `get()`.
+        //< **Over a slice the element is read as `(coll.ptr + idx)$`**: the condition already
+        //< holds the index inside, so the index path's bounds check and call only cost. Any
+        //< other subject keeps its own `[]`, which its type may define.
         loc: = r.loc
         idx_name: = base_c_name.made_name(next_temp_name("for_idx"))
 
@@ -96,10 +99,17 @@ impl Ast_node
             .add_child(Ast_node(.k_assign_op, "+=", loc))
             .add_child(Ast_node.build_int_literal(1, loc))
 
-        idx_expr: = Ast_node(.k_expr_postfix, "postfix", loc)
+        $idx_expr: = Ast_node(.k_expr_postfix, "postfix", loc)
             .add_child(Ast_node.build_ident(coll_ref.text, 0, loc))
             .add_child(Ast_node(.k_literal, "[", loc))
             .add_child(Ast_node.build_ident(idx_name, 0, loc))
+        if over_slice
+            at: = Ast_node(.k_expr, "expr", loc)
+                .add_child(Ast_node.build_field_access(coll_ref.text, 0, "ptr", 0, loc))
+                .add_child(Ast_node(.k_literal, "+", loc))
+                .add_child(Ast_node.build_ident(idx_name, 0, loc))
+            idx_expr = Ast_node(.k_expr_postfix, "postfix", loc).add_child(at)
+                .add_child(Ast_node(.k_literal, "$", loc))
 
         idx_decl: = Ast_node.build_inferred_var_decl(Ast_node.build_ident(idx_name, 0, loc),
             Ast_node.build_int_literal(0, loc), loc)
@@ -170,7 +180,7 @@ priv fn next_temp_name(prefix: U8[]): U8[] //< the temporary variable's name
     //< Numbered separately from parse's `for_coll`.
     for_in_counter += 1
     b: = base_core.arena.text()
-    b.s(prefix).s("_s").s("\{for_in_counter\}")
+    b.s(prefix).s("\{for_in_counter\}")
     return b.take()
 
 fn enter_fn_serial(): Sz //< starts the numbering for one function body

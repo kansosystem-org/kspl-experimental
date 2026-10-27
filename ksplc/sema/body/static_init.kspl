@@ -1,0 +1,339 @@
+//< The one rule for what a top-level initializer holds, which Lower and both backends follow
+//< A top-level `const` or `$` variable sits in static memory, so its initializer is fixed at
+//< compile time. **Sema decides each initializer once**, and every later stage reads the decision
+//< instead of deciding again:
+//<
+//< * **A scalar is a folded value.** An integer, `Bool`, character, scalar enum or floating-point
+//<   node that folds is recorded with its value (`Static_state.values`). Both backends write that
+//<   value; neither writes the expression.
+//< * **Anything else is a shape both backends write as it stands**: a compound literal, a string,
+//<   `null`, a function, a constant's name, a global's address, a slice over an array, a pointer
+//<   cast, a tagged union's variant. A conditional with a folded condition is the branch it picks.
+//< * **The rest is refused here**, with ksplc's own diagnostic, never left to the C compiler or
+//<   LLVM.
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_place" as base_ast_place
+import "ksplc/sema/body/postfix" as sema_body_postfix
+import "ksplc/sema/decl/eval" as sema_decl_eval
+import "ksplc/sema/decl/fold_float" as sema_decl_fold_float
+import "ksplc/sema/session/ctx" { Sema_ctx }
+import "ksplc/sema/session/state" { Static_value }
+import "ksplc/sema/type/query" as sema_type_query
+import "std/ds" { Map }
+import "std/str"
+
+priv enum Bad_init_why //<
+    //< why a form cannot stand in a top-level initializer, which picks the message
+    run_time //< a call, a dereference or a variable's value
+    cycle //< a cycle among constant definitions
+    part_read //< a part of another value: an element, a field, a slice's `.len` or `.ptr`
+    no_address //< the address of what is no global, nor a field or a fixed element of one
+    not_static //< a form that is neither a folded value nor a shape the backends write
+    reported //< the fold has reported it already (an overflow, a division by zero, a deep chain)
+
+priv struct Bad_init //< where a form that cannot stand in a top-level initializer was found
+    node: Ast_node$@
+    why: Bad_init_why
+
+priv struct Init_walk //< the constants one initializer's walk passes through
+    //< Caution: **Track them with a Map** (keyed by the declaration node's address). A List goes
+    //< cubic and **never finishes**. An empty Map takes no memory (Map.new in std/ds.kspl).
+    seen: Map<|Sz, Bool|>$@ //< the constants on the path from the initializer, to stop a cycle
+    clean: Map<|Sz, Bool|>$@ //<
+        //< The constants whose initializers classify_static walked to the end with nothing found
+        //< Caution: **Do not walk a declaration twice once it is known clean.** A `k_expr_path`
+        //< and its `k_identifier` point at one reference, so the cost becomes 2^N. **Keep it to
+        //< this one walk.** Across declarations it would remember "clean" before `def_node` is
+        //< linked and let a cycle by (the case const_cycle in tests/negative/const.kspl).
+    no_run_time: Map<|Sz, Bool|>$@ //< the same for find_run_time_form, which looks for less
+
+impl Sema_ctx
+    fn static_value(r: Self$@, node: Ast_node$@): Static_value? //<
+        //< The folded value sema recorded for a top-level initializer's node, or none
+        //< None means the node is a shape, written as it stands, or no top-level initializer.
+        return r.statics.values.get(Sz::node)
+
+    fn static_pick(r: Self$@, node: Ast_node$@): Ast_node$@? //<
+        //< The branch a top-level conditional picks, where its value is no scalar
+        return r.statics.picks.get(Sz::node)
+
+    priv fn holds_scalar(r: Self$@, type_id: I32): Bool //<
+        //< Whether a value of the type is one folded number: an integer, `Bool`, float or scalar enum
+        if type_id == 0
+            return false
+        repr: = r.env.scalar_repr_id(type_id)
+        return r.env.is_integer(repr) || r.env.is_bool(repr) || r.env.is_float(repr)
+
+impl Ast_node
+    fn check_static_initializer(r: Self$@, c: Sema_ctx$@) //<
+        //< Checks a top-level variable's or constant's initializer and records its decision
+        //< **Run it once every top-level initializer is typed** (`run` in infer.kspl): a fold reads
+        //< the operands' types, and the value recorded is the value the backends write.
+        defer $seen: = Map<|Sz, Bool|>(null)
+        defer $clean: = Map<|Sz, Bool|>(null)
+        defer $no_run_time: = Map<|Sz, Bool|>(null)
+        $walk: = Init_walk::{ .seen = seen@, .clean = clean@, .no_run_time = no_run_time@ }
+        bad: = r.classify_static(c, walk@) catch
+            return
+        switch bad.why
+        case .cycle
+            c.err(bad.node, "circular constant definition detected")
+        case .part_read
+            c.err(bad.node,
+                "a top-level initializer cannot read a part of another value (an element, a field, \
+                    a slice's `.len` or `.ptr`). Write the value itself, or name a `const` that \
+                    holds it")
+        case .run_time
+            c.err(bad.node, "top-level variable initializer is not a compile-time constant")
+        case .no_address
+            c.err(bad.node,
+                "a top-level initializer can take only a fixed address: a global's, or a field's or \
+                    a constant index's inside one. This place is reached through a pointer or a \
+                    computed index")
+        case .not_static
+            c.err(bad.node,
+                "this cannot stand in a top-level initializer. ksplc cannot compute it at compile \
+                    time, and it is no compound literal, string, `null`, function or global's \
+                    address. Compute the value in a function instead")
+        case .reported {}
+
+    priv fn classify_static(r: Self$@, c: Sema_ctx$@, walk: Init_walk$@): Bad_init? //<
+        //< The first form in r that cannot stand in a top-level initializer, recording the rest
+        if r == null || r.kind_id == .k_empty
+            return .none
+        if c.holds_scalar(r.type_id)
+            return r.fold_static(c, walk)
+        switch r.kind_id
+        case .k_null, .k_string, .k_expr_fn_lit, .k_enum_init, .k_implicit_enum,
+            .k_expr_implicit_dot
+            // A variant written alone is a tagged union's tag; a scalar one folded above.
+            return .none
+        case .k_expr_primary
+            return r.get_primary_inner_expr().classify_static(c, walk)
+        case .k_struct_literal, .k_expr_compound
+            for child in r.children
+                if child.kind_id != .k_expr_field_init
+                    continue
+                if idx: = child.get_field_init_index()
+                    if bad: = idx.classify_static(c, walk)
+                        return .some(bad)
+                if bad: = child.get_field_init_expr().classify_static(c, walk)
+                    return .some(bad)
+            return .none
+        case .k_enum_init_call
+            args: = r.find_child(.k_expr_args)
+            if args != null
+                for arg in args.children
+                    if arg.is_literal(",")
+                        continue
+                    if bad: = arg.classify_static(c, walk)
+                        return .some(bad)
+            return .none
+        case .k_expr_upcast
+            // `{ object's address, vtable }`: the object is a place, as for `@`.
+            inner: = r.get_upcast_inner()
+            if c.env.is_pointer(inner.type_id)
+                return inner.classify_static(c, walk)
+            return inner.classify_static_place(c, walk, r)
+        case .k_expr_ternary
+            return r.classify_static_choice(c, walk)
+        case .k_identifier, .k_expr_path, .k_type_path, .k_generic_path
+            return r.classify_static_name(c, walk)
+        case .k_expr_postfix
+            return r.classify_static_postfix(c, walk)
+        default
+            return r.not_static_why(c, walk)
+
+    priv fn fold_static(r: Self$@, c: Sema_ctx$@, walk: Init_walk$@): Bad_init? //<
+        //< Folds a scalar node and records its value, or says why it does not fold
+        if c.env.is_float(r.type_id)
+            c.statics.float_cut = false
+            switch r.fold_float(c)
+            case .some(f)
+                c.statics.values.set(Sz::r, .real(f))
+                return .none
+            case .none
+                if c.statics.float_cut
+                    r.report_float_cut(c)
+                    return .some(Bad_init::{ .node = r, .why = .reported })
+                return r.not_static_why(c, walk)
+        $folded: = true
+        $broken: = false
+        v: = c.fold_quietly(r, false) catch e
+            folded = false
+            switch e
+            case .not_constant {}
+            default
+                broken = true
+            fallback 0I64
+        if folded
+            c.statics.values.set(Sz::r, .whole(v))
+            return .none
+        if broken
+            // It overflows, divides by 0, or is too deep. **Report by folding again**, so one
+            // reporting point names the step that overflowed. A chain **not used** as a constant
+            // expression is folded only here, so its depth is reported here.
+            _loud: = r.eval_constexpr_internal(c, 0) catch 0I64
+            return .some(Bad_init::{ .node = r, .why = .reported })
+        return r.not_static_why(c, walk)
+
+    priv fn not_static_why(r: Self$@, c: Sema_ctx$@, walk: Init_walk$@): Bad_init? //<
+        //< Why r is refused: the run-time form inside it, or that it is no static form at all
+        if bad: = r.find_run_time_form(c, walk)
+            return .some(bad)
+        return .some(Bad_init::{ .node = r, .why = .not_static })
+
+    priv fn classify_static_choice(r: Self$@, c: Sema_ctx$@, walk: Init_walk$@): Bad_init? //<
+        //< A conditional whose value is no scalar: its condition folds, and it is the branch picked
+        //< Lower puts the branch in its place (`lower_expr_ternary`), so no backend sees the
+        //< choice.
+        cond: = r.get_ternary_cond()
+        switch c.try_eval_constexpr_wide(cond)
+        case .some(v)
+            chosen: = r.get_ternary_true() if v != 0 else r.get_ternary_false()
+            c.statics.picks.set(Sz::r, chosen)
+            return chosen.classify_static(c, walk)
+        case .none
+            return cond.not_static_why(c, walk)
+
+    priv fn classify_static_name(r: Self$@, c: Sema_ctx$@, walk: Init_walk$@): Bad_init? //<
+        //< A name whose value is no scalar: a function, or a constant written in its place
+        //< A variable's name is a run-time read. **Follow a constant's initializer**, or `const A
+        //< = B; const B = A;` slips through.
+        if r.def_node != null &&
+            (r.def_node.kind_id == .k_decl_var || r.def_node.kind_id == .k_decl_var_item)
+            return .some(Bad_init::{ .node = r, .why = .run_time })
+        if decl: = r.referenced_const(c)
+            return decl.classify_static_const(c, walk, r)
+        return .none
+
+    priv fn classify_static_const(r: Self$@, c: Sema_ctx$@, walk: Init_walk$@, at: Ast_node$@):
+        Bad_init? //<
+            //< The initializer of the constant declared at r, named at `at`
+        key: = Sz::r
+        if walk.seen.get(key).unwrap_or(false)
+            return .some(Bad_init::{ .node = at, .why = .cycle })
+        if walk.clean.get(key).unwrap_or(false)
+            return .none
+        walk.seen.set(key, true)
+        found: = r.get_var_decl_expr().classify_static(c, walk)
+        walk.seen.remove(key)
+        if found.is_none()
+            walk.clean.set(key, true)
+        return found
+
+    priv fn classify_static_postfix(r: Self$@, c: Sema_ctx$@, walk: Init_walk$@): Bad_init? //<
+        //< A postfix expression whose value is no scalar: an address, a slice or a pointer cast
+        op: = r.postfix_op_text()
+        recv: = r.get_postfix_receiver()
+        if op.equals("@")
+            return recv.classify_static_place(c, walk, r)
+        if !op.equals("::")
+            return r.not_static_why(c, walk)
+        if recv == null || recv.kind_id == .k_null
+            return .none
+        target: = c.env.get_clean_real_type(r.type_id)
+        if c.env.is_slice(target)
+            // A slice over an array: a run of elements, or a constant array by its name.
+            if c.env.is_array(c.env.get_clean_real_type(recv.type_id)) &&
+                (recv.kind_id == .k_struct_literal || recv.is_path_or_ident())
+                return recv.classify_static(c, walk)
+            return r.not_static_why(c, walk)
+        // A pointer cast: of an integer (a device register's address), or of another pointer.
+        if c.env.is_pointer(target) || c.env.is_fn_ptr(target)
+            if c.holds_scalar(recv.type_id) && !c.env.is_float(recv.type_id)
+                return recv.fold_static(c, walk)
+            if c.env.is_pointer(recv.type_id) || c.env.is_fn_ptr(recv.type_id)
+                return recv.classify_static(c, walk)
+        return r.not_static_why(c, walk)
+
+    priv fn classify_static_place(r: Self$@, c: Sema_ctx$@, walk: Init_walk$@, at: Ast_node$@):
+        Bad_init? //<
+            //< A place whose address the initializer takes at `at`: it must be a fixed address
+        if !r.is_static_place(c)
+            return .some(Bad_init::{ .node = at, .why = .no_address })
+        // Each constant index is a folded value the LLVM backend writes into its `getelementptr`.
+        $cur: = r
+        for cur.kind_id == .k_expr_postfix
+            if cur.postfix_op_text().equals("[")
+                if bad: = cur.get_postfix_member().fold_static(c, walk)
+                    return .some(bad)
+            cur = cur.get_postfix_receiver()
+        return .none
+
+    fn is_static_place(r: Self$@, c: Sema_ctx$@): Bool //<
+        //< Whether the place's address is fixed when the program links
+        //< The place is a global's name, or a field or a constant-index element of one, reached
+        //< without passing a pointer (whose target is known only at run time). genc writes it as
+        //< C's address constant (`&g.a.data[2]`), genllvm as a constant `getelementptr`.
+        if r.is_path_or_ident()
+            return true
+        if r.kind_id != .k_expr_postfix
+            return false
+        op: = r.postfix_op_text()
+        recv: = r.get_postfix_receiver()
+        if recv == null || c.env.is_pointer(recv.type_id)
+            return false
+        base_id: = c.env.get_clean_real_type(recv.type_id)
+        if op.equals(".")
+            return !c.env.is_result(base_id) && recv.is_static_place(c)
+        if op.equals("[") && c.env.is_array(base_id)
+            return sema_body_postfix.index_is_static_in_range(c, r.get_postfix_member(),
+                c.env.array_len(base_id)) && recv.is_static_place(c)
+        return false
+
+    priv fn find_run_time_form(r: Self$@, c: Sema_ctx$@, walk: Init_walk$@): Bad_init? //<
+        //< The first form in r that has no value fixed at compile time, searched depth-first
+        //< It names why a form is refused; classify_static has decided that it is.
+        if r == null
+            return .none
+        // `sizeof(g)` reads no value: its operand is not evaluated, only its type is taken.
+        if r.kind_id == .k_expr_sizeof || r.kind_id == .k_expr_offsetof
+            return .none
+        op: = r.get_postfix_op()
+        if op != null
+            // `x@` is C's "address constant"; it reads no value, so the receiver is not followed.
+            if op.text.equals("@")
+                return .none
+            // A function call and a dereference do not have their value fixed at link time.
+            if op.text.equals("(") || op.text.equals("$")
+                return .some(Bad_init::{ .node = r, .why = .run_time })
+            // A part of a value is no static value: C99 has no constant that reads an element or
+            // a member.
+            if op.text.equals("[") || r.reads_member(c)
+                return .some(Bad_init::{ .node = r, .why = .part_read })
+        if r.def_node != null
+            // A variable's reference is a run-time read. An enum variant, a function and a field
+            // have other def_node kinds.
+            if r.def_node.kind_id == .k_decl_var || r.def_node.kind_id == .k_decl_var_item
+                return .some(Bad_init::{ .node = r, .why = .run_time })
+            if r.def_node.kind_id == .k_decl_const
+                key: = Sz::r.def_node
+                if walk.seen.get(key).unwrap_or(false)
+                    return .some(Bad_init::{ .node = r, .why = .cycle })
+                inner: = r.def_node.get_var_decl_expr()
+                if !walk.no_run_time.get(key).unwrap_or(false) && inner != null &&
+                    inner.kind_id != .k_empty
+                    walk.seen.set(key, true)
+                    found: = inner.find_run_time_form(c, walk)
+                    walk.seen.remove(key)
+                    if found.is_some()
+                        return found
+                    walk.no_run_time.set(key, true)
+        for child in r.children
+            if found: = child.find_run_time_form(c, walk)
+                return .some(found)
+        return .none
+
+    priv fn reads_member(r: Self$@, c: Sema_ctx$@): Bool //<
+        //< Whether it reads a struct's field or a slice's `.len` or `.ptr`
+        //< An array's `.len` is no read: sema has made it its integer already. A name through a
+        //< module, an enum variant and a method are other kinds of node.
+        if r.kind_id != .k_expr_postfix || !r.get_postfix_op().text.equals(".")
+            return false
+        if r.def_node != null && r.def_node.kind_id == .k_struct_field
+            return true
+        recv: = r.get_postfix_receiver()
+        return recv != null &&
+            c.env.is_slice(c.env.get_clean_real_type(recv.type_id))

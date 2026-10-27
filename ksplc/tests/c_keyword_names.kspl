@@ -1,6 +1,7 @@
 //< Uses C's reserved words, the target headers' macros and the compiler's own names as KSPL names
 //< They stand at every position the generated C writes a name bare. Bare, each expands into a C
-//< error. One spelled like a name the compiler makes (`test_made_names`) would read the compiler's.
+//< error. One spelled like a name the compiler makes (`test_made_names`) would read the compiler's,
+//< and one spelled like a global's C name would hide that global.
 // ==========================================
 // Caution: **Include the names the preamble headers `#define`** (`is_preamble_macro` in
 // `base/c_name.kspl`). **Include the ones erased with `#undef`** (`Sig_row`: from the declaration
@@ -145,23 +146,42 @@ priv fn catch_reads_own_e(): I32 //< a `catch` naming no error, beside the sourc
         fallback _e + 1
 
 priv fn temps_beside_own(): I32 //< Lower's temporaries beside locals spelled as they once were
+    //< `__k_tmp1` is the C spelling of the first one today; the source's takes the `_kw` suffix.
     _mir_tmp_001: I32 = 1
-    _mir_tmp_002: I32 = 2
-    return may_fail(5) catch _mir_tmp_001 + _mir_tmp_002
+    __k_tmp1: I32 = 2
+    return may_fail(5) catch _mir_tmp_001 + __k_tmp1
 
 priv fn for_in_beside_own(): I32 //< a `for … in` beside locals spelled as its temporaries
     _for_coll1: I32 = 7
-    _for_idx_s1: I32 = 100
+    __k_for_idx1: I32 = 100
     $total: I32 = 0
     for x in I32[]::{ 1, 2 }
         total += x + _for_coll1
-    return total + _for_idx_s1
+    return total + __k_for_idx1
+
+fn c_named_twice(n: I32): I32 //< a function whose C name a local in `globals_beside_own` spells
+    return n * 2
+
+priv fn global_named(Slice_U8: I32, s: U8[]): I32 //<
+    //< A parameter spelled as a type's C name, before a parameter of that type
+    return Slice_U8 + I32::s.len
+
+priv fn globals_beside_own(): I32 //< locals spelled as the C names of types and of a function
+    //< Each is declared before a use of the global it spells, which C would read as the local.
+    ksplc_tests_c_keyword_names_Rect: = 1
+    r: Rect = ::{ .int = 2, .float = 0, .far = 0, .NULL = 0 }
+    Slice_U8: = 3
+    s: U8[] = "four"
+    kspl_ksplc_tests_c_keyword_names_c_named_twice: = 5
+    return ksplc_tests_c_keyword_names_Rect + r.int + Slice_U8 + I32::s.len +
+        kspl_ksplc_tests_c_keyword_names_c_named_twice + c_named_twice(3) + global_named(6, "ab")
 
 fn test_made_names() //< the source's names never meet the names the compiler makes beside them
     verdict.start("[Genc] a local spelled like a compiler-made one stays the source's test...")
     assert(catch_reads_own_e() == 43, "made names: a catch block reads the source's _e")
     assert(temps_beside_own() == 3, "made names: Lower's temporaries leave the source's alone")
     assert(for_in_beside_own() == 117, "made names: a for … in leaves the source's locals alone")
+    assert(globals_beside_own() == 29, "made names: a local spelled as a global's C name")
     verdict.pass("each name the compiler makes is one no source can spell.")
 
 fn test_c_keyword_names()

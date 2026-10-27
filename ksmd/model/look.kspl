@@ -1,10 +1,11 @@
 //< The direct formatting a table cell or a paragraph carries
-//< It is written in braces: `{color="#c00000" fill="#fff2cc" size=14 align="right"}` gives the
-//< text's colour, the background's colour, the font size in points and the alignment. A cell writes
-//< it after its value. A paragraph or a heading takes `align` alone, on a line of its own before
-//< it.
+//< It is written in braces: `{color="#c00000" fill="#fff2cc" size=14 align="right"
+//< format="percent:1"}` gives the text's colour, the background's colour, the font size in points,
+//< the alignment and the cell's own number format. A cell writes it after its value. A paragraph or
+//< a heading takes `align` alone, on a line of its own before it.
 import "ksmd/base/attribute" { Attribute }
 import "ksmd/base/source" { Diagnostic, Source }
+import "ksmd/model/format" { Number_format, format_of, no_format, same_format, write_format }
 import "std/chars"
 import "std/ds" { List }
 import "std/str" { Str_builder }
@@ -12,6 +13,9 @@ import "std/str" { Str_builder }
 const MAX_NOTE: Sz = 1000 //< the bytes of one note
 priv const MIN_SIZE: Sz = 12 //< 6 points, in half points
 priv const MAX_SIZE: Sz = 144 //< 72 points, in half points
+priv const FORMAT_SAYS: U8[] =
+    "format is a number format, as \"percent:1\" or \"currency:USD:2\", or \"general\"" //<
+        //< what the reader says of a `format` it cannot read
 
 enum Align //< where a cell's or a paragraph's text stands across
     none //< as the page sets it: a number to the right, other text to the left
@@ -24,6 +28,7 @@ enum Look_part //< one part of a look, which the editor sets or clears
     fill
     size
     align
+    format //< the cell's own number format, as `formats` writes an entry, or `general`
     all //< every part at once; only an empty value, which clears them all
 
 struct Look
@@ -31,17 +36,20 @@ struct Look
     fill: U8[] //< the background's colour, as `color`; empty for none
     size: Sz //< the font size in half points, so 10.5 points is 21; 0 for the page's size
     align: Align
+    format: Number_format //<
+        //< the cell's own number format, over its column's; none takes the column's
 
 fn plain_look(): Look //< no formatting
-    return Look::{ .color = "", .fill = "", .size = 0, .align = .none }
+    return Look::{ .color = "", .fill = "", .size = 0, .align = .none, .format = no_format() }
 
 fn is_plain(l: Look): Bool
-    return l.color.len == 0 && l.fill.len == 0 && l.size == 0 && l.align == .none
+    return l.color.len == 0 && l.fill.len == 0 && l.size == 0 && l.align == .none &&
+        l.format.kind == .none
 
 fn same_look(a: Look, b: Look): Bool
     // A colour's hex digits may be written in either case; the writer writes lower case.
     return a.color.equals_ignore_case(b.color) && a.fill.equals_ignore_case(b.fill) &&
-        a.size == b.size && a.align == b.align
+        a.size == b.size && a.align == b.align && same_format(a.format, b.format)
 
 fn look_of(src: Source@, attributes: List<|Attribute|>@, at: Sz): Look!Diagnostic //<
     //< The look the attributes in one pair of braces give; `at` is where the braces open
@@ -67,8 +75,14 @@ fn look_of(src: Source@, attributes: List<|Attribute|>@, at: Sz): Look!Diagnosti
             l.align = align_of(a.value) if a.quoted else .none
             if l.align == .none
                 throw src.diagnostic(a.offset, "align is \"left\", \"center\" or \"right\"")
+        else if a.name.equals("format")
+            f: = format_of(a.value if a.quoted else "") catch
+                throw src.diagnostic(a.offset, FORMAT_SAYS)
+            if !a.quoted || f.kind == .none
+                throw src.diagnostic(a.offset, FORMAT_SAYS)
+            l.format = f
         else if !a.name.equals("note")
-            throw src.diagnostic(a.offset, "braces take color, fill, size, align and note")
+            throw src.diagnostic(a.offset, "braces take color, fill, size, align, format and note")
     return l
 
 fn note_of(src: Source@, attributes: List<|Attribute|>@): U8[]!Diagnostic //<
@@ -111,6 +125,11 @@ fn write_braces(l: Look, note: U8[], out: Str_builder$@) //<
     if l.align != .none
         out.s("" if first else " ").s("align=\"").s(l.align.name()).c('"')
         first = false
+    if l.format.kind != .none
+        out.s("" if first else " ").s("format=\"")
+        write_format(l.format, out)
+        out.c('"')
+        first = false
     if note.len > 0
         out.s("" if first else " ").s("note=\"").escape_and_append(note).c('"')
     out.c('}')
@@ -133,6 +152,9 @@ fn with_part($l: Look, part: Look_part, value: U8[]): Look? //<
     case .align
         l.align = .none if value.len == 0 else align_of(value)
         if value.len > 0 && l.align == .none
+            return .none
+    case .format
+        l.format = format_of(value) catch
             return .none
     case .all
         if value.len > 0

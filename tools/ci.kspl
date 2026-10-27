@@ -27,9 +27,6 @@ import "std/subproc"
 import "std/sys"
 import "tools/ci_gates" + { Gate, Set }
 
-priv const VERDICT_LINE: U8[] = "RESULT: ALL PASS" //<
-    //< The line a gate with `Gate.verdict` must print ("How a run is read" in `docs/SPEC-gates.md`)
-
 fn main(): I32
     defer arena: = Arena(1024 * 1024)
     $make: U8[] = "make"
@@ -83,7 +80,7 @@ fn main(): I32
     case .some(s)
         return run_set(name, s,
             Round::{ .make = make, .jobs = jobs, .platform = platform, .relaxed = relaxed,
-            .cap_s = cap, .stop = stop, .serial = serial }, arena)
+            .cap_s = cap, .stop = stop, .serial = serial, .full = s == Set.ci_full }, arena)
     case .none
         io.err().s("ci: no set is named '\{name\}'\n")
         p.print_usage(io.err())
@@ -97,6 +94,7 @@ priv struct Round //< how this round runs each gate: the command line's settings
     cap_s: I64 //< the seconds one gate may run before it is stopped (`--cap`)
     stop: Bool //< any fallen gate ends the set, not only one with `Gate.stops` (`--stop-at-first`)
     serial: Bool //< every gate runs alone, a pair with `Gate.beside` included (`--serial`)
+    full: Bool //< `ci-full`: a SKIP passes, and the round lists each one last
 
 priv const CAP_MAX_S: I64 = 2000000I64 //< the longest cap a child's limit in milliseconds holds
 
@@ -157,6 +155,8 @@ priv fn run_set(name: U8[], s: Set, r: Round, arena: Arena$@): I32 //<
         io.err().s("ci: the set '\{name\}' holds no gate\n")
         return 1
     print_digest(r, arena)
+    if r.full
+        print_skips(arena)
     // **A round with a switch off says so last**: green there is not CI's verdict.
     if r.relaxed.len > 0
         io.out().s("# turned off here: ").s(r.relaxed)
@@ -229,8 +229,8 @@ priv fn judge_gate(g: Gate, r: Round, exit: I32, sec: I64, arena: Arena$@): Bool
     log: = ci_gates.log_path(g.log, arena)
     $rc: = exit
     said: = io.read_file(log, arena) catch ""
-    j: = ci_gates.Judge::{ .platform = r.platform, .relaxed = r.relaxed }
-    if rc == 0 && g.verdict && !said_verdict(said, arena)
+    j: = ci_gates.Judge::{ .platform = r.platform, .relaxed = r.relaxed, .any_skip = r.full }
+    if rc == 0 && g.verdict && !ci_gates.said_verdict(said, arena)
         rc = 1
     if rc == 0
         if odd: = unexpected_skip(said, j@, arena)
@@ -251,13 +251,6 @@ priv fn unexpected_skip(text: U8[], j: ci_gates.Judge@, arena: Arena$@): U8[]? /
             return .some(line)
     return .none
 
-priv fn said_verdict(text: U8[], arena: Arena$@): Bool //<
-    //< Whether the log holds the line a passing gate prints
-    for line in text.lines(arena)
-        if line.starts_with(VERDICT_LINE)
-            return true
-    return false
-
 priv fn annotate(g: Gate, text: U8[], rc: I32, j: ci_gates.Judge@, arena: Arena$@) //<
     //< One error mark per fallen gate on GitHub's page (a step keeps ten): its first cause
     //< The cause is the summary's first for that gate (`ci_gates.causes`), else its exit code.
@@ -273,11 +266,26 @@ priv fn annotate(g: Gate, text: U8[], rc: I32, j: ci_gates.Judge@, arena: Arena$
 
 priv fn print_digest(r: Round, arena: Arena$@) //<
     //< The gates that ran and why any fell, on the screen
-    j: = ci_gates.Judge::{ .platform = r.platform, .relaxed = r.relaxed }
+    j: = ci_gates.Judge::{ .platform = r.platform, .relaxed = r.relaxed, .any_skip = r.full }
     outs: = ci_gates.outcomes(j@, arena)
     defer $b: = Str_builder()
     ci_gates.digest_plain(outs@, r.jobs, j@, b@)
     io.out().s(b.slice())
+
+priv fn print_skips(arena: Arena$@) //<
+    //< Every SKIP line of the round, by gate: what this machine did not check
+    //< **A full round passes a SKIP, so it must name each one**, or green would hide a gate that
+    //< checked nothing.
+    $count: Sz = 0
+    for g in ci_gates.GATES
+        said: = io.read_file(ci_gates.log_path(g.log, arena), arena) catch ""
+        for line in ci_gates.skip_lines(said, arena)
+            if count == 0
+                io.out().s("# not checked on this machine (a SKIP passes in ci-full):\n")
+            io.out().s("#   ").s(g.log).s(": ").s(line.trim_spaces()).c('\n')
+            count += 1
+    if count == 0
+        io.out().s("# every check ran on this machine\n")
 
 priv fn summary(title: U8[], jobs: I64, j: ci_gates.Judge, arena: Arena$@): I32 //<
     //< The summary for the job's page, added to `$GITHUB_STEP_SUMMARY` (the screen when unset)

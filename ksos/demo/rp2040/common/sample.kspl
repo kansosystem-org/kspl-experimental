@@ -64,6 +64,11 @@ fn stopped(): U8[] //< why it stopped saving records
     //< Empty while it continues.
     return stop_reason
 
+fn restart() //< saves from nothing again, once the record was erased
+    //< **A stop for `full` would otherwise outlive the erase** that made room, until a restart.
+    saved = 0
+    stop_reason = ""
+
 priv fn encode(v: U8$[], s: Sample) //< lays one out
     d: = s.dist_mm if s.dist_mm <= 0xffffU32 else 0xffffU32
     mv: = s.bat_mv if s.bat_mv <= 0xffffU32 else 0xffffU32
@@ -95,7 +100,7 @@ fn append(kind: U16, s: Sample) //< appends one
     //< failed write): it returns silently, and driving is unaffected.
     if !records.ok() || stop_reason.len > 0
         return
-    buf: U8[SAMPLE_BYTES] = ::{}
+    $buf: U8[SAMPLE_BYTES] = ::{}
     encode(U8$[]::buf, s)
     records.handle().append(kind, U8[]::buf) catch e
         // Caution: Do not discard the reason; full is expected, a failed write is not.
@@ -105,7 +110,7 @@ fn append(kind: U16, s: Sample) //< appends one
 
 fn say_last(ln: con.Line$@, kind: U16) //< prints the newest one as one line
     //< **This is the evidence that "the time series survived a power cut".**
-    buf: U8[SAMPLE_BYTES] = ::{}
+    $buf: U8[SAMPLE_BYTES] = ::{}
     n: = records.read_last(kind, U8$[]::buf)
     if n != SAMPLE_BYTES
         return
@@ -179,7 +184,7 @@ fn dump(ln: con.Line$@, kind: U16) //< prints the whole record to the console
         ok = emit_line(ln)
     $n: U32 = 0
     $other: U32 = 0
-    buf: U8[SAMPLE_BYTES] = ::{}
+    $buf: U8[SAMPLE_BYTES] = ::{}
     $it: = lg.iter()
     for ok && it.next()
         // Caution: Check both the kind and the length; the marker and the policy share the record.

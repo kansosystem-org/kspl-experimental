@@ -5,7 +5,7 @@
 // ==========================================
 // "What the self-driving probe does, and where its judgement lives" in ksos/docs/DESIGN-rtos.md
 // gives what it does each round. It gives the three safety timeouts decided outside the policy.
-// It says where its decisions live, against the closed-loop version, and what the PC needs first.
+// It says where its decisions live, and what the PC needs first.
 // ==========================================
 
 // Caution: **Test it with the wheels off the ground.** Nobody drives it, and a hand is too slow
@@ -19,7 +19,6 @@ import "ksos/boards/freenove_4wd_pico/motor"
 import "ksos/boards/freenove_4wd_pico/range"
 import "ksos/boards/freenove_4wd_pico/status"
 import "ksos/boards/freenove_4wd_pico/track"
-import "ksos/demo/common/car_model" as cmodel
 import "ksos/demo/common/pilot_policy" as policy
 import "ksos/demo/rp2040/common/battery"
 import "ksos/demo/rp2040/common/bringup" as boot
@@ -36,8 +35,7 @@ import "ksos/kernel/task" + { Task }
 import "std/mem" { Arena }
 
 $tcb_car: Task
-// The task stack for the driving loop, with room for the learned weights (188 bytes) in
-// `bring_up`'s frame.
+// The task stack for the driving loop.
 $stack_car: U8[2560]
 
 // The policy's body, and the working space for one round.
@@ -53,11 +51,6 @@ const SAMPLE_EVERY: U32 = 50 //<
     //< How many rounds between saving one observation
     //< A round where the manoeuvre changed is always saved as well. **Not every round**: at 16
     //< bytes per 100ms round, 64KB lasts minutes; changes plus a heartbeat last hours.
-// How many rounds between saving the learned weights (188 bytes). **The record only appends, so
-// each save uses up room**; after a power cut it resumes from the last save.
-// Caution: **Do not make it shorter** — it cuts the room for the observations, and interrupts
-// stop while the write runs.
-const MODEL_SAVE_EVERY: U32 = 600 // 60 seconds at a 100ms period
 
 // --- the safety timeouts for stopping remotely / not running too long ---
 const IR_REARM_ROUNDS: U32 = 8 //<
@@ -88,18 +81,9 @@ const LOOP_INTERVAL_MS: U32 = 100 //< the control period [ms]
 const LINE_INTERVAL_MS: U32 = 10 //<
     //< The interval for reading only the line partway through a round and steering again [ms]
     //< **Two or more reads while turning across the line**, or the crossing goes unnoticed.
-    //< **Make it divide loop_interval_ms** — otherwise the remainder goes unsteered. The net's step
-    //< (`car_model.step`) must fit in it too.
+    //< **Make it divide loop_interval_ms** — otherwise the remainder goes unsteered.
 const EMERGENCY_MM: U32 = 100 //<
     //< The distance at which it backs off, before the policy's decision [mm]
-
-// The prediction of the next round's three line bits (0 to 7), and whether that net is usable.
-// **`cmodel.NO_PREDICTION` means "no answer yet"** (0 is a prediction of all white).
-$last_pred: I32 = cmodel.NO_PREDICTION
-$model_ready: Bool = false
-// The time one learning step took [us]. **Measure it apart from `us=`** (deciding alone), or
-// deciding looks slower. **The period adds up**: the work plus 100ms of pump.
-$last_learn_us: U32 = 0
 
 // Set once anything has failed; it stays stopped from then on.
 $halted: Bool = false
@@ -305,12 +289,11 @@ priv fn one_round(p: policy.Policy$@, arena: Arena$@) //< runs one round
     apply(d.lon, d.lat, d.rot, .policy)
     decisions += 1
 
-priv fn track_while_pumping(p: policy.Policy$@, arena: Arena$@, driving: Bool): Bool //<
+priv fn track_while_pumping(p: policy.Policy$@, arena: Arena$@, driving: Bool) //<
     //< Spends one round's waiting time running USB and IR
     //< **The ultrasonic is not read again** (too slow for `LINE_INTERVAL_MS`). **A round it may not
     //< drive on is left alone**, or steering would overwrite the command that stopped it.
     mark: = arena.save()
-    $steered: = false
     $waited: U32 = 0
     for waited + LINE_INTERVAL_MS <= LOOP_INTERVAL_MS
         pump_watch(LINE_INTERVAL_MS)
@@ -321,34 +304,15 @@ priv fn track_while_pumping(p: policy.Policy$@, arena: Arena$@, driving: Bool): 
         if line == last_line
             continue // if the line has not moved, the same observation gives the same manoeuvre
         last_line = line
-        prev_lon: = last_lon
-        prev_lat: = last_lat
-        prev_rot: = last_rot
         t0: = timer.now_us()
         d: = policy.decide(p, last_dist, line, arena)
         last_decide_us = timer.elapsed_us(t0)
         apply(d.lon, d.lat, d.rot, .policy)
         arena.restore(mark)
         steers += 1
-        if last_lon != prev_lon || last_lat != prev_lat || last_rot != prev_rot
-            steered = true
     // Caution: Wait out the remainder too, or the period shrinks and the round limit comes early.
     if waited < LOOP_INTERVAL_MS
         pump_watch(LOOP_INTERVAL_MS - waited)
-    return steered
-
-priv fn pct_field(ln: con.Line$@, label: U8[], permille: U32) //<
-    //< Prints one field of a fraction [‰], to one decimal place
-    //< Caution: **Do not make it an integer percentage** — near 60‰ the net and its baseline vanish
-    //< in the rounding. **Print no number at 0 steps**, where 0% would read as "perfect".
-    ln.str(label)
-    if cmodel.steps_done() == 0
-        ln.str("--")
-    else
-        ln.u32(permille / 10)
-        ln.str(".")
-        ln.u32(permille % 10)
-        ln.str("%")
 
 priv fn report(ln: con.Line$@) //< prints one line
     //< Not every round, or USB's send queue drops lines. One line describes **one moment**: the
@@ -392,26 +356,6 @@ priv fn report(ln: con.Line$@) //< prints one line
     ln.u32(driving_rounds)
     ln.str(" rec=")
     ln.u32(csample.count())
-    // The next round's predicted bits, and the fraction missed. **`perr=` below `base=` is the only
-    // evidence of learning** (stage 11 in ksos/docs/HOWTO-bring-up.md).
-    if model_ready
-        ln.str(" pred=")
-        if last_pred < 0
-            ln.str("-")
-        else
-            ln.u32(U32::last_pred)
-        pct_field(ln, " perr=", cmodel.err_permille())
-        pct_field(ln, " base=", cmodel.base_permille())
-        // Caution: **Print the version**; a mismatched layout still gives a plausible `st,`.
-        ln.str(" v")
-        ln.u32(cmodel.version())
-        ln.str(" lus=")
-        ln.u32(last_learn_us)
-        ln.str("/")
-        ln.u32(cmodel.steps_done())
-        ln.str("st,")
-        ln.u32(store.models_saved())
-        ln.str("sv")
     if csample.stopped().len > 0
         ln.str("(stopped: ")
         ln.str(csample.stopped())
@@ -420,9 +364,20 @@ priv fn report(ln: con.Line$@) //< prints one line
         battery.watch.halt_note(ln, halt_state.text())
     _sent: = ln.flush()
 
-priv fn take_policy(p: policy.Policy$@, blob: U8[], why: status.State, arena: Arena$@): Bool //<
-    //< Loads blob as the policy in force; true if it loaded, and a halt for why if it did not
-    p$ = policy.load(blob, arena) catch
+priv fn take_policy( //< loads blob as the policy in force; true if it loaded
+    ln: con.Line$@,
+    p: policy.Policy$@,
+    blob: U8[],
+    why: status.State, //< the halt when it did not load
+    arena: Arena$@,
+): Bool
+    p$ = policy.load(blob, arena) catch e
+        // **Print which check refused it.** The halt's text says only which policy it was, and
+        // each check has its own cause: a file that is not safetensors, another version, a shape.
+        ln.reset()
+        ln.str("[car] policy refused: ")
+        ln.str(e.variant_name())
+        _sent: = ln.flush()
         halt(why)
         fallback policy.empty()
     if halted
@@ -463,7 +418,7 @@ fn car_task(_arg: Void$@): Void
         _rest: = nc.drain_stream(pilot_boot.FETCH_IDLE_MS)
         nc.close_conn()
         if blob.len > 0
-            ready = take_policy(p@, blob, .bad_policy, arena@)
+            ready = take_policy(ln@, p@, blob, .bad_policy, arena@)
             if ready
                 store.save_policy(ln@, blob)
 
@@ -473,10 +428,11 @@ fn car_task(_arg: Void$@): Void
         // One stored but larger than the buffer is a bad stored policy, not "no policy".
         kept: = pilot_boot.stored_policy() catch e
             if e == ksdblog.Ksdb_error.too_small
+                con.say(ln@, "[car]", "policy refused: the stored one is larger than its buffer")
                 halt(.bad_stored_policy)
             fallback ""
         if kept.len > 0
-            ready = take_policy(p@, kept, .bad_stored_policy, arena@)
+            ready = take_policy(ln@, p@, kept, .bad_stored_policy, arena@)
             if ready
                 con.say(ln@, "[car]", "no fresh policy — using the one stored on board")
     if !ready && !halted
@@ -487,28 +443,6 @@ fn car_task(_arg: Void$@): Void
         con.say(ln@, "[car]", "policy on board, link closed — deciding here from now on")
     else
         con.say(ln@, "[car]", "no policy — staying put")
-    // Set up the net that predicts its own movement.
-    // Caution: **Allocate it before the reset point (`work`)** — the weights live for the whole
-    // run. It is not global: a global array's size takes only a number, which would drift from the
-    // net.
-    model_buf: U8[cmodel.STATE_BYTES] = ::{}
-    mbuf: = U8$[]::model_buf
-    if ready
-        model_ready = cmodel.init(U32::motor.CAP, arena@)
-        if !model_ready
-            con.say(ln@, "[car]", "forward model unavailable — running without it")
-        else if store.load_model(mbuf)
-            // Caution: **Print the numbers, with the baseline.** Only this line tells whether the
-            // run on battery (no console) learned.
-            ln.reset()
-            ln.str("[car] resumed the forward model — ")
-            ln.u32(cmodel.steps_done())
-            ln.str(" steps learned, missed ")
-            ln.u32(cmodel.err_permille())
-            ln.str(" per mille of bits vs ")
-            ln.u32(cmodel.base_permille())
-            ln.str(" for no-change")
-            _sent: = ln.flush()
     // After the policy: resetting to before here loses what the weights point at.
     work: = arena.save()
 
@@ -517,16 +451,9 @@ fn car_task(_arg: Void$@): Void
         loops += 1
         // Caution: **Call all three every round, stopped too**, or a way back goes unnoticed.
         // **If any one is false it does not drive.**
-        was_halted: = halted
         may_battery: = watch_battery(ln@)
         may_remote: = watch_remote(ln@)
         may_time: = watch_run_time()
-        // **Save what was learned at the moment it stopped**; the limit can land on a save round,
-        // and then it **stops without a single save**.
-        // Caution: **Do not write when the battery stopped it**, onto Flash with the voltage
-        // falling.
-        if model_ready && !was_halted && halted && !battery.watch.on_battery
-            store.save_model(mbuf)
 
         // **Dump outside the watch**; its seconds would drop the stop signal meanwhile.
         if dump_requested
@@ -545,16 +472,6 @@ fn car_task(_arg: Void$@): Void
             prev_rot: = last_rot
             one_round(p@, arena@)
             arena.restore(work)
-            // **One step is learned here, after the command is on the wheels** (the command is part
-            // of the question). **Not on every tick**: a step overruns 10ms, and line following
-            // slows.
-            if model_ready
-                t0: = timer.now_us()
-                last_pred = cmodel.step(last_line, last_lon, last_lat, last_rot, arena@)
-                last_learn_us = timer.elapsed_us(t0)
-                arena.restore(work)
-                if loops % MODEL_SAVE_EVERY == 0
-                    store.save_model(mbuf)
             // Caution: **Always save a round that changed**, or the change itself goes missing.
             changed: = last_lon != prev_lon || last_lat != prev_lat || last_rot != prev_rot
             if changed || loops % SAMPLE_EVERY == 0
@@ -570,10 +487,6 @@ fn car_task(_arg: Void$@): Void
                     .rot = last_rot,
                     .by = last_by,
                 })
-        else if model_ready
-            // Caution: **Cancel the question on a round it did not drive**, or it pairs a command
-            // with a distance measured long after.
-            cmodel.forget()
         // One line every 10 rounds.
         // **Do not read the sensors again here**, or dist/line and drive come from different
         // moments.
@@ -583,11 +496,7 @@ fn car_task(_arg: Void$@): Void
         (status.State.driving if !halted else halt_state).show(last_by == csample.Author.safety)
         // Keep running USB, or the host detaches it and the Serial Monitor dies. **IR is checked in
         // here too** (pump_watch).
-        steered: = track_while_pumping(p@, arena@, driving)
-        // Caution: **Cancel the pending question on a round that steered again partway.** The
-        // command it asked about is no longer the one that moved the car.
-        if steered && model_ready
-            cmodel.forget()
+        track_while_pumping(p@, arena@, driving)
 
 // The on_idle for `task.run_single_task`: semihosting's exit is not available, so it does nothing.
 priv fn park() {}

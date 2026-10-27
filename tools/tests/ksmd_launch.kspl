@@ -9,6 +9,7 @@ import "std/ds" { List }
 import "std/fs"
 import "std/http"
 import "std/io"
+import "std/json"
 import "std/mem" { Arena }
 import "std/net"
 import "std/str"
@@ -16,7 +17,7 @@ import "std/strfmt" as _strfmt
 import "std/subproc"
 import "std/sys"
 import "std/verdict"
-import "tools/ksmd_aim"
+import "tools/opener" { PORT_TRIES }
 import "tools/opener_aim" as aim
 
 priv const URL_WAIT_STEPS: Sz = 300 //< how many times, 100ms apart, an open's output is read
@@ -33,7 +34,7 @@ struct Run //< one launcher run that waits on the server it started
 
 priv fn first_free(from: I32): I32 //< the first port from `from` that can be listened on now
     //< The launcher asks the same question the same way (`free_port` in `tools/opener.kspl`).
-    for $at: I32 = from; at < from + 16; at += 1
+    for $at: I32 = from; at < from + PORT_TRIES; at += 1
         probe: = net.Tcp_listener.bind("127.0.0.1", at) catch
             continue
         probe.free()
@@ -56,7 +57,7 @@ priv fn ask(url: U8[], target: U8[], arena: Arena$@): http.Response$@? //<
         return .none
     bearer: = arena.text().s("Bearer ").s(aim.token_in_url(url)).take()
     head: = http.headers(arena).add("Host", "127.0.0.1").add("Authorization", bearer).build()
-    http.write_request(stream, "GET", target, head, "") catch
+    http.write_request(stream, "GET", target, head, "", ANSWER_WAIT_MS) catch
         return .none
     answer: =
         http.read_response(stream, arena, http.DEFAULT_MAX_BODY_BYTES, ANSWER_WAIT_MS) catch
@@ -70,6 +71,15 @@ priv fn body_of(url: U8[], target: U8[], arena: Arena$@): U8[] //<
             return arena.dup_str(got.body)
         return arena.text().s("(status \{got.status\})").take()
     return "(no answer)"
+
+priv fn serves(status: U8[], folder: U8[], arena: Arena$@): Bool //<
+    //< Whether a `/api/status` answer names `folder` as the root it serves
+    //< Caution: **Read the root from the parsed answer, not the text.** JSON writes a `\` as
+    //< `\\`, so a Windows path is never found in the raw text.
+    doc: = json.parse(status, arena) catch
+        return false
+    root: = doc.val.get("root").as_str().unwrap_or("")
+    return root.equals(folder)
 
 priv fn start(argv: U8[][], out: U8[]): Run //< starts a run that waits, and reads its URL
     kid: = subproc.spawn_redirect(argv, "", out, out) catch
@@ -94,9 +104,14 @@ priv fn output(run: Run@, arena: Arena$@): U8[] //< what a run put out so far
     return arena.dup_str(io.read_file(run.out, null) catch "(no output)")
 
 priv fn check_port(what: U8[], run: Run@, want: I32, arena: Arena$@) //<
-    //< That the run came up, and its server listens on `want`
+    //< That the run came up, and its server listens on `want`, or on a later port it says it took
+    //< Caution: **`want` was free only when the test looked.** Another program can take it before
+    //< the launcher binds it, and the launcher then moves on to the next port, as it must.
     on: = aim.port_num(aim.port_in_url(run.url))
-    verdict.check(what, run.url.len > 0 && on == want,
+    moved: =
+        on > want && on < want + PORT_TRIES &&
+        output(run, arena).find_str("was taken").is_some()
+    verdict.check(what, run.url.len > 0 && (on == want || moved),
         arena.text().s("wanted port \{want\}; the run put out: ").s(output(run, arena)).take())
 
 priv fn refused(launcher: U8[], args: U8[][], says: U8[], arena: Arena$@) //<
@@ -127,8 +142,7 @@ priv fn place(work: U8[], launcher: U8[], server: U8[], arena: Arena$@): U8[]!fs
     //< Copies the launcher and the server into `<work>/bin` with a stand-in page beside them
     //< Returns the launcher's copy. The page is served for `/` alone, so any text stands in for it.
     bin: = fs.join(work, "bin", arena)
-    fs.write_tree(fs.join(bin, ksmd_aim.KSMD.built, arena), U8[][]::{ ksmd_aim.KSMD.page },
-        U8[][]::{ PAGE }, arena)!
+    fs.write_tree(fs.join(bin, aim.BUILT, arena), U8[][]::{ aim.PAGE }, U8[][]::{ PAGE }, arena)!
     at: = fs.join(bin, "ksmd_open.exe", arena)
     fs.copy_file(launcher, at)!
     fs.copy_file(server, fs.join(bin, "kssrv.exe", arena))!
@@ -137,7 +151,7 @@ priv fn place(work: U8[], launcher: U8[], server: U8[], arena: Arena$@): U8[]!fs
 priv fn write_workspaces(work: U8[], arena: Arena$@): Void!fs.Fs_error //<
     //< `ws/`, marked as a workspace and holding two documents, and `loose/`, holding one unmarked
     fs.write_tree(fs.join(work, "ws", arena),
-        U8[][]::{ ksmd_aim.MARK, "top.ksmd", "parts/doc.ksmd", "notes.txt" },
+        U8[][]::{ aim.MARK, "top.ksmd", "parts/doc.ksmd", "notes.txt" },
         U8[][]::{ "", "%ksmd 1\n\nTop.\n", DOC, "not a document\n" }, arena)!
     fs.write_tree(fs.join(work, "loose", arena), U8[][]::{ "a.ksmd" },
         U8[][]::{ "%ksmd 1\n\nLoose.\n" }, arena)!
@@ -146,14 +160,14 @@ priv fn check_marked(launcher: U8[], ws: U8[], work: U8[], arena: Arena$@): Run 
     //< A document two folders under the mark opens on the marked folder, on that folder's port
     doc: = fs.join(ws, "parts/doc.ksmd", arena)
     // **Find the free port before the run**: once its server listens, the port is no longer free.
-    want: = first_free(ksmd_aim.home_port(ws))
+    want: = first_free(aim.home_port(ws))
     first: =
         start(U8[][]::{ launcher, doc, "--show" }, fs.join(work, "first.out", arena))
     check_port("the marked folder's server listens on its own port", first@, want, arena)
     verdict.check("the URL opens the document by its path from the workspace",
         first.url.find_str("/?doc=parts/doc.ksmd#t=").is_some(), first.url)
     status: = body_of(first.url, "/api/status", arena)
-    verdict.check("the server serves the marked folder", status.find_str(ws).is_some(), status)
+    verdict.check("the server serves the marked folder", serves(status, ws, arena), status)
     verdict.check("the page answers", body_of(first.url, "/", arena).equals(PAGE), first.url)
     verdict.check("the server reads the document",
         body_of(first.url, "/api/file?path=parts/doc.ksmd", arena).equals(DOC), first.url)
@@ -172,7 +186,7 @@ priv fn check_marked(launcher: U8[], ws: U8[], work: U8[], arena: Arena$@): Run 
 
 priv fn check_taken(launcher: U8[], loose: U8[], work: U8[], arena: Arena$@): Run //<
     //< A port another program holds is skipped, and the run says that drafts stay with a port
-    home: = ksmd_aim.home_port(loose)
+    home: = aim.home_port(loose)
     // **Held here, or by some other program already**: either way the launcher must skip it.
     held: = net.Tcp_listener.bind("127.0.0.1", home) catch
         fallback null
@@ -190,6 +204,76 @@ priv fn check_taken(launcher: U8[], loose: U8[], work: U8[], arena: Arena$@): Ru
         held.free()
     return taken
 
+priv fn make_link(at: U8[], target: U8[], arena: Arena$@): Bool //<
+    //< A symbolic link at `at` to `target`; false where `ln -s` cannot make one
+    r: =
+        subproc.run_capture(U8[][]::{ "ln", "-s", target, at }, "", TOOL_WAIT_MS, 4096, arena)
+        catch
+        return false
+    return r.exited_with(0) && fs.is_link(at)
+
+priv fn check_links(launcher: U8[], ws: U8[], arena: Arena$@) //<
+    //< A document that is a link, or lies under a folder that is one, is refused before anything
+    //< starts. The server refuses both (403), so a page opened on them would show nothing.
+    alias: = fs.join(ws, "alias.ksmd", arena)
+    folder: = fs.join(ws, "lnk", arena)
+    if !make_link(alias, "top.ksmd", arena) || !make_link(folder, "parts", arena)
+        verdict.skip_check("it refuses a document behind a link",
+            "a link cannot be made with `ln -s` in this environment")
+        return
+    refused(launcher, U8[][]::{ alias }, "opens no link", arena)
+    refused(launcher, U8[][]::{ fs.join(folder, "doc.ksmd", arena) }, "opens no link", arena)
+
+priv fn check_quiet(launcher: U8[], ws: U8[], token: U8[], work: U8[], arena: Arena$@) //<
+    //< Without `--show`, the run puts out no token, and the browser gets it inside a page
+    //< **A double-click sends the output where others can read it** (the journal on Linux). A
+    //< stand-in browser, first on the PATH, notes the page it was handed.
+    //< Caution: **The stand-in is a shell script named `xdg-open`.** Windows starts the browser
+    //< another way, so there the launcher would open a real one: the check skips.
+    name: = "a run without --show puts out no token"
+    if sys.is_windows()
+        verdict.skip_check(name, "Windows starts a browser without `xdg-open`, the stand-in")
+        verdict.skip_check("the browser is handed a page that holds the token",
+            "Windows starts a browser without `xdg-open`, the stand-in")
+        return
+    if token.len == 0
+        verdict.check(name, false, "the first run put out no token to look for")
+        return
+    bin: = fs.join(work, "fakebin", arena)
+    noted: = fs.join(work, "handed.txt", arena)
+    tool: = fs.join(bin, "xdg-open", arena)
+    script: = arena.text().s("#!/bin/sh\nprintf '%s\\n' \"$1\" > '").s(noted).s("'\n").take()
+    fs.mkdir_all(bin) catch {}
+    io.write_file(tool, script) catch panic("the stand-in browser must be writable")
+    made: =
+        subproc.run_capture(U8[][]::{ "chmod", "+x", tool }, "", TOOL_WAIT_MS, 4096, arena)
+        catch panic("chmod must start")
+    if !made.exited_with(0)
+        verdict.check(name, false, "the stand-in browser cannot be made runnable")
+        return
+    path: = arena.dup_str(sys.get_env("PATH").unwrap_or("/usr/bin:/bin"))
+    sys.set_env("PATH", bin) catch panic("PATH must be settable")
+    got: =
+        subproc.run_capture(U8[][]::{ launcher, fs.join(ws, "top.ksmd", arena) }, "", TOOL_WAIT_MS,
+        64 * 1024, arena) catch panic("the launcher must start")
+    sys.set_env("PATH", path) catch panic("PATH must be settable")
+    said: = got.text(arena)
+    verdict.check(name,
+        got.exited_with(0) && said.find_str(token).is_none() &&
+        said.find_str("#t=").is_none() && said.find_str("/?doc=top.ksmd").is_some(), said)
+    // **The launcher does not wait for the browser**, so the note can come after it exits.
+    $handed: U8[] = ""
+    for _step in Range.asc(URL_WAIT_STEPS)
+        handed = io.read_file(noted, null) catch ""
+        if handed.find_char('\n').is_some()
+            break
+        sys.sleep_ms(100)
+    page: = handed.sub(0, handed.find_char('\n').unwrap_or(handed.len))
+    held: = io.read_file(page, null) catch ""
+    verdict.check("the browser is handed a page that holds the token",
+        held.find_str(token).is_some(),
+        arena.text().s("the stand-in browser was handed: ").s(handed).take())
+
 priv fn same_port_pair(work: U8[], arena: Arena$@): U8[][2] //<
     //< Two folders under `work` whose workspaces get the same port, so two runs compete for it
     //< They are found by name, as the port comes from the folder's path. Among 4,000 names over
@@ -198,7 +282,7 @@ priv fn same_port_pair(work: U8[], arena: Arena$@): U8[][2] //<
     for i in Range.asc(4000)
         name: = fs.join(work, arena.text().s("pair\{i\}").take(), arena)
         for other in seen
-            if ksmd_aim.home_port(other) == ksmd_aim.home_port(name)
+            if aim.home_port(other) == aim.home_port(name)
                 return U8[][2]::{ other, name }
         seen.push(name)
     return U8[][2]::{ "", "" }
@@ -238,9 +322,8 @@ priv fn check_together(launcher: U8[], pair: U8[][2], work: U8[], arena: Arena$@
             arena.text().s(runs[0].url).c(' ').s(runs[1].url).take())
         for k in Range.asc(2)
             status: = body_of(runs[k].url, "/api/status", arena)
-            quoted: = arena.text().c('"').s(pair[k]).c('"').take()
             verdict.check("each server serves its own document's folder",
-                status.find_str(quoted).is_some(), status)
+                serves(status, pair[k], arena), status)
     return runs
 
 fn main(): I32 //< the exit code is the checks' verdict (`verdict.finish`)
@@ -259,9 +342,10 @@ fn main(): I32 //< the exit code is the checks' verdict (`verdict.finish`)
     ws: = fs.join(work, "ws", arena)
     loose: = fs.join(work, "loose", arena)
     $first: = check_marked(launcher, ws, work, arena)
+    check_quiet(launcher, ws, aim.token_in_url(first.url), work, arena)
     $taken: = check_taken(launcher, loose, work, arena)
     // `--workspace` serves the folder named, here one holding both workspaces.
-    want: = first_free(ksmd_aim.home_port(work))
+    want: = first_free(aim.home_port(work))
     $wide: =
         start(U8[][]::{ launcher, fs.join(ws, "top.ksmd", arena),
         arena.text().s("--workspace=").s(work).take(), "--show" },
@@ -277,6 +361,7 @@ fn main(): I32 //< the exit code is the checks' verdict (`verdict.finish`)
         arena.text().s("--workspace=").s(loose).take() }, "outside the workspace", arena)
     refused(launcher, U8[][]::{ fs.join(ws, "parts/../top.ksmd", arena) }, "without '..'", arena)
     refused(launcher, U8[][]::{ fs.join(ws, "none.ksmd", arena) }, "no such file", arena)
+    check_links(launcher, ws, arena)
     listed: =
         subproc.run_capture(U8[][]::{ launcher, "--list" }, "", TOOL_WAIT_MS, 64 * 1024, arena)
         catch panic("the launcher must start")

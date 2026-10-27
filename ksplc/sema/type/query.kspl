@@ -332,6 +332,8 @@ impl sema_type_env.Env
             return true
         if !op_text.equals(".") && !op_text.equals("[") && !op_text.equals("]")
             return false
+        if r.is_value_index_node(node)
+            return false // `a.get(i)`'s result, as a call's is
         // A step inside a value is a place only where the value is one: `f().x` is not.
         return !r.steps_inside_value(node) || r.is_place_expr(node.get_postfix_receiver())
 
@@ -353,7 +355,7 @@ impl sema_type_env.Env
             return r.is_unaddressable_value(node.get_primary_inner_expr())
         if node.kind_id != .k_expr_postfix && node.kind_id != .k_method_access
             return false
-        if node.postfix_op_text().equals("(")
+        if node.postfix_op_text().equals("(") || r.is_value_index_node(node)
             return true
         return r.steps_inside_value(node) &&
             r.is_unaddressable_value(node.get_postfix_receiver())
@@ -368,12 +370,21 @@ impl sema_type_env.Env
         return r.is_unaddressable_value(node) ||
             (!r.is_slice(node.type_id) && !r.is_place_expr(node))
 
+    fn is_value_index_node(r: Self$@, node: Ast_node$@): Bool //<
+        //< Whether a subscript resolved to `Index.get`, which returns a copy of the element
+        //< The subscript is then a call's result: not a place, and its address cannot be taken. A
+        //< write to its field (`s[0].x = 5`) would change only the copy.
+        if !node.is_trait_index_access() || !node.def_node.is_fn_decl()
+            return false
+        return !r.is_place_index_node(node)
+
     priv fn steps_inside_value(r: Self$@, node: Ast_node$@): Bool //<
         //< Whether a `.` or `[` reaches memory inside its receiver's own value
         //< A field of a struct value, an element of a fixed-length array and an element of a
-        //< container that owns it (`index_owns_elements`) do. A step through a pointer, a slice's
-        //< element and a subscript through `Index` reach memory elsewhere. A receiver not typed
-        //< yet answers no, as a step through a pointer would.
+        //< container that owns it (`index_owns_elements`) do. A step through a pointer and a
+        //< slice's element reach memory elsewhere. A subscript through `Index` makes a new value
+        //< (is_value_index_node). A receiver not typed yet answers no, as a step through a pointer
+        //< would.
         recv: = node.get_postfix_receiver()
         if recv == null || sema_type_env.is_unknown(recv.type_id) ||
             r.is_pointer(recv.type_id)

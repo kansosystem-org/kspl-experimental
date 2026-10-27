@@ -247,7 +247,9 @@ function ksmdTable(ks) {
 
   // Chooses a cell, or with `opening` opens it to edit, as a spreadsheet's double-click or F2 does,
   // the caret at the end. With `whole`, all of its text is selected, so what is typed replaces it.
-  function edit(el, opening = true, whole = false) {
+  // With `typed`, the box that holds the chosen cell's focus becomes the input, keeping what was
+  // typed or is being composed in it (`catcher` in `range.js`).
+  function edit(el, opening = true, whole = false, typed = null) {
     if (open && open.input.parentNode === el) return;
     take();
     const block = blockOf(el);
@@ -261,23 +263,33 @@ function ksmdTable(ks) {
       ks.range.focus();
       return;
     }
-    const input = document.createElement("input");
+    const input = typed || document.createElement("input");
     input.className = "cell-input";
+    input.readOnly = false;
     // An input asks for about 20 characters of width; given none, opening a cell moves no column.
     input.size = 1;
     input.setAttribute("aria-label", row < 0 ? `Name of column ${letters(column)}` :
       `Cell ${letters(column)}${row + 1}`);
     input.title = "Alt+Right makes this column wider, and Alt+Left narrower. Shift+F10 opens the table menu";
-    input.value = ks.cellText(block, row, column);
-    open = { block, row, column, input, before: input.value, nodes: Array.from(el.childNodes) };
-    el.textContent = "";
-    el.appendChild(input);
+    const before = ks.cellText(block, row, column);
+    if (!typed) input.value = before;
+    open = { block, row, column, input, before, nodes: Array.from(el.childNodes).filter((n) => n !== input) };
+    // Caution: **Leave a typed box where it stands.** Moved, it loses the focus, and an input
+    // method its composition.
+    for (const n of open.nodes) n.remove();
+    if (!typed) el.appendChild(input);
     input.addEventListener("keydown", keys);
     if (row >= 0) ks.choices.attach(el.closest(".table"), column, input);
     ks.range.collapse();
     // A grid from a spreadsheet fills cells from this one; one value goes into the input.
     input.addEventListener("paste", (e) => {
       const text = e.clipboardData ? e.clipboardData.getData("text/plain") : "";
+      // Text a document cannot hold never goes in, not even as one value.
+      if (ks.tooLarge(text)) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
       if (!ks.range.grid(text)) return;
       e.preventDefault();
       // The paste renders the table again, which takes this input out of the page; the document's
@@ -286,20 +298,23 @@ function ksmdTable(ks) {
       if (open && open.input === input) input.value = open.before;
       ks.range.pasteGrid(text, false);
     });
-    // A blur of an input already closed, as a resize closes and opens its cell, takes nothing.
+    // A blur of an input already closed, as a resize closes and opens its cell, takes nothing. A
+    // value the model refuses stays: the person may have only pressed a menu or a dialog.
     input.addEventListener("blur", () => {
-      if (open && open.input === input) take();
+      if (open && open.input === input) take("stay");
     });
+    if (typed) return;
     input.focus();
     if (whole) input.select();
     else input.setSelectionRange(input.value.length, input.value.length);
   }
 
   // Takes the open cell's text into the model; the table is then shown again with its values.
-  // With `keep`, a value the model refuses stays in its open cell to be put right, as a
-  // spreadsheet keeps it, and the result is false; else the cell shows its value again. Either
-  // way the page says why.
-  function take(keep = false) {
+  // A value the model refuses shows the cell's value again, unless `keep` says what to do:
+  // "focus" opens the cell again with the text, to be put right as a spreadsheet keeps it, and
+  // "stay" leaves the input as it stands, where the focus may have gone elsewhere, unless it has
+  // left the page. Then the result is false. Either way the page says why.
+  function take(keep = "") {
     if (!open) return true;
     const o = open;
     open = null;
@@ -315,6 +330,11 @@ function ksmdTable(ks) {
     }
     const r = ks.act("ksmd_web_set_cell", o.block, o.row, o.column, ks.put(o.input.value));
     if (!keep || !r || r.ok) return true;
+    if (keep === "stay") {
+      if (!o.input.isConnected) return true;
+      open = o;
+      return false;
+    }
     const el = find(o.block, o.row, o.column);
     if (el) {
       edit(el);
@@ -407,7 +427,7 @@ function ksmdTable(ks) {
       return;
     } else return;
     e.preventDefault();
-    if (!take(true)) return;
+    if (!take("focus")) return;
     moveTo(block, to[0], to[1]);
   }
 
@@ -417,10 +437,18 @@ function ksmdTable(ks) {
   // which Excel needs to read it as UTF-8; lines end in CR LF, as RFC 4180 has them.
   function csv(block) {
     const wrap = ks.view.blocks()[block];
-    const field = (text) => (/[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text);
+    // Caution: **A spreadsheet runs text that starts with `=`, `+`, `-`, `@`, a tab or a CR as a
+    // formula.** Such text gets a `'` before it and is quoted, so it opens as text; a number
+    // stays a number.
+    const field = (text, number = false) => {
+      const t = !number && /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
+      return t !== text || /[",\r\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
+    };
     const value = (v) => (!v || v.length < 2 ? "" : v[0] === 1 ? shown(v[1]) : String(v[1]));
-    const lines = [wrap.names.map(field).join(",")];
-    for (const row of wrap.values) lines.push(row.map((v) => field(value(v))).join(","));
+    const lines = [wrap.names.map((n) => field(n)).join(",")];
+    for (const row of wrap.values) {
+      lines.push(row.map((v) => field(value(v), !!v && v[0] === 1)).join(","));
+    }
     const file = new Blob(["\uFEFF", lines.join("\r\n"), "\r\n"], { type: "text/csv" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(file);
@@ -444,18 +472,30 @@ function ksmdTable(ks) {
     return r;
   }
 
-  // Sets the number format of the chosen columns as one step; a currency asks for its code.
+  // Sets the number format of the chosen cells as one step, as Excel does; a currency asks for its
+  // code. Whole columns, chosen by their letters, take it as the column's own, which new rows
+  // follow too; the cells' own formats there go. General and the plain date are a cell's
+  // `general`, which shows its value as calculated over any format of its column.
   function format(block, name) {
     const r = ks.range.rect();
+    const rows = size(block).rows;
+    const whole = r.r1 <= 0 && r.r2 === rows - 1 && (r.r2 > r.r1 || r.r1 < 0);
     const kinds = { "format-none": "", "format-number": "number:2", "format-grouped": "grouped:2",
-      "format-percent": "percent:0" };
-    if (name in kinds) return ks.act("ksmd_web_column_format", block, r.c1, r.c2, ks.put(kinds[name]));
+      "format-percent": "percent:0", "format-date": "", "format-date-slash": "date:yyyy/mm/dd" };
+    if (name in kinds) {
+      if (whole) return ks.act("ksmd_web_column_format", block, r.c1, r.c2, ks.put(kinds[name]));
+      return ks.act("ksmd_web_cell_look", block, r.r1, r.c1, r.r2, r.c2, 5, ks.put(kinds[name] || "general"));
+    }
     if (name === "format-more" || name === "format-fewer") {
-      return ks.act("ksmd_web_column_places", block, r.c1, r.c2, name === "format-more" ? 1 : 0);
+      const more = name === "format-more" ? 1 : 0;
+      if (whole) return ks.act("ksmd_web_column_places", block, r.c1, r.c2, more);
+      return ks.act("ksmd_web_cell_places", block, r.r1, r.c1, r.r2, r.c2, more);
     }
     const code = window.prompt("Currency code, such as USD, EUR or JPY", "USD");
     if (code === null) return null;
-    return ks.act("ksmd_web_column_currency", block, r.c1, r.c2, ks.put(code.trim().toUpperCase()));
+    const typed = ks.put(code.trim().toUpperCase());
+    if (whole) return ks.act("ksmd_web_column_currency", block, r.c1, r.c2, typed);
+    return ks.act("ksmd_web_cell_currency", block, r.r1, r.c1, r.r2, r.c2, typed);
   }
 
   // Fits a column to its widest value on one line: the other columns share what is left in the
@@ -473,7 +513,7 @@ function ksmdTable(ks) {
     for (const el of cells) {
       const probe = document.createElement("span");
       probe.className = "measure";
-      probe.textContent = el.querySelector("input") ? el.querySelector("input").value : el.textContent;
+      probe.textContent = el.querySelector(".cell-input") ? el.querySelector(".cell-input").value : el.textContent;
       el.appendChild(probe);
       const style = getComputedStyle(el);
       const pad = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight) +
@@ -549,7 +589,7 @@ function ksmdTable(ks) {
       ks.range.reach(Number(el.dataset.r), Number(el.dataset.c));
       return;
     }
-    if (el && !el.querySelector("input")) {
+    if (el && !el.querySelector(".cell-input")) {
       e.preventDefault();
       edit(el, false);
       if (e.button === 0 && !e.shiftKey) pressed = ks.cell;
@@ -602,16 +642,29 @@ function ksmdTable(ks) {
     csv,
     format,
     fit,
+    // Makes a column wider or narrower by a step, as Alt+Right and Alt+Left do.
+    widen,
     range: () => ks.range.rect(),
     // Opens a cell to edit, or leaves the table past its first or last row; with `whole`, what is
     // typed replaces its text.
     open: (block, row, column, whole = false) => moveTo(block, row, column, true, whole),
+    // Opens the chosen cell with what was typed or is being composed in the box over it.
+    openTyped: (box) => {
+      const el = box.parentElement;
+      if (!el || ks.readOnly || (open && open.input === box)) return;
+      ks.range.collapse();
+      edit(el, true, false, box);
+    },
     // Chooses a cell, or leaves the table past its first or last row.
     choose: (block, row, column) => moveTo(block, row, column, false),
     // The row `dr` steps from `row`, passing over the rows a filter or a group hides.
     step: (block, row, dr) => stepRow(block, row, dr),
     // The cell being edited, whose row a filter keeps in sight: { block, row } or null.
     editing: () => (open ? { block: open.block, row: open.row } : null),
+    // The open cell's text where it differs from the cell's own, not yet taken into the
+    // document: { block, row, column, text } or null.
+    pending: () => (open && open.input.value !== open.before ?
+      { block: open.block, row: open.row, column: open.column, text: open.input.value } : null),
     // Whether an event belongs to a cell's own input rather than to the document.
     owns: (target) => !!(target && target.closest && target.closest(".table")),
     // Opens a cell with text typed in and part of it selected, as AutoSum leaves its formula.

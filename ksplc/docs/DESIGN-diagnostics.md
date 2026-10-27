@@ -88,12 +88,12 @@ Caution: **Do not use this flag to suppress the use-after-free check as well.** 
 
 | The user wrote | Shown as | Not shown as |
 | :-- | :-- | :-- |
-| `I32?` | `I32?` | `std_lang_Option_I32` |
+| `I32?` | `I32?` | `Option_I32` |
 | a function the compiler synthesized | as the source calls it | `_anon_fn_1` |
 | an environment the compiler synthesized | reworded in a note | `_anon_env_1` |
 | `Names` from `typedef Names = List<\|U8[]\|>;` | `Names` | `List<\|U8[]\|>` |
 
-Shown `std_lang_Option_I32`, someone who wrote `I32?` cannot match it to their code. Synthesized names are not shown either. An alias is shown by its own name, unresolved. `Names` is what the user wrote, and resolving it would name a type the line does not spell.
+Shown `Option_I32`, someone who wrote `I32?` cannot match it to their code. Synthesized names are not shown either. An alias is shown by its own name, unresolved. `Names` is what the user wrote, and resolving it would name a type the line does not spell.
 
 ### No diagnostic that depends on a generic's type argument
 
@@ -210,7 +210,7 @@ Caution: **Do not drop the `=` inside a parameter.** A default value is read as 
 
 **It is not enough that each diagnostic fires.** The step that turns "there were findings" into a failed build needs a separate check, that the tool itself has not broken. Even with every diagnostic confirmed to fire, CI passes if the part that turns them into a pass/fail verdict is broken. That part is the Makefile's `lint` target.
 
-**`LINT_TARGETS` lists entry points, and code unreachable from them is not analysed.** A generic is analysed only once instantiated. So code instantiated only from `tests/debug/main.kspl` escapes unless that file is listed, and its information diagnostics pile up, dozens under `std/` alone. So it is listed, and `lint-cfg`'s verdict matches. `make test-lint-gate`, among the repository's own suites beside the target it judges, checks that a file holding one information diagnostic makes `make lint` exit non-zero.
+**`make lint` analyses entry points, and code unreachable from them is not analysed.** A generic is analysed only once instantiated. So code instantiated only from `tests/debug/main.kspl` escapes unless that file is an entry point, and its information diagnostics pile up, dozens under `std/` alone. It is one, because it holds `fn main`: `LINT_TARGETS` in `mk/lint.mk` takes every such source. `make test-lint-gate`, among the repository's own suites beside the target it judges, checks that a file holding one information diagnostic makes `make lint` exit non-zero.
 
 **A severity and a CI policy are different things**: Hint means "does not stop the user's build", not "can be left standing in our repository". Outside the gate, findings pile up and bury each new one, so the gate requires zero at Hint and above. A diagnostic that can be allowed to pile up is not worth emitting.
 
@@ -236,19 +236,36 @@ Caution: **Call this check inside Sema.** After Lower and code generation, the d
 
 ### The static-initializer check is applied to both `var` and `const`
 
-**A global's starting value must be computable before the program runs. This is checked for both `var` and `const`: both become file-scope initializers in the generated C**, where C requires a constant expression. So both refuse a run-time computation: a call, a dereference, a read of a run-time value (`check_static_initializer` in `sema/decl/eval.kspl`). A read of a part of another value (an element, a field, a slice's `.len`) is refused too, with its own message, even from a `const`. C99 has no constant expression that reads one, and the fold reads integers alone, so neither backend could write it.
+**A global's starting value must be computable before the program runs. This is checked for both `var` and `const`**: both sit in static memory, and both become file-scope initializers in the generated C. **Sema decides each top-level initializer once, and Lower and both backends follow that decision** (`check_static_initializer` in `sema/body/static_init.kspl`). Each part of an initializer falls into one of three classes:
 
-Caution: **Folding does not guarantee it for a `const`.** Folding (`eval_constexpr`, computing a constant's value at compile time) runs only where a constant is used as a constant expression. A `pub const X: I32 = f();` that nothing uses that way is never folded, and the backend writes `f()` into C's initializer as it is.
+| Class | What it is | What the later stages do |
+| :-- | :-- | :-- |
+| A folded value | A node whose type is an integer, `Bool`, character, scalar enum or float, and which folds | Both backends write the value recorded in `Static_state.values`. Lower leaves the node alone |
+| A shape | A compound literal, a string, `null`, a function, a variant or a trait value. A fixed address, a slice over an array, a pointer cast and a constant of a shape count too | Each backend writes it as it stands. A conditional with a folded condition is the branch it picks (`Static_state.picks`), which Lower puts in its place |
+| Refused | Anything else | ksplc reports it with its own message |
+
+**No later stage decides again.** A guard in Lower, a fold in genc or a list of writable constants in genllvm would be a second copy of the rule. Copies disagree, and code that one copy lets through stops in the C compiler or in LLVM with zero diagnostics from ksplc (Principle 2). So a shape is in the table only when both backends write it, and a backend meets an unclassified form only as an ICE.
+
+**What is refused, and why:**
+
+* **A run-time computation** (a call, a dereference, a variable's value) reports `top-level variable initializer is not a compile-time constant`.
+* **A read of a part of another value** (an element, a field, a slice's `.len`) has its own message, even from a `const`. C99 has no constant expression that reads one, and the fold reads none.
+* **An address reached through a pointer or a computed index** reports that only a fixed address can be taken. `is_static_place` decides which addresses are fixed, and genllvm's constant `getelementptr` writes exactly those.
+* **Any other scalar that does not fold** reports that it cannot stand in a top-level initializer. A comparison of two addresses is an example.
+
+Caution: **Folding where a constant is used does not cover this.** A `pub const X: I32 = f();` that nothing uses as a constant expression is never folded there. Only this check sees it.
 
 **Follow a constant's references**, or the cycle `const A = B; const B = A;` slips through. Folding cuts cycles too, but only this check reports them. Folding runs only where a constant is used. So reporting there would miss cycles among unused constants, or among constants that cannot fold (a string, a `::{}`).
 
-**The value check sits here for the same reason** (`report_init_overflow`). An initializer whose shape passed is folded on the spot, and an overflow or a division by zero is reported. Otherwise an unused `pub const X: I32 = 2147483647 + 1;` reaches the generated C with zero diagnostics, and the C compiler's `-Winteger-overflow` reaches the user (Principle 2).
+**The value check sits here for the same reason** (`fold_static`). A scalar is folded on the spot, and an overflow or a division by zero is reported. Otherwise an unused `pub const X: I32 = 2147483647 + 1;` would never be reported.
 
-**Suppress first, then fold.** Some legitimate initializers are not values: a string, a `::{}`, an `x@`, a function name, an enum variant. Folded without suppression, such an initializer reports "it is not a constant expression". The value check must not decide whether the shape is admissible.
+**Fold quietly first, then report by folding again.** The quiet fold tells "not a constant" from an overflow. Only an overflow, a division by zero or a cut chain is folded again loudly, so one reporting point names the failing step.
 
 **Width and signedness come from the operands' type**, so the declaration's type need not be passed. `I8::127 + I8::1` overflows as `I8` even where it would fit an `I64` (`fit_or_report`).
 
-Note: **An unsigned wrap is not an overflow**: `U8::255 + U8::1` is 0, `mod 2^8`, as docs/SPEC-programming-language.md §6.8 says. In the generated C an integer promotion intervenes, so the C compiler still warns "256 becomes 0" (`-Wconstant-conversion`). The value is right, and the warning remains.
+**Each constant is folded once, and its value is kept** (`Static_state.ints` and `.floats`). A chain such as `const C2 = C1 + C1` names each constant twice, so a fold that walks every name again costs 2^n. A kept value carries how deep its own fold went. A reuse adds that depth, so the depth limit cuts the same chains as without the cache. **A value is kept only for one typing state** (`Static_state.epoch`): a fold reads the operands' types, so each newly typed initializer makes the kept values stale.
+
+Note: **An unsigned wrap is not an overflow**: `U8::255 + U8::1` is 0, `mod 2^8`, as docs/SPEC-programming-language.md §6.8 says.
 
 ### Each depth limit is set by what breaks first
 
@@ -270,13 +287,13 @@ Note: **An unsigned wrap is not an overflow**: `U8::255 + U8::1` is 0, `mod 2^8`
 
 **The folding's limit cannot be replaced by the AST's depth.** A constant's references dive across declarations (`eval_ident_or_path`), so they can go deeper than the one expression the parser accepted.
 
-**Return the cut-off apart from `not_constant`** (`Sema_error.nesting_too_deep`). As the same value, the quiet folding entry point (`eval_constexpr_quiet`) swallows it as "not a constant". The user then sees a different diagnostic, such as an error in an array size. Kept apart, the re-folding in `report_init_overflow` picks it up and reports the depth.
+**Return the cut-off apart from `not_constant`** (`Sema_error.nesting_too_deep`). As the same value, the quiet folding entry point (`eval_constexpr_quiet`) swallows it as "not a constant". The user then sees a different diagnostic, such as an error in an array size. Kept apart, the re-folding in `fold_static` (`sema/body/static_init.kspl`) picks it up and reports the depth.
 
-**A chain cut at the limit is one error, reported at the head of the fold that met it** (`report_cut_chain` in `sema/decl/eval.kspl`). "Implementation limits" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md) asks this of every cutoff. Each constant down a long chain is folded on its own (`report_init_overflow`), and every one past the limit is cut again. Reported where each walk stopped, one chain gave an error per constant, each on a line that says nothing of the chain. So the constants a reported cut went through are kept (`Resolving_state.cut_reported`), and a cut through any of them is the same chain. An array length taken from a cut chain names the depth too, not "a size that is not positive".
+**A chain cut at the limit is one error, reported at the head of the fold that met it** (`report_cut_chain` in `sema/decl/eval.kspl`). "Implementation limits" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md) asks this of every cutoff. Each constant down a long chain is checked on its own (`fold_static`), and every one past the limit is cut again. Reported where each walk stopped, one chain gave an error per constant, each on a line that says nothing of the chain. So the constants a reported cut went through are kept (`Resolving_state.cut_reported`), and a cut through any of them is the same chain. An array length taken from a cut chain names the depth too, not "a size that is not positive".
 
 **A refused typedef (too deep, circular) is the unknown type** (`resolve_written_type` in `sema/decl/resolve.kspl`). Named as a type of its own, each use added a mismatch (`expected 'A999', but got 'I32'`) that hid the refusal. An alias whose chain ends in a refused one is refused with no second error.
 
-**Raising the folding's limit lengthens translation on a pathological input.** Every top-level constant is folded to look for an overflow (`report_init_overflow`), so the chain's cost is the declaration count × the limit.
+**Raising the folding's limit lengthens translation on a pathological input.** Every top-level constant is folded (`fold_static`). A kept value saves the walk below it, so the chain's cost is at most the declaration count × the limit. The floating-point fold (`MAX_FLOAT_FOLD_DEPTH` in `sema/decl/fold_float.kspl`) reaches as deep as the integer one, since a float that does not fold cannot stand in a top-level initializer.
 
 **The bottom two exist for the C compiler, not for ksplc.** Past them the generated C exceeds the C compiler's limit (clang's `-fbracket-depth` defaults to 256) and stops with `bracket nesting level exceeded`. The user then gets the C compiler's error, not a KSPL diagnostic ("Failing fast through an exception or an ICE" in [`DESIGN-compiler.md`](DESIGN-compiler.md)). The values sit below 256 because C's depth also counts an expression's parentheses. They sit well below because MSVC and others have other limits. Block depth needs no counter of its own: the scope stack (`symtab.scope_stack.len`) grows by one per block, and that is what is checked.
 
@@ -388,7 +405,9 @@ Caution: **Do not consult it with the qualification stripped.** A short name ans
 
 **`ksplc explain <code>` prints that code's section of the diagnostics specification, [`SPEC-diagnostics.md`](SPEC-diagnostics.md), compiled into ksplc** (`ksplc/tools/explain.kspl`). `ksplc explain W0207` prints W0207's. So an edit to the specification reaches the command on the next build, with no second copy to drift (Principle 6). `ksplc/base/lint_codes.kspl` says which codes exist: an unregistered code is rejected before the text is searched.
 
-**`ksplc explain` with no code lists the codes, and a code's start narrows the list** (`ksplc explain W`, `ksplc explain I03`). Before, the only list was the specification read whole, and a reader had to know a code to ask about it. **The list is the specification's section headings.** So a code given a section is listed with no other edit, and the title listed is the one `explain <code>` prints. **One command answers both questions**, "which codes are there" and "what does this one mean", so a reader who finds one finds the other. A list of all codes is long, so a start narrows it. A reader looking at the warnings, or at one chapter, then reads only those. The codes off by default are marked, since a reader choosing what to switch on needs that most.
+**`ksplc explain` with no code lists the codes.** A reader does not have to know a code to ask about it. **The list is the specification's section headings.** So a code given a section is listed with no other edit, and the title listed is the one `explain <code>` prints. **One command answers both questions**, "which codes are there" and "what does this one mean", so a reader who finds one finds the other. The codes off by default are marked, since a reader choosing what to switch on needs that most.
+
+**A code's start does not narrow the list; it is refused as an unknown code.** A filter on the list is a second way to find a code, and a search of the list's output already does it (Principle 6). Taken as a filter, a mistyped code would print a list instead of an error.
 
 **Only a warning, an information or a hint has an explanation, because only they carry a code** ("An error has no number" in [`SPEC-tools.md`](SPEC-tools.md)). So an error's message must say what went wrong and what to write instead, in the line the reader already has. Elm does this for every message.
 

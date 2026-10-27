@@ -22,7 +22,7 @@ This guide brings the car up one *stage* at a time. A stage is one small check. 
 | The LED matrix module (it takes the ultrasonic module's connector) | The I2C check and the car's face | 5c |
 | A PC that can share its connection with the car's USB adapter (the steps here are Windows's) | The network stages | 6a |
 | Python (`python -m http.server`) | A web server for the car to call | 6c |
-| kssrv built on the PC (`make kssrv`) | The server that decides for the car, or hands it a policy | 6e |
+| kssrv built on the PC (`make kssrv`) | The server that hands the car its policy | 7 |
 
 ## Words used in this guide
 
@@ -49,7 +49,7 @@ The guide assumes no embedded-systems knowledge. "Words used in this document" i
 | frame, MAC, ARP, ICMP, TCP, HTTP | The network layers. A *frame* (IEEE 802.3) is one packet on the wire, addressed by *MAC* (hardware) address. *ARP* finds the MAC address that owns an IP address. *ICMP* carries `ping`. *TCP* is an ordered connection on top of IP, and *HTTP* is the web's request and response on top of TCP |
 | heap | Memory handed out while the program runs (`alloc`), rather than fixed when it is built |
 | atomic operation | A read-and-change of memory that nothing can interrupt halfway. The RP2040's CPU has no instruction for it, so ksos builds one from the chip's hardware lock (the SIO *spinlock*) |
-| kssrv | Kanso's web server, run on the PC in stages 6e, 7 and 9 |
+| kssrv | Kanso's web server, run on the PC in stages 7 and 9 |
 | policy | The small neural network and its tables that turn the car's sensor readings into the next manoeuvre |
 | manoeuvre | One of the car's moves: `forward`, `back`, `strafe_left` / `strafe_right` (sideways), turning, `stop`, `emergency_back` |
 | the record | An append-only log (entries are only added at the end) kept in the flash's last 64KB by [ksdb](../../ksdb/README.md) |
@@ -68,11 +68,11 @@ flowchart LR
     S2b --> S4["4, 5a, 5b, 5c: the sensors"]
     S2b --> B["6d, 8, 10: heap, record, LEDs"]
     S2b --> N["6a, 6b, 6c: a network over USB"]
-    N --> D["6e, 7: driving with kssrv"]
+    N --> D["7: receiving a policy from kssrv"]
     S3 --> D
     D --> S9["9: starting with no PC"]
     B --> S9
-    S9 --> L["11, 12: learning, the IR remote"]
+    S9 --> L["12: the IR remote"]
 ```
 
 | # | What it brings up | How you know it worked |
@@ -89,21 +89,19 @@ flowchart LR
 | [6b](#stage-6b--passing-8023-frames--ping) | 802.3 frames through `Link` in `ksos/net/link.kspl` | ping from the PC |
 | [6c](#stage-6c--running-tcp-and-http-on-real-hardware) | TCP / HTTP | A server on the PC |
 | [6d](#stage-6d--heap-and-atomics-on-armv6-m) | The heap and the atomics (`alloc` / `Arc` / `std/http`) | The `[heap]` lines |
-| [6e](#stage-6e--a-closed-loop-with-the-pcs-kssrv) | A **closed loop** with the PC's kssrv | The wheels move / kssrv's `/api/status` |
 | [7](#stage-7--receiving-a-policy-then-deciding-alone) | Deciding in the car on a policy received once | The wheels keep moving with `kssrv.exe` down |
 | [8](#stage-8--leaving-a-record-inside-the-device) | An append-only record in the flash's last 64KB | `boot #N` grows each power cycle |
 | [9](#stage-9--the-car-keeps-its-policy-and-starts-alone) | Starting with no PC, on the policy kept in the car | With no kssrv, the wheels turn at power-on |
 | [10](#stage-10--showing-the-state-as-ws2812-light) | The WS2812 LEDs as a window needing no cable | The `[led]` colours, by eye |
-| [11](#stage-11--a-model-that-predicts-the-cars-motion) | The car predicting its own motion | `st,` grows and carries across restarts (on the floor; at `line=7` it does not move) |
 | [12](#stage-12--driving-it-from-the-ir-remote-alone) | Driving by the IR remote alone | The keys change how it drives |
 
-**"Tuning line following", after stage 12, is not a stage**: it holds what stages 7, 9, 11 and 12 share when the car follows a line.
+**"Tuning line following", after stage 12, is not a stage**: it holds what stages 7, 9 and 12 share when the car follows a line.
 
 **Wireless is not among the stages** ("WiFi (CYW43439) — not implemented in this design" in [`DESIGN-rtos.md`](DESIGN-rtos.md)).
 
 **`make ksos-rp2040-board` is one firmware for stages 2b, 4, 5c, 6d, 8 and 10.** It prints lines tagged `[tag]` for each stage in turn, one lap in about 20 seconds (how to read them: the heading of [`demo/rp2040/rp2040_board_probe.kspl`](../demo/rp2040/rp2040_board_probe.kspl)). `make ksos-rp2040-net` is one firmware for 6a, 6b and 6c.
 
-Caution: **Do not add the stages that turn the wheels (3, 6e, 7, 9, 12) to the board firmware.** They need the wheels lifted before writing, and the board firmware runs connected on the desk.
+Caution: **Do not add the stages that turn the wheels (3, 7, 9, 12) to the board firmware.** They need the wheels lifted before writing, and the board firmware runs connected on the desk.
 
 **Stage 2 is split** because USB cannot enumerate until the clock is right ("The clocks and the µs timer" in [`DESIGN-rtos.md`](DESIGN-rtos.md)). 2a checks the clock by the buzzer's pitch. **Stage 5 is split** by the tools each part needs. IR (5b) comes before I2C (5c). I2C needs the ultrasonic module swapped for the LED matrix, while the IR receiver stays on GPIO 3.
 
@@ -420,98 +418,16 @@ Caution: **The car's address is fixed at 192.168.137.50, with no DHCP.** `rx=` g
 
 ---
 
-## Stage 6e — a closed loop with the PC's kssrv
-
-**A decision made outside the car comes back to the wheels.** The car sends its sensor readings to kssrv on the PC. A small MLP (a small neural network) there settles the next manoeuvre. The car turns its wheels, then it repeats. The request's and response's shape are in the server's own documents.
-
-```mermaid
-sequenceDiagram
-    participant Car
-    participant PC as kssrv on the PC
-    loop every lap
-        Car->>Car: read the sensors
-        Car->>PC: POST /api/car
-        PC->>Car: the next manoeuvre
-        Car->>Car: turn the four wheels
-    end
-```
-
-Caution: **Lift the wheels off**: in a closed loop, a hand is too slow to catch a start in an unintended direction.
-
-**Plug in the ultrasonic module, not the LED matrix.** Lifted, the reflective sensors see nothing and read `line=7`, which the decision takes as "a junction or an end". At a distance the answer is then always `stop`, and moving a hand gives only `stop` and `emergency_back`. To see the other manoeuvres, slip white paper under the reflective sensors (`line=0`). `forward` with no paper is suspect: the sensor or the decision is ignoring the observation.
-
-**The car applies three safety timeouts itself, whatever the reply.** They are the battery, point-blank range and no reply. They are the `car-loop` column of "The safety timeouts of each firmware" in stage 7. The battery timeout does not clear by itself. Switch the battery off and on.
-
-**kssrv must run on the PC, facing outward** (only it answers `/api/car`, and not under `--local`). It trains the steering policy at start-up, so its listener takes a moment. The sharing is as in stage 6c (the PC 192.168.137.1, the car 192.168.137.50). The connection stays open (kssrv keeps it alive), since a new TCP connection per lap does not fit the 100ms control period.
-
-### How to proceed
-
-1. Lift the wheels, plug in the ultrasonic module, and slip white paper under the reflective sensors.
-2. On the PC, build and start kssrv, then the car's firmware:
-
-   ```
-   make kssrv                     # on the PC side
-   ./out/kssrv.exe 8080 .         # on the PC side (a few seconds until the listener comes up)
-   make ksos-rp2040-car-loop     # the car side's UF2
-   ```
-
-3. Write `ksos_rp2040_car_loop.uf2`, replug, and open the Serial Monitor. The buzzer sounds only until enumeration: **one beep, then silence** is going well (the other counts are in the table after these steps).
-4. Once connected, it prints:
-
-   ```
-   [car] link up, resolving peer
-   [car] connected to kssrv, entering the control loop
-   ```
-
-   Then one line every 10 laps (about a second):
-
-   ```
-   car t=10 dist= 245mm line=2 bat=7.912V cmd=strafe_right (0,50,0) ok=10 to=0 bad=0 drop=0
-   ```
-
-5. Check the PC side at the same time (**one side alone is not enough**):
-
-   ```console
-   $ curl -s localhost:8080/api/status | python3 -m json.tool | grep -E 'commands|requests'
-   ```
-
-What the beeps in step 3 mean:
-
-| The beeps | What it means |
-|---|---|
-| **One, then silence** | USB initialized: going well; the rest shows on the console |
-| Four, then silence | The ADC did not wake (suspect `clk_adc`); with no console yet, sound is all there is |
-| Five, then silence | PWM did not wake (every later instruction is ignored) |
-| Nine, then silence | `usb.init()` failed: back to stage 2b |
-| N, repeating | Not enumerated; N is how far it got, as in stage 2b (replugging starts over) |
-
-What the report line's fields count:
-
-| Field | What it counts |
-|---|---|
-| `ok` | Valid replies passed to the wheels. **Its growth is the closed loop's evidence** |
-| `to` | Replies that never came. Growing: the PC side or the sharing |
-| `bad` | Replies that could not be read. Growing: a `seq` mismatch or the JSON's form |
-| `drop` | Sends lost. **Must be 0** (there is one NTB) |
-| `HALTED:` | It stopped on the safe side; the reason follows (until the power is switched off and on) |
-
-**Done means two things:**
-
-1. **The loop is closed**: `ok` grows with `drop=0`, and the PC's `commands` keeps pace (slightly ahead, since `ok` skips emergency-retreat laps).
-2. **The decision reaches the wheels.** With the paper in (`line=0`), move a hand and watch `cmd`. It goes `forward` (over 400mm), `strafe_*` (400 to 150mm) and `back` (150 to 100mm). Under 100mm it goes `emergency_back`, decided by the car alone. The wheels must really change.
-
-**The sideways direction follows the right sensor, not the distance**: an odd `line` gives only `strafe_left`. For `strafe_right` make `line` even (`0` with the paper, or black under the left or centre sensor alone).
-
 ## Stage 7 — receiving a policy, then deciding alone
 
-**Here the car receives a whole policy once at start-up, disconnects, and decides alone** ("What the self-driving probe does" in [`DESIGN-rtos.md`](DESIGN-rtos.md)). Where stage 6e asks the PC on every lap, this car asks once and then needs no PC.
+**Here the car receives a whole policy once at start-up, disconnects, and decides alone** ("What the self-driving probe does" in [`DESIGN-rtos.md`](DESIGN-rtos.md)).
 
 ```mermaid
 sequenceDiagram
     participant Car
     participant PC as kssrv on the PC
     Note over Car,PC: at start-up
-    Car->>PC: GET /api/pilot
+    Car->>PC: GET /pilot_policy.safetensors
     PC->>Car: the policy (the weights, the manoeuvre table, the preprocessing constants)
     Car->>PC: close the connection
     Note over Car: after that, with no PC
@@ -520,11 +436,13 @@ sequenceDiagram
     end
 ```
 
-Caution: **Lift the wheels off, and plug the ultrasonic module in** (as in stage 6e).
+Caution: **Lift the wheels off**: a hand is too slow to catch a start in an unintended direction.
+
+**Plug in the ultrasonic module, not the LED matrix.** Lifted, the reflective sensors see nothing and read `line=7`, which the policy takes as "a junction or an end". At a distance the answer is then always `stop`. To see the other manoeuvres, slip white paper under the reflective sensors (`line=0`).
 
 **The car applies its safety timeouts outside the policy.** They are the battery, point-blank range and a missing policy. They are the `car-pilot` column of "The safety timeouts of each firmware" below.
 
-**kssrv is needed only while the policy is received.** After that the PC can go down, which is the point of this stage. The sharing is as in stage 6c. The policy (about 2.0KB) arrives in several segments and is read until complete (`std/http` looks at Content-Length). Keep the received body alive while in use: the weights point into it (zero copy).
+**kssrv is needed only while the policy is received.** After that the PC can go down, which is the point of this stage. kssrv hands the policy out as a plain file, `ksos/demo/cortex_m/pilot_policy.safetensors`, so it serves that folder. The sharing is as in stage 6c. The policy (about 2.0KB) arrives in several segments and is read until complete (`std/http` looks at Content-Length). Keep the received body alive while in use: the weights point into it (zero copy).
 
 ### How to proceed
 
@@ -532,11 +450,11 @@ Caution: **Lift the wheels off, and plug the ultrasonic module in** (as in stage
 
    ```
    make kssrv                     # on the PC side (only while it is being received)
-   ./out/kssrv.exe 8080 .         # on the PC side (a few seconds until the listener comes up)
+   ./out/kssrv.exe 8080 ksos/demo/cortex_m   # on the PC side: serves the policy file
    make ksos-rp2040-car-pilot    # the car side's UF2
    ```
 
-2. Write `ksos_rp2040_car_pilot.uf2`, replug, and open the Serial Monitor. The beeps read as in stage 6e.
+2. Write `ksos_rp2040_car_pilot.uf2`, replug, and open the Serial Monitor. The buzzer sounds only until enumeration: **one beep, then silence** is going well (the other counts are in the table after these steps).
 3. The wheels do not move until the first line below appears (if it does not, check kssrv and the sharing):
 
    ```
@@ -556,7 +474,17 @@ Caution: **Lift the wheels off, and plug the ultrasonic module in** (as in stage
 | `us` | One decision's time in µs (around 10ms, a tenth of the 100ms period). **Do not rely on the absolute value.** It moves with the XIP cache's contents (the cache through which the CPU runs code straight from flash). It jumps about 1.5 times on the lap after a record is written (stage 9) |
 | `emerg` | Laps where it overrode the policy at close range and backed off. **`n` + `emerg` = `t`** (an emergency lap is not in `n`); a mismatch means a lost count |
 | `drop` | Sends lost. It sends nothing after receiving, so it must not grow |
-| `HALTED:` | As in stage 6e |
+| `HALTED:` | It stopped on the safe side; the reason follows |
+
+What the beeps in step 2 mean:
+
+| The beeps | What it means |
+|---|---|
+| **One, then silence** | USB initialized: going well; the rest shows on the console |
+| Four, then silence | The ADC did not wake (suspect `clk_adc`); with no console yet, sound is all there is |
+| Five, then silence | PWM did not wake (every later instruction is ignored) |
+| Nine, then silence | `usb.init()` failed: back to stage 2b |
+| N, repeating | Not enumerated; N is how far it got, as in stage 2b (replugging starts over) |
 
 #### Bringing it back when the battery stopped it
 
@@ -579,22 +507,21 @@ Caution: **Do not unplug USB, and keep the wheels lifted.** Unplugging does not 
 3. `fetch_policy` sends `Connection: close`, so kssrv shows `conn #N closed` and the loop sends nothing after. Bringing kssrv down confirms that from outside.
 4. **`n` growing, and the wheels turning, are the evidence.**
 
-The only path to the wheels (`apply`) is `one_round` inside `if ready && !halted`. Stage 6e, treated the same way, counts `to` and stops. The car also runs on the battery alone with the cable off, but then only the wheels' motion can be seen.
+The only path to the wheels (`apply`) is `one_round` inside `if ready && !halted`. The car also runs on the battery alone with the cable off, but then only the wheels' motion can be seen.
 
 ### The safety timeouts of each firmware
 
 **Each car firmware stops, or holds the wheels back, by itself in these cases**, whatever the reply or the policy says, and with no link.
 
-| The car sees | It | `car-loop` (6e) | `car-pilot` (7, 9) | `car-ir` (12) | How it comes back |
-| :-- | :-- | :--: | :--: | :--: | :-- |
-| The battery under `BATTERY_LOW_MV` on `LOW_ROUNDS` **consecutive** laps (`ksos/demo/rp2040/common/battery.kspl`) (a motor's inrush dips it for an instant) | Stops; `car-loop` also sends no more requests | ✅ | ✅ | — | Switch the battery off and on ("Bringing it back when the battery stopped it" above) |
-| The distance under `emergency_mm` (100mm) | Backs off | ✅ | ✅ | — | By itself, once the distance grows |
-| No valid reply within `reply_deadline_ms` (300ms) | Stops | ✅ | — | — | By itself, at the next valid reply |
-| No policy received, and none in the record | Never moves | — | ✅ | — | Receive one from kssrv (stage 9) |
-| A remote button while it runs | Stops | — | ✅ any button | ✅ ▶ or 9 only | `car-pilot`: hold a key about a second, then let go ("How to stop it when it drives itself" in stage 9) |
-| 60 seconds of driving (`max_driving_rounds`) | Stops. The only one that works while nobody watches | — | ✅ | — | As for the remote |
-| A held key let go | Stops | — | — | ✅ | Press the key again ("It runs only while a key is held" in stage 12) |
-| Every instruction to the wheels | Scales it down to the speed cap, `cap.cap` (it does not stop) | — | ✅ | ✅ | — |
+| The car sees | It | `car-pilot` (7, 9) | `car-ir` (12) | How it comes back |
+| :-- | :-- | :--: | :--: | :-- |
+| The battery under `BATTERY_LOW_MV` on `LOW_ROUNDS` **consecutive** laps (`ksos/demo/rp2040/common/battery.kspl`) (a motor's inrush dips it for an instant) | Stops | ✅ | — | Switch the battery off and on ("Bringing it back when the battery stopped it" above) |
+| The distance under `emergency_mm` (100mm) | Backs off | ✅ | — | By itself, once the distance grows |
+| No policy received, and none in the record | Never moves | ✅ | — | Receive one from kssrv (stage 9) |
+| A remote button while it runs | Stops | ✅ any button | ✅ ▶ or 9 only | `car-pilot`: hold a key about a second, then let go ("How to stop it when it drives itself" in stage 9) |
+| 60 seconds of driving (`max_driving_rounds`) | Stops. The only one that works while nobody watches | ✅ | — | As for the remote |
+| A held key let go | Stops | — | ✅ | Press the key again ("It runs only while a key is held" in stage 12) |
+| Every instruction to the wheels | Scales it down to the speed cap, `cap.cap` (it does not stop) | ✅ | ✅ | — |
 
 ## Stage 8 — leaving a record inside the device
 
@@ -773,8 +700,7 @@ With neither a link nor a PC, **holding a remote key prints the whole record to 
 | :-- | :-- |
 | The region's marker | Written back (left erased, the next start would erase again) |
 | The policy | Written back: without it, a start with nothing upstream cannot move |
-| The observations (`kind=2`) | Dropped |
-| The learned weights (`kind=3`) | Dropped; the weights in RAM stay and are written again at the next save |
+| The observations (`kind=2`) | Dropped, and recording starts again: `rec=` counts from 0, and a `(stopped: full)` goes |
 
 **Rewriting the firmware does not erase the record**; only a changed marker (`record_marker`) does. Records of different generations then mix, and `[dump]` alone cannot show the boundary: erase before measuring again.
 
@@ -864,88 +790,6 @@ Note: Only `ksos/demo/rp2040/common/sample.kspl` knows the columns' order, and t
 Caution: **Do not raise the brightness** (one place: `board.WS2812_LEVEL`). Eight elements at full white use about 0.5A, and the low-voltage watch (`battery_low_mv`) fires on their own light. To save more, light fewer elements (what a dark one still uses is under "The WS2812 LEDs" in [`SPEC-board.md`](SPEC-board.md)).
 
 If the colours do start going wrong, doubling `bit_counts` doubles the window for the write. Whether WS2812 accepts the longer Low must be confirmed on the real board.
-
-## Stage 11 — a model that predicts the car's motion
-
-**This stage brings the mechanism up; it does not show the prediction coming right.** Whether it beats "the same as last time" on the floor is "What has been checked on real hardware" in [ksos](../README.md).
-
-The policy (stage 7) decides what to do; this stage adds a small net that predicts **what happens then** (`ksos/demo/common/car_model.kspl`). Each lap it learns a little from its own mistake:
-
-```mermaid
-flowchart LR
-    I["the line bits now and before,<br/>and the manoeuvre about to be sent"] --> P["predict the next lap's three line bits"]
-    P --> C["compare with what the next lap reads"]
-    C --> L["correct the net by one step"]
-    L --> I
-```
-
-* **One step per control lap** (`loop_interval_ms` = 100ms). Do not learn on every 10ms steering tick: a step does not fit, the lap stretches to 230ms, and line following dulls.
-* **It predicts the line, not the ultrasonic distance.**
-
-Why it learns this way is in "🤖 The AI on bare metal" in [`DESIGN-rtos.md`](DESIGN-rtos.md). It covers the line and not the distance, and no teacher. It also covers the policy not trained on its own record, and what is refused.
-
-The report line gains these fields:
-
-```
-car t=300 dist= 612mm line=3 bat=7.980V drive=(20,7,12) n=300 us=9210 emerg=0 drop=0 rec=42 pred=2 perr=4.8% base=6.1% v6 lus=3100/2999st,0sv
-```
-
-| Field | What it means |
-| :-- | :-- |
-| `pred=` | The predicted next-lap bits (0 to 7), to compare with the next line's `line=`. `-` is no prediction (stopped, or not one step learned) |
-| `perr=` | A moving average of the share of bits predicted wrong, in % (not the loss). `--` is not one step learned |
-| `base=` | The share wrong for "the same as the previous tick", in %. **`perr=` below it is the only evidence of learning** (both over the same steps and window, so `[dump]` need not be recounted). A draw is not a win: it means only "no change" was learned |
-| `v` | The weights' layout version (`STATE_VERSION` in `demo/common/car_model.kspl`). If it differs from the local source, the other numbers still look plausible: check it first when the counting changes |
-| `lus=` | One learning step's time in µs, apart from `us=` (the policy alone). A lap that sent a stop skips the forward pass (the net's calculation from input to output) and reads small: read it where `drive=` is non-zero. Do not rely on the absolute value; to shorten it, shrink `HIDDEN` in `demo/common/car_model.kspl` |
-| `st,` | Steps learned. **It accumulates across power cycles** (read back from the record), so a run's steps are the difference. One per lap (fewer than `n=` when steering was redone mid-lap), only on laps the wheels moved |
-| `sv` | Saves of the weights to the record. If it stays 0, the next start-up does not resume from here |
-| `resumed the forward model — N steps learned, missed E per mille of bits vs B for no-change` | The previous weights were read. Whether E is below B says whether it was learning last time (E alone says nothing) |
-
-**`lus=3100/2999st,0sv` is three fields in a row**, not a division: the step time in µs, the steps learned, the saves.
-
-### Nothing can be learned unless the wheels move
-
-**A stopped lap asks no question**: with 0 steps `perr=` shows `--`. A lap not driven (stopped, or HALTED) and a lap whose steering was redone mid-lap teach nothing either. Why is in "🤖 The AI on bare metal" in [`DESIGN-rtos.md`](DESIGN-rtos.md).
-
-**At `line=7` the car does not move** (the policy stops at "a junction or an end"). On a stand all three sensors read black, so `st,` never grows and a hand does not help. Put it down on the floor.
-
-### Keeping what was learned across a power cycle
-
-The weights and **the progress (the steps and the error)** go into the record (ksdb) as one `kind=3` entry, 452 bytes with its head (`skip kind=3 len=444` in `[dump]`).
-
-It saves every 60 seconds and the instant it stops, but **not on a battery halt**, which loses the progress since the last periodic save.
-
-**Weights of another scale are refused.** If the version, the hidden layer's size or the speed cap differs, `load` refuses them and learning restarts. So no `resumed ...` line appears on the first start after changing `cap.cap`.
-
-### Running it without the cable and reading the result afterwards
-
-A learning run can go on the battery alone, with the LEDs as the window. See "Seeing the state as light while it drives itself" in stage 9. **The next cabled start-up's `resumed ...` line gives the result.**
-
-1. Start with USB and confirm the policy is in the record (`no fresh policy — using the one stored on board` is enough). If not, receive it from kssrv once first.
-2. Unplug USB, put it down on the floor and let it run. Blinking LEDs show the loop is turning (at `line=7` it does not move).
-3. It stops at the 60-second run-time limit and saves what it learned at that instant. To go on, hold a key about a second and let go.
-4. Pick it up and connect USB: the start-up line `resumed the forward model — N steps learned, missed E per mille of bits vs B for no-change` is the previous run's result.
-5. Repeat 2 to 4: **N growing and E shrinking means it is learning on the floor** (each run is one point).
-
-To print the record, hold a key about three seconds while it is stopped ("Reading out the record stored in the car" in stage 9). `perr=`'s history is not there (the progress is inside the `kind=3` entry).
-
-### How the learning is checked
-
-**`make ksos-cm-car-model-probe` checks the learning on bare metal**, under QEMU (an emulator of the CPU, run on the PC). It uses a function standing in for the floor, which the net cannot see into. The wrong bits must drop below the "same as last time" mark, so the net can only predict from what it learned. It also checks that a stopped lap teaches nothing, the save and read-back, and the refusal of weights of another scale. Even there it does not reach 0%, because the course's curve is hidden from the net. So the probe asks only whether it beats "the same as last time", not by how much.
-
-**`base=` moves with the course, the battery and the period.** So compare `perr=` with `base=` within one run, never `perr=` across runs. Do not read the probe's result as the car's prospect. That floor is one function, and on a real floor the line barely moves between ticks.
-
-On the floor, read these three **from the top** (a lower one means something only once those above hold):
-
-| What to look at | The shape of it holding |
-| :-- | :-- |
-| Is there material to learn from | `st,` grows at a pace close to `n=` |
-| Is the learning carried over | The steps grow in the `resumed ...` line after switching back on |
-| Is it learning | `perr=` below `base=` |
-
-### Tell the version written by `v`, not by `st,`
-
-**`st,` accumulates across power cycles** and restarts from 0 when `load` refuses another version's weights, so one value can mean "resumed" or "restarted". Read `v` first: if it differs from `STATE_VERSION` in the local `demo/common/car_model.kspl`, the version written is old. Then one run's steps are the difference in `st,` from the start-up `resumed ...` line.
 
 ## Stage 12 — driving it from the IR remote alone
 

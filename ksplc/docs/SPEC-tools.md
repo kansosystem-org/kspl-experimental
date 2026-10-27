@@ -33,7 +33,7 @@ flowchart LR
 | `ksplc info <subject>` | prints one answer ksplc holds (where the standard library is, the link conditions, where the cache is, the reserved words) | [7. Querying and tidying up](#7-querying-and-tidying-up-ksplc-info--ksplc-clean) |
 | `ksplc clean` | empties the disk cache ksplc made | [7. Querying and tidying up](#7-querying-and-tidying-up-ksplc-info--ksplc-clean) |
 | `ksplc emit-runtime <output.c>` | writes only the C runtime's source, as one translation unit, for LLVM IR to link | [2.10.5 Writing the runtime for LLVM IR](#2105-writing-the-runtime-for-llvm-ir-ksplc-emit-runtime) |
-| `ksplc explain [<code> \| <start>]` | prints what a diagnostic code means and what to do about it: that code's section of the diagnostics specification. With no code it lists every code and its title; with a code's start (`W`, `I03`), the codes it begins | [`SPEC-diagnostics.md`](SPEC-diagnostics.md) |
+| `ksplc explain [<code>]` | prints what a diagnostic code means and what to do about it: that code's section of the diagnostics specification. With no code it lists every code and its title. Any other word is refused | [`SPEC-diagnostics.md`](SPEC-diagnostics.md) |
 | `ksplc doc <file>[.<name>]` | prints what a file, one entry or a folder publishes, rendered from the source | [7.5 ksplc doc](#75-ksplc-doc-what-a-file-publishes-as-a-reference) |
 
 The words in the table: *semantic analysis* is the stage that works out every type and name. *Lower* is the stage after it, which prepares the code for output. A *diagnostic* is a message about your code: an error, a warning, an information or a hint ([§5.2](#52-the-diagnostics-four-weights)). A *translation unit* is one `.c` file as the C compiler reads it.
@@ -89,7 +89,7 @@ clang main.ll kspl_runtime.c -o main
 
 #### 2.2.1 Naming the machine the output is for (`--machine`)
 
-`--machine=<triple>` names the machine the program will run on, by the triple its C compiler names that machine by (clang's `-target`). Without it, the output is for the machine ksplc itself runs on, which `ksplc info machine` names ([§7.1](#71-ksplc-info-reporting-what-ksplc-resolved)).
+`--machine=<triple>` names the machine the program will run on, by the triple its C compiler names that machine by (clang's `-target`). Without it, the output is for the machine ksplc itself runs on.
 
 ```sh
 ksplc --freestanding --machine=thumbv7m-none-eabi app.kspl app.c
@@ -107,7 +107,7 @@ The name after `kspl_folded_for_` is the machine ksplc laid the number out for. 
 | The case | What happens |
 | :-- | :-- |
 | A machine ksplc has no widths for | refused, with the machines it knows listed. They are the rows of `MACHINES` in [`../base/target.kspl`](../base/target.kspl) |
-| No `--machine`, on a machine ksplc has no widths for | every subcommand that lays values out refuses at its start: a compile, `lint`, `lsp`, `run`, `build` and `info machine`. The message names the machine ksplc runs on, as the triple its C compiler's macros give. It lists the known ones, and asks for `--machine=<triple>` on a compile or a lint. `fmt`, `doc`, `explain`, `emit-runtime` and `clean` read no type, and run |
+| No `--machine`, on a machine ksplc has no widths for | every subcommand that lays values out refuses at its start: a compile, `lint`, `lsp`, `run` and `build`. The message names the machine ksplc runs on, as the triple its C compiler's macros give. It lists the known ones, and asks for `--machine=<triple>` on a compile or a lint. `fmt`, `doc`, `explain`, `info`, `emit-runtime` and `clean` read no type, and run |
 | `--to=llvm` for a machine with 4-byte pointers (Cortex-M, wasm32) | refused: the LLVM backend lays out only 8-byte pointers. Write C for it |
 | `--to=llvm` for any other machine | the IR names the machine's `target triple`, so an LLVM tool builds for it |
 
@@ -173,8 +173,6 @@ This table lists every option of a compile. Most have a section of their own, li
 | `--library=<FILE>` | builds a library and writes its interface to `<FILE>`: a C header for a `.h`, an `extern "C"` block for a `.kspl`. It can be repeated, so one compilation writes both forms. Only the library's `#export` functions are visible outside the generated C, and its runtime and std are its own ([§2.10.1](#2101-building-a-library---library), [§2.10.2](#2102-writing-its-interfaces---libraryfile)). |
 | `--emit-deps=<FILE>` | on success, writes the list of the sources read to `<FILE>` ([§2.9.3](#293-writing-out-the-list-of-sources-read---emit-deps)). |
 | `--emit-libs=<FILE>` | on success, writes the libraries the program names with `#link` to `<FILE>` as one line of `-l<name>` words, a response file for the C compiler (`@<FILE>`) ([§2.10.4](#2104-writing-out-the-libraries-the-program-names---emit-libs)). |
-| `--surface-scope=<pub\|all>` | what `--emit-surface` writes: `pub` (the default), what the package publishes, or `all`, everything a file beside it can reach ([§2.9.4](#294-writing-out-the-published-api---emit-surface)). |
-| `--emit-surface=<FILE>` | writes the record of the API the file publishes to `<FILE>`. It is not the interface a caller links against (`--library=`), but **the record that two versions are compared by** ([§2.9.4](#294-writing-out-the-published-api---emit-surface)). |
 | `--lint=<CODE>=<level>` | sets one diagnostic's level, `off`, `on` or `error`, on a compile as on `ksplc lint`; it can be repeated, and the later one wins ([§5.3](#53-enabling-disabling-or-promoting-a-diagnostic-to-an-error-lint----lint--ksplccfg)) |
 | `--diagnostic-format=<text\|json>` | how the diagnostics are written to standard error: `text` (the default), for a person, or `json`, one object per line, for a program ([§2.11](#211-diagnostics-a-program-reads---diagnostic-format)). |
 | `--help` | prints the usage on standard output and exits with 0. |
@@ -351,7 +349,7 @@ An *artifact* is one thing a build makes: a program or a library. Sections 2.1 t
 | :-- | :-- | :-- |
 | **Receiver** | `--std-dir` / `--pkg-src-dir` (telling it a place, mainly through `KSPLC_STD_DIR` / `KSPLC_PKG_SRC_DIR`) | none: a C program includes the header, a KSPL program imports the `extern "C"` block |
 | **Provider** | none (a folder is simply placed) | `--library=` (the library, its insides private, and its interfaces) |
-| **Record** (neither side) | `--emit-deps` (the sources read → the rebuild verdict, `run`'s cache), `--emit-surface` (the published API → comparing versions) | `--emit-libs` (the libraries the program names → the link line) |
+| **Record** (neither side) | `--emit-deps` (the sources read → the rebuild verdict, `run`'s cache), `ksplc doc --emit-surface` (the published API → comparing versions) | `--emit-libs` (the libraries the program names → the link line) |
 
 Note: `ksplc emit-runtime` stands apart from both: it writes the runtime that `--to=llvm`'s IR links ([§2.10.5](#2105-writing-the-runtime-for-llvm-ir-ksplc-emit-runtime)).
 
@@ -371,7 +369,8 @@ flowchart LR
     PKG --> K
     K --> OUT["the generated C / IR"]
     K --> DEPS["--emit-deps<br/>the list of the sources read<br/>(sha256 + path)<br/>→ the rebuild verdict, run's cache"]
-    K --> SURF["--emit-surface<br/>the record of the API being published<br/>→ putting one version against another"]
+    SRC --> DOC["ksplc doc"]
+    DOC --> SURF["--emit-surface<br/>the record of the API being published<br/>→ putting one version against another"]
 ```
 
 #### 2.9.1 Locating the standard library (`--std-dir=`)
@@ -436,11 +435,13 @@ On success it writes one line per source to `<FILE>`, as `<64 hex digits of sha2
 
 #### 2.9.4 Writing out the published API (`--emit-surface`)
 
-`--emit-surface=<FILE>` writes the declarations the compiled entry point publishes to `<FILE>`, **one per line**. Keep the file from one version and write it again for the next. Comparing the two lines up **what was added, changed and deleted**, by name.
+`ksplc doc --emit-surface=<FILE> <file>` writes the declarations the file publishes to `<FILE>`, **one per line**, and prints nothing. Keep the file from one version and write it again for the next. Comparing the two lines up **what was added, changed and deleted**, by name.
 
 ```sh
-ksplc --emit-surface=tensor.surface ksai/tensor.kspl out.c
+ksplc doc --emit-surface=tensor.surface ksai/tensor
 ```
+
+**The record needs the source alone**, as the rest of `ksplc doc` does ([§7.5](#75-ksplc-doc-what-a-file-publishes-as-a-reference)). So it is written in a fraction of a second, with no analysis and no output file. What this gives up: writing the record does not show that the file compiles. `<file>` is a file's logical name; an entry or a folder is refused, since a record covers one whole file.
 
 ```
 ksai/tensor	Tensor<|T|>.matmul	pub fn matmul(r: Self$@, rhs: Tensor<|T|>): Tensor<|T|>!Tensor_error	the product of two matrices
@@ -470,7 +471,7 @@ The columns are separated by tabs, and the lines are sorted by key:
 
 Note: **The parts' rows and the file's own row are for a reference to read, not for matching versions.** No caller relies on what a parameter means or what a file is for, so a prose edit to either is no break. `make surface` leaves these rows out of `SURFACE.txt`, and `ksplc doc` shows them ([§7.5](#75-ksplc-doc-what-a-file-publishes-as-a-reference)).
 
-**The scope decides which declarations are written** (`--surface-scope`, [§2.3](#23-the-other-compiler-options)). The record that two versions are matched by is always made at `pub`, since nobody outside relies on a declaration that is not `pub`. `all` serves a package that publishes nothing: an application's files reach one another with visibility unset, so at `pub` its record is empty. Any other name is refused. A mistyped scope that defaulted to `pub` would write only the published declarations and look as if it had worked.
+**The scope decides which declarations are written** (`--surface-scope`, [§7.5](#75-ksplc-doc-what-a-file-publishes-as-a-reference)). The record that two versions are matched by is always made at `pub`, since nobody outside relies on a declaration that is not `pub`. `all` serves a package that publishes nothing: an application's files reach one another with visibility unset, so at `pub` its record is empty. Any other name is refused. A mistyped scope that defaulted to `pub` would write only the published declarations and look as if it had worked.
 
 **It is kept apart from a library's interface** (`--library=`), which writes one build's `#export` functions in C.
 
@@ -520,7 +521,7 @@ The rest behaves as in a program:
 
 #### 2.10.2 Writing its interfaces (`--library=<FILE>`)
 
-`--library=<FILE>` writes, on success, the library's interface to `<FILE>`: the file a caller needs in order to call the library. **The extension picks the form**, and any other is refused. **Repeat the option for the second form**: one compilation writes every interface it names, and a path named twice is refused. A library is always built with an interface, since without one a caller could reach it only through declarations written by hand. The option is named for the library, unlike `--emit-libs` and `--emit-surface`. Those only add a file beside the output, while this one changes what the generated C is.
+`--library=<FILE>` writes, on success, the library's interface to `<FILE>`: the file a caller needs in order to call the library. **The extension picks the form**, and any other is refused. **Repeat the option for the second form**: one compilation writes every interface it names, and a path named twice is refused. A library is always built with an interface, since without one a caller could reach it only through declarations written by hand. The option is named for the library, unlike `--emit-deps` and `--emit-libs`. Those only add a file beside the output, while this one changes what the generated C is.
 
 | `<FILE>` | The form | Read by |
 | :-- | :-- | :-- |
@@ -817,9 +818,8 @@ flowchart LR
     * a name declared in a file outside the workspace: the standard library, or a package read from another folder. The workspace is what the server walks: the files under the folder the editor opened, outside the folders `.gitignore` names and those starting with a dot. Asked first (`textDocument/prepareRename`), the editor says so before a new name is typed;
     * a new name already declared in a scope around a place the name is written bare. The scope is the same block, an enclosing block, the function's parameters, or the file's own declarations and imports. A field, a variant or a method is compared with the other members of its type instead.
 * **The call hierarchy**: a function's callers and callees across files, as a tree. It follows the operators and the methods to what they desugar into (the plain calls the compiler rewrites them to). Passing a function as a function pointer is an edge too, marked `(as fn pointer)` in `detail` to tell it from a call.
-* **The outline**: it answers `textDocument/documentSymbol` with what the file declares, nested as written. It lists functions, types with their fields and variants, an `impl` and a trait with their functions (as methods), constants and global variables. An `impl` is named by its header as written (`impl Editor`, `impl Align: Formattable`). It is read from the syntax tree already kept for the document, so it parses nothing again and resolves no import. Nothing inside a body is listed. A document that does not parse lists the declarations parsed around the error, as the colouring does.
+* **The outline**: it answers `textDocument/documentSymbol` with what the file declares, nested as written. It lists functions, types with their fields and variants, an `impl` and a trait with their functions (as methods), constants and global variables. An `impl` is named by its header as written (`impl Editor`, `impl Align: Formattable`). It is read from the syntax tree already kept for the document, so it parses nothing again and resolves no import. Nothing inside a body is listed. A document that does not parse lists the declarations parsed around the error.
 * **Diagnostics**: the analysis runs as you type, and errors and warnings show as wavy underlines ([5. Static analysis and the linter](#5-static-analysis-and-the-linter-ksplc-lint)).
-* **Colouring by meaning**: it answers `textDocument/semanticTokens/full`, laid over the editor's own syntax colouring, not replacing it (in VS Code, the TextMate grammar in `.vscode/extensions/kspl`). It adds only what the syntax colouring can never tell ([§4.4](#44-colouring-by-meaning-semantictokens)).
 
 **Hover lays a signature out as the source does.** It stays on one line where it fits the formatter's width and no parameter has a description. Otherwise each parameter takes a line of its own, followed by its own `//<`, and the return type closes the last line:
 
@@ -847,6 +847,10 @@ The `.vscode/extensions/kspl` extension provides these settings.
 | `kspl.trace.server` | how much of the traffic with the server to log in the "Kanso LSP" output panel (`off`, `messages`, `verbose`), for troubleshooting. `off` by default. The panel comes forward by itself only on an error (the server not found, or stopping) and when this setting is turned up. `verbose` logs every message whole |
 | `kspl.defines` | the `#cfg()` flags to raise during the analysis, as the compiler's `--define` does (for example `["blas"]`) |
 
+**The editor colours the code by its spelling alone**, with the extension's TextMate grammar (`tmLanguage.json`). The language server sends no colours.
+
+**A check holds the copy of the reserved-word list to its source.** VS Code's grammar (`tmLanguage.json`) cannot import ksplc, so it holds a copy of the words, which could drift unnoticed. The canonical source is `ksplc info keywords`'s output, and `make test-conventions` holds the copy to it, in both directions.
+
 ### 4.3 How code covered by `#cfg()` is handled
 
 **Code under a `#cfg(flag)` the editor has not been told about is dropped before the analysis**, as in the compiler (`--define`, [§2.3](#23-the-other-compiler-options)). So no type or symbol exists there, and hover, jumps and the call hierarchy find nothing. To edit code under `#cfg(blas)`, tell the editor the flag: add it to `kspl.defines`.
@@ -858,22 +862,6 @@ Caution: A dropped declaration leaves nothing in the AST (the syntax tree), so a
 The extension passes the list to the server in the environment variable `KSPLC_DEFINES`, separated by commas or whitespace. It is an environment variable for the same reason as `KSPLC_STD_DIR` ([§2.9.1](#291-locating-the-standard-library---std-dir)). Set it when running `ksplc lsp` without an editor.
 
 **Raising every flag is no answer.** Code that pairs `#cfg(x)` with `#cfg(!x)` (`std/math`'s freestanding version and the like) then drops the `!` side instead. That is the same problem turned inside out.
-
-### 4.4 Colouring by meaning (semanticTokens)
-
-The editor colours most of the code by its spelling alone. The language server adds colour only where knowing the program changes the answer, such as which names are types. LSP calls these colour marks *semantic tokens*.
-
-**Only what the syntactic position decides for certain is coloured**: a declared name, a position where a type is written, and an `import`'s alias. An identifier inside an expression is not: only resolving it decides what it points at. Colouring on a guess shows a wrong colour with confidence, which is worse than none.
-
-The `initialize` response names the `legend`, **the only thing that gives a token's number its meaning**, so it is always sent.
-
-Caution: `range` and `delta` are not advertised; advertising one without answering it leaves the editor waiting.
-
-**`character` and `length` are in UTF-16 units** (the way LSP counts characters); byte counts would shift the colours from the first line holding non-ASCII onwards. No token spans lines (the LSP forbids it). Tokens are sent in ascending order, since they are packed as differences and another order breaks the positions.
-
-**Source that does not parse gets an empty answer.** With no tree, colouring would be a guess. While you type, the editor's syntax colouring carries the colours.
-
-**A check holds the copy of the reserved-word list to its source.** VS Code's grammar (`tmLanguage.json`) cannot import ksplc, so it holds a copy of the words, which could drift unnoticed. The canonical source is `ksplc info keywords`'s output, and `make test-conventions` holds the copy to it, in both directions.
 
 ---
 
@@ -1066,16 +1054,15 @@ It gives callers one verdict ksplc makes internally, such as where the standard 
 | `exe-flags` | the options ksplc itself passes to `CC` when building an executable from the artifact (removing unreferenced sections, the stack size requested on Windows). **It is a different subject from `link-libs`**: without those libraries the link fails; without these options it still builds, but under changed conditions. A script building an executable passes both. |
 | `cache-dir` | the disk cache's location (the normalized AST, `ksplc run`'s build results and the texts `ksplc fmt` already formats). The default is the OS's cache area, which cannot otherwise be found from outside. |
 | `keywords` | the reserved words gathered automatically from the grammar ([§7.3](#73-ksplc-info-keywords-the-list-of-reserved-words)). |
-| `machine` | the machine a compile is for when no `--machine` names one: the one ksplc runs on, as a triple ([§2.2.1](#221-naming-the-machine-the-output-is-for---machine)). A build script hands the same name to the C compiler. |
 | `package` | the package the current folder belongs to: its name on the first line, what it `uses` on the second ([§6.4](#64-a-package-that-names-itself-package)). **It can answer two empty lines**: outside every package there is nothing to name. |
 
-**No other option takes effect on `info`, and each is refused** ([§1](#1-introduction-ksplc-is-one-binary-holding-every-subcommand)). That includes `--to`: `link-libs` and `exe-flags` follow the C compiler's target triple (`CC -dumpmachine`), which the language of the output does not change. And `--machine`: `machine` answers the default, which is the machine ksplc runs on.
+**No other option takes effect on `info`, and each is refused** ([§1](#1-introduction-ksplc-is-one-binary-holding-every-subcommand)). That includes `--to`: `link-libs` and `exe-flags` follow the C compiler's target triple (`CC -dumpmachine`), which the language of the output does not change.
 
 With no subject, or an unknown one, it refuses and lists the subjects.
 
 ```
 $ ksplc info
-usage: ksplc info <std-dir|link-libs|exe-flags|cache-dir|keywords|machine|package>
+usage: ksplc info <std-dir|link-libs|exe-flags|cache-dir|keywords|package>
 ```
 
 ### 7.2 ksplc clean: removing what was built
@@ -1094,41 +1081,24 @@ It empties the disk cache and reports the location it emptied on standard error.
 ksplc info keywords
 ```
 
-It prints them to standard output, gathered automatically from the grammar `ksplc/kspl.kspeg`. They are grouped by the grammar rule that uses each directly, alphabetical within each group, and followed by the total count of unique keywords.
+It prints them to standard output, gathered automatically from the grammar `ksplc/kspl.kspeg`: one word per line, sorted by byte value, each word once. **It has the shape of the other subjects' lists**, so a script reads it line by line, with no headings to skip.
 
 ```
-visibility (N):
-  priv
-  pub
-decl (N):
-  as
-  const
-  ...
-type (N):
-  ...
-stmt (N):
-  break
-  case
-  ...
-Primitive_type (N):
-  Bool
-  F32
-  ...
-
-Total: N unique keyword(s) across M group(s)
+Bool
+F32
+...
+as
+break
+...
 ```
 
-The groups come in the order in which each group's first rule appears in the grammar file (`visibility` → `decl` → `type` → `stmt` → …).
+**A debugger shows a variable named like a C reserved word with its `_kw` suffix.** A local that hides another of its name, or that is spelled as a global's C name (`std_lang_Slice_U8`), shows as `__k_shadow<N>_<name>`. `#line` keeps the source lines right, but the names a debugger shows are the generated C's. lldb's Python formatters cannot hide the suffix: they bind to types and cannot rename a frame's local variables. VS Code's Variables panel shows the same names.
 
-**A debugger shows a variable named like a C reserved word with its `_kw` suffix.** `#line` keeps the source lines right, but the names a debugger shows are the generated C's. lldb's Python formatters cannot hide the suffix: they bind to types and cannot rename a frame's local variables. VS Code's Variables panel shows the same names.
+### 7.4 How reserved words are gathered automatically
 
-### 7.4 How reserved words are gathered automatically and grouped
+**The list of reserved words is written nowhere**: it is read from the grammar each time. A single-quoted string in the grammar file `ksplc/kspl.kspeg` (`'if'`) is a reserved word, unlike an ordinary double-quoted string (`"0x"`). kspeg gathers them into the rule `_Keyword` it synthesizes (the notation is kspeg's specification, reached from [`kspeg/README.md`](../../kspeg/README.md)). The list is read from each rule's own keywords, not from the shape of `_Keyword`, which is kspeg's choice. A keyword that several rules use is listed once.
 
-**The list of reserved words is written nowhere**: it is read from the grammar each time. A single-quoted string in the grammar file `ksplc/kspl.kspeg` (`'if'`) is a reserved word, unlike an ordinary double-quoted string (`"0x"`). kspeg gathers them into the rule `_Keyword` it synthesizes (the notation is kspeg's specification, reached from [`kspeg/README.md`](../../kspeg/README.md)). The total is counted from this rule.
-
-The grouping, separately, records for each rule the keywords written directly in its own definition. It does not follow a `reference` into another rule's keywords. It names the group by the rule name's prefix before the first `_` (`stmt_return` → `stmt`). Where no other rule shares that prefix (`Primitive` for `Primitive_type`), the whole rule name is the group name. A keyword used directly by several groups of rules (`defer`, both a declaration's trailing modifier and a statement) is listed in each.
-
-Both displays are derived each time from the rule names and keyword literals. So adding or removing a keyword or a rule in the grammar needs no separate list to maintain.
+So adding or removing a keyword in the grammar needs no separate list to maintain.
 
 ### 7.5 ksplc doc: what a file publishes, as a reference
 
@@ -1137,9 +1107,10 @@ Both displays are derived each time from the rule names and keyword literals. So
 ```bash
 ksplc doc <file>[.<name>] [--surface-scope=pub|all] [--std-dir=DIR] [--pkg-src-dir=DIR]
 ksplc doc <folder>
+ksplc doc --emit-surface=<FILE> <file> [--surface-scope=pub|all]
 ```
 
-It prints, as Markdown on standard output, what a file publishes. That is each declaration as written, with what its `//<` says of it, of its parameters and of what it returns. **Nothing is written to disk**: the description in the source is the one copy, and this renders it when asked.
+It prints, as Markdown on standard output, what a file publishes. That is each declaration as written, with what its `//<` says of it, of its parameters and of what it returns. **The reference is never written to disk**: the description in the source is the one copy, and this renders it when asked. `--emit-surface=` writes the file's record instead, for comparing versions ([§2.9.4](#294-writing-out-the-published-api---emit-surface)).
 
 | Asked for | What comes back |
 | :-- | :-- |

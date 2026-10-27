@@ -12,9 +12,8 @@ import "ksplc/gen/llvm/ctx" as gen_llvm_ctx + { Genllvm_ctx }
 import "ksplc/gen/llvm/expr" as gen_llvm_expr
 import "ksplc/gen/llvm/stmt" as gen_llvm_stmt
 import "ksplc/gen/llvm/types" as gen_llvm_types
-import "ksplc/sema/body/postfix" as sema_body_postfix
+import "ksplc/sema/body/static_init" as sema_body_static_init
 import "ksplc/sema/decl/eval" as sema_decl_eval
-import "ksplc/sema/decl/fold_float" as sema_decl_fold_float
 import "ksplc/sema/decl/layout" as sema_decl_layout
 import "ksplc/sema/type/def" as sema_type_def
 import "ksplc/sema/type/env" as sema_type_env
@@ -140,12 +139,30 @@ impl Ast_node
             cg.s("section \"").s(section_attr.section_name()).s("\" ")
 
     priv fn emit_llvm_const_init(r: Ast_node$@, cg: Genllvm_ctx$@, type_id: I32) //<
-        //< It lowers a global declaration's initializer to an LLVM static constant expression
-        //< Caution: Never silently replace a shape that cannot be lowered with a zeroinitializer.
-        //< That starts a written value at 0 with no warning ("Failing fast through an exception or
-        //< an ICE" in ksplc/docs/DESIGN-compiler.md). It is an error with a position.
+        //< It writes a global's initializer as an LLVM constant, as sema classified it
+        //< Sema decided each top-level initializer once (`../../sema/body/static_init.kspl`). A
+        //< value it folded is written as that value, and any other form is a shape written here
+        //< as it stands. Sema has refused the rest, so a form this cannot write is an ICE.
         if r == null || r.kind_id == .k_empty || r.is_typed_null()
             cg.s("zeroinitializer")
+            return
+        switch r.kind_id
+        case .k_integer
+            // Folding works in I64 and cannot hold a `U64` above I64's maximum. So a single
+            // literal's text is converted directly (as emit_llvm_integer_literal in expr.kspl
+            // does).
+            cg.s(r.emit_llvm_integer_literal(cg))
+            return
+        case .k_float
+            r.emit_llvm_const_float(cg, type_id)
+            return
+        default {}
+        if v: = cg.sema.static_value(r)
+            switch v
+            case .whole(n)
+                cg.s("\{n\}")
+            case .real(f)
+                cg.s(gen_llvm_ctx.format_f64_hex(f))
             return
         if init: = r.named_const_init(cg, type_id)
             init.emit_llvm_const_init(cg, type_id)
@@ -153,33 +170,22 @@ impl Ast_node
         switch r.kind_id
         case .k_null
             cg.s("zeroinitializer")
-        case .k_bool
-            cg.s("1" if r.text.equals("true") else "0")
-        case .k_integer
-            // Folding works in I64 and cannot hold a `U64` above I64's maximum. So a single
-            // literal's text is converted directly (as emit_llvm_integer_literal in expr.kspl
-            // does).
-            cg.s(r.emit_llvm_integer_literal(cg))
-        case .k_float
-            r.emit_llvm_const_float(cg, type_id)
         case .k_string
             r.emit_llvm_const_string(cg, type_id)
         case .k_struct_literal
             r.emit_llvm_const_aggregate(cg, type_id)
+        case .k_expr_primary
+            r.get_primary_inner_expr().emit_llvm_const_init(cg, type_id)
         case .k_expr_postfix
             r.emit_llvm_const_postfix(cg, type_id)
+        case .k_expr_upcast
+            r.emit_llvm_const_upcast(cg)
         case .k_identifier, .k_expr_path, .k_type_path, .k_generic_path
-            // A function pointer's initial value is a function's address and does not go through
-            // the integer constant folding (emit_llvm_const_scalar_expr). Build the name the same
-            // way as a run-time reference.
-            // Caution: **Ask emit_llvm_lvalue, do not add the `@` yourself**: it tells a global
-            // from a local.
-            if cg.env.is_fn_ptr(cg.env.get_clean_real_type(type_id))
-                cg.s(r.emit_llvm_lvalue(cg))
-                return
-            r.emit_llvm_const_scalar_expr(cg)
+            // A function's name is its address. Caution: **Ask emit_llvm_lvalue, do not add the
+            // `@` yourself**: it tells a global from a local.
+            cg.s(r.emit_llvm_lvalue(cg))
         default
-            r.emit_llvm_const_scalar_expr(cg)
+            r.ice_panic("genllvm: a global initializer of a form sema did not classify")
 
     priv fn named_const_init(r: Ast_node$@, cg: Genllvm_ctx$@, type_id: I32): Ast_node$@? //<
         //< The initializer of the `const` a global initializer names, written in its place
@@ -229,67 +235,63 @@ impl Ast_node
         cg.s("{ ptr @.str.\{str_id\}, i64 \{I32::byte_len\} }")
 
     priv fn emit_llvm_const_postfix(r: Ast_node$@, cg: Genllvm_ctx$@, type_id: I32) //<
-        //< A postfix expression appearing in a constant's initializer
-        //< Only a global's address and a slice over an array are lowered here; the rest goes to
-        //< integer folding. The array is a global's place, or an array literal (`T[]::{ … }`).
-        //< Caution: **Build the descriptor.** Folded, the array's name gives `0` and reports "not a
-        //< constant". Take the length **from the type**.
-        op: = r.get_postfix_op()
-        target: = r.safe_get_child(0)
+        //< A postfix expression in a global's initializer: an address, a slice or a pointer cast
+        //< These are the postfix shapes sema lets stand (classify_static_postfix in
+        //< `../../sema/body/static_init.kspl`); a scalar one is a folded value.
+        //< Caution: **Build a slice's descriptor.** Take the length **from the type**.
+        op: = r.postfix_op_text()
+        target: = r.get_postfix_receiver()
         // A global's address is a link-time constant (C's address constant), written by its name.
         // A field's or an element's is a constant `getelementptr` from it (emit_const_place_addr).
-        if op != null && op.is_literal("@") && target != null && target.is_const_place(cg)
+        if op.equals("@")
             target.emit_const_place_addr(cg)
             return
+        r.ice_assert(op.equals("::"), "genllvm: a postfix global initializer sema did not classify")
         real_id: = cg.env.get_clean_real_type(type_id)
         // Caution: **Recognize a slice by its spelling.** A `T[]` is a `Slice<|T|>` instance. So
-        // dispatching on the constructor sends it down the same path as a plain struct. There it
-        // fails, because it cannot be evaluated as a constant expression (a reflection table has a
-        // `U8[]` field; `../../sema/decl/reflect.kspl`).
-        if op == null || !op.is_literal("::") || target == null || !cg.env.is_slice(real_id)
-            r.emit_llvm_const_scalar_expr(cg)
+        // dispatching on the constructor sends it down the same path as a plain struct (a
+        // reflection table has a `U8[]` field; `../../sema/decl/reflect.kspl`).
+        if !cg.env.is_slice(real_id)
+            // A pointer cast. An integer becomes an address (a device register's); a pointer is
+            // already one, since LLVM's pointers carry no type.
+            if cg.env.is_pointer(target.type_id) || cg.env.is_fn_ptr(target.type_id)
+                target.emit_llvm_const_init(cg, target.type_id)
+                return
+            cg.s("inttoptr (i64 ")
+            target.emit_llvm_const_init(cg, target.type_id)
+            cg.s(" to ptr)")
             return
         src_id: = cg.env.get_clean_real_type(target.type_id)
         switch cg.env.get_info(src_id)
         case .array(_base_id, size)
-            if target.is_const_place(cg)
-                cg.s("{ ptr ")
-                target.emit_const_place_addr(cg)
-                cg.s(", i64 \{size\} }")
-                return
             if target.kind_id == .k_struct_literal
                 // `T[]::{ … }`: the literal becomes a constant of its own. A run of elements
                 // makes only read-only slices, so the array can sit in ROM, as a string's bytes.
                 cg.s("{ ptr @.arr.\{cg.add_const_array(target)\}, i64 \{size\} }")
                 return
-        default {}
-        r.emit_llvm_const_scalar_expr(cg)
+            cg.s("{ ptr ")
+            target.emit_const_place_addr(cg)
+            cg.s(", i64 \{size\} }")
+        default
+            r.ice_panic("genllvm: a slice in a global initializer over no array")
 
-    priv fn is_const_place(r: Ast_node$@, cg: Genllvm_ctx$@): Bool //<
-        //< Whether the place's address is an LLVM constant expression (emit_const_place_addr)
-        //< The place is a global's name, or a field or a constant-index element of one. It is
-        //< reached without passing a pointer (whose target is known only at run time). genc writes
-        //< the same place as C's address constant (`&g.a.data[2]`).
-        if r.is_path_or_ident()
-            return true
-        if r.kind_id != .k_expr_postfix
-            return false
-        op: = r.postfix_op_text()
-        recv: = r.get_postfix_receiver()
-        if recv == null || cg.env.is_pointer(recv.type_id)
-            return false
-        base_id: = cg.env.get_clean_real_type(recv.type_id)
-        if op.equals(".")
-            return !cg.env.is_result(base_id) && recv.is_const_place(cg)
-        if op.equals("[") && cg.env.is_array(base_id)
-            index: = r.get_postfix_member()
-            return index != null &&
-                sema_body_postfix.index_is_static_in_range(cg.sema, index,
-                cg.env.array_len(base_id)) && recv.is_const_place(cg)
-        return false
+    priv fn emit_llvm_const_upcast(r: Ast_node$@, cg: Genllvm_ctx$@) //<
+        //< A trait value in a global's initializer: the object's address and the vtable's
+        //< The object is a pointer, or a place whose address is fixed (emit_llvm_upcast in
+        //< expr_agg.kspl builds the same pair at run time).
+        inner: = r.get_upcast_inner()
+        cg.s("{ ptr ")
+        if cg.env.is_pointer(inner.type_id)
+            inner.emit_llvm_const_init(cg, inner.type_id)
+        else
+            inner.emit_const_place_addr(cg)
+        cg.s(", ptr @kspl_vtable_impl_").s_mangled(cg.env.receiver_base_id(inner.type_id)).s("_")
+            .s_mangled(r.type_id).s(" }")
 
     priv fn emit_const_place_addr(r: Ast_node$@, cg: Genllvm_ctx$@) //<
-        //< It writes a place is_const_place accepts as a constant `getelementptr` from its global
+        //< It writes a place whose address is fixed as a constant `getelementptr` from its global
+        //< Sema has checked that the place is one (is_static_place in
+        //< `../../sema/body/static_init.kspl`) and folded each index.
         if r.is_path_or_ident()
             cg.s(r.emit_llvm_lvalue(cg))
             return
@@ -301,45 +303,16 @@ impl Ast_node
             cg.s(", i32 0, i32 \{cg.field_index(base_id, r.get_postfix_member().ival)\})")
             return
         $at: I64 = 0
-        switch cg.sema.try_eval_constexpr_wide(r.get_postfix_member())
+        switch cg.sema.static_value(r.get_postfix_member())
         case .some(v)
-            at = v
+            switch v
+            case .whole(n)
+                at = n
+            default
+                r.ice_panic("emit_const_place_addr: an index sema folded is no integer")
         case .none
-            r.ice_panic("emit_const_place_addr: an index is_const_place took is not constant")
+            r.ice_panic("emit_const_place_addr: an index sema did not fold")
         cg.s(", i32 0, i64 \{at\})")
-
-    priv fn emit_llvm_const_scalar_expr(r: Ast_node$@, cg: Genllvm_ctx$@)
-        // A general constant expression (an enum variant, arithmetic, a cast and so on).
-        // Caution: Use the version that does not narrow to I32; register definitions such as
-        // `1U32 << 31` would overflow it.
-        // **A float is folded here** (`pi * 2.0`, `F64::3`), as C's compiler folds the same text
-        // for genc. A float cast to an integer (`I32::2.9`) is sema's fold (`float_cast_of`), which
-        // genc writes too.
-        if cg.env.is_float(r.type_id)
-            switch r.fold_float(cg.sema)
-            case .some(f)
-                cg.s(gen_llvm_ctx.format_f64_hex(f))
-                return
-            case .none {}
-        switch cg.sema.try_eval_constexpr_wide(r)
-        case .some(v)
-            cg.s("\{v\}")
-            return
-        case .none {}
-        switch r.float_cast_of(cg.sema, false)
-        case .fits(v)
-            cg.s("\{v\}")
-            return
-        default {}
-        // Caution: Make it a diagnostic with a position. An ICE does not say which declaration to
-        // fix ("A diagnostic points at 'the position the user wrote'" in
-        // ksplc/docs/DESIGN-diagnostics.md).
-        cg.sema
-            .err(r,
-            "this global initializer is not a compile-time constant the LLVM backend can lower. \
-                Compile this file with --to=c, or replace the initializer with a literal")
-        cg.had_error = true
-        cg.s("0")
 
     priv fn emit_llvm_const_aggregate(r: Ast_node$@, cg: Genllvm_ctx$@, type_id: I32) //<
         //< A compound literal `::{ ... }`

@@ -1,5 +1,5 @@
 # ksbind -- testing this package on its own, from a `ksplc`, a C compiler and the libraries it
-# binds (OpenSSL's libssl and libcrypto, SQLite's libsqlite3)
+# binds (OpenSSL's libssl and libcrypto)
 # Caution: **Keep this file standing alone.** A copy of this folder alone is tested by it.
 
 KSPLC ?= ksplc

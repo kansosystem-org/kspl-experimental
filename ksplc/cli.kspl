@@ -53,8 +53,7 @@ priv struct Face_row //< a subcommand, and all ksplc says about it
     form: U8[] //< what follows `ksplc <name>` in its usage line
     lays_out: Bool //<
         //< Whether it lays values out, and so needs a machine ksplc has widths for
-        //< `info` asks for it only on its `machine` subject. `fmt` and `doc` parse alone and read
-        //< no type, so they run on a machine the table lacks.
+        //< `fmt` and `doc` parse alone and read no type, so they run on a machine the table lacks.
 
 priv const FACES: Face_row[12] = ::{ Face_row::{ .face = .compile, .declared = .default_face,
     .help = "", .form = "[options...] <input.kspl> <output.c>", .lays_out = true },
@@ -71,14 +70,14 @@ priv const FACES: Face_row[12] = ::{ Face_row::{ .face = .compile, .declared = .
     Face_row::{ .face = .lsp_worker, .declared = .hidden, .help = "", .form = "",
     .lays_out = true },
     Face_row::{ .face = .info, .declared = .named, .help = "answer a query", .form = "<subject>",
-    .lays_out = true },
+    .lays_out = false },
     Face_row::{ .face = .clean, .declared = .named, .help = "empty the disk cache", .form = "",
     .lays_out = false },
     Face_row::{ .face = .emit_runtime, .declared = .named,
     .help = "write the C runtime's source out as one translation unit",
     .form = "[options...] <output.c>", .lays_out = false },
     Face_row::{ .face = .explain, .declared = .named,
-    .help = "print what a diagnostic code means, or list the codes", .form = "[<code> | <start>]",
+    .help = "print what a diagnostic code means, or list the codes", .form = "[<code>]",
     .lays_out = false },
     Face_row::{ .face = .doc, .declared = .named,
     .help = "print what a file, one entry or a folder publishes, from its source",
@@ -205,12 +204,11 @@ priv fn declare_options(p: argparse.Parser$@, o: Cli$@) //< it declares every su
     p.only_for("--emit-libs", "compile")
     p.str_opt("--emit-surface", base_core.config.surface_path@,
         "where to write the published API record for comparing versions")
-    p.only_for("--emit-surface", "compile")
+    p.only_for("--emit-surface", "doc")
     p.str_opt("--surface-scope", o.surface_scope@,
-        "what --emit-surface writes: pub (default) for the published API, or all for everything a \
-            sibling file can reach. Use all for a package that publishes nothing")
-    // `doc` reads it as the record does: `all` shows what a package keeps to itself too.
-    p.only_for("--surface-scope", "compile doc")
+        "what doc shows or --emit-surface writes: pub (default) for the published API, or all for \
+            everything a sibling file can reach. Use all for a package that publishes nothing")
+    p.only_for("--surface-scope", "doc")
     p.str_opt("--machine", base_core.config.machine@,
         "the machine the output is for, as a triple (the default is the one ksplc runs on)")
     // Not `run` / `build`: they compile for the machine ksplc runs on and start or link the result
@@ -320,9 +318,7 @@ priv fn apply_options(o: Cli$@, face: Face) //<
         base_core.config.target = .llvm
     else if face == Face.compile && o.to_name.len > 0 && !o.to_name.equals("c")
         usage.error_exit("--to: a compile writes 'c' or 'llvm'\n")
-    // `info` asks only on its `machine` subject, once the subject is read (`read_mode`).
-    if face != Face.info
-        face.check_machine()
+    face.check_machine()
     if o.split_units.len > 0
         n: = o.split_units.to_i64() catch 0
         if n < 1 || n > I64::MAX_SPLIT_UNITS
@@ -404,10 +400,6 @@ priv fn read_mode(p: argparse.Parser$@, face: Face, in_files: List<|U8[]|>$@, o:
                 .error_exit(usage.usage_for_topics(face.face_name(), usage.info_topics()))
         topic: = usage.parse_info_topic(in_files.get(0))
         usage.refuse_unread_std_dir(p, topic)
-        switch topic
-        case .machine
-            face.check_machine()
-        default {}
         return .info(topic)
     case .clean
         // **It takes no subject**: there is one thing to clean, and a word after it would change
@@ -418,13 +410,13 @@ priv fn read_mode(p: argparse.Parser$@, face: Face, in_files: List<|U8[]|>$@, o:
     case .emit_runtime
         return .emit_runtime(only_input(in_files, face))
     case .explain
-        // **No code lists every code; a code's start (`W`, `I03`) lists the codes it begins.**
+        // **No code lists every code.**
         if in_files.len == 0
             return .explain("")
         asked: = only_input(in_files, face)
         code: = tools_explain.canonical_code(asked, base_core.arena)
         // An error has no code, so a message the reader wants explained may well have none.
-        if !base_lint_codes.is_known(code) && !tools_explain.is_code_start(code)
+        if !base_lint_codes.is_known(code)
             msg: = base_core.arena.text().s("ksplc explain: '").s(asked)
                 .s("' is not a diagnostic code. Only warnings, information diagnostics and hints \
                     carry codes; `ksplc explain` lists them. An error's message explains the \

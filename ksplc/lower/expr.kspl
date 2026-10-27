@@ -6,6 +6,7 @@ import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_place" as base_ast_place
 import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/c_name" as base_c_name
+import "ksplc/base/core" as base_core
 import "ksplc/lower/abi" as lower_abi
 import "ksplc/lower/arc" as lower_arc
 import "ksplc/lower/ctx" { Lowering_ctx }
@@ -13,7 +14,7 @@ import "ksplc/lower/defer" as lower_defer
 import "ksplc/lower/order" as lower_order + { Operand_order }
 import "ksplc/lower/root" as lower_root
 import "ksplc/sema/body/call_defaults" as sema_body_call_defaults
-import "ksplc/sema/decl/eval" as sema_decl_eval
+import "ksplc/sema/body/static_init" as sema_body_static_init
 import "ksplc/sema/type/arc" as sema_type_arc
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
@@ -129,21 +130,22 @@ impl Ast_node
             r.type_id = type_id
 
     fn lower_logical_op(r: Self$@, lctx: Lowering_ctx$@, is_and: Bool)
-        // A top-level initializer has no statement to hoist into, and a constant has no side effect
-        // to skip. So the operator stays as written, and both backends fold it there.
-        if !lctx.in_fn_body
-            r.lower_default(lctx)
-            return
         lhs: = r.get_binary_left()
         rhs: = r.get_binary_right()
         loc: = r.loc
         bool_id: = I32::sema_type_env.Builtin_type_id.bool_type
-        tmp_name: = lctx.gen_tmp_name()
 
         lhs.lower(lctx)
+        then_block: = lower_into_block(lctx, rhs, loc)
+        // **Where the right side hoists nothing, C's own operator keeps the order**: the left side
+        // first, the right side only if needed. The expansion below cost the C compiler about 3% of
+        // its work on the seed. genllvm has no short-circuit of its own, so it keeps the expansion.
+        if then_block.children.len == 0 && !base_core.is_llvm_target()
+            r.type_id = bool_id
+            return
+        tmp_name: = lctx.gen_tmp_name()
         lctx.pre_stmts.push(lctx.build_let_decl(tmp_name, bool_id, lhs, loc))
 
-        then_block: = lower_into_block(lctx, rhs, loc)
         $cond_expr: = Ast_node.build_ident(tmp_name, bool_id, loc)
         if !is_and
             cond_expr = Ast_node.build_unary_expr("!", cond_expr, bool_id, loc)
@@ -605,15 +607,13 @@ impl Ast_node
         true_node: = r.get_ternary_true()
         false_node: = r.get_ternary_false()
         // A top-level initializer has no statement to hoist into (the temporary would land at file
-        // scope). Its condition is a constant there, so the branch it picks takes its place.
+        // scope). Sema has folded its condition there, and the branch it picked takes its place.
         if !lctx.in_fn_body
-            switch lctx.sema.try_eval_constexpr_wide(cond_node)
-            case .some(v)
-                chosen: = true_node if v != 0 else false_node
-                chosen.lower(lctx)
-                r$ = chosen$
-                return
-            case .none {}
+            chosen: = lctx.sema.static_pick(r) catch
+                r.ice_panic("lower: a top-level conditional that sema did not decide")
+            chosen.lower(lctx)
+            r$ = chosen$
+            return
         loc: = r.loc
         type_id: = r.type_id
         is_void: = sema_type_env.is_void(type_id) || type_id == 0

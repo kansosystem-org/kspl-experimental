@@ -63,9 +63,11 @@ Caution: **Do not inspect only the last level**: a link on a folder would pass u
 
 **The token reaches the page once, inside the URL a person opens: the server prints one line, `http://127.0.0.1:<number>/#t=<token>`, and a person opens it once.** Then:
 
-1. The page moves the token from the fragment (the part of the URL after `#`) into `sessionStorage`, the browser's storage for one tab.
+1. The page moves the token from the fragment (the part of the URL after `#`) into `sessionStorage`, the browser's storage for one tab. It reads the fragment once, at start, as `name=value` pairs, and takes only the value of `t`.
 2. It at once removes the token from the URL with `history.replaceState`, so the browser history keeps no token.
 3. After that, every request carries it in a header (`Authorization: Bearer`).
+
+**The token is 48 lowercase hexadecimal digits**, made from 24 random bytes. A page takes nothing of another form as the token, so a fragment such as `#heart=1` cannot replace it.
 
 **It survives a reload**: `sessionStorage` stays inside the tab, disappears when the tab closes, and cannot be read from another origin. So a person opens the URL once per start-up.
 
@@ -141,17 +143,19 @@ Caution: **Do not list more than one folder in one request.** A whole tree in on
 
 ### Keeping the server alive while a page is open
 
-An open page keeps one connection open to the server. When no page holds one, the server stops after a wait.
+While a page is open, one connection to the server stays open. When nothing holds one, the server stops after a wait.
 
 | Request | Response |
 | :-- | :-- |
 | `GET /api/here` | A response whose length is not stated, and **not one byte of it ever arrives**. It ends when the connection does |
 
-**A page holds one connection open for as long as it is open, and the server stops once nothing holds it.** How long it waits with nothing holding it is set at launch (`--idle=<seconds>`); if no time is set, it does not stop.
+**One tab holds the connection for every open tab of the page on that server, and the server stops once nothing holds it.** How long it waits with nothing holding it is set at launch (`--idle=<seconds>`); if no time is set, it does not stop.
 
 **Do not use a timer on the page instead**, and do not judge use by the last request alone.
 
 **Do not rely on the page saying goodbye.**
+
+Caution: **Hold from one tab only.** A browser opens about six connections to one server. A hold in each tab uses them up, and the next request waits without end. The tabs agree on one holder, as a browser's Web Locks API (`navigator.locks`) lets them. When the holder closes, another open tab takes the hold over.
 
 Caution: **Open the hold again if it ends.** A connection can break while the page stays open, and without a new hold the server counts down while a person is still writing.
 

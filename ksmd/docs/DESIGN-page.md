@@ -14,11 +14,11 @@
 
 **Only the blocks an action changed are rendered again.** An action reports the first block it changed and how many at the end it left alone. After a table edit, every table shows again, since a value can depend on another table.
 
-**The menu bar holds File, Edit and View; the ribbon holds the text's tools, and the right-click menu the table's.** Each command then stands in one place, with its shortcut. File always holds Print; Open and Save stand in it only where the local server opens files. A menu opens on a press of its name, not on pointing, so moving the mouse across the bar opens nothing. While one menu is open, pointing at another name opens that one. In the right-click menu, a long group is a flyout, which opens on pointing, on a press, or with Right. Esc, a press outside and a chosen command close every menu, and the focus goes back where it was. Up and Down move through a menu, and Right and Left go into a flyout, out of it, or on to the next menu. Each command keeps its shortcut, which the menu shows beside it.
+**The menu bar holds every command: File, Edit, View, Insert, Format and Table.** Each item shows its icon, its name and its shortcut, so a person can find any command by reading the menus. One list in `ksmd/port/web/commands.js` gives each command its name, key and icon. The menus, the right-click menu and the quick access bar are built from it, so the three cannot differ. File always holds Print; Open and Save stand in it only where the local server opens files. A menu opens on a press of its name, not on pointing, so moving the mouse across the bar opens nothing. While one menu is open, pointing at another name opens that one. In the right-click menu, a long group is a flyout, which opens on pointing, on a press, or with Right. Esc, a press outside and a chosen command close every menu, and the focus goes back where it was. Up and Down move through a menu, and Right and Left go into a flyout, out of it, or on to the next menu. Each command keeps its shortcut, which the menu shows beside it.
 
 **A table command that cannot act is disabled, not hidden.** With no cell chosen, every table command is disabled. A person sees where the command is, and the menu does not change shape.
 
-**A right-click on a cell, a row number or a column letter opens the table menu at that place.** It chooses that cell first, and the commands act on it. A right-click inside a chosen range keeps the range, as in Excel, so a command acts on all of it. Shift+F10 or the menu key in an open cell opens the menu too. Its commands stand in one list (`TABLE_GROUPS` in `ksmd/port/web/menu.js`). Rows, Columns and Note show their commands in the menu itself, as the most used. Fill, Sort, Filter, Number format, Group, AutoSum and Table are flyouts, as Excel's cell menu holds Sort and Filter. So the whole menu fits a window 600 pixels tall, and its last items never fall below the screen.
+**A right-click on a cell, a row number or a column letter opens the table menu at that place.** It chooses that cell first, and the commands act on it. A right-click inside a chosen range keeps the range, as in Excel, so a command acts on all of it. Shift+F10 or the menu key in an open cell opens the menu too. It holds the Table menu's commands, from one list (`TABLE_GROUPS` in `ksmd/port/web/commands.js`). Rows, Columns and Note show their commands in the menu itself, as the most used. Fill, Sort, Filter, Number format, Group, AutoSum and Table are flyouts, as Excel's cell menu holds Sort and Filter. So the whole menu fits a window 600 pixels tall, and its last items never fall below the screen.
 
 **A command's key stands beside its item, in the menu and in a flyout, and the same list runs it from a cell.** So the key shown and the key that acts cannot differ. The keys are Excel's: Ctrl+Shift+~, !, % and $ for the number formats, Shift+F2 for a note, and Alt+Down for the column's filter. The page has no separate list of keys; a person learns each one beside the command it runs.
 
@@ -40,19 +40,25 @@
 
 **A filter is a way of looking: the file keeps every row.** It belongs to the page, and lasts until it is cleared, the table is removed, or the page closes. A filter written into the file would hide rows from the next reader, the complaint Excel's saved filters draw. A formula counts every row, shown or not. The row being edited stays in sight until the edit is taken. Up, Down and Enter pass over the hidden rows. A new row shows every row again, since the filter would hide an empty row at once.
 
-**Under the menu bar stands a ribbon, as in Office**: named groups of tools for Edit, Font, Paragraph and Insert. The table's commands stand in its right-click menu alone, so no row of tools appears and pushes the document down when a cell is chosen. The font colour acts on the selected text, or on the chosen cells. The fill and size tools act on cells alone, so they are pressed only while a cell is the place. With nothing selected, a colour applies to the text typed next, as in Word; Automatic takes it away. The font and fill colour tools are split: the face applies the colour shown on it, and the arrow opens a palette. The palette holds Office's standard colours, "Automatic" or "No fill", and any other colour. Clear takes colours, size and alignment away in one step; in text, it takes the alignment away.
+**Under the menu bar stands a quick access bar, as in Office: one row of the tools the person chose, as icons.** A ribbon's groups took three lines of height and still could not hold every command. The menus now hold them all, so the bar needs only the few a person uses most. Pointing at a tool shows its name and key. View, Quick access bar opens the chooser, which lists every command menu by menu, each with a box. A right-click on a command, in a menu or on the bar, adds it or takes it off.
+
+**The bar keeps the menus' order, with a line between two menus' tools.** A tool is then found where its menu puts it, whatever order it was chosen in. A tool its menu hides, as Save in a page opened from a file, stands nowhere on the bar.
+
+**The bar shows what stands at the caret, as Word's does.** The kind of block shows in its list, and Strong, Emphasis, a kind of list and an alignment are pressed in where they are on. Over a selection, a mark is pressed in where all the selected text has it. At a caret, it is pressed in where text typed there would take it. A tool that cannot act there is greyed out. Marks belong to text, so a heading takes them. A code block holds literal text and a cell a value, so the mark tools are greyed out there.
+
+**The choice of tools is this browser's own**, as the width is, so nothing goes into the file. Reset brings back the tools every page starts with (`QUICK_DEFAULT` in `ksmd/port/web/commands.js`). They are the most used: saving, undo, finding, the looks of text, and Table and Sum. The font colour acts on the selected text, or on the chosen cells. The fill and size tools act on cells alone, so they are pressed only while a cell is the place. With nothing selected, a colour applies to the text typed next, as in Word; Automatic takes it away. The font and fill colour tools are split: the face applies the colour shown on it, and the arrow opens a palette. The palette holds Office's standard colours, "Automatic" or "No fill", and any other colour. Clear format takes colours, size, alignment and a cell's own number format away in one step, as Excel's Clear Formats does. In text it takes the colour and the paragraphs' alignment away; the marks stay, as part of what the text says.
 
 **A look acts on the cells where a cell was worked in last, and on the selected text otherwise.** A press or a key in the text makes the text the place; opening or choosing a cell makes the cells the place. The page's own selection changes after an action do not count. Alignment on text aligns the paragraphs and headings the selection touches.
 
 **Shift+click chooses a range of cells from the chosen one, and so does a drag across cells** ("Ranges of cells" below). The press opens its cell as usual. Once the drag reaches another cell, the open cell closes unchanged, and the range follows the pointer until the button comes up.
 
-**The right-click menu's Number format group sets the format of the chosen cell's column**, or of every column the range spans, in one step. It holds General, Number, Thousands, Percent, Currency, and More and Fewer decimal places. Currency asks for a code, and takes the places that currency's money is counted in: none for JPY and KRW, two for every other code. A cell shows the text the format gives, and the filter panel lists and matches that text.
+**The Number format group sets the format of the chosen cells**, in one step, as Excel does. Columns chosen whole, by their letters, take it as their own, which new rows follow. It holds General, Number, Thousands, Percent, Currency, More and Fewer decimal places, and two forms of a date: `2026-10-26`, the default, and `2026/10/26`. Currency asks for a code, and takes the places that currency's money is counted in: none for JPY and KRW, two for every other code. A cell shows the text the format gives, and the filter panel lists and matches that text.
 
 **Cells copy and paste as Excel's do.** Ctrl+C on a range puts its values on the clipboard as tab-separated rows, which a spreadsheet takes. A number goes as calculated, not as its format shows it, so no digit is lost. A paste of such rows fills the table from the chosen cell, as one step, and the table grows the rows and columns it needs. Each pasted value reads as typed text does, and a number with thousands separators, as `1,234.5`, is a number. Rows pasted into text make a new table, whose first row gives the names. A refusal changes nothing.
 
 **The document fills the window's width by default, with a margin of 32 pixels.** A table then has the room a spreadsheet would give it. View, Reading width keeps lines about 50 characters' widths long instead, for long prose. The choice belongs to the browser, not to the document.
 
-**Ctrl+; types today's date, and Ctrl+: the time, as in Excel.** They work in a cell and in the text, and the ribbon's Insert group holds both. The date is written `2026-10-23` and the time `14:05`, ISO 8601's forms. They read the same in every country. In a cell, the date is a date and the time is text.
+**Ctrl+; types today's date, and Ctrl+: the time, as in Excel.** They work in a cell and in the text, and the Insert menu holds both. The date is written `2026-10-23` and the time `14:05`, ISO 8601's forms. They read the same in every country. In a cell, the date is a date and the time is text.
 
 **A double-click on a column's border fits the column to its widest value on one line.** The border is the edge between two column letters, or the border between two cells. The table keeps its width, and the other columns share what is left in the proportions they had. The fit is one step of undo, and saves as `widths`, as a drag does. A row has no height in the source. It is always as tall as its content, so a double-click on a row's border has nothing to set.
 
@@ -66,7 +72,7 @@
 * **All weights are multiplied by one whole number before the two columns share theirs.** The two then have about 1,000 steps to share, and the other columns keep their proportions exactly. The writer divides the weights by their greatest common divisor again.
 * **No weight passes 10,000 or falls below 1**, the bounds the reader takes.
 
-**In a cell, Alt+Right makes its column wider and Alt+Left narrower, by a twentieth of the table's width.** The width comes from the column on its right, or for the last column from the one on its left. Each press is one step of undo, and the cell stays open for the next. The keys work in the cell because a keyboard already reaches a cell, and resizes the column being worked in. An edge that takes the focus would be one more stop for Tab on every table. A table of one column has no width to share, and the page says so.
+**In a cell, chosen or open, Alt+Right makes its column wider and Alt+Left narrower, by a twentieth of the table's width.** Left to the browser, the keys would go back or forward a page, out of the editor. The width comes from the column on its right, or for the last column from the one on its left. Each press is one step of undo, and the cell stays open for the next. The keys work in the cell because a keyboard already reaches a cell, and resizes the column being worked in. An edge that takes the focus would be one more stop for Tab on every table. A table of one column has no width to share, and the page says so.
 
 **An image and an include show what their clauses say.** Opened from a file, the page shows an image's path, alternate text and caption, and a marked box naming an include's path. Served by the local server, it shows the image and the included blocks in place ("The file lifecycle" in [`DESIGN-ksmd.md`](DESIGN-ksmd.md)).
 
@@ -86,7 +92,7 @@
 
 * **Shift and an arrow key extend a range from an open cell**, as in a spreadsheet. Once the caret stands inside the cell's text, Shift+Left and Shift+Right select text instead.
 * **The range keeps the identities of its rows and columns, as a formula's range does.** A row added above it, a sort or an undo leaves it on the same cells. The page keeps no element and no place on the page across an action.
-* **On a chosen cell that is not open, the keys act on the range.** Delete and Backspace clear its cells as one step, and each cell keeps its look. F2 opens the chosen cell, and a typed character opens it with that character in place of its value. Enter moves the choice down and Tab right, Shift back. Ctrl+; and Ctrl+: type today's date or the time into it. Ctrl+Z and Ctrl+Y undo and redo, as in the text. Esc first leaves the chosen cell alone, then leaves the table.
+* **On a chosen cell that is not open, the keys act on the range.** Delete and Backspace clear its cells as one step, and each cell keeps its look. F2 opens the chosen cell, and a typed character opens it with that character in place of its value. An input method composes from the first key too. The focus stands in an invisible text box over the chosen cell. Windows keeps an input method off where no text can be typed. On the cell itself, the first key went in as a letter ("bい" for "び"). What is typed or composed in the box opens the cell. The box itself becomes its input, so a composition goes on unbroken. Enter moves the choice down and Tab right, Shift back. Ctrl+; and Ctrl+: type today's date or the time into it. Ctrl+Z and Ctrl+Y undo and redo, as in the text. Esc first leaves the chosen cell alone, then leaves the table.
 * **Copy, cut and paste act on the range.** A paste of one value fills every cell of the range. A paste of rows fills the table from the range's corner.
 * **A look applies to every cell of the range in one step.**
 
@@ -111,12 +117,13 @@
 * **The file holds the names, then each row's calculated values**, every row whether a filter or a group hides it. A formula gives its result, since the other program reads no ksmd formula.
 * **A number is written as the table shows it before any format**, with `.` for its point and no separators. Another program then reads it as a number; a format is a way of showing.
 * **A value is quoted only where it holds a comma, a quote or a line break**, and a quote inside is doubled. Lines end in CR LF, as RFC 4180 writes them.
+* **Text that starts with `=`, `+`, `-`, `@`, a tab or a CR gets a `'` before it, and is quoted.** A spreadsheet would run such text as a formula, and a formula can open a link or start a program. The `'` shows in the cell, and the text stays text. A number is never changed, so `-5` stays a number.
 * **The file is UTF-8 with a byte order mark.** Without one, Excel reads the bytes in the computer's own code page, and text outside ASCII comes out wrong.
 * **The file is named after the table**, with the characters a file name cannot hold made `_`.
 
 ## Find and replace
 
-**Ctrl+F opens a find bar under the ribbon, and Ctrl+H opens it with its replace part.** The Edit menu and the ribbon's Find tool open it too. A short selection on one line becomes the search text.
+**Ctrl+F opens a find bar under the quick access bar, and Ctrl+H opens it with its replace part.** The Edit menu and the bar's Find tool open it too. A short selection on one line becomes the search text.
 
 * **Find looks in the text the page shows, and in each cell's text as a person edits it.** So a formula's source is searched, and its calculated value is not. Replace changes what is written, and a calculated value holds nothing written to change.
 * **A match can cross formatting.** `**bold**words` holds "boldwords", since a reader sees one word there. A match stays inside one paragraph, heading, list item, code block or cell.
@@ -148,7 +155,7 @@
 
 **A cell with a note has a red corner, as in Excel. A paragraph or a heading with one has a bar at its left.** Pointing at it shows the note.
 
-* **The ribbon's Note asks for the note of the chosen cell, or of the paragraph the caret stands in.** An empty answer resolves it.
+* **Insert, Note asks for the note of the chosen cell, or of the paragraph the caret stands in.** An empty answer resolves it.
 * **The table's right-click menu holds Note… and Resolve note.** Each change is one step of undo.
 
 ## Choices on the page
@@ -170,7 +177,7 @@
 
 ## AutoSum
 
-**The ribbon's Sum (Alt+=) puts a total in the chosen cell**, as Excel's AutoSum does (`autosum.js`). The right-click menu's AutoSum flyout also gives Average, Count numbers, Max and Min.
+**Sum (Alt+=) puts a total in the chosen cell**, as Excel's AutoSum does (`autosum.js`). The Table menu's AutoSum flyout also gives Average, Count numbers, Max and Min, as does the right-click menu's.
 
 * **In one cell, it types `=sum(...)` over the whole column above, and leaves the cell open with the range selected.** Enter takes it, and typing changes the range. Where nothing stands above, it takes the row to the left.
 * **The range is the whole column above, not the numbers up to the first gap.** A range cut at an empty cell would leave out the numbers above it. `sum` leaves out empty cells and text, and the names' row is never in the range.
@@ -181,11 +188,11 @@
 
 **File, Print or save as PDF (Ctrl+P) opens the browser's print dialog, which also saves a PDF.** Print and PDF are then one output, made by the same rules, so they never differ.
 
-* **The output shows the document, and nothing only editing uses.** The menus, the ribbon, the status line and the contents go. So do the column letters, the row numbers, a table's name, the filter arrows and the line above a filtered table. Remove, Edit and Leave out of print go too, with an include's frame, the marks of notes and choices, and the chosen cells.
+* **The output shows the document, and nothing only editing uses.** The menus, the quick access bar, the status line and the contents go. So do the column letters, the row numbers, a table's name, the filter arrows and the line above a filtered table. Remove, Edit and Leave out of print go too, with an include's frame, the marks of notes and choices, and the chosen cells.
 * **Rows a filter or a closed group hides stay hidden on paper, as in Excel.** So a printout shows what the person sees.
 * **A divider ends a page.** Its line still shows at the page's end.
 * **The page always prints light, and the author's fills and colours print as the page shows them.** The browser would otherwise leave background colours out.
-* **A table fits the page.** A column is never narrower than its longest word, and a number or a date stays on one line. The width left over goes by the columns' weights. Scaled down whole, a table set out for a wide window would break a short date apart.
+* **A table fits the page.** A number or a date stays on one line, and a long word, such as a URL or a path, breaks where it must. Kept whole, it widened its column past the page, so the table stood off the page's middle. The width left over goes by the columns' weights. Scaled down whole, a table set out for a wide window would break a short date apart.
 * **The row numbers' column keeps its place with no width.** Taken out of the rows, it would move every value one column to the left, under another column's name.
 
 **A table, chart, image or include can be left out of the output: `invisible="printing"` in its clause.** A table that only feeds a chart is the usual case. It still calculates, and the chart still draws from it.
@@ -206,9 +213,10 @@
 
 **View, Read-only shows the document and takes no edit**, as Word's Read Mode and Excel's Protected View do. A person reading a file then changes nothing by a stray key.
 
-* **The ribbon and the blocks' buttons go, and a Read-only mark stands beside the document's name.**
+* **The blocks' buttons go, the commands that edit cannot be pressed, and a Read-only mark stands beside the document's name.**
 * **Every action that changes the document is refused at one place**, the call that runs it, so no key, paste or drop gets past.
 * **What only looks still works**: finding, filters, the contents, printing, saving a copy and exporting CSV. A press on a cell chooses it without opening it, so a range's sum still shows.
+* **A press on a link opens it in a new tab.** While editing, a press places the caret, and Ctrl+press opens the link. The page's own tab never follows a link, since it holds the unsaved edits and the local server's token.
 * **The choice is this browser's own and is kept**, as the page's width is. Nothing goes into the file.
 
 ## The figures in the status line
@@ -241,7 +249,23 @@
 * **A single tap chooses the cell**, through the mouse events the browser makes of a tap.
 * **A finger that moves more than a few pixels scrolls**, and presses nothing.
 * **A cell takes no text selection and no callout of its own.** Without that, the system's own menu would cover the table's.
-* **In a narrow window the ribbon is one row that scrolls sideways**, so the document keeps the height.
+* **In a narrow window the quick access bar is one row that scrolls sideways**, so the document keeps the height.
+
+## The page and its files
+
+Served by the local server, the page opens and saves files itself. The file lifecycle is "The file lifecycle" in [`DESIGN-ksmd.md`](DESIGN-ksmd.md); this section gives the page's own choices.
+
+* **One tab holds the server open for all the page's tabs on it.** A browser opens six connections to one server. A hold in each tab would use them all with six tabs open, and no save could go out. The tabs share one lock (`navigator.locks`), and when the holder closes, another tab takes the hold over.
+* **Text typed in a cell still open is unsaved at once, and its draft holds it.** The draft keeps the open cell's text beside the document's source, and brings it back as that cell's value. Taking the cell to hold a draft would close it under the person's typing.
+* **A draft brought back first holds aside the edits made since the document opened**, as a draft of their own. So neither version is lost.
+* **The open document's path, its file's digest and its saved text are one record in `ksmd/port/web/file.js`, changed in one place.** The editor, the menu bar, the window's title and the address follow from it. Each kept its own copy before, so a document that did not open could leave the address naming it. A reload then opened that file again in place of the edits.
+* **Whether a draft is held is the answer of the last write, not whether the browser has storage.** A browser whose storage is full opens its store, but every write fails. A check of the store alone let the page open another document, and the edits went.
+* **Where no draft could be held, leaving a document with unsaved edits asks first**: save, discard, or cancel. Opening another document would otherwise lose the edits without a word. A change on disk then offers to load the file's version only as a discard.
+* **Leaving the page asks first while no draft holds the latest edits**: in the second after typing, and where no draft can be held. A draft written as the page goes may not land before the page closes.
+* **A document named in the address that does not open leaves the address.** The new document is then open, and its draft is offered.
+* **Text typed in a cell that the editor refuses stays in its cell**, as a spreadsheet keeps it, and the draft holds it. A save writes nothing, another document does not open, and a menu command does nothing until the text is put right or Esc drops it. A press in the menu bar or in a dialog leaves the cell open. Before, each of them took the cell, the text went, and the next draft let it go.
+* **Save As into another folder writes each include's and image's path again, so it names the same file from there.** A path is read from the document's folder, so kept as it was, it would name another file. The rewrite is one step of undo, and a save that fails takes it back (`ksmd/port/web/moving.kspl`).
+* **Pasted text larger than a document can hold is refused before it reaches the editor.** The editor's memory is a fixed buffer, and a request that cannot be met stops the page.
 
 ## What the editing page does not do yet
 

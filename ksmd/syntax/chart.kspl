@@ -9,6 +9,7 @@ import "ksmd/calc/formula" { find_table }
 import "ksmd/model/model" { Chart, Chart_kind, Document, MAX_SERIES, Table, UNBOUND }
 import "std/chars"
 import "std/ds" { List }
+import "std/mem" { Arena }
 import "std/str" { Str_builder }
 
 fn kind_of(text: U8[]): Chart_kind? //< `bar` or `line`
@@ -51,9 +52,7 @@ fn column_at(t: Table@, id: Sz): Sz //< where the column of this identity stands
 fn write_chart(doc: Document@, c: Chart@, invisible: Bool, out: Str_builder$@) //<
     //< The opening line, with its names
     //< A chart whose table is not found, as when it is read alone, writes the names it holds.
-    bound: =
-        c.table != UNBOUND && c.table < doc.tables.len &&
-        doc.tables[c.table].name.len > 0
+    bound: = is_bound(doc, c)
     out.s(":::chart table=")
     quoted(doc.tables[c.table].name if bound else c.name, out)
     out.s(" kind=\"").s("bar" if c.kind == .bar else "line").s("\" labels=")
@@ -70,6 +69,39 @@ fn write_chart(doc: Document@, c: Chart@, invisible: Bool, out: Str_builder$@) /
         quoted(c.title, out)
     write_invisible(invisible, out)
     out.c('\n')
+
+fn reads_back(doc: Document@, c: Chart@): Bool //<
+    //< Whether the chart, saved and read again, finds the columns it holds now
+    //< The reader takes the first column of a name, and splits `values` at each ','. So a column
+    //< the chart shows needs a name of its own, and a drawn one no ','. A missing column is kept.
+    if !is_bound(doc, c)
+        return true
+    t: = doc.tables[c.table]@
+    if !found_again(t, c.labels, name_of(doc, c, true, c.labels, c.label_name))
+        return false
+    defer scratch: = Arena(1024)
+    joined: = scratch.text()
+    for j in Range.asc(c.series.len)
+        if j > 0
+            joined.c(',')
+        joined.s(name_of(doc, c, true, c.series[j], c.series_names[j]))
+    $names: = List<|U8[]|>(scratch)
+    if !split_names(joined.take(), names@) || names.len != c.series.len
+        return false
+    for j in Range.asc(names.len)
+        if !found_again(t, c.series[j], names[j])
+            return false
+    return true
+
+priv fn found_again(t: Table@, id: Sz, name: U8[]): Bool //<
+    //< Whether a column, written by this name, is found again; a missing one stays missing
+    if name.len == 0
+        return false
+    return id == UNBOUND || column_at(t, id) == UNBOUND || column_named(t, name) == id
+
+priv fn is_bound(doc: Document@, c: Chart@): Bool //< whether the chart's table is found
+    return c.table != UNBOUND && c.table < doc.tables.len &&
+        doc.tables[c.table].name.len > 0
 
 priv fn name_of(doc: Document@, c: Chart@, bound: Bool, id: Sz, kept: U8[]): U8[] //<
     //< A column's name now, or the name kept where the column is not found

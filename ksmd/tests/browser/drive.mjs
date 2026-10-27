@@ -49,6 +49,13 @@ export function driver(page) {
     return false;
   }
 
+  // Loads the page again, as a key would, and waits until `ready` holds on the new page. A dialog
+  // that keeps the old page open makes it wait out `ms`, and answer false.
+  async function reload(ready, ms = 10000) {
+    await js("window.left = true; location.reload()");
+    return until(`!window.left && ${ready}`, ms);
+  }
+
   async function press(key, modifiers = 0) {
     let vk;
     let text;
@@ -165,12 +172,13 @@ export function driver(page) {
     }
   }
 
-  // Presses a command as a person does: in the menu bar, its menu's name, the flyout's name where
-  // it stands in one, then the command; else its tool on the ribbon; else, for a table's command,
-  // a right-click on the chosen cell and the command in that menu.
+  // Presses a command as a person does. While a cell is chosen, a table's command goes through a
+  // right-click on it and the command in that menu; any other through the menu bar: its menu's
+  // name, the flyout's name where it stands in one, then the command.
   async function menu(cmd) {
     const own = `[data-cmd="${cmd}"]`;
-    if (await js(`!!document.querySelector('.menubar ${own}')`)) {
+    if (!(await js(`!!document.querySelector('.menu.context ${own}') && ` +
+      "!!document.querySelector('#doc .chosen, #doc .cell-input')"))) {
       const item = `.menubar ${own}`;
       await click(`.top-menu:has(${own}) > .menu-name`);
       if (await js(`!!document.querySelector('${item}').closest(".sub")`)) {
@@ -179,12 +187,7 @@ export function driver(page) {
       await click(item);
       return;
     }
-    const tool = `.ribbon .group:not([hidden]) ${own}`;
-    if (await js(`!!document.querySelector('${tool}')`)) {
-      await click(tool);
-      return;
-    }
-    await rightClick("#doc .chosen, #doc [data-r]:has(> input)");
+    await rightClick("#doc .chosen, #doc [data-r]:has(> .cell-input)");
     const item = `.menu.context ${own}`;
     if (await js(`!!document.querySelector('${item}').closest(".sub")`)) {
       await point(`.menu.context .sub:has(${own}) > .sub-name`);
@@ -231,6 +234,6 @@ export function driver(page) {
     await clickAt(at[0], at[1]);
   }
 
-  return { page, js, settle, until, press, type, select, click, clickAt, clickBelow, drag, menu, point,
+  return { page, js, settle, until, reload, press, type, select, click, clickAt, clickBelow, drag, menu, point,
     doubleClickAt, rightClick, dragTo, openCell };
 }

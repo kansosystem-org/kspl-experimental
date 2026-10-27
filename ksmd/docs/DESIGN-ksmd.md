@@ -100,7 +100,7 @@ Visual typing inserts literal text. Typing `#`, `*` or `:::` does not automatica
 
 **A quote is a paragraph whose every line starts with `> `**, as mail and Markdown write it. Meeting notes and quoted mail are then set apart from the writer's own words. A quote holds one paragraph; two quotes stand apart with a blank line between them, so no quote nests in another.
 
-**A divider is a line `---`**, and separates two parts of a document. It holds nothing, so the page shows it as a line with a Remove button, as an image has. The ribbon's Insert group adds one at the caret.
+**A divider is a line `---`**, and separates two parts of a document. It holds nothing, so the page shows it as a line with a Remove button, as an image has. Insert, Divider adds one at the caret.
 
 ### Looks: colours, font size and alignment
 
@@ -136,7 +136,7 @@ Visual typing inserts literal text. Typing `#`, `*` or `:::` does not automatica
 * **A note is 1 to 1,000 bytes of text**, a JSON string as any attribute is. A line break may stand in it, written `\n`.
 * **Resolving a note takes it away.** Word keeps a resolved comment hidden in the file. Here the file holds what is still open, so the next reader is not handed remarks that no longer apply. Undo brings a resolved note back.
 * **No threads, replies or names.** These serve several people working on one file at once, which ksmd leaves out ("What the file lifecycle leaves out" below).
-* **A note stays with its cell or paragraph.** A new value, a sort and a moved row keep it. A paragraph split in two keeps it on the part that holds the text before the split.
+* **A note stays with its cell or paragraph.** A new value, a new column name, a sort and a moved row keep it. A paragraph split in two keeps it on the part that holds the text before the split.
 
 ## Tables and calculations
 
@@ -245,11 +245,12 @@ Each error has its own mark, since each is fixed differently. A cycle shown as 0
 * **`keys` and `values` are ranges of one column, or of one row, as long as each other.** Any other shape is `#SHAPE!`.
 * **A match is exact.** Text equals text without regard to case, as the sort and the filter compare it. A number equals the same number. No nearest match is guessed, which is the complaint VLOOKUP's default draws.
 * **`otherwise` is required, and calculated only where no key matches**, as `if` calculates only its branch. A missing key then shows what the writer chose, never an error nobody planned for.
-* **An error in `key` is the result.** A key cell holding an error is passed over.
+* **An error in `key` is the result.** A key cell holding an error is passed over, except `#CYCLE!` before the match.
+* **A key on a cycle makes the lookup `#CYCLE!`.** Passed over, it would hide the cycle, and which cell showed it would depend on which calculated first.
 
 ### Number formats
 
-**A column's number format sets how its numbers show; each cell keeps the number it holds.** The table's `formats` attribute holds one entry per column, as `widths` does:
+**A column's number format sets how its numbers show, and a cell can take its own; each cell keeps the number it holds.** The table's `formats` attribute holds one entry per column, as `widths` does:
 
 ```text
 :::table name="budget" formats=",grouped:2,percent:1,currency:USD:2"
@@ -262,9 +263,12 @@ Each error has its own mark, since each is fixed differently. A cycle shown as 0
 | `grouped:2` | `1,234.50` | `-0.13` |
 | `percent:1` | `123,450.0%` | `-12.5%` |
 | `currency:USD:2` | `$1,234.50` | `-$0.13` |
+| `date:yyyy/mm/dd` | The number as calculated | The number as calculated |
 
 * **Each entry names its kind and its decimal places, from 0 to 9.** No part is left to a default, so one format has one spelling. A short word replaces a code of `#`, `0` and `;` that a person has to decode.
-* **A format belongs to a column, not to a cell.** A column holds one kind of value, so a new row shows like the rows above it. The source then holds one entry per column, not one per cell of 10,000 rows.
+* **A column's format is the default, and new rows follow it.** A column mostly holds one kind of value, so a new row shows like the rows above it. The source then holds one entry per column, not one per cell of 10,000 rows.
+* **A cell can take a format of its own, written in its braces: `| 0.125 {format="percent:1"} |`.** A total row, a rate among amounts, or a table set out as labels and values needs one format per cell, as Excel gives. The cell's own format stands over its column's. `general` shows the cell as calculated, whatever its column's format; a column has no such entry, since its empty entry says the same.
+* **A format chosen on cells is theirs; chosen on whole columns, by their letters, it is the columns'.** A column's format then takes its cells' own formats away, so the whole column shows it, as in Excel. Clear format takes a cell's own format away.
 * **A column without a format has an empty entry.** `formats` stands only while some column has a format; the reader refuses one whose entries are all empty. A wrong entry is refused at its own column on the line.
 * **Every kind but `number` puts a `,` between each three digits.** `percent` shows the number times 100: the decimal point moves two places, so 0.07 shows as exactly `7%`.
 * **The decimal point is always `.` and the separator `,`, the characters the source and a paste already use.** So every reader sees the same text in the same file. A setting per document or per machine would show one file in two ways.
@@ -274,6 +278,7 @@ Each error has its own mark, since each is fixed differently. A cycle shown as 0
 * **Text, empty cells and errors in a formatted column show as they are.** A formula's number shows in the column's format. The header's names never change.
 * **A typed `$12` or `12%` stays text,** as any other typed text does ("How the editor changes a document" below). The format gives the symbol; the cell holds the number.
 * **An open cell edits the number it holds, not the shown text.** A format hides digits, so the cell's editor shows them all.
+* **`date:yyyy/mm/dd` shows the column's dates as `2026/10/23`; its numbers show as calculated.** It names the pattern it shows, so a reader of the source knows the form. A date shows as `2026-10-23` with no entry, so that form has no entry of its own. Its places cannot change.
 * **A new column has no format, and a moved or removed column takes its format with it.** A new column's values are not known yet, so no format is guessed for them.
 
 `ksmd/model/format.kspl` reads, writes and shows a format. `edit.set_format` sets or clears the format of a run of columns, and `edit.step_places` shows one more or one fewer place. Each is one step of undo.
@@ -341,7 +346,8 @@ Each row and column of a table holds an identity that the source does not show. 
 * **A reference that names no cell stays as written,** such as `Z9` in a four-column table. It attaches once that cell exists: after an insertion, and when the source is read again.
 * **A reference straight after a number, as in `1A1`, never attaches.** That formula does not read. Attached, a moved column could join the two into one number (`1E1`).
 * **An edit that would write a formula longer than 4,096 bytes is refused, and changes nothing.** The reader refuses such a formula, so the saved source could not be opened again.
-* **A value that would not read back is refused.** A number keeps the shape the reader takes. A formula stays on one line, with each `|` inside quotes.
+* **A value that would not read back is refused.** A number keeps the shape the reader takes. A formula must read back as itself, alone in its cell.
+* **The reader's own rule for a cell decides whether a formula reads back** (`reads_as_formula` in `ksmd/syntax/clause.kspl`). So a formula stays on one line, with each `|` and `{` inside quotes. A `{` outside quotes would start the cell's look.
 
 ### How tables calculate
 
@@ -356,14 +362,15 @@ Calculation (`ksmd/calc/calc.kspl`) reads the model and one input: the date the 
 
 ### Dates
 
-**A date is a value of its own: a day, written `2026-10-23` and shown so.** A cell holding a bare `2026-10-23` is a date, and a typed one becomes one. A quoted `"2026-10-23"` stays text, so a file written before dates were values reads as it did.
+**A date is a value of its own: a day, written `2026-10-23` and shown so.** A cell holding a bare `2026-10-23` is a date, and a typed one becomes one. A typed `2026/10/23` or `2026/1/5` becomes one too, kept as `2026-10-23`. A quoted `"2026-10-23"` stays text, so a file written before dates were values reads as it did.
 
 * **A date plus or minus a whole number of days is a date, and a date minus a date is the days between them**: `=A1+7`, `=B1-A1`. Any other arithmetic on a date is `#VALUE!`, and a day outside the years 1 to 9999 is `#NUM!`.
 * **Dates compare with dates.** A date and text are unequal, and ordering them is `#VALUE!`, as for any two kinds.
 * **`date(year, month, day)` makes a date**, and a day that does not exist, such as `date(2026, 2, 29)`, is `#NUM!`. `year`, `month` and `day` give a date's parts as numbers.
 * **`min` and `max` of dates give the earliest and the latest, and `count` counts them.** A date has no sum, so `sum` and `average` over one are `#VALUE!`, as is `min` over dates and numbers together.
 * **A date sorts after the numbers and before text, earliest first.** The fill handle goes on by a day, or by the step between two dates.
-* **A date has one form, ISO 8601's.** It reads the same in every country, and sorts in day order even as text. A number format does not change it.
+* **The file keeps a date in one form, ISO 8601's.** It reads the same in every country, and sorts in day order even as text.
+* **A column can show its dates with `/`, as Japan, China and Korea write them** (`date:yyyy/mm/dd` under "Number formats" below). Typing `/` is what a person there does, and Excel there reads it as a date. A typed `/` date that stayed text sorted among the text, after every real date. So the page takes the form people type, and the file keeps the one form.
 * **A date is a count of days, not a number.** Excel keeps a date as a serial number, so a date in a sum adds silently, and a number shown as a date misleads. Here the kinds stay apart, and a mistake shows as `#VALUE!`.
 
 ### Today's date
@@ -399,6 +406,7 @@ These were weighed and left out, so one way to write each thing stays:
 * **Only bars and lines.** They are the charts people make most. A pie shows the same as a bar and is harder to read. Scatter, area and stacked charts draw few users.
 * **A chart holds its table and columns by identity, as a formula's references do.** A renamed or a moved column stays in the chart, and the writer writes the names they have now.
 * **A name that names nothing is kept as written, and the chart says what is missing**, as a formula's `#REF!` does. Nothing is lost when a column is removed and put back.
+* **A column that a chart shows keeps a name that finds it again.** The reader takes the first column of a name, and splits `values` at each `,`. So an edit is refused where a shown column's name would be empty or would match a column before it. A drawn column's name also holds no `,`.
 * **A cell that holds no number leaves a gap**, and the axis starts at zero, so a bar's height is its value.
 * **A chart draws the table's calculated values and holds none.** The file keeps only the clause, so the table stays the one place its numbers live.
 * **The page draws a chart as SVG**, with colours that people with the common kinds of colour blindness tell apart.
@@ -409,7 +417,7 @@ These were weighed and left out, so one way to write each thing stays:
 
 An include clause has only `path="notes.ksmd"` and an empty body. An image clause requires `src` and `alt`, and permits `caption`. All three are quoted strings; its body is empty. Version 1 accepts local PNG and JPEG assets. SVG, remote images, executable formats and data URLs are excluded.
 
-Links may use `https`, `http`, `mailto`, or a document fragment. Other schemes are refused. Opening links is an explicit user action; rendering does not follow them.
+Links may use `https`, `http`, `mailto`, or a document fragment. Other schemes are refused. Rendering never follows a link, and opening one is an explicit user action. In the page, Ctrl+click opens a link in a new tab, and in Read-only a plain click does too. The page's own tab never leaves the document.
 
 ### The workspace and its paths
 
@@ -534,7 +542,7 @@ Undo and redo put back the selection each step started or ended with. A new acti
 
 ## The file lifecycle
 
-**ksmd reaches files through the repository's local server, `kssrv --local`, started on one workspace folder.** A page in a browser cannot read a folder, so it asks the server for each file by its path from the root. The protocol and its refusals are [`docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md). The server reaches files and nothing else: it starts no program, lists no folder, and knows nothing of the document. ksmd adds no server and no request of its own.
+**ksmd reaches files through the repository's local server, `kssrv --local`, started on one workspace folder.** A page in a browser cannot read a folder, so it asks the server for each file by its path from the root. The protocol and its refusals are [`docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md). The server reaches files and nothing else: it starts no program, and knows nothing of the document. It lists one folder's names, for the File dialog alone. ksmd adds no server and no request of its own.
 
 | Guarantee | What holds it |
 | :-- | :-- |
@@ -639,7 +647,9 @@ A diagnostic names the source path, one-based line and Unicode-scalar column, pl
 
 Malformed syntax, unknown clauses or attributes, and unsupported versions prevent editing and saving that source. They do not cause a partly parsed model to overwrite the file. Offer the original source and diagnostics for inspection. Calculation errors are valid cell results and do not prevent saving their formula source.
 
-The reader refuses a formula longer than 4,096 bytes, and an edit that would write one is refused. A formula nested deeper than 64 levels calculates as `#SYNTAX!`. A table edit past a table's limits is refused, and a refused edit changes nothing.
+The reader refuses a formula longer than 4,096 bytes, and an edit that would write one is refused. A table's new name counts too, as a reference writes it. A formula nested deeper than 64 levels calculates as `#SYNTAX!`. A table edit past a table's limits is refused, and a refused edit changes nothing.
+
+**A step that would leave the source over 8 MiB or 100,000 blocks is undone and refused.** The reader refuses such a source, so the saved file would not open again. The editor keeps the count of the source's bytes. A step that changes only blocks adds the bytes of those blocks. A step that changes a table measures the whole source. A table's rows and names change how other tables and charts are written.
 
 ### Keys from a document
 

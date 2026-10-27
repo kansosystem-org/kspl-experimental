@@ -272,6 +272,21 @@ function ksmdView(ks) {
     if (block >= 0) ks.act("ksmd_web_remove_block", block);
   });
 
+  // A link opens in a tab of its own, on Ctrl+click (Cmd+click on a Mac), and in Read-only on a
+  // plain click too, as in Word. **It never leads this tab away**: the unsaved edits and the
+  // token live here. A link to a `#place` names no place the page can go to.
+  ks.root.addEventListener("click", (e) => {
+    const a = e.target.closest && e.target.closest("a[href]");
+    if (!a) return;
+    e.preventDefault();
+    if (!(e.ctrlKey || e.metaKey || ks.readOnly)) return;
+    if (a.getAttribute("href").startsWith("#")) {
+      ks.say(`The link names a place, ${a.getAttribute("href")}, and the page cannot go to it.`);
+      return;
+    }
+    window.open(a.href, "_blank", "noopener,noreferrer");
+  });
+
   // The page's block elements, in the model's order; the gap element is not a block.
   const blocks = () => Array.from(ks.root.children).filter((e) => !e.classList.contains("gap"));
   const items = (list) => Array.from(list.children).filter((e) => !e.classList.contains("gap"));

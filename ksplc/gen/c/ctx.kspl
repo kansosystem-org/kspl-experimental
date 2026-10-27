@@ -100,10 +100,11 @@ struct Genc_ctx
         //< **It only tells a global from a local variable**: emit_var_decl writes both, and only a
         //< global gets the linkage setting.
     const_init_depth: Sz //<
-        //< Whether a top-level `const`'s initializer is being written, as a nesting count
-        //< **Only here is a reference to a constant emitted as its value rather than by name**
-        //< (emit_path_or_literal in gen/c/expr.kspl). C's initializer must be a constant
-        //< expression, and in C99 the name of an object, `const` or not, is not one.
+        //< Whether a top-level initializer is being written, as a nesting count
+        //< **Only here is a scalar written as the value sema folded, and a reference to a constant
+        //< as its initializer** (emit_expr and emit_path_or_literal in gen/c/expr.kspl). C's
+        //< initializer must be a constant expression, and in C99 the name of an object, `const` or
+        //< not, is not one.
     brace_init: Bool //<
         //< Whether the expression about to be written stands where C reads an initializer's braces
         //< That is a file-scope initializer itself, or a member of one written in braces. There an
@@ -111,6 +112,9 @@ struct Genc_ctx
         //< (`(P){ .x = 1 }`). **C99 takes no compound literal as a file-scope initializer**, which
         //< must be a constant expression. Strict compilers refuse it as "initializer element is
         //< not constant". emit_expr reads and clears it, so it never reaches a nested operand.
+    literals: Map<|U8[], U8[]|> //<
+        //< Each string slice's named constant in this unit, by its type and spelling
+        //< See name_string_literals in `literal.kspl`.
     addr_root: Ast_node$@ //<
         //< The name an `x@` being written takes the address of, or null
         //< **It is written by name even in a `const`'s initializer.** `&name` is a C99 address
@@ -125,7 +129,8 @@ impl Genc_ctx
             .create(Genc_ctx::{ .out = out, .last_char = '\n', .sema = sema, .env = sema.env,
             .current_ret_id = 0, .source_map = source_map, .last_line = 0, .last_file = "",
             .last_node = null, .scratch = scratch, .had_error = false, .split = split,
-            .top_level_var = false, .const_init_depth = 0, .brace_init = false, .addr_root = null })
+            .top_level_var = false, .const_init_depth = 0, .brace_init = false,
+            .literals = Map<|U8[], U8[]|>(null), .addr_root = null })
 
     fn writes_decls(r: Self$@): Bool //<
         //< Whether this pass writes the declarations every unit sees
@@ -397,6 +402,7 @@ impl Genc_ctx: Writer
 impl Genc_ctx: Manual_free
     fn free(r: Self$@)
         r.scratch.free()
+        r.literals.free()
 
 priv fn emits_c_const(env: sema_type_env.Env$@, type_id: I32): Bool //<
     //< Whether the C type name itself carries the `const `, so the declaration adds none

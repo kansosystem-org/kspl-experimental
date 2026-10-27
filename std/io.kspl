@@ -1,6 +1,6 @@
 //< Reading and writing through streams: a file, and the standard three
-//< A destination is a `Writer` and a source is a `Reader`, so one call writes to a file, standard
-//< output or a `Str_builder` alike. A failure is an `Io_error` naming the file, not a crash.
+//< A destination is a `Writer`, so one call writes to a file, standard output or a `Str_builder`
+//< alike. A failure is an `Io_error` naming the file, not a crash.
 import "std/chars"
 import "std/libc"
 import "std/mem" + { Arena, dealloc }
@@ -15,9 +15,6 @@ pub enum Io_error //< why a read, a write or an open failed
         //< Empty from an open `File_stream`, as `read_failed`.
     close_failed //< buffered data could not be flushed on closing
     invalid_arg //< an argument is invalid, such as a path containing a NUL
-
-pub trait Reader //< anything bytes can be read from
-    fn read(r: Self, $buf: U8$[]): Sz!Io_error //< fills buf; returns the count read, 0 at the end
 
 pub struct File_stream //< one open file to write to, read from and close
     //< **Its owner closes it with `free()`**, usually by declaring it with `defer` in front.
@@ -46,12 +43,6 @@ impl File_stream: Writer //< so it can be used wherever a `Writer` is expected
         flush_or_stop(r.live())
         return r
 
-impl File_stream: Reader //< so it can be used wherever a `Reader` is expected
-    pub fn read(r: Self$@, buf: U8$[]): Sz!Io_error //< fills the buffer; 0 means the end
-        if r.stream == null
-            throw .invalid_arg
-        return read_into(r.stream, buf)!
-
 impl File_stream: Manual_free //< it owns the handle and releases it in `free()`
     pub fn free(r: Self$@) //< closes the handle; a failure while closing is not reported
         //< That is `Manual_free`'s contract.
@@ -61,6 +52,11 @@ impl File_stream: Manual_free //< it owns the handle and releases it in `free()`
             r.stream = null
 
 impl File_stream
+    pub fn read(r: Self$@, buf: U8$[]): Sz!Io_error //< fills the buffer; 0 means the end
+        if r.stream == null
+            throw .invalid_arg
+        return read_into(r.stream, buf)!
+
     pub fn sync(r: Self$@): Void!Io_error //< flushes buffered data and reports a failure
         //< It does not mean the data reached the disk: `fs.replace_file` is what puts a file there.
         //< `Writer.flush()` returns `Self$@` for chaining, so only this method can report a
@@ -181,7 +177,9 @@ priv fn open_error(path: U8[], mode: U8[]): Io_error //< the reason it could not
     return .write_failed(path)
 
 pub fn open( //< opens a file, handling a non-ASCII path on Windows too
-    //< A child process started while it is open does not get it.
+    //< A child process started while it is open does not get it. **The bytes are read and written
+    //< as they are on every OS**: on Windows too, `b` changes nothing, and no `\r` is added or
+    //< dropped. While it is open, another process can still rename or remove the file.
     path: U8[], //< the file to open
     mode: U8[], //< `r`, `w` or `a`, then any of `+` and `b`, and `x` after `w`; another letter fails
 ): File_stream!Io_error //<
@@ -254,22 +252,6 @@ pub fn write_file( //< writes the whole file, creating or replacing it
     closed: = libc.fclose(file) == 0
     if written != data.len || !closed
         throw .write_failed(path)
-
-pub fn copy( //< reads to the end, writes it all out, and returns how much was copied
-    //< Caution: **A write failure is not reported here**: `Writer` returns no failure. Check the
-    //< destination after it (`File_stream.sync()!`), or a full disk passes for a whole copy.
-    src: Reader, //< where the bytes come from
-    dst: Writer, //< where they go
-): Sz!Io_error //< the number of bytes copied; fails if a read fails
-    $buf: U8[4096] = ::{}
-    $total_bytes: Sz = 0
-    for
-        bytes_read: = src.read(U8$[]::buf)!
-        if bytes_read == 0
-            break
-        dst.s(U8$[]::{ .ptr = buf@, .len = bytes_read })
-        total_bytes += bytes_read
-    return total_bytes
 
 pub fn getchar(): U8?!Io_error //< one byte from standard input, or none at the end
     //< **A failed read is an error, not the end**, as at `read_stdin`.

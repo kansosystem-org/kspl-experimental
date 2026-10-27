@@ -201,6 +201,58 @@ pub fn main(): I32
   b: U8[] = "cd"
   c: = a + b
   return I32::c.len
+// ==== case slice_cast_mut_from_readonly_array
+//< A mutable slice is not made from an array whose binding has no `$`
+//< The C declares that array `const`, so a write through the view was undefined there: an
+//< optimiser read it back as it was initialized. A field of such a binding is refused too; a
+//< `$` binding and a read-only view pass.
+// EXPECT: cannot cast a read-only array to the mutable slice type 'U8$[]'. Its binding has no '$'
+// EXPECT: cannot cast a read-only array to the mutable slice type 'I32$[]'
+// EXPECT: Finished with 2 error(s)
+priv struct Holder
+  arr: I32[3]
+
+priv fn fill(s: U8$[])
+  s[0] = 1
+
+priv fn fill_i32(s: I32$[])
+  s[0] = 1
+
+fn main(): I32
+  buf: U8[4] = ::{}
+  fill(U8$[]::buf)
+  h: Holder = ::{ .arr = ::{ 1, 2, 3 } }
+  fill_i32(I32$[]::h.arr)
+  $ok: U8[4] = ::{}
+  fill(U8$[]::ok)
+  view: = U8[]::buf
+  return I32::ok[0] + I32::view.len + h.arr[0]
+// ==== case slice_cast_mut_from_temporary
+//< A mutable slice is not made from an array that is not a place
+//< The array is a call's result, or a field of one: a copy with no name. A write through the view
+//< changed only the copy. A slice over a named `$` array, and a read-only view of a copy, pass.
+// EXPECT: cannot cast a temporary array to the mutable slice type 'I32$[]'
+// EXPECT: cannot cast a temporary array to the mutable slice type 'I32$[]'
+// EXPECT: Finished with 2 error(s)
+priv struct B
+  arr: I32[3]
+
+priv fn mkarr(): I32[3]
+  return ::{ 1, 2, 3 }
+
+priv fn mkb(): B
+  return ::{ .arr = ::{ 1, 2, 3 } }
+
+priv fn fill(s: I32$[])
+  s[0] = 99
+
+fn main(): I32
+  fill(I32$[]::mkarr())
+  v: = I32$[]::mkb().arr
+  $named: = mkarr()
+  fill(I32$[]::named)
+  w: = I32[]::mkb().arr
+  return v[0] + w[0]
 // ==== case slice_cast_elem_size
 //< A cast to a slice that changes the element size is rejected
 //< Caution: **Place the shapes that should pass too.** A same-size reread (`U8[]` ↔ `I8[]`,
@@ -285,6 +337,15 @@ pub fn main(): I32
   io.out()
     .s("\{from_local_array()\}\{from_elem_list().len\}\{wrapped_in_struct().s\}\{explicit_addr()\}\{from_builder()\}\n")
   return 0
+// ==== case slice_run_mut
+//< A run of elements does not make a mutable slice
+//< Its array has no name to carry the `$` that writable memory needs. Read as a descriptor, the
+//< values filled `.ptr` and `.len` by position, and the error named neither.
+// EXPECT: a run of elements cannot make a mutable slice ('$[]')
+// EXPECT-NOT: expected 'I32$@'
+fn main(): I32
+  xs: = I32$[]::{ 10, 20 }
+  return xs[0]
 // ==== case slice_struct_readonly_write
 //< Assigning to an element of an immutable slice (`T[]`, `Slice<|T|>` in `std/lang`) is rejected
 //< **Talk about the elements:** "implement `Index_mut`" cannot be followed, since the elements'

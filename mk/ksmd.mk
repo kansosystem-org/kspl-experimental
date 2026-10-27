@@ -11,18 +11,18 @@ ksmd-web: $(STAGE1_EXE)
 	@$(ksmd_make) web
 
 ## Gates|test-ksmd-browser|Edit ksmd documents in a headless Chromium through real input events, and open and save files through kssrv --local
-test-ksmd-browser: $(STAGE1_EXE) kssrv
-	@$(ksmd_make) test-browser KSSRV=../$(OUT_DIR)/kssrv.exe
+test-ksmd-browser: $(STAGE1_EXE) $(KSSRV_EXE)
+	@$(ksmd_make) test-browser KSSRV=../$(KSSRV_EXE)
 
 ## Run|measure-ksmd|Time opening, editing and saving ksmd documents from a typical one to a large one, in KSPL and in a headless Chromium
-measure-ksmd: $(STAGE1_EXE) kssrv
-	@$(ksmd_make) measure KSSRV=../$(OUT_DIR)/kssrv.exe
+measure-ksmd: $(STAGE1_EXE) $(KSSRV_EXE)
+	@$(ksmd_make) measure KSSRV=../$(KSSRV_EXE)
 
 # ==========================================
 # Opening a `.ksmd` from the desktop (`make ksmd`)
 # ==========================================
 # **The association points at this executable**, not `ksplc run`: a double-click stands elsewhere.
-# It looks for the server and the page beside itself (`KSMD` in `tools/ksmd_aim.kspl`).
+# It looks for the server and the page beside itself (`BUILT` and `PAGE` in `tools/opener_aim.kspl`).
 KSMD_OPEN_EXE := $(OUT_DIR)/ksmd_open.exe
 KSMD_ICON_DIR := ksmd/port/desktop
 
@@ -36,15 +36,14 @@ $(KSMD_OPEN_RES): $(KSMD_ICON_DIR)/ksmd.rc $(KSMD_ICON_DIR)/ksmd.ico | $(OUT_DIR
 	$(WINDRES) --include-dir=$(KSMD_ICON_DIR) -O coff $(KSMD_ICON_DIR)/ksmd.rc -o $@
 endif
 
-$(KSMD_OPEN_EXE): $(STAGE1_EXE) $(KSMD_OPEN_RES) tools/ksmd_open.kspl tools/ksmd_aim.kspl \
-		$(OPENER_SRC)
+$(KSMD_OPEN_EXE): $(STAGE1_EXE) $(KSMD_OPEN_RES) tools/ksmd_open.kspl $(OPENER_SRC)
 	$(stop_ksmd_servers)
 	@echo "# BUILDING the launcher (out/ksmd_open.exe)"
 	$(call kspl_build,tools/ksmd_open.kspl,ksmd_open,,$(GUI_LDFLAGS) $(KSMD_OPEN_RES))
 	@echo "# built -> $(KSMD_OPEN_EXE)"
 
 ## Run|ksmd-open|Open one `.ksmd` document in a browser (`FILE=` is wanted)
-ksmd-open: ksmd-web kssrv $(KSMD_OPEN_EXE)
+ksmd-open: ksmd-web $(KSSRV_EXE) $(KSMD_OPEN_EXE)
 	@test -n "$(FILE)" || { echo "usage: make ksmd-open FILE=<path to a .ksmd document>"; exit 1; }
 	./$(KSMD_OPEN_EXE) "$(FILE)"
 
@@ -53,9 +52,9 @@ ksmd-open: ksmd-web kssrv $(KSMD_OPEN_EXE)
 KSMD_OPEN_WORK := $(TMP_DIR)/ksmd_open_test
 
 ## Gates|test-ksmd-open|Start the ksmd launcher on scratch workspaces: the workspace, its port, reuse, a taken port, two opens at once and the refusals
-test-ksmd-open: kssrv $(KSMD_OPEN_EXE)
+test-ksmd-open: $(KSSRV_EXE) $(KSMD_OPEN_EXE)
 	rm -rf "$(KSMD_OPEN_WORK)"
-	./$(STAGE1_EXE) run tools/tests/ksmd_launch.kspl $(KSMD_OPEN_EXE) $(OUT_DIR)/kssrv.exe \
+	./$(STAGE1_EXE) run tools/tests/ksmd_launch.kspl $(KSMD_OPEN_EXE) $(KSSRV_EXE) \
 		"$(KSMD_OPEN_WORK)"
 
 KSMD_DESKTOP := $(OUT_DIR)/ksmd.desktop
@@ -95,7 +94,7 @@ test-ksmd-desktop: | $(OUT_DIR)
 	$(call desktop_check,$(KSMD_DESKTOP),$(KSMD_MIME),$(KSMD_ICON),$(KSMD_MIME_TYPE),ksmd,$(KSMD_REQUIRE_DESKTOP))
 
 ## Run|ksmd|Build the page, the server and the launcher, and make a `.ksmd` open on a double-click
-ksmd: ksmd-web kssrv $(KSMD_OPEN_EXE) test-ksmd-desktop
+ksmd: ksmd-web $(KSSRV_EXE) $(KSMD_OPEN_EXE) test-ksmd-desktop
 	@echo "# built -> $(KSMD_DESKTOP)"
 	@echo "# built -> $(KSMD_MIME)"
 	@echo "# $(KSMD_ASSOC_LEAD)"
@@ -113,7 +112,7 @@ ksmd: ksmd-web kssrv $(KSMD_OPEN_EXE) test-ksmd-desktop
 ifeq ($(PLATFORM),linux)
 ## Build-and-install|install-desktop|Make `.ksmd` files open on a double-click, with their icon (Linux; `make install` does it too)
 install-desktop: export ABS_HELP := $(install_abs_help)
-install-desktop: ksmd-web kssrv $(KSMD_OPEN_EXE) test-ksmd-desktop
+install-desktop: ksmd-web $(KSSRV_EXE) $(KSMD_OPEN_EXE) test-ksmd-desktop
 	@echo "# TYING .ksmd TO ITS LAUNCHER under $(DESKTOP_DATA)"
 	@case '$(DESKTOP_DATA)' in /*) ;; *) printf '%s\n' "$$ABS_HELP"; exit 1;; esac
 	$(call desktop_install,$(DESKTOP_DATA),$(KSMD_DESKTOP),$(KSMD_MIME),$(KSMD_ICON),$(KSMD_MIME_TYPE))

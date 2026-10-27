@@ -54,7 +54,7 @@ One `#` marks the declaration that follows it; two (`##`) mark the whole file. C
 | Kind | Examples | Applies to |
 | :-- | :-- | :-- |
 | Attribute, `#` | `#inline`, `#cfg(flag)` | What comes next |
-| Directive, `##` | `##error`, `##warning`, `##lint` | What encloses it: the file |
+| Directive, `##` | `##error`, `##lint` | What encloses it: the file |
 
 Both stand before their target, so **the number of `#`, not the position, fixes the scope**.
 
@@ -280,7 +280,7 @@ There is no built-in slice. `std/lang` declares `struct Slice<|$T|> { ptr: T$@; 
 
 `ksplc/parse/desugar.kspl` desugars **the type expression as written**, folding the postfixes from the left. So `U8$[][]` is an immutable-element slice of mutable-element slices; reverse the order and the markers swap. A postfix carrying a size (`[N]`) is a fixed-length array and is not folded.
 
-**Diagnostics show the sugar** (`ksplc/sema/type/display.kspl`), not a type name the user never wrote, such as `std_lang_Slice_U8_Const`.
+**Diagnostics show the sugar** (`ksplc/sema/type/display.kspl`), not a type name the user never wrote, such as `Slice_U8_Const`.
 
 **The sugar is the only spelling of a slice type.** `Slice<|U8|>` written as a type is a compile error naming `U8[]`, as `Option<|T|>` is for `T?` ("`T?` is sugar for `Option<|T|>`" below). Two spellings of one type would leave a reader wondering whether they differ (Principle 6). Only `std/lang`'s declaration of `Slice` names it.
 
@@ -777,27 +777,26 @@ The last is the weakest coupling: it can misfire on an unrelated method named `f
 
 #### Why a container's round trip is a table-returning trait
 
-To write a struct out as JSON or a database row and read it back, a type conforms to `Reflectable`. Its one method returns a table describing the type's fields, and the libraries walk that table. The compiler writes the table for you when the `impl` is empty.
+To write a struct out as JSON and read it back, a type conforms to `Reflectable`. Its one method returns a table describing the type's fields, and a library walks that table. The compiler writes the table for you when the `impl` is empty.
 
-With a bare interface, `json` and `db` would each write a field's key twice, once to write and once to read (`std/docs/DESIGN-core.md`). KSPL folds that into **one trait that returns a table of fields**.
+With a bare interface, `json` would write a field's key twice, once to write and once to read (`std/docs/DESIGN-core.md`). KSPL folds that into **one trait that returns a table of fields**.
 
 ```kspl
 pub trait Reflectable
     fn fields(r: Self): Field_info[]
 ```
 
-`Field_info` (in `std/reflect`) holds the name, the offset, the kind, a nested table and `Field_extra` (a number's width, and the like). `std/json_struct`'s `from_struct` / `into_struct` and `ksbind/db`'s `bind_row` / `read_row` walk it in ordinary KSPL.
+`Field_info` (in `std/reflect`) holds the name, the offset, the kind, a nested table and `Field_extra` (a number's width, and the like). `std/json_struct`'s `from_struct` / `into_struct` walk it in ordinary KSPL.
 
 ```mermaid
 flowchart LR
     S["a struct with<br/>impl X: Reflectable (empty)"] -->|the compiler writes fields| T["the field table<br/>name, offset, kind per field"]
     T --> J["std/json_struct<br/>from_struct / into_struct"]
-    T --> D["ksbind/db<br/>bind_row / read_row"]
 ```
 
 **A trait rather than an attribute**, by (3) of "The order of decision". Whether a type can round-trip is derived structurally from its fields' types (`Outer` only when `Inner` can), and it must be writable as a generic's constraint (`fn save<|T: Reflectable|>`). Nor is it an empty marker: `fields()` is called directly under that constraint. So no second mechanism looks up a name (the chapter "One notation per purpose" in [`DESIGN-principles.md`](DESIGN-principles.md)).
 
-**A table rather than a body per library.** `Json_codable { fn to_json(…) }` names a `std/json` type in its signature. Once ksplc synthesized its body, it would be a compiler-known trait. "Why compiler-known traits are confined to `std/lang`" puts those in `std/lang`, which can import only `std/libc`. A table's signature needs only `U8[]`, `Sz` and an enum, so it can live anywhere: in `std/reflect`, not `std/lang` ("Why compiler-known traits are confined to `std/lang`"). And one mechanism serves both `json` and `db`.
+**A table rather than a body per library.** `Json_codable { fn to_json(…) }` names a `std/json` type in its signature. Once ksplc synthesized its body, it would be a compiler-known trait. "Why compiler-known traits are confined to `std/lang`" puts those in `std/lang`, which can import only `std/libc`. A table's signature needs only `U8[]`, `Sz` and an enum, so it can live anywhere: in `std/reflect`, not `std/lang` ("Why compiler-known traits are confined to `std/lang`"). And the same table serves any other library that walks a struct's fields.
 
 **The compiler writes the table only for an `impl` with an empty body**, as a person would write it. It leaves an `impl` with a body alone (the rule is "5.5 Worked example: synthesizing a field table with `Reflectable`" in [`SPEC-programming-language.md`](SPEC-programming-language.md)). A body written by hand is the way out for another key mapping, or for a type the table cannot express. The trait is matched by FQN, as every compiler-known trait is ("Why compiler-known traits are confined to `std/lang`"). How the compiler builds the table is ksplc's: `synthesize_reflect_impls` in `ksplc/sema/decl/reflect.kspl`. It is also pass 2a' in [`../ksplc/docs/DESIGN-sema.md`](../ksplc/docs/DESIGN-sema.md), under this heading:
 
@@ -931,7 +930,7 @@ Note: This is revisited only under the condition in "Whether a callback arrives 
 
 **Moving a callback that needs no captures to `Callable` shrinks what can be written.** A closure cannot be named and reused ("Why capture is made explicit and escape is forbidden"). `ksos`'s `on_idle` takes `semihost_console`'s `exit` from each demo's `ksos_main`; as a `Callable` it would need the same closure in every one.
 
-**The judgment changes only "when a caller needing captures appears".** Only then is a zero-capture closure in a top-level `const` (a closure that can be named) worth weighing. Do not add it first. The LLVM backend lacks the ground for it. A fat pointer cannot be folded into a static initializer, and the build stops with `this global initializer is not a compile-time constant`. So it would cost about as much as making a function pointer placeable at global scope.
+**The judgment changes only "when a caller needing captures appears".** Only then is a zero-capture closure in a top-level `const` (a closure that can be named) worth weighing. Do not add it first. The LLVM backend lacks the ground for it. A fat pointer is no shape a static initializer can hold on both backends. So it would cost about as much as making a function pointer placeable at global scope.
 
 ### Where it is fine to move to `std/seq`
 

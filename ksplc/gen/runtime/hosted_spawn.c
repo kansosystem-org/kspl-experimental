@@ -492,15 +492,16 @@ KSPL_LINK I64 kspl_proc_start(const U8 *argv_buf, Sz argv_buf_len, I32 argc, con
     if (in_w != NULL) SetHandleInformation(in_w, HANDLE_FLAG_INHERIT, 0);
     if (out_r != NULL) SetHandleInformation(out_r, HANDLE_FLAG_INHERIT, 0);
     if (err_r != NULL) SetHandleInformation(err_r, HANDLE_FLAG_INHERIT, 0);
-    /* Allow a reader (`FILE_SHARE_READ`) — the side waiting for it to come up watches
-     * while reading. */
+    /* Every sharing flag, as on POSIX: a reader watches the file while the child writes it, and
+     * a rename or a removal over it goes through while the child still holds it. */
+    DWORD share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
     if (out_len > 0) {
-        oh = CreateFileW(out_path, GENERIC_WRITE, FILE_SHARE_READ, &sa, CREATE_ALWAYS,
-            FILE_ATTRIBUTE_NORMAL, NULL);
+        oh = CreateFileW(out_path, GENERIC_WRITE, share, &sa, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL,
+            NULL);
         if (oh == INVALID_HANDLE_VALUE) { oh = NULL; goto fail; }
     }
     if (err_len > 0) {
-        eh = one_file ? oh : CreateFileW(err_path, GENERIC_WRITE, FILE_SHARE_READ, &sa, CREATE_ALWAYS,
+        eh = one_file ? oh : CreateFileW(err_path, GENERIC_WRITE, share, &sa, CREATE_ALWAYS,
             FILE_ATTRIBUTE_NORMAL, NULL);
         if (eh == INVALID_HANDLE_VALUE) { eh = NULL; goto fail; }
     }

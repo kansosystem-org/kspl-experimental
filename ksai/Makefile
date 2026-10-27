@@ -15,7 +15,9 @@ KANSO_REQUIRE_ASAN ?=
 # -O1, as the sanitizer slows it; `-g` and the frame pointer keep a stop's call row readable.
 ASAN_BUILD := --sanitize=address --cflags="-O1 -g -fno-omit-frame-pointer"
 
-EXAMPLES := llama_engine qwen_infer fim_coder
+# An example is a folder under `examples/` that holds a `main.kspl`. So `make test` builds a new
+# example without a list to edit; what it checks in a run is in `tests/examples_main.kspl`.
+EXAMPLES := $(sort $(patsubst examples/%/main.kspl,%,$(wildcard examples/*/main.kspl)))
 .PHONY: examples $(EXAMPLES) test test-unit test-fuzz
 examples: $(EXAMPLES)
 
@@ -36,7 +38,7 @@ test: examples test-unit
 	"$(KSPLC)" run tests/stops_main.kspl "$(KSPLC_EXE)"
 	rm -rf "$(OUT)/examples_test"
 	"$(KSPLC)" run tests/examples_main.kspl "$(OUT)/llama_engine.exe" "$(OUT)/qwen_infer.exe" \
-		"$(OUT)/fim_coder.exe" "$(OUT)/examples_test"
+		"$(OUT)/fim_coder.exe" "$(OUT)/car_pilot.exe" "$(OUT)/examples_test"
 
 fuzz_build = "$(KSPLC)" build $(1) tests/read_prog.kspl "$(OUT)/fuzz/read_prog.exe"
 # Caution: **Make the folder first**: the sanitizer's log is redirected into it before the build.

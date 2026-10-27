@@ -329,8 +329,8 @@ fn equiv_hidden_fn(): I32
 fn verbatim_hiding_lines(b: Str_builder$@) //< each initializer reads the global, not the local
     equiv_hidden: = equiv_hidden + 1
     equiv_hidden_fn: = equiv_hidden_fn() + 1
-    sqrt: = libc.sqrt(16.0) + 1.0
-    b.s("verbatim=\{equiv_hidden\}/\{equiv_hidden_fn\}/\{I32::sqrt\}\n")
+    strtod: = libc.strtod(Void$@::"16".ptr, null) + 1.0
+    b.s("verbatim=\{equiv_hidden\}/\{equiv_hidden_fn\}/\{I32::strtod\}\n")
 
 // ==========================================
 // Casts from floating point to an integer. Each width saturates at its own bounds, and NaN gives 0
@@ -363,3 +363,76 @@ fn float_cast_lines(b: Str_builder$@) //< one line of every source value at ever
         b.s("\{I32::f\},\{U32::f\},\{I8::f\},\{U64::f\};")
     b.s("\{I32::2.9\},\{I32::-2.9\},\{U8::255.9\},\{I64::-9223372036854775808.0\},")
         .s("\{U64::18446744073709549568.0\},\{I32::(F32::16777217.0)\},\{G_CAST_FOLDED\}\n")
+
+// ==========================================
+// Top-level initializers of every shape sema lets stand. A scalar is the value sema folded, which
+// both backends write; any other shape is written as it stands. **Keep each shape that one
+// backend refused before**: a float comparison, a trait value, a pointer cast from an integer.
+// ==========================================
+priv struct Si_point
+    x: I32
+    y: I32
+
+priv enum Si_col
+    red
+    green = 5
+    blue
+
+priv enum Si_opt
+    none
+    some(v: I32)
+
+priv trait Si_named
+    fn named(r: Self): I32
+
+impl Si_point: Si_named
+    fn named(r: Self): I32
+        return r.x * 10 + r.y
+
+priv const SI_A: I32 = 3
+priv const SI_B: I32 = SI_A + SI_A
+priv const SI_AND: Bool = SI_B > 4 && SI_A < 4
+priv const SI_OR: Bool = SI_B < 4 || !SI_AND
+priv const SI_DIV: I32 = SI_B / -1
+priv const SI_PICK_N: I32 = SI_A if !(SI_B > 0) else -SI_A
+priv const SI_F: F64 = 1.5
+priv const SI_FF: F64 = SI_F * SI_F + 0.25
+priv const SI_F32: F32 = F32::SI_FF
+priv const SI_F_GT: Bool = SI_FF > SI_F
+priv const SI_F_INT: I32 = I32::(SI_FF * 3.0)
+priv const SI_INF: F64 = 1.0 / 0.0
+priv const SI_NAN: F64 = 0.0 / 0.0
+priv const SI_PT_PICK: Si_point = ::{ .x = 1, .y = 2 } if SI_AND else ::{ .x = 3, .y = 4 }
+priv const SI_TEXT: U8[] = "yes" if SI_OR else "no"
+priv const SI_PT: Si_point = ::{ .x = SI_B * 2, .y = 7 if SI_AND else 8 }
+priv const SI_COL: Si_col = .blue
+priv const SI_COL_N: I32 = I32::Si_col.blue
+priv const SI_CH: U8 = 'a' + 1
+priv const SI_BIG: U64 = 0xFFFF_FFFF_FFFF_FFF0U64
+priv const SI_BIG1: U64 = SI_BIG + 1
+priv const SI_SIZE: Sz = sizeof(Si_point) * 2
+priv const SI_OFF: Sz = offsetof(Si_point, y)
+priv const SI_NUMS: I32[3] = ::{ SI_A, SI_B, SI_A * SI_B }
+priv const SI_NUMS_S: I32[] = I32[]::SI_NUMS
+priv const SI_RUN: I32[] = I32[]::{ 4, SI_B }
+priv const SI_OPT: Si_opt = .some(SI_B + 1)
+priv const SI_OPT_PICK: Si_opt = SI_OPT if SI_AND else .none
+priv const SI_NAMED: Si_named = SI_PT
+priv const SI_OP: fn(a: I32): I32 = fn(a: I32): I32
+    return a + SI_B
+priv const SI_REG: U32@ = U32@::0x4000_0000
+priv $si_var: I32 = SI_B * 10
+priv $si_var_pt: Si_point = ::{ .x = SI_A if SI_B > 0 else 0 }
+
+fn static_init_lines(b: Str_builder$@) //< each top-level shape, read at run time
+    b.s("sinit=\{SI_B\}/\{SI_AND\}/\{SI_OR\}/\{SI_DIV\}/\{SI_PICK_N\}/\{SI_FF\}/\{SI_F32\}/")
+        .s("\{SI_F_GT\}/\{SI_F_INT\}/\{SI_INF > 1.0e308\}/\{SI_NAN != SI_NAN\}/")
+        .s("\{SI_PT_PICK.x\}/\{SI_TEXT\}/\{SI_PT.x\}/\{SI_PT.y\}/\{I32::SI_COL\}/\{SI_COL_N\}/")
+        .s("\{SI_CH\}/\{SI_BIG1\}/\{SI_SIZE\}/\{SI_OFF\}/\{SI_NUMS[2]\}/\{SI_NUMS_S[1]\}/")
+        .s("\{SI_RUN[1]\}/\{SI_NAMED.named()\}/\{SI_OP(1)\}/\{Sz::SI_REG\}/\{si_var\}/")
+        .s("\{si_var_pt.x\}/")
+    switch SI_OPT_PICK
+    case .some(v)
+        b.s("\{v\}\n")
+    case .none
+        b.s("none\n")

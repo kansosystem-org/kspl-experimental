@@ -267,3 +267,43 @@ struct Resolving_state //<
         //< Caution: **Record the report here and emit it later.** An array length is evaluated
         //< under `eval_constexpr_quiet`, which discards diagnostics, so an `err` where it is found
         //< leaves nothing. run in `sema/decl/collect.kspl` reports it once, at the end.
+
+enum Static_value //< a top-level initializer's value that sema folded (`../body/static_init.kspl`)
+    whole(v: I64) //< an integer, a `Bool`, a character or a scalar enum's tag, as I64's bits
+    real(f: F64) //< a floating-point value, already rounded to `F32` where the node is one
+
+struct Const_fold //< a constant's folded integer value, kept so that each constant folds once
+    value: I64
+    below: I32 //<
+        //< How many levels the constant's own fold went below its initializer
+        //< A reuse adds it to the depth it is reached at. So the depth limit cuts the same chains
+        //< as without the cache: **the cache changes the cost, never the answer.**
+    epoch: I32 //< the `Static_state.epoch` it was folded in; another epoch's value is stale
+
+struct Const_fold_float //< the same, for a floating-point constant (`../decl/fold_float.kspl`)
+    value: F64
+    below: I32
+    epoch: I32
+
+struct Static_state //<
+    //< What sema decided about top-level initializers, and the folded constants it keeps
+    //< **Both backends and Lower read these decisions** rather than deciding again. The rule is in
+    //< `../body/static_init.kspl`.
+    values: Map<|Sz, Static_value|>$@ //<
+        //< The value of each node that a top-level initializer holds as one folded value
+        //< Keyed by the node's address. Only the largest folded node is kept, not its operands.
+    picks: Map<|Sz, Ast_node$@|>$@ //<
+        //< A top-level conditional whose value is no scalar, keyed by its address: the branch its
+        //< folded condition picks. Lower puts that branch in its place.
+    ints: Map<|Sz, Const_fold|>$@ //< a constant's declaration address -> its folded value
+    floats: Map<|Sz, Const_fold_float|>$@ //< the same, for floating-point constants
+    epoch: I32 //<
+        //< Which typing state the folded constants belong to; 0 turns the cache off
+        //< A fold reads the operands' types, so a value folded before a constant's initializer is
+        //< typed can differ from the value after. The epoch moves on whenever an initializer is
+        //< typed (`infer_global` in `../body/infer.kspl`), which makes every kept value stale. The
+        //< declaration pass types nothing in a fixed order, so the cache stays off there.
+    deepest: I32 //< the deepest level the running integer fold has reached
+    deepest_float: I32 //< the same, for the running floating-point fold
+    float_cut: Bool //< whether the running floating-point fold stopped at its depth limit
+    float_cut_reported: Bool //< whether a floating-point fold's cut has been reported

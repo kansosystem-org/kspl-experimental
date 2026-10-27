@@ -4,7 +4,6 @@
 //< `make test` runs it and passes the server it built and a working directory.
 //< **On Windows the firewall prompt appears every time, and that is normal.** kssrv listens on
 //< 0.0.0.0, so Windows Defender asks permission for incoming connections.
-import "kssrv/tests/car"
 import "kssrv/tests/client"
 import "kssrv/tests/guard"
 import "kssrv/tests/local"
@@ -26,7 +25,7 @@ priv const USAGE: U8[] = "usage: ksplc run tests/main.kspl <kssrv> <work_dir> [<
     //< With a run's name, only that run goes, to reproduce one by hand. `--RUNS` prints the names,
     //< one a line. So whoever picks one does not have to read them out of this file.
 
-priv const RUNS: U8[][6] = ::{ "outward", "local", "page", "idle", "stop", "memory" } //<
+priv const RUNS: U8[][7] = ::{ "outward", "local", "linked", "page", "idle", "stop", "memory" } //<
     //< The server runs, each a process of its own on a free port the system chose
 priv const PAGE_REL: U8[] = "ui/app.html" //< the page placed outside the root
     //< **Not under the root** (that is the case being tested).
@@ -180,6 +179,8 @@ priv fn serve_run(name: U8[], at: Placed, arena: Arena$@) //< runs the server ru
         serve_outward_and_check(at, arena)
     else if name.equals("local")
         serve_local_and_check(at, arena)
+    else if name.equals("linked")
+        serve_linked_and_check(at, arena)
     else if name.equals("page")
         serve_page_and_check(at.exe, at.root, at.tmp, arena)
     else if name.equals("idle")
@@ -191,7 +192,7 @@ priv fn serve_run(name: U8[], at: Placed, arena: Arena$@) //< runs the server ru
 
 priv fn serve_memory_and_check(at: Placed, arena: Arena$@) //<
     //< Checks that the server's heap comes back to the same figure after clients that misbehave
-    //< **Local use trains nothing**, so it comes up at once; the waves need nothing else of it.
+    //< It runs for local use, as the waves need nothing that only an outward-facing server has.
     if !verdict.check("the large file the waves ask for is placed",
         memory.place(at.root, arena), at.root)
         return
@@ -252,9 +253,9 @@ priv fn serve_outward_and_check(at: Placed, arena: Arena$@) //< the outward-faci
             srv.failed("kssrv answers what the guard asks", e3.reason(), arena)
         srv.stop()
 
-priv const IDLE_SECONDS: U8[] = "3" //< how long that one waits with nothing holding it
+priv const IDLE_S: I32 = 3 //< how long that one waits with nothing holding it [s]
 
-priv const HELD_MS: I32 = 6000 //< how long it is held for, twice the wait above
+priv const HELD_MS: I32 = IDLE_S * 2000 //< how long it is held for, twice the wait above
 
 priv const GONE_MS: I32 = 30000 //< the cap on waiting for it to exit once nothing holds it
 
@@ -266,7 +267,7 @@ priv fn serve_idle_and_check(at: Placed, arena: Arena$@) //<
     //< Checking that it stays up alone passes one that never stops ("Keeping the server alive
     //< while a page is open"
     //< in `../../docs/SPEC-local-server.md`).
-    flags: = U8[][]::{ arena.text().s("--idle=\{IDLE_SECONDS\}").take() }
+    flags: = U8[][]::{ arena.text().s("--idle=\{IDLE_S\}").take() }
     started: =
         bring_up_local(at, "kssrv-idle", flags,
         "it comes into a state where it can answer under --idle", "--idle puts the token out too",
@@ -287,9 +288,16 @@ priv fn serve_idle_and_check(at: Placed, arena: Arena$@) //<
         sys.sleep_ms(HELD_MS)
         verdict.check("a page holding it keeps it up past the wait", srv.child.alive(),
             srv.log(arena))
+        let_go_us: = sys.mono_us()
         hold.free()
         stopped: = wait_gone(srv.child@)
         verdict.check("it stops itself once nothing holds it", stopped, srv.log(arena))
+        // Caution: **Count the wait from the page letting go.** Counted from its last request, a
+        // page held past the wait stops the server the moment it closes, even for a reload.
+        waited_ms: = (sys.mono_us() - let_go_us) / 1000I64
+        verdict.check("it waits the whole time after the last page lets go",
+            !stopped || waited_ms >= I64::IDLE_S * 1000I64,
+            arena.text().s("it stopped \{waited_ms\} ms after the page let go").take())
         if !stopped
             srv.stop()
         else
@@ -458,6 +466,37 @@ priv fn serve_local_and_check(at: Placed, arena: Arena$@) //<
             srv.failed("--local answers the save checked against a FIFO", e2.reason(), arena)
         srv.stop()
 
+priv fn serve_linked_and_check(at: Placed, arena: Arena$@) //<
+    //< Checks that a root reached through a link is served, its listing included
+    //< **A root that is a link is normal** (macOS's `/tmp`); only a link under the root is
+    //< refused. A check that refuses the root's own link leaves the Save As dialog empty.
+    if !local.make_link(at.tmp, "www-link", "www", arena)
+        verdict.skip_check("a root that is a link is served",
+            "a link cannot be made with `ln -s` in this environment")
+        return
+    through: = Placed::{ .exe = at.exe, .root = fs.join(at.tmp, "www-link", arena),
+        .tmp = at.tmp }
+    started: =
+        bring_up_local(through, "kssrv-linked", U8[][]::{},
+        "it comes into a state where it can answer on a root that is a link",
+        "the server on a root that is a link puts the token out", arena)
+    if got: = started
+        $srv: = got.srv
+        linked_cases(srv.port, got.token, arena) catch e
+            srv.failed("it goes on answering on a root that is a link", e.reason(), arena)
+        srv.stop()
+
+priv fn linked_cases(port: I32, token: U8[], arena: Arena$@): Void!client.Http_end //<
+    //< the root's listing and a file under it, with the root reached through a link
+    auth: = client.bearer_head(token, arena)
+    top: = client.get(port, "/api/list", auth, arena)!
+    verdict.check("/api/list names a root that is a link",
+        top.status == 200 && top.body.find_str("\"index.html\"").is_some(),
+        client.shown(top, arena))
+    one: = client.get(port, "/sub/one.txt", auth, arena)!
+    verdict.check("a file under a root that is a link is served",
+        one.status == 200 && one.body.equals("one\n"), client.shown(one, arena))
+
 priv const TOKEN_LINE: U8[] = "#t=" //< the marker before the token in the output
     //< Caution: **Keep it matching kssrv's output** (`kssrv/main.kspl`): the token is the URL's
     //< fragment, from `#t=` to the line's end.
@@ -477,8 +516,6 @@ priv fn token_from(out_log: U8[], arena: Arena$@): U8[] //< extracts the token f
 priv fn run_cases(port: I32, root: U8[], arena: Arena$@): Void!client.Http_end
     serve_cases(port, arena)!
     api_cases(port, root, arena)!
-    blob: = car.pilot_cases(port, arena)!
-    car.car_cases(port, blob, arena)!
     keepalive_cases(port, arena)!
 
 // --- static serving, percent-decoding, escaping outside the root ---

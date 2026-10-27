@@ -1,7 +1,7 @@
-//< How kssrv decides the steering it returns to the car (`POST /api/car`)
-//< The car sends **the distance and the line** as raw readings, and how to move is decided here.
+//< The car's piloting policy: trained from written rules, written out as one safetensors file
+//< The car reads **the distance and the line** as raw readings, and the policy picks how to move.
 //< **This net learns from `rule_action` below.** The net is no smarter than the rules.
-//< **The safety timeout is on the car's side.**
+//< **The safety timeouts are on the car's side.**
 //< **After `build()` this struct is read-only.**
 
 // ==========================================
@@ -16,7 +16,6 @@ import "ksai/nn_grad"
 import "ksai/safetensors" as st
 import "ksai/sampler"
 import "ksai/tensor" { Tensor }
-import "std/log" { Log }
 import "std/mem" + { Arena, dealloc }
 import "std/prng"
 import "std/str" { Str_builder }
@@ -77,12 +76,8 @@ priv const AVOID_MM: I64 = 400 // closer than this -> dodge sideways
 priv const FAR_MM: I64 = 1000 //< the distance cap used for normalizing
     //< Anything farther than this is treated as the same "far".
 
-const COMMAND_VALID_MS: I64 = 500 //< how long [ms] the car may wait for the next answer
-    //< If no answer comes in time, the car stops. **The server decides it**, or every policy change
-    //< would mean reflashing the car.
-
 priv const TRAIN_EPOCHS: Sz = 400 //< the training settings
-    //< They run at every startup; keep them within what the startup time allows.
+    //< The seeds are fixed, so one build of the trainer writes the same policy every run.
 priv const LEARNING_RATE: F64 = 0.08
 priv const WEIGHT_SEED: U64 = 4242U64
 priv const TRAIN_DIST_SEED: U64 = 31337U64 //< the seed for the random distances used in training
@@ -167,7 +162,7 @@ priv fn measure_agreement(p: Pilot$@, compute: Arena$@, out_seen: Sz$@): F64 //<
     out_seen$ = seen
     return F64::hit / F64::seen if seen > 0 else 0.0
 
-priv fn train(mlp: nn.Mlp<|F32|>$@, compute: Arena$@): F64 //< the start-up training
+priv fn train(mlp: nn.Mlp<|F32|>$@, compute: Arena$@): F64 //< trains the net
     //< It learns from `rule_action`, with cross-entropy loss.
     base: = compute.save()
     $last_loss: F64 = 0.0
@@ -240,10 +235,10 @@ priv fn maneuver_tensor(arena: Arena$@): Tensor<|F32|> //<
     return t
 
 fn export(p: Pilot$@, arena: Arena$@): Str_builder //<
-    //< Builds the whole steering policy the car downloads, as one safetensors (`GET /api/pilot`)
+    //< Builds the whole steering policy the car reads, as one safetensors
     //< Caution: **Make the file enough on its own to reproduce `decide` and the manoeuvres'
     //< meaning.** With the weights alone, the reader must copy the features (`FAR_MM`) and the
-    //< table, and cannot notice when the server changes them.
+    //< table, and cannot notice when the trainer changes them.
     $w: = st.Safetensors_writer()
     w.add("fc1.weight", p.mlp.fc1.weights)
     w.add("fc1.bias", p.mlp.fc1.bias)
@@ -255,9 +250,8 @@ fn export(p: Pilot$@, arena: Arena$@): Str_builder //<
     w.set_meta("far_mm", num.s("\{FAR_MM\}").slice())
     return w.finish()
 
-fn print_summary(p: Pilot$@, lg: Log$@)
-    if ln: = lg.at(.information)
-        ln
-            .s("pilot ready — \{p.params\} params, \{p.samples\} samples, trained in \
-                \{p.train_ms\} ms, loss \{p.final_loss:.4\}, agrees with the rules on \
-                \{p.agreement * 100.0:.2\}% of \{p.checked\} swept observations")
+fn summary(p: Pilot$@, out: Str_builder$@) //< one line of the policy's figures
+    out
+        .s("pilot: \{p.params\} params, \{p.samples\} samples, trained in \{p.train_ms\} ms, loss \
+            \{p.final_loss:.4\}, agrees with the rules on \{p.agreement * 100.0:.2\}% of \
+            \{p.checked\} swept observations")

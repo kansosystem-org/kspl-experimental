@@ -8,7 +8,7 @@ This document lists every diagnostic code `ksplc` reports: what each points at, 
 
 A diagnostic code's letter gives the weight ("5.2 The diagnostics' four weights" in [`SPEC-tools.md`](SPEC-tools.md#52-the-diagnostics-four-weights)), and each code is explained in [2](#2-the-list-of-warnings-w) / [3](#3-the-list-of-information-diagnostics-i) / [4](#4-the-list-of-hints-h).
 
-**`ksplc explain <code>` prints that code's section** (the code in either case), so the explanation is available where the diagnostic appeared. **`ksplc explain` with no code lists every code**, one line each with its title, in this document's order, and marks the codes off by default. **A code's start lists the codes it begins**: `ksplc explain W` lists the warnings, `ksplc explain I03` the codes from I0301 on. A compile or lint that printed a coded diagnostic names the command under its summary. An error, having no code, has no section: its message explains itself.
+**`ksplc explain <code>` prints that code's section** (the code in either case), so the explanation is available where the diagnostic appeared. **`ksplc explain` with no code lists every code**, one line each with its title, in this document's order, and marks the codes off by default. **Any other word is refused**, a code's start (`W`, `I03`) included. A compile or lint that printed a coded diagnostic names the command under its summary. An error, having no code, has no section: its message explains itself.
 
 The terminal view omits parenthetical document references and Markdown link targets. It wraps prose, preserves code examples, and names this document once at the end. The full references remain here.
 

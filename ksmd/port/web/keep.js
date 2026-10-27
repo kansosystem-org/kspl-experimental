@@ -49,8 +49,9 @@ function ksmdKeep() {
   }
 
   return {
-    // Holds a draft: { root, path, id, text, base }. `base` names the file's bytes the edits
-    // started from, so a draft brought back is compared with the file before it is saved.
+    // Holds a draft: { root, path, id, text, cell, base }. `cell` is the text typed in a cell still
+    // open, { block, row, column, text }, or null. `base` names the file's bytes the edits started
+    // from, so a draft brought back is compared with the file before it is saved.
     put(d) {
       return run("readwrite", (s) => s.put({ ...d, key: `${d.root}\n${d.path}\n${d.id}`,
         at: Date.now() }));

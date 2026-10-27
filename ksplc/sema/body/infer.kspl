@@ -16,6 +16,7 @@ import "ksplc/sema/body/for_in" as sema_body_for_in
 import "ksplc/sema/body/lint_free" as sema_body_lint_free
 import "ksplc/sema/body/lint_stmt" as sema_body_lint_stmt
 import "ksplc/sema/body/lint_written" as sema_body_lint_written
+import "ksplc/sema/body/static_init" as sema_body_static_init
 import "ksplc/sema/body/stmt" as sema_body_stmt
 import "ksplc/sema/decl/access" as sema_decl_access
 import "ksplc/sema/decl/attrs" as sema_decl_attrs
@@ -200,6 +201,8 @@ fn run(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error
         c.body_names = wanted_names(r, name)
     default {}
 
+    // From here a constant's folded value is kept (`Static_state.epoch` in ../session/state.kspl).
+    c.statics.epoch = 1
     for child_node in r.children
         // Report progress once per declaration (report_progress in base/core.kspl). Otherwise the
         // LSP's supervisor takes a silent but live worker for a hung one and kills it.
@@ -220,6 +223,15 @@ fn run(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error
                     has_err = true
         else if child.kind_id == .k_decl_var || child.kind_id == .k_decl_const
             child.infer_global(c)!
+    // Caution: **Check the top-level initializers once every one of them is typed.** A fold reads
+    // the operands' types, and what the check records is what the backends write.
+    for child_node in r.children
+        child: = child_node.unwrap_top_level()
+        if child.kind_id == .k_decl_var || child.kind_id == .k_decl_const
+            init: = child.get_var_decl_expr()
+            if init != null && init.kind_id != .k_empty
+                c.set_current_file(child.loc.file())
+                init.check_static_initializer(c)
 
     // From here on the bodies are monomorphized templates.
     c.set_in_generic_instance(true)
@@ -286,9 +298,8 @@ impl Ast_node
 
         type_node: = r.get_var_decl_type_node()
         r.type_id = r.resolve_inferred_array(c, expected_id, expr_id, type_node, r)
-        // Caution: **Include `const` too.** Like `var`, it becomes a file-scope initializer in C,
-        // which requires a constant expression.
-        expr_node.check_static_initializer(c)
+        // The initializer is typed now, so a value folded before it may differ.
+        c.statics.epoch += 1
 
     priv fn keep_checked_children(r: Self$@, c: Sema_ctx$@, checked: Map<|Sz, Bool|>$@) //<
         //< It drops each template (except in the editor) and each instance whose body was unchecked
@@ -580,11 +591,8 @@ impl Ast_node
                 $msg_slice: U8[] = "Assertion failed"
                 if msg_node != null
                     msg_slice = msg_node.text.literal_value(base_core.arena)
-                // Caution: Send both through the same path as other diagnostics; printed directly,
-                // they get no position and are missing from the final count. No code is assigned:
-                // the words are the user's, and silencing them with `##lint` would void the
-                // assertion.
-                if sema_decl_attrs.directive_name(r).equals("error")
-                    c.err(r, msg_slice)
-                else
-                    c.warn(r, msg_slice)
+                // Caution: Send the message through the same path as other diagnostics. Printed
+                // directly, it gets no position and is missing from the final count. No code is
+                // assigned: the words are the user's, and silencing them with `##lint` would void
+                // the assertion.
+                c.err(r, msg_slice)

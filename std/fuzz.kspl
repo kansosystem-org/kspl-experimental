@@ -45,7 +45,7 @@ pub struct Options //< the two numbers of a fuzz run, which reproduce it
 
 pub fn declare( //< adds `--trials` and `--seed` to the caller's parser
     //< The values in `o` at the call are the defaults. **Declare both options through this**: the
-    //< same names everywhere let the reproduce line of `report_all` run as printed.
+    //< same names everywhere let the reproduce line that `scatter` prints run as printed.
     p: argparse.Parser$@, //< the parser that holds the program's other arguments
     o: Options$@, //< where the two numbers are stored
 )
@@ -211,7 +211,7 @@ pub fn gather( //< collects the files with the given endings under the folders, 
             out.push(Sample::{ .kind = kind, .name = name, .data = kept, .built = false })
     return out
 
-pub fn pick( //< one seed of the given kind, or `all.len` if there is none
+fn pick( //< one seed of the given kind, or `all.len` if there is none
     //< Caution: **It does not pick from all seeds**, or a kind with few seeds would almost never be
     //< tested; the caller picks the kind first.
     all: List<|Sample|>@, //< every seed
@@ -298,9 +298,9 @@ priv fn duplicate_bytes(data: List<|U8|>$@, r: Prng$@, arena: Arena$@) //<
 // A trial
 // ==========================================
 
-pub struct Trial //< the outcome of one trial
-    pub got: subproc.Run_result //< the run; the rerun with a longer timeout if the first timed out
-    pub slow: Bool //< it timed out the first time but ended within the longer timeout.
+struct Trial //< the outcome of one trial
+    got: subproc.Run_result //< the run; the rerun with a longer timeout if the first timed out
+    slow: Bool //< it timed out the first time but ended within the longer timeout.
         //< Caution: **Report it when it is true** (`note` does): a trial near the timeout will one
         //< day look hung.
 
@@ -463,14 +463,14 @@ struct Finding //< one trial that did not end with the program's own answer
         //< Caution: **No exit code when it timed out**: that code comes from the kill, not the
         //< program.
 
-pub struct Findings //< the findings, grouped by how the trials ended
+struct Findings //< the findings, grouped by how the trials ended
     crashes: List<|Finding|>$@ //< the trials that crashed silently
     aborts: List<|Finding|>$@ //< the trials that announced a stop
     hangs: List<|Finding|>$@ //< the trials that did not end
     arena: Arena$@ //< where the lists and each finding's text go
     own: Own_arena //< that arena, when `findings_new` was given null; `free` lets it go
 
-pub fn findings_new( //< an empty set of findings
+fn findings_new( //< an empty set of findings
     //< With `null`, `defer found.free()` frees it and every finding `note` adds.
     arena: Arena$@, //< where they go; null means an arena of their own and a `free()`
 ): Findings
@@ -481,7 +481,7 @@ pub fn findings_new( //< an empty set of findings
         .own = work.keep() }
 
 impl Findings: Manual_free //< `free()` lets go the arena findings made with null live in
-    pub fn free(r: Self) //< lets go every finding, when `findings_new` was given null
+    fn free(r: Self) //< lets go every finding, when `findings_new` was given null
         //< Made in the caller's arena, it frees nothing: that arena does.
         $own: = r.own
         own.free()
@@ -506,7 +506,7 @@ priv fn save_mutant(dir: U8[], kind: U8[], trial: Sz, data: U8[], ext: U8[], are
         return "(could not keep it)"
     return path
 
-pub fn note( //< records one trial, and saves its input if it is a finding
+fn note( //< records one trial, and saves its input if it is a finding
     //< **A trial that ended with the program's own answer is not recorded**: that is the normal
     //< end. A slow one (`Trial.slow`) is said on a line of its own.
     f: Findings, //< the findings
@@ -567,7 +567,7 @@ priv fn checked(what: U8[], trials: Sz, items: List<|Finding|>@, arena: Arena$@)
     verdict.check(arena.text().s(what).s(" (\{trials\} rounds)").take(), items.len == 0,
         arena.text().s("\{items.len\} found").take())
 
-pub fn report_all( //< prints the findings, the three check lines, and how to run it again
+fn report_all( //< prints the findings, the three check lines, and how to run it again
     //< Caution: **Keep the three lines separate**, or the verdict cannot tell a crash from a hang.
     //< **A fuzz run with no trials is a failure**, not three passes over nothing.
     f: Findings, //< the findings

@@ -173,6 +173,31 @@ fn test_the_shards_part_ci() //< `ci` selects what the host runs natively
             "macOS's ci runs exactly the two shared sections, with no container")
     verdict.pass("ci selects what each host runs natively: three sections on Linux, two elsewhere.")
 
+fn test_ci_full_takes_every_answer() //< `ci-full` adds the Linux-only gates a host can answer
+    verdict.start("[tools/ci_gates] what ci-full runs on each host test...")
+    $win_extra: Sz = 0
+    for g in ci_gates.GATES
+        full: = ci_gates.Set.ci_full
+        assert(full.runs(g, "linux") == ci_gates.Set.ci.runs(g, "linux"),
+            "on Linux ci-full is ci, which already runs every section")
+        for host in U8[][]::{ "win32", "darwin" }
+            if ci_gates.Set.ci.runs(g, host)
+                assert(full.runs(g, host), "ci-full keeps every gate ci runs")
+        if g.shard == ci_gates.Shard.linux && g.not_on.len == 0
+            assert(full.runs(g, "win32") && full.runs(g, "darwin"),
+                "ci-full runs a Linux-only gate on every host unless its row says it cannot")
+        if full.runs(g, "win32") && !ci_gates.Set.ci.runs(g, "win32")
+            win_extra += 1
+        assert(g.shard != ci_gates.Shard.none || !full.runs(g, "darwin"),
+            "ci-full leaves out macOS's stand-ins for the copies it already tests")
+    for g in ci_gates.GATES
+        if g.log.equals("perf") || g.log.equals("ksos_posix") || g.log.equals("ksmd_desktop")
+            assert(!ci_gates.Set.ci_full.runs(g, "win32"),
+                "a gate that cannot answer on Windows stays out of its ci-full")
+    assert(win_extra > 0, "ci-full on Windows adds gates that ci leaves to Linux")
+    verdict
+        .pass("ci-full is ci on Linux, and elsewhere adds each Linux-only gate the host can answer.")
+
 // ==========================================
 // Sample gate logs, each cut to a real round's shape, and the summary read back from them
 // **What a reader needs is the line that failed the gate, last.** Each sample's cause sits among
@@ -364,10 +389,25 @@ fn test_a_log_saying_nothing_shows_its_tail(arena: Arena$@) //<
     assert(p.find_str("#   lint: NO VERDICT").is_some(), "a gate cut short with an empty log fell")
     verdict.pass("where nothing names a cause, the log's last lines stand in.")
 
+priv const CHILD_SLEEP: U8[] = "sleep 30" //<
+    //< What a fake gate does past the cap of one second
+    //< **Keep it far beyond the cap**, so a stop at the cap and a wait for the child's end differ
+    //< by more than a busy machine adds.
+
+priv const CAP_STOP_MAX_MS: I64 = 15000 //<
+    //< The most a stop at a one-second cap may take, its half second of grace included
+    //< Generous: under the 30 s a fake gate runs, and far over what a busy machine adds to the cap.
+
+priv const BEATS: I32 = 300 //<
+    //< How many marks the fake gate's own child leaves, a tenth of a second apart (30 s or more)
+
+priv fn beats_now(file: U8[], arena: Arena$@): Sz //< how many marks the child left so far
+    return (io.read_file(file, arena) catch "").len
+
 fn test_a_gate_past_its_cap_is_stopped_and_named(arena: Arena$@) //<
     //< A gate past its cap is stopped with what it started, and the cap is its first cause
-    //< The fake gate's own child leaves a mark three seconds in: stopped with the gate at one, it
-    //< leaves none. The stop may take the half second of grace a group is given to end.
+    //< The fake gate's own child leaves a mark each tenth of a second, far past the cap. Stopped
+    //< with the gate, it leaves no more marks.
     verdict.start("[tools/ci_gates] a gate that runs past its cap test...")
     if sys.is_windows()
         verdict.skip("it hands over shell command lines")
@@ -375,19 +415,23 @@ fn test_a_gate_past_its_cap_is_stopped_and_named(arena: Arena$@) //<
     dir: = "out/tmp/kspl_ci_cap"
     fs.mkdir_all(dir) catch panic("the work directory must be creatable")
     log: = arena.text().s(dir).s("/fake.log").take()
-    mark: = arena.text().s(dir).s("/mark").take()
-    fs.remove_path(mark) catch {}
+    beat: = arena.text().s(dir).s("/beat").take()
+    fs.remove_path(beat) catch {}
     io.write_file(log, "the gate's own line\n") catch panic("the log must be writable")
-    gate: = arena.text().s("sh -c 'sleep 3; touch \"\{mark\}\"'; true").take()
+    gate: = arena.text().s("sh -c 'i=0; while [ $i -lt \{BEATS\} ]; do echo >> \"\{beat\}\"; ")
+        .s("i=$((i+1)); sleep 0.1; done'; true").take()
     t0: = sys.mono_us()
     rc: = ci_gates.run_capped(U8[][]::{ "/bin/sh", "-c", gate }, "fake", log, 1I64, t0)
     took_ms: = (sys.mono_us() - t0) / 1000I64
-    sys.sleep_ms(2500)
     assert(rc != 0, "a gate stopped at its cap fails")
     $m: = Panic_msg()
-    assert(took_ms < 2800I64,
+    assert(took_ms < CAP_STOP_MAX_MS,
         m.s("it is stopped at its cap, before its child's end (took ").n(took_ms).s(" ms)").slice())
-    assert(!fs.exists(mark), "the gate's own child is stopped with it")
+    // **A stopped child leaves no mark, however long the wait.** A busy machine can only delay the
+    // marks of one left running, so this check cannot fail on a correct stop.
+    left: = beats_now(beat, arena)
+    sys.sleep_ms(1000)
+    assert(beats_now(beat, arena) == left, "the gate's own child is stopped with it")
     held: = io.read_file(log, arena) catch ""
     line: = "# gate fake ran over 1 s and was stopped"
     assert(held
@@ -434,12 +478,12 @@ fn test_a_round_that_ended_early_says_so_last(arena: Arena$@) //<
     //< The gates not run are named as not run, and the last line says it is no full verdict
     verdict.start("[tools/ci_gates] the last lines of a round that ended early test...")
     $left: = List<|U8[]|>(arena)
-    left.push("lint_cfg")
+    left.push("debug_tools")
     left.push("suites_a")
     defer $b: = Str_builder()
     ci_gates.early_end("lint", true, left@, b@)
     by_switch: =
-        "# not run (2): lint_cfg, suites_a\n# ended early at lint: STOP=1 ends the round at the \
+        "# not run (2): debug_tools, suites_a\n# ended early at lint: STOP=1 ends the round at the \
             first gate that fails, so this round is not a full verdict\n"
     assert(b.slice().equals(by_switch), "the switch's round names what it left, then why it ended")
     defer $c: = Str_builder()
@@ -477,15 +521,27 @@ fn test_a_skip_is_held_by_its_platform_alone() //<
     assert(!ci_gates.is_expected_skip(arm, "linux", ""),
         "Linux's image holds one, so it may not skip")
     v6: = "SKIP Net: connecting over the IPv6 loopback: this machine has no IPv6 at all"
-    for p in U8[][]::{ "linux", "darwin", "win32" }
-        assert(ci_gates.is_expected_skip(v6, p, ""), "a host's kernel may lack IPv6 anywhere")
-    assert(!ci_gates.is_expected_skip(v6, "solaris", ""), "a platform with no rows holds no SKIP")
-    lo: = "SKIP Net: connecting over the IPv6 loopback: IPv6 is on, but the loopback holds no `::1`"
+    assert(ci_gates.is_expected_skip(v6, "linux", ""), "a Linux host's kernel may lack IPv6")
+    for p in U8[][]::{ "darwin", "win32", "solaris" }
+        assert(!ci_gates.is_expected_skip(v6, p, ""),
+            "the test tells no other kernel without IPv6, and those runners have it")
+    lo: = "SKIP Net: connecting over the IPv6 loopback: the loopback holds no `::1`"
     assert(!ci_gates.is_expected_skip(lo, "linux", ""),
         "Linux's container has `::1`, so it may not skip")
     for p in U8[][]::{ "darwin", "win32" }
         assert(ci_gates.is_expected_skip(lo, p, ""), "elsewhere a loopback without `::1` may skip")
     verdict.pass("each platform holds its own reasons to skip, and nothing else passes in silence.")
+
+fn test_a_gate_skipped_whole_has_given_its_verdict(arena: Arena$@) //<
+    //< A gate's verdict is `ALL PASS` or a whole `SKIPPED`, at a line's head; the rows judge the skip
+    verdict.start("[tools/ci_gates] the line that gives a gate's verdict test...")
+    assert(ci_gates.said_verdict("# checking\nRESULT: ALL PASS (3)\n", arena), "a pass is a verdict")
+    assert(ci_gates.said_verdict("RESULT: SKIPPED (no browser)\n", arena),
+        "a gate skipped whole has given its verdict, which the rows then judge")
+    assert(!ci_gates.said_verdict("RESULT: SOME FAILED (1)\n", arena), "a fall is no pass")
+    assert(!ci_gates.said_verdict("|   RESULT: ALL PASS\n    RESULT: ALL PASS\n", arena),
+        "a child's verdict quoted inside a line is not the gate's")
+    verdict.pass("a gate's verdict is a pass or a whole skip, at the head of a line.")
 
 fn test_a_switch_turned_off_lets_its_own_skips_through() //<
     //< On Linux a SKIP a switch makes a failure passes once that switch is off, and no other does
@@ -507,6 +563,11 @@ fn test_a_switch_turned_off_lets_its_own_skips_through() //<
     assert(!ci_gates.is_expected_skip(cross, "linux", ""), "Linux's image holds the cross compiler")
     assert(ci_gates.is_expected_skip(cross, "linux", "KANSO_REQUIRE_MINGW"),
         "turned off, the cross half's skip passes")
+    browser: = "RESULT: SKIPPED (no browser - see docs/SPEC-gates.md)"
+    assert(!ci_gates.is_expected_skip(browser, "linux", ""), "Linux's image holds a browser")
+    assert(ci_gates.is_expected_skip(browser, "linux", "KSMD_REQUIRE_BROWSER"),
+        "turned off, the browser gate's skip passes")
+    assert(!ci_gates.is_expected_skip(browser, "darwin", ""), "no other platform runs that gate")
     node: = "SKIP vscode: the extension's client side: node is not installed"
     assert(!ci_gates.is_expected_skip(node, "linux", "KANSO_REQUIRE_CHOWN KSOS_REQUIRE_ARM"),
         "a tool no switch covers stays required")
@@ -563,6 +624,13 @@ fn test_the_pair_starts_together_only_where_both_run(arena: Arena$@) //<
         assert(pairs_in(.ci_macos, p, false, arena).len == 0, "macOS's set holds none")
     verdict.pass("the pair starts together where its set runs both, and the switch parts it.")
 
+priv fn meet(dir: U8[], own: U8[], other: U8[], then: U8[], arena: Arena$@): U8[] //<
+    //< A shell body that leaves the mark `own`, waits for the mark `other`, then runs `then`
+    //< It sleeps a second before `then`, so each gate's time is a second or more.
+    fs.remove_path(arena.text().s(dir).c('/').s(own).s(".in").take()) catch {}
+    return arena.text().s("touch \"\{dir\}/\{own\}.in\"; ")
+        .s("while [ ! -e \"\{dir\}/\{other\}.in\" ]; do sleep 0.02; done; sleep 1; ").s(then).take()
+
 priv fn fake_gate(dir: U8[], name: U8[], body: U8[], arena: Arena$@): ci_gates.Capped //<
     //< A gate whose command runs `body` in the shell, its output into its own log
     log: = arena.text().s(dir).c('/').s(name).s(".log").take()
@@ -577,7 +645,8 @@ priv fn fake_gate(dir: U8[], name: U8[], body: U8[], arena: Arena$@): ci_gates.C
 
 fn test_a_pair_runs_side_by_side_and_is_judged_apart(arena: Arena$@) //<
     //< Both start at once, each ends with its own code and time, and each is judged by its own log
-    //< Each fake gate sleeps a second: one after the other they would take two.
+    //< **Each fake gate waits for the other's mark before it ends.** One after the other, the first
+    //< would wait until its cap stops it. A time alone cannot tell a busy machine from that.
     verdict.start("[tools/ci_gates] two gates side by side test...")
     if sys.is_windows()
         verdict.skip("it hands over shell command lines")
@@ -585,17 +654,15 @@ fn test_a_pair_runs_side_by_side_and_is_judged_apart(arena: Arena$@) //<
     dir: = "out/tmp/kspl_ci_pair"
     fs.mkdir_all(dir) catch panic("the work directory must be creatable")
     $runs: = List<|ci_gates.Capped|>(arena)
-    runs.push(fake_gate(dir, "race", "sleep 1; echo 'RESULT: ALL PASS'", arena))
-    falls: = "sleep 1; echo 'FAIL ship: the shipped C differs'; exit 3"
+    passes: = meet(dir, "race", "selfhost_ship", "echo 'RESULT: ALL PASS'", arena)
+    runs.push(fake_gate(dir, "race", passes, arena))
+    falls: =
+        meet(dir, "selfhost_ship", "race", "echo 'FAIL ship: the shipped C differs'; exit 3", arena)
     runs.push(fake_gate(dir, "selfhost_ship", falls, arena))
-    t0: = sys.mono_us()
-    ci_gates.run_capped_all(runs.slice(), 60I64, t0)
-    took_ms: = (sys.mono_us() - t0) / 1000I64
-    $m: = Panic_msg()
-    assert(took_ms < 1800I64,
-        m.s("both start together, so the pair takes one second (took ").n(took_ms).s(" ms)").slice())
+    ci_gates.run_capped_all(runs.slice(), 20I64, sys.mono_us())
     race: = runs.get(0)
     ship: = runs.get(1)
+    assert(race.rc != 1 && ship.rc != 1, "both start together, so each finds the other's mark")
     assert(race.rc == 0 && ship.rc == 3, "each gate keeps its own exit code")
     assert(race.took_us >= 900000I64 && ship.took_us >= 900000I64,
         "each gate's time is its own, from the start to its end")
@@ -606,8 +673,11 @@ fn test_a_pair_runs_side_by_side_and_is_judged_apart(arena: Arena$@) //<
             .push(sample(c.name, io.read_file(c.log, arena) catch "", ended, arena))
     assert(outs.get(0).ok && !outs.get(1).ok, "the partner of a fallen gate still passes")
     p: = summarised(outs@, arena)
-    assert(p.find_str("#   race           PASS 1s").is_some(), "each gate has its own line")
-    assert(p.find_str("#   selfhost_ship  FAIL 1s").is_some(), "the fallen one is marked so")
+    // **Each line carries its gate's own time, in whole seconds.** A busy machine adds to it.
+    race_line: = arena.text().s("#   race           PASS \{race.took_us / 1000000I64\}s").take()
+    assert(p.find_str(race_line).is_some(), "each gate has its own line")
+    ship_line: = arena.text().s("#   selfhost_ship  FAIL \{ship.took_us / 1000000I64\}s").take()
+    assert(p.find_str(ship_line).is_some(), "the fallen one is marked so")
     assert(p.find_str("#   selfhost_ship: FAIL ship: the shipped C differs").is_some(),
         "the fall's cause is read from that gate's own log")
     assert(p.find_str("#   race:").is_none(), "no cause is laid on the gate that passed")
@@ -623,16 +693,18 @@ fn test_a_partner_past_its_cap_is_stopped_alone(arena: Arena$@) //<
     dir: = "out/tmp/kspl_ci_pair_cap"
     fs.mkdir_all(dir) catch panic("the work directory must be creatable")
     $runs: = List<|ci_gates.Capped|>(arena)
-    runs.push(fake_gate(dir, "race", "sleep 3", arena))
+    runs.push(fake_gate(dir, "race", CHILD_SLEEP, arena))
     runs.push(fake_gate(dir, "selfhost_ship", "echo 'RESULT: ALL PASS'", arena))
     t0: = sys.mono_us()
     ci_gates.run_capped_all(runs.slice(), 1I64, t0)
     took_ms: = (sys.mono_us() - t0) / 1000I64
     $m: = Panic_msg()
-    assert(took_ms < 2800I64,
+    assert(took_ms < CAP_STOP_MAX_MS,
         m.s("the one past its cap is stopped there (took ").n(took_ms).s(" ms)").slice())
     assert(runs.get(0).rc == 1, "the gate past its cap fails")
-    assert(runs.get(1).rc == 0 && runs.get(1).took_us < 900000I64,
+    // **Its time is its own if it ended before the one stopped at the cap.** Given the pair's end,
+    // it would be the later of the two.
+    assert(runs.get(1).rc == 0 && runs.get(1).took_us < runs.get(0).took_us,
         "its partner ended on its own, and its time is its own")
     held: = io.read_file(runs.get(0).log, arena) catch ""
     assert(held.ends_with("# gate race ran over 1 s and was stopped\n"),

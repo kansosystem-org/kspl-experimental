@@ -439,7 +439,8 @@ impl Parser
         //< that equals `key`
         //< `keys` and `values` are ranges of one column, or of one row, as long as each other. Text
         //< equals text without regard to case, as the filter and the sort compare it. Where no key
-        //< equals it, the result is `otherwise`, which is calculated only then, as `if` does.
+        //< equals it, the result is `otherwise`, which is calculated only then, as `if` does. A key
+        //< cell holding an error is passed over, but `#CYCLE!` before the match is the result.
         key: = p.expression()
         p.expect(.comma)
         keys: = p.range_piece()
@@ -468,7 +469,13 @@ impl Parser
                 failed = true
             else
                 for i in Range.asc(length_of(ka))
-                    if equal_keys(key, value_at(p.c, spot_in(ka, i)))
+                    v: = value_at(p.c, spot_in(ka, i))
+                    // A key on a cycle carries it, so every cell on the cycle shows `#CYCLE!`.
+                    if v.kind == .error && v.error == .cycle
+                        broken = v
+                        failed = true
+                        break
+                    if equal_keys(key, v)
                         found = .some(value_at(p.c, spot_in(va, i)))
                         break
         otherwise: = p.branch(!failed && found.is_none())

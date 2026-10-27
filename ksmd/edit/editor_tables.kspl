@@ -2,7 +2,7 @@
 //< their looks, sorting, pasting a grid, widths, number formats, choices, colour rules, groups of
 //< rows and names Each is one step of undo, recorded by comparing the tables with copies made
 //< before it.
-import "ksmd/base/dates" { is_date }
+import "ksmd/base/dates" { is_date, typed_date, write_date }
 import "ksmd/base/marker" { is_decimal }
 import "ksmd/calc/calc" { calculate }
 import "ksmd/calc/formula" { Positions, write_formula }
@@ -13,7 +13,7 @@ import "ksmd/edit/history" { Transaction, begin, capture, is_empty, record_table
 import "ksmd/edit/region" { Unit, blank_unit, gap_spot, paragraph_style, settle, whole_unit }
 import "ksmd/edit/series" { Series, series_of, value_at }
 import "ksmd/model/choice" { entry_of }
-import "ksmd/model/format" { Number_format }
+import "ksmd/model/format" { MAX_PLACES, Number_format, no_format, shows_numbers }
 import "ksmd/model/look" { Look_part, plain_look, with_part }
 import "ksmd/model/model" { Block, Cell, Cell_kind, Table }
 import "ksmd/model/rule" { rule_of }
@@ -69,21 +69,16 @@ impl Editor
         r: = replace(w@, frag@, scratch)
         got: = settle(ed.doc@, w.units@, w.from, ed.arena, scratch) catch
             throw .no_read_back
-        // The copy restores the tables if the grid is refused; it lasts only when there is one.
-        saved: = capture(ed.doc@, ed.arena if grid.len > 0 else scratch)
         u: = edit.new_table(ed.doc@, columns, rows, ed.arena) catch why
             throw .table(why)
         if grid.len > 0
             ed.fill(u, -1, 0, grid) catch why
-                for ed.doc.tables.len > saved.len
-                    _gone: = ed.doc.tables.pop()
-                for i in Range.asc(saved.len)
-                    ed.doc.tables[i] = saved[i]
+                ed.put_tables_back(before@)
                 throw .table(why)
         $tx: = begin(ed.selection(), ed.arena)
         caret: = Pos::{ .unit = r.last, .offset = 0 }
         ed.apply(w@, tx@, got@, caret, caret)
-        ed.close_table_step(before@, tx)
+        ed.close_table_step(before@, tx)!
 
     fn remove_table(ed: Self$@, block: Sz): Void!Refused //<
         //< Removes a table block and empties its table; the caret takes the gap it leaves
@@ -97,18 +92,18 @@ impl Editor
         before: = capture(ed.doc@, scratch)
         switch what
         case .insert_row
-            edit.insert_row(ed.doc@, u, at, ed.arena) catch why
+            edit.insert_rows(ed.doc@, u, at, 1, ed.arena) catch why
                 throw .table(why)
         case .remove_row
             edit.remove_row(ed.doc@, u, at) catch why
                 throw .table(why)
         case .insert_column
-            edit.insert_column(ed.doc@, u, at, ed.arena) catch why
+            edit.insert_columns(ed.doc@, u, at, 1, ed.arena) catch why
                 throw .table(why)
         case .remove_column
             edit.remove_column(ed.doc@, u, at) catch why
                 throw .table(why)
-        ed.close_table_step(before@, begin(ed.selection(), ed.arena))
+        ed.close_table_step(before@, begin(ed.selection(), ed.arena))!
 
     fn set_cell(ed: Self$@, block: Sz, row: Sz, column: Sz, text: U8[]): Void!Refused //<
         //< Puts what a person typed in a cell; row -1 is the names above the data rows
@@ -125,7 +120,7 @@ impl Editor
             value: = value_of(text, scratch)
             edit.set_cell(ed.doc@, u, row, column, value.kind, value.text, ed.arena) catch why
                 throw .table(why)
-        ed.close_table_step(before@, begin(ed.selection(), ed.arena))
+        ed.close_table_step(before@, begin(ed.selection(), ed.arena))!
 
     fn sort_table(ed: Self$@, block: Sz, column: Sz, descending: Bool): Void!Refused //<
         //< Orders the data rows of the table a block shows by one column's values, as one step
@@ -162,7 +157,7 @@ impl Editor
         before: = capture(ed.doc@, scratch)
         edit.sort_rows(ed.doc@, u, keys@, descending, scratch) catch why
             throw .table(why)
-        ed.close_table_step(before@, begin(ed.selection(), ed.arena))
+        ed.close_table_step(before@, begin(ed.selection(), ed.arena))!
 
     fn set_look(ed: Self$@, block: Sz, from_row: Sz, from_column: Sz, to_row: Sz, to_column: Sz,
         part: Look_part, value: U8[]): Void!Refused //<
@@ -182,7 +177,7 @@ impl Editor
             for column in Range(from_column, to_column + 1, 1)
                 edit.set_look(ed.doc@, u, row, column, part, value, ed.arena) catch why
                     throw .table(why)
-        ed.close_table_step(before@, begin(ed.selection(), ed.arena))
+        ed.close_table_step(before@, begin(ed.selection(), ed.arena))!
 
     fn paste_cells(ed: Self$@, block: Sz, row: Sz, column: Sz, grid: List<|List<|U8[]|>|>@):
         Void!Refused //<
@@ -195,12 +190,10 @@ impl Editor
             throw .table(.outside)
         defer scratch: = Arena(64 * 1024)
         before: = capture(ed.doc@, scratch)
-        saved: = capture(ed.doc@, ed.arena)
         ed.fill(u, row, column, grid) catch why
-            for i in Range.asc(saved.len)
-                ed.doc.tables[i] = saved[i]
+            ed.put_tables_back(before@)
             throw .table(why)
-        ed.close_table_step(before@, begin(ed.selection(), ed.arena))
+        ed.close_table_step(before@, begin(ed.selection(), ed.arena))!
 
     priv fn fill(ed: Self$@, u: Sz, row: Sz, column: Sz, grid: List<|List<|U8[]|>|>@):
         Void!Edit_error //<
@@ -208,10 +201,12 @@ impl Editor
         $width: Sz = 0
         for line in grid
             width = line.len if line.len > width else width
-        for ed.doc.tables[u].rows.len < row + grid.len
-            edit.insert_row(ed.doc@, u, ed.doc.tables[u].rows.len, ed.arena)!
-        for ed.doc.tables[u].columns.len < column + width
-            edit.insert_column(ed.doc@, u, ed.doc.tables[u].columns.len, ed.arena)!
+        rows: = ed.doc.tables[u].rows.len
+        if rows < row + grid.len
+            edit.insert_rows(ed.doc@, u, rows, row + grid.len - rows, ed.arena)!
+        columns: = ed.doc.tables[u].columns.len
+        if columns < column + width
+            edit.insert_columns(ed.doc@, u, columns, column + width - columns, ed.arena)!
         defer scratch: = Arena(16 * 1024)
         for r in Range.asc(grid.len)
             line: = grid[r]
@@ -270,15 +265,18 @@ impl Editor
                 edit.copy_cell(ed.doc@, u, from_row, from_column, u, row, column, ed.arena) catch why
                     ed.put_tables_back(before@)
                     throw .table(why)
-        ed.close_table_step(before@, begin(ed.selection(), ed.arena))
+        ed.close_table_step(before@, begin(ed.selection(), ed.arena))!
 
     fn put_tables_back(ed: Self$@, before: List<|Table|>@) //<
         //< Makes every table its copy again, after an edit refused midway; nothing is recorded
+        //< A table added since is taken out.
         was: = ed.change
         $tx: = begin(ed.selection(), ed.arena)
         record_tables(ed.doc@, before, tx@, ed.arena)
         defer scratch: = Arena(16 * 1024)
         swap(ed.doc@, tx@, true, ed.change@, scratch)
+        for ed.doc.tables.len > before.len
+            _gone: = ed.doc.tables.pop()
         ed.change = was
 
     fn set_widths(ed: Self$@, block: Sz, weights: List<|Sz|>@): Void!Refused //<
@@ -288,7 +286,7 @@ impl Editor
         before: = capture(ed.doc@, scratch)
         edit.set_widths(ed.doc@, u, weights) catch why
             throw .table(why)
-        ed.close_table_step(before@, begin(ed.selection(), ed.arena))
+        ed.close_table_step(before@, begin(ed.selection(), ed.arena))!
 
     fn group_rows(ed: Self$@, block: Sz, first: Sz, last: Sz, what: Group_edit): Void!Refused //<
         //< Groups or ungroups the data rows from `first` to `last`, or hides or shows a group, as
@@ -306,7 +304,7 @@ impl Editor
         case .hide, .show
             edit.show_group(ed.doc@, u, first, last, what == .show) catch why
                 throw .table(why)
-        ed.close_table_step(before@, begin(ed.selection(), ed.arena))
+        ed.close_table_step(before@, begin(ed.selection(), ed.arena))!
 
     fn set_format(ed: Self$@, block: Sz, first: Sz, last: Sz, f: Number_format): Void!Refused //<
         //< Gives columns `first` to `last` of a block's table one number format, as one step
@@ -315,7 +313,7 @@ impl Editor
         before: = capture(ed.doc@, scratch)
         edit.set_format(ed.doc@, u, first, last, f, ed.arena) catch why
             throw .table(why)
-        ed.close_table_step(before@, begin(ed.selection(), ed.arena))
+        ed.close_table_step(before@, begin(ed.selection(), ed.arena))!
 
     fn set_choices(ed: Self$@, block: Sz, column: Sz, list: U8[]): Void!Refused //<
         //< Gives a column of a block's table the choices a person typed as `Open, Done`, or none
@@ -327,7 +325,7 @@ impl Editor
         before: = capture(ed.doc@, scratch)
         edit.set_choices(ed.doc@, u, column, entry, ed.arena) catch why
             throw .table(why)
-        ed.close_table_step(before@, begin(ed.selection(), ed.arena))
+        ed.close_table_step(before@, begin(ed.selection(), ed.arena))!
 
     fn set_rule(ed: Self$@, block: Sz, column: Sz, entry: U8[]): Void!Refused //<
         //< Gives a column of a block's table the colour rule an entry names, or none for empty
@@ -339,7 +337,7 @@ impl Editor
         before: = capture(ed.doc@, scratch)
         edit.set_rule(ed.doc@, u, column, r) catch why
             throw .table(why)
-        ed.close_table_step(before@, begin(ed.selection(), ed.arena))
+        ed.close_table_step(before@, begin(ed.selection(), ed.arena))!
 
     fn set_cell_note(ed: Self$@, block: Sz, row: Sz, column: Sz, note: U8[]): Void!Refused //<
         //< Gives a cell of a block's table a note, or resolves it with empty text, as one step
@@ -348,7 +346,7 @@ impl Editor
         before: = capture(ed.doc@, scratch)
         edit.set_note(ed.doc@, u, row, column, note, ed.arena) catch why
             throw .table(why)
-        ed.close_table_step(before@, begin(ed.selection(), ed.arena))
+        ed.close_table_step(before@, begin(ed.selection(), ed.arena))!
 
     fn step_places(ed: Self$@, block: Sz, first: Sz, last: Sz, more: Bool): Void!Refused //<
         //< One more, or one fewer, decimal place in the formatted columns, as one step
@@ -357,7 +355,46 @@ impl Editor
         before: = capture(ed.doc@, scratch)
         edit.step_places(ed.doc@, u, first, last, more) catch why
             throw .table(why)
-        ed.close_table_step(before@, begin(ed.selection(), ed.arena))
+        ed.close_table_step(before@, begin(ed.selection(), ed.arena))!
+
+    fn step_cell_places(ed: Self$@, block: Sz, from_row: Sz, from_column: Sz, to_row: Sz,
+        to_column: Sz, more: Bool): Void!Refused //<
+            //< One more, or one fewer, decimal place in each cell of a rectangle whose format
+            //< shows numbers, as one step
+            //< A cell with no format of its own takes its column's, with the place stepped, as its
+            //< own. So the other cells of the column keep theirs.
+        u: = ed.table_of(block)!
+        t: = ed.doc.tables[u]@
+        if from_row < -1 || to_row >= t.rows.len || from_row > to_row || from_column < 0 ||
+            to_column >= t.columns.len || from_column > to_column
+            throw .table(.outside)
+        defer scratch: = Arena(16 * 1024)
+        before: = capture(ed.doc@, scratch)
+        $formatted: = false
+        $changed: = false
+        for row in Range(from_row, to_row + 1, 1)
+            for column in Range(from_column, to_column + 1, 1)
+                at: = t.at(row, column)
+                own: = t.cells[at].look.format
+                column_format: = t.formats[column] if t.formats.len > 0 else no_format()
+                $f: = own if own.kind != .none else column_format
+                if !shows_numbers(f)
+                    continue
+                formatted = true
+                if more && f.places < MAX_PLACES
+                    f.places += 1
+                else if !more && f.places > 0
+                    f.places -= 1
+                else
+                    continue
+                f.code = ed.arena.dup_str(f.code)
+                t.cells[at].look.format = f
+                changed = true
+        if !formatted
+            throw .table(.no_format)
+        if !changed
+            throw .table(.places)
+        ed.close_table_step(before@, begin(ed.selection(), ed.arena))!
 
     fn rename_table(ed: Self$@, block: Sz, name: U8[]): Void!Refused //<
         //< names the table a block shows
@@ -366,7 +403,7 @@ impl Editor
         before: = capture(ed.doc@, scratch)
         edit.rename_table(ed.doc@, u, name, ed.arena) catch why
             throw .table(why)
-        ed.close_table_step(before@, begin(ed.selection(), ed.arena))
+        ed.close_table_step(before@, begin(ed.selection(), ed.arena))!
 
     fn cell_text(ed: Self@, u: Sz, row: Sz, column: Sz, arena: Arena$@): U8[] //<
         //< What a person edits in a cell, which `set_cell` reads back as the same value
@@ -405,12 +442,12 @@ impl Editor
             throw .table(.outside)
         return ed.doc.blocks.get(block).first
 
-    priv fn close_table_step(ed: Self$@, before: List<|Table|>@, $tx: Transaction) //<
+    priv fn close_table_step(ed: Self$@, before: List<|Table|>@, $tx: Transaction): Void!Refused //<
         //< Records how the tables differ from their copies, and the step
         record_tables(ed.doc@, before, tx@, ed.arena)
         ed.change.tables = true
         ed.change.any = ed.change.any || !is_empty(tx@)
-        ed.finish(tx, .other, false)
+        ed.finish(tx, .other, false)!
 
 struct Value //< what typed text puts in a cell
     kind: Cell_kind
@@ -452,6 +489,11 @@ fn value_of(typed: U8[], arena: Arena$@): Value //< how `set_cell` reads typed t
         return Value::{ .kind = .number, .text = typed }
     if is_date(typed)
         return Value::{ .kind = .date, .text = typed }
+    // A date typed with `/` is kept in the file's own form.
+    if day: = typed_date(typed)
+        defer $text: = Str_builder()
+        write_date(day, text@)
+        return Value::{ .kind = .date, .text = arena.dup_str(text.slice()) }
     return Value::{ .kind = .text, .text = typed }
 
 priv fn quoted(typed: U8[], arena: Arena$@): U8[]? //< the text a JSON string means, if it is one

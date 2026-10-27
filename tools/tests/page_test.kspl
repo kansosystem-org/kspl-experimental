@@ -8,7 +8,6 @@ import "std/str" + { Str_builder }
 import "std/sys"
 import "std/tests/file_mode"
 import "std/verdict"
-import "tools/ksmd_aim"
 import "tools/opener_aim" as aim
 import "tools/surface_rows" as surface
 import "tools/tutorial_page" as tutorial
@@ -28,12 +27,6 @@ priv const SCRATCH: U8[] = "out/tmp/kspl_test_aim" //< where the checks that wri
 
 priv const SECRET_URL: U8[] = "http://127.0.0.1:8080/?doc=a.ksmd#t=secret0123" //<
     //< a URL whose token a check looks for
-
-priv const PAGE_APP: aim.App = ksmd_aim.KSMD //< the application whose page the checks hand on
-
-priv const OTHER_APP: aim.App = aim.App::{ .name = "other", .files = "other_open", .built = "other",
-    .page = "other.html", .tip = "" } //<
-        //< Another application, whose opener shares the folder
 
 priv fn holding(path: U8[], want: U8[]): Bool //< whether the file at path holds want
     got: = io.read_file(path, null) catch
@@ -122,19 +115,30 @@ fn test_a_port_that_cannot_be_waited_on() //< a string that is not a port become
     verdict
         .pass("only a port that gets through becomes a number; out of range and non-numeric give 0.")
 
+fn test_the_url_put_out_without_its_token() //< what a double-click puts out holds no token
+    verdict.start("[tools/opener_aim] the URL without its token test...")
+    cut: = aim.without_token(SECRET_URL)
+    assert(cut.equals("http://127.0.0.1:8080/?doc=a.ksmd"), "the fragment is cut off")
+    assert(cut.find_str("secret").is_none(), "the token is gone")
+    assert(aim.without_token("http://127.0.0.1:8080/").equals("http://127.0.0.1:8080/"),
+        "a URL with no fragment stays as it is")
+    verdict.pass("the URL put out without --show names the page and holds no token.")
+
 fn test_a_folder_cannot_plant_a_record() //< a line break in a value adds no record of its own
     //< A folder from an archive, named with line breaks, once added a record naming another host.
     verdict.start("[tools/opener_aim] a folder planting a record in the note test...")
     planted: = "x\nhttp://evil.example:8999/#t=AT\n/home/u/notes"
+    every: = fn(_u: U8[]; ): Bool
+        return true
     defer $one: = Str_builder()
-    note: = aim.state_text("http://127.0.0.1:8100/#t=k1", planted, "", one@)
+    note: = aim.state_text("http://127.0.0.1:8100/#t=k1", planted, "", every, one@)
     assert(aim.state_count(note) == 0, "a folder holding a line break is not written")
     assert(!aim.fits_note(planted) && !aim.fits_note("a\rb") && aim.fits_note("/home/u/notes"),
         "only a value with no line break fits")
     // A note written before this check could hold one; it is not copied forward.
     old: = "http://evil.example:8999/#t=AT\n/home/u/notes\n"
     defer $two: = Str_builder()
-    kept: = aim.state_text("http://127.0.0.1:8100/#t=k1", "/home/u/dl", old, two@)
+    kept: = aim.state_text("http://127.0.0.1:8100/#t=k1", "/home/u/dl", old, every, two@)
     assert(aim.state_count(kept) == 1, "a record naming another host is dropped")
     assert(aim.on_loopback("http://127.0.0.1:8100/#t=k1") &&
         !aim.on_loopback("http://evil.example:8999/#t=AT") &&
@@ -143,8 +147,10 @@ fn test_a_folder_cannot_plant_a_record() //< a line break in a value adds no rec
 
 fn test_the_note_lists_the_running_servers() //< the note is a run of records, newest first
     verdict.start("[tools/opener_aim] the note of the running servers test...")
+    every: = fn(_u: U8[]; ): Bool
+        return true
     defer $one: = Str_builder()
-    first: = aim.state_text("http://127.0.0.1:8080/#t=k9", ".", "", one@)
+    first: = aim.state_text("http://127.0.0.1:8080/#t=k9", ".", "", every, one@)
     assert(aim.state_count(first) == 1, "start one and there is one record")
     a: = aim.state_record(first, 0)
     assert(a[0].equals("http://127.0.0.1:8080/#t=k9"), "a record holds the URL to open")
@@ -152,13 +158,13 @@ fn test_the_note_lists_the_running_servers() //< the note is a run of records, n
     // A server for a different folder is **added**, not written over. Written over, the first one
     // is lost, and it holds its port with nobody able to reuse it.
     defer $two: = Str_builder()
-    both: = aim.state_text("http://127.0.0.1:8081/#t=zz", "/home/me/docs", first, two@)
+    both: = aim.state_text("http://127.0.0.1:8081/#t=zz", "/home/me/docs", first, every, two@)
     assert(aim.state_count(both) == 2, "a different folder makes two records")
     assert(aim.state_record(both, 0)[1].equals("/home/me/docs"), "the newer one comes first")
     assert(aim.state_record(both, 1)[1].equals("."), "the one started first is left too")
     // Serving the same folder again drops the old record.
     defer $again: = Str_builder()
-    fresh: = aim.state_text("http://127.0.0.1:8082/#t=n1", ".", both, again@)
+    fresh: = aim.state_text("http://127.0.0.1:8082/#t=n1", ".", both, every, again@)
     assert(aim.state_count(fresh) == 2, "records for the same folder do not grow")
     assert(aim.state_record(fresh, 0)[0].equals("http://127.0.0.1:8082/#t=n1"),
         "the newer one is left")
@@ -177,23 +183,34 @@ fn test_a_note_that_was_cut_short() //< a note cut off partway is read as far as
     assert(aim.state_count("http://h:1/#t=k\n.\n") == 1, "two lines together make one record")
     assert(aim.state_record("http://h:1/#t=k\n", 0)[1].len == 0, "a line that is not there is empty")
     assert(aim.state_record("http://h:1/#t=k\n.\n", 9)[0].len == 0, "a record not there is empty")
-    // **Do not let it grow without LIMIT**: past the cap, the oldest records go first.
+    verdict.pass("a cut-short note does not stop it.")
+
+fn test_the_note_drops_only_a_server_gone() //< a record goes when its server stops answering
+    //< Caution: **Keep every server that answers, however many there are.** A record dropped at a
+    //< count hides a running server from `--list` and `--stop-all`.
+    verdict.start("[tools/opener_aim] the note dropping only the servers gone test...")
+    every: = fn(_u: U8[]; ): Bool
+        return true
     defer arena: = Arena(64 * 1024)
     defer $body: = Str_builder()
-    defer $dir: = Str_builder()
     $had: U8[] = ""
     for i in Range.asc(12)
-        dir.clear()
-        dir.s("/dir/\{i\}")
         body.clear()
-        made: = aim.state_text("http://127.0.0.1:1/#t=k", dir.slice(), had, body@)
+        made: = aim.state_text(arena.text().s("http://127.0.0.1:\{100 + i\}/#t=k").take(),
+            arena.text().s("/dir/\{i\}").take(), had, every, body@)
         // Caution: **Copy it**; the next pass rebuilds the same buffer.
-        keep: = arena.text()
-        keep.s(made)
-        had = keep.take()
-    assert(aim.state_count(had) == 8, "it stops at the cap of 8")
-    assert(aim.state_record(had, 0)[1].equals("/dir/11"), "the newest record is left")
-    verdict.pass("a cut-short note does not stop it, and records are cut off at the cap of 8.")
+        had = arena.dup_str(made)
+    assert(aim.state_count(had) == 12, "every server still answering keeps its record")
+    assert(aim.state_record(had, 0)[1].equals("/dir/11"), "the newest record comes first")
+    assert(aim.state_record(had, 11)[1].equals("/dir/0"), "the oldest record is kept too")
+    one_gone: = fn(u: U8[]; ): Bool
+        return u.find_str(":105/").is_none()
+    body.clear()
+    shed: = aim.state_text("http://127.0.0.1:200/#t=k", "/dir/new", had, one_gone, body@)
+    assert(aim.state_count(shed) == 12, "the record of the one server gone is dropped")
+    for i in Range.asc(aim.state_count(shed))
+        assert(!aim.state_record(shed, i)[1].equals("/dir/5"), "no record names its folder")
+    verdict.pass("every server that answers keeps its record, and only one gone loses it.")
 
 fn test_a_note_rebuilt_from_its_records() //< records put back one by one read back the same
     //< **Listing and stopping rebuild the note this way**, keeping only the servers still
@@ -268,8 +285,7 @@ fn test_the_browser_is_handed_a_page_not_the_url() //< the token stays off the c
     defer arena: = Arena(64 * 1024)
     dir: = fs.mkdir_unique(SCRATCH, "page_", arena)
         catch panic("cannot create the working directory")
-    page: = aim.write_page(SECRET_URL, PAGE_APP, dir, arena)
-        catch panic("the page should be written")
+    page: = aim.write_page(SECRET_URL, dir, arena) catch panic("the page should be written")
     for win in Bool[2]::{ false, true }
         way: = aim.browser_argv("xdg-open", page, win, arena)
         for one in way
@@ -284,7 +300,7 @@ fn test_the_browser_is_handed_a_page_not_the_url() //< the token stays off the c
     assert(owner_only(page, arena), "only its owner may read the page")
     // **The URL is written as an attribute's value**, so a `"` cannot end it.
     defer $text: = Str_builder()
-    quoted: = aim.page_text("http://h:1/?doc=a\"b<c>&d#t=k", PAGE_APP, text@)
+    quoted: = aim.page_text("http://h:1/?doc=a\"b<c>&d#t=k", text@)
     assert(quoted.find_str("a&quot;b&lt;c&gt;&amp;d").is_some() &&
         quoted.find_str("a\"b").is_none(), "a mark in the URL is escaped")
     fs.remove_path(page) catch {}
@@ -297,20 +313,19 @@ fn test_a_page_handed_long_ago_is_removed() //< a page goes once a browser has h
     defer arena: = Arena(64 * 1024)
     dir: = fs.mkdir_unique(SCRATCH, "sweep_", arena)
         catch panic("cannot create the working directory")
-    page: = aim.write_page(SECRET_URL, PAGE_APP, dir, arena)
-        catch panic("the page should be written")
+    page: = aim.write_page(SECRET_URL, dir, arena) catch panic("the page should be written")
     other: = fs.join(dir, "other.html", arena)
     io.write_file(other, "x") catch panic("the probe file must be writable")
-    // **Another application's opener can share the folder**, and its pages are its own to sweep.
-    theirs: = aim.write_page(SECRET_URL, OTHER_APP, dir, arena)
-        catch panic("the other application's page should be written")
+    // **Another tool can share the folder**, and its pages are its own to sweep.
+    theirs: = fs.join(dir, "other_open-1.html", arena)
+    io.write_file(theirs, "x") catch panic("another tool's page must be writable")
     at: = (fs.stat(page) catch panic("the page should stand")).mtime
-    aim.sweep_pages(dir, PAGE_APP, at + aim.PAGE_KEEP_S, arena)
+    aim.sweep_pages(dir, at + aim.PAGE_KEEP_S, arena)
     assert(fs.exists(page), "a page within its time is kept")
-    aim.sweep_pages(dir, PAGE_APP, at + aim.PAGE_KEEP_S + 1, arena)
+    aim.sweep_pages(dir, at + aim.PAGE_KEEP_S + 1, arena)
     assert(!fs.exists(page), "a page past its time is removed")
     assert(fs.exists(other), "a file whose name the opener does not give is left alone")
-    assert(fs.exists(theirs), "another application's page is left alone")
+    assert(fs.exists(theirs), "another tool's page is left alone")
     fs.remove_path(theirs) catch {}
     fs.remove_path(other) catch {}
     fs.remove_path(dir) catch {}

@@ -1,0 +1,29 @@
+//< Trains the car's piloting policy and writes it to one safetensors file
+//< `car_pilot <out.safetensors>`. The car keeps a copy of that file; write the copy again with
+//< this program after the rules, the net or the encoding change ("The car's policy file" in
+//< `ksai/README.md`).
+import "ksai/examples/car_pilot/policy"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/sys"
+
+priv const USAGE: U8[] = "usage: car_pilot <out.safetensors>\n"
+
+fn main(): I32
+    argv: = sys.args()
+    if argv.len != 2
+        io.err().s(USAGE)
+        return 2
+    out_path: = argv.get(1)
+    defer compute: = Arena(1024 * 1024)
+    p: = policy.build(compute)
+    defer policy.free(p)
+    defer $blob: = policy.export(p, compute)
+    io.write_file(out_path, blob.slice()) catch
+        io.err().s("[error] cannot write \{out_path\}\n")
+        return 1
+    defer $line: = Str_builder()
+    policy.summary(p, line@)
+    io.out().s(line.slice()).s("\n  -> \{out_path\}\n")
+    return 0

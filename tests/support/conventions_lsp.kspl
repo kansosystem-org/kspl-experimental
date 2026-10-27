@@ -22,13 +22,12 @@ priv const VSCODE_CLIENT: U8[] = ".vscode/extensions/kspl/extension.js"
 // escapes the check ("an entry point that does nothing when pressed").
 // `prepareProvider` is an option of `renameProvider`, and promises `prepareRename`.
 priv const CAP_NAMES: U8[][_] = ::{ "hoverProvider", "definitionProvider", "renameProvider",
-    "prepareProvider", "referencesProvider", "callHierarchyProvider", "semanticTokensProvider",
-    "codeActionProvider", "inlayHintProvider", "completionProvider", "documentSymbolProvider" }
+    "prepareProvider", "referencesProvider", "callHierarchyProvider", "codeActionProvider",
+    "inlayHintProvider", "completionProvider", "documentSymbolProvider" }
 priv const CAP_METHODS: U8[][_] = ::{ "textDocument/hover", "textDocument/definition",
     "textDocument/rename", "textDocument/prepareRename", "textDocument/references",
-    "textDocument/prepareCallHierarchy", "textDocument/semanticTokens/full",
-    "textDocument/codeAction", "textDocument/inlayHint", "textDocument/completion",
-    "textDocument/documentSymbol" }
+    "textDocument/prepareCallHierarchy", "textDocument/codeAction", "textDocument/inlayHint",
+    "textDocument/completion", "textDocument/documentSymbol" }
 
 priv fn served(arena: Arena$@): List<|U8[]|> //< the methods the server handles
     //< **The ones starting with `$/` are not counted**: only the tests send them, and a real client
@@ -46,7 +45,7 @@ priv fn cap_says(src: U8[], name: U8[], arena: Arena$@): Bool? //<
     for got in scan.find_all(src,
         arena.text().s(".set(\"").s(name).s("\", b.bool_val(").take(), "))", arena)
         return .some(got.equals("true"))
-    // A declaration with a body (an object like `semanticTokensProvider`) counts as true.
+    // A declaration with a body (an object like `completionProvider`) counts as true.
     if src.find_str(arena.text().s(".set(\"").s(name).s("\", ").take()).is_some()
         return .some(true)
     return .none
@@ -480,12 +479,12 @@ priv fn check_wind_back(arena: Arena$@)
 priv const TM_GRAMMAR: U8[] = ".vscode/extensions/kspl/tmLanguage.json"
 
 priv fn ksplc_keywords(arena: Arena$@): List<|U8[]|> //<
-    //< The words `ksplc info keywords` lists (each on a line of its own, indented under a group)
+    //< The words `ksplc info keywords` lists, one per line
     r: = ksplc_harness.ksplc_bare(U8[][]::{ "info", "keywords" })
     $out: = List<|U8[]|>(arena)
     for ln in r.out.lines(arena)
-        if ln.starts_with("  ") && ln.trim_spaces().len > 0
-            scan.push_unique(out@, ln.trim_spaces())
+        if ln.len > 0
+            out.push(ln)
     return out
 
 priv fn grammar_keywords(src: U8[], arena: Arena$@): List<|U8[]|> //<

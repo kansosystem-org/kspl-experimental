@@ -12,8 +12,7 @@ import "ksplc/tests/support/lsp_client"
 import "ksplc/tests/support/lsp_frames"
 import "ksplc/tests/support/lsp_fresh"
 import "ksplc/tests/support/lsp_hover"
-import "ksplc/tests/support/lsp_outline" + { HEAVY_MS, incoming, off_words, prepare_fn,
-    read_tokens }
+import "ksplc/tests/support/lsp_outline" + { HEAVY_MS, incoming, prepare_fn }
 import "ksplc/tests/support/lsp_pick"
 import "ksplc/tests/support/lsp_read" { col_in_line, decl_line, end_text, from_names, is_missing }
 import "ksplc/tests/support/lsp_recover"
@@ -33,37 +32,6 @@ import "std/sys"
 import "std/verdict"
 
 priv const SRC: U8[] = "fn main(): Void\n    var x = 1\n\n"
-// The source that **parses**, for the colouring. The colours come from the syntax tree, so a
-// document that does not parse comes back empty (`ksplc/lsp/semtok.kspl`'s header). A function's
-// name, a type's position, a struct's name and fields, and an import's alias are all in one.
-// **An enum too**: the compiler gives it a `variant_name` from a string of its own, which must
-// colour nothing (`made_by_compiler` in `ksplc/base/ast_ext.kspl`). So must the `xs.free()` it
-// makes for `defer $xs: = …`, at the `defer`.
-priv const SEMTOK_SRC: U8[] =
-    """import "std/ds" { List }
-
-
-fn count(): Sz
-  defer $xs: = List<|I32|>(null)
-  xs.push(1)
-  return xs.len
-
-
-struct Pair
-  left: I32
-  right: I32
-
-
-fn add(a: I32, b: I32): I32
-  return a + b
-
-
-enum Side
-  near
-  far
-
-"""
-priv const SEMTOK_URI: U8[] = "file:///s.kspl"
 priv const PROBE_URI: U8[] = "file:///t.kspl"
 
 priv const CH_FILE: U8[] = "lsp/call_hier.kspl" //<
@@ -713,46 +681,7 @@ fn main(): I32
     verdict.check("hover answers (before the injection)", !is_missing(hover1),
         lsp_client.why(c@, "", arena))
 
-    // The source's colouring.
-    // Caution: **Having announced it, answer**, or the editor waits.
-    caps: = init.val.get("result").get("capabilities").get("semanticTokensProvider")
-    legend: = caps.get("legend")
-    types_n: = legend.get("tokenTypes").arr_list(arena).len
-    verdict.check("it names semanticTokens and puts the legend out",
-        types_n > 0 && legend.get("tokenModifiers").arr_list(arena).len > 0, d15)
-    // Caution: **Test it on a source that parses.**
-    c.notify("textDocument/didOpen", lsp_client.did_open(SEMTOK_URI, SEMTOK_SRC, arena),
-        lsp_client.SEND_MS, arena) catch {}
-    sem: = lsp_client.answer(c@, "textDocument/semanticTokens/full",
-        lsp_client.at_doc(SEMTOK_URI, arena), lsp_client.READ_MS, arena)
-    sem_data: = sem.get("result").get("data")
-    toks: = read_tokens(sem_data, types_n, arena)
-    d_sem: = lsp_client.dump(sem, arena)
-    // The tokens are `Pair`, `I32` x5, `add`, `a` and `b`.
-    verdict.check("semanticTokens returns content", toks.count >= 6, d_sem)
-    // Caution: **Keep the five numbers of each token together**, or the colour lands off the text.
-    verdict.check("the kind's number stays inside the legend", !toks.over, d_sem)
-    verdict.check("the positions are ascending", !toks.back, d_sem)
-    verdict.check("it puts out no token of length 0", !toks.empty, d_sem)
-    // **The check is what each one covers**, not only the count. What the compiler made, placed at
-    // its own string's positions, colours `t Pa` and `g` in the file's first lines.
-    verdict.check("every token covers one whole name as written",
-        off_words(sem_data, SEMTOK_SRC, arena) == 0, d_sem)
-    lsp_client.close(c@, SEMTOK_URI, arena)
     lsp_outline.run_outline(c@, init.val.get("result").get("capabilities"), arena)
-
-    // **A document that fails to parse is coloured as far as it parsed.** The editor reads it a
-    // second time ("Only the editor's parse recovers from a syntax error" in
-    // `ksplc/docs/DESIGN-tools.md`) and colours the valid declarations around it.
-    // Caution: **The skipped text is still not coloured**, and nothing is guessed
-    // (`lsp/semtok.kspl`'s header). The probe's `fn main` is valid and its `var x = 1;` is not, so
-    // the answer is one token.
-    bad: = lsp_client.answer(c@, "textDocument/semanticTokens/full",
-        lsp_client.at_doc(PROBE_URI, arena), lsp_client.READ_MS, arena)
-    bad_toks: = read_tokens(bad.get("result").get("data"), types_n, arena)
-    verdict.check("a source that does not pass is coloured as far as it parsed",
-        !is_missing(bad.get("result")) && bad_toks.count == 1 && !bad_toks.over && !bad_toks.back,
-        lsp_client.dump(bad, arena))
 
     check_wide_range(c@, arena)
 

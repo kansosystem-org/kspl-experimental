@@ -309,8 +309,6 @@ These checks make sure the forgiving parse stays inside the editor and does what
 
 **What is inside an unclosed block stays inside it.** Where `fn f(): I32 {` is never closed, everything below it is that function's body as far as anyone can tell. The editor does not invent the `}` the writer has not typed. That shape needs the file *above* to still answer and the parse not to run away, and both hold.
 
-**`semanticTokens` colours from the recovered tree too**: what parsed is coloured and the swallowed run is not, so "nothing is guessed" still holds.
-
 ## A `didOpen` checks one document's bodies
 
 **When you open a file, the server type-checks the function bodies of that file only, not of every file it imports. So the first answer comes quickly.** A `didOpen` that checks the bodies of every file reachable from the document stands between the reader and every answer after it. For a file in the middle of the tree that is a great many files, thrown away and redone on every keystroke.
@@ -319,7 +317,7 @@ So the document view checks `main_file`'s bodies and no others (`Bodies.main_fil
 
 | View | Bodies checked | Serves |
 | :-- | :-- | :-- |
-| the document view (`build_document_state`) | the open file's only | hover, jump to definition, colouring, the panel while a call is typed, this document's diagnostics |
+| the document view (`build_document_state`) | the open file's only | hover, jump to definition, the outline, the panel while a call is typed, this document's diagnostics |
 | the workspace view (`build_workspace_state`) | every file's that names the word, or a generic using it | references, renaming, the call hierarchy |
 
 **Nothing shown depends on other files' bodies.** None of what the document view serves looks inside another file's body. Diagnostics are filtered to the open file when sent (`is_same_file` in `lsp/msg.kspl`), so other files' findings would be computed only to be dropped.
@@ -376,7 +374,7 @@ Hovering a generic declaration shows it the way you wrote it (with `Self` and `T
 
 1. **`Self` is not shown as a concrete type.** The type node of `fn next(r: Self)` in `trait Iter<|T|>` carries the id of `Slice<|U8|>`, an instantiation that happens to exist, and would read `fn next(r: U8[])`. `Self` beats every type id (`write_type_of` in `lsp/spell.kspl`): it is a fixed spelling, not a type to resolve ("5.1 Traits (`trait`)" in `../../docs/SPEC-programming-language.md`). The test "is this `Self`" and its spelling (`self_type_spelling`) live with the rest of the spelling in `base/ast_spell.kspl`, written with its `$`. The type's name drops the `$` (`extract_type_name`, so `impl U8$[]` is found as `impl U8[]`), and `r: Self$@` would read `r: Self@`, a receiver that cannot be written through.
 2. **A trait's requirement keeps its owner** (not `std.lang.free` for `trait Manual_free`'s `free`). An impl's method carries its owner inside `sym.name` (`out.probe.Point.area`); a trait's does not, and a generic trait's requirement has no symbol. A method whose name is still bare takes its owner from the declaration it stands in (`find_owner_in_tree` in `lsp/hover.kspl`). It is read off the tree, not the type tables, where a generic trait nothing instantiated has no entry.
-3. **The internal name does not reach the screen** ("A diagnostic points at 'the position the user wrote'" in [`DESIGN-diagnostics.md`](DESIGN-diagnostics.md) forbids it). The copy and the source node of `pub fn at_ref` in the `Slice` impl cover the same offset, and when the copy answers, the hover reads `std.lang.Slice.std_lang_Slice_U8_Const_at_ref`. At an equal score the walk prefers the node whose text is the source's text at that position (`is_source_text` in `lsp/position.kspl`). This is a preference, not a filter, so a synthesized node still answers where it is the only one. It answers at its own position, not over the length of its text, which measures nothing on screen. Measured by its text, the `Slice` a `U8[]` is read as answered on the `]|>` after it.
+3. **The internal name does not reach the screen** ("A diagnostic points at 'the position the user wrote'" in [`DESIGN-diagnostics.md`](DESIGN-diagnostics.md) forbids it). The copy and the source node of `pub fn at_ref` in the `Slice` impl cover the same offset, and when the copy answers, the hover reads `std.lang.Slice.Slice_U8_Const_at_ref`. At an equal score the walk prefers the node whose text is the source's text at that position (`is_source_text` in `lsp/position.kspl`). This is a preference, not a filter, so a synthesized node still answers where it is the only one. It answers at its own position, not over the length of its text, which measures nothing on screen. Measured by its text, the `Slice` a `U8[]` is read as answered on the `]|>` after it.
 
 **The type arguments are the answer at a call, not on the declaration.** `List<|U8[]|>(arena)` calls that one instantiation, so its hover names it. The declaration stands for every instantiation, so it shows the generic's own name (`keep_args` in `find_owner_of_fn`). Run the two together and one of them lies.
 

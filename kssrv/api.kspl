@@ -1,11 +1,9 @@
 //< The endpoints under `/api/`
 //< To add an endpoint, add one row to `ROUTES` and one case to `Api.queue`. How a response is
 //< queued (`conn.queue_response`) lives in `kssrv/conn.kspl`.
-//< **Do not mix the local-use endpoints (`--local`) with the outward-facing ones.** The file
-//< endpoints read and write under the root, so facing outward they **do not exist**. The car's
-//< endpoints have nothing to answer with for local use (`Reach`).
+//< **Do not let the local-use endpoints (`--local`) face outward.** The file endpoints read and
+//< write under the root, so facing outward they **do not exist** (`Reach`).
 import "kssrv/conn"
-import "kssrv/pilot"
 import "std/chars"
 import "std/fs"
 import "std/http"
@@ -40,16 +38,6 @@ fn queue_json_error(c: conn.Conn$@, status: I32, allow: U8[] = "") //<
 fn queue_api_status(c: conn.Conn$@, ctx: conn.Ctx$@, keep: Bool) //<
     //< `GET /api/status`: returns that it is running, and how much it has handled
     $b: = Json_builder(c.arena)
-    // The car's steering policy does not change after `build()`, so it is read directly. **For
-    // local use there is none**, and `pilot` is null.
-    $pilot_val: = b.null_val()
-    if ctx.p != null
-        pilot_val = b.obj().set("params", b.int_val(ctx.p.params))
-            .set("samples", b.int_val(ctx.p.samples))
-            .set("train_cpu_ms", b.int_val(ctx.p.train_ms))
-            .set("agreement", b.float_val(ctx.p.agreement))
-            .set("agreement_checked", b.int_val(ctx.p.checked))
-            .set("command_valid_ms", b.int_val(pilot.COMMAND_VALID_MS)).build()
     // Caution: **Say whether it is for local use.** Otherwise the page shows the local tools even
     // where there are no file endpoints: buttons that do nothing. Without the token this is a 401,
     // so nothing leaks.
@@ -60,12 +48,11 @@ fn queue_api_status(c: conn.Conn$@, ctx: conn.Ctx$@, keep: Bool) //<
         .set("conditional_writes", b.bool_val(ctx.is_local()))
         .set("uptime_s", b.int_val(sys.wall_seconds() - conn.stats.started_s))
         .set("requests", b.int_val(conn.stats.requests))
-        .set("commands", b.int_val(conn.stats.commands))
         .set("connections_total", b.int_val(conn.stats.connections_total))
         .set("connections_open", b.int_val(conn.stats.connections_open))
         .set("connections_refused", b.int_val(conn.stats.connections_refused))
         .set("max_connections", b.int_val(conn.MAX_CONNS))
-        .set("heap_bytes", b.int_val(heap_used_bytes())).set("pilot", pilot_val).build()
+        .set("heap_bytes", b.int_val(heap_used_bytes())).build()
     queue_json(c, 200, val, keep)
 
 fn rel_or_refuse(c: conn.Conn$@, query: U8[], root: U8[]): U8[]? //<
@@ -155,14 +142,14 @@ priv fn check_content(path: U8[], expected: U8[]): I32 //< checks a conditional 
     defer $file: = io.open(path, "rb") catch
         return 500
     $hash: = Sha256()
-    buf: U8[8192] = ::{}
+    $buf: U8[8192] = ::{}
     for
         n: = file.read(U8$[]::buf) catch
             return 500
         if n == 0
             break
         hash.update((U8[]::buf).sub(0, n))
-    hex: U8[sha256.HEX_LEN] = ::{}
+    $hex: U8[sha256.HEX_LEN] = ::{}
     sha256.write_hex(hash.finalize(), U8$[]::hex)
     return 200 if (U8[]::hex).equals(expected) else 409
 
@@ -204,10 +191,11 @@ fn queue_api_list(c: conn.Conn$@, query: U8[], root: U8[], keep: Bool) //<
     //< A link is left out, so the dialog never offers a way out of the root, and so is a hidden
     //< name (`.git`, `.ksmd-workspace`). So is anything neither a folder nor an ordinary file.
     //< At most `MAX_LISTED` names come back; `more` says that others stand there.
+    // **No link check here**: `rel_or_refuse` refused any below the root, and a root can be one.
     rel: U8[] = rel_or_refuse(c, query, root) catch
         return
     folder: = root if rel.len == 0 else fs.join(root, rel, c.arena)
-    if fs.is_link(folder) || !fs.is_dir(folder)
+    if !fs.is_dir(folder)
         queue_json_error(c, 404)
         return
     names: = fs.read_dir(folder, c.arena) catch _e
@@ -265,51 +253,11 @@ fn authorized(req: http.Request$@, token: U8[]): Bool
         return token_matches(given.sub_from(BEARER.len), token)
     return false
 
-fn queue_api_car(c: conn.Conn$@, req: http.Request$@, p: pilot.Pilot$@, keep: Bool) //<
-    //< `POST /api/car`: takes the distance and line the car measured and returns one manoeuvre
-    //< `{"dist_mm":250,"line":2,"seq":17}` goes in, and
-    //< `{"seq":17,"cmd":"strafe_right","lon":0,"lat":50,"rot":0,"valid_ms":500}` comes back.
-    //< A few hundred weights, read-only after `build()`, so it answers on the accepting thread.
-    //< Caution: **Return `seq` unchanged**: it is the car's only way to tell that the answer is for
-    //< its latest request.
-    doc: = json.parse(req.body, c.arena) catch _e
-        queue_json_error(c, 400)
-        return
-    // Caution: **Do not default a missing `dist_mm` to 0**, which means "it could not be measured".
-    // As a default, it would turn a broken request into a valid observation.
-    dist: = doc.val.get("dist_mm").as_int64().unwrap_or(-1I64)
-    line: = doc.val.get("line").as_int64().unwrap_or(-1I64)
-    if dist < 0I64 || line < 0I64 || line >= I64::pilot.LINE_PATTERNS
-        queue_json_error(c, 400)
-        return
-    seq_no: = doc.val.get("seq").as_int64().unwrap_or(0I64)
-    obs: = pilot.Obs::{ .dist_mm = dist, .line = line }
-    // The work uses the connection's arena, which `conn_build` rewinds per request.
-    act: = pilot.decide(p, obs, c.arena)
-    m: = pilot.MANEUVERS[act]
-    conn.stats.commands += 1I64
-    $b: = Json_builder(c.arena)
-    val: = b.obj().set("seq", b.int_val(seq_no)).set("cmd", b.str_val(m.name))
-        .set("lon", b.int_val(m.lon)).set("lat", b.int_val(m.lat))
-        .set("rot", b.int_val(m.rot)).set("valid_ms", b.int_val(pilot.COMMAND_VALID_MS)).build()
-    queue_json(c, 200, val, keep)
-
-fn queue_api_pilot(c: conn.Conn$@, p: pilot.Pilot$@, keep: Bool) //<
-    //< `GET /api/pilot`: returns one whole steering policy as safetensors
-    //< The policy is the weights, the manoeuvre table and the preprocessing constants. A car that
-    //< has it decides for itself without asking per observation; the same weights answer
-    //< `POST /api/car`. **The type is octet-stream** (no MIME type is registered for safetensors).
-    $blob: = pilot.export(p, c.arena)
-    conn.queue_response(c, 200, "application/octet-stream", blob.slice(), keep)
-
 priv enum Reach //< in which mode an endpoint exists
     both
     local //< only for local use
         //< **Facing outward it does not**: with no token, anyone could read and write under the
         //< root.
-    outward //< only facing outward
-        //< **For local use it does not**: the car cannot reach the loopback, so no policy is
-        //< trained there (`main` in `kssrv/main.kspl`).
 
 priv fn reaches(c: conn.Conn$@, ctx: conn.Ctx$@, r: Reach): Bool //<
     //< Whether the endpoint exists in this mode
@@ -320,8 +268,6 @@ priv fn reaches(c: conn.Conn$@, ctx: conn.Ctx$@, r: Reach): Bool //<
     case .both {}
     case .local
         here = local
-    case .outward
-        here = !local
     if !here
         queue_json_error(c, 404)
     return here
@@ -359,8 +305,6 @@ priv enum Api //< the endpoint a route reaches
     here
     stop
     status
-    car
-    pilot
 
 priv struct Route //< one entry point under `/api/`
     path: U8[] //< the path
@@ -368,7 +312,7 @@ priv struct Route //< one entry point under `/api/`
     methods: U8[] //< the methods it takes, as a 405's `Allow` names them; another one is a 405
     api: Api //< the endpoint it reaches
 
-priv const ROUTES: Route[8] = ::{ //<
+priv const ROUTES: Route[6] = ::{ //<
     //< Every entry point, with who may reach it and by which methods
     //< **The guards run once, here, for every row**: decided per endpoint, a new one forgets one.
     //< `/api/file` has no `HEAD`: `/api/stat` gives the size and whether it exists (Principle 6).
@@ -378,8 +322,6 @@ priv const ROUTES: Route[8] = ::{ //<
     Route::{ .path = "/api/here", .reach = .local, .methods = "GET", .api = .here },
     Route::{ .path = "/api/stop", .reach = .local, .methods = "POST", .api = .stop },
     Route::{ .path = "/api/status", .reach = .both, .methods = "GET", .api = .status },
-    Route::{ .path = "/api/car", .reach = .outward, .methods = "POST", .api = .car },
-    Route::{ .path = "/api/pilot", .reach = .outward, .methods = "GET", .api = .pilot },
 }
 
 priv fn takes(r: Route, method: U8[]): Bool //< whether the route takes that method
@@ -422,7 +364,3 @@ impl Api
             queue_api_stop(c)
         case .status
             queue_api_status(c, ctx, keep)
-        case .car
-            queue_api_car(c, req, ctx.p, keep)
-        case .pilot
-            queue_api_pilot(c, ctx.p, keep)

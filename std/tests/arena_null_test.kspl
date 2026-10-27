@@ -122,6 +122,10 @@ fn test_null_arena_text_and_bytes() //< the functions that return one block of t
     freed(path)
     full: = fs.absolute("x", null) catch panic("the working directory is readable")
     freed(full)
+    here: = fs.absolute(".", null) catch panic("the working directory is readable")
+    kept: = fs.long_name(here, null) catch panic("the working directory stands")
+    freed(kept)
+    freed(here)
     back_to(before, "every one-block result frees with dealloc, a failure leaving nothing")
     verdict.pass("Text and bytes made with a null arena free with dealloc, and leave nothing else.")
 
@@ -149,17 +153,12 @@ fn test_null_arena_lists() //< the functions that return a list, which frees wit
     $sorted: = nums.order_by(fn(a: I32@, b: I32@; ): I32 {
         return b$ - a$;
     }, null)
-    $head: = nums.take(2, null)
-    $tail: = nums.skip(2, null)
     assert(odd.len == 2 && twice.get(4) == 8 && once.len == 5 && sorted.get(0) == 4,
         "the chain's lists come out on the heap")
-    assert(head.len == 2 && tail.len == 3, "take and skip on the heap")
     odd.free()
     twice.free()
     once.free()
     sorted.free()
-    head.free()
-    tail.free()
     nums.free()
     rx: = Regex.compile("b") catch panic("the pattern compiles")
     $hits: = rx.find_all("abcb", null)
@@ -289,15 +288,12 @@ fn test_null_arena_messages() //< a query, headers, a message and a parser free 
 
 fn test_null_arena_work_is_freed() //< a function frees the work it does not return
     verdict.start("[std] null as the arena: the work behind a result is freed test...")
-    src: = "GET / HTTP/1.1\r\nHost: h\r\n\r\n"
     // A parse adds the test's own arguments to the parser. So the first parse comes before the
     // count, and the second adds no more than the room the first made.
     defer p: = argparse.Parser.create("probe", "a null arena", null)
     p.positional("[anything]")
     p.parse_or_exit()
     before: = mem.heap_used_bytes()
-    n: = http.request_length(src, 0, null) catch panic("a whole request has a length")
-    assert(n == src.len, "request_length with a null arena")
     p.parse() catch panic("the test's own arguments are read")
     $b: = Json_builder(null)
     body: = jsonrpc.encode("m", b.int_val(1), 3, null)
@@ -308,7 +304,7 @@ fn test_null_arena_work_is_freed() //< a function frees the work it does not ret
     taken: = jsonrpc.take_frame(acc@, 64, null) catch panic("a whole frame is taken")
     freed(taken.unwrap_or(""))
     acc.free()
-    back_to(before, "request_length, parse, encode and take_frame free their own work")
+    back_to(before, "parse, encode and take_frame free their own work")
 
     dir: = "out/tmp/kspl_test_null_arena"
     fs.mkdir_all(dir) catch panic("the work directory can be made")

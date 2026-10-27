@@ -396,9 +396,9 @@ test-seed-sum: $(STAGE1_EXE)
 # **Only a leading tab marks a recipe line**, for make and the checks: a `$(foreach)` body starts
 # with one (in a `define`), and a variable's continuation line never does.
 # **A clone's own make files come first** (`KANSO_LOCAL_MK`: each top folder's `local.mk` unless
-# set), since `mk/lint.mk` and `mk/test.mk` read `EXTRA_SUITES` and `EXTRA_LINT_TARGETS` as they
-# are defined. A clone of the published copy has none. **Exported, so the checks read this list**
-# (`make_files` in `tests/suite/recipe_bytes_test.kspl`); a file named that is missing fails.
+# set), since `mk/test.mk` reads `EXTRA_SUITES` as it is defined. A clone of the published copy
+# has none. **Exported, so the checks read this list** (`make_files` in
+# `tests/suite/recipe_bytes_test.kspl`); a file named that is missing fails.
 export KANSO_LOCAL_MK ?= $(wildcard */local.mk)
 include $(KANSO_LOCAL_MK)
 include mk/ci.mk
@@ -419,6 +419,18 @@ define kspl_build
 	$(CC) $(CFLAGS) -O3 $(GEN_DIR)/$(2).c @$(GEN_DIR)/$(2).libs $(4) $(LDLIBS) \
 	  -o $(or $(5),$(OUT_DIR)/$(2).exe)
 endef
+
+# $(call kspl_dep_rules,<target>,<stem>): turns `<stem>.deps`, what ksplc read (`--emit-deps`),
+# into make's rules in `<stem>.d`, for an `-include`. An empty rule for each source lets one be
+# removed. **Two kinds of line are left out.** A whole path's drive colon would break the rule;
+# only std's is whole, and the stage1 compiler stands for std (`KSPL_SRCS`). A `ksplc.cfg` looked
+# for and not found (its hash is dashes) would rebuild the target on every run.
+kspl_dep_rules = awk '$$1 !~ /^-/ && $$2 !~ /^(\/|[A-Za-z]:)/ \
+  { print "$(1): " $$2; print $$2 ":" }' $(2).deps > $(2).d
+# $(call kspl_unrecorded,<stem>): `FORCE` where `<stem>.d` is missing. **A target with no record
+# of its sources is built**, so one left from before the record existed is not taken as current.
+kspl_unrecorded = $(if $(wildcard $(1).d),,FORCE)
+FORCE:
 
 # --- The AI engine (ksai/examples/llama_engine) ---
 ## Run|run|Build the AI engine (`ksai/examples/llama_engine`) and run it
@@ -485,12 +497,17 @@ stop_ksmd_servers =
 endif
 
 # --- The static file server (kssrv/) --- Build only (it stays resident, so make does not run it).
+# **A file with the sources it was built from**, so the ksmd gates that each want it build it once.
+KSSRV_EXE := $(OUT_DIR)/kssrv.exe
 ## Run|kssrv|Build the HTTP server that serves static files
-kssrv: $(STAGE1_EXE)
+kssrv: $(KSSRV_EXE)
+$(KSSRV_EXE): $(STAGE1_EXE) $(call kspl_unrecorded,$(GEN_DIR)/kssrv)
 	$(stop_ksmd_servers)
 	@echo "# BUILDING KSSRV (static file HTTP server)"
-	$(call kspl_build,kssrv/main.kspl,kssrv,)
-	@echo "# built -> $(OUT_DIR)/kssrv.exe (try: ./$(OUT_DIR)/kssrv.exe 8080 .)"
+	$(call kspl_build,kssrv/main.kspl,kssrv,--emit-deps=$(GEN_DIR)/kssrv.deps)
+	$(call kspl_dep_rules,$@,$(GEN_DIR)/kssrv)
+	@echo "# built -> $(KSSRV_EXE) (try: ./$(KSSRV_EXE) 8080 .)"
+-include $(GEN_DIR)/kssrv.d
 
 # --- Kanso OS (RTOS): `ksos/Makefile`'s own targets, called here by the same names ---
 # That file stands alone (a copy of the folder is tested by it), so what the root adds is only

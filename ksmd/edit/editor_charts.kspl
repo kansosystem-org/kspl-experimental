@@ -7,7 +7,7 @@ import "ksmd/edit/editor" { Editor, Refused, end_block, replace }
 import "ksmd/edit/history" { begin }
 import "ksmd/edit/region" { Spot, Unit, gap_spot, whole_unit }
 import "ksmd/model/model" { Block, Chart, Chart_kind, MAX_SERIES, Table }
-import "std/chars"
+import "ksmd/syntax/chart" { reads_back }
 import "std/ds" { List }
 import "std/mem" { Arena }
 
@@ -47,8 +47,9 @@ impl Editor
         ed.put_chart(gap_spot(block), gap_spot(block + 1), chart, scratch)!
 
     priv fn chart_of(ed: Self$@, s: Chart_settings@): Chart!Refused //<
-        //< A chart of the settings, its columns held by identity; refused where one names nothing
-        //< A column whose name holds a ',' cannot be named in `values`, so it is refused there.
+        //< A chart of the settings, its columns held by identity
+        //< Refused where the saved chart would not find these columns by their names: one with no
+        //< name or another's, or a drawn one whose name holds a ','.
         if s.table < 0 || s.table >= ed.doc.tables.len ||
             ed.doc.tables[s.table].name.len == 0
             throw .table(.outside)
@@ -59,14 +60,16 @@ impl Editor
         $ids: = List<|Sz|>(ed.arena)
         $names: = List<|U8[]|>(ed.arena)
         for c in s.values
-            if c < 0 || c >= t.columns.len || t.cells[c].text.len == 0 ||
-                t.cells[c].text.find_str(",").is_some()
+            if c < 0 || c >= t.columns.len
                 throw .table(.outside)
             ids.push(t.columns[c])
             names.push(t.cells[c].text)
-        return Chart::{ .kind = s.kind, .title = ed.arena.dup_str(s.title), .table = s.table,
+        chart: = Chart::{ .kind = s.kind, .title = ed.arena.dup_str(s.title), .table = s.table,
             .name = t.name, .labels = t.columns[s.labels],
             .label_name = t.cells[s.labels].text, .series = ids, .series_names = names }
+        if !reads_back(ed.doc@, chart@)
+            throw .table(.chart_name)
+        return chart
 
     priv fn put_chart(ed: Self$@, s: Spot, e: Spot, chart: Chart, scratch: Arena$@): Void!Refused //<
         //< A block for the chart in place of what stands from `s` to `e`, as one step
@@ -80,7 +83,7 @@ impl Editor
         r: = replace(w@, frag@, scratch)
         $tx: = begin(ed.selection(), ed.arena)
         ed.commit(w@, tx@, r.caret, r.caret, scratch)!
-        ed.finish(tx, .other, false)
+        ed.finish(tx, .other, false)!
 
 priv fn numeric_column(ed: Editor@, u: Sz, t: Table@): Sz //<
     //< The first column after the first whose values are mostly numbers, or the second column

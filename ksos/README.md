@@ -28,7 +28,7 @@ The producer creates five items, with `Task.delay` between them. The higher-prio
 
 The local [`Makefile`](Makefile) supports building and testing an independent copy of this folder. It provides `make test` and the demo and gate targets below. The targets find `ksai` and `ksdb` through the compiler's package paths. The Makefile header lists additional requirements. Targets with the same names at the repository root use the repository compiler.
 
-`ksos/tests/` contains unit tests, USB descriptor text checks, firmware conversion tests, and serial port checks. The conversion tool, elf2uf2, produces firmware files for real chips. The serial checks cover the universal asynchronous receiver/transmitter (UART).
+`ksos/tests/` contains unit tests, USB descriptor text checks, and firmware conversion tests. The conversion tool, elf2uf2, produces firmware files for real chips.
 
 ## The idea
 
@@ -72,7 +72,7 @@ The kernel allocates no memory internally and does not depend on `malloc`. The c
 | `ksos/net/` | A minimal network stack (ARP, IPv4, UDP, TCP) |
 | `ksos/boards/` | Connections between components on a board |
 | `ksos/demo/` | The demos, one firmware each; the POSIX and Cortex-M ones are tests too |
-| `ksos/tests/` | The unit tests, the USB descriptors read as text, elf2uf2 and the UART checks |
+| `ksos/tests/` | The unit tests, the USB descriptors read as text, and elf2uf2 |
 | [`ksos/docs/`](docs/) | Design, board specifications, and setup instructions; see “Further reading” below |
 
 Imports follow this order: `kernel` < `drivers` < `boards` < `demo`. A folder can import only lower layers. `net` is beside `drivers`. It needs neither the kernel nor hardware registers. Only `demo` uses it.
@@ -200,14 +200,11 @@ The Cortex-M demos require a cross compiler and QEMU, both provided in the devel
 | `ksos/demo/cortex_m/cortex_m_stack_guard.kspl` | `make ksos-cm-stack-guard` | After a task switches out and back, its damaged canary causes a panic at the next SysTick switch. The expected panic passes the test. |
 | `ksos/demo/cortex_m/cortex_m_heap_probe.kspl` | `make ksos-cm-heap-probe` | The freestanding heap (`mem.init_freestanding_heap`) and `Arc<T>` work without an OS or `malloc`. Creating and deleting 120 tasks exercises reuse of the port's 33 contexts. |
 | `ksos/demo/cortex_m/cortex_m_panic_probe.kspl` | `make ksos-cm-panic-probe` | a panic's crash record read back across a real soft reset |
-| `ksos/demo/cortex_m/cortex_m_uart_echo.kspl` | `make ksos-cm-uart-echo` | UART0's receive path, judged by an outside echo test |
-| `ksos/demo/cortex_m/cortex_m_uart_irq_echo.kspl` | `make ksos-cm-uart-irq-echo` | Interrupt-driven UART receive through interrupt controller line 0 (NVIC IRQ0). The handler gives a semaphore while the task waits. The scheduler sleeps with `WFI`, which waits for an interrupt. The driver's ring buffer queues a whole line. |
 | `ksos/demo/cortex_m/cortex_m_ai_probe.kspl` | `make ksos-cm-ai-probe` | `ksai` inference (a whole `Transformer_block`) on bare metal, matching the host's numbers |
 | `ksos/demo/cortex_m/cortex_m_ai_train_probe.kspl` | `make ksos-cm-ai-train-probe` | On-device low-rank adaptation (LoRA) trains small matrices added to model weights. `Lora.save_raw` and `load_raw` save and restore the adapter. |
 | `ksos/demo/cortex_m/cortex_m_ai_weights_probe.kspl` | `make ksos-cm-ai-weights-probe` | real weights (a safetensors made a static array by `embed`) read with zero copies and no filesystem |
 | `ksos/demo/cortex_m/cortex_m_control_ai_probe.kspl` | `make ksos-cm-control-ai-probe` | a control loop and continuing AI inference side by side, undisturbed |
 | `ksos/demo/cortex_m/cortex_m_pilot_probe.kspl` | `make ksos-cm-pilot-probe` | A received policy selects the next manoeuvre locally |
-| `ksos/demo/cortex_m/cortex_m_car_model_probe.kspl` | `make ksos-cm-car-model-probe` | The car trains a neural network to predict the result of its movement |
 
 The Cortex-M0 port in `port/cortex_m0/` also supports the RP2040 CPU. QEMU runs it through `port/nrf51/` on the micro:bit (`-M microbit`). `make test-ksos-qemu` includes these runs. Demos must fit 16 KB of RAM and need no atomic instructions, which ARMv6-M lacks. Each task receives a 1 KB stack.
 
@@ -270,7 +267,6 @@ All RP2040 demo filenames end in `*_probe.kspl`, so the groups below distinguish
 
 | The make target | What it confirms |
 | :-- | :-- |
-| `make ksos-rp2040-car-loop` | The control loop requests a decision from the layer above for every observation. |
 | `make ksos-rp2040-car-pilot` | The car receives a policy and disconnects. It then makes decisions locally. |
 | `make ksos-rp2040-car-ir` | driving it with a remote |
 
@@ -282,7 +278,7 @@ These components support embedded devices. They are optional for a first reading
 
 - `ksos/boards/` defines board wiring above the CPU ports and peripheral drivers. The board is a Freenove 4WD mecanum car with a Pico W. It supports Phase 3 of [What works, and how far](../README.md#-what-works-and-how-far). [`ksos/docs/SPEC-board.md`](docs/SPEC-board.md) defines wiring. [`ksos/docs/HOWTO-bring-up.md`](docs/HOWTO-bring-up.md) explains setup.
 
-- `ksos/drivers/` accesses memory-mapped input/output (MMIO) registers directly. These memory addresses control UART, GPIO, PWM, clocks, ADC, I2C, USB CDC, and other peripherals. [`ksos/docs/DESIGN-rtos.md`](docs/DESIGN-rtos.md) describes each driver. Operations such as `putc`, `getc`, and `transfer` stop after a limited number of iterations if hardware does not respond. They report failure through `Bool` or `T?`.
+- `ksos/drivers/` accesses memory-mapped input/output (MMIO) registers directly. These memory addresses control GPIO, PWM, clocks, ADC, I2C, USB CDC, and other peripherals. [`ksos/docs/DESIGN-rtos.md`](docs/DESIGN-rtos.md) describes each driver. Operations such as `transfer` stop after a limited number of iterations if hardware does not respond. They report failure through `Bool` or `T?`.
 
 - `ksos/net/` provides a minimal network stack. `ksos/net/tcp_conn.kspl` implements TCP above `ksos/net/mini_ipv4.kspl`, which provides ARP, IPv4, and UDP without fragmentation. See [`ksos/docs/DESIGN-rtos.md`](docs/DESIGN-rtos.md).
 
@@ -330,7 +326,6 @@ This table is the canonical record of checks performed on the real car. A ✅ me
 | Driving from the IR remote alone (`rp2040_car_ir_probe`) | **not confirmed** beyond reception and key assignments. Wheel motion, face output, and each mode's motion remain unconfirmed (stage 12) |
 | I2C (`ksos/drivers/rp2040/i2c`) and the LED matrix (`ht16k33`) | ✅ (address 0x71 responded and a band moved across the display; stage 5c) |
 | USB Ethernet (`rp2040/usb_cdc`'s CDC-NCM part) | ✅ (a network adapter appeared alongside the COM port, with `alt=1 link=up`; stage 6a) |
-| The closed loop with kssrv (`rp2040_car_loop_probe`) | ✅ All seven manoeuvres reached the wheels using kssrv's `commands`. The counters were `to=0 bad=0 drop=0` (stage 6e) |
 | Receiving a policy and deciding inside the car (`rp2040_car_pilot_probe`) | ✅ The car received a policy and disconnected. It continued making decisions after `kssrv` stopped. **One inference takes around 10 ms** (stage 7) |
 | The NTB framework (`cdc_ncm`) and the link layer (`ksos/net/link`) | ✅ (`ping` from the PC got through, this side's MAC in `arp -a`; stage 6b) |
 | ARP's requesting side (`build_arp_request` / `parse_arp_reply`) | ✅ (resolved the peer's MAC; stage 6b covers only answering) |
@@ -339,9 +334,6 @@ This table is the canonical record of checks performed on the real car. A ✅ me
 | The round trip as an HTTP client | ✅ (`status200=1`: the request arrived and was interpreted) |
 | `alloc` / `Arena` / `Arc` / `std/http.parse_response` | ✅ (`RESULT pass=11 fail=0`, the atomics filled in from SIO's hardware spinlock by `ksos/port/rp2040/ksos_atomic_sio.c`; stage 6d) |
 | The four atomics (`kspl_atomic_add`/`cas`/`load`/`store`) | ✅ (the SIO spinlock works on the real chip) |
-| Learned state surviving power loss (`car_model` plus ksdb) | ✅ Restart reports `resumed the forward model — N steps learned`. The step count grows across startups. `drop=0` remains true during each learning step |
-| Learning a step at a time while the car runs | ✅ (on most laps run) |
-| Prediction better than repeating the previous observation on the floor | **unmet**: at best equal, with `base=` varying by location. It wins in bare-metal QEMU (`make ksos-cm-car-model-probe`), whose floor model is one function. [`ksos/docs/DESIGN-rtos.md`](docs/DESIGN-rtos.md) explains the limitation |
 | `car-pilot` remote stop, runtime limit, and speed cap | ✅ Any button reports `HALTED: stopped by remote`. At 60 seconds, it reports `HALTED: run time limit`. All six manoeuvres stayed within the speed cap. Pressing and releasing resumed operation with `n` growing. See “How to stop it when it drives itself” in `ksos/docs/HOWTO-bring-up.md` |
 | Starting without a PC using the stored policy (`rp2040_car_pilot_probe`) | ✅ Without kssrv, it reports `no fresh policy — using the one stored on board`. All six manoeuvres reached the wheels. `last run ended` reports the previous observation. `policy unchanged` confirms that an unchanged policy was not written again (stage 9) |
 | Flash writes (`ksos/drivers/rp2040/flash`) and the device log | ✅ `boot #` increased at each power-on. `records` and `used` matched each append exactly. A record crossing a flash page boundary read back correctly (stage 8) |
@@ -350,8 +342,6 @@ This table is the canonical record of checks performed on the real car. A ✅ me
 | Flash chip part number | **not confirmed**. [`ksos/docs/SPEC-board.md`](docs/SPEC-board.md) names the expected part under “Flashing the firmware, and the debug output”. Boot does not require a particular chip |
 
 ## Files near the limit and how they split
-
-**No file in ksos exceeds 900 lines.**
 
 Only code without shared state can move to another file unchanged. Here, state means top-level variables declared with `$`, such as `$halted: Bool = false`. Driver and demo functions share these variables. Moving those functions requires moving their state or passing it explicitly. Shared state determines file boundaries, not line counts. These sections remain together:
 

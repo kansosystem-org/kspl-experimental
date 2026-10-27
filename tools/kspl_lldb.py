@@ -24,6 +24,7 @@ import re
 MODULE_DOTS = [
     ("std_ds_", "std.ds."), ("std_io_", "std.io."), ("std_mem_", "std.mem."),
     ("std_str_", "std.str."), ("std_sys_", "std.sys."), ("std_os_", "std.os."),
+    # Only a function keeps `std_lang_`: a type of `std/lang` is named without it (`Slice_U8`).
     ("std_lang_", "std.lang."), ("std_seq_", "std.seq."),
     ("ksplc_", "ksplc."),
     ("sema_scope_", "sema.scope."), ("sema_types_", "sema.types."),
@@ -73,8 +74,8 @@ def drop_test_noise(name, anchored=True):
 # Caution: **Look at the longer name first**, or `Slice_U8_Const` crushes into `U8[]` and leaves
 # `_Const` behind.
 def sigils(name):
-    name = re.sub(r'std\.lang\.Slice_([A-Za-z0-9_.]+?)_Const\b', r'const \1[]', name)
-    name = re.sub(r'std\.lang\.Slice_([A-Za-z0-9_.]+)', r'\1[]', name)
+    name = re.sub(r'(?<![A-Za-z0-9.])Slice_([A-Za-z0-9_.]+?)_Const\b', r'const \1[]', name)
+    name = re.sub(r'(?<![A-Za-z0-9.])Slice_([A-Za-z0-9_.]+)', r'\1[]', name)
     name = name.replace("_Ptr", "@")
     # A failable type is spelled `type?error` (the C name carries a `_Result_` in between).
     name = re.sub(r'_Result_([A-Za-z0-9_.]+)', r'?\1', name)
@@ -109,21 +110,23 @@ def demangle_fn(name):
 # The self-test. **`lldb` is not needed** (this part looks only at the name conversion).
 #
 # Caution: **Take the samples from the generated C.** What rots is the compiler's names changing
-# under this side, which a made-up sample cannot notice (a slice is `std_lang_Slice_U8`).
+# under this side, which a made-up sample cannot notice (a slice is `Slice_U8`).
 DEMANGLE_CASES = [
     ("struct kspl_std_ds_List_I32", "std.ds.List<|I32|>"),
     ("kspl_std_io_Writer", "std.io.Writer"),
     ("kspl_ksplc_base_ast_Ast_node_Ptr", "ksplc.base.ast.Ast_node@"),
     ("kspl_ksplc_base_ast_Ast_node_Ptr_Result_std_ds_Ds_error",
      "ksplc.base.ast.Ast_node@?std.ds.Ds_error"),
-    ("kspl_put_std_lang_Writer_std_lang_Slice_U8", "put_std.lang.Writer_U8[]"),
-    ("kspl_put_std_lang_Writer_std_lang_Slice_U8_Const", "put_std.lang.Writer_const U8[]"),
-    ("kspl_std_lang_Option_std_ds_List_Sz_Ptr_Tag", "std.lang.Option<|std.ds.List<|Sz@|>|>"),
+    ("kspl_put_Writer_Slice_U8", "put_Writer_U8[]"),
+    ("kspl_put_Writer_Slice_U8_Const", "put_Writer_const U8[]"),
+    ("Option_std_ds_List_Sz_Ptr_Tag", "Option<|std.ds.List<|Sz@|>|>"),
+    ("std_ds_List_Slice_U8_Const", "std.ds.List<|const U8[]|>"),
 ]
 
 DEMANGLE_FN_CASES = [
     ("kspl_priv_std_ds_List_push", "priv std.ds.List_push"),
     ("kspl_std_sys_args", "std.sys.args"),
+    ("kspl_std_lang_bounds_panic", "std.lang.bounds_panic"),
 ]
 
 

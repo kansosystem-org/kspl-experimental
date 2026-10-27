@@ -307,16 +307,16 @@ The verdict is two functions in `gen/c/expr.kspl`, used by both `emit_binary_exp
 
 #### In a top-level initializer, a constant becomes its value
 
-**When a global constant is built from another constant, genc writes the other constant's value, not its name.** It does so in top-level `const` initializers alone, because strict C compilers refuse the name there. C99 requires a constant expression in a file-scope initializer, and the name of an object is not one, `const` or not. gcc and clang fold such a name as an extension; other C compilers refuse it with "initializer element is not constant". So `const B = f(A);` would build on some toolchains only.
+**In a top-level initializer, both backends write a number as the value sema folded, never as the expression.** Sema decides each initializer once ("The static-initializer check is applied to both `var` and `const`" in [`DESIGN-diagnostics.md`](DESIGN-diagnostics.md)). Its record (`static_value`) is what genc's `emit_expr` and genllvm's `emit_llvm_const_init` read. So a reference to another constant, a division by `-1`, a `&&` and a conditional all reach C and LLVM as one number. C99 requires a constant expression in a file-scope initializer, and the name of an object is not one, `const` or not. gcc and clang accept such a name as an extension; other C compilers refuse it with "initializer element is not constant".
 
-This is `emit_const_ref_inline` in `ksplc/gen/c/expr.kspl`. `const_init_expr` in `sema/decl/eval.kspl` resolves the constant, as for folding, and that path's record cuts a cycle.
+* **A literal or an enum variant keeps its spelling in genc.** It is a C constant already and is equal to its folded value, so the generated C stays readable.
+* **A value is not expanded as an expression.** An expansion carries the whole initializer of the constant it names. So a chain `const A1 = A0 + 1;` n deep would nest n deep and hit C's limit on parenthesis depth (256 in clang).
+* **A `sizeof` or `offsetof` is the number ksplc's layout model gives**, laid out for the machine named. The C compiler checks that number ("A layout is computed when it is first asked for" in [`DESIGN-sema.md`](DESIGN-sema.md)).
+
+**A constant of any other shape is written as its initializer** (`emit_const_ref_inline` in `ksplc/gen/c/expr.kspl`, `named_const_init` in `gen/llvm/decl.kspl`). A struct, a string or a tagged union has no single number. `const_init_expr` in `sema/decl/eval.kspl` resolves the constant, and genc's record of the path cuts a cycle.
 
 * **A name whose address is taken stays a name.** `&name` is a C99 address constant, while the address of the value written out is no constant at all (`&((I32)4LL)`), or a copy's (`&((T){ … })`), which breaks pointer identity. The root of the place under `@`, and of an array turned into a slice (`T[]::table`, whose `.ptr` is the array's address), is kept by name (`Genc_ctx.addr_root`). genllvm writes the same address as `ptr @name`, and a field's or an element's (`g.v@`, `g[2]@`) as a constant `getelementptr` from it (`emit_const_place_addr` in `gen/llvm/decl.kspl`).
-* **A tagged union is written as its initializer, never as a number.** The integer fold reads only a scalar enum's variant as its tag; a tagged union's `.a` folded to `0` would put an integer where `{ tag, payload }` belongs. genllvm writes a named constant as its initializer too (`named_const_init` in `gen/llvm/decl.kspl`).
-
-**The value is folded, not expanded as an expression.** An expansion carries the whole initializer of the constant it names. So a chain `const A1 = A0 + 1;` n deep would nest n deep and hit C's limit on parenthesis depth (256 in clang). The language guarantees chains to the depth in `tests/suite/limits_test.kspl`. Only what cannot be folded (a string, `::{}`) is emitted as an expression.
-
-**A referenced constant that carries a `sizeof` is folded with ksplc's layout model**, laid out for the machine named. The C compiler checks the folded size ("A layout is computed when it is first asked for" in [`DESIGN-sema.md`](DESIGN-sema.md)). A `sizeof` written in the initializer itself stays C's `sizeof`: only references to constants are replaced.
+* **A tagged union is written as its initializer, never as a number.** A tagged union's `.a` folded to `0` would put an integer where `{ tag, payload }` belongs.
 
 #### The generated C is ISO C99, not GNU C
 
@@ -331,6 +331,21 @@ This is `emit_const_ref_inline` in `ksplc/gen/c/expr.kspl`. `const_init_expr` in
 
 * **A cast in a file-scope initializer stays a cast.** A call is no constant expression, so a function's address stored in a global `Void$@` keeps the plain cast. `-pedantic` reports it, and nothing in the repository writes one.
 * **What stays compiler-specific is named and guarded where it matters.** `KSPL_UNUSED`, `KSPL_EXPORT` and `KSPL_SECTION` expand to GNU attributes or nothing (`runtime/core.h`). The runtime's `__attribute__((noreturn))` / `((constructor))`, its `__thread` (`KSPL_PER_THREAD`) and `__atomic_*` builtins, the frame address `kspl_stack_here` reads (`__builtin_frame_address`), and `asm_volatile`'s `__asm__ volatile` are GNU C, which gcc and clang (MSYS2's included) both take. MSVC's own compiler (`cl.exe`) takes none of them, nor a string literal past 65535 bytes; Kanso's build refuses that toolchain.
+
+
+### Genc writes less code, not fewer bytes
+
+**The C compiler's time follows the amount of code in function bodies, not the file's size.** A survey of the seed found no hot spot, so three everyday shapes are written shorter. Together they cut clang's work on the seed by about 8% at `-g -O0` and 5 to 9% at `-O2`.
+
+| Shape | Written as | Where | Saving |
+| :-- | :-- | :-- | --: |
+| A string slice | A `static const` named `kspl_lit_N`, written once per unit before the first function using it | `name_string_literals` in `gen/c/literal.kspl` | about 4% |
+| `a && b`, `a \|\| b` | C's own operator where the right side hoists nothing | `lower_logical_op` in `lower/expr.kspl` | about 3% |
+| A `for … in` over a slice | The element read as `(coll.ptr + idx)$`; the loop condition already bounds the index | `build_index_loop` in `sema/body/for_in.kspl` | about 1% |
+
+* A named constant is no compound literal: no stack slot and no copy at each use. Each unit numbers its own, so a split output names them alike only within a unit.
+* **genllvm keeps the expanded `&&` / `||`**: it has no short-circuit of its own.
+* Names took 78% of the seed's bytes, yet shortening them saved no compile time: the C compiler reads a name once.
 
 ### Genllvm (LLVM IR): why the structure differs, and managing SSA
 
@@ -441,15 +456,7 @@ There are four requirements:
 3. Reorder a compound literal into declaration order (LLVM requires every element, in order).
 4. Write the array under a slice literal (`T[]::{ … }`) as a private constant `@.arr.N`, and point the slice at it. C builds that array in place as a file-scope compound literal. genc writes its members as plain braces, since C99 takes no compound literal as a member there. An LLVM initializer cannot hold one, and code built for a function body there does not assemble.
 
-**A shape that cannot be lowered is an ICE.**
-
-**A float is folded by genllvm itself** (`fold_float` in `gen/llvm/decl.kspl`), since sema folds integers only and LLVM has no float constant expressions to hand it to. It takes what C's static initializer takes:
-* a literal and a constant's name;
-* `-`, `+ - * /` and a cast from a number;
-* an `F32` rounded at each step;
-* a float cast to an integer, truncated toward zero.
-
-Without it, `const H: F64 = pi * 2.0` and `I32::2.9` built on C and were refused on LLVM.
+**genllvm writes only the shapes sema classified** (`sema/body/static_init.kspl`). A number is the value sema folded, a float included (`fold_float` in `sema/decl/fold_float.kspl`). Any other shape is written as it stands: a trait value as the object's address and the vtable's, a pointer cast of an integer as `inttoptr`. **A form sema did not classify is an ICE**: sema refuses what neither backend can write, so reaching one is ksplc's own fault.
 
 **A value holding a tagged union is written as packed bytes** (`emit_llvm_laid_const` in `gen/llvm/decl.kspl`). A tagged union's LLVM type is an `i32` tag and raw words ("The runtime memory layout and the ABI specification"). No constant can fill that field by field. Each variant needs bytes of its own, so an array of them cannot be an LLVM array either. Such a global gets a packed struct type of its own. Every piece sits at ksplc's layout offset (`field_offset_of`, `enum_payload_offset`, `payload_field_offset`), with `i8` padding between and the type's alignment on the global. The code reads it at the same offsets. It reads a field through a named type's GEP (LLVM's "address of a field" instruction). It reads a payload field by its byte offset (`payload_field_ptr` in `gen/llvm/types.kspl`).
 
@@ -467,7 +474,7 @@ Caution: **Decide the position on the same grounds as the code that emits the de
 
 A raw pointer leaves out the leading `const` for another reason: its type name already emits `const T*`, so another would qualify it twice (`emits_c_const` / `type_name_carries_const` in `gen/c/ctx.kspl`).
 
-**genllvm: a function's address does not go through integer constant folding.** Rebuilding a global initializer as a static constant (`emit_llvm_const_init`) defaults to that folding, which rejects a function name as "not a constant expression". Build the name by the path a run-time reference takes (`emit_llvm_lvalue`). That path alone tells a global from a local. A local read as a global breaks by pointing at a different symbol, not as a link error.
+**genllvm: a function's address is written by name.** A function has no folded value, so `emit_llvm_const_init` writes it as the path a run-time reference takes (`emit_llvm_lvalue`). That path alone tells a global from a local. A local read as a global breaks by pointing at a different symbol, not as a link error.
 
 The regression test is `tests/prog/equiv.kspl`. It stores a `const`, a mutable and a `null` in globals and reassigns the mutable one before the call, so folding to its initial value would show. **For the `const` it covers both a signature through an alias and one written directly.** C's position for the `const` differs between them, so with only one the mismatch above passes.
 

@@ -13,6 +13,7 @@ import "ksplc/lower/arc" as lower_arc
 import "ksplc/lower/ctx" { Fallback_ctx, Jump_ctx, Lowering_ctx }
 import "ksplc/lower/defer" as lower_defer
 import "ksplc/lower/expr" as lower_expr
+import "ksplc/sema/body/static_init" as sema_body_static_init
 import "ksplc/sema/session/ctx" { Sema_ctx }
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
@@ -51,6 +52,10 @@ fn run(ctx: Sema_ctx$@, root: Ast_node$@)
 impl Ast_node
     fn lower(r: Self$@, lctx: Lowering_ctx$@)
         if r == null
+            return
+        // A value sema folded in a top-level initializer is written as that value, so nothing in
+        // it is lowered (the rule is in sema/body/static_init.kspl).
+        if !lctx.in_fn_body && lctx.sema.static_value(r).is_some()
             return
         lctx.lower_depth += 1
         if lctx.lower_depth >= MAX_LOWER_DEPTH

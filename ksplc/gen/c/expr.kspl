@@ -10,6 +10,7 @@ import "ksplc/gen/c/ctx" { Genc_ctx }
 import "ksplc/gen/c/expr_postfix" as gen_c_expr_postfix
 import "ksplc/gen/c/literal" as gen_c_literal
 import "ksplc/sema/body/binary" as sema_body_binary
+import "ksplc/sema/body/static_init" as sema_body_static_init
 import "ksplc/sema/decl/eval" as sema_decl_eval
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
@@ -22,6 +23,12 @@ impl Ast_node
         // Only the expression itself stands in the initializer's place; its operands do not.
         as_init: = c.brace_init
         c.brace_init = false
+        // In a top-level initializer a value sema folded is written as that value. A literal or
+        // an enum variant is a C constant already, and keeps its spelling.
+        if c.const_init_depth > 0 && !r.spells_own_value()
+            if v: = c.sema.static_value(r)
+                r.emit_static_value(c, v)
+                return
 
         switch r.kind_id
         case .k_integer
@@ -180,14 +187,22 @@ impl Ast_node
 
         mangled_name.slice().kspl_symbol_to(c$)
 
+    priv fn spells_own_value(r: Ast_node$@): Bool //< whether it is a literal or an enum variant
+        switch r.kind_id
+        case .k_integer, .k_float, .k_char, .k_bool, .k_enum_init, .k_implicit_enum
+            return true
+        default
+            return false
+
     priv fn emit_const_ref_inline(r: Ast_node$@, c: Genc_ctx$@, as_init: Bool): Bool //<
         //< It emits another constant's initializer instead of a reference to it; true if it did
-        //< It does so only inside a top-level `const`'s initializer.
+        //< It does so only inside a top-level initializer, for a constant whose value is no scalar.
+        //< A scalar's reference is the value sema folded (emit_expr).
         //<
         //< Caution: **C's initializers must be constant expressions**, and in C99 the name of an
         //< object is not one, `const` or not. A reference by name compiles only where the C
-        //< compiler folds it as an extension, and elsewhere fails with `initializer element is not
-        //< constant`.
+        //< compiler accepts it as an extension, and elsewhere fails with `initializer element is
+        //< not constant`.
         if c.const_init_depth == 0 || r == c.addr_root
             return false
         if init: = r.const_init_expr(c.sema)
@@ -196,16 +211,6 @@ impl Ast_node
                 return false
             c.sema.resolving.consts.set(key, true)
             defer c.sema.resolving.consts.remove(key)
-            // Caution: **Where it can be folded, emit a value, not an expression.** Chaining
-            // `const A1 = A0 + 1;` over n levels nests n deep and hits C's parenthesis depth limit.
-            // Only constant references are replaced; a `sizeof` stays as C's `sizeof`.
-            switch c.sema.try_eval_constexpr_wide(init)
-            case .some(v)
-                c.s("((").t(r.type_id).s(")")
-                gen_c_literal.emit_folded_i64(c, v)
-                c.s(")")
-                return true
-            case .none {}
             // In an initializer's place the value is braces, which no parentheses can enclose.
             if as_init
                 c.brace_init = true
@@ -245,14 +250,14 @@ impl Ast_node
         //< the cast `neg > sizeof(I32)` is false in C while genllvm's `icmp sgt` says true.
         target: = r.get_sizeof_target()
         // A local read for its size (`sizeof(x)`, `sizeof(x.a)`) is a use of it, which C would
-        // otherwise call unused (Principle 2). Not at the top level: a comma is no constant
-        // expression in C.
-        if !c.top_level_var && c.const_init_depth == 0
-            if root: = target.sizeof_root_name()
-                c.s("((void)sizeof(")
-                root.emit_expr(c)
-                c.s("), (Sz)sizeof(").t(target.type_id).s("))")
-                return
+        // otherwise call unused (Principle 2). A top-level initializer holds the value sema
+        // folded instead (emit_expr), so the comma, which is no constant expression in C, never
+        // stands there.
+        if root: = target.sizeof_root_name()
+            c.s("((void)sizeof(")
+            root.emit_expr(c)
+            c.s("), (Sz)sizeof(").t(target.type_id).s("))")
+            return
         c.s("(Sz)sizeof(").t(target.type_id).s(")")
 
     priv fn sizeof_root_name(r: Ast_node$@): Ast_node$@? //<
@@ -277,12 +282,11 @@ impl Ast_node
 
     priv fn emit_offsetof(r: Ast_node$@, c: Genc_ctx$@) //<
         //< It emits C's `offsetof`, cast to `Sz` for the same reason as `emit_sizeof`
-        //< Caution: **Leave it to C's `offsetof`** (do not emit the folded value). Where ksplc's
-        //< layout and C's disagree, no diagnostic is reported (the head of
-        //< `sema/decl/layout.kspl`). So the C backend asks C itself, which keeps them in agreement
-        //< by construction. `--to=llvm` has nobody to ask, so it folds (emit_llvm_const_int in
-        //< `gen/llvm/expr.kspl`). A field keeps its name in the generated C, so it can be passed
-        //< as it is (`gen/c/types.kspl`).
+        //< Caution: **Leave it to C's `offsetof`** in a function body. C itself then keeps ksplc's
+        //< layout and C's in agreement (the head of `sema/decl/layout.kspl`). `--to=llvm` folds
+        //< (emit_llvm_const_int in `gen/llvm/expr.kspl`). A top-level initializer holds the value
+        //< sema folded, which `emit_layout_checks` in root.kspl has C check. A field keeps its name
+        //< in the generated C, so it can be passed as it is (`gen/c/types.kspl`).
         c.s("(Sz)offsetof(").t(r.get_offsetof_type().type_id).s(", ")
             .s(r.get_offsetof_field().text).s(")")
 
@@ -375,18 +379,8 @@ impl Ast_node
         if op.equals("-") && c.env.is_pointer(r.get_binary_left().type_id)
             r.emit_binary_body(c)
             return
+        // A file-scope initializer cannot call the helper, and needs none: sema has folded it.
         if sema_body_binary.takes_signed_div(c.sema, op, r.type_id, r.get_binary_right())
-            // A file-scope initializer cannot call the helper. Sema has folded it already
-            // (check_static_initializer) and refused a minimum divided by `-1` there. The value
-            // goes in as the LLVM backend writes it.
-            if c.top_level_var
-                switch c.sema.try_eval_constexpr_wide(r)
-                case .some(v)
-                    c.s("((").t(r.type_id).s(")")
-                    gen_c_literal.emit_folded_i64(c, v)
-                    c.s(")")
-                    return
-                case .none {}
             open_signed_div(c, op, r.type_id)
             r.get_binary_left().emit_expr(c)
             r.get_binary_right().close_signed_div(c, r.type_id)

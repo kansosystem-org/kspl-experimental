@@ -204,7 +204,7 @@ priv fn budget()
     changed: = calc.calculate(doc@, TODAY, arena)
     number("a changed quantity changes its total", changed@, 0, 0, 3, 60.0)
     number("and the sum that depends on it", changed@, 0, 2, 3, 70.0)
-    edit.insert_row(doc@, 0, 1, arena) catch
+    edit.insert_rows(doc@, 0, 1, 1, arena) catch
         panic("inserting a row")
     edit.set_cell(doc@, 0, 1, 0, .text, "Ink", arena) catch
         panic("naming the new row")
@@ -549,6 +549,17 @@ priv fn lookups()
         "if(false, lookup(1/0, d.A1:A6, d.C1:C6, 0), 1) -> 1",
         "lookup(\"Ink\", \"Ink\", d.C1:C6, 0) -> #SYNTAX!",
         "lookup(\"Ink\", d.A1:A6, d.C1:C6) -> #SYNTAX!" }, DATA)
+    // A key on a cycle carries `#CYCLE!`, whichever cell calculates first. Another error in a key
+    // cell is passed over.
+    defer arena: = Arena(64 * 1024)
+    r: =
+        results("| =lookup(1, B1:B2, B1:B2, 0) | =A1 |\n| | 1 |\n| =B3 | =lookup(1, A3:A4, A3:A4, \
+            0) |\n| 1 | |\n| =1/0 | =lookup(1, A5:A6, A5:A6, 0) |\n| 1 | |\n:::\n", arena)
+    failure("a lookup whose key cell names it, calculated first, is a cycle", r@, 0, 0, 0, .cycle)
+    failure("and so is that key cell", r@, 0, 0, 1, .cycle)
+    failure("a key cell that names its lookup, calculated first, is a cycle", r@, 0, 2, 0, .cycle)
+    failure("and so is that lookup", r@, 0, 2, 1, .cycle)
+    number("a key cell holding another error is passed over", r@, 0, 4, 1, 1.0)
 
 priv fn cases(list: U8[][]) //< `cases_with`, with no other table
     cases_with(list, "")
