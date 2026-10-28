@@ -1,0 +1,790 @@
+//< Weight matrices in GGUF's own formats: 3- to 8-bit numbers with a scale per block
+//< **The bytes are GGUF's, byte for byte**: ggml's `block_q5_0`, `block_q8_0` and the K blocks
+//< `block_q3_K` to `block_q6_K`, and rows of F32, F16 and BF16. So a tensor read from a GGUF file
+//< is used as it stands. A product decodes one block at a time and multiplies it at once, and makes
+//< no F32 copy of the matrix. Making these formats from F32 is `ksai/quantize.kspl`. The reasons
+//< are "Weights stay in GGUF's formats" in `ksai/docs/DESIGN-learning.md`.
+import "ksai/parallel"
+import "ksai/tensor" { Tensor }
+import "std/checked_int"
+import "std/math"
+import "std/mem"
+
+pub enum Quant_format //< how one row of a weight matrix is stored, each as GGUF stores it
+    //< A row is a whole number of blocks. A block holds `block_len()` numbers in `block_bytes()`
+    //< bytes. Multi-byte numbers are little-endian, as in GGUF.
+    f32 //< 4-byte floats, one per number
+    f16 //< IEEE half-precision floats, 2 bytes each
+    bf16 //< bfloat16, 2 bytes each: the top half of an F32
+    q5_0 //< blocks of 32 in 22 bytes: an F16 scale `d`, the fifth bits, then the low 4 bits
+        //< A number is `d × (q - 16)`. GGUF files use it where a row is not a multiple of 256.
+    q8_0 //< blocks of 32: an F16 scale `d`, then 32 signed bytes; a number is `d × q`
+    q3_k //< blocks of 256 in 110 bytes: 3-bit numbers in 16 groups of 16, each with a scale
+        //< The bytes are the high bits (32), the low 2 bits (64), 12 bytes of 6-bit scales, then
+        //< the F16 `d`. A number is `d × (scale - 32) × q`, with `q` from -4 to 3.
+    q4_k //< blocks of 256 in 144 bytes: 4-bit numbers in 8 groups of 32, each with a scale and min
+        //< The bytes are `d` and `dmin` (F16), 12 bytes of 6-bit scales and mins, then 128 bytes of
+        //< 4-bit numbers. A number is `d × scale × q - dmin × min`.
+    q5_k //< blocks of 256 in 176 bytes: Q4_K's groups, scales and mins, with a fifth bit
+        //< The bytes are `d` and `dmin`, 12 bytes of scales and mins, 32 bytes of fifth bits, then
+        //< 128 bytes of the low 4 bits. A number is `d × scale × q - dmin × min`.
+    q6_k //< blocks of 256 in 210 bytes: 6-bit numbers in 16 groups of 16, each with a scale
+        //< The bytes are the low 4 bits (128), the high 2 bits (64), 16 signed 8-bit scales, then
+        //< the F16 `d`. A number is `d × scale × (q - 32)`.
+
+pub enum Quant_error //< why a quantized matrix or its product was refused
+    bad_shape //< a dimension is negative, or the columns do not fill whole blocks
+    size_mismatch //< the bytes are not exactly the rows times the bytes of one row
+    shape_mismatch //< a product's operand or result is not the shape the matrix needs
+    out_of_bounds //< a row number outside the matrix
+    no_quantizer //< there is no quantizer for that format here; only Q8_0 and Q4_K have one
+
+const QK8_0: Sz = 32 //< the numbers in one Q8_0 block
+const QK_K: Sz = 256 //< the numbers in one K block, Q3_K to Q6_K
+const Q8_0_BYTES: Sz = 34 //< ggml's `sizeof(block_q8_0)`
+const Q5_0_BYTES: Sz = 22 //< ggml's `sizeof(block_q5_0)`
+const Q3_K_BYTES: Sz = 110 //< ggml's `sizeof(block_q3_K)`
+const Q4_K_BYTES: Sz = 144 //< ggml's `sizeof(block_q4_K)`
+const Q5_K_BYTES: Sz = 176 //< ggml's `sizeof(block_q5_K)`
+const Q6_K_BYTES: Sz = 210 //< ggml's `sizeof(block_q6_K)`
+priv const SPAN: Sz = 256 //< the numbers a product decodes at once; a whole block of each format
+priv const LANES: Sz = 16 //< the partial sums of a dot product, kept side by side
+    //< One running sum waits on its last addition at every step. Sixteen independent ones fill two
+    //< or four vector registers, and the C compiler keeps them there.
+
+impl Quant_format
+    pub fn block_len(r: Self): Sz //< how many numbers one block holds; 1 for plain floats
+        switch r
+        case .f32, .f16, .bf16
+            return 1
+        case .q5_0, .q8_0
+            return QK8_0
+        case .q3_k, .q4_k, .q5_k, .q6_k
+            return QK_K
+
+    pub fn block_bytes(r: Self): Sz //< how many bytes one block takes
+        switch r
+        case .f32
+            return 4
+        case .f16, .bf16
+            return 2
+        case .q5_0
+            return Q5_0_BYTES
+        case .q8_0
+            return Q8_0_BYTES
+        case .q3_k
+            return Q3_K_BYTES
+        case .q4_k
+            return Q4_K_BYTES
+        case .q5_k
+            return Q5_K_BYTES
+        case .q6_k
+            return Q6_K_BYTES
+
+    pub fn row_bytes( //< the bytes of one row of `cols` numbers
+        r: Self,
+        cols: Sz, //< the numbers in a row; a positive multiple of `block_len()`
+    ): Sz!Quant_error
+        if cols <= 0 || cols % r.block_len() != 0
+            throw .bad_shape
+        return cols / r.block_len() * r.block_bytes()
+
+    fn input_block(r: Self): Sz //< the block an input row is rounded in; 0 keeps it F32
+        //< llama.cpp rounds a K format's inputs to its Q8_K blocks of 256, and Q8_0's and Q5_0's to
+        //< Q8_0 blocks of 32. F32, F16 and BF16 weights multiply F32 inputs as they are.
+        switch r
+        case .f32, .f16, .bf16
+            return 0
+        case .q5_0, .q8_0
+            return QK8_0
+        case .q3_k, .q4_k, .q5_k, .q6_k
+            return QK_K
+
+    fn has_mins(r: Self): Bool //< whether a block subtracts a min per group: Q4_K and Q5_K
+        return r == .q4_k || r == .q5_k
+
+    priv fn block_ints(r: Self, src: U8@, w: I16$@, mins: I32$@, ds: F32$@) //<
+        //< One block as small integers, each times its group's integer scale; `ds` gets `d`, `dmin`
+        //< The integer product of a block with an input block is then one dot product of whole
+        //< numbers, plus the mins of `has_mins`. Only the formats `input_block` rounds inputs for
+        //< come here.
+        switch r
+        case .q5_0
+            ints_q5_0(src, w, ds)
+        case .q8_0
+            ints_q8_0(src, w, ds)
+        case .q3_k
+            ints_q3_k(src, w, ds)
+        case .q4_k
+            ints_q4_k(src, w, mins, ds)
+        case .q5_k
+            ints_q5_k(src, w, mins, ds)
+        case .q6_k
+            ints_q6_k(src, w, ds)
+        case .f32, .f16, .bf16
+            panic("quant: a float format has no integer blocks")
+
+    priv fn decode_span(r: Self, row: U8@, first: Sz, n: Sz, out: F32$@) //<
+        //< Decodes numbers [first, first + n) of a row; both are whole blocks
+        switch r
+        case .f32
+            // The target is little-endian, as GGUF is ("Byte order" in the language specification).
+            mem.copy(Void$@::out, Void$@::(row + first * 4), n * 4)
+        case .f16
+            for i in Range.asc(n)
+                (out + i)$ = f16_to_f32(half_at(row + (first + i) * 2))
+        case .bf16
+            for i in Range.asc(n)
+                (out + i)$ = f32_from_bits(U32::half_at(row + (first + i) * 2) << 16)
+        case .q5_0
+            for b in Range.asc(n / QK8_0)
+                decode_q5_0(row + (first / QK8_0 + b) * Q5_0_BYTES, out + b * QK8_0)
+        case .q8_0
+            for b in Range.asc(n / QK8_0)
+                decode_q8_0(row + (first / QK8_0 + b) * Q8_0_BYTES, out + b * QK8_0)
+        case .q3_k
+            for b in Range.asc(n / QK_K)
+                decode_q3_k(row + (first / QK_K + b) * Q3_K_BYTES, out + b * QK_K)
+        case .q4_k
+            for b in Range.asc(n / QK_K)
+                decode_q4_k(row + (first / QK_K + b) * Q4_K_BYTES, out + b * QK_K)
+        case .q5_k
+            for b in Range.asc(n / QK_K)
+                decode_q5_k(row + (first / QK_K + b) * Q5_K_BYTES, out + b * QK_K)
+        case .q6_k
+            for b in Range.asc(n / QK_K)
+                decode_q6_k(row + (first / QK_K + b) * Q6_K_BYTES, out + b * QK_K)
+
+pub struct Quant_matrix //< a weight matrix in one of the GGUF formats, its bytes borrowed
+    //< Row `i` holds the weights of output `i`, as GGUF stores a weight. The bytes stay the
+    //< caller's: they must outlive the matrix. Its sizes were checked against the bytes when it was
+    //< made, so a product never reads past them.
+    data: U8[] //< every row's bytes, one row after another
+    n_rows: Sz
+    n_cols: Sz
+    fmt: Quant_format
+    row_len: Sz //< the bytes of one row
+
+impl Quant_matrix
+    pub fn from_bytes( //< a matrix over bytes in one of the formats, its sizes checked first
+        //< Caution: **The bytes must be exactly `rows × format.row_bytes(cols)` long.** A longer
+        //< slice is refused too: it means the sizes describe another tensor.
+        format: Quant_format, //< how a row is stored
+        rows: Sz, //< the outputs; 0 or more
+        cols: Sz, //< the numbers in a row; a positive multiple of `format.block_len()`
+        bytes: U8[], //< borrowed, not copied
+    ): Quant_matrix!Quant_error
+        if rows < 0
+            throw .bad_shape
+        row_len: = format.row_bytes(cols)!
+        total: = rows.checked_mul(row_len) catch
+            throw .size_mismatch
+        if bytes.len != total
+            throw .size_mismatch
+        return Quant_matrix::{
+            .data = bytes,
+            .n_rows = rows,
+            .n_cols = cols,
+            .fmt = format,
+            .row_len = row_len,
+        }
+
+    pub fn rows(r: Self@): Sz //< how many rows (outputs) it has
+        return r.n_rows
+
+    pub fn cols(r: Self@): Sz //< how many numbers each row holds
+        return r.n_cols
+
+    pub fn format(r: Self@): Quant_format //< how its rows are stored
+        return r.fmt
+
+    pub fn bytes(r: Self@): U8[] //< its bytes, exactly as they would stand in a GGUF file
+        return r.data
+
+    pub fn dequantize_row( //< one row decoded to F32, written into the caller's memory
+        //< It is what a model needs for a token's embedding, and the reference a test compares.
+        r: Self@,
+        row: Sz, //< which row, from 0
+        out: F32$[], //< where the numbers go; exactly `cols()` long
+    ): Void!Quant_error
+        if row < 0 || row >= r.n_rows
+            throw .out_of_bounds
+        if out.len != r.n_cols
+            throw .shape_mismatch
+        r.fmt.decode_span(r.data.ptr + row * r.row_len, 0, r.n_cols, out.ptr)
+
+    pub fn mul_mat( //< the product with F32 inputs, in a tensor on the input's arena
+        //< Output `[t, i]` is the dot product of row `i` with input row `t`, as ggml's
+        //< `ggml_mul_mat` gives. One input row is the matrix-vector product.
+        r: Self@,
+        x: Tensor<|F32|>, //< the inputs, shaped `[n, cols()]`
+    ): Tensor<|F32|>!Quant_error //< shaped `[n, rows()]`
+        r.check_input(x)!
+        shape: Sz[2] = ::{ x.shape[0], r.n_rows }
+        out: = Tensor<|F32|>(Sz[]::shape, x.arena)
+        r.mul_mat_into(x, out)!
+        return out
+
+    pub fn mul_mat_into( //< the product with F32 inputs, written into a tensor the caller owns
+        //< Large products split their rows over the CPU's cores (`ksai/parallel`). Any thread count
+        //< writes the same bits, so the result does not depend on the machine.
+        r: Self@,
+        x: Tensor<|F32|>, //< the inputs, shaped `[n, cols()]`
+        out: Tensor<|F32|>, //< where the product goes; it must already hold `[n, rows()]`
+    ): Void!Quant_error
+        r.check_input(x)!
+        r.mul_mat_on(x, out, parallel.threads_for(x.shape[0], r.n_rows, r.n_cols))!
+
+    fn mul_mat_on(r: Self@, x: Tensor<|F32|>, out: Tensor<|F32|>, threads: Sz): Sz!Quant_error //<
+        //< The product on up to `threads` threads; returns how many took part
+        //< The tests compare one thread with several through it.
+        r.check_input(x)!
+        n: = x.shape[0]
+        if !out.holds_matrix(n, r.n_rows)
+            throw .shape_mismatch
+        block: = r.fmt.input_block()
+        if block == 0
+            $job: = Mul_job::{ .w = r, .x = x.data, .n = n, .out = out.data }
+            return parallel.split(mul_rows, Void$@::job@, r.n_rows, 1, threads)
+        // The inputs are rounded once, on as many threads as their rows pay for.
+        $q8: = Q8_input.round(x.data, n, r.n_cols, block, threads)
+        $job: = Int_job::{ .w = r, .x = q8@, .out = out.data }
+        used: = parallel.split(mul_rows_int, Void$@::job@, r.n_rows, TILE, threads)
+        q8.free()
+        return used
+
+    priv fn check_input(r: Self@, x: Tensor<|F32|>): Void!Quant_error //<
+        //< Refuses inputs that are not 2D, or whose rows are not as long as this matrix's
+        if x.shape.len != 2 || x.shape[1] != r.n_cols || x.shape[0] < 0
+            throw .shape_mismatch
+
+priv struct Mul_job //< one product, as each of its threads reads it
+    w: Quant_matrix@
+    x: F32@ //< the inputs, `n` rows of `cols` numbers
+    n: Sz
+    out: F32$@ //< `n` rows of `rows` numbers; a thread writes the outputs of its own weight rows
+
+priv fn mul_rows(arg: Void$@, first: Sz, last: Sz) //< the product's outputs for rows [first, last)
+    //< **Each output is the sum, block after block, of a block's 16-lane dot product.** The order
+    //< depends on neither the thread nor how many inputs are multiplied together.
+    j: = Mul_job$@::arg
+    w: = j.w
+    $span: F32[SPAN] = ::{}
+    buf: F32$@ = span@
+    for row in Range(first, last, 1)
+        src: = w.data.ptr + row * w.row_len
+        for t in Range.asc(j.n)
+            (j.out + t * w.n_rows + row)$ = 0.0
+        $c0: Sz = 0
+        for c0 < w.n_cols
+            len: = math.min(SPAN, w.n_cols - c0)
+            w.fmt.decode_span(src, c0, len, buf)
+            for t in Range.asc(j.n)
+                o: = j.out + t * w.n_rows + row
+                o$ = o$ + dot_lanes(buf, j.x + t * w.n_cols + c0, len)
+            c0 += len
+
+fn dot_lanes(a: F32@, b: F32@, n: Sz): F32 //< the dot product of `n` numbers, in 16 lanes
+    //< Number `i` goes to lane `i % 16`; the lanes are added in order at the end.
+    $acc: F32[LANES] = ::{}
+    p: F32$@ = acc@
+    whole: = n / LANES * LANES
+    for $g: Sz = 0; g < whole; g += LANES
+        for k in Range.asc(LANES)
+            (p + k)$ = (p + k)$ + (a + g + k)$ * (b + g + k)$
+    for i in Range(whole, n, 1)
+        (p + i - whole)$ = (p + i - whole)$ + (a + i)$ * (b + i)$
+    $s: F32 = 0.0
+    for k in Range.asc(LANES)
+        s = s + (p + k)$
+    return s
+
+// ==========================================
+// The integer products, as llama.cpp's `ggml_vec_dot_q3_K_q8_K` to `_q6_K_q8_K`, `_q8_0_q8_0` and
+// `_q5_0_q8_0` compute them. Each input row is rounded to 8-bit numbers with a scale per block
+// (Q8_K or Q8_0). A weight block times an input block is then a sum of whole numbers, exact in 32
+// bits, scaled once by the two blocks' scales. Each output adds its blocks' parts in ascending
+// order, so neither the thread count nor the batch changes a bit.
+// ==========================================
+
+priv const GROUP: Sz = 32 //< the numbers one integer dot product sums: a Q8_0 block, or an eighth
+    //< of a K block. A K format's groups are added as whole numbers before any scale.
+priv const K_GROUPS: Sz = 8 //< the groups of 32 in a block of 256
+
+struct Q8_input //< a product's input rows, each rounded to 8-bit numbers with a scale per block
+    q: I16$@ //< `n × cols` whole numbers from -127 to 127
+        //< They are widened to 16 bits once here, since every weight row reads them again.
+    d: F32$@ //< each block's scale: `n × cols / block` of them
+    sums: I32$@ //< the sum of `q` over each group of 32: `n × cols / 32` of them
+        //< The mins of Q4_K and Q5_K multiply these. They are Q8_K's `bsums`, two at a time.
+    x: F32@ //< the F32 inputs, read only while they are rounded
+    n: Sz
+    cols: Sz
+    block: Sz //< `QK_K` for Q8_K, `QK8_0` for Q8_0
+
+impl Q8_input
+    fn round( //< `n` rows of `cols` numbers rounded, on up to `threads` threads
+        x: F32@, //< the rows
+        n: Sz,
+        cols: Sz, //< a multiple of `block`
+        block: Sz, //< `QK_K` or `QK8_0`
+        threads: Sz,
+    ): Q8_input
+        blocks: = n * (cols / block)
+        groups: = n * (cols / GROUP)
+        // One allocation, freed by `free`: the scales and sums first, so each part stays aligned.
+        d: = F32$@::mem.alloc(blocks * 4 + groups * 4 + n * cols * 2)
+        sums: = I32$@::(d + blocks)
+        $r: = Q8_input::{ .q = I16$@::(sums + groups), .d = d, .sums = sums, .x = x, .n = n,
+            .cols = cols, .block = block }
+        _used: = parallel.split(round_rows, Void$@::r@, n, 1, math.min(threads, n))
+        return r
+
+impl Q8_input: Manual_free //< it owns its memory and gives it back with `free()`
+    fn free(r: Self$@) //< gives the memory back
+        mem.dealloc(Void$@::r.d)
+
+priv fn round_rows(arg: Void$@, first: Sz, last: Sz) //< input rows [first, last) rounded
+    r: = Q8_input$@::arg
+    per_row: = r.cols / r.block
+    groups: = r.cols / GROUP
+    for t in Range(first, last, 1)
+        x: = r.x + t * r.cols
+        q: = r.q + t * r.cols
+        for b in Range.asc(per_row)
+            if r.block == QK_K
+                round_q8_k(x + b * QK_K, q + b * QK_K, r.d + t * per_row + b)
+            else
+                round_q8_0(x + b * QK8_0, q + b * QK8_0, r.d + t * per_row + b)
+        for g in Range.asc(groups)
+            $s: I32 = 0
+            // `make test-simd` sees this sum vectorize.
+            for l in Range.asc(GROUP)
+                s += I32::(q + g * GROUP + l)$
+            (r.sums + t * groups + g)$ = s
+
+priv fn round_q8_k(x: F32@, q: I16$@, d: F32$@) //< 256 numbers as llama.cpp's Q8_K block
+    //< ggml's `quantize_row_q8_K_ref`: the number of largest magnitude (the first, on a tie)
+    //< becomes -127, and each number `nearest_int(x × -127 / max)`. The scale is the reciprocal of
+    //< that factor, as ggml stores it, not `max / -127`.
+    $max: F32 = 0.0
+    $amax: F32 = 0.0
+    for j in Range.asc(QK_K)
+        v: = (x + j)$
+        ax: = -v if v < 0.0 else v
+        if ax > amax
+            amax = ax
+            max = v
+    if amax == 0.0
+        d$ = 0.0
+        for j in Range.asc(QK_K)
+            (q + j)$ = 0
+        return
+    iscale: = -127.0F32 / max
+    // `make test-simd` sees this loop vectorize.
+    for j in Range.asc(QK_K)
+        scaled: = iscale * (x + j)$
+        (q + j)$ = I16::math.min(nearest_int(scaled), 127I32)
+    d$ = 1.0F32 / iscale
+
+priv fn round_q8_0(x: F32@, q: I16$@, d: F32$@) //< 32 numbers as llama.cpp's Q8_0 block on x86
+    //< ggml's `quantize_row_q8_0` for AVX, which the CPU backend runs on x86: each number becomes
+    //< `x × 127 / max`, rounded to the nearest whole number with halves to even. The scale
+    //< `max / 127` is kept as an F16, as the block stores it. This is not the reference quantizer
+    //< that makes Q8_0 weights (`ksai/quantize`), which multiplies by `1 / d` and rounds halves
+    //< away from 0; llama.cpp itself uses both.
+    $amax: F32 = 0.0
+    for i in Range.asc(QK8_0)
+        v: = (x + i)$
+        a: = -v if v < 0.0 else v
+        if a > amax
+            amax = a
+    d$ = f16_to_f32(f16_from_f32(amax / 127.0F32))
+    id: = 127.0F32 / amax if amax != 0.0 else 0.0F32
+    for i in Range.asc(QK8_0)
+        scaled: = (x + i)$ * id
+        (q + i)$ = I16::math.max(math.min(nearest_int(scaled), 127I32), -128I32)
+
+fn nearest_int(f: F32): I32 //< ggml's `nearest_int`: the nearest whole number, halves to even
+    //< It adds 1.5 × 2^23, so the float's own rounding does the work; it holds for |f| < 2^22.
+    v: = f + 12582912.0F32
+    return I32::(f32_bits(v) & 0x7FFFFF) - 0x400000
+
+priv struct Int_job //< one integer product, as each of its threads reads it
+    w: Quant_matrix@
+    x: Q8_input@
+    out: F32$@ //< `n` rows of `rows` numbers; a thread writes the outputs of its own weight rows
+
+priv const TILE: Sz = 4 //< the weight rows multiplied together: an input block is read once for all
+
+priv fn mul_rows_int(arg: Void$@, first: Sz, last: Sz) //< the outputs of weight rows [first, last)
+    //< Each weight block is turned into integers once, then multiplied with every input row. Four
+    //< rows go together, so each input block is read from memory once for the four.
+    j: = Int_job$@::arg
+    m: = j.w
+    x: = j.x
+    nb: = m.n_cols / x.block
+    groups: = m.n_cols / GROUP
+    bytes: = m.fmt.block_bytes()
+    $w_buf: I16[TILE*QK_K] = ::{}
+    $min_buf: I32[TILE*K_GROUPS] = ::{}
+    $d_buf: F32[TILE*2] = ::{}
+    w: I16$@ = w_buf@
+    mins: I32$@ = min_buf@
+    ds: F32$@ = d_buf@
+    $row: = first
+    for row < last
+        tile: = math.min(TILE, last - row)
+        for t in Range.asc(x.n)
+            for k in Range.asc(tile)
+                (j.out + t * m.n_rows + row + k)$ = 0.0
+        for b in Range.asc(nb)
+            for k in Range.asc(tile)
+                src: = m.data.ptr + (row + k) * m.row_len + b * bytes
+                m.fmt.block_ints(src, w + k * QK_K, mins + k * K_GROUPS, ds + 2 * k)
+            for t in Range.asc(x.n)
+                xq: = x.q + t * m.n_cols + b * x.block
+                dx: = (x.d + t * nb + b)$
+                sums: = x.sums + t * groups + b * K_GROUPS
+                for k in Range.asc(tile)
+                    wk: = w + k * QK_K
+                    sumi: = dot_block(wk, xq) if x.block == QK_K else dot_ints(wk, xq)
+                    o: = j.out + t * m.n_rows + row + k
+                    // A product and a sum stay in separate statements, so no compiler fuses them.
+                    scale: = (ds + 2 * k)$ * dx
+                    part: = scale * F32::sumi
+                    o$ = o$ + part
+                    if m.fmt.has_mins()
+                        mk: = mins + k * K_GROUPS
+                        $summ: I32 = 0
+                        for g in Range.asc(K_GROUPS)
+                            summ += (mk + g)$ * (sums + g)$
+                        low_scale: = (ds + 2 * k + 1)$ * dx
+                        low: = low_scale * F32::summ
+                        o$ = o$ - low
+        row += tile
+
+// The two dot products are kept out of their callers (`#noinline`). Each is then vectorized on its
+// own, as written: a group of 32 becomes four 16-bit multiply-adds that sum pairs. Inlined into
+// the product's loops, the C compiler unrolls the groups first and leaves scalar code.
+
+#noinline
+priv fn dot_block(w: I16@, x: I16@): I32 //< a K block's 256 weights times 256 inputs, exactly
+    //< The groups of 32 are summed one after another, each by its own vector sums.
+    $s: I32 = 0
+    for $g: Sz = 0; g < QK_K; g += GROUP
+        $part: I32 = 0
+        // `make test-simd` sees this sum vectorize.
+        for l in Range.asc(GROUP)
+            part += I32::(w + g + l)$ * I32::(x + g + l)$
+        s += part
+    return s
+
+#noinline
+priv fn dot_ints(w: I16@, x: I16@): I32 //< 32 weights times 32 inputs, summed exactly in 32 bits
+    //< Each product is at most 4096 × 127, so 32 of them stay far inside 32 bits.
+    $s: I32 = 0
+    // `make test-simd` sees this sum vectorize.
+    for l in Range.asc(GROUP)
+        s += I32::(w + l)$ * I32::(x + l)$
+    return s
+
+// Each block's integers. A weight's number times its group's integer scale is at most 4096 in
+// size, so it fits 16 bits and a group needs no scale of its own in the dot product.
+
+priv fn ints_q5_0(src: U8@, w: I16$@, ds: F32$@) //< one Q5_0 block: `q - 16`, and `d`
+    ds$ = f16_to_f32(half_at(src))
+    high: = U32::half_at(src + 2) | (U32::half_at(src + 4) << 16)
+    for j in Range.asc(16)
+        b: = I32::(src + 6 + j)$
+        h: = I32::((high >> U32::j) & 0x10001)
+        (w + j)$ = I16::(((b & 0xF) | ((h & 1) << 4)) - 16)
+        (w + j + 16)$ = I16::(((b >> 4) | ((h >> 12) & 0x10)) - 16)
+
+priv fn ints_q8_0(src: U8@, w: I16$@, ds: F32$@) //< one Q8_0 block: its signed bytes, and `d`
+    ds$ = f16_to_f32(half_at(src))
+    for i in Range.asc(QK8_0)
+        (w + i)$ = I8::(src + 2 + i)$
+
+priv fn ints_q3_k(src: U8@, w: I16$@, ds: F32$@) //< one Q3_K block: `q × (scale - 32)`, and `d`
+    //< Each half of 128 takes 32 bytes of low bits, 2 bits for each of four groups of 32. Bit
+    //< `4h + j` of the high-bit byte `l` is set where number `l` of that group needs no `- 4`.
+    //< A byte gives a number to each of the four groups, so a loop fills four at once.
+    ds$ = f16_to_f32(half_at(src + 108))
+    for h in Range.asc(2)
+        q: = src + 32 + h * 32
+        o: = w + h * 128
+        hb: = U8::(h * 4)
+        for part in Range.asc(2)
+            s1: = I16::k3_scale(h * 8 + part, src + 96)
+            s2: = I16::k3_scale(h * 8 + 2 + part, src + 96)
+            s3: = I16::k3_scale(h * 8 + 4 + part, src + 96)
+            s4: = I16::k3_scale(h * 8 + 6 + part, src + 96)
+            // `make test-simd` sees this loop vectorize.
+            for $l: Sz = part * 16; l < part * 16 + 16; l += 1
+                a: = (q + l)$
+                m: = (src + l)$ >> hb
+                b1: = I16::(a & 3U8) - (0I16 if (m & 1U8) != 0U8 else 4I16)
+                b2: = I16::((a >> 2U8) & 3U8) - (0I16 if (m & 2U8) != 0U8 else 4I16)
+                b3: = I16::((a >> 4U8) & 3U8) - (0I16 if (m & 4U8) != 0U8 else 4I16)
+                b4: = I16::(a >> 6U8) - (0I16 if (m & 8U8) != 0U8 else 4I16)
+                (o + l)$ = b1 * s1
+                (o + l + 32)$ = b2 * s2
+                (o + l + 64)$ = b3 * s3
+                (o + l + 96)$ = b4 * s4
+
+priv fn ints_q4_k(src: U8@, w: I16$@, mins: I32$@, ds: F32$@) //< one Q4_K block, `d` and `dmin`
+    //< Each number is `q × scale`; the mins stay apart, to be multiplied with the input's sums.
+    ds$ = f16_to_f32(half_at(src))
+    (ds + 1)$ = f16_to_f32(half_at(src + 2))
+    scales: = src + 4
+    for g in Range.asc(4)
+        s1: = I16::k4_scale(2 * g, scales)
+        s2: = I16::k4_scale(2 * g + 1, scales)
+        (mins + 2 * g)$ = k4_min(2 * g, scales)
+        (mins + 2 * g + 1)$ = k4_min(2 * g + 1, scales)
+        q: = src + 16 + g * 32
+        o: = w + g * 64
+        // `make test-simd` sees this loop vectorize.
+        for l in Range.asc(32)
+            (o + l)$ = I16::((q + l)$ & 0xF) * s1
+            (o + 32 + l)$ = I16::((q + l)$ >> 4) * s2
+
+priv fn ints_q5_k(src: U8@, w: I16$@, mins: I32$@, ds: F32$@) //< one Q5_K block, `d` and `dmin`
+    //< Q4_K's numbers with a fifth bit: bit `2g` of the fifth-bit byte `l` belongs to group `2g`,
+    //< bit `2g + 1` to group `2g + 1`. The mins stay apart, as Q4_K's do.
+    ds$ = f16_to_f32(half_at(src))
+    (ds + 1)$ = f16_to_f32(half_at(src + 2))
+    scales: = src + 4
+    qh: = src + 16
+    for g in Range.asc(4)
+        s1: = I16::k4_scale(2 * g, scales)
+        s2: = I16::k4_scale(2 * g + 1, scales)
+        (mins + 2 * g)$ = k4_min(2 * g, scales)
+        (mins + 2 * g + 1)$ = k4_min(2 * g + 1, scales)
+        q: = src + 48 + g * 32
+        o: = w + g * 64
+        lo_bit: = 1U8 << U8::(2 * g)
+        hi_bit: = lo_bit << 1U8
+        // `make test-simd` sees this loop vectorize.
+        for l in Range.asc(32)
+            h: = (qh + l)$
+            b1: = ((q + l)$ & 0xFU8) | (16U8 if (h & lo_bit) != 0U8 else 0U8)
+            b2: = ((q + l)$ >> 4U8) | (16U8 if (h & hi_bit) != 0U8 else 0U8)
+            (o + l)$ = I16::b1 * s1
+            (o + 32 + l)$ = I16::b2 * s2
+
+priv fn ints_q6_k(src: U8@, w: I16$@, ds: F32$@) //< one Q6_K block: `(q - 32) × scale`, and `d`
+    //< In a half, byte `l` of the high bits gives 2 bits to each of numbers l, l+32, l+64 and
+    //< l+96. Each 6-bit number is put together in a byte and widened only then, so the C compiler
+    //< works on 16 or 32 bytes at once; built in 32-bit numbers, it ran three times slower.
+    ds$ = f16_to_f32(half_at(src + 208))
+    for h in Range.asc(2)
+        ql: = src + h * 64
+        qh: = src + 128 + h * 32
+        sc: = src + 192 + h * 8
+        o: = w + h * 128
+        for s in Range.asc(2)
+            s1: = I16::I8::(sc + s)$
+            s2: = I16::I8::(sc + s + 2)$
+            s3: = I16::I8::(sc + s + 4)$
+            s4: = I16::I8::(sc + s + 6)$
+            // `make test-simd` sees this loop vectorize.
+            for $l: Sz = s * 16; l < s * 16 + 16; l += 1
+                hb: = (qh + l)$
+                a: = (ql + l)$
+                c: = (ql + l + 32)$
+                b1: = U8::((a & 0x0F) | U8::((hb & 0x03) << 4))
+                b2: = U8::((c & 0x0F) | U8::((hb & 0x0C) << 2))
+                b3: = U8::((a >> 4) | (hb & 0x30))
+                b4: = (c >> 4) | U8::((hb & 0xC0) >> 2)
+                (o + l)$ = (I16::b1 - 32I16) * s1
+                (o + l + 32)$ = (I16::b2 - 32I16) * s2
+                (o + l + 64)$ = (I16::b3 - 32I16) * s3
+                (o + l + 96)$ = (I16::b4 - 32I16) * s4
+
+// ==========================================
+// Decoding. Each block decoder follows ggml's `dequantize_row_*` in `ggml-quants.c`, product by
+// product, so the numbers are the same bits. A product and a subtraction stay in separate
+// statements: the C compiler may fuse one expression's `a * b - c` into one rounding.
+// ==========================================
+
+priv fn decode_q5_0(src: U8@, out: F32$@) //< one Q5_0 block: `d`, the fifth bits, the nibbles
+    //< Byte `j` of the nibbles holds number `j` low and number `j + 16` high. Bit `i` of the
+    //< little-endian U32 before them is number `i`'s fifth bit.
+    d: = f16_to_f32(half_at(src))
+    high: = U32::half_at(src + 2) | (U32::half_at(src + 4) << 16)
+    for j in Range.asc(16)
+        b: = I32::(src + 6 + j)$
+        h: = I32::((high >> U32::j) & 0x10001)
+        lo: = ((b & 0xF) | ((h & 1) << 4)) - 16
+        hi: = ((b >> 4) | ((h >> 12) & 0x10)) - 16
+        (out + j)$ = F32::lo * d
+        (out + j + 16)$ = F32::hi * d
+
+priv fn decode_q8_0(src: U8@, out: F32$@) //< one Q8_0 block: `d`, then 32 signed bytes
+    d: = f16_to_f32(half_at(src))
+    for i in Range.asc(QK8_0)
+        (out + i)$ = F32::I8::(src + 2 + i)$ * d
+
+fn k3_scale(j: Sz, q: U8@): I32 //< group `j`'s scale in Q3_K's 12 packed bytes, less 32
+    //< The low 4 bits of groups 0-7 sit in the low half of bytes 0-7, those of groups 8-15 in the
+    //< high half. The top 2 bits of group `j` are bits `2 × (j / 4)` of byte `8 + j % 4`.
+    b: = (q + j % 8)$
+    low: = I32::(b & 0xFU8) if j < 8 else I32::(b >> 4U8)
+    high: = I32::(((q + 8 + j % 4)$ >> U8::(2 * (j / 4))) & 3U8)
+    return (low | (high << 4)) - 32
+
+fn k4_scale(j: Sz, q: U8@): U8 //< group `j`'s 6-bit scale in Q4_K's 12 packed bytes
+    //< ggml's `get_scale_min_k4`: groups 0-3 sit in the low 6 bits of bytes 0-3. Groups 4-7 take
+    //< 4 bits from bytes 8-11 and their top 2 bits from the top of bytes 0-3.
+    if j < 4
+        return U8::((q + j)$ & 63)
+    return U8::(((q + j + 4)$ & 0xF) | (((q + j - 4)$ >> 6) << 4))
+
+fn k4_min(j: Sz, q: U8@): U8 //< group `j`'s 6-bit min in Q4_K's 12 packed bytes
+    //< Groups 0-3 sit in bytes 4-7; groups 4-7 take the high 4 bits of bytes 8-11 and the top 2
+    //< bits of bytes 4-7.
+    if j < 4
+        return U8::((q + j + 4)$ & 63)
+    return ((q + j + 4)$ >> 4) | (((q + j)$ >> 6) << 4)
+
+priv fn decode_q3_k(src: U8@, out: F32$@) //< one Q3_K block of 256 numbers, in two halves of 128
+    //< The layout is `ints_q3_k`'s. The scale's product with `d` is ggml's first multiplication.
+    d: = f16_to_f32(half_at(src + 108))
+    for h in Range.asc(2)
+        q: = src + 32 + h * 32
+        for j in Range.asc(4)
+            shift: = U8::(2 * j)
+            bit: = 1U8 << U8::(4 * h + j)
+            for part in Range.asc(2)
+                dl: = d * F32::k3_scale(h * 8 + j * 2 + part, src + 96)
+                for l in Range(part * 16, part * 16 + 16, 1)
+                    low: = I32::(((q + l)$ >> shift) & 3U8)
+                    lift: = 0 if ((src + l)$ & bit) != 0U8 else 4
+                    (out + h * 128 + j * 32 + l)$ = dl * F32::(low - lift)
+
+priv fn decode_q4_k(src: U8@, out: F32$@) //< one Q4_K block of 256 numbers
+    //< Each 32 bytes of numbers hold two groups: the low 4 bits, then the high 4 bits.
+    d: = f16_to_f32(half_at(src))
+    dmin: = f16_to_f32(half_at(src + 2))
+    scales: = src + 4
+    for g in Range.asc(4)
+        d1: = d * F32::k4_scale(2 * g, scales)
+        m1: = dmin * F32::k4_min(2 * g, scales)
+        d2: = d * F32::k4_scale(2 * g + 1, scales)
+        m2: = dmin * F32::k4_min(2 * g + 1, scales)
+        q: = src + 16 + g * 32
+        o: = out + g * 64
+        for l in Range.asc(32)
+            lo: = d1 * F32::((q + l)$ & 0xF)
+            (o + l)$ = lo - m1
+        for l in Range.asc(32)
+            hi: = d2 * F32::((q + l)$ >> 4)
+            (o + 32 + l)$ = hi - m2
+
+priv fn decode_q5_k(src: U8@, out: F32$@) //< one Q5_K block of 256 numbers
+    //< The layout is `ints_q5_k`'s; the products and subtractions are `decode_q4_k`'s.
+    d: = f16_to_f32(half_at(src))
+    dmin: = f16_to_f32(half_at(src + 2))
+    scales: = src + 4
+    qh: = src + 16
+    for g in Range.asc(4)
+        d1: = d * F32::k4_scale(2 * g, scales)
+        m1: = dmin * F32::k4_min(2 * g, scales)
+        d2: = d * F32::k4_scale(2 * g + 1, scales)
+        m2: = dmin * F32::k4_min(2 * g + 1, scales)
+        q: = src + 48 + g * 32
+        o: = out + g * 64
+        lo_bit: = 1U8 << U8::(2 * g)
+        hi_bit: = lo_bit << 1U8
+        for l in Range.asc(32)
+            v: = I32::((q + l)$ & 0xFU8) + (16 if ((qh + l)$ & lo_bit) != 0U8 else 0)
+            lo: = d1 * F32::v
+            (o + l)$ = lo - m1
+        for l in Range.asc(32)
+            v: = I32::((q + l)$ >> 4U8) + (16 if ((qh + l)$ & hi_bit) != 0U8 else 0)
+            hi: = d2 * F32::v
+            (o + 32 + l)$ = hi - m2
+
+priv fn decode_q6_k(src: U8@, out: F32$@) //< one Q6_K block of 256 numbers, in two halves of 128
+    //< In a half, byte `l` of the high bits gives 2 bits to each of numbers l, l+32, l+64 and l+96.
+    d: = f16_to_f32(half_at(src + 208))
+    for h in Range.asc(2)
+        ql: = src + h * 64
+        qh: = src + 128 + h * 32
+        sc: = src + 192 + h * 8
+        o: = out + h * 128
+        // The scale's product with `d` is ggml's first multiplication, made once per 16 numbers.
+        for s in Range.asc(2)
+            d1: = d * F32::I8::(sc + s)$
+            d2: = d * F32::I8::(sc + s + 2)$
+            d3: = d * F32::I8::(sc + s + 4)$
+            d4: = d * F32::I8::(sc + s + 6)$
+            for l in Range(s * 16, s * 16 + 16, 1)
+                hb: = (qh + l)$
+                q1: = (((ql + l)$ & 0xF) | ((hb & 3) << 4)) - 32
+                q2: = (((ql + l + 32)$ & 0xF) | (((hb >> 2) & 3) << 4)) - 32
+                q3: = (((ql + l)$ >> 4) | (((hb >> 4) & 3) << 4)) - 32
+                q4: = (((ql + l + 32)$ >> 4) | (((hb >> 6) & 3) << 4)) - 32
+                (o + l)$ = d1 * F32::q1
+                (o + l + 32)$ = d2 * F32::q2
+                (o + l + 64)$ = d3 * F32::q3
+                (o + l + 96)$ = d4 * F32::q4
+
+// ==========================================
+// Half-precision floats and a float's bits
+// ==========================================
+
+fn half_at(p: U8@): U16 //< two bytes, least significant first, as GGUF stores an F16
+    return U16::p$ | (U16::(p + 1)$ << 8)
+
+fn f32_from_bits(bits: U32): F32 //< the same bits read as an F32; no numeric conversion
+    $b: = bits
+    $v: F32 = 0.0
+    mem.copy(Void$@::v@, Void$@::b@, 4)
+    return v
+
+fn f32_bits(v: F32): U32 //< an F32's bits read as an integer; no numeric conversion
+    $x: = v
+    $b: U32 = 0
+    mem.copy(Void$@::b@, Void$@::x@, 4)
+    return b
+
+fn f16_to_f32(h: U16): F32 //< an IEEE half's value, exactly; F32 holds every half
+    sign: = (U32::h & 0x8000) << 16
+    exp: = (U32::h >> 10) & 0x1F
+    mant: = U32::h & 0x3FF
+    if exp == 0
+        // Zero or subnormal: mant × 2^-24, exact in F32.
+        mag: = F32::mant * 5.9604644775390625e-8F32
+        return -mag if sign != 0 else mag
+    if exp == 0x1F
+        return f32_from_bits(sign | 0x7F800000 | (mant << 13))
+    return f32_from_bits(sign | ((exp + 112) << 23) | (mant << 13))
+
+fn f16_from_f32(v: F32): U16 //< the nearest half, ties to even, as ggml writes a block's scale
+    //< Too large gives infinity, too small gives zero, and a NaN gives the quiet NaN 0x7E00.
+    f: = f32_bits(v)
+    sign: = (f >> 16) & 0x8000
+    e: = (f >> 23) & 0xFF
+    mant: = f & 0x7FFFFF
+    if e == 0xFF
+        return U16::(sign | (0x7E00U32 if mant != 0 else 0x7C00U32))
+    if e >= 143
+        return U16::(sign | 0x7C00)
+    if e >= 113
+        return U16::(sign | round_even(((e - 112) << 10) | (mant >> 13), mant & 0x1FFF, 0x1000))
+    if e < 102
+        return U16::sign
+    // A subnormal half: the whole significand, shifted to units of 2^-24.
+    m: = mant | 0x800000
+    shift: = 126 - e
+    return U16::(sign | round_even(m >> shift, m & ((1U32 << shift) - 1U32),
+        1U32 << (shift - 1U32)))
+
+priv fn round_even(kept: U32, dropped: U32, half: U32): U32 //< `kept`, rounded on what was cut
+    //< A carry out of the significand raises the exponent, which is the right answer.
+    if dropped > half || (dropped == half && (kept & 1) != 0)
+        return kept + 1
+    return kept

@@ -1,0 +1,214 @@
+//< The generated text as the client reads it: its thinking, plain content, and its tool calls
+//< Qwen3-Instruct-2507 writes a tool call as `<tool_call>{"name": ..., "arguments": ...}`, then
+//< `</tool_call>`. Qwen3.5 writes `<function=...>` and a `<parameter=...>` block per argument
+//< inside the tags. Each block becomes one entry of the OpenAI-style `message.tool_calls`. **A
+//< block that does not read as a call stays in the content as written**, so the client sees what
+//< the model wrote. Qwen3.5's thinking goes to `reasoning_content`, as `llama-server` returns it.
+import "ksai/examples/chat_server/engine" { Finish }
+import "ksai/examples/chat_server/template" { Kind }
+import "std/chars"
+import "std/ds" { List }
+import "std/json" + { Json_builder }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+
+priv const OPEN_TAG: U8[] = "<tool_call>"
+priv const CLOSE_TAG: U8[] = "</tool_call>"
+priv const THINK_END: U8[] = "</think>"
+priv const FUNCTION_OPEN: U8[] = "<function="
+priv const FUNCTION_CLOSE: U8[] = "</function>"
+priv const PARAMETER_OPEN: U8[] = "<parameter="
+priv const PARAMETER_CLOSE: U8[] = "</parameter>"
+
+struct Call_out //< one tool call the model made
+    name: U8[]
+    arguments: U8[] //< the arguments as JSON text, as the protocol sends them
+
+struct Parsed //< the generated text, split
+    reasoning: U8[] //< the model's thinking, its ends trimmed; empty where it did not think
+    content: U8[] //< the text outside the calls, its ends trimmed; empty where there is none
+    calls: List<|Call_out|>
+
+fn split_calls( //< the thinking, the tool-call blocks of a generated text, and the text around them
+    //< **A last block with no closing tag is read too**: generation can stop inside it, or the
+    //< model can end its turn without the tag. Where the prompt opened the thinking, the text up
+    //< to `</think>`, or up to the first call, is the thinking, as `llama-server` reads it.
+    text: U8[],
+    kind: Kind, //< which model wrote it, and so how it writes a call
+    tools: List<|json.Value|>@, //< the request's tools, whose parameters say each argument's type
+    thinking: Bool, //< whether the prompt ended inside the model's thinking
+    arena: Arena$@,
+): Parsed
+    $calls: = List<|Call_out|>(arena)
+    content: = arena.text()
+    $rest: = text
+    $reasoning: U8[] = ""
+    if thinking
+        stop: = rest.find_str(THINK_END).unwrap_or(rest.len)
+        call: = rest.find_str(OPEN_TAG).unwrap_or(rest.len)
+        if stop < call
+            reasoning = rest.sub(0, stop)
+            rest = rest.sub_from(stop + THINK_END.len)
+        else
+            reasoning = rest.sub(0, call)
+            rest = rest.sub_from(call)
+    for
+        open: = rest.find_str(OPEN_TAG).unwrap_or(rest.len)
+        content.s(rest.sub(0, open))
+        if open == rest.len
+            break
+        inner: = rest.sub_from(open + OPEN_TAG.len)
+        $body: = inner
+        $used: = inner.len
+        if close: = inner.find_str(CLOSE_TAG)
+            body = inner.sub(0, close)
+            used = close + CLOSE_TAG.len
+        block: = rest.sub(open, OPEN_TAG.len + used)
+        $call: Call_out? = .none
+        switch kind
+        case .instruct_2507
+            call = read_call(body, arena)
+        case .qwen35
+            call = read_function(body, tools, arena)
+        if c: = call
+            calls.push(c)
+        else
+            content.s(block)
+        rest = rest.sub_from(open + OPEN_TAG.len + used)
+    return Parsed::{ .reasoning = reasoning.trim_spaces(),
+        .content = content.take().trim_spaces(), .calls = calls }
+
+priv fn read_function(body: U8[], tools: List<|json.Value|>@, arena: Arena$@): Call_out? //<
+    //< The call one Qwen3.5 block holds: `<function=name>`, its parameters, then `</function>`
+    //< A parameter's value is the text between the tag's newline and the newline before its end.
+    $rest: = body.trim_start()
+    if !rest.starts_with(FUNCTION_OPEN, 0)
+        return .none
+    name_end: = rest.find_char('>') catch
+        return .none
+    name: = rest.sub(FUNCTION_OPEN.len, name_end - FUNCTION_OPEN.len)
+    rest = rest.sub_from(name_end + 1)
+    $b: = Json_builder(arena)
+    $args: = b.obj()
+    for
+        rest = rest.trim_start()
+        if rest.starts_with(FUNCTION_CLOSE, 0)
+            rest = rest.sub_from(FUNCTION_CLOSE.len)
+            break
+        if !rest.starts_with(PARAMETER_OPEN, 0)
+            return .none
+        key_end: = rest.find_char('>') catch
+            return .none
+        key: = rest.sub(PARAMETER_OPEN.len, key_end - PARAMETER_OPEN.len)
+        $value: = rest.sub_from(key_end + 1)
+        if value.starts_with("\n", 0)
+            value = value.sub_from(1)
+        close: = value.find_str(PARAMETER_CLOSE) catch
+            return .none
+        rest = value.sub_from(close + PARAMETER_CLOSE.len)
+        $text: = value.sub(0, close)
+        if text.ends_with("\n")
+            text = text.sub(0, text.len - 1)
+        args = args.set(arena.dup_str(key),
+            typed(text, parameter_types(tools, name, key), arena))
+    if name.len == 0 || rest.trim_spaces().len > 0
+        return .none
+    defer $out: = Str_builder()
+    args.build().dump(out@)
+    return .some(Call_out::{ .name = arena.dup_str(name),
+        .arguments = arena.dup_str(out.slice()) })
+
+priv fn parameter_types(tools: List<|json.Value|>@, name: U8[], key: U8[]): json.Value //<
+    //< The `type` the request's tools give parameter `key` of function `name`; null where none
+    for i in Range.asc(tools.len)
+        f: = tools.get(i).get("function")
+        if f.get("name").as_str().unwrap_or("").equals(name)
+            return f.get("parameters").get("properties").get(key).get("type")
+    return .null_val
+
+priv fn typed(text: U8[], types: json.Value, arena: Arena$@): json.Value //<
+    //< An argument's value as the type its parameter gives it, as `llama-server` reads it
+    //< A text-only parameter keeps the text. Any other is read as JSON first, and stays text
+    //< where it does not read.
+    if only: = types.as_str()
+        if only.equals("string")
+            return .str_val(arena.dup_str(text))
+    doc: = json.parse(text, arena) catch
+        return .str_val(arena.dup_str(text))
+    return doc.val
+
+priv fn read_call(body: U8[], arena: Arena$@): Call_out? //<
+    //< The call one block holds: an object with a `name` and, unless empty, its `arguments`
+    //< The arguments can come as an object or as JSON text; both go out as text.
+    doc: = json.parse(body.trim_spaces(), arena) catch
+        return .none
+    name: = doc.val.get("name").as_str().unwrap_or("")
+    if name.len == 0
+        return .none
+    $args: U8[] = "{}"
+    if found: = doc.val.find("arguments")
+        if text: = found.as_str()
+            args = text
+        else if is_object(found)
+            defer $b: = Str_builder()
+            found.dump(b@)
+            args = arena.dup_str(b.slice())
+        else
+            return .none
+    return .some(Call_out::{ .name = arena.dup_str(name), .arguments = args })
+
+priv fn is_object(v: json.Value): Bool //< whether the value is a JSON object
+    switch v
+    case .obj_val
+        return true
+    default
+        return false
+
+struct Answer_ids //< the names one answer carries, unique for the server's life
+    id: U8[] //< the answer's own, `chatcmpl-<n>`
+    first_call: Sz //< the number of its first call's `call_<n>`; the rest count on
+    created: I64 //< when it was made, in seconds since 1970
+    model: U8[] //< the model it names
+
+struct Usage //< the token counts the answer reports
+    prompt: Sz
+    completion: Sz
+    cached: Sz //< prompt tokens whose cache rows were kept from an earlier request
+
+fn answer_json(p: Parsed@, finish: Finish, ids: Answer_ids, use: Usage, arena: Arena$@): U8[] //<
+    //< The whole `chat.completion` object, with the fields the OpenAI protocol names
+    $b: = Json_builder(arena)
+    $msg: = b.obj().set("role", b.str_val("assistant"))
+    msg = msg.set("content",
+        b.null_val() if p.content.len == 0 && p.calls.len > 0 else b.str_val(p.content))
+    if p.reasoning.len > 0
+        msg = msg.set("reasoning_content", b.str_val(p.reasoning))
+    if p.calls.len > 0
+        $calls: = b.arr()
+        for i in Range.asc(p.calls.len)
+            c: = p.calls.get(i)
+            f: = b.obj().set("name", b.str_val(c.name))
+                .set("arguments", b.str_val(c.arguments)).build()
+            id: = arena.text().s("call_\{ids.first_call + i\}").take()
+            calls = calls
+                .push(b.obj().set("id", b.str_val(id)).set("type", b.str_val("function"))
+                .set("function", f).build())
+        msg = msg.set("tool_calls", calls.build())
+    $reason: = "stop"
+    if p.calls.len > 0
+        reason = "tool_calls"
+    else if finish == Finish.length
+        reason = "length"
+    choice: = b.obj().set("index", b.int_val(0)).set("message", msg.build())
+        .set("finish_reason", b.str_val(reason)).build()
+    details: = b.obj().set("cached_tokens", b.int_val(use.cached)).build()
+    usage: = b.obj().set("prompt_tokens", b.int_val(use.prompt))
+        .set("completion_tokens", b.int_val(use.completion))
+        .set("total_tokens", b.int_val(use.prompt + use.completion))
+        .set("prompt_tokens_details", details).build()
+    top: = b.obj().set("id", b.str_val(ids.id)).set("object", b.str_val("chat.completion"))
+        .set("created", b.int_val(ids.created)).set("model", b.str_val(ids.model))
+        .set("choices", b.arr().push(choice).build()).set("usage", usage).build()
+    defer $out: = Str_builder()
+    top.dump(out@)
+    return arena.dup_str(out.slice())

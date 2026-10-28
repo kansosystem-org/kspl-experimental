@@ -1,0 +1,91 @@
+//< `ksagent eval`: reading a questions file, and scoring each answer
+import "ksagent/answer" { Answer, Lang, Source }
+import "ksagent/evaluate"
+import "ksagent/tests/agent_test"
+import "ksagent/tests/stub"
+import "std/chars"
+import "std/mem" { Arena }
+import "std/str"
+import "std/verdict"
+
+priv const QUESTIONS: U8[] =
+    """
+%ksmd 1
+
+## Question
+
+How much paid leave does a new employee get?
+
+Expect: rules/leave.md 3-4
+
+## 質問
+
+社員食堂は何時に開きますか?
+
+Expect: none
+"""
+
+fn test_a_questions_file_is_read()
+    verdict.start("[ksagent] a questions file gives each question and where its answer stands")
+    defer arena: = Arena(64 * 1024)
+    cases: = evaluate.read_cases(QUESTIONS, arena) catch why
+        verdict.check("the questions file is read", false, why)
+        return
+    verdict.check("two questions, the first with a place and the second with none",
+        cases.len == 2 && cases.get(0).path.equals("rules/leave.md") &&
+        cases.get(0).from_line == 3I64 && cases.get(0).to_line == 4I64 &&
+        cases.get(1).path.len == 0 && cases.get(1).lang == Lang.ja, "")
+    bad: = "## Question\n\nNo expectation here.\n"
+    $refused: = false
+    _c: = evaluate.read_cases(bad, arena) catch
+        refused = true
+        fallback cases
+    verdict.check("a question with no Expect line is refused", refused, "")
+
+fn test_scoring_passes_and_fails()
+    verdict.start("[ksagent] eval scores a right place, a wrong range and Expect: none")
+    defer arena: = Arena(64 * 1024)
+    cases: = evaluate.read_cases(QUESTIONS, arena) catch panic("the questions file reads")
+    at: = cases.get(0)
+    none: = cases.get(1)
+    right: = cited(4I64, 6I64, arena)
+    wrong: = cited(6I64, 6I64, arena)
+    not_found: = Answer.ended(.not_found, .en, arena)
+    verdict.check("a source overlapping the expected lines passes",
+        evaluate.score(at@, right@, arena).equals("pass"), "")
+    verdict.check("a source in the right file but the wrong lines fails",
+        evaluate.score(at@, wrong@, arena).starts_with("fail: cites rules/leave.md 6-6"), "")
+    verdict.check("Expect: none passes on the not-found answer",
+        evaluate.score(none@, not_found@, arena).equals("pass"), "")
+    verdict.check("Expect: none fails on an answer",
+        evaluate.score(none@, right@, arena).starts_with("fail: answered"), "")
+
+priv fn cited(from: I64, to: I64, arena: Arena$@): Answer //< an answer citing those lines
+    $a: = Answer.ended(.answered, .en, arena)
+    a.text = "Ten days."
+    a.sources
+        .push(Source::{ .path = "rules/leave.md", .from_line = from, .to_line = to, .quote = "x" })
+    return a
+
+fn test_eval_runs_each_question(work: U8[], arena: Arena$@)
+    verdict.start("[ksagent] eval asks each question and totals the table")
+    root: = stub.folder(work, "eval", arena)
+    src: = stub.source("rules/leave.md", 3, 4, "receives 10 days of paid leave", arena)
+    cites: = stub.list_of(U8[][]::{ src }, arena)
+    one: = stub.one_call(stub.answer_call("Ten days.", cites, arena), arena)
+    two: = stub.one_call(stub.answer_call("NOT_FOUND", "[]", arena), arena)
+    s: = stub.start(U8[][]::{ one, two }, arena)
+    cases: = evaluate.read_cases(QUESTIONS, arena) catch panic("the questions file reads")
+    rows: = evaluate.run_all(agent_test.job_at(s.port, root, arena), cases@, arena)
+    stub.finish(s)
+    stub.release(s)
+    table: = evaluate.markdown(rows@, arena)
+    verdict.check("both rows pass, and the totals say so",
+        table
+        .find_str("| 1 | How much paid leave does a new employee get? | rules/leave.md 3-4 | pass |")
+        .is_some() && table.find_str("Passed: 2. Failed: 0.").is_some(), table)
+    doc: = evaluate.ksmd(rows@, arena)
+    verdict.check("the ksmd form is a table clause with quoted text",
+        doc.starts_with("%ksmd 1\n") && doc.find_str(":::table name=\"eval\"").is_some() &&
+        doc.find_str("| 2 | \"社員食堂は何時に開きますか?\" | \"none\" | \"pass\" |")
+        .is_some(), doc)

@@ -9,12 +9,32 @@ import path from "path";
 
 const CALL_LIMIT_MS = 20000;
 
+// Each message of a browser's log once, at its last place, with how often it came. A browser can
+// repeat one message every second (Chrome on Windows, where its updater refuses it), which would
+// otherwise crowd out of the last lines the one that says why it stopped. A line's own process,
+// thread and time, before its level, do not make it another message.
+function distinct(log) {
+  const seen = new Map();
+  for (const line of log.split(/\r?\n/)) {
+    if (line.trim() === "") continue;
+    const message = line.replace(/^\[\d+:\d+:[\d\/.]+:/, "[");
+    seen.set(message, (seen.get(message) || 0) + 1);
+    const count = seen.get(message);
+    seen.delete(message);
+    seen.set(message, count);
+  }
+  return [...seen].map(([message, count]) => count > 1 ? `${message} (${count} times)` : message);
+}
+
+// Caution: **The profile's folder is given whole.** A browser that does not take it uses the
+// person's own profile, and where that browser is already open it hands the request over and ends.
 export async function launch(binary, work) {
   fs.rmSync(work, { recursive: true, force: true });
   fs.mkdirSync(work, { recursive: true });
   const args = [
     "--headless", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage",
-    "--remote-debugging-pipe", `--user-data-dir=${path.join(work, "profile")}`,
+    "--remote-debugging-pipe", `--user-data-dir=${path.resolve(work, "profile")}`,
+    "--enable-logging=stderr",
     "--no-first-run", "--no-default-browser-check", "--disable-background-networking",
     "--disable-component-update", "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1",
     "--window-size=1200,900", "about:blank",
@@ -98,7 +118,17 @@ export async function launch(binary, work) {
     return page;
   }
 
-  const { targetId } = await send("Target.createTarget", { url: "about:blank" });
+  // The first call is where a browser that never speaks the protocol shows, for example where a
+  // policy forbids remote debugging; what the browser printed says why, so the failure carries it.
+  let targetId;
+  try {
+    ({ targetId } = await send("Target.createTarget", { url: "about:blank" }));
+  } catch (e) {
+    child.kill("SIGKILL");
+    const said = distinct(fs.readFileSync(path.join(work, "browser.log"), "utf8"));
+    throw new Error(`${e.message}. The browser printed this (${path.join(work, "browser.log")}):\n` +
+      (said.slice(-20).join("\n") || "(nothing)"));
+  }
   const page = await attach(targetId);
   await send("Target.setDiscoverTargets", { discover: true });
   // The tabs standing at the start are no tab a page opened.

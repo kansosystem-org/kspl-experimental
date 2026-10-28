@@ -1,8 +1,9 @@
 //< Reads a ksai model from a file, and writes one back
-//< **This is the only place in `ksai` that imports `std/io` and `std/fs`.** Both safetensors and
-//< lora take an already parsed `Safetensors` and a writer to write into. So bare-metal code skips
-//< this file. It passes `embed`ed bytes through `Safetensors.load_from_bytes`, and gets its bytes
-//< back from `Safetensors_writer.finish()`.
+//< **This is the only place in `ksai` that imports `std/io` and `std/fs`.** Safetensors, GGUF and
+//< lora take bytes already in memory, and a writer to write into. So bare-metal code skips this
+//< file. It passes `embed`ed bytes through `Safetensors.load_from_bytes` or `Gguf.parse`, and gets
+//< its bytes back from `Safetensors_writer.finish()`.
+import "ksai/gguf" { Gguf, Gguf_error }
 import "ksai/lora_set"
 import "ksai/safetensors" as st
 import "ksai/tensor"
@@ -22,6 +23,18 @@ pub fn load_safetensors( //< reads and parses a model file into the caller's are
     file_data: = io.read_file_capped(path, SZ_MAX, arena) catch
         throw .read_failed
     return st.Safetensors.load_from_bytes(file_data, arena)!
+
+pub fn load_gguf( //< reads and parses a GGUF model file into the caller's arena
+    //< **The file is read once, straight into the arena, and its tensors are used where they lie.**
+    //< So the peak memory is the file's size, plus the lists of keys and tensors. Free or reset
+    //< the arena after every matrix and value read from the file is no longer used.
+    path: U8[], //< the file to read
+    arena: Arena$@, //< where the file's bytes and the parsed lists go
+): Gguf!Gguf_error //< the parsed file; fails if it cannot be read, or is refused as broken
+    tensor.require_arena(arena)
+    file_data: = io.read_file_capped(path, SZ_MAX, arena) catch
+        throw .read_failed
+    return Gguf.parse(file_data, arena)!
 
 pub fn save_safetensors( //< writes what a writer has collected as a model file
     //< **A crash or a power cut midway leaves the old file or the new**, never a model cut short.

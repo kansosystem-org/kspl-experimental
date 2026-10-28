@@ -1,0 +1,217 @@
+//< A chat file: questions a person adds under `## Question`, and the answers ksagent writes back
+//< **This reads a small part of ksmd's syntax, not all of it**: level 1 and 2 headings, and the
+//< ``` and `:::` fences that hide a heading. ksmd's own reader is internal to ksmd. The reasons
+//< are "The chat file" in `ksagent/docs/DESIGN-agent.md`.
+//< **What it writes is ksmd a page can open**: the model's text is escaped (`write_text`).
+import "ksagent/agent" { Turn }
+import "ksagent/answer" + { Answer, Lang }
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+
+const MAX_HISTORY_TURNS: Sz = 4 //< the most earlier questions sent with a new one
+const MAX_HISTORY_BYTES: Sz = 16 * 1024 //< the most bytes of earlier questions and answers sent
+    //< The latest turns are kept: a follow-up question refers to what was asked just before.
+
+enum Kind //< what a level 1 or 2 heading starts
+    question //< `## Question` or `## 質問`
+    answer //< `## Answer` or `## 回答`
+    other //< any other heading of level 1 or 2
+
+struct Section //< a part of the file that a level 1 or 2 heading starts
+    kind: Kind
+    lang: Lang //< the heading's language: `質問` and `回答` are `ja`
+    body_at: Sz //< where the text after the heading line starts
+    end: Sz //< where the next level 1 or 2 heading starts, or the file's length
+
+impl Section
+    fn body(r: Self@, text: U8[]): U8[] //< the section's text, without its heading or edge spaces
+        return text.sub(r.body_at, r.end - r.body_at).trim_spaces()
+
+fn sections(text: U8[], arena: Arena$@): List<|Section|> //<
+    //< The file's sections, in order; what stands before the first heading belongs to none
+    //< A heading inside a ``` fence or a `:::` block does not count.
+    $out: = List<|Section|>(arena)
+    $fence: Sz = 0
+    $in_block: = false
+    $at: Sz = 0
+    for at < text.len
+        nl: = text.sub_from(at).find_char('\n').unwrap_or(text.len - at)
+        next: = at + nl + 1
+        line: = text.sub(at, nl).trim_end()
+        if fence > 0
+            if line.len == fence && backticks(line) == fence
+                fence = 0
+        else if in_block
+            in_block = !line.equals(":::")
+        else if backticks(line) >= 3
+            fence = backticks(line)
+        else if line.starts_with(":::") && line.len > 3
+            in_block = true
+        else if line.starts_with("# ") || line.starts_with("## ")
+            if out.len > 0
+                out[out.len - 1].end = at
+            out.push(heading(line, next if next < text.len else text.len, text.len))
+        at = next
+    return out
+
+priv fn backticks(line: U8[]): Sz //< how many backticks open the line
+    $n: Sz = 0
+    for n < line.len && line[n] == '`'
+        n += 1
+    return n
+
+priv fn heading(line: U8[], body_at: Sz, end: Sz): Section //< the section a heading line starts
+    $s: = Section::{ .kind = .other, .lang = .en, .body_at = body_at, .end = end }
+    if !line.starts_with("## ")
+        return s
+    name: = line.sub_from(3).trim_spaces()
+    if name.equals("Question") || name.equals("質問")
+        s.kind = .question
+    else if name.equals("Answer") || name.equals("回答")
+        s.kind = .answer
+    s.lang = .ja if name.equals("質問") || name.equals("回答") else .en
+    return s
+
+struct Pending //< the first question in a file that has no answer yet
+    question: U8[] //< its text
+    lang: Lang //< its heading's language, which the answer's heading follows
+    history: List<|Turn|> //< the answered questions before it, oldest first, within the caps
+
+fn find_pending(text: U8[], arena: Arena$@): Pending? //<
+    //< The first question with no `## Answer` right after it, or none
+    //< **A question with no text yet is passed over**: the person saved before writing it.
+    all: = sections(text, arena)
+    $turns: = List<|Turn|>(arena)
+    for i in Range.asc(all.len)
+        s: = all.get(i)
+        if s.kind != Kind.question
+            continue
+        q: = s.body(text)
+        answered: = i + 1 < all.len && all.get(i + 1).kind == Kind.answer
+        if answered
+            turns.push(Turn::{ .question = q, .answer = all.get(i + 1).body(text) })
+            continue
+        if q.len == 0
+            continue
+        return .some(Pending::{ .question = q, .lang = s.lang,
+            .history = recent(turns@, arena) })
+    return .none
+
+priv fn recent(turns: List<|Turn|>@, arena: Arena$@): List<|Turn|> //<
+    //< The latest turns that fit `MAX_HISTORY_TURNS` and `MAX_HISTORY_BYTES`, oldest first
+    $first: = turns.len
+    $bytes: Sz = 0
+    for first > 0 && turns.len - first < MAX_HISTORY_TURNS
+        t: = turns.get(first - 1)
+        if bytes + t.question.len + t.answer.len > MAX_HISTORY_BYTES
+            break
+        bytes += t.question.len + t.answer.len
+        first -= 1
+    $out: = List<|Turn|>(arena)
+    for i in Range(first, turns.len, 1)
+        out.push(turns.get(i))
+    return out
+
+fn insert_answer(fresh: U8[], question: U8[], block: U8[], arena: Arena$@): U8[]? //<
+    //< The file with the answer put right after the question, or none if it is no longer pending
+    //< `fresh` is the file read again just before writing. **Only the same text still waiting for
+    //< an answer takes it**: a question the person changed or removed meanwhile gets none.
+    all: = sections(fresh, arena)
+    for i in Range.asc(all.len)
+        s: = all.get(i)
+        answered: = i + 1 < all.len && all.get(i + 1).kind == Kind.answer
+        if s.kind != Kind.question || answered || !s.body(fresh).equals(question)
+            continue
+        out: = arena.text()
+        head: = fresh.sub(0, s.end)
+        out.s(head)
+        if head.len > 0 && !head.ends_with("\n")
+            out.c('\n')
+        if !head.ends_with("\n\n")
+            out.c('\n')
+        out.s(block)
+        if s.end < fresh.len
+            out.c('\n').s(fresh.sub_from(s.end))
+        return .some(out.take())
+    return .none
+
+// ==========================================
+// Writing an answer as ksmd
+// ==========================================
+
+fn answer_block(a: Answer@, arena: Arena$@): U8[] //<
+    //< The `## Answer` section for a chat file, its heading in the question's language
+    //< Each source is its path and lines, then its quote as a `> ` quote, so the evidence shows
+    //< without opening the file. **The path stands in backticks, not as a link**: a ksmd link
+    //< goes only to a web address.
+    out: = arena.text()
+    out.s("## 回答\n\n" if a.lang == Lang.ja else "## Answer\n\n")
+    switch a.outcome
+    case .answered
+        write_text(out, a.text, arena)
+    case .not_found
+        write_text(out, a.lang.not_found_line(), arena)
+    default
+        write_text(out, answer.ended_line(a, arena), arena)
+        return out.take()
+    if a.sources.len > 0
+        out.c('\n')
+        write_text(out, a.lang.sources_word(), arena)
+    for i in Range.asc(a.sources.len)
+        s: = a.sources.get(i)
+        out.c('\n')
+        write_path(out, s.path)
+        out.c(' ').s(answer.span_words(s, a.lang, arena)).s("\n\n> ")
+        write_line(out, answer.collapse_spaces(s.quote, arena))
+        out.c('\n')
+    if a.removed.len > 0
+        out.c('\n')
+        write_text(out, a.lang.removed_line(a.removed.len, arena), arena)
+    if a.is_unverified()
+        out.c('\n')
+        write_text(out, a.lang.unverified_line(), arena)
+    return out.take()
+
+fn write_text(out: Writer, text: U8[], arena: Arena$@) //<
+    //< Writes text as ksmd paragraphs that show it as it is: no mark in it takes effect
+    //< A blank line parts two paragraphs. Each other line break stays one, as a hard break (a `\`
+    //< at the line's end), and leading spaces go: ksmd refuses an indented line.
+    $open: = false
+    for line in text.lines(arena)
+        t: = line.trim_spaces()
+        if t.len == 0
+            if open
+                out.s("\n\n")
+            open = false
+            continue
+        if open
+            out.s("\\\n")
+        write_line(out, t)
+        open = true
+    if open
+        out.c('\n')
+
+priv fn write_line(out: Writer, t: U8[]) //<
+    //< Writes one line of text, escaped so ksmd reads it as plain text
+    //< **A mark that would start a block is escaped at the line's start** (`\#`, `\-`, `\>`, `\|`,
+    //< `\{`, `\:`, and the period of `1.`). So a `## Question` line in an answer is no question.
+    $digits: Sz = 0
+    for digits < t.len && t[digits].is_digit()
+        digits += 1
+    for i in Range.asc(t.len)
+        c: = t[i]
+        first: = i == 0 && (c == '#' || c == '-' || c == '>' || c == '|' || c == '{' || c == ':')
+        period: = digits > 0 && i == digits && c == '.'
+        if first || period || c == '\\' || c == '*' || c == '`' || c == '[' || c == ']'
+            out.c('\\')
+        out.c(c)
+
+priv fn write_path(out: Writer, path: U8[]) //<
+    //< writes a path in backticks, or escaped where it holds one
+    if path.find_char('`').is_some()
+        write_line(out, path)
+        return
+    out.c('`').s(path).c('`')

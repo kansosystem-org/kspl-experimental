@@ -60,10 +60,25 @@ function ksmdLocal() {
     return Array.from(new Uint8Array(d), (n) => n.toString(16).padStart(2, "0")).join("");
   }
 
+  // What stands at a path: { size, at }, with `at` the second it last changed. Nothing there is
+  // { size: -1, at: -1 }, and null means it could not be asked.
+  async function stat(path) {
+    try {
+      const got = await send(`/api/stat?path=${encodeURIComponent(path)}`);
+      if (got.status === 404) return { size: -1, at: -1 };
+      if (!got.ok) return null;
+      const said = await got.json();
+      return { size: Number(said.size), at: Number(said.changed_at) };
+    } catch (_) {
+      return null;
+    }
+  }
+
   return {
     token,
     reason,
     digest,
+    stat,
     // Whether a local server answers with file access: { root } or { why }.
     async status() {
       if (location.protocol !== "http:" && location.protocol !== "https:") return { why: "" };
@@ -95,12 +110,8 @@ function ksmdLocal() {
     },
     // Whether anything stands at a path: true, false, or null where it could not be asked.
     async stands(path) {
-      try {
-        const got = await send(`/api/stat?path=${encodeURIComponent(path)}`);
-        return got.ok ? true : got.status === 404 ? false : null;
-      } catch (_) {
-        return null;
-      }
+      const got = await stat(path);
+      return got === null ? null : got.size >= 0;
     },
     // The names in one folder: { status, folders, files, more } on 200, else { status, why }.
     async list(path) {

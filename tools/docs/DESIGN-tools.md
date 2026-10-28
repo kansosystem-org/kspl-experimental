@@ -42,7 +42,7 @@ The task is *fill-in-the-middle* (FIM): the model sees the code before and after
 
 **The compiler is the judge.** What is generated and trained on is checked and filtered by a program, not by a person. The main measure is the rate at which `ksplc` accepts a file once the completion is inserted. Using the compiler this way is called the *compiler oracle* below.
 
-**It lives in `tools/`, not in `ksai/`, because it imports nothing from the engine.** It starts the compiler and reads this repository as its corpus, so it runs only inside the whole tree. The engine's examples take the corpus and the tokenizer by path, and this folder runs them as processes.
+**It lives in `tools/`, not in `ksai/`, because it runs only inside the whole tree.** It starts the compiler and reads this repository as its corpus. The engine's examples take the corpus and the tokenizer by path, and this folder runs them as processes. Of the engine, it imports only the tokenizer: the tokenizer is trained on the same chunks that it encodes.
 
 ### Implementation language: KSPL for data, evaluation and the gate
 

@@ -58,8 +58,8 @@ LINT_MAINS := $(shell { git ls-files; git ls-files --others --exclude-standard; 
 # Entries called from outside their I0402 package: linted with it off, their callers with it on.
 # Every ksplc suite stands on its harness, which the root's suites call too.
 LINT_SUITES_OWN := $(wildcard ksplc/tests/suite/*.kspl)
-LINT_TARGETS_OWN := ksplc/tests/main.kspl ksos/tests/main.kspl tools/tests/main.kspl \
-	tools/repo_stat.kspl tools/seed_sum.kspl $(LINT_SUITES_OWN)
+LINT_TARGETS_OWN := ksplc/tests/main.kspl ksos/tests/main.kspl ksagent/tests/main.kspl \
+	tools/tests/main.kspl tools/repo_stat.kspl tools/seed_sum.kspl $(LINT_SUITES_OWN)
 
 # The bare-metal demos and the page's wasm bridge, linted with `--freestanding`. They hold no `main`.
 LINT_TARGETS_FREE := $(wildcard ksos/demo/cortex_m/*.kspl) \

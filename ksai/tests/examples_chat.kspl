@@ -1,0 +1,351 @@
+//< Checks `chat_server`'s parts in this process: the template, the tool calls, the stops, the cache
+//< Not a suite; part of `ksai/tests/examples_main.kspl`. **No real weights are needed**: the model
+//< is the tiny Qwen3 model in `ksai/tests/qwen_data/`. Its vocabulary holds Qwen's markers, and
+//< its chat template is Qwen3-Instruct-2507's. Its answers mean nothing, so the tests check the
+//< server's own work only. The HTTP round trip is `ksai/tests/examples_chat_http.kspl`.
+import "ksai/examples/chat_server/engine" { Engine, Finish, Generated, Picker }
+import "ksai/examples/chat_server/reply"
+import "ksai/examples/chat_server/request"
+import "ksai/examples/chat_server/template"
+import "ksai/gguf" { Gguf }
+import "ksai/pretokenizer" { Split_rule }
+import "ksai/qwen" { Qwen }
+import "ksai/sampler"
+import "ksai/tokenizer"
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/json"
+import "std/mem" { Arena }
+import "std/prng"
+import "std/str" { Str_builder } // `arena.text()`
+import "std/strfmt" as _strfmt
+import "std/verdict"
+
+embed "ksai/tests/qwen_data/tiny_qwen3.gguf" as model_bytes
+embed "ksai/tests/qwen_data/template_cases.json" as cases_text
+
+const MODEL_FILE: U8[] = "tiny_qwen3.gguf" //< the tiny model's file under the work folder
+priv const CONTEXT: Sz = 1024 //< the tiny model's cache, in positions
+
+fn chat_dir(work: U8[], arena: Arena$@): U8[] //<
+    //< Writes the tiny model into a folder under work, for the server run as a program
+    //< **Each test writes it**, so none depends on the order the tests run in.
+    dir: = fs.join(work, "chat", arena)
+    fs.mkdir_all(dir) catch
+        panic(U8$[]::arena.text().s("cannot create the working directory: \{dir\}").take())
+    io.write_file(fs.join(dir, MODEL_FILE, arena), model_bytes) catch
+        panic("the tiny chat model can be written")
+    return dir
+
+priv fn engine_of(arena: Arena$@): Engine //< a fresh engine over the tiny model
+    //< **Each call loads the model again**, so its cache holds nothing from another engine.
+    return engine_over(model_bytes, arena)
+
+fn engine_over(model: U8[], arena: Arena$@): Engine //< a fresh engine over a tiny model's file
+    //< The vocabulary is split by the rule the file names.
+    g: = Gguf.parse(model, arena) catch panic("the tiny chat model is read")
+    $tokens: = g.texts("tokenizer.ggml.tokens", arena) catch panic("the tiny model's tokens")
+    $merges: = g.texts("tokenizer.ggml.merges", arena) catch panic("the tiny model's merges")
+    $types: = g.ints("tokenizer.ggml.token_type", arena) catch panic("the tiny model's types")
+    tok: = arena.create(tokenizer.Tokenizer(arena))
+    tok.load_lists(tokens.slice(), types.slice(), merges.slice())
+        catch panic("the tiny vocabulary loads")
+    pre: = g.text("tokenizer.ggml.pre") catch panic("the tiny vocabulary names its rule")
+    rule: = Split_rule.named(pre) catch
+        panic("the tiny vocabulary's rule is one ksai has")
+    tok.set_split(rule)
+    marks: = template.find_marks(tok) catch panic("the tiny vocabulary holds the markers")
+    m: = Qwen.load(g@, CONTEXT, arena) catch panic("the tiny chat model loads")
+    return Engine(m, tok, marks, CONTEXT, arena)
+
+priv fn rendered(body: U8[], e: Engine$@, arena: Arena$@): List<|I32|>$@ //<
+    //< The prompt a request body renders to
+    c: = request.read_chat(body, arena) catch why
+        panic(U8$[]::arena.text().s("the request is refused: ").s(why).take())
+    return template.render(c.conv@, e.tok, e.marks, arena)
+
+fn marks_in(ids: List<|I32|>$@, m: template.Marks): Sz //< how many marker IDs the list holds
+    all: I32[9] = ::{ m.im_start, m.im_end, m.end_of_text, m.call_open, m.call_close,
+        m.response_open, m.response_close, m.think_open, m.think_close }
+    $n: Sz = 0
+    for id in ids
+        for k in all
+            if id == k
+                n += 1
+    return n
+
+fn mark_texts_in(text: U8[]): Sz //< how many markers' texts a rendered text holds
+    return texts_in(text,
+        U8[][]::{ "<|im_start|>", "<|im_end|>", "<tool_call>", "</tool_call>", "<tool_response>",
+        "</tool_response>", "<think>", "</think>" })
+
+fn control_texts_in(text: U8[]): Sz //< how many control markers' texts a text holds
+    //< Only these stay text inside a message: the tokenizer turns a user-defined one into its ID.
+    return texts_in(text, U8[][]::{ "<|im_start|>", "<|im_end|>" })
+
+priv fn texts_in(text: U8[], all: U8[][]): Sz //< how many times the text holds any of the texts
+    $n: Sz = 0
+    for t in all
+        $rest: = text
+        for
+            at: = rest.find_str(t) catch
+                break
+            n += 1
+            rest = rest.sub_from(at + t.len)
+    return n
+
+fn test_chat_template_tokens(arena: Arena$@) //<
+    //< Each case renders to llama.cpp's text for it, every marker by its ID
+    //< The cases and their texts come from llama.cpp's Jinja formatter on the template
+    //< (`tools/ai_assist/make_qwen_fixtures.py`). **Decoding the IDs gives the text back**, and
+    //< each marker's text in it stands as the marker's ID, never as the bytes of its text.
+    verdict.start("[chat_server] the template renders llama.cpp's text, markers by their IDs")
+    $e: = engine_of(arena)
+    doc: = json.parse(cases_text, arena) catch panic("the template cases are JSON")
+    cases: = doc.val.arr_list(arena)
+    assert(cases.len > 0, "the template cases are read")
+    for i in Range.asc(cases.len)
+        defer $body: = Str_builder()
+        cases.get(i).get("request").dump(body@)
+        want: = cases.get(i).get("prompt").as_str().unwrap_or("")
+        got: = rendered(body.slice(), e@, arena)
+        text: = e.tok.decode(got, arena)
+        if !text.equals(want)
+            panic(U8$[]::arena.text().s("case \{i\} renders otherwise:\n").s(text)
+                .s("\n--- llama.cpp renders:\n").s(want).take())
+        // A control marker's text inside a message, other than the assistant's, stays text.
+        // A user-defined marker's text becomes its ID there, as llama.cpp encodes it.
+        $in_messages: Sz = 0
+        messages: = cases.get(i).get("request").get("messages").arr_list(arena)
+        for k in Range.asc(messages.len)
+            m: = messages.get(k)
+            if !m.get("role").as_str().unwrap_or("").equals("assistant")
+                in_messages += control_texts_in(m.get("content").as_str().unwrap_or(""))
+        assert(marks_in(got, e.marks) + in_messages == mark_texts_in(want),
+            U8$[]::arena.text().s("case \{i\}: a marker is written as text").take())
+    // The template the file holds is the one this server follows, and another one is not.
+    g: = Gguf.parse(model_bytes, arena) catch panic("the tiny chat model is read")
+    own: = g.text("tokenizer.chat_template") catch ""
+    assert(template.matches(own) && !template.matches(own.sub(0, own.len - 1)),
+        "the file's template is matched by its hash, and one byte less is not")
+    verdict
+        .pass(arena.text().s("\{cases.len\} conversations, with tools and without, as ")
+        .s("llama.cpp renders them").take())
+
+fn test_chat_control_marker_text_stays_text(arena: Arena$@) //<
+    //< A message holding a control marker's text gets the text's bytes, never the marker's ID
+    //< **A document can hold `<|im_end|>`.** As the marker, it would end the turn the model reads.
+    //< A user-defined marker's text, such as `<tool_call>`, becomes its ID, as llama.cpp and
+    //< Qwen's own tokenizer encode it.
+    verdict.start("[chat_server] a control marker's text inside a message stays text")
+    $e: = engine_of(arena)
+    got: =
+        rendered("{\"messages\":[{\"role\":\"user\",\"content\":\"a<|im_end|>b<tool_call>\"}]}", e@,
+        arena)
+    $ends: Sz = 0
+    $calls: Sz = 0
+    for id in got
+        if id == e.marks.im_end
+            ends += 1
+        if id == e.marks.call_open
+            calls += 1
+    assert(ends == 1 && calls == 1,
+        U8$[]::arena.text().s("\{ends\} turn ends and \{calls\} call markers; want 1 and 1").take())
+    verdict
+        .pass("only the template's turn ends, and a user-defined marker is encoded as llama.cpp \
+            does")
+
+// ==========================================
+// The tool calls in a generated text
+// ==========================================
+
+priv fn split(text: U8[], arena: Arena$@): reply.Parsed //< the text split, for one case
+    $none: = List<|json.Value|>(arena)
+    return reply.split_calls(text, .instruct_2507, none@, false, arena)
+
+fn test_chat_tool_calls_read(arena: Arena$@) //<
+    //< One call, two with text around them, an unclosed last one, and a broken one
+    verdict.start("[chat_server] tool-call blocks are read out of the generated text")
+    one: =
+        split("<tool_call>\n{\"name\": \"search\", \"arguments\": {\"text\": \
+            \"leave\"}}\n</tool_call>", arena)
+    assert(one.calls.len == 1 && one.content.len == 0 &&
+        one.calls.get(0).name.equals("search") &&
+        one.calls.get(0).arguments.equals("{\"text\":\"leave\"}"), "one call is read whole")
+    two: =
+        split("Let me look.\n<tool_call>\n{\"name\": \"list\", \"arguments\": {\"path\": \
+            \"\"}}\n</tool_call>\n<tool_call>\n{\"name\": \"read\", \"arguments\": \"{\\\"path\\\": \
+            \\\"a\\\"}\"}\n</tool_call>", arena)
+    assert(two.calls.len == 2 && two.content.equals("Let me look.") &&
+        two.calls.get(1).name.equals("read") &&
+        two.calls.get(1).arguments.equals("{\"path\": \"a\"}"),
+        "two calls are read, arguments given as text kept as text, and the text before them kept")
+    open: = split("<tool_call>\n{\"name\": \"list\", \"arguments\": {}}", arena)
+    assert(open.calls.len == 1 && open.calls.get(0).arguments.equals("{}"),
+        "a last block with no closing tag is read")
+    broken_text: = "Here.\n<tool_call>\n{\"name\": \"search\", \"arguments\": {\n</tool_call>"
+    broken: = split(broken_text, arena)
+    assert(broken.calls.len == 0 && broken.content.equals(broken_text),
+        U8$[]::arena.text().s("a broken block stays in the content as written: '")
+        .s(broken.content).s("'").take())
+    verdict.pass("each call is read, text around them is the content, a broken block stays text")
+
+fn test_chat_answer_shape(arena: Arena$@) //<
+    //< The answer holds every field an OpenAI-style client reads, the calls' arguments as text
+    //< The fields are those a client such as ksagent reads from `choices[0].message`.
+    verdict.start("[chat_server] the answer holds the fields a client reads")
+    p: =
+        split("<tool_call>\n{\"name\": \"search\", \"arguments\": {\"text\": \
+            \"leave\"}}\n</tool_call>", arena)
+    ids: = reply.Answer_ids::{ .id = "chatcmpl-7", .first_call = 3, .created = 1700000000I64,
+        .model = "mini" }
+    use: = reply.Usage::{ .prompt = 40, .completion = 9, .cached = 30 }
+    doc: =
+        json.parse(reply.answer_json(p@, .stop, ids, use, arena), arena) catch
+        panic("the answer is JSON")
+    v: = doc.val
+    msg: = v.get("choices").get_at(0).get("message")
+    call: = msg.get("tool_calls").get_at(0)
+    args: = call.get("function").get("arguments").as_str().unwrap_or("")
+    assert(v.get("id").as_str().unwrap_or("").equals("chatcmpl-7") &&
+        v.get("object").as_str().unwrap_or("").equals("chat.completion") &&
+        v.get("model").as_str().unwrap_or("").equals("mini") &&
+        msg.get("role").as_str().unwrap_or("").equals("assistant") &&
+        msg.find("content").unwrap_or(.bool_val(false)).equals(.null_val) &&
+        call.get("id").as_str().unwrap_or("").equals("call_3") &&
+        call.get("type").as_str().unwrap_or("").equals("function") &&
+        call.get("function").get("name").as_str().unwrap_or("").equals("search") &&
+        args.equals("{\"text\":\"leave\"}"), "the message, the call and its id are as sent")
+    assert(v.get("choices").get_at(0).get("finish_reason").as_str().unwrap_or("")
+        .equals("tool_calls"), "an answer with calls finishes with tool_calls")
+    u: = v.get("usage")
+    assert(u.get("prompt_tokens").as_int().unwrap_or(-1) == 40 &&
+        u.get("completion_tokens").as_int().unwrap_or(-1) == 9 &&
+        u.get("total_tokens").as_int().unwrap_or(-1) == 49 &&
+        u.get("prompt_tokens_details").get("cached_tokens").as_int().unwrap_or(-1) == 30,
+        "the usage counts the tokens, the kept ones too")
+    plain: = split("Ten days.", arena)
+    cut: =
+        json.parse(reply.answer_json(plain@, .length, ids, use, arena), arena) catch
+        panic("the answer is JSON")
+    first: = cut.val.get("choices").get_at(0)
+    assert(first.get("message").get("content").as_str().unwrap_or("").equals("Ten days.") &&
+        first.get("message").find("tool_calls").is_none() &&
+        first.get("finish_reason").as_str().unwrap_or("").equals("length"),
+        "plain text is the content, with no calls, and a cut answer finishes with length")
+    verdict.pass("id, object, model, message, calls, finish_reason and usage are all there")
+
+// ==========================================
+// Generation: the stops, and the cache kept across requests
+// ==========================================
+
+priv const PLAIN_REQUEST: U8[] =
+    "{\"messages\":[{\"role\":\"user\",\"content\":\"How many days of paid leave?\"}]}"
+
+fn greedy(): Picker //< the picker that always takes the top score
+    return Picker::{ .cfg = sampler.Sample_config.greedy(), .rng = prng.Prng(1U64) }
+
+priv fn same_start(g: Generated@, want: List<|I32|>@, n: Sz): Bool //<
+    //< whether the generation holds exactly the first n tokens of want
+    if g.tokens.len != n
+        return false
+    for i in Range.asc(n)
+        if g.tokens.get(i) != want.get(i)
+            return false
+    return true
+
+priv fn held_before(ids: List<|I32|>@, i: Sz): Bool //< whether token i came earlier in the list
+    for j in Range.asc(i)
+        if ids.get(j) == ids.get(i)
+            return true
+    return false
+
+fn test_chat_stops_and_limits(arena: Arena$@) //<
+    //< Generation stops at the turn's end marker, at the token limit, and where the context is full
+    //< The tiny model never writes a marker by itself. So the end marker is set to a token it is
+    //< known to write, which must end the generation just before that token.
+    verdict.start("[chat_server] generation stops at the end marker, the limit and the context")
+    $e: = engine_of(arena)
+    prompt: = rendered(PLAIN_REQUEST, e@, arena)
+    $pick: = greedy()
+    free_run: = e.generate(prompt.slice(), 6, pick@, arena)
+    assert(free_run.tokens.len == 6 && free_run.finish == Finish.length,
+        U8$[]::arena.text().s("the free run gave \{free_run.tokens.len\} tokens, not 6").take())
+    one: = e.generate(prompt.slice(), 1, pick@, arena)
+    assert(same_start(one@, free_run.tokens@, 1) && one.finish == Finish.length,
+        "a limit of one gives the first token, and finishes with length")
+    // The last token that has not come before ends the run there, and no earlier one does.
+    $k: Sz = 0
+    for i in Range.asc(free_run.tokens.len)
+        if !held_before(free_run.tokens@, i)
+            k = i
+    held: = e.marks
+    e.marks.im_end = free_run.tokens.get(k)
+    stopped: = e.generate(prompt.slice(), 6, pick@, arena)
+    e.marks = held
+    assert(same_start(stopped@, free_run.tokens@, k) && stopped.finish == Finish.stop,
+        U8$[]::arena.text().s("the end marker as token \{k\} gave \{stopped.tokens.len\} tokens")
+        .take())
+    e.context = prompt.len + 1
+    full: = e.generate(prompt.slice(), 6, pick@, arena)
+    e.context = CONTEXT
+    assert(same_start(full@, free_run.tokens@, 2) && full.finish == Finish.length,
+        U8$[]::arena.text().s("a context one past the prompt gave \{full.tokens.len\} tokens, ")
+        .s("not 2").take())
+    verdict.pass("the end marker stops before itself; the limit and a full context cut the answer")
+
+fn last_scores(e: Engine$@, arena: Arena$@): List<|F32|> //< a copy of the engine's scores
+    $out: = List<|F32|>(arena)
+    for i in Range.asc(e.logits.size)
+        out.push((e.logits.data + i)$)
+    return out
+
+fn same_scores(a: List<|F32|>@, b: List<|F32|>@): Bool //< whether the scores match exactly
+    if a.len != b.len
+        return false
+    for i in Range.asc(a.len)
+        if a.get(i) != b.get(i)
+            return false
+    return true
+
+fn test_chat_cache_kept_matches_fresh(arena: Arena$@) //<
+    //< A prompt computed on the cache an earlier request left gives the scores a fresh run gives
+    //< **Bit for bit, not within a tolerance**: a kept row is the very row a fresh run computes.
+    verdict.start("[chat_server] the cache kept across requests gives a fresh run's scores")
+    $kept: = engine_of(arena)
+    first: = rendered(PLAIN_REQUEST, kept@, arena)
+    $pick: = greedy()
+    answer: = kept.generate(first.slice(), 4, pick@, arena)
+    follow: = arena.text().s("{\"messages\":[{\"role\":\"user\",\"content\":")
+        .s("\"How many days of paid leave?\"},{\"role\":\"assistant\",\"content\":\"")
+        .s("Ten\"},{\"role\":\"user\",\"content\":\"And sick days?\"}]}").take()
+    second: = rendered(follow, kept@, arena)
+    reused: = kept.feed(second.slice())
+    assert(reused >= first.len,
+        U8$[]::arena.text().s("only \{reused\} of the first prompt's \{first.len\} tokens were ")
+        .s("kept").take())
+    $fresh: = engine_of(arena)
+    fresh_reused: = fresh.feed(second.slice())
+    assert(fresh_reused == 0 && answer.tokens.len == 4, "a fresh engine keeps nothing")
+    kept_scores: = last_scores(kept@, arena)
+    fresh_scores: = last_scores(fresh@, arena)
+    assert(same_scores(kept_scores@, fresh_scores@),
+        "the kept cache gives other scores than a fresh run")
+    verdict
+        .pass(arena.text().s("\{reused\} kept tokens, and the scores match a fresh run's").take())
+    // A prompt that parts from the cache early keeps only the shared start.
+    other: =
+        rendered("{\"messages\":[{\"role\":\"system\",\"content\":\"Be \
+            brief.\"},{\"role\":\"user\",\"content\":\"How many days of paid leave?\"}]}", kept@,
+        arena)
+    parted: = kept.feed(other.slice())
+    $fresh2: = engine_of(arena)
+    _none: = fresh2.feed(other.slice())
+    parted_scores: = last_scores(kept@, arena)
+    fresh2_scores: = last_scores(fresh2@, arena)
+    assert(parted > 0 && parted < first.len && same_scores(parted_scores@, fresh2_scores@),
+        U8$[]::arena.text().s("a prompt parting early kept \{parted\} tokens").take())
+    verdict
+        .pass("a prompt parting from the cache early keeps the shared start, with the same scores")

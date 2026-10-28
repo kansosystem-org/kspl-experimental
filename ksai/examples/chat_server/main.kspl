@@ -1,0 +1,164 @@
+//< A chat server for a Qwen3-Instruct-2507 or Qwen3.5 model, in the OpenAI style of tool clients
+//< It answers `POST /v1/chat/completions` with tool calls, without streaming, on the loopback only.
+//< The model, its vocabulary and its chat template all come from one GGUF file, such as the ones
+//< `models/README.md` names. **`ksai/tests/examples_chat.kspl` tests it** (`make test` in this
+//< package). Its design is `ksai/docs/DESIGN-serving.md`.
+
+// ==========================================
+// Usage:
+//     chat_server <model.gguf> [--port=8081] [--max-tokens=1024] [--context=16384]
+// ==========================================
+import "ksai/examples/chat_server/engine" { Engine }
+import "ksai/examples/chat_server/serve" + { Server }
+import "ksai/examples/chat_server/template" + { Kind }
+import "ksai/examples/chat_server/template35"
+import "ksai/gguf" { Gguf }
+import "ksai/model_file" as ai_file
+import "ksai/pretokenizer" { Split_rule }
+import "ksai/qwen" { Qwen, Qwen_config }
+import "ksai/tokenizer"
+import "std/argparse"
+import "std/chars"
+import "std/io"
+import "std/mem" { Arena }
+import "std/net"
+import "std/str" // `equals`
+import "std/strfmt" as _strfmt
+import "std/sys"
+
+priv const NAME: U8[] = "chat_server" //< the program's name in its usage and messages
+priv const DEFAULT_CONTEXT: I64 = 16384I64 //< `--context` where it is not given
+    //< Qwen3-4B's cache takes 288 KiB a token in F32, so this is 4.5 GiB. With the 2.5 GB file it
+    //< fits a machine of 16 GB with room for the rest. 32768 would take 9 GiB. Qwen3.5-9B's cache
+    //< takes 64 KiB a token, so 1 GiB, beside its 4.7 GB file.
+
+priv struct Options //< the command line, read and checked
+    model: U8[]
+    port: I64
+    max_tokens: I64
+    context: I64
+
+priv fn read_args(o: Options$@, arena: Arena$@): Bool //<
+    //< Reads the command line into `o`; false once a refusal is printed
+    $port: I64 = 8081I64
+    $max_tokens: I64 = 1024I64
+    $context: I64 = DEFAULT_CONTEXT
+    cli: = argparse.Parser
+        .create(NAME,
+        "answers OpenAI-style chat requests with a Qwen3-Instruct-2507 or Qwen3.5 model", arena)
+    cli.positional("<model.gguf>")
+    cli.int_opt("--port", port@,
+        "the loopback port to listen on; 0 lets the OS choose (default 8081)")
+    cli.int_opt("--max-tokens", max_tokens@, "the most tokens one answer can take (default 1024)")
+    cli.int_opt("--context", context@,
+        "the most tokens a conversation and its answer can hold (default 16384)")
+    cli.parse_or_exit()
+    if cli.rest.len != 1
+        cli.print_usage(io.err())
+        return false
+    if port < 0I64 || port > 65535I64 || max_tokens < 1I64 || context < 2I64
+        io.err().s("\{NAME\}: --port must be from 0 to 65535, --max-tokens at least 1, and ")
+            .s("--context at least 2\n")
+        return false
+    o$ = Options::{ .model = cli.rest[0], .port = port, .max_tokens = max_tokens,
+        .context = context }
+    return true
+
+priv fn model_id(path: U8[]): U8[] //< the model's name: its file's name, less `.gguf`
+    name: = sys.get_file_name(path)
+    return name.strip_suffix(".gguf")
+
+priv fn load_tokenizer(g: Gguf@, arena: Arena$@): tokenizer.Tokenizer$@? //<
+    //< The file's vocabulary as a tokenizer, or none once the refusal is printed
+    //< **Only GPT-2's byte-level BPE with Qwen's splitting is read**, as Qwen's files hold.
+    kind: = g.text("tokenizer.ggml.model") catch ""
+    pre: = g.text("tokenizer.ggml.pre") catch ""
+    $rule: Split_rule? = .none
+    if kind.equals("gpt2")
+        rule = Split_rule.named(pre)
+    split: = rule catch
+        io.err().s("\{NAME\}: the vocabulary is \"").s(kind).s("\" split as \"").s(pre)
+            .s("\"; this server reads \"gpt2\" split as \"qwen2\" or \"qwen35\", as Qwen's ")
+            .s("files hold\n")
+        return .none
+    $tokens: = g.texts("tokenizer.ggml.tokens", arena) catch e
+        io.err().s("\{NAME\}: ").s(e.describe(arena)).s("\n")
+        return .none
+    $merges: = g.texts("tokenizer.ggml.merges", arena) catch e
+        io.err().s("\{NAME\}: ").s(e.describe(arena)).s("\n")
+        return .none
+    $types: = g.ints("tokenizer.ggml.token_type", arena) catch e
+        io.err().s("\{NAME\}: ").s(e.describe(arena)).s("\n")
+        return .none
+    tok: = arena.create(tokenizer.Tokenizer(arena))
+    tok.set_split(split)
+    tok.load_lists(tokens.slice(), types.slice(), merges.slice()) catch e
+        switch e
+        case .broken(list, entry)
+            io.err().s("\{NAME\}: the vocabulary's \{list\} entry \{entry\} is broken\n")
+        default
+            io.err().s("\{NAME\}: the vocabulary cannot be read\n")
+        return .none
+    return .some(tok)
+
+priv fn kind_of(chat_template: U8[]): Kind? //< the template a file holds, by its text's hash
+    if template.matches(chat_template)
+        return .some(.instruct_2507)
+    if template35.matches(chat_template)
+        return .some(.qwen35)
+    return .none
+
+fn main(): I32
+    defer arena: = Arena(64 * 1024 * 1024)
+    $o: Options = ::{}
+    if !read_args(o@, arena)
+        return 2
+    g: = ai_file.load_gguf(o.model, arena) catch e
+        io.err().s("\{NAME\}: \{o.model\}: ").s(e.describe(arena)).s("\n")
+        return 1
+    cfg: = Qwen_config.read(g@, arena) catch e
+        io.err().s("\{NAME\}: \{o.model\}: ").s(e.describe(arena)).s("\n")
+        return 1
+    context: = Sz::o.context
+    if context > cfg.trained_context
+        io.err().s("\{NAME\}: --context must be at most \{cfg.trained_context\}, the context the ")
+            .s("model was trained on\n")
+        return 2
+    tok: = load_tokenizer(g@, arena) catch
+        return 1
+    chat_template: = g.text("tokenizer.chat_template") catch ""
+    kind: = kind_of(chat_template) catch
+        io.err().s("\{NAME\}: the file's chat template is neither Qwen3-Instruct-2507's nor ")
+            .s("Qwen3.5's, the two this server writes: its answers would be another model's\n")
+        return 1
+    marks: = template.find_marks(tok) catch missing
+        io.err().s("\{NAME\}: the vocabulary has no ").s(missing)
+            .s(" token: this server runs Qwen3-Instruct-2507 and Qwen3.5 models only\n")
+        return 1
+    m: = Qwen.load(g@, context, arena) catch e
+        io.err().s("\{NAME\}: \{o.model\}: ").s(e.describe(arena)).s("\n")
+        return 1
+    $engine: = Engine(m, tok, marks, context, arena)
+    // The markers are the IDs the template splices in, so the model must have a row for each.
+    if bad: = engine
+        .outside_vocab(I32[]::{ marks.im_start, marks.im_end, marks.end_of_text, marks.call_open,
+        marks.call_close, marks.response_open, marks.response_close, marks.think_open,
+        marks.think_close })
+        io.err().s("\{NAME\}: the vocabulary is not this model's: token \{bad\} is past its ")
+            .s("\{m.cfg.vocab\} rows\n")
+        return 1
+    listener: = net.Tcp_listener.bind(serve.HOST, I32::o.port) catch
+        io.err().s("\{NAME\}: cannot listen on \{serve.HOST\}:\{o.port\}; is the port in use?\n")
+        return 1
+    port: = listener.port() catch
+        io.err().s("\{NAME\}: cannot read the port it listens on\n")
+        return 1
+    cache_mib: =
+        cfg.attention_blocks() * 2 * cfg.n_kv_heads * cfg.head_dim * 4 * context / (1024 * 1024)
+    io.err().s("\{NAME\}: \{model_id(o.model)\}: \{cfg.n_layers\} layers, vocabulary ")
+        .s("\{cfg.vocab\}, context \{context\} tokens (a cache of \{cache_mib\} MiB)\n")
+    io.err().s("\{NAME\}: listening on http://\{serve.HOST\}:\{port\}\n")
+    $s: = Server::{ .engine = engine@, .kind = kind, .model_id = model_id(o.model),
+        .max_tokens = Sz::o.max_tokens, .answered = 0, .calls = 0 }
+    serve.serve(listener, s@)
+    return 0

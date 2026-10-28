@@ -1,0 +1,223 @@
+//< The gated delta net: the attention of Qwen3.5's linear layers, which keeps a state, not the past
+//< **A layer keeps a square of `head_dim` numbers per value head**, and the last inputs of a short
+//< convolution. Each token decays the square, writes its value under its key, and reads the square
+//< with its query. So a token costs the same at every position, but **the state follows one run of
+//< tokens and cannot be rewound**: `ksai/qwen` saves and restores it whole. The steps are
+//< llama.cpp's `qwen35` graph with its fused `gated_delta_net`. The reasons are "Qwen3.5's linear
+//< layers keep a state" in `ksai/docs/DESIGN-learning.md`.
+
+// ==========================================
+// One layer, over the rows of the normalized input `h`, as llama.cpp's `build_layer_attn_linear`:
+//   q, k, v = silu(conv(W_qkv · h))          each query and key head then L2-normalized
+//   g = softplus(W_alpha · h + dt_bias) × a     β = sigmoid(W_beta · h)
+//   per value head:  S = e^g × S;  S += β (v - S k) ⊗ k;  o = S q / √head_dim
+//   out = W_out · (RMSNorm(o) per head × silu(W_gate · h))
+// ==========================================
+import "ksai/parallel"
+import "ksai/quant" { Quant_matrix }
+import "ksai/tensor" { Tensor }
+import "std/math"
+import "std/mem"
+
+pub struct Delta_shape //< a delta net's widths, from the file's `<arch>.ssm.*` settings
+    pub k_heads: Sz //< `ssm.group_count`: how many query and key heads
+    pub v_heads: Sz //< `ssm.time_step_rank`: how many value heads; a multiple of `k_heads`
+        //< Value head `h` reads query and key head `h % k_heads`, as llama.cpp pairs them.
+    pub head_dim: Sz //< `ssm.state_size`: the width of a query, a key and a value head
+    pub kernel: Sz //< `ssm.conv_kernel`: the positions the convolution reads, its own included
+
+impl Delta_shape
+    pub fn channels(r: Self@): Sz //< the numbers the convolution reads per position
+        //< The queries, then the keys, then the values.
+        return (2 * r.k_heads + r.v_heads) * r.head_dim
+
+    pub fn inner(r: Self@): Sz //< the width of the values, and of the gate: `v_heads × head_dim`
+        return r.v_heads * r.head_dim
+
+    pub fn state_len(r: Self@): Sz //< the numbers one layer's running state takes
+        //< Each value head's square, then the convolution's last `kernel - 1` positions.
+        return r.v_heads * r.head_dim * r.head_dim + (r.kernel - 1) * r.channels()
+
+struct Delta_net //< one layer's weights, borrowed from the file, and its running state
+    shape: Delta_shape
+    eps: F32 //< the RMS norm's epsilon, which the L2 norms of the queries and keys take too
+    qkv: Quant_matrix //< `attn_qkv`: the queries, keys and values before the convolution
+    z: Quant_matrix //< `attn_gate`: the gate on the output norm, through SiLU
+    alpha: Quant_matrix //< `ssm_alpha`: each value head's decay, before its bias
+    beta: Quant_matrix //< `ssm_beta`: how strongly each value head writes, before the sigmoid
+    conv: Tensor<|F32|> //< `ssm_conv1d`, turned: `kernel` rows of a weight per channel
+        //< Row 0 weighs the oldest position. The file holds a row per channel; turned, the loop
+        //< over the channels reads in order and runs on vectors.
+    dt_bias: Tensor<|F32|> //< `ssm_dt.bias`: added to the decay before the softplus
+    a: Tensor<|F32|> //< `ssm_a`: each value head's decay rate, `-e^A`, so below 0
+    norm: Tensor<|F32|> //< `ssm_norm`: the output norm's gain, one head wide
+    wo: Quant_matrix //< `ssm_out`: the output projection
+    state: F32$@ //< `shape.state_len()` numbers, the layout `state_len` gives
+        //< Head `h`'s square holds row `j` (a value's number) over column `i` (a key's number), as
+        //< ggml stores it, so a row is read in order.
+
+impl Delta_net
+    fn reset(r: Self@) //< empties the state, for a sequence that starts again at position 0
+        mem.zero(Void$@::r.state, r.shape.state_len() * 4)
+
+    fn forward( //< the layer's output for each row of `h`; the state moves on by the rows
+        //< Row `t` follows the rows before it and the state, whatever pieces the rows came in.
+        r: Self@,
+        h: Tensor<|F32|>, //< the rows, normalized; their arena takes the working tensors
+    ): Tensor<|F32|> //< `[rows, hidden]`, on `h`'s arena
+        s: = r.shape
+        n: = h.shape[0]
+        mixed: = product(r.qkv@, h)
+        $z: = product(r.z@, h)
+        al: = product(r.alpha@, h)
+        be: = product(r.beta@, h)
+        conv: = r.convolve(mixed)
+        heads: = 2 * s.k_heads
+        for t in Range.asc(n)
+            for k in Range.asc(heads)
+                l2_norm(conv.data + t * s.channels() + k * s.head_dim, s.head_dim, r.eps)
+        // Each row's decay and write strength per value head, as llama.cpp's F32 steps give them.
+        for t in Range.asc(n)
+            for k in Range.asc(s.v_heads)
+                at: = t * s.v_heads + k
+                biased: = (al.data + at)$ + (r.dt_bias.data + k)$
+                (al.data + at)$ = softplus(biased) * (r.a.data + k)$
+                (be.data + at)$ = sigmoid((be.data + at)$)
+        o_shape: Sz[2] = ::{ n, s.inner() }
+        o: = Tensor<|F32|>(Sz[]::o_shape, h.arena)
+        $job: = Recur_job::{ .shape = s, .conv = conv.data, .g = al.data, .beta = be.data,
+            .state = r.state, .out = o.data, .n = n,
+            .scale = 1.0F32 / F32::math.sqrt(F32::s.head_dim) }
+        _used: = parallel.split(recur_heads, Void$@::job@, s.v_heads, 1,
+            parallel.threads_for(n, s.inner(), 4 * s.head_dim))
+        // The output norm, per value head, times the gate through SiLU.
+        $rows: = reshaped(o, n * s.v_heads, s.head_dim)
+        normed: = rows.rmsnorm(r.norm, r.eps) catch panic("Delta_net: the output norm's width")
+        gate: = z.silu()
+        flat: = reshaped(normed, n, s.inner())
+        gated: = flat * gate
+        return product(r.wo@, gated)
+
+    priv fn convolve(r: Self@, mixed: Tensor<|F32|>): Tensor<|F32|> //<
+        //< The short convolution over the kept positions and these rows, then SiLU
+        //< Channel `c` of row `t` is the sum, oldest position first, of each of the last
+        //< `kernel` positions times its weight, as ggml's `ssm_conv` adds them. The last
+        //< `kernel - 1` positions are kept for the next call.
+        s: = r.shape
+        n: = mixed.shape[0]
+        c: = s.channels()
+        kept: = s.kernel - 1
+        hist: = r.state + s.v_heads * s.head_dim * s.head_dim
+        out_shape: Sz[2] = ::{ n, c }
+        $out: = Tensor<|F32|>(Sz[]::out_shape, mixed.arena)
+        for t in Range.asc(n)
+            o: = out.data + t * c
+            mem.zero(Void$@::o, c * 4)
+            for i in Range.asc(s.kernel)
+                p: = t + i - kept // the position read, counted from this call's first row
+                src: = hist + (kept + p) * c if p < 0 else mixed.data + p * c
+                // `make test-simd` sees this loop vectorize.
+                for ch in Range.asc(c)
+                    term: = (src + ch)$ * (r.conv.data + i * c + ch)$
+                    (o + ch)$ = (o + ch)$ + term
+        // The kept positions move on: the last `kept` of the old ones and these rows.
+        keep: = F32$@::mixed.arena.alloc(kept * c * 4)
+        for i in Range.asc(kept)
+            p: = n + i - kept
+            src: = hist + (kept + p) * c if p < 0 else mixed.data + p * c
+            mem.copy(Void$@::(keep + i * c), Void$@::src, c * 4)
+        mem.copy(Void$@::hist, Void$@::keep, kept * c * 4)
+        return out.silu()
+
+priv fn product(w: Quant_matrix@, x: Tensor<|F32|>): Tensor<|F32|> //< `w` times each row of `x`
+    //< The shapes were checked when the model was loaded, so a refusal is a fault in the code.
+    return w.mul_mat(x) catch panic("Delta_net: a weight refused an input whose shape was checked")
+
+priv fn reshaped(t: Tensor<|F32|>, rows: Sz, cols: Sz): Tensor<|F32|> //< the same numbers, reshaped
+    shape: = Sz$@::t.arena.alloc(2 * sizeof(Sz))
+    shape$ = rows
+    (shape + 1)$ = cols
+    return Tensor<|F32|>.from_raw_parts(t.data, shape, 2, t.size, t.arena)
+
+priv fn l2_norm(x: F32$@, n: Sz, eps: F32) //< `x` divided by its length, in place
+    //< llama.cpp's `rms_norm(x, eps / n)` times `1 / √n`: the squares summed in F64, the rest in
+    //< F32, each step rounded as there.
+    $ss: F64 = 0.0
+    for i in Range.asc(n)
+        sq: = (x + i)$ * (x + i)$
+        ss = ss + F64::sq
+    mean: = F32::(ss / F64::n)
+    width: = F32::n
+    scale: = 1.0F32 / F32::math.sqrt(mean + eps / width)
+    inv: = 1.0F32 / F32::math.sqrt(width)
+    for i in Range.asc(n)
+        y: = (x + i)$ * scale
+        (x + i)$ = y * inv
+
+priv fn softplus(x: F32): F32 //< `log(1 + e^x)`, as ggml's: `x` itself above 20
+    if x > 20.0F32
+        return x
+    e: = F32::math.exp(x)
+    return F32::math.log(1.0F32 + e)
+
+priv fn sigmoid(x: F32): F32 //< `1 / (1 + e^-x)`, as ggml's
+    e: = F32::math.exp(-x)
+    return 1.0F32 / (1.0F32 + e)
+
+priv struct Recur_job //< one call's recurrence, as each of its threads reads it
+    shape: Delta_shape
+    conv: F32@ //< the convolved rows: queries and keys normalized, then the values
+    g: F32@ //< each row's decay exponent per value head
+    beta: F32@ //< each row's write strength per value head
+    state: F32$@ //< the squares; a thread writes only its own heads'
+    out: F32$@ //< `n` rows of `inner` numbers; a thread writes only its own heads' columns
+    n: Sz
+    scale: F32 //< `1 / √head_dim`, which each output is multiplied by
+
+priv const LANES: Sz = 8 //< the partial sums of a row's dot product, kept side by side
+
+priv fn dot(a: F32@, b: F32@, n: Sz): F32 //<
+    //< the dot product of `n` numbers in 8 lanes; `n` % 8 == 0
+    $acc: F32[LANES] = ::{}
+    p: F32$@ = acc@
+    for $g: Sz = 0; g < n; g += LANES
+        for k in Range.asc(LANES)
+            term: = (a + g + k)$ * (b + g + k)$
+            (p + k)$ = (p + k)$ + term
+    $s: F32 = 0.0
+    for k in Range.asc(LANES)
+        s = s + (p + k)$
+    return s
+
+priv fn recur_heads(arg: Void$@, first: Sz, last: Sz) //< value heads [first, last), every row
+    //< ggml's `gated_delta_net`, one row of the square at a time: a row's decay, its read with
+    //< the key, its write and its read with the query touch that row alone, so the order of the
+    //< rows changes no number.
+    j: = Recur_job$@::arg
+    s: = j.shape
+    d: = s.head_dim
+    c: = s.channels()
+    for h in Range(first, last, 1)
+        kh: = h % s.k_heads
+        sq: = j.state + h * d * d
+        for t in Range.asc(j.n)
+            row: = j.conv + t * c
+            q: = row + kh * d
+            k: = row + (s.k_heads + kh) * d
+            v: = row + (2 * s.k_heads + h) * d
+            decay: = F32::math.exp((j.g + t * s.v_heads + h)$)
+            b: = (j.beta + t * s.v_heads + h)$
+            o: = j.out + t * s.inner() + h * d
+            for i in Range.asc(d)
+                m: = sq + i * d
+                // `make test-simd` sees this loop vectorize.
+                for x in Range.asc(d)
+                    (m + x)$ = (m + x)$ * decay
+                read: = dot(m, k, d)
+                diff: = (v + i)$ - read
+                delta: = diff * b
+                // `make test-simd` sees this loop vectorize.
+                for x in Range.asc(d)
+                    term: = (k + x)$ * delta
+                    (m + x)$ = (m + x)$ + term
+                (o + i)$ = dot(m, q, d) * j.scale

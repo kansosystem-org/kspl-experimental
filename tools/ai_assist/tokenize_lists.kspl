@@ -1,0 +1,85 @@
+#!/usr/bin/env -S ksplc run
+//< Builds ksai's tokenizer from a GGUF file's three lists and prints each text's token IDs
+//< The other half of `check_qwen_tokenizer.py`, which writes the lists and the texts, and compares
+//< what this prints with llama.cpp. **The lists go through `Tokenizer.load_lists`**, the call the
+//< GGUF reader makes, so GPT-2's mapping of bytes and the token types are checked too.
+
+// ==========================================
+// Usage:
+//   tokenize_lists <pre> <tokens> <types> <merges> <texts>
+// `<pre>` is the file's `tokenizer.ggml.pre`, which names the rule that splits a text. Each file
+// holds one entry per line: a token, a rule or a text as hex, a type as a number. One line is
+// printed per text: its IDs, separated by spaces.
+// ==========================================
+import "ksai/pretokenizer" { Split_rule }
+import "ksai/tokenizer" as ai_tokenizer
+import "std/chars"
+import "std/ds" { List }
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/strnum" // `to_count`
+import "std/sys"
+
+priv fn unhex(line: U8[], arena: Arena$@): U8[] //< the bytes a line spells in hex
+    b: = arena.text()
+    for $k: Sz = 0; k + 1 < line.len; k += 2
+        hi: = line[k].hex_val().unwrap_or(0)
+        lo: = line[k + 1].hex_val().unwrap_or(0)
+        b.c(U8::((hi << 4) | lo))
+    return b.take()
+
+priv fn read_lines(path: U8[], arena: Arena$@): U8[][] //< a file's lines, the last one's end too
+    text: = io.read_file(path, arena) catch
+        io.err().s("\{sys.program_name()\}: cannot read \{path\}\n")
+        sys.exit(1)
+    $out: = List<|U8[]|>(arena)
+    for line in text.lines(arena)
+        out.push(line)
+    if out.len > 0 && out[out.len - 1].len == 0
+        out.len -= 1
+    return out.slice()
+
+priv fn hex_lines(path: U8[], arena: Arena$@): U8[][] //< each line of a file read as hex
+    lines: = read_lines(path, arena)
+    $out: = List<|U8[]|>.new_with_cap(lines.len, arena)
+    for line in lines
+        out.push(unhex(line, arena))
+    return out.slice()
+
+fn main(): I32
+    args: = sys.args()
+    if args.len != 6
+        io.err().s("usage: tokenize_lists <pre> <tokens> <types> <merges> <texts>\n")
+        return 2
+    rule: = Split_rule.named(args[1]) catch
+        io.err().s("tokenize_lists: no rule splits text as \"").s(args[1]).s("\"\n")
+        return 2
+    defer arena: = Arena(1024 * 1024 * 1024)
+    tokens: = hex_lines(args[2], arena)
+    $types: = List<|I32|>(arena)
+    for line in read_lines(args[3], arena)
+        types.push(I32::(line.to_count(1000) catch -1))
+    merges: = hex_lines(args[4], arena)
+    $tok: = ai_tokenizer.Tokenizer(arena)
+    tok.set_split(rule)
+    tok.load_lists(tokens, types.slice(), merges) catch e
+        switch e
+        case .broken(list, entry)
+            io.err().s("the \{list\} list's entry \{entry\} cannot be taken\n")
+        default
+            io.err().s("the lists cannot be taken\n")
+        return 1
+    defer work: = Arena(64 * 1024 * 1024)
+    defer $line: = Str_builder()
+    for text in hex_lines(args[5], arena)
+        ids: = tok.encode(text, work)
+        line.clear()
+        for i in Range.asc(ids.len)
+            if i > 0
+                line.c(' ')
+            line.s("\{ids[i]\}")
+        line.c('\n')
+        io.out().s(line.slice())
+        work.reset()
+    return 0

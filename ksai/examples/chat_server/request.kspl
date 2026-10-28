@@ -1,0 +1,137 @@
+//< A `POST /v1/chat/completions` body read into the conversation and the choices it asks for
+//< **A field is applied, or refused by name**: `stream` set to true, and every field in
+//< `UNAPPLIED` not set to the value that changes nothing. A refusal is a sentence the client shows.
+//< Caution: **A field in neither list is passed over unseen**: `std/json` does not list an object's
+//< members, so the reader can only ask for the names it knows.
+import "ksai/examples/chat_server/template" { Call, Conversation, Message }
+import "ksai/sampler"
+import "std/ds" { List }
+import "std/json"
+import "std/mem" { Arena }
+import "std/str" // `arena.text()` and `equals`
+import "std/strfmt" as _strfmt
+
+struct Chat //< one request, read and checked
+    conv: Conversation
+    max_tokens: Sz //< the request's own limit; 0 where it gave none
+    cfg: sampler.Sample_config
+    seed: U64? //< the sampling's seed; none where the request gave none
+    thinking: Bool? //< `chat_template_kwargs.enable_thinking`; none where the request gave none
+
+priv struct Unapplied //< a field this server does not apply, and its value that changes nothing
+    name: U8[]
+    no_op: U8[] //< that value as JSON text; `null` stands for "absent"
+
+priv const UNAPPLIED: Unapplied[_] = ::{
+    Unapplied::{ .name = "n", .no_op = "1" },
+    Unapplied::{ .name = "tool_choice", .no_op = "\"auto\"" },
+    Unapplied::{ .name = "parallel_tool_calls", .no_op = "true" },
+    Unapplied::{ .name = "stop", .no_op = "null" },
+    Unapplied::{ .name = "logprobs", .no_op = "false" },
+    Unapplied::{ .name = "response_format", .no_op = "null" },
+    Unapplied::{ .name = "frequency_penalty", .no_op = "0" },
+    Unapplied::{ .name = "presence_penalty", .no_op = "0" },
+    Unapplied::{ .name = "max_completion_tokens", .no_op = "null" },
+}
+
+const STREAM_REFUSED: U8[] =
+    "streaming is not supported: send \"stream\": false. This server answers each request whole, \
+        with a Content-Length." //< the refusal of `"stream": true`
+
+fn read_chat(body: U8[], arena: Arena$@): Chat!U8[] //<
+    //< The request a body holds, or why it is refused
+    doc: = json.parse(body, arena) catch
+        throw "the body is not JSON"
+    v: = doc.val
+    if v.get("stream").as_bool().unwrap_or(false)
+        throw STREAM_REFUSED
+    for u in UNAPPLIED
+        if got: = v.find(u.name)
+            same: = json.parse(u.no_op, arena) catch panic("UNAPPLIED holds JSON")
+            if !got.equals(.null_val) && !same_value(got, same.val)
+                throw arena.text().s("the field \"").s(u.name)
+                    .s("\" is not supported by this server; leave it out").take()
+    $chat: = Chat::{ .conv = Conversation::{ .messages =
+        read_messages(v.get("messages"), arena)!, .tools = v.get("tools").arr_list(arena),
+        .thinking = false }, .max_tokens = 0, .cfg = sampler.Sample_config.greedy(), .seed = .none,
+        .thinking = .none }
+    if found: = v.get("chat_template_kwargs").find("enable_thinking")
+        flag: = found.as_bool() catch
+            throw "chat_template_kwargs.enable_thinking must be true or false"
+        chat.thinking = .some(flag)
+    if found: = v.find("max_tokens")
+        n: = found.as_int64().unwrap_or(0I64)
+        if n < 1I64
+            throw "max_tokens must be a whole number of at least 1"
+        chat.max_tokens = Sz::n
+    // Either one asks for sampling; the other then takes the protocol's default, 1.
+    if v.find("temperature").is_some() || v.find("top_p").is_some()
+        top_p: = read_number(v, "top_p", 1.0, arena)!
+        if top_p == 0.0
+            throw "top_p must be above 0"
+        chat.cfg = sampler.Sample_config::{ .temperature =
+            read_number(v, "temperature", 2.0, arena)!, .top_k = 0, .top_p = top_p }
+    if found: = v.find("seed")
+        if seed: = found.as_int64()
+            chat.seed = .some(U64::seed)
+        else
+            throw "seed must be a whole number"
+    return chat
+
+priv fn same_value(a: json.Value, b: json.Value): Bool //<
+    //< Whether two values are the same, a number written `0` the same as `0.0`
+    if x: = a.as_f64()
+        if y: = b.as_f64()
+            return x == y
+    return a.equals(b)
+
+priv fn read_number(v: json.Value, name: U8[], high: F64, arena: Arena$@): F64!U8[] //<
+    //< A number field from 0 to `high`, 1 where absent, or why it is refused
+    if found: = v.find(name)
+        n: = found.as_f64().unwrap_or(-1.0)
+        if n < 0.0 || n > high
+            throw arena.text().s(name).s(" must be a number from 0 to \{high\}").take()
+        return n
+    return 1.0
+
+priv fn read_messages(list: json.Value, arena: Arena$@): List<|Message|>!U8[] //<
+    //< The messages, each with a role the template knows and a text or null content
+    items: = list.arr_list(arena)
+    if items.len == 0
+        throw "messages must be a list holding at least one message"
+    $out: = List<|Message|>(arena)
+    for i in Range.asc(items.len)
+        m: = items.get(i)
+        role: = m.get("role").as_str().unwrap_or("")
+        if !role.equals("system") && !role.equals("user") && !role.equals("assistant") &&
+            !role.equals("tool")
+            throw arena.text().s("message \{i\} has the role \"").s(role)
+                .s("\"; the roles are system, user, assistant and tool").take()
+        content: = m.get("content")
+        $text: U8[]? = .none
+        if s: = content.as_str()
+            text = .some(s)
+        else if !content.equals(.null_val)
+            throw arena.text().s("message \{i\}'s content must be a text or null").take()
+        $calls: = List<|Call|>(arena)
+        if role.equals("assistant")
+            calls = read_calls(m.get("tool_calls"), arena)
+        out
+            .push(Message::{ .role = role, .content = text,
+            .reasoning = m.get("reasoning_content").as_str(), .calls = calls })
+    return out
+
+priv fn read_calls(list: json.Value, arena: Arena$@): List<|Call|> //<
+    //< The tool calls of an assistant message, their arguments as the request gave them
+    //< A call is its `function` member, or the call itself where it has none, as the template
+    //< reads.
+    $out: = List<|Call|>(arena)
+    items: = list.arr_list(arena)
+    for i in Range.asc(items.len)
+        $f: = items.get(i)
+        if inner: = f.find("function")
+            f = inner
+        out
+            .push(Call::{ .name = f.get("name").as_str().unwrap_or(""),
+            .arguments = f.get("arguments") })
+    return out

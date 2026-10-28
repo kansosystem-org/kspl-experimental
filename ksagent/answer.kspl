@@ -1,0 +1,248 @@
+//< An answer, its checked sources, and how it is written out
+//< **Every cited source is checked against the file** (`check_source`): its quote must stand in
+//< the lines it names. A source that fails is removed and counted, never shown as evidence.
+//< The fixed lines ksagent adds itself come in the question's language (`Lang`).
+import "ksagent/files"
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+
+const NOT_FOUND: U8[] = "NOT_FOUND" //< the text the model gives `answer` when the files lack one
+    //< **A marker, not a sentence**: a small model copies one word reliably. ksagent writes the
+    //< sentence itself, in the question's language (`not_found_line`).
+
+const MAX_CITED_LINES: I64 = 50I64 //< the widest range one source may cite
+    //< A wider range no longer points at the evidence: any quote stands somewhere in a long range,
+    //< and an evaluation would pass an answer that cites a whole file.
+
+const MIN_QUOTE_CHARS: Sz = 8 //< the fewest characters a quote may hold
+    //< A shorter quote no longer shows where the answer comes from: one word, or one Japanese
+    //< character, stands in almost any range. Characters are counted, not bytes, so a Japanese
+    //< quote needs as many as an English one.
+
+enum Lang //< the language of a question, and of the lines ksagent adds to its answer
+    en
+    ja
+
+impl Lang
+    fn of(text: U8[]): Lang //< `ja` when the text holds kana or kanji, else `en`
+        $i: Sz = 0
+        for i < text.len
+            step: = text.utf8_seq_len(i) catch
+                i += 1
+                continue
+            if step == 3 && is_japanese(text, i)
+                return .ja
+            i += step
+        return .en
+
+    fn not_found_line(r: Self): U8[] //< what a not-found answer says
+        switch r
+        case .ja
+            return "このフォルダーのファイルには、この質問の答えが見つかりませんでした。"
+        case .en
+            return "The files in this folder do not hold the answer to this question."
+
+    fn unverified_line(r: Self): U8[] //< the mark on an answer that no checked source backs
+        switch r
+        case .ja
+            return "未確認: \
+                確認できた出典がありません。ファイルで確かめてください。"
+        case .en
+            return "Unverified: no cited source passed the check. Confirm it in the files."
+
+    fn removed_line(r: Self, n: Sz, arena: Arena$@): U8[] //< how many sources the check removed
+        switch r
+        case .ja
+            return arena.text()
+                .s("示された行に引用が見つからない出典を \{n\} \
+                    件取り除きました。").take()
+        case .en
+            return arena.text()
+                .s("Removed \{n\} cited source(s): the quote does not stand at the lines given.")
+                .take()
+
+    fn sources_word(r: Self): U8[] //< the word that opens the list of sources
+        switch r
+        case .ja
+            return "出典:"
+        case .en
+            return "Sources:"
+
+priv fn is_japanese(text: U8[], at: Sz): Bool //<
+    //< Whether the three-byte character at `at` is kana, a kanji, or a full-width form
+    lead: = I32::text[at]
+    cp: =
+        ((lead & 0x0F) << 12) | ((I32::text[at + 1] & 0x3F) << 6) | (I32::text[at + 2] & 0x3F)
+    return (cp >= 0x3040 && cp <= 0x30FF) || (cp >= 0x4E00 && cp <= 0x9FFF) ||
+        (cp >= 0xFF00 && cp <= 0xFFEF)
+
+struct Source //< one place the answer cites
+    path: U8[] //< the file, under the root
+    from_line: I64 //< the first line cited, counting from 1
+    to_line: I64 //< the last line cited
+    quote: U8[] //< the words cited, as they stand in those lines
+
+enum Outcome //< how the work on one question ended
+    answered //< the model gave an answer: through `answer`, or as plain text
+    not_found //< the model said the files do not hold the answer
+    stopped(why: U8[]) //< a cap was reached first; `why` names the cap
+    failed(why: U8[]) //< the model server could not be reached, or failed
+
+struct Answer //< what one question got
+    outcome: Outcome
+    lang: Lang //< the question's language, for the lines ksagent adds
+    text: U8[] //< the model's answer, as it wrote it; empty unless `answered`
+    sources: List<|Source|> //< the sources that passed the check
+    removed: List<|U8[]|> //< one line for each source that failed the check, saying why
+
+impl Answer
+    fn ended(outcome: Outcome, lang: Lang, arena: Arena$@): Answer //< an answer with no text
+        return Answer::{ .outcome = outcome, .lang = lang, .text = "",
+            .sources = List<|Source|>(arena), .removed = List<|U8[]|>(arena) }
+
+    fn is_unverified(r: Self@): Bool //< whether it is an answer that no checked source backs
+        switch r.outcome
+        case .answered
+            return r.sources.len == 0
+        default
+            return false
+
+fn finish(root: U8[], text: U8[], given: List<|Source|>@, lang: Lang, arena: Arena$@): Answer //<
+    //< Turns the model's final answer into an `Answer`, checking each source it cites
+    //< The not-found marker ends as `not_found`, whatever sources come with it.
+    if text.trim_spaces().equals_ignore_case(NOT_FOUND)
+        return Answer.ended(.not_found, lang, arena)
+    $a: = Answer.ended(.answered, lang, arena)
+    a.text = text.trim_spaces()
+    for i in Range.asc(given.len)
+        s: = given.get(i)
+        $checked: = s
+        why: = check_source(root, s, checked@, arena)
+        if why.len == 0
+            a.sources.push(checked)
+        else
+            a.removed
+                .push(arena.text().s(s.path).s(" ").s(span_words(s, lang, arena)).s(": ").s(why)
+                .take())
+    return a
+
+fn check_source(root: U8[], s: Source, out: Source$@, arena: Arena$@): U8[] //<
+    //< Why the source fails the check, or empty when its quote stands in the lines it names
+    //< **The quote and the lines are compared with each run of whitespace made one space**, so a
+    //< line break or an indent in either does not matter. `out` gets the path as the root holds
+    //< it. Caution: **This shows that the words stand there, not that they back the answer.**
+    quote: = collapse_spaces(s.quote, arena)
+    if char_count(quote) < MIN_QUOTE_CHARS
+        return arena.text().s("the quote is shorter than \{MIN_QUOTE_CHARS\} characters").take()
+    if s.from_line < 1I64 || s.to_line < s.from_line
+        return "the lines are not a range from a first line to a last one"
+    if s.to_line - s.from_line + 1I64 > MAX_CITED_LINES
+        return arena.text().s("the range is wider than \{MAX_CITED_LINES\} lines").take()
+    $full: U8[] = ""
+    switch files.resolve(root, s.path, arena)
+    case .ok(f, rel)
+        full = f
+        out.path = rel
+    case .refused(why)
+        return why
+    body: = files.read_text(full, arena) catch why
+        return why
+    lines: = files.split_lines(body, arena)
+    if s.to_line > I64::lines.len
+        return arena.text().s("the file has only \{lines.len\} lines").take()
+    cited: = arena.text()
+    for k in Range.asc(Sz::(s.to_line - s.from_line + 1I64))
+        cited.s(lines.get(Sz::(s.from_line - 1I64) + k)).c(' ')
+    if collapse_spaces(cited.take(), arena).find_str(quote).is_none()
+        return "the quote does not stand in those lines"
+    return ""
+
+priv fn char_count(text: U8[]): Sz //< how many UTF-8 characters the text holds
+    //< Each byte that does not continue a character starts one.
+    $n: Sz = 0
+    for c in text
+        if (c & 0xC0U8) != 0x80U8
+            n += 1
+    return n
+
+fn collapse_spaces(text: U8[], arena: Arena$@): U8[] //<
+    //< The text with each run of spaces, tabs and line breaks made one space, and none at the ends
+    out: = arena.text()
+    $pending: = false
+    $any: = false
+    for c in text
+        if c.is_space()
+            pending = any
+            continue
+        if pending
+            out.c(' ')
+            pending = false
+        out.c(c)
+        any = true
+    return out.take()
+
+// ==========================================
+// The lines ksagent adds, in the question's language
+// ==========================================
+
+fn span_words(s: Source, lang: Lang, arena: Arena$@): U8[] //< the lines a source cites, as words
+    //< One line is named alone: `line 3`, not `lines 3–3`.
+    span: = arena.text()
+    one: = s.from_line == s.to_line
+    switch lang
+    case .ja
+        span.s("\{s.from_line\}")
+        if !one
+            span.s("–\{s.to_line\}")
+        span.s("行目")
+    case .en
+        span.s("line " if one else "lines ").s("\{s.from_line\}")
+        if !one
+            span.s("–\{s.to_line\}")
+    return span.take()
+
+fn ended_line(a: Answer@, arena: Arena$@): U8[] //<
+    //< The one line an answer that did not finish says, or empty when it finished
+    switch a.outcome
+    case .stopped(why)
+        return arena.text()
+            .s(("回答の途中で止まりました: " if a.lang == Lang.ja
+            else "Stopped without an answer: ")).s(why).take()
+    case .failed(why)
+        return arena.text()
+            .s("回答できませんでした: " if a.lang == Lang.ja else "No answer: ").s(why)
+            .take()
+    default
+        return ""
+
+// ==========================================
+// Writing an answer out
+// ==========================================
+
+fn write_console(a: Answer@, out: Writer, arena: Arena$@) //<
+    //< Writes the answer for a terminal: the text, then each checked source with its quote
+    //< Each removed source is named with the reason, so whoever tries a model sees what it got
+    //< wrong.
+    switch a.outcome
+    case .answered
+        out.s(a.text).c('\n')
+    case .not_found
+        out.s(a.lang.not_found_line()).c('\n')
+    default
+        out.s(ended_line(a, arena)).c('\n')
+        return
+    if a.sources.len > 0
+        out.c('\n').s(a.lang.sources_word()).c('\n')
+    for i in Range.asc(a.sources.len)
+        s: = a.sources.get(i)
+        out.s("- ").s(s.path).c(' ').s(span_words(s, a.lang, arena)).c('\n')
+        out.s("  > ").s(collapse_spaces(s.quote, arena)).c('\n')
+    if a.removed.len > 0
+        out.c('\n').s(a.lang.removed_line(a.removed.len, arena)).c('\n')
+        for i in Range.asc(a.removed.len)
+            out.s("  (").s(a.removed.get(i)).s(")\n")
+    if a.is_unverified()
+        out.c('\n').s(a.lang.unverified_line()).c('\n')

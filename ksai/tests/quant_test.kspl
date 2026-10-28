@@ -1,0 +1,579 @@
+//< ksai's GGUF formats against llama.cpp's reference, and their products against llama.cpp's
+//< The reference files in `quant_data/` come from llama.cpp's Python package `gguf` and its C
+//< library (`tools/ai_assist/make_quant_fixtures.py`), so this test needs no Python.
+import "ksai/quant" + { Q8_input, Quant_error, Quant_format, Quant_matrix }
+import "ksai/quantize" as _quantize // `Quant_matrix.quantize`
+#cfg(!blas)
+import "ksai/tensor" + { Tensor } // `matmul_split`, which a BLAS build does not have
+#cfg(blas)
+import "ksai/tensor" { Tensor }
+import "ksai/tests/quant_case" + { Case, Product_case }
+import "std/bytes" as std_bytes
+import "std/chars"
+import "std/io"
+import "std/math"
+import "std/mem" + { Arena }
+import "std/prng"
+import "std/str"
+import "std/strfmt"
+import "std/verdict"
+
+embed "ksai/tests/quant_data/f16.bin" as f16_file
+embed "ksai/tests/quant_data/bf16.bin" as bf16_file
+embed "ksai/tests/quant_data/q8_0.bin" as q8_0_file
+embed "ksai/tests/quant_data/q4_k.bin" as q4_k_file
+embed "ksai/tests/quant_data/q5_0.bin" as q5_0_file
+embed "ksai/tests/quant_data/q6_k.bin" as q6_k_file
+embed "ksai/tests/quant_data/q3_k.bin" as q3_k_file
+embed "ksai/tests/quant_data/q5_k.bin" as q5_k_file
+embed "ksai/tests/quant_data/dot_q4_k.bin" as dot_q4_k_file
+embed "ksai/tests/quant_data/dot_q6_k.bin" as dot_q6_k_file
+embed "ksai/tests/quant_data/dot_q5_0.bin" as dot_q5_0_file
+embed "ksai/tests/quant_data/dot_q8_0.bin" as dot_q8_0_file
+embed "ksai/tests/quant_data/dot_q3_k.bin" as dot_q3_k_file
+embed "ksai/tests/quant_data/dot_q5_k.bin" as dot_q5_k_file
+
+priv fn case_of(file: U8[], format: Quant_format, arena: Arena$@): Case //<
+    //< A reference file, which must be of the format named
+    c: = quant_case.read_case(file, arena)
+    assert(c.format == format, "quant: a reference file is of another format")
+    return c
+
+priv fn all_cases(arena: Arena$@): Case[] //< every reference file
+    cases: = Case$@::arena.alloc(8 * sizeof(Case))
+    (cases + 0)$ = case_of(f16_file, .f16, arena)
+    (cases + 1)$ = case_of(bf16_file, .bf16, arena)
+    (cases + 2)$ = case_of(q8_0_file, .q8_0, arena)
+    (cases + 3)$ = case_of(q4_k_file, .q4_k, arena)
+    (cases + 4)$ = case_of(q6_k_file, .q6_k, arena)
+    (cases + 5)$ = case_of(q5_0_file, .q5_0, arena)
+    (cases + 6)$ = case_of(q3_k_file, .q3_k, arena)
+    (cases + 7)$ = case_of(q5_k_file, .q5_k, arena)
+    return Case[]::{ .ptr = cases, .len = 8 }
+
+fn test_quant_decodes_as_gguf(arena: Arena$@) //<
+    //< Each format's rows, decoded, are the reference's numbers bit for bit
+    verdict
+        .start("[Quant] F16, BF16, Q5_0, Q8_0 and Q3_K to Q6_K decode as llama.cpp's gguf does...")
+    $checked: Sz = 0
+    for c in all_cases(arena)
+        assert(quant_case.decode_mismatches(c@, arena) == 0,
+            "quant: a decoded number differs from gguf's")
+        checked += c.rows * c.cols
+    verdict.pass(arena.text().s("\{checked\} numbers decode to gguf's bits").take())
+
+fn test_quant_f16_rounds_as_numpy(arena: Arena$@) //<
+    //< An F32 rounded to a half gives numpy's half: ties to even, subnormals and overflow included
+    verdict.start("[Quant] F32 to F16 rounds ties to even, as numpy and ggml do...")
+    c: = case_of(f16_file, .f16, arena)
+    for i in Range.asc(c.inputs.len)
+        want: = quant.half_at(c.encoded.ptr + 2 * i)
+        got: = quant.f16_from_f32(c.inputs[i])
+        if want != got
+            io.err().s("input \{c.inputs[i]\}: half \{got:x\} for \{want:x\}\n")
+        assert(want == got, "quant: f16_from_f32 differs from numpy")
+    verdict
+        .pass(arena.text().s("\{c.inputs.len\} numbers round to numpy's halves").take())
+
+priv fn tensor_of(xs: F32[], rows: Sz, cols: Sz, arena: Arena$@): Tensor<|F32|> //< a copy, shaped
+    shape: Sz[2] = ::{ rows, cols }
+    t: = Tensor<|F32|>(Sz[]::shape, arena)
+    mem.copy(Void$@::t.data, Void$@::xs.ptr, rows * cols * 4)
+    return t
+
+fn test_quant_q8_0_quantizes_as_ggml(arena: Arena$@) //<
+    //< Q8_0 made from F32 is the reference's bytes exactly
+    verdict.start("[Quant] F32 to Q8_0 writes the bytes ggml's reference quantizer writes...")
+    c: = case_of(q8_0_file, .q8_0, arena)
+    src: = tensor_of(c.inputs, c.rows, c.cols, arena)
+    m: = Quant_matrix.quantize(src, .q8_0, arena) catch e
+        io.err().s("\{e\}\n")
+        panic("quant: quantize to Q8_0 failed")
+    got: = m.bytes()
+    assert(got.len == c.encoded.len, "quant: Q8_0's length differs")
+    for i in Range.asc(got.len)
+        if got[i] != c.encoded[i]
+            io.err().s("Q8_0 byte \{i\}: \{got[i]:x\} for \{c.encoded[i]:x\}\n")
+        assert(got[i] == c.encoded[i], "quant: a Q8_0 byte differs from the reference")
+    verdict
+        .pass(arena.text().s("\{got.len\} bytes match, the all-zero block and the ties included")
+        .take())
+
+fn test_quant_q4_k_round_trip(arena: Arena$@) //<
+    //< Q4_K made from F32 decodes to within a step of each number
+    //< `gguf` has no Q4_K quantizer, and the decoder is checked against it above. So each number
+    //< must come back within one step of its group: the group's range over 15.
+    verdict.start("[Quant] F32 to Q4_K and back stays within one step of each group...")
+    c: = case_of(q4_k_file, .q4_k, arena)
+    src: = tensor_of(c.inputs, c.rows, c.cols, arena)
+    m: = Quant_matrix.quantize(src, .q4_k, arena) catch e
+        io.err().s("\{e\}\n")
+        panic("quant: quantize to Q4_K failed")
+    back: = F32$[]::{ .ptr = F32$@::arena.alloc(c.cols * 4), .len = c.cols }
+    $sq_err: F64 = 0.0
+    $sq_val: F64 = 0.0
+    for i in Range.asc(c.rows)
+        m.dequantize_row(i, back) catch panic("quant: a Q4_K row was refused")
+        for g in Range.asc(c.cols / 32)
+            $lo: F64 = 0.0
+            $hi: F64 = 0.0
+            for k in Range(g * 32, g * 32 + 32, 1)
+                v: = F64::c.inputs[i * c.cols + k]
+                lo = math.min(lo, v)
+                hi = math.max(hi, v)
+            step: = (hi - lo) / 15.0
+            for k in Range(g * 32, g * 32 + 32, 1)
+                v: = F64::c.inputs[i * c.cols + k]
+                err: = math.abs(F64::back[k] - v)
+                sq_err += err * err
+                sq_val += v * v
+                assert(err <= step + 1.0e-6, "quant: a Q4_K number is off by more than a step")
+    rel: = math.sqrt(sq_err / sq_val)
+    // About 4.5 bits a number: a tenth of the signal is already a broken fit.
+    assert(rel < 0.1, "quant: Q4_K's error is larger than 4 bits allow")
+    verdict
+        .pass(arena.text()
+        .s("each number within a step; the error is \{(rel * 100.0):.1\}% of the signal").take())
+
+// ==========================================
+// The products: a quantized matrix times F32 inputs, against the same numbers decoded first.
+// ==========================================
+
+priv fn random_tensor(rows: Sz, cols: Sz, rng: prng.Prng$@, arena: Arena$@): Tensor<|F32|>
+    shape: Sz[2] = ::{ rows, cols }
+    $t: = Tensor<|F32|>(Sz[]::shape, arena)
+    t.fill_uniform(rng, 1.0)
+    return t
+
+priv fn matrix_in(format: Quant_format, src: Tensor<|F32|>, arena: Arena$@): Quant_matrix //<
+    //< The weights in a format, made the way each format can be made here
+    rows: = src.shape[0]
+    cols: = src.shape[1]
+    if format == .q8_0 || format == .q4_k
+        return Quant_matrix.quantize(src, format, arena) catch panic("quant: quantize failed")
+    row_len: = format.row_bytes(cols) catch panic("quant: a test shape fails its blocks")
+    bytes: = U8$@::arena.alloc(rows * row_len)
+    if format != .f32 && format != .f16 && format != .bf16
+        // Random blocks with no quantizer here: the reference file's, tiled over the rows.
+        c: = case_of(reference_file(format), format, arena)
+        for i in Range.asc(rows * row_len)
+            (bytes + i)$ = c.encoded[i % c.encoded.len]
+    for i in Range.asc(rows * cols)
+        v: = (src.data + i)$
+        switch format
+        case .f32
+            mem.copy(Void$@::(bytes + 4 * i), Void$@::v@, 4)
+        case .f16
+            h: = quant.f16_from_f32(v)
+            (bytes + 2 * i)$ = U8::(h & 0xFF)
+            (bytes + 2 * i + 1)$ = U8::(h >> 8)
+        case .bf16
+            b: = quant.f32_bits(v)
+            (bytes + 2 * i)$ = U8::((b >> 16) & 0xFF)
+            (bytes + 2 * i + 1)$ = U8::(b >> 24)
+        case .q5_0, .q8_0, .q3_k, .q4_k, .q5_k, .q6_k {}
+    return Quant_matrix.from_bytes(format, rows, cols,
+        U8[]::{ .ptr = bytes, .len = rows * row_len })
+        catch panic("quant: a test matrix was refused")
+
+priv fn reference_file(format: Quant_format): U8[] //<
+    //< the decoding reference of a format with no quantizer
+    switch format
+    case .q3_k
+        return q3_k_file
+    case .q5_k
+        return q5_k_file
+    case .q6_k
+        return q6_k_file
+    case .q5_0
+        return q5_0_file
+    default
+        panic("quant: a format with a quantizer here, or a float one, has no tiled reference")
+
+priv const PRODUCT_TOL: F64 = 1.0e-5 //< the error allowed, as a share of Σ|w × x|.
+    //< The F32 sums run in 16 lanes over a few hundred numbers, which bounds the rounding near
+    //< 1e-6 of that sum; ten times that is room, and a wrong decode is off by far more.
+
+priv const FLOAT_FORMATS: Quant_format[_] = ::{ .f32, .f16, .bf16 }
+
+fn test_quant_product_matches_decoded(arena: Arena$@) //<
+    //< A float format's product is the product with its rows decoded to F32
+    //< Its inputs stay F32. The other formats' inputs are rounded to 8 bits, so their bound is
+    //< `test_quant_integer_product_near_f32`'s.
+    verdict.start("[Quant] F32, F16 and BF16 products equal the decoded matrix's, within 1e-5...")
+    $rng: = prng.Prng(7)
+    rows: Sz = 24
+    cols: Sz = 512
+    n: Sz = 3
+    x: = random_tensor(n, cols, rng@, arena)
+    $worst: F64 = 0.0
+    for format in FLOAT_FORMATS
+        w: = matrix_in(format, random_tensor(rows, cols, rng@, arena), arena)
+        y: = w.mul_mat(x) catch panic("quant: mul_mat refused valid shapes")
+        assert(y.shape[0] == n && y.shape[1] == rows, "quant: mul_mat's result is misshapen")
+        row: = F32$[]::{ .ptr = F32$@::arena.alloc(cols * 4), .len = cols }
+        for i in Range.asc(rows)
+            w.dequantize_row(i, row) catch panic("quant: a row was refused")
+            for t in Range.asc(n)
+                $exact: F64 = 0.0
+                $size: F64 = 0.0
+                for k in Range.asc(cols)
+                    p: = F64::row[k] * F64::(x.data + t * cols + k)$
+                    exact += p
+                    size += math.abs(p)
+                err: = math.abs(F64::(y.data + t * rows + i)$ - exact) / size
+                worst = math.max(worst, err)
+                assert(err <= PRODUCT_TOL, "quant: a product differs from the decoded one")
+    verdict
+        .pass(arena.text()
+        .s("3 formats; the largest error is \{(worst * 1.0e6):.3\} millionths of Σ|w x|").take())
+
+// ==========================================
+// The integer products: inputs rounded to 8 bits as llama.cpp rounds them, multiplied in whole
+// numbers. The reference files come from llama.cpp's own C library.
+// ==========================================
+
+priv const INT_FORMATS: Quant_format[_] = ::{ .q5_0, .q8_0, .q3_k, .q4_k, .q5_k, .q6_k }
+
+priv fn product_cases(arena: Arena$@): Product_case[] //< every product file
+    cases: = Product_case$@::arena.alloc(6 * sizeof(Product_case))
+    (cases + 0)$ = quant_case.read_product_case(dot_q4_k_file, arena)
+    (cases + 1)$ = quant_case.read_product_case(dot_q6_k_file, arena)
+    (cases + 2)$ = quant_case.read_product_case(dot_q5_0_file, arena)
+    (cases + 3)$ = quant_case.read_product_case(dot_q8_0_file, arena)
+    (cases + 4)$ = quant_case.read_product_case(dot_q3_k_file, arena)
+    (cases + 5)$ = quant_case.read_product_case(dot_q5_k_file, arena)
+    return Product_case[]::{ .ptr = cases, .len = 6 }
+
+priv fn product_weight(c: Product_case@): Quant_matrix //< the case's weight
+    return Quant_matrix.from_bytes(c.format, c.rows, c.cols, c.weights)
+        catch panic("quant: a product file's weight was refused")
+
+fn test_quant_inputs_round_as_ggml(arena: Arena$@) //<
+    //< Each input row rounded to 8 bits is llama.cpp's Q8_K or Q8_0 blocks: scales, numbers, sums
+    verdict.start("[Quant] inputs round to llama.cpp's Q8_K and Q8_0 blocks, bit for bit...")
+    $blocks: Sz = 0
+    for c in product_cases(arena)
+        block: = c.format.input_block()
+        size: = quant_case.rounded_block_bytes(c.format)
+        $q8: = Q8_input.round(c.inputs.ptr, c.n, c.cols, block, 1)
+        per_row: = c.cols / block
+        for t in Range.asc(c.n)
+            for b in Range.asc(per_row)
+                ref: = c.rounded.sub((t * per_row + b) * size, size)
+                d: = (q8.d + t * per_row + b)$
+                $at: Sz = 2
+                if block == quant.QK_K
+                    at = 4
+                    assert(quant.f32_bits(d) == ref.get_u32_le(0), "quant: a Q8_K scale differs")
+                    for g in Range.asc(quant.QK_K / 32)
+                        pair: =
+                            I32::I16::ref.get_u16_le(4 + 256 + 4 * g) + I32::I16::ref
+                            .get_u16_le(4 + 256 + 4 * g + 2)
+                        assert((q8.sums + (t * c.cols + b * block) / 32 + g)$ == pair,
+                            "quant: a Q8_K sum differs")
+                else
+                    assert(quant.f32_bits(d) == quant
+                        .f32_bits(quant.f16_to_f32(ref.get_u16_le(0))),
+                        "quant: a Q8_0 scale differs")
+                for i in Range.asc(block)
+                    got: = (q8.q + t * c.cols + b * block + i)$
+                    assert(got == I16::I8::ref[at + i], "quant: a rounded input differs from ggml's")
+                blocks += 1
+        q8.free()
+    verdict
+        .pass(arena.text().s("\{blocks\} blocks: each scale, number and sum is ggml's").take())
+
+// The plain reference: each weight's whole number read straight from the block, one at a time, as
+// ggml's own `vec_dot_*_generic` reads them, and summed in 64 bits.
+
+priv fn q4_k_term(blk: U8@, e: Sz, x: I64): I64 //<
+    //< weight `e` of a Q4_K block times `x`, with its scale
+    group: = e / 32
+    byte: = (blk + 16 + (e / 64) * 32 + e % 32)$
+    q: = I64::(byte & 0xF) if e % 64 < 32 else I64::(byte >> 4)
+    return I64::quant.k4_scale(group, blk + 4) * q * x
+
+priv fn q3_k_term(blk: U8@, e: Sz, x: I64): I64 //<
+    //< weight `e` of a Q3_K block times `x`, with its scale
+    half: = e / 128
+    group: = (e % 128) / 32
+    l: = e % 32
+    low: = I64::(((blk + 32 + half * 32 + l)$ >> U8::(2 * group)) & 3)
+    high: = ((blk + l)$ >> U8::(4 * half + group)) & 1
+    q: = low - (0 if high != 0 else 4)
+    return I64::quant.k3_scale(half * 8 + group * 2 + l / 16, blk + 96) * q * x
+
+priv fn q5_k_term(blk: U8@, e: Sz, x: I64): I64 //<
+    //< weight `e` of a Q5_K block times `x`, with its scale
+    group: = e / 32
+    byte: = (blk + 48 + (e / 64) * 32 + e % 32)$
+    low: = I64::(byte & 0xF) if e % 64 < 32 else I64::(byte >> 4)
+    high: = I64::(((blk + 16 + e % 32)$ >> U8::group) & 1)
+    return I64::quant.k4_scale(group, blk + 4) * (low | (high << 4)) * x
+
+priv fn q6_k_term(blk: U8@, e: Sz, x: I64): I64 //<
+    //< weight `e` of a Q6_K block times `x`, with its scale
+    half: = e / 128
+    quarter: = (e % 128) / 32
+    l: = e % 32
+    low_byte: = (blk + half * 64 + l + (32 if quarter % 2 == 1 else 0))$
+    low: = I64::(low_byte & 0xF) if quarter < 2 else I64::(low_byte >> 4)
+    high: = I64::(((blk + 128 + half * 32 + l)$ >> U8::(2 * quarter)) & 3)
+    scale: = I64::I8::(blk + 192 + half * 8 + quarter * 2 + l / 16)$
+    return scale * ((low | (high << 4)) - 32) * x
+
+priv fn small_block_term(format: Quant_format, blk: U8@, e: Sz, x: I64): I64 //<
+    //< Weight `e` of a Q8_0 or Q5_0 block times `x`
+    if format == .q8_0
+        return I64::I8::(blk + 2 + e)$ * x
+    high: =
+        (U32::quant.half_at(blk + 2) | (U32::quant.half_at(blk + 4) << 16)) >> U32::e
+    byte: = (blk + 6 + e % 16)$
+    low: = I64::(byte & 0xF) if e < 16 else I64::(byte >> 4)
+    return ((low | (I64::(high & 1) << 4)) - 16) * x
+
+priv fn plain_product(w: Quant_matrix@, row: Sz, q8: Q8_input@, t: Sz): F32 //<
+    //< One output computed plainly: integer sums per block, then the kernel's float steps
+    block: = q8.block
+    per_row: = w.cols() / block
+    bytes: = w.format().block_bytes()
+    row_len: = w.format().row_bytes(w.cols()) catch panic("quant: a row's size")
+    $o: F32 = 0.0
+    for b in Range.asc(per_row)
+        blk: = w.bytes().ptr + row * row_len + b * bytes
+        $sumi: I64 = 0
+        $summ: I64 = 0
+        for e in Range.asc(block)
+            x: = I64::(q8.q + t * w.cols() + b * block + e)$
+            switch w.format()
+            case .q3_k
+                sumi += q3_k_term(blk, e, x)
+            case .q4_k
+                sumi += q4_k_term(blk, e, x)
+                summ += I64::quant.k4_min(e / 32, blk + 4) * x
+            case .q5_k
+                sumi += q5_k_term(blk, e, x)
+                summ += I64::quant.k4_min(e / 32, blk + 4) * x
+            case .q6_k
+                sumi += q6_k_term(blk, e, x)
+            case .q5_0, .q8_0
+                sumi += small_block_term(w.format(), blk, e, x)
+            case .f32, .f16, .bf16 {}
+        dx: = (q8.d + t * per_row + b)$
+        $d_at: Sz = 0
+        if w.format() == .q6_k
+            d_at = 208
+        else if w.format() == .q3_k
+            d_at = 108
+        scale: = quant.f16_to_f32(quant.half_at(blk + d_at)) * dx
+        part: = scale * F32::I32::sumi
+        o = o + part
+        if w.format().has_mins()
+            low_scale: = quant.f16_to_f32(quant.half_at(blk + 2)) * dx
+            low: = low_scale * F32::I32::summ
+            o = o - low
+    return o
+
+fn test_quant_integer_products_are_exact(arena: Arena$@) //<
+    //< Each format's product is the plain computation of the same rounding, bit for bit
+    verdict
+        .start("[Quant] Q3_K to Q6_K, Q5_0 and Q8_0 products equal a plain integer sum exactly...")
+    $checked: Sz = 0
+    for c in product_cases(arena)
+        w: = product_weight(c@)
+        x: = tensor_of(c.inputs, c.n, c.cols, arena)
+        y: = w.mul_mat(x) catch panic("quant: mul_mat refused a product file's shapes")
+        $q8: = Q8_input.round(c.inputs.ptr, c.n, c.cols, c.format.input_block(), 1)
+        for t in Range.asc(c.n)
+            for i in Range.asc(c.rows)
+                want: = plain_product(w@, i, q8@, t)
+                got: = (y.data + t * c.rows + i)$
+                if quant.f32_bits(want) != quant.f32_bits(got)
+                    io.err()
+                        .s("blocks of \{c.format.block_bytes()\} bytes, input \{t\} row \{i\}: \
+                            \{got\} for \{want\}\n")
+                assert(quant.f32_bits(want) == quant.f32_bits(got),
+                    "quant: an integer product differs from the plain sum")
+                checked += 1
+        q8.free()
+    verdict.pass(arena.text().s("\{checked\} products, each the same bits").take())
+
+priv const LLAMA_TOL: F64 = 1.0e-5 //< the difference allowed from llama.cpp, a share of Σ|w × x|.
+    //< Both sides sum the same whole numbers; only the F32 sums of the blocks' parts run in
+    //< another order, which moves a result by far less.
+
+fn test_quant_products_follow_llama_cpp(arena: Arena$@) //<
+    //< Each product is llama.cpp's `vec_dot` of the same blocks, but for the order of F32 sums
+    verdict.start("[Quant] products equal llama.cpp's vec_dot, within 1e-5 of Σ|w x|...")
+    $worst: F64 = 0.0
+    for c in product_cases(arena)
+        w: = product_weight(c@)
+        x: = tensor_of(c.inputs, c.n, c.cols, arena)
+        y: = w.mul_mat(x) catch panic("quant: mul_mat refused a product file's shapes")
+        row: = F32$[]::{ .ptr = F32$@::arena.alloc(c.cols * 4), .len = c.cols }
+        for i in Range.asc(c.rows)
+            w.dequantize_row(i, row) catch panic("quant: a row was refused")
+            for t in Range.asc(c.n)
+                $size: F64 = 0.0
+                for k in Range.asc(c.cols)
+                    size += math.abs(F64::row[k] * F64::c.inputs[t * c.cols + k])
+                ref: = F64::c.products[t * c.rows + i]
+                err: = math.abs(F64::(y.data + t * c.rows + i)$ - ref) / size
+                worst = math.max(worst, err)
+                if err > LLAMA_TOL
+                    io.err()
+                        .s("blocks of \{c.format.block_bytes()\}: input \{t\} row \{i\}: \
+                            \{(y.data + t * c.rows + i)$\} for \{ref\}, size \{size\}\n")
+                assert(err <= LLAMA_TOL, "quant: a product differs from llama.cpp's")
+    verdict
+        .pass(arena.text()
+        .s("6 formats; the largest difference is \{(worst * 1.0e6):.3\} millionths of Σ|w x|")
+        .take())
+
+fn test_quant_integer_product_near_f32(arena: Arena$@) //<
+    //< Rounding the inputs moves a product by at most 0.6 of an input step times Σ|w|
+    //< A Q8_K number is off by at most half its block's step `max / 127`. A Q8_0 number is off by
+    //< up to 0.56 of a step, since its scale is rounded to an F16. The rest is F32 rounding.
+    verdict
+        .start("[Quant] integer products stay within 0.6 input steps × Σ|w| of the F32 product...")
+    $rng: = prng.Prng(17)
+    rows: Sz = 16
+    cols: Sz = 512
+    n: Sz = 3
+    x: = random_tensor(n, cols, rng@, arena)
+    $worst: F64 = 0.0
+    for format in INT_FORMATS
+        w: = matrix_in(format, random_tensor(rows, cols, rng@, arena), arena)
+        y: = w.mul_mat(x) catch panic("quant: mul_mat refused valid shapes")
+        block: = format.input_block()
+        row: = F32$[]::{ .ptr = F32$@::arena.alloc(cols * 4), .len = cols }
+        for i in Range.asc(rows)
+            w.dequantize_row(i, row) catch panic("quant: a row was refused")
+            for t in Range.asc(n)
+                $exact: F64 = 0.0
+                $size: F64 = 0.0
+                $bound: F64 = 0.0
+                for b in Range.asc(cols / block)
+                    $amax: F64 = 0.0
+                    $wsum: F64 = 0.0
+                    for k in Range(b * block, b * block + block, 1)
+                        xv: = F64::(x.data + t * cols + k)$
+                        p: = F64::row[k] * xv
+                        exact += p
+                        size += math.abs(p)
+                        amax = math.max(amax, math.abs(xv))
+                        wsum += math.abs(F64::row[k])
+                    bound += 0.6 * amax / 127.0 * wsum
+                err: = math.abs(F64::(y.data + t * rows + i)$ - exact)
+                worst = math.max(worst, err / bound)
+                assert(err <= bound + PRODUCT_TOL * size,
+                    "quant: an integer product is further from the F32 one than its rounding")
+    verdict
+        .pass(arena.text().s("6 formats; the largest error is \{(worst * 100.0):.0\}% of the bound")
+        .take())
+
+fn test_quant_threads_give_the_same_bits(arena: Arena$@) //<
+    //< One thread and several write the same bits, and one input row alone gives the same row
+    verdict.start("[Quant] a product on several threads writes one thread's bits...")
+    $rng: = prng.Prng(11)
+    rows: Sz = 96
+    cols: Sz = 512
+    w: = matrix_in(.q4_k, random_tensor(rows, cols, rng@, arena), arena)
+    x: = random_tensor(2, cols, rng@, arena)
+    shape: Sz[2] = ::{ 2, rows }
+    one: = Tensor<|F32|>(Sz[]::shape, arena)
+    many: = Tensor<|F32|>(Sz[]::shape, arena)
+    w.mul_mat_on(x, one, 1) catch panic("quant: the product on one thread was refused")
+    used: = w.mul_mat_on(x, many, 4) catch panic("quant: the product on threads was refused")
+    assert(used > 1, "quant: the split ran on one thread only, so it was not checked")
+    for i in Range.asc(one.size)
+        assert(quant.f32_bits((one.data + i)$) == quant.f32_bits((many.data + i)$),
+            "quant: the threads changed a product's bits")
+    // The second input row alone: the order of additions does not depend on the batch.
+    x1: = tensor_of(F32[]::{ .ptr = x.data + cols, .len = cols }, 1, cols, arena)
+    alone: = w.mul_mat(x1) catch panic("quant: mul_mat refused one row")
+    for i in Range.asc(rows)
+        assert(quant.f32_bits((alone.data + i)$) == quant.f32_bits((one.data + rows + i)$),
+            "quant: one input row alone gave other bits than in a batch")
+    check_matmul_threads(arena)
+    verdict
+        .pass(arena.text().s("\{used\} threads and one write the same bits, as does one row alone")
+        .take())
+
+#cfg(!blas)
+fn check_matmul_threads(arena: Arena$@) //< ksai's F32 matmul: several threads write one's bits
+    $rng: = prng.Prng(13)
+    a: = random_tensor(3, 200, rng@, arena)
+    b: = random_tensor(200, 300, rng@, arena)
+    shape: Sz[2] = ::{ 3, 300 }
+    one: = Tensor<|F32|>(Sz[]::shape, arena)
+    many: = Tensor<|F32|>(Sz[]::shape, arena)
+    tensor.matmul_split<|F32|>(one.data, a.data, b.data, 3, 200, 300, 1)
+    used: = tensor.matmul_split<|F32|>(many.data, a.data, b.data, 3, 200, 300, 4)
+    assert(used > 1, "quant: matmul's split ran on one thread only, so it was not checked")
+    $a2: = a
+    plain: = a2.matmul(b) catch panic("quant: matmul refused valid shapes")
+    for i in Range.asc(one.size)
+        bits: = quant.f32_bits((one.data + i)$)
+        assert(bits == quant.f32_bits((many.data + i)$), "quant: threads changed matmul's bits")
+        assert(bits == quant.f32_bits((plain.data + i)$), "quant: matmul's split changed its bits")
+
+#cfg(blas)
+fn check_matmul_threads(arena: Arena$@) //< nothing to check: BLAS's gemm runs its own threads
+    assert(arena != null, "quant: the test needs its arena")
+
+priv fn refused<|T|>(r: T!Quant_error, want: Quant_error): Bool //< whether it failed with `want`
+    switch r
+    case .ok
+        return false
+    case .err(e)
+        return e == want
+
+fn test_quant_refuses_wrong_sizes(arena: Arena$@) //<
+    //< Every size that does not fit the bytes fails by name before a byte is read
+    verdict.start("[Quant] wrong sizes, short and long bytes and misshapen operands are refused...")
+    bytes: U8[2*34] = ::{}
+    b: = U8[]::bytes
+    expect_refused(Quant_matrix.from_bytes(.q8_0, 2, 32, b.sub(0, 67)), .size_mismatch, "short")
+    expect_refused(Quant_matrix.from_bytes(.q8_0, 1, 32, b), .size_mismatch, "long")
+    expect_refused(Quant_matrix.from_bytes(.q8_0, 2, 48, b), .bad_shape, "a part block")
+    expect_refused(Quant_matrix.from_bytes(.q8_0, -1, 32, b), .bad_shape, "negative rows")
+    expect_refused(Quant_matrix.from_bytes(.q8_0, 2, 0, b), .bad_shape, "no columns")
+    expect_refused(Quant_matrix.from_bytes(.q4_k, 0x7FFFFFFF, 1 << 30, b), .size_mismatch,
+        "rows times the row's bytes overflowing")
+    m: = Quant_matrix.from_bytes(.q8_0, 2, 32, b) catch panic("quant: a valid matrix was refused")
+    $row: F32[32] = ::{}
+    $short_row: F32[31] = ::{}
+    past_end: = m.dequantize_row(2, F32$[]::row)
+    assert(refused<|Void|>(past_end, .out_of_bounds), "quant: row 2 of 2 was read")
+    before: = m.dequantize_row(-1, F32$[]::row)
+    assert(refused<|Void|>(before, .out_of_bounds), "quant: row -1 was read")
+    short: = m.dequantize_row(0, F32$[]::short_row)
+    assert(refused<|Void|>(short, .shape_mismatch), "quant: a short output row was written")
+    $rng: = prng.Prng(3)
+    wide: = m.mul_mat(random_tensor(1, 64, rng@, arena))
+    assert(refused<|Tensor<|F32|>|>(wide, .shape_mismatch), "quant: 64 inputs for 32 columns")
+    flat_shape: Sz[1] = ::{ 32 }
+    flat: = m.mul_mat(Tensor<|F32|>(Sz[]::flat_shape, arena))
+    assert(refused<|Tensor<|F32|>|>(flat, .shape_mismatch), "quant: a 1D input was taken")
+    out_shape: Sz[2] = ::{ 1, 3 }
+    misshapen: = m.mul_mat_into(random_tensor(1, 32, rng@, arena),
+        Tensor<|F32|>(Sz[]::out_shape, arena))
+    assert(refused<|Void|>(misshapen, .shape_mismatch), "quant: a misshapen result was taken")
+    q6: = Quant_matrix.quantize(random_tensor(2, 256, rng@, arena), .q6_k, arena)
+    assert(refused<|Quant_matrix|>(q6, .no_quantizer), "quant: Q6_K was made with no quantizer")
+    odd: = Quant_matrix.quantize(random_tensor(2, 96, rng@, arena), .q4_k, arena)
+    assert(refused<|Quant_matrix|>(odd, .bad_shape), "quant: 96 numbers were cut into blocks of 256")
+    verdict.pass(arena.text().s("each wrong size fails with its own name").take())
+
+priv fn expect_refused(r: Quant_matrix!Quant_error, want: Quant_error, what: U8[]) //<
+    //< A matrix that must be refused, with the reason named
+    switch r
+    case .ok
+        io.err().s("\{what\}\n")
+        panic("quant: a matrix that does not fit its bytes was made")
+    case .err(e)
+        if e != want
+            io.err().s("\{what\}: \{e\} for \{want\}\n")
+        assert(e == want, "quant: a matrix was refused for another reason")

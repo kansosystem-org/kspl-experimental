@@ -96,12 +96,20 @@ FORCE:
 # Caution: **Not `BROWSER`**: VS Code and desktops set it to a script that opens a URL elsewhere.
 # Caution: **Skip a snap.** Ubuntu's `chromium` runs confined and cannot read a page outside the
 # home folder, so every check of a page opened from a file fails while the served ones pass.
-KSMD_BROWSER := $(firstword $(wildcard /opt/chrome-linux/chrome) \
+# On Windows, Chrome stands outside `PATH`: in Program Files, or in the user's own folder for an
+# install without administrator rights. Caution: **That path holds a space**, so it is looked up
+# apart and never passes through `firstword`, which would cut it there.
+KSMD_BROWSER := $(or $(firstword $(wildcard /opt/chrome-linux/chrome) \
     $(wildcard /opt/pw-browsers/chromium-*/chrome-linux/chrome) \
+    $(wildcard /opt/pw-browsers/chromium-*/chrome-linux64/chrome) \
     $(shell for b in chromium google-chrome-stable google-chrome; do \
         p=$$(command -v $$b 2>/dev/null) || continue; \
         case "$$(readlink -f "$$p")" in (/snap/*) continue;; esac; \
-        grep -qs snap "$$p" && continue; echo "$$p"; break; done))
+        grep -qs snap "$$p" && continue; echo "$$p"; break; done)), \
+    $(if $(filter Windows_NT,$(OS)),$(shell \
+    for d in "$$PROGRAMFILES" "$$(printenv 'ProgramFiles(x86)')" "$$LOCALAPPDATA"; do \
+        [ -n "$$d" ] || continue; p="$$(cygpath -m "$$d")/Google/Chrome/Application/chrome.exe"; \
+        [ -f "$$p" ] && { echo "$$p"; break; }; done)))
 # Where it is 1, finding no browser is a failure rather than a SKIP, so a round that lost the tool
 # does not stay green. From the root it is 1 on Linux, whose image holds a browser
 # (`REQUIRE_SWITCHES` in the root's `mk/test.mk`); here it is off unless given.

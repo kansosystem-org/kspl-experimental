@@ -1,0 +1,227 @@
+//< The Qwen model on the tiny models' files: their scores against an F64 reference, and refusals
+//< The reference scores are in each file itself (`ksai.check.scores`). The generators compute
+//< them in F64 from the decoded weights, and check them against llama.cpp
+//< (`make_qwen_fixtures.py` and `make_qwen35_fixtures.py` in `tools/ai_assist/`). The Qwen3.5
+//< model has delta nets, so its running state is saved, restored and carried across calls here.
+import "ksai/gguf" { Gguf }
+import "ksai/qwen" { Qwen, Qwen_error }
+import "ksai/tensor" { Tensor }
+import "ksai/tests/gguf_test" { said, tiny }
+import "ksai/tokenizer"
+import "std/chars"
+import "std/ds" { List }
+import "std/math"
+import "std/mem" { Arena }
+import "std/str" // `arena.text()`
+import "std/strfmt" as _strfmt
+import "std/verdict"
+
+embed "ksai/tests/qwen_data/tiny_qwen3.gguf" as model_file
+embed "ksai/tests/qwen_data/tiny_qwen35.gguf" as model35_file
+
+priv const CONTEXT: Sz = 64 //< the cache the tests take, in positions
+priv const TOL: F64 = 0.0001 //< the largest gap allowed from the F64 reference
+    //< Caution: **Check how large the gap is before loosening it.** F32's rounding over two
+    //< blocks gives a few millionths of the scores here; a gap of another order means another
+    //< computation, not rounding.
+
+fn said_qwen(e: Qwen_error, arena: Arena$@): U8[] //< an error as `<variant> <what it names>`
+    switch e
+    case .gguf(inner)
+        return arena.text().s("gguf ").s(said(inner, arena)).take()
+    case .not_qwen(arch)
+        return arena.text().s("not_qwen ").s(arch).take()
+    case .bad_setting(key)
+        return arena.text().s("bad_setting ").s(key).take()
+    case .bad_shape(name)
+        return arena.text().s("bad_shape ").s(name).take()
+    case .unread(name)
+        return arena.text().s("unread ").s(name).take()
+
+priv fn loaded(g: Gguf@, arena: Arena$@): Qwen //< a tiny model, its cache empty
+    return Qwen.load(g, CONTEXT, arena) catch e
+        panic(U8$[]::arena.text().s("qwen: the tiny model is refused: ").s(said_qwen(e, arena))
+            .take())
+
+priv fn copied(scores: Tensor<|F32|>, arena: Arena$@): List<|F32|> //< the scores, kept
+    $out: = List<|F32|>(arena)
+    for i in Range.asc(scores.size)
+        out.push((scores.data + i)$)
+    return out
+
+priv fn same_bits(a: List<|F32|>@, b: List<|F32|>@): Bool //< whether two score lists are equal
+    if a.len != b.len
+        return false
+    for i in Range.asc(a.len)
+        if a.get(i) != b.get(i)
+            return false
+    return true
+
+fn test_qwen_matches_reference(arena: Arena$@) //<
+    //< The scores after each token are the F64 reference's, and reading in pieces changes no bit
+    verdict.start("[Qwen] the tiny Qwen3 model's scores are the F64 reference's")
+    g: = tiny(arena)
+    verdict.pass(matches_reference(g@, "Qwen3", arena))
+
+fn test_qwen35_matches_reference(arena: Arena$@) //<
+    //< The same for the tiny Qwen3.5 model: delta nets, a gated attention and partial RoPE
+    verdict.start("[Qwen] the tiny Qwen3.5 model's scores are the F64 reference's")
+    g: = Gguf.parse(model35_file, arena) catch panic("qwen: the tiny Qwen3.5 model is refused")
+    verdict.pass(matches_reference(g@, "Qwen3.5", arena))
+
+priv fn matches_reference(g: Gguf@, family: U8[], arena: Arena$@): U8[] //<
+    //< Checks one tiny model against its reference; says what was checked
+    $tokens: = g.ints("ksai.check.tokens", arena) catch panic("qwen: the check tokens")
+    want: = g.floats("ksai.check.scores", arena) catch panic("qwen: the reference scores")
+    $m: = loaded(g, arena)
+    vocab: = m.cfg.vocab
+    assert(want.len == tokens.len * vocab, "qwen: a reference row per token")
+    defer step: = Arena(1024 * 1024)
+    $gap: F64 = 0.0
+    $last: = List<|F32|>(arena)
+    for i in Range.asc(tokens.len)
+        scores: = m.forward(tokens.sub(i, 1), i, step)
+        for k in Range.asc(vocab)
+            d: = math.abs(F64::(scores.data + k)$ - F64::want.get(i * vocab + k))
+            if d > gap
+                gap = d
+        last = copied(scores, arena)
+        step.reset()
+    assert(gap <= TOL,
+        U8$[]::arena.text().s("qwen: the \{family\} scores are \{gap\} from the reference").take())
+    // The whole prompt in one call, and in two pieces, give the last scores bit for bit.
+    $whole: = loaded(g, arena)
+    one: = copied(whole.forward(tokens.slice(), 0, step), arena)
+    step.reset()
+    $pieces: = loaded(g, arena)
+    _first: = pieces.forward(tokens.sub(0, 5), 0, step)
+    two: = copied(pieces.forward(tokens.sub_from(5), 5, step), arena)
+    assert(same_bits(last@, one@) && same_bits(last@, two@),
+        "qwen: reading the prompt in pieces changes the scores")
+    return arena.text()
+        .s("\{tokens.len\} \{family\} positions within \{(gap * 1.0e6):.2\} millionths of the ")
+        .s("reference; one call, two and twelve give the same bits").take()
+
+fn test_qwen35_state_restores(arena: Arena$@) //<
+    //< A saved running state, restored after other tokens, reads on as if nothing came between
+    //< This is what lets a server keep the start of a conversation: the state cannot be rewound,
+    //< so it goes back to a copy. Position 0 starts it afresh.
+    verdict.start("[Qwen] the tiny Qwen3.5 model's running state is saved and restored")
+    g: = Gguf.parse(model35_file, arena) catch panic("qwen: the tiny Qwen3.5 model is refused")
+    $tokens: = g.ints("ksai.check.tokens", arena) catch panic("qwen: the check tokens")
+    $m: = loaded(g@, arena)
+    assert(m.recurrent(), "qwen: the Qwen3.5 model keeps a running state")
+    defer step: = Arena(1024 * 1024)
+    whole: = copied(m.forward(tokens.slice(), 0, step), arena)
+    step.reset()
+    // Five tokens, a copy, then other tokens in their place, then the copy again.
+    _five: = m.forward(tokens.sub(0, 5), 0, step)
+    step.reset()
+    $saved: = m.new_state(arena)
+    m.save_state(saved@)
+    assert(saved.tokens == 5, "qwen: the copy follows the five tokens read")
+    other: I32[3] = ::{ tokens[7], tokens[2], tokens[9] }
+    _wrong: = m.forward(I32[]::other, 5, step)
+    step.reset()
+    assert(m.state_tokens() == 8, "qwen: the state follows eight tokens")
+    m.restore_state(saved@)
+    assert(m.state_tokens() == 5, "qwen: the restored state follows five")
+    again: = copied(m.forward(tokens.sub_from(5), 5, step), arena)
+    step.reset()
+    assert(same_bits(whole@, again@), "qwen: the restored state reads on otherwise")
+    // Position 0 empties the state, whatever it followed before.
+    first: = copied(m.forward(tokens.slice(), 0, step), arena)
+    step.reset()
+    assert(same_bits(whole@, first@), "qwen: position 0 does not start afresh")
+    verdict.pass("a copy after 5 tokens, restored after 3 others, gives the scores of one run")
+
+priv fn value_at(file: U8[], key: U8[]): Sz //< where a key's value starts, after its type
+    if at: = file.find_str(key)
+        return at + key.len + 4
+    panic("qwen: a key the tiny model holds")
+
+priv fn refused(file: U8[], context: Sz, arena: Arena$@): U8[] //< why a model is refused
+    g: = Gguf.parse(file, arena) catch e
+        return arena.text().s("gguf ").s(said(e, arena)).take()
+    _m: = Qwen.load(g@, context, arena) catch e
+        return said_qwen(e, arena)
+    return ""
+
+priv fn expect(got: U8[], want: U8[], what: U8[], arena: Arena$@)
+    if !got.equals(want)
+        panic(U8$[]::arena.text().s(what).s(": got \"").s(got).s("\", want \"").s(want).s("\"")
+            .take())
+
+fn test_qwen_refuses_other_models(arena: Arena$@) //<
+    //< Another family, a setting that does not fit, and a tensor left unread are refused by name
+    verdict.start("[Qwen] a model that is not the one the code computes is refused by name")
+    expect(refused(model_file, CONTEXT, arena), "", "the tiny model", arena)
+    expect(refused(model_file, 4097, arena), "bad_setting qwen3.context_length",
+        "a cache past the trained context", arena)
+    f: = arena.dup_str(model_file)
+    arch: = value_at(model_file, "general.architecture") + 8
+    f[arch + 4] = '9'
+    expect(refused(f, CONTEXT, arena), "not_qwen qwen9", "another family", arena)
+    f[arch + 4] = '3'
+    blocks: = value_at(model_file, "qwen3.block_count")
+    f[blocks] = 1
+    expect(refused(f, CONTEXT, arena), "unread blk.1.attn_norm.weight",
+        "a block the settings leave out", arena)
+    f[blocks] = 2
+    ffn: = value_at(model_file, "qwen3.feed_forward_length")
+    f[ffn + 1] = 0
+    f[ffn] = 128
+    expect(refused(f, CONTEXT, arena), "bad_shape blk.0.ffn_gate.weight",
+        "a width the weights do not have", arena)
+    verdict.pass("another family, a cache too long, an unread block and a wrong width")
+
+fn test_qwen35_refuses_what_it_does_not_compute(arena: Arena$@) //<
+    //< Qwen3.5's own settings are checked: RoPE sections, the delta nets' widths, the pattern
+    verdict.start("[Qwen] a Qwen3.5 setting that the code does not compute is refused by name")
+    expect(refused(model35_file, CONTEXT, arena), "", "the tiny Qwen3.5 model", arena)
+    // The sections are an array: its element type, its length, then four I32s.
+    f: = arena.dup_str(model35_file)
+    sections: = value_at(model35_file, "qwen35.rope.dimension_sections") + 12
+    f[sections + 8] = 1
+    expect(refused(f, CONTEXT, arena), "bad_setting qwen35.rope.dimension_sections",
+        "a RoPE pair that a text position does not fill", arena)
+    f[sections + 8] = 2
+    state: = value_at(model35_file, "qwen35.ssm.state_size")
+    f[state] = 60
+    expect(refused(f, CONTEXT, arena), "bad_setting qwen35.ssm.state_size",
+        "a state row that is no whole number of eights", arena)
+    f[state] = 64
+    every: = value_at(model35_file, "qwen35.full_attention_interval")
+    f[every] = 4
+    expect(refused(f, CONTEXT, arena), "gguf missing blk.1.attn_qkv.weight",
+        "blocks the interval makes delta nets", arena)
+    verdict.pass("a RoPE section, a state width and the layer pattern")
+
+priv fn id_of(tokens: List<|U8[]|>@, text: U8[]): I32 //< a token's ID: its place in the list
+    for i in Range.asc(tokens.len)
+        if tokens.get(i).equals(text)
+            return I32::i
+    panic("qwen: a token the tiny vocabulary holds")
+
+fn test_qwen_vocabulary_from_file(arena: Arena$@) //<
+    //< The file's tokens, merges and types make a tokenizer: merges apply, markers keep their text
+    verdict.start("[Qwen] the tiny model's vocabulary becomes a tokenizer")
+    g: = tiny(arena)
+    $tokens: = g.texts("tokenizer.ggml.tokens", arena) catch panic("qwen: the tokens")
+    $merges: = g.texts("tokenizer.ggml.merges", arena) catch panic("qwen: the merges")
+    $types: = g.ints("tokenizer.ggml.token_type", arena) catch panic("qwen: the token types")
+    $tok: = tokenizer.Tokenizer(arena)
+    tok.load_lists(tokens.slice(), types.slice(), merges.slice())
+        catch panic("qwen: the tiny vocabulary is refused")
+    text: = " the day 休?"
+    ids: = tok.encode(text, arena)
+    want: I32[5] = ::{ id_of(tokens@, "Ġthe"), id_of(tokens@, "Ġday"), id_of(tokens@, "Ġ"),
+        id_of(tokens@, "ä¼ĳ"), id_of(tokens@, "?") }
+    assert(ids.len == 5, "qwen: the merges join the bytes into five tokens")
+    for i in Range.asc(5)
+        assert(ids.get(i) == want[i], "qwen: a merged token's ID")
+    assert(tok.decode(ids, arena).equals(text), "qwen: the tokens decode to the text")
+    end: = tok.vocab.get("<|im_end|>").unwrap_or(-1)
+    assert(end == id_of(tokens@, "<|im_end|>") && tok.decode_one(end).equals("<|im_end|>"),
+        "qwen: a marker is found by its text, and decodes to it")
+    verdict.pass("the merges join bytes, and a marker keeps its text")

@@ -1,7 +1,7 @@
 #!/usr/bin/env -S ksplc run
 //< Reads one byte sequence from outside through a ksai reader, then uses what it read
-//< **ksai receives two things from outside**: the weights file (safetensors) and the tokenizer's
-//< vocabulary.
+//< **ksai receives three things from outside**: a weights file (safetensors), a model file
+//< (GGUF), and the tokenizer's vocabulary.
 //< Caution: **Do not stop after reading.** Failures happen where the data is **used**
 //< (`get_tensor` returns a view onto raw bytes, so a range mistake does not show until an element
 //< is read).
@@ -9,8 +9,10 @@
 
 // ==========================================
 // Usage:
-//   read_prog <kind> <file>      (the kind is `safetensors` or `vocab`)
+//   read_prog <kind> <file>      (the kind is `safetensors`, `gguf` or `vocab`)
 // ==========================================
+import "ksai/gguf" { Gguf }
+import "ksai/qwen" { Qwen }
 import "ksai/safetensors" as st
 import "ksai/tensor" { Tensor }
 import "ksai/tokenizer" as tok
@@ -56,6 +58,42 @@ priv fn read_safetensors(path: U8[], arena: Arena$@): I32 //< reads the weights 
         ok += 1
     return 0 if ok > 0 else 1
 
+priv fn read_gguf(path: U8[], arena: Arena$@): I32 //< reads a model file, then runs the model
+    //< **Every tensor is decoded whole**, the vocabulary is built, and the model reads two tokens.
+    //< So a range the reader let through is read to its last byte.
+    raw: = io.read_file(path, null) catch
+        return 1
+    defer dealloc(Void$@::raw.ptr)
+    g: = Gguf.parse(raw, arena) catch
+        return 1
+    for t in g.tensors()
+        m: = t.matrix() catch
+            return 1
+        row: = F32$@::arena.alloc(m.cols() * 4)
+        for r in Range.asc(m.rows())
+            m.dequantize_row(r, F32$[]::{ .ptr = row, .len = m.cols() }) catch
+                return 1
+            for k in Range.asc(m.cols())
+                used += F64::(row + k)$
+    $tokens: = g.texts("tokenizer.ggml.tokens", arena) catch
+        return 1
+    $merges: = g.texts("tokenizer.ggml.merges", arena) catch
+        return 1
+    $types: = g.ints("tokenizer.ggml.token_type", arena) catch
+        return 1
+    $t: = tok.Tokenizer(arena)
+    t.load_lists(tokens.slice(), types.slice(), merges.slice()) catch
+        return 1
+    used += F64::t.encode("Kanso café ✓ 12", arena).len
+    $m: = Qwen.load(g@, 8, arena) catch
+        return 1
+    if m.cfg.vocab < 2
+        return 1
+    defer step: = Arena(1024 * 1024)
+    scores: = m.forward(I32[]::{ 0, 1 }, 0, step)
+    use_tensor<|F32|>(scores)
+    return 0
+
 priv fn read_vocab(path: U8[], arena: Arena$@): I32 //< reads the vocabulary
     //< **One file holds both texts**: the vocabulary up to its first empty line, and the merges
     //< after it. So one mutation can damage either or both.
@@ -79,12 +117,14 @@ priv fn read_vocab(path: U8[], arena: Arena$@): I32 //< reads the vocabulary
 fn main(): I32
     args: = sys.args()
     if args.len < 3
-        io.err().s("usage: read_prog <safetensors|vocab> <file>\n")
+        io.err().s("usage: read_prog <safetensors|gguf|vocab> <file>\n")
         return 2
     defer arena: = Arena(64 * 1024 * 1024)
     $code: = 2
     if args[1].equals("safetensors")
         code = read_safetensors(args[2], arena)
+    else if args[1].equals("gguf")
+        code = read_gguf(args[2], arena)
     else if args[1].equals("vocab")
         code = read_vocab(args[2], arena)
     else

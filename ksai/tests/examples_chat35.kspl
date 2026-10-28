@@ -1,0 +1,242 @@
+//< Checks `chat_server` on Qwen3.5: its template, its tool calls and thinking, its kept state
+//< Not a suite; part of `ksai/tests/examples_main.kspl`. The model is the tiny Qwen3.5 model in
+//< `ksai/tests/qwen_data/`, whose chat template is Qwen3.5-9B's. **Its delta nets keep a running
+//< state**, so the kept cache must give a fresh run's scores here too. The Qwen3-Instruct-2507
+//< side is `ksai/tests/examples_chat.kspl`, whose helpers this file shares.
+import "ksai/examples/chat_server/engine" { Engine }
+import "ksai/examples/chat_server/reply"
+import "ksai/examples/chat_server/request"
+import "ksai/examples/chat_server/template"
+import "ksai/examples/chat_server/template35"
+import "ksai/gguf" { Gguf }
+import "ksai/tests/examples_chat" as chat
+import "ksai/tests/examples_chat_http" as http_test
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/json"
+import "std/mem" { Arena }
+import "std/str" { Str_builder } // `arena.text()`
+import "std/strfmt" as _strfmt
+import "std/verdict"
+
+embed "ksai/tests/qwen_data/tiny_qwen35.gguf" as model_bytes
+embed "ksai/tests/qwen_data/template35_cases.json" as cases_text
+
+priv const MODEL_FILE: U8[] = "tiny_qwen35.gguf" //< the tiny model's file under the work folder
+
+priv fn rendered(body: U8[], e: Engine$@, arena: Arena$@): List<|I32|>$@!U8[] //<
+    //< The prompt a request body renders to, thinking on unless the request turns it off
+    c: = request.read_chat(body, arena) catch why
+        panic(U8$[]::arena.text().s("the request is refused: ").s(why).take())
+    $conv: = c.conv
+    conv.thinking = c.thinking.unwrap_or(true)
+    return template35.render(conv@, e.tok, e.marks, arena)!
+
+priv fn prompt_of(body: U8[], e: Engine$@, arena: Arena$@): List<|I32|>$@ //< a prompt that renders
+    return rendered(body, e, arena) catch why
+        panic(U8$[]::arena.text().s("the conversation is refused: ").s(why).take())
+
+fn test_chat35_template_tokens(arena: Arena$@) //<
+    //< Each case renders to llama.cpp's text for it, every marker by its ID
+    //< The cases and their texts come from llama.cpp's Jinja formatter on Qwen3.5's template
+    //< (`tools/ai_assist/make_qwen35_fixtures.py`), the arguments given as `llama-server` gives
+    //< them. Decoding the IDs gives the text back, and each marker stands as its ID.
+    verdict.start("[chat_server] Qwen3.5's template renders llama.cpp's text, markers by their IDs")
+    $e: = chat.engine_over(model_bytes, arena)
+    doc: = json.parse(cases_text, arena) catch panic("the template cases are JSON")
+    cases: = doc.val.arr_list(arena)
+    assert(cases.len > 0, "the template cases are read")
+    for i in Range.asc(cases.len)
+        defer $body: = Str_builder()
+        cases.get(i).get("request").dump(body@)
+        want: = cases.get(i).get("prompt").as_str().unwrap_or("")
+        got: = prompt_of(body.slice(), e@, arena)
+        text: = e.tok.decode(got, arena)
+        if !text.equals(want)
+            panic(U8$[]::arena.text().s("case \{i\} renders otherwise:\n").s(text)
+                .s("\n--- llama.cpp renders:\n").s(want).take())
+        $in_messages: Sz = 0
+        messages: = cases.get(i).get("request").get("messages").arr_list(arena)
+        for k in Range.asc(messages.len)
+            m: = messages.get(k)
+            if !m.get("role").as_str().unwrap_or("").equals("assistant")
+                in_messages += chat
+                    .control_texts_in(m.get("content").as_str().unwrap_or(""))
+        assert(chat.marks_in(got, e.marks) + in_messages == chat.mark_texts_in(want),
+            U8$[]::arena.text().s("case \{i\}: a marker is written as text").take())
+    g: = Gguf.parse(model_bytes, arena) catch panic("the tiny Qwen3.5 model is read")
+    own: = g.text("tokenizer.chat_template") catch ""
+    assert(template35.matches(own) && !template35.matches(own.sub(0, own.len - 1)) &&
+        !template.matches(own), "the file's template is matched by its hash, and no other is")
+    verdict
+        .pass(arena.text().s("\{cases.len\} conversations, with tools, thinking and without, as ")
+        .s("llama.cpp renders them").take())
+
+fn test_chat35_template_refusals(arena: Arena$@) //<
+    //< What Qwen3.5's template refuses is refused with its message, as `llama-server` refuses it
+    verdict.start("[chat_server] a conversation Qwen3.5's template refuses is refused")
+    $e: = chat.engine_over(model_bytes, arena)
+    late: =
+        rendered("{\"messages\":[{\"role\":\"user\",\"content\":\"Hi\"},{\"role\":\"system\",\"content\":\"Be brief.\"}]}",
+        e@, arena)
+    no_question: =
+        rendered("{\"messages\":[{\"role\":\"system\",\"content\":\"Be brief.\"}]}", e@, arena)
+    bad_args: =
+        rendered("{\"messages\":[{\"role\":\"user\",\"content\":\"Go.\"},{\"role\":\"assistant\",\"content\":null,\"tool_calls\":[{\"id\":\"a\",\"type\":\"function\",\"function\":{\"name\":\"search\",\"arguments\":\"{not json\"}}]}]}",
+        e@, arena)
+    assert(refusal(late).equals("System message must be at the beginning.") &&
+        refusal(no_question).equals("No user query found in messages.") &&
+        refusal(bad_args).starts_with("Failed to parse tool call arguments", 0),
+        "each refusal names what the template refuses")
+    verdict.pass("a late system message, no question, and arguments that are no JSON")
+
+priv fn refusal(r: List<|I32|>$@!U8[]): U8[] //< the message a refused render gives; empty if none
+    _ids: = r catch why
+        return why
+    return ""
+
+priv const TOOLS: U8[] =
+    "{\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"read\",\"parameters\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"from_line\":{\"type\":\"integer\"},\"note\":{\"type\":[\"string\",\"null\"]}}}}}]}" //<
+        //< one tool whose parameters are a text, a whole number, and a text or null
+
+priv fn split(text: U8[], thinking: Bool, arena: Arena$@): reply.Parsed //< the text split
+    doc: = json.parse(TOOLS, arena) catch panic("the tools are JSON")
+    tools: = doc.val.get("tools").arr_list(arena)
+    return reply.split_calls(text, .qwen35, tools@, thinking, arena)
+
+fn test_chat35_tool_calls_read(arena: Arena$@) //<
+    //< Qwen3.5's calls, each argument typed by its parameter, and its thinking apart
+    verdict.start("[chat_server] Qwen3.5's tool calls and thinking are read out of the text")
+    one: =
+        split("Let me \
+            read.\n</think>\n\nSure.\n\n<tool_call>\n<function=read>\n<parameter=path>\nleave.md\n</parameter>\n<parameter=from_line>\n3\n</parameter>\n<parameter=note>\nnull\n</parameter>\n</function>\n</tool_call>",
+        true, arena)
+    assert(one.reasoning.equals("Let me read.") && one.content.equals("Sure.") &&
+        one.calls.len == 1 && one.calls.get(0).name.equals("read") &&
+        one.calls.get(0).arguments.equals("{\"path\":\"leave.md\",\"from_line\":3,\"note\":null}"),
+        U8$[]::arena.text().s("one call with its thinking: ").s(one.calls.get(0).arguments).take())
+    // A text parameter keeps a number as text; thinking cut short by a call ends at the call.
+    two: =
+        split("Find \
+            it.\n<tool_call>\n<function=read>\n<parameter=path>\n12\n</parameter>\n</function>\n</tool_call>\n<tool_call>\n<function=read>\n<parameter=path>\nb.md\n</parameter>\n</function>",
+        true, arena)
+    assert(two.reasoning.equals("Find it.") && two.content.len == 0 && two.calls.len == 2 &&
+        two.calls.get(0).arguments.equals("{\"path\":\"12\"}") &&
+        two.calls.get(1).arguments.equals("{\"path\":\"b.md\"}"),
+        "two calls, the last with no closing tag, a text parameter kept as text")
+    broken_text: = "Here.\n<tool_call>\n<function=read>\n<parameter=path>\na.md\n</tool_call>"
+    broken: = split(broken_text, false, arena)
+    assert(broken.calls.len == 0 && broken.reasoning.len == 0 &&
+        broken.content.equals(broken_text), "a broken block stays in the content as written")
+    p: = split("Mulling.\n</think>\n\nTen days.", true, arena)
+    ids: = reply.Answer_ids::{ .id = "chatcmpl-1", .first_call = 1, .created = 1700000000I64,
+        .model = "mini" }
+    use: = reply.Usage::{ .prompt = 4, .completion = 6, .cached = 0 }
+    doc: =
+        json.parse(reply.answer_json(p@, .stop, ids, use, arena), arena) catch
+        panic("the answer is JSON")
+    msg: = doc.val.get("choices").get_at(0).get("message")
+    assert(msg.get("content").as_str().unwrap_or("").equals("Ten days.") &&
+        msg.get("reasoning_content").as_str().unwrap_or("").equals("Mulling."),
+        "the thinking goes to reasoning_content, apart from the content")
+    verdict.pass("calls typed by their parameters, thinking apart, a broken block kept as text")
+
+priv const FIRST_REQUEST: U8[] =
+    "{\"messages\":[{\"role\":\"user\",\"content\":\"How many days of paid leave?\"}]}"
+
+priv const FOLLOW_REQUEST: U8[] =
+    "{\"messages\":[{\"role\":\"user\",\"content\":\"How many days of paid \
+        leave?\"},{\"role\":\"assistant\",\"content\":\"Ten\"},{\"role\":\"user\",\"content\":\"And \
+        sick days?\"}]}"
+
+priv const THIRD_REQUEST: U8[] =
+    "{\"messages\":[{\"role\":\"user\",\"content\":\"How many days of paid \
+        leave?\"},{\"role\":\"assistant\",\"content\":\"Ten\"},{\"role\":\"user\",\"content\":\"And \
+        sick \
+        days?\"},{\"role\":\"assistant\",\"content\":\"Five\",\"reasoning_content\":\"look\"}]}" //<
+            //< the follow-up with an answer after it: it holds the follow-up's prompt whole
+
+priv fn kept_matches_fresh(e: Engine$@, body: U8[], arena: Arena$@): Sz //<
+    //< Feeds a prompt to `e` and to a fresh engine; stops unless the scores match bit for bit
+    //< Returns how many tokens `e` kept.
+    prompt: = prompt_of(body, e, arena)
+    kept: = e.feed(prompt.slice())
+    $fresh: = chat.engine_over(model_bytes, arena)
+    _none: = fresh.feed(prompt.slice())
+    a: = chat.last_scores(e, arena)
+    b: = chat.last_scores(fresh@, arena)
+    assert(chat.same_scores(a@, b@),
+        U8$[]::arena.text().s("after keeping \{kept\} tokens the scores are not a fresh run's")
+        .take())
+    return kept
+
+priv fn turn_of(prompt: List<|I32|>$@, e: Engine$@): Sz //< where the prompt's last turn opens
+    $at: = prompt.len - 1
+    for at > 0 && prompt.get(at) != e.marks.im_start
+        at -= 1
+    return at
+
+fn test_chat35_state_kept_matches_fresh(arena: Arena$@) //<
+    //< The state copied where the answer's turn opens lets the next prompt read on from it
+    //< The delta nets' state cannot go back, so a prompt that parts from what the cache holds
+    //< reads on from the latest copy at or before the parting, or from nothing.
+    verdict.start("[chat_server] Qwen3.5's kept state gives a fresh run's scores")
+    $e: = chat.engine_over(model_bytes, arena)
+    first: = prompt_of(FIRST_REQUEST, e@, arena)
+    $pick: = chat.greedy()
+    answer: = e.generate(first.slice(), 4, pick@, arena)
+    assert(answer.reused == 0 && answer.tokens.len == 4, "the first request keeps nothing")
+    // The follow-up writes the answer back with no thinking block, so it parts from the cache
+    // inside the first prompt's last turn: it reads on from the copy where that turn opens.
+    follow: = kept_matches_fresh(e@, FOLLOW_REQUEST, arena)
+    assert(follow == turn_of(first, e@),
+        U8$[]::arena.text().s("the follow-up kept \{follow\} tokens, not \{turn_of(first, e@)\}")
+        .take())
+    second: = prompt_of(FOLLOW_REQUEST, e@, arena)
+    // The same prompt again goes back to the copy where its own last turn opens.
+    same: = kept_matches_fresh(e@, FOLLOW_REQUEST, arena)
+    // A prompt that holds the follow-up's whole reads on with no copy.
+    third: = kept_matches_fresh(e@, THIRD_REQUEST, arena)
+    // A prompt that parts before every copy starts afresh.
+    other: =
+        kept_matches_fresh(e@,
+        "{\"messages\":[{\"role\":\"system\",\"content\":\"Be \
+            brief.\"},{\"role\":\"user\",\"content\":\"Hi\"}]}", arena)
+    assert(same == turn_of(second, e@) && third == second.len && other == 0,
+        U8$[]::arena.text().s("kept \{same\}, \{third\} and \{other\} tokens, not ")
+        .s("\{turn_of(second, e@)\}, \{second.len\} and 0").take())
+    verdict
+        .pass(arena.text().s("a follow-up, the same prompt, a longer one and another kept ")
+        .s("\{follow\}, \{same\}, \{third\} and 0 tokens, each with a fresh run's scores").take())
+
+fn test_chat35_server_http(chat_exe: U8[], work: U8[], arena: Arena$@) //<
+    //< The built server loads a Qwen3.5 file and answers, with thinking and without
+    verdict.start("[chat_server] the built server answers over HTTP from a Qwen3.5 file")
+    dir: = chat.chat_dir(work, arena)
+    path: = fs.join(dir, MODEL_FILE, arena)
+    io.write_file(path, model_bytes) catch panic("the tiny Qwen3.5 model can be written")
+    $child: = http_test.started(chat_exe, path, arena)
+    port: = http_test.port_of(child@, arena)
+    fault: = asked_all(port, arena)
+    child.kill()
+    assert(fault.len == 0, arena.dup_str(fault))
+    verdict.pass("a request with thinking and one without get whole answers")
+
+priv fn asked_all(port: I32, arena: Arena$@): U8[] //< empty where each answer is right
+    thinking: = http_test.asked(port, "POST", "/v1/chat/completions", FIRST_REQUEST, arena)
+    plain: = http_test.asked(port, "POST", "/v1/chat/completions",
+        "{\"chat_template_kwargs\":{\"enable_thinking\":false},\"messages\":[{\"role\":\"user\",\"content\":\"Hi\"}]}",
+        arena)
+    late: = http_test.asked(port, "POST", "/v1/chat/completions",
+        "{\"messages\":[{\"role\":\"user\",\"content\":\"Hi\"},{\"role\":\"system\",\"content\":\"x\"}]}",
+        arena)
+    models: = http_test.asked(port, "GET", "/v1/models", "", arena)
+    listed: = http_test.json_of(models, arena).get("data").get_at(0).get("id").as_str()
+        .unwrap_or("")
+    if thinking.status != 200 || plain.status != 200 || !listed.equals("tiny_qwen35") ||
+        !http_test.refused(late, 400, "System message must be at the beginning", arena)
+        return arena.text().s("Qwen3.5 answers got \{thinking.status\}, \{plain.status\} and ")
+            .s("\{late.status\}, and the model is listed as ").s(listed).take()
+    return ""

@@ -40,6 +40,14 @@ ksai/block_train	nn.Transformer_block<|T|>.backward_grads	pub fn backward_grads(
 ksai/block_train	nn.Transformer_block<|T|>.backward_lora	pub fn backward_lora(r: Self$@, c: Block_train<|T|>$@, dout: Tensor<|T|>, lr: F64, q_lora: lora.Lora<|T|>$@, v_lora: lora.Lora<|T|>$@, fc1_lora: lora.Lora<|T|>$@, fc2_lora: lora.Lora<|T|>$@): Tensor<|T|>	one step on the adapters only; every base weight stays frozen. The base is frozen (a backward with lr=0 returns only the gradient). The returned gradient sums every path.
 ksai/block_train	nn.Transformer_block<|T|>.train_forward	pub fn train_forward(r: Self$@, x: Tensor<|T|>): Block_train<|T|>	runs the whole sequence at once, keeping what the backward pass needs
 ksai/block_train	nn.Transformer_block<|T|>.train_forward_lora	pub fn train_forward_lora(r: Self$@, x: Tensor<|T|>, q_lora: lora.Lora<|T|>$@, v_lora: lora.Lora<|T|>$@, fc1_lora: lora.Lora<|T|>$@, fc2_lora: lora.Lora<|T|>$@): Block_train<|T|>	the same as `train_forward`, with the adapters' delta added. It does not update the base (attention_norm, wq/wk/wv/wo, ffn_norm, fc1/fc2) at all. It folds only the adapters' deltas into the block's forward pass.
+ksai/delta_net	Delta_shape	pub struct Delta_shape	a delta net's widths, from the file's `<arch>.ssm.*` settings
+ksai/delta_net	Delta_shape.channels	pub fn channels(r: Self@): Sz	the numbers the convolution reads per position. The queries, then the keys, then the values.
+ksai/delta_net	Delta_shape.head_dim	pub head_dim: Sz	`ssm.state_size`: the width of a query, a key and a value head
+ksai/delta_net	Delta_shape.inner	pub fn inner(r: Self@): Sz	the width of the values, and of the gate: `v_heads × head_dim`
+ksai/delta_net	Delta_shape.k_heads	pub k_heads: Sz	`ssm.group_count`: how many query and key heads
+ksai/delta_net	Delta_shape.kernel	pub kernel: Sz	`ssm.conv_kernel`: the positions the convolution reads, its own included
+ksai/delta_net	Delta_shape.state_len	pub fn state_len(r: Self@): Sz	the numbers one layer's running state takes. Each value head's square, then the convolution's last `kernel - 1` positions.
+ksai/delta_net	Delta_shape.v_heads	pub v_heads: Sz	`ssm.time_step_rank`: how many value heads; a multiple of `k_heads`. Value head `h` reads query and key head `h % k_heads`, as llama.cpp pairs them.
 ksai/examples/car_pilot/encoding	DRIVE_FIELDS	pub const DRIVE_FIELDS: Sz = 3	how many values one manoeuvre holds (lon, lat, rot)
 ksai/examples/car_pilot/encoding	FEATURE_COUNT	pub const FEATURE_COUNT: Sz = 5	[measured or not, the normalized distance, left, middle, right]
 ksai/examples/car_pilot/encoding	FORMAT_VERSION	pub const FORMAT_VERSION: U8[] = "2"	the version written in the policy, and the one read. Caution: **Raise it when the features' order, the activation (SiLU) or the manoeuvre table's meaning changes.** The shapes still fit, so an old reader silently uses new weights with the old meaning.
@@ -47,6 +55,63 @@ ksai/examples/car_pilot/encoding	LINE_LEFT	pub const LINE_LEFT: I64 = 4	the left
 ksai/examples/car_pilot/encoding	LINE_MIDDLE	pub const LINE_MIDDLE: I64 = 2	the middle sensor's bit
 ksai/examples/car_pilot/encoding	LINE_RIGHT	pub const LINE_RIGHT: I64 = 1	the right sensor's bit
 ksai/examples/car_pilot/encoding	features	pub fn features(dist_mm: I64, line: I64, far_mm: I64, arena: Arena$@): Tensor<|F32|>	an observation as the feature vector the policy takes
+ksai/gguf	Gguf	pub struct Gguf	a parsed GGUF file, whose values and tensors borrow the file's bytes. The bytes must outlive it and everything read from it.
+ksai/gguf	Gguf.alignment	pub alignment: Sz	every tensor's data starts on a multiple of this
+ksai/gguf	Gguf.data_offset	pub data_offset: Sz	where the data section starts in the file
+ksai/gguf	Gguf.flag	pub fn flag(r: Self@, key: U8[]): Bool!Gguf_error	a bool value
+ksai/gguf	Gguf.float	pub fn float(r: Self@, key: U8[]): F64!Gguf_error	an F32 or F64 value
+ksai/gguf	Gguf.floats	pub fn floats(r: Self@, key: U8[], arena: Arena$@): List<|F32|>!Gguf_error	an array of F32 values
+ksai/gguf	Gguf.has	pub fn has(r: Self@, key: U8[]): Bool	whether the file holds a key of that name
+ksai/gguf	Gguf.has_tensor	pub fn has_tensor(r: Self@, name: U8[]): Bool	whether the file holds a tensor of that name
+ksai/gguf	Gguf.integer	pub fn integer(r: Self@, key: U8[]): I64!Gguf_error	a value of any integer type. Caution: **A U64 past the largest I64 is refused** (`wrong_type`), never wrapped.
+ksai/gguf	Gguf.ints	pub fn ints(r: Self@, key: U8[], arena: Arena$@): List<|I32|>!Gguf_error	an array of I32 values
+ksai/gguf	Gguf.kind	pub fn kind(r: Self@, key: U8[]): Gguf_type!Gguf_error	the type of the key's value
+ksai/gguf	Gguf.parse	pub fn parse(file: U8[], arena: Arena$@): Gguf!Gguf_error	reads a GGUF file the caller holds in memory. The lists of keys and tensors go on `arena`; the values and the tensors' bytes stay in `file`. A file is refused whole: no part of a broken one is returned.
+ksai/gguf	Gguf.tensor	pub fn tensor(r: Self@, name: U8[]): Gguf_tensor!Gguf_error	the tensor of that name
+ksai/gguf	Gguf.tensors	pub fn tensors(r: Self@): Gguf_tensor[]	every tensor, in the order of their infos
+ksai/gguf	Gguf.text	pub fn text(r: Self@, key: U8[]): U8[]!Gguf_error	a string value, borrowed from the file
+ksai/gguf	Gguf.texts	pub fn texts(r: Self@, key: U8[], arena: Arena$@): List<|U8[]|>!Gguf_error	an array of strings, each borrowed from the file
+ksai/gguf	Gguf.version	pub version: U32	2 or 3, the two versions of this layout
+ksai/gguf	Gguf_error	pub enum Gguf_error	why a GGUF file, or a value asked of it, was refused
+ksai/gguf	Gguf_error.bad_alignment	bad_alignment	`general.alignment` is not a power of two held as a U32
+ksai/gguf	Gguf_error.bad_offset	bad_offset(name: U8[])	the data is not where the tensor before it ends, or runs past the end. Tensors lie in the order of their infos, each padded to the alignment.
+ksai/gguf	Gguf_error.bad_tensor	bad_tensor(name: U8[])	no dimension or more than 4, or a row that is no whole number of blocks
+ksai/gguf	Gguf_error.bad_value_type	bad_value_type(key: U8[])	a value type GGUF does not define, or an array of arrays
+ksai/gguf	Gguf_error.bad_version	bad_version(version: U32)	a version other than 2 or 3, the two with this layout
+ksai/gguf	Gguf_error.describe	pub fn describe(r: Self, arena: Arena$@): U8[]	what is wrong, as a sentence for the person who gave the file
+ksai/gguf	Gguf_error.duplicate	duplicate(name: U8[])	a second key, or a second tensor, of the same name
+ksai/gguf	Gguf_error.missing	missing(name: U8[])	no key or tensor has that name
+ksai/gguf	Gguf_error.not_gguf	not_gguf	the file does not start with the four bytes `GGUF`
+ksai/gguf	Gguf_error.read_failed	read_failed	the file could not be read
+ksai/gguf	Gguf_error.too_many	too_many(what: U8[])	a count of keys or tensors larger than the rest of the file can hold
+ksai/gguf	Gguf_error.truncated	truncated(what: U8[])	the named part runs past the end of the file
+ksai/gguf	Gguf_error.unsupported_format	unsupported_format(name: U8[])	a tensor stored in a format `ksai/quant` cannot decode
+ksai/gguf	Gguf_error.wrong_type	wrong_type(key: U8[])	the key holds a value of another type than the one asked for
+ksai/gguf	Gguf_tensor	pub struct Gguf_tensor	one tensor: its name, its shape, and its bytes in the file
+ksai/gguf	Gguf_tensor.data	pub data: U8[]	its bytes, borrowed from the file
+ksai/gguf	Gguf_tensor.dims	pub dims: Sz[4]	ggml's order: `dims[0]` is a row's length; a dimension not given is 1
+ksai/gguf	Gguf_tensor.format	pub format: Quant_format	how its rows are stored
+ksai/gguf	Gguf_tensor.matrix	pub fn matrix(r: Self@): Quant_matrix!Quant_error	the tensor as a matrix over its bytes. A row is `dims[0]` numbers, one output of a weight; the other dimensions count the rows.
+ksai/gguf	Gguf_tensor.n_dims	pub n_dims: Sz	how many dimensions the file gave, 1 to 4
+ksai/gguf	Gguf_tensor.name	pub name: U8[]	its name, such as `blk.0.attn_q.weight`, borrowed from the file
+ksai/gguf	Gguf_tensor.offset	pub offset: Sz	where its data starts, counted from the start of the data section
+ksai/gguf	Gguf_tensor.rows	pub fn rows(r: Self@): Sz	every dimension but the first, multiplied; `place_data` checked it
+ksai/gguf	Gguf_tensor.type_id	pub type_id: U32	ggml's number for the format
+ksai/gguf	Gguf_tensor.vector	pub fn vector(r: Self@, arena: Arena$@): Tensor<|F32|>!Quant_error	a one-row F32 tensor as a `Tensor`, its bytes borrowed where they are aligned. A norm's weights take this form. A misaligned row is copied onto `arena`.
+ksai/gguf	Gguf_type	pub enum Gguf_type	the type of a metadata value, numbered as GGUF numbers it
+ksai/gguf	Gguf_type.array	array	a run of values of one other type; an array of arrays is refused
+ksai/gguf	Gguf_type.bool	bool	one byte, 0 for false
+ksai/gguf	Gguf_type.f32	f32	a 4-byte float
+ksai/gguf	Gguf_type.f64	f64	an 8-byte float
+ksai/gguf	Gguf_type.i16	i16	a signed 16-bit integer
+ksai/gguf	Gguf_type.i32	i32	a signed 32-bit integer
+ksai/gguf	Gguf_type.i64	i64	a signed 64-bit integer
+ksai/gguf	Gguf_type.i8	i8	a signed byte
+ksai/gguf	Gguf_type.string	string	a U64 length, then that many bytes of UTF-8
+ksai/gguf	Gguf_type.u16	u16	an unsigned 16-bit integer
+ksai/gguf	Gguf_type.u32	u32	an unsigned 32-bit integer
+ksai/gguf	Gguf_type.u64	u64	an unsigned 64-bit integer
+ksai/gguf	Gguf_type.u8	u8	an unsigned byte
 ksai/grad	Tensor<|T|>.accumulate	pub fn accumulate(r: Self$@, grad: Tensor<|T|>)	adds another gradient into this one, in place. self += grad. **The caller decides the order of the additions.** Floating-point addition is not associative. So a sum that must match on every run has to be taken in one fixed order.
 ksai/grad	Tensor<|T|>.cross_entropy_loss	pub fn cross_entropy_loss(r: Self$@, target: I32): F64	how wrong the last position's prediction was, in nats. Self's final dimension is the vocabulary; L = logsumexp(logits) - logits[target]. Of several rows it takes only the last (one step of teacher forcing); for every row, use `cross_entropy_loss_seq`.
 ksai/grad	Tensor<|T|>.cross_entropy_loss_seq	pub fn cross_entropy_loss_seq(r: Self$@, targets: I32$[]): F64	how wrong every position's prediction was, averaged, in nats. Every row's loss: next-token prediction, what a language model is trained on.
@@ -84,6 +149,7 @@ ksai/lora_set	Qkv_lora.q	pub q: Lora<|T|>	the adapter on the query projection
 ksai/lora_set	Qkv_lora.v	pub v: Lora<|T|>	the adapter on the value projection
 ksai/lora_set	Qkv_lora<|T|>.load_set_from	pub fn load_set_from(s: st.Safetensors, n_layers: Sz, q: Lora_widths, v: Lora_widths, arena: Arena$@): Qkv_lora<|T|>$@!st.Safetensors_error	reads every block's attention adapters in one call. The names read are "blocks.{i}.attn.{q,v}.lora_{a,b,scale}". It takes a parsed Safetensors, not a path (the reason is in this file's header); on bare metal, pass `embed`ed bytes through `Safetensors.load_from_bytes` first.
 ksai/lora_set	Qkv_lora<|T|>.save_set_into	pub fn save_set_into(adapters: Qkv_lora<|T|>$@, n_layers: Sz, w: st.Safetensors_writer$@, arena: Arena$@)	the inverse of `load_set_from`: writes every block's adapters. The caller prepares the `Safetensors_writer` (as with `load_set_from`), and its `finish()` produces the bytes; for a quick local save, `Lora.save_raw` is lighter.
+ksai/model_file	load_gguf	pub fn load_gguf(path: U8[], arena: Arena$@): Gguf!Gguf_error	reads and parses a GGUF model file into the caller's arena. **The file is read once, straight into the arena, and its tensors are used where they lie.** So the peak memory is the file's size, plus the lists of keys and tensors. Free or reset the arena after every matrix and value read from the file is no longer used.
 ksai/model_file	load_qkv_lora_set	pub fn load_qkv_lora_set<|T|>(path: U8[], n_layers: Sz, q: lora_set.Lora_widths, v: lora_set.Lora_widths, arena: Arena$@): lora_set.Qkv_lora<|T|>$@!st.Safetensors_error	reads every block's attention adapters directly from a file. The names read are "blocks.{i}.attn.{q,v}.lora_*". The file's bytes are read into the required arena: freeing it releases the whole set, including a partially loaded set.
 ksai/model_file	load_safetensors	pub fn load_safetensors(path: U8[], arena: Arena$@): st.Safetensors!st.Safetensors_error	reads and parses a model file into the caller's arena. The file and parsed header share the arena lifetime. Free or reset the arena after all tensors borrowing its weights are no longer used.
 ksai/model_file	save_qkv_lora_set	pub fn save_qkv_lora_set<|T|>(adapters: lora_set.Qkv_lora<|T|>$@, n_layers: Sz, path: U8[], arena: Arena$@): Void!st.Safetensors_error	the inverse of `load_qkv_lora_set`: writes adapters to a file
@@ -94,19 +160,24 @@ ksai/nn	Embedding<|T|>.forward	pub fn forward(r: Self$@, token_id: I32, compute_
 ksai/nn	Embedding<|T|>.init_uniform	pub fn init_uniform(r: Self$@, rng: prng.Prng$@, scale: F64)	initializes the table for training
 ksai/nn	Embedding<|T|>.new	pub fn new(vocab_size: Sz, dim: Sz, arena: Arena$@): Embedding<|T|>	a table of that shape, with constant starting values
 ksai/nn	Gqa_attention	pub struct Gqa_attention<|T|>	grouped-query attention: several query heads share one key head
-ksai/nn	Gqa_attention.head_dim	pub head_dim: Sz	how wide one head is
-ksai/nn	Gqa_attention.k_cache	pub k_cache: Tensor<|T|>	every key seen so far, `[max_seq, n_kv_heads * head_dim]`
-ksai/nn	Gqa_attention.n_heads	pub n_heads: Sz	how many query heads
-ksai/nn	Gqa_attention.n_kv_heads	pub n_kv_heads: Sz	how many key and value heads; it must divide `n_heads`
-ksai/nn	Gqa_attention.rope_theta	pub rope_theta: F64	the base of the positional rotation (RoPE)
-ksai/nn	Gqa_attention.v_cache	pub v_cache: Tensor<|T|>	every value seen so far, shaped the same
+ksai/nn	Gqa_attention.cache	pub cache: Gqa_cache<|T|>	the keys and values so far, and the attention over them
 ksai/nn	Gqa_attention.wk	pub wk: Linear<|T|>	`[dim, n_kv_heads * head_dim]`, the keys, of which there are fewer
 ksai/nn	Gqa_attention.wo	pub wo: Linear<|T|>	`[n_heads * head_dim, dim]`, the output projection
 ksai/nn	Gqa_attention.wq	pub wq: Linear<|T|>	`[dim, n_heads * head_dim]`, the queries
 ksai/nn	Gqa_attention.wv	pub wv: Linear<|T|>	the values, shaped as the keys are
-ksai/nn	Gqa_attention<|T|>.forward	pub fn forward(r: Self$@, x: Tensor<|T|>, start_pos: Sz): Tensor<|T|>	attention over everything cached so far, this input included
+ksai/nn	Gqa_attention<|T|>.forward	pub fn forward(r: Self$@, x: Tensor<|T|>, start_pos: Sz): Tensor<|T|>	attention over everything cached so far, these inputs included
 ksai/nn	Gqa_attention<|T|>.forward_lora	pub fn forward_lora(r: Self$@, x: Tensor<|T|>, start_pos: Sz, q_lora: lora.Lora<|T|>$@, v_lora: lora.Lora<|T|>$@): Tensor<|T|>	the same, with fine-tuned adapters added at inference. The adapters go on the Q and V projection outputs, before RoPE, where `peft` puts them.
 ksai/nn	Gqa_attention<|T|>.new	pub fn new(dim: Sz, n_heads: Sz, n_kv_heads: Sz, head_dim: Sz, max_seq_len: Sz, rope_theta: F64, arena: Arena$@): Gqa_attention<|T|>	the four projections, and a cache long enough for the sequence
+ksai/nn	Gqa_cache	pub struct Gqa_cache<|T|>	the keys and values of every position so far, and attention over them
+ksai/nn	Gqa_cache.head_dim	pub head_dim: Sz	how wide one head is
+ksai/nn	Gqa_cache.k_cache	pub k_cache: Tensor<|T|>	every key seen so far, `[max_seq, n_kv_heads * head_dim]`
+ksai/nn	Gqa_cache.n_heads	pub n_heads: Sz	how many query heads
+ksai/nn	Gqa_cache.n_kv_heads	pub n_kv_heads: Sz	how many key and value heads; it must divide `n_heads`
+ksai/nn	Gqa_cache.rope_dims	pub rope_dims: Sz	how many of a head's numbers RoPE turns, from its start; even
+ksai/nn	Gqa_cache.rope_theta	pub rope_theta: F64	the base of the positional rotation (RoPE)
+ksai/nn	Gqa_cache.v_cache	pub v_cache: Tensor<|T|>	every value seen so far, shaped the same
+ksai/nn	Gqa_cache<|T|>.attend	pub fn attend(r: Self$@, $q: Tensor<|T|>, $k: Tensor<|T|>, v: Tensor<|T|>, start_pos: Sz): Tensor<|T|>	saves the rows' keys and values, and attends each query over its past. Row `s` sits at position `start_pos + s` and sees every position up to its own. RoPE is applied to `q` and `k` here. **A row's result does not depend on the rows around it**, so a prompt read in pieces of any size gives the same bits. The key heads are split over the cores (`ksai/parallel`), each computed whole, so the thread count changes nothing.
+ksai/nn	Gqa_cache<|T|>.new	pub fn new(n_heads: Sz, n_kv_heads: Sz, head_dim: Sz, rope_dims: Sz, max_seq_len: Sz, rope_theta: F64, arena: Arena$@): Gqa_cache<|T|>	a cache of `max_seq_len` positions, empty
 ksai/nn	Linear	pub struct Linear<|T|>	one fully connected layer: a weight matrix and a bias
 ksai/nn	Linear.bias	pub bias: Tensor<|T|>	the bias added to each output, `out_features` long
 ksai/nn	Linear.weights	pub weights: Tensor<|T|>	the matrix, shaped `[in_features, out_features]`
@@ -191,6 +262,82 @@ ksai/optim	Updater<|T|>.free	pub fn free(r: Self$@)	frees the list of states (th
 ksai/optim	Updater<|T|>.sgd	pub fn sgd(lr: F64): Updater<|T|>	plain gradient descent, with no state
 ksai/optim	Updater<|T|>.update	pub fn update(r: Self$@, $param: Tensor<|T|>, grad: Tensor<|T|>)	moves one weight by its gradient, in place
 ksai/optim	Updater<|T|>:Manual_free	impl<|T|> Updater<|T|>: Manual_free	it owns its list of states and frees it with `free()`
+ksai/parallel	set_threads #cfg(!freestanding)	pub fn set_threads(n: Sz)	the most threads one product may use; the default, 0, is every CPU. A program that already keeps every CPU busy with threads of its own sets 1. Its products then stay on the thread that calls them, and threads do not outnumber CPUs.
+ksai/pretokenizer	Split_rule	pub enum Split_rule	which rule splits a text, by the name GGUF's `tokenizer.ggml.pre` gives it
+ksai/pretokenizer	Split_rule.named	pub fn named(pre: U8[]): Split_rule?	the rule a GGUF file names, or none for another
+ksai/pretokenizer	Split_rule.qwen2	qwen2	Qwen2's and Qwen3's: a mark is neither a letter nor a space, like punctuation
+ksai/pretokenizer	Split_rule.qwen35	qwen35	Qwen3.5's: a mark belongs to the letter run it stands in
+ksai/pretokenizer	chunk_end	pub fn chunk_end(text: U8[], start: Sz, rule: Split_rule): Sz	where the chunk that starts at `start` ends; the next chunk starts there. The alternatives are tried in the rule's order, and the first that matches is taken.
+ksai/quant	Q8_input:Manual_free	impl Q8_input: Manual_free	it owns its memory and gives it back with `free()`
+ksai/quant	Quant_error	pub enum Quant_error	why a quantized matrix or its product was refused
+ksai/quant	Quant_error.bad_shape	bad_shape	a dimension is negative, or the columns do not fill whole blocks
+ksai/quant	Quant_error.no_quantizer	no_quantizer	there is no quantizer for that format here; only Q8_0 and Q4_K have one
+ksai/quant	Quant_error.out_of_bounds	out_of_bounds	a row number outside the matrix
+ksai/quant	Quant_error.shape_mismatch	shape_mismatch	a product's operand or result is not the shape the matrix needs
+ksai/quant	Quant_error.size_mismatch	size_mismatch	the bytes are not exactly the rows times the bytes of one row
+ksai/quant	Quant_format	pub enum Quant_format	how one row of a weight matrix is stored, each as GGUF stores it. A row is a whole number of blocks. A block holds `block_len()` numbers in `block_bytes()` bytes. Multi-byte numbers are little-endian, as in GGUF.
+ksai/quant	Quant_format.bf16	bf16	bfloat16, 2 bytes each: the top half of an F32
+ksai/quant	Quant_format.block_bytes	pub fn block_bytes(r: Self): Sz	how many bytes one block takes
+ksai/quant	Quant_format.block_len	pub fn block_len(r: Self): Sz	how many numbers one block holds; 1 for plain floats
+ksai/quant	Quant_format.f16	f16	IEEE half-precision floats, 2 bytes each
+ksai/quant	Quant_format.f32	f32	4-byte floats, one per number
+ksai/quant	Quant_format.q3_k	q3_k	blocks of 256 in 110 bytes: 3-bit numbers in 16 groups of 16, each with a scale. The bytes are the high bits (32), the low 2 bits (64), 12 bytes of 6-bit scales, then the F16 `d`. A number is `d × (scale - 32) × q`, with `q` from -4 to 3.
+ksai/quant	Quant_format.q4_k	q4_k	blocks of 256 in 144 bytes: 4-bit numbers in 8 groups of 32, each with a scale and min. The bytes are `d` and `dmin` (F16), 12 bytes of 6-bit scales and mins, then 128 bytes of 4-bit numbers. A number is `d × scale × q - dmin × min`.
+ksai/quant	Quant_format.q5_0	q5_0	blocks of 32 in 22 bytes: an F16 scale `d`, the fifth bits, then the low 4 bits. A number is `d × (q - 16)`. GGUF files use it where a row is not a multiple of 256.
+ksai/quant	Quant_format.q5_k	q5_k	blocks of 256 in 176 bytes: Q4_K's groups, scales and mins, with a fifth bit. The bytes are `d` and `dmin`, 12 bytes of scales and mins, 32 bytes of fifth bits, then 128 bytes of the low 4 bits. A number is `d × scale × q - dmin × min`.
+ksai/quant	Quant_format.q6_k	q6_k	blocks of 256 in 210 bytes: 6-bit numbers in 16 groups of 16, each with a scale. The bytes are the low 4 bits (128), the high 2 bits (64), 16 signed 8-bit scales, then the F16 `d`. A number is `d × scale × (q - 32)`.
+ksai/quant	Quant_format.q8_0	q8_0	blocks of 32: an F16 scale `d`, then 32 signed bytes; a number is `d × q`
+ksai/quant	Quant_format.row_bytes	pub fn row_bytes(r: Self, cols: Sz): Sz!Quant_error	the bytes of one row of `cols` numbers
+ksai/quant	Quant_matrix	pub struct Quant_matrix	a weight matrix in one of the GGUF formats, its bytes borrowed. Row `i` holds the weights of output `i`, as GGUF stores a weight. The bytes stay the caller's: they must outlive the matrix. Its sizes were checked against the bytes when it was made, so a product never reads past them.
+ksai/quant	Quant_matrix.bytes	pub fn bytes(r: Self@): U8[]	its bytes, exactly as they would stand in a GGUF file
+ksai/quant	Quant_matrix.cols	pub fn cols(r: Self@): Sz	how many numbers each row holds
+ksai/quant	Quant_matrix.dequantize_row	pub fn dequantize_row(r: Self@, row: Sz, out: F32$[]): Void!Quant_error	one row decoded to F32, written into the caller's memory. It is what a model needs for a token's embedding, and the reference a test compares.
+ksai/quant	Quant_matrix.format	pub fn format(r: Self@): Quant_format	how its rows are stored
+ksai/quant	Quant_matrix.from_bytes	pub fn from_bytes(format: Quant_format, rows: Sz, cols: Sz, bytes: U8[]): Quant_matrix!Quant_error	a matrix over bytes in one of the formats, its sizes checked first. Caution: **The bytes must be exactly `rows × format.row_bytes(cols)` long.** A longer slice is refused too: it means the sizes describe another tensor.
+ksai/quant	Quant_matrix.mul_mat	pub fn mul_mat(r: Self@, x: Tensor<|F32|>): Tensor<|F32|>!Quant_error	the product with F32 inputs, in a tensor on the input's arena. Output `[t, i]` is the dot product of row `i` with input row `t`, as ggml's `ggml_mul_mat` gives. One input row is the matrix-vector product.
+ksai/quant	Quant_matrix.mul_mat_into	pub fn mul_mat_into(r: Self@, x: Tensor<|F32|>, out: Tensor<|F32|>): Void!Quant_error	the product with F32 inputs, written into a tensor the caller owns. Large products split their rows over the CPU's cores (`ksai/parallel`). Any thread count writes the same bits, so the result does not depend on the machine.
+ksai/quant	Quant_matrix.rows	pub fn rows(r: Self@): Sz	how many rows (outputs) it has
+ksai/quantize	Quant_matrix.quantize	pub fn quantize(src: Tensor<|F32|>, format: Quant_format, arena: Arena$@): Quant_matrix!Quant_error	the F32 matrix in Q8_0 or Q4_K, its bytes on the given arena. Caution: **The result is lossy.** Q8_0 keeps about 8 bits of each number and Q4_K about 4.5. Other formats throw `.no_quantizer`.
+ksai/qwen	Qwen	pub struct Qwen	a Qwen model, its weights borrowed from a parsed GGUF file
+ksai/qwen	Qwen.cfg	pub cfg: Qwen_config	the settings read from the file
+ksai/qwen	Qwen.context	pub context: Sz	the positions the cache holds; a prompt and its answer must fit
+ksai/qwen	Qwen.forward	pub fn forward(r: Self$@, tokens: I32[], start_pos: Sz, step: Arena$@): Tensor<|F32|>	reads tokens at the next positions; returns the scores after the last one. The tokens' keys and values go into the cache from `start_pos` on, and the positions from `start_pos + tokens.len` on are left as they were. **The scores after a token are the same bits however the tokens before it were split into calls.** Caution: **A model with delta nets reads only on from where its state stands**: `start_pos` 0 starts it afresh, and any other must equal the tokens it follows (`state_tokens`). Going back takes `restore_state`; the state cannot be rewound.
+ksai/qwen	Qwen.load	pub fn load(g: Gguf@, context: Sz, arena: Arena$@): Qwen!Qwen_error	the model a GGUF file holds, with a cache of `context` positions. Every tensor's shape is checked against the settings, and every tensor must be read. The cache's size is in `Qwen_config.attention_blocks`; each delta net's state takes `Delta_shape.state_len()` F32 numbers, whatever the context.
+ksai/qwen	Qwen.new_state	pub fn new_state(r: Self@, arena: Arena$@): Qwen_state	room for a copy of the running state, following no token yet
+ksai/qwen	Qwen.recurrent	pub fn recurrent(r: Self@): Bool	whether some block keeps a running state (`Qwen_state`)
+ksai/qwen	Qwen.restore_state	pub fn restore_state(r: Self$@, from: Qwen_state@)	the running state as `save_state` copied it. Caution: **The cache must still hold the rows of the copy's tokens.** Rows written over since then give the scores of another conversation, with no error.
+ksai/qwen	Qwen.save_state	pub fn save_state(r: Self@, into: Qwen_state$@)	copies the running state into `into`. `into` must come from this model's `new_state`.
+ksai/qwen	Qwen.state_tokens	pub fn state_tokens(r: Self@): Sz	how many tokens the running state follows now
+ksai/qwen	Qwen_config	pub struct Qwen_config	the settings, read from the file's `<arch>.*` keys
+ksai/qwen	Qwen_config.arch	pub arch: U8[]	`general.architecture`: `qwen2`, `qwen3` or `qwen35`
+ksai/qwen	Qwen_config.attends	pub fn attends(r: Self@, block: Sz): Bool	whether block `block` attends, or is a delta net
+ksai/qwen	Qwen_config.attention_blocks	pub fn attention_blocks(r: Self@): Sz	how many blocks attend, each with a cache. The cache takes `attention_blocks() × 2 × n_kv_heads × head_dim × 4` bytes a position.
+ksai/qwen	Qwen_config.attention_every	pub attention_every: Sz	every this-many-th block attends; the others are delta nets. 1 where every block attends, as in Qwen2 and Qwen3.
+ksai/qwen	Qwen_config.delta	pub delta: Delta_shape	the delta nets' widths; zeros where every block attends
+ksai/qwen	Qwen_config.eps	pub eps: F32	what the RMS norms add under the square root
+ksai/qwen	Qwen_config.ffn	pub ffn: Sz	the feed-forward part's hidden width
+ksai/qwen	Qwen_config.gated	pub gated: Bool	whether a gate per query head scales the attention's output
+ksai/qwen	Qwen_config.head_dim	pub head_dim: Sz	the width of one head
+ksai/qwen	Qwen_config.hidden	pub hidden: Sz	the width of the state between blocks
+ksai/qwen	Qwen_config.n_heads	pub n_heads: Sz	how many query heads
+ksai/qwen	Qwen_config.n_kv_heads	pub n_kv_heads: Sz	how many key and value heads; it divides `n_heads`
+ksai/qwen	Qwen_config.n_layers	pub n_layers: Sz	how many decoder blocks
+ksai/qwen	Qwen_config.qk_norm	pub qk_norm: Bool	whether each query and key head is RMS-normalized before RoPE
+ksai/qwen	Qwen_config.qkv_bias	pub qkv_bias: Bool	whether the queries, keys and values carry a bias
+ksai/qwen	Qwen_config.read	pub fn read(g: Gguf@, arena: Arena$@): Qwen_config!Qwen_error	the settings of the model a GGUF file holds, each checked. `Qwen.load` reads them too. A program reads them first to check its own options against them, such as a context longer than the model was trained on.
+ksai/qwen	Qwen_config.rope_dims	pub rope_dims: Sz	how many of a head's numbers RoPE turns: `rope.dimension_count`
+ksai/qwen	Qwen_config.rope_theta	pub rope_theta: F64	the base of the positional rotation (RoPE)
+ksai/qwen	Qwen_config.trained_context	pub trained_context: Sz	the most positions the model was trained on
+ksai/qwen	Qwen_config.vocab	pub vocab: Sz	the embedding's rows
+ksai/qwen	Qwen_error	pub enum Qwen_error	why a GGUF file was refused as a Qwen model
+ksai/qwen	Qwen_error.bad_setting	bad_setting(key: U8[])	a setting is out of its range, or does not fit the others
+ksai/qwen	Qwen_error.bad_shape	bad_shape(name: U8[])	a tensor's shape is not the one the settings give
+ksai/qwen	Qwen_error.describe	pub fn describe(r: Self, arena: Arena$@): U8[]	what is wrong, as a sentence for the person who gave the file
+ksai/qwen	Qwen_error.gguf	gguf(e: Gguf_error)	the file, a key or a tensor was refused, or one is missing
+ksai/qwen	Qwen_error.not_qwen	not_qwen(arch: U8[])	`general.architecture` names a family `FAMILIES` does not hold
+ksai/qwen	Qwen_error.unread	unread(name: U8[])	a tensor the model does not use; the file is another model's. Caution: **Refused, not skipped.** A tensor the code does not read means a layer it does not compute, so the answers would be another model's, with no error.
+ksai/qwen	Qwen_state	pub struct Qwen_state	a copy of the delta nets' running state, and the tokens it follows. **The attention blocks' keys and values are not in it**: they stay in the cache, one row per position. So a copy made after `tokens` tokens is good while the cache still holds the rows of those tokens.
+ksai/qwen	Qwen_state.tokens	pub tokens: Sz	how many tokens the copy follows
 ksai/safetensors	Safetensors	pub struct Safetensors	a parsed header and weights, borrowed for their arenas' lifetimes
 ksai/safetensors	Safetensors.get_tensor	pub fn get_tensor<|T|>(r: Self$@, name: U8[], arena: Arena$@): Tensor<|T|>!Safetensors_error	one tensor, borrowing aligned elements or copying misaligned ones. Caution: **An aligned result borrows from the file.** Its elements are not copied, so the backing bytes must stay alive while the tensor is used. A misaligned result uses an aligned copy in the supplied arena instead.
 ksai/safetensors	Safetensors.load_from_bytes	pub fn load_from_bytes(file_data: U8[], arena: Arena$@): Safetensors!Safetensors_error	reads the header of a file the caller already holds in memory. **The function that opens a file lives elsewhere** (`ksai/model_file`): here it would need `std/io`, and code that only uses tensors would pay for file I/O. The bytes belong to the caller (typically `embed "model.safetensors" as model_bytes;`) and must outlive every tensor borrowing them.
@@ -220,7 +367,7 @@ ksai/sampler	Sample_config.top_k	pub top_k: Sz	at most this many top-scoring can
 ksai/sampler	Sample_config.top_p	pub top_p: F64	only candidates within this cumulative probability; 1.0 means no limit
 ksai/sampler	argmax	pub fn argmax<|T|>(logits: Tensor<|T|>): I32	the highest-scoring token, the same one every time. Caution: **Also reject a shape whose last dimension is 0.** A size of 0 is legitimate for an empty tensor (`Tensor.new` in `ksai/tensor.kspl`), and checking only the number of dimensions lets `(logits.data + offset)$` read a region with no elements. No range check catches a raw dereference, and it does not crash: it returns **a plausible token ID**, 0.
 ksai/sampler	sample	pub fn sample<|T|>(logits: Tensor<|T|>, cfg: Sample_config, rng: prng.Prng$@, arena: Arena$@): I32	one token chosen at random, weighted by the model's scores
-ksai/tensor	MAX_TENSOR_ELEMS	pub const MAX_TENSOR_ELEMS: Sz = 100000000	the most elements one tensor can hold. The cap `new` enforces, which fits cfg(freestanding)'s 32-bit Sz (800MB even at F64). It is pub so safetensors.get_tensor, which bypasses `new`, applies the same cap.
+ksai/tensor	MAX_TENSOR_ELEMS	pub const MAX_TENSOR_ELEMS: Sz = 2147483647	the most elements one tensor can hold. The cap `new` enforces: the largest I32, so a dimension reaches BLAS's I32 arguments whole. A real model needs more than 10^8: Qwen2.5-0.5B's embedding is 151936 x 896. The bytes are checked apart (`checked_mul`), so a 32-bit Sz still cannot overflow. It is pub so safetensors.get_tensor, which bypasses `new`, applies the same cap.
 ksai/tensor	Tensor	pub struct Tensor<|T|>	a multi-dimensional array: the elements and their shape
 ksai/tensor	Tensor.data	pub data: T$@	the elements, laid out with the last dimension varying fastest
 ksai/tensor	Tensor.shape	pub shape: Sz$[]	each dimension's size; how many there are is `shape.len`
@@ -237,7 +384,7 @@ ksai/tensor	Tensor<|T|>.mul	pub fn mul(r: Self$@, rhs: Tensor<|T|>): Tensor<|T|>
 ksai/tensor	Tensor<|T|>.new	pub fn new(shape: Sz[], arena: Arena$@): Tensor<|T|>	a tensor of that shape, its elements not yet written
 ksai/tensor	Tensor<|T|>.rmsnorm	pub fn rmsnorm(r: Self$@, weight: Tensor<|T|>, eps: T): Tensor<|T|>!Tensor_error	root-mean-square normalization over the last dimension
 ksai/tensor	Tensor<|T|>.scale	pub fn scale(r: Self$@, factor: T): Tensor<|T|>	every element multiplied, in a newly allocated tensor
-ksai/tensor	Tensor<|T|>.silu	pub fn silu(r: Self$@): Tensor<|T|>	the SiLU (Swish) activation, element by element
+ksai/tensor	Tensor<|T|>.silu	pub fn silu(r: Self$@): Tensor<|T|>	the SiLU (Swish) activation, element by element. F32 elements take `exp_f32`, so the loop runs on vectors; F64 ones keep `math.exp`.
 ksai/tensor	Tensor<|T|>.softmax	pub fn softmax(r: Self$@): Tensor<|T|>!Tensor_error	each row turned into weights that sum to 1. The row's maximum is subtracted first, so a large value does not overflow.
 ksai/tensor	Tensor<|T|>.sub	pub fn sub(r: Self$@, rhs: Tensor<|T|>): Tensor<|T|>	the difference; a mismatch panics
 ksai/tensor	Tensor<|T|>:Add<|Tensor<|T|>, Tensor<|T|>|>	impl<|T|> Tensor<|T|>: Add<|Tensor<|T|>, Tensor<|T|>|>	so `a + b` can be written
@@ -248,22 +395,26 @@ ksai/tensor	Tensor_error	pub enum Tensor_error	why an operation could not run on
 ksai/tensor	Tensor_error.out_of_bounds	out_of_bounds	a row number outside the tensor; a bad element index stops the program
 ksai/tensor	Tensor_error.rank_mismatch	rank_mismatch	the number of dimensions is not what the operation expects
 ksai/tensor	Tensor_error.shape_mismatch	shape_mismatch	a dimension's size does not match, such as the inner-product dimension
-ksai/tokenizer	Bpe_key:ds.Hashable<|Bpe_key|>	impl Bpe_key: ds.Hashable<|Bpe_key|>	so a pair of token IDs can stand as a map's key. The two hashes below skip `ds.fmix32`. Token IDs are consecutive numbers whose low bits are already spread. So mixing would only add an operation to each BPE merge lookup.
+ksai/tokenizer	Bpe_key:ds.Hashable<|Bpe_key|>	impl Bpe_key: ds.Hashable<|Bpe_key|>	so a pair of token IDs can stand as a map's key. **Both IDs are mixed** (`ds.fmix32`). An XOR of the two stays below the vocabulary's size and gives (a, b) and (b, a) one value, so Qwen's 151,387 rules crowd into long probe runs.
 ksai/tokenizer	Load_error	pub enum Load_error	why `Tokenizer.load` refused a vocabulary or its merges
-ksai/tokenizer	Load_error.broken	broken(path: U8[], line: Sz)	a line is not one `train_bpe.kspl` writes; the file and the. line's number from 1 (`load_text` names `vocabulary` or `merges` for the file). **Refused, not skipped**: a word or a rule dropped in silence makes every text it touches encode to other IDs, which nothing downstream can notice.
+ksai/tokenizer	Load_error.broken	broken(path: U8[], line: Sz)	a line is not one `train_bpe.kspl` writes; the file and the. line's number from 1 (`load_text` names `vocabulary` or `merges` for the file, and `load_lists` names `tokens`, `types` or `merges` with the entry's number from 1). **Refused, not skipped**: a word or a rule dropped in silence makes every text it touches encode to other IDs, which nothing downstream can notice.
 ksai/tokenizer	Load_error.io	io(err: io.Io_error)	a file could not be read
+ksai/tokenizer	TOKEN_NORMAL	pub const TOKEN_NORMAL: I32 = 1	a GGUF token type: a word of the BPE vocabulary
+ksai/tokenizer	TOKEN_USER_DEFINED	pub const TOKEN_USER_DEFINED: I32 = 4	a GGUF token type: a marker matched in any text. Such as Qwen's `<think>` and `<tool_call>`. **Matched even inside a message**, as llama.cpp and Hugging Face's tokenizer do: the chat template writes them as text, and the model was trained on their single IDs. Every other type (a control token such as `<|im_end|>`) is never matched in text: a caller puts its ID in the list itself.
 ksai/tokenizer	Token_key:ds.Hashable<|Token_key|>	impl Token_key: ds.Hashable<|Token_key|>	so a token ID can stand as a map's key
 ksai/tokenizer	Tokenizer	pub struct Tokenizer	the vocabulary and merge rules that turn text into token IDs
-ksai/tokenizer	Tokenizer.add_merge	pub fn add_merge(r: Self$@, id1: I32, id2: I32, merged_id: I32)	adds one merge rule: this pair, when adjacent, becomes that one word. Caution: **The call order is the rank**, so the rules must arrive in priority order (`load()` and `train_bpe.kspl`'s merges.txt already do).
+ksai/tokenizer	Tokenizer.add_merge	pub fn add_merge(r: Self$@, id1: I32, id2: I32, merged_id: I32)	adds one merge rule: this pair, when adjacent, becomes that one word. Caution: **The call order is the rank**, so the rules must arrive in priority order (`load()` and `train_bpe.kspl`'s merges.txt already do). A pair given again keeps its first rank, as llama.cpp keeps it.
 ksai/tokenizer	Tokenizer.add_token	pub fn add_token(r: Self$@, token: U8[], id: I32)	adds one word to the vocabulary, looked up in both directions from then on
 ksai/tokenizer	Tokenizer.arena	pub arena: Arena$@	the arena for every word, every rule and every cached chunk. **Nothing a call returns is put here** (`encode` and `decode` take the caller's arena), so a tokenizer kept for a server's lifetime grows only up to `CHUNK_CACHE_CAP`.
 ksai/tokenizer	Tokenizer.decode	pub fn decode(r: Self$@, tokens: List<|I32|>$@, arena: Arena$@): U8[]	the text for the IDs
 ksai/tokenizer	Tokenizer.decode_one	pub fn decode_one(r: Self$@, id: I32): U8[]	the text for one ID, for printing each generated token as it comes. **It allocates nothing**: the result is the vocabulary's own bytes, which stay valid while the tokenizer's arena does. An ID not in the vocabulary gives an empty text.
-ksai/tokenizer	Tokenizer.encode	pub fn encode(r: Self$@, text: U8[], arena: Arena$@): List<|I32|>$@	the token IDs for a text. Splits into chunks (`chunk_end`) and within each chunk merges the pair of the smallest rank every time; no merge crosses a chunk, as during training.
+ksai/tokenizer	Tokenizer.encode	pub fn encode(r: Self$@, text: U8[], arena: Arena$@): List<|I32|>$@	the token IDs for a text. Each user-defined marker's text becomes its ID first. The rest is split into chunks (`pretokenizer.chunk_end`), and within each chunk the pair of the smallest rank merges every time; no merge crosses a chunk, as during training.
 ksai/tokenizer	Tokenizer.load	pub fn load(r: Self$@, vocab_path: U8[], merges_path: U8[]): Void!Load_error	loads the vocabulary and merge rules that `train_bpe.kspl` wrote
+ksai/tokenizer	Tokenizer.load_lists	pub fn load_lists(r: Self$@, tokens: U8[][], types: I32[], merges: U8[][]): Void!Load_error	loads a byte-level vocabulary given as a GGUF file holds it. The three lists are `tokenizer.ggml.tokens`, `.token_type` and `.merges`, in a GGUF file's order; nothing is read from a file. A normal word is written in GPT-2's mapping of bytes to characters, and any other is its text as it stands.
 ksai/tokenizer	Tokenizer.load_text	pub fn load_text(r: Self$@, vocab: U8[], merges: U8[]): Void!Load_error	loads the two files' texts already in memory, with no file read. For a program with no filesystem, or texts `embed`ded at build time. A broken line is named in `vocabulary` or `merges`, as a file's path would be.
-ksai/tokenizer	Tokenizer.new	pub fn new(arena: Arena$@): Tokenizer	an empty tokenizer, to be filled by `load` or by `add_token` / `add_merge`
+ksai/tokenizer	Tokenizer.new	pub fn new(arena: Arena$@): Tokenizer	an empty tokenizer, to be filled by a `load` or by `add_token` / `add_merge`
 ksai/tokenizer	Tokenizer.next_rank	pub next_rank: I32	the rank the next `add_merge` gets; the call order is the rank
+ksai/tokenizer	Tokenizer.set_split	pub fn set_split(r: Self$@, rule: Split_rule)	the rule that splits a text into chunks before merging. It must be the rule the vocabulary was made with: GGUF's `tokenizer.ggml.pre` names it (`Split_rule.named`). Qwen2's rule is taken until this is called.
 ksai/tokenizer	Tokenizer.vocab	pub vocab: Map<|U8[], I32|>$@	each word's byte sequence, mapped to its ID
 ksai/tokenizer	UNK_ID	pub const UNK_ID: I32 = 0	`<unk>`, the ID a byte the vocabulary lacks is encoded as
 ksai/tokenizer	parse_token_id	pub fn parse_token_id(text: U8[]): I32?	a decimal ID that fits an `I32`, or none

@@ -1,0 +1,192 @@
+//< A stand-in model server for the tests, and the replies it can give
+//< Not a suite; part of `ksagent/tests/all.kspl`. **CI has no model**, so this answers each
+//< request with the next reply prepared for it, on a free loopback port, in a thread of its own.
+//< It keeps every request body, so a test can check what ksagent sent back (a tool's refusal).
+//< Caution: **It never waits for good**: a request that does not come within `WAIT_US` ends it.
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/http"
+import "std/json" + { Json_builder }
+import "std/mem" { Arena }
+import "std/net"
+import "std/str" { Str_builder }
+import "std/strfmt" as _strfmt
+import "std/sys"
+import "std/thread"
+
+priv const WAIT_US: I64 = 20000000I64 //< how long it waits for the next request
+priv const READ_WAIT_MS: I32 = 20000 //< how long one request may take to arrive
+
+struct Stub //< one stand-in server and what it saw
+    listener: net.Tcp_listener$@
+    port: I32
+    replies: U8[][] //< the raw HTTP responses, one per request, in order
+    bodies: List<|U8[]|> //< the request bodies it received, in order
+    own: Arena$@ //< the thread's own memory, for `bodies`
+    edit_path: U8[] //< a file it writes when the first request comes; empty writes none
+        //< **It stands for a person saving while the model works**: the write lands between
+        //< ksagent's first read of a chat file and its second.
+    edit_body: U8[]
+    worker: thread.Thread$@
+
+fn start(replies: U8[][], arena: Arena$@): Stub$@ //< starts a stand-in that gives these replies
+    return start_editing(replies, "", "", arena)
+
+fn start_editing(replies: U8[][], edit_path: U8[], edit_body: U8[], arena: Arena$@): Stub$@ //<
+    //< Starts a stand-in that also writes `edit_body` to `edit_path` when the first request comes
+    listener: = net.Tcp_listener.bind("127.0.0.1", 0) catch panic("the stand-in can listen")
+    listener.set_nonblocking() catch panic("the stand-in's socket can stop blocking")
+    port: = listener.port() catch panic("a bound socket knows its port")
+    s: = arena
+        .create(Stub::{ .listener = listener, .port = port, .replies = replies,
+        .bodies = List<|U8[]|>(null), .own = Arena(64 * 1024), .edit_path = edit_path,
+        .edit_body = edit_body, .worker = null })
+    s.bodies = List<|U8[]|>(s.own)
+    s.worker = thread.Thread.spawn<|Stub|>(serve, s) catch panic("the stand-in's thread starts")
+    return s
+
+fn finish(s: Stub$@) //< waits for the stand-in to stop, then closes its socket
+    s.worker.join_and_free()
+    s.listener.free()
+
+fn release(s: Stub$@) //< lets go the memory of the bodies it kept
+    s.own.free()
+
+#export
+fn serve(s: Stub$@): Void$@ //< answers each request with its reply, until the replies run out
+    for i in Range.asc(s.replies.len)
+        conn: = accept_within(s.listener) catch
+            return null
+        body: = read_body(conn, s.own)
+        if i == 0 && s.edit_path.len > 0
+            fs.replace_file(s.edit_path, s.edit_body, .kept) catch {}
+        s.bodies.push(body)
+        conn.write_all(s.replies[i]) catch {}
+        conn.free()
+    return null
+
+priv fn accept_within(listener: net.Tcp_listener$@): net.Tcp_stream$@? //<
+    //< The next connection, or none when none comes within `WAIT_US`
+    deadline: = sys.mono_us() + WAIT_US
+    for sys.mono_us() < deadline
+        conn: = listener.accept() catch
+            sys.sleep_ms(2)
+            continue
+        return .some(conn)
+    return .none
+
+priv fn read_body(conn: net.Tcp_stream$@, arena: Arena$@): U8[] //<
+    //< The body of the one request on the connection, or empty where it never arrives whole
+    defer $got: = Str_builder()
+    for
+        $chunk: U8[4096] = ::{}
+        n: = conn.read_for(U8$[]::chunk, READ_WAIT_MS) catch
+            return ""
+        if n == 0
+            return ""
+        got.s((U8[]::chunk).sub(0, n))
+        req: =
+            http.parse_request(got.slice(), http.DEFAULT_MAX_BODY_BYTES, arena) catch e
+            switch e
+            case .incomplete
+                continue
+            default
+                return ""
+        return arena.dup_str(req.body)
+
+// ==========================================
+// The replies
+// ==========================================
+
+fn http_ok(body: U8[], arena: Arena$@): U8[] //< a whole 200 response carrying a JSON body
+    defer $out: = Str_builder()
+    head: = http.headers(arena).add("Content-Type", "application/json").build()
+    http.format_response(out@, 200, head, body) catch panic("the stand-in's reply is well-formed")
+    return arena.dup_str(out.slice())
+
+fn call(name: U8[], args: U8[], arena: Arena$@): U8[] //<
+    //< One tool call, as a reply's `tool_calls` holds it; `args` is the arguments' JSON text
+    $b: = Json_builder(arena)
+    f: = b.obj().set("name", b.str_val(name)).set("arguments", b.str_val(args)).build()
+    v: = b.obj()
+        .set("id", b.str_val(arena.text().s("call_").s(name).take()))
+        .set("type", b.str_val("function")).set("function", f).build()
+    return dumped(v, arena)
+
+fn calls_reply(calls: U8[][], arena: Arena$@): U8[] //< a reply that asks for these tool calls
+    out: = arena.text()
+    out
+        .s("{\"choices\": [{\"index\": 0, \"message\": {\"role\": \"assistant\", \"content\": null, \
+            ").s("\"tool_calls\": [")
+    for i in Range.asc(calls.len)
+        out.s(", " if i > 0 else "").s(calls[i])
+    out.s("]}, \"finish_reason\": \"tool_calls\"}]}")
+    return http_ok(out.take(), arena)
+
+fn one_call(c: U8[], arena: Arena$@): U8[] //< a reply that asks for one tool call
+    return calls_reply(U8[][]::{ c }, arena)
+
+fn text_reply(text: U8[], arena: Arena$@): U8[] //< a reply with plain text and no tool call
+    $b: = Json_builder(arena)
+    msg: = b.obj().set("role", b.str_val("assistant")).set("content", b.str_val(text)).build()
+    choice: = b.obj().set("index", b.int_val(0)).set("message", msg).build()
+    return http_ok(dumped(b.obj().set("choices", b.arr().push(choice).build()).build(), arena),
+        arena)
+
+fn answer_call(text: U8[], sources: U8[], arena: Arena$@): U8[] //<
+    //< An `answer` call; `sources` is the JSON text of its list
+    $b: = Json_builder(arena)
+    args: = arena.text().s("{\"text\": ").s(dumped(b.str_val(text), arena)).s(", \"sources\": ")
+        .s(sources).s("}").take()
+    return call("answer", args, arena)
+
+fn list_of(items: U8[][], arena: Arena$@): U8[] //< JSON texts joined into a JSON list's text
+    out: = arena.text()
+    out.c('[')
+    for i in Range.asc(items.len)
+        out.s(", " if i > 0 else "").s(items[i])
+    out.c(']')
+    return out.take()
+
+fn source(path: U8[], from: I32, to: I32, quote: U8[], arena: Arena$@): U8[] //<
+    //< One source, as the JSON text an `answer` call's list holds
+    $b: = Json_builder(arena)
+    v: = b.obj().set("path", b.str_val(path)).set("from_line", b.int_val(from))
+        .set("to_line", b.int_val(to)).set("quote", b.str_val(quote)).build()
+    return dumped(v, arena)
+
+priv fn dumped(v: json.Value, arena: Arena$@): U8[] //< a value as JSON text
+    defer $out: = Str_builder()
+    v.dump(out@)
+    return arena.dup_str(out.slice())
+
+// ==========================================
+// The folder the tests ask about
+// ==========================================
+
+const LEAVE: U8[] =
+    "# Leave\n\nA new employee receives 10 days of paid leave\nafter six months of work.\n\nUnused \
+        days carry over for one year.\n" //< `rules/leave.md`; the quotes cite lines 3-4
+
+const KYUKA: U8[] =
+    "# 休暇規程\n\n第3条 年次有給休暇は、入社6か月後に10日付与する。\n" //<
+        //< `規程/休暇.md`, so a search finds Japanese as plain bytes
+
+priv const RELS: U8[][7] = ::{ "rules/leave.md", "規程/休暇.md", ".env", ".hidden/notes.md",
+    "data.bin", "out/build.md", "team.chat.ksmd" }
+
+fn folder(work: U8[], name: U8[], arena: Arena$@): U8[] //<
+    //< Makes a fresh folder under `work` holding the files the tests ask about, and returns it
+    //< Beside it stands `<name>-outside.txt`, which no tool may reach. `data.bin` holds a NUL.
+    //< A search skips `out/`, build output, and `team.chat.ksmd`, a chat file. **The folder's name
+    //< is new on every run**, so a link left by an earlier run cannot turn a check into a skip.
+    prefix: = arena.text().s(name).c('-').take()
+    root: = fs.mkdir_unique(work, prefix, arena) catch panic("the test folder can be made")
+    bodies: = U8[][]::{ LEAVE, KYUKA, "TOKEN=secret-value\n", "hidden notes\n", "abc\0def\n",
+        "paid leave, in build output\n", "## Question\n\nHow much paid leave?\n" }
+    fs.write_tree(root, U8[][]::RELS, bodies, arena) catch panic("the test folder can be written")
+    outside: = arena.text().s(name).s("-outside.txt").take()
+    fs.write_tree(work, U8[][]::{ outside }, U8[][]::{ "outside contents\n" }, arena)
+        catch panic("the file outside the folder can be written")
+    return root

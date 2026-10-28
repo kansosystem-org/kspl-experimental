@@ -80,7 +80,7 @@ priv fn made_norm(step: Sz, arena: Arena$@): Tensor<|F32|> //< the normalisation
         (t.data + i)$ = F32::1.0 + (F32::0.01) * (F32::((i * step + 3) % 7))
     return t
 
-priv fn made_cfg(arena: Arena$@): Tensor<|F32|> //< the config tensor
+priv fn made_cfg(vocab: Sz, arena: Arena$@): Tensor<|F32|> //< the config tensor
     //< **`read_cfg` in `ksai/examples/qwen_infer/model.kspl` decides the layout** (the order of
     //< the 9 elements).
     shape: Sz[1] = ::{ 9 }
@@ -91,17 +91,18 @@ priv fn made_cfg(arena: Arena$@): Tensor<|F32|> //< the config tensor
     (t.data + 3)$ = F32::N_KV_HEADS
     (t.data + 4)$ = F32::HEAD_DIM
     (t.data + 5)$ = F32::INTERMEDIATE
-    (t.data + 6)$ = F32::VOCAB
+    (t.data + 6)$ = F32::vocab
     (t.data + 7)$ = ROPE_THETA
     (t.data + 8)$ = EPS
     return t
 
-priv fn write_weights(path: U8[], arena: Arena$@): Bool //< writes one small weights file
-    //< Caution: **Vary the formula per layer** (with one formula, mixing layers up would not show
-    //< in the answer).
+fn write_weights(path: U8[], vocab: Sz, arena: Arena$@): Bool //< writes one small weights file
+    //< `vocab` is the vocabulary's size: `VOCAB` here, and more in `ksai/tests/examples_chat.kspl`,
+    //< whose tokens hold Qwen2.5's markers. Caution: **Vary the formula per layer** (with one
+    //< formula, mixing layers up would not show in the answer).
     $w: = st.Safetensors_writer()
-    w.add("cfg", made_cfg(arena))
-    w.add("embed.weight", made2(VOCAB, HIDDEN, 3, arena))
+    w.add("cfg", made_cfg(vocab, arena))
+    w.add("embed.weight", made2(vocab, HIDDEN, 3, arena))
     defer $b: = Str_builder()
     for i in Range.asc(N_LAYERS)
         q: = N_HEADS * HEAD_DIM
@@ -119,7 +120,7 @@ priv fn write_weights(path: U8[], arena: Arena$@): Bool //< writes one small wei
         w.add(key(b@, i, ".attn_norm.weight"), made_norm(2 + i, arena))
         w.add(key(b@, i, ".ffn_norm.weight"), made_norm(5 + i, arena))
     w.add("norm.weight", made_norm(3, arena))
-    w.add("lm_head.weight", made2(HIDDEN, VOCAB, 41, arena))
+    w.add("lm_head.weight", made2(HIDDEN, vocab, 41, arena))
     ai_file.save_safetensors(w@, path) catch
         return false
     return true
@@ -220,7 +221,7 @@ fn test_qwen_answers(qwen_exe: U8[], work: U8[], arena: Arena$@) //<
     weights: = fs.join(work, "mini_qwen.safetensors", arena)
     fs.mkdir_all(work) catch
         panic(U8$[]::arena.text().s("cannot create the working directory: \{work\}").take())
-    assert(write_weights(weights, arena),
+    assert(write_weights(weights, VOCAB, arena),
         U8$[]::arena.text().s("cannot write \{weights\}").take())
 
     said: = ran(qwen_exe, weights, TOKENS_IN, arena)

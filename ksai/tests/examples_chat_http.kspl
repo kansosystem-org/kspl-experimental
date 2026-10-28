@@ -1,0 +1,205 @@
+//< Starts `chat_server` as built, on the tiny model, and asks it over HTTP as a client would
+//< Not a suite; part of `ksai/tests/examples_main.kspl`. **The program runs as it ships**, its
+//< command line included, on a port the OS chooses (`--port=0`), read from the line it prints.
+//< Caution: **Every wait is bounded**, and the server is killed at the end, so a server that
+//< hangs fails the test rather than holding it.
+import "ksai/tests/examples_chat" as chat
+import "std/chars"
+import "std/fs"
+import "std/http"
+import "std/json"
+import "std/mem" { Arena }
+import "std/net"
+import "std/str" { Str_builder }
+import "std/strfmt" as _strfmt
+import "std/strnum" // `to_i64`
+import "std/subproc"
+import "std/sys"
+import "std/verdict"
+
+priv const START_WAIT_US: I64 = 60000000I64 //< how long the server may take to listen
+priv const ASK_WAIT_MS: I32 = 60000 //< how long one answer may take, under a sanitizer too
+priv const LISTEN_LINE: U8[] = "listening on http://127.0.0.1:" //< what it prints once listening
+priv const MAX_TOKENS: Sz = 5 //< the server's cap on an answer, passed as `--max-tokens`
+priv const SMALL_CONTEXT: Sz = 1024 //< the server's context, passed as `--context`
+
+fn started(exe: U8[], model: U8[], arena: Arena$@): subproc.Piped_child //<
+    //< The server, started on a tiny model's file; it stops the test where it does not start
+    argv: = U8[][]::{ exe, model, "--port=0",
+        arena.text().s("--max-tokens=\{MAX_TOKENS\}").take(),
+        arena.text().s("--context=\{SMALL_CONTEXT\}").take() }
+    child: = subproc.spawn_piped(argv, "") catch
+        panic(U8$[]::arena.text().s("chat_server cannot be started: \{exe\}").take())
+    return child
+
+fn port_of(child: subproc.Piped_child$@, arena: Arena$@): I32 //<
+    //< The port the server says it listens on; it stops the test where no such line comes
+    defer $said: = Str_builder()
+    buf: = U8$[]::{ .ptr = U8$@::arena.alloc(4096), .len = 4096 }
+    deadline: = sys.mono_us() + START_WAIT_US
+    for sys.mono_us() < deadline
+        n: = child.read_err(buf, 1000) catch e
+            if e == subproc.Read_end.timed_out
+                continue
+            break
+        said.s(U8[]::{ .ptr = buf.ptr, .len = n })
+        text: = said.slice()
+        if at: = text.find_str(LISTEN_LINE)
+            rest: = text.sub_from(at + LISTEN_LINE.len)
+            if end: = rest.find_char('\n')
+                port: = rest.sub(0, end).to_i64() catch
+                    fallback 0I64
+                if port > 0I64
+                    return I32::port
+                break
+    child.kill()
+    panic(U8$[]::arena.text().s("chat_server did not say it listens: ").s(said.slice()).take())
+
+struct Got //< one answer, or why none came
+    status: I32 //< 0 where no answer came
+    body: U8[] //< the answer's body, or why no answer came
+    typed: Bool //< whether it names its length, and its type as JSON
+
+fn asked(port: I32, method: U8[], path: U8[], body: U8[], arena: Arena$@): Got //<
+    //< One request on a connection of its own, and the whole answer
+    defer stream: = net.Tcp_stream.connect("127.0.0.1", port) catch
+        return Got::{ .status = 0, .body = "the server cannot be reached", .typed = false }
+    head: = http.headers(arena)
+        .add("Host", arena.text().s("127.0.0.1:\{port\}").take())
+        .add("Content-Type", "application/json").add("Connection", "close").build()
+    http.write_request(stream, method, path, head, body, ASK_WAIT_MS) catch
+        return Got::{ .status = 0, .body = "the request cannot be sent", .typed = false }
+    r: = http.read_response(stream, arena, 8 * 1024 * 1024, ASK_WAIT_MS) catch
+        return Got::{ .status = 0, .body = "no whole answer by its Content-Length",
+            .typed = false }
+    typed: =
+        r.headers.find("Content-Length").is_some() &&
+        r.headers.find("Content-Type").unwrap_or("").equals("application/json")
+    return Got::{ .status = r.status, .body = r.body, .typed = typed }
+
+fn json_of(g: Got, arena: Arena$@): json.Value //< an answer's body as JSON; null where none
+    doc: = json.parse(g.body, arena) catch
+        return .null_val
+    return doc.val
+
+fn refused(r: Got, status: I32, words: U8[], arena: Arena$@): Bool //<
+    //< whether the answer is that status, with an `error.message` holding those words
+    text: = json_of(r, arena).get("error").get("message").as_str().unwrap_or("")
+    return r.status == status && text.find_str(words).is_some()
+
+priv const ASK_BODY: U8[] =
+    "{\"model\":\"local\",\"stream\":false,\"messages\":[{\"role\":\"system\",\"content\":\"You \
+        answer from the files.\"},{\"role\":\"user\",\"content\":\"How many days of paid \
+        leave?\"}],\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"search\",\"parameters\":{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\"}}}}}]}" //<
+            //< a request in the shape a client with tools sends
+
+priv fn answer_fault(v: json.Value, arena: Arena$@): U8[] //<
+    //< Empty where every field a client reads is there, of its kind, and the counts add up
+    choice: = v.get("choices").get_at(0)
+    msg: = choice.get("message")
+    content: = msg.find("content").unwrap_or(.bool_val(false))
+    reason: = choice.get("finish_reason").as_str().unwrap_or("")
+    u: = v.get("usage")
+    prompt: = u.get("prompt_tokens").as_int().unwrap_or(-1)
+    done: = u.get("completion_tokens").as_int().unwrap_or(-1)
+    if v.get("id").as_str().unwrap_or("").starts_with("chatcmpl-") &&
+        v.get("object").as_str().unwrap_or("").equals("chat.completion") &&
+        v.get("created").as_int64().unwrap_or(0I64) > 0I64 &&
+        v.get("model").as_str().unwrap_or("").equals("tiny_qwen3") &&
+        msg.get("role").as_str().unwrap_or("").equals("assistant") &&
+        (content.as_str().is_some() || content.equals(.null_val)) &&
+        (reason.equals("stop") || reason.equals("length") || reason.equals("tool_calls")) &&
+        prompt > 0 && done >= 0 && done <= I32::MAX_TOKENS &&
+        u.get("total_tokens").as_int().unwrap_or(-1) == prompt + done
+        return ""
+    return arena.text().s("the answer lacks a field a client reads: ").s(json_text(v, arena)).take()
+
+fn json_text(v: json.Value, arena: Arena$@): U8[] //< a value as JSON text, for a message
+    defer $out: = Str_builder()
+    v.dump(out@)
+    return arena.dup_str(out.slice())
+
+fn test_chat_server_http(chat_exe: U8[], work: U8[], arena: Arena$@) //<
+    //< The built server answers a client's request, refuses what it does not do, and keeps its cache
+    //< Caution: **Kill the server before any failure stops this program**, or it outlives the run
+    //< and holds the pipes of whatever started it. So the checks return their failure.
+    verdict.start("[chat_server] the built server answers over HTTP")
+    $child: =
+        started(chat_exe, fs.join(chat.chat_dir(work, arena), chat.MODEL_FILE, arena), arena)
+    port: = port_of(child@, arena)
+    fault: = asked_all(port, arena)
+    child.kill()
+    assert(fault.len == 0, arena.dup_str(fault))
+    verdict.pass("/v1/models names the model; another method or path is refused")
+
+priv fn asked_all(port: I32, arena: Arena$@): U8[] //<
+    //< Asks the running server every request; empty where each answer is right, else the first fault
+    first: = asked(port, "POST", "/v1/chat/completions", ASK_BODY, arena)
+    if first.status != 200 || !first.typed
+        return arena.text().s("a chat request got \{first.status\}: ").s(first.body).take()
+    one: = json_of(first, arena)
+    if fault: = some_text(answer_fault(one, arena))
+        return fault
+    verdict.pass("a request with tools gets a whole answer with every field a client reads")
+
+    again: = json_of(asked(port, "POST", "/v1/chat/completions", ASK_BODY, arena), arena)
+    prompt: = one.get("usage").get("prompt_tokens").as_int().unwrap_or(-1)
+    kept: = again.get("usage").get("prompt_tokens_details").get("cached_tokens").as_int()
+        .unwrap_or(-1)
+    if !again.get("choices").equals(one.get("choices")) || kept != prompt - 1
+        return arena.text().s("the same request again kept \{kept\} of \{prompt\} tokens: ")
+            .s(json_text(again, arena)).take()
+    verdict.pass("the same request again gives the same answer from the kept cache")
+
+    stream: =
+        asked(port, "POST", "/v1/chat/completions",
+        "{\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":\"Hi\"}]}", arena)
+    if !refused(stream, 400, "streaming is not supported", arena)
+        return arena.text().s("a stream request got \{stream.status\}: ").s(stream.body).take()
+    verdict.pass("a request for streaming is refused, saying so")
+
+    think: =
+        asked(port, "POST", "/v1/chat/completions",
+        "{\"chat_template_kwargs\":{\"enable_thinking\":true},\"messages\":[{\"role\":\"user\",\"content\":\"Hi\"}]}",
+        arena)
+    if !refused(think, 400, "does not think", arena)
+        return arena.text().s("thinking asked of Qwen3-Instruct-2507 got \{think.status\}: ")
+            .s(think.body).take()
+    verdict.pass("thinking asked of a model that does not think is refused, saying so")
+
+    n2: =
+        asked(port, "POST", "/v1/chat/completions",
+        "{\"n\":2,\"messages\":[{\"role\":\"user\",\"content\":\"Hi\"}]}", arena)
+    long: = arena.text().s("{\"messages\":[{\"role\":\"user\",\"content\":\"")
+    for _i in Range.asc(SMALL_CONTEXT)
+        long.c('x')
+    too_long: =
+        asked(port, "POST", "/v1/chat/completions", long.s("\"}]}").take(), arena)
+    if !refused(n2, 400, "\"n\"", arena) || !refused(too_long, 400, "--context", arena)
+        return arena.text().s("an unsupported field got \{n2.status\} and a long conversation ")
+            .s("\{too_long.status\}").take()
+    verdict.pass("a field it does not apply, and a conversation past the context, are refused")
+
+    sampled: =
+        "{\"temperature\":0.8,\"top_p\":0.9,\"seed\":7,\"messages\":[{\"role\":\"user\",\"content\":\"Hi\"}]}"
+    s1: = json_of(asked(port, "POST", "/v1/chat/completions", sampled, arena), arena)
+    s2: = json_of(asked(port, "POST", "/v1/chat/completions", sampled, arena), arena)
+    if fault: = some_text(answer_fault(s1, arena))
+        return fault
+    if !s1.get("choices").equals(s2.get("choices"))
+        return "one seed gave two sampled answers"
+    verdict.pass("sampling with a seed answers, the same way twice")
+
+    models: = asked(port, "GET", "/v1/models", "", arena)
+    listed: = json_of(models, arena).get("data").get_at(0).get("id").as_str().unwrap_or("")
+    wrong_method: = asked(port, "GET", "/v1/chat/completions", "", arena)
+    nowhere: = asked(port, "POST", "/v1/completions", "{}", arena)
+    if models.status != 200 || !listed.equals("tiny_qwen3") ||
+        !refused(wrong_method, 405, "POST", arena) ||
+        !refused(nowhere, 404, "no endpoint", arena)
+        return arena.text().s("/v1/models got \{models.status\}, a GET chat ")
+            .s("\{wrong_method.status\}, another path \{nowhere.status\}").take()
+    return ""
+
+fn some_text(text: U8[]): U8[]? //< the text, or none where it is empty
+    return .none if text.len == 0 else .some(text)

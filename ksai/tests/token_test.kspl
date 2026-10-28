@@ -2,6 +2,7 @@
 import "ksai/sampler" as ai_sampler
 import "ksai/tensor" { Tensor }
 import "ksai/tokenizer" as ai_tokenizer
+import "std/ds" { List }
 import "std/fs"
 import "std/io"
 import "std/math"
@@ -80,16 +81,92 @@ fn test_tokenizer_keeps_its_size() //<
         assert(tok.decode_one(3).equals("ab"), "one ID decodes to its word")
         work.reset()
     assert(own.get_total_used() == held, "a cached text adds nothing to the tokenizer")
-    // More distinct words than the cache holds, then new ones once it is full.
+    // More distinct words than the cache holds, then new ones once it is full. Letters, since
+    // each digit is a chunk of its own.
     defer $words: = str.Str_builder()
     for i in Range.asc(70000)
-        words.s(" \{I32::i\}")
+        words.c(' ')
+        letters(i, words@)
     _full: = tok.encode(words.slice(), work)
     work.reset()
     full: = own.get_total_used()
-    _past: = tok.encode(" 70000 70001 70002 123456789", work)
+    _past: = tok.encode(" zzzzza zzzzzb zzzzzc", work)
     assert(own.get_total_used() == full, "a word past the cache's cap adds nothing")
     verdict.pass("")
+
+priv fn letters(n: Sz, out: str.Str_builder$@) //< a word of its own for each number, in a to p
+    $v: = n
+    for
+        out.c('a' + U8::(v % 16))
+        v /= 16
+        if v == 0
+            return
+
+priv fn mapped(text: U8[], arena: Arena$@): U8[] //< the text in GPT-2's mapping of bytes
+    //< By hand for the few bytes the samples hold: a space is `Ġ` and a newline `Ċ`.
+    b: = arena.text()
+    for c in text
+        if c == ' '
+            b.s("Ġ")
+        else if c == '\n'
+            b.s("Ċ")
+        else
+            b.c(c)
+    return b.take()
+
+priv const NORMAL: I32 = ai_tokenizer.TOKEN_NORMAL
+priv const MARKER: I32 = ai_tokenizer.TOKEN_USER_DEFINED
+priv const CONTROL: I32 = 3 //< GGUF's control token, such as `<|im_end|>`
+
+fn test_tokenizer_load_lists(arena: Arena$@) //<
+    //< `load_lists` reads a GGUF file's lists: GPT-2's mapping, the rules, the markers
+    //< A user-defined marker becomes its ID even inside a text; a control token's text stays text.
+    verdict.start("[Tokenizer] load_lists reads a GGUF vocabulary, markers included...")
+    words: = U8[][]::{ "a", "b", "x", " ", "\n", "ab", " ab", "\n\n", "<think>", "<|x|>", "<", "|",
+        ">" }
+    $tokens: = List<|U8[]|>(arena)
+    for w in words
+        tokens.push(mapped(w, arena))
+    tokens[8] = "<think>"
+    tokens[9] = "<|x|>"
+    types: = I32[]::{ NORMAL, NORMAL, NORMAL, NORMAL, NORMAL, NORMAL, NORMAL, NORMAL, MARKER,
+        CONTROL, NORMAL, NORMAL, NORMAL }
+    merges: = U8[][]::{ "a b", "Ġ ab", "Ċ Ċ" }
+    $tok: = ai_tokenizer.Tokenizer(arena)
+    tok.load_lists(tokens.slice(), types, merges) catch panic("a well-formed vocabulary must load")
+    text: = " ab\n\nab<think>x<|x|>"
+    ids: = tok.encode(text, arena)
+    want: = I32[]::{ 6, 7, 5, 8, 2, 10, 11, 2, 11, 12 }
+    assert(ids.len == want.len, "the text gives one ID per chunk and per marker")
+    for i in Range.asc(want.len)
+        assert(ids[i] == want[i],
+            U8$[]::arena.text().s("ID \{i\} is \{ids[i]\}").take())
+    assert(tok.decode(ids, arena).equals(text), "the IDs decode back to the text")
+    assert(refused(tokens.slice(), I32[]::{ NORMAL }, merges).equals("types"), "a short type list")
+    $raw: = List<|U8[]|>(arena)
+    for t in tokens
+        raw.push(t)
+    raw[3] = " " // a space is not in GPT-2's mapping: the mapping writes it `Ġ`
+    assert(refused(raw.slice(), types, merges).equals("tokens"), "a byte outside the mapping")
+    raw[3] = "a"
+    assert(refused(raw.slice(), types, merges).equals("tokens"), "two words with the same bytes")
+    assert(refused(tokens.slice(), types, U8[][]::{ "b a" }).equals("merges"),
+        "a merge into no word")
+    assert(refused(tokens.slice(), types, U8[][]::{ "ab" }).equals("merges"),
+        "a merge with no space")
+    verdict.pass("words, rules and markers load; each damaged entry is named by its list.")
+
+priv fn refused(tokens: U8[][], types: I32[], merges: U8[][]): U8[] //<
+    //< The list `load_lists` names as damaged, or empty where it takes them
+    defer scratch: = Arena(64 * 1024)
+    $tok: = ai_tokenizer.Tokenizer(scratch)
+    tok.load_lists(tokens, types, merges) catch e
+        switch e
+        case .broken(list, _entry)
+            return list
+        default
+            return "io"
+    return ""
 
 priv fn broken_line(vocab: U8[], merges: U8[]): Sz //<
     //< The line `load` names as broken in the pair written out, or 0 where it takes them

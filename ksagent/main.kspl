@@ -1,0 +1,134 @@
+#!/usr/bin/env -S ksplc run
+//< Answers questions about the files in one folder, through a model server on this machine
+//< Each answer cites the file and lines it comes from, and each cited quote is checked against
+//< the file. `ask` answers one question, `watch` answers the questions added to chat files, and
+//< `eval` scores a model on questions whose answers are known.
+//< **It only reads the folder**, except the chat files it answers in and the table `--out` names.
+
+// ==========================================
+// Usage:
+//     ksagent ask [options...] <folder> "<question>"
+//     ksagent watch [options...] <folder>
+//     ksagent eval [options...] <folder> <questions file>
+// ==========================================
+import "ksagent/agent"
+import "ksagent/answer" + { Lang }
+import "ksagent/evaluate"
+import "ksagent/files"
+import "ksagent/model"
+import "ksagent/watch"
+import "std/argparse"
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+
+priv const NAME: U8[] = "ksagent" //< the program's name in its usage and messages
+priv const MAX_TIMEOUT_S: I64 = 86400I64 //< the longest `--timeout`: one day
+    //< The wait is held in milliseconds as an `I32`, and no reply is worth waiting longer.
+
+priv struct Options //< the command line, read and checked
+    command: U8[]
+    rest: U8[][] //< the positional arguments after the command
+    url: U8[]
+    model: U8[]
+    timeout_s: I64
+    out: U8[] //< `eval`'s table file under the folder; empty writes none
+
+priv fn read_args(o: Options$@, arena: Arena$@): Bool //<
+    //< Reads the command line into `o`; false once a refusal is printed
+    $url: U8[] = model.DEFAULT_URL
+    $model_name: U8[] = "local"
+    $timeout_s: I64 = 600I64
+    $out: U8[] = ""
+    cli: = argparse.Parser
+        .create(NAME,
+        "answers questions about the files in one folder, citing the lines each answer comes from",
+        arena)
+    cli.subcommand("ask", "answer one question and print the answer and its checked sources")
+    cli.subcommand("watch", "answer each question saved into a *.chat.ksmd file under <folder>")
+    cli.subcommand("eval", "ask the questions of a questions file and print how many passed")
+    cli.command_form("ask", "[options...] <folder> \"<question>\"")
+    cli.command_form("watch", "[options...] <folder>")
+    cli.command_form("eval", "[options...] <folder> <questions file>")
+    cli.positional("<folder> [<question> | <questions file>]")
+    cli.str_opt("--model-url", url@, "the model server, http only (default http://127.0.0.1:8081)")
+    cli.str_opt("--model", model_name@, "the model name each request names (default local)")
+    cli.int_opt("--timeout", timeout_s@, "the seconds one model reply may take (default 600)")
+    cli.str_opt("--out", out@, "also write eval's table to this file under <folder> (.md or .ksmd)")
+    cli.only_for("--out", "eval")
+    cli.parse_or_exit()
+    command: = cli.command catch
+        cli.print_usage(io.err())
+        return false
+    want: = 1 if command.equals("watch") else 2
+    if cli.rest.len != want
+        cli.print_command_usage(command, io.err())
+        return false
+    o$ = Options::{ .command = command, .rest = cli.rest.slice(), .url = url, .model = model_name,
+        .timeout_s = timeout_s, .out = out }
+    return true
+
+fn main(): I32
+    defer arena: = Arena(64 * 1024)
+    $o: Options = ::{}
+    if !read_args(o@, arena)
+        return 2
+    root: = o.rest[0]
+    if !fs.is_dir(root)
+        io.err().s("\{NAME\}: not a folder: \{root\}\n")
+        return 1
+    if o.timeout_s < 1I64 || o.timeout_s > MAX_TIMEOUT_S
+        io.err().s("\{NAME\}: --timeout must be from 1 to \{MAX_TIMEOUT_S\} seconds\n")
+        return 1
+    server: =
+        model.parse_url(o.url, o.model, I32::(o.timeout_s * 1000I64), arena) catch why
+        io.err().s("\{NAME\}: ").s(why).c('\n')
+        return 1
+    job: = agent.Ask::{ .server = server@, .root = root, .trace = true }
+    if o.command.equals("watch")
+        return watch.watch(job)
+    if o.command.equals("eval")
+        return run_eval(job, o.rest[1], o.out, arena)
+    question: = o.rest[1]
+    none: = List<|agent.Turn|>(arena)
+    a: = agent.run(job, question, none@, Lang.of(question), arena)
+    answer.write_console(a@, io.out(), arena)
+    return 1 if answer.ended_line(a@, arena).len > 0 else 0
+
+priv fn run_eval(job: agent.Ask, questions: U8[], out: U8[], arena: Arena$@): I32 //<
+    //< `eval`: asks every question of the file, prints the table, and writes it where `--out` says
+    text: = io.read_file(questions, arena) catch
+        io.err().s("\{NAME\}: cannot read the questions file \{questions\}\n")
+        return 1
+    cases: = evaluate.read_cases(text, arena) catch why
+        io.err().s("\{NAME\}: \{questions\}: ").s(why).c('\n')
+        return 1
+    // **Check where the table goes before asking**: the questions can take an hour.
+    $target: U8[] = ""
+    if out.len > 0
+        if !out.ends_with(".md") && !out.ends_with(".ksmd")
+            io.err().s("\{NAME\}: --out must name a .md or a .ksmd file\n")
+            return 1
+        // **The same guards as the model's paths** (`files.resolve`), so the table cannot land
+        // outside the folder, on a hidden name or on a chat file.
+        switch files.resolve(job.root, out, arena)
+        case .ok(full, _rel)
+            target = full
+        case .refused(why)
+            io.err().s("\{NAME\}: --out: ").s(why).c('\n')
+            return 1
+    rows: = evaluate.run_all(job, cases@, arena)
+    io.out().s(evaluate.markdown(rows@, arena))
+    if target.len > 0
+        body: =
+            (evaluate.ksmd(rows@, arena) if out.ends_with(".ksmd")
+            else evaluate.markdown(rows@, arena))
+        fs.replace_file(target, body, .kept) catch e
+            io.err().s("\{NAME\}: cannot write \{target\} (\{e\})\n")
+            return 1
+        io.err().s("wrote \{target\}\n")
+    return 0

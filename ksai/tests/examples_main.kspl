@@ -1,6 +1,9 @@
 //< Builds the applications as they ship and checks what they print when run
 //< `make test` runs it (`ksai/Makefile`), passing the programs it built and a working directory.
 import "ksai/tests/examples_car" as car
+import "ksai/tests/examples_chat" as chat
+import "ksai/tests/examples_chat35" as _chat35
+import "ksai/tests/examples_chat_http" as _chat_http
 import "ksai/tests/examples_qwen" as qwen
 import "std/chars"
 import "std/fs"
@@ -16,7 +19,7 @@ import "std/verdict"
 
 priv const USAGE: U8[] =
     "usage: ksplc run tests/examples_main.kspl <llama_engine> <qwen_infer> <fim_coder> <car_pilot> \
-        <work_dir>" //<
+        <chat_server> <work_dir>" //<
             //< the arguments, in that order (`make test` in `ksai/Makefile` passes them)
 
 priv const LLAMA_VERDICT: U8[] = "RESULT: ALL PASS" //< what llama_engine says when training works
@@ -32,6 +35,7 @@ priv struct Tests //< what the tests take: each program's path, and where they r
     qwen_exe: U8[]
     fim_exe: U8[]
     car_exe: U8[]
+    chat_exe: U8[]
     work: U8[]
     arena: Arena$@
 
@@ -41,14 +45,15 @@ fn main(): I32
     io.set_line_buffered()
     defer arena: = Arena(64 * 1024 * 1024)
     argv: = sys.args()
-    if argv.len != 6
+    if argv.len != 7
         panic(arena.dup_str(USAGE))
     // The children start in `work`, so the programs' paths are made absolute first.
     llama: = fs.absolute(argv.get(1), arena) catch panic("cannot read the working directory")
     fim: = fs.absolute(argv.get(3), arena) catch panic("cannot read the working directory")
     car_exe: = fs.absolute(argv.get(4), arena) catch panic("cannot read the working directory")
     $t: = Tests::{ .llama_exe = llama, .qwen_exe = arena.dup_str(argv.get(2)), .fim_exe = fim,
-        .car_exe = car_exe, .work = arena.dup_str(argv.get(5)), .arena = arena }
+        .car_exe = car_exe, .chat_exe = arena.dup_str(argv.get(5)),
+        .work = arena.dup_str(argv.get(6)), .arena = arena }
     t.run()
     return 0
 
@@ -82,15 +87,6 @@ priv fn test_llama_trains(llama_exe: U8[], work: U8[], arena: Arena$@) //<
 priv const FIM_WAIT_MS: I32 = 600000 //< the cap on one run of fim_coder
 priv const SAID_CAP: Sz = 1024 * 1024 //< how much of what it says is kept
 
-priv fn byte_vocab(arena: Arena$@): U8[] //< a vocabulary of the 256 bytes alone
-    //< **Every text encodes under it** with no merge, so the corpus below needs no tokenizer
-    //< trained first.
-    b: = arena.text()
-    hex: = "0123456789abcdef"
-    for i in Range.asc(256)
-        b.s("\{i + 1\}\t").c(hex[i / 16]).c(hex[i % 16]).c('\n')
-    return b.take()
-
 priv fn fim_run(argv: U8[][], work: U8[], arena: Arena$@): U8[] //<
     //< one run; its output if it failed
     r: = subproc.run_capture(argv, work, FIM_WAIT_MS, SAID_CAP, arena) catch
@@ -99,6 +95,14 @@ priv fn fim_run(argv: U8[][], work: U8[], arena: Arena$@): U8[] //<
         return arena.text().s("exit \{r.exit_code.unwrap_or(-1)\}:\n").s(r.stdout_data)
             .s(r.stderr_data).take()
     return ""
+
+priv fn byte_vocab(arena: Arena$@): U8[] //< a vocabulary of the 256 bytes alone, as IDs 1 to 256
+    //< **Every text encodes under it** with no merge, so no tokenizer is trained first.
+    b: = arena.text()
+    hex: = "0123456789abcdef"
+    for i in Range.asc(256)
+        b.s("\{i + 1\}\t").c(hex[i / 16]).c(hex[i % 16]).c('\n')
+    return b.take()
 
 fn test_fim_round_trip(fim_exe: U8[], work: U8[], arena: Arena$@) //<
     //< fim_coder trains, writes its weights, reads them back, and answers each hole with candidates

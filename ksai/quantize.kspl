@@ -1,0 +1,199 @@
+//< Making GGUF's Q8_0 and Q4_K blocks from F32 weights, as llama.cpp's reference quantizer does
+//< **Each block follows ggml's `quantize_row_q8_0_ref` and `quantize_row_q4_K_ref`**, so ksai
+//< writes the blocks llama.cpp writes when no importance matrix is given. It is for converting a
+//< model and for tests; a program that only runs a model does not import it.
+import "ksai/quant" + { Quant_error, Quant_format, Quant_matrix }
+import "ksai/tensor" + { Tensor }
+import "std/checked_int"
+import "std/math"
+import "std/mem" + { Arena }
+
+impl Quant_matrix
+    pub fn quantize( //< the F32 matrix in Q8_0 or Q4_K, its bytes on the given arena
+        //< Caution: **The result is lossy.** Q8_0 keeps about 8 bits of each number and Q4_K about
+        //< 4.5. Other formats throw `.no_quantizer`.
+        src: Tensor<|F32|>, //< the weights, shaped `[rows, cols]`, one output per row
+        format: Quant_format, //< `.q8_0` or `.q4_k`
+        arena: Arena$@, //< where the bytes go
+    ): Quant_matrix!Quant_error
+        tensor.require_arena(arena)
+        if src.shape.len != 2 || src.shape[0] < 0
+            throw .bad_shape
+        rows: = src.shape[0]
+        cols: = src.shape[1]
+        row_len: = format.row_bytes(cols)!
+        total: = rows.checked_mul(row_len) catch
+            throw .size_mismatch
+        if format != .q8_0 && format != .q4_k
+            throw .no_quantizer
+        out: = U8$@::arena.alloc(total)
+        blocks: = cols / format.block_len()
+        for row in Range.asc(rows)
+            x: = src.data + row * cols
+            y: = out + row * row_len
+            for b in Range.asc(blocks)
+                if format == .q8_0
+                    quantize_q8_0(x + b * quant.QK8_0, y + b * quant.Q8_0_BYTES)
+                else
+                    quantize_q4_k(x + b * quant.QK_K, y + b * quant.Q4_K_BYTES)
+        return Quant_matrix.from_bytes(format, rows, cols, U8[]::{ .ptr = out, .len = total })
+
+priv fn put_half(p: U8$@, h: U16) //< an F16, least significant byte first
+    p$ = U8::(h & 0xFF)
+    (p + 1)$ = U8::(h >> 8)
+
+priv fn quantize_q8_0(x: F32@, y: U8$@) //< 32 numbers as one Q8_0 block
+    //< `d` is the largest magnitude over 127; each number becomes `round(x / d)`, halves away
+    //< from 0. It multiplies by `1 / d` as ggml does, which rounds differently from dividing.
+    $amax: F32 = 0.0
+    for i in Range.asc(quant.QK8_0)
+        amax = math.max(amax, math.abs((x + i)$))
+    d: = amax / 127.0F32
+    id: = 1.0F32 / d if d != 0.0 else 0.0F32
+    put_half(y, quant.f16_from_f32(d))
+    for i in Range.asc(quant.QK8_0)
+        x0: = (x + i)$ * id
+        (y + 2 + i)$ = U8::I8::math.round(x0)
+
+// ==========================================
+// Q4_K. Each of the 8 groups of 32 gets a scale and a min fitted by weighted least squares, which
+// are then stored as 6-bit multiples of the block's `d` and `dmin`. The arithmetic keeps ggml's
+// order, expression by expression, so a C compiler that fuses `a * b + c` fuses both alike.
+// ==========================================
+
+priv const GROUP: Sz = 32 //< the numbers sharing one scale and one min
+priv const GROUPS: Sz = 8 //< the groups in one block of 256
+priv const NMAX: I32 = 15 //< the largest 4-bit number
+priv const RMIN: F32 = -1.0 //< ggml's `rmin`: the first scale tried is `(nmax - 1) / range`
+priv const RDELTA: F32 = 0.1 //< ggml's `rdelta`: each further try adds this to `nmax - 1`
+priv const NSTEP: Sz = 20 //< ggml's `nstep`: the tries after the first
+
+priv struct Fit //< one group's fitted scale and min
+    scale: F32
+    min: F32 //< ggml's `the_min`, the offset negated; 0 or more
+
+priv fn clamp_q(l: I32): I32 //< a number limited to [0, 15]
+    return math.max(0, math.min(NMAX, l))
+
+priv fn fit_group(x: F32@, w: F32@, l_out: U8$@, aux: U8$@): Fit //<
+    //< ggml's `make_qkx2_quants(32, 15, x, w, L, &min, Laux, -1, 0.1, 20, false)`
+    //< It tries 21 scales and keeps the one whose weighted squared error is least.
+    $lo: = x$
+    $hi: = x$
+    $sum_w: = w$
+    $sum_x: = sum_w * x$
+    for i in Range(1, GROUP, 1)
+        if (x + i)$ < lo
+            lo = (x + i)$
+        if (x + i)$ > hi
+            hi = (x + i)$
+        sum_w += (w + i)$
+        sum_x += (w + i)$ * (x + i)$
+    if lo > 0.0
+        lo = 0.0
+    if hi == lo
+        for i in Range.asc(GROUP)
+            (l_out + i)$ = 0
+        return Fit::{ .scale = 0.0, .min = -lo }
+    $iscale: = F32::NMAX / (hi - lo)
+    $scale: = 1.0F32 / iscale
+    $best: F32 = 0.0
+    for i in Range.asc(GROUP)
+        l: = clamp_q(quant.nearest_int(iscale * ((x + i)$ - lo)))
+        (l_out + i)$ = U8::l
+        diff: = scale * F32::l + lo - (x + i)$
+        best += (w + i)$ * (diff * diff)
+    for step in Range(0, NSTEP + 1, 1)
+        iscale = (RMIN + RDELTA * F32::step + F32::NMAX) / (hi - lo)
+        $sum_l: F32 = 0.0
+        $sum_l2: F32 = 0.0
+        $sum_xl: F32 = 0.0
+        for i in Range.asc(GROUP)
+            l: = clamp_q(quant.nearest_int(iscale * ((x + i)$ - lo)))
+            (aux + i)$ = U8::l
+            wi: = (w + i)$
+            sum_l += wi * F32::l
+            sum_l2 += wi * F32::l * F32::l
+            sum_xl += wi * F32::l * (x + i)$
+        dd: = sum_w * sum_l2 - sum_l * sum_l
+        if dd > 0.0
+            $this_scale: = (sum_w * sum_xl - sum_x * sum_l) / dd
+            $this_min: = (sum_l2 * sum_x - sum_l * sum_xl) / dd
+            if this_min > 0.0
+                this_min = 0.0
+                this_scale = sum_xl / sum_l2
+            $cur: F32 = 0.0
+            for i in Range.asc(GROUP)
+                diff: = this_scale * F32::(aux + i)$ + this_min - (x + i)$
+                cur += (w + i)$ * (diff * diff)
+            if cur < best
+                mem.copy(Void$@::l_out, Void$@::aux, GROUP)
+                best = cur
+                scale = this_scale
+                lo = this_min
+    return Fit::{ .scale = scale, .min = -lo }
+
+priv fn quantize_q4_k(x: F32@, y: U8$@) //< 256 numbers as one Q4_K block
+    $levels: U8[256] = ::{}
+    $aux: U8[32] = ::{}
+    $weights: F32[32] = ::{}
+    $scales: F32[8] = ::{}
+    $mins: F32[8] = ::{}
+    lp: U8$@ = levels@
+    wp: F32$@ = weights@
+    $max_scale: F32 = 0.0
+    $max_min: F32 = 0.0
+    for j in Range.asc(GROUPS)
+        g: = x + j * GROUP
+        $sum_x2: F32 = 0.0
+        for l in Range.asc(GROUP)
+            sum_x2 += (g + l)$ * (g + l)$
+        av_x: = F32::math.sqrt(sum_x2 / 32.0F32)
+        for l in Range.asc(GROUP)
+            (wp + l)$ = av_x + math.abs((g + l)$)
+        fit: = fit_group(g, wp, lp + j * GROUP, aux@)
+        scales[j] = fit.scale
+        mins[j] = fit.min
+        if fit.scale > max_scale
+            max_scale = fit.scale
+        if fit.min > max_min
+            max_min = fit.min
+    pack_scales(y + 4, F32[]::scales, F32[]::mins, max_scale, max_min)
+    put_half(y, quant.f16_from_f32(max_scale / 63.0F32))
+    put_half(y + 2, quant.f16_from_f32(max_min / 63.0F32))
+    refit_levels(x, y, lp)
+    // Two groups share each 32 bytes: the even group's numbers low, the odd group's high.
+    for j in Range.asc(4)
+        q: = y + 16 + j * 32
+        for l in Range.asc(GROUP)
+            (q + l)$ = (lp + j * 64 + l)$ | ((lp + j * 64 + 32 + l)$ << 4)
+
+priv fn pack_scales(q: U8$@, scales: F32[], mins: F32[], max_scale: F32, max_min: F32) //<
+    //< Each group's scale and min as a 6-bit multiple of the largest, packed into 12 bytes
+    //< The layout is what `quant.k4_scale` and `quant.k4_min` read.
+    inv_scale: = 63.0F32 / max_scale if max_scale > 0.0 else 0.0F32
+    inv_min: = 63.0F32 / max_min if max_min > 0.0 else 0.0F32
+    for j in Range.asc(GROUPS)
+        ls: = math.min(U8::63, U8::quant.nearest_int(inv_scale * scales[j]))
+        lm: = math.min(U8::63, U8::quant.nearest_int(inv_min * mins[j]))
+        if j < 4
+            (q + j)$ = ls
+            (q + j + 4)$ = lm
+        else
+            (q + j + 4)$ = U8::((ls & 0xF) | ((lm & 0xF) << 4))
+            (q + j - 4)$ = (q + j - 4)$ | ((ls >> 4) << 6)
+            (q + j)$ = (q + j)$ | ((lm >> 4) << 6)
+
+priv fn refit_levels(x: F32@, y: U8@, levels: U8$@) //<
+    //< Each number's 4-bit level again, against the scale and min as stored
+    //< A group whose stored scale is 0 keeps the levels its fit gave, as ggml does.
+    d: = quant.f16_to_f32(quant.half_at(y))
+    dmin: = quant.f16_to_f32(quant.half_at(y + 2))
+    for j in Range.asc(GROUPS)
+        dj: = d * F32::quant.k4_scale(j, y + 4)
+        if dj == 0.0
+            continue
+        dm: = dmin * F32::quant.k4_min(j, y + 4)
+        for i in Range.asc(GROUP)
+            l: = clamp_q(quant.nearest_int(((x + j * GROUP + i)$ + dm) / dj))
+            (levels + j * GROUP + i)$ = U8::l

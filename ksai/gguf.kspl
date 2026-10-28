@@ -1,0 +1,490 @@
+//< Reads a GGUF file: its metadata, its tensors' names and shapes, and where their bytes lie
+//< **Every length, count and offset is checked against the file's size before it is used.** A
+//< broken file is refused by an error that names the part at fault. The tensors stay in the
+//< caller's bytes: `Gguf_tensor.matrix` gives a `Quant_matrix` over them, and nothing is copied.
+//< **The function that reads the file from disk lives in `ksai/model_file`**, so code that holds
+//< the bytes already, such as an embedded model, needs no file system. The reasons are "A GGUF
+//< file is read once and used in place" in `ksai/docs/DESIGN-learning.md`.
+import "ksai/quant" { Quant_error, Quant_format, Quant_matrix }
+import "ksai/tensor" + { Tensor }
+import "std/bytes" // `get_u32_le` / `get_u64_le`
+import "std/chars" // `sub`
+import "std/checked_int"
+import "std/ds" { List, Map }
+import "std/mem" + { Arena }
+import "std/str" // `arena.text()`
+import "std/strfmt" as _strfmt
+
+pub enum Gguf_error //< why a GGUF file, or a value asked of it, was refused
+    read_failed //< the file could not be read
+    not_gguf //< the file does not start with the four bytes `GGUF`
+    bad_version(version: U32) //< a version other than 2 or 3, the two with this layout
+    truncated(what: U8[]) //< the named part runs past the end of the file
+    too_many(what: U8[]) //< a count of keys or tensors larger than the rest of the file can hold
+    bad_value_type(key: U8[]) //< a value type GGUF does not define, or an array of arrays
+    duplicate(name: U8[]) //< a second key, or a second tensor, of the same name
+    bad_alignment //< `general.alignment` is not a power of two held as a U32
+    bad_tensor(name: U8[]) //<
+        //< no dimension or more than 4, or a row that is no whole number of blocks
+    unsupported_format(name: U8[]) //< a tensor stored in a format `ksai/quant` cannot decode
+    bad_offset(name: U8[]) //< the data is not where the tensor before it ends, or runs past the end
+        //< Tensors lie in the order of their infos, each padded to the alignment.
+    missing(name: U8[]) //< no key or tensor has that name
+    wrong_type(key: U8[]) //< the key holds a value of another type than the one asked for
+
+impl Gguf_error
+    pub fn describe( //< what is wrong, as a sentence for the person who gave the file
+        r: Self,
+        arena: Arena$@, //< where the sentence goes
+    ): U8[]
+        b: = arena.text()
+        switch r
+        case .read_failed
+            b.s("The file cannot be read.")
+        case .not_gguf
+            b.s("The file is not a GGUF file: it does not start with the four bytes GGUF.")
+        case .bad_version(v)
+            b.s("The file is GGUF version \{v\}. Versions 2 and 3 are read.")
+        case .truncated(what)
+            b.s("The file ends inside ").s(what).s(". It is cut short or broken.")
+        case .too_many(what)
+            b.s("The file claims more ").s(what).s(" than it can hold. It is broken.")
+        case .bad_value_type(key)
+            b.s("The value of ").s(key).s(" has a type GGUF does not define, or is an array of ")
+                .s("arrays.")
+        case .duplicate(name)
+            b.s("The name ").s(name).s(" stands twice in the file.")
+        case .bad_alignment
+            b.s("general.alignment is not a power of two held as a U32.")
+        case .bad_tensor(name)
+            b.s("The tensor ").s(name).s(" has no dimension or more than 4, or a row that is no ")
+                .s("whole number of blocks.")
+        case .unsupported_format(name)
+            b.s("The tensor ").s(name).s(" is stored in a format ksai cannot decode.")
+        case .bad_offset(name)
+            b.s("The data of the tensor ").s(name).s(" does not start where the tensor before it ")
+                .s("ends, or runs past the file.")
+        case .missing(name)
+            b.s("The file holds no ").s(name).s(".")
+        case .wrong_type(key)
+            b.s("The value of ").s(key).s(" is of another type than this program reads.")
+        return b.take()
+
+pub enum Gguf_type //< the type of a metadata value, numbered as GGUF numbers it
+    u8 //< an unsigned byte
+    i8 //< a signed byte
+    u16 //< an unsigned 16-bit integer
+    i16 //< a signed 16-bit integer
+    u32 //< an unsigned 32-bit integer
+    i32 //< a signed 32-bit integer
+    f32 //< a 4-byte float
+    bool //< one byte, 0 for false
+    string //< a U64 length, then that many bytes of UTF-8
+    array //< a run of values of one other type; an array of arrays is refused
+    u64 //< an unsigned 64-bit integer
+    i64 //< a signed 64-bit integer
+    f64 //< an 8-byte float
+
+priv const MAGIC: U32 = 0x46554747 //< `GGUF` read as a little-endian U32
+priv const DEFAULT_ALIGNMENT: Sz = 32 //< the alignment where `general.alignment` is absent
+priv const MAX_DIMS: Sz = 4 //< the most dimensions a tensor has
+priv const MIN_KV_BYTES: Sz = 13 //< the smallest key-value pair: a length, a type and one byte
+priv const MIN_INFO_BYTES: Sz = 32 //< the smallest tensor info: a name's length, one dimension,
+    //< the type and the offset
+
+priv struct Kv //< one metadata pair: where its value lies in the file
+    key: U8[]
+    kind: Gguf_type
+    elem: Gguf_type //< an array's element type; the same as `kind` for any other value
+    count: Sz //< an array's length; 1 for any other value
+    at: Sz //< the value's first byte; an array's first element
+
+pub struct Gguf_tensor //< one tensor: its name, its shape, and its bytes in the file
+    pub name: U8[] //< its name, such as `blk.0.attn_q.weight`, borrowed from the file
+    pub dims: Sz[4] //< ggml's order: `dims[0]` is a row's length; a dimension not given is 1
+    pub n_dims: Sz //< how many dimensions the file gave, 1 to 4
+    pub type_id: U32 //< ggml's number for the format
+    pub format: Quant_format //< how its rows are stored
+    pub offset: Sz //< where its data starts, counted from the start of the data section
+    pub data: U8[] //< its bytes, borrowed from the file
+
+pub struct Gguf //< a parsed GGUF file, whose values and tensors borrow the file's bytes
+    //< The bytes must outlive it and everything read from it.
+    priv raw: U8[]
+    pub version: U32 //< 2 or 3, the two versions of this layout
+    pub alignment: Sz //< every tensor's data starts on a multiple of this
+    pub data_offset: Sz //< where the data section starts in the file
+    priv kvs: List<|Kv|>$@
+    priv kv_index: Map<|U8[], Sz|>$@
+    priv list: List<|Gguf_tensor|>$@
+    priv tensor_index: Map<|U8[], Sz|>$@
+
+priv struct Cursor //< reads the file front to back, each read checked against the end
+    raw: U8[]
+    at: Sz
+
+impl Cursor
+    priv fn need(r: Self@, n: Sz, what: U8[]): Void!Gguf_error //< `n` more bytes, or `truncated`
+        if n < 0 || n > r.raw.len - r.at
+            throw .truncated(what)
+
+    priv fn u32(r: Self$@, what: U8[]): U32!Gguf_error
+        r.need(4, what)!
+        v: = r.raw.get_u32_le(r.at)
+        r.at += 4
+        return v
+
+    priv fn size(r: Self$@, what: U8[]): Sz!Gguf_error //< a U64 count or length, checked
+        //< Caution: **Compare while still U64.** Converted first, a value past `Sz` wraps into
+        //< range and slips past the check.
+        r.need(8, what)!
+        v: = r.raw.get_u64_le(r.at)
+        r.at += 8
+        if v > U64::(r.raw.len - r.at)
+            throw .truncated(what)
+        return Sz::v
+
+    priv fn count(r: Self$@, what: U8[], least: Sz): Sz!Gguf_error //<
+        //< A U64 count of items that take at least `least` bytes each, checked against the rest
+        r.need(8, "the header")!
+        v: = r.raw.get_u64_le(r.at)
+        r.at += 8
+        if v > U64::((r.raw.len - r.at) / least)
+            throw .too_many(what)
+        return Sz::v
+
+    priv fn text(r: Self$@, what: U8[]): U8[]!Gguf_error //< a string: a U64 length, then its bytes
+        n: = r.size(what)!
+        s: = r.raw.sub(r.at, n)
+        r.at += n
+        return s
+
+    priv fn skip(r: Self$@, n: Sz, what: U8[]): Void!Gguf_error
+        r.need(n, what)!
+        r.at += n
+
+priv const TYPES: Gguf_type[13] = ::{ Gguf_type.u8, Gguf_type.i8, Gguf_type.u16, Gguf_type.i16,
+    Gguf_type.u32, Gguf_type.i32, Gguf_type.f32, Gguf_type.bool, Gguf_type.string, Gguf_type.array,
+    Gguf_type.u64, Gguf_type.i64, Gguf_type.f64 } //< by GGUF's number for each
+
+priv fn type_of(id: U32): Gguf_type? //< GGUF's value type of that number, or none
+    if id > 12
+        return .none
+    return .some(TYPES[Sz::id])
+
+impl Gguf_type
+    priv fn width(r: Self): Sz //< the bytes one value takes; 0 for a string or an array
+        switch r
+        case .u8, .i8, .bool
+            return 1
+        case .u16, .i16
+            return 2
+        case .u32, .i32, .f32
+            return 4
+        case .u64, .i64, .f64
+            return 8
+        case .string, .array
+            return 0
+
+priv fn format_of(id: U32): Quant_format? //<
+    //< the format of ggml's type number, if `ksai/quant` has it
+    switch id
+    case 0
+        return .some(.f32)
+    case 1
+        return .some(.f16)
+    case 6
+        return .some(.q5_0)
+    case 8
+        return .some(.q8_0)
+    case 11
+        return .some(.q3_k)
+    case 12
+        return .some(.q4_k)
+    case 13
+        return .some(.q5_k)
+    case 14
+        return .some(.q6_k)
+    case 30
+        return .some(.bf16)
+    default
+        return .none
+
+priv fn padded(n: Sz, align: Sz): Sz //< `n` raised to a multiple of `align`; `n` is checked first
+    return (n + align - 1) / align * align
+
+impl Gguf
+    pub fn parse( //< reads a GGUF file the caller holds in memory
+        //< The lists of keys and tensors go on `arena`; the values and the tensors' bytes stay in
+        //< `file`. A file is refused whole: no part of a broken one is returned.
+        file: U8[], //< the whole file, borrowed
+        arena: Arena$@, //< where the lists of keys and tensors are allocated
+    ): Gguf!Gguf_error
+        tensor.require_arena(arena)
+        $c: = Cursor::{ .raw = file, .at = 0 }
+        if file.len < 4 || c.u32("the header")! != MAGIC
+            throw .not_gguf
+        version: = c.u32("the header")!
+        if version != 2 && version != 3
+            throw .bad_version(version)
+        n_tensors: = c.count("tensors", MIN_INFO_BYTES)!
+        n_kvs: = c.count("keys", MIN_KV_BYTES)!
+        $g: = Gguf::{ .raw = file, .version = version, .alignment = DEFAULT_ALIGNMENT,
+            .data_offset = 0, .kvs = List<|Kv|>.create(arena),
+            .kv_index = arena.create(Map<|U8[], Sz|>(arena)),
+            .list = List<|Gguf_tensor|>.create(arena),
+            .tensor_index = arena.create(Map<|U8[], Sz|>(arena)) }
+        for _i in Range.asc(n_kvs)
+            g.read_kv(c@)!
+        g.alignment = g.read_alignment()!
+        for _i in Range.asc(n_tensors)
+            g.read_info(c@)!
+        // The data section starts at the next multiple of the alignment. A file of no tensors can
+        // end before it.
+        g.data_offset = padded(c.at, g.alignment)
+        if g.data_offset > file.len
+            if g.list.len > 0
+                throw .truncated("the padding before the data")
+            g.data_offset = file.len
+        g.place_data()!
+        return g
+
+    priv fn read_kv(r: Self$@, c: Cursor$@): Void!Gguf_error //< one key and its value
+        key: = c.text("a key")!
+        id: = c.u32(key)!
+        kind: = type_of(id) catch
+            throw .bad_value_type(key)
+        $elem: = kind
+        $count: Sz = 1
+        if kind == Gguf_type.array
+            elem_id: = c.u32(key)!
+            elem = type_of(elem_id) catch
+                throw .bad_value_type(key)
+            if elem == Gguf_type.array
+                throw .bad_value_type(key)
+            count = c.size(key)!
+        at: = c.at
+        w: = elem.width()
+        if w == 0
+            for _k in Range.asc(count)
+                _s: = c.text(key)!
+        else
+            // `count` is at most the bytes left, so the product stays well inside `Sz`.
+            c.skip(count * w, key)!
+        if r.kv_index.get(key).is_some()
+            throw .duplicate(key)
+        r.kv_index.set(key, r.kvs.len)
+        r.kvs
+            .push(Kv::{ .key = key, .kind = kind, .elem = elem, .count = count, .at = at })
+
+    priv fn read_alignment(r: Self@): Sz!Gguf_error //< `general.alignment`, or the default
+        k: = r.find("general.alignment") catch
+            return DEFAULT_ALIGNMENT
+        if k.kind != Gguf_type.u32
+            throw .bad_alignment
+        a: = r.raw.get_u32_le(k.at)
+        if a == 0 || (a & (a - 1)) != 0 || a > 0x10000
+            throw .bad_alignment
+        return Sz::a
+
+    priv fn read_info(r: Self$@, c: Cursor$@): Void!Gguf_error //< one tensor's name, shape, type
+        name: = c.text("a tensor's name")!
+        n_dims: = Sz::c.u32(name)!
+        if n_dims < 1 || n_dims > MAX_DIMS
+            throw .bad_tensor(name)
+        $t: = Gguf_tensor::{ .name = name, .dims = ::{ 1, 1, 1, 1 }, .n_dims = n_dims }
+        for d in Range.asc(n_dims)
+            c.need(8, name)!
+            v: = c.raw.get_u64_le(c.at)
+            c.at += 8
+            // A dimension past the file's size cannot fit in it, whatever the format.
+            if v > U64::c.raw.len
+                throw .bad_tensor(name)
+            t.dims[d] = Sz::v
+        t.type_id = c.u32(name)!
+        t.format = format_of(t.type_id) catch
+            throw .unsupported_format(name)
+        c.need(8, name)!
+        off: = c.raw.get_u64_le(c.at)
+        c.at += 8
+        if off > U64::c.raw.len
+            throw .bad_offset(name)
+        t.offset = Sz::off
+        if r.tensor_index.get(name).is_some()
+            throw .duplicate(name)
+        r.tensor_index.set(name, r.list.len)
+        r.list.push(t)
+
+    priv fn place_data(r: Self$@): Void!Gguf_error //<
+        //< Checks each tensor's size and place, and points its `data` at its bytes
+        //< **The tensors lie in the order of their infos**, each starting on the alignment where
+        //< the one before it ends. So two tensors never share a byte.
+        body: = r.raw.len - r.data_offset
+        $next: Sz = 0
+        for i in Range.asc(r.list.len)
+            t: = r.list.at(i, "", 0)
+            n: = tensor_bytes(t$) catch
+                throw .bad_tensor(t.name)
+            if t.offset != next || n > body - t.offset
+                throw .bad_offset(t.name)
+            t.data = r.raw.sub(r.data_offset + t.offset, n)
+            next = padded(t.offset + n, r.alignment)
+
+    priv fn find(r: Self@, key: U8[]): Kv!Gguf_error //< the pair of that key, or `missing`
+        i: = r.kv_index.get(key) catch
+            throw .missing(key)
+        return r.kvs.get(i)
+
+    pub fn has(r: Self@, key: U8[]): Bool //< whether the file holds a key of that name
+        return r.kv_index.get(key).is_some()
+
+    pub fn kind(r: Self@, key: U8[]): Gguf_type!Gguf_error //< the type of the key's value
+        return r.find(key)!.kind
+
+    pub fn integer(r: Self@, key: U8[]): I64!Gguf_error //< a value of any integer type
+        //< Caution: **A U64 past the largest I64 is refused** (`wrong_type`), never wrapped.
+        k: = r.find(key)!
+        p: = r.raw.ptr + k.at
+        switch k.kind
+        case .u8
+            return I64::p$
+        case .i8
+            return I64::I8::p$
+        case .u16
+            return I64::r.raw.get_u16_le(k.at)
+        case .i16
+            return I64::I16::r.raw.get_u16_le(k.at)
+        case .u32
+            return I64::r.raw.get_u32_le(k.at)
+        case .i32
+            return I64::I32::r.raw.get_u32_le(k.at)
+        case .u64
+            v: = r.raw.get_u64_le(k.at)
+            if v > 0x7FFFFFFFFFFFFFFFU64
+                throw .wrong_type(key)
+            return I64::v
+        case .i64
+            return I64::r.raw.get_u64_le(k.at)
+        default
+            throw .wrong_type(key)
+
+    pub fn float(r: Self@, key: U8[]): F64!Gguf_error //< an F32 or F64 value
+        k: = r.find(key)!
+        switch k.kind
+        case .f32
+            return F64::f32_at(r.raw, k.at)
+        case .f64
+            $bits: = r.raw.get_u64_le(k.at)
+            $v: F64 = 0.0
+            mem.copy(Void$@::v@, Void$@::bits@, 8)
+            return v
+        default
+            throw .wrong_type(key)
+
+    pub fn flag(r: Self@, key: U8[]): Bool!Gguf_error //< a bool value
+        k: = r.find(key)!
+        if k.kind != Gguf_type.bool
+            throw .wrong_type(key)
+        return r.raw[k.at] != 0
+
+    pub fn text(r: Self@, key: U8[]): U8[]!Gguf_error //< a string value, borrowed from the file
+        k: = r.find(key)!
+        if k.kind != Gguf_type.string
+            throw .wrong_type(key)
+        return r.string_at(k.at)
+
+    pub fn texts( //< an array of strings, each borrowed from the file
+        r: Self@,
+        key: U8[],
+        arena: Arena$@, //< where the list is allocated; the strings stay in the file
+    ): List<|U8[]|>!Gguf_error
+        k: = r.array(key, .string)!
+        $out: = List<|U8[]|>.new_with_cap(k.count, arena)
+        $at: = k.at
+        for _i in Range.asc(k.count)
+            s: = r.string_at(at)
+            out.push(s)
+            at += 8 + s.len
+        return out
+
+    pub fn ints( //< an array of I32 values
+        r: Self@,
+        key: U8[],
+        arena: Arena$@, //< where the list is allocated
+    ): List<|I32|>!Gguf_error
+        k: = r.array(key, .i32)!
+        $out: = List<|I32|>.new_with_cap(k.count, arena)
+        for i in Range.asc(k.count)
+            out.push(I32::r.raw.get_u32_le(k.at + i * 4))
+        return out
+
+    pub fn floats( //< an array of F32 values
+        r: Self@,
+        key: U8[],
+        arena: Arena$@, //< where the list is allocated
+    ): List<|F32|>!Gguf_error
+        k: = r.array(key, .f32)!
+        $out: = List<|F32|>.new_with_cap(k.count, arena)
+        for i in Range.asc(k.count)
+            out.push(f32_at(r.raw, k.at + i * 4))
+        return out
+
+    priv fn array(r: Self@, key: U8[], elem: Gguf_type): Kv!Gguf_error //< an array of that type
+        k: = r.find(key)!
+        if k.kind != Gguf_type.array || k.elem != elem
+            throw .wrong_type(key)
+        return k
+
+    priv fn string_at(r: Self@, at: Sz): U8[] //< a string the parse already checked
+        return r.raw.sub(at + 8, Sz::r.raw.get_u64_le(at))
+
+    pub fn tensors(r: Self@): Gguf_tensor[] //< every tensor, in the order of their infos
+        return Gguf_tensor[]::{ .ptr = r.list.ptr, .len = r.list.len }
+
+    pub fn has_tensor(r: Self@, name: U8[]): Bool //< whether the file holds a tensor of that name
+        return r.tensor_index.get(name).is_some()
+
+    pub fn tensor(r: Self@, name: U8[]): Gguf_tensor!Gguf_error //< the tensor of that name
+        i: = r.tensor_index.get(name) catch
+            throw .missing(name)
+        return r.list.get(i)
+
+impl Gguf_tensor
+    pub fn rows(r: Self@): Sz //< every dimension but the first, multiplied; `place_data` checked it
+        return r.dims[1] * r.dims[2] * r.dims[3]
+
+    pub fn matrix(r: Self@): Quant_matrix!Quant_error //< the tensor as a matrix over its bytes
+        //< A row is `dims[0]` numbers, one output of a weight; the other dimensions count the rows.
+        return Quant_matrix.from_bytes(r.format, r.rows(), r.dims[0], r.data)!
+
+    pub fn vector( //< a one-row F32 tensor as a `Tensor`, its bytes borrowed where they are aligned
+        //< A norm's weights take this form. A misaligned row is copied onto `arena`.
+        r: Self@,
+        arena: Arena$@, //< where the shape goes, and a copy of misaligned bytes
+    ): Tensor<|F32|>!Quant_error
+        if r.format != Quant_format.f32 || r.rows() != 1
+            throw .shape_mismatch
+        n: = r.dims[0]
+        shape: = Sz$@::arena.alloc(sizeof(Sz))
+        shape$ = n
+        $data: = F32$@::r.data.ptr
+        if Sz::r.data.ptr % 4 != 0
+            data = F32$@::arena.alloc(n * 4)
+            mem.copy(Void$@::data, Void$@::r.data.ptr, n * 4)
+        return Tensor<|F32|>.from_raw_parts(data, shape, 1, n, arena)
+
+priv fn tensor_bytes(t: Gguf_tensor): Sz!checked_int.Checked_error //< the bytes its data takes
+    //< A first dimension that is no whole number of blocks is refused as an overflow is.
+    block: = t.format.block_len()
+    if t.dims[0] < 1 || t.dims[0] % block != 0
+        throw .overflow
+    $n: = t.dims[0] / block * t.format.block_bytes()
+    for d in Range(1, MAX_DIMS, 1)
+        n = n.checked_mul(t.dims[d])!
+    return n
+
+priv fn f32_at(raw: U8[], at: Sz): F32 //< the F32 whose little-endian bits start at `at`
+    $bits: = raw.get_u32_le(at)
+    $v: F32 = 0.0
+    mem.copy(Void$@::v@, Void$@::bits@, 4)
+    return v

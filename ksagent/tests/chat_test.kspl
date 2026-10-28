@@ -1,0 +1,119 @@
+//< The chat file: which question is pending, and how the answer is written back
+import "ksagent/answer" { Lang }
+import "ksagent/chat"
+import "ksagent/tests/agent_test"
+import "ksagent/tests/stub"
+import "ksagent/watch"
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str"
+import "std/verdict"
+
+priv const FENCED: U8[] =
+    """
+%ksmd 1
+
+# Notes
+
+## Question
+
+How much paid leave?
+
+## Answer
+
+Ten days.
+
+## Notes
+
+```text
+## Question
+inside a fence
+```
+
+:::table name="t"
+| "Kind" |
+:::
+
+## 質問
+
+有給休暇は何日ですか?
+
+## Question
+
+Asked later.
+"""
+
+fn test_the_pending_question_is_found()
+    verdict.start("[ksagent] the first question with no answer is pending; fences hide headings")
+    defer arena: = Arena(64 * 1024)
+    p: = chat.find_pending(FENCED, arena) catch
+        verdict.check("a pending question is found", false, "")
+        return
+    verdict.check("the pending question is the Japanese one, not the fenced one",
+        p.question.equals("有給休暇は何日ですか?") && p.lang == Lang.ja, p.question)
+    verdict.check("the answered question before it is the history",
+        p.history.len == 1 && p.history.get(0).question.equals("How much paid leave?") &&
+        p.history.get(0).answer.equals("Ten days."), "")
+    answered: = "## Question\n\nOne?\n\n## Answer\n\nYes.\n"
+    verdict.check("an answered question is not answered again",
+        chat.find_pending(answered, arena).is_none(), "")
+    empty: = "## 質問\n\n## Question\n\n"
+    verdict.check("a question with no text yet is passed over",
+        chat.find_pending(empty, arena).is_none(), "")
+
+fn test_an_answer_cannot_add_a_question()
+    verdict.start("[ksagent] an answer's text is escaped, so it starts no heading or block")
+    defer arena: = Arena(64 * 1024)
+    out: = arena.text()
+    chat.write_text(out, "## Question\n- item *bold* [x]\n1. first\n\n  ::: table", arena)
+    written: = out.take()
+    want: = "\\## Question\\\n\\- item \\*bold\\* \\[x\\]\\\n1\\. first\n\n\\::: table\n"
+    verdict.check("each block mark and inline mark is escaped", written.equals(want), written)
+    verdict.check("so the written answer holds no pending question",
+        chat.find_pending(written, arena).is_none(), "")
+
+fn test_the_answer_lands_after_its_question(work: U8[], arena: Arena$@)
+    verdict.start("[ksagent] the answer is written after its question, keeping what was added")
+    root: = stub.folder(work, "chat-added", arena)
+    path: = fs.join(root, "team.chat.ksmd", arena)
+    before: = "%ksmd 1\n\n## Question\n\nHow much paid leave?\n\n## Notes\n\nLater.\n"
+    edited: =
+        "%ksmd 1\n\nAdded meanwhile.\n\n## Question\n\nHow much paid leave?\n\n## Notes\n\nLater.\n"
+    io.write_file(path, before) catch panic("the chat file can be written")
+    answer_with(stub.start_editing(U8[][]::{ leave_answer(arena) }, path, edited, arena), root,
+        path, before, arena)
+    after: = io.read_file(path, arena) catch panic("the chat file can be read")
+    want: =
+        "%ksmd 1\n\nAdded meanwhile.\n\n## Question\n\nHow much paid leave?\n\n## Answer\n\nTen \
+            days.\n\nSources:\n\n`rules/leave.md` lines 3–4\n\n> receives 10 days of paid \
+            leave\n\n## Notes\n\nLater.\n"
+    verdict.check("the answer stands after the question, and the added text stays",
+        after.equals(want), after)
+    verdict.check("the question is answered now",
+        chat.find_pending(after, arena).is_none(), "")
+
+fn test_a_changed_question_gets_no_answer(work: U8[], arena: Arena$@)
+    verdict.start("[ksagent] a question changed while it was answered gets no answer")
+    root: = stub.folder(work, "chat-changed", arena)
+    path: = fs.join(root, "team.chat.ksmd", arena)
+    before: = "%ksmd 1\n\n## Question\n\nHow much paid leave?\n"
+    edited: = "%ksmd 1\n\n## Question\n\nHow much sick leave?\n"
+    io.write_file(path, before) catch panic("the chat file can be written")
+    answer_with(stub.start_editing(U8[][]::{ leave_answer(arena) }, path, edited, arena), root,
+        path, before, arena)
+    after: = io.read_file(path, arena) catch panic("the chat file can be read")
+    verdict.check("the file holds the person's change, and no answer", after.equals(edited), after)
+
+priv fn answer_with(s: stub.Stub$@, root: U8[], path: U8[], text: U8[], arena: Arena$@) //<
+    //< Answers the pending question of `text` through the stand-in, as `watch` would
+    p: = chat.find_pending(text, arena) catch
+        panic("the file holds a pending question")
+    _wrote: = watch.answer_one(agent_test.job_at(s.port, root, arena), path, p, arena)
+    stub.finish(s)
+    stub.release(s)
+
+priv fn leave_answer(arena: Arena$@): U8[] //< a reply answering the paid-leave question
+    src: = stub.source("rules/leave.md", 3, 4, "receives 10 days of paid leave", arena)
+    cites: = stub.list_of(U8[][]::{ src }, arena)
+    return stub.one_call(stub.answer_call("Ten days.", cites, arena), arena)

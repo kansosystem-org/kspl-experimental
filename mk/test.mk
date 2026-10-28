@@ -299,25 +299,35 @@ test-freestanding-math: $(STAGE1_EXE)
 # `make test-simd`: a function holding a loop that vectorizes would otherwise pass for another.
 # **The place is where the generated C's `for` sits as `#line` counts it**, which can fall past the
 # `.kspl` line of the loop, so it is read from the C; the record (`-g`) says which places vectorized.
-simd_prog := FILENAME == src && index($$0, "`make test-simd`") { want[FNR + 1] = 1; n++ } \
+# **A short sum is vectorized whole, not as a loop**: the C compiler unrolls a loop of 32 and turns
+# its sum into vector code (the SLP vectorizer). A comment saying "sees this sum vectorize" asks
+# for that instead, at the sum's own line, the one after the `for`.
+simd_prog := FILENAME == src && index($$0, "`make test-simd` sees this sum") { sum[FNR + 2] = 1; \
+    n++; next } \
+  FILENAME == src && index($$0, "`make test-simd`") { want[FNR + 1] = 1; n++ } \
   FILENAME == gen && /^\#line / { at = 0; \
     if ($$3 == "\"" src "\"" && ($$2 in want) && !($$2 in place)) { at = $$2; p = $$2 - 1 }; next } \
   FILENAME == gen && at { p++; if ($$0 ~ /^[ \t]*for \(/) { place[at] = p; at = 0 } } \
   FILENAME == rec && /^--- / { passed = ($$0 ~ /!Passed/) } \
-  FILENAME == rec && /^Name:/ { vec = passed && $$2 == "Vectorized" } \
-  FILENAME == rec && /^DebugLoc:/ && vec && index($$0, "File: \047" src "\047") { \
-    if (match($$0, /Line: [0-9]+/)) done[substr($$0, RSTART + 6, RLENGTH - 6) + 0] = 1 } \
+  FILENAME == rec && /^Name:/ { vec = passed && $$2 == "Vectorized"; \
+    red = passed && $$2 == "VectorizedHorizontalReduction" } \
+  FILENAME == rec && /^DebugLoc:/ && (vec || red) && index($$0, "File: \047" src "\047") { \
+    if (match($$0, /Line: [0-9]+/)) { line = substr($$0, RSTART + 6, RLENGTH - 6) + 0; \
+      if (vec) done[line] = 1; else summed[line] = 1 } } \
   END { if (n == 0) { print "RESULT: SOME FAILED (1) -> no loop in " src " names make test-simd"; \
       exit 1 } \
     for (l in want) if (!(l in place) || !((place[l]) in done)) { bad = 1; \
       print "RESULT: SOME FAILED (1) -> the loop at " src ":" l " no longer auto-vectorizes at -O3" } \
+    for (l in sum) if (!(l in summed)) { bad = 1; \
+      print "RESULT: SOME FAILED (1) -> the sum at " src ":" l " no longer auto-vectorizes at -O3" } \
     if (bad) exit 1; \
     print "  -> " n " loops in " src " auto-vectorize at -O3" }
 # $(call simd_check,<program>,<the .kspl its loops are in>,<stem>): builds it, then checks them
 define simd_check
 	./$(STAGE1_EXE) $(1) $(TMP_DIR)/$(3).c
 	@$(CC) -std=c99 -O3 -g -c $(TMP_DIR)/$(3).c -o $(TMP_DIR)/$(3).o -fsave-optimization-record \
-		-foptimization-record-file=$(LOG_DIR)/$(3).yaml -foptimization-record-passes=loop-vectorize
+		-foptimization-record-file=$(LOG_DIR)/$(3).yaml \
+		-foptimization-record-passes='loop-vectorize|slp-vectorizer'
 	@awk -v src=$(2) -v gen=$(TMP_DIR)/$(3).c -v rec=$(LOG_DIR)/$(3).yaml '$(simd_prog)' \
 		$(2) $(TMP_DIR)/$(3).c $(LOG_DIR)/$(3).yaml
 endef
@@ -327,6 +337,8 @@ test-simd: $(STAGE1_EXE)
 	@echo "# VERIFYING ksai's hot loops auto-vectorize (-O3 loop vectorizer)"
 	$(call simd_check,ksai/examples/llama_engine/main.kspl,ksai/tensor.kspl,simd_check)
 	$(call simd_check,ksai/examples/qwen_infer/main.kspl,ksai/nn.kspl,simd_check_qwen)
+	$(call simd_check,ksai/benches/bench_quant.kspl,ksai/quant.kspl,simd_check_quant)
+	$(call simd_check,ksai/benches/bench_qwen.kspl,ksai/delta_net.kspl,simd_check_delta)
 	@# Caution: **Do not remove this line.** It is the gate's verdict (`Gate.verdict`).
 	@echo "RESULT: ALL PASS (every loop naming make test-simd auto-vectorizes at -O3)"
 

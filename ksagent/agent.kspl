@@ -1,0 +1,193 @@
+//< The loop that answers one question: the model asks for tools until it calls `answer`
+//< **The system prompt is the main control over a small model**, so it says each rule once, in
+//< short sentences. The tools are `list`, `search`, `read` and `answer` (`TOOLS_JSON`).
+//< **Every loop ends**: at the `answer` call, at plain text, or at a cap (`MAX_ROUNDS`,
+//< `MAX_REQUEST_BYTES`), which the answer then names.
+import "ksagent/answer" + { Answer, Lang, Source }
+import "ksagent/files"
+import "ksagent/model"
+import "std/chars"
+import "std/ds" { List }
+import "std/io"
+import "std/json" + { Json_builder }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/strfmt" as _strfmt
+import "std/strnum"
+
+const MAX_ROUNDS: Sz = 12 //< the most requests one question sends to the model
+    //< A small model that has not found the answer in a dozen tool calls rarely finds it later,
+    //< and each round can take a minute on a local machine.
+
+const MAX_REQUEST_BYTES: Sz = 192 * 1024 //< the cap on one request's bytes
+    //< **The whole conversation goes out on every round**, so this bounds what the model must read.
+    //< It fits a server started with a context of 64k tokens; a smaller context fails earlier.
+
+const SYSTEM_PROMPT: U8[] =
+    """
+You answer questions about the files in one folder. You see the folder only through the tools list, search and read.
+
+Rules:
+1. Answer only from what the tools show you. Do not use your own knowledge. Do not guess.
+2. Find the files first. Call search with one to three key words from the question, each in its shortest form, such as quote rather than quoted. A line matches when it holds every word.
+3. If a search finds nothing, search for one key word alone. Then call list, and read the README and the other documents it shows. Only then decide that the files do not hold the answer.
+4. Call read to read the lines around a hit before you answer.
+5. Answer in the language of the question.
+6. Finish by calling answer. Put the answer in text. In sources, give each place the answer comes from: the file's path, its first and last line, at most 50 lines apart, and a quote copied exactly from those lines.
+7. If the files do not hold the answer, call answer with the text NOT_FOUND and no sources.
+8. Give every path relative to the folder, such as rules/leave.md.
+9. You can call the tools at most 12 times. Call answer before that.
+"""
+
+const REMIND_ANSWER: U8[] = //< what the model is told when it answers in plain text
+    "Call the answer tool now. Put the answer in text, and give each source as a path, a first and \
+        a last line, and a quote copied exactly from those lines. Do not reply with plain text."
+
+const TOOLS_JSON: U8[] =
+    """
+[
+{"type": "function", "function": {"name": "list", "description": "List the entries of one folder. A folder ends with /.", "parameters": {"type": "object", "properties": {"path": {"type": "string", "description": "The folder, relative to the root folder. Empty for the root folder."}}, "required": ["path"]}}},
+{"type": "function", "function": {"name": "search", "description": "Find the lines that hold every one of the words, in any order, in every text file under a path. A word is found inside a longer one. ASCII case is ignored. If no line holds every word, the lines holding the most of them come first. Returns at most 50 lines as path:line: text.", "parameters": {"type": "object", "properties": {"text": {"type": "string", "description": "One to three key words, separated by spaces, each in its shortest form."}, "path": {"type": "string", "description": "A folder or a file to search in. Empty for the whole root folder."}}, "required": ["text"]}}},
+{"type": "function", "function": {"name": "read", "description": "Read the numbered lines of one text file, at most 400 lines at a time.", "parameters": {"type": "object", "properties": {"path": {"type": "string", "description": "The file, relative to the root folder."}, "from_line": {"type": "integer", "description": "The first line to read, counting from 1."}, "to_line": {"type": "integer", "description": "The last line to read."}}, "required": ["path", "from_line", "to_line"]}}},
+{"type": "function", "function": {"name": "answer", "description": "Give the final answer and the places it comes from.", "parameters": {"type": "object", "properties": {"text": {"type": "string", "description": "The answer, in the language of the question. NOT_FOUND when the files do not hold it."}, "sources": {"type": "array", "items": {"type": "object", "properties": {"path": {"type": "string"}, "from_line": {"type": "integer"}, "to_line": {"type": "integer"}, "quote": {"type": "string", "description": "Words copied exactly from those lines."}}, "required": ["path", "from_line", "to_line", "quote"]}}}, "required": ["text", "sources"]}}}
+]
+"""
+
+struct Turn //< one earlier question and its answer, sent as the conversation so far
+    question: U8[]
+    answer: U8[]
+
+struct Ask //< what one question needs besides its text
+    server: model.Server@
+    root: U8[] //< the folder the tools reach
+    trace: Bool //< whether each tool call is written to standard error as it happens
+        //< A local model can take minutes; a line per call shows the person it is working.
+
+fn run(job: Ask, question: U8[], history: List<|Turn|>@, lang: Lang, arena: Arena$@): Answer //<
+    //< Answers one question from the folder's files, by the model's tool calls
+    //< `history` is the conversation so far, oldest first; `lang` is the question's language.
+    $b: = Json_builder(arena)
+    tools: = json.parse(TOOLS_JSON, arena) catch panic("the tools' description is valid JSON")
+    $msgs: = List<|json.Value|>(arena)
+    msgs.push(message(b@, "system", SYSTEM_PROMPT))
+    for i in Range.asc(history.len)
+        t: = history.get(i)
+        msgs.push(message(b@, "user", t.question))
+        msgs.push(message(b@, "assistant", t.answer))
+    msgs.push(message(b@, "user", question))
+    $reminded: = false
+    for round in Range.asc(MAX_ROUNDS)
+        body: = request_body(b@, job.server.model, msgs@, tools.val)
+        if body.len > MAX_REQUEST_BYTES
+            return Answer.ended(.stopped("the conversation reached its cap of 192 KiB. Ask a \
+                narrower question, or start the model server with a larger context."), lang, arena)
+        reply: = model.ask(job.server, body, arena) catch e
+            return Answer.ended(.failed(e.describe(job.server, arena)), lang, arena)
+        if reply.calls.len == 0
+            if reply.content.trim_spaces().len == 0
+                return Answer.ended(.failed("the model's reply holds neither text nor a tool call."),
+                    lang, arena)
+            // **Plain text is asked once to become an answer call.** A small model often writes
+            // the answer and even its sources as text, which no check can read.
+            if !reminded && round + 1 < MAX_ROUNDS
+                reminded = true
+                if job.trace
+                    io.err().s("  (asked to call answer)\n")
+                msgs.push(message(b@, "assistant", reply.content))
+                msgs.push(message(b@, "user", REMIND_ANSWER))
+                continue
+            none: = List<|Source|>(arena)
+            return answer.finish(job.root, reply.content, none@, lang, arena)
+        msgs.push(assistant_message(b@, reply@))
+        for i in Range.asc(reply.calls.len)
+            c: = reply.calls.get(i)
+            if job.trace
+                io.err().s("  ").s(c.name).s(" ").s(files.cut(c.arguments, 200)).c('\n')
+            args: = json.parse(c.arguments, arena) catch
+                msgs
+                    .push(tool_message(b@, c.id, "refused: the arguments are not valid JSON"))
+                continue
+            if c.name.equals("answer")
+                return finish_answer(job.root, args.val, lang, arena)
+            msgs
+                .push(tool_message(b@, c.id, run_tool(job.root, c.name, args.val, arena)))
+    why: = arena.text()
+        .s("the model used all \{MAX_ROUNDS\} tool rounds without calling answer. Ask a narrower \
+            question, or try a stronger model.").take()
+    return Answer.ended(.stopped(why), lang, arena)
+
+priv fn run_tool(root: U8[], name: U8[], args: json.Value, arena: Arena$@): U8[] //<
+    //< Runs one of the reading tools, and returns what the model reads back
+    path: = args.get("path").as_str().unwrap_or("")
+    if name.equals("list")
+        return files.tool_list(root, path, arena)
+    if name.equals("search")
+        return files.tool_search(root, args.get("text").as_str().unwrap_or(""), path, arena)
+    if name.equals("read")
+        from: = int_arg(args.get("from_line"))
+        to: = int_arg(args.get("to_line"))
+        return files.tool_read(root, path, from, to, arena)
+    return arena.text().s("refused: there is no tool called ").s(name)
+        .s("; the tools are list, search, read and answer").take()
+
+priv fn int_arg(v: json.Value): I64 //< a line number the model gave, or 0 where there is none
+    //< **A number written as text is read too** (`"12"`): small models write either.
+    if n: = v.as_int64()
+        return n
+    if f: = v.as_f64()
+        return I64::f
+    if text: = v.as_str()
+        return text.trim_spaces().to_i64() catch 0I64
+    return 0I64
+
+priv fn finish_answer(root: U8[], args: json.Value, lang: Lang, arena: Arena$@): Answer //<
+    //< The answer the `answer` call gives, its sources checked
+    //< A source with a field missing stays in the list, so the check removes and counts it.
+    $given: = List<|Source|>(arena)
+    sources: = args.get("sources").arr_list(arena)
+    for i in Range.asc(sources.len)
+        s: = sources.get(i)
+        given
+            .push(Source::{ .path = s.get("path").as_str().unwrap_or(""),
+            .from_line = int_arg(s.get("from_line")), .to_line = int_arg(s.get("to_line")),
+            .quote = s.get("quote").as_str().unwrap_or("") })
+    return answer.finish(root, args.get("text").as_str().unwrap_or(""), given@, lang, arena)
+
+// ==========================================
+// The request's JSON
+// ==========================================
+
+priv fn message(b: Json_builder$@, role: U8[], content: U8[]): json.Value //< one plain message
+    return b.obj().set("role", b.str_val(role)).set("content", b.str_val(content)).build()
+
+priv fn tool_message(b: Json_builder$@, id: U8[], content: U8[]): json.Value //<
+    //< What one tool call gave back, tied to the call by its id
+    return b.obj().set("role", b.str_val("tool")).set("tool_call_id", b.str_val(id))
+        .set("content", b.str_val(content)).build()
+
+priv fn assistant_message(b: Json_builder$@, reply: model.Reply@): json.Value //<
+    //< The model's turn as it is sent back: its text and the calls it asked for
+    //< **Rebuilt from what was read**, so a field one server adds (its reasoning) is not sent to it
+    //< again on every round.
+    $calls: = b.arr()
+    for i in Range.asc(reply.calls.len)
+        c: = reply.calls.get(i)
+        f: = b.obj().set("name", b.str_val(c.name)).set("arguments", b.str_val(c.arguments)).build()
+        calls = calls
+            .push(b.obj().set("id", b.str_val(c.id)).set("type", b.str_val("function"))
+            .set("function", f).build())
+    content: = b.null_val() if reply.content.len == 0 else b.str_val(reply.content)
+    return b.obj().set("role", b.str_val("assistant")).set("content", content)
+        .set("tool_calls", calls.build()).build()
+
+priv fn request_body(b: Json_builder$@, model_name: U8[], msgs: List<|json.Value|>@,
+    tools: json.Value): U8[] //<
+        //< One request's JSON text: the model, the whole conversation and the tools
+    $all: = b.arr()
+    for i in Range.asc(msgs.len)
+        all = all.push(msgs.get(i))
+    req: = b.obj().set("model", b.str_val(model_name)).set("messages", all.build())
+        .set("tools", tools).set("stream", b.bool_val(false)).build()
+    defer $out: = Str_builder()
+    req.dump(out@)
+    return b.arena.dup_str(out.slice())

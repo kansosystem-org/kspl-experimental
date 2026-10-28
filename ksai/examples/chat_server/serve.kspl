@@ -1,0 +1,193 @@
+//< The HTTP side: one connection at a time, one request on each, answered whole with its length
+//< It answers `POST /v1/chat/completions` and `GET /v1/models`, and refuses every other path.
+//< **A request must arrive within `READ_WAIT_MS` and its answer leave within `WRITE_WAIT_MS`**,
+//< so a client that stops halfway cannot hold the one connection the server serves. Why one at a
+//< time, and why only the loopback, is in `ksai/docs/DESIGN-serving.md`.
+import "ksai/examples/chat_server/engine" { Engine, Picker }
+import "ksai/examples/chat_server/reply"
+import "ksai/examples/chat_server/request"
+import "ksai/examples/chat_server/template" + { Kind }
+import "ksai/examples/chat_server/template35"
+import "std/chars"
+import "std/ds" { List }
+import "std/http"
+import "std/io"
+import "std/json" + { Json_builder }
+import "std/math"
+import "std/mem" { Arena }
+import "std/net"
+import "std/prng"
+import "std/str" { Str_builder }
+import "std/strfmt" as _strfmt
+import "std/sys"
+
+const HOST: U8[] = "127.0.0.1" //< the only address it listens on: the loopback
+priv const CHAT_PATH: U8[] = "/v1/chat/completions"
+priv const MODELS_PATH: U8[] = "/v1/models"
+priv const READ_WAIT_MS: I64 = 30000I64 //< how long a whole request may take to arrive
+priv const WRITE_WAIT_MS: I32 = 30000 //< how long a whole answer may take to leave
+priv const REQUEST_CHUNK: Sz = 1024 * 1024 //< the largest chunk of one request's memory
+
+struct Server //< what every request is answered from
+    engine: Engine$@
+    kind: Kind //< the chat template the model's file holds, which writes its prompts
+    model_id: U8[] //< the name the answers and `GET /v1/models` give the model
+    max_tokens: Sz //< the cap on an answer's tokens; a request can ask for fewer
+    answered: Sz //< chat answers given so far, which numbers each answer's id
+    calls: Sz //< tool calls returned so far, which numbers each call's id
+
+priv struct Answer //< one HTTP answer: its status and its JSON body
+    status: I32
+    body: U8[]
+
+fn serve(listener: net.Tcp_listener$@, s: Server$@) //< answers connections one by one, for good
+    for
+        conn: = listener.accept() catch
+            // A failed accept is the OS's, such as too many open files; waiting lets it recover.
+            sys.sleep_ms(100)
+            continue
+        defer arena: = Arena(REQUEST_CHUNK)
+        answer_one(conn, s, arena)
+        conn.free()
+
+fn answer_one(conn: net.Tcp_stream$@, s: Server$@, arena: Arena$@) //<
+    //< Reads one request from the connection, and writes its answer
+    req: = read_request(conn, arena) catch e
+        switch e
+        case .connection_closed
+            return
+        case .io(err)
+            if err != net.Net_error.timed_out
+                return
+        default {}
+        write_answer(conn, refusal_of(e, arena), arena)
+        return
+    started: = sys.mono_us()
+    a: = route(req, s, arena)
+    write_answer(conn, a, arena)
+    io.err().s(req.method).c(' ').s(req.target).s(" -> \{a.status\} in ")
+        .s("\{(sys.mono_us() - started) / 1000I64\} ms\n")
+
+priv fn read_request(conn: net.Tcp_stream$@, arena: Arena$@): http.Request$@!http.Http_error //<
+    //< One whole request, all of it within `READ_WAIT_MS`
+    deadline: = sys.deadline_after_ms(READ_WAIT_MS)
+    defer $got: = Str_builder()
+    for
+        left: = (deadline - sys.mono_us()) / 1000I64
+        if left <= 0I64
+            throw .io(.timed_out)
+        $chunk: U8[16384] = ::{}
+        n: =
+            conn.read_for(U8$[]::chunk, I32::math.min(left, 0x7FFFFFFFI64)) catch e
+            throw .io(e)
+        if n == 0
+            throw .connection_closed
+        got.s((U8[]::chunk).sub(0, n))
+        req: =
+            http.parse_request(got.slice(), http.DEFAULT_MAX_BODY_BYTES, arena) catch e
+            switch e
+            case .incomplete
+                continue
+            default
+                throw e
+        return req
+
+priv fn refusal_of(e: http.Http_error, arena: Arena$@): Answer //< the answer to a request not read
+    switch e
+    case .io
+        return failure(408, "the request did not arrive whole in time", arena)
+    case .head_too_large
+        return failure(431, "the request's head is too large", arena)
+    case .body_too_large
+        return failure(413, "the request's body is too large", arena)
+    default
+        return failure(400, "the request is not well-formed HTTP", arena)
+
+priv fn write_answer(conn: net.Tcp_stream$@, a: Answer, arena: Arena$@) //<
+    //< Sends one answer with its length, then the connection closes
+    $head: = http.headers(arena).add("Content-Type", "application/json").add("Connection", "close")
+    if a.status == 405
+        head = head.add("Allow", "GET, POST")
+    defer $out: = Str_builder()
+    http.format_response(out@, a.status, head.build(), a.body) catch
+        panic("an answer built here is well-formed HTTP")
+    conn.write_all_for(out.slice(), WRITE_WAIT_MS) catch {}
+
+priv fn failure(status: I32, message: U8[], arena: Arena$@): Answer //<
+    //< An error answer, in the shape OpenAI-style clients read: `error.message`
+    $b: = Json_builder(arena)
+    kind: = "server_error" if status >= 500 else "invalid_request_error"
+    err: = b.obj().set("message", b.str_val(message)).set("type", b.str_val(kind)).build()
+    return Answer::{ .status = status,
+        .body = dumped(b.obj().set("error", err).build(), arena) }
+
+priv fn dumped(v: json.Value, arena: Arena$@): U8[] //< a value as JSON text
+    defer $out: = Str_builder()
+    v.dump(out@)
+    return arena.dup_str(out.slice())
+
+priv fn route(req: http.Request$@, s: Server$@, arena: Arena$@): Answer //<
+    //< The answer for a request's method and path
+    //< `GET /v1/models` reads nothing: clients ask it to see that the server is up, and which
+    //< model it holds.
+    if req.target.equals(CHAT_PATH)
+        if !req.method.equals("POST")
+            return failure(405, "use POST for /v1/chat/completions", arena)
+        return chat(req.body, s, arena)
+    if req.target.equals(MODELS_PATH)
+        if !req.method.equals("GET")
+            return failure(405, "use GET for /v1/models", arena)
+        $b: = Json_builder(arena)
+        one: = b.obj().set("id", b.str_val(s.model_id)).set("object", b.str_val("model"))
+            .set("owned_by", b.str_val("ksai")).build()
+        list: = b.obj().set("object", b.str_val("list"))
+            .set("data", b.arr().push(one).build()).build()
+        return Answer::{ .status = 200, .body = dumped(list, arena) }
+    return failure(404,
+        arena.text().s("there is no endpoint at ").s(req.target)
+        .s(": this server answers POST /v1/chat/completions and GET /v1/models").take(), arena)
+
+priv fn chat(body: U8[], s: Server$@, arena: Arena$@): Answer //< one chat completion
+    c: = request.read_chat(body, arena) catch why
+        return failure(400, why, arena)
+    e: = s.engine
+    $conv: = c.conv
+    $prompt: = List<|I32|>.create(arena)
+    // Qwen3.5 thinks unless the request turns it off, as `llama-server --jinja` sets it.
+    switch s.kind
+    case .instruct_2507
+        if c.thinking.unwrap_or(false)
+            return failure(400,
+                "this model does not think: send chat_template_kwargs.enable_thinking false, or \
+                    leave it out", arena)
+        prompt = template.render(conv@, e.tok, e.marks, arena)
+    case .qwen35
+        conv.thinking = c.thinking.unwrap_or(true)
+        prompt = template35.render(conv@, e.tok, e.marks, arena) catch why
+            return failure(400, why, arena)
+    if prompt.len >= e.context
+        return failure(400,
+            arena.text().s("the conversation takes \{prompt.len\} tokens, and the context holds ")
+            .s("\{e.context\}: start the server with a larger --context").take(), arena)
+    if bad: = e.outside_vocab(prompt.slice())
+        return failure(500,
+            arena.text()
+            .s("the vocabulary file is not this model's: it gave the token ID \{bad\}, ")
+            .s("past the model's \{e.model.cfg.vocab\}").take(), arena)
+    $limit: = s.max_tokens
+    if c.max_tokens > 0 && c.max_tokens < limit
+        limit = c.max_tokens
+    $pick: = Picker::{ .cfg = c.cfg,
+        .rng = prng.Prng(c.seed.unwrap_or(U64::sys.mono_us())) }
+    $g: = e.generate(prompt.slice(), limit, pick@, arena)
+    parsed: = reply.split_calls(e.tok.decode(g.tokens@, arena), s.kind, conv.tools@, conv.thinking,
+        arena)
+    s.answered += 1
+    ids: = reply.Answer_ids::{ .id = arena.text().s("chatcmpl-\{s.answered\}").take(),
+        .first_call = s.calls + 1, .created = sys.wall_seconds(), .model = s.model_id }
+    s.calls += parsed.calls.len
+    use: = reply.Usage::{ .prompt = prompt.len, .completion = g.tokens.len, .cached = g.reused }
+    io.err().s("  \{prompt.len\} prompt tokens (\{g.reused\} kept from before), ")
+        .s("\{g.tokens.len\} generated\n")
+    return Answer::{ .status = 200,
+        .body = reply.answer_json(parsed@, g.finish, ids, use, arena) }

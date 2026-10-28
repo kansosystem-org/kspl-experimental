@@ -1,7 +1,8 @@
 // The ksmd page served by `kssrv --local` on a scratch workspace: opening, saving and reopening,
-// a change made on disk, a draft that outlives its tab, an included file edited in a tab of its
-// own, images, and the refusals. Every check that writes compares the bytes on disk. Drafts and
-// many tabs are `drafts.mjs`; each way the page could lose edits is `losses.mjs`.
+// a change made on disk, seen at once while the page is looked at, a draft that outlives its tab,
+// an included file edited in a tab of its own, images, and the refusals. Every check that writes
+// compares the bytes on disk. Drafts and many tabs are `drafts.mjs`; each way the page could lose
+// edits is `losses.mjs`.
 // The server is the one the repository builds; it is started on port 0 and stopped by asking it.
 import { spawn } from "child_process";
 import fs from "fs";
@@ -83,6 +84,7 @@ function read(root, rel) {
 }
 
 // Every file under the root, with its bytes, so a check sees that nothing else was written.
+// Each name is written with `/`, as a document names a file, on Windows too.
 function snapshot(root) {
   const out = [];
   const walk = (dir) => {
@@ -90,7 +92,7 @@ function snapshot(root) {
       const full = path.join(dir, name);
       const st = fs.lstatSync(full);
       if (st.isDirectory()) walk(full);
-      else out.push(`${path.relative(root, full)}=${st.isSymbolicLink() ? "link" :
+      else out.push(`${path.relative(root, full).split(path.sep).join("/")}=${st.isSymbolicLink() ? "link" :
         fs.readFileSync(full).toString("base64")}`);
     }
   };
@@ -310,6 +312,98 @@ const SECTIONS = {
     await ctx.browser.closeTab(d.page);
   },
 
+  // While the page is looked at, it notices a change on disk by itself: no focus event is sent,
+  // and none may arrive. Hidden, it asks nothing until it is shown again.
+  async watched(ctx) {
+    const file = path.join(ctx.root, "top.ksmd");
+    const before = ctx.disk("top.ksmd");
+    const d = await tab(ctx, "?doc=top.ksmd");
+    await d.page("Emulation.setFocusEmulationEnabled", { enabled: true });
+    await idle(d);
+    await d.js(`window.focused = 0;
+      window.shown = 0;
+      window.addEventListener("focus", () => { window.focused += 1; });
+      document.addEventListener("visibilitychange", () => { window.shown += 1; });
+      window.fetched = [];
+      const send = window.fetch;
+      window.fetch = function (url, how) {
+        if (!how || !how.method) window.fetched.push(String(url));
+        return send.call(window, url, how);
+      };`);
+    // The source changes before the step that loads it ends and says so.
+    const shows = (text) => d.until(`ksmd.source() === ${JSON.stringify(text)} && ` +
+      "document.documentElement.dataset.files === 'ready'", 10000);
+    check(await d.js("document.visibilityState === 'visible' && document.hasFocus()"),
+      "the page is visible and has the focus");
+    const theirs = before.replace("First paragraph.", "An answer another program wrote.");
+    fs.writeFileSync(file, theirs);
+    check(await shows(theirs) && (await said(d)).includes("The page shows it as it is now"),
+      "a change on disk shows within ten seconds while the page is looked at", await said(d));
+    // A change time not yet past when the page asks cannot rule out a later write of the same
+    // size in that second. So the page compares the bytes, and finds the second write.
+    const ahead = new Date(Date.now() + 3600 * 1000);
+    const second = theirs.replace("An answer", "A reply,");
+    fs.writeFileSync(file, second);
+    fs.utimesSync(file, ahead, ahead);
+    check(await shows(second), "a change whose time is still ahead shows too");
+    // The same size as `second`, so only the bytes tell them apart.
+    const third = second.replace("A reply,", "A third,");
+    fs.writeFileSync(file, third);
+    fs.utimesSync(file, ahead, ahead);
+    check(await shows(third), "and so does a write of the same size and the same change time");
+    check(await d.js("window.focused + window.shown") === 0, "and no focus or visibility event came",
+      String(await d.js("window.focused + window.shown")));
+
+    // Hidden, the page asks nothing; shown again, it reads its file at once.
+    await d.js(`Object.defineProperty(document, "visibilityState", { configurable: true,
+      get: () => "hidden" });
+      Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
+      document.dispatchEvent(new Event("visibilitychange"));`);
+    await idle(d);
+    const hidden = third.replace("A third,", "Unseen,");
+    fs.writeFileSync(file, hidden);
+    const asked = await d.js("window.fetched.length");
+    await d.js("new Promise((r) => setTimeout(r, 4500))");
+    check(await d.js("ksmd.source()") === third && await d.js("window.fetched.length") === asked,
+      "a hidden page asks the server nothing, and shows the file as it was",
+      (await d.js("window.fetched.slice(-3).join(' ')")) || "");
+    await d.js(`delete document.visibilityState; delete document.hidden;
+      document.dispatchEvent(new Event("visibilitychange"));`);
+    check(await shows(hidden), "shown again, it shows the file as it is now");
+
+    // The page's own save is no change: nothing but the file itself is read again.
+    await typeAtEnd(d, 1, " Saved here.");
+    await d.press("s", CTRL);
+    await idle(d);
+    const mine = await d.js("ksmd.source()");
+    await d.js("window.fetched = []");
+    await d.js("new Promise((r) => setTimeout(r, 4500))");
+    const after = await d.js("window.fetched.filter((u) => !u.includes('top.ksmd'))" +
+      ".map((u) => decodeURIComponent(u)).join(' ')");
+    check(ctx.disk("top.ksmd") === mine && after === "" && (await said(d)) === "Saved top.ksmd.",
+      "the page's own save is not taken for a change on disk", `${after} | ${await said(d)}`);
+
+    // With edits unsaved, the change asks once, as a save would, and the edits stay.
+    await typeAtEnd(d, 1, " Unsaved.");
+    const edited = await d.js("ksmd.source()");
+    const outside = mine.replace("Saved here.", "Changed there.");
+    fs.writeFileSync(file, outside);
+    check(await d.until("!document.getElementById('notice').hidden", 10000) &&
+      (await noticed(d)).includes("changed on disk") && await d.js("ksmd.source()") === edited &&
+      ctx.disk("top.ksmd") === outside,
+    "with edits unsaved, the change shows the notice, and neither version is lost", await noticed(d));
+    await choose(d, "Keep editing");
+    await d.js("new Promise((r) => setTimeout(r, 4500))");
+    check(await d.js("document.getElementById('notice').hidden") &&
+      await d.js("ksmd.source()") === edited, "the notice does not come back for the same change");
+    check(await d.js("window.focused") === 0, "no focus event came in the whole section");
+    await d.press("s", CTRL);
+    await idle(d);
+    await choose(d, "Replace the file");
+    fs.writeFileSync(file, before);
+    await ctx.browser.closeTab(d.page);
+  },
+
   async recovery(ctx) {
     const before = ctx.disk("top.ksmd");
     const d = await tab(ctx, "?doc=top.ksmd");
@@ -413,9 +507,12 @@ const SECTIONS = {
     const d = await tab(ctx, "?doc=top.ksmd");
     const shown = () => d.js("Array.from(document.querySelectorAll('#browse .browse-list button'), " +
       "(b) => b.textContent).join(' ')");
+    // The list comes from the server after each move, so a press waits for its name to show.
     const press = async (label) => {
-      await d.js(`Array.from(document.querySelectorAll('#browse .browse-list button'))
-        .find((b) => b.textContent === ${JSON.stringify(label)}).click()`);
+      const button = `Array.from(document.querySelectorAll('#browse .browse-list button'))
+        .find((b) => b.textContent === ${JSON.stringify(label)})`;
+      await d.until(`!!${button}`);
+      await d.js(`${button}.click()`);
       await d.settle();
     };
     const pressOk = async () => {
@@ -471,13 +568,7 @@ const SECTIONS = {
     check(ctx.disk("parts/notes.ksmd") === theirs && (await said(d)).includes("changed after you chose it"),
       "the second press replaces only the bytes that stood when the file was chosen", await said(d));
     fs.writeFileSync(path.join(ctx.root, "parts/notes.ksmd"), notes);
-    await d.menu("file-open");
-    await d.until("document.querySelector('#browse .browse-list button') !== null");
-    await press("..");
-    await d.js(`Array.from(document.querySelectorAll('#browse .browse-list button'))
-      .find((b) => b.textContent === 'top.ksmd').dispatchEvent(new MouseEvent('dblclick',
-      { bubbles: true }))`);
-    await idle(d);
+    await openInDialog(d, ["..", "top.ksmd"]);
     check(await d.js("document.querySelector('.menubar .doc-name').textContent") === "top.ksmd" &&
       await d.js("ksmd.source()") === top, "Open shows the same dialog; a double press opens",
     `${await said(d)} | ${await shown()}`);

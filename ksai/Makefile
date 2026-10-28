@@ -38,7 +38,7 @@ test: examples test-unit
 	"$(KSPLC)" run tests/stops_main.kspl "$(KSPLC_EXE)"
 	rm -rf "$(OUT)/examples_test"
 	"$(KSPLC)" run tests/examples_main.kspl "$(OUT)/llama_engine.exe" "$(OUT)/qwen_infer.exe" \
-		"$(OUT)/fim_coder.exe" "$(OUT)/car_pilot.exe" "$(OUT)/examples_test"
+		"$(OUT)/fim_coder.exe" "$(OUT)/car_pilot.exe" "$(OUT)/chat_server.exe" "$(OUT)/examples_test"
 
 fuzz_build = "$(KSPLC)" build $(1) tests/read_prog.kspl "$(OUT)/fuzz/read_prog.exe"
 # Caution: **Make the folder first**: the sanitizer's log is redirected into it before the build.

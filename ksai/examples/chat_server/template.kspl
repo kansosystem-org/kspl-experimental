@@ -1,0 +1,244 @@
+//< Qwen3-Instruct-2507's chat template: a conversation and its tools, as the token IDs the model reads
+//< **It follows the chat template of Qwen3-4B-Instruct-2507's GGUF file**, the value of
+//< GGUF's `tokenizer.chat_template`, branch by branch and in the same order. So the two can be
+//< compared line by line, and a fix is made here alone. `matches` ties the file's text to this
+//< one by its hash. **A marker token goes in by its ID, and only where the template puts it**; the
+//< text between markers is encoded. The conversation, the markers and the prompt's builder serve
+//< Qwen3.5's template too (`template35.kspl`). Why: "The chat template is kept in one place" in
+//< `ksai/docs/DESIGN-serving.md`.
+import "ksai/tokenizer"
+import "std/chars"
+import "std/ds" { List }
+import "std/json"
+import "std/mem" { Arena }
+import "std/sha256"
+import "std/str" { Str_builder }
+
+// ==========================================
+// The template's fixed text, in the order it is written out
+// ==========================================
+const TEMPLATE_SHA256: U8[] = "c979e0e71a3e21b8f208e6ab120d5cb29327885f29d2a8b18fda67a723798e18" //<
+    //< The SHA-256 of the GGUF file's chat template that `render` follows
+priv const TOOLS_HEAD: U8[] =
+    "# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are \
+        provided with function signatures within <tools></tools> XML tags:\n<tools>"
+priv const TOOLS_ASK: U8[] =
+    "\n</tools>\n\nFor each function call, return a json object with function name and arguments \
+        within "
+priv const TOOLS_TAGS: U8[] = " XML tags:\n" //< between the two tag pairs of the instruction
+priv const CALL_FORM: U8[] = "\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n"
+const RESPONSE_TEXT: U8[] = "<tool_response>" //< a user message wrapped in these two
+const RESPONSE_END_TEXT: U8[] = "</tool_response>" //< is a tool's result, not a question
+const THINK_TEXT: U8[] = "<think>"
+const THINK_END_TEXT: U8[] = "</think>"
+
+enum Kind //< the chat templates this server writes, each tied to a file's text by its hash
+    instruct_2507 //< Qwen3-Instruct-2507's: `render` here
+    qwen35 //< Qwen3.5's: `template35.render`
+
+struct Marks //< the IDs of the marker tokens, found in the vocabulary by their exact text
+    im_start: I32 //< `<|im_start|>`, which opens a turn
+    im_end: I32 //< `<|im_end|>`, which ends a turn; generation stops at it
+    end_of_text: I32 //< `<|endoftext|>`; generation stops at it too
+    call_open: I32 //< `<tool_call>`, which opens a tool call
+    call_close: I32 //< `</tool_call>`
+    response_open: I32 //< `<tool_response>`, which opens a tool's result
+    response_close: I32 //< `</tool_response>`
+    think_open: I32 //< `<think>`, which opens the model's thinking
+    think_close: I32 //< `</think>`
+
+priv const MARK_TEXTS: U8[][9] = ::{ "<|im_start|>", "<|im_end|>", "<|endoftext|>", "<tool_call>",
+    "</tool_call>", "<tool_response>", "</tool_response>", "<think>", "</think>" } //<
+        //< in `Marks`' field order
+
+fn matches(chat_template: U8[]): Bool //< whether a file's chat template is the one `render` follows
+    $hex: U8[64] = ::{}
+    sha256.write_hex(sha256.hash(chat_template), U8$[]::hex)
+    return (U8[]::hex).equals(TEMPLATE_SHA256)
+
+fn find_marks(tok: tokenizer.Tokenizer$@): Marks!U8[] //<
+    //< The marker IDs of a Qwen vocabulary, or the marker text it lacks
+    $ids: I32[9] = ::{}
+    for i in Range.asc(9)
+        if id: = tok.vocab.get(MARK_TEXTS[i])
+            ids[i] = id
+        else
+            throw MARK_TEXTS[i]
+    return Marks::{ .im_start = ids[0], .im_end = ids[1], .end_of_text = ids[2],
+        .call_open = ids[3], .call_close = ids[4], .response_open = ids[5],
+        .response_close = ids[6], .think_open = ids[7], .think_close = ids[8] }
+
+struct Call //< one tool call an assistant message holds
+    name: U8[]
+    arguments: json.Value //< a text, written as it is, or an object, written as the template's
+        //< `tojson` writes it
+
+struct Message //< one message of the conversation, as the request gave it
+    role: U8[] //< `system`, `user`, `assistant` or `tool`
+    content: U8[]? //< none where the request gave `null`
+    reasoning: U8[]? //< `reasoning_content`, where the request gave a text
+    calls: List<|Call|> //< the tool calls of an assistant message; empty for any other
+
+struct Conversation //< what the template renders
+    messages: List<|Message|>
+    tools: List<|json.Value|> //< each tool as the request gave it; empty renders no tools
+    thinking: Bool //< whether the answer opens with the model's thinking, where a template asks
+        //< Qwen3.5's template reads it as `enable_thinking`; Qwen3-Instruct-2507 never thinks.
+
+struct Prompt //< token IDs being built: text waits until a marker or the end encodes it
+    //< **The text between two markers is encoded as one piece**, as Qwen's tokenizer does. Pieces
+    //< encoded one by one could merge differently at their edges.
+    tok: tokenizer.Tokenizer$@
+    ids: List<|I32|>$@
+    text: Str_builder$@
+    arena: Arena$@
+
+impl Prompt
+    fn s(r: Self$@, text: U8[]): Self$@ //< appends text
+        r.text.s(text)
+        return r
+
+    fn mark(r: Self$@, id: I32): Self$@ //< appends a marker token by its ID
+        r.flush()
+        r.ids.push(id)
+        return r
+
+    fn json(r: Self$@, v: json.Value): Self$@ //< appends a value as the template's `tojson`
+        tojson(v, r.text)
+        return r
+
+    fn flush(r: Self$@) //< encodes the waiting text
+        if r.text.len == 0
+            return
+        for id in r.tok.encode(r.text.slice(), r.arena)
+            r.ids.push(id)
+        r.text.clear()
+
+    priv fn assistant(r: Self$@, m: Message@, after_query: Bool, last: Bool, marks: Marks) //<
+        //< An assistant message: its thinking where the template keeps it, its text, its calls
+        //< Thinking is kept only after the last question, and only where it is the last message
+        //< or holds text. A `</think>` in the content splits the thinking from it.
+        $content: = m.content.unwrap_or("")
+        $reasoning: U8[] = ""
+        if given: = m.reasoning
+            reasoning = given
+        else if content.find_str(THINK_END_TEXT).is_some()
+            before: = rstrip_nl(before_first(content, THINK_END_TEXT))
+            reasoning = lstrip_nl(after_last(before, THINK_TEXT))
+            content = lstrip_nl(after_last(content, THINK_END_TEXT))
+        r.mark(marks.im_start).s("assistant\n")
+        if after_query && (last || reasoning.len > 0)
+            r.mark(marks.think_open).s("\n").s(rstrip_nl(lstrip_nl(reasoning))).s("\n")
+                .mark(marks.think_close).s("\n\n").s(lstrip_nl(content))
+        else
+            r.s(content)
+        for k in Range.asc(m.calls.len)
+            c: = m.calls.get(k)
+            if k > 0 || content.len > 0
+                r.s("\n")
+            r.mark(marks.call_open).s("\n{\"name\": \"").s(c.name).s("\", \"arguments\": ")
+            if text: = c.arguments.as_str()
+                r.s(text)
+            else
+                r.json(c.arguments)
+            r.s("}\n").mark(marks.call_close)
+        r.mark(marks.im_end).s("\n")
+
+fn tojson(v: json.Value, out: Str_builder$@) //< a value as Python's `json.dumps` writes it
+    //< That is the template's `tojson`: a space after each `,` and `:` between items, and
+    //< non-ASCII text as it is. **Members keep the request's order**, as `std/json` reads it.
+    defer $flat: = Str_builder()
+    v.dump(flat@)
+    $in_text: = false
+    $escaped: = false
+    for c in flat.slice()
+        out.c(c)
+        if in_text
+            if escaped
+                escaped = false
+            else if c == '\\'
+                escaped = true
+            else if c == '"'
+                in_text = false
+        else if c == '"'
+            in_text = true
+        else if c == ',' || c == ':'
+            out.c(' ')
+
+// ==========================================
+// Python's string methods the template calls, on newlines alone
+// ==========================================
+
+fn lstrip_nl(s: U8[]): U8[] //< `s.lstrip('\n')`
+    $i: Sz = 0
+    for i < s.len && s[i] == '\n'
+        i += 1
+    return s.sub_from(i)
+
+fn rstrip_nl(s: U8[]): U8[] //< `s.rstrip('\n')`
+    $n: = s.len
+    for n > 0 && s[n - 1] == '\n'
+        n -= 1
+    return s.sub(0, n)
+
+fn after_last(s: U8[], part: U8[]): U8[] //< `s.split(part)|last`: the text after its last one
+    $rest: = s
+    for
+        at: = rest.find_str(part) catch
+            return rest
+        rest = rest.sub_from(at + part.len)
+
+fn before_first(s: U8[], part: U8[]): U8[] //< `s.split(part)|first`
+    at: = s.find_str(part) catch
+        return s
+    return s.sub(0, at)
+
+priv fn last_query(msgs: List<|Message|>@): Sz //< the template's `ns.last_query_index`
+    //< The last user message that is not a tool's result wrapped in `<tool_response>`; where there
+    //< is none, the last message.
+    for $i: = msgs.len; i > 0; i -= 1
+        m: = msgs.get(i - 1)
+        if text: = m.content
+            if m.role.equals("user") &&
+                !(text.starts_with(RESPONSE_TEXT, 0) && text.ends_with(RESPONSE_END_TEXT))
+                return i - 1
+    return msgs.len - 1
+
+fn render(conv: Conversation@, tok: tokenizer.Tokenizer$@, marks: Marks, arena: Arena$@):
+    List<|I32|>$@ //<
+        //< The token IDs of the whole conversation, ending where the assistant's answer starts
+    defer $text: = Str_builder()
+    $p: = Prompt::{ .tok = tok, .ids = List<|I32|>.create(arena), .text = text@, .arena = arena }
+    msgs: = conv.messages
+    first_system: = msgs.len > 0 && msgs.get(0).role.equals("system")
+    if conv.tools.len > 0
+        p.mark(marks.im_start).s("system\n")
+        if first_system
+            p.s(msgs.get(0).content.unwrap_or("")).s("\n\n")
+        p.s(TOOLS_HEAD)
+        for i in Range.asc(conv.tools.len)
+            p.s("\n").json(conv.tools.get(i))
+        p.s(TOOLS_ASK).mark(marks.call_open).mark(marks.call_close).s(TOOLS_TAGS)
+            .mark(marks.call_open).s(CALL_FORM).mark(marks.call_close).mark(marks.im_end).s("\n")
+    else if first_system
+        p.mark(marks.im_start).s("system\n").s(msgs.get(0).content.unwrap_or(""))
+            .mark(marks.im_end).s("\n")
+    query: = last_query(msgs@)
+    for i in Range.asc(msgs.len)
+        m: = msgs.get(i)
+        content: = m.content.unwrap_or("")
+        if m.role.equals("user") || (m.role.equals("system") && i > 0)
+            p.mark(marks.im_start).s(m.role).s("\n").s(content).mark(marks.im_end).s("\n")
+        else if m.role.equals("assistant")
+            p.assistant(m@, i > query, i + 1 == msgs.len, marks)
+        else if m.role.equals("tool")
+            // Consecutive tool results share one user turn.
+            if i == 0 || !msgs.get(i - 1).role.equals("tool")
+                p.mark(marks.im_start).s("user")
+            p.s("\n").mark(marks.response_open).s("\n").s(content).s("\n")
+                .mark(marks.response_close)
+            if i + 1 == msgs.len || !msgs.get(i + 1).role.equals("tool")
+                p.mark(marks.im_end).s("\n")
+    p.mark(marks.im_start).s("assistant\n")
+    p.flush()
+    return p.ids

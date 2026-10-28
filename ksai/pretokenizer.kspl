@@ -1,0 +1,190 @@
+//< Splits a text into the chunks BPE merges within, by Qwen's rules as llama.cpp applies them
+//< Qwen2 and Qwen3 split by GGUF's `qwen2` pattern:
+//< `(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}| ?[^\s\p{L}\p{N}]+[\r\n]*|`
+//< `\s*[\r\n]+|\s+(?!\S)|\s+`. Qwen3.5's `qwen35` adds the marks `\p{M}` to the letter runs and
+//< takes them out of the other runs. Each is written out by hand, as llama.cpp does; the classes
+//< are llama.cpp's (`unicode_class.kspl`). Why: "The tokenizer gives llama.cpp's tokens" in
+//< `ksai/docs/DESIGN-learning.md`.
+import "ksai/unicode_class" as uc
+import "std/chars" // `to_lower`
+import "std/str" // `equals`
+
+pub enum Split_rule //< which rule splits a text, by the name GGUF's `tokenizer.ggml.pre` gives it
+    qwen2 //< Qwen2's and Qwen3's: a mark is neither a letter nor a space, like punctuation
+    qwen35 //< Qwen3.5's: a mark belongs to the letter run it stands in
+
+impl Split_rule
+    pub fn named(pre: U8[]): Split_rule? //< the rule a GGUF file names, or none for another
+        if pre.equals("qwen2")
+            return .some(.qwen2)
+        if pre.equals("qwen35")
+            return .some(.qwen35)
+        return .none
+
+priv const CLASS_END: U8 = 5 //< the class past the text's end, where no alternative goes on
+priv const REPLACEMENT: I32 = 0xFFFD //< what a byte that starts no code point is read as
+priv const CODE_POINTS: I32 = 0x110000 //< one past the largest code point
+
+struct Cpt //< one code point of the text, as the rule reads it
+    cp: I32 //< its value
+    cls: U8 //< its class: `CLASS_*` of `unicode_class.kspl`, or `CLASS_END`
+    len: Sz //< how many bytes of the text it takes
+
+priv fn class_of(cp: I32): U8 //< a code point's class, looked up in the generated table
+    if cp < 0x80
+        return uc.ASCII_CLASS[cp]
+    if cp >= CODE_POINTS
+        return uc.CLASS_OTHER // llama.cpp's "undefined", which is no letter, number or space
+    // The last run starting at or below `cp`; run 0 starts at 0, so one always does.
+    $lo: Sz = 0
+    $hi: Sz = uc.CLASS_RUNS.len
+    for hi - lo > 1
+        mid: = lo + (hi - lo) / 2
+        if I32::(uc.CLASS_RUNS[mid] >> 3) <= cp
+            lo = mid
+        else
+            hi = mid
+    return U8::(uc.CLASS_RUNS[lo] & 7U32)
+
+priv fn bad_byte(): Cpt //< a byte that starts no code point: one byte, read as U+FFFD
+    return Cpt::{ .cp = REPLACEMENT, .cls = class_of(REPLACEMENT), .len = 1 }
+
+priv fn tail_ok(text: U8[], at: Sz, n: Sz): Bool //<
+    //< whether bytes at+1 .. at+n-1 continue a code point
+    if at + n > text.len
+        return false
+    for k in Range(1, n, 1)
+        if (text[at + k] & 0xC0U8) != 0x80U8
+            return false
+    return true
+
+fn read_cpt(text: U8[], at: Sz): Cpt //<
+    //< the code point starting at `at`, or `CLASS_END` past the end
+    //< **As lenient as llama.cpp's reader** (`unicode_cpt_from_utf8`): the lead byte gives the
+    //< length and only the continuation bytes are checked, so an overlong form is read as its
+    //< value. A byte that starts no code point is one U+FFFD; the text itself is never changed.
+    if at >= text.len
+        return Cpt::{ .cp = -1, .cls = CLASS_END, .len = 0 }
+    b: = text[at]
+    if b < 0x80U8
+        return Cpt::{ .cp = b, .cls = uc.ASCII_CLASS[b], .len = 1 }
+    $n: Sz = 0
+    $cp: I32 = 0
+    if (b & 0xE0U8) == 0xC0U8
+        n = 2
+        cp = b & 0x1FU8
+    else if (b & 0xF0U8) == 0xE0U8
+        n = 3
+        cp = b & 0x0FU8
+    else if (b & 0xF8U8) == 0xF0U8
+        n = 4
+        cp = b & 0x07U8
+    if n == 0 || !tail_ok(text, at, n)
+        return bad_byte()
+    for k in Range(1, n, 1)
+        cp = (cp << 6) | I32::(text[at + k] & 0x3FU8)
+    return Cpt::{ .cp = cp, .cls = class_of(cp), .len = n }
+
+priv fn read_as(text: U8[], at: Sz, rule: Split_rule): Cpt //<
+    //< `read_cpt`, with a mark read as punctuation where the rule does not know marks
+    $c: = read_cpt(text, at)
+    if rule == .qwen2 && c.cls == uc.CLASS_MARK
+        c.cls = uc.CLASS_OTHER
+    return c
+
+priv fn lower_ascii(cp: I32): U8 //< an ASCII code point in lower case, or 0 for any other
+    if cp < 0 || cp >= 0x80
+        return 0
+    return (U8::cp).to_lower()
+
+priv fn is_newline(c: Cpt): Bool //< `\r` or `\n`, the two the rule names apart from `\s`
+    return c.cp == 0x0D || c.cp == 0x0A
+
+priv fn contraction_end(text: U8[], start: Sz): Sz //< where `'s`, `'re` and the rest end, or 0
+    //< Case does not matter (`'S` too). Only ASCII folds: no other code point folds to one of
+    //< these letters, which `gen_unicode_class.py` checks.
+    first: = read_cpt(text, start + 1)
+    one: = lower_ascii(first.cp)
+    if one == 's' || one == 't' || one == 'm' || one == 'd'
+        return start + 1 + first.len
+    second: = read_cpt(text, start + 1 + first.len)
+    two: = lower_ascii(second.cp)
+    if (one == 'r' && two == 'e') || (one == 'v' && two == 'e') || (one == 'l' && two == 'l')
+        return start + 1 + first.len + second.len
+    return 0
+
+priv fn run_end(text: U8[], from: Sz, cls: U8, also: U8, rule: Split_rule): Sz //<
+    //< where the run of `cls` or `also` starting at `from` ends
+    $at: = from
+    for
+        c: = read_as(text, at, rule)
+        if c.cls != cls && c.cls != also
+            return at
+        at += c.len
+
+priv fn letter_like(c: Cpt): Bool //< a letter, or a mark where the rule joins marks to letters
+    //< `read_as` has already read a mark as punctuation for a rule that does not.
+    return c.cls == uc.CLASS_LETTER || c.cls == uc.CLASS_MARK
+
+priv fn other_run_end(text: U8[], start: Sz, c0: Cpt, rule: Split_rule): Sz //<
+    //< ` ?[^\s\p{L}\p{N}]+[\r\n]*`: where it ends, or 0 when it does not match at `start`
+    //< A lone space at the text's end matches it too: llama.cpp's reading of the optional space.
+    $at: = start
+    if c0.cp == 0x20
+        next: = read_as(text, start + 1, rule)
+        if next.cls != uc.CLASS_OTHER && next.cls != CLASS_END
+            return 0
+        at = start + 1
+    else if c0.cls != uc.CLASS_OTHER
+        return 0
+    at = run_end(text, at, uc.CLASS_OTHER, uc.CLASS_OTHER, rule)
+    for at < text.len && (text[at] == '\r' || text[at] == '\n')
+        at += 1
+    return at
+
+priv fn space_run_end(text: U8[], start: Sz, c0: Cpt, rule: Split_rule): Sz //<
+    //< `\s*[\r\n]+`, `\s+(?!\S)` or `\s+`: where the white space at `start` ends
+    //< A run with a newline ends after its last newline. A run before a non-space keeps its last
+    //< space for the next chunk. One code point that matches nothing is a chunk of its own.
+    $at: = start
+    $last: = start // where the run's last code point starts
+    $count: Sz = 0
+    $after_newline: Sz = 0
+    for
+        c: = read_as(text, at, rule)
+        if c.cls != uc.CLASS_SPACE
+            break
+        if is_newline(c)
+            after_newline = at + c.len
+        last = at
+        count += 1
+        at += c.len
+    if after_newline > 0
+        return after_newline
+    if count > 1 && at < text.len
+        return last
+    if count > 0
+        return at
+    return start + c0.len
+
+pub fn chunk_end( //< where the chunk that starts at `start` ends; the next chunk starts there
+    //< The alternatives are tried in the rule's order, and the first that matches is taken.
+    text: U8[], //< the text between two markers, or the whole text where it holds none
+    start: Sz, //< where the chunk starts, below `text.len`: 0, or where the previous one ended
+    rule: Split_rule, //< the rule the vocabulary was made with
+): Sz
+    c0: = read_as(text, start, rule)
+    if c0.cp == '\''
+        contraction: = contraction_end(text, start)
+        if contraction > 0
+            return contraction
+    // `[^\r\n\p{L}\p{N}]?\p{L}+`, or `[^\r\n\p{L}\p{N}]?[\p{L}\p{M}]+` in Qwen3.5's
+    if !is_newline(c0) && c0.cls != uc.CLASS_NUMBER
+        if letter_like(c0) || letter_like(read_as(text, start + c0.len, rule))
+            return run_end(text, start + c0.len, uc.CLASS_LETTER, uc.CLASS_MARK, rule)
+    if c0.cls == uc.CLASS_NUMBER
+        return start + c0.len
+    other: = other_run_end(text, start, c0, rule)
+    if other > 0
+        return other
+    return space_run_end(text, start, c0, rule)

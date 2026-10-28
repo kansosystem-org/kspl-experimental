@@ -41,11 +41,17 @@ flowchart LR
 | `build_corpus.kspl` / `corpus_count.kspl` | Normalizes every source through `fmt` (KSPL's formatter), removes duplicates, splits train/val and counts, writing to `corpus/`. `corpus_count.kspl` holds the counting rules (the folders left out; words, tokens and lines), split off so it can be tested. |
 | `make_fim.kspl` | Writes FIM training examples to `corpus/fim_{train,val}.jsonl`. The source is self-hosted code that compiles, so the middle is the correct completion by definition and no example needs recompiling. |
 | `eval_fim.kspl` | Hides single lines of the validation files, inserts a model's completion, and measures the rate at which `ksplc` accepts the file (`make fim-eval`). `--model=native` runs `ksai/examples/fim_coder` as its own process. A file that does not compile on its own gives no holes. |
-| `train_bpe.kspl` | Derives the BPE vocabulary and merges from the corpus into `tokenizer/`, which `Tokenizer.load` in `ksai/tokenizer.kspl` reads. (BPE, byte-pair encoding, builds the vocabulary by merging the pairs of pieces that occur most often.) |
+| `train_bpe.kspl` | Derives the BPE vocabulary and merges from the corpus into `tokenizer/`, which `Tokenizer.load` in `ksai/tokenizer.kspl` reads. (BPE, byte-pair encoding, builds the vocabulary by merging the pairs of pieces that occur most often.) It splits the corpus into chunks by the tokenizer's own rule (`chunk_end` in `ksai/pretokenizer.kspl`), so every merge it learns can apply when the tokenizer encodes. |
 | `lora_finetune_external.py` | Fine-tunes a LoRA (a small set of added weights trained on top of a model) outside KSPL, on a GPU machine. It starts from scratch, or continues with `--continue-from`. It writes the LoRA as safetensors in the KSPL convention. `--help` lists its options, including those for a CPU. |
 | `export_qwen_to_kspl.py` / `export_qwen_tokenizer.py` | Convert Hugging Face Qwen's weights and tokenizer into the files `ksai` reads. |
+| `gen_unicode_class.py` | Writes `ksai/unicode_class.kspl`, the Unicode classes the tokenizer's rule reads, from llama.cpp's `unicode-data.cpp`. `--check` compares instead of writing. |
+| `check_qwen_tokenizer.py` / `tokenize_lists.kspl` | Compare ksai's tokenizer with llama.cpp's on a GGUF model, text by text (below). `tokenize_lists.kspl` is the KSPL half: it loads the GGUF file's lists through `Tokenizer.load_lists` and prints each text's IDs. |
 | `qwen_logit_parity.py` | Prints Hugging Face's logits (the scores for each next token) for the same input, to compare with KSPL's. |
+| `qwen_gguf_check.py` | Runs ksai's Qwen model (`ksai/benches/bench_qwen.kspl`) and llama.cpp on the same GGUF file. It compares their greedy tokens, their scores, and the chat template's rendering ("Checking against llama.cpp" below). |
+| `make_qwen_fixtures.py` / `make_qwen35_fixtures.py` | Write the tiny Qwen3 and Qwen3.5 models and the chat-template cases that ksai's tests read (`ksai/tests/qwen_data/`), with llama.cpp's packages `gguf` and `llama_cpp` as the reference. The files are committed, so the tests need no Python. |
 | `safetensors_io.py` | Writes safetensors, for `export_qwen_to_kspl.py` and `lora_finetune_external.py`. |
+| `make_quant_fixtures.py` | Writes the reference files that ksai's GGUF formats are tested against (`ksai/tests/quant_data/`). The reference is llama.cpp's `gguf` package, and its C library for the products. The files are committed, so the tests need no Python. |
+| `gguf_quant_check.py` | Takes a few real tensors of each format out of GGUF files, for checking ksai's decoding by hand (`ksai/benches/README.md`). |
 | `tests/` | `ai_assist_test.kspl`: counting the corpus, and the oracle, which starts the real compiler; `make debug-tools` runs them with the rest of the tools' tests. |
 
 **`corpus/` and `tokenizer/` are generated and reproducible**, and git ignores them; the scripts and the tools are the product.
@@ -56,7 +62,7 @@ flowchart LR
 
 ```sh
 python3 -m venv .venv && . .venv/bin/activate
-pip install numpy torch transformers peft safetensors
+pip install numpy torch transformers peft safetensors gguf llama-cpp-python jinja2
 ```
 
 **`tools/kspl_lldb.py`'s `lldb` is not among them.** It is a Python module that comes with LLVM, not from pip, and is installed with LLVM ([`.devcontainer/Dockerfile`](../../.devcontainer/Dockerfile)).
@@ -99,6 +105,44 @@ echo "def add(a, b):
 It writes Python that stays coherent across several functions. **The prompt is Python on purpose.** The model has never seen KSPL. So a KSPL prompt could not tell a broken pipeline from a model that does not know KSPL.
 
 Decoding is greedy (it always takes the top-scoring token), with no repetition penalty. So a numeric prompt such as `let n = ` can repeat digits without end. That comes from the decoding, not from a fault in the pipeline.
+
+## Checking against llama.cpp
+
+This check shows that ksai runs the user's model, Qwen3-4B-Instruct-2507, as llama.cpp runs the same GGUF file. It needs `gguf`, `llama-cpp-python` and `numpy`, and the file that [`models/README.md`](../../models/README.md) names:
+
+```sh
+out/ksplc_stage1.exe build "--cflags=-O3 -march=native" ksai/benches/bench_qwen.kspl out/bench_qwen.exe
+python3 tools/ai_assist/qwen_gguf_check.py --model models/Qwen3-4B-Instruct-2507-Q4_K_M.gguf
+python3 tools/ai_assist/qwen_gguf_check.py --model models/Qwen3.5-9B-Q3_K_M.gguf
+```
+
+The prompts' token IDs come from llama.cpp, so the tokenizers' work does not mix in. Each check prints `agree` or `DIFFER`:
+
+* **The first 32 greedy tokens** equal llama.cpp's, for prompts in English, Japanese and code, and a conversation with tools. It shows the smallest gap between the top two scores where they agree, and both sides' top two where they part. A parting where each side's top two lie within the scores' tolerance prints `tie`: either token can come first there.
+* **The scores after a fixed prompt** agree within a tolerance. Both sides round each product's inputs to 8 bits. So a difference in an activation's last bit can move a number to the next step, and they never agree exactly. Beside it stands llama.cpp against itself, reading a prompt in one batch and token by token. No other program can differ from llama.cpp by less.
+* **The chat template**: llama.cpp renders each conversation of the file's cases as that file holds it: `template_cases.json`, or `template35_cases.json` for Qwen3.5, in `ksai/tests/qwen_data/`. ksai's tests check that `chat_server` renders the same texts.
+
+Last it prints how fast each side reads the prompt of 350 tokens and generates 64, on the same machine. Each is the median of three runs, with how many times faster llama.cpp is.
+
+## Checking the tokenizer against llama.cpp
+
+This check shows that ksai's tokenizer gives the same token IDs as llama.cpp for a real model. It needs the `gguf` and `llama_cpp` Python packages, a built `ksplc` and a downloaded GGUF model.
+
+```sh
+python3 tools/ai_assist/check_qwen_tokenizer.py --model Qwen3-4B-Instruct-2507-Q4_K_M.gguf
+```
+
+It reads which rule splits the text from the file's `tokenizer.ggml.pre`: `qwen2` for Qwen3-4B-Instruct-2507, `qwen35` for Qwen3.5-9B. Run it on each model the server runs.
+
+The texts are samples written into the script: English and Japanese prose, other scripts with their combining marks, code, numbers, emoji, white space and markers. Added to them are 5,000 seeded random strings and every text file the repository tracks. **It passes when the last line says `0 differ`.** A failure prints the first differing tokens of up to ten texts. `--random` and `--seed` change the random strings, and `--file-limit` the largest file read.
+
+**Check the Unicode table too when llama.cpp changes.** Get llama.cpp's source in the version the model runs with. Then run this, with the path to that source:
+
+```sh
+python3 tools/ai_assist/gen_unicode_class.py <llama.cpp>/src/unicode-data.cpp --check
+```
+
+It fails when `ksai/unicode_class.kspl` differs from what that source gives. Run it again without `--check` to write the new table.
 
 ## Further reading
 

@@ -575,7 +575,9 @@ Undo and redo put back the selection each step started or ended with. A new acti
 
 **A file changed on disk is never overwritten without a choice.** The page writes nothing and shows a notice that does not block editing. The notice offers two ways on: replace the file with this version, or load the file's version and keep this one as a draft. No merge is offered, since a merge that drops a line loses work silently.
 
-**When the page is looked at again, it reads its file again.** Focus and visibility both start the check. With nothing unsaved, a changed file shows at once. With edits unsaved, the page shows the same notice as a save. Each include and image is fetched again, and the view changes where one changed. The server watches no file, so a page that is not looked at notices a change only at its next save.
+**When the page is looked at again, it reads its file again.** Focus and visibility both start the check. With nothing unsaved, a changed file shows at once. With edits unsaved, the page shows the same notice as a save. Each include and image is fetched again, and the view changes where one changed.
+
+**While the page is visible, it asks the local server every two seconds whether its file changed.** It asks for the file's size and change time ("Watching" in [`docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md)). Where either differs from what the page last saw, the check above runs, once for each change. So text that another program writes into the open document shows without a click elsewhere. A hidden page asks nothing, and notices a change only when it is shown again or at its next save. An include or an image changed alone shows when the page is looked at again.
 
 **A new document saves only where no file stands, unless the person chooses to replace one.** Save on a document with no file yet opens Save As, as a word processor does. Save As replaces a file that stands only after a second press. So a save never replaces a file without a choice. Opening a missing path creates nothing.
 
@@ -623,7 +625,7 @@ Undo and redo put back the selection each step started or ended with. A new acti
 ### What the file lifecycle leaves out
 
 * Two people editing one file at once. A save after another person's save asks, as for any change on disk.
-* Noticing a change while the page is not looked at.
+* Noticing a change while the page is hidden.
 
 ## Limits and failures
 

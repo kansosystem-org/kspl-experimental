@@ -108,14 +108,16 @@ ifeq ($(OS),Windows_NT)
 export MSYS := $(strip $(MSYS) winsymlinks:nativestrict)
 endif
 
-# --- The switches a person sets: `LLVM=1`, `STATS=1`, `BLAS=1` --- **Each reads 0 or 1 alone**:
-# any other value would build the default without a word (Principle 5). What they decide below
-# (`BACKEND`, `TARGET_EXT`, `TARGET_FLAG`, `GUI_LDFLAGS`) is not set by hand, or one choice would
-# have two spellings that can disagree.
+# --- The switches a person sets: `LLVM=1`, `STATS=1`, `BLAS=1`, `NATIVE=1` --- **Each reads 0 or 1
+# alone**: any other value would build the default without a word (Principle 5). What they decide
+# below (`BACKEND`, `TARGET_EXT`, `TARGET_FLAG`, `GUI_LDFLAGS`) is not set by hand, or one choice
+# would have two spellings that can disagree.
 LLVM ?= 0
 STATS ?= 0
 BLAS ?= 0
-$(foreach v,LLVM STATS BLAS,$(if $(filter 0 1,$($(v))),,$(error $(v)=$($(v)): only 0 or 1 is read)))
+NATIVE ?= 0
+$(foreach v,LLVM STATS BLAS NATIVE,\
+  $(if $(filter 0 1,$($(v))),,$(error $(v)=$($(v)): only 0 or 1 is read)))
 $(foreach v,BACKEND TARGET_EXT TARGET_FLAG GUI_LDFLAGS,$(if $(filter command line,$(origin $(v))),\
   $(error $(v) follows from LLVM=1 and the platform, and is not set by hand)))
 
@@ -139,6 +141,15 @@ endif
 AI_KSPL_FLAGS :=
 ifeq ($(BLAS),1)
     AI_KSPL_FLAGS := --define=blas
+endif
+# --- The AI examples built for this machine's own CPU (make NATIVE=1) --- **For a program run on
+# the machine that builds it**, such as `make chat-server` on the user's own PC: the C compiler may
+# then use every instruction the CPU has (AVX2 on most x86-64 CPUs since 2013), and a model runs
+# about a fifth faster. The default build runs on any CPU of the architecture, so CI and a program
+# copied to another machine stay right. The integer products give the same numbers either way.
+AI_CFLAGS :=
+ifeq ($(NATIVE),1)
+    AI_CFLAGS := -march=native
 endif
 
 # --- What the bootstrap produces ---
@@ -233,7 +244,7 @@ endif
 	stage1 self-host self-host-ship commit-seed test-seed-sum \
 	fmt lint debug debug-file \
 	test-llvm-abi test-freestanding-math test-simd install-lsp install install-check \
-	run fim-corpus fim-model fim-eval qwen kssrv perf-log
+	run fim-corpus fim-model fim-eval qwen chat-server kssrv ksagent model-server perf-log
 
 # A blank line, parting the lines a `$(foreach)` lists; here as mk/test.mk uses it.
 define nl
@@ -436,7 +447,7 @@ FORCE:
 ## Run|run|Build the AI engine (`ksai/examples/llama_engine`) and run it
 run: $(STAGE1_EXE)
 	@echo "# RUNNING AI ENGINE (Release Build, BLAS=$(BLAS))"
-	$(call kspl_build,ksai/examples/llama_engine/main.kspl,llama_engine,$(AI_KSPL_FLAGS))
+	$(call kspl_build,ksai/examples/llama_engine/main.kspl,llama_engine,$(AI_KSPL_FLAGS),$(AI_CFLAGS))
 	./$(OUT_DIR)/llama_engine.exe
 
 # --- Generating the corpus for KSPL FIM (tools/ai_assist/build_corpus.kspl -> make_fim.kspl) ---
@@ -466,7 +477,7 @@ FIM_ENV := OPENBLAS_NUM_THREADS=1
 fim-model: fim-corpus
 	$(call kspl_build,$(FIM_AI)/train_bpe.kspl,train_bpe,)
 	./$(OUT_DIR)/train_bpe.exe --vocab=2000
-	$(call kspl_build,ksai/examples/fim_coder/main.kspl,fim_coder,$(AI_KSPL_FLAGS))
+	$(call kspl_build,ksai/examples/fim_coder/main.kspl,fim_coder,$(AI_KSPL_FLAGS),$(AI_CFLAGS))
 	$(FIM_ENV) ./$(OUT_DIR)/fim_coder.exe train --corpus=$(FIM_AI)/corpus/fim_train.jsonl \
 		--vocab=$(FIM_AI)/tokenizer/vocab.txt --merges=$(FIM_AI)/tokenizer/merges.txt \
 		--out=$(OUT_DIR)/fim_coder.safetensors --steps=$(FIM_STEPS) --batch=$(FIM_BATCH) \
@@ -484,8 +495,15 @@ fim-eval: $(STAGE1_EXE)
 ## Run|qwen|Build native inference for the Qwen family (`ksai/examples/qwen_infer`)
 qwen: $(STAGE1_EXE)
 	@echo "# BUILDING QWEN NATIVE INFERENCE (BLAS=$(BLAS))"
-	$(call kspl_build,ksai/examples/qwen_infer/main.kspl,qwen_infer,$(AI_KSPL_FLAGS))
+	$(call kspl_build,ksai/examples/qwen_infer/main.kspl,qwen_infer,$(AI_KSPL_FLAGS),$(AI_CFLAGS))
 	@echo "# built -> $(OUT_DIR)/qwen_infer.exe"
+
+# --- The chat server for a Qwen2.5-Instruct model (ksai/examples/chat_server) --- Build only.
+## Run|chat-server|Build the chat server a client with tools asks (`ksai/examples/chat_server`; `NATIVE=1` for this machine's CPU)
+chat-server: $(STAGE1_EXE)
+	@echo "# BUILDING THE CHAT SERVER (BLAS=$(BLAS) NATIVE=$(NATIVE))"
+	$(call kspl_build,ksai/examples/chat_server/main.kspl,chat_server,$(AI_KSPL_FLAGS),$(AI_CFLAGS))
+	@echo "# built -> $(OUT_DIR)/chat_server.exe"
 
 # --- Servers ksmd's launcher left running --- **On Windows a running program's file can be neither
 # replaced nor removed**, so a build or a clean would stop with "Permission denied". The launcher
@@ -508,6 +526,26 @@ $(KSSRV_EXE): $(STAGE1_EXE) $(call kspl_unrecorded,$(GEN_DIR)/kssrv)
 	$(call kspl_dep_rules,$@,$(GEN_DIR)/kssrv)
 	@echo "# built -> $(KSSRV_EXE) (try: ./$(KSSRV_EXE) 8080 .)"
 -include $(GEN_DIR)/kssrv.d
+
+# --- The folder's question answerer (ksagent/) --- Build only (it needs a model server to answer).
+KSAGENT_EXE := $(OUT_DIR)/ksagent.exe
+## Run|ksagent|Build the program that answers questions about a folder's files through a local model
+ksagent: $(KSAGENT_EXE)
+$(KSAGENT_EXE): $(STAGE1_EXE) $(call kspl_unrecorded,$(GEN_DIR)/ksagent)
+	@echo "# BUILDING KSAGENT (answers questions about a folder's files)"
+	$(call kspl_build,ksagent/main.kspl,ksagent,--emit-deps=$(GEN_DIR)/ksagent.deps)
+	$(call kspl_dep_rules,$@,$(GEN_DIR)/ksagent)
+	@echo "# built -> $(KSAGENT_EXE) (try: ./$(KSAGENT_EXE) ask docs \"What is KSPL?\")"
+-include $(GEN_DIR)/ksagent.d
+
+# --- The model ksagent asks: llama.cpp's server on a file in models/ (models/README.md) ---
+# Caution: **The options stand here alone.** models/README.md names this target, not the command.
+MODEL ?= Qwen3-4B-Instruct-2507-Q4_K_M.gguf
+## Run|model-server|Start llama.cpp's server on a model file in `models/`, at 127.0.0.1:8081 where ksagent asks (`MODEL=<file>`; the first model by default)
+model-server:
+	@command -v llama-server >/dev/null 2>&1 || { echo "llama-server is not on PATH: install llama.cpp as models/README.md says"; exit 1; }
+	@test -f "models/$(MODEL)" || { echo "models/$(MODEL) is not there: download it as models/README.md says"; exit 1; }
+	llama-server -m "models/$(MODEL)" --jinja --port 8081 -c 32768
 
 # --- Kanso OS (RTOS): `ksos/Makefile`'s own targets, called here by the same names ---
 # That file stands alone (a copy of the folder is tested by it), so what the root adds is only

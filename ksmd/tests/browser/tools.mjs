@@ -483,11 +483,15 @@ export function tools({ browser, page, js, settle, until, press, type, select, c
         getComputedStyle(document.querySelector('#doc td[data-r="0"][data-c="1"]')).color])`);
       await page("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: "dark" }] });
       const dark = await looks();
+      // Light is asked for by name: with no setting, the browser follows the machine's own, which
+      // can be dark (a Windows PC set to dark mode).
+      await page("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: "light" }] });
+      const light = await looks();
       await page("Emulation.setEmulatedMedia", { features: [] });
       check(dark === '["rgb(30, 31, 34)","rgb(29, 29, 31)","rgb(227, 227, 227)"]',
         "a dark system makes the page dark, and a filled cell keeps dark text", dark);
-      check(await looks() === '["rgb(255, 255, 255)","rgb(29, 29, 31)","rgb(29, 29, 31)"]',
-        "and a light one gives the light page back", await looks());
+      check(light === '["rgb(255, 255, 255)","rgb(29, 29, 31)","rgb(29, 29, 31)"]',
+        "and a light one gives the light page back", light);
     },
 
     // A table command's key stands beside its item in the right-click menu, and runs it from a cell.

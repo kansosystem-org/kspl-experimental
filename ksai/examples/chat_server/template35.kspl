@@ -1,0 +1,310 @@
+//< Qwen3.5's chat template: a conversation and its tools, as the token IDs the model reads
+//< **It follows the chat template of Qwen3.5-9B's GGUF file** branch by branch, in the same order,
+//< with the fixed text as constants at the top; `matches` ties the file's text to it by its hash.
+//< The conversation, the markers and the builder are `template.kspl`'s. It renders what
+//< `llama-server` hands the template: tool-call arguments as objects, and `enable_thinking` as
+//< `Conversation.thinking`. Why is "The chat template is kept in one place" in
+//< `ksai/docs/DESIGN-serving.md`.
+import "ksai/examples/chat_server/template" + { Conversation, Marks, Message, Prompt }
+import "ksai/tokenizer"
+import "std/chars"
+import "std/ds" { List }
+import "std/json"
+import "std/mem" { Arena }
+import "std/sha256"
+import "std/str" { Str_builder }
+
+// ==========================================
+// The template's fixed text, in the order it is written out
+// ==========================================
+const TEMPLATE_SHA256: U8[] = "7f0e529032c25183bcd66c7f238da2d377f43be754a94e2725a58c4e16d2ed67" //<
+    //< The SHA-256 of the GGUF file's chat template that `render` follows
+priv const TOOLS_HEAD: U8[] = "# Tools\n\nYou have access to the following functions:\n\n<tools>"
+priv const TOOLS_END: U8[] = "\n</tools>"
+priv const TOOLS_ASK: U8[] =
+    "\n\nIf you choose to call a function ONLY reply in the following format with NO suffix:\n\n"
+priv const CALL_EXAMPLE: U8[] =
+    "\n<function=example_function_name>\n<parameter=example_parameter_1>\nvalue_1\n</parameter>\n<parameter=example_parameter_2>\nThis is the value for the second parameter\nthat can span\nmultiple lines\n</parameter>\n</function>\n" //< between the example's two tags
+priv const REMINDER_HEAD: U8[] =
+    "\n\n<IMPORTANT>\nReminder:\n- Function calls MUST follow the specified format: an inner \
+        <function=...></function> block must be nested within " //< then the two call tags
+priv const REMINDER_TAGS: U8[] = " XML tags\n" //< after the call tags, as the reminder writes them
+priv const REMINDER_END: U8[] =
+    "- Required parameters MUST be specified\n- You may provide optional reasoning for your \
+        function call in natural language BEFORE the function call, but NOT after\n- If there is no \
+        function call available, answer the question like normal with your current knowledge and do \
+        not tell the user about function calls\n</IMPORTANT>"
+
+fn matches(chat_template: U8[]): Bool //< whether a file's chat template is the one `render` follows
+    $hex: U8[64] = ::{}
+    sha256.write_hex(sha256.hash(chat_template), U8$[]::hex)
+    return (U8[]::hex).equals(TEMPLATE_SHA256)
+
+fn render(conv: Conversation@, tok: tokenizer.Tokenizer$@, marks: Marks, arena: Arena$@):
+    List<|I32|>$@!U8[] //<
+        //< The token IDs of the whole conversation, ending where the assistant's answer starts
+        //< A conversation the template refuses is refused with its message: a system message
+        //< after the first, no question, or arguments that are no JSON.
+    defer $text: = Str_builder()
+    $p: = Prompt::{ .tok = tok, .ids = List<|I32|>.create(arena), .text = text@, .arena = arena }
+    msgs: = conv.messages
+    first_system: = msgs.len > 0 && msgs.get(0).role.equals("system")
+    if conv.tools.len > 0
+        p.mark(marks.im_start).s("system\n").s(TOOLS_HEAD)
+        for i in Range.asc(conv.tools.len)
+            p.s("\n").json(conv.tools.get(i))
+        p.s(TOOLS_END).s(TOOLS_ASK).mark(marks.call_open).s(CALL_EXAMPLE).mark(marks.call_close)
+            .s(REMINDER_HEAD).mark(marks.call_open).mark(marks.call_close).s(REMINDER_TAGS)
+            .s(REMINDER_END)
+        if first_system
+            content: = py_strip(msgs.get(0).content.unwrap_or(""))
+            if content.len > 0
+                p.s("\n\n").s(content)
+        p.mark(marks.im_end).s("\n")
+    else if first_system
+        p.mark(marks.im_start).s("system\n")
+            .s(py_strip(msgs.get(0).content.unwrap_or(""))).mark(marks.im_end).s("\n")
+    query: = last_query(msgs@)!
+    for i in Range.asc(msgs.len)
+        m: = msgs.get(i)
+        content: = py_strip(m.content.unwrap_or(""))
+        if m.role.equals("system")
+            if i > 0
+                throw "System message must be at the beginning."
+        else if m.role.equals("user")
+            p.mark(marks.im_start).s("user\n").s(content).mark(marks.im_end).s("\n")
+        else if m.role.equals("assistant")
+            assistant(p@, m@, content, i > query, marks, arena)!
+        else if m.role.equals("tool")
+            // Consecutive tool results share one user turn; a first message opens none.
+            if i > 0 && !msgs.get(i - 1).role.equals("tool")
+                p.mark(marks.im_start).s("user")
+            p.s("\n").mark(marks.response_open).s("\n").s(content).s("\n")
+                .mark(marks.response_close)
+            if i + 1 == msgs.len || !msgs.get(i + 1).role.equals("tool")
+                p.mark(marks.im_end).s("\n")
+    p.mark(marks.im_start).s("assistant\n")
+    if conv.thinking
+        p.mark(marks.think_open).s("\n")
+    else
+        p.mark(marks.think_open).s("\n\n").mark(marks.think_close).s("\n\n")
+    p.flush()
+    return p.ids
+
+priv fn last_query(msgs: List<|Message|>@): Sz!U8[] //< the template's `ns.last_query_index`
+    //< The last user message whose stripped text is not a tool's result wrapped in
+    //< `<tool_response>`. The template refuses a conversation with none.
+    for $i: = msgs.len; i > 0; i -= 1
+        m: = msgs.get(i - 1)
+        if m.role.equals("user")
+            text: = py_strip(m.content.unwrap_or(""))
+            if !(text.starts_with(template.RESPONSE_TEXT, 0) &&
+                text.ends_with(template.RESPONSE_END_TEXT))
+                return i - 1
+    throw "No user query found in messages."
+
+priv fn assistant(p: Prompt$@, m: Message@, stripped: U8[], after_query: Bool, marks: Marks,
+    arena: Arena$@): Void!U8[] //<
+        //< An assistant message: its thinking after the last question, its text, then its calls
+        //< A `</think>` in the text splits the thinking from it, where no `reasoning_content`
+        //< comes.
+    $content: = stripped
+    $reasoning: U8[] = ""
+    if given: = m.reasoning
+        reasoning = given
+    else if content.find_str(template.THINK_END_TEXT).is_some()
+        before: = template
+            .rstrip_nl(template.before_first(content, template.THINK_END_TEXT))
+        reasoning = template.lstrip_nl(template.after_last(before, template.THINK_TEXT))
+        content = template.lstrip_nl(template.after_last(content, template.THINK_END_TEXT))
+    p.mark(marks.im_start).s("assistant\n")
+    if after_query
+        p.mark(marks.think_open).s("\n").s(py_strip(reasoning)).s("\n").mark(marks.think_close)
+            .s("\n\n")
+    p.s(content)
+    for k in Range.asc(m.calls.len)
+        c: = m.calls.get(k)
+        if k > 0
+            p.s("\n")
+        else if py_strip(content).len > 0
+            p.s("\n\n")
+        p.mark(marks.call_open).s("\n<function=").s(c.name).s(">\n")
+        args: = arguments(c.arguments, arena)!
+        $list: = members(args, arena)
+        for a in list.slice()
+            p.s("<parameter=").s(a.name).s(">\n")
+            switch a.value
+            case .obj_val, .array_val
+                p.json(a.value)
+            default
+                py_str(a.value, p.text)
+            p.s("\n</parameter>\n")
+        p.s("</function>\n").mark(marks.call_close)
+    p.mark(marks.im_end).s("\n")
+
+priv fn arguments(given: json.Value, arena: Arena$@): json.Value!U8[] //<
+    //< A call's arguments as an object, as `llama-server` hands them to the template
+    //< Arguments sent as JSON text are parsed; text that is no JSON is refused, as there.
+    text: = given.as_str() catch
+        return given
+    doc: = json.parse(text, arena) catch
+        throw "Failed to parse tool call arguments as JSON."
+    return doc.val
+
+struct Member //< one member of an object, in the object's order
+    name: U8[]
+    value: json.Value
+
+fn members(v: json.Value, arena: Arena$@): List<|Member|> //< an object's members, in order
+    //< `std/json` keeps the order but lists no members, so the object's own text is read: each
+    //< member is a key at depth 1, then a value up to the next `,` at that depth. Not an object
+    //< has none, as the template's `is mapping` gives.
+    $out: = List<|Member|>(arena)
+    switch v
+    case .obj_val {}
+    default
+        return out
+    defer $b: = Str_builder()
+    v.dump(b@)
+    flat: = b.slice()
+    $at: Sz = 1
+    for at < flat.len - 1
+        key_end: = string_end(flat, at)
+        key: = json.parse(flat.sub(at, key_end - at), arena) catch panic("a dumped key parses")
+        $end: = key_end + 1 // past the `:`
+        $depth: Sz = 0
+        for end < flat.len - 1 && !(depth == 0 && flat[end] == ',')
+            c: = flat[end]
+            if c == '"'
+                end = string_end(flat, end)
+                continue
+            if c == '{' || c == '['
+                depth += 1
+            else if c == '}' || c == ']'
+                depth -= 1
+            end += 1
+        value: = json.parse(flat.sub(key_end + 1, end - key_end - 1), arena)
+            catch panic("a dumped value parses")
+        out
+            .push(Member::{ .name = key.val.as_str().unwrap_or(""), .value = value.val })
+        at = end + 1
+    return out
+
+priv fn string_end(s: U8[], at: Sz): Sz //< just past the JSON string that opens at `at`
+    $i: = at + 1
+    for i < s.len && s[i] != '"'
+        i += 2 if s[i] == '\\' else 1
+    return i + 1
+
+fn py_str(v: json.Value, out: Str_builder$@) //< a value as the template's `|string` writes it
+    //< Python's `str`: a text as it is, `True`, `False`, `None`, and a float's shortest form,
+    //< with an exponent below 1e-4 and from 1e16 up.
+    switch v
+    case .str_val(s)
+        out.s(s)
+    case .bool_val(b)
+        out.s("True" if b else "False")
+    case .null_val
+        out.s("None")
+    case .float_val(f)
+        py_float(f, out)
+    default
+        v.dump(out)
+
+priv fn py_float(f: F64, out: Str_builder$@) //< a float as Python's `repr` writes it
+    //< The shortest digits that read back are JSON's (`dump`); only where to put the point
+    //< differs. Python writes `1e-05` and `1e+16` where JSON writes `0.00001` and
+    //< `10000000000000000.0`.
+    defer $b: = Str_builder()
+    json.Value.float_val(f).dump(b@)
+    text: = b.slice()
+    mag: = -f if f < 0.0 else f
+    if mag == 0.0 || (mag >= 1.0e-4 && mag < 1.0e16) || text.equals("null")
+        out.s(text)
+        return
+    // The digits without the point and the sign, and the power of ten of the first one.
+    defer $digits: = Str_builder()
+    $exp: Sz = 0
+    $seen_point: = false
+    $e_at: = text.len
+    for i in Range.asc(text.len)
+        c: = text[i]
+        if c == 'e' || c == 'E'
+            e_at = i
+            break
+        if c == '.'
+            seen_point = true
+        else if c >= '0' && c <= '9'
+            if digits.len == 0 && c == '0'
+                if seen_point
+                    exp -= 1
+                continue
+            digits.c(c)
+            if !seen_point
+                exp += 1
+    if e_at < text.len
+        $k: = e_at + 1
+        $sign: Sz = 1
+        if text[k] == '-' || text[k] == '+'
+            sign = -1 if text[k] == '-' else 1
+            k += 1
+        $value: Sz = 0
+        for k < text.len
+            value = value * 10 + Sz::(text[k] - '0')
+            k += 1
+        exp += sign * value
+    $n: = digits.len
+    for n > 1 && digits.slice()[n - 1] == '0'
+        n -= 1
+    d: = digits.slice().sub(0, n)
+    if f < 0.0
+        out.c('-')
+    out.c(d[0])
+    if d.len > 1
+        out.c('.').s(d.sub_from(1))
+    power: = exp - 1
+    out.c('e').c('-' if power < 0 else '+')
+    abs: = -power if power < 0 else power
+    if abs < 10
+        out.c('0')
+    out.s("\{abs\}")
+
+priv fn py_strip(s: U8[]): U8[] //< `s.strip()`: Python's white space taken off both ends
+    $start: Sz = 0
+    for start < s.len
+        n: = space_len(s, start)
+        if n == 0
+            break
+        start += n
+    $end: = s.len
+    for end > start
+        $first: = end - 1
+        for first > start && (s[first] & 0xC0U8) == 0x80U8
+            first -= 1
+        if space_len(s, first) != end - first
+            break
+        end = first
+    return s.sub(start, end - start)
+
+priv fn space_len(s: U8[], at: Sz): Sz //< the bytes of the white space at `at`, or 0 for none
+    //< Python's `str.isspace`: ASCII's six and 0x1C to 0x1F, U+0085, U+00A0, U+1680, U+2000 to
+    //< U+200A, U+2028, U+2029, U+202F, U+205F and U+3000.
+    b: = s[at]
+    if b == ' ' || (b >= 0x09U8 && b <= 0x0DU8) || (b >= 0x1CU8 && b <= 0x1FU8)
+        return 1
+    if b == 0xC2U8 && at + 1 < s.len && (s[at + 1] == 0x85U8 || s[at + 1] == 0xA0U8)
+        return 2
+    if at + 2 >= s.len
+        return 0
+    c1: = s[at + 1]
+    c2: = s[at + 2]
+    if b == 0xE1U8 && c1 == 0x9AU8 && c2 == 0x80U8
+        return 3
+    if b == 0xE2U8 && c1 == 0x80U8 &&
+        (c2 <= 0x8AU8 || c2 == 0xA8U8 || c2 == 0xA9U8 || c2 == 0xAFU8)
+        return 3
+    if b == 0xE2U8 && c1 == 0x81U8 && c2 == 0x9FU8
+        return 3
+    if b == 0xE3U8 && c1 == 0x80U8 && c2 == 0x80U8
+        return 3
+    return 0

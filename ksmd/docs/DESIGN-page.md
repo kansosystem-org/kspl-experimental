@@ -259,6 +259,7 @@ Served by the local server, the page opens and saves files itself. The file life
 * **Text typed in a cell still open is unsaved at once, and its draft holds it.** The draft keeps the open cell's text beside the document's source, and brings it back as that cell's value. Taking the cell to hold a draft would close it under the person's typing.
 * **A draft brought back first holds aside the edits made since the document opened**, as a draft of their own. So neither version is lost.
 * **The open document's path, its file's digest and its saved text are one record in `ksmd/port/web/file.js`, changed in one place.** The editor, the menu bar, the window's title and the address follow from it. Each kept its own copy before, so a document that did not open could leave the address naming it. A reload then opened that file again in place of the edits.
+* **A change time in the same second as the ask cannot rule out a later write.** The server gives the time in whole seconds. A write of the same size later in that second leaves both answers alike. So until an ask comes in a later second, the page compares the file's bytes too. After its own save, the page compares them once, since another program can write between the save and the ask.
 * **Whether a draft is held is the answer of the last write, not whether the browser has storage.** A browser whose storage is full opens its store, but every write fails. A check of the store alone let the page open another document, and the edits went.
 * **Where no draft could be held, leaving a document with unsaved edits asks first**: save, discard, or cancel. Opening another document would otherwise lose the edits without a word. A change on disk then offers to load the file's version only as a discard.
 * **Leaving the page asks first while no draft holds the latest edits**: in the second after typing, and where no draft can be held. A draft written as the page goes may not land before the page closes.
@@ -276,4 +277,4 @@ Served by the local server, the page opens and saves files itself. The file life
 * Columns cannot be grouped; only rows can.
 * It never trims the undo history. A long session can use up the editor's memory, and the page then asks the person to save and open the document again.
 * The browser checks run in headless Chromium alone. Firefox, Safari, a real input method on a real keyboard and screen readers are not checked.
-* A person switching tabs in a desktop browser is not checked: the checks send the focus event themselves.
+* A person switching tabs in a desktop browser is not checked: the checks send the focus event themselves, and hide the page by script.

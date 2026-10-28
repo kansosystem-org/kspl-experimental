@@ -214,7 +214,7 @@ So the file would only repeat them, in two files if both the convention and GitH
 
 #### Where an unneeded `pub` is reported
 
-**[I0402] can be enabled for `ksmd/`, `ksos/` and `tools/` as well as `ksplc/` and `kssrv/`, but not for the units distributed and used elsewhere (`std/`, `ksdb/`, `ksai/`, `ksbind/`).** Their `pub` is a contract with outside users that references inside the repository cannot judge. So keeping to one entry point there is a matter of form, and adding more brings no diagnostic. Read the header of `all.kspl` before adding.
+**[I0402] can be enabled for `ksmd/`, `ksos/`, `ksagent/` and `tools/` as well as `ksplc/` and `kssrv/`, but not for the units distributed and used elsewhere (`std/`, `ksdb/`, `ksai/`, `ksbind/`).** Their `pub` is a contract with outside users that references inside the repository cannot judge. So keeping to one entry point there is a matter of form, and adding more brings no diagnostic. Read the header of `all.kspl` before adding.
 
 **The diagnostic is turned off in two files, each with its reason beside the switch.** In `tools/ai_assist/ksplc_oracle.kspl`, `compiles` is a `pub` that the tools' tests use (`tools/ai_assist/tests/ai_assist_test.kspl`), invisible from the entry point building the tool. In `ksplc/tests/prog/equiv.kspl`, `main`'s error type is seen from outside as the entry point's, so it cannot be narrowed. Closed to one file each, the switch leaves the unit's other `pub` count at zero.
 
@@ -440,7 +440,7 @@ sequenceDiagram
 
 ## Why one repository
 
-Kanso holds nine packages (`ksai` / `ksbind` / `ksdb` / `ksmd` / `ksos` / `kspeg` / `ksplc` / `kssrv` / `std`) in one repository. **This is not "not split yet" but the decision not to split.** In short, most changes touch more than one package. The compiler cannot be built without the standard library. So separate repositories would make ordinary work slower and easier to break.
+Kanso holds ten packages (`ksagent` / `ksai` / `ksbind` / `ksdb` / `ksmd` / `ksos` / `kspeg` / `ksplc` / `kssrv` / `std`) in one repository. **This is not "not split yet" but the decision not to split.** In short, most changes touch more than one package. The compiler cannot be built without the standard library. So separate repositories would make ordinary work slower and easier to break.
 
 ### What happens if it is split
 

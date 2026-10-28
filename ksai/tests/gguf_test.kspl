@@ -1,0 +1,337 @@
+//< The GGUF reader: every field of the tiny model, and broken files refused by name
+//< The tiny model comes from llama.cpp's own writer (`tools/ai_assist/make_qwen_fixtures.py`).
+//< The broken files are built here field by field, so each test breaks exactly one thing.
+import "ksai/gguf" { Gguf, Gguf_error, Gguf_type }
+import "ksai/quant" { Quant_format }
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/strfmt" as _strfmt
+import "std/verdict"
+
+embed "ksai/tests/qwen_data/tiny_qwen3.gguf" as tiny_file
+
+fn tiny(arena: Arena$@): Gguf //< the tiny model's file, parsed
+    return Gguf.parse(tiny_file, arena) catch panic("gguf: the tiny model is refused")
+
+fn said(e: Gguf_error, arena: Arena$@): U8[] //< an error as `<variant> <what it names>`
+    switch e
+    case .read_failed
+        return "read_failed"
+    case .not_gguf
+        return "not_gguf"
+    case .bad_version(v)
+        return arena.text().s("bad_version \{v\}").take()
+    case .truncated(what)
+        return arena.text().s("truncated ").s(what).take()
+    case .too_many(what)
+        return arena.text().s("too_many ").s(what).take()
+    case .bad_value_type(key)
+        return arena.text().s("bad_value_type ").s(key).take()
+    case .duplicate(name)
+        return arena.text().s("duplicate ").s(name).take()
+    case .bad_alignment
+        return "bad_alignment"
+    case .bad_tensor(name)
+        return arena.text().s("bad_tensor ").s(name).take()
+    case .unsupported_format(name)
+        return arena.text().s("unsupported_format ").s(name).take()
+    case .bad_offset(name)
+        return arena.text().s("bad_offset ").s(name).take()
+    case .missing(name)
+        return arena.text().s("missing ").s(name).take()
+    case .wrong_type(key)
+        return arena.text().s("wrong_type ").s(key).take()
+
+priv fn refusal(file: U8[], arena: Arena$@): U8[] //< why a file is refused; empty where it is read
+    _g: = Gguf.parse(file, arena) catch e
+        return said(e, arena)
+    return ""
+
+priv fn expect(got: U8[], want: U8[], what: U8[], arena: Arena$@) //< stops unless they are equal
+    if !got.equals(want)
+        panic(U8$[]::arena.text().s(what).s(": got \"").s(got).s("\", want \"").s(want).s("\"")
+            .take())
+
+fn test_gguf_reads_every_value_type(arena: Arena$@) //<
+    //< One key of each GGUF type reads back as written, and another type is refused by name
+    verdict.start("[GGUF] every value type of the tiny model reads back as written")
+    g: = tiny(arena)
+    assert(g.version == 3 && g.alignment == 64 && g.data_offset % 64 == 0,
+        "gguf: the version, the alignment or the data's offset")
+    kinds: Gguf_type[12] = ::{ .u8, .i8, .u16, .i16, .u32, .i32, .f32, .bool, .string, .u64, .i64,
+        .f64 }
+    names: U8[][12] = ::{ "u8", "i8", "u16", "i16", "u32", "i32", "f32", "bool", "string", "u64",
+        "i64", "f64" }
+    for i in Range.asc(12)
+        key: = arena.text().s("ksai.check.").s(names[i]).take()
+        kind: = g.kind(key) catch .array
+        assert(kind == kinds[i], "gguf: a key's type")
+    ints: I64[8] = ::{ 200I64, -100I64, 60000I64, -30000I64, 4000000000I64, -2000000000I64,
+        1099511627779I64, -1099511627781I64 }
+    int_keys: U8[][8] = ::{ "u8", "i8", "u16", "i16", "u32", "i32", "u64", "i64" }
+    for i in Range.asc(8)
+        key: = arena.text().s("ksai.check.").s(int_keys[i]).take()
+        v: = g.integer(key) catch 0I64
+        assert(v == ints[i], "gguf: an integer reads as written")
+    f: = g.float("ksai.check.f32") catch 0.0
+    d: = g.float("ksai.check.f64") catch 0.0
+    t: = g.flag("ksai.check.bool") catch false
+    assert(f == 1.5 && d == 3.25e-7 && t, "gguf: an F32, an F64 and a bool")
+    expect(g.text("ksai.check.string") catch "", "かんそ ✓", "a string", arena)
+    strings: = g.texts("ksai.check.strings", arena) catch panic("gguf: the strings")
+    assert(strings.len == 4, "gguf: an array of strings has its length")
+    want: U8[][4] = ::{ "", "a", "ü", "かんそ" }
+    for i in Range.asc(4)
+        expect(strings.get(i), want[i], "an array's string", arena)
+    expect(g.text("general.architecture") catch "", "qwen3", "the architecture", arena)
+    _n: = g.integer("ksai.check.f32") catch e
+        expect(said(e, arena), "wrong_type ksai.check.f32", "an F32 read as an integer", arena)
+        fallback 0I64
+    _s: = g.texts("ksai.check.tokens", arena) catch e
+        expect(said(e, arena), "wrong_type ksai.check.tokens", "I32s read as strings", arena)
+        fallback List<|U8[]|>(arena)
+    _m: = g.flag("no.such.key") catch e
+        expect(said(e, arena), "missing no.such.key", "a key that is absent", arena)
+        fallback false
+    verdict.pass("12 scalar types, 3 array types, and the refusals of another type")
+
+fn test_gguf_reads_tensor_infos(arena: Arena$@) //<
+    //< The tensors' names, shapes, formats and places, each inside the data section
+    verdict.start("[GGUF] the tiny model's tensors have their shapes, formats and places")
+    g: = tiny(arena)
+    all: = g.tensors()
+    assert(all.len == 24, "gguf: the tiny model holds 24 tensors")
+    $end: Sz = 0
+    for t in all
+        assert(t.offset % g.alignment == 0 && t.offset >= end, "gguf: tensors lie in order")
+        assert(t.data.ptr == tiny_file.ptr + g.data_offset + t.offset,
+            "gguf: a tensor's bytes are the file's own, not a copy")
+        end = t.offset + t.data.len
+    assert(g.data_offset + end == tiny_file.len, "gguf: the last tensor ends the file")
+    em: = g.tensor("token_embd.weight") catch panic("gguf: the embedding")
+    assert(em.n_dims == 2 && em.dims[0] == 32 && em.dims[1] == 280 &&
+        em.format == Quant_format.q8_0, "gguf: the embedding is Q8_0, 280 rows of 32")
+    d: = g.tensor("blk.1.ffn_down.weight") catch panic("gguf: a Q4_K weight")
+    assert(d.dims[0] == 256 && d.rows() == 32 && d.format == Quant_format.q4_k &&
+        d.data.len == 32 * 144, "gguf: ffn_down is Q4_K, 32 rows of 256")
+    v: = g.tensor("blk.0.attn_v.weight") catch panic("gguf: an F32 weight")
+    assert(v.format == Quant_format.f32 && v.type_id == 0 && v.data.len == 32 * 32 * 4,
+        "gguf: blk.0.attn_v is F32")
+    n: = g.tensor("output_norm.weight") catch panic("gguf: a vector")
+    assert(n.n_dims == 1 && n.dims[0] == 32 && n.rows() == 1, "gguf: a vector has one row")
+    assert(!g.has_tensor("output.weight"), "gguf: the tiny model's output is its embedding")
+    _x: = g.tensor("output.weight") catch e
+        expect(said(e, arena), "missing output.weight", "a tensor that is absent", arena)
+        fallback n
+    verdict.pass("24 tensors, in order and on the alignment, borrowed from the file")
+
+// ==========================================
+// Broken files, built here. `Spec.good()` is a valid file of two keys, an array and two
+// tensors; each test changes one field of it.
+// ==========================================
+
+priv struct Spec //< every field of the small file that a test can change
+    magic: U32
+    version: U32
+    n_tensors: U64 //< the count the header claims
+    n_kvs: U64
+    count_type: U32 //< the type `x.count` claims; its value is written to fit 4 or 8 bytes
+    count_value: U64
+    list_key: U8[] //< the array's key; `x.count` makes a second key of that name
+    list_elem: U32 //< the type of the array's elements
+    align: U32 //< `general.alignment`, or 0 to leave the key out
+    align_type: U32
+    a_dims: Sz //< how many dimensions tensor `a` claims
+    a_rows: U64
+    a_type: U32
+    b_name: U8[]
+    b_len: U64 //< tensor `b`'s numbers, Q8_0
+    b_offset: U64
+
+impl Spec
+    priv fn good(): Spec //< the valid file
+        return Spec::{ .magic = 0x46554747, .version = 3, .n_tensors = 2, .n_kvs = 4,
+            .count_type = 4, .count_value = 7, .list_key = "x.list", .list_elem = 5, .align = 0,
+            .align_type = 4, .a_dims = 2, .a_rows = 2, .a_type = 0, .b_name = "b", .b_len = 64,
+            .b_offset = 256 }
+
+priv fn put32(b: Str_builder$@, v: U32) //< four bytes, least significant first
+    for i in Range.asc(4)
+        b.c(U8::((v >> U32::(i * 8)) & 0xFF))
+
+priv fn put64(b: Str_builder$@, v: U64) //< eight bytes, least significant first
+    for i in Range.asc(8)
+        b.c(U8::((v >> U64::(i * 8)) & 0xFF))
+
+priv fn put_str(b: Str_builder$@, s: U8[]) //< a string: its length, then its bytes
+    put64(b, U64::s.len)
+    b.s(s)
+
+priv fn built(s: Spec, arena: Arena$@): U8[] //< the file a spec describes
+    defer $b: = Str_builder()
+    put32(b@, s.magic)
+    put32(b@, s.version)
+    put64(b@, s.n_tensors)
+    put64(b@, s.n_kvs)
+    put_str(b@, "general.architecture")
+    put32(b@, 8)
+    put_str(b@, "test")
+    put_str(b@, "x.count")
+    put32(b@, s.count_type)
+    if s.count_type == 10 || s.count_type == 11
+        put64(b@, s.count_value)
+    else
+        put32(b@, U32::s.count_value)
+    put_str(b@, s.list_key)
+    put32(b@, 9)
+    put32(b@, s.list_elem)
+    put64(b@, 3)
+    for v in Range.asc(3)
+        put32(b@, U32::(v + 1))
+    $align: Sz = 32
+    if s.align != 0
+        put_str(b@, "general.alignment")
+        put32(b@, s.align_type)
+        if s.align_type == 10
+            put64(b@, s.align)
+        else
+            put32(b@, s.align)
+        align = Sz::s.align
+    else
+        put_str(b@, "x.none")
+        put32(b@, 7)
+        b.c(1)
+    put_str(b@, "a")
+    put32(b@, U32::s.a_dims)
+    put64(b@, 32)
+    for _d in Range(1, s.a_dims, 1)
+        put64(b@, s.a_rows)
+    put32(b@, s.a_type)
+    put64(b@, 0)
+    put_str(b@, s.b_name)
+    put32(b@, 1)
+    put64(b@, s.b_len)
+    put32(b@, 8)
+    put64(b@, s.b_offset)
+    for b.len % align != 0
+        b.c(0)
+    // `a` as 2 rows of 32 F32 numbers, then `b`'s two Q8_0 blocks at 256.
+    for i in Range.asc(256)
+        b.c(U8::i)
+    for i in Range.asc(68)
+        b.c(U8::(i * 7))
+    return arena.dup_str(b.slice())
+
+fn test_gguf_reads_a_built_file(arena: Arena$@) //<
+    //< The valid built file reads: its keys, its array, and both tensors' bytes
+    verdict.start("[GGUF] a file built here reads, with the default alignment of 32")
+    file: = built(Spec.good(), arena)
+    g: = Gguf.parse(file, arena) catch panic("gguf: the built file is refused")
+    assert(g.alignment == 32 && g.version == 3, "gguf: the default alignment")
+    count: = g.integer("x.count") catch 0I64
+    assert(count == 7I64, "gguf: x.count")
+    list: = g.ints("x.list", arena) catch panic("gguf: x.list")
+    assert(list.len == 3 && list.get(0) == 1 && list.get(2) == 3, "gguf: x.list")
+    a: = g.tensor("a") catch panic("gguf: a")
+    b: = g.tensor("b") catch panic("gguf: b")
+    assert(a.data.len == 256 && a.data[255] == 255 && b.data.len == 68 && b.offset == 256,
+        "gguf: the tensors' bytes")
+    m: = b.matrix() catch panic("gguf: b as a matrix")
+    assert(m.rows() == 1 && m.cols() == 64, "gguf: b is one row of 64")
+    $v2: = Spec.good()
+    v2.version = 2
+    expect(refusal(built(v2, arena), arena), "", "version 2 has the same layout", arena)
+    verdict.pass("keys, an I32 array and two tensors read back")
+
+fn test_gguf_refuses_broken_headers(arena: Arena$@) //<
+    //< Each broken field is refused, and the refusal names it
+    verdict.start("[GGUF] a broken header is refused by name")
+    good: = Spec.good()
+    $s: = good
+    s.magic = 0x46554748
+    expect(refusal(built(s, arena), arena), "not_gguf", "another magic", arena)
+    s = good
+    s.version = 1
+    expect(refusal(built(s, arena), arena), "bad_version 1", "version 1", arena)
+    s = good
+    s.n_kvs = 1U64 << 40
+    expect(refusal(built(s, arena), arena), "too_many keys", "a huge key count", arena)
+    s = good
+    s.n_tensors = 1U64 << 40
+    expect(refusal(built(s, arena), arena), "too_many tensors", "a huge tensor count", arena)
+    s = good
+    s.count_type = 13
+    expect(refusal(built(s, arena), arena), "bad_value_type x.count", "type 13", arena)
+    s = good
+    s.list_elem = 9
+    expect(refusal(built(s, arena), arena), "bad_value_type x.list", "an array of arrays", arena)
+    s = good
+    s.list_key = "x.count"
+    expect(refusal(built(s, arena), arena), "duplicate x.count", "two keys of a name", arena)
+    s = good
+    s.b_name = "a"
+    expect(refusal(built(s, arena), arena), "duplicate a", "two tensors of a name", arena)
+    s = good
+    s.align = 48
+    expect(refusal(built(s, arena), arena), "bad_alignment", "an alignment of 48", arena)
+    s.align = 64
+    s.align_type = 10
+    expect(refusal(built(s, arena), arena), "bad_alignment", "an alignment as a U64", arena)
+    s.align_type = 4
+    expect(refusal(built(s, arena), arena), "", "an alignment of 64", arena)
+    s = good
+    s.count_type = 10
+    s.count_value = 1U64 << 63
+    g: = Gguf.parse(built(s, arena), arena) catch panic("gguf: a U64 key")
+    _n: = g.integer("x.count") catch e
+        expect(said(e, arena), "wrong_type x.count", "a U64 past I64", arena)
+        fallback 0I64
+    verdict.pass("each broken field names itself")
+
+fn test_gguf_refuses_broken_tensors(arena: Arena$@) //<
+    //< Shapes, formats and offsets that do not fit the file are refused, naming the tensor
+    verdict.start("[GGUF] a broken tensor info is refused, naming the tensor")
+    good: = Spec.good()
+    $s: = good
+    s.a_type = 2
+    expect(refusal(built(s, arena), arena), "unsupported_format a", "Q4_0", arena)
+    s = good
+    s.a_dims = 5
+    expect(refusal(built(s, arena), arena), "bad_tensor a", "five dimensions", arena)
+    s = good
+    s.a_rows = 1U64 << 40
+    expect(refusal(built(s, arena), arena), "bad_tensor a", "a huge dimension", arena)
+    s = good
+    s.b_len = 30
+    expect(refusal(built(s, arena), arena), "bad_tensor b", "no whole Q8_0 block", arena)
+    s = good
+    s.b_len = 96
+    expect(refusal(built(s, arena), arena), "bad_offset b", "data past the end", arena)
+    offsets: U64[4] = ::{ 224, 288, 260, 1U64 << 40 }
+    for off in offsets
+        s = good
+        s.b_offset = off
+        expect(refusal(built(s, arena), arena), "bad_offset b",
+            "an overlap, a gap, a misaligned start or one past the file", arena)
+    verdict.pass("formats, dimensions, block sizes and offsets are each refused")
+
+fn test_gguf_refuses_every_short_file(arena: Arena$@) //<
+    //< A file cut anywhere is refused, never read with parts missing
+    verdict.start("[GGUF] a file cut short anywhere is refused")
+    file: = built(Spec.good(), arena)
+    for n in Range.asc(file.len)
+        why: = refusal(file.sub(0, n), arena)
+        assert(why.len > 0, "gguf: a file cut short is read")
+    g: = tiny(arena)
+    $cuts: Sz = 0
+    // Every cut in the header, and one in 4093 bytes of the data.
+    $n: Sz = 0
+    for n < tiny_file.len
+        assert(refusal(tiny_file.sub(0, n), arena).len > 0, "gguf: the tiny model cut short")
+        cuts += 1
+        n += 1 if n < g.data_offset else 4093
+    verdict
+        .pass(arena.text().s("\{file.len\} cuts of the built file, \{cuts\} of the tiny model")
+        .take())

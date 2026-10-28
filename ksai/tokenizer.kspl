@@ -1,7 +1,9 @@
 //< A byte-level BPE tokenizer: text to a token-ID sequence and back
-//< `encode` and `decode` are the conversions, and the pre-trained `vocab.txt` / `merges.txt` are
-//< loaded from here. **Training the tokenizer is not here**: a separate tool produces the BPE
-//< merge rules, and this file only loads and uses them.
+//< `encode` and `decode` are the conversions. A vocabulary comes from `train_bpe.kspl`'s two files
+//< (`load`, `load_text`) or from a GGUF file's lists (`load_lists`). **Training the tokenizer is
+//< not here**: a separate tool produces the BPE merge rules, and this file only loads and uses
+//< them. Text is split into chunks by Qwen's rules (`pretokenizer.kspl`) before merging.
+import "ksai/pretokenizer" + { Split_rule }
 import "std/chars"
 import "std/ds" + { List, Map }
 import "std/io"
@@ -36,7 +38,8 @@ priv fn bare_line(line: U8[]): U8[] //< a line without the `\r` a CRLF file leav
 pub enum Load_error //< why `Tokenizer.load` refused a vocabulary or its merges
     io(err: io.Io_error) //< a file could not be read
     broken(path: U8[], line: Sz) //< a line is not one `train_bpe.kspl` writes; the file and the
-        //< line's number from 1 (`load_text` names `vocabulary` or `merges` for the file).
+        //< line's number from 1 (`load_text` names `vocabulary` or `merges` for the file, and
+        //< `load_lists` names `tokens`, `types` or `merges` with the entry's number from 1).
         //< **Refused, not skipped**: a word or a rule dropped in silence makes every text it
         //< touches encode to other IDs, which nothing downstream can notice.
 
@@ -48,11 +51,11 @@ impl Bpe_key
         return Bpe_key::{ .val = ((U64::a) << 32) | (U64::b) }
 
 impl Bpe_key: ds.Hashable<|Bpe_key|> //< so a pair of token IDs can stand as a map's key
-    //< The two hashes below skip `ds.fmix32`. Token IDs are consecutive numbers whose low bits are
-    //< already spread. So mixing would only add an operation to each BPE merge lookup.
+    //< **Both IDs are mixed** (`ds.fmix32`). An XOR of the two stays below the vocabulary's size
+    //< and gives (a, b) and (b, a) one value, so Qwen's 151,387 rules crowd into long probe runs.
     fn hash(r: Self@): U32
         v: = r.val
-        return U32::(v ^ (v >> 32))
+        return ds.fmix32(U32::(v >> 32) * 0x9E3779B1U32 + U32::(v & 0xFFFFFFFFU64))
     fn equals(r: Self@, other: Bpe_key): Bool
         return r.val == other.val
 
@@ -65,48 +68,58 @@ impl Token_key: ds.Hashable<|Token_key|> //< so a token ID can stand as a map's 
     fn equals(r: Self$@, other: Token_key): Bool
         return r.val == other.val
 
-priv fn char_class(c: U8): I32 //<
-    //< The character classes used in the GPT-2/Qwen family's pre-splitting (the pretokenizer)
-    //< ASCII-based (0=space, 1=letter, 2=digit, 3=other), since KSPL's code and prompts are mostly
-    //< ASCII; a non-ASCII byte is "other". "_" is a Punctuation_Connector, not a letter, so snake
-    //< case's "_" becomes a chunk of its own, as in a real GPT-2-family tokenizer.
-    if c.is_space()
-        return 0
-    // Not `is_alpha` in str, which counts `_` among the letters (the Punctuation_Connector above).
-    if c.is_lower() || c.is_upper()
-        return 1
-    if c.is_digit()
-        return 2
-    return 3
+pub const TOKEN_NORMAL: I32 = 1 //< a GGUF token type: a word of the BPE vocabulary
+pub const TOKEN_USER_DEFINED: I32 = 4 //< a GGUF token type: a marker matched in any text
+    //< Such as Qwen's `<think>` and `<tool_call>`. **Matched even inside a message**, as llama.cpp
+    //< and Hugging Face's tokenizer do: the chat template writes them as text, and the model was
+    //< trained on their single IDs. Every other type (a control token such as `<|im_end|>`) is
+    //< never matched in text: a caller puts its ID in the list itself.
 
-priv fn chunk_end(text: U8[], start: Sz): Sz //<
-    //< Where the chunk starting at `start` ends: the core of GPT-2's regular-expression splitting
-    //< A reduced ASCII version. In a run of spaces, the last one is held back to join the next
-    //< chunk as its leading space (" foo" -> [" ", " foo"]). Otherwise a run of letters, of digits,
-    //< or of other bytes is one chunk. English contractions ("'s") get no special handling (it
-    //< matters little for code completion).
-    n: = text.len
-    $body: = start
-    if (text.ptr + start).is_space()
-        $j: = start
-        for j < n && (text.ptr + j).is_space()
-            j += 1
-        if j == n // trailing spaces become one chunk as they are
-            return n
-        if j - start > 1 // the run but its last space
-            return j - 1
-        body = start + 1 // the one space leads the chunk after it
-    cls: = char_class((text.ptr + body)$)
-    $j: = body
-    for j < n && char_class((text.ptr + j)$) == cls
-        j += 1
-    return j
+priv struct Marker //< a marker `encode` replaces by its ID wherever its text appears
+    text: U8[]
+    id: I32
+
+priv const GPT2_SHIFTED: Sz = 68 //< how many bytes GPT-2's mapping writes as U+0100 and above
+
+priv fn gpt2_printable(b: I32): Bool //< whether GPT-2's mapping writes the byte as itself
+    return (b >= 0x21 && b <= 0x7E) || (b >= 0xA1 && b <= 0xAC) || (b >= 0xAE && b <= 0xFF)
+
+priv fn gpt2_shifted(): U8[GPT2_SHIFTED] //< the bytes GPT-2's mapping writes as U+0100, U+0101..
+    //< In ascending order: the bytes that are not printable, which the mapping numbers from 256.
+    $out: U8[GPT2_SHIFTED] = ::{}
+    $n: Sz = 0
+    for b in Range.asc(256)
+        if !gpt2_printable(I32::b)
+            out[n] = U8::b
+            n += 1
+    return out
+
+priv fn gpt2_bytes( //< appends the bytes a GGUF word's text stands for
+    //< A byte-level vocabulary stores each byte as one printable character, GPT-2's mapping, so
+    //< that a word is valid text. False when a character is outside the mapping.
+    text: U8[],
+    shifted: U8[],
+    out: Str_builder$@,
+): Bool
+    $at: Sz = 0
+    for at < text.len
+        c: = pretokenizer.read_cpt(text, at)
+        if c.cp >= 0 && c.cp < 256 && gpt2_printable(c.cp)
+            out.c(U8::c.cp)
+        else if c.cp >= 256 && c.cp < 256 + I32::GPT2_SHIFTED
+            out.c(shifted[c.cp - 256])
+        else
+            return false
+        at += c.len
+    return true
 
 pub struct Tokenizer //< the vocabulary and merge rules that turn text into token IDs
     pub vocab: Map<|U8[], I32|>$@ //< each word's byte sequence, mapped to its ID
     priv vocab_rev: Map<|Token_key, U8[]|>$@ //< for decode: an ID -> its byte sequence
+    priv byte_ids: I32[256] //< each one-byte word's ID, where merging starts; `UNK_ID` if none
     priv merges: Map<|Bpe_key, I32|>$@
     priv merge_rank: Map<|Bpe_key, I32|>$@ //< a pair -> its rank (0 is first); true BPE needs it
+    priv markers: List<|Marker|>$@ //< the markers `encode` matches, longest first, then by ID
     pub next_rank: I32 //< the rank the next `add_merge` gets; the call order is the rank
     pub arena: Arena$@ //< the arena for every word, every rule and every cached chunk
         //< **Nothing a call returns is put here** (`encode` and `decode` take the caller's arena),
@@ -116,20 +129,32 @@ pub struct Tokenizer //< the vocabulary and merge rules that turn text into toke
         //< keeps the same cache. **It holds only while nothing is added** (`edits`).
     priv edits: Sz //< how many times a word or a rule was added; any change restarts the cache
     priv cache_edits: Sz //< `edits` when the cache was started
+    priv split: Split_rule //< the rule that splits a text into chunks; Qwen2's unless set
 
 priv const CHUNK_CACHE_CAP: Sz = 65536 //< how many chunks the cache holds at most
 
 impl Tokenizer
-    pub fn new( //< an empty tokenizer, to be filled by `load` or by `add_token` / `add_merge`
-        arena: Arena$@, //< the arena for the four maps and everything put into them
+    pub fn new( //< an empty tokenizer, to be filled by a `load` or by `add_token` / `add_merge`
+        arena: Arena$@, //< the arena for its maps and lists and everything put into them
     ): Tokenizer
         vocab: = arena.create(Map<|U8[], I32|>(arena))
         vocab_rev: = arena.create(Map<|Token_key, U8[]|>(arena))
         merges: = arena.create(Map<|Bpe_key, I32|>(arena))
         merge_rank: = arena.create(Map<|Bpe_key, I32|>(arena))
         return Tokenizer::{ .vocab = vocab, .vocab_rev = vocab_rev, .merges = merges,
-            .merge_rank = merge_rank, .next_rank = 0, .arena = arena,
-            .chunk_cache = arena.create(Map<|U8[], I32$[]|>(arena)), .edits = 0, .cache_edits = 0 }
+            .merge_rank = merge_rank, .markers = List<|Marker|>.create(arena), .next_rank = 0,
+            .arena = arena,
+            .chunk_cache = arena.create(Map<|U8[], I32$[]|>(arena)), .edits = 0, .cache_edits = 0,
+            .split = .qwen2 }
+
+    pub fn set_split( //< the rule that splits a text into chunks before merging
+        //< It must be the rule the vocabulary was made with: GGUF's `tokenizer.ggml.pre` names it
+        //< (`Split_rule.named`). Qwen2's rule is taken until this is called.
+        r: Self$@,
+        rule: Split_rule,
+    )
+        r.split = rule
+        r.edits += 1
 
     pub fn add_token( //< adds one word to the vocabulary, looked up in both directions from then on
         r: Self$@,
@@ -139,20 +164,33 @@ impl Tokenizer
         perm_token: = r.arena.dup_str(token)
         r.vocab.set(perm_token, id)
         r.vocab_rev.set(Token_key::{ .val = id }, perm_token)
+        if token.len == 1
+            r.byte_ids[token[0]] = id
         r.edits += 1
 
     pub fn add_merge( //< adds one merge rule: this pair, when adjacent, becomes that one word
         //< Caution: **The call order is the rank**, so the rules must arrive in priority order
-        //< (`load()` and `train_bpe.kspl`'s merges.txt already do).
+        //< (`load()` and `train_bpe.kspl`'s merges.txt already do). A pair given again keeps its
+        //< first rank, as llama.cpp keeps it.
         r: Self$@,
         id1: I32, //< the left ID
         id2: I32, //< the right ID
         merged_id: I32, //< the ID the two merge into
     )
         key: = Bpe_key.of(id1, id2)
-        r.merges.set(key, merged_id)
-        r.merge_rank.set(key, r.next_rank)
+        if r.merge_rank.get(key).is_none()
+            r.merges.set(key, merged_id)
+            r.merge_rank.set(key, r.next_rank)
         r.next_rank += 1
+        r.edits += 1
+
+    priv fn add_marker(r: Self$@, text: U8[], id: I32) //< a marker `encode` matches in any text
+        //< Kept longest first, so a marker inside a longer one never splits it; equal lengths go
+        //< by ID. That is llama.cpp's order.
+        $at: Sz = 0
+        for at < r.markers.len && r.markers[at].text.len >= text.len
+            at += 1
+        r.markers.insert(at, Marker::{ .text = r.arena.dup_str(text), .id = id })
         r.edits += 1
 
     // One entry per line: vocab.txt "<id>\t<hex>" (the word's bytes; id 0's <unk> is empty) and
@@ -181,6 +219,56 @@ impl Tokenizer
     ): Void!Load_error //< the first line that is not an entry
         r.add_vocab(vocab, "vocabulary")!
         r.add_merges(merges, "merges")!
+
+    pub fn load_lists( //< loads a byte-level vocabulary given as a GGUF file holds it
+        //< The three lists are `tokenizer.ggml.tokens`, `.token_type` and `.merges`, in a GGUF
+        //< file's order; nothing is read from a file. A normal word is written in GPT-2's mapping
+        //< of bytes to characters, and any other is its text as it stands.
+        r: Self$@,
+        tokens: U8[][], //< each word's text; its position is its ID
+        types: I32[], //< each word's GGUF token type, `TOKEN_NORMAL` and the others
+        merges: U8[][], //< the rules in priority order, each two words' texts and a space between
+    ): Void!Load_error //< the first entry that cannot be taken, named `tokens`, `types` or `merges`
+        if types.len != tokens.len
+            throw .broken("types",
+                (types.len if types.len < tokens.len else tokens.len) + 1)
+        shifted: = gpt2_shifted()
+        defer $b: = Str_builder()
+        for i in Range.asc(tokens.len)
+            b.clear()
+            if types[i] == TOKEN_NORMAL
+                if !gpt2_bytes(tokens[i], U8[]::shifted, b@)
+                    throw .broken("tokens", i + 1)
+            else
+                b.s(tokens[i])
+            // A second word with the same bytes would make the first unreachable; llama.cpp
+            // refuses such a vocabulary too.
+            if r.vocab.get(b.slice()).is_some()
+                throw .broken("tokens", i + 1)
+            r.add_token(b.slice(), I32::i)
+            if types[i] == TOKEN_USER_DEFINED
+                if tokens[i].len == 0
+                    throw .broken("tokens", i + 1)
+                r.add_marker(tokens[i], I32::i)
+        defer $left: = Str_builder()
+        defer $right: = Str_builder()
+        for i in Range.asc(merges.len)
+            rule: = merges[i]
+            // Split at the first space after the first byte, as llama.cpp does.
+            space: = rule.sub_from(1).find_char(' ').unwrap_or(-1)
+            left.clear()
+            right.clear()
+            if space < 0 ||
+                !gpt2_bytes(rule.sub(0, space + 1), U8[]::shifted, left@) ||
+                !gpt2_bytes(rule.sub_from(space + 2), U8[]::shifted, right@)
+                throw .broken("merges", i + 1)
+            id1: = r.vocab.get(left.slice())
+            id2: = r.vocab.get(right.slice())
+            left.s(right.slice())
+            merged: = r.vocab.get(left.slice())
+            if id1.is_none() || id2.is_none() || merged.is_none()
+                throw .broken("merges", i + 1)
+            r.add_merge(id1.unwrap_or(0), id2.unwrap_or(0), merged.unwrap_or(0))
 
     priv fn add_vocab(r: Self$@, text: U8[], name: U8[]): Void!Load_error //< vocab.txt's words
         defer $lines: = text.lines(null)
@@ -221,19 +309,38 @@ impl Tokenizer
             throw .broken(name, i + 1)
 
     pub fn encode( //< the token IDs for a text
-        //< Splits into chunks (`chunk_end`) and within each chunk merges the pair of the smallest
-        //< rank every time; no merge crosses a chunk, as during training.
+        //< Each user-defined marker's text becomes its ID first. The rest is split into chunks
+        //< (`pretokenizer.chunk_end`), and within each chunk the pair of the smallest rank merges
+        //< every time; no merge crosses a chunk, as during training.
         r: Self$@,
         text: U8[], //< the text; any byte sequence works, a byte the vocabulary lacks as `UNK_ID`
         arena: Arena$@, //< the arena the list of IDs is allocated from; nothing else is
     ): List<|I32|>$@
         tokens: = List<|I32|>.create(arena)
-        $i: Sz = 0
-        for i < text.len
-            end: = chunk_end(text, i)
-            r.bpe_chunk(text.sub(i, end - i), tokens)
-            i = end
+        r.encode_part(text, 0, tokens)
         return tokens
+
+    priv fn encode_part(r: Self$@, text: U8[], marker: Sz, out: List<|I32|>$@) //<
+        //< Splits the text at each `markers[marker]`, and the parts between at the next markers
+        //< The order (longest first) is llama.cpp's, so where two markers overlap the same one
+        //< wins.
+        if marker == r.markers.len
+            $i: Sz = 0
+            for i < text.len
+                end: = pretokenizer.chunk_end(text, i, r.split)
+                r.bpe_chunk(text.sub(i, end - i), out)
+                i = end
+            return
+        mark: = r.markers[marker]
+        $rest: = text
+        for
+            at: = rest.find_str(mark.text).unwrap_or(-1)
+            if at < 0
+                r.encode_part(rest, marker + 1, out)
+                return
+            r.encode_part(rest.sub(0, at), marker + 1, out)
+            out.push(mark.id)
+            rest = rest.sub_from(at + mark.text.len)
 
     priv fn bpe_chunk(r: Self$@, chunk: U8[], out: List<|I32|>$@) //<
         //< Merges one pre-split chunk by BPE, smallest rank first, and appends its token IDs to out
@@ -250,9 +357,8 @@ impl Tokenizer
                 out.push(id)
             return
         first: = out.len
-        for i in Range.asc(chunk.len)
-            b: = U8[]::{ .ptr = chunk.ptr + i, .len = 1 }
-            out.push(r.vocab.get(b).unwrap_or(UNK_ID))
+        for b in chunk
+            out.push(r.byte_ids[b])
         for
             if out.len - first < 2
                 break

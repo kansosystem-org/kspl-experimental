@@ -1,6 +1,6 @@
 //< Feeds broken input to ksai's readers (`make test-fuzz`)
-//< **ksai reads two kinds of outside input**: a weights file and a vocabulary. `get_tensor`
-//< returns a view onto raw bytes, so **no error shows until an element is read**. The reader
+//< **ksai reads three kinds of outside input**: a weights file, a model file and a vocabulary.
+//< A tensor is a view onto raw bytes, so **no error shows until an element is read**. The reader
 //< ([`read_prog.kspl`](read_prog.kspl)) sums every element. The Makefile builds it with the
 //< address sanitizer where the C compiler has its runtime, and says so (`fuzz.Sanitized`). So an
 //< out-of-range read stops where it happens.
@@ -30,13 +30,17 @@ priv const REACH_FLOOR_DIV: Sz = 20 //<
     //< `docs/DESIGN-principles.md`). **Do not raise it**: it only shows that fuzzing works; the
     //< proportion itself means nothing.
 
-priv const KINDS: fuzz.Input_kind[2] = ::{ //<
+embed "ksai/tests/qwen_data/tiny_qwen3.gguf" as tiny_model
+embed "ksai/tests/qwen_data/tiny_qwen35.gguf" as tiny_model35
+
+priv const KINDS: fuzz.Input_kind[3] = ::{ //<
     //< The kinds of input that are fuzzed, and their files' endings
     //< **This is the canonical source**: both the names the program under test accepts and the code
     //< below that builds the seeds follow it.
     //< Caution: **Keep the tensors' names in step with the reader too** (`tensor_names` in
     //< [`read_prog.kspl`](read_prog.kspl)).
     fuzz.Input_kind::{ .name = "safetensors", .ext = ".safetensors" },
+    fuzz.Input_kind::{ .name = "gguf", .ext = ".gguf" },
     fuzz.Input_kind::{ .name = "vocab", .ext = ".txt" },
 }
 
@@ -73,6 +77,14 @@ priv fn collect_seeds(arena: Arena$@): List<|fuzz.Sample|>
     out
         .push(fuzz.Sample::{ .kind = "safetensors", .name = "built weights",
         .data = built_weights(arena), .built = true })
+    // The tiny models are seeds as they are committed: llama.cpp's writer made them, which has no
+    // counterpart here. **They must be read**, as their tests read them, so they count as built.
+    out
+        .push(fuzz.Sample::{ .kind = "gguf", .name = "the tiny Qwen3 model", .data = tiny_model,
+        .built = true })
+    out
+        .push(fuzz.Sample::{ .kind = "gguf", .name = "the tiny Qwen3.5 model", .data = tiny_model35,
+        .built = true })
     out
         .push(fuzz.Sample::{ .kind = "vocab", .name = "built vocabulary",
         .data = built_vocab(arena), .built = true })

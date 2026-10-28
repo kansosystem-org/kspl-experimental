@@ -1,0 +1,93 @@
+//< Times a quantized weight's product with one input row and with 64, on one thread and every CPU
+//< Without arguments it times a 4096 × 4096 Q4_K matrix of random blocks, the shape of one 7B to
+//< 9B model weight. One input row is a generated token's product; 64 are a piece of a prompt. Each
+//< argument is a reference file of a real tensor (`tools/ai_assist/gguf_quant_check.py`): it checks
+//< that ksai decodes the tensor to the reference's bits, and times the larger ones. How to run it
+//< is in `ksai/benches/README.md`.
+import "ksai/parallel"
+import "ksai/quant" { Quant_format, Quant_matrix }
+import "ksai/tensor" { Tensor }
+import "ksai/tests/quant_case"
+import "std/io"
+import "std/mem" { Arena }
+import "std/prng"
+import "std/strfmt" as _strfmt
+import "std/sys"
+
+priv const ROUNDS: Sz = 7 //< the runs per thread count; the fastest is kept
+priv const TIMED_FROM: Sz = 1 << 20 //< the numbers a tensor holds before it is worth timing
+priv const PIECE: Sz = 64 //< the input rows of a prompt's piece, as `chat_server` reads them
+
+priv fn fastest_us(w: Quant_matrix@, x: Tensor<|F32|>, out: Tensor<|F32|>, per_round: Sz): F64 //<
+    //< The fastest round's time for one product, in microseconds
+    $best: I64 = 0x7FFFFFFFFFFFFFFF
+    for _r in Range.asc(ROUNDS)
+        began: = sys.mono_us()
+        for _i in Range.asc(per_round)
+            w.mul_mat_into(x, out) catch panic("bench_quant: the product refused its shapes")
+        took: = sys.mono_us() - began
+        if took < best
+            best = took
+    return F64::best / F64::per_round
+
+priv fn time_product(name: U8[], w: Quant_matrix@, n: Sz, arena: Arena$@) //<
+    //< `n` input rows times the matrix, on one thread and on every CPU
+    xs: Sz[2] = ::{ n, w.cols() }
+    $x: = Tensor<|F32|>(Sz[]::xs, arena)
+    $rng: = prng.Prng(1)
+    x.fill_uniform(rng@, 1.0)
+    os: Sz[2] = ::{ n, w.rows() }
+    out: = Tensor<|F32|>(Sz[]::os, arena)
+    per_round: = 1 + 40000000 / (w.rows() * w.cols() * n)
+    parallel.set_threads(1)
+    one: = fastest_us(w, x, out, per_round)
+    parallel.set_threads(0)
+    all: = fastest_us(w, x, out, per_round)
+    macs: = F64::(w.rows() * w.cols() * n)
+    io.out().s("\{name\}: \{w.rows()\} x \{w.cols()\} by \{n\} rows: ")
+        .s("one thread \{(one / 1000.0):.2\} ms, \{sys.cpu_count()\} CPUs \{(all / 1000.0):.2\} ms ")
+        .s("(\{(one / all):.1\}x), \{(macs / all / 1000.0):.1\} G multiply-adds a second\n")
+
+priv fn time_matvec(name: U8[], w: Quant_matrix@, arena: Arena$@) //<
+    //< One input row and a prompt's piece times the matrix
+    time_product(name, w, 1, arena)
+    time_product(name, w, PIECE, arena)
+
+priv fn random_q4_k(rows: Sz, cols: Sz, arena: Arena$@): Quant_matrix //<
+    //< Random Q4_K blocks with a small scale: the speed does not depend on the numbers
+    row_len: = Quant_format.q4_k.row_bytes(cols)
+        catch panic("bench_quant: cols is not whole blocks")
+    n: = rows * row_len
+    bytes: = U8$@::arena.alloc(n)
+    $rng: = prng.Prng(2)
+    for i in Range.asc(n)
+        (bytes + i)$ = U8::(rng.next_f64() * 256.0)
+    for b in Range.asc(n / 144)
+        (bytes + b * 144 + 1)$ = 0x20 // d and dmin about 0.008
+        (bytes + b * 144 + 3)$ = 0x20
+    return Quant_matrix.from_bytes(.q4_k, rows, cols, U8[]::{ .ptr = bytes, .len = n })
+        catch panic("bench_quant: the random matrix was refused")
+
+fn main(): I32 //< 1 when a tensor decodes to other bits than its reference
+    defer arena: = Arena(64 * 1024 * 1024)
+    args: = sys.args()
+    if args.len < 2
+        w: = random_q4_k(4096, 4096, arena)
+        time_matvec("random Q4_K", w@, arena)
+        return 0
+    $failed: = false
+    for i in Range(1, args.len, 1)
+        path: = args[i]
+        bytes: = io.read_file(path, arena) catch
+            io.err().s("bench_quant: cannot read \{path\}\n")
+            return 2
+        c: = quant_case.read_case(bytes, arena)
+        bad: = quant_case.decode_mismatches(c@, arena)
+        failed = failed || bad > 0
+        io.out().s("\{path\}: \{c.rows * c.cols\} numbers, \{bad\} decode to other bits\n")
+        if bad == 0 && c.rows * c.cols >= TIMED_FROM
+            w: =
+                Quant_matrix.from_bytes(c.format, c.rows, c.cols, c.encoded) catch
+                panic("bench_quant: a checked tensor was refused")
+            time_matvec(path, w@, arena)
+    return 1 if failed else 0

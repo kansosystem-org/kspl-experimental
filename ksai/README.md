@@ -17,7 +17,7 @@ make run     # at the repository's root: the demo that trains a tiny language mo
 | :-- | :-- | :-- | :-- |
 | `make test` | `ksai/` | Checks the components, then builds and runs the examples ([`ksai/Makefile`](Makefile)). It also checks programs that must stop: an empty `argmax` and a shape whose size overflows. Each runs as a child process and must report its reason ([`ksai/tests/stops_main.kspl`](tests/stops_main.kspl)) | `ksplc` and a C compiler |
 | `make test BLAS=1` | `ksai/` | Runs the same checks with OpenBLAS for `matmul`. OpenBLAS is a library of fast matrix operations | OpenBLAS |
-| `make test-fuzz` | `ksai/` | Tests readers with broken weights files and vocabularies to detect crashes. At the repository root, use `make test-ksai-fuzz` | `ksplc` and a C compiler |
+| `make test-fuzz` | `ksai/` | Tests readers with broken weights files, GGUF model files and vocabularies to detect crashes. At the repository root, use `make test-ksai-fuzz` | `ksplc` and a C compiler |
 | `make run` | Repository root | Trains the demo model and generates characters | A C compiler; the target builds `ksplc` first |
 
 The fuzz tests use the address sanitizer when the C compiler supports it. This compiler option stops a program when it accesses memory incorrectly. Set `KANSO_REQUIRE_ASAN=1` to require it.
@@ -61,7 +61,7 @@ flowchart LR
 | :-- | :-- |
 | `ksai/*.kspl` | Tensors, layers, training, the tokenizer, and the weights format; see “Reading order” below |
 | [`ksai/examples/`](examples/) | Programs that use these components; see “The examples” below |
-| [`ksai/benches/`](benches/README.md) | A benchmark for one training step, with instructions and an explanation of the results |
+| [`ksai/benches/`](benches/README.md) | Benchmarks for one training step, a quantized product and a whole Qwen model, with instructions and an explanation of the results |
 | [`ksai/tests/`](tests/) | Tests run by `make test` |
 | [`ksai/docs/`](docs/) | Design documents and the generated reference |
 
@@ -89,7 +89,46 @@ The gemm declaration names its library with `#cfg(blas) #link("openblas")`. A bu
 
 Keep speed measurements in [`ksai/benches/README.md`](benches/README.md). Do not duplicate them here.
 
-At `-O3`, the C compiler converts `matmul_kernel`'s loop to SIMD instructions automatically. SIMD means single instruction, multiple data: one instruction operates on several numbers. `make test-simd` checks this conversion. See the kernel design in [`ksai/docs/DESIGN-learning.md`](docs/DESIGN-learning.md).
+At `-O3`, the C compiler converts `matmul_cols`'s loop to SIMD instructions automatically. SIMD means single instruction, multiple data: one instruction operates on several numbers. `make test-simd` checks this conversion. See the kernel design in [`ksai/docs/DESIGN-learning.md`](docs/DESIGN-learning.md).
+
+A large `matmul` splits its columns over the CPU's cores (`ksai/parallel.kspl`). The result is the same bits for any number of threads. A small product and a freestanding build stay on one thread. A program that already keeps every CPU busy calls `parallel.set_threads(1)`, as `fim_coder train` does.
+
+### Quantized weights: `ksai/quant.kspl`, `ksai/quantize.kspl`
+
+A 9B model's weights take about 36 GB as 32-bit floats, more than most machines hold. Quantized weights keep each number in fewer bits: 3 to 8 bits, with one scale for each block of 32 or 256 numbers. A 9B model then takes 4 to 6 GB.
+
+`Quant_matrix` holds a weight matrix in one of these formats. Its bytes are GGUF's own, byte for byte, so a tensor read from a GGUF file is used with no conversion. GGUF is the file format of llama.cpp, in which most models are shared.
+
+| Format | One block | Bits per number |
+| :-- | :-- | :-- |
+| `f32`, `f16`, `bf16` | One plain float | 32, 16, 16 |
+| `q8_0` | 32 signed bytes and one F16 scale | 8.5 |
+| `q5_0` | 32 five-bit numbers and one F16 scale | 5.5 |
+| `q3_k` | 256 three-bit numbers in 16 groups, each with a 6-bit scale | 3.4 |
+| `q4_k` | 256 four-bit numbers in 8 groups, each with a 6-bit scale and minimum | 4.5 |
+| `q5_k` | 256 five-bit numbers in 8 groups, each with a 6-bit scale and minimum | 5.5 |
+| `q6_k` | 256 six-bit numbers in 16 groups, each with an 8-bit scale | 6.6 |
+
+A file in llama.cpp's "Q4_K_M" mix holds mostly `q4_k` and some `q6_k` weights, with `f32` for the norms. A "Q3_K_M" file holds mostly `q3_k`, with `q4_k`, `q5_k`, `q6_k` and `q8_0` for the weights that matter most. Where a row is not a multiple of 256 long, as in a 0.5B Qwen model, it uses `q5_0` or `q8_0` instead.
+
+- `Quant_matrix.from_bytes` checks the sizes against the bytes before anything reads them, and refuses a wrong size by name (`Quant_error`).
+- `dequantize_row` decodes one row to F32, for example a token's embedding.
+- `mul_mat` multiplies the matrix by F32 inputs. For the 3- to 8-bit formats it rounds each input row to 8 bits first and multiplies whole numbers, as llama.cpp does. It turns one block at a time into numbers, so no F32 copy of the matrix is made. It splits its rows over the CPU's cores.
+- `Quant_matrix.quantize` in `ksai/quantize.kspl` makes Q8_0 or Q4_K from F32, as llama.cpp's own quantizer does. Only a program that converts weights needs it.
+
+The tests compare every format with llama.cpp's Python package `gguf`, and the products with llama.cpp's own C library, through small reference files in [`tests/quant_data/`](tests/quant_data/). [`tools/ai_assist/make_quant_fixtures.py`](../tools/ai_assist/make_quant_fixtures.py) writes them.
+
+### Models from GGUF files: `ksai/gguf.kspl`, `ksai/qwen.kspl`
+
+A GGUF file holds a whole model: its settings, its vocabulary, its chat template and its weights.
+
+- `Gguf.parse` reads a file the caller holds in memory. It checks every length and offset against the file's size, and refuses a broken file by an error that names the part at fault (`Gguf_error`). `model_file.load_gguf` reads the file from disk first, once, into an arena.
+- Its values are read by type: `integer`, `float`, `flag`, `text`, and the arrays `texts`, `ints` and `floats`. A value of another type is refused, never converted.
+- `Gguf.tensor` gives a tensor's name, shape and format, and its bytes in the file. `matrix()` makes it a `Quant_matrix` with no copy.
+- `Qwen.load` builds a Qwen2, Qwen3 or Qwen3.5 model from the file, with a cache of the positions asked for. `Qwen.forward` reads tokens and returns the scores for the next one.
+- Three of every four Qwen3.5 blocks are gated delta nets (`ksai/delta_net.kspl`), which keep a running state instead of the past tokens. `Qwen_state` copies that state and puts it back, since it cannot go back by itself.
+
+The tests read a tiny Qwen3 model and a tiny Qwen3.5 model in [`tests/qwen_data/`](tests/qwen_data/). [`tools/ai_assist/make_qwen_fixtures.py`](../tools/ai_assist/make_qwen_fixtures.py) and [`tools/ai_assist/make_qwen35_fixtures.py`](../tools/ai_assist/make_qwen35_fixtures.py) write them with llama.cpp's own writer. Each file also holds the scores the model must give, computed in F64. Why the reader and the model take this shape is in "A GGUF file is read once and used in place" in [`ksai/docs/DESIGN-learning.md`](docs/DESIGN-learning.md).
 
 ### Layers: `ksai/nn.kspl`
 
@@ -125,12 +164,13 @@ Both `_grad` and `_train` files contain backward operations. `_grad` contains fu
 
 | File | What it contains |
 | :-- | :-- |
-| `ksai/tokenizer.kspl` | `Tokenizer` converts strings to token IDs with `encode` and back with `decode`. `load` reads a vocabulary file. It uses GPT-2/Qwen byte-level byte pair encoding (BPE), which merges frequent byte pairs |
+| `ksai/tokenizer.kspl` | `Tokenizer` converts strings to token IDs with `encode` and back with `decode`. It uses GPT-2/Qwen byte-level byte pair encoding (BPE), which merges frequent byte pairs. `load` reads a vocabulary file, and `load_lists` takes a GGUF file's vocabulary lists. For Qwen's vocabulary it gives the same IDs as llama.cpp |
+| `ksai/pretokenizer.kspl` | `chunk_end` splits text into the chunks that BPE merges within, by Qwen2's rule or Qwen3.5's (`Split_rule`). A tokenizer is trained on the same chunks. Its Unicode classes are in `ksai/unicode_class.kspl`, generated from llama.cpp's tables |
 | `ksai/safetensors.kspl` | Reads and writes weights in the standard safetensors format. `Safetensors_writer.add` and `finish` produce bytes. `set_meta` writes supporting information into `__metadata__`. `load_from_bytes` parses the bytes. `get_tensor` borrows aligned elements or copies misaligned elements into the supplied arena. Path operations belong to `ksai/model_file.kspl` |
 | `ksai/sampler.kspl` | Chooses a token from scores. `argmax` selects the highest score. `sample` uses temperature, top-k, and top-p |
 | `ksai/lora.kspl` | `Lora` supports low-rank adaptation (LoRA), which trains small added matrices instead of all model weights. It imports no safetensors code. `save_raw` and `load_raw` use raw bytes with no dependencies |
 | `ksai/lora_set.kspl` | Groups `Qkv_lora` and `Mlp_lora` adapters per block and defines their names in safetensors. `load_set_from` and `save_set_into` use a parsed `Safetensors` |
-| `ksai/model_file.kspl` | Provides path operations such as `load_safetensors` and `save_qkv_lora_set` using the modules above |
+| `ksai/model_file.kspl` | Provides path operations such as `load_safetensors`, `load_gguf` and `save_qkv_lora_set` using the modules above |
 
 Use `map_into` to load weights into a model. The reference from `ksplc doc ksai/safetensors` explains its checks and those omitted by `get_tensor`.
 
@@ -155,15 +195,16 @@ The examples show how programs use ksai. Read `llama_engine` first for basic tra
 | Folder | What it does | How to build it |
 | :-- | :-- | :-- |
 | `examples/llama_engine/` | Trains a tiny model further from embedded weights and generates text. `main.kspl` loads, trains, and generates. `model.kspl` defines the layers | Root `make run` builds and runs it |
-| `examples/qwen_infer/` | Provides a command-line interface for inference with real Qwen2.5-Coder weights. `main.kspl` contains the model | Root `make qwen` builds it only |
+| `examples/qwen_infer/` | Provides a command-line interface for inference with real Qwen2.5-Coder weights in 32-bit floats, with LoRA adapters. `model.kspl` contains the model | Root `make qwen` builds it only |
 | `examples/fim_coder/` | Trains a small coding model from scratch using fill-in-the-middle (FIM): predict missing code from its surrounding code. `train` distributes sequence batches across CPUs and writes weights. `complete` produces candidates, starting with greedy selection. It takes corpus and tokenizer paths | Root `make fim-model` trains it on this repository |
 | `examples/car_pilot/` | Trains a small car's driving policy from written rules and writes it to one safetensors file ("The car's policy file" below). `policy.kspl` holds the rules and the net; `encoding.kspl` holds what both the trainer and the car read | `make car_pilot` here builds it |
+| `examples/chat_server/` | Serves a Qwen3-Instruct-2507 or Qwen3.5 model from its GGUF file over HTTP to a client with tools, such as ksagent ("The chat server" below). `template.kspl` and `template35.kspl` hold the two chat templates; `engine.kspl` keeps the cache across requests | Root `make chat-server` builds it |
 
 The examples belong to the package, like a Cargo crate's `examples/` folder. `make test` builds each example and checks its output ([`tests/examples_main.kspl`](tests/examples_main.kspl)). Build failures therefore fail the package tests. Copying the package folder includes the examples.
 
 The bundled `examples/llama_engine/mini_llama.safetensors` weights are our own, with a vocabulary of 12 and two layers. They use Llama's architecture; see [`THIRD-PARTY-NOTICES.md`](../THIRD-PARTY-NOTICES.md). `llama_engine` includes them with `embed`, which resolves them through the package regardless of the current folder. It trains a copy without writing back. The entry point in `model.kspl` writes weights.
 
-Before running `qwen_infer`, convert real weights with `tools/ai_assist/export_qwen_to_kspl.py`. Thus, `make qwen` only builds the program.
+Before running `qwen_infer`, convert real weights with `tools/ai_assist/export_qwen_to_kspl.py`. Thus, `make qwen` only builds the program. Keep downloaded and converted model files in `models/` at the repository's root; [`models/README.md`](../models/README.md) says which models and how to get them.
 
 ### The car's policy file
 
@@ -198,23 +239,53 @@ Caution: **Check `__metadata__.kspl_pilot` before using the weights, and refuse 
 
 `make test` runs `car_pilot` and reads the file it writes without the trainer's constants ([`ksai/tests/examples_car.kspl`](tests/examples_car.kspl)). The reasons for this shape are in "The car's policy: learned from rules, kept as one file" in [`ksai/docs/DESIGN-learning.md`](docs/DESIGN-learning.md).
 
+### The chat server
+
+`chat_server` lets ksagent, or another client with tools, run with nothing from outside. It answers `POST /v1/chat/completions` in the OpenAI style, with tool calls and without streaming, as `llama-server` does. Why it is shaped this way is [`ksai/docs/DESIGN-serving.md`](docs/DESIGN-serving.md).
+
+It runs Qwen3-4B-Instruct-2507 or Qwen3.5-9B from one GGUF file, which holds the weights, the vocabulary and the chat template. [`models/README.md`](../models/README.md) says where to download them. Build the server at the repository root, start it, and point ksagent at it:
+
+```sh
+make chat-server NATIVE=1
+./out/chat_server.exe models/Qwen3-4B-Instruct-2507-Q4_K_M.gguf     # or models/Qwen3.5-9B-Q3_K_M.gguf
+./out/ksagent.exe ask --timeout=3600 rules "How many days of paid leave does a new employee get?"
+```
+
+`NATIVE=1` builds the server for this machine's own CPU, which makes it faster. Leave it out for a program that runs on another machine. Why is "A build for the machine's own CPU is asked for" in [`ksai/docs/DESIGN-learning.md`](docs/DESIGN-learning.md).
+
+It is ready when it prints the line `listening on http://127.0.0.1:8081`, the address ksagent asks by default. It prints one line per request on standard error.
+
+| Option | What it does |
+| :-- | :-- |
+| `--port=<n>` | The loopback port. The default is 8081; 0 lets the system choose, and the server prints the port it got |
+| `--max-tokens=<n>` | The most tokens one answer can take, Qwen3.5's thinking included. The default is 1024; a request can ask for fewer with `max_tokens` |
+| `--context=<n>` | The most tokens a conversation and its answer can hold together. The default is 16384, a cache of 4.5 GiB for Qwen3-4B and 1 GiB for Qwen3.5-9B. At most the context the model was trained on |
+
+Its limits:
+
+* **It listens on the loopback only.** It has no accounts and no encryption, so only this machine can ask.
+* **It is slower than llama.cpp on the same file.** For Qwen3-4B it runs at about half its speed in generating, and a fifth in reading a prompt. A question to ksagent about a small folder takes minutes, so give ksagent a longer `--timeout`. Why the gap stays is in the ksai section of [`docs/PLAN.md`](../docs/PLAN.md); the measurements are in [`ksai/benches/README.md`](benches/README.md).
+* **Qwen3.5 thinks before it answers, as `llama-server --jinja` has it do.** Its thinking comes back as `reasoning_content`, and a request turns it off with `"chat_template_kwargs": {"enable_thinking": false}`. Thinking makes an answer several times longer.
+* **It runs Qwen3-Instruct-2507 and Qwen3.5 models only.** It checks the file's chat template by its hash and refuses another, since each model has its own.
+
 Before moving or deleting an example, check these dependencies:
 
 | Gate | How it uses the examples |
 | :-- | :-- |
 | `make run` | The macOS CI AI step trains `llama_engine` and checks that its loss decreased |
-| `make test-extract` | Runs the package tests from an independent copy. Linux and Windows use this instead of `make run`. `llama_engine` trains from that copy. `qwen_infer` checks reference answers using Qwen-shaped weights from a fixed formula ([`tests/examples_qwen.kspl`](tests/examples_qwen.kspl)). `fim_coder` trains briefly on a generated corpus. It checks identical weights with one and two threads, then completes missing code ([`tests/examples_main.kspl`](tests/examples_main.kspl)). `car_pilot` writes its policy file, which is read back as the car reads it |
+| `make test-extract` | Runs the package tests from an independent copy. Linux and Windows use this instead of `make run`. `llama_engine` trains from that copy. `qwen_infer` checks reference answers using Qwen-shaped weights from a fixed formula ([`tests/examples_qwen.kspl`](tests/examples_qwen.kspl)). `fim_coder` trains briefly on a generated corpus. It checks identical weights with one and two threads, then completes missing code ([`tests/examples_main.kspl`](tests/examples_main.kspl)). `car_pilot` writes its policy file, which is read back as the car reads it. `chat_server` runs on the tiny Qwen3 and Qwen3.5 models and answers over HTTP. Its templates render the conversations as llama.cpp does ([`tests/examples_chat.kspl`](tests/examples_chat.kspl), [`tests/examples_chat_http.kspl`](tests/examples_chat_http.kspl), [`tests/examples_chat35.kspl`](tests/examples_chat35.kspl)) |
 | `make test-simd` | Compiles `llama_engine` and `qwen_infer` to C. It checks automatic vectorization at `-O3` for each named `ksai` loop |
 | `make lint` | Analyses each example's `main.kspl`, which `mk/lint.mk` finds by its `fn main` |
 | `make test-ksos-link` / `make test-ksos-qemu` | Use embedded weights in the `ksos` Cortex-M demo, without a filesystem |
 
-The SIMD gate needs programs that instantiate generic functions, such as `matmul_kernel<|T|>` in `ksai/tensor.kspl`. The compiler generates their C code only for calls with concrete types, such as `F32`. Compiling ksai alone does not produce these loops. The gate therefore inspects C generated from `llama_engine` and `qwen_infer`.
+The SIMD gate needs programs that instantiate generic functions, such as `matmul_cols<|T|>` in `ksai/tensor.kspl`. The compiler generates their C code only for calls with concrete types, such as `F32`. Compiling ksai alone does not produce these loops. The gate therefore inspects C generated from `llama_engine` and `qwen_infer`.
 
-`make test-fuzz` does not use the examples. It generates its own initial inputs for mutation ([`tests/fuzz_main.kspl`](tests/fuzz_main.kspl)).
+`make test-fuzz` does not use the examples. It writes its own initial inputs for mutation, and takes the tiny Qwen3 and Qwen3.5 models as they are committed ([`tests/fuzz_main.kspl`](tests/fuzz_main.kspl)).
 
 ## Further reading
 
-* [`ksai/docs/DESIGN-learning.md`](docs/DESIGN-learning.md) explains optimizer selection, training across threads, LoRA separation, and matrix backend choices.
+* [`ksai/docs/DESIGN-learning.md`](docs/DESIGN-learning.md) explains optimizer selection, training across threads, LoRA separation, matrix backend choices, and the GGUF reader and the Qwen model.
+* [`ksai/docs/DESIGN-serving.md`](docs/DESIGN-serving.md) explains the chat server: the loopback, one request at a time, the template, the markers and the cache kept across requests.
 * [`ksai/benches/README.md`](benches/README.md) explains the benchmark and its results.
 * [`ksai/SURFACE.txt`](SURFACE.txt) records the published API. See the targets that write and check it in [`docs/SPEC-gates.md`](../docs/SPEC-gates.md).
 * [std](../std/README.md) introduces the standard library, including ksai's `mem`, `math`, and `bytes` dependencies. `ksplc doc std` lists its published files.

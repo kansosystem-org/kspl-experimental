@@ -2,6 +2,35 @@
 
 **This page holds every plan for the work not done yet**: a section per package with work left, and what spans packages. **Only what is not done stands here.** A done stage is deleted, and its result goes into the document of its kind. A package with nothing left to do has no section ("Document naming" in [`SPEC-documents.md`](SPEC-documents.md)). Each section counts its stages from 1.
 
+## ksagent
+
+ksagent answers questions about the files in one folder, with checked sources. It reads only, and talks to the page through files. What it does is in [ksagent](../ksagent/README.md), and its decisions are in [`ksagent/docs/DESIGN-agent.md`](../ksagent/docs/DESIGN-agent.md). Stages 1 and 2 each change a settled rule, so each starts with the user's decision.
+
+| | What is left | What it gives the user | What marks it as done |
+| :-- | :-- | :-- | :-- |
+| stage 1 | **A team server.** The local server listens on the loopback only ("Where it listens" in [`SPEC-local-server.md`](SPEC-local-server.md)), so only the person at the machine can ask. A server for other machines needs its own specification. It holds accounts, HTTPS (kssrv's stage 1), a folder the AI only reads, and a log of the questions | Every employee asks about the regulations from a browser | The user's decision on serving other machines, the new specification, and a test that signs in and asks over HTTPS |
+| stage 2 | **Edits and allowed commands.** ksagent reads only. For a development folder, it would propose an edit, and the person accepts it in ksmd. It would also run commands from a list, such as the folder's tests. The person approves each in ksagent's own console. No page request may start a program ("Only four things can be asked for" in [`SPEC-local-server.md`](SPEC-local-server.md)), so the approval stays out of the page | Development together with the AI, as with a coding assistant | The user's decision on running commands, and tests that a refused command and a refused edit change nothing |
+| stage 3 | **Answers that appear as they are written.** A model server streams its answer in pieces (`Transfer-Encoding: chunked`), which `std/http` does not read. So ksagent asks for the whole answer and shows nothing until it ends | The person sees the answer grow, rather than waiting a minute for all of it | `std/http` reading a chunked reply with its own tests, and ksagent showing an answer as it streams |
+| stage 4 | **PDF and Word files.** Only UTF-8 text is read, so regulations kept as PDF or Word must be saved as text first | Regulations are asked about as they are kept | A reader for each format, and its text cited by page as text files are by line |
+
+## ksai
+
+This section plans ksai running ksagent's model itself, so that no outside program is needed. **ksai runs both models the user runs today: Qwen3-4B-Instruct-2507 from its Q4_K_M file, and Qwen3.5-9B from its Q3_K_M file.** What is left is speed. What ksai holds is in [ksai](../ksai/README.md), and its decisions are in [`ksai/docs/DESIGN-learning.md`](../ksai/docs/DESIGN-learning.md).
+
+**The reference for every stage is llama.cpp, run on the same GGUF file.** ksai's answers must match its answers. The server is a ksai program of its own, so kssrv stays free of models.
+
+What exists already:
+
+* **ksai runs Qwen3-4B-Instruct-2507 and Qwen3.5-9B from their GGUF files** (`ksai/gguf.kspl` and `ksai/qwen.kspl`, which runs Qwen2 too). Qwen3.5's delta nets, which keep a running state, are `ksai/delta_net.kspl`. Given llama.cpp's token IDs, the greedy tokens are llama.cpp's, except where two top scores nearly tie. `tools/ai_assist/qwen_gguf_check.py` checks this on each file. The tokenizer gives llama.cpp's IDs for both files' splitting rules (`tools/ai_assist/check_qwen_tokenizer.py`).
+* **ksagent answers through ksai alone, on both files.** Through the server below, ksagent answered a Japanese question with a checked source. Qwen3.5-9B thinks before it answers, as `llama-server --jinja` has it do.
+* **A model server in ksai** (`ksai/examples/chat_server`). It reads the weights, the vocabulary and the chat template from the one GGUF file. It answers ksagent's protocol, `POST /v1/chat/completions` with tool calls, without streaming. Its rendering of a conversation is llama.cpp's for both templates, in the tests. It keeps copies of Qwen3.5's running state, so a follow-up reads on from the shared start.
+* **Speed on the CPU, as far as KSPL's loops reach.** Take a 4-CPU machine with ksai built for that CPU (`NATIVE=1`). On Qwen3-4B's Q4_K_M file it generates at about half llama.cpp's speed, and reads a prompt at about a fifth. On Qwen3.5-9B's Q3_K_M file it generates at about two fifths of its speed, and reads a prompt at about a sixth. **The user decided to keep the kernels spelt for the auto-vectorizer**, so the prompt's gap stays. llama.cpp's hand-written vector code does four to eight times as many multiply-adds per instruction. The graphics card (stage 1 below) would pass both.
+* **GGUF's 3- to 8-bit blocks and their products** (`ksai/quant.kspl`), checked bit for bit against llama.cpp's own library. A product rounds its inputs to 8 bits and multiplies whole numbers, as llama.cpp does. Large products and the attention use every CPU core.
+
+| | What is left | What it gives the user | What marks it as done |
+| :-- | :-- | :-- | :-- |
+| stage 1 | **The graphics card.** Everything runs on the CPU. The user's card is an NVIDIA one with 6 GB. Its kernels can be written for CUDA (NVIDIA only) or Vulkan (any vendor, as the user's llama.cpp build uses) | Answers at the speed of a chat | The user's choice between CUDA and Vulkan first, then Qwen3-4B-Instruct-2507 on the card with the same tokens. This is by far the largest stage |
+
 ## ksos
 
 Three pieces of work are left in ksos:
@@ -31,6 +60,8 @@ This section holds the work on the kssrv server that is not done yet. It says wh
 ## tools
 
 All of it belongs to the coding assistant (`tools/ai_assist/`). The assistant is a small AI model that fills in a gap in KSPL code from the code around it. That task is called *fill-in-the-middle* (FIM). What is in place is in [`tools/ai_assist/README.md`](../tools/ai_assist/README.md), and why it is built that way is in "The coding assistant" in [`tools/docs/DESIGN-tools.md`](../tools/docs/DESIGN-tools.md).
+
+**These stages wait until the ksai plan above is done.** The work goes into running a model in ksai first. The scripts in `tools/ai_assist/` that check ksai against llama.cpp are in use meanwhile.
 
 ### The stages
 

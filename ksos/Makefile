@@ -84,7 +84,8 @@ CM_CC := clang --target=$(CM_MACHINE) -mcpu=cortex-m3 -ffreestanding -Wall -Os \
 LIBGCC_CM := $(shell arm-none-eabi-gcc -mcpu=cortex-m3 -mthumb -print-libgcc-file-name 2>/dev/null)
 export ARM_TOOLCHAIN_HINT := arm-none-eabi-gcc was not found. Linking bare metal (ksos-cm*/ksos-rp*)\
  needs arm-none-eabi's libgcc (the bodies of soft-float and 64-bit integer division).\
- Ubuntu/devcontainer: apt-get install -y gcc-arm-none-eabi
+ Ubuntu/devcontainer: apt-get install -y gcc-arm-none-eabi.\
+ MSYS2 UCRT64: pacman -S mingw-w64-ucrt-x86_64-arm-none-eabi-gcc
 # $(call require_arm_toolchain,<the libgcc handed to the link>): **hand it the very variable the
 # link gets**, or where only that multilib build is missing the link fails with no guidance.
 define require_arm_toolchain

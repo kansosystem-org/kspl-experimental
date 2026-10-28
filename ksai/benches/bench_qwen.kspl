@@ -1,0 +1,138 @@
+//< Runs a Qwen model from its GGUF file on token IDs: reads them as a prompt, then generates
+//< It prints each generated token with the two top scores, and how fast the prompt was read and
+//< the tokens generated. `tools/ai_assist/qwen_gguf_check.py` compares this with llama.cpp on the
+//< same file. How to run it is in `ksai/benches/README.md`.
+
+// ==========================================
+// Usage:
+//   bench_qwen <model.gguf> [--generate=32] [--scores=<file>] [--context=4096] [--piece=64]
+//              [--threads=0] < token IDs
+// It prints `PROMPT`, then a `TOKEN <id> <score> <second id> <second score>` line per generated
+// token, then `GENERATE`. `--scores` writes the scores after the prompt as raw little-endian F32.
+// ==========================================
+import "ksai/model_file" as ai_file
+import "ksai/parallel"
+import "ksai/qwen" { Qwen }
+import "ksai/tensor" { Tensor }
+import "ksai/tokenizer"
+import "std/argparse"
+import "std/chars"
+import "std/ds" { List }
+import "std/io"
+import "std/math"
+import "std/mem" { Arena }
+import "std/strfmt" as _strfmt
+import "std/sys"
+
+priv const NAME: U8[] = "bench_qwen"
+
+priv struct Top2 //< the two highest scores and their tokens
+    first: I32
+    first_score: F32
+    second: I32
+    second_score: F32
+
+priv fn top2(s: Tensor<|F32|>): Top2 //< the two highest scores; the lower ID wins a tie, as argmax
+    $t: = Top2::{ .first = 0, .first_score = s.data$, .second = -1, .second_score = 0.0 }
+    for i in Range(1, s.size, 1)
+        v: = (s.data + i)$
+        if v > t.first_score
+            t.second = t.first
+            t.second_score = t.first_score
+            t.first = I32::i
+            t.first_score = v
+        else if t.second < 0 || v > t.second_score
+            t.second = I32::i
+            t.second_score = v
+    return t
+
+priv fn read_ids(arena: Arena$@): List<|I32|>!U8[] //< the token IDs on standard input
+    text: = io.read_stdin(arena) catch
+        throw "standard input cannot be read"
+    $out: = List<|I32|>(arena)
+    $i: Sz = 0
+    for i < text.len
+        if !text[i].is_digit()
+            i += 1
+            continue
+        $j: = i
+        for j < text.len && text[j].is_digit()
+            j += 1
+        id: = tokenizer.parse_token_id(text.sub(i, j - i)) catch
+            throw "a token ID is past the largest I32"
+        out.push(id)
+        i = j
+    return out
+
+priv fn per_second(n: Sz, us: I64): F64 //< how many a second `n` in `us` microseconds are
+    return F64::n * 1000000.0 / F64::math.max(us, 1I64)
+
+fn main(): I32
+    defer arena: = Arena(64 * 1024 * 1024)
+    $generate: I64 = 32I64
+    $context: I64 = 4096I64
+    $piece: I64 = 64I64
+    $threads: I64 = 0I64
+    $scores_path: U8[] = ""
+    cli: = argparse.Parser
+        .create(NAME, "reads token IDs as a prompt, then generates greedily", arena)
+    cli.positional("<model.gguf>")
+    cli.int_opt("--generate", generate@, "how many tokens to generate (default 32)")
+    cli.int_opt("--context", context@, "the positions the cache holds (default 4096)")
+    cli.int_opt("--piece", piece@, "the most prompt tokens read together (default 64)")
+    cli.int_opt("--threads", threads@, "the most threads a product uses; 0 is every CPU")
+    cli.str_opt("--scores", scores_path@, "a file for the scores after the prompt, as raw F32")
+    cli.parse_or_exit()
+    if cli.rest.len != 1 || generate < 1I64 || context < 2I64 || piece < 1I64 || threads < 0I64
+        cli.print_usage(io.err())
+        return 2
+    parallel.set_threads(Sz::threads)
+    $ids: = read_ids(arena) catch why
+        io.err().s("\{NAME\}: ").s(why).s("\n")
+        return 2
+    g: = ai_file.load_gguf(cli.rest[0], arena) catch e
+        io.err().s("\{NAME\}: ").s(e.describe(arena)).s("\n")
+        return 1
+    $m: = Qwen.load(g@, Sz::context, arena) catch e
+        io.err().s("\{NAME\}: ").s(e.describe(arena)).s("\n")
+        return 1
+    if ids.len == 0 || ids.len + Sz::generate > m.context
+        io.err().s("\{NAME\}: give 1 or more token IDs, which with --generate fit --context\n")
+        return 2
+    for id in ids
+        if id < 0 || Sz::id >= m.cfg.vocab
+            io.err().s("\{NAME\}: the token ID \{id\} is past the vocabulary\n")
+            return 2
+    defer step: = Arena(64 * 1024 * 1024)
+    scores: = Tensor<|F32|>(Sz[]::{ 1, m.cfg.vocab }, arena)
+    began: = sys.mono_us()
+    $at: Sz = 0
+    for at < ids.len
+        n: = math.min(Sz::piece, ids.len - at)
+        out: = m.forward(ids.sub(at, n), at, step)
+        for k in Range.asc(scores.size)
+            (scores.data + k)$ = (out.data + k)$
+        step.reset()
+        at += n
+    prompt_us: = sys.mono_us() - began
+    io.out().s("PROMPT \{ids.len\} tokens \{prompt_us / 1000I64\} ms ")
+        .s("\{per_second(ids.len, prompt_us)\} tokens/s\n")
+    if scores_path.len > 0
+        io.write_file(scores_path,
+            U8[]::{ .ptr = U8@::scores.data, .len = scores.size * 4 }) catch
+            io.err().s("\{NAME\}: cannot write \{scores_path\}\n")
+            return 1
+    gen_began: = sys.mono_us()
+    for k in Range.asc(Sz::generate)
+        t: = top2(scores)
+        io.out().s("TOKEN \{t.first\} \{t.first_score\} \{t.second\} \{t.second_score\}\n")
+        if k + 1 < Sz::generate
+            one: I32[1] = ::{ t.first }
+            out: = m.forward(I32[]::one, ids.len + k, step)
+            for i in Range.asc(scores.size)
+                (scores.data + i)$ = (out.data + i)$
+            step.reset()
+    gen_us: = sys.mono_us() - gen_began
+    io.out().s("GENERATE \{generate - 1I64\} steps \{gen_us / 1000I64\} ms ")
+        .s("\{per_second(Sz::generate - 1, gen_us)\} tokens/s\n")
+    return 0

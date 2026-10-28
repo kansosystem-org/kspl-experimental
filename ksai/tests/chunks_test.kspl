@@ -1,0 +1,95 @@
+//< The chunks Qwen's rules split a text into, one branch of a rule at a time
+//< Each expectation was worked out by hand from the rule and agrees with llama.cpp's
+//< (`tools/ai_assist/check_qwen_tokenizer.py` compares the two on a real model).
+import "ksai/pretokenizer" + { Split_rule }
+import "std/chars"
+import "std/mem" { Arena }
+import "std/str"
+import "std/verdict"
+
+priv fn split_as(text: U8[], want: U8[][], arena: Arena$@) //< that Qwen2's rule gives `want`
+    split_by(text, want, .qwen2, arena)
+
+priv fn split_by(text: U8[], want: U8[][], rule: Split_rule, arena: Arena$@) //<
+    //< That `rule` splits `text` into `want`
+    $at: Sz = 0
+    $k: Sz = 0
+    for at < text.len
+        end: = pretokenizer.chunk_end(text, at, rule)
+        got: = text.sub(at, end - at)
+        assert(end > at && k < want.len && got.equals(want[k]),
+            U8$[]::arena.text().s("\"").s(text).s("\": chunk \{k\} is \"").s(got).s("\"").take())
+        at = end
+        k += 1
+    assert(k == want.len,
+        U8$[]::arena.text().s("\"").s(text).s("\": \{k\} chunks, not \{want.len\}").take())
+
+fn test_chunks_contractions(arena: Arena$@) //<
+    //< `'s`, `'t`, `'re`, `'ve`, `'m`, `'ll`, `'d`, any case
+    verdict.start("[Chunks] a contraction is a chunk of its own, in either case...")
+    split_as("it's", U8[][]::{ "it", "'s" }, arena)
+    split_as("I'M", U8[][]::{ "I", "'M" }, arena)
+    split_as("we'Re they'll", U8[][]::{ "we", "'Re", " they", "'ll" }, arena)
+    split_as("you've'd", U8[][]::{ "you", "'ve", "'d" }, arena)
+    // Any other letter after the quote is the letter rule's: the quote leads the run.
+    split_as("'xy", U8[][]::{ "'xy" }, arena)
+    split_as("'", U8[][]::{ "'" }, arena)
+    verdict.pass("")
+
+fn test_chunks_letters(arena: Arena$@) //< a letter run, with one leading code point that is none
+    verdict.start("[Chunks] a run of letters takes one leading non-letter, never a newline...")
+    split_as(" hello world", U8[][]::{ " hello", " world" }, arena)
+    split_as("snake_case(a", U8[][]::{ "snake", "_case", "(a" }, arena)
+    split_as("\tfoo", U8[][]::{ "\tfoo" }, arena)
+    split_as("\nfoo", U8[][]::{ "\n", "foo" }, arena)
+    // Kanji, kana and Latin are all letters, so they make one run; U+3000 leads like a space.
+    split_as("KSPLは簡素　です", U8[][]::{ "KSPLは簡素", "　です" }, arena)
+    // A byte that starts no code point is read as U+FFFD, a symbol, and the text keeps it.
+    bad: = arena.text().s("a").c(0xFFU8).s("b").take()
+    split_as(bad, U8[][]::{ "a", bad.sub_from(1) }, arena)
+    verdict.pass("")
+
+fn test_chunks_digits(arena: Arena$@) //< each digit is a chunk of its own, in any script
+    verdict.start("[Chunks] every digit is a chunk alone, full-width and Roman numerals too...")
+    split_as("x123", U8[][]::{ "x", "1", "2", "3" }, arena)
+    split_as(" 42", U8[][]::{ " ", "4", "2" }, arena)
+    split_as("１２Ⅻ", U8[][]::{ "１", "２", "Ⅻ" }, arena)
+    verdict.pass("")
+
+fn test_chunks_punctuation(arena: Arena$@) //<
+    //< a run of other code points takes the newlines after it
+    verdict.start("[Chunks] a punctuation run takes one leading space and its trailing newlines...")
+    split_as("a.\n\n(b", U8[][]::{ "a", ".\n\n", "(b" }, arena)
+    split_as("x ...\r\n", U8[][]::{ "x", " ...\r\n" }, arena)
+    split_as("です。」\n", U8[][]::{ "です", "。」\n" }, arena)
+    split_as("a +=1", U8[][]::{ "a", " +=", "1" }, arena)
+    split_as("a ", U8[][]::{ "a", " " }, arena)
+    verdict.pass("")
+
+fn test_chunks_white_space(arena: Arena$@) //< newlines end a run; a run keeps its last space back
+    verdict.start("[Chunks] white space ends after its last newline, or leaves one space...")
+    split_as("\n\n\n", U8[][]::{ "\n\n\n" }, arena)
+    split_as("  \n  \nx", U8[][]::{ "  \n  \n", "x" }, arena)
+    split_as("a \n b", U8[][]::{ "a", " \n", " b" }, arena)
+    // Before a non-space, the run's last space goes to the next chunk; at the end, none does.
+    split_as("a   b", U8[][]::{ "a", "  ", " b" }, arena)
+    split_as("a   ", U8[][]::{ "a", "   " }, arena)
+    split_as("a \t+", U8[][]::{ "a", " ", "\t", "+" }, arena)
+    verdict.pass("")
+
+fn test_chunks_marks(arena: Arena$@) //<
+    //< Qwen3.5's rule joins a mark to its letters; Qwen2's does not
+    verdict.start("[Chunks] a combining mark joins the letter run in Qwen3.5's rule alone...")
+    // "e" and a combining acute accent, then "té"; a dot before an accent; Devanagari's vowel
+    // signs.
+    accent: = "e\u0301t\u00E9"
+    split_by(accent, U8[][]::{ "e", "\u0301t\u00E9" }, .qwen2, arena)
+    split_by(accent, U8[][]::{ accent }, .qwen35, arena)
+    split_by("a.\u0301b", U8[][]::{ "a", ".\u0301", "b" }, .qwen2, arena)
+    split_by("a.\u0301b", U8[][]::{ "a", ".\u0301b" }, .qwen35, arena)
+    hindi: = "\u0939\u093F\u0928\u094D\u0926\u0940"
+    split_by(hindi, U8[][]::{ hindi }, .qwen35, arena)
+    split_by(hindi, U8[][]::{ "\u0939", "\u093F\u0928", "\u094D\u0926", "\u0940" }, .qwen2, arena)
+    assert(Split_rule.named("qwen35").unwrap_or(.qwen2) == .qwen35 &&
+        Split_rule.named("llama3").is_none(), "chunks: a rule is found by its GGUF name")
+    verdict.pass("")

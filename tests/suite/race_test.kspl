@@ -273,24 +273,29 @@ priv fn build_all(name: U8[], pkg: U8[], entries: U8[][], work: U8[], deps: Str_
     return exes
 
 priv fn race_ksai(work: U8[], deps: Str_builder$@, runs: List<|Raced|>$@, arena: Arena$@) //<
-    //< ksai's examples and the tests that run them (`ksai/Makefile`'s `test`)
-    //< fim_coder trains on two threads there.
+    //< ksai's examples, the tests that run them, and its unit tests (`ksai/Makefile`'s `test`)
+    //< fim_coder trains on two threads there. The unit tests split products over threads.
     name: = "ksai's examples and their tests run with no data race"
     exes: =
         build_all(name, "ksai",
         U8[][]::{ "ksai/examples/llama_engine/main.kspl", "ksai/examples/qwen_infer/main.kspl",
         "ksai/examples/fim_coder/main.kspl", "ksai/examples/car_pilot/main.kspl",
-        "ksai/tests/examples_main.kspl" }, work, deps, arena)
+        "ksai/examples/chat_server/main.kspl", "ksai/tests/examples_main.kspl",
+        "ksai/tests/main.kspl" }, work, deps, arena)
     if exes.len == 0
         return
     tmp: = fs.join(work, "ksai_work", arena)
     // The arguments are as `ksai/Makefile`'s `test` passes them, in its order.
-    argv: = harness_sanitizer.kept(U8[][]::{ exes.get(4), exes.get(0), exes.get(1), exes.get(2),
-        exes.get(3), tmp }, arena)
+    argv: = harness_sanitizer.kept(U8[][]::{ exes.get(5), exes.get(0), exes.get(1), exes.get(2),
+        exes.get(3), exes.get(4), tmp }, arena)
     dir: = fs.join(harness.root(), "ksai", arena)
     log_dir: = fs.join(work, "ksai_log", arena)
     runs
         .push(Raced::{ .name = name, .dir = dir, .argv = argv, .log_dir = log_dir,
+        .env = harness_sanitizer.pkg_env(arena) })
+    runs
+        .push(Raced::{ .name = name, .dir = dir,
+        .argv = harness_sanitizer.kept(U8[][]::{ exes.get(6) }, arena), .log_dir = log_dir,
         .env = harness_sanitizer.pkg_env(arena) })
 
 priv fn race_ksbind(work: U8[], deps: Str_builder$@, runs: List<|Raced|>$@, arena: Arena$@) //<
@@ -315,6 +320,24 @@ priv fn race_ksbind(work: U8[], deps: Str_builder$@, runs: List<|Raced|>$@, aren
         .push(Raced::{ .name = name, .dir = dir,
         .argv = harness_sanitizer.kept(U8[][]::{ b.exe }, arena),
         .log_dir = fs.join(work, "ksbind_log", arena),
+        .env = harness_sanitizer.pkg_env(arena) })
+
+priv fn race_ksagent(work: U8[], deps: Str_builder$@, runs: List<|Raced|>$@, arena: Arena$@) //<
+    //< ksagent's tests (`ksagent/Makefile`'s `test`)
+    //< Their stand-in model server answers from a second thread while the loop asks it.
+    name: = "ksagent's tests run with no data race"
+    dir: = fs.join(harness.root(), "ksagent", arena)
+    b: =
+        build(dir, fs.join(harness.root(), "ksagent/tests/main.kspl", arena),
+        fs.join(work, "ksagent.exe", arena), OPT_FOR_RUN, arena)
+    if b.exe.len == 0
+        verdict.check(name, false, b.why)
+        return
+    deps.s(b.deps)
+    argv: = harness_sanitizer.kept(U8[][]::{ b.exe, fs.join(work, "ksagent_work", arena) }, arena)
+    runs
+        .push(Raced::{ .name = name, .dir = dir, .argv = argv,
+        .log_dir = fs.join(work, "ksagent_log", arena),
         .env = harness_sanitizer.pkg_env(arena) })
 
 // ==========================================
@@ -482,6 +505,7 @@ fn main(): I32
     race_tests(work, deps@, runs@, arena)
     race_ksai(work, deps@, runs@, arena)
     race_ksbind(work, deps@, runs@, arena)
+    race_ksagent(work, deps@, runs@, arena)
     race_lsp(work, deps@, arena)
     run_all_raced(runs@, work, arena)
     check_covered(deps.slice(), arena)

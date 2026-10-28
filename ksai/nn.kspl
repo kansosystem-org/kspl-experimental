@@ -4,7 +4,8 @@
 //< backward passes are split into `ksai/nn_grad`, `ksai/attention_train` and `ksai/block_train`,
 //< so a binary that only runs inference carries no training code. Read it after `ksai/tensor`.
 import "ksai/lora"
-import "ksai/tensor" { Tensor }
+import "ksai/parallel"
+import "ksai/tensor" + { Tensor }
 import "std/math"
 import "std/mem" { Arena }
 import "std/prng"
@@ -320,20 +321,182 @@ impl<|T|> Swiglu_mlp<|T|>
         return r.down.forward(gu)
 // ---------------------------------------------------------
 // Grouped-Query Attention (the Llama/Qwen family): Q has n_heads, K/V n_kv_heads (a divisor of
-// n_heads). RoPE is NeoX-style per head_dim with a variable theta. Q/K/V carry a bias and O none
-// (Qwen2's convention). It runs one token at a time over the KV cache.
+// n_heads). RoPE is NeoX-style per head_dim with a variable theta. `Gqa_cache` holds the keys and
+// values and attends over them, for every model whose projections differ, such as one on
+// quantized weights (`ksai/qwen`). `Gqa_attention` adds Qwen2's projections: Q/K/V carry a bias.
 // ---------------------------------------------------------
+pub struct Gqa_cache<|T|> //< the keys and values of every position so far, and attention over them
+    pub n_heads: Sz //< how many query heads
+    pub n_kv_heads: Sz //< how many key and value heads; it must divide `n_heads`
+    pub head_dim: Sz //< how wide one head is
+    pub rope_dims: Sz //< how many of a head's numbers RoPE turns, from its start; even
+    pub rope_theta: F64 //< the base of the positional rotation (RoPE)
+    pub k_cache: Tensor<|T|> //< every key seen so far, `[max_seq, n_kv_heads * head_dim]`
+    pub v_cache: Tensor<|T|> //< every value seen so far, shaped the same
+
+priv struct Attend_job<|T|> //< one call's attention, as each of its threads reads it
+    q: T$@ //< the rotated queries, `rows` rows of `n_heads * head_dim`
+    k: T$@ //< the cache's keys
+    v: T$@ //< the cache's values
+    out: T$@ //< `rows` rows of `n_heads * head_dim`; a thread writes its own heads' columns
+    scores: T$@ //< `seen` numbers per head, each head's working row
+    rows: Sz
+    start: Sz //< the first row's position
+    seen: Sz //< the positions the last row attends to: `start + rows`
+    n_heads: Sz
+    groups: Sz //< how many query heads share one key head
+    head_dim: Sz
+    scale: T
+
+impl<|T|> Gqa_cache<|T|>
+    pub fn new( //< a cache of `max_seq_len` positions, empty
+        n_heads: Sz, //< how many query heads
+        n_kv_heads: Sz, //< how many key and value heads; it must divide `n_heads`
+        head_dim: Sz, //< how wide one head is
+        rope_dims: Sz, //< how many of a head's numbers RoPE turns: `head_dim`, or fewer
+        max_seq_len: Sz, //< the most positions it holds
+        rope_theta: F64, //< the base of the positional rotation (RoPE)
+        arena: Arena$@, //< the arena the cache is allocated from
+    ): Gqa_cache<|T|>
+        // Caution: **Refuse heads that do not share out evenly.** Uneven, the last query heads read
+        // a key head past the cache's row; with no key head, `attend` divides by zero.
+        if n_kv_heads <= 0 || n_heads <= 0 || n_heads % n_kv_heads != 0
+            panic("Gqa_attention: n_kv_heads must be positive and divide n_heads")
+        // RoPE pairs the two halves of what it turns, so an odd or empty part cannot be rotated.
+        if head_dim <= 0 || rope_dims <= 0 || rope_dims % 2 != 0 || rope_dims > head_dim
+            panic("Gqa_attention: rope_dims must be even, positive and at most head_dim")
+        cache_shape: Sz[2] = ::{ max_seq_len, n_kv_heads * head_dim }
+        return Gqa_cache<|T|>::{ .n_heads = n_heads, .n_kv_heads = n_kv_heads, .head_dim = head_dim,
+            .rope_dims = rope_dims, .rope_theta = rope_theta,
+            .k_cache = Tensor<|T|>(Sz[]::cache_shape, arena),
+            .v_cache = Tensor<|T|>(Sz[]::cache_shape, arena) }
+
+    pub fn attend( //< saves the rows' keys and values, and attends each query over its past
+        //< Row `s` sits at position `start_pos + s` and sees every position up to its own. RoPE is
+        //< applied to `q` and `k` here. **A row's result does not depend on the rows around it**,
+        //< so a prompt read in pieces of any size gives the same bits. The key heads are split over
+        //< the cores (`ksai/parallel`), each computed whole, so the thread count changes nothing.
+        r: Self$@,
+        $q: Tensor<|T|>, //< the queries before RoPE, `[rows, n_heads * head_dim]`
+        $k: Tensor<|T|>, //< the keys before RoPE, `[rows, n_kv_heads * head_dim]`
+        v: Tensor<|T|>, //< the values, shaped as the keys
+        start_pos: Sz, //< the first row's position
+    ): Tensor<|T|> //< `[rows, n_heads * head_dim]`, on the queries' arena
+        kv_dim: = r.n_kv_heads * r.head_dim
+        q_dim: = r.n_heads * r.head_dim
+        rows: = q.shape[0] if q.shape.len == 2 else 0
+        if q.shape.len != 2 || q.shape[1] != q_dim || !k.holds_matrix(rows, kv_dim) ||
+            !v.holds_matrix(rows, kv_dim)
+            panic("Gqa_attention: q, k and v are not one row each per token")
+        // Caution: **Stop past the cache's end**: a row written there would land in other memory.
+        if start_pos < 0 || rows > r.k_cache.shape[0] - start_pos
+            panic("Gqa_attention: the positions run past the cache's end")
+        arena: = q.arena
+        q_rot: =
+            q.apply_rope_neox(start_pos, r.head_dim, r.rope_dims, r.rope_theta)
+            catch panic("Gqa_attention: apply_rope_neox failed")
+        k_rot: =
+            k.apply_rope_neox(start_pos, r.head_dim, r.rope_dims, r.rope_theta)
+            catch panic("Gqa_attention: apply_rope_neox failed")
+        for i in Range.asc(rows * kv_dim)
+            (r.k_cache.data + start_pos * kv_dim + i)$ = (k_rot.data + i)$
+            (r.v_cache.data + start_pos * kv_dim + i)$ = (v.data + i)$
+        seen: = start_pos + rows
+        out_shape: Sz[2] = ::{ rows, q_dim }
+        out: = Tensor<|T|>(Sz[]::out_shape, arena)
+        $job: = Attend_job<|T|>::{ .q = q_rot.data, .k = r.k_cache.data, .v = r.v_cache.data,
+            .out = out.data, .scores = T$@::arena.alloc(r.n_heads * seen * sizeof(T)), .rows = rows,
+            .start = start_pos, .seen = seen, .n_heads = r.n_heads,
+            .groups = r.n_heads / r.n_kv_heads, .head_dim = r.head_dim,
+            .scale = T::(1.0 / math.sqrt(F64::r.head_dim)) }
+        _used: = parallel.split(attend_heads<|T|>, Void$@::job@, r.n_kv_heads, 1,
+            parallel.threads_for(r.n_heads * rows, seen, 2 * r.head_dim))
+        return out
+
+priv const SCORE_LANES: Sz = 8 //< the partial sums of a query's dot product with a key
+    //< One running sum waits on its last addition at every step; eight independent ones fill a
+    //< vector register, and the order stays fixed, so the bits do not depend on the machine.
+
+priv fn dot_lanes<|T|>(a: T@, b: T@, n: Sz): T //< the dot product of `n` numbers, in 8 lanes
+    //< Number `i` goes to lane `i % 8`; the lanes are added in order at the end.
+    $acc: T[SCORE_LANES] = ::{}
+    p: T$@ = acc@
+    whole: = n / SCORE_LANES * SCORE_LANES
+    for $g: Sz = 0; g < whole; g += SCORE_LANES
+        for k in Range.asc(SCORE_LANES)
+            (p + k)$ = (p + k)$ + (a + g + k)$ * (b + g + k)$
+    for i in Range(whole, n, 1)
+        (p + i - whole)$ = (p + i - whole)$ + (a + i)$ * (b + i)$
+    $s: T = 0.0
+    for k in Range.asc(SCORE_LANES)
+        s = s + (p + k)$
+    return s
+
+priv fn exp_row<|T|>(sc: T$@, n: Sz, max_val: T) //< each score `x` becomes `e^(x - max_val)`
+    //< F32 scores take `tensor.exp_f32`, so the loop runs on vectors; F64 ones keep `math.exp`.
+    if sizeof(T) == 4
+        m: = F32::max_val
+        // `make test-simd` sees this loop vectorize.
+        for t in Range.asc(n)
+            (sc + t)$ = T::tensor.exp_f32(F32::(sc + t)$ - m)
+    else
+        for t in Range.asc(n)
+            (sc + t)$ = T::math.exp(F64::((sc + t)$ - max_val))
+
+priv fn attend_heads<|T|>(arg: Void$@, first: Sz, last: Sz) //< key heads [first, last) of a call
+    //< Each key head is taken with the query heads that share it, so each key and value row is
+    //< read from memory once for all of them. A query head's weights are a softmax over the
+    //< positions a row sees. Its output is the values multiplied by them, added in ascending
+    //< position.
+    j: = Attend_job<|T|>$@::arg
+    q_dim: = j.n_heads * j.head_dim
+    kv_dim: = q_dim / j.groups
+    for kh in Range(first, last, 1)
+        ko: = kh * j.head_dim // the key head's place in a key row
+        heads: = kh * j.groups // its first query head
+        for s in Range.asc(j.rows)
+            n: = j.start + s + 1
+            for t in Range.asc(n)
+                k_row: = j.k + t * kv_dim + ko
+                for g in Range.asc(j.groups)
+                    h: = heads + g
+                    dot: =
+                        dot_lanes<|T|>(j.q + s * q_dim + h * j.head_dim, k_row, j.head_dim)
+                    (j.scores + h * j.seen + t)$ = dot * j.scale
+            for g in Range.asc(j.groups)
+                sc: = j.scores + (heads + g) * j.seen
+                $max_val: T = 0.0
+                for t in Range.asc(n)
+                    if t == 0 || (sc + t)$ > max_val
+                        max_val = (sc + t)$
+                exp_row<|T|>(sc, n, max_val)
+                // As llama.cpp's softmax: the sum in F64, its reciprocal rounded once to `T`.
+                $sum_exp: F64 = 0.0
+                for t in Range.asc(n)
+                    sum_exp = sum_exp + F64::(sc + t)$
+                inv_sum: = T::(1.0 / sum_exp)
+                for t in Range.asc(n)
+                    (sc + t)$ = (sc + t)$ * inv_sum
+                o: = j.out + s * q_dim + (heads + g) * j.head_dim
+                for d in Range.asc(j.head_dim)
+                    (o + d)$ = T::0.0
+            // t goes outside and the accumulation runs parallel over d (as in
+            // grad_matmul_weight_into). For a fixed d the addition order stays ascending t.
+            for t in Range.asc(n)
+                v_row: = j.v + t * kv_dim + ko
+                for g in Range.asc(j.groups)
+                    w: = (j.scores + (heads + g) * j.seen + t)$
+                    o: = j.out + s * q_dim + (heads + g) * j.head_dim
+                    // `make test-simd` sees this loop vectorize.
+                    for d in Range.asc(j.head_dim)
+                        (o + d)$ = (o + d)$ + w * (v_row + d)$
+
 pub struct Gqa_attention<|T|> //< grouped-query attention: several query heads share one key head
     pub wq: Linear<|T|> //< `[dim, n_heads * head_dim]`, the queries
     pub wk: Linear<|T|> //< `[dim, n_kv_heads * head_dim]`, the keys, of which there are fewer
     pub wv: Linear<|T|> //< the values, shaped as the keys are
     pub wo: Linear<|T|> //< `[n_heads * head_dim, dim]`, the output projection
-    pub n_heads: Sz //< how many query heads
-    pub n_kv_heads: Sz //< how many key and value heads; it must divide `n_heads`
-    pub head_dim: Sz //< how wide one head is
-    pub rope_theta: F64 //< the base of the positional rotation (RoPE)
-    pub k_cache: Tensor<|T|> //< every key seen so far, `[max_seq, n_kv_heads * head_dim]`
-    pub v_cache: Tensor<|T|> //< every value seen so far, shaped the same
+    pub cache: Gqa_cache<|T|> //< the keys and values so far, and the attention over them
 
 impl<|T|> Gqa_attention<|T|>
     pub fn new( //< the four projections, and a cache long enough for the sequence
@@ -344,86 +507,32 @@ impl<|T|> Gqa_attention<|T|>
         max_seq_len: Sz, //< the longest sequence the cache must hold
         rope_theta: F64, //< the base of the positional rotation (RoPE)
         arena: Arena$@): Gqa_attention<|T|>
-        // Caution: **Refuse heads that do not share out evenly.** Uneven, the last query heads read
-        // a key head past the cache's row; with no key head, `forward` divides by zero.
-        if n_kv_heads <= 0 || n_heads <= 0 || n_heads % n_kv_heads != 0
-            panic("Gqa_attention: n_kv_heads must be positive and divide n_heads")
-        // RoPE pairs each head's two halves, so an odd or empty head cannot be rotated.
-        if head_dim <= 0 || head_dim % 2 != 0
-            panic("Gqa_attention: head_dim must be even and positive")
+        cache: =
+            Gqa_cache<|T|>(n_heads, n_kv_heads, head_dim, head_dim, max_seq_len, rope_theta, arena)
         q_dim: = n_heads * head_dim
         kv_dim: = n_kv_heads * head_dim
-        cache_shape: Sz[2] = ::{ max_seq_len, kv_dim }
-        k_cache: = Tensor<|T|>(Sz[]::cache_shape, arena)
-        v_cache: = Tensor<|T|>(Sz[]::cache_shape, arena)
         return Gqa_attention<|T|>::{ .wq = Linear<|T|>(dim, q_dim, arena),
             .wk = Linear<|T|>(dim, kv_dim, arena), .wv = Linear<|T|>(dim, kv_dim, arena),
-            .wo = Linear<|T|>(q_dim, dim, arena), .n_heads = n_heads, .n_kv_heads = n_kv_heads,
-            .head_dim = head_dim, .rope_theta = rope_theta, .k_cache = k_cache,
-            .v_cache = v_cache }
+            .wo = Linear<|T|>(q_dim, dim, arena), .cache = cache }
 
-    pub fn forward( //< attention over everything cached so far, this input included
+    pub fn forward( //< attention over everything cached so far, these inputs included
         r: Self$@,
-        x: Tensor<|T|>, //< the input for this step
-        start_pos: Sz, //< this input's position in the sequence, so the cache and RoPE line up
+        x: Tensor<|T|>, //< the input, one row per token
+        start_pos: Sz, //< the first row's position in the sequence, so the cache and RoPE line up
     ): Tensor<|T|>
         return r.forward_lora(x, start_pos, null, null)
 
     pub fn forward_lora( //< the same, with fine-tuned adapters added at inference
         //< The adapters go on the Q and V projection outputs, before RoPE, where `peft` puts them.
-        r: Self$@, x: Tensor<|T|>, //< the input for this step
-        start_pos: Sz, //< this input's position in the sequence
+        r: Self$@, x: Tensor<|T|>, //< the input, one row per token
+        start_pos: Sz, //< the first row's position in the sequence
         q_lora: lora.Lora<|T|>$@, //< the adapter on the query; null adds nothing
         v_lora: lora.Lora<|T|>$@): Tensor<|T|>
-        // **One token per call**: the scores and the output below are one row, so a second row of
-        // `x` would be dropped without a word.
-        if x.shape.len != 2 || x.shape[0] != 1
-            panic("Gqa_attention: forward takes one token, a single row of x")
-        compute_arena: = x.arena
-        kv_dim: = r.n_kv_heads * r.head_dim
-        q_dim: = r.n_heads * r.head_dim
-        $q0: = r.wq.forward(x)
+        $q: = r.wq.forward(x)
         if q_lora != null
-            q0 = q0 + q_lora.forward(x)
-        q: = q0.apply_rope_neox(start_pos, r.head_dim, r.rope_theta)
-            catch panic("Gqa_attention: apply_rope_neox failed")
-        $k0: = r.wk.forward(x)
-        k: = k0.apply_rope_neox(start_pos, r.head_dim, r.rope_theta)
-            catch panic("Gqa_attention: apply_rope_neox failed")
+            q = q + q_lora.forward(x)
+        k: = r.wk.forward(x)
         $v: = r.wv.forward(x)
         if v_lora != null
             v = v + v_lora.forward(x)
-        r.k_cache.update_row(start_pos, k) catch panic("Gqa_attention: update_row failed")
-        r.v_cache.update_row(start_pos, v) catch panic("Gqa_attention: update_row failed")
-
-        seq_len: = start_pos + 1
-        groups: = r.n_heads / r.n_kv_heads // how many Q heads share one KV head
-        scale: = T::(1.0 / math.sqrt(F64::r.head_dim))
-        out_shape: Sz[2] = ::{ 1, q_dim }
-        out: = Tensor<|T|>(Sz[]::out_shape, compute_arena)
-
-        for h in Range.asc(r.n_heads)
-            qo: = h * r.head_dim // this head's Q offset
-            ko: = (h / groups) * r.head_dim // the corresponding KV head's offset
-            sc_shape: Sz[2] = ::{ 1, seq_len }
-            $sc: = Tensor<|T|>(Sz[]::sc_shape, compute_arena)
-            for t in Range.asc(seq_len)
-                $dot: = T::0.0
-                for d in Range.asc(r.head_dim)
-                    dot =
-                        dot + (q.data + qo + d)$ * (r.k_cache.data + t * kv_dim + ko + d)$
-                (sc.data + t)$ = dot * scale
-            attn: = sc.softmax() catch panic("Gqa_attention: softmax failed")
-            // t goes outside and the accumulation runs parallel over d (as in
-            // grad_matmul_weight_into). For a fixed d the addition order stays ascending t, so the
-            // result is unchanged bit for bit. v_cache is read contiguously within t's row,
-            // which favours auto-vectorization.
-            for d in Range.asc(r.head_dim)
-                (out.data + qo + d)$ = T::0.0
-            for t in Range.asc(seq_len)
-                attn_t: = (attn.data + t)$
-                v_row: = r.v_cache.data + t * kv_dim + ko
-                // `make test-simd` sees this loop vectorize.
-                for d in Range.asc(r.head_dim)
-                    (out.data + qo + d)$ = (out.data + qo + d)$ + attn_t * (v_row + d)$
-        return r.wo.forward(out)
+        return r.wo.forward(r.cache.attend(q, k, v, start_pos))

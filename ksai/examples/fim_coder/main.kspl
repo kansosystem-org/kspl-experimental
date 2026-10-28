@@ -13,6 +13,7 @@
 import "ksai/examples/llama_engine/model" as ai_model
 import "ksai/model_file" as ai_file
 import "ksai/optim" as ai_optim
+import "ksai/parallel"
 import "ksai/sampler" as ai_sampler
 import "ksai/tensor" { Tensor }
 import "ksai/tokenizer" as ai_tokenizer
@@ -201,6 +202,9 @@ priv fn train(corpus: U8[], at: Paths, plan: Schedule, u: ai_optim.Updater<|F32|
     defer work: = Arena(64 * 1024 * 1024)
     $batch: = Batch::{ .model = model@ }
     threads: = math.min(plan.threads, plan.batch)
+    // The batch's threads keep the CPUs busy, so a product does not split again over them.
+    if threads > 1
+        parallel.set_threads(1)
     $workers: = List<|Worker|>(model_arena)
     for t in Range.asc(threads)
         workers

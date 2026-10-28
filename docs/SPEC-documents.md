@@ -317,7 +317,7 @@ The repository has three layers. From the top:
 | Layer | Contents | Role |
 | :-- | :-- | :-- |
 | index | The root `README.md`, `docs/` | Shows where everything is. **May point downward** |
-| implementation | `ksplc/` / `std/` / `ksai/` / `kspeg/` / `ksos/` / `kssrv/` / `ksdb/` / `ksbind/` / `ksmd/` | References among them go **only in the direction of import** (`ksplc→std`, `ksai→std`, `kspeg→std`, `ksos→std`, `kssrv→std`, `ksdb→std`, `ksbind→std`, `ksmd→std`, `ksplc→kspeg`, `ksos→ksai`, `kssrv→ksai`, `ksos→ksdb`) |
+| implementation | `ksplc/` / `std/` / `ksai/` / `kspeg/` / `ksos/` / `kssrv/` / `ksdb/` / `ksbind/` / `ksmd/` / `ksagent/` | References among them go **only in the direction of import** (`ksplc→std`, `ksai→std`, `kspeg→std`, `ksos→std`, `kssrv→std`, `ksdb→std`, `ksbind→std`, `ksmd→std`, `ksagent→std`, `ksplc→kspeg`, `ksos→ksai`, `kssrv→ksai`, `ksos→ksdb`) |
 | leaf | `tests/` / `tools/` | Point upward only |
 
 The chart shows the shape with a few of the packages; the table above is the full list of directions.

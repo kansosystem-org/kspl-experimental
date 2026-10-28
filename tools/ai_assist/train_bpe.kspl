@@ -11,13 +11,14 @@
 // Usage:
 //   ./out/train_bpe.exe --vocab=2000
 // ==========================================
+import "ksai/pretokenizer"
+import "ksai/tokenizer" as ai_tokenizer
 import "std/argparse"
 import "std/chars"
 import "std/ds" { List, Map }
 import "std/fs"
 import "std/io"
 import "std/mem" { Arena }
-import "std/regex"
 import "std/str" { Str_builder }
 import "std/strfmt"
 import "std/sys"
@@ -28,11 +29,6 @@ priv const VAL_PATH: U8[] = "tools/ai_assist/corpus/val.jsonl"
 priv const OUT_DIR: U8[] = "tools/ai_assist/tokenizer"
 priv const VOCAB_OUT: U8[] = "tools/ai_assist/tokenizer/vocab.txt"
 priv const MERGES_OUT: U8[] = "tools/ai_assist/tokenizer/merges.txt"
-
-priv const WORD_PATTERN: U8[] = "[A-Za-z_][A-Za-z0-9_]*|\\d+|\\s+|." //<
-    //< A simple pre-split for code (identifier / number / whitespace run / any other character)
-    //< The trailing `.` takes any one character; without it the splitting stops at the first other
-    //< character and the rest of the text is dropped.
 
 priv const PAIR_SHIFT: Sz = 1048576 //< how a pair is packed to be a Map key
     //< An id is below the vocabulary size, so 2^20 is enough.
@@ -62,22 +58,16 @@ priv fn load_text(path: U8[], arena: Arena$@): U8[] //<
     return out
 
 priv fn count_words(text: U8[], arena: Arena$@): Map<|U8[], Sz|>$@ //<
-    //< Pre-splits the text and counts each word's occurrences
-    defer rx: = regex.Regex.compile(WORD_PATTERN)
-        catch panic("the word pattern itself does not compile")
+    //< Splits the text into chunks and counts each chunk's occurrences
+    //< **The chunks are the tokenizer's own** (`pretokenizer.chunk_end`): a merge learnt across a
+    //< boundary the tokenizer keeps would never apply when it encodes.
     out: = arena.create(Map<|U8[], Sz|>.new_with_cap(4096, arena))
     $pos: Sz = 0
     for pos < text.len
-        rest: = text.sub_from(pos)
-        $end: Sz = 0
-        if m: = rx.find(rest)
-            if m.end > m.start
-                w: = rest.sub(m.start, m.end - m.start)
-                out.set(w, out.get(w).unwrap_or(0) + 1)
-                end = m.end
-        if end == 0
-            break
-        pos += end
+        end: = pretokenizer.chunk_end(text, pos, .qwen2)
+        w: = text.sub(pos, end - pos)
+        out.set(w, out.get(w).unwrap_or(0) + 1)
+        pos = end
     return out
 
 priv fn build_corpus(words: Map<|U8[], Sz|>$@, arena: Arena$@): List<|Word|> //<
@@ -178,43 +168,17 @@ priv fn write_merges(merges: List<|Merge|>$@)
         f.s(b.slice())
     oracle.close_or_die(f@, path)
 
-priv fn count_tokens(text: U8[], merges: List<|Merge|>$@, arena: Arena$@): Sz //<
-    //< How many tokens the val text becomes, merging in rank order (the compression rate)
-    $rank: = Map<|Sz, Sz|>.new_with_cap(8192, arena)
-    defer rank.free()
-    $merged_id: = Map<|Sz, Sz|>.new_with_cap(8192, arena)
-    defer merged_id.free()
-    for i in Range.asc(merges.len)
-        m: = merges.get(i)
-        key: Sz = m.a * PAIR_SHIFT + m.b
-        rank.set(key, i)
-        merged_id.set(key, m.id)
-
-    words: = count_words(text, arena)
-    $total: Sz = 0
-    for e in words.items()
-        $ids: = List<|I32|>(arena)
-        w: = e.key
-        for j in Range.asc(w.len)
-            ids.push(w[j] + 1)
-        for ids.len >= 2
-            $best_rank: Sz = -1
-            $best_i: Sz = -1
-            for $j: Sz = 0; j + 1 < ids.len; j += 1
-                key: Sz = ids.get(j) * PAIR_SHIFT + ids.get(j + 1)
-                r: = rank.get(key).unwrap_or(-1)
-                if r >= 0 && (best_rank < 0 || r < best_rank)
-                    best_rank = r
-                    best_i = j
-            if best_i < 0
-                break
-            key: Sz = ids.get(best_i) * PAIR_SHIFT + ids.get(best_i + 1)
-            ids.set(best_i, I32::merged_id.get(key).unwrap_or(0))
-            for $j: = best_i + 1; j + 1 < ids.len; j += 1
-                ids.set(j, ids.get(j + 1))
-            ids.len -= 1
-        total += ids.len * e.value
-    return total
+priv fn count_tokens(text: U8[], expand: List<|U8[]|>$@, merges: List<|Merge|>$@, arena: Arena$@):
+    Sz //<
+        //< How many tokens the val text becomes (the compression rate)
+        //< **Encoded by `ksai/tokenizer` itself**, from the words and rules just learnt, so the
+        //< rate is the one `fim_coder` meets.
+    $tok: = ai_tokenizer.Tokenizer(arena)
+    for i in Range.asc(expand.len)
+        tok.add_token(expand.get(i), I32::i)
+    for m in merges
+        tok.add_merge(m.a, m.b, m.id)
+    return tok.encode(text, arena).len
 
 fn main() //< derives the BPE vocabulary and merges from the corpus
     defer arena: = Arena(512 * 1024 * 1024)
@@ -245,7 +209,7 @@ fn main() //< derives the BPE vocabulary and merges from the corpus
     write_merges(merges@)
 
     val_text: = load_text(VAL_PATH, arena)
-    val_tokens: = count_tokens(val_text, merges@, arena)
+    val_tokens: = count_tokens(val_text, expand@, merges@, arena)
     io.out()
         .s("BPE trained: vocab=\{I32::expand.len\} (target \{I32::target_vocab\}), \
             merges=\{I32::merges.len\}\n")

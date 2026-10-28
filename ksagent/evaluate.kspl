@@ -1,0 +1,194 @@
+//< Scoring a model on questions whose right answer is known: `ksagent eval`
+//< The questions file uses the chat file's headings. Each `## Question` section's last line says
+//< where the answer stands: `Expect: <path> <from>-<to>`, or `Expect: none` when the files do not
+//< hold it. Each question runs the same loop as `ask` (`agent.run`).
+import "ksagent/agent"
+import "ksagent/answer" + { Answer, Lang }
+import "ksagent/chat"
+import "ksagent/files"
+import "std/chars"
+import "std/ds" { List }
+import "std/io"
+import "std/json" { Json_builder }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/strfmt" as _strfmt
+import "std/strnum"
+import "std/sys"
+
+priv const EXPECT: U8[] = "Expect:" //< what opens the last line of a question in the file
+priv const SHOWN_QUESTION_BYTES: Sz = 120 //< how much of a question its row shows
+
+struct Case //< one question and where its answer stands
+    question: U8[]
+    lang: Lang
+    path: U8[] //< the file the answer stands in; empty for `Expect: none`
+    from_line: I64
+    to_line: I64
+
+fn read_cases(text: U8[], arena: Arena$@): List<|Case|>!U8[] //<
+    //< The questions of a questions file, in order, or why one cannot be read
+    $out: = List<|Case|>(arena)
+    all: = chat.sections(text, arena)
+    for i in Range.asc(all.len)
+        s: = all.get(i)
+        if s.kind != chat.Kind.question
+            continue
+        body: = s.body(text)
+        cut: = body.rfind_char('\n').unwrap_or(0)
+        last: = body.sub_from(cut).trim_spaces()
+        question: = body.sub(0, cut).trim_spaces()
+        if !last.starts_with(EXPECT) || question.len == 0
+            throw arena.text()
+                .s("question \{out.len + 1\} must end with a line `Expect: <path> <from>-<to>` or \
+                    `Expect: none`, below its text").take()
+        $c: = Case::{ .question = question, .lang = s.lang, .path = "", .from_line = 0I64,
+            .to_line = 0I64 }
+        if !read_expect(last.sub_from(EXPECT.len).trim_spaces(), c@)
+            throw arena.text().s("question \{out.len + 1\}: cannot read `").s(last)
+                .s("`; write `Expect: rules/leave.md 12-15` or `Expect: none`").take()
+        out.push(c)
+    if out.len == 0
+        throw "the file holds no `## Question` section"
+    return out
+
+priv fn read_expect(rest: U8[], c: Case$@): Bool //< reads `<path> <from>-<to>` or `none` into c
+    if rest.equals("none")
+        return true
+    space: = rest.rfind_char(' ') catch
+        return false
+    range: = rest.sub_from(space + 1)
+    dash: = range.find_char('-') catch
+        return false
+    c.path = rest.sub(0, space).trim_spaces().strip_prefix("./")
+    c.from_line = range.sub(0, dash).to_i64() catch
+        return false
+    c.to_line = range.sub_from(dash + 1).to_i64() catch
+        return false
+    return c.path.len > 0 && c.from_line >= 1I64 && c.to_line >= c.from_line
+
+fn score(c: Case@, a: Answer@, arena: Arena$@): U8[] //<
+    //< `pass`, or `fail:` and why: the row's result
+    //< A checked source passes when it names the expected file with lines that overlap the
+    //< expected range. For `Expect: none`, only the not-found answer passes.
+    switch a.outcome
+    case .stopped
+        return "fail: stopped at a cap"
+    case .failed
+        return "fail: no answer from the model server"
+    case .not_found
+        return "pass" if c.path.len == 0 else "fail: said not found"
+    case .answered {}
+    if c.path.len == 0
+        return "fail: answered, but the files do not hold the answer"
+    if a.sources.len == 0
+        return "fail: no checked source"
+    for i in Range.asc(a.sources.len)
+        s: = a.sources.get(i)
+        if s.path.equals(c.path) && s.from_line <= c.to_line && s.to_line >= c.from_line
+            return "pass"
+    first: = a.sources.get(0)
+    return arena.text().s("fail: cites ").s(first.path).c(' ')
+        .s("\{first.from_line\}-\{first.to_line\}").take()
+
+struct Row //< one question's line in the table
+    question: U8[]
+    expected: U8[]
+    result: U8[] //< `pass`, or `fail:` and why (`score`)
+    passed: Bool
+    unverified: Bool //< whether the answer had no checked source (`Answer.is_unverified`)
+    seconds: F64
+
+struct Totals //< the line under the table
+    passed: Sz
+    failed: Sz
+    unverified: Sz //< answers with no checked source
+    seconds: F64 //< the seconds of all questions together
+
+fn run_all(job: agent.Ask, cases: List<|Case|>@, arena: Arena$@): List<|Row|> //<
+    //< Asks each question in turn and scores its answer
+    $rows: = List<|Row|>(arena)
+    for i in Range.asc(cases.len)
+        c: = cases.get(i)
+        if job.trace
+            io.err().s("question \{i + 1\} of \{cases.len\}\n")
+        started: = sys.mono_us()
+        none: = List<|agent.Turn|>(arena)
+        a: = agent.run(job, c.question, none@, c.lang, arena)
+        seconds: = F64::(sys.mono_us() - started) / 1000000.0
+        expected: =
+            ("none" if c.path.len == 0
+            else arena.text().s(c.path).s(" \{c.from_line\}-\{c.to_line\}").take())
+        result: = score(c@, a@, arena)
+        rows
+            .push(Row::{ .question = c.question, .expected = expected, .result = result,
+            .passed = result.equals("pass"), .unverified = a.is_unverified(), .seconds = seconds })
+    return rows
+
+fn totals(rows: List<|Row|>@): Totals //< the counts under the table
+    $t: = Totals::{ .passed = 0, .failed = 0, .unverified = 0, .seconds = 0.0 }
+    for i in Range.asc(rows.len)
+        r: = rows.get(i)
+        if r.passed
+            t.passed += 1
+        else
+            t.failed += 1
+        if r.unverified
+            t.unverified += 1
+        t.seconds += r.seconds
+    return t
+
+// ==========================================
+// The table, as Markdown or as ksmd
+// ==========================================
+
+fn markdown(rows: List<|Row|>@, arena: Arena$@): U8[] //< the table and its totals, as Markdown
+    out: = arena.text()
+    out.s("| # | Question | Expected | Result | Seconds |\n| --: | :-- | :-- | :-- | --: |\n")
+    for i in Range.asc(rows.len)
+        r: = rows.get(i)
+        out.s("| \{i + 1\} | ")
+        md_cell(out, shown(r.question, arena))
+        out.s(" | ")
+        md_cell(out, r.expected)
+        out.s(" | ")
+        md_cell(out, r.result)
+        out.s(" | \{r.seconds:.1\} |\n")
+    out.c('\n').s(totals_line(totals(rows), rows.len, arena)).c('\n')
+    return out.take()
+
+priv fn md_cell(out: Writer, text: U8[]) //< writes text into a Markdown cell: a `|` is escaped
+    for c in text
+        if c == '|'
+            out.c('\\')
+        out.c(c)
+
+fn ksmd(rows: List<|Row|>@, arena: Arena$@): U8[] //< the table and its totals, as a ksmd file
+    //< **ksmd's table holds quoted text and bare numbers**, so it is not the Markdown form.
+    $b: = Json_builder(arena)
+    out: = arena.text()
+    out.s("%ksmd 1\n\n# ksagent evaluation\n\n:::table name=\"eval\"\n")
+    out.s("| \"#\" | \"Question\" | \"Expected\" | \"Result\" | \"Seconds\" |\n")
+    for i in Range.asc(rows.len)
+        r: = rows.get(i)
+        out.s("| \{i + 1\} | ").s(quoted(b@, shown(r.question, arena))).s(" | ")
+            .s(quoted(b@, r.expected)).s(" | ").s(quoted(b@, r.result)).s(" | \{r.seconds:.1\} |\n")
+    out.s(":::\n\n").s(totals_line(totals(rows), rows.len, arena)).c('\n')
+    return out.take()
+
+priv fn quoted(b: Json_builder$@, text: U8[]): U8[] //< text as a JSON string, quotes included
+    defer $out: = Str_builder()
+    b.str_val(text).dump(out@)
+    return b.arena.dup_str(out.slice())
+
+priv fn shown(question: U8[], arena: Arena$@): U8[] //< a question on one line, cut if long
+    one: = answer.collapse_spaces(question, arena)
+    if one.len <= SHOWN_QUESTION_BYTES
+        return one
+    return arena.text().s(files.cut(one, SHOWN_QUESTION_BYTES)).s("…").take()
+
+priv fn totals_line(t: Totals, n: Sz, arena: Arena$@): U8[] //< the totals, as one sentence
+    average: = t.seconds / F64::n if n > 0 else 0.0
+    return arena.text()
+        .s("Passed: \{t.passed\}. Failed: \{t.failed\}. Answers with no checked source: \
+            \{t.unverified\}. Average: \{average:.1\} seconds per question.").take()

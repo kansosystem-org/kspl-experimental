@@ -1,0 +1,133 @@
+//< Reading a reference file of a GGUF format, and decoding it against the reference's numbers
+//< `make_quant_fixtures.py` and `gguf_quant_check.py` in `tools/ai_assist/` write these files;
+//< the first one's docstring gives the layout. The unit test and `ksai/benches/bench_quant.kspl`
+//< both read them here, so the two cannot read one layout two ways.
+import "ksai/quant" + { Quant_format, Quant_matrix }
+import "std/bytes" as std_bytes
+import "std/chars"
+import "std/io"
+import "std/mem" + { Arena }
+import "std/str"
+import "std/strfmt"
+
+priv const HEAD: Sz = 28 //< the magic and six U32s before a reference file's data
+
+struct Case //< one reference file, read
+    format: Quant_format
+    rows: Sz
+    cols: Sz
+    inputs: F32$[] //< what a quantizer starts from; empty where the file holds none
+    encoded: U8[] //< the bytes, a view into the file
+    decoded: F32$[] //< the reference's numbers, `rows × cols`
+
+priv fn field(file: U8[], k: Sz): Sz //< the k-th U32 after the magic
+    return Sz::file.get_u32_le(4 + 4 * k)
+
+fn floats_at(file: U8[], at: Sz, n: Sz, arena: Arena$@): F32$[] //< n F32s copied out of bytes
+    p: = F32$@::arena.alloc(n * 4 + 4)
+    mem.copy(Void$@::p, Void$@::(file.ptr + at), n * 4)
+    return F32$[]::{ .ptr = p, .len = n }
+
+priv fn format_of(ggml_type: Sz): Quant_format //< ggml's `GGML_TYPE_*` number, as a format
+    switch ggml_type
+    case 0
+        return .f32
+    case 1
+        return .f16
+    case 6
+        return .q5_0
+    case 8
+        return .q8_0
+    case 11
+        return .q3_k
+    case 12
+        return .q4_k
+    case 13
+        return .q5_k
+    case 14
+        return .q6_k
+    case 30
+        return .bf16
+    default
+        panic("quant_case: a ggml type ksai does not read")
+
+fn read_case(file: U8[], arena: Arena$@): Case //<
+    //< A reference file, its header checked against its length before anything is read
+    assert(file.len >= HEAD && file.sub(0, 4).equals("KSQF"), "quant_case: not a reference file")
+    rows: = field(file, 1)
+    cols: = field(file, 2)
+    n_in: = field(file, 3)
+    n_enc: = field(file, 4)
+    n_dec: = field(file, 5)
+    assert(n_dec == rows * cols, "quant_case: the decoded count is not rows × cols")
+    assert(file.len == HEAD + 4 * n_in + n_enc + 4 * n_dec, "quant_case: the length is wrong")
+    return Case::{
+        .format = format_of(field(file, 0)),
+        .rows = rows,
+        .cols = cols,
+        .inputs = floats_at(file, HEAD, n_in, arena),
+        .encoded = file.sub(HEAD + 4 * n_in, n_enc),
+        .decoded = floats_at(file, HEAD + 4 * n_in + n_enc, n_dec, arena),
+    }
+
+fn decode_mismatches(c: Case@, arena: Arena$@): Sz //<
+    //< How many numbers ksai decodes to other bits than the reference; the first few are printed
+    m: = Quant_matrix.from_bytes(c.format, c.rows, c.cols, c.encoded) catch e
+        io.err().s("the sizes were refused: \{e\}\n")
+        return c.rows * c.cols
+    out: = F32$[]::{ .ptr = F32$@::arena.alloc(c.cols * 4), .len = c.cols }
+    $bad: Sz = 0
+    for i in Range.asc(c.rows)
+        m.dequantize_row(i, out) catch panic("quant_case: dequantize_row refused a valid row")
+        for k in Range.asc(c.cols)
+            want: = quant.f32_bits(c.decoded[i * c.cols + k])
+            got: = quant.f32_bits(out[k])
+            if want != got
+                if bad < 5
+                    io.err().s("row \{i\} number \{k\}: bits \{got:x\} for \{want:x\}\n")
+                bad += 1
+    return bad
+
+priv const PRODUCT_HEAD: Sz = 20 //< the magic and four U32s before a product file's data
+
+struct Product_case //< one product file: inputs, llama.cpp's rounding of them, a weight, products
+    format: Quant_format //< the weight's format
+    rows: Sz //< the weight's rows
+    cols: Sz
+    n: Sz //< the input rows
+    inputs: F32$[] //< `n × cols` F32 numbers
+    rounded: U8[] //< each input row as llama.cpp's Q8_K or Q8_0 blocks, ggml's bytes
+    weights: U8[] //< the weight's bytes, as GGUF stores them
+    products: F32$[] //< llama.cpp's products, `n × rows`, an input row's outputs together
+
+fn rounded_block_bytes(format: Quant_format): Sz //< ggml's size of one rounded input block
+    //< A K format's inputs are Q8_K blocks: an F32 scale, 256 bytes and sixteen I16 sums. The
+    //< others' are Q8_0 blocks.
+    return 4 + 256 + 32 if format.block_len() == 256 else 34
+
+fn read_product_case(file: U8[], arena: Arena$@): Product_case //<
+    //< A product file, its length checked first
+    //< The layout is `write_product`'s in `tools/ai_assist/make_quant_fixtures.py`.
+    assert(file.len >= PRODUCT_HEAD && file.sub(0, 4).equals("KSQP"),
+        "quant_case: not a product file")
+    format: = format_of(field(file, 0))
+    rows: = field(file, 1)
+    cols: = field(file, 2)
+    n: = field(file, 3)
+    in_block: = 256 if format.block_len() == 256 else 32
+    n_rounded: = n * (cols / in_block) * rounded_block_bytes(format)
+    n_weights: = rows * (format.row_bytes(cols) catch panic("quant_case: a misshapen weight"))
+    at_rounded: = PRODUCT_HEAD + 4 * n * cols
+    at_weights: = at_rounded + n_rounded
+    at_products: = at_weights + n_weights
+    assert(file.len == at_products + 4 * n * rows, "quant_case: the product file's length is wrong")
+    return Product_case::{
+        .format = format,
+        .rows = rows,
+        .cols = cols,
+        .n = n,
+        .inputs = floats_at(file, PRODUCT_HEAD, n * cols, arena),
+        .rounded = file.sub(at_rounded, n_rounded),
+        .weights = file.sub(at_weights, n_weights),
+        .products = floats_at(file, at_products, n * rows, arena),
+    }

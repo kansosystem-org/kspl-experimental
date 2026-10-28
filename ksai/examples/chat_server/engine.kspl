@@ -1,0 +1,170 @@
+//< One model and its key-value cache, kept across requests: a prompt in, the generated tokens out
+//< **The cache is kept for the longest prefix of tokens a new prompt shares with what it holds.**
+//< A client re-sends the whole conversation each round, so only the new end is computed. A model
+//< with delta nets keeps copies of its running state too, since the state cannot go back. Why is
+//< "The cache is kept across requests" in `ksai/docs/DESIGN-serving.md`.
+import "ksai/examples/chat_server/template" { Marks }
+import "ksai/qwen" { Qwen, Qwen_state }
+import "ksai/sampler"
+import "ksai/tensor" { Tensor }
+import "ksai/tokenizer"
+import "std/chars" // `sub`
+import "std/ds" { List }
+import "std/math"
+import "std/mem" { Arena }
+import "std/prng"
+
+priv const STEP_CHUNK: Sz = 64 * 1024 * 1024 //< the largest chunk of one step's working memory
+priv const PROMPT_PIECE: Sz = 64 //< the most prompt tokens one step reads together
+    //< A step decodes each weight block once for all its tokens, so a larger piece reads a prompt
+    //< faster. The working memory grows with it: about 36 KiB a token for Qwen3-4B's widths.
+priv const CHECKPOINTS: Sz = 4 //< the copies of a running state kept, each where an answer starts
+    //< A conversation that goes back to one of the last four prompts reads on from its copy. Each
+    //< copy of Qwen3.5-9B's state takes about 50 MiB.
+
+struct Engine //< the model, its tokenizer, and what its cache holds now
+    model: Qwen
+    tok: tokenizer.Tokenizer$@
+    marks: Marks
+    context: Sz //< the most tokens a prompt and its answer can hold together
+        //< **The model's cache must hold this many** (`Qwen.load`'s `context`).
+    seen: List<|I32|> //< the tokens whose keys and values the cache holds, from position 0
+    logits: Tensor<|F32|> //< the scores for the token after the last one in `seen`
+    step: Arena$@ //< one step's working memory, emptied after each step
+    saved: List<|Checkpoint|> //< copies of the running state; empty for a model with none
+    requests: Sz //< prompts fed so far, which dates each copy
+
+priv fn age(c: Checkpoint): Sz //< when a copy was made; 0 for an emptied one, written over first
+    return c.made if c.state.tokens > 0 else 0
+
+struct Checkpoint //< a copy of the running state, and when it was made
+    state: Qwen_state //< its `tokens` are the first tokens of `seen` it follows; 0 for no copy
+    made: Sz //< the request that made it; the oldest is written over first
+
+enum Finish //< why generation stopped
+    stop //< the model ended its turn
+    length //< the token limit or the context was reached
+
+struct Generated //< what one generation gave
+    tokens: List<|I32|> //< the generated tokens, the one that ended the turn left out
+    reused: Sz //< how many prompt tokens kept their place in the cache from before
+    finish: Finish
+
+struct Picker //< how the next token is chosen from the scores
+    cfg: sampler.Sample_config //< `Sample_config.greedy()` always takes the top score
+    rng: prng.Prng
+
+impl Engine
+    fn new(model: Qwen, tok: tokenizer.Tokenizer$@, marks: Marks, context: Sz, arena: Arena$@):
+        Engine //< an engine whose cache holds nothing yet
+        shape: Sz[2] = ::{ 1, model.cfg.vocab }
+        $saved: = List<|Checkpoint|>(arena)
+        if model.recurrent()
+            for _i in Range.asc(CHECKPOINTS)
+                saved.push(Checkpoint::{ .state = model.new_state(arena), .made = 0 })
+        return Engine::{ .model = model, .tok = tok, .marks = marks, .context = context,
+            .seen = List<|I32|>(arena), .logits = Tensor<|F32|>(Sz[]::shape, arena),
+            .step = Arena(STEP_CHUNK), .saved = saved, .requests = 0 }
+
+    fn outside_vocab(r: Self@, ids: I32[]): I32? //<
+        //< The first ID the model has no row for, or none
+        //< Caution: **Check before feeding.** The embedding's own check stops the whole server.
+        for id in ids
+            if id < 0 || Sz::id >= r.model.cfg.vocab
+                return .some(id)
+        return .none
+
+    fn feed(r: Self$@, prompt: I32[]): Sz //<
+        //< Brings the cache to `prompt` and the scores to its last token; returns the tokens kept
+        //< **At least the last token is computed again**: its scores are not kept, only its keys.
+        //< The rest is read `PROMPT_PIECE` tokens at a time. `prompt` must be non-empty, fit
+        //< `context`, and pass `outside_vocab`. A running state goes back to its latest copy at or
+        //< before the shared start. It is copied again where the answer's turn opens: the next
+        //< prompt shares the text before it, whether it goes on with this answer or writes the
+        //< answer back without its thinking.
+        $keep: Sz = 0
+        for keep < r.seen.len && keep + 1 < prompt.len && r.seen[keep] == prompt[keep]
+            keep += 1
+        r.requests += 1
+        if !r.model.recurrent()
+            r.seen.len = keep
+            r.read(prompt, keep, prompt.len)
+            return keep
+        keep = r.go_back(keep)
+        r.seen.len = keep
+        $turn: = prompt.len - 1
+        for turn > 0 && prompt[turn] != r.marks.im_start
+            turn -= 1
+        if turn >= keep
+            r.read(prompt, keep, turn)
+            r.save()
+            r.read(prompt, turn, prompt.len)
+        else
+            r.read(prompt, keep, prompt.len)
+        return keep
+
+    priv fn read(r: Self$@, prompt: I32[], from: Sz, to: Sz) //< tokens [from, to), in pieces
+        $at: = from
+        for at < to
+            n: = math.min(PROMPT_PIECE, to - at)
+            r.advance(prompt.sub(at, n))
+            at += n
+
+    priv fn go_back(r: Self$@, keep: Sz): Sz //<
+        //< the tokens kept once the state stands at or before `keep`
+        //< The state follows every token in `seen`. Short of that, it goes back to the latest
+        //< copy at or before `keep`, or to nothing. A copy past the tokens kept goes: the cache
+        //< rows it needs are written over next.
+        $back: Sz = 0
+        $best: Sz = r.saved.len
+        for i in Range.asc(r.saved.len)
+            t: = r.saved.get(i).state.tokens
+            if t > keep
+                (r.saved.ptr + i).state.tokens = 0
+            else if t > back
+                back = t
+                best = i
+        if keep == r.seen.len
+            return keep
+        if best < r.saved.len
+            r.model.restore_state((r.saved.ptr + best).state@)
+        return back
+
+    priv fn save(r: Self$@) //<
+        //< copies the running state, over a copy of these tokens, an emptied one, or the oldest
+        $slot: Sz = 0
+        for i in Range.asc(r.saved.len)
+            c: = r.saved.get(i)
+            if c.state.tokens == r.seen.len
+                slot = i
+                break
+            if age(c) < age(r.saved.get(slot))
+                slot = i
+        c: = r.saved.ptr + slot
+        r.model.save_state(c.state@)
+        c.made = r.requests
+
+    priv fn advance(r: Self$@, ids: I32[]) //< computes tokens at the next positions
+        out: = r.model.forward(ids, r.seen.len, r.step)
+        for i in Range.asc(r.logits.size)
+            (r.logits.data + i)$ = (out.data + i)$
+        r.step.reset()
+        for id in ids
+            r.seen.push(id)
+
+    fn generate(r: Self$@, prompt: I32[], limit: Sz, pick: Picker$@, arena: Arena$@): Generated //<
+        //< Generates after `prompt` until the turn ends, `limit` tokens, or the context is full
+        reused: = r.feed(prompt)
+        $out: = Generated::{ .tokens = List<|I32|>(arena), .reused = reused, .finish = .length }
+        for
+            next: = sampler.sample(r.logits, pick.cfg, pick.rng@, r.step)
+            r.step.reset()
+            if next == r.marks.im_end || next == r.marks.end_of_text
+                out.finish = .stop
+                break
+            out.tokens.push(next)
+            if out.tokens.len >= limit || r.seen.len >= r.context
+                break
+            one: I32[1] = ::{ next }
+            r.advance(I32[]::one)
+        return out

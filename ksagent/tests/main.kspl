@@ -1,0 +1,23 @@
+//< ksagent's tests, run as a program of their own (`make test` in this package's folder)
+//< `all.kspl` holds them; this file gives them a `main` and a folder to work in, which
+//< `ksagent/Makefile` empties first.
+import "ksagent/tests/all"
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/sys"
+import "std/verdict"
+
+fn main(): I32 //< the exit code is the checks' verdict (`verdict.finish`)
+    verdict.begin("ksagent")
+    io.set_line_buffered()
+    argv: = sys.args()
+    if argv.len != 2
+        return verdict.fatal("usage: ksplc run tests/main.kspl <work folder>")
+    defer arena: = Arena(1024 * 1024)
+    work: = fs.absolute(argv.get(1), arena) catch
+        return verdict.fatal("the work folder's path cannot be made absolute")
+    fs.mkdir_all(work) catch
+        return verdict.fatal("the work folder cannot be made")
+    all.run_ksagent(work, arena)
+    return verdict.finish()

@@ -1,0 +1,201 @@
+//< The model server: one chat request goes out, one reply comes back
+//< It speaks the chat-completions protocol many local servers share: `POST /v1/chat/completions`
+//< with `"tools"`, and `"stream": false`. **Only plain http, and only a reply that names its
+//< length** (`Content-Length`): `std/http` reads no other. Why is "The model server" in
+//< `ksagent/docs/DESIGN-agent.md`.
+import "std/chars"
+import "std/ds" { List }
+import "std/http"
+import "std/json"
+import "std/mem" { Arena }
+import "std/net"
+import "std/str" { Str_builder }
+import "std/strfmt" as _strfmt
+import "std/strnum"
+import "std/sys"
+
+const DEFAULT_URL: U8[] = "http://127.0.0.1:8081" //< where `llama-server --port 8081` listens
+const API_KEY_ENV: U8[] = "KSAGENT_API_KEY" //< the environment variable an API key comes from
+    //< Caution: **Never an option.** The command line shows in the process list, to anyone on the
+    //< machine.
+priv const CHAT_PATH: U8[] = "/v1/chat/completions"
+priv const MAX_REPLY_BYTES: Sz = 8 * 1024 * 1024 //< a larger reply is refused, not read
+priv const SEND_WAIT_MS: I32 = 30000 //< how long sending one request may take
+    //< The reply's wait is the person's `--timeout`; a send only waits for the server to read.
+priv const DETAIL_BYTES: Sz = 300 //< how much of a refusal's body a message shows
+
+struct Server //< where the model server is, and what each request to it carries
+    host: U8[] //< a name or an IPv4 address
+    port: I32
+    base: U8[] //< the path the URL gave before `/v1/…`, with no `/` at its end; often empty
+    model: U8[] //< the model name each request names
+    timeout_ms: I32 //< how long one reply may take to arrive whole
+    api_key: U8[] //< sent as `Authorization: Bearer`; empty sends none
+
+fn parse_url(url: U8[], model: U8[], timeout_ms: I32, arena: Arena$@): Server!U8[] //<
+    //< The server a `--model-url` names, or why it cannot be used
+    if url.starts_with("https://")
+        throw "https is not supported yet: give an http:// address, such as a server on this \
+            machine"
+    if !url.starts_with("http://")
+        throw "the model URL must start with http://, such as http://127.0.0.1:8081"
+    rest: = url.sub_from("http://".len)
+    slash: = rest.find_char('/').unwrap_or(rest.len)
+    host_port: = rest.sub(0, slash)
+    $base: = rest.sub_from(slash)
+    for base.len > 0 && base[base.len - 1] == '/'
+        base = base.sub(0, base.len - 1)
+    $host: = host_port
+    $port: I64 = 80I64
+    if colon: = host_port.rfind_char(':')
+        host = host_port.sub(0, colon)
+        port = host_port.sub_from(colon + 1).to_i64() catch
+            throw "the port in the model URL is not a number"
+    if host.len == 0 || host.find_char('[').is_some()
+        throw "the model URL must name a host: a name or an IPv4 address"
+    if port < 1I64 || port > 65535I64
+        throw "the port in the model URL is out of range (1-65535)"
+    key: = sys.get_env(API_KEY_ENV).unwrap_or("")
+    return Server::{ .host = arena.dup_str(host), .port = I32::port,
+        .base = arena.dup_str(base), .model = model, .timeout_ms = timeout_ms, .api_key = key }
+
+impl Server
+    fn address(r: Self@, arena: Arena$@): U8[] //< the server as a URL, for a message
+        return arena.text().s("http://\{r.host\}:\{r.port\}").s(r.base).take()
+
+struct Call //< one tool call the model asked for
+    id: U8[] //< the id the reply to it must carry
+    name: U8[] //< which tool
+    arguments: U8[] //< the arguments, as JSON text
+
+struct Reply //< what the model said in one turn
+    content: U8[] //< its text; empty when it only called tools
+    calls: List<|Call|> //< the tool calls it asked for, in order
+
+enum Model_error //< why a request to the model server got no usable reply
+    unreachable //< nothing answers at the address
+    timed_out //< no whole reply arrived within the timeout
+    no_length(chunked: Bool) //<
+        //< the reply names no `Content-Length`; `chunked` says it came in chunks
+    status(code: I32, detail: U8[]) //< the server refused the request
+    bad_reply(detail: U8[]) //< the reply cannot be read
+
+impl Model_error
+    fn describe(e: Self, s: Server@, arena: Arena$@): U8[] //<
+        //< One line saying what went wrong, then what the person can do
+        where: = s.address(arena)
+        out: = arena.text()
+        switch e
+        case .unreachable
+            out
+                .s("the model server at \{where\} does not answer. Start it, for example with \
+                    `llama-server --jinja --port 8081`, or give its address with --model-url.")
+        case .timed_out
+            out
+                .s("the model server at \{where\} gave no whole reply within \
+                    \{s.timeout_ms / 1000\} seconds. Give it longer with --timeout, or use a \
+                    smaller model.")
+        case .no_length(chunked)
+            if chunked
+                out
+                    .s("the model server sent its reply in chunks (Transfer-Encoding: chunked), \
+                        which ksagent cannot read yet. ")
+            else
+                out
+                    .s("the model server's reply names no Content-Length, which ksagent cannot read \
+                        yet. ")
+            out.s("llama-server and vLLM answer with a Content-Length when \"stream\" is false.")
+        case .status(code, detail)
+            out.s("the model server at \{where\} refused the request with HTTP \{code\}: ")
+                .s(detail)
+        case .bad_reply(detail)
+            out.s("the reply from the model server at \{where\} cannot be read: ").s(detail)
+        return out.take()
+
+fn ask(s: Server@, body: U8[], arena: Arena$@): Reply!Model_error //<
+    //< Sends one request body and reads the reply, on a connection of its own
+    //< **One connection per request, closed after it**: a turn waits seconds or minutes for the
+    //< model, so keeping a connection alive between turns saves nothing worth its state.
+    defer stream: = net.Tcp_stream.connect(s.host, s.port) catch
+        throw .unreachable
+    host: = arena.text().s(s.host).s(":\{s.port\}").take()
+    $head: = http.headers(arena).add("Host", host).add("Content-Type", "application/json")
+        .add("Accept", "application/json").add("Connection", "close")
+    if s.api_key.len > 0
+        head = head.add("Authorization",
+            arena.text().s("Bearer ").s(s.api_key).take())
+    target: = arena.text().s(s.base).s(CHAT_PATH).take()
+    http.write_request(stream, "POST", target, head.build(), body, SEND_WAIT_MS) catch e
+        throw http_failure(e)
+    resp: = http.read_response(stream, arena, MAX_REPLY_BYTES, s.timeout_ms) catch e
+        throw http_failure(e)
+    if resp.status != 200
+        throw .status(resp.status, refusal_detail(resp.body, arena))
+    return parse_reply(resp.body, arena)!
+
+priv fn http_failure(e: http.Http_error): Model_error //< what a failure of `std/http` means here
+    switch e
+    case .io(net_error)
+        switch net_error
+        case .timed_out
+            return .timed_out
+        default
+            return .bad_reply("the connection failed midway")
+    case .unsupported_transfer_encoding
+        return .no_length(true)
+    case .unsupported_close_delimited
+        return .no_length(false)
+    case .connection_closed
+        return .bad_reply("the server closed the connection before its reply was whole")
+    case .body_too_large
+        return .bad_reply("the reply is larger than 8 MiB")
+    default
+        return .bad_reply("the reply is not well-formed HTTP")
+
+priv fn refusal_detail(body: U8[], arena: Arena$@): U8[] //<
+    //< What a refusal says: its JSON `error.message` or `error`, or the start of its body
+    doc: = json.parse(body, arena) catch
+        return cut_detail(body)
+    err: = doc.val.get("error")
+    if text: = err.as_str()
+        return cut_detail(text)
+    if text: = err.get("message").as_str()
+        return cut_detail(text)
+    return cut_detail(body)
+
+priv fn cut_detail(text: U8[]): U8[] //< at most `DETAIL_BYTES` of a text, at a character's start
+    if text.len <= DETAIL_BYTES
+        return text
+    $end: = DETAIL_BYTES
+    for end > 0 && (text[end] & 0xC0U8) == 0x80U8
+        end -= 1
+    return text.sub(0, end)
+
+fn parse_reply(body: U8[], arena: Arena$@): Reply!Model_error //<
+    //< The text and the tool calls of `choices[0].message`
+    //< **The arguments can come as JSON text or as an object**; both are kept as text.
+    doc: = json.parse(body, arena) catch
+        throw .bad_reply("it is not JSON")
+    msg: = doc.val.get("choices").get_at(0).get("message")
+    if msg.find("role").is_none() && msg.find("content").is_none()
+        throw .bad_reply("it holds no choices[0].message")
+    $reply: = Reply::{ .content = msg.get("content").as_str().unwrap_or(""),
+        .calls = List<|Call|>(arena) }
+    calls: = msg.get("tool_calls").arr_list(arena)
+    for i in Range.asc(calls.len)
+        c: = calls.get(i)
+        f: = c.get("function")
+        $args: U8[] = ""
+        if text: = f.get("arguments").as_str()
+            args = text
+        else
+            defer $b: = Str_builder()
+            f.get("arguments").dump(b@)
+            args = arena.dup_str(b.slice())
+        $id: = c.get("id").as_str().unwrap_or("")
+        if id.len == 0
+            id = arena.text().s("call_\{i\}").take()
+        reply.calls
+            .push(Call::{ .id = id, .name = f.get("name").as_str().unwrap_or(""),
+            .arguments = args })
+    return reply

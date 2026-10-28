@@ -21,6 +21,10 @@ function ksmdFiles(ks, api) {
   // **After the start, change it only through `become`**: the editor, the menu bar and the address
   // follow it there.
   let doc = { path: "", base: null, clean: "", id: newId() };
+  // What the page last saw on disk at the open document's path: { path, size, at, sure, digest }.
+  // `size` and `at` were asked before the bytes that `digest` names were read. `sure` means they
+  // were asked in a later second than `at`, so any later write changes `at`.
+  let seen = null;
   // Whether a draft holds the edits as they are now: false from an edit until a draft is written.
   let heldNow = true;
   const MAX_IMAGE = 8 * 1024 * 1024; // the local server's ceiling on a write
@@ -111,6 +115,20 @@ function ksmdFiles(ks, api) {
     show();
   }
 
+  // Reads a document's file: what `local.read` answers, with `digest` naming the bytes and
+  // `seen` for the record above. The size is asked first, so bytes newer than it count as a
+  // change at the next ask, and none is missed. `polled` is { size, at, asked } asked already.
+  async function readDoc(path, polled = null) {
+    const asked = polled ? polled.asked : Date.now();
+    const info = polled || await local.stat(path);
+    const got = await local.read(path);
+    got.digest = got.status === 200 ? await local.digest(got.bytes) : null;
+    const known = info !== null && (got.status === 200 || got.status === 404);
+    got.seen = !known ? null : { path, size: info.size, at: info.at,
+      sure: Math.floor(asked / 1000) > info.at, digest: got.digest };
+    return got;
+  }
+
   // ---- Opening ----
 
   // Resolves a typed path by the workspace's rules: the path, or null after saying why not.
@@ -129,7 +147,7 @@ function ksmdFiles(ks, api) {
       show();
       return false;
     }
-    const got = await local.read(path);
+    const got = await readDoc(path);
     if (got.status !== 200) {
       ks.say(got.status === 404 ? `No file stands at ${path}. To start a document there, type ` +
         "it, then choose File, Save as." : `${path} cannot be opened. ${got.why}`);
@@ -146,6 +164,7 @@ function ksmdFiles(ks, api) {
       show();
       return false;
     }
+    seen = got.seen;
     if (!aside || left.path === path) return true;
     // A new document has no path to open it by: the page offers its draft where it opens on none.
     ks.say(`Opened ${path}. Your unsaved edits to ${left.path || "the new document"} are held ` +
@@ -351,21 +370,19 @@ function ksmdFiles(ks, api) {
     const text = toSave();
     if (text === null) return false;
     if (doc.base === null) return place(doc.path, text, null);
-    const now = await local.read(doc.path);
-    if (now.status === 404) {
-      askGone();
-      return false;
-    }
+    const now = await readDoc(doc.path);
     if (now.status !== 200) {
-      ks.say(`${doc.path} could not be saved. ${now.why}`);
+      if (now.status === 404) askGone();
+      else ks.say(`${doc.path} could not be saved. ${now.why}`);
+      seen = now.seen || seen;
       return false;
     }
-    const d = await local.digest(now.bytes);
-    if (d !== doc.base) {
-      await askChanged(now.bytes, d);
+    if (now.digest !== doc.base) {
+      seen = now.seen;
+      await askChanged(now.bytes, now.digest);
       return false;
     }
-    return write(text, d);
+    return write(text, now.digest);
   }
 
   // Saves to a new place: true once it is written. A file is written only where none stands, so
@@ -440,8 +457,9 @@ function ksmdFiles(ks, api) {
     const bytes = ks.enc.encode(text);
     const got = await local.write(doc.path, bytes, expected);
     if (got.status === 409) {
-      const now = await local.read(doc.path);
-      if (now.status === 200) await askChanged(now.bytes, await local.digest(now.bytes));
+      const now = await readDoc(doc.path);
+      seen = now.seen || seen;
+      if (now.status === 200) await askChanged(now.bytes, now.digest);
       else askGone();
       return false;
     }
@@ -453,9 +471,14 @@ function ksmdFiles(ks, api) {
     return true;
   }
 
+  // What is asked after a write can already hold another program's write, so it is not `sure`:
+  // the next ask reads the bytes once.
   async function saved(path, bytes, text) {
     const left = doc;
-    become({ path, base: await local.digest(bytes), clean: text, id: left.id });
+    const base = await local.digest(bytes);
+    const info = await local.stat(path);
+    seen = info && { path, size: info.size, at: info.at, sure: false, digest: base };
+    become({ path, base, clean: text, id: left.id });
     await keep.drop(root, left.path, left.id);
     if (left.path !== path) await fill();
     quiet();
@@ -488,27 +511,51 @@ function ksmdFiles(ks, api) {
     ]);
   }
 
-  // When the page is looked at again: a file changed on disk shows at once, or asks where this
-  // page holds edits; includes and images are fetched again.
-  async function check() {
+  // When the page is looked at again, or `watch` saw its file change: a file changed on disk shows
+  // at once, or asks where this page holds edits; includes and images are fetched again.
+  // `polled` is what `watch` asked already.
+  async function check(polled = null) {
     if (doc.path !== "" && doc.base !== null) {
-      const now = await local.read(doc.path);
+      const now = await readDoc(doc.path, polled);
+      seen = now.seen || seen;
       if (now.status === 404 && unsaved()) {
         askGone();
-      } else if (now.status === 200) {
-        const d = await local.digest(now.bytes);
-        if (d !== doc.base) {
-          if (unsaved()) {
-            await askChanged(now.bytes, d);
-          } else if (await take(doc.path, now.bytes, " It was changed on disk. The page shows " +
-            "the version it opened.")) {
-            ks.say(`${doc.path} was changed on disk. The page shows it as it is now.`);
-            return;
-          }
+      } else if (now.status === 200 && now.digest !== doc.base) {
+        if (unsaved()) {
+          await askChanged(now.bytes, now.digest);
+        } else if (await take(doc.path, now.bytes, " It was changed on disk. The page shows " +
+          "the version it opened.")) {
+          ks.say(`${doc.path} was changed on disk. The page shows it as it is now.`);
+          return;
         }
       }
     }
     await refresh();
+  }
+
+  // While the page is looked at, asks the server every two seconds whether the open document's
+  // file changed, and runs `check` where it did. Each change is checked once, so a notice the
+  // person closed does not come back for it.
+  const WATCH_MS = 2000;
+  const same = (a, b) => a.size === b.size && a.at === b.at;
+  async function watch() {
+    if (doc.path === "" || doc.base === null) return;
+    const asked = Date.now();
+    const info = await local.stat(doc.path);
+    if (info === null) return;
+    const polled = { ...info, asked };
+    const known = seen !== null && seen.path === doc.path && same(seen, info) ? seen : null;
+    if (known && known.sure) return;
+    // Not `sure`: a later write of the same size in the same second leaves both alike, so the
+    // bytes decide.
+    if (known) {
+      const now = await readDoc(doc.path, polled);
+      if (now.status === 200 && now.digest === known.digest) {
+        seen = now.seen;
+        return;
+      }
+    }
+    await check(polled);
   }
 
   // ---- Drafts ----
@@ -665,6 +712,16 @@ function ksmdFiles(ks, api) {
       if (document.hidden) one(holdAside);
       else lookAgain();
     });
+    // A hidden page asks nothing, and the check above answers when it is shown again. No ask
+    // starts while one is still out.
+    let watching = false;
+    setInterval(() => {
+      if (document.visibilityState !== "visible" || watching || waiting) return;
+      watching = true;
+      one(() => watch().finally(() => {
+        watching = false;
+      }));
+    }, WATCH_MS);
     window.addEventListener("pagehide", () => one(holdAside));
     // A draft written as the page goes may not land, so leaving asks while no draft holds the edits.
     window.addEventListener("beforeunload", (e) => {

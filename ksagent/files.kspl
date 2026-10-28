@@ -1,0 +1,359 @@
+//< The folder's files, as the model's tools reach them
+//< **Every path the model gives passes `resolve` first**, so nothing outside the folder, no link
+//< and no hidden name is ever read. The tools only read: nothing here writes a file.
+//< A file is text only when it holds no NUL byte and is valid UTF-8 (`text_problem`).
+//< **A chat file is no source**: it holds questions and earlier answers (`is_chat`).
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/seq"
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/sys"
+
+const MAX_HITS: Sz = 50 //< the most lines one search returns
+const MAX_READ_LINES: Sz = 400 //< the most lines one read returns
+const MAX_READ_BYTES: Sz = 32 * 1024 //< the most bytes one read returns
+const MAX_LISTED: Sz = 500 //< the most names one listing returns
+priv const MAX_TEXT_BYTES: I64 = 8I64 * 1024I64 * 1024I64 //< a larger file is not read
+    //< It bounds the memory one tool call takes; a regulation or a source file is far smaller.
+priv const HIT_TEXT_BYTES: Sz = 200 //< how much of a matching line a search hit shows
+    //< The model reads the lines around a hit with `read`, so a hit only has to place them.
+
+const CHAT_SUFFIX: U8[] = ".chat.ksmd" //< how the name of a chat file ends (`ksagent watch`)
+
+enum Resolved //< a path the model gave, checked against the root
+    ok(full: U8[], rel: U8[]) //< the path to open, and the path under the root (empty: the root)
+    refused(why: U8[]) //< why it was refused, as one line the model can act on
+
+fn resolve(root: U8[], given: U8[], arena: Arena$@): Resolved //<
+    //< Checks a path the model gave and joins it to the root
+    //< It refuses an absolute path, a `..` step, a link anywhere on the path (`fs.stays_under`) and
+    //< a name that starts with a dot. **Windows answers to a short name** (`GIT~1` for `.git`), so
+    //< each segment's long name is checked too (`fs.long_name`).
+    $rel: = given.trim_spaces()
+    for rel.starts_with("./")
+        rel = rel.sub_from(2)
+    for rel.len > 0 && rel[rel.len - 1] == '/'
+        rel = rel.sub(0, rel.len - 1)
+    if rel.len == 0 || rel.equals(".")
+        return .ok(root, "")
+    if !fs.stays_under(root, rel)
+        return .refused("the path must stay inside the folder: give it relative to the folder, such \
+            as rules/leave.md, with no `..` step and no link on the way")
+    if hides_name(rel) || hides_long_name(root, rel, arena)
+        return .refused("names that start with a dot are hidden, and cannot be read")
+    if is_chat(sys.get_file_name(rel))
+        return .refused("a chat file holds questions and earlier answers, which are no source")
+    return .ok(fs.join(root, rel, arena), rel)
+
+fn is_chat(name: U8[]): Bool //< whether a name is a chat file's
+    //< Caution: **Never let a chat file back an answer.** Its answers are the model's own words, so
+    //< citing one would check a claim against itself.
+    return name.ends_with(CHAT_SUFFIX)
+
+fn is_hidden(name: U8[]): Bool //< whether a name is one the tools never show: it starts with a dot
+    return name.len > 0 && name[0] == '.'
+
+priv fn hides_name(rel: U8[]): Bool //< whether a segment of `rel` starts with a dot
+    //< Caution: **Split at `\` too** (`sys.is_path_sep`): Windows opens `sub\.env` as `sub/.env`.
+    $start: Sz = 0
+    for start <= rel.len
+        end: = sys.segment_end(rel, start)
+        if is_hidden(rel.sub(start, end - start))
+            return true
+        start = end + 1
+    return false
+
+priv fn hides_long_name(root: U8[], rel: U8[], arena: Arena$@): Bool //<
+    //< Whether a segment of `rel`, by the name the file system keeps, starts with a dot
+    $start: Sz = 0
+    for start <= rel.len
+        end: = sys.segment_end(rel, start)
+        long: =
+            fs.long_name(fs.join(root, rel.sub(0, end), arena), arena) catch
+            return false
+        if is_hidden(long)
+            return true
+        start = end + 1
+    return false
+
+fn skip_dir(name: U8[]): Bool //< the folders a walk does not enter: hidden ones, and `out`
+    return is_hidden(name) || name.equals("out")
+
+fn text_problem(bytes: U8[]): U8[] //< why the bytes are not text, or empty when they are
+    if bytes.contains_nul()
+        return "it holds a NUL byte, so it is not a text file"
+    $i: Sz = 0
+    for i < bytes.len
+        if bytes[i] < 0x80U8
+            i += 1
+            continue
+        n: = bytes.utf8_seq_len(i) catch
+            return "it is not valid UTF-8 text"
+        i += n
+    return ""
+
+fn read_text(full: U8[], arena: Arena$@): U8[]!U8[] //<
+    //< The whole file, when it is a text file; otherwise why not, as one line
+    info: = fs.stat(full) catch
+        throw "there is no such file"
+    switch info.kind
+    case .file {}
+    case .dir
+        throw "it is a folder: use list to see what it holds"
+    case .other
+        throw "it is not a regular file"
+    if fs.is_link(full)
+        throw "it is a link, and links are not followed"
+    if info.size > MAX_TEXT_BYTES
+        throw "it is larger than 8 MiB"
+    body: = io.read_file(full, arena) catch
+        throw "it cannot be read"
+    problem: = text_problem(body)
+    if problem.len > 0
+        throw problem
+    return body
+
+fn split_lines(text: U8[], arena: Arena$@): List<|U8[]|> //<
+    //< The lines of a text, numbered from 1 by their index plus one
+    //< The same split as the citation check's, so a line number means one line everywhere.
+    return text.lines(arena)
+
+// ==========================================
+// The tools: list, search and read. Each returns the text the model reads, a refusal included.
+// ==========================================
+
+fn tool_list(root: U8[], given: U8[], arena: Arena$@): U8[] //< the entries of one folder
+    //< A folder ends with `/`. Hidden names and links are left out, as `read` would refuse them.
+    $full: U8[] = ""
+    switch resolve(root, given, arena)
+    case .ok(f, _rel)
+        full = f
+    case .refused(why)
+        return arena.text().s("refused: ").s(why).take()
+    if !fs.is_dir(full)
+        return "refused: it is not a folder"
+    names: = fs.read_dir(full, arena) catch
+        return "refused: the folder cannot be read"
+    sorted: = names.order_by(fn(a: U8[]@, b: U8[]@; ): I32 {
+        return a.compare(b$);
+    }, arena)
+    out: = arena.text()
+    $listed: Sz = 0
+    for name in sorted
+        path: = fs.join(full, name, arena)
+        if is_hidden(name) || is_chat(name) || fs.is_link(path)
+            continue
+        if listed == MAX_LISTED
+            out.s("(the list stops at \{MAX_LISTED\} names)\n")
+            break
+        listed += 1
+        out.s(name).s("/\n" if fs.is_dir(path) else "\n")
+    if listed == 0
+        return "(the folder is empty)"
+    return out.take()
+
+fn tool_search(root: U8[], text: U8[], given: U8[], arena: Arena$@): U8[] //<
+    //< The lines that hold the words of `text`, as `path:line: text`, over every text file under
+    //< `given`
+    //< **A line matches when it holds every word, in any order**, ASCII case ignored. A word is
+    //< found inside a longer one, so `quote` finds `quoted`. Japanese has no spaces, so a Japanese
+    //< text is one word, found as it is written. With no line holding every word, the lines that
+    //< hold the most of them come first, under a line that says so.
+    $words: = words_of(text, arena)
+    if words.len == 0
+        return "refused: give some words to search for"
+    $full: U8[] = ""
+    $rel: U8[] = ""
+    switch resolve(root, given, arena)
+    case .ok(f, r)
+        full = f
+        rel = r
+    case .refused(why)
+        return arena.text().s("refused: ").s(why).take()
+    $files: = List<|U8[]|>(arena)
+    if fs.is_dir(full)
+        files = fs.walk_files(full, skip_dir, arena) catch
+            return "refused: the folder cannot be read"
+    else
+        files.push(full)
+    // Every line that holds a word, with how many it holds; each list is cut where no more of it
+    // could be shown.
+    $whole: = List<|Hit|>(arena)
+    $partial: = List<|Hit|>(arena)
+    for path in files
+        name: = sys.get_file_name(path)
+        if is_hidden(name) || is_chat(name) || fs.is_link(path)
+            continue
+        body: = read_text(path, arena) catch
+            continue
+        shown: = shown_path(rel, full, path, arena)
+        lines: = split_lines(body, arena)
+        for i in Range.asc(lines.len)
+            held: = words_held(lines.get(i), words.slice())
+            if held == 0
+                continue
+            hit: = Hit::{ .path = shown, .line = i + 1, .text = lines.get(i), .held = held }
+            if held == words.len
+                whole.push(hit)
+            else if partial.len < MAX_PARTIAL
+                partial.push(hit)
+    if whole.len > 0
+        return hit_lines(whole.slice(), arena)
+    if partial.len == 0
+        return "(no line holds any of those words)"
+    out: = arena.text()
+    out.s("(no line holds every word; these lines hold the most of them)\n")
+    $shown_hits: Sz = 0
+    $level: = words.len - 1
+    for level > 0 && shown_hits < MAX_HITS
+        for h in partial
+            if h.held == level && shown_hits < MAX_HITS
+                hit_line(h, out)
+                shown_hits += 1
+        level -= 1
+    return out.take()
+
+priv struct Hit //< one line a search found
+    path: U8[] //< the file, as the model gives it back
+    line: Sz //< its number, from 1
+    text: U8[] //< the line itself
+    held: Sz //< how many of the search's words it holds
+
+priv const MAX_PARTIAL: Sz = 10000 //< the most lines kept that hold only some of the words
+    //< It bounds the memory a search of common words takes over a large folder.
+
+priv fn hit_lines(hits: Hit[], arena: Arena$@): U8[] //<
+    //< The lines that hold every word, at most `MAX_HITS`, and a last line where the list was cut
+    out: = arena.text()
+    for k in Range.asc(hits.len)
+        if k == MAX_HITS
+            out.s("(the list stops at \{MAX_HITS\} hits: add a word, or give a path)\n")
+            break
+        hit_line(hits[k], out)
+    return out.take()
+
+priv fn hit_line(h: Hit, out: str.Arena_text$@) //< writes one hit as `path:line: text`
+    out.s(h.path).s(":\{h.line\}: ").s(cut(h.text.trim_spaces(), HIT_TEXT_BYTES)).c('\n')
+
+fn words_of(text: U8[], arena: Arena$@): List<|U8[]|> //<
+    //< The words of a search, lower case, each once
+    //< Words are split at spaces and tabs, and at the ideographic space a Japanese keyboard types.
+    $words: = List<|U8[]|>(arena)
+    $start: Sz = 0
+    $i: Sz = 0
+    for i <= text.len
+        gap: = space_at(text, i)
+        if i == text.len || gap > 0
+            if i > start
+                w: = lower_ascii(text.sub(start, i - start), arena)
+                if !holds(words.slice(), w)
+                    words.push(w)
+            i += 1 if gap == 0 else gap
+            start = i
+            continue
+        i += 1
+    return words
+
+priv fn space_at(text: U8[], i: Sz): Sz //< how many bytes the space at `i` takes; 0 for none
+    if i >= text.len
+        return 0
+    c: = text[i]
+    if c == ' ' || c == '\t'
+        return 1
+    // U+3000, the ideographic space, is E3 80 80 in UTF-8.
+    if c == 0xE3U8 && i + 2 < text.len && text[i + 1] == 0x80U8 && text[i + 2] == 0x80U8
+        return 3
+    return 0
+
+priv fn holds(words: U8[][], w: U8[]): Bool //< whether the list already holds the word
+    for x in words
+        if x.equals(w)
+            return true
+    return false
+
+priv fn words_held(line: U8[], words: U8[][]): Sz //< how many of the words the line holds
+    $n: Sz = 0
+    for w in words
+        if holds_ignoring_case(line, w)
+            n += 1
+    return n
+
+priv fn shown_path(rel: U8[], full: U8[], path: U8[], arena: Arena$@): U8[] //<
+    //< A walked file's path as the model gives it back: under the root, with `/` between levels
+    if path.equals(full)
+        return rel
+    tail: = path.sub_from(full.len + 1)
+    return (tail if rel.len == 0
+        else arena.text().s(rel).c('/').s(tail).take())
+
+fn tool_read(root: U8[], given: U8[], from_line: I64, to_line: I64, arena: Arena$@): U8[] //<
+    //< Lines `from_line`..`to_line` of one text file, each opening with its number
+    //< At most `MAX_READ_LINES` lines or `MAX_READ_BYTES` bytes; the last line says where it
+    //< stopped, so the model can read on.
+    $full: U8[] = ""
+    $rel: U8[] = ""
+    switch resolve(root, given, arena)
+    case .ok(f, r)
+        full = f
+        rel = r
+    case .refused(why)
+        return arena.text().s("refused: ").s(why).take()
+    body: = read_text(full, arena) catch why
+        return arena.text().s("refused: ").s(why).take()
+    lines: = split_lines(body, arena)
+    n: = I64::lines.len
+    first: = 1I64 if from_line < 1I64 else from_line
+    if first > n
+        return arena.text().s("refused: \{rel\} has \{n\} lines").take()
+    last: = n if to_line < first || to_line > n else to_line
+    out: = arena.text()
+    out.s(rel).s(" (lines \{first\}-\{last\} of \{n\})\n")
+    $bytes: Sz = 0
+    $k: = first
+    for k <= last
+        line: = lines.get(Sz::(k - 1I64))
+        if k - first == I64::MAX_READ_LINES || bytes + line.len > MAX_READ_BYTES
+            out
+                .s("(stopped before line \{k\}: one read returns at most \{MAX_READ_LINES\} lines \
+                    or 32 KiB; read again from line \{k\})\n")
+            break
+        bytes += line.len
+        out.s("\{k\}: ").s(line).c('\n')
+        k += 1I64
+    return out.take()
+
+// ==========================================
+// Text helpers
+// ==========================================
+
+fn lower_ascii(text: U8[], arena: Arena$@): U8[] //< a copy with ASCII letters made lower case
+    out: = arena.text()
+    for c in text
+        out.c(c.to_lower())
+    return out.take()
+
+priv fn holds_ignoring_case(line: U8[], lower_needle: U8[]): Bool //<
+    //< Whether the line holds the needle, ASCII case ignored; the needle is already lower case
+    if lower_needle.len > line.len
+        return false
+    for start in Range.asc(line.len - lower_needle.len + 1)
+        $same: = true
+        for j in Range.asc(lower_needle.len)
+            if line[start + j].to_lower() != lower_needle[j]
+                same = false
+                break
+        if same
+            return true
+    return false
+
+fn cut(text: U8[], max: Sz): U8[] //< at most `max` bytes, cut at a character's start
+    if text.len <= max
+        return text
+    $end: = max
+    for end > 0 && (text[end] & 0xC0U8) == 0x80U8
+        end -= 1
+    return text.sub(0, end)

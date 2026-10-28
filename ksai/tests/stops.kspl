@@ -78,21 +78,21 @@ fn updater_weight_count(arena: Arena$@)
     io.out().s("must not get here\n")
 
 // ==========================================
-// gqa-uneven-heads / gqa-odd-head-dim / gqa-several-rows: grouped-query attention refuses heads
-// that do not share out, a head RoPE cannot rotate, and more than one token per call. Taken, the
-// first reads past the cache's row, and the last drops every row but the first.
+// gqa-uneven-heads / gqa-odd-head-dim / gqa-past-cache: grouped-query attention refuses heads that
+// do not share out, a head RoPE cannot rotate, and positions past its cache. Taken, the first and
+// the last write or read past the cache's memory.
 // ==========================================
 fn gqa_new(n_heads: Sz, n_kv_heads: Sz, head_dim: Sz, arena: Arena$@): nn.Gqa_attention<|F32|> //<
     //< An attention of those heads, 8 wide, with a cache of 4 positions
     io.out().s("about to make \{n_heads\} heads over \{n_kv_heads\}, \{head_dim\} wide\n")
     return nn.Gqa_attention<|F32|>(8, n_heads, n_kv_heads, head_dim, 4, 10000.0, arena)
 
-fn gqa_several_rows(arena: Arena$@)
+fn gqa_past_cache(arena: Arena$@) //< two rows from position 3, in a cache of 4 positions
     $attn: = gqa_new(4, 2, 2, arena)
     shape: Sz[2] = ::{ 2, 8 }
     x: = Tensor<|F32|>(Sz[]::shape, arena)
     x.fill(0.5)
-    _out: = attn.forward(x, 0)
+    _out: = attn.forward(x, 3)
     io.out().s("must not get here\n")
 
 // ==========================================
@@ -151,14 +151,14 @@ fn main(): I32
     else if which.equals("gqa-odd-head-dim")
         _a: = gqa_new(4, 2, 3, arena)
         io.out().s("must not get here\n")
-    else if which.equals("gqa-several-rows")
-        gqa_several_rows(arena)
+    else if which.equals("gqa-past-cache")
+        gqa_past_cache(arena)
     else if which.equals("grad-small-out")
         grad_small_out(arena)
     else
         // **An unknown name must not pass**: it says no reason, so its check fails.
         io.err().s("usage: stops <which>, one of: argmax-empty-logits\n")
             .s("  tensor-shape-product-overflow tensor-add-shape-mismatch updater-weight-count\n")
-            .s("  gqa-uneven-heads\n").s("  gqa-odd-head-dim gqa-several-rows grad-small-out\n")
+            .s("  gqa-uneven-heads\n").s("  gqa-odd-head-dim gqa-past-cache grad-small-out\n")
         return 2
     return 0

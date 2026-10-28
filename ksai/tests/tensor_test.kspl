@@ -2,13 +2,14 @@ import "ksai/lora" { Lora }
 import "ksai/lora_set" { Lora_widths, Qkv_lora }
 import "ksai/model_file" as ai_file
 import "ksai/safetensors" as ai_st
-import "ksai/tensor" { Tensor }
+import "ksai/tensor" + { Tensor }
 import "std/buf" { Buf_writer }
 import "std/bytes" as std_bytes
 import "std/io"
 import "std/math"
 import "std/mem" + { Arena }
 import "std/str" { Str_builder }
+import "std/strfmt" as _strfmt
 import "std/verdict"
 
 // ==========================================
@@ -161,7 +162,7 @@ fn test_tensor_error_recoverable(arena: Arena$@)
             process.")
 priv fn refuses_rope(t: Tensor<|F32|>, head_dim: Sz): Bool //< whether RoPE refuses that width
     $x: = t
-    _r: = x.apply_rope_neox(0, head_dim, 10000.0) catch
+    _r: = x.apply_rope_neox(0, head_dim, head_dim, 10000.0) catch
         return true
     return false
 
@@ -504,3 +505,22 @@ fn test_empty_tensor_operations(arena: Arena$@)
         fallback rows
     assert(caught == 4, "all empty reductions report errors")
     verdict.pass("Empty reductions report shape errors without a panic.")
+
+fn test_tensor_exp_f32_is_close(arena: Arena$@) //<
+    //< `exp_f32` is within 2 units in the last place of e^x over [-87, 88], and holds its edges
+    verdict.start("[Tensor] exp_f32 is e^x within 2 units in the last place, from -87 to 88...")
+    $worst: F64 = 0.0
+    steps: Sz = 200000
+    for i in Range(0, steps + 1, 1)
+        x: = F32::(-87.0 + 175.0 * F64::i / F64::steps)
+        want: = math.exp(x)
+        got: = F64::tensor.exp_f32(x)
+        // A unit in the last place of an F32 near `want` is at most `want × 2^-23`.
+        ulps: = math.abs(got - want) / (want * 1.1920928955078125e-7)
+        worst = math.max(worst, ulps)
+    assert(worst <= 2.0, "tensor: exp_f32 is further than 2 units in the last place from e^x")
+    assert(tensor.exp_f32(-1000.0) == tensor.exp_f32(-87.0), "tensor: exp_f32 below its range")
+    assert(tensor.exp_f32(1000.0) == tensor.exp_f32(88.0), "tensor: exp_f32 above its range")
+    assert(tensor.exp_f32(0.0) == 1.0, "tensor: exp_f32(0) is not 1")
+    verdict
+        .pass(arena.text().s("the largest error is \{worst:.2\} units in the last place").take())
