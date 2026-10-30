@@ -446,7 +446,7 @@ Caution: **Get the order wrong and the seed is left holding a stale `std`.** `ma
 
 | Place | What it holds |
 | :-- | :-- |
-| `out/` itself | The programs a person runs or a document names, such as `ksplc_stage1.exe`, `kssrv.exe` and `ksmd_open.exe` |
+| `out/` itself | The programs a person runs or a document names, such as `ksplc_stage1.exe`, `kssrv.exe` and `ksmd.exe` |
 | `out/gen/` | What a build writes for a later step: generated C and LLVM IR, `.libs` and `.deps` files, and the `.desktop` entry |
 | `out/test/` | A program built only for a gate, such as `test_debug.exe`, `debug_tools.exe` and `kssrv_llvm.exe` |
 | `out/log/` | Logs and reports: `make.log`, each gate's log under `ci/`, and the comparisons `stage_diff_c.txt` and `ship_diff.txt` |

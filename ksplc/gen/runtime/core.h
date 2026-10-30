@@ -84,9 +84,11 @@ static inline KSPL_UNUSED KSPL_NORETURN void kspl_shift_breach(int64_t amount, i
 static inline KSPL_UNUSED KSPL_NORETURN void kspl_tag_breach(int64_t value, const char* enum_name,
     const char* file, int line);
 
+/* **One unsigned comparison**: a negative index becomes larger than any length. As two signed
+ * ones inside a loop, the check led LLVM 22 at -O1 to make the loop's end test constant. */
 static inline KSPL_UNUSED ptrdiff_t kspl_bounds_check(ptrdiff_t idx, ptrdiff_t len, const char* file, int line)
 {
-    if (idx < 0 || idx >= len) {
+    if ((size_t)idx >= (size_t)len) {
         kspl_bounds_breach(idx, len, file, line);
     }
     return idx;

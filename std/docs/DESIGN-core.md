@@ -414,7 +414,7 @@ sorted: = names.order_by(fn(a: U8[]@, b: U8[]@; ): I32 {
 
 ### Indexing costs one comparison; the stop is out of line
 
-`xs[i]` calls `at`, which compares `i` with the length and calls `bounds_panic` (`std/lang.kspl`) when it is out of range. **`at` carries `#inline`**: its body is copied into each call site, leaving one comparison and the address arithmetic.
+`xs[i]` calls `at`, which compares `i` with the length and calls `bounds_panic` (`std/lang.kspl`) when it is out of range. **The comparison is one, unsigned** (`U64::i >= U64::len`): a negative index becomes larger than any length, so one test covers both ends. Every check in `std`, and the check the compiler writes for an array (`kspl_bounds_check`), takes this form. Written as two signed comparisons inside a loop, the check led LLVM 22 at `-O1` to make the loop's end test constant. The loop then ran past its end. Neither form is undefined in C, but only the unsigned one avoids that fault. **`at` carries `#inline`**: its body is copied into each call site, leaving one comparison and the address arithmetic.
 
 **`bounds_panic` carries `#noinline` for that to happen.** The C compiler judges whether a function is small enough to copy only after it has copied that function's own callees into it. Copied into `at`, the message building (`Panic_msg`, three numbers turned into text) makes `at` too big, and every `xs[i]` stays a call. With it kept out, every `xs[i]` of an optimized build is the comparison inline, and a program that indexes lists runs measurably fewer instructions.
 

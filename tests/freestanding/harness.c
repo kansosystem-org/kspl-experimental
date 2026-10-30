@@ -12,6 +12,7 @@
 #ifdef _WIN32
 #include <windows.h>
 #else
+#include <setjmp.h>
 #include <signal.h>
 #include <unistd.h>
 #endif
@@ -158,11 +159,20 @@ static void check_float_format(void) {
 
 // What the hook was handed, and how many times. **The hook leaves by a jump back**, as a port's
 // hook would reset the board: a breach does not return, and the harness has more to check.
-// Caution: **Use `__builtin_setjmp`, not `setjmp`.** On Windows, `longjmp` unwinds the frames
-// between (RtlUnwindEx), and the probe's frames have no unwind data, as bare-metal code has none
-// (clang leaves it out under `-ffreestanding`). The unwind then fails and the process dies with
-// nothing printed. The builtin puts the stack and frame back without unwinding, on every host.
+// Caution: **On Windows, use `__builtin_setjmp`, not `setjmp`.** There `longjmp` unwinds the
+// frames between (RtlUnwindEx), and the probe's frames have no unwind data, as bare-metal code has
+// none (clang leaves it out under `-ffreestanding`). The unwind then fails and the process dies
+// with nothing printed. The builtin puts the stack and frame back without unwinding. **Elsewhere,
+// `setjmp`**: clang has no builtin for AArch64, such as macOS on Apple's chips.
+#ifdef _WIN32
 static void* hook_exit[5];
+#define JUMP_MARK(buf) __builtin_setjmp(buf)
+#define JUMP_BACK(buf) __builtin_longjmp(buf, 1)
+#else
+static jmp_buf hook_exit;
+#define JUMP_MARK(buf) setjmp(buf)
+#define JUMP_BACK(buf) longjmp(buf, 1)
+#endif
 static int hook_calls = 0;
 static char hook_msg[160];
 
@@ -171,7 +181,7 @@ void harness_panic_seen(const unsigned char* msg, size_t len) {
     memcpy(hook_msg, msg, n);
     hook_msg[n] = 0;
     hook_calls++;
-    __builtin_longjmp(hook_exit, 1);
+    JUMP_BACK(hook_exit);
 }
 
 // A breach that never reaches the hook stops in std/lang's `panic` loop. **A time limit turns
@@ -209,7 +219,7 @@ static void arm_breach_limit(void) {
 static void check_breach(const char* name, int which, const char* want) {
     hook_calls = 0;
     hook_msg[0] = 0;
-    if (__builtin_setjmp(hook_exit) == 0) {
+    if (JUMP_MARK(hook_exit) == 0) {
         int got = which == 0 ? probe_index(7) : probe_divide(1, 0);
         printf("FAIL %s: the breach did not stop (it gave %d)\n", name, got);
         fails++;

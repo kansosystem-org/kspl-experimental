@@ -135,18 +135,21 @@ priv const FIXTURE_MAKEFILE: U8[] =
 
 priv fn gnu_make(arena: Arena$@): U8[] //<
     //< The make that runs the build, which `make explain` passes on too; else GNU make 4's name
-    //< here: `gmake` where it stands, or `make`
+    //< here: `gmake` where it stands, or `make`. Empty, the test skipped, where it is no GNU make
+    //< 4, such as macOS's own 3.81.
     // **The name alone can start another make**: on MSYS2 it can find UCRT64's, which the root
     // make file refuses, so make stops before it reads a rule.
+    $names: = U8[][]::{ "gmake", "make" }
     if given: = sys.get_env("KANSO_MAKE")
-        return given
-    for name in U8[][]::{ "gmake", "make" }
+        names = U8[][]::{ given }
+    for name in names
         r: =
             subproc.run_capture(U8[][]::{ name, "--version" }, "", 10000, 4096, arena) catch
             continue
         if make_db.gnu_make_major(r.stdout_data) >= 4
             return name
-    assert(false, "GNU make 4 runs here (macOS: brew install make, which installs gmake)")
+    verdict
+        .skip("no GNU make 4 runs here, whose database the tool reads (macOS: brew install make)")
     return ""
 
 priv fn run(argv: U8[][], arena: Arena$@): subproc.Run_result //< runs one child to its end
@@ -185,6 +188,8 @@ priv fn section(out: U8[], head: U8[], arena: Arena$@): List<|U8[]|> //< one sec
 fn test_explaining_the_fixture(arena: Arena$@) //< every kind of variable, and a pattern rule
     verdict.start("[tools/make_explain] the fixture's targets test...")
     make: = gnu_make(arena)
+    if make.len == 0
+        return
     fs.mkdir_all(fs.join(FIXTURE, "out", arena)) catch {}
     // `a.txt` is written after its source, so make finds it up to date.
     io.write_file(fs.join(FIXTURE, "Makefile", arena), FIXTURE_MAKEFILE) catch {}
@@ -246,6 +251,8 @@ fn test_explaining_the_fixture(arena: Arena$@) //< every kind of variable, and a
 fn test_explaining_real_targets(arena: Arena$@) //< `chat` and `help`, held to make's own answers
     verdict.start("[tools/make_explain] the root build's targets test...")
     make: = gnu_make(arena)
+    if make.len == 0
+        return
     chat: = explain(make, "chat", U8[][]::{}, arena)
     assert(chat.exited_with(0), "`chat` is explained")
     // **Each variable's place is the database's**: the text `make -pn` writes above it.
@@ -302,6 +309,8 @@ priv const ACTS_MAKEFILE: U8[] =
 fn test_explaining_runs_nothing(arena: Arena$@) //< no recipe, no command, and make's own words
     verdict.start("[tools/make_explain] a look that acts on nothing test...")
     make: = gnu_make(arena)
+    if make.len == 0
+        return
     fs.mkdir_all(ACTS) catch {}
     ran: = fs.join(ACTS, "ran.txt", arena)
     fs.remove_path(ran) catch {}
@@ -337,6 +346,8 @@ priv fn argv_of(line: U8[], program: U8[], arena: Arena$@): U8[] //<
 fn test_values_reach_programs_as_typed(arena: Arena$@) //< quotes, `$` and backticks in a value
     verdict.start("[tools/make_explain] values handed on as typed test...")
     make: = gnu_make(arena)
+    if make.len == 0
+        return
     // `$$` is how a person types one `$` to make; the program must get it, not the shell.
     typed: = "it's \"a\" $$HOME `x`"
     want: = "it's \"a\" $HOME `x`"

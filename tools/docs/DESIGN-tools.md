@@ -115,7 +115,7 @@ The task is *fill-in-the-middle* (FIM): the model sees the code before and after
 
 ## The desktop opener
 
-Double-clicking a `.ksmd` document runs ksmd's opener, [`../ksmd_open.kspl`](../ksmd_open.kspl). It makes sure a local kssrv server is running for the document's workspace, then makes the browser open the document's page. It chooses only the folder to serve and the port to start from; the rest is [`../opener.kspl`](../opener.kspl). ksagent's chat opener shares it ("Opening the chat page" below). The steps that tie the file type to it are "Opening a `.ksmd` document on a double-click" in [`docs/HOWTO-set-up-a-project.md`](../../docs/HOWTO-set-up-a-project.md#opening-a-ksmd-document-on-a-double-click).
+Double-clicking a `.ksmd` document runs ksmd's opener, [`../ksmd.kspl`](../ksmd.kspl). It makes sure a local kssrv server is running for the document's workspace, then makes the browser open the document's page. It chooses only the folder to serve and the port to start from; the rest is [`../opener.kspl`](../opener.kspl). ksagent's chat opener shares it ("Opening the chat page" below). The steps that tie the file type to it are "Opening a `.ksmd` document on a double-click" in [`docs/HOWTO-set-up-a-project.md`](../../docs/HOWTO-set-up-a-project.md#opening-a-ksmd-document-on-a-double-click).
 
 ```mermaid
 sequenceDiagram
@@ -161,14 +161,14 @@ Why that one named page file gives the client no more reach is "Where it listens
 
 **Several documents opened at once** (each starts its own opener, at the same moment):
 
-* **One lock is held from looking at the record to writing it** (`out/tmp/ksmd_open.lock`, `open_or_start` in [`../opener.kspl`](../opener.kspl)), and `--list`, `--stop` and `--stop-all` take it too. Without it, two openers each start a server, and one record overwrites the other, losing a server nobody can then reach.
+* **One lock is held from looking at the record to writing it** (`out/tmp/ksmd.lock`, `open_or_start` in [`../opener.kspl`](../opener.kspl)), and `--list`, `--stop` and `--stop-all` take it too. Without it, two openers each start a server, and one record overwrites the other, losing a server nobody can then reach.
 * **The lock is the operating system's** (`fs.File_lock`), let go however the process ends. A lock file the opener made would outlive a crash and stop every later opening.
-* **Each server writes its own log, named by its port** (`out/tmp/ksmd_open.<port>.log`), chosen free under the lock. One shared log would hand one opener the URL another's server printed.
+* **Each server writes its own log, named by its port** (`out/tmp/ksmd.<port>.log`), chosen free under the lock. One shared log would hand one opener the URL another's server printed.
 * **What it gives up**: an opening waits while another starts its server, a few seconds at most.
 
 **Keeping the token secret:**
 
-* **The token is kept in files that only their owner can read**: the record (`out/tmp/ksmd_open.state`), the server's log and the page handed to the browser. Each is created with mode 0600 (`fs.write_unique`), and replaced with `fs.replace_file`'s owner-only rule (`write_owned` in [`../opener_aim.kspl`](../opener_aim.kspl)). On Windows no mode is set, and the folder decides who can read them.
+* **The token is kept in files that only their owner can read**: the record (`out/tmp/ksmd.state`), the server's log and the page handed to the browser. Each is created with mode 0600 (`fs.write_unique`), and replaced with `fs.replace_file`'s owner-only rule (`write_owned` in [`../opener_aim.kspl`](../opener_aim.kspl)). On Windows no mode is set, and the folder decides who can read them.
 * **The token never goes on a command line**, where `ps` shows it to every user on the machine. The opener reads it from the line kssrv prints once at start-up. It hands it to the browser inside a page ("The browser is handed a page, never the URL" below).
 * **The token is put out only with `--show` or `--list`**, which a person asks for at a terminal. A double-click sends the opener's output where others can read it, such as the system journal. So when it opens a document without `--show`, the opener puts out the URL without its fragment.
 
@@ -184,7 +184,7 @@ Why that one named page file gives the client no more reach is "Where it listens
 
 **How it is installed and checked:**
 
-* **The file association points at the built executable** (`out/ksmd_open.exe`, built by `make ksmd`), which finds kssrv beside itself. Started by a double-click, `ksplc run ...` would run in home or `/`, where neither `std/` nor `out/` can be found.
+* **The file association points at the built executable** (`out/ksmd.exe`, built by `make ksmd`), which finds kssrv beside itself. Started by a double-click, `ksplc run ...` would run in home or `/`, where neither `std/` nor `out/` can be found.
 * **The opener exits once the URL is passed to a browser, and the server stays** for the next opening. Only with `--show` does it wait and pass the server's output through (`tools/tests/ksmd_launch.kspl` uses that).
 * **The document to double-click is an example the tree keeps**, [`ksmd/examples/overview.ksmd`](../../ksmd/examples/overview.ksmd), which `make ksmd` names. It holds a table that calculates and an include, so the opened page shows both working.
 
@@ -238,7 +238,7 @@ Note: The server's output and the browser's are written beside the opener, under
 
 ### Opening a `.ksmd` document
 
-**ksmd's opener is a program of its own, `tools/ksmd_open.kspl`, built as `out/ksmd_open.exe`.** ksmd is a library and a page, with no program to add an `open` command to. Only a leaf may know both kssrv and ksmd's page.
+**ksmd's opener is a program of its own, `tools/ksmd.kspl`, built as `out/ksmd.exe`.** ksmd is a library and a page, with no program to add an `open` command to. Only a leaf may know both kssrv and ksmd's page.
 
 ksmd needs a workspace that holds the document's includes, and one port for it on every run ("Opening a document from the desktop" in [`ksmd/docs/DESIGN-ksmd.md`](../../ksmd/docs/DESIGN-ksmd.md)). The rules are in [`../opener_aim.kspl`](../opener_aim.kspl), each checked alone by [`../tests/ksmd_aim_test.kspl`](../tests/ksmd_aim_test.kspl).
 

@@ -150,6 +150,15 @@ priv fn build(dir: U8[], entry: U8[], exe: U8[], opt: U8[], arena: Arena$@): Bui
     flags.push(opt)
     return harness_sanitizer.build(dir, entry, exe, flags.slice(), false, "", arena)
 
+priv fn aborts_in(text: U8[], arena: Arena$@): List<|U8[]|> //<
+    //< A stopped run's stack, which the sanitizer logs on an abort (`handle_abort=1`), such as a
+    //< panic's: without it a panic names one line, and not the thread or the calls that led there
+    $out: = List<|U8[]|>(arena)
+    at: = text.find_str("ERROR: ThreadSanitizer:") catch
+        return out
+    out.push(text.sub_from(at))
+    return out
+
 priv fn reports_in(log_dir: U8[], arena: Arena$@): List<|U8[]|> //<
     //< Every race the sanitizer logged under log_dir, one process's log per `tsan.<pid>`
     return harness_sanitizer.reports_in(log_dir, "tsan.", races_in, arena)
@@ -167,7 +176,8 @@ priv fn sanitized(log_dir: U8[], env: U8[][], argv: U8[][], arena: Arena$@): U8[
     for w in U8[][]::{ "sh", "-c", "ulimit -s \"$0\" && exec \"$@\"", RACE_STACK_KIB, "env" }
         out.push(w)
     out
-        .push(arena.text().s("TSAN_OPTIONS=log_path=").s(fs.join(log_dir, "tsan", arena)).take())
+        .push(arena.text().s("TSAN_OPTIONS=log_path=").s(fs.join(log_dir, "tsan", arena))
+        .s(":handle_abort=1").take())
     for e in env
         out.push(e)
     for a in argv
@@ -205,6 +215,9 @@ priv fn run_all_raced(runs: List<|Raced|>@, work: U8[], arena: Arena$@) //<
                 ended = false
                 if races.len == 0
                     why.s("it did not end with 0, and left no report:\n").s(outs.get(j).out)
+                    for stack in harness_sanitizer.reports_in(runs.get(i).log_dir, "tsan.",
+                        aborts_in, arena)
+                        why.s("where it stopped, as the sanitizer logged it:\n").s(stack)
         if races.len > 0
             why.s("the whole reports are in ").s(runs.get(i).log_dir)
         verdict.check(name, races.len == 0 && ended, why.take())

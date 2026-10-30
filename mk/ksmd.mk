@@ -23,40 +23,40 @@ measure-ksmd: $(STAGE1_EXE) $(KSSRV_EXE)
 # ==========================================
 # **The association points at this executable**, not `ksplc run`: a double-click stands elsewhere.
 # It looks for the server and the page beside itself (`KSMD` in `tools/opener_aim.kspl`).
-KSMD_OPEN_EXE := $(OUT_DIR)/ksmd_open.exe
+KSMD_EXE := $(OUT_DIR)/ksmd.exe
 KSMD_ICON_DIR := ksmd/port/desktop
 
 # **On Windows the icon is built into the launcher**: a file associated with a program shows that
 # program's icon, so no registry entry is needed.
-KSMD_OPEN_RES :=
+KSMD_RES :=
 ifeq ($(PLATFORM),win32)
 WINDRES ?= windres
-KSMD_OPEN_RES := $(GEN_DIR)/ksmd_open_icon.o
-$(KSMD_OPEN_RES): $(KSMD_ICON_DIR)/ksmd.rc $(KSMD_ICON_DIR)/ksmd.ico | $(OUT_DIR)
+KSMD_RES := $(GEN_DIR)/ksmd_icon.o
+$(KSMD_RES): $(KSMD_ICON_DIR)/ksmd.rc $(KSMD_ICON_DIR)/ksmd.ico | $(OUT_DIR)
 	@mkdir -p $(dir $@)
 	$(WINDRES) --include-dir=$(KSMD_ICON_DIR) -O coff $(KSMD_ICON_DIR)/ksmd.rc -o $@
 endif
 
-$(KSMD_OPEN_EXE): $(STAGE1_EXE) $(KSMD_OPEN_RES) tools/ksmd_open.kspl $(OPENER_SRC)
+$(KSMD_EXE): $(STAGE1_EXE) $(KSMD_RES) tools/ksmd.kspl $(OPENER_SRC)
 	$(stop_ksmd_servers)
-	@echo "# BUILDING the launcher (out/ksmd_open.exe)"
-	$(call kspl_build,tools/ksmd_open.kspl,ksmd_open,,$(GUI_LDFLAGS) $(KSMD_OPEN_RES))
-	@echo "# built -> $(KSMD_OPEN_EXE)"
+	@echo "# BUILDING the launcher (out/ksmd.exe)"
+	$(call kspl_build,tools/ksmd.kspl,ksmd,,$(GUI_LDFLAGS) $(KSMD_RES))
+	@echo "# built -> $(KSMD_EXE)"
 
 ## Run|ksmd-open|Open one `.ksmd` document in a browser (`FILE=` is wanted)
-ksmd-open: ksmd-web $(KSSRV_EXE) $(KSMD_OPEN_EXE)
+ksmd-open: ksmd-web $(KSSRV_EXE) $(KSMD_EXE)
 	@test -n "$(FILE)" || { echo "usage: make ksmd-open FILE=<path to a .ksmd document>"; exit 1; }
-	./$(KSMD_OPEN_EXE) "$(FILE)"
+	./$(KSMD_EXE) "$(FILE)"
 
 # **The launcher as a double-click runs it**, on scratch workspaces with a stand-in page, and with
 # `--show`, so no browser starts (`tools/tests/ksmd_launch.kspl`). Its work folder is emptied first.
-KSMD_OPEN_WORK := $(TMP_DIR)/ksmd_open_test
+KSMD_LAUNCH_WORK := $(TMP_DIR)/ksmd_launch_test
 
 ## Gates|test-ksmd-open|Start the ksmd launcher on scratch workspaces: the workspace, its port, reuse, a taken port, two opens at once and the refusals
-test-ksmd-open: $(KSSRV_EXE) $(KSMD_OPEN_EXE)
-	rm -rf "$(KSMD_OPEN_WORK)"
-	./$(STAGE1_EXE) run tools/tests/ksmd_launch.kspl $(KSMD_OPEN_EXE) $(KSSRV_EXE) \
-		"$(KSMD_OPEN_WORK)"
+test-ksmd-open: $(KSSRV_EXE) $(KSMD_EXE)
+	rm -rf "$(KSMD_LAUNCH_WORK)"
+	./$(STAGE1_EXE) run tools/tests/ksmd_launch.kspl $(KSMD_EXE) $(KSSRV_EXE) \
+		"$(KSMD_LAUNCH_WORK)"
 
 KSMD_DESKTOP := $(GEN_DIR)/ksmd.desktop
 KSMD_MIME := $(GEN_DIR)/ksmd-mime.xml
@@ -68,13 +68,13 @@ ifeq ($(PLATFORM),win32)
 KSMD_ASSOC_LEAD := associate it for your user (no admin rights needed):
 KSMD_ASSOC_STEPS := \
 	'right-click $(KSMD_SAMPLE) -> Open with -> Choose another app' \
-	'-> Look for another app on this PC -> pick $(KSMD_OPEN_EXE)' \
+	'-> Look for another app on this PC -> pick $(KSMD_EXE)' \
 	'-> tick "Always use this app to open .ksmd files"'
 else ifeq ($(PLATFORM),darwin)
 KSMD_ASSOC_LEAD := associate it for your user:
 KSMD_ASSOC_STEPS := \
 	'Automator -> New Document -> Application -> Run Shell Script' \
-	'its body: $(KSMD_OPEN_EXE) "$$1"  (Pass input: as arguments); save the app' \
+	'its body: $(KSMD_EXE) "$$1"  (Pass input: as arguments); save the app' \
 	'Finder -> Get Info on $(KSMD_SAMPLE) -> Open with -> that app -> Change All'
 else
 KSMD_ASSOC_LEAD := tie it for your user:
@@ -90,12 +90,12 @@ KSMD_MIME_TYPE := application/x-ksmd
 KSMD_REQUIRE_DESKTOP ?=
 ## Gates|test-ksmd-desktop|Whether the entry `make ksmd` writes is a valid `.desktop` file, and installs as `make install-desktop` puts it in
 test-ksmd-desktop: | $(OUT_DIR)
-	$(call desktop_entry,$(KSMD_DESKTOP),ksmd,$(KSMD_OPEN_EXE),$(KSMD_ICON),$(KSMD_MIME_TYPE);,$(KSMD_REQUIRE_DESKTOP))
+	$(call desktop_entry,$(KSMD_DESKTOP),ksmd,$(KSMD_EXE),$(KSMD_ICON),$(KSMD_MIME_TYPE);,$(KSMD_REQUIRE_DESKTOP))
 	$(call mime_entry,$(KSMD_MIME),$(KSMD_MIME_TYPE),ksmd document,text/plain,*.ksmd)
 	$(call desktop_check,$(KSMD_DESKTOP),$(KSMD_MIME),$(KSMD_ICON),$(KSMD_MIME_TYPE),ksmd,$(KSMD_REQUIRE_DESKTOP))
 
 ## Run|ksmd|Build the page, the server and the launcher, and make a `.ksmd` open on a double-click
-ksmd: ksmd-web $(KSSRV_EXE) $(KSMD_OPEN_EXE) test-ksmd-desktop
+ksmd: ksmd-web $(KSSRV_EXE) $(KSMD_EXE) test-ksmd-desktop
 	@echo "# built -> $(KSMD_DESKTOP)"
 	@echo "# built -> $(KSMD_MIME)"
 	@echo "# $(KSMD_ASSOC_LEAD)"
@@ -113,7 +113,7 @@ ksmd: ksmd-web $(KSSRV_EXE) $(KSMD_OPEN_EXE) test-ksmd-desktop
 ifeq ($(PLATFORM),linux)
 ## Build-and-install|install-desktop|Make `.ksmd` files open on a double-click, with their icon (Linux; `make install` does it too)
 install-desktop: export ABS_HELP := $(install_abs_help)
-install-desktop: ksmd-web $(KSSRV_EXE) $(KSMD_OPEN_EXE) test-ksmd-desktop
+install-desktop: ksmd-web $(KSSRV_EXE) $(KSMD_EXE) test-ksmd-desktop
 	@echo "# TYING .ksmd TO ITS LAUNCHER under $(DESKTOP_DATA)"
 	@case '$(DESKTOP_DATA)' in /*) ;; *) printf '%s\n' "$$ABS_HELP"; exit 1;; esac
 	$(call desktop_install,$(DESKTOP_DATA),$(KSMD_DESKTOP),$(KSMD_MIME),$(KSMD_ICON),$(KSMD_MIME_TYPE))

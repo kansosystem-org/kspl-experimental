@@ -53,15 +53,18 @@ endif
 # Nobody reads this target's C, so it is not tidied: **`C_FMT=:`**, as an empty one would run the C.
 C_FMT_OFF := C_FMT=:
 
+# **The `make explain` tests run the make that `make explain` runs** (`ci_make`): found by its name,
+# make can be another one, such as MSYS2's UCRT64 make, which the root make file refuses.
+export KANSO_MAKE = $(ci_make)
+
 # Caution: **Not `out/tools.exe`**: tools look names up in `out/` and would start the wrong program
 # with nothing said. Hence `debug_`.
 ## Local-cycle|debug-*|Run only that package's tests (the names are `OWN_MAKE_PKGS` in `mk/test.mk`)
 ## Local-cycle|debug-tools|Run only the tests of `tools/`
-# `KANSO_MAKE`: the make that `make explain` runs, for its tests to run the same one.
 debug-tools: $(STAGE1_EXE)
 	@$(MAKE) --no-print-directory debug-file SRC_KSPL=tools/tests/main.kspl OUT_STEM=debug_tools \
 		DEBUG_EXE_DIR=$(TEST_DIR) $(C_FMT_OFF)
-	KANSO_MAKE=$(call shq,$(ci_make)) ./$(TEST_DIR)/debug_tools.exe
+	./$(TEST_DIR)/debug_tools.exe
 
 # --- kssrv and ksbind through the LLVM backend ---
 # **`make LLVM=1 debug` holds neither** (they run only as their own `make test`), so genllvm broken

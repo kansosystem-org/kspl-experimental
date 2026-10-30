@@ -533,7 +533,7 @@ $(CHAT_SERVER_SWITCHES): FORCE
 # "Permission denied". Each launcher stops its own first; an open ksmd page keeps its edits as a
 # draft, and a chat page's questions are already in their file.
 ifeq ($(PLATFORM),win32)
-stop_ksmd_servers = @for o in "$(KSMD_OPEN_EXE)" "$(KSAGENT_CHAT_EXE)"; do \
+stop_ksmd_servers = @for o in "$(KSMD_EXE)" "$(KSAGENT_CHAT_EXE)"; do \
     if [ -x "$$o" ]; then "./$$o" --stop-all || true; fi; done
 else
 stop_ksmd_servers =

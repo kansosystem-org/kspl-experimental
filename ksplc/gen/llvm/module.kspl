@@ -119,15 +119,14 @@ priv fn emit_runtime_decls(cg: Genllvm_ctx$@, abi_sym: U8[]) //<
 
 priv fn emit_runtime_check_fns(cg: Genllvm_ctx$@) //< the run-time checks
     //< Checks stay in IR so LLVM can optimize them; hosted.c owns failure reporting for both
-    //< backends, including flushing output before aborting.
+    //< backends, including flushing output before aborting. The bounds check is one unsigned
+    //< comparison, as `kspl_bounds_check` in the C runtime says why.
     emit_by_hand(cg,
         """
 
 define i64 @kspl_bounds_check(i64 %idx, i64 %len, ptr %file, i32 %line) {
 entry:
-    %cmp1 = icmp slt i64 %idx, 0
-    %cmp2 = icmp sge i64 %idx, %len
-    %cmp = or i1 %cmp1, %cmp2
+    %cmp = icmp uge i64 %idx, %len
     br i1 %cmp, label %panic, label %ok
 panic:
     call void @kspl_bounds_fail(i64 %idx, i64 %len, ptr %file, i32 %line)

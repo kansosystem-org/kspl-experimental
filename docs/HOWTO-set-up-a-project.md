@@ -134,7 +134,7 @@ ie4uinit.exe -show
 
 ## Opening a `.ksmd` document on a double-click
 
-**This section makes a `.ksmd` document open in ksmd, the document editor ([ksmd](../ksmd/README.md)), in your browser on a double-click.** It needs a clone that builds from source ([`HOWTO-build.md`](HOWTO-build.md)). `make ksmd` builds the launcher `out/ksmd_open.exe`, the server and the page.
+**This section makes a `.ksmd` document open in ksmd, the document editor ([ksmd](../ksmd/README.md)), in your browser on a double-click.** It needs a clone that builds from source ([`HOWTO-build.md`](HOWTO-build.md)). `make ksmd` builds the launcher `out/ksmd.exe`, the server and the page.
 
 **The launcher starts the local server on the document's workspace, or reuses the one running there.** It passes the document's address to the browser, and exits ("Opening a `.ksmd` document" in [`tools/docs/DESIGN-tools.md`](../tools/docs/DESIGN-tools.md)).
 
@@ -150,7 +150,7 @@ ie4uinit.exe -show
   ```
 
   On Windows, run `New-Item $HOME\notes\.ksmd-workspace` in PowerShell.
-* **From a terminal, `--workspace=<folder>` names the workspace for one run**: `out/ksmd_open.exe --workspace=$HOME/notes $HOME/notes/a/b.ksmd`. Use it for a folder you cannot write the file into.
+* **From a terminal, `--workspace=<folder>` names the workspace for one run**: `out/ksmd.exe --workspace=$HOME/notes $HOME/notes/a/b.ksmd`. Use it for a folder you cannot write the file into.
 
 **Each workspace keeps its own port, from 20000 to 29999, worked out from its path**, so the browser's unsaved drafts come back. If another program holds it, the launcher takes the next free port and says so.
 
@@ -187,15 +187,15 @@ ie4uinit.exe -show
 
 **On Windows the tie is made by hand, once**: only Windows's own "Open with" dialog can choose the default program.
 
-1. **Build everything** in the MSYS2 UCRT64 shell: `make ksmd`. The build puts the icon inside `out\ksmd_open.exe`.
-2. **Open one document by hand first**: `out/ksmd_open.exe ksmd/examples/overview.ksmd`. Check that the browser shows it.
+1. **Build everything** in the MSYS2 UCRT64 shell: `make ksmd`. The build puts the icon inside `out\ksmd.exe`.
+2. **Open one document by hand first**: `out/ksmd.exe ksmd/examples/overview.ksmd`. Check that the browser shows it.
    * Caution: **A double-click shows a refusal nowhere.** This run shows it in the terminal.
 3. **Right-click a `.ksmd` file**, and choose "Open with ▸ Choose another app ▸ Look for another app on this PC".
-4. **Pick `out\ksmd_open.exe`**, and tick "Always use this app". The `.ksmd` files then show the launcher's icon, the page with the K.
+4. **Pick `out\ksmd.exe`**, and tick "Always use this app". The `.ksmd` files then show the launcher's icon, the page with the K.
 
 **No gate runs these steps.** They were checked once by hand on a Windows PC.
 
-**macOS**, by hand as well: make an Automator "Application" that runs `out/ksmd_open.exe "$1"`, and tie `.ksmd` to it with Finder's "Get Info ▸ Open with ▸ Change All".
+**macOS**, by hand as well: make an Automator "Application" that runs `out/ksmd.exe "$1"`, and tie `.ksmd` to it with Finder's "Get Info ▸ Open with ▸ Change All".
 
 ### Listing and stopping the servers
 
@@ -203,9 +203,9 @@ ie4uinit.exe -show
 
 | Command | What it does |
 | :-- | :-- |
-| `out/ksmd_open.exe --list` | Shows the servers running, with the workspace each serves |
-| `out/ksmd_open.exe --stop=<folder>` | Stops the server of that workspace |
-| `out/ksmd_open.exe --stop-all` | Stops every one |
+| `out/ksmd.exe --list` | Shows the servers running, with the workspace each serves |
+| `out/ksmd.exe --stop=<folder>` | Stops the server of that workspace |
+| `out/ksmd.exe --stop-all` | Stops every one |
 
 ### Resetting the `.ksmd` association
 
@@ -213,17 +213,18 @@ ie4uinit.exe -show
 
 **Windows** (PowerShell, as yourself; no administrator needed):
 
-1. **Rebuild the launcher**: `make ksmd`. In Explorer, `out\ksmd_open.exe` now shows the page with the K.
+1. **Rebuild the launcher**: `make ksmd`. In Explorer, `out\ksmd.exe` now shows the page with the K.
 2. **Make Windows forget the old choices.** An error saying a key does not exist only means there was nothing to forget.
 
   ```powershell
   reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.ksmd" /f
-  reg delete "HKCU\Software\Classes\Applications\ksmd_open.exe" /f
+  reg delete "HKCU\Software\Classes\Applications\ksmd.exe" /f
+  reg delete "HKCU\Software\Classes\Applications\ksmd_open.exe" /f   # its name before ksmd.exe
   reg delete "HKCU\Software\Classes\.ksmd" /f
   ```
 
 3. **Clear the icon cache:** run `ie4uinit.exe -show`, or sign out and in again.
-4. **Tie it again**, as in the steps above. Pick the `out\ksmd_open.exe` of the folder you work in now, not an entry already in the list.
+4. **Tie it again**, as in the steps above. Pick the `out\ksmd.exe` of the folder you work in now, not an entry already in the list.
 
 **Linux:** run `make install-desktop` from the folder you work in now, which ties `.ksmd` to it again. To remove the tie and the type altogether:
 
@@ -239,6 +240,6 @@ update-desktop-database ~/.local/share/applications
 
 | Look at | What it tells you |
 | :-- | :-- |
-| **A run from a terminal** | `out/ksmd_open.exe <document>` prints why it refuses a document, such as a name not ending in `.ksmd` |
-| **`out/tmp/ksmd_open.browser.log`** | What the browser printed when the launcher started it |
-| **`out/ksmd_open.exe --show <document>`** | It prints the whole URL, with the token after `#`; paste it into a browser. If the document opens, only the hand-over to the browser failed. Without `--show` no token is printed, since a double-click's output can reach others |
+| **A run from a terminal** | `out/ksmd.exe <document>` prints why it refuses a document, such as a name not ending in `.ksmd` |
+| **`out/tmp/ksmd.browser.log`** | What the browser printed when the launcher started it |
+| **`out/ksmd.exe --show <document>`** | It prints the whole URL, with the token after `#`; paste it into a browser. If the document opens, only the hand-over to the browser failed. Without `--show` no token is printed, since a double-click's output can reach others |
